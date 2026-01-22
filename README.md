@@ -4,7 +4,12 @@ A hands-on framework for learning and implementing customer churn prediction pip
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](83.99%)
+[![CI](https://github.com/aladjov/CR/actions/workflows/ci.yaml/badge.svg)](https://github.com/aladjov/CR/actions/workflows/ci.yaml)
+[![codecov](https://codecov.io/gh/aladjov/CR/branch/master/graph/badge.svg)](https://codecov.io/gh/aladjov/CR)
+[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit)](https://github.com/pre-commit/pre-commit)
+[![Typed](https://img.shields.io/badge/typed-Pydantic-blue)](https://docs.pydantic.dev/)
+[![MLflow](https://img.shields.io/badge/MLflow-integrated-0194E2?logo=mlflow)](https://mlflow.org/)
+[![Databricks](https://img.shields.io/badge/Databricks-compatible-FF3621?logo=databricks)](https://databricks.com/)
 
 ---
 
@@ -1552,7 +1557,7 @@ databricks fs cp dist/customer_retention-*.whl \
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/customer-retention.git
+git clone https://github.com/aladjov/CR.git
 cd customer-retention
 
 # Install (uv recommended for speed)
