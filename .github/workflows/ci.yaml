@@ -40,9 +40,7 @@ jobs:
 
       - name: Run ruff linter
         run: ruff check src/ tests/
-
-      - name: Run ruff formatter check
-        run: ruff format --check src/ tests/
+        # Note: ruff format check disabled to allow compact code style per Coding_Practices.md
 
   test:
     name: Test (Python ${{ matrix.python-version }})
