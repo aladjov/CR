@@ -51,7 +51,7 @@ This is an **educational framework** that walks you through building a customer 
 - [[Tutorial: Retail Customer Retention|Tutorial-Retail-Churn]] - **Complete example with executed notebooks**
   - 17 notebooks executed with actual results
   - Model performance: AUC 0.9858, PR-AUC 0.9949
-  - [Browse HTML outputs](tutorial/index.html)
+  - [Browse HTML Tutorial](https://aladjov.github.io/CR/tutorial/)
 - [[Tutorial: Bank Customer Churn|Tutorial-Bank-Churn]] - Dataset setup instructions
 - [[Tutorial: Netflix Churn|Tutorial-Netflix-Churn]] - Dataset setup instructions
 
