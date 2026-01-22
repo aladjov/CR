@@ -248,10 +248,10 @@ The framework implements a **medallion architecture** with clear separation betw
 │   ┌─────────────────────────────────────────────────────────────────────────────┐   │
 │   │                     EXPLORATION LOOP (Iterative)                            │   │
 │   │                                                                             │   │
-│   │    ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐         │   │
-│   │    │  Explore │────▶│Recommend │────▶│  Train   │────▶│ Evaluate │         │   │
-│   │    │   Data   │     │ Features │     │  Model   │     │ Results  │         │   │
-│   │    └──────────┘     └──────────┘     └──────────┘     └────┬─────┘         │   │
+│   │    ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐          │   │
+│   │    │  Explore │────▶│Recommend │────▶│  Train   │────▶│ Evaluate │          │   │
+│   │    │   Data   │     │ Features │     │  Model   │     │ Results  │          │   │
+│   │    └──────────┘     └──────────┘     └──────────┘     └────┬─────┘          │   │
 │   │         ▲                                                   │               │   │
 │   │         │                                                   │               │   │
 │   │         │           ┌──────────────────────┐                │               │   │
@@ -266,7 +266,7 @@ The framework implements a **medallion architecture** with clear separation betw
 │                                           │ When satisfied                          │
 │                                           ▼                                         │
 │   ┌─────────────────────────────────────────────────────────────────────────────┐   │
-│   │                       PRODUCTION EXECUTION                                   │   │
+│   │                       PRODUCTION EXECUTION                                  │   │
 │   │                                                                             │   │
 │   │    Choose ONE track based on your environment:                              │   │
 │   │                                                                             │   │
@@ -313,9 +313,9 @@ These issues cause models to perform well in development but fail in production.
 #### Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        TEMPORAL FRAMEWORK ARCHITECTURE                        │
-├─────────────────────────────────────────────────────────────────────────────┤
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                        TEMPORAL FRAMEWORK ARCHITECTURE                       │
+├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │   RAW DATA                                                                   │
 │   ┌─────────────────────┐                                                    │
@@ -326,13 +326,13 @@ These issues cause models to perform well in development but fail in production.
 │   └──────────┬──────────┘                                                    │
 │              │                                                               │
 │              ▼                                                               │
-│   ┌─────────────────────────────────────────────────────────────┐           │
-│   │                   ScenarioDetector                          │           │
-│   │  • Analyzes columns for datetime patterns                   │           │
-│   │  • Identifies feature vs label timestamps                   │           │
-│   │  • Detects derivable timestamps (e.g., tenure → signup)     │           │
-│   │  • Returns: scenario + TimestampConfig                      │           │
-│   └──────────┬──────────────────────────────────────────────────┘           │
+│   ┌─────────────────────────────────────────────────────────────┐            │
+│   │                   ScenarioDetector                          │            │
+│   │  • Analyzes columns for datetime patterns                   │            │
+│   │  • Identifies feature vs label timestamps                   │            │
+│   │  • Detects derivable timestamps (e.g., tenure → signup)     │            │
+│   │  • Returns: scenario + TimestampConfig                      │            │
+│   └──────────┬──────────────────────────────────────────────────┘            │
 │              │                                                               │
 │              │  Scenarios:                                                   │
 │              │  • production - explicit timestamps found                     │
@@ -340,13 +340,13 @@ These issues cause models to perform well in development but fail in production.
 │              │  • synthetic - no temporal info, generate synthetic           │
 │              │                                                               │
 │              ▼                                                               │
-│   ┌─────────────────────────────────────────────────────────────┐           │
-│   │                UnifiedDataPreparer                          │           │
-│   │  • Applies TimestampConfig via TimestampManager             │           │
-│   │  • Adds: feature_timestamp, label_timestamp                 │           │
-│   │  • Adds: label_available_flag                               │           │
-│   │  • Validates point-in-time correctness                      │           │
-│   └──────────┬──────────────────────────────────────────────────┘           │
+│   ┌─────────────────────────────────────────────────────────────┐            │
+│   │                UnifiedDataPreparer                          │            │
+│   │  • Applies TimestampConfig via TimestampManager             │            │
+│   │  • Adds: feature_timestamp, label_timestamp                 │            │
+│   │  • Adds: label_available_flag                               │            │
+│   │  • Validates point-in-time correctness                      │            │
+│   └──────────┬──────────────────────────────────────────────────┘            │
 │              │                                                               │
 │              ▼                                                               │
 │   ┌─────────────────────┐                                                    │
@@ -360,37 +360,37 @@ These issues cause models to perform well in development but fail in production.
 │   └──────────┬──────────┘                                                    │
 │              │                                                               │
 │              ▼                                                               │
-│   ┌─────────────────────────────────────────────────────────────┐           │
-│   │                   SnapshotManager                           │           │
-│   │  • Filters: label_available_flag == True                    │           │
-│   │  • Filters: label_timestamp <= cutoff_date                  │           │
-│   │  • Computes SHA256 hash for integrity                       │           │
-│   │  • Saves versioned parquet + metadata JSON                  │           │
-│   └──────────┬──────────────────────────────────────────────────┘           │
+│   ┌─────────────────────────────────────────────────────────────┐            │
+│   │                   SnapshotManager                           │            │
+│   │  • Filters: label_available_flag == True                    │            │
+│   │  • Filters: label_timestamp <= cutoff_date                  │            │
+│   │  • Computes SHA256 hash for integrity                       │            │
+│   │  • Saves versioned parquet + metadata JSON                  │            │
+│   └──────────┬──────────────────────────────────────────────────┘            │
 │              │                                                               │
 │              ▼                                                               │
-│   ┌─────────────────────┐    ┌─────────────────────┐                        │
-│   │  training_v1.parquet│    │  training_v1_       │                        │
-│   │  (filtered data)    │    │  metadata.json      │                        │
-│   │                     │    │  • snapshot_id      │                        │
-│   │  Only rows where    │    │  • data_hash        │                        │
-│   │  label was known    │    │  • cutoff_date      │                        │
-│   │  before cutoff      │    │  • row_count        │                        │
-│   └─────────────────────┘    └─────────────────────┘                        │
+│   ┌─────────────────────┐    ┌─────────────────────┐                         │
+│   │  training_v1.parquet│    │  training_v1_       │                         │
+│   │  (filtered data)    │    │  metadata.json      │                         │
+│   │                     │    │  • snapshot_id      │                         │
+│   │  Only rows where    │    │  • data_hash        │                         │
+│   │  label was known    │    │  • cutoff_date      │                         │
+│   │  before cutoff      │    │  • row_count        │                         │
+│   └─────────────────────┘    └─────────────────────┘                         │
 │              │                                                               │
 │              │  On load: hash verified                                       │
 │              │  → ValueError if data modified                                │
 │              │                                                               │
 │              ▼                                                               │
-│   ┌─────────────────────────────────────────────────────────────┐           │
-│   │                   MODEL TRAINING                            │           │
-│   │  • Uses only label_available records                        │           │
-│   │  • Features from feature_timestamp                          │           │
-│   │  • Labels from label_timestamp                              │           │
-│   │  • No future data leakage possible                          │           │
-│   └─────────────────────────────────────────────────────────────┘           │
+│   ┌─────────────────────────────────────────────────────────────┐            │
+│   │                   MODEL TRAINING                            │            │
+│   │  • Uses only label_available records                        │            │
+│   │  • Features from feature_timestamp                          │            │
+│   │  • Labels from label_timestamp                              │            │
+│   │  • No future data leakage possible                          │            │
+│   └─────────────────────────────────────────────────────────────┘            │
 │                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 #### Core Concepts
@@ -558,43 +558,43 @@ The framework includes a **unified feature store** module that provides point-in
 #### Feature Store Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
+┌──────────────────────────────────────────────────────────────────────────────┐
 │                         FEATURE STORE ARCHITECTURE                           │
-├─────────────────────────────────────────────────────────────────────────────┤
+├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │   Unified Data (with temporal columns)                                       │
 │              │                                                               │
 │              ▼                                                               │
-│   ┌─────────────────────────────────────┐                                   │
-│   │        FeatureRegistry              │                                   │
-│   │  • TemporalFeatureDefinition        │  Define features with             │
-│   │  • Computation type (passthrough,   │  temporal metadata                │
-│   │    aggregation, derived)            │                                   │
-│   │  • Leakage risk annotation          │                                   │
-│   └──────────────────┬──────────────────┘                                   │
+│   ┌─────────────────────────────────────┐                                    │
+│   │        FeatureRegistry              │                                    │
+│   │  • TemporalFeatureDefinition        │  Define features with              │
+│   │  • Computation type (passthrough,   │  temporal metadata                 │
+│   │    aggregation, derived)            │                                    │
+│   │  • Leakage risk annotation          │                                    │
+│   └──────────────────┬──────────────────┘                                    │
 │                      │                                                       │
 │                      ▼                                                       │
-│   ┌─────────────────────────────────────┐                                   │
-│   │      FeatureStoreManager            │                                   │
-│   │  • Unified API for both backends    │                                   │
-│   │  • publish_features()               │                                   │
-│   │  • get_training_features()          │                                   │
-│   │  • get_inference_features()         │                                   │
-│   └──────────────────┬──────────────────┘                                   │
+│   ┌─────────────────────────────────────┐                                    │
+│   │      FeatureStoreManager            │                                    │
+│   │  • Unified API for both backends    │                                    │
+│   │  • publish_features()               │                                    │
+│   │  • get_training_features()          │                                    │
+│   │  • get_inference_features()         │                                    │
+│   └──────────────────┬──────────────────┘                                    │
 │                      │                                                       │
-│         ┌────────────┴────────────┐                                         │
-│         ▼                         ▼                                         │
-│   ┌─────────────┐          ┌─────────────┐                                  │
-│   │ FeastBackend│          │ Databricks  │                                  │
-│   │   (Local)   │          │  Backend    │                                  │
-│   │             │          │             │                                  │
-│   │ • Parquet   │          │ • Unity     │                                  │
-│   │ • SQLite    │          │   Catalog   │                                  │
-│   │ • PIT joins │          │ • Delta Lake│                                  │
-│   └─────────────┘          │ • PIT joins │                                  │
-│                            └─────────────┘                                  │
+│         ┌────────────┴────────────┐                                          │
+│         ▼                         ▼                                          │
+│   ┌─────────────┐          ┌─────────────┐                                   │
+│   │ FeastBackend│          │ Databricks  │                                   │
+│   │   (Local)   │          │  Backend    │                                   │
+│   │             │          │             │                                   │
+│   │ • Parquet   │          │ • Unity     │                                   │
+│   │ • SQLite    │          │   Catalog   │                                   │
+│   │ • PIT joins │          │ • Delta Lake│                                   │
+│   └─────────────┘          │ • PIT joins │                                   │
+│                            └─────────────┘                                   │
 │                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 #### Core Components
@@ -666,60 +666,60 @@ The exploration loop is **iterative by design**. Each iteration is versioned, an
 ### Exploration Workflow
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
+┌──────────────────────────────────────────────────────────────────────────────┐
 │                         EXPLORATION LOOP                                     │
-├─────────────────────────────────────────────────────────────────────────────┤
+├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │  ITERATION 1                                                                 │
 │  ──────────                                                                  │
 │  Notebooks 01-04: Explore each dataset                                       │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                       │
-│  │ customers.csv│  │  events.csv  │  │ products.csv │                       │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘                       │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                        │
+│  │ customers.csv│  │  events.csv  │  │ products.csv │                        │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘                        │
 │         │                 │                 │                                │
 │         ▼                 ▼                 ▼                                │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                       │
-│  │  findings    │  │  findings    │  │  findings    │  ← Versioned YAML     │
-│  │  (YAML)      │  │  (YAML)      │  │  (YAML)      │    with iteration_id  │
-│  └──────────────┘  └──────────────┘  └──────────────┘                       │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                        │
+│  │  findings    │  │  findings    │  │  findings    │  ← Versioned YAML      │
+│  │  (YAML)      │  │  (YAML)      │  │  (YAML)      │    with iteration_id   │
+│  └──────────────┘  └──────────────┘  └──────────────┘                        │
 │                                                                              │
-│  Notebook 05: Multi-Dataset Discovery & Selection                           │
-│  ┌───────────────────────────────────────────────────┐                      │
+│  Notebook 05: Multi-Dataset Discovery & Selection                            │
+│  ┌───────────────────────────────────────────────────┐                       │
 │  │  • Discover all explored datasets                  │                      │
-│  │  • SELECT which datasets to include               │  ← USER CHOICE       │
-│  │  • Define relationships (join keys)               │                      │
-│  │  • Save multi_dataset_findings.yaml               │                      │
-│  └───────────────────────────────────────────────────┘                      │
+│  │  • SELECT which datasets to include               │  ← USER CHOICE        │
+│  │  • Define relationships (join keys)               │                       │
+│  │  • Save multi_dataset_findings.yaml               │                       │
+│  └───────────────────────────────────────────────────┘                       │
 │                                                                              │
 │  Notebook 06: Capture Recommendations                                        │
-│  ┌───────────────────────────────────────────────────┐                      │
-│  │  • Bronze: null handling, outlier capping         │                      │
-│  │  • Silver: joins, aggregations                    │                      │
-│  │  • Gold: encoding, scaling, transformations       │                      │
-│  │  • Track: applied vs skipped recommendations      │  ← TRACKED           │
-│  └───────────────────────────────────────────────────┘                      │
+│  ┌───────────────────────────────────────────────────┐                       │
+│  │  • Bronze: null handling, outlier capping         │                       │
+│  │  • Silver: joins, aggregations                    │                       │
+│  │  • Gold: encoding, scaling, transformations       │                       │
+│  │  • Track: applied vs skipped recommendations      │  ← TRACKED            │
+│  └───────────────────────────────────────────────────┘                       │
 │                                                                              │
 │  Notebooks 07-08: Train & Evaluate                                           │
-│  ┌───────────────────────────────────────────────────┐                      │
-│  │  • Train baseline models                          │                      │
-│  │  • Evaluate metrics (AUC, precision, recall)      │                      │
-│  │  • Collect feature importances                    │  ← FEEDBACK          │
-│  │  • Analyze prediction errors                      │                      │
-│  └───────────────────────────────────────────────────┘                      │
+│  ┌───────────────────────────────────────────────────┐                       │
+│  │  • Train baseline models                          │                       │
+│  │  • Evaluate metrics (AUC, precision, recall)      │                       │
+│  │  • Collect feature importances                    │  ← FEEDBACK           │
+│  │  • Analyze prediction errors                      │                       │
+│  └───────────────────────────────────────────────────┘                       │
 │         │                                                                    │
 │         ▼                                                                    │
-│  ┌───────────────────────────────────────────────────┐                      │
-│  │  Satisfied with results?                          │                      │
-│  │                                                   │                      │
-│  │  NO → Start ITERATION 2                           │                      │
-│  │       • Low-importance features identified        │                      │
-│  │       • New feature ideas from error analysis     │                      │
-│  │       • Recommendations refined                   │                      │
-│  │                                                   │                      │
-│  │  YES → Proceed to Production Execution            │                      │
-│  └───────────────────────────────────────────────────┘                      │
+│  ┌───────────────────────────────────────────────────┐                       │
+│  │  Satisfied with results?                          │                       │
+│  │                                                   │                       │
+│  │  NO → Start ITERATION 2                           │                       │
+│  │       • Low-importance features identified        │                       │
+│  │       • New feature ideas from error analysis     │                       │
+│  │       • Recommendations refined                   │                       │
+│  │                                                   │                       │
+│  │  YES → Proceed to Production Execution            │                       │
+│  └───────────────────────────────────────────────────┘                       │
 │                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Multi-Source Pipeline Structure
@@ -921,90 +921,90 @@ The framework includes a **Pipeline Generator** that produces complete, runnable
 ### End-to-End Workflow
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────┐
+┌──────────────────────────────────────────────────────────────────────────────────┐
 │                           COMPLETE ML PIPELINE WORKFLOW                          │
-├─────────────────────────────────────────────────────────────────────────────────┤
+├──────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                  │
-│  STEP 1: EXPLORATION (Notebooks 01-07)                                          │
+│  STEP 1: EXPLORATION (Notebooks 01-07)                                           │
 │  ───────────────────────────────────────                                         │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐                          │
-│  │ customers   │    │   events    │    │  products   │   Raw data sources       │
-│  └──────┬──────┘    └──────┬──────┘    └──────┬──────┘                          │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐                           │
+│  │ customers   │    │   events    │    │  products   │   Raw data sources        │
+│  └──────┬──────┘    └──────┬──────┘    └──────┬──────┘                           │
 │         │                  │                  │                                  │
 │         ▼                  ▼                  ▼                                  │
-│  ┌─────────────────────────────────────────────────────┐                        │
-│  │              DataExplorer (per source)              │                        │
-│  │  • Auto-detect column types                         │                        │
-│  │  • Quality assessment                               │                        │
-│  │  • Cleaning recommendations                         │                        │
-│  └─────────────────────────────────────────────────────┘                        │
+│  ┌─────────────────────────────────────────────────────┐                         │
+│  │              DataExplorer (per source)              │                         │
+│  │  • Auto-detect column types                         │                         │
+│  │  • Quality assessment                               │                         │
+│  │  • Cleaning recommendations                         │                         │
+│  └─────────────────────────────────────────────────────┘                         │
 │         │                  │                  │                                  │
 │         ▼                  ▼                  ▼                                  │
-│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐                         │
-│  │ customers_   │   │  events_     │   │ products_    │   Exploration findings  │
-│  │ findings.yaml│   │ findings.yaml│   │ findings.yaml│   (per source)          │
-│  └──────────────┘   └──────────────┘   └──────────────┘                         │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐                          │
+│  │ customers_   │   │  events_     │   │ products_    │   Exploration findings   │
+│  │ findings.yaml│   │ findings.yaml│   │ findings.yaml│   (per source)           │
+│  └──────────────┘   └──────────────┘   └──────────────┘                          │
 │         │                  │                  │                                  │
 │         └──────────────────┼──────────────────┘                                  │
 │                            ▼                                                     │
-│  ┌─────────────────────────────────────────────────────┐                        │
-│  │           ExplorationManager (Notebook 05)          │                        │
-│  │  • Discover all explored datasets                   │                        │
-│  │  • Define relationships (join keys)                 │                        │
-│  │  • Select/exclude datasets                          │                        │
-│  └─────────────────────────────────────────────────────┘                        │
+│  ┌─────────────────────────────────────────────────────┐                         │
+│  │           ExplorationManager (Notebook 05)          │                         │
+│  │  • Discover all explored datasets                   │                         │
+│  │  • Define relationships (join keys)                 │                         │
+│  │  • Select/exclude datasets                          │                         │
+│  └─────────────────────────────────────────────────────┘                         │
 │                            │                                                     │
 │                            ▼                                                     │
-│  ┌─────────────────────────────────────────────────────┐                        │
-│  │          multi_dataset_findings.yaml                │   Combined findings    │
-│  └─────────────────────────────────────────────────────┘                        │
+│  ┌─────────────────────────────────────────────────────┐                         │
+│  │          multi_dataset_findings.yaml                │   Combined findings     │
+│  └─────────────────────────────────────────────────────┘                         │
 │                                                                                  │
 │  STEP 2: PIPELINE GENERATION                                                     │
 │  ───────────────────────────                                                     │
 │                            │                                                     │
 │                            ▼                                                     │
-│  ┌─────────────────────────────────────────────────────┐                        │
-│  │              PipelineGenerator                      │                        │
-│  │  • Parse exploration findings                       │                        │
-│  │  • Build pipeline configuration                     │                        │
-│  │  • Render code from templates                       │                        │
-│  └─────────────────────────────────────────────────────┘                        │
+│  ┌─────────────────────────────────────────────────────┐                         │
+│  │              PipelineGenerator                      │                         │
+│  │  • Parse exploration findings                       │                         │
+│  │  • Build pipeline configuration                     │                         │
+│  │  • Render code from templates                       │                         │
+│  └─────────────────────────────────────────────────────┘                         │
 │                            │                                                     │
 │                            ▼                                                     │
-│  ┌─────────────────────────────────────────────────────┐                        │
-│  │           GENERATED PIPELINE                        │                        │
-│  │  orchestration/{pipeline_name}/                     │                        │
-│  │  ├── config.py           ← Pipeline configuration   │                        │
-│  │  ├── bronze/                                        │                        │
-│  │  │   ├── bronze_customers.py  ← Parallel execution  │                        │
-│  │  │   └── bronze_events.py                           │                        │
-│  │  ├── silver/                                        │                        │
-│  │  │   └── silver_merge.py      ← Join bronze outputs │                        │
-│  │  ├── gold/                                          │                        │
-│  │  │   └── gold_features.py     ← Feature engineering │                        │
-│  │  ├── training/                                      │                        │
-│  │  │   └── ml_experiment.py     ← MLFlow integration  │                        │
-│  │  └── pipeline_runner.py       ← Local orchestrator   │                        │
-│  └─────────────────────────────────────────────────────┘                        │
+│  ┌─────────────────────────────────────────────────────┐                         │
+│  │           GENERATED PIPELINE                        │                         │
+│  │  orchestration/{pipeline_name}/                     │                         │
+│  │  ├── config.py           ← Pipeline configuration   │                         │
+│  │  ├── bronze/                                        │                         │
+│  │  │   ├── bronze_customers.py  ← Parallel execution  │                         │
+│  │  │   └── bronze_events.py                           │                         │
+│  │  ├── silver/                                        │                         │
+│  │  │   └── silver_merge.py      ← Join bronze outputs │                         │
+│  │  ├── gold/                                          │                         │
+│  │  │   └── gold_features.py     ← Feature engineering │                         │
+│  │  ├── training/                                      │                         │
+│  │  │   └── ml_experiment.py     ← MLFlow integration  │                         │
+│  │  └── pipeline_runner.py       ← Local orchestrator  │                         │
+│  └─────────────────────────────────────────────────────┘                         │
 │                                                                                  │
-│  STEP 3: LOCAL EXECUTION WITH FEAST + MLFLOW                                    │
+│  STEP 3: LOCAL EXECUTION WITH FEAST + MLFLOW                                     │
 │  ───────────────────────────────────────────                                     │
 │                            │                                                     │
 │         ┌──────────────────┼──────────────────┐                                  │
 │         ▼                  ▼                  ▼                                  │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐                          │
-│  │   FEAST     │    │   MLFlow    │    │  Pipeline   │                          │
-│  │ Feature     │    │ Experiment  │    │  Execution  │                          │
-│  │   Store     │    │  Tracking   │    │  (pandas)   │                          │
-│  └─────────────┘    └─────────────┘    └─────────────┘                          │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐                           │
+│  │   FEAST     │    │   MLFlow    │    │  Pipeline   │                           │
+│  │ Feature     │    │ Experiment  │    │  Execution  │                           │
+│  │   Store     │    │  Tracking   │    │  (pandas)   │                           │
+│  └─────────────┘    └─────────────┘    └─────────────┘                           │
 │         │                  │                  │                                  │
 │         ▼                  ▼                  ▼                                  │
-│  • Feature views    • Metrics logged   • Bronze → Silver → Gold                 │
-│  • Online serving   • Model artifacts  • Parallel bronze execution              │
-│  • Point-in-time    • Experiment runs  • Local parquet output                   │
-│    joins            • Model registry                                            │
+│  • Feature views    • Metrics logged   • Bronze → Silver → Gold                  │
+│  • Online serving   • Model artifacts  • Parallel bronze execution               │
+│  • Point-in-time    • Experiment runs  • Local parquet output                    │
+│    joins            • Model registry                                             │
 │                                                                                  │
-└─────────────────────────────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Quick Start: Generate a Pipeline
