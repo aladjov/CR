@@ -1,0 +1,61 @@
+# Pre-commit hooks configuration
+# Install: pre-commit install
+# Run manually: pre-commit run --all-files
+#
+# IMPORTANT: These hooks enforce the coding standards from docs/Coding_Practices.md
+# The --no-verify flag should NOT be used. CI will reject PRs that bypass these checks.
+
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  # Ruff - fast Python linter and formatter
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.4
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  # Standard pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
+      - id: debug-statements
+      - id: detect-private-key
+
+  # Local hooks for test coverage enforcement
+  - repo: local
+    hooks:
+      # Pre-push hook: Run tests with coverage enforcement (75% minimum)
+      - id: pytest-coverage
+        name: pytest with coverage (75% minimum required)
+        entry: python -m pytest tests/ --cov=src/customer_retention --cov-fail-under=75 -q --tb=no
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+        verbose: true
+
+      # Pre-commit hook: Quick syntax and import check on changed files
+      - id: python-check
+        name: python syntax check
+        entry: python -m py_compile
+        language: system
+        types: [python]
+
+      # Reminder about --no-verify
+      - id: no-verify-warning
+        name: coverage enforcement reminder
+        entry: python -c "print('\n⚠️  Remember: CI enforces 75% coverage. PRs bypassing pre-push hooks will be rejected.\n')"
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+        verbose: true

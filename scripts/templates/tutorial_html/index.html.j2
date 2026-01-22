@@ -1,0 +1,189 @@
+{%- extends 'lab/index.html.j2' -%}
+
+{# Custom CSS for tutorial styling #}
+{% block header %}
+{{ super() }}
+<style>
+/* Tutorial-specific styles */
+.tutorial-code-section {
+    margin: 1em 0;
+    border: 1px solid #e1e4e8;
+    border-radius: 6px;
+    overflow: hidden;
+}
+.tutorial-code-section summary {
+    padding: 10px 15px;
+    background: #f6f8fa;
+    cursor: pointer;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 0.9em;
+    color: #586069;
+    border-bottom: 1px solid #e1e4e8;
+    user-select: none;
+}
+.tutorial-code-section summary:hover {
+    background: #ebeef1;
+}
+.tutorial-code-section summary::marker {
+    color: #0366d6;
+}
+.tutorial-code-section[open] summary {
+    border-bottom: 1px solid #e1e4e8;
+}
+.tutorial-code-section .jp-InputArea {
+    margin: 0;
+    border: none;
+}
+.tutorial-code-section .jp-Cell-inputWrapper {
+    padding: 0;
+}
+/* Output styling */
+.jp-OutputArea {
+    padding: 10px 15px;
+}
+/* Markdown styling improvements */
+.jp-RenderedMarkdown {
+    padding: 15px 20px;
+}
+.jp-RenderedMarkdown h1, .jp-RenderedMarkdown h2, .jp-RenderedMarkdown h3 {
+    border-bottom: 1px solid #eaecef;
+    padding-bottom: 0.3em;
+}
+/* Table styling */
+.jp-RenderedHTMLCommon table {
+    border-collapse: collapse;
+    margin: 1em 0;
+}
+.jp-RenderedHTMLCommon th, .jp-RenderedHTMLCommon td {
+    border: 1px solid #dfe2e5;
+    padding: 8px 12px;
+}
+.jp-RenderedHTMLCommon th {
+    background: #f6f8fa;
+}
+/* Image/chart styling */
+.jp-RenderedImage img, .jp-RenderedSVG svg {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 1em auto;
+}
+/* DataFrame output styling */
+.dataframe {
+    font-size: 0.9em;
+}
+/* Hide code cell numbers */
+.jp-InputPrompt, .jp-OutputPrompt {
+    display: none !important;
+}
+/* Tutorial header */
+.tutorial-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 40px 20px;
+    margin: -20px -20px 30px -20px;
+    text-align: center;
+}
+.tutorial-header h1 {
+    margin: 0;
+    border: none;
+    color: white;
+}
+.tutorial-header .subtitle {
+    opacity: 0.9;
+    margin-top: 10px;
+}
+/* Navigation/TOC styling */
+.tutorial-toc {
+    background: #f6f8fa;
+    border: 1px solid #e1e4e8;
+    border-radius: 6px;
+    padding: 20px;
+    margin-bottom: 30px;
+}
+.tutorial-toc h3 {
+    margin-top: 0;
+    border: none;
+}
+.tutorial-toc ul {
+    list-style: none;
+    padding-left: 0;
+}
+.tutorial-toc li {
+    padding: 5px 0;
+}
+.tutorial-toc a {
+    color: #0366d6;
+    text-decoration: none;
+}
+.tutorial-toc a:hover {
+    text-decoration: underline;
+}
+/* Expand/Collapse All buttons */
+.code-toggle-controls {
+    text-align: right;
+    margin-bottom: 20px;
+}
+.code-toggle-controls button {
+    background: #0366d6;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-left: 10px;
+    font-size: 0.9em;
+}
+.code-toggle-controls button:hover {
+    background: #0256b9;
+}
+/* Print styles */
+@media print {
+    .tutorial-code-section {
+        break-inside: avoid;
+    }
+    .code-toggle-controls {
+        display: none;
+    }
+}
+</style>
+{% endblock header %}
+
+{# Wrap code cells in collapsible details #}
+{% block codecell %}
+<div class="jp-Cell jp-CodeCell tutorial-code-section">
+<details>
+<summary>Show/Hide Code Cell</summary>
+{{ super() }}
+</details>
+</div>
+{% endblock codecell %}
+
+{# Add toggle controls at the end #}
+{% block footer_js %}
+{{ super() }}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Add toggle controls if there are code cells
+    const codeSections = document.querySelectorAll('.tutorial-code-section');
+    if (codeSections.length > 0) {
+        const controls = document.createElement('div');
+        controls.className = 'code-toggle-controls';
+        controls.innerHTML = `
+            <button onclick="toggleAllCode(true)">Expand All Code</button>
+            <button onclick="toggleAllCode(false)">Collapse All Code</button>
+        `;
+        const firstCell = document.querySelector('.jp-Cell');
+        if (firstCell) {
+            firstCell.parentNode.insertBefore(controls, firstCell);
+        }
+    }
+});
+
+function toggleAllCode(expand) {
+    document.querySelectorAll('.tutorial-code-section details').forEach(function(details) {
+        details.open = expand;
+    });
+}
+</script>
+{% endblock footer_js %}

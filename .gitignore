@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/xs
+*.swp
+*.swo
+.DS_Store
+
+# Testing
+.pytest_cache/
+tests/.coverage
+tests/htmlcov/
+.tox/
+.nox/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Project specific
+*.log
+
+# Test fixtures - large datasets
+tests/fixtures/bank_customer_churn.csv
+tests/fixtures/netflix_customer_churn.csv
+tests/fixtures/customer_emails.csv
+tests/fixtures/customer_transactions.csv
+tests/fixtures/customer_retention_retail.csv
+
+# Experiments outputs (all generated data - gitignored)
+experiments/
+
+# Generated pipelines (transient outputs, can be regenerated)
+generated_pipelines/

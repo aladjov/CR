@@ -1,0 +1,121 @@
+# CI Pipeline - Enforces coding standards from docs/Coding_Practices.md
+#
+# This workflow CANNOT be bypassed. All PRs must pass:
+# - Lint checks (ruff)
+# - Test coverage >= 75%
+# - All tests passing
+#
+# Branch protection rules should require this workflow to pass before merge.
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv pip install --system ruff
+
+      - name: Run ruff linter
+        run: ruff check src/ tests/
+
+      - name: Run ruff formatter check
+        run: ruff format --check src/ tests/
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv pip install --system -e ".[dev,ml]"
+
+      - name: Run tests with coverage
+        run: |
+          python -m pytest tests/ \
+            --cov=src/customer_retention \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-fail-under=75 \
+            -v
+
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+          verbose: true
+
+  coverage-gate:
+    name: Coverage Gate (75% minimum - REQUIRED)
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Coverage requirement passed
+        run: |
+          echo "✅ All test jobs passed with coverage >= 75%"
+          echo ""
+          echo "This gate ensures compliance with docs/Coding_Practices.md:"
+          echo "  'Follow test driven development practices with at least 75% coverage'"
+          echo ""
+          echo "This check CANNOT be bypassed. Branch protection rules should require it."
+
+  # This job always runs and provides clear feedback
+  status:
+    name: CI Status
+    runs-on: ubuntu-latest
+    needs: [lint, test, coverage-gate]
+    if: always()
+    steps:
+      - name: Check status
+        run: |
+          if [ "${{ needs.lint.result }}" != "success" ]; then
+            echo "❌ Lint failed"
+            exit 1
+          fi
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "❌ Tests failed or coverage < 75%"
+            exit 1
+          fi
+          if [ "${{ needs.coverage-gate.result }}" != "success" ]; then
+            echo "❌ Coverage gate failed"
+            exit 1
+          fi
+          echo "✅ All CI checks passed"

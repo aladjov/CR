@@ -1,0 +1,28 @@
+[run]
+source = src/customer_retention
+branch = True
+data_file = tests/.coverage
+omit =
+    */tests/*
+    */__pycache__/*
+    */site-packages/*
+    */__init__.py
+
+[report]
+precision = 2
+show_missing = True
+skip_covered = False
+skip_empty = True
+fail_under = 75
+
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise AssertionError
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    @abstractmethod
+
+[html]
+directory = tests/htmlcov
