@@ -45,12 +45,12 @@ tests/htmlcov/
 # Project specific
 *.log
 
-# Test fixtures - large datasets
+# Test fixtures - large datasets (not included in repo)
 tests/fixtures/bank_customer_churn.csv
 tests/fixtures/netflix_customer_churn.csv
 tests/fixtures/customer_emails.csv
 tests/fixtures/customer_transactions.csv
-tests/fixtures/customer_retention_retail.csv
+# Note: customer_retention_retail.csv IS committed (required for CI tests)
 
 # Experiments outputs (all generated data - gitignored)
 experiments/
