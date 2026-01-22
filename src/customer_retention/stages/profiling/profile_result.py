@@ -1,6 +1,8 @@
 from enum import Enum
-from typing import Optional, Any
+from typing import Any, Optional
+
 from pydantic import BaseModel
+
 from customer_retention.core.config.column_config import ColumnType, DatasetGranularity
 
 

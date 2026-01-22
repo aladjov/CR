@@ -1,10 +1,10 @@
 import json
-from typing import Optional, Dict, Any
 from pathlib import Path
-from datetime import datetime
+from typing import Any, Dict, Optional
 
-from customer_retention.core.compat import pd, DataFrame
+from customer_retention.core.compat import pd
 from customer_retention.core.config import ColumnType
+
 from .profile_result import ProfileResult
 
 

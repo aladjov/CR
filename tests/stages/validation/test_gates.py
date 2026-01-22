@@ -1,6 +1,4 @@
-import pytest
-import pandas as pd
-from customer_retention.stages.validation import Severity, ValidationIssue, GateResult, ValidationGate
+from customer_retention.stages.validation import GateResult, Severity, ValidationGate, ValidationIssue
 
 
 class TestSeverity:

@@ -1,9 +1,13 @@
-import pytest
 import os
 from pathlib import Path
 
+import pytest
+
 from customer_retention.stages.temporal.access_guard import (
-    AccessContext, DataAccessGuard, require_context, guarded_read
+    AccessContext,
+    DataAccessGuard,
+    guarded_read,
+    require_context,
 )
 
 

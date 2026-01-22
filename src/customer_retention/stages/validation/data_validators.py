@@ -6,9 +6,9 @@ including duplicate detection, date logic validation, and value range validation
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any, Tuple
+from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import pd, DataFrame
+from customer_retention.core.compat import DataFrame, pd
 from customer_retention.core.components.enums import Severity
 
 

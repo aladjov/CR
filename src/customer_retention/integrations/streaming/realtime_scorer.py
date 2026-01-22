@@ -1,9 +1,9 @@
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Dict, Any, Optional, List
-import time
 import statistics
 import threading
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Dict, List, Optional
 
 
 @dataclass
@@ -127,7 +127,7 @@ class RealtimeScorer:
         store_connected = True
         try:
             self._feature_store.read_batch("__health_check__", [])
-        except:
+        except Exception:
             store_connected = True
         return EndpointHealth(
             status="healthy" if model_loaded and store_connected else "unhealthy",

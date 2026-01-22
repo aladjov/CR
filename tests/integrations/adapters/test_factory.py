@@ -1,5 +1,5 @@
+
 import pytest
-import os
 
 try:
     import deltalake
@@ -42,17 +42,17 @@ class TestFactoryFunctions:
 @requires_delta
 class TestFactoryEnvironmentDetection:
     def test_get_delta_returns_local_by_default(self):
+        from customer_retention.core.compat.detection import is_spark_available
         from customer_retention.integrations.adapters import get_delta
         from customer_retention.integrations.adapters.storage import LocalDelta
-        from customer_retention.core.compat.detection import is_spark_available
         if not is_spark_available():
             storage = get_delta()
             assert isinstance(storage, LocalDelta)
 
     def test_get_delta_returns_databricks_when_available(self):
+        from customer_retention.core.compat.detection import is_spark_available
         from customer_retention.integrations.adapters import get_delta
         from customer_retention.integrations.adapters.storage import DatabricksDelta
-        from customer_retention.core.compat.detection import is_spark_available
         if is_spark_available():
             storage = get_delta()
             assert isinstance(storage, DatabricksDelta)

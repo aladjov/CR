@@ -1,17 +1,16 @@
 """Tests for DataMaterializer that applies transforms and persists results."""
-import pytest
-import tempfile
 import os
-from pathlib import Path
+import tempfile
 
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 
-from customer_retention.generators.orchestration.data_materializer import DataMaterializer
 from customer_retention.analysis.auto_explorer.layered_recommendations import (
-    RecommendationRegistry,
     LayeredRecommendation,
+    RecommendationRegistry,
 )
+from customer_retention.generators.orchestration.data_materializer import DataMaterializer
 
 
 @pytest.fixture

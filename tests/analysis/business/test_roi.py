@@ -1,9 +1,6 @@
 import pytest
-import pandas as pd
-import numpy as np
-from customer_retention.analysis.business import (
-    ROIAnalyzer, ROIResult, InterventionROI, OptimizationResult
-)
+
+from customer_retention.analysis.business import InterventionROI, OptimizationResult, ROIAnalyzer
 
 
 @pytest.fixture

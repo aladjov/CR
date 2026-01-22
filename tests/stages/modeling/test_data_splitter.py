@@ -1,9 +1,8 @@
-import pytest
-import pandas as pd
 import numpy as np
-from customer_retention.stages.modeling import (
-    DataSplitter, SplitStrategy, SplitResult, SplitConfig
-)
+import pandas as pd
+import pytest
+
+from customer_retention.stages.modeling import DataSplitter, SplitConfig, SplitStrategy
 
 
 @pytest.fixture

@@ -1,18 +1,19 @@
 """Tests for temporal quality checks - TDD approach."""
-import pytest
-import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
 
+import numpy as np
+import pandas as pd
+import pytest
+
+from customer_retention.core.components.enums import Severity
 from customer_retention.stages.profiling.temporal_quality_checks import (
-    TemporalQualityCheck,
     DuplicateEventCheck,
-    TemporalGapCheck,
-    FutureDateCheck,
     EventOrderCheck,
+    FutureDateCheck,
+    TemporalGapCheck,
+    TemporalQualityCheck,
     TemporalQualityResult,
 )
-from customer_retention.core.components.enums import Severity
 
 
 @pytest.fixture

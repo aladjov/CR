@@ -1,17 +1,26 @@
-import pytest
-import pandas as pd
-import numpy as np
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+
 from customer_retention.core.config import ColumnType
 from customer_retention.stages.cleaning import (
-    MissingValueHandler, ImputationStrategy,
-    OutlierHandler, OutlierDetectionMethod, OutlierTreatmentStrategy
+    ImputationStrategy,
+    MissingValueHandler,
+    OutlierDetectionMethod,
+    OutlierHandler,
+    OutlierTreatmentStrategy,
 )
 from customer_retention.stages.transformation import (
-    NumericTransformer, ScalingStrategy, PowerTransform,
-    CategoricalEncoder, EncodingStrategy,
-    DatetimeTransformer, BinaryHandler,
-    TransformationPipeline
+    BinaryHandler,
+    CategoricalEncoder,
+    DatetimeTransformer,
+    EncodingStrategy,
+    NumericTransformer,
+    PowerTransform,
+    ScalingStrategy,
+    TransformationPipeline,
 )
 
 

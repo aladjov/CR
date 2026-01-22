@@ -1,14 +1,18 @@
 """Tests for time series detection and validation module."""
 
-import pytest
-import pandas as pd
+from datetime import datetime
+
 import numpy as np
-from datetime import datetime, timedelta
+import pandas as pd
+import pytest
 
 from customer_retention.stages.validation.timeseries_detector import (
-    TimeSeriesDetector, TimeSeriesValidator,
-    TimeSeriesCharacteristics, TimeSeriesValidationResult,
-    DatasetType, TimeSeriesFrequency
+    DatasetType,
+    TimeSeriesCharacteristics,
+    TimeSeriesDetector,
+    TimeSeriesFrequency,
+    TimeSeriesValidationResult,
+    TimeSeriesValidator,
 )
 
 

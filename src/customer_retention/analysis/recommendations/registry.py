@@ -1,15 +1,14 @@
-from typing import List, Optional, TYPE_CHECKING
 import re
+from typing import TYPE_CHECKING, List, Optional
 
 from .base import BaseRecommendation
 from .cleaning import ImputeRecommendation, OutlierCapRecommendation
-from .transform import StandardScaleRecommendation, MinMaxScaleRecommendation, LogTransformRecommendation
-from .encoding import OneHotEncodeRecommendation, LabelEncodeRecommendation
-from .datetime import ExtractMonthRecommendation, ExtractDayOfWeekRecommendation, DaysSinceRecommendation
+from .datetime import DaysSinceRecommendation, ExtractDayOfWeekRecommendation, ExtractMonthRecommendation
+from .encoding import LabelEncodeRecommendation, OneHotEncodeRecommendation
+from .transform import LogTransformRecommendation, MinMaxScaleRecommendation, StandardScaleRecommendation
 
 if TYPE_CHECKING:
-    from customer_retention.analysis.auto_explorer.findings import ExplorationFindings, ColumnFinding
-    from customer_retention.core.config.column_config import ColumnType
+    from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
 
 
 class RecommendationRegistry:

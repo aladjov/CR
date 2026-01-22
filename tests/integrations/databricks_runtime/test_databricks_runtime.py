@@ -12,9 +12,9 @@ The tests use the @pytest.mark.databricks marker which auto-skips when
 DATABRICKS_RUNTIME_VERSION environment variable is not set.
 """
 
-import pytest
+
 import pandas as pd
-from datetime import datetime
+import pytest
 
 
 @pytest.mark.databricks
@@ -134,6 +134,7 @@ class TestDatabricksMLflow:
 
     def test_mlflow_log_and_load_model(self):
         from sklearn.linear_model import LogisticRegression
+
         from customer_retention.integrations.adapters.mlflow.databricks import DatabricksMLflow
         adapter = DatabricksMLflow()
         adapter.start_run(experiment_name="/test/customer_retention_test")
@@ -150,9 +151,7 @@ class TestDatabricksFeatureStore:
     """Test Databricks Feature Store adapter."""
 
     def test_feature_store_create_table(self):
-        from customer_retention.integrations.adapters.feature_store.databricks import (
-            DatabricksFeatureStore
-        )
+        from customer_retention.integrations.adapters.feature_store.databricks import DatabricksFeatureStore
         fs = DatabricksFeatureStore(catalog="hive_metastore", schema="default")
         schema = {
             "customer_id": "int",
@@ -167,9 +166,7 @@ class TestDatabricksFeatureStore:
         assert result.success
 
     def test_feature_store_write_and_read(self):
-        from customer_retention.integrations.adapters.feature_store.databricks import (
-            DatabricksFeatureStore
-        )
+        from customer_retention.integrations.adapters.feature_store.databricks import DatabricksFeatureStore
         fs = DatabricksFeatureStore(catalog="hive_metastore", schema="default")
         df = pd.DataFrame({
             "customer_id": [1, 2, 3],

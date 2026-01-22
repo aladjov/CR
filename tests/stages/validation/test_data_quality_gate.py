@@ -1,11 +1,15 @@
-import pytest
 import pandas as pd
-import numpy as np
-from customer_retention.stages.validation import DataQualityGate, Severity
+
 from customer_retention.core.config import (
-    PipelineConfig, BronzeConfig, ValidationConfig,
-    DataSourceConfig, SourceType, FileFormat, ColumnType, ColumnConfig
+    BronzeConfig,
+    ColumnConfig,
+    ColumnType,
+    DataSourceConfig,
+    FileFormat,
+    PipelineConfig,
+    SourceType,
 )
+from customer_retention.stages.validation import DataQualityGate, Severity
 
 
 class TestDataQualityGate:

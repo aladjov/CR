@@ -1,9 +1,10 @@
-from enum import Enum
-from typing import Optional, Any
 from dataclasses import dataclass, field
+from enum import Enum
+from typing import Optional
+
 import numpy as np
 
-from customer_retention.core.compat import pd, DataFrame, Series
+from customer_retention.core.compat import DataFrame, Series, pd
 
 
 class EncodingStrategy(str, Enum):
@@ -144,7 +145,7 @@ class CategoricalEncoder:
             mask = clean == cat
             cat_target = target[mask]
             n = len(cat_target)
-            cat_mean = cat_target.mean()
+            cat_target.mean()
 
             smoothed = (cat_target.sum() + self.smoothing * self._global_mean) / (n + self.smoothing)
             self._target_means[cat] = smoothed
@@ -235,7 +236,7 @@ class CategoricalEncoder:
 
     def _encode_target(self, series: Series) -> CategoricalEncodeResult:
         result = series.map(self._target_means)
-        unknown_mask = result.isna() & series.notna()
+        result.isna() & series.notna()
         result = result.fillna(self._global_mean)
         result = result.where(series.notna(), np.nan)
 

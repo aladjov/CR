@@ -1,11 +1,11 @@
 """Tests for PipelineCodeGenerator that produces adapter-pattern Python code."""
 import pytest
 
-from customer_retention.generators.orchestration.code_generator import PipelineCodeGenerator
 from customer_retention.analysis.auto_explorer.layered_recommendations import (
-    RecommendationRegistry,
     LayeredRecommendation,
+    RecommendationRegistry,
 )
+from customer_retention.generators.orchestration.code_generator import PipelineCodeGenerator
 
 
 @pytest.fixture

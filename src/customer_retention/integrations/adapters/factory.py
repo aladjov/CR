@@ -1,8 +1,8 @@
-from typing import Optional
 from customer_retention.core.compat.detection import is_spark_available
-from .storage import DeltaStorage, LocalDelta, DatabricksDelta
-from .feature_store import FeatureStoreAdapter, LocalFeatureStore, DatabricksFeatureStore
-from .mlflow import MLflowAdapter, LocalMLflow, DatabricksMLflow
+
+from .feature_store import DatabricksFeatureStore, FeatureStoreAdapter, LocalFeatureStore
+from .mlflow import DatabricksMLflow, LocalMLflow, MLflowAdapter
+from .storage import DatabricksDelta, DeltaStorage, LocalDelta
 
 
 def get_delta(force_local: bool = False) -> DeltaStorage:

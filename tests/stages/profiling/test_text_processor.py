@@ -1,7 +1,8 @@
 """Tests for TextColumnProcessor - TDD first."""
-import pytest
+from unittest.mock import MagicMock, patch
+
 import numpy as np
-from unittest.mock import Mock, patch, MagicMock
+import pytest
 
 from customer_retention.core.compat import pd
 
@@ -54,9 +55,7 @@ class TestTextColumnProcessorInit:
         assert processor.config.variance_threshold == 0.95
 
     def test_custom_config(self):
-        from customer_retention.stages.profiling.text_processor import (
-            TextColumnProcessor, TextProcessingConfig
-        )
+        from customer_retention.stages.profiling.text_processor import TextColumnProcessor, TextProcessingConfig
         config = TextProcessingConfig(variance_threshold=0.80)
         processor = TextColumnProcessor(config)
         assert processor.config.variance_threshold == 0.80

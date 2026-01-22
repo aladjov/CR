@@ -1,11 +1,8 @@
-import pytest
-from datetime import datetime, timedelta
-from pathlib import Path
+from datetime import datetime
 
 from customer_retention.stages.temporal import (
-    PointInTimeRegistry,
     DatasetSnapshot,
-    ConsistencyReport,
+    PointInTimeRegistry,
 )
 
 

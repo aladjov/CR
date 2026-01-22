@@ -1,8 +1,9 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, Dict, List, Any
-import pandas as pd
+from typing import Any, Dict, List, Optional
+
 import numpy as np
+import pandas as pd
 
 from customer_retention.core.compat import Series, ensure_pandas_series
 

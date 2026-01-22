@@ -1,11 +1,18 @@
 import json
-import numpy as np
-from typing import Optional, Dict, List, Any
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
+from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import pd, Series, DataFrame
+import numpy as np
+
+from customer_retention.core.compat import pd
 from customer_retention.core.config import ColumnType
-from customer_retention.core.utils.statistics import compute_psi_numeric, compute_psi_categorical, compute_ks_statistic, compute_chi_square
+from customer_retention.core.utils.statistics import (
+    compute_chi_square,
+    compute_ks_statistic,
+    compute_psi_categorical,
+    compute_psi_numeric,
+)
+
 from .profile_result import ProfileResult
 
 

@@ -1,12 +1,11 @@
 """Baseline model training for customer retention prediction."""
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
 import time
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import pd, DataFrame, Series
+from customer_retention.core.compat import DataFrame, Series
 from customer_retention.core.components.enums import ModelType
-import numpy as np
 
 
 @dataclass

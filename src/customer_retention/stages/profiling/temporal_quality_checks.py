@@ -8,10 +8,9 @@ Provides quality checks specific to event-level data including:
 - Event ordering validation
 """
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Optional, Any, List
+from typing import Optional
 
-from customer_retention.core.compat import pd, DataFrame
+from customer_retention.core.compat import DataFrame, pd
 from customer_retention.core.components.enums import Severity
 
 

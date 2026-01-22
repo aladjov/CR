@@ -1,11 +1,12 @@
-from typing import Optional
 from datetime import datetime
+
 from customer_retention.core.compat import DataFrame
-from customer_retention.core.config import DataSourceConfig, ColumnType
-from customer_retention.stages.profiling import TypeDetector, ProfilerFactory, ColumnProfile
-from customer_retention.stages.profiling.profile_result import ProfileResult, TypeInference, UniversalMetrics
+from customer_retention.core.config import ColumnType, DataSourceConfig
+from customer_retention.stages.profiling import ColumnProfile, ProfilerFactory, TypeDetector
+from customer_retention.stages.profiling.profile_result import ProfileResult, UniversalMetrics
 from customer_retention.stages.profiling.quality_checks import QualityCheckRegistry, QualityCheckResult
-from .gates import ValidationGate, GateResult, Severity
+
+from .gates import GateResult, Severity, ValidationGate
 
 
 class FeatureQualityGate(ValidationGate):

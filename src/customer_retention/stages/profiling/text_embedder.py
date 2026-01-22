@@ -1,8 +1,8 @@
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 
 from customer_retention.core.compat import DataFrame
-
 
 EMBEDDING_MODELS: Dict[str, Dict[str, Any]] = {
     "minilm": {

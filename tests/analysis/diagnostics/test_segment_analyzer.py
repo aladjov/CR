@@ -1,9 +1,9 @@
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 from sklearn.linear_model import LogisticRegression
-from customer_retention.analysis.diagnostics import SegmentPerformanceAnalyzer, SegmentResult, SegmentCheck
-from customer_retention.core.components.enums import Severity
+
+from customer_retention.analysis.diagnostics import SegmentPerformanceAnalyzer
 
 
 @pytest.fixture

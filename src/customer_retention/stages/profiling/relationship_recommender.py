@@ -2,7 +2,8 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 
 from customer_retention.core.compat import pd
@@ -160,7 +161,7 @@ class RelationshipRecommender:
                     category=RecommendationCategory.FEATURE_SELECTION,
                     title="Remove multicollinear feature",
                     description=f"{pair['feature1']} and {pair['feature2']} are highly correlated (r={pair['correlation']:.2f})",
-                    action=f"Consider dropping one of these features. Keep the one with stronger business meaning or higher target correlation.",
+                    action="Consider dropping one of these features. Keep the one with stronger business meaning or higher target correlation.",
                     priority="high" if abs(pair["correlation"]) >= 0.85 else "medium",
                     affected_features=[pair["feature1"], pair["feature2"]],
                     evidence={"correlation": pair["correlation"]},
@@ -182,7 +183,7 @@ class RelationshipRecommender:
         if target_col not in df.columns:
             return {"strong": [], "weak": [], "recommendations": []}
 
-        target = df[target_col]
+        df[target_col]
 
         for col in numeric_cols:
             if col == target_col or col not in df.columns:

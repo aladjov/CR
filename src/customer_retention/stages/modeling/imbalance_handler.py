@@ -1,11 +1,12 @@
 """Class imbalance handling strategies for model training."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, Optional, Any, Union
+from typing import Dict, Optional, Union
 
-from customer_retention.core.compat import pd, DataFrame, Series
 import numpy as np
+
+from customer_retention.core.compat import DataFrame, Series
 
 
 class ImbalanceStrategy(Enum):

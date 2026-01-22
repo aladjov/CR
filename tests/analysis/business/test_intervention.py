@@ -1,9 +1,11 @@
 import pytest
-import pandas as pd
-import numpy as np
+
 from customer_retention.analysis.business import (
-    InterventionMatcher, InterventionCatalog, Intervention,
-    InterventionRecommendation, RiskSegment
+    Intervention,
+    InterventionCatalog,
+    InterventionMatcher,
+    InterventionRecommendation,
+    RiskSegment,
 )
 
 

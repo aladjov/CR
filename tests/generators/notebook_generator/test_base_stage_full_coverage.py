@@ -1,6 +1,7 @@
-import pytest
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
+
+import pytest
 
 
 @dataclass
@@ -21,10 +22,10 @@ class MockExplorationFindings:
 
 class TestStageGeneratorDescription:
     def test_default_description_is_empty(self):
-        from customer_retention.generators.notebook_generator.stages.base_stage import StageGenerator
-        from customer_retention.generators.notebook_generator.config import NotebookConfig
+
         from customer_retention.generators.notebook_generator.base import NotebookStage
-        import nbformat
+        from customer_retention.generators.notebook_generator.config import NotebookConfig
+        from customer_retention.generators.notebook_generator.stages.base_stage import StageGenerator
 
         class MinimalStage(StageGenerator):
             @property
@@ -50,16 +51,16 @@ class TestStageGeneratorDescription:
 
 class TestStageGeneratorGetTargetColumn:
     def test_returns_target_from_findings(self):
-        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
         from customer_retention.generators.notebook_generator.config import NotebookConfig
+        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
         findings = MockExplorationFindings(target_column="churn")
         config = NotebookConfig()
         stage = IngestionStage(config, findings)
         assert stage.get_target_column() == "churn"
 
     def test_returns_default_when_no_findings(self):
-        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
         from customer_retention.generators.notebook_generator.config import NotebookConfig
+        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
         config = NotebookConfig()
         stage = IngestionStage(config, None)
         assert stage.get_target_column() == "target"
@@ -67,16 +68,16 @@ class TestStageGeneratorGetTargetColumn:
 
 class TestStageGeneratorGetIdentifierColumns:
     def test_returns_identifiers_from_findings(self):
-        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
         from customer_retention.generators.notebook_generator.config import NotebookConfig
+        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
         findings = MockExplorationFindings(identifier_columns=["user_id", "account_id"])
         config = NotebookConfig()
         stage = IngestionStage(config, findings)
         assert stage.get_identifier_columns() == ["user_id", "account_id"]
 
     def test_returns_default_when_no_findings(self):
-        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
         from customer_retention.generators.notebook_generator.config import NotebookConfig
+        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
         config = NotebookConfig()
         stage = IngestionStage(config, None)
         assert stage.get_identifier_columns() == ["customer_id"]
@@ -84,16 +85,16 @@ class TestStageGeneratorGetIdentifierColumns:
 
 class TestStageGeneratorGetFeatureColumns:
     def test_returns_empty_when_no_findings(self):
-        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
         from customer_retention.generators.notebook_generator.config import NotebookConfig
+        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
         config = NotebookConfig()
         stage = IngestionStage(config, None)
         assert stage.get_feature_columns() == []
 
     def test_returns_feature_columns_from_findings(self):
-        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
-        from customer_retention.generators.notebook_generator.config import NotebookConfig
         from customer_retention.core.config import ColumnType as CT
+        from customer_retention.generators.notebook_generator.config import NotebookConfig
+        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
         columns = {
             "age": MockColumnFinding("age", CT.NUMERIC_CONTINUOUS),
             "gender": MockColumnFinding("gender", CT.CATEGORICAL_NOMINAL),
@@ -110,16 +111,16 @@ class TestStageGeneratorGetFeatureColumns:
 
 class TestStageGeneratorGetNumericColumns:
     def test_returns_empty_when_no_findings(self):
-        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
         from customer_retention.generators.notebook_generator.config import NotebookConfig
+        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
         config = NotebookConfig()
         stage = IngestionStage(config, None)
         assert stage.get_numeric_columns() == []
 
     def test_returns_numeric_columns_from_findings(self):
-        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
-        from customer_retention.generators.notebook_generator.config import NotebookConfig
         from customer_retention.core.config import ColumnType as CT
+        from customer_retention.generators.notebook_generator.config import NotebookConfig
+        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
         columns = {
             "age": MockColumnFinding("age", CT.NUMERIC_CONTINUOUS),
             "count": MockColumnFinding("count", CT.NUMERIC_DISCRETE),
@@ -136,16 +137,16 @@ class TestStageGeneratorGetNumericColumns:
 
 class TestStageGeneratorGetCategoricalColumns:
     def test_returns_empty_when_no_findings(self):
-        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
         from customer_retention.generators.notebook_generator.config import NotebookConfig
+        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
         config = NotebookConfig()
         stage = IngestionStage(config, None)
         assert stage.get_categorical_columns() == []
 
     def test_returns_categorical_columns_from_findings(self):
-        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
-        from customer_retention.generators.notebook_generator.config import NotebookConfig
         from customer_retention.core.config import ColumnType as CT
+        from customer_retention.generators.notebook_generator.config import NotebookConfig
+        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
         columns = {
             "age": MockColumnFinding("age", CT.NUMERIC_CONTINUOUS),
             "gender": MockColumnFinding("gender", CT.CATEGORICAL_NOMINAL),
@@ -175,8 +176,8 @@ class TestAllStageProperties:
     ])
     def test_stage_property_returns_correct_enum(self, stage_class, expected_stage):
         from customer_retention.generators.notebook_generator import stages
-        from customer_retention.generators.notebook_generator.config import NotebookConfig
         from customer_retention.generators.notebook_generator.base import NotebookStage
+        from customer_retention.generators.notebook_generator.config import NotebookConfig
         cls = getattr(stages, stage_class)
         config = NotebookConfig()
         instance = cls(config, None)

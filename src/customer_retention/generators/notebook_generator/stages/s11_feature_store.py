@@ -5,6 +5,7 @@ and retrieve them for training with point-in-time correctness.
 """
 
 from typing import List
+
 import nbformat
 
 from ..base import NotebookStage
@@ -258,7 +259,7 @@ print(f"Created feature table: {{FEATURE_TABLE}}")
 '''),
 
             self.cb.section("4. Create Training Set with Point-in-Time Lookups"),
-            self.cb.code(f'''# Create entity DataFrame with observation timestamps
+            self.cb.code('''# Create entity DataFrame with observation timestamps
 entity_df = df.select("entity_id", col("feature_timestamp").alias("event_timestamp"))
 
 # Define feature lookups with timestamp_lookup_key for PIT correctness
@@ -278,7 +279,7 @@ training_set = fe.create_training_set(
 )
 
 training_df = training_set.load_df()
-print(f"Training set: {{training_df.count()}} rows, {{len(training_df.columns)}} columns")
+print(f"Training set: {training_df.count()} rows, {len(training_df.columns)} columns")
 training_df.show(5)
 '''),
 
@@ -331,13 +332,13 @@ training_df.show(5)
 '''),
 
             self.cb.section("7. Summary"),
-            self.cb.code(f'''print("=" * 60)
+            self.cb.code('''print("=" * 60)
 print("Databricks Feature Store Integration Complete")
 print("=" * 60)
-print(f"Feature table: {{FEATURE_TABLE}}")
+print(f"Feature table: {FEATURE_TABLE}")
 print(f"Primary key: entity_id")
 print(f"Timestamp key: feature_timestamp")
-print(f"Training set rows: {{training_df.count()}}")
+print(f"Training set rows: {training_df.count()}")
 print()
 print("Next steps:")
 print("1. Train model using training_set")

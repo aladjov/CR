@@ -1,11 +1,10 @@
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from customer_retention.analysis.interpretability import (
-    ShapExplainer, GlobalExplanation, FeatureImportance
-)
+
+from customer_retention.analysis.interpretability import FeatureImportance, GlobalExplanation, ShapExplainer
 
 
 @pytest.fixture

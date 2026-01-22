@@ -1,8 +1,9 @@
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 from sklearn.linear_model import LogisticRegression
-from customer_retention.stages.modeling import ModelEvaluator, EvaluationResult
+
+from customer_retention.stages.modeling import ModelEvaluator
 
 
 @pytest.fixture

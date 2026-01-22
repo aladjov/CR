@@ -1,12 +1,11 @@
 import pytest
 
-from customer_retention.core.config.column_config import ColumnType
 from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
-from customer_retention.generators.spec_generator.pipeline_spec import (
-    PipelineSpec, SourceSpec, SchemaSpec, ColumnSpec,
-    TransformSpec, FeatureSpec, ModelSpec, QualityGateSpec
-)
+from customer_retention.core.config.column_config import ColumnType
 from customer_retention.generators.spec_generator.databricks_generator import DatabricksSpecGenerator
+from customer_retention.generators.spec_generator.pipeline_spec import (
+    PipelineSpec,
+)
 
 
 @pytest.fixture

@@ -1,7 +1,9 @@
-import pytest
 import json
+
+import pytest
+
+from customer_retention.core.config import ColumnConfig, ColumnType, DataSourceConfig, FileFormat, SourceType
 from customer_retention.stages.ingestion import DataSourceRegistry, LoadResult
-from customer_retention.core.config import DataSourceConfig, SourceType, FileFormat, ColumnConfig, ColumnType
 
 
 class TestDataSourceRegistry:

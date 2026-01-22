@@ -1,15 +1,13 @@
+import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
-from datetime import datetime
-import numpy as np
-from sklearn.metrics import (
-    precision_recall_curve, auc, roc_auc_score,
-    precision_score, recall_score
-)
-import time
 
-from customer_retention.core.compat import pd, DataFrame, Series
+import numpy as np
+from sklearn.metrics import auc, precision_recall_curve, precision_score, recall_score, roc_auc_score
+
+from customer_retention.core.compat import DataFrame, Series
 
 
 class ModelRole(Enum):
@@ -273,7 +271,7 @@ class RollbackManager:
             registry.transition_stage(model_name, to_version, ModelStage.PRODUCTION)
             registry.transition_stage(model_name, from_version, ModelStage.ARCHIVED)
             if self.notify_on_rollback:
-                from customer_retention.stages.monitoring.alert_manager import AlertManager, Alert, AlertLevel
+                from customer_retention.stages.monitoring.alert_manager import Alert, AlertLevel, AlertManager
                 alert_manager = AlertManager()
                 alert = Alert(
                     alert_id=f"rollback_{datetime.now().strftime('%Y%m%d%H%M%S')}",

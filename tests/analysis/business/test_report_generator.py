@@ -1,10 +1,14 @@
-import pytest
-import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
+import pandas as pd
+import pytest
+
 from customer_retention.analysis.business import (
-    ReportGenerator, ExecutiveDashboard, CampaignList, CustomerServiceReport,
-    ProductInsights, GovernanceReport
+    CampaignList,
+    CustomerServiceReport,
+    ExecutiveDashboard,
+    GovernanceReport,
+    ProductInsights,
+    ReportGenerator,
 )
 
 

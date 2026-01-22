@@ -1,12 +1,10 @@
-import pytest
 import pandas as pd
-import numpy as np
+import pytest
 
 from customer_retention.analysis.recommendations.base import (
+    CleaningRecommendation,
     Platform,
     RecommendationResult,
-    BaseRecommendation,
-    CleaningRecommendation,
     TransformRecommendation,
 )
 from customer_retention.analysis.recommendations.pipeline import RecommendationPipeline
@@ -348,7 +346,7 @@ class TestRecommendationPipelineMLflowIntegration:
 
 class TestRecommendationPipelineFromFindings:
     def test_from_findings_returns_pipeline(self):
-        from customer_retention.analysis.auto_explorer.findings import ExplorationFindings, ColumnFinding
+        from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
         from customer_retention.core.config.column_config import ColumnType
         findings = ExplorationFindings(
             source_path="test.csv", source_format="csv", row_count=100, column_count=2,

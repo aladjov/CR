@@ -1,34 +1,34 @@
-from .findings import ColumnFinding, ExplorationFindings, TimeSeriesMetadata, TextProcessingMetadata
-from .explorer import DataExplorer
-from .recommendations import (
-    RecommendationEngine,
-    TargetRecommendation,
-    FeatureRecommendation,
-    CleaningRecommendation,
-    TransformRecommendation
-)
 from .exploration_manager import (
-    ExplorationManager,
-    MultiDatasetFindings,
+    AggregationPlanItem,
     DatasetInfo,
     DatasetRelationshipInfo,
-    AggregationPlanItem,
+    ExplorationManager,
+    MultiDatasetFindings,
 )
+from .explorer import DataExplorer
+from .findings import ColumnFinding, ExplorationFindings, TextProcessingMetadata, TimeSeriesMetadata
 from .layered_recommendations import (
-    LayeredRecommendation,
-    BronzeRecommendations,
-    SilverRecommendations,
-    GoldRecommendations,
-    RecommendationRegistry,
-    NUMERIC_AGGREGATIONS,
-    CATEGORICAL_AGGREGATIONS,
     ALL_AGGREGATIONS,
+    CATEGORICAL_AGGREGATIONS,
+    NUMERIC_AGGREGATIONS,
+    BronzeRecommendations,
+    GoldRecommendations,
+    LayeredRecommendation,
+    RecommendationRegistry,
+    SilverRecommendations,
 )
 from .recommendation_builder import (
-    RecommendationBuilder,
     BronzeBuilder,
-    SilverBuilder,
     GoldBuilder,
+    RecommendationBuilder,
+    SilverBuilder,
+)
+from .recommendations import (
+    CleaningRecommendation,
+    FeatureRecommendation,
+    RecommendationEngine,
+    TargetRecommendation,
+    TransformRecommendation,
 )
 
 __all__ = [

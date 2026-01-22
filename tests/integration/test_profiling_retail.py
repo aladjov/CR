@@ -1,11 +1,10 @@
-import pytest
-import pandas as pd
 from pathlib import Path
+
+import pandas as pd
+import pytest
+
 from customer_retention.core.config import ColumnType
-from customer_retention.stages.profiling import (
-    TypeDetector, ProfilerFactory,
-    ColumnProfile, UniversalMetrics
-)
+from customer_retention.stages.profiling import ProfilerFactory, TypeDetector
 
 
 @pytest.fixture

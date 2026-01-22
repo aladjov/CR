@@ -1,10 +1,9 @@
-import pytest
-import pandas as pd
-import numpy as np
 from datetime import datetime
-from customer_retention.stages.features import (
-    FeatureManifest, FeatureSet, FeatureSetRegistry
-)
+
+import pandas as pd
+import pytest
+
+from customer_retention.stages.features import FeatureManifest, FeatureSet, FeatureSetRegistry
 
 
 class TestFeatureManifest:

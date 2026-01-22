@@ -1,21 +1,9 @@
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .context import (
-    IterationContext,
-    IterationContextManager,
-    IterationStatus,
-    IterationTrigger
-)
-from .recommendation_tracker import (
-    RecommendationTracker,
-    TrackedRecommendation
-)
-from .feedback_collector import (
-    ModelFeedback,
-    ModelFeedbackCollector,
-    FeatureInsight
-)
+from .context import IterationContext, IterationContextManager, IterationStatus, IterationTrigger
+from .feedback_collector import ModelFeedback, ModelFeedbackCollector
+from .recommendation_tracker import RecommendationTracker, TrackedRecommendation
 from .signals import SignalAggregator
 
 
@@ -113,7 +101,7 @@ class IterationOrchestrator:
         new_ctx = self.start_child_iteration(trigger)
 
         insights = self._feedback_collector.analyze_feature_importance(feedback)
-        low_importance = [i.feature_name for i in insights if i.recommendation_to_drop]
+        [i.feature_name for i in insights if i.recommendation_to_drop]
 
         return new_ctx
 

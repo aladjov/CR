@@ -1,13 +1,19 @@
+
 import pytest
-from pathlib import Path
 
 
 class TestDatabricksSpecGeneratorFullCoverage:
     @pytest.fixture
     def full_spec(self):
         from customer_retention.generators.spec_generator.pipeline_spec import (
-            PipelineSpec, SourceSpec, SchemaSpec, ColumnSpec,
-            TransformSpec, FeatureSpec, ModelSpec, QualityGateSpec
+            ColumnSpec,
+            FeatureSpec,
+            ModelSpec,
+            PipelineSpec,
+            QualityGateSpec,
+            SchemaSpec,
+            SourceSpec,
+            TransformSpec,
         )
         spec = PipelineSpec(
             name="test_pipeline",

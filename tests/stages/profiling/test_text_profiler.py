@@ -1,8 +1,8 @@
-import pytest
 import pandas as pd
-from customer_retention.stages.profiling import ColumnProfiler, ProfilerFactory
-from customer_retention.stages.profiling.profile_result import TextMetrics
+import pytest
+
 from customer_retention.core.config import ColumnType
+from customer_retention.stages.profiling import ColumnProfiler, ProfilerFactory
 
 
 @pytest.fixture

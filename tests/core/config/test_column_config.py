@@ -1,6 +1,7 @@
 import pytest
 from pydantic import ValidationError
-from customer_retention.core.config import ColumnType, ColumnConfig
+
+from customer_retention.core.config import ColumnConfig, ColumnType
 
 
 class TestColumnType:

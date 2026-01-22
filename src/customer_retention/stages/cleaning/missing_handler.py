@@ -1,9 +1,10 @@
-from enum import Enum
-from typing import Optional, Any
 from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Optional
+
 import numpy as np
 
-from customer_retention.core.compat import pd, DataFrame, Series
+from customer_retention.core.compat import DataFrame, Series, pd
 from customer_retention.core.config import ColumnType
 
 

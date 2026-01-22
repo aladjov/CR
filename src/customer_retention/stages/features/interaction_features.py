@@ -10,7 +10,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-from customer_retention.core.compat import pd, DataFrame, Series
+from customer_retention.core.compat import DataFrame, Series
 
 
 @dataclass

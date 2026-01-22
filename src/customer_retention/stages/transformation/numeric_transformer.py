@@ -1,9 +1,10 @@
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
-from dataclasses import dataclass, field
+
 import numpy as np
 
-from customer_retention.core.compat import pd, DataFrame, Series
+from customer_retention.core.compat import Series, pd
 
 
 class ScalingStrategy(str, Enum):

@@ -116,7 +116,7 @@ def display_table(df: Any, max_rows: int = 50, title: Optional[str] = None):
     env = detect_environment()
     if env in ["databricks", "jupyter", "ipython"]:
         try:
-            from IPython.display import display, HTML
+            from IPython.display import HTML, display
             if title:
                 display(HTML(f"<h4>{title}</h4>"))
             if hasattr(df, "to_html"):
@@ -163,7 +163,7 @@ def display_summary(findings: Any, charts: Any):
     )
     if env in ["databricks", "jupyter", "ipython"]:
         try:
-            from IPython.display import display, HTML
+            from IPython.display import HTML, display
             display(HTML(html))
         except ImportError:
             print(html)

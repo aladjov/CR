@@ -1,8 +1,11 @@
 from typing import Optional, Union
+
 import pandas as pd
-from .type_inferencer import TypeInferencer
-from .config_generator import ConfigGenerator
+
 from customer_retention.core.config.pipeline_config import PipelineConfig
+
+from .config_generator import ConfigGenerator
+from .type_inferencer import TypeInferencer
 
 
 def discover_and_configure(source: Union[str, pd.DataFrame], project_name: str = "customer_retention",

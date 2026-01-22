@@ -1,7 +1,7 @@
 """Calibration analysis probes for model validation."""
 
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import Dict, List
 
 import numpy as np
 

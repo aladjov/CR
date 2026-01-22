@@ -1,21 +1,20 @@
 import pytest
-import pandas as pd
 
-from customer_retention.core.config.column_config import ColumnType
 from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
-from customer_retention.analysis.recommendations.registry import RecommendationRegistry
 from customer_retention.analysis.recommendations import (
+    DaysSinceRecommendation,
+    ExtractDayOfWeekRecommendation,
+    ExtractMonthRecommendation,
     ImputeRecommendation,
+    LabelEncodeRecommendation,
+    LogTransformRecommendation,
+    MinMaxScaleRecommendation,
+    OneHotEncodeRecommendation,
     OutlierCapRecommendation,
     StandardScaleRecommendation,
-    MinMaxScaleRecommendation,
-    LogTransformRecommendation,
-    OneHotEncodeRecommendation,
-    LabelEncodeRecommendation,
-    ExtractMonthRecommendation,
-    ExtractDayOfWeekRecommendation,
-    DaysSinceRecommendation,
 )
+from customer_retention.analysis.recommendations.registry import RecommendationRegistry
+from customer_retention.core.config.column_config import ColumnType
 
 
 class TestRecommendationRegistryCleaningMap:

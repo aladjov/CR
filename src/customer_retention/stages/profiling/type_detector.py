@@ -1,9 +1,9 @@
-import re
 from typing import Optional
 
-from customer_retention.core.compat import pd, Series, DataFrame, is_numeric_dtype, is_string_dtype, is_datetime64_any_dtype
+from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype, is_numeric_dtype, is_string_dtype, pd
 from customer_retention.core.config.column_config import ColumnType, DatasetGranularity
-from .profile_result import TypeInference, TypeConfidence, GranularityResult
+
+from .profile_result import GranularityResult, TypeConfidence, TypeInference
 
 
 class TypeDetector:
@@ -66,7 +66,7 @@ class TypeDetector:
     def is_identifier(self, series: pd.Series, column_name: str) -> bool:
         column_lower = column_name.lower()
         if any(pattern in column_lower for pattern in self.IDENTIFIER_PATTERNS):
-            self.evidence.append(f"Column name contains identifier pattern")
+            self.evidence.append("Column name contains identifier pattern")
             return True
 
         if len(series) == 0:

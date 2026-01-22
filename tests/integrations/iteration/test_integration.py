@@ -1,8 +1,7 @@
-import pytest
-from pathlib import Path
-import yaml
-import pandas as pd
+
 import numpy as np
+import pandas as pd
+import pytest
 
 
 class TestFullIterationLoop:
@@ -36,11 +35,11 @@ class TestFullIterationLoop:
     def test_complete_iteration_workflow(self, setup_environment):
         from customer_retention.integrations.iteration import (
             IterationOrchestrator,
-            IterationTrigger,
             IterationStatus,
-            TrackedRecommendation,
+            IterationTrigger,
+            ModelFeedback,
             RecommendationType,
-            ModelFeedback
+            TrackedRecommendation,
         )
 
         findings_dir = setup_environment["findings_dir"]
@@ -105,7 +104,7 @@ class TestFullIterationLoop:
         assert ctx2.parent_iteration_id == ctx1.iteration_id
 
         # 9. Get refined recommendations based on feedback
-        from customer_retention.analysis.auto_explorer.findings import ExplorationFindings, ColumnFinding
+        from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
         from customer_retention.core.config.column_config import ColumnType
 
         findings = ExplorationFindings(
@@ -138,17 +137,17 @@ class TestFullIterationLoop:
         assert len(history) == 2
 
     def test_drift_triggered_iteration(self, setup_environment):
+        import numpy as np
+        import pandas as pd
+
         from customer_retention.integrations.iteration import (
             IterationOrchestrator,
-            IterationTrigger,
             IterationStatus,
+            IterationTrigger,
             SignalAggregator,
-            IterationSignal
         )
         from customer_retention.stages.monitoring.drift_detector import DriftDetector
         from customer_retention.stages.monitoring.performance_monitor import PerformanceMonitor
-        import pandas as pd
-        import numpy as np
 
         findings_dir = setup_environment["findings_dir"]
 
@@ -190,9 +189,9 @@ class TestFullIterationLoop:
     def test_performance_drop_triggered_iteration(self, setup_environment):
         from customer_retention.integrations.iteration import (
             IterationOrchestrator,
-            IterationTrigger,
             IterationStatus,
-            SignalAggregator
+            IterationTrigger,
+            SignalAggregator,
         )
         from customer_retention.stages.monitoring.performance_monitor import PerformanceMonitor
 
@@ -216,12 +215,9 @@ class TestFullIterationLoop:
         assert trigger == IterationTrigger.PERFORMANCE_DROP
 
     def test_iteration_with_findings_integration(self, setup_environment):
-        from customer_retention.integrations.iteration import (
-            IterationOrchestrator,
-            IterationTrigger
-        )
-        from customer_retention.analysis.auto_explorer.findings import ExplorationFindings, ColumnFinding
+        from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
         from customer_retention.core.config.column_config import ColumnType
+        from customer_retention.integrations.iteration import IterationOrchestrator, IterationTrigger
 
         findings_dir = setup_environment["findings_dir"]
         orchestrator = IterationOrchestrator(str(findings_dir))
@@ -249,11 +245,10 @@ class TestFullIterationLoop:
     def test_recommendation_tracking_across_iterations(self, setup_environment):
         from customer_retention.integrations.iteration import (
             IterationOrchestrator,
-            IterationTrigger,
             IterationStatus,
-            TrackedRecommendation,
+            IterationTrigger,
             RecommendationType,
-            RecommendationStatus
+            TrackedRecommendation,
         )
 
         findings_dir = setup_environment["findings_dir"]
@@ -296,11 +291,7 @@ class TestFullIterationLoop:
         assert applied[1].applied_in_iteration == ctx2.iteration_id
 
     def test_compare_iterations_metrics(self, setup_environment):
-        from customer_retention.integrations.iteration import (
-            IterationOrchestrator,
-            IterationTrigger,
-            IterationStatus
-        )
+        from customer_retention.integrations.iteration import IterationOrchestrator, IterationStatus, IterationTrigger
 
         findings_dir = setup_environment["findings_dir"]
         orchestrator = IterationOrchestrator(str(findings_dir))

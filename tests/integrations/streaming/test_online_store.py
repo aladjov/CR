@@ -1,11 +1,15 @@
-import pytest
 import time
-from datetime import datetime, timedelta
-from typing import Dict, Any
+from datetime import datetime
+from typing import Dict
+
+import pytest
 
 from customer_retention.integrations.streaming import (
-    OnlineFeatureStore, FeatureRecord, FeatureStoreConfig,
-    BatchSyncResult, TTLConfig, FeatureLookup, FeatureWriteResult
+    FeatureLookup,
+    FeatureRecord,
+    FeatureStoreConfig,
+    OnlineFeatureStore,
+    TTLConfig,
 )
 
 

@@ -1,9 +1,9 @@
 """Business report generation."""
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any
+from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import pd, DataFrame, Series
+from customer_retention.core.compat import DataFrame, Series, pd
 
 
 @dataclass

@@ -1,5 +1,3 @@
-import pytest
-import nbformat
 
 
 class TestCellBuilder:

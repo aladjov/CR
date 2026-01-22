@@ -1,7 +1,8 @@
 from dataclasses import dataclass
-from typing import Tuple, Optional, List
+from typing import Optional
 
 from ..components.enums import Severity
+
 
 @dataclass
 class ThresholdConfig:

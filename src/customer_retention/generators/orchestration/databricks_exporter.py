@@ -1,6 +1,9 @@
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from customer_retention.analysis.auto_explorer.layered_recommendations import LayeredRecommendation, RecommendationRegistry
+from customer_retention.analysis.auto_explorer.layered_recommendations import (
+    LayeredRecommendation,
+    RecommendationRegistry,
+)
 
 if TYPE_CHECKING:
     from customer_retention.analysis.auto_explorer.findings import ExplorationFindings

@@ -1,13 +1,17 @@
+
 import pytest
-from pathlib import Path
 
 
 class TestGenericSpecGeneratorFullCoverage:
     @pytest.fixture
     def full_spec(self):
         from customer_retention.generators.spec_generator.pipeline_spec import (
-            PipelineSpec, SourceSpec, SchemaSpec, ColumnSpec,
-            TransformSpec, ModelSpec
+            ColumnSpec,
+            ModelSpec,
+            PipelineSpec,
+            SchemaSpec,
+            SourceSpec,
+            TransformSpec,
         )
         spec = PipelineSpec(
             name="test_pipeline",

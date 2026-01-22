@@ -1,6 +1,6 @@
 """Tests for TextDimensionalityReducer - TDD first."""
-import pytest
 import numpy as np
+import pytest
 
 
 class TestTextDimensionalityReducerInit:
@@ -85,9 +85,7 @@ class TestTextDimensionalityReducerTransform:
             reducer.transform(embeddings, "text")
 
     def test_transform_returns_reduction_result(self):
-        from customer_retention.stages.profiling.text_reducer import (
-            TextDimensionalityReducer, ReductionResult
-        )
+        from customer_retention.stages.profiling.text_reducer import ReductionResult, TextDimensionalityReducer
         embeddings = np.random.randn(100, 50)
         reducer = TextDimensionalityReducer(variance_threshold=0.5)
         reducer.fit(embeddings)

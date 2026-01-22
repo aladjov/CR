@@ -1,12 +1,14 @@
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Dict, List, Optional
 from datetime import datetime
-import numpy as np
+from enum import Enum
+from typing import Dict, List, Optional
 
-from customer_retention.core.compat import pd, DataFrame, Series
+from customer_retention.core.compat import DataFrame, Series
 from customer_retention.core.components.enums import Severity
-from customer_retention.core.utils.statistics import compute_psi_from_series, compute_psi_categorical, compute_ks_statistic
+from customer_retention.core.utils.statistics import (
+    compute_ks_statistic,
+    compute_psi_from_series,
+)
 
 
 class DriftType(Enum):

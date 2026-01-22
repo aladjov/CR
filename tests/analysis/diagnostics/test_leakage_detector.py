@@ -1,7 +1,8 @@
-import pytest
-import pandas as pd
 import numpy as np
-from customer_retention.analysis.diagnostics import LeakageDetector, LeakageResult, LeakageCheck
+import pandas as pd
+import pytest
+
+from customer_retention.analysis.diagnostics import LeakageDetector
 from customer_retention.core.components.enums import Severity
 
 

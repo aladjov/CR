@@ -1,9 +1,11 @@
 from __future__ import annotations
+
 from typing import Any, Dict, List, Optional, Union
+
 import pandas as pd
 
-from .detection import is_spark_available
 from . import pandas_backend
+from .detection import is_spark_available
 
 
 class DataOps:

@@ -1,11 +1,9 @@
-import pytest
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
+from datetime import timedelta
 
-from customer_retention.stages.temporal.timestamp_manager import (
-    TimestampStrategy, TimestampConfig, TimestampManager
-)
+import pandas as pd
+import pytest
+
+from customer_retention.stages.temporal.timestamp_manager import TimestampConfig, TimestampManager, TimestampStrategy
 
 
 class TestTimestampConfig:

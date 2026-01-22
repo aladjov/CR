@@ -1,10 +1,12 @@
 import pytest
-import nbformat
 
 
 class TestLocalNotebookGenerator:
     def test_generates_all_stages(self):
-        from customer_retention.generators.notebook_generator import LocalNotebookGenerator, NotebookConfig, NotebookStage
+        from customer_retention.generators.notebook_generator import (
+            LocalNotebookGenerator,
+            NotebookConfig,
+        )
         generator = LocalNotebookGenerator(NotebookConfig(), None)
         notebooks = generator.generate_all()
         assert len(notebooks) == 10  # Holdout stage disabled by default
@@ -12,14 +14,22 @@ class TestLocalNotebookGenerator:
             assert stage in notebooks
 
     def test_local_notebook_has_framework_imports(self):
-        from customer_retention.generators.notebook_generator import LocalNotebookGenerator, NotebookConfig, NotebookStage
+        from customer_retention.generators.notebook_generator import (
+            LocalNotebookGenerator,
+            NotebookConfig,
+            NotebookStage,
+        )
         generator = LocalNotebookGenerator(NotebookConfig(), None)
         nb = generator.generate_stage(NotebookStage.INGESTION)
         code = "".join(cell.source for cell in nb.cells if cell.cell_type == "code")
         assert "customer_retention" in code
 
     def test_local_notebook_valid_format(self):
-        from customer_retention.generators.notebook_generator import LocalNotebookGenerator, NotebookConfig, NotebookStage
+        from customer_retention.generators.notebook_generator import (
+            LocalNotebookGenerator,
+            NotebookConfig,
+            NotebookStage,
+        )
         generator = LocalNotebookGenerator(NotebookConfig(), None)
         nb = generator.generate_stage(NotebookStage.CLEANING)
         assert nb.nbformat == 4
@@ -36,20 +46,31 @@ class TestLocalNotebookGenerator:
 
 class TestDatabricksNotebookGenerator:
     def test_generates_all_stages(self):
-        from customer_retention.generators.notebook_generator import DatabricksNotebookGenerator, NotebookConfig, NotebookStage
+        from customer_retention.generators.notebook_generator import (
+            DatabricksNotebookGenerator,
+            NotebookConfig,
+        )
         generator = DatabricksNotebookGenerator(NotebookConfig(), None)
         notebooks = generator.generate_all()
         assert len(notebooks) == 10  # Holdout stage disabled by default
 
     def test_databricks_notebook_no_framework_imports(self):
-        from customer_retention.generators.notebook_generator import DatabricksNotebookGenerator, NotebookConfig, NotebookStage
+        from customer_retention.generators.notebook_generator import (
+            DatabricksNotebookGenerator,
+            NotebookConfig,
+            NotebookStage,
+        )
         generator = DatabricksNotebookGenerator(NotebookConfig(), None)
         nb = generator.generate_stage(NotebookStage.INGESTION)
         code = "".join(cell.source for cell in nb.cells if cell.cell_type == "code")
         assert "from customer_retention" not in code
 
     def test_databricks_uses_spark(self):
-        from customer_retention.generators.notebook_generator import DatabricksNotebookGenerator, NotebookConfig, NotebookStage
+        from customer_retention.generators.notebook_generator import (
+            DatabricksNotebookGenerator,
+            NotebookConfig,
+            NotebookStage,
+        )
         generator = DatabricksNotebookGenerator(NotebookConfig(), None)
         nb = generator.generate_stage(NotebookStage.INGESTION)
         code = "".join(cell.source for cell in nb.cells if cell.cell_type == "code")
@@ -57,7 +78,10 @@ class TestDatabricksNotebookGenerator:
 
     def test_databricks_uses_catalog_schema(self):
         from customer_retention.generators.notebook_generator import (
-            DatabricksNotebookGenerator, NotebookConfig, NotebookStage, FeatureStoreConfig
+            DatabricksNotebookGenerator,
+            FeatureStoreConfig,
+            NotebookConfig,
+            NotebookStage,
         )
         config = NotebookConfig(feature_store=FeatureStoreConfig(catalog="test_cat", schema="test_schema"))
         generator = DatabricksNotebookGenerator(config, None)
@@ -69,7 +93,7 @@ class TestDatabricksNotebookGenerator:
 
 class TestGenerateOrchestrationNotebooks:
     def test_generates_for_both_platforms(self, tmp_path):
-        from customer_retention.generators.notebook_generator import generate_orchestration_notebooks, Platform
+        from customer_retention.generators.notebook_generator import Platform, generate_orchestration_notebooks
         results = generate_orchestration_notebooks(output_dir=str(tmp_path))
         assert Platform.LOCAL in results
         assert Platform.DATABRICKS in results
@@ -77,13 +101,13 @@ class TestGenerateOrchestrationNotebooks:
         assert len(results[Platform.DATABRICKS]) == 10  # Holdout stage disabled by default
 
     def test_generates_local_only(self, tmp_path):
-        from customer_retention.generators.notebook_generator import generate_orchestration_notebooks, Platform
+        from customer_retention.generators.notebook_generator import Platform, generate_orchestration_notebooks
         results = generate_orchestration_notebooks(output_dir=str(tmp_path), platforms=[Platform.LOCAL])
         assert Platform.LOCAL in results
         assert Platform.DATABRICKS not in results
 
     def test_creates_platform_subdirectories(self, tmp_path):
-        from customer_retention.generators.notebook_generator import generate_orchestration_notebooks, Platform
+        from customer_retention.generators.notebook_generator import generate_orchestration_notebooks
         generate_orchestration_notebooks(output_dir=str(tmp_path))
         assert (tmp_path / "local").exists()
         assert (tmp_path / "databricks").exists()
@@ -96,7 +120,11 @@ class TestNotebookCodeCompiles:
         "DEPLOYMENT", "MONITORING", "BATCH_INFERENCE"
     ])
     def test_local_code_compiles(self, stage):
-        from customer_retention.generators.notebook_generator import LocalNotebookGenerator, NotebookConfig, NotebookStage
+        from customer_retention.generators.notebook_generator import (
+            LocalNotebookGenerator,
+            NotebookConfig,
+            NotebookStage,
+        )
         generator = LocalNotebookGenerator(NotebookConfig(), None)
         nb = generator.generate_stage(NotebookStage[stage])
         code = "\n".join(cell.source for cell in nb.cells if cell.cell_type == "code")
@@ -108,7 +136,11 @@ class TestNotebookCodeCompiles:
         "DEPLOYMENT", "MONITORING", "BATCH_INFERENCE"
     ])
     def test_databricks_code_compiles(self, stage):
-        from customer_retention.generators.notebook_generator import DatabricksNotebookGenerator, NotebookConfig, NotebookStage
+        from customer_retention.generators.notebook_generator import (
+            DatabricksNotebookGenerator,
+            NotebookConfig,
+            NotebookStage,
+        )
         generator = DatabricksNotebookGenerator(NotebookConfig(), None)
         nb = generator.generate_stage(NotebookStage[stage])
         code = "\n".join(cell.source for cell in nb.cells if cell.cell_type == "code")

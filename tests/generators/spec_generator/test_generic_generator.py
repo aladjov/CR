@@ -1,9 +1,9 @@
 import pytest
 
-from customer_retention.core.config.column_config import ColumnType
 from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
-from customer_retention.generators.spec_generator.pipeline_spec import PipelineSpec
+from customer_retention.core.config.column_config import ColumnType
 from customer_retention.generators.spec_generator.generic_generator import GenericSpecGenerator
+from customer_retention.generators.spec_generator.pipeline_spec import PipelineSpec
 
 
 @pytest.fixture

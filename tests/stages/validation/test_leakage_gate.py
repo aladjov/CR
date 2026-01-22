@@ -1,8 +1,9 @@
-import pytest
-import pandas as pd
 import numpy as np
-from customer_retention.stages.validation import LeakageGate, LeakageCheckResult
+import pandas as pd
+import pytest
+
 from customer_retention.core.components.enums import Severity
+from customer_retention.stages.validation import LeakageGate
 
 
 class TestHighCorrelationDetection:
@@ -461,10 +462,11 @@ class TestAntiPatternsIntegration:
 
     def test_snapshot_based_training_prevents_leakage(self):
         """Verify that using snapshots with proper temporal filtering prevents leakage."""
-        from customer_retention.stages.temporal import SnapshotManager, UnifiedDataPreparer, ScenarioDetector
-        from datetime import datetime
         import tempfile
+        from datetime import datetime
         from pathlib import Path
+
+        from customer_retention.stages.temporal import ScenarioDetector, UnifiedDataPreparer
 
         np.random.seed(42)
         n = 100

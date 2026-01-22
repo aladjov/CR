@@ -1,12 +1,12 @@
 import ast
-import pytest
-from pathlib import Path
 
-from customer_retention.core.config.column_config import ColumnType
+import pytest
+
 from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
+from customer_retention.core.config.column_config import ColumnType
 from customer_retention.generators.spec_generator.mlflow_pipeline_generator import (
-    MLflowPipelineGenerator,
     MLflowConfig,
+    MLflowPipelineGenerator,
     RecommendationParser,
 )
 

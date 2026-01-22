@@ -1,4 +1,5 @@
 from typing import List
+
 import nbformat
 
 from ..base import NotebookStage
@@ -53,9 +54,9 @@ high_corr = [c for c in upper.columns if any(upper[c] > correlation_threshold)]
 print(f"High correlation features ({{len(high_corr)}}): {{high_corr[:5]}}")
 X = X.drop(columns=high_corr)'''),
             self.cb.section("Save Selected Features"),
-            self.cb.code(f'''selected_df = df[[*id_cols, *X.columns, target_col]].dropna(subset=[target_col])
+            self.cb.code('''selected_df = df[[*id_cols, *X.columns, target_col]].dropna(subset=[target_col])
 selected_df.to_parquet("./experiments/data/gold/customers_selected.parquet", index=False)
-print(f"Selected {{len(X.columns)}} features, saved {{len(selected_df)}} rows")'''),
+print(f"Selected {len(X.columns)} features, saved {len(selected_df)} rows")'''),
         ]
 
     def generate_databricks_cells(self) -> List[nbformat.NotebookNode]:

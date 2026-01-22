@@ -1,9 +1,10 @@
-import pytest
-import pandas as pd
 import numpy as np
-from customer_retention.stages.profiling import BaselineDriftChecker, ProfileResult, ColumnProfile, TypeInference
-from customer_retention.stages.profiling.profile_result import UniversalMetrics, NumericMetrics, CategoricalMetrics
+import pandas as pd
+import pytest
+
 from customer_retention.core.config import ColumnType
+from customer_retention.stages.profiling import BaselineDriftChecker, ColumnProfile, ProfileResult, TypeInference
+from customer_retention.stages.profiling.profile_result import NumericMetrics, UniversalMetrics
 
 
 @pytest.fixture

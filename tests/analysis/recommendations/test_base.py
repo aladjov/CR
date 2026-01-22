@@ -1,16 +1,15 @@
-import pytest
+
 import pandas as pd
-import numpy as np
-from abc import ABC
+import pytest
 
 from customer_retention.analysis.recommendations.base import (
-    Platform,
-    RecommendationResult,
     BaseRecommendation,
     CleaningRecommendation,
-    TransformRecommendation,
-    EncodingRecommendation,
     DatetimeRecommendation,
+    EncodingRecommendation,
+    Platform,
+    RecommendationResult,
+    TransformRecommendation,
 )
 
 

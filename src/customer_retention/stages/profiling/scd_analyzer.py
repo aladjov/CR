@@ -1,7 +1,7 @@
-from typing import Dict, Optional, Any
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
+from typing import Any, Dict, Optional
 
-from customer_retention.core.compat import pd, DataFrame
+from customer_retention.core.compat import pd
 from customer_retention.core.config import DataSourceConfig
 
 

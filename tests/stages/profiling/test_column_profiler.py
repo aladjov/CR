@@ -1,12 +1,8 @@
-import pytest
-import pandas as pd
 import numpy as np
-from customer_retention.stages.profiling import (
-    ColumnProfiler, ProfilerFactory,
-    UniversalMetrics, IdentifierMetrics, TargetMetrics,
-    NumericMetrics, CategoricalMetrics, DatetimeMetrics, BinaryMetrics
-)
+import pandas as pd
+
 from customer_retention.core.config import ColumnType
+from customer_retention.stages.profiling import ProfilerFactory
 
 
 class TestUniversalMetrics:

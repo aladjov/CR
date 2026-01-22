@@ -6,11 +6,12 @@ These tests verify that:
 3. Models trained with the temporal framework have no data leakage
 4. Snapshots are reproducible and versioned correctly
 """
-import pytest
-import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
 
 
 @pytest.fixture
@@ -141,10 +142,11 @@ class TestKaggleScenarioEndToEnd:
 
     def test_full_kaggle_pipeline_no_leakage(self, kaggle_style_data, tmp_path):
         """Complete pipeline from raw Kaggle data to model training without leakage."""
-        from customer_retention.stages.temporal import ScenarioDetector, UnifiedDataPreparer
-        from customer_retention.analysis.diagnostics import LeakageDetector
         from sklearn.ensemble import RandomForestClassifier
         from sklearn.model_selection import train_test_split
+
+        from customer_retention.analysis.diagnostics import LeakageDetector
+        from customer_retention.stages.temporal import ScenarioDetector, UnifiedDataPreparer
 
         # Step 1: Detect scenario and prepare data
         detector = ScenarioDetector()
@@ -229,7 +231,7 @@ class TestProductionScenarioEndToEnd:
         assert "label_timestamp" in unified_df.columns
 
     def test_snapshot_versioning(self, production_style_data, tmp_path):
-        from customer_retention.stages.temporal import ScenarioDetector, UnifiedDataPreparer, SnapshotManager
+        from customer_retention.stages.temporal import ScenarioDetector, UnifiedDataPreparer
 
         detector = ScenarioDetector()
         scenario, ts_config, discovery_result = detector.detect(
@@ -260,7 +262,7 @@ class TestProductionScenarioEndToEnd:
         assert metadata1["data_hash"] == metadata2["data_hash"]
 
     def test_snapshot_reproducibility(self, production_style_data, tmp_path):
-        from customer_retention.stages.temporal import ScenarioDetector, UnifiedDataPreparer, SnapshotManager
+        from customer_retention.stages.temporal import ScenarioDetector, SnapshotManager, UnifiedDataPreparer
 
         detector = ScenarioDetector()
         scenario, ts_config, discovery_result = detector.detect(
@@ -321,10 +323,10 @@ class TestLeakageDetection:
         # This is more of a sanity check
 
     def test_run_all_checks_integration(self, kaggle_style_data):
-        from customer_retention.stages.temporal import ScenarioDetector, UnifiedDataPreparer
-        from customer_retention.analysis.diagnostics import LeakageDetector
-        from pathlib import Path
         import tempfile
+
+        from customer_retention.analysis.diagnostics import LeakageDetector
+        from customer_retention.stages.temporal import ScenarioDetector, UnifiedDataPreparer
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -359,8 +361,8 @@ class TestTemporalFeatureEngineering:
     """Test that temporal features respect point-in-time constraints."""
 
     def test_temporal_features_use_feature_timestamp(self, production_style_data, tmp_path):
+        from customer_retention.stages.features.temporal_features import ReferenceDateSource, TemporalFeatureGenerator
         from customer_retention.stages.temporal import ScenarioDetector, UnifiedDataPreparer
-        from customer_retention.stages.features.temporal_features import TemporalFeatureGenerator, ReferenceDateSource
 
         detector = ScenarioDetector()
         scenario, ts_config, discovery_result = detector.detect(
@@ -390,7 +392,7 @@ class TestSnapshotManager:
     """Test snapshot management functionality."""
 
     def test_list_snapshots(self, kaggle_style_data, tmp_path):
-        from customer_retention.stages.temporal import ScenarioDetector, UnifiedDataPreparer, SnapshotManager
+        from customer_retention.stages.temporal import ScenarioDetector, SnapshotManager, UnifiedDataPreparer
 
         detector = ScenarioDetector()
         scenario, ts_config, discovery_result = detector.detect(
@@ -415,7 +417,7 @@ class TestSnapshotManager:
         assert len(snapshots) >= 2
 
     def test_compare_snapshots(self, kaggle_style_data, tmp_path):
-        from customer_retention.stages.temporal import ScenarioDetector, UnifiedDataPreparer, SnapshotManager
+        from customer_retention.stages.temporal import ScenarioDetector, SnapshotManager, UnifiedDataPreparer
 
         detector = ScenarioDetector()
         scenario, ts_config, discovery_result = detector.detect(
@@ -450,9 +452,10 @@ class TestModelTrainingWithSnapshots:
     """Test model training using versioned snapshots."""
 
     def test_train_model_from_snapshot(self, kaggle_style_data, tmp_path):
-        from customer_retention.stages.temporal import ScenarioDetector, UnifiedDataPreparer, SnapshotManager
         from sklearn.ensemble import GradientBoostingClassifier
         from sklearn.model_selection import cross_val_score
+
+        from customer_retention.stages.temporal import ScenarioDetector, SnapshotManager, UnifiedDataPreparer
 
         # Prepare data and create snapshot
         detector = ScenarioDetector()
@@ -754,8 +757,9 @@ class TestTargetEncodingLeakageAntiPattern:
 
     def test_target_encoding_train_test_separation(self):
         """Verify target encoding only uses training set statistics."""
-        from customer_retention.stages.transformation import CategoricalEncoder, EncodingStrategy
         from sklearn.model_selection import train_test_split
+
+        from customer_retention.stages.transformation import CategoricalEncoder, EncodingStrategy
 
         np.random.seed(42)
         n = 1000
@@ -1042,12 +1046,11 @@ class TestFeatureEngineeringLeakageAntiPatterns:
 
     def test_full_pipeline_leakage_detection(self):
         """End-to-end test that leakage is caught at multiple stages."""
-        from customer_retention.stages.temporal import ScenarioDetector, UnifiedDataPreparer
-        from customer_retention.stages.validation import LeakageGate
-        from customer_retention.analysis.diagnostics import LeakageDetector
         import tempfile
-        from pathlib import Path
         from datetime import datetime
+
+        from customer_retention.analysis.diagnostics import LeakageDetector
+        from customer_retention.stages.temporal import ScenarioDetector, UnifiedDataPreparer
 
         np.random.seed(42)
         n = 200

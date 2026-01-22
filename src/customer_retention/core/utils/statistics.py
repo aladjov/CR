@@ -1,7 +1,9 @@
+from typing import Dict, List, Tuple
+
 import numpy as np
 from scipy import stats
-from typing import Dict, List, Tuple, Union
-from customer_retention.core.compat import pd, Series
+
+from customer_retention.core.compat import Series
 
 
 def compute_psi_numeric(current: Series, reference_hist_edges: List[float], reference_hist_counts: List[int], epsilon: float = 1e-10) -> float:

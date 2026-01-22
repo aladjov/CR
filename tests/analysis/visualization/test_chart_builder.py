@@ -1,6 +1,6 @@
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 
 from customer_retention.analysis.visualization.chart_builder import ChartBuilder
 
@@ -246,7 +246,7 @@ class TestMultiLineChart:
 class TestTemporalDistribution:
     @pytest.fixture
     def temporal_analysis(self):
-        from customer_retention.stages.profiling import TemporalAnalyzer, TemporalGranularity
+        from customer_retention.stages.profiling import TemporalAnalyzer
         analyzer = TemporalAnalyzer()
         dates = pd.Series(pd.date_range("2023-01-01", "2023-12-31", freq="D"))
         return analyzer.analyze(dates)
@@ -377,9 +377,7 @@ class TestGrowthSummaryIndicators:
 class TestSegmentOverview:
     @pytest.fixture
     def segmentation_result(self):
-        from customer_retention.stages.profiling import (
-            SegmentationResult, SegmentProfile, SegmentationMethod
-        )
+        from customer_retention.stages.profiling import SegmentationMethod, SegmentationResult, SegmentProfile
         return SegmentationResult(
             n_segments=3,
             method=SegmentationMethod.KMEANS,
@@ -411,9 +409,7 @@ class TestSegmentOverview:
 class TestSegmentFeatureComparison:
     @pytest.fixture
     def segmentation_result(self):
-        from customer_retention.stages.profiling import (
-            SegmentationResult, SegmentProfile, SegmentationMethod
-        )
+        from customer_retention.stages.profiling import SegmentationMethod, SegmentationResult, SegmentProfile
         return SegmentationResult(
             n_segments=3,
             method=SegmentationMethod.KMEANS,
@@ -456,9 +452,7 @@ class TestSegmentFeatureComparison:
 class TestSegmentRecommendationCard:
     @pytest.fixture
     def segmentation_result(self):
-        from customer_retention.stages.profiling import (
-            SegmentationResult, SegmentProfile, SegmentationMethod
-        )
+        from customer_retention.stages.profiling import SegmentationMethod, SegmentationResult, SegmentProfile
         return SegmentationResult(
             n_segments=3,
             method=SegmentationMethod.KMEANS,
@@ -479,9 +473,7 @@ class TestSegmentRecommendationCard:
         assert fig is not None
 
     def test_single_model_recommendation(self, chart_builder):
-        from customer_retention.stages.profiling import (
-            SegmentationResult, SegmentProfile, SegmentationMethod
-        )
+        from customer_retention.stages.profiling import SegmentationMethod, SegmentationResult, SegmentProfile
         result = SegmentationResult(
             n_segments=1,
             method=SegmentationMethod.KMEANS,
@@ -497,9 +489,7 @@ class TestSegmentRecommendationCard:
         assert fig is not None
 
     def test_strong_segmentation_recommendation(self, chart_builder):
-        from customer_retention.stages.profiling import (
-            SegmentationResult, SegmentProfile, SegmentationMethod
-        )
+        from customer_retention.stages.profiling import SegmentationMethod, SegmentationResult, SegmentProfile
         result = SegmentationResult(
             n_segments=3,
             method=SegmentationMethod.KMEANS,

@@ -1,8 +1,6 @@
-import pytest
 import pandas as pd
-from pathlib import Path
 
-from customer_retention.core.components.base import Component, ComponentResult, ComponentStatus
+from customer_retention.core.components.base import Component, ComponentResult
 from customer_retention.generators.orchestration.context import PipelineContext
 
 

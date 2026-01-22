@@ -1,14 +1,14 @@
 """Tests for TimeSeriesProfiler - TDD approach."""
-import pytest
-import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
 
+import numpy as np
+import pandas as pd
+import pytest
+
 from customer_retention.stages.profiling.time_series_profiler import (
-    TimeSeriesProfiler,
-    TimeSeriesProfile,
-    EntityLifecycle,
     DistributionStats,
+    TimeSeriesProfile,
+    TimeSeriesProfiler,
 )
 
 

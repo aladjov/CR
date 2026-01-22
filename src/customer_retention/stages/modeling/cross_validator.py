@@ -1,15 +1,13 @@
 """Cross-validation strategies for model evaluation."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import pd, DataFrame, Series
 import numpy as np
-from sklearn.model_selection import (
-    StratifiedKFold, RepeatedStratifiedKFold, GroupKFold, cross_val_score
-)
-from sklearn.base import clone
+from sklearn.model_selection import GroupKFold, RepeatedStratifiedKFold, StratifiedKFold, cross_val_score
+
+from customer_retention.core.compat import DataFrame, Series
 
 
 class CVStrategy(Enum):

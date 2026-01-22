@@ -39,17 +39,15 @@ Timestamp Scenarios:
     - synthetic: No temporal information, must use synthetic timestamps
 """
 
-from .timestamp_manager import TimestampStrategy, TimestampConfig, TimestampManager
-from .timestamp_discovery import (
-    TimestampRole, TimestampCandidate, TimestampDiscoveryResult, TimestampDiscoveryEngine
-)
-from .snapshot_manager import SnapshotMetadata, SnapshotManager
-from .point_in_time_join import PointInTimeJoiner
-from .data_preparer import PreparedData, UnifiedDataPreparer
 from .access_guard import AccessContext, DataAccessGuard
-from .scenario_detector import ScenarioDetector
-from .point_in_time_registry import DatasetSnapshot, ConsistencyReport, PointInTimeRegistry
 from .cutoff_analyzer import CutoffAnalysis, CutoffAnalyzer
+from .data_preparer import PreparedData, UnifiedDataPreparer
+from .point_in_time_join import PointInTimeJoiner
+from .point_in_time_registry import ConsistencyReport, DatasetSnapshot, PointInTimeRegistry
+from .scenario_detector import ScenarioDetector
+from .snapshot_manager import SnapshotManager, SnapshotMetadata
+from .timestamp_discovery import TimestampCandidate, TimestampDiscoveryEngine, TimestampDiscoveryResult, TimestampRole
+from .timestamp_manager import TimestampConfig, TimestampManager, TimestampStrategy
 
 # Columns added by the temporal framework for point-in-time correctness.
 # These should be excluded from exploration charts and modeling features.
@@ -86,8 +84,9 @@ def load_data_with_snapshot_preference(findings, output_dir: str = "../explorati
     >>> df, source = load_data_with_snapshot_preference(findings)
     >>> print(f"Loaded from: {source}")
     """
-    import pandas as pd
     from pathlib import Path
+
+    import pandas as pd
 
     # Check if snapshot exists in findings
     snapshot_path = getattr(findings, 'snapshot_path', None)

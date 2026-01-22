@@ -1,11 +1,12 @@
 """Cohort-level interpretability analysis."""
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any, Tuple
+from typing import Any, Dict, List
+
 import numpy as np
 import shap
 
-from customer_retention.core.compat import pd, DataFrame, Series
+from customer_retention.core.compat import DataFrame, Series, pd
 
 
 @dataclass

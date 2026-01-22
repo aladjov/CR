@@ -1,9 +1,10 @@
-import pytest
-from datetime import datetime
+
 import pandas as pd
+import pytest
 
 from customer_retention.stages.temporal.timestamp_discovery import (
-    TimestampDiscoveryEngine, TimestampRole, DatetimeOrderAnalyzer
+    DatetimeOrderAnalyzer,
+    TimestampDiscoveryEngine,
 )
 
 

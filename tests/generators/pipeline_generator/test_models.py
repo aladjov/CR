@@ -1,5 +1,3 @@
-import pytest
-from dataclasses import asdict
 
 
 class TestPipelineTransformationType:
@@ -57,7 +55,10 @@ class TestSourceConfig:
 
 class TestTransformationStep:
     def test_transformation_step_creation(self):
-        from customer_retention.generators.pipeline_generator.models import TransformationStep, PipelineTransformationType
+        from customer_retention.generators.pipeline_generator.models import (
+            PipelineTransformationType,
+            TransformationStep,
+        )
         step = TransformationStep(type=PipelineTransformationType.IMPUTE_NULL, column="age",
                                   parameters={"value": 0}, rationale="Fill missing ages")
         assert step.type == PipelineTransformationType.IMPUTE_NULL
@@ -66,7 +67,10 @@ class TestTransformationStep:
         assert step.rationale == "Fill missing ages"
 
     def test_transformation_step_with_cap_outlier(self):
-        from customer_retention.generators.pipeline_generator.models import TransformationStep, PipelineTransformationType
+        from customer_retention.generators.pipeline_generator.models import (
+            PipelineTransformationType,
+            TransformationStep,
+        )
         step = TransformationStep(type=PipelineTransformationType.CAP_OUTLIER, column="income",
                                   parameters={"lower": 0, "upper": 1000000}, rationale="Cap extreme incomes")
         assert step.parameters["lower"] == 0
@@ -82,7 +86,12 @@ class TestBronzeLayerConfig:
         assert config.transformations == []
 
     def test_bronze_layer_config_with_transformations(self):
-        from customer_retention.generators.pipeline_generator.models import BronzeLayerConfig, SourceConfig, TransformationStep, PipelineTransformationType
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeLayerConfig,
+            PipelineTransformationType,
+            SourceConfig,
+            TransformationStep,
+        )
         source = SourceConfig(name="test", path="/test", format="csv", entity_key="id")
         step = TransformationStep(type=PipelineTransformationType.IMPUTE_NULL, column="col", parameters={"value": 0}, rationale="test")
         config = BronzeLayerConfig(source=source, transformations=[step])
@@ -119,14 +128,22 @@ class TestGoldLayerConfig:
         assert config.feature_selections == []
 
     def test_gold_layer_config_with_encodings(self):
-        from customer_retention.generators.pipeline_generator.models import GoldLayerConfig, TransformationStep, PipelineTransformationType
+        from customer_retention.generators.pipeline_generator.models import (
+            GoldLayerConfig,
+            PipelineTransformationType,
+            TransformationStep,
+        )
         encoding = TransformationStep(type=PipelineTransformationType.ENCODE, column="category",
                                        parameters={"method": "one_hot"}, rationale="One-hot encode")
         config = GoldLayerConfig(encodings=[encoding])
         assert len(config.encodings) == 1
 
     def test_gold_layer_config_with_scalings(self):
-        from customer_retention.generators.pipeline_generator.models import GoldLayerConfig, TransformationStep, PipelineTransformationType
+        from customer_retention.generators.pipeline_generator.models import (
+            GoldLayerConfig,
+            PipelineTransformationType,
+            TransformationStep,
+        )
         scaling = TransformationStep(type=PipelineTransformationType.SCALE, column="amount",
                                      parameters={"method": "standard"}, rationale="Standardize")
         config = GoldLayerConfig(scalings=[scaling])
@@ -135,7 +152,13 @@ class TestGoldLayerConfig:
 
 class TestPipelineConfig:
     def test_pipeline_config_creation(self):
-        from customer_retention.generators.pipeline_generator.models import PipelineConfig, SourceConfig, BronzeLayerConfig, SilverLayerConfig, GoldLayerConfig
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeLayerConfig,
+            GoldLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
         source = SourceConfig(name="customers", path="/data/customers.csv", format="csv", entity_key="id")
         bronze = {"customers": BronzeLayerConfig(source=source)}
         silver = SilverLayerConfig()
@@ -148,7 +171,13 @@ class TestPipelineConfig:
         assert config.output_dir == "/output"
 
     def test_pipeline_config_multiple_sources(self):
-        from customer_retention.generators.pipeline_generator.models import PipelineConfig, SourceConfig, BronzeLayerConfig, SilverLayerConfig, GoldLayerConfig
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeLayerConfig,
+            GoldLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
         source1 = SourceConfig(name="customers", path="/c.csv", format="csv", entity_key="id")
         source2 = SourceConfig(name="orders", path="/o.csv", format="csv", entity_key="customer_id")
         bronze = {"customers": BronzeLayerConfig(source=source1), "orders": BronzeLayerConfig(source=source2)}

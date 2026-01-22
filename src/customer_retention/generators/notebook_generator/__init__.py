@@ -1,15 +1,24 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from .base import NotebookGenerator, NotebookStage
-from .config import NotebookConfig, Platform, MLflowConfig, FeatureStoreConfig, OutputFormat
+
+if TYPE_CHECKING:
+    from customer_retention.analysis.auto_explorer import ExplorationFindings
 from .cell_builder import CellBuilder
-from .local_generator import LocalNotebookGenerator
+from .config import FeatureStoreConfig, MLflowConfig, NotebookConfig, OutputFormat, Platform
 from .databricks_generator import DatabricksNotebookGenerator
-from .runner import NotebookRunner, NotebookValidationResult, ValidationReport, validate_generated_notebooks, ScriptRunner
-from .script_generator import ScriptGenerator, LocalScriptGenerator, DatabricksScriptGenerator
+from .local_generator import LocalNotebookGenerator
 from .project_init import ProjectInitializer, initialize_project
+from .runner import (
+    NotebookRunner,
+    NotebookValidationResult,
+    ScriptRunner,
+    ValidationReport,
+    validate_generated_notebooks,
+)
+from .script_generator import DatabricksScriptGenerator, LocalScriptGenerator, ScriptGenerator
 
 
 @dataclass

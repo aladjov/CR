@@ -1,12 +1,13 @@
-from pathlib import Path
-from typing import Union, Optional, List, Any
 import hashlib
+from pathlib import Path
+from typing import List, Optional, Union
 
-from customer_retention.core.compat import pd, DataFrame, Series, to_pandas
+from customer_retention.core.compat import DataFrame, Series, pd, to_pandas
 from customer_retention.core.config.column_config import ColumnType
-from customer_retention.stages.profiling import TypeDetector, ProfilerFactory
+from customer_retention.stages.profiling import ProfilerFactory, TypeDetector
 from customer_retention.stages.temporal import TEMPORAL_METADATA_COLS
-from .findings import ExplorationFindings, ColumnFinding
+
+from .findings import ColumnFinding, ExplorationFindings
 
 
 class DataExplorer:
@@ -207,7 +208,7 @@ class DataExplorer:
 
     def _display_summary(self, findings: ExplorationFindings):
         try:
-            from customer_retention.analysis.visualization import display_summary, ChartBuilder
+            from customer_retention.analysis.visualization import ChartBuilder, display_summary
             display_summary(findings, ChartBuilder())
         except ImportError:
             self._print_text_summary(findings)

@@ -28,12 +28,13 @@ Example:
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Any
+from typing import Any, Optional
+
 import pandas as pd
 
-from .timestamp_manager import TimestampManager, TimestampConfig
-from .snapshot_manager import SnapshotManager
 from .point_in_time_join import PointInTimeJoiner
+from .snapshot_manager import SnapshotManager
+from .timestamp_manager import TimestampConfig, TimestampManager
 
 
 @dataclass

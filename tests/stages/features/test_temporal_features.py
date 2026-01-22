@@ -1,8 +1,8 @@
-import pytest
+
 import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-from customer_retention.stages.features import TemporalFeatureGenerator, ReferenceDateSource
+import pytest
+
+from customer_retention.stages.features import ReferenceDateSource, TemporalFeatureGenerator
 
 
 class TestReferenceDateHandling:

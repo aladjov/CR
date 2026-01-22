@@ -1,14 +1,13 @@
 """Tests for TimeWindowAggregator - TDD approach."""
-import pytest
-import pandas as pd
+from datetime import timedelta
+
 import numpy as np
-from datetime import datetime, timedelta
+import pandas as pd
+import pytest
 
 from customer_retention.stages.profiling.time_window_aggregator import (
-    TimeWindowAggregator,
     AggregationPlan,
-    TimeWindow,
-    AggregationType,
+    TimeWindowAggregator,
 )
 
 

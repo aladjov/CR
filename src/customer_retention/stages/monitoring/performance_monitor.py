@@ -1,15 +1,13 @@
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Dict, List, Optional
 from datetime import datetime
-import numpy as np
-from sklearn.metrics import (
-    precision_recall_curve, auc, roc_auc_score,
-    precision_score, recall_score, brier_score_loss
-)
-from sklearn.calibration import calibration_curve
+from enum import Enum
+from typing import Dict, List, Optional
 
-from customer_retention.core.compat import pd, DataFrame, Series
+import numpy as np
+from sklearn.calibration import calibration_curve
+from sklearn.metrics import auc, brier_score_loss, precision_recall_curve, precision_score, recall_score, roc_auc_score
+
+from customer_retention.core.compat import Series
 
 
 class PerformanceStatus(Enum):

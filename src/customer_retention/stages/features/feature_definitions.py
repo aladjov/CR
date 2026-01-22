@@ -7,9 +7,9 @@ This module provides classes for documenting and managing feature metadata.
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Any, Dict, List, Optional, Tuple
 
-from customer_retention.core.compat import pd, DataFrame
+from customer_retention.core.compat import DataFrame, pd
 
 
 class FeatureCategory(Enum):

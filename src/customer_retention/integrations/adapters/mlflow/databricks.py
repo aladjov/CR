@@ -1,6 +1,8 @@
 from typing import Any, Dict, Optional
-from .base import MLflowAdapter
+
 from customer_retention.core.compat.detection import is_spark_available
+
+from .base import MLflowAdapter
 
 try:
     import mlflow
@@ -49,5 +51,4 @@ class DatabricksMLflow(MLflowAdapter):
         return mlflow.sklearn.load_model(model_uri)
 
     def transition_stage(self, model_name: str, version: str, stage: str) -> None:
-        from mlflow.entities.model_registry import ModelVersionStatus
         self._client.set_model_version_tag(name=model_name, version=version, key="stage", value=stage)

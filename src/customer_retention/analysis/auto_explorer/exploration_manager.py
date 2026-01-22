@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 import yaml
 
 from customer_retention.core.config.column_config import DatasetGranularity
+
 from .findings import ExplorationFindings
 
 if TYPE_CHECKING:

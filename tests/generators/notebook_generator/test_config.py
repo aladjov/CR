@@ -1,5 +1,3 @@
-import pytest
-from dataclasses import FrozenInstanceError
 
 
 class TestMLflowConfig:
@@ -55,13 +53,13 @@ class TestNotebookConfig:
         assert config.platform == Platform.DATABRICKS
 
     def test_mlflow_config_embedded(self):
-        from customer_retention.generators.notebook_generator.config import NotebookConfig, MLflowConfig
+        from customer_retention.generators.notebook_generator.config import MLflowConfig, NotebookConfig
         mlflow_cfg = MLflowConfig(experiment_name="test_exp")
         config = NotebookConfig(mlflow=mlflow_cfg)
         assert config.mlflow.experiment_name == "test_exp"
 
     def test_feature_store_config_embedded(self):
-        from customer_retention.generators.notebook_generator.config import NotebookConfig, FeatureStoreConfig
+        from customer_retention.generators.notebook_generator.config import FeatureStoreConfig, NotebookConfig
         fs_cfg = FeatureStoreConfig(table_name="my_features")
         config = NotebookConfig(feature_store=fs_cfg)
         assert config.feature_store.table_name == "my_features"

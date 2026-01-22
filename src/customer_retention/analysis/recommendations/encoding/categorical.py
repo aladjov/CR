@@ -1,7 +1,8 @@
 from typing import Any, Dict, List, Optional
+
 import pandas as pd
 
-from ..base import EncodingRecommendation, Platform, RecommendationResult
+from ..base import EncodingRecommendation, RecommendationResult
 
 
 class OneHotEncodeRecommendation(EncodingRecommendation):

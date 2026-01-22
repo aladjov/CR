@@ -1,10 +1,8 @@
-import pytest
 import pandas as pd
-import numpy as np
+import pytest
+
 from customer_retention.core.config import ColumnType
-from customer_retention.stages.cleaning import (
-    MissingValueHandler, ImputationStrategy, ImputationResult
-)
+from customer_retention.stages.cleaning import ImputationStrategy, MissingValueHandler
 
 
 class TestImputationStrategies:

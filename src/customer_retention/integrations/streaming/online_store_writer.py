@@ -1,11 +1,11 @@
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, List
-from collections import defaultdict
-import time
 import statistics
+import time
+from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Dict, List, Optional
 
-from customer_retention.core.compat import pd, DataFrame
+from customer_retention.core.compat import DataFrame, pd
 
 
 @dataclass

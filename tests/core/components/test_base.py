@@ -1,5 +1,6 @@
-import pytest
 from abc import ABC
+
+import pytest
 
 
 class TestComponentStatus:
@@ -83,7 +84,6 @@ class TestComponent:
 
     def test_concrete_component_can_instantiate(self):
         from customer_retention.core.components.base import Component, ComponentResult, ComponentStatus
-        from customer_retention.generators.orchestration.context import PipelineContext
 
         class TestComponent(Component):
             def validate_inputs(self, context):

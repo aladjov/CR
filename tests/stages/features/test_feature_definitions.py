@@ -1,9 +1,9 @@
-import pytest
-import pandas as pd
 from datetime import datetime
-from customer_retention.stages.features import (
-    FeatureDefinition, FeatureCategory, LeakageRisk, FeatureCatalog
-)
+
+import pandas as pd
+import pytest
+
+from customer_retention.stages.features import FeatureCatalog, FeatureCategory, FeatureDefinition, LeakageRisk
 
 
 class TestFeatureDefinition:

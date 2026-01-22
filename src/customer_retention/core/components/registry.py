@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Type
+
 from .base import Component
 
 
@@ -45,8 +46,7 @@ class ComponentRegistry:
 
 
 def get_default_registry() -> ComponentRegistry:
-    from .components import (Ingester, Profiler, Transformer, FeatureEngineer,
-                             Trainer, Validator, Explainer, Deployer)
+    from .components import Deployer, Explainer, FeatureEngineer, Ingester, Profiler, Trainer, Transformer, Validator
     registry = ComponentRegistry()
     registry.register("ingester", Ingester, "data_preparation")
     registry.register("profiler", Profiler, "data_preparation", ["ingester"])

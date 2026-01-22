@@ -1,9 +1,9 @@
 """Automatic validation rule generation from exploration findings."""
 
-from typing import Dict, Any
+from typing import Any, Dict
+
 from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
 from customer_retention.core.config.column_config import ColumnType
-
 
 PERCENTAGE_PATTERNS = ["rate", "pct", "percent", "ratio"]
 SKIP_TYPES = [ColumnType.IDENTIFIER, ColumnType.DATETIME, ColumnType.TEXT,

@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 
 class PipelineTransformationType(Enum):

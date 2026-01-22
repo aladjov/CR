@@ -1,7 +1,10 @@
 from typing import Any, Dict, List, Optional
+
 import pandas as pd
+
+from customer_retention.core.compat.detection import get_spark_session, is_spark_available
+
 from .base import DeltaStorage
-from customer_retention.core.compat.detection import is_spark_available, get_spark_session
 
 
 class DatabricksDelta(DeltaStorage):

@@ -1,6 +1,7 @@
-from dataclasses import dataclass, field
-from typing import Dict, List, TYPE_CHECKING
 import time
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Dict, List
+
 from .base import Component, ComponentResult, ComponentStatus
 from .registry import ComponentRegistry
 

@@ -1,8 +1,17 @@
-import pytest
 from customer_retention.core.config import (
-    DedupStrategy, BronzeConfig, SilverConfig, GoldConfig,
-    ModelingConfig, ValidationConfig, PathConfig, PipelineConfig,
-    DataSourceConfig, SourceType, FileFormat, ColumnType, ColumnConfig
+    BronzeConfig,
+    ColumnConfig,
+    ColumnType,
+    DataSourceConfig,
+    DedupStrategy,
+    FileFormat,
+    GoldConfig,
+    ModelingConfig,
+    PathConfig,
+    PipelineConfig,
+    SilverConfig,
+    SourceType,
+    ValidationConfig,
 )
 
 

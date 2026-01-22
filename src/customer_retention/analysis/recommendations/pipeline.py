@@ -1,11 +1,12 @@
-from typing import Any, Dict, Iterator, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional
+
 import pandas as pd
 
 from .base import BaseRecommendation, Platform
 
 if TYPE_CHECKING:
-    from customer_retention.stages.features.feature_definitions import FeatureCatalog
     from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
+    from customer_retention.stages.features.feature_definitions import FeatureCatalog
 
 
 class RecommendationPipeline:

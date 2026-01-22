@@ -1,10 +1,9 @@
 """Fairness analysis for model predictions."""
 
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional
-import numpy as np
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
-from customer_retention.core.compat import pd, DataFrame, Series
+from customer_retention.core.compat import Series, pd
 
 
 @dataclass

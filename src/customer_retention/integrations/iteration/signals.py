@@ -1,9 +1,12 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-from customer_retention.core.compat import pd, DataFrame
+from customer_retention.core.compat import DataFrame
+
+if TYPE_CHECKING:
+    from .context import IterationTrigger
 
 
 class IterationSignal(Enum):

@@ -30,12 +30,12 @@ Example:
 """
 
 from .definitions import (
-    TemporalFeatureDefinition,
     FeatureComputationType,
     TemporalAggregation,
+    TemporalFeatureDefinition,
 )
-from .registry import FeatureRegistry
 from .manager import FeatureStoreManager, get_feature_store_manager
+from .registry import FeatureRegistry
 
 __all__ = [
     "TemporalFeatureDefinition",

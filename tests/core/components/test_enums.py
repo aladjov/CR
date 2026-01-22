@@ -1,4 +1,3 @@
-import pytest
 
 
 class TestSeverity:
@@ -34,6 +33,6 @@ class TestModelType:
 
 class TestModelTypeExport:
     def test_modeling_module_exports_model_type(self):
-        from customer_retention.stages.modeling import ModelType
         from customer_retention.core.components.enums import ModelType as CoreModelType
+        from customer_retention.stages.modeling import ModelType
         assert ModelType is CoreModelType

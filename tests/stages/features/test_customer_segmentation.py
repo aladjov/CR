@@ -1,11 +1,13 @@
 """Tests for customer segmentation module."""
 
-import pytest
 import pandas as pd
-import numpy as np
+import pytest
+
 from customer_retention.stages.features import (
-    CustomerSegmenter, SegmentationType,
-    SegmentDefinition, SegmentationResult
+    CustomerSegmenter,
+    SegmentationResult,
+    SegmentationType,
+    SegmentDefinition,
 )
 
 

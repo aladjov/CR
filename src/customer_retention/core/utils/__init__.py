@@ -1,7 +1,19 @@
 from ..components.enums import Severity
-from .statistics import compute_psi_numeric, compute_psi_categorical, compute_psi_from_series, compute_ks_statistic, compute_chi_square
-from .leakage import LeakageThresholds, classify_correlation, classify_separation, calculate_class_overlap, DEFAULT_THRESHOLDS
+from .leakage import (
+    DEFAULT_THRESHOLDS,
+    LeakageThresholds,
+    calculate_class_overlap,
+    classify_correlation,
+    classify_separation,
+)
 from .severity import ThresholdConfig, classify_by_thresholds, severity_recommendation
+from .statistics import (
+    compute_chi_square,
+    compute_ks_statistic,
+    compute_psi_categorical,
+    compute_psi_from_series,
+    compute_psi_numeric,
+)
 
 __all__ = [
     "Severity",

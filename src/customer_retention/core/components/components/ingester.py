@@ -1,7 +1,9 @@
 from typing import List
-from ..base import Component, ComponentResult
-from customer_retention.generators.orchestration.context import PipelineContext
+
 from customer_retention.core.compat import ops
+from customer_retention.generators.orchestration.context import PipelineContext
+
+from ..base import Component, ComponentResult
 
 
 class Ingester(Component):

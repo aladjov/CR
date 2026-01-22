@@ -1,4 +1,3 @@
-import pytest
 import pandas as pd
 
 
@@ -31,7 +30,7 @@ class TestTypeInferencer:
         assert inferencer is not None
 
     def test_infer_returns_result(self):
-        from customer_retention.analysis.discovery.type_inferencer import TypeInferencer, InferenceResult
+        from customer_retention.analysis.discovery.type_inferencer import InferenceResult, TypeInferencer
         df = pd.DataFrame({
             "id": [1, 2, 3],
             "name": ["a", "b", "c"],
@@ -51,16 +50,16 @@ class TestTypeInferencer:
 
     def test_infer_detects_target(self):
         from customer_retention.analysis.discovery.type_inferencer import TypeInferencer
-        from customer_retention.core.config.column_config import ColumnType
         df = pd.DataFrame({"churn": [0, 1, 0, 1, 0]})
         inferencer = TypeInferencer()
         result = inferencer.infer(df)
         assert result.target_column == "churn"
 
     def test_infer_detects_numeric(self):
+        import numpy as np
+
         from customer_retention.analysis.discovery.type_inferencer import TypeInferencer
         from customer_retention.core.config.column_config import ColumnType
-        import numpy as np
         df = pd.DataFrame({"amount": np.random.uniform(0, 1000, 100)})
         inferencer = TypeInferencer()
         result = inferencer.infer(df)

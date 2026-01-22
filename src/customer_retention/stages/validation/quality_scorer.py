@@ -6,13 +6,11 @@ data quality scores based on validation results from the exploration phase.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Any, List
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
-from .data_validators import DuplicateResult, DateLogicResult, RangeValidationResult
-from .timeseries_detector import (
-    TimeSeriesCharacteristics, TimeSeriesValidationResult, DatasetType
-)
+from .data_validators import DateLogicResult, DuplicateResult, RangeValidationResult
+from .timeseries_detector import TimeSeriesCharacteristics, TimeSeriesValidationResult
 
 
 class QualityLevel(Enum):

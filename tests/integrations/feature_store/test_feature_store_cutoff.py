@@ -1,11 +1,11 @@
-import pytest
 from datetime import datetime
-import pandas as pd
-from pathlib import Path
 
+import pandas as pd
+import pytest
+
+from customer_retention.integrations.feature_store.definitions import FeatureComputationType, TemporalFeatureDefinition
 from customer_retention.integrations.feature_store.manager import FeastBackend, FeatureStoreManager
 from customer_retention.integrations.feature_store.registry import FeatureRegistry
-from customer_retention.integrations.feature_store.definitions import TemporalFeatureDefinition, FeatureComputationType
 
 PASSTHROUGH_FEATURE = FeatureComputationType.PASSTHROUGH
 

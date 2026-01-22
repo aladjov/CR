@@ -1,17 +1,15 @@
 """Tests for ExplorationManager and MultiDatasetFindings - TDD approach."""
-import pytest
-import pandas as pd
-import numpy as np
-from pathlib import Path
-import tempfile
 import shutil
+import tempfile
+from pathlib import Path
+
+import pytest
 
 from customer_retention.analysis.auto_explorer import ExplorationFindings
 from customer_retention.analysis.auto_explorer.exploration_manager import (
+    DatasetInfo,
     ExplorationManager,
     MultiDatasetFindings,
-    DatasetInfo,
-    DatasetRelationshipInfo,
 )
 from customer_retention.core.config.column_config import DatasetGranularity
 
@@ -343,7 +341,6 @@ class TestSelectionConnectsToRegistry:
         assert "emails" not in registry.sources
 
     def test_registry_has_sources_for_selected_only(self, temp_explorations_dir, sample_entity_findings, sample_event_findings, sample_email_findings):
-        from customer_retention.analysis.auto_explorer.layered_recommendations import RecommendationRegistry
 
         manager = ExplorationManager(explorations_dir=temp_explorations_dir)
         multi = manager.create_multi_dataset_findings()
@@ -395,7 +392,6 @@ class TestAggregatedFindingsDiscovery:
     @pytest.fixture
     def event_findings_with_aggregation(self, temp_explorations_dir, sample_event_findings, aggregated_event_findings):
         """Update event findings to mark aggregation as executed."""
-        from customer_retention.analysis.auto_explorer.findings import TimeSeriesMetadata
 
         # Load and update original findings
         findings = ExplorationFindings.load(str(sample_event_findings))

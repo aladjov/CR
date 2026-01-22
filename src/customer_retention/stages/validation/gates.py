@@ -1,7 +1,9 @@
 from abc import ABC, abstractmethod
-from typing import Optional, Any
 from datetime import datetime
+from typing import Any, Optional
+
 from pydantic import BaseModel
+
 from customer_retention.core.compat import DataFrame
 from customer_retention.core.components.enums import Severity
 

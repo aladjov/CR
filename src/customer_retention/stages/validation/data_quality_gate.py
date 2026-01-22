@@ -1,9 +1,10 @@
 import time
-from datetime import datetime
-from customer_retention.core.compat import pd, DataFrame, is_datetime64_any_dtype, Timestamp
-from .gates import ValidationGate, GateResult, ValidationIssue, Severity
-from customer_retention.core.config.pipeline_config import PipelineConfig, BronzeConfig
+
+from customer_retention.core.compat import DataFrame, Timestamp, is_datetime64_any_dtype, pd
 from customer_retention.core.config.column_config import ColumnType
+from customer_retention.core.config.pipeline_config import BronzeConfig, PipelineConfig
+
+from .gates import GateResult, Severity, ValidationGate, ValidationIssue
 
 
 class DataQualityGate(ValidationGate):
@@ -43,13 +44,13 @@ class DataQualityGate(ValidationGate):
 
             if missing_pct > 0.5:
                 issues.append(self.create_issue(
-                    "DQ001", f"Critical missing values in column",
+                    "DQ001", "Critical missing values in column",
                     Severity.CRITICAL, column, missing_count, total_rows,
                     "Consider dropping this column or investigating data source"
                 ))
             elif missing_pct > 0.3:
                 issues.append(self.create_issue(
-                    "DQ002", f"High missing values in column",
+                    "DQ002", "High missing values in column",
                     Severity.HIGH, column, missing_count, total_rows,
                     "Review imputation strategy or consider feature engineering"
                 ))
@@ -107,7 +108,7 @@ class DataQualityGate(ValidationGate):
         null_count = df[target_column].isna().sum()
         if null_count > 0:
             issues.append(self.create_issue(
-                "DQ021", f"Target column has null values",
+                "DQ021", "Target column has null values",
                 Severity.CRITICAL, target_column, null_count, len(df),
                 "Drop rows with null target or investigate data quality"
             ))
@@ -131,13 +132,13 @@ class DataQualityGate(ValidationGate):
 
         if minority_pct < 0.01:
             issues.append(self.create_issue(
-                "DQ022", f"Severe class imbalance in target",
+                "DQ022", "Severe class imbalance in target",
                 Severity.HIGH, target_column, minority_count, total_rows,
                 "Consider oversampling, undersampling, or SMOTE"
             ))
         elif minority_pct < 0.1:
             issues.append(self.create_issue(
-                "DQ023", f"Moderate class imbalance in target",
+                "DQ023", "Moderate class imbalance in target",
                 Severity.MEDIUM, target_column, minority_count, total_rows,
                 "Monitor model performance on minority class"
             ))
@@ -165,7 +166,7 @@ class DataQualityGate(ValidationGate):
 
                 if future_count > 0:
                     issues.append(self.create_issue(
-                        "DQ030", f"Future dates detected",
+                        "DQ030", "Future dates detected",
                         Severity.HIGH, column, future_count, len(df),
                         "Verify data source or timezone handling"
                     ))
@@ -192,7 +193,7 @@ class DataQualityGate(ValidationGate):
 
                 if violation_count > 0:
                     issues.append(self.create_issue(
-                        "DQ031", f"Temporal logic violation: created > firstorder",
+                        "DQ031", "Temporal logic violation: created > firstorder",
                         Severity.HIGH, "created,firstorder", violation_count, len(df),
                         "Review date logic in data source"
                     ))
@@ -215,7 +216,7 @@ class DataQualityGate(ValidationGate):
                     try:
                         pd.to_numeric(column_data.dropna(), errors='raise')
                         issues.append(self.create_issue(
-                            "DQ040", f"Numeric column stored as string",
+                            "DQ040", "Numeric column stored as string",
                             Severity.MEDIUM, col_config.name, len(df), len(df),
                             "Convert to numeric type during processing",
                             auto_fixable=True

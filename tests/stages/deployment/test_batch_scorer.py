@@ -1,12 +1,11 @@
-import pytest
-import pandas as pd
+from unittest.mock import MagicMock
+
 import numpy as np
-from datetime import datetime
-from unittest.mock import MagicMock, patch
+import pandas as pd
+import pytest
 from sklearn.ensemble import RandomForestClassifier
-from customer_retention.stages.deployment import (
-    BatchScorer, ScoringConfig, ScoringResult, RiskSegment
-)
+
+from customer_retention.stages.deployment import BatchScorer, RiskSegment, ScoringConfig
 
 
 @pytest.fixture

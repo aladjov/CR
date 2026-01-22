@@ -1,9 +1,9 @@
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Any
-import re
+from typing import Any, Dict, List, Optional
 
-from customer_retention.analysis.auto_explorer.findings import ExplorationFindings, ColumnFinding
+from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
 from customer_retention.core.config.column_config import ColumnType
 
 
@@ -237,7 +237,7 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
                     f"    # Impute {col_name} with mode",
                     f"    if df['{col_name}'].isna().any():",
                     f"        mode_val = df['{col_name}'].mode().iloc[0] if not df['{col_name}'].mode().empty else None",
-                    f"        if mode_val is not None:",
+                    "        if mode_val is not None:",
                     f"            cleaning_stats['{col_name}_imputed'] = df['{col_name}'].isna().sum()",
                     f"            df['{col_name}'] = df['{col_name}'].fillna(mode_val)",
                     "",
@@ -270,7 +270,7 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
                 f"    # Drop rare categories in {col_name} (< {threshold}%)",
                 f"    value_counts = df['{col_name}'].value_counts(normalize=True)",
                 f"    rare_values = value_counts[value_counts < {threshold / 100}].index",
-                f"    if len(rare_values) > 0:",
+                "    if len(rare_values) > 0:",
                 f"        cleaning_stats['{col_name}_rare_dropped'] = len(rare_values)",
                 f"        df.loc[df['{col_name}'].isin(rare_values), '{col_name}'] = df['{col_name}'].mode().iloc[0]",
                 "",
@@ -279,9 +279,9 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
         return lines
 
     def generate_transform_functions(self, findings: ExplorationFindings) -> str:
-        numeric_cols = self._get_columns_by_type(findings,
+        self._get_columns_by_type(findings,
             [ColumnType.NUMERIC_CONTINUOUS, ColumnType.NUMERIC_DISCRETE])
-        categorical_cols = self._get_columns_by_type(findings,
+        self._get_columns_by_type(findings,
             [ColumnType.CATEGORICAL_NOMINAL, ColumnType.CATEGORICAL_ORDINAL])
 
         transform_actions = self._build_transform_actions(findings)

@@ -4,17 +4,18 @@ This module provides a unified interface for feature store operations
 that works with both Feast (local) and Databricks (production) backends.
 """
 
+import hashlib
+import json
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
-import hashlib
-import json
+
 import pandas as pd
 
-from .definitions import TemporalFeatureDefinition, FeatureComputationType
+from customer_retention.stages.temporal import PointInTimeRegistry, SnapshotManager
+
 from .registry import FeatureRegistry
-from customer_retention.stages.temporal import TimestampConfig, SnapshotManager, PointInTimeRegistry
 
 
 class FeatureStoreBackend(ABC):
@@ -314,7 +315,7 @@ class DatabricksBackend(FeatureStoreBackend):
         cutoff_date: Optional[datetime] = None,
     ) -> str:
         from pyspark.sql import SparkSession
-        from pyspark.sql.types import StructType, StructField, StringType, FloatType, IntegerType, TimestampType
+        from pyspark.sql.types import FloatType, IntegerType, StringType, StructField, StructType, TimestampType
 
         spark = SparkSession.builder.getOrCreate()
 
@@ -364,8 +365,8 @@ class DatabricksBackend(FeatureStoreBackend):
         timestamp_column: str = "event_timestamp",
     ) -> pd.DataFrame:
         """Get point-in-time correct historical features."""
-        from pyspark.sql import SparkSession
         from databricks.feature_engineering import FeatureLookup
+        from pyspark.sql import SparkSession
 
         spark = SparkSession.builder.getOrCreate()
         entity_spark = spark.createDataFrame(entity_df)
@@ -399,8 +400,8 @@ class DatabricksBackend(FeatureStoreBackend):
         feature_refs: list[str],
     ) -> dict[str, Any]:
         """Get features for online serving via Model Serving."""
-        from pyspark.sql import SparkSession
         from databricks.feature_engineering import FeatureLookup
+        from pyspark.sql import SparkSession
 
         spark = SparkSession.builder.getOrCreate()
         entity_df = pd.DataFrame(entity_keys)

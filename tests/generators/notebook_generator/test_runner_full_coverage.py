@@ -1,6 +1,3 @@
-import pytest
-from pathlib import Path
-import nbformat
 
 
 class TestNotebookRunnerExceptionHandling:
@@ -23,16 +20,16 @@ class TestNotebookRunnerExceptionHandling:
 
 class TestValidateGeneratedNotebooksFunction:
     def test_validates_with_default_platforms(self, tmp_path):
+        from customer_retention.generators.notebook_generator import Platform, generate_orchestration_notebooks
         from customer_retention.generators.notebook_generator.runner import validate_generated_notebooks
-        from customer_retention.generators.notebook_generator import generate_orchestration_notebooks, Platform
         generate_orchestration_notebooks(output_dir=str(tmp_path), platforms=[Platform.LOCAL])
         reports = validate_generated_notebooks(str(tmp_path))
         assert "local" in reports
         assert reports["local"].all_passed
 
     def test_validates_with_custom_platforms(self, tmp_path):
+        from customer_retention.generators.notebook_generator import Platform, generate_orchestration_notebooks
         from customer_retention.generators.notebook_generator.runner import validate_generated_notebooks
-        from customer_retention.generators.notebook_generator import generate_orchestration_notebooks, Platform
         generate_orchestration_notebooks(output_dir=str(tmp_path), platforms=[Platform.DATABRICKS])
         reports = validate_generated_notebooks(str(tmp_path), platforms=["databricks"])
         assert "databricks" in reports
@@ -80,7 +77,7 @@ class TestScriptRunnerSyntaxFailure:
 
 class TestValidationReportLongError:
     def test_to_markdown_truncates_long_error(self):
-        from customer_retention.generators.notebook_generator.runner import ValidationReport, NotebookValidationResult
+        from customer_retention.generators.notebook_generator.runner import NotebookValidationResult, ValidationReport
         long_error = "A" * 100
         results = [NotebookValidationResult("test", False, 1.0, error=long_error)]
         report = ValidationReport(results=results, platform="local")

@@ -1,11 +1,14 @@
-import pytest
 import time
-from datetime import datetime, timedelta
 from typing import Dict
 
+import pytest
+
 from customer_retention.integrations.streaming import (
-    EarlyWarningModel, WarningLevel, WarningResult,
-    EarlyWarningConfig, SignalDetector, SignalType
+    EarlyWarningConfig,
+    EarlyWarningModel,
+    SignalDetector,
+    SignalType,
+    WarningLevel,
 )
 
 
@@ -322,7 +325,8 @@ class TestEdgeCases:
 
 class TestIntegrationWithChapter8Alerts:
     def test_warning_to_alert_conversion(self, early_warning_model, critical_risk_features):
-        from customer_retention.stages.monitoring import Alert, AlertLevel as MonitoringAlertLevel
+        from customer_retention.stages.monitoring import Alert
+        from customer_retention.stages.monitoring import AlertLevel as MonitoringAlertLevel
         result = early_warning_model.predict("CUST001", critical_risk_features)
         alert = result.to_alert()
         assert isinstance(alert, Alert)

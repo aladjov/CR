@@ -1,9 +1,8 @@
 """Tests for automatic validation rule generation."""
 
-import pytest
-from customer_retention.stages.validation.rule_generator import RuleGenerator
 from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
 from customer_retention.core.config.column_config import ColumnType
+from customer_retention.stages.validation.rule_generator import RuleGenerator
 
 
 def make_column(name: str, col_type: ColumnType, **metrics) -> ColumnFinding:

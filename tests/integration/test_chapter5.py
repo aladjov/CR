@@ -1,19 +1,27 @@
-import pytest
-import pandas as pd
-import numpy as np
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+import pytest
+
 from customer_retention.stages.modeling import (
-    DataSplitter, SplitStrategy,
-    ImbalanceHandler, ImbalanceStrategy, ClassWeightMethod,
-    BaselineTrainer, ModelType,
-    ModelEvaluator,
-    CrossValidator, CVStrategy,
-    HyperparameterTuner, SearchStrategy,
-    ThresholdOptimizer, OptimizationObjective,
+    BaselineTrainer,
+    ClassWeightMethod,
+    CrossValidator,
+    CVStrategy,
+    DataSplitter,
+    FeatureScaler,
+    HyperparameterTuner,
+    ImbalanceHandler,
+    ImbalanceStrategy,
     ModelComparator,
-    FeatureScaler, ScalerType,
-    MLflowLogger,
+    ModelEvaluator,
+    ModelType,
+    OptimizationObjective,
+    ScalerType,
+    SearchStrategy,
+    SplitStrategy,
+    ThresholdOptimizer,
 )
 from customer_retention.stages.validation import ModelValidityGate
 
@@ -372,8 +380,8 @@ class TestFullPipeline:
         X = retail_data[feature_columns].fillna(0)
         y = retail_data["retained"]
 
-        from sklearn.linear_model import LogisticRegression
         from sklearn.ensemble import RandomForestClassifier
+        from sklearn.linear_model import LogisticRegression
 
         lr = LogisticRegression(max_iter=1000, random_state=42)
         lr.fit(X, y)

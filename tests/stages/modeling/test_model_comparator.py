@@ -1,11 +1,10 @@
-import pytest
-import pandas as pd
 import numpy as np
-from sklearn.linear_model import LogisticRegression
+import pandas as pd
+import pytest
 from sklearn.ensemble import RandomForestClassifier
-from customer_retention.stages.modeling import (
-    ModelComparator, ComparisonResult, ModelMetrics
-)
+from sklearn.linear_model import LogisticRegression
+
+from customer_retention.stages.modeling import ModelComparator
 
 
 @pytest.fixture

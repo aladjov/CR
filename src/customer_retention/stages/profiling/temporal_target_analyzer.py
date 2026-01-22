@@ -1,6 +1,7 @@
 """Temporal feature analysis with respect to a binary target."""
-from dataclasses import dataclass, field
-from typing import Optional, List
+from dataclasses import dataclass
+from typing import List, Optional
+
 import numpy as np
 import pandas as pd
 
@@ -167,7 +168,7 @@ class TemporalTargetAnalyzer:
             return 'stable'
 
         rates = yearly_stats['retention_rate'].values
-        years = yearly_stats['period'].values
+        yearly_stats['period'].values
 
         # Simple linear regression
         if len(rates) >= 2:

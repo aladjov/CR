@@ -1,6 +1,6 @@
-import pytest
-from pathlib import Path
 from abc import ABC
+
+import pytest
 
 try:
     import mlflow
@@ -62,8 +62,9 @@ class TestLocalMLflowLogging:
 @requires_mlflow
 class TestLocalMLflowModel:
     def test_log_model_returns_uri(self, tmp_path):
-        from customer_retention.integrations.adapters.mlflow import LocalMLflow
         from sklearn.linear_model import LogisticRegression
+
+        from customer_retention.integrations.adapters.mlflow import LocalMLflow
         adapter = LocalMLflow(tracking_uri=str(tmp_path / "mlruns"))
         adapter.start_run(experiment_name="test_exp")
         model = LogisticRegression()
@@ -73,9 +74,10 @@ class TestLocalMLflowModel:
         adapter.end_run()
 
     def test_load_model_returns_model(self, tmp_path):
-        from customer_retention.integrations.adapters.mlflow import LocalMLflow
-        from sklearn.linear_model import LogisticRegression
         import numpy as np
+        from sklearn.linear_model import LogisticRegression
+
+        from customer_retention.integrations.adapters.mlflow import LocalMLflow
         adapter = LocalMLflow(tracking_uri=str(tmp_path / "mlruns"))
         adapter.start_run(experiment_name="test_exp")
         model = LogisticRegression()
@@ -89,9 +91,10 @@ class TestLocalMLflowModel:
 @requires_mlflow
 class TestLocalMLflowRegistry:
     def test_log_model_with_registered_name(self, tmp_path):
-        from customer_retention.integrations.adapters.mlflow import LocalMLflow
-        from sklearn.linear_model import LogisticRegression
         import numpy as np
+        from sklearn.linear_model import LogisticRegression
+
+        from customer_retention.integrations.adapters.mlflow import LocalMLflow
         adapter = LocalMLflow(tracking_uri=str(tmp_path / "mlruns"))
         adapter.start_run(experiment_name="test_exp")
         model = LogisticRegression()
@@ -103,8 +106,8 @@ class TestLocalMLflowRegistry:
 
 class TestDatabricksMLflowMocked:
     def test_databricks_mlflow_requires_spark(self):
-        from customer_retention.integrations.adapters.mlflow import DatabricksMLflow
         from customer_retention.core.compat.detection import is_spark_available
+        from customer_retention.integrations.adapters.mlflow import DatabricksMLflow
         if not is_spark_available():
             with pytest.raises(ImportError):
                 DatabricksMLflow()
@@ -127,7 +130,7 @@ class TestExperimentTrackerInit:
 class TestExperimentTrackerExploration:
     @pytest.fixture
     def sample_findings(self):
-        from customer_retention.analysis.auto_explorer.findings import ExplorationFindings, ColumnFinding
+        from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
         from customer_retention.core.config.column_config import ColumnType
         return ExplorationFindings(
             source_path="test_data.csv",
@@ -200,7 +203,7 @@ class TestExperimentTrackerExploration:
 class TestExperimentTrackerPipeline:
     @pytest.fixture
     def sample_pipeline(self):
-        from customer_retention.analysis.recommendations import RecommendationPipeline, ImputeRecommendation
+        from customer_retention.analysis.recommendations import ImputeRecommendation, RecommendationPipeline
         pipeline = RecommendationPipeline([
             ImputeRecommendation(columns=["age"], strategy="median"),
             ImputeRecommendation(columns=["income"], strategy="mean"),
@@ -222,8 +225,9 @@ class TestExperimentTrackerPipeline:
         assert run.data.params["recommendation_count"] == "2"
 
     def test_log_pipeline_logs_generated_code(self, tmp_path, sample_pipeline):
-        from customer_retention.integrations.adapters.mlflow import ExperimentTracker
         import os
+
+        from customer_retention.integrations.adapters.mlflow import ExperimentTracker
         tracker = ExperimentTracker(tracking_uri=str(tmp_path / "mlruns"))
         run_id = tracker.log_pipeline_execution(sample_pipeline)
         artifacts_path = mlflow.artifacts.download_artifacts(run_id=run_id)
@@ -233,8 +237,8 @@ class TestExperimentTrackerPipeline:
 @requires_mlflow
 class TestExperimentTrackerSearch:
     def test_list_exploration_runs(self, tmp_path):
-        from customer_retention.integrations.adapters.mlflow import ExperimentTracker
         from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
+        from customer_retention.integrations.adapters.mlflow import ExperimentTracker
         tracker = ExperimentTracker(tracking_uri=str(tmp_path / "mlruns"))
         findings = ExplorationFindings(
             source_path="test.csv", source_format="csv", row_count=100, column_count=3
@@ -245,8 +249,8 @@ class TestExperimentTrackerSearch:
         assert runs[0]["data"]["tags"]["stage"] == "exploration"
 
     def test_get_best_run(self, tmp_path):
-        from customer_retention.integrations.adapters.mlflow import ExperimentTracker
         from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
+        from customer_retention.integrations.adapters.mlflow import ExperimentTracker
         tracker = ExperimentTracker(tracking_uri=str(tmp_path / "mlruns"))
         for score in [70, 90, 80]:
             findings = ExplorationFindings(

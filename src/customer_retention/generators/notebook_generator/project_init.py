@@ -1,5 +1,5 @@
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -153,7 +153,7 @@ dev = [
         return None
 
     def _generate_orchestration(self, project_path: Path) -> None:
-        from . import generate_orchestration_notebooks, Platform
+        from . import Platform, generate_orchestration_notebooks
         platforms = [Platform(p) for p in (self.platforms or ["local", "databricks"])]
         output_dir = project_path / "generated_pipelines"
         generate_orchestration_notebooks(

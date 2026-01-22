@@ -1,10 +1,11 @@
-from dataclasses import dataclass, field, asdict
-from datetime import datetime
-from typing import Dict, List, Optional, Any
 import json
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
 import yaml
 
-from customer_retention.core.config.column_config import ColumnType, ColumnConfig, DatasetGranularity
+from customer_retention.core.config.column_config import ColumnConfig, ColumnType, DatasetGranularity
 
 
 def _convert_to_native(obj: Any) -> Any:

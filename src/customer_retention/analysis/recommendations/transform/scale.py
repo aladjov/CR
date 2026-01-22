@@ -1,8 +1,8 @@
 from typing import Any, Dict, List, Optional, Tuple
-import pandas as pd
-import numpy as np
 
-from ..base import TransformRecommendation, Platform, RecommendationResult
+import pandas as pd
+
+from ..base import RecommendationResult, TransformRecommendation
 
 
 class StandardScaleRecommendation(TransformRecommendation):

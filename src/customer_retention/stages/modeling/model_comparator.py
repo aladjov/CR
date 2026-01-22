@@ -1,14 +1,18 @@
 """Model comparison and selection for customer retention prediction."""
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import pd, DataFrame, Series
-import numpy as np
 from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score,
-    roc_auc_score, average_precision_score,
+    accuracy_score,
+    average_precision_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
 )
+
+from customer_retention.core.compat import DataFrame, Series
 
 
 @dataclass

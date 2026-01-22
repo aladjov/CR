@@ -1,9 +1,17 @@
-from typing import Optional
 import json
-from .type_inferencer import InferenceResult
-from customer_retention.core.config.pipeline_config import PipelineConfig, BronzeConfig, SilverConfig, GoldConfig, ModelingConfig
-from customer_retention.core.config.source_config import DataSourceConfig, SourceType, FileFormat
+from typing import Optional
+
 from customer_retention.core.config.column_config import ColumnConfig
+from customer_retention.core.config.pipeline_config import (
+    BronzeConfig,
+    GoldConfig,
+    ModelingConfig,
+    PipelineConfig,
+    SilverConfig,
+)
+from customer_retention.core.config.source_config import DataSourceConfig, FileFormat, SourceType
+
+from .type_inferencer import InferenceResult
 
 
 class ConfigGenerator:

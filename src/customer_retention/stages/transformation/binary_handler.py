@@ -1,8 +1,9 @@
-from typing import Optional, Any
 from dataclasses import dataclass, field
+from typing import Any, Optional
+
 import numpy as np
 
-from customer_retention.core.compat import pd, Series
+from customer_retention.core.compat import Series
 
 
 @dataclass

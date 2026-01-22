@@ -1,16 +1,16 @@
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 
 from customer_retention.stages.profiling.segment_analyzer import (
+    ClusterVisualizationResult,
+    DimensionReductionMethod,
+    FullSegmentationResult,
     SegmentAnalyzer,
+    SegmentationDecisionMetrics,
+    SegmentationMethod,
     SegmentationResult,
     SegmentProfile,
-    SegmentationMethod,
-    DimensionReductionMethod,
-    ClusterVisualizationResult,
-    SegmentationDecisionMetrics,
-    FullSegmentationResult,
 )
 
 

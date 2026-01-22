@@ -1,6 +1,6 @@
-import pytest
+
 import pandas as pd
-from datetime import datetime
+import pytest
 
 from customer_retention.stages.temporal.point_in_time_join import PointInTimeJoiner
 

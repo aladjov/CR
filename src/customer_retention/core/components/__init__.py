@@ -1,7 +1,7 @@
 from .base import Component, ComponentResult, ComponentStatus
-from .registry import ComponentRegistry, ComponentRegistration, get_default_registry
+from .enums import ModelType, Severity
 from .orchestrator import Orchestrator, OrchestratorResult
-from .enums import Severity, ModelType
+from .registry import ComponentRegistration, ComponentRegistry, get_default_registry
 
 __all__ = [
     "Component", "ComponentResult", "ComponentStatus",

@@ -1,4 +1,5 @@
 from typing import List
+
 import nbformat
 
 from ..base import NotebookStage
@@ -84,13 +85,13 @@ for col in categorical_cols:
         cleaning_stats[f"{{col}}_nulls_imputed"] = nulls_before
         print(f"Imputed {{col}}: {{nulls_before}} missing values")'''),
             self.cb.section("Handle Outliers"),
-            self.cb.code(f'''outlier_handler = OutlierHandler(method="iqr", treatment="cap")
+            self.cb.code('''outlier_handler = OutlierHandler(method="iqr", treatment="cap")
 for col in numeric_cols:
     if col in df.columns:
         q1, q3 = df[col].quantile([0.25, 0.75])
         iqr = q3 - q1
         outliers = ((df[col] < q1 - 1.5*iqr) | (df[col] > q3 + 1.5*iqr)).sum()
-        cleaning_stats[f"{{col}}_outliers_capped"] = outliers
+        cleaning_stats[f"{col}_outliers_capped"] = outliers
         df[col] = outlier_handler.fit_transform(df[col])
 print("Outliers capped using IQR method")'''),
             self.cb.section("Log Cleaning Statistics to MLflow"),
@@ -151,7 +152,7 @@ for col_name in categorical_cols:
 mlflow.log_param("categorical_strategy", "mode")
 print("Categorical columns imputed with mode")'''),
             self.cb.section("Handle Outliers with IQR"),
-            self.cb.code(f'''for col_name in numeric_cols:
+            self.cb.code('''for col_name in numeric_cols:
     quantiles = df.approxQuantile(col_name, [0.25, 0.75], 0.05)
     if len(quantiles) == 2:
         q1, q3 = quantiles
@@ -161,7 +162,7 @@ print("Categorical columns imputed with mode")'''),
         df = df.withColumn(col_name, when(col(col_name) < lower, lower)
                           .when(col(col_name) > upper, upper)
                           .otherwise(col(col_name)))
-mlflow.log_params({{"outlier_method": "iqr", "outlier_treatment": "cap"}})
+mlflow.log_params({"outlier_method": "iqr", "outlier_treatment": "cap"})
 print("Outliers capped using IQR")'''),
             self.cb.section("Log Cleaning Statistics"),
             self.cb.code('''final_count = df.count()

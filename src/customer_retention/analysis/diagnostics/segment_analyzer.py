@@ -1,13 +1,13 @@
 """Segment performance analysis probes."""
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import Dict, List
 
 import numpy as np
+from sklearn.metrics import average_precision_score, precision_score, recall_score, roc_auc_score
 
-from customer_retention.core.compat import pd, DataFrame, Series
+from customer_retention.core.compat import DataFrame, Series, pd
 from customer_retention.core.components.enums import Severity
-from sklearn.metrics import precision_score, recall_score, roc_auc_score, average_precision_score
 
 
 @dataclass
@@ -118,5 +118,5 @@ class SegmentPerformanceAnalyzer:
         if not high_issues:
             return "No significant segment gaps. Continue with global model."
         if len(high_issues) == 1:
-            return f"One segment underperforms. Consider adding segment as feature."
+            return "One segment underperforms. Consider adding segment as feature."
         return "Multiple segments underperform. Consider segment-specific models."

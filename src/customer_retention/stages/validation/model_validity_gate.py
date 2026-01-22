@@ -1,7 +1,7 @@
 """Model Validity Gate (Checkpoint 4) for customer retention model validation."""
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 from customer_retention.core.components.enums import Severity
 

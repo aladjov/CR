@@ -1,10 +1,14 @@
 from abc import ABC, abstractmethod
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
+
 import nbformat
 
 from .config import NotebookConfig
+
+if TYPE_CHECKING:
+    from customer_retention.analysis.auto_explorer import ExplorationFindings
 
 
 class NotebookStage(str, Enum):

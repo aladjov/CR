@@ -1,10 +1,9 @@
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 from sklearn.linear_model import LogisticRegression
-from customer_retention.stages.modeling import (
-    ThresholdOptimizer, OptimizationObjective, ThresholdResult
-)
+
+from customer_retention.stages.modeling import OptimizationObjective, ThresholdOptimizer
 
 
 @pytest.fixture

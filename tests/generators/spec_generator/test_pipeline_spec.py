@@ -1,18 +1,19 @@
-import pytest
 import json
+
+import pytest
 import yaml
 
-from customer_retention.core.config.column_config import ColumnType
 from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
+from customer_retention.core.config.column_config import ColumnType
 from customer_retention.generators.spec_generator.pipeline_spec import (
-    PipelineSpec,
-    SourceSpec,
-    SchemaSpec,
     ColumnSpec,
-    TransformSpec,
     FeatureSpec,
     ModelSpec,
-    QualityGateSpec
+    PipelineSpec,
+    QualityGateSpec,
+    SchemaSpec,
+    SourceSpec,
+    TransformSpec,
 )
 
 

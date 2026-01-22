@@ -1,9 +1,8 @@
-import pytest
-import pandas as pd
 import numpy as np
-from customer_retention.stages.modeling import (
-    BaselineTrainer, ModelType, TrainingConfig, TrainedModel
-)
+import pandas as pd
+import pytest
+
+from customer_retention.stages.modeling import BaselineTrainer, ModelType, TrainingConfig
 
 
 @pytest.fixture

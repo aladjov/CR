@@ -5,6 +5,7 @@ with point-in-time correctness for feature retrieval.
 """
 
 from typing import List
+
 import nbformat
 
 from ..base import NotebookStage
@@ -382,7 +383,7 @@ print("3. Monitor model performance over time")'''),
         catalog = self.config.feature_store.catalog
         schema = self.config.feature_store.schema
         model_name = self.config.mlflow.model_name
-        target = self.get_target_column()
+        self.get_target_column()
         threshold = self.config.threshold
 
         return self.header_cells() + [
@@ -437,7 +438,7 @@ entity_df.show(5)'''),
             self.cb.section("4. Define Feature Lookups with Point-in-Time"),
             self.cb.markdown('''The `timestamp_lookup_key` parameter ensures that features are retrieved
 as they existed at the specified inference timestamp - no future data leakage.'''),
-            self.cb.code(f'''# Define feature lookups with PIT correctness
+            self.cb.code('''# Define feature lookups with PIT correctness
 # The timestamp_lookup_key ensures features are retrieved as of inference_timestamp
 feature_lookups = [
     FeatureLookup(
@@ -448,14 +449,14 @@ feature_lookups = [
 ]
 
 print("Feature lookups configured with Point-in-Time correctness")
-print(f"  Feature Table: {{FEATURE_TABLE}}")
+print(f"  Feature Table: {FEATURE_TABLE}")
 print(f"  Lookup Key: entity_id")
 print(f"  Timestamp Key: inference_timestamp")'''),
 
             self.cb.section("5. Score with Feature Store (PIT-Correct)"),
             self.cb.markdown('''Use `fe.score_batch()` to automatically retrieve features with PIT correctness
 and apply the model. This ensures training-serving consistency.'''),
-            self.cb.code(f'''# Score using the feature store with automatic PIT feature retrieval
+            self.cb.code('''# Score using the feature store with automatic PIT feature retrieval
 # This is the recommended approach for production inference
 try:
     # Method 1: Use fe.score_batch for automatic feature lookup
@@ -466,7 +467,7 @@ try:
     )
     print("Scored using fe.score_batch with automatic feature lookup")
 except Exception as e:
-    print(f"fe.score_batch not available: {{e}}")
+    print(f"fe.score_batch not available: {e}")
     print("Falling back to manual feature retrieval...")
 
     # Method 2: Manual feature retrieval with PIT join

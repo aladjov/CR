@@ -1,7 +1,5 @@
+
 import pytest
-from datetime import datetime
-from pathlib import Path
-import yaml
 
 
 class TestIterationOrchestrator:
@@ -20,8 +18,8 @@ class TestIterationOrchestrator:
         assert orchestrator is not None
 
     def test_start_new_iteration(self, setup_findings_dir):
+        from customer_retention.integrations.iteration.context import IterationStatus, IterationTrigger
         from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
-        from customer_retention.integrations.iteration.context import IterationTrigger, IterationStatus
 
         orchestrator = IterationOrchestrator(str(setup_findings_dir))
         ctx = orchestrator.start_new_iteration(IterationTrigger.INITIAL)
@@ -32,8 +30,8 @@ class TestIterationOrchestrator:
         assert ctx.status == IterationStatus.EXPLORING
 
     def test_get_current_iteration(self, setup_findings_dir):
-        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
         from customer_retention.integrations.iteration.context import IterationTrigger
+        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
 
         orchestrator = IterationOrchestrator(str(setup_findings_dir))
         ctx = orchestrator.start_new_iteration(IterationTrigger.INITIAL)
@@ -43,8 +41,8 @@ class TestIterationOrchestrator:
         assert current.iteration_id == ctx.iteration_id
 
     def test_start_child_iteration(self, setup_findings_dir):
-        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
         from customer_retention.integrations.iteration.context import IterationTrigger
+        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
 
         orchestrator = IterationOrchestrator(str(setup_findings_dir))
         parent = orchestrator.start_new_iteration(IterationTrigger.INITIAL)
@@ -54,8 +52,8 @@ class TestIterationOrchestrator:
         assert child.parent_iteration_id == parent.iteration_id
 
     def test_update_iteration_status(self, setup_findings_dir):
+        from customer_retention.integrations.iteration.context import IterationStatus, IterationTrigger
         from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
-        from customer_retention.integrations.iteration.context import IterationTrigger, IterationStatus
 
         orchestrator = IterationOrchestrator(str(setup_findings_dir))
         orchestrator.start_new_iteration(IterationTrigger.INITIAL)
@@ -65,8 +63,8 @@ class TestIterationOrchestrator:
         assert current.status == IterationStatus.TRAINING
 
     def test_record_model_metrics(self, setup_findings_dir):
-        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
         from customer_retention.integrations.iteration.context import IterationTrigger
+        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
 
         orchestrator = IterationOrchestrator(str(setup_findings_dir))
         orchestrator.start_new_iteration(IterationTrigger.INITIAL)
@@ -79,10 +77,11 @@ class TestIterationOrchestrator:
         assert current.model_artifact_path == "/models/v1"
 
     def test_track_recommendation(self, setup_findings_dir):
-        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
         from customer_retention.integrations.iteration.context import IterationTrigger
+        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            TrackedRecommendation, RecommendationType
+            RecommendationType,
+            TrackedRecommendation,
         )
 
         orchestrator = IterationOrchestrator(str(setup_findings_dir))
@@ -101,10 +100,12 @@ class TestIterationOrchestrator:
         assert tracker.get("rec_001") is not None
 
     def test_apply_recommendation(self, setup_findings_dir):
-        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
         from customer_retention.integrations.iteration.context import IterationTrigger
+        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            TrackedRecommendation, RecommendationType, RecommendationStatus
+            RecommendationStatus,
+            RecommendationType,
+            TrackedRecommendation,
         )
 
         orchestrator = IterationOrchestrator(str(setup_findings_dir))
@@ -130,10 +131,12 @@ class TestIterationOrchestrator:
         assert "rec_001" in current.applied_recommendations
 
     def test_skip_recommendation(self, setup_findings_dir):
-        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
         from customer_retention.integrations.iteration.context import IterationTrigger
+        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            TrackedRecommendation, RecommendationType, RecommendationStatus
+            RecommendationStatus,
+            RecommendationType,
+            TrackedRecommendation,
         )
 
         orchestrator = IterationOrchestrator(str(setup_findings_dir))
@@ -157,9 +160,9 @@ class TestIterationOrchestrator:
         assert "rec_002" in current.skipped_recommendations
 
     def test_collect_feedback(self, setup_findings_dir):
-        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
         from customer_retention.integrations.iteration.context import IterationTrigger
         from customer_retention.integrations.iteration.feedback_collector import ModelFeedback
+        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
 
         orchestrator = IterationOrchestrator(str(setup_findings_dir))
         orchestrator.start_new_iteration(IterationTrigger.INITIAL)
@@ -177,8 +180,8 @@ class TestIterationOrchestrator:
         assert saved_feedback.model_type == "RandomForest"
 
     def test_check_for_iteration_triggers(self, setup_findings_dir):
-        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
         from customer_retention.integrations.iteration.context import IterationTrigger
+        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
 
         orchestrator = IterationOrchestrator(str(setup_findings_dir))
         orchestrator.start_new_iteration(IterationTrigger.INITIAL)
@@ -188,8 +191,8 @@ class TestIterationOrchestrator:
         assert should_trigger is False
 
     def test_trigger_manual_iteration(self, setup_findings_dir):
-        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
         from customer_retention.integrations.iteration.context import IterationTrigger
+        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
 
         orchestrator = IterationOrchestrator(str(setup_findings_dir))
         orchestrator.start_new_iteration(IterationTrigger.INITIAL)
@@ -201,9 +204,9 @@ class TestIterationOrchestrator:
         assert trigger == IterationTrigger.MANUAL
 
     def test_prepare_iteration_from_feedback(self, setup_findings_dir):
-        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
-        from customer_retention.integrations.iteration.context import IterationTrigger, IterationStatus
+        from customer_retention.integrations.iteration.context import IterationStatus, IterationTrigger
         from customer_retention.integrations.iteration.feedback_collector import ModelFeedback
+        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
 
         orchestrator = IterationOrchestrator(str(setup_findings_dir))
         orchestrator.start_new_iteration(IterationTrigger.INITIAL)
@@ -224,11 +227,11 @@ class TestIterationOrchestrator:
         assert new_ctx.trigger == IterationTrigger.MANUAL
 
     def test_get_refined_recommendations(self, setup_findings_dir):
-        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
+        from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
+        from customer_retention.core.config.column_config import ColumnType
         from customer_retention.integrations.iteration.context import IterationTrigger
         from customer_retention.integrations.iteration.feedback_collector import ModelFeedback
-        from customer_retention.analysis.auto_explorer.findings import ExplorationFindings, ColumnFinding
-        from customer_retention.core.config.column_config import ColumnType
+        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
 
         orchestrator = IterationOrchestrator(str(setup_findings_dir))
         orchestrator.start_new_iteration(IterationTrigger.INITIAL)
@@ -277,8 +280,8 @@ class TestIterationOrchestrator:
         assert "top_features" in refined
 
     def test_get_iteration_history(self, setup_findings_dir):
+        from customer_retention.integrations.iteration.context import IterationStatus, IterationTrigger
         from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
-        from customer_retention.integrations.iteration.context import IterationTrigger, IterationStatus
 
         orchestrator = IterationOrchestrator(str(setup_findings_dir))
 
@@ -297,8 +300,8 @@ class TestIterationOrchestrator:
         assert history[2].iteration_number == 3
 
     def test_compare_iterations(self, setup_findings_dir):
+        from customer_retention.integrations.iteration.context import IterationStatus, IterationTrigger
         from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
-        from customer_retention.integrations.iteration.context import IterationTrigger, IterationStatus
 
         orchestrator = IterationOrchestrator(str(setup_findings_dir))
 
@@ -313,10 +316,11 @@ class TestIterationOrchestrator:
         assert comparison["metric_changes"]["roc_auc"] == pytest.approx(0.05)
 
     def test_save_state(self, setup_findings_dir):
-        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
         from customer_retention.integrations.iteration.context import IterationTrigger
+        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            TrackedRecommendation, RecommendationType
+            RecommendationType,
+            TrackedRecommendation,
         )
 
         orchestrator = IterationOrchestrator(str(setup_findings_dir))
@@ -341,10 +345,12 @@ class TestIterationOrchestrator:
         assert recommendations_path.exists()
 
     def test_load_state(self, setup_findings_dir):
-        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
         from customer_retention.integrations.iteration.context import IterationTrigger
+        from customer_retention.integrations.iteration.orchestrator import IterationOrchestrator
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            TrackedRecommendation, RecommendationType, RecommendationStatus
+            RecommendationStatus,
+            RecommendationType,
+            TrackedRecommendation,
         )
 
         # Create and save state

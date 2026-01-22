@@ -1,10 +1,12 @@
 """Segment-aware outlier analysis that considers natural data clusters."""
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 
-from customer_retention.core.compat import pd, DataFrame, to_pandas
-from customer_retention.stages.cleaning.outlier_handler import OutlierHandler, OutlierDetectionMethod, OutlierResult
+from customer_retention.core.compat import DataFrame, pd, to_pandas
+from customer_retention.stages.cleaning.outlier_handler import OutlierDetectionMethod, OutlierHandler, OutlierResult
+
 from .segment_analyzer import SegmentAnalyzer, SegmentationResult
 
 

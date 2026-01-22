@@ -1,6 +1,7 @@
 """Categorical feature analysis with respect to a binary target."""
-from dataclasses import dataclass, field
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import List
+
 import numpy as np
 import pandas as pd
 from scipy.stats import chi2_contingency

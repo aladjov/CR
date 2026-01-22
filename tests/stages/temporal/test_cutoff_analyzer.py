@@ -1,9 +1,10 @@
-import pytest
 from datetime import datetime
-import pandas as pd
-import numpy as np
 
-from customer_retention.stages.temporal.cutoff_analyzer import CutoffAnalyzer, CutoffAnalysis
+import numpy as np
+import pandas as pd
+import pytest
+
+from customer_retention.stages.temporal.cutoff_analyzer import CutoffAnalysis, CutoffAnalyzer
 
 
 class TestCutoffAnalyzer:

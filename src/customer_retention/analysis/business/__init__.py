@@ -1,18 +1,18 @@
-from .risk_profile import (
-    RiskProfiler, CustomerRiskProfile, RiskFactor, RiskSegment, Urgency,
-    Intervention as RiskIntervention
-)
-from .intervention_matcher import (
-    InterventionMatcher, InterventionCatalog, Intervention,
-    InterventionRecommendation, RiskSegment as MatcherRiskSegment
-)
-from .roi_analyzer import ROIAnalyzer, ROIResult, InterventionROI, OptimizationResult
-from .fairness_analyzer import FairnessAnalyzer, FairnessResult, FairnessMetric, GroupMetrics
+from .ab_test_designer import ABTestDesign, ABTestDesigner, MeasurementPlan, SampleSizeResult
+from .fairness_analyzer import FairnessAnalyzer, FairnessMetric, FairnessResult, GroupMetrics
+from .intervention_matcher import Intervention, InterventionCatalog, InterventionMatcher, InterventionRecommendation
+from .intervention_matcher import RiskSegment as MatcherRiskSegment
 from .report_generator import (
-    ReportGenerator, ExecutiveDashboard, CampaignList, CustomerServiceReport,
-    ProductInsights, GovernanceReport
+    CampaignList,
+    CustomerServiceReport,
+    ExecutiveDashboard,
+    GovernanceReport,
+    ProductInsights,
+    ReportGenerator,
 )
-from .ab_test_designer import ABTestDesigner, ABTestDesign, SampleSizeResult, MeasurementPlan
+from .risk_profile import CustomerRiskProfile, RiskFactor, RiskProfiler, RiskSegment, Urgency
+from .risk_profile import Intervention as RiskIntervention
+from .roi_analyzer import InterventionROI, OptimizationResult, ROIAnalyzer, ROIResult
 
 __all__ = [
     "RiskProfiler", "CustomerRiskProfile", "RiskFactor", "RiskSegment", "Urgency",
@@ -22,4 +22,5 @@ __all__ = [
     "ReportGenerator", "ExecutiveDashboard", "CampaignList", "CustomerServiceReport",
     "ProductInsights", "GovernanceReport",
     "ABTestDesigner", "ABTestDesign", "SampleSizeResult", "MeasurementPlan",
+    "MatcherRiskSegment", "RiskIntervention",  # Aliases for disambiguation
 ]

@@ -1,8 +1,8 @@
-import pytest
-import pandas as pd
 import numpy as np
-from sklearn.linear_model import LogisticRegression
-from customer_retention.analysis.diagnostics import CVAnalyzer, CVAnalysisResult, CVCheck
+import pandas as pd
+import pytest
+
+from customer_retention.analysis.diagnostics import CVAnalyzer
 from customer_retention.core.components.enums import Severity
 
 

@@ -2,11 +2,12 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from typing import List, Optional
+
 import numpy as np
 from scipy import stats
 
-from customer_retention.core.compat import pd, DataFrame, Series, concat
+from customer_retention.core.compat import DataFrame, concat
 
 
 @dataclass
@@ -68,7 +69,7 @@ class ABTestDesigner:
         z_alpha = stats.norm.ppf(1 - alpha / 2)
         p1 = baseline_rate
         p2 = baseline_rate - effect_size
-        p_pooled = (p1 + p2) / 2
+        (p1 + p2) / 2
         se = np.sqrt(p1 * (1 - p1) / sample_size_per_group + p2 * (1 - p2) / sample_size_per_group)
         z = abs(p1 - p2) / se
         power = stats.norm.cdf(z - z_alpha) + stats.norm.cdf(-z - z_alpha)

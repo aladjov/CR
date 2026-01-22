@@ -6,11 +6,12 @@ appropriate transformations based on distribution characteristics.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any, Tuple
 from enum import Enum
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 
-from customer_retention.core.compat import pd, Series
+from customer_retention.core.compat import Series, pd
 
 
 class DistributionTransformationType(Enum):
@@ -184,7 +185,7 @@ class DistributionAnalyzer:
         try:
             skewness = float(clean_series.skew())
             kurtosis = float(clean_series.kurtosis())
-        except:
+        except Exception:
             skewness = 0.0
             kurtosis = 0.0
 

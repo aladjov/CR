@@ -1,7 +1,10 @@
 from dataclasses import dataclass
 from typing import Tuple
+
 from customer_retention.core.compat import Series
+
 from ..components.enums import Severity
+
 
 @dataclass
 class LeakageThresholds:

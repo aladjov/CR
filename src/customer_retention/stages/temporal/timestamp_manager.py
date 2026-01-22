@@ -20,12 +20,13 @@ Example:
     >>> df_with_timestamps = manager.ensure_timestamps(df)
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Optional, Any
-import pandas as pd
+from typing import Any, Optional
+
 import numpy as np
+import pandas as pd
 
 
 class TimestampStrategy(Enum):

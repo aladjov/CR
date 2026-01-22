@@ -1,15 +1,24 @@
-import pytest
-import pandas as pd
-import numpy as np
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+
 from customer_retention.stages.features import (
-    FeatureEngineer, FeatureEngineerConfig,
-    TemporalFeatureGenerator, ReferenceDateSource,
     BehavioralFeatureGenerator,
+    FeatureCatalog,
+    FeatureCategory,
+    FeatureDefinition,
+    FeatureEngineer,
+    FeatureEngineerConfig,
+    FeatureManifest,
+    FeatureSelector,
+    FeatureSet,
+    FeatureSetRegistry,
     InteractionFeatureGenerator,
-    FeatureSelector, SelectionMethod,
-    FeatureDefinition, FeatureCategory, LeakageRisk, FeatureCatalog,
-    FeatureManifest, FeatureSet, FeatureSetRegistry,
+    LeakageRisk,
+    SelectionMethod,
+    TemporalFeatureGenerator,
 )
 from customer_retention.stages.validation import LeakageGate
 

@@ -1,14 +1,25 @@
-import pytest
 import time
 from datetime import datetime, timedelta
-from typing import List
 from unittest.mock import MagicMock
 
+import pytest
+
 from customer_retention.integrations.streaming import (
-    TriggerEngine, StreamTriggerType, TriggerDefinition, TriggerResult,
-    TriggerConfig, TriggerContext, ActionType,
-    ThresholdTrigger, PatternTrigger, AnomalyTrigger, CompositeTrigger,
-    Event, EventType, EventSource, WarningResult, WarningLevel, SignalType
+    ActionType,
+    AnomalyTrigger,
+    CompositeTrigger,
+    Event,
+    EventSource,
+    EventType,
+    PatternTrigger,
+    SignalType,
+    StreamTriggerType,
+    ThresholdTrigger,
+    TriggerConfig,
+    TriggerContext,
+    TriggerEngine,
+    WarningLevel,
+    WarningResult,
 )
 
 

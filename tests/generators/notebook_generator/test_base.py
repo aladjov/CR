@@ -1,5 +1,6 @@
-import pytest
 from abc import ABC
+
+import pytest
 
 
 class TestNotebookStage:
@@ -39,9 +40,10 @@ class TestNotebookGenerator:
             NotebookGenerator(NotebookConfig(), None)
 
     def test_generate_stage_is_abstract(self):
+        import nbformat
+
         from customer_retention.generators.notebook_generator.base import NotebookGenerator
         from customer_retention.generators.notebook_generator.config import NotebookConfig
-        import nbformat
 
         class ConcreteGenerator(NotebookGenerator):
             def generate_stage(self, stage):
@@ -51,9 +53,10 @@ class TestNotebookGenerator:
         assert generator is not None
 
     def test_generate_all_returns_dict(self):
+        import nbformat
+
         from customer_retention.generators.notebook_generator.base import NotebookGenerator, NotebookStage
         from customer_retention.generators.notebook_generator.config import NotebookConfig
-        import nbformat
 
         class ConcreteGenerator(NotebookGenerator):
             def generate_stage(self, stage):
@@ -66,9 +69,10 @@ class TestNotebookGenerator:
         assert all(stage in result for stage in NotebookStage)
 
     def test_save_all_creates_files(self, tmp_path):
-        from customer_retention.generators.notebook_generator.base import NotebookGenerator, NotebookStage
-        from customer_retention.generators.notebook_generator.config import NotebookConfig
         import nbformat
+
+        from customer_retention.generators.notebook_generator.base import NotebookGenerator
+        from customer_retention.generators.notebook_generator.config import NotebookConfig
 
         class ConcreteGenerator(NotebookGenerator):
             def generate_stage(self, stage):

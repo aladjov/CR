@@ -1,10 +1,14 @@
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
+
 import nbformat
 
-from ..config import NotebookConfig, Platform
 from ..base import NotebookStage
+
+if TYPE_CHECKING:
+    from customer_retention.analysis.auto_explorer import ExplorationFindings
 from ..cell_builder import CellBuilder
+from ..config import NotebookConfig, Platform
 
 
 class StageGenerator(ABC):

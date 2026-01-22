@@ -1,8 +1,9 @@
-import pytest
-import pandas as pd
+
 import numpy as np
-from datetime import datetime
-from customer_retention.stages.transformation import DatetimeTransformer, DatetimeTransformResult
+import pandas as pd
+import pytest
+
+from customer_retention.stages.transformation import DatetimeTransformer
 
 
 class TestDatetimeExtraction:

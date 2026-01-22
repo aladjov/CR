@@ -5,13 +5,13 @@ This module provides classes for tracking feature sets, manifests,
 and registry for version management.
 """
 
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Dict, List, Optional, Any
 import hashlib
 import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import pd, DataFrame
+from customer_retention.core.compat import DataFrame, pd
 
 
 @dataclass

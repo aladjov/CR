@@ -1,7 +1,8 @@
-import pytest
-import yaml
 import json
 from pathlib import Path
+
+import pytest
+import yaml
 
 
 @pytest.fixture
@@ -150,8 +151,9 @@ class TestPipelineGeneratorGenerate:
         assert len(bronze_files) == 2
 
     def test_output_files_are_valid_python(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
         import ast
+
+        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
         generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "valid_python")
         files = generator.generate()
         for file_path in files:
@@ -202,8 +204,9 @@ class TestScoringPipelineGeneration:
         assert scoring_file in files
 
     def test_scoring_file_is_valid_python(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
         import ast
+
+        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
         generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "scoring_valid")
         generator.generate()
         scoring_file = tmp_path / "scoring" / "run_scoring.py"
@@ -245,8 +248,9 @@ class TestDashboardNotebookGeneration:
         assert dashboard_file in files
 
     def test_dashboard_file_is_valid_json(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
         import json
+
+        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
         generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "dashboard_json")
         generator.generate()
         dashboard_file = tmp_path / "scoring" / "scoring_dashboard.ipynb"

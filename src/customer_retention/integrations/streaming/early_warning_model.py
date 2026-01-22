@@ -1,8 +1,8 @@
-from dataclasses import dataclass, field
+import pickle
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Dict, Any, Optional, List, Tuple
-import pickle
+from typing import Dict, List, Optional, Tuple
 
 
 class WarningLevel(Enum):
@@ -134,8 +134,8 @@ class EarlyWarningModel:
 
     def train(self, training_data: List[Tuple[Dict[str, float], int]]):
         try:
-            from sklearn.linear_model import LogisticRegression
             import numpy as np
+            from sklearn.linear_model import LogisticRegression
             feature_names = sorted(self._weights.keys())
             X = []
             y = []
@@ -177,7 +177,7 @@ class EarlyWarningModel:
                 feature_names = sorted(self._weights.keys())
                 X = [[features.get(f, 0.0) for f in feature_names]]
                 return float(self._model.predict_proba(np.array(X))[0][1])
-            except:
+            except Exception:
                 pass
         score = 0.0
         normalized_features = self._normalize_features(features)

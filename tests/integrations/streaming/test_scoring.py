@@ -1,12 +1,14 @@
-import pytest
 import time
-from datetime import datetime
-from typing import Dict
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+
+import pytest
 
 from customer_retention.integrations.streaming import (
-    RealtimeScorer, ScoringRequest, ScoringResponse, ScoringConfig,
-    EndpointHealth, AutoScaler, ScalingMetrics
+    AutoScaler,
+    RealtimeScorer,
+    ScalingMetrics,
+    ScoringConfig,
+    ScoringRequest,
 )
 
 

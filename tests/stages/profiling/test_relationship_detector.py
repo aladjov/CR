@@ -1,13 +1,12 @@
 """Tests for RelationshipDetector - TDD approach."""
-import pytest
 import pandas as pd
-import numpy as np
+import pytest
 
 from customer_retention.stages.profiling.relationship_detector import (
-    RelationshipDetector,
     DatasetRelationship,
-    RelationshipType,
     JoinSuggestion,
+    RelationshipDetector,
+    RelationshipType,
 )
 
 

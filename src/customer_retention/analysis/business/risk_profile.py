@@ -1,12 +1,13 @@
 """Customer risk profiling."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import List, Dict, Optional, Any
+from typing import Any, List, Optional
+
 import numpy as np
 import shap
 
-from customer_retention.core.compat import pd, DataFrame, Series
+from customer_retention.core.compat import DataFrame, Series
 from customer_retention.core.components.enums import RiskSegment
 
 

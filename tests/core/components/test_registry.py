@@ -1,4 +1,3 @@
-import pytest
 
 
 class TestComponentRegistry:
@@ -14,15 +13,15 @@ class TestComponentRegistry:
         assert "model_development" in registry.PHASES
 
     def test_register_component(self):
-        from customer_retention.core.components.registry import ComponentRegistry
         from customer_retention.core.components.components import Ingester
+        from customer_retention.core.components.registry import ComponentRegistry
         registry = ComponentRegistry()
         registry.register("ingester", Ingester, phase="data_preparation")
         assert "ingester" in registry.list_components()
 
     def test_get_component(self):
-        from customer_retention.core.components.registry import ComponentRegistry, ComponentRegistration
         from customer_retention.core.components.components import Ingester
+        from customer_retention.core.components.registry import ComponentRegistration, ComponentRegistry
         registry = ComponentRegistry()
         registry.register("ingester", Ingester, phase="data_preparation")
         reg = registry.get_component("ingester")
@@ -30,8 +29,8 @@ class TestComponentRegistry:
         assert reg.component_class == Ingester
 
     def test_get_phase_components(self):
-        from customer_retention.core.components.registry import ComponentRegistry
         from customer_retention.core.components.components import Ingester, Profiler
+        from customer_retention.core.components.registry import ComponentRegistry
         registry = ComponentRegistry()
         registry.register("ingester", Ingester, phase="data_preparation")
         registry.register("profiler", Profiler, phase="data_preparation")
@@ -39,8 +38,8 @@ class TestComponentRegistry:
         assert len(components) == 2
 
     def test_get_chapters_components(self):
-        from customer_retention.core.components.registry import ComponentRegistry
         from customer_retention.core.components.components import Ingester, Profiler, Trainer
+        from customer_retention.core.components.registry import ComponentRegistry
         registry = ComponentRegistry()
         registry.register("ingester", Ingester, phase="data_preparation")
         registry.register("profiler", Profiler, phase="data_preparation")

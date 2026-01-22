@@ -1,12 +1,24 @@
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Optional
+
 import yaml
+
+from customer_retention.analysis.auto_explorer.exploration_manager import (
+    DatasetInfo,
+    DatasetRelationshipInfo,
+    MultiDatasetFindings,
+)
 from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
-from customer_retention.analysis.auto_explorer.exploration_manager import MultiDatasetFindings, DatasetInfo, DatasetRelationshipInfo
 from customer_retention.analysis.auto_explorer.layered_recommendations import RecommendationRegistry
+
 from .models import (
-    PipelineConfig, SourceConfig, BronzeLayerConfig, SilverLayerConfig,
-    GoldLayerConfig, TransformationStep, PipelineTransformationType
+    BronzeLayerConfig,
+    GoldLayerConfig,
+    PipelineConfig,
+    PipelineTransformationType,
+    SilverLayerConfig,
+    SourceConfig,
+    TransformationStep,
 )
 
 
@@ -124,7 +136,7 @@ class FindingsParser:
     def _build_source_configs(self, multi: MultiDatasetFindings, sources: Dict[str, ExplorationFindings]) -> List[SourceConfig]:
         result = []
         for name, findings in sources.items():
-            dataset_info = multi.datasets.get(name)
+            multi.datasets.get(name)
             is_event = name in multi.event_datasets
             time_col = None
             entity_key = findings.identifier_columns[0] if findings.identifier_columns else "id"

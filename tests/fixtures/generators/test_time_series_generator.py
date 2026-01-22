@@ -1,14 +1,12 @@
 """Tests for time series fixture generator - TDD approach."""
+from pathlib import Path
+
 import pandas as pd
 import pytest
-from pathlib import Path
 
 from tests.fixtures.generators.time_series_generator import (
     TimeSeriesGenerator,
-    TransactionGenerator,
-    EmailGenerator,
 )
-
 
 FIXTURES_DIR = Path(__file__).parent.parent
 RETAIL_FIXTURE = FIXTURES_DIR / "customer_retention_retail.csv"

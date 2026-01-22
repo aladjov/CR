@@ -1,5 +1,5 @@
 from .base import DeltaStorage
-from .local import LocalDelta
 from .databricks import DatabricksDelta
+from .local import LocalDelta
 
 __all__ = ["DeltaStorage", "LocalDelta", "DatabricksDelta"]

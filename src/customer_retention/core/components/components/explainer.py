@@ -1,6 +1,8 @@
 from typing import List
-from ..base import Component, ComponentResult
+
 from customer_retention.generators.orchestration.context import PipelineContext
+
+from ..base import Component, ComponentResult
 
 
 class Explainer(Component):
@@ -16,7 +18,6 @@ class Explainer(Component):
     def run(self, context: PipelineContext) -> ComponentResult:
         self._start_timer()
         try:
-            from customer_retention.analysis.interpretability.shap_explainer import ShapExplainer
             return self.create_result(
                 success=True,
                 metrics={"explanations_generated": 1}

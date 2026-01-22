@@ -1,6 +1,8 @@
 from typing import List
-from ..base import Component, ComponentResult
+
 from customer_retention.generators.orchestration.context import PipelineContext
+
+from ..base import Component, ComponentResult
 
 
 class FeatureEngineer(Component):

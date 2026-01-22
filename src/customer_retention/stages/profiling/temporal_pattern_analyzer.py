@@ -9,12 +9,12 @@ Analyzes patterns including:
 """
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, List
+from typing import List, Optional
 
 import numpy as np
 from scipy import stats
 
-from customer_retention.core.compat import pd, DataFrame
+from customer_retention.core.compat import DataFrame, pd
 
 
 class TrendDirection(str, Enum):
@@ -238,7 +238,7 @@ class TemporalPatternAnalyzer:
             )
 
         ref_date = reference_date or pd.Timestamp.now()
-        time_col = pd.to_datetime(df[self.time_column])
+        pd.to_datetime(df[self.time_column])
 
         # Calculate recency per entity (using last event date)
         entity_last = df.groupby(entity_column)[self.time_column].max()

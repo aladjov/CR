@@ -5,11 +5,10 @@ This module provides leakage detection to prevent data leakage
 in features before model training.
 """
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
-import numpy as np
-from customer_retention.core.compat import pd, DataFrame, Timestamp, is_numeric_dtype
+from customer_retention.core.compat import DataFrame, Timestamp, is_numeric_dtype, pd
 from customer_retention.core.components.enums import Severity
 
 

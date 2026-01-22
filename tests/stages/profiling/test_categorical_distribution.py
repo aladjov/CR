@@ -1,11 +1,12 @@
 """Tests for CategoricalDistributionAnalyzer."""
 
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
+
 from customer_retention.stages.profiling.categorical_distribution import (
-    CategoricalDistributionAnalyzer,
     CategoricalDistributionAnalysis,
+    CategoricalDistributionAnalyzer,
     EncodingRecommendation,
     EncodingType,
 )

@@ -5,13 +5,13 @@ This module provides feature selection methods including variance,
 correlation, and other filtering techniques.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import pd, DataFrame, Series, is_numeric_dtype
+from customer_retention.core.compat import DataFrame, is_numeric_dtype, pd
 
 
 class SelectionMethod(Enum):

@@ -1,10 +1,9 @@
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 from sklearn.ensemble import RandomForestClassifier
-from customer_retention.analysis.business import (
-    FairnessAnalyzer, FairnessResult, FairnessMetric, GroupMetrics
-)
+
+from customer_retention.analysis.business import FairnessAnalyzer, FairnessResult, GroupMetrics
 
 
 @pytest.fixture

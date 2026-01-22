@@ -13,8 +13,8 @@ def init_project() -> int:
     import argparse
 
     from customer_retention.generators.notebook_generator import (
-        ProjectInitializer,
         Platform,
+        ProjectInitializer,
     )
 
     parser = argparse.ArgumentParser(
@@ -66,7 +66,7 @@ Examples:
     # Initialize project using library
     try:
         initializer = ProjectInitializer(output_dir)
-        result = initializer.initialize(
+        initializer.initialize(
             project_name=args.name,
             platforms=platforms,
         )
@@ -74,12 +74,12 @@ Examples:
         print("\n" + "=" * 50)
         print("Done!")
         print("=" * 50)
-        print(f"\nNext steps:")
+        print("\nNext steps:")
         print(f"  1. cd {output_dir}")
-        print(f"  2. Add your data to experiments/data/")
-        print(f"  3. Open exploration_notebooks/01_data_discovery.ipynb")
-        print(f"  4. Set DATA_PATH to your data file")
-        print(f"  5. Run all cells - auto-discovery will do the rest!")
+        print("  2. Add your data to experiments/data/")
+        print("  3. Open exploration_notebooks/01_data_discovery.ipynb")
+        print("  4. Set DATA_PATH to your data file")
+        print("  5. Run all cells - auto-discovery will do the rest!")
         print()
 
         return 0

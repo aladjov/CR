@@ -1,7 +1,7 @@
 """Tests for console output utilities."""
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
+
 from customer_retention.analysis.visualization import console
 
 

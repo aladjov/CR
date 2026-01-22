@@ -1,12 +1,12 @@
 """Hyperparameter tuning strategies for model optimization."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import pd, DataFrame, Series
-import numpy as np
-from sklearn.model_selection import RandomizedSearchCV, GridSearchCV
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+
+from customer_retention.core.compat import DataFrame, Series
 
 
 class SearchStrategy(Enum):
@@ -72,7 +72,6 @@ class HyperparameterTuner:
             )
 
         if self.strategy == SearchStrategy.HALVING:
-            from sklearn.experimental import enable_halving_search_cv
             from sklearn.model_selection import HalvingRandomSearchCV
             return HalvingRandomSearchCV(
                 model,

@@ -1,7 +1,7 @@
-import pytest
 import pandas as pd
-import numpy as np
-from customer_retention.stages.transformation import BinaryHandler, BinaryTransformResult
+import pytest
+
+from customer_retention.stages.transformation import BinaryHandler
 
 
 class TestBinaryStandardization:

@@ -1,9 +1,10 @@
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
-from dataclasses import dataclass
+
 import numpy as np
 
-from customer_retention.core.compat import pd, DataFrame, Series
+from customer_retention.core.compat import Series
 
 
 class OutlierDetectionMethod(str, Enum):

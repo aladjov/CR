@@ -1,5 +1,5 @@
 from .load_result import LoadResult
-from .loaders import DataLoader, CSVLoader, ParquetLoader, DeltaLoader, LoaderFactory
+from .loaders import CSVLoader, DataLoader, DeltaLoader, LoaderFactory, ParquetLoader
 from .source_registry import DataSourceRegistry
 
 __all__ = [

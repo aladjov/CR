@@ -9,9 +9,9 @@ Detects:
 """
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, List, Set
+from typing import List, Optional, Set
 
-from customer_retention.core.compat import pd, DataFrame
+from customer_retention.core.compat import DataFrame
 
 
 class RelationshipType(str, Enum):

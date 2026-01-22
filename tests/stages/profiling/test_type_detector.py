@@ -1,8 +1,9 @@
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
+
 from customer_retention.core.config import ColumnType
-from customer_retention.stages.profiling import TypeDetector, TypeConfidence
+from customer_retention.stages.profiling import TypeConfidence, TypeDetector
 
 
 class TestTypeDetector:
@@ -264,7 +265,6 @@ class TestDatasetGranularityDetection:
 
     def test_detect_entity_column(self):
         """Should identify the entity column (ID with repetitions)."""
-        from customer_retention.core.config import DatasetGranularity
 
         detector = TypeDetector()
         df = pd.DataFrame({
@@ -278,7 +278,6 @@ class TestDatasetGranularityDetection:
 
     def test_detect_time_column(self):
         """Should identify the time column."""
-        from customer_retention.core.config import DatasetGranularity
 
         detector = TypeDetector()
         df = pd.DataFrame({
@@ -308,7 +307,6 @@ class TestDatasetGranularityDetection:
 
     def test_granularity_result_has_stats(self):
         """Result should include useful statistics."""
-        from customer_retention.core.config import DatasetGranularity
 
         detector = TypeDetector()
         df = pd.DataFrame({

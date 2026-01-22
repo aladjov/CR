@@ -1,15 +1,13 @@
 """Tests for fluent RecommendationBuilder used by exploration notebooks."""
-import pytest
-import tempfile
-import os
-from pathlib import Path
 
-from customer_retention.analysis.auto_explorer.findings import ExplorationFindings, ColumnFinding
+import pytest
+
+from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
 from customer_retention.analysis.auto_explorer.recommendation_builder import (
-    RecommendationBuilder,
     BronzeBuilder,
-    SilverBuilder,
     GoldBuilder,
+    RecommendationBuilder,
+    SilverBuilder,
 )
 from customer_retention.core.config.column_config import ColumnType
 

@@ -1,12 +1,13 @@
 """Threshold optimization for classification models."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, Optional
 
-from customer_retention.core.compat import pd, DataFrame, Series
 import numpy as np
-from sklearn.metrics import precision_score, recall_score, f1_score, fbeta_score, confusion_matrix
+from sklearn.metrics import confusion_matrix, f1_score, fbeta_score, precision_score, recall_score
+
+from customer_retention.core.compat import DataFrame, Series
 
 
 class OptimizationObjective(Enum):

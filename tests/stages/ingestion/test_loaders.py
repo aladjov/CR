@@ -1,7 +1,7 @@
 import pytest
-import pandas as pd
-from customer_retention.stages.ingestion import CSVLoader, ParquetLoader, DeltaLoader, LoaderFactory
-from customer_retention.core.config import DataSourceConfig, SourceType, FileFormat, ColumnType, ColumnConfig
+
+from customer_retention.core.config import DataSourceConfig, FileFormat, SourceType
+from customer_retention.stages.ingestion import CSVLoader, DeltaLoader, LoaderFactory, ParquetLoader
 
 
 class TestCSVLoader:

@@ -1,9 +1,8 @@
-import pytest
-import pandas as pd
 import numpy as np
-from customer_retention.analysis.business import (
-    ABTestDesigner, ABTestDesign, SampleSizeResult, MeasurementPlan
-)
+import pandas as pd
+import pytest
+
+from customer_retention.analysis.business import ABTestDesign, ABTestDesigner, MeasurementPlan, SampleSizeResult
 
 
 @pytest.fixture

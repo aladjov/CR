@@ -1,7 +1,8 @@
 from typing import Any, Dict, List, Optional
+
 import pandas as pd
 
-from ..base import CleaningRecommendation, Platform, RecommendationResult
+from ..base import CleaningRecommendation, RecommendationResult
 
 
 class OutlierCapRecommendation(CleaningRecommendation):

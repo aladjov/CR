@@ -1,8 +1,7 @@
-import pytest
 import os
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from customer_retention.analysis.visualization.display import detect_environment, DisplayManager
+from customer_retention.analysis.visualization.display import DisplayManager, detect_environment
 
 
 class TestDetectEnvironment:

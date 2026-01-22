@@ -5,14 +5,12 @@ This module provides temporal feature calculations such as tenure,
 recency, activation time, and active period.
 """
 
+import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Union
-import warnings
 
-import numpy as np
-
-from customer_retention.core.compat import pd, DataFrame, Series, Timestamp, Timedelta
+from customer_retention.core.compat import DataFrame, Series, Timedelta, Timestamp, pd
 
 
 class ReferenceDateSource(Enum):

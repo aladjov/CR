@@ -1,9 +1,11 @@
-from typing import Optional, Any
+from typing import Any, Optional
+
 from pydantic import BaseModel
 
-from customer_retention.core.compat import pd, Series, is_datetime64_any_dtype
-from customer_retention.core.config import ColumnType
+from customer_retention.core.compat import is_datetime64_any_dtype, pd
 from customer_retention.core.components.enums import Severity
+from customer_retention.core.config import ColumnType
+
 
 class QualityCheckResult(BaseModel):
     check_id: str
@@ -311,7 +313,7 @@ class TargetUnexpectedClassesCheck(QualityCheck):
                 f"Target has {n_classes} classes, expected {self.expected_classes}",
                 {"n_classes": n_classes, "expected_classes": self.expected_classes,
                  "classes": list(target_metrics.class_distribution.keys())},
-                f"Investigate class mismatch. Check for data leakage, incorrect filtering, or configuration error."
+                "Investigate class mismatch. Check for data leakage, incorrect filtering, or configuration error."
             )
         else:
             return self.create_result(
@@ -785,7 +787,7 @@ class ConstantValueCheck(QualityCheck):
         if numeric_metrics.std == 0:
             return self.create_result(
                 column_name, False,
-                f"Column has constant value (std = 0)",
+                "Column has constant value (std = 0)",
                 {"std": 0, "mean": numeric_metrics.mean},
                 "Remove constant column - provides no information for modeling."
             )
@@ -1152,7 +1154,7 @@ class DatetimeInvalidDatesCheck(QualityCheck):
             for val in clean_series:
                 try:
                     pd.to_datetime(val, format='mixed')
-                except:
+                except Exception:
                     invalid_count += 1
 
         if invalid_count > 0:

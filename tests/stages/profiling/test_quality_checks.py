@@ -1,14 +1,22 @@
-import pytest
 import pandas as pd
+
+from customer_retention.core.components.enums import Severity
 from customer_retention.core.config import ColumnType
 from customer_retention.stages.profiling import ProfilerFactory, QualityCheckRegistry
-from customer_retention.core.components.enums import Severity
 from customer_retention.stages.profiling.quality_checks import (
-    MissingValueCheck, HighCardinalityCheck, LowCardinalityCheck,
-    ConstantFeatureCheck, ImbalancedTargetCheck, SkewnessCheck,
-    OutlierCheck, ZeroInflationCheck, IdentifierLeakageCheck,
-    DatetimeFutureLeakageCheck, PlaceholderDateCheck,
-    RareCategoryCheck, UnknownCategoryCheck
+    ConstantFeatureCheck,
+    DatetimeFutureLeakageCheck,
+    HighCardinalityCheck,
+    IdentifierLeakageCheck,
+    ImbalancedTargetCheck,
+    LowCardinalityCheck,
+    MissingValueCheck,
+    OutlierCheck,
+    PlaceholderDateCheck,
+    RareCategoryCheck,
+    SkewnessCheck,
+    UnknownCategoryCheck,
+    ZeroInflationCheck,
 )
 
 
@@ -136,8 +144,8 @@ class TestImbalancedTargetCheck:
 
 class TestTargetNullCheck:
     def test_target_with_nulls(self):
-        from customer_retention.stages.profiling.quality_checks import TargetNullCheck
         from customer_retention.stages.profiling.profile_result import UniversalMetrics
+        from customer_retention.stages.profiling.quality_checks import TargetNullCheck
 
         check = TargetNullCheck()
         # Create universal metrics directly
@@ -157,8 +165,8 @@ class TestTargetNullCheck:
         assert "2 null values" in result.message
 
     def test_target_without_nulls(self):
-        from customer_retention.stages.profiling.quality_checks import TargetNullCheck
         from customer_retention.stages.profiling.profile_result import UniversalMetrics
+        from customer_retention.stages.profiling.quality_checks import TargetNullCheck
 
         check = TargetNullCheck()
         # Create universal metrics directly
@@ -486,8 +494,9 @@ class TestUnknownCategoryCheck:
 
 class TestInfiniteValuesCheck:
     def test_detects_infinite_values(self):
-        from customer_retention.stages.profiling.quality_checks import InfiniteValuesCheck
         import numpy as np
+
+        from customer_retention.stages.profiling.quality_checks import InfiniteValuesCheck
 
         check = InfiniteValuesCheck()
         series = pd.Series([1.0, 2.0, np.inf, 4.0, -np.inf, 6.0])

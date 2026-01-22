@@ -1,11 +1,12 @@
-import pytest
-import pandas as pd
+import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
-import tempfile
-import shutil
 
-from customer_retention.stages.temporal.data_preparer import UnifiedDataPreparer, PreparedData
+import pandas as pd
+import pytest
+
+from customer_retention.stages.temporal.data_preparer import PreparedData, UnifiedDataPreparer
 from customer_retention.stages.temporal.timestamp_manager import TimestampConfig, TimestampStrategy
 
 

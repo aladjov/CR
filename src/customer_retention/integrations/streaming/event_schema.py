@@ -1,8 +1,8 @@
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Dict, Any, Optional, List
-import json
+from typing import Any, Dict, List, Optional
 
 
 class EventSource(Enum):
@@ -105,7 +105,7 @@ class Event:
     @staticmethod
     def to_spark_schema():
         try:
-            from pyspark.sql.types import StructType, StructField, StringType, TimestampType, MapType
+            from pyspark.sql.types import MapType, StringType, StructField, StructType, TimestampType
             return StructType([
                 StructField("event_id", StringType(), False),
                 StructField("customer_id", StringType(), False),

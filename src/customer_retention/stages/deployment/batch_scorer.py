@@ -1,10 +1,9 @@
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
-from datetime import datetime
-import numpy as np
 import time
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, List, Optional
 
-from customer_retention.core.compat import pd, DataFrame
+from customer_retention.core.compat import DataFrame, pd
 from customer_retention.core.components.enums import RiskSegment
 
 

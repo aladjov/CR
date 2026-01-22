@@ -1,8 +1,9 @@
 from datetime import datetime
 from typing import Any, List, Optional
+
 import pandas as pd
 
-from ..base import DatetimeRecommendation, Platform, RecommendationResult
+from ..base import DatetimeRecommendation, RecommendationResult
 
 
 class ExtractMonthRecommendation(DatetimeRecommendation):

@@ -1,10 +1,12 @@
-import pytest
 from datetime import datetime, timedelta
-from dataclasses import asdict
 
 from customer_retention.integrations.streaming import (
-    Event, EventType, EventSource, EventSchema, EventValidator,
-    ValidationResult, SchemaRegistry
+    Event,
+    EventSchema,
+    EventSource,
+    EventType,
+    EventValidator,
+    SchemaRegistry,
 )
 
 

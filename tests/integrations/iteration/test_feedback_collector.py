@@ -1,6 +1,5 @@
+
 import pytest
-from datetime import datetime
-from pathlib import Path
 
 
 class TestModelFeedback:
@@ -100,9 +99,10 @@ class TestModelFeedbackCollector:
         assert collector is not None
 
     def test_create_from_sklearn_model(self):
-        from customer_retention.integrations.iteration.feedback_collector import ModelFeedbackCollector
-        from sklearn.ensemble import RandomForestClassifier
         import numpy as np
+        from sklearn.ensemble import RandomForestClassifier
+
+        from customer_retention.integrations.iteration.feedback_collector import ModelFeedbackCollector
 
         model = RandomForestClassifier(n_estimators=10, random_state=42)
         X = np.array([[1, 2], [3, 4], [5, 6], [7, 8]])
@@ -122,9 +122,7 @@ class TestModelFeedbackCollector:
         assert "feature_a" in feedback.feature_importances
 
     def test_analyze_feature_importance(self):
-        from customer_retention.integrations.iteration.feedback_collector import (
-            ModelFeedbackCollector, ModelFeedback
-        )
+        from customer_retention.integrations.iteration.feedback_collector import ModelFeedback, ModelFeedbackCollector
         feedback = ModelFeedback(
             iteration_id="iter_001",
             model_type="RandomForest",
@@ -145,9 +143,7 @@ class TestModelFeedbackCollector:
         assert insights[-1].recommendation_to_drop is True
 
     def test_analyze_feature_importance_drop_threshold(self):
-        from customer_retention.integrations.iteration.feedback_collector import (
-            ModelFeedbackCollector, ModelFeedback
-        )
+        from customer_retention.integrations.iteration.feedback_collector import ModelFeedback, ModelFeedbackCollector
         feedback = ModelFeedback(
             iteration_id="iter_001",
             model_type="RandomForest",
@@ -165,9 +161,7 @@ class TestModelFeedbackCollector:
         assert len(to_drop) == 2  # borderline and useless
 
     def test_suggest_next_actions(self):
-        from customer_retention.integrations.iteration.feedback_collector import (
-            ModelFeedbackCollector, ModelFeedback
-        )
+        from customer_retention.integrations.iteration.feedback_collector import ModelFeedback, ModelFeedbackCollector
         feedback = ModelFeedback(
             iteration_id="iter_001",
             model_type="RandomForest",
@@ -188,9 +182,7 @@ class TestModelFeedbackCollector:
         assert drop_action
 
     def test_suggest_actions_good_performance(self):
-        from customer_retention.integrations.iteration.feedback_collector import (
-            ModelFeedbackCollector, ModelFeedback
-        )
+        from customer_retention.integrations.iteration.feedback_collector import ModelFeedback, ModelFeedbackCollector
         feedback = ModelFeedback(
             iteration_id="iter_001",
             model_type="RandomForest",
@@ -205,9 +197,7 @@ class TestModelFeedbackCollector:
         assert good_action
 
     def test_compare_feedback(self):
-        from customer_retention.integrations.iteration.feedback_collector import (
-            ModelFeedbackCollector, ModelFeedback
-        )
+        from customer_retention.integrations.iteration.feedback_collector import ModelFeedback, ModelFeedbackCollector
         feedback1 = ModelFeedback(
             iteration_id="iter_001",
             model_type="RandomForest",
@@ -228,9 +218,7 @@ class TestModelFeedbackCollector:
         assert "improved" in comparison["overall_trend"]
 
     def test_compare_feedback_degraded(self):
-        from customer_retention.integrations.iteration.feedback_collector import (
-            ModelFeedbackCollector, ModelFeedback
-        )
+        from customer_retention.integrations.iteration.feedback_collector import ModelFeedback, ModelFeedbackCollector
         feedback1 = ModelFeedback(
             iteration_id="iter_001",
             model_type="RF",
@@ -250,9 +238,7 @@ class TestModelFeedbackCollector:
         assert "degraded" in comparison["overall_trend"]
 
     def test_save_and_load_feedback(self, tmp_path):
-        from customer_retention.integrations.iteration.feedback_collector import (
-            ModelFeedbackCollector, ModelFeedback
-        )
+        from customer_retention.integrations.iteration.feedback_collector import ModelFeedback, ModelFeedbackCollector
         feedback = ModelFeedback(
             iteration_id="iter_001",
             model_type="XGBoost",
@@ -268,9 +254,7 @@ class TestModelFeedbackCollector:
         assert loaded.metrics["roc_auc"] == 0.88
 
     def test_get_top_features(self):
-        from customer_retention.integrations.iteration.feedback_collector import (
-            ModelFeedbackCollector, ModelFeedback
-        )
+        from customer_retention.integrations.iteration.feedback_collector import ModelFeedback, ModelFeedbackCollector
         feedback = ModelFeedback(
             iteration_id="iter_001",
             model_type="RF",
@@ -289,9 +273,7 @@ class TestModelFeedbackCollector:
         assert top[2][0] == "f4"
 
     def test_get_low_importance_features(self):
-        from customer_retention.integrations.iteration.feedback_collector import (
-            ModelFeedbackCollector, ModelFeedback
-        )
+        from customer_retention.integrations.iteration.feedback_collector import ModelFeedback, ModelFeedbackCollector
         feedback = ModelFeedback(
             iteration_id="iter_001",
             model_type="RF",

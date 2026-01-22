@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .definitions import (
-    TemporalFeatureDefinition,
-    FeatureGroup,
     FeatureComputationType,
+    FeatureGroup,
+    TemporalFeatureDefinition,
 )
 
 

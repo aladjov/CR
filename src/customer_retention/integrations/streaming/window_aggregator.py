@@ -1,13 +1,14 @@
+import os
+import pickle
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Dict, Any, Optional, List, Callable
-from collections import defaultdict
-import pickle
-import os
+from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import pd, DataFrame
-from .event_schema import Event, EventType, EventSource
+from customer_retention.core.compat import DataFrame, pd
+
+from .event_schema import Event, EventSource, EventType
 
 
 class WindowType(Enum):

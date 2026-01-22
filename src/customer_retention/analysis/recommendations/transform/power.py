@@ -1,8 +1,9 @@
 from typing import Any, List, Optional
-import pandas as pd
-import numpy as np
 
-from ..base import TransformRecommendation, Platform, RecommendationResult
+import numpy as np
+import pandas as pd
+
+from ..base import RecommendationResult, TransformRecommendation
 
 
 class LogTransformRecommendation(TransformRecommendation):

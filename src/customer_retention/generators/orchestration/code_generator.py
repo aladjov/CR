@@ -1,6 +1,9 @@
 from typing import List
 
-from customer_retention.analysis.auto_explorer.layered_recommendations import LayeredRecommendation, RecommendationRegistry
+from customer_retention.analysis.auto_explorer.layered_recommendations import (
+    LayeredRecommendation,
+    RecommendationRegistry,
+)
 
 
 class PipelineCodeGenerator:

@@ -1,9 +1,6 @@
-import pytest
 import pandas as pd
-from customer_retention.core.config import (
-    ColumnType, ColumnConfig, DataSourceConfig,
-    SourceType, FileFormat, PipelineConfig
-)
+
+from customer_retention.core.config import DataSourceConfig, FileFormat, PipelineConfig, SourceType
 from customer_retention.stages.ingestion import LoaderFactory
 from customer_retention.stages.validation import DataQualityGate
 

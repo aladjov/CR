@@ -1,13 +1,13 @@
-import pytest
 import tempfile
 from pathlib import Path
 
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 
-from customer_retention.core.config.column_config import ColumnType
 from customer_retention.analysis.auto_explorer.explorer import DataExplorer
 from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
+from customer_retention.core.config.column_config import ColumnType
 
 
 @pytest.fixture

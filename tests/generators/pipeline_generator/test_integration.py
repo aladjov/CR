@@ -1,8 +1,8 @@
+import json
+
+import pandas as pd
 import pytest
 import yaml
-import json
-import pandas as pd
-from pathlib import Path
 
 
 @pytest.fixture

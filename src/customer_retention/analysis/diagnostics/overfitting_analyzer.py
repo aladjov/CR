@@ -1,13 +1,13 @@
 """Overfitting analysis probes for model validation."""
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
-
-from customer_retention.core.compat import pd, DataFrame, Series
-from customer_retention.core.components.enums import Severity
 from sklearn.model_selection import learning_curve
+
+from customer_retention.core.compat import DataFrame, Series
+from customer_retention.core.components.enums import Severity
 
 
 @dataclass

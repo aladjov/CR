@@ -1,8 +1,4 @@
-import pytest
-import pandas as pd
-import numpy as np
-from customer_retention.stages.validation import ModelValidityGate, ModelValidityResult
-from customer_retention.core.components.enums import Severity
+from customer_retention.stages.validation import ModelValidityGate
 
 
 class TestSuspiciousPRAUC:

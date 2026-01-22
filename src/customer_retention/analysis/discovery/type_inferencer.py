@@ -1,9 +1,11 @@
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Union
+
 import pandas as pd
-from customer_retention.core.config.column_config import ColumnType
+
 from customer_retention.core.compat import ops
+from customer_retention.core.config.column_config import ColumnType
 
 
 class InferenceConfidence(str, Enum):

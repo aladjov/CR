@@ -119,7 +119,25 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
-ignore = ["E501"]
+ignore = [
+    "E501",   # Line too long (handled by formatter)
+    "N803",   # Argument name should be lowercase (ML convention: X, X_train)
+    "N806",   # Variable name should be lowercase (ML convention: X, X_train)
+    "N817",   # CamelCase imported as acronym (CT, FE aliases)
+    "E402",   # Module level import not at top (needed for conditional imports)
+    "E712",   # Comparison to True/False (style preference)
+    "E721",   # Type comparison using == (sometimes intentional)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests often have unused variables for setup/assertions
+"tests/**/*.py" = ["F841", "N801"]
+# Availability check imports are intentional
+"src/customer_retention/core/compat/*.py" = ["F401"]
+"tests/integrations/adapters/*.py" = ["F401"]
+"tests/core/compat/*.py" = ["F401"]
+# Storage adapters check for optional dependencies
+"src/customer_retention/integrations/adapters/storage/*.py" = ["F401"]
 
 [tool.uv]
 # PyTorch CUDA index - used when installing ml-cuda extras

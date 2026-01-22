@@ -1,21 +1,21 @@
-import pytest
-import pandas as pd
-import numpy as np
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
 
 from customer_retention.analysis.diagnostics import (
-    LeakageDetector,
-    OverfittingAnalyzer,
-    CVAnalyzer,
-    SegmentPerformanceAnalyzer,
     CalibrationAnalyzer,
+    CVAnalyzer,
     ErrorAnalyzer,
+    LeakageDetector,
     NoiseTester,
+    OverfittingAnalyzer,
+    SegmentPerformanceAnalyzer,
 )
-from customer_retention.stages.validation import BusinessSenseGate
 from customer_retention.core.components.enums import Severity
+from customer_retention.stages.validation import BusinessSenseGate
 
 
 @pytest.fixture

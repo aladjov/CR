@@ -1,9 +1,10 @@
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any
 from enum import Enum
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 
-from customer_retention.core.compat import pd, Series
+from customer_retention.core.compat import Series, pd
 
 
 class EncodingType(Enum):

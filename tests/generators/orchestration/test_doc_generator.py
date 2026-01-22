@@ -1,13 +1,13 @@
 """Tests for PipelineDocGenerator that produces pipeline_spec.md for LLM context."""
 import pytest
 
-from customer_retention.generators.orchestration.doc_generator import PipelineDocGenerator
+from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
 from customer_retention.analysis.auto_explorer.layered_recommendations import (
-    RecommendationRegistry,
     LayeredRecommendation,
+    RecommendationRegistry,
 )
-from customer_retention.analysis.auto_explorer.findings import ExplorationFindings, ColumnFinding
 from customer_retention.core.config.column_config import ColumnType
+from customer_retention.generators.orchestration.doc_generator import PipelineDocGenerator
 
 
 @pytest.fixture

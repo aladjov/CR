@@ -1,12 +1,20 @@
-import pytest
 from datetime import datetime, timedelta
 from typing import List
 
+import pytest
+
 from customer_retention.integrations.streaming import (
-    Event, EventType, EventSource, WindowAggregator, WindowType,
-    TumblingWindow, SlidingWindow, SessionWindow,
-    StreamingFeature, FeatureComputer, AggregationResult,
-    WatermarkConfig, StreamState
+    Event,
+    EventSource,
+    EventType,
+    FeatureComputer,
+    SessionWindow,
+    SlidingWindow,
+    StreamState,
+    TumblingWindow,
+    WatermarkConfig,
+    WindowAggregator,
+    WindowType,
 )
 
 

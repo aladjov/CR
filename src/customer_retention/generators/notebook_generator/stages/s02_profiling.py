@@ -1,4 +1,5 @@
 from typing import List
+
 import nbformat
 
 from ..base import NotebookStage
@@ -82,11 +83,11 @@ display(null_counts)'''),
 distinct_counts = df.select([countDistinct(col(c)).alias(c) for c in df.columns])
 display(distinct_counts)'''),
             self.cb.section("Save Profiling Results"),
-            self.cb.code(f'''profile_data = {{
+            self.cb.code('''profile_data = {
     "columns": df.columns,
     "dtypes": [str(f.dataType) for f in df.schema.fields],
     "row_count": df.count()
-}}
+}
 import json
 dbutils.fs.put("/tmp/profile_results.json", json.dumps(profile_data), overwrite=True)'''),
         ]

@@ -1,4 +1,3 @@
-from typing import Optional
 from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
 from customer_retention.core.config.column_config import ColumnType
 
@@ -91,7 +90,7 @@ class LLMContextBuilder:
         lines = [
             "# Pipeline Configuration Context",
             "",
-            f"## User Goal",
+            "## User Goal",
             f"{user_goal}",
             "",
             self.build_exploration_context(findings),

@@ -1,9 +1,16 @@
-import pytest
 import ast
 import json
+
+import pytest
+
 from customer_retention.generators.pipeline_generator.models import (
-    PipelineConfig, SourceConfig, BronzeLayerConfig, SilverLayerConfig,
-    GoldLayerConfig, TransformationStep, PipelineTransformationType
+    BronzeLayerConfig,
+    GoldLayerConfig,
+    PipelineConfig,
+    PipelineTransformationType,
+    SilverLayerConfig,
+    SourceConfig,
+    TransformationStep,
 )
 
 

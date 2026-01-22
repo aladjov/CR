@@ -1,7 +1,8 @@
 """Tests for TextEmbedder - TDD first."""
-import pytest
+from unittest.mock import MagicMock, patch
+
 import numpy as np
-from unittest.mock import Mock, patch, MagicMock
+import pytest
 
 from customer_retention.core.compat import pd
 

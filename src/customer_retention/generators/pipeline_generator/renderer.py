@@ -1,6 +1,6 @@
-from pathlib import Path
-from jinja2 import Environment, FileSystemLoader, BaseLoader
-from .models import PipelineConfig, BronzeLayerConfig
+from jinja2 import BaseLoader, Environment
+
+from .models import BronzeLayerConfig, PipelineConfig
 
 
 class InlineLoader(BaseLoader):

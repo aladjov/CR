@@ -1,13 +1,11 @@
-import pytest
 import json
 import tempfile
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 
-from customer_retention.core.config.column_config import ColumnType
 from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings, _convert_to_native
+from customer_retention.core.config.column_config import ColumnType
 
 
 class TestConvertToNative:

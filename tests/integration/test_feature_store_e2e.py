@@ -7,27 +7,26 @@ These tests verify the complete feature store workflow including:
 - Integration with the temporal framework
 """
 
-import pytest
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
+import pytest
 
 from customer_retention.integrations.feature_store import (
-    TemporalFeatureDefinition,
     FeatureComputationType,
-    TemporalAggregation,
     FeatureRegistry,
     FeatureStoreManager,
+    TemporalAggregation,
+    TemporalFeatureDefinition,
 )
 from customer_retention.integrations.feature_store.definitions import FeatureGroup
 from customer_retention.integrations.feature_store.registry import create_standard_churn_features
 from customer_retention.stages.temporal import (
     ScenarioDetector,
     UnifiedDataPreparer,
-    TimestampConfig,
-    TimestampStrategy,
 )
 
 

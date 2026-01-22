@@ -1,12 +1,10 @@
 """Tests for data validators module."""
 
-import pytest
 import pandas as pd
-import numpy as np
-from customer_retention.stages.validation import (
-    DataValidator, DuplicateResult, DateLogicResult, RangeValidationResult
-)
+import pytest
+
 from customer_retention.core.components.enums import Severity
+from customer_retention.stages.validation import DataValidator, DateLogicResult, DuplicateResult, RangeValidationResult
 
 
 class TestDataValidator:

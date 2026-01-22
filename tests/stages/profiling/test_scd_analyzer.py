@@ -1,7 +1,8 @@
-import pytest
 import pandas as pd
-from customer_retention.stages.profiling import SCDAnalyzer, SCDResult
-from customer_retention.core.config import DataSourceConfig, ColumnConfig, ColumnType, SourceType, FileFormat
+import pytest
+
+from customer_retention.core.config import ColumnConfig, ColumnType, DataSourceConfig, FileFormat, SourceType
+from customer_retention.stages.profiling import SCDAnalyzer
 
 
 @pytest.fixture

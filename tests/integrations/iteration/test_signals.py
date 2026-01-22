@@ -1,7 +1,7 @@
-import pytest
-from datetime import datetime
-import pandas as pd
+
 import numpy as np
+import pandas as pd
+import pytest
 
 
 class TestIterationSignal:
@@ -18,7 +18,7 @@ class TestIterationSignal:
 
 class TestSignalEvent:
     def test_create_signal_event(self):
-        from customer_retention.integrations.iteration.signals import SignalEvent, IterationSignal
+        from customer_retention.integrations.iteration.signals import IterationSignal, SignalEvent
         event = SignalEvent(
             signal_type=IterationSignal.DRIFT_CRITICAL,
             source="drift_detector",
@@ -32,7 +32,7 @@ class TestSignalEvent:
         assert event.timestamp is not None
 
     def test_signal_event_to_dict(self):
-        from customer_retention.integrations.iteration.signals import SignalEvent, IterationSignal
+        from customer_retention.integrations.iteration.signals import IterationSignal, SignalEvent
         event = SignalEvent(
             signal_type=IterationSignal.PERFORMANCE_WARNING,
             source="performance_monitor",
@@ -46,7 +46,7 @@ class TestSignalEvent:
         assert "timestamp" in data
 
     def test_signal_event_from_dict(self):
-        from customer_retention.integrations.iteration.signals import SignalEvent, IterationSignal
+        from customer_retention.integrations.iteration.signals import IterationSignal, SignalEvent
         data = {
             "signal_type": "drift_warning",
             "source": "drift_detector",
@@ -120,7 +120,7 @@ class TestSignalAggregator:
         assert len(critical_signals) == 0
 
     def test_check_drift_signals_with_drift(self, sample_reference_data, drifted_current_data):
-        from customer_retention.integrations.iteration.signals import SignalAggregator, IterationSignal
+        from customer_retention.integrations.iteration.signals import SignalAggregator
         from customer_retention.stages.monitoring.drift_detector import DriftDetector
 
         drift_detector = DriftDetector(reference_data=sample_reference_data)
@@ -144,7 +144,7 @@ class TestSignalAggregator:
         assert len(critical) == 0
 
     def test_check_performance_signals_warning(self):
-        from customer_retention.integrations.iteration.signals import SignalAggregator, IterationSignal
+        from customer_retention.integrations.iteration.signals import IterationSignal, SignalAggregator
         from customer_retention.stages.monitoring.performance_monitor import PerformanceMonitor
 
         perf_monitor = PerformanceMonitor(baseline_metrics={"roc_auc": 0.85, "pr_auc": 0.70})
@@ -157,7 +157,7 @@ class TestSignalAggregator:
         assert len(warning_signals) > 0
 
     def test_check_performance_signals_critical(self):
-        from customer_retention.integrations.iteration.signals import SignalAggregator, IterationSignal
+        from customer_retention.integrations.iteration.signals import IterationSignal, SignalAggregator
         from customer_retention.stages.monitoring.performance_monitor import PerformanceMonitor
 
         perf_monitor = PerformanceMonitor(baseline_metrics={"roc_auc": 0.85})
@@ -169,7 +169,7 @@ class TestSignalAggregator:
         assert len(critical) > 0
 
     def test_add_manual_signal(self):
-        from customer_retention.integrations.iteration.signals import SignalAggregator, IterationSignal
+        from customer_retention.integrations.iteration.signals import IterationSignal, SignalAggregator
         aggregator = SignalAggregator()
 
         aggregator.add_manual_signal(
@@ -181,7 +181,7 @@ class TestSignalAggregator:
         assert events[0].signal_type == IterationSignal.MANUAL_TRIGGER
 
     def test_add_scheduled_signal(self):
-        from customer_retention.integrations.iteration.signals import SignalAggregator, IterationSignal
+        from customer_retention.integrations.iteration.signals import IterationSignal, SignalAggregator
         aggregator = SignalAggregator()
 
         aggregator.add_scheduled_signal(schedule_name="weekly_retrain")
@@ -198,8 +198,8 @@ class TestSignalAggregator:
         assert trigger is None
 
     def test_should_trigger_iteration_with_critical(self):
-        from customer_retention.integrations.iteration.signals import SignalAggregator, SignalEvent, IterationSignal
         from customer_retention.integrations.iteration.context import IterationTrigger
+        from customer_retention.integrations.iteration.signals import IterationSignal, SignalAggregator, SignalEvent
         aggregator = SignalAggregator()
 
         # Add a critical signal
@@ -217,8 +217,8 @@ class TestSignalAggregator:
         assert trigger == IterationTrigger.DRIFT_DETECTED
 
     def test_should_trigger_iteration_performance_drop(self):
-        from customer_retention.integrations.iteration.signals import SignalAggregator, SignalEvent, IterationSignal
         from customer_retention.integrations.iteration.context import IterationTrigger
+        from customer_retention.integrations.iteration.signals import IterationSignal, SignalAggregator, SignalEvent
         aggregator = SignalAggregator()
 
         event = SignalEvent(
@@ -266,7 +266,7 @@ class TestSignalAggregator:
         assert len(signals) > 0
 
     def test_get_signal_summary(self):
-        from customer_retention.integrations.iteration.signals import SignalAggregator, SignalEvent, IterationSignal
+        from customer_retention.integrations.iteration.signals import IterationSignal, SignalAggregator, SignalEvent
         aggregator = SignalAggregator()
 
         aggregator._pending_signals.append(SignalEvent(

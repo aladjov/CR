@@ -1,6 +1,7 @@
-import pytest
 import pandas as pd
-from customer_retention.core.config import ColumnConfig, DataSourceConfig, ColumnType, SourceType, FileFormat
+import pytest
+
+from customer_retention.core.config import ColumnConfig, ColumnType, DataSourceConfig, FileFormat, SourceType
 from customer_retention.stages.validation import FeatureQualityGate
 
 

@@ -2,11 +2,11 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, Optional, Any
+from typing import Any, Dict, Optional
 
-from customer_retention.core.compat import pd, DataFrame, Series
-import numpy as np
-from sklearn.preprocessing import StandardScaler, RobustScaler, MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
+
+from customer_retention.core.compat import DataFrame
 
 
 class ScalerType(Enum):

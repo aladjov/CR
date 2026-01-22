@@ -1,8 +1,9 @@
-from typing import Optional, Union
 from dataclasses import dataclass, field
+from typing import Optional, Union
+
 import numpy as np
 
-from customer_retention.core.compat import pd, DataFrame, Series, Timestamp, is_datetime64_any_dtype
+from customer_retention.core.compat import DataFrame, Series, Timestamp, is_datetime64_any_dtype, pd
 
 
 @dataclass

@@ -1,13 +1,12 @@
 """Tests for medallion architecture layered recommendations."""
-import pytest
 from dataclasses import asdict
 
 from customer_retention.analysis.auto_explorer.layered_recommendations import (
-    LayeredRecommendation,
     BronzeRecommendations,
-    SilverRecommendations,
     GoldRecommendations,
+    LayeredRecommendation,
     RecommendationRegistry,
+    SilverRecommendations,
 )
 
 

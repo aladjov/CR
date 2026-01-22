@@ -1,7 +1,7 @@
 import pytest
 
-from customer_retention.core.config.column_config import ColumnType
 from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
+from customer_retention.core.config.column_config import ColumnType
 from customer_retention.integrations.llm_context.context_builder import LLMContextBuilder
 from customer_retention.integrations.llm_context.prompts import PromptTemplates
 

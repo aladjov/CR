@@ -1,13 +1,13 @@
-import pytest
-import pandas as pd
-import numpy as np
 from datetime import datetime
+
+import pandas as pd
+import pytest
 
 from customer_retention.analysis.recommendations.base import Platform, RecommendationResult
 from customer_retention.analysis.recommendations.datetime.extract import (
-    ExtractMonthRecommendation,
-    ExtractDayOfWeekRecommendation,
     DaysSinceRecommendation,
+    ExtractDayOfWeekRecommendation,
+    ExtractMonthRecommendation,
 )
 
 

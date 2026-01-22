@@ -18,11 +18,12 @@ Example:
     >>> print(f"Recommendation: {result.recommendation}")
 """
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Optional, Any
-import re
+from typing import Any, Optional
+
 import pandas as pd
 
 

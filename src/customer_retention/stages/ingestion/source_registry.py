@@ -1,8 +1,11 @@
 import json
 from datetime import datetime
 from typing import Optional
+
 from pydantic import BaseModel
+
 from customer_retention.core.config.source_config import DataSourceConfig
+
 from .load_result import LoadResult
 
 

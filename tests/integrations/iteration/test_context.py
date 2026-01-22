@@ -1,7 +1,5 @@
+
 import pytest
-import yaml
-from datetime import datetime
-from pathlib import Path
 
 
 class TestIterationStatus:
@@ -52,7 +50,11 @@ class TestIterationContext:
         assert child.iteration_id != parent.iteration_id
 
     def test_iteration_context_default_values(self):
-        from customer_retention.integrations.iteration.context import IterationContext, IterationStatus, IterationTrigger
+        from customer_retention.integrations.iteration.context import (
+            IterationContext,
+            IterationStatus,
+            IterationTrigger,
+        )
         ctx = IterationContext.create_new("/findings", IterationTrigger.INITIAL)
         assert ctx.status == IterationStatus.EXPLORING
         assert ctx.model_artifact_path is None
@@ -62,7 +64,11 @@ class TestIterationContext:
         assert ctx.skipped_recommendations == []
 
     def test_update_status(self):
-        from customer_retention.integrations.iteration.context import IterationContext, IterationStatus, IterationTrigger
+        from customer_retention.integrations.iteration.context import (
+            IterationContext,
+            IterationStatus,
+            IterationTrigger,
+        )
         ctx = IterationContext.create_new("/findings", IterationTrigger.INITIAL)
         ctx.update_status(IterationStatus.TRAINING)
         assert ctx.status == IterationStatus.TRAINING
@@ -91,7 +97,11 @@ class TestIterationContext:
         assert "rec_003" in ctx.skipped_recommendations
 
     def test_save_and_load(self, tmp_path):
-        from customer_retention.integrations.iteration.context import IterationContext, IterationTrigger, IterationStatus
+        from customer_retention.integrations.iteration.context import (
+            IterationContext,
+            IterationStatus,
+            IterationTrigger,
+        )
         ctx = IterationContext.create_new(str(tmp_path), IterationTrigger.INITIAL)
         ctx.update_status(IterationStatus.TRAINING)
         ctx.set_model_metrics({"roc_auc": 0.85}, "/models/v1")
@@ -160,7 +170,9 @@ class TestIterationContext:
 class TestIterationContextManager:
     def test_list_iterations(self, tmp_path):
         from customer_retention.integrations.iteration.context import (
-            IterationContext, IterationContextManager, IterationTrigger
+            IterationContext,
+            IterationContextManager,
+            IterationTrigger,
         )
         iterations_dir = tmp_path / "iterations"
         iterations_dir.mkdir()
@@ -177,7 +189,9 @@ class TestIterationContextManager:
 
     def test_get_current_iteration(self, tmp_path):
         from customer_retention.integrations.iteration.context import (
-            IterationContext, IterationContextManager, IterationTrigger
+            IterationContext,
+            IterationContextManager,
+            IterationTrigger,
         )
         iterations_dir = tmp_path / "iterations"
         iterations_dir.mkdir()
@@ -194,7 +208,9 @@ class TestIterationContextManager:
 
     def test_get_iteration_by_id(self, tmp_path):
         from customer_retention.integrations.iteration.context import (
-            IterationContext, IterationContextManager, IterationTrigger
+            IterationContext,
+            IterationContextManager,
+            IterationTrigger,
         )
         iterations_dir = tmp_path / "iterations"
         iterations_dir.mkdir()
@@ -209,7 +225,9 @@ class TestIterationContextManager:
 
     def test_get_iteration_history(self, tmp_path):
         from customer_retention.integrations.iteration.context import (
-            IterationContext, IterationContextManager, IterationTrigger
+            IterationContext,
+            IterationContextManager,
+            IterationTrigger,
         )
         iterations_dir = tmp_path / "iterations"
         iterations_dir.mkdir()

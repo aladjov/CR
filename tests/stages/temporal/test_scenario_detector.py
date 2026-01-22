@@ -1,10 +1,9 @@
-import pytest
-import pandas as pd
 from datetime import datetime
 
-from customer_retention.stages.temporal.scenario_detector import (
-    ScenarioDetector, auto_detect_and_configure
-)
+import pandas as pd
+import pytest
+
+from customer_retention.stages.temporal.scenario_detector import ScenarioDetector, auto_detect_and_configure
 from customer_retention.stages.temporal.timestamp_manager import TimestampStrategy
 
 

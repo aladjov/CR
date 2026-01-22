@@ -4,12 +4,12 @@ import pandas as pd
 import pytest
 
 from customer_retention.stages.profiling.temporal_feature_analyzer import (
+    FeatureRecommendation,
+    LagCorrelationResult,
+    MomentumResult,
+    PredictivePowerResult,
     TemporalFeatureAnalyzer,
     VelocityResult,
-    MomentumResult,
-    LagCorrelationResult,
-    PredictivePowerResult,
-    FeatureRecommendation,
 )
 
 

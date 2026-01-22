@@ -1,11 +1,11 @@
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Dict, Any, Optional, List, Tuple, Callable
-import uuid
+from typing import Any, Dict, List, Optional, Tuple
 
-from .event_schema import Event, EventType, EventSource
-from .early_warning_model import WarningResult, WarningLevel, SignalType
+from .early_warning_model import WarningResult
+from .event_schema import Event
 
 
 class StreamTriggerType(Enum):

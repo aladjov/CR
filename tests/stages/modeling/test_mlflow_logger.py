@@ -1,8 +1,6 @@
-import pytest
-import pandas as pd
-import numpy as np
 from unittest.mock import MagicMock, patch
-from customer_retention.stages.modeling import MLflowLogger, ExperimentConfig
+
+from customer_retention.stages.modeling import ExperimentConfig, MLflowLogger
 
 
 class TestExperimentConfig:

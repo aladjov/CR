@@ -22,10 +22,11 @@ Example:
 
 from datetime import datetime
 from typing import Optional
+
 import pandas as pd
 
-from .timestamp_manager import TimestampConfig, TimestampStrategy
 from .timestamp_discovery import TimestampDiscoveryEngine, TimestampDiscoveryResult
+from .timestamp_manager import TimestampConfig, TimestampStrategy
 
 
 class ScenarioDetector:

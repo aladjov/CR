@@ -1,10 +1,11 @@
-import pytest
 import json
+
 import pandas as pd
-from pathlib import Path
-from customer_retention.stages.profiling import ReportGenerator, ProfileResult, ColumnProfile, TypeInference
-from customer_retention.stages.profiling.profile_result import UniversalMetrics, NumericMetrics, CategoricalMetrics
+import pytest
+
 from customer_retention.core.config import ColumnType
+from customer_retention.stages.profiling import ColumnProfile, ProfileResult, ReportGenerator, TypeInference
+from customer_retention.stages.profiling.profile_result import CategoricalMetrics, NumericMetrics, UniversalMetrics
 
 
 @pytest.fixture

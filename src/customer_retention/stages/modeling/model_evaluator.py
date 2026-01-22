@@ -1,16 +1,26 @@
 """Model evaluation metrics for customer retention prediction."""
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
-from customer_retention.core.compat import pd, DataFrame, Series
 import numpy as np
 from sklearn.metrics import (
-    accuracy_score, balanced_accuracy_score, precision_score, recall_score, f1_score,
-    roc_auc_score, average_precision_score, brier_score_loss, log_loss,
-    confusion_matrix, classification_report,
-    roc_curve, precision_recall_curve,
+    accuracy_score,
+    average_precision_score,
+    balanced_accuracy_score,
+    brier_score_loss,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    log_loss,
+    precision_recall_curve,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+    roc_curve,
 )
+
+from customer_retention.core.compat import DataFrame, Series
 
 
 @dataclass

@@ -6,10 +6,10 @@ value, engagement, recency, and other behavioral patterns.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any, Callable
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import pd, DataFrame, Series
+from customer_retention.core.compat import DataFrame, pd
 
 
 class SegmentationType(Enum):

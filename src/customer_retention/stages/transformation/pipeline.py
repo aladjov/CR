@@ -1,16 +1,17 @@
-from typing import Optional
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Optional
+
 import numpy as np
 
-from customer_retention.core.compat import pd, DataFrame
-
+from customer_retention.core.compat import DataFrame, pd
 from customer_retention.core.config import ColumnType
 from customer_retention.stages.cleaning import MissingValueHandler, OutlierHandler, OutlierTreatmentStrategy
-from .numeric_transformer import NumericTransformer, ScalingStrategy
+
+from .binary_handler import BinaryHandler
 from .categorical_encoder import CategoricalEncoder, EncodingStrategy
 from .datetime_transformer import DatetimeTransformer
-from .binary_handler import BinaryHandler
+from .numeric_transformer import NumericTransformer, ScalingStrategy
 
 
 @dataclass

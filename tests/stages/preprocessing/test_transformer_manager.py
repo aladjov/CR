@@ -1,7 +1,7 @@
-import pytest
-import pandas as pd
+
 import numpy as np
-from pathlib import Path
+import pandas as pd
+import pytest
 
 
 @pytest.fixture
@@ -203,7 +203,7 @@ class TestTransformerManagerScalerTypes:
 
 class TestTransformerBundle:
     def test_to_dict_and_from_dict(self, sample_df):
-        from customer_retention.stages.preprocessing import TransformerManager, TransformerBundle
+        from customer_retention.stages.preprocessing import TransformerBundle, TransformerManager
 
         manager = TransformerManager()
         manager.fit_transform(
@@ -248,8 +248,9 @@ class TestTransformerManifest:
 
 class TestTransformerManagerMLflowIntegration:
     def test_log_to_mlflow_creates_artifacts(self, sample_df, tmp_path, monkeypatch):
-        from customer_retention.stages.preprocessing import TransformerManager
         import mlflow
+
+        from customer_retention.stages.preprocessing import TransformerManager
 
         mlflow.set_tracking_uri(f"file://{tmp_path}/mlruns")
 
@@ -272,8 +273,9 @@ class TestTransformerManagerMLflowIntegration:
         assert any("transformer_manifest.json" in p for p in artifact_names)
 
     def test_log_to_mlflow_with_run_id(self, sample_df, tmp_path):
-        from customer_retention.stages.preprocessing import TransformerManager
         import mlflow
+
+        from customer_retention.stages.preprocessing import TransformerManager
 
         mlflow.set_tracking_uri(f"file://{tmp_path}/mlruns")
 
@@ -295,8 +297,9 @@ class TestTransformerManagerMLflowIntegration:
         assert len(artifacts) > 0
 
     def test_load_from_mlflow(self, sample_df, tmp_path):
-        from customer_retention.stages.preprocessing import TransformerManager
         import mlflow
+
+        from customer_retention.stages.preprocessing import TransformerManager
 
         mlflow.set_tracking_uri(f"file://{tmp_path}/mlruns")
 
@@ -319,8 +322,9 @@ class TestTransformerManagerMLflowIntegration:
         assert loaded.manifest.categorical_columns == manager.manifest.categorical_columns
 
     def test_load_from_mlflow_by_experiment(self, sample_df, tmp_path):
-        from customer_retention.stages.preprocessing import TransformerManager
         import mlflow
+
+        from customer_retention.stages.preprocessing import TransformerManager
 
         mlflow.set_tracking_uri(f"file://{tmp_path}/mlruns")
         experiment_name = "test_experiment"
@@ -347,8 +351,9 @@ class TestTransformerManagerMLflowIntegration:
         assert loaded.manifest.scaler_type == "standard"
 
     def test_load_from_mlflow_raises_if_experiment_not_found(self, tmp_path):
-        from customer_retention.stages.preprocessing import TransformerManager
         import mlflow
+
+        from customer_retention.stages.preprocessing import TransformerManager
 
         mlflow.set_tracking_uri(f"file://{tmp_path}/mlruns")
 
@@ -359,8 +364,9 @@ class TestTransformerManagerMLflowIntegration:
             )
 
     def test_log_to_mlflow_raises_if_not_fitted(self, tmp_path):
-        from customer_retention.stages.preprocessing import TransformerManager
         import mlflow
+
+        from customer_retention.stages.preprocessing import TransformerManager
 
         mlflow.set_tracking_uri(f"file://{tmp_path}/mlruns")
         mlflow.set_experiment("test_unfitted")

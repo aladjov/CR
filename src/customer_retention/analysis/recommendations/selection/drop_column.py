@@ -1,4 +1,5 @@
 from typing import Any, List, Optional
+
 import pandas as pd
 
 from ..base import BaseRecommendation, RecommendationResult

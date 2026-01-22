@@ -6,10 +6,10 @@ Provides profiling capabilities specific to time series data including:
 - Event frequency distributions
 - Inter-event timing statistics
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
-from customer_retention.core.compat import pd, DataFrame
+from customer_retention.core.compat import DataFrame, pd
 
 
 @dataclass

@@ -2,13 +2,14 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Dict, Optional, Any
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 import shap
-
-from customer_retention.core.compat import pd, DataFrame, Series
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
+
+from customer_retention.core.compat import DataFrame, Series
 
 
 class Confidence(Enum):

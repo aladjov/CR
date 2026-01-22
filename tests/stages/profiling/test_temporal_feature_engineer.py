@@ -1,16 +1,17 @@
 """Tests for TemporalFeatureEngineer - temporal feature engineering with lagged windows."""
 
-import pytest
-import pandas as pd
+from datetime import datetime
+
 import numpy as np
-from datetime import datetime, timedelta
+import pandas as pd
+import pytest
 
 from customer_retention.stages.profiling.temporal_feature_engineer import (
-    TemporalFeatureEngineer,
-    TemporalAggregationConfig,
-    ReferenceMode,
     FeatureGroup,
     FeatureGroupResult,
+    ReferenceMode,
+    TemporalAggregationConfig,
+    TemporalFeatureEngineer,
     TemporalFeatureResult,
 )
 

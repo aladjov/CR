@@ -1,5 +1,5 @@
-import pytest
 import pandas as pd
+import pytest
 
 from customer_retention.analysis.recommendations.base import Platform, RecommendationResult
 from customer_retention.analysis.recommendations.selection.drop_column import DropColumnRecommendation

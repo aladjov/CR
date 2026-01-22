@@ -1,4 +1,5 @@
 from typing import List
+
 import nbformat
 
 from ..base import NotebookStage

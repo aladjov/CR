@@ -1,6 +1,6 @@
-from typing import Dict, List, Any, Optional
-from pathlib import Path
 import json
+from pathlib import Path
+from typing import Any, Dict, List
 
 from .pipeline_spec import PipelineSpec
 
@@ -80,17 +80,17 @@ class DatabricksSpecGenerator:
         for source in spec.sources:
             table_name = f"{spec.name}_bronze"
             lines.extend([
-                f'@dlt.table(',
+                '@dlt.table(',
                 f'    name="{table_name}",',
                 f'    comment="Raw data from {source.name}"',
-                f')',
-                f'@dlt.expect_or_drop("valid_record", "1=1")',
+                ')',
+                '@dlt.expect_or_drop("valid_record", "1=1")',
                 f'def {table_name}():',
-                f'    return (',
-                f'        spark.read',
+                '    return (',
+                '        spark.read',
                 f'        .format("{source.format}")',
                 f'        .load("{source.path}")',
-                f'    )',
+                '    )',
                 ""
             ])
 
@@ -110,10 +110,10 @@ class DatabricksSpecGenerator:
                 )
 
         lines.extend([
-            f'@dlt.table(',
+            '@dlt.table(',
             f'    name="{table_name}",',
-            f'    comment="Cleaned and standardized data"',
-            f')',
+            '    comment="Cleaned and standardized data"',
+            ')',
         ])
         for exp in expectations:
             lines.append(exp)
@@ -134,12 +134,12 @@ class DatabricksSpecGenerator:
                 elif transform.transform_type == "one_hot_encoding":
                     col = transform.input_columns[0]
                     lines.append(f'    # {transform.name}')
-                    lines.append(f'    # Note: One-hot encoding applied in feature engineering')
+                    lines.append('    # Note: One-hot encoding applied in feature engineering')
 
             lines.append("")
 
         lines.extend([
-            f'    return df',
+            '    return df',
             ""
         ])
 
@@ -152,10 +152,10 @@ class DatabricksSpecGenerator:
         silver_table = f"{spec.name}_silver"
 
         lines.extend([
-            f'@dlt.table(',
+            '@dlt.table(',
             f'    name="{table_name}",',
-            f'    comment="Feature-engineered data ready for modeling"',
-            f')',
+            '    comment="Feature-engineered data ready for modeling"',
+            ')',
             f'def {table_name}():',
             f'    df = dlt.read("{silver_table}")',
             ""
@@ -174,7 +174,7 @@ class DatabricksSpecGenerator:
             lines.append("")
 
         lines.extend([
-            f'    return df',
+            '    return df',
             ""
         ])
 
@@ -243,7 +243,7 @@ class DatabricksSpecGenerator:
             "",
             "fs = FeatureStoreClient()",
             "",
-            f'# Create feature table',
+            '# Create feature table',
             f'feature_table_name = "{self.catalog}.{self.schema}.{spec.name}_features"',
             ""
         ]
@@ -251,23 +251,23 @@ class DatabricksSpecGenerator:
         if primary_key:
             lines.extend([
                 f'# Define the feature table with primary key: {primary_key}',
-                f'fs.create_table(',
-                f'    name=feature_table_name,',
+                'fs.create_table(',
+                '    name=feature_table_name,',
                 f'    primary_keys=["{primary_key}"],',
                 f'    df=spark.table("{self.catalog}.{self.schema}.{spec.name}_gold"),',
                 f'    description="Features for {spec.name}"',
-                f')',
+                ')',
                 ""
             ])
         else:
             lines.extend([
-                f'# Write features to table',
+                '# Write features to table',
                 f'df = spark.table("{self.catalog}.{self.schema}.{spec.name}_gold")',
-                f'fs.write_table(',
-                f'    name=feature_table_name,',
-                f'    df=df,',
-                f'    mode="overwrite"',
-                f')',
+                'fs.write_table(',
+                '    name=feature_table_name,',
+                '    df=df,',
+                '    mode="overwrite"',
+                ')',
                 ""
             ])
 
@@ -277,12 +277,12 @@ class DatabricksSpecGenerator:
                 "feature_lookups = ["
             ])
             for feature in spec.feature_definitions:
-                lines.append(f'    FeatureLookup(')
-                lines.append(f'        table_name=feature_table_name,')
+                lines.append('    FeatureLookup(')
+                lines.append('        table_name=feature_table_name,')
                 lines.append(f'        feature_names=["{feature.name}"],')
                 if primary_key:
                     lines.append(f'        lookup_key="{primary_key}"')
-                lines.append(f'    ),')
+                lines.append('    ),')
             lines.append("]")
 
         return "\n".join(lines)
@@ -303,10 +303,10 @@ class DatabricksSpecGenerator:
             f'mlflow.set_experiment("/Users/{{username}}/{spec.name}_experiment")',
             "",
             f'with mlflow.start_run(run_name="{model_name}"):',
-            f'    # Load training data',
+            '    # Load training data',
             f'    df = spark.table("{self.catalog}.{self.schema}.{spec.name}_gold")',
             "",
-            f'    # Log parameters',
+            '    # Log parameters',
             f'    mlflow.log_param("target_column", "{target}")',
             f'    mlflow.log_param("model_type", "{model_type}")',
             ""
@@ -319,23 +319,23 @@ class DatabricksSpecGenerator:
             lines.append("")
 
         lines.extend([
-            f'    # Train model',
-            f'    model = GBTClassifier(',
-            f'        featuresCol="features",',
+            '    # Train model',
+            '    model = GBTClassifier(',
+            '        featuresCol="features",',
             f'        labelCol="{target}",',
-            f'        maxIter=100',
-            f'    )',
+            '        maxIter=100',
+            '    )',
             "",
-            f'    trained_model = model.fit(df)',
+            '    trained_model = model.fit(df)',
             "",
-            f'    # Log model',
+            '    # Log model',
             f'    mlflow.spark.log_model(trained_model, "{model_name}")',
             "",
-            f'    # Register model in Unity Catalog',
-            f'    mlflow.register_model(',
+            '    # Register model in Unity Catalog',
+            '    mlflow.register_model(',
             f'        f"runs/{{mlflow.active_run().info.run_id}}/{model_name}",',
             f'        "{self.catalog}.{self.schema}.{spec.name}_model"',
-            f'    )',
+            '    )',
         ])
 
         return "\n".join(lines)
@@ -366,7 +366,7 @@ class DatabricksSpecGenerator:
 
             lines.extend([
                 ")",
-                f"USING DELTA",
+                "USING DELTA",
                 f"COMMENT '{layer.title()} layer table for {spec.name}';",
                 ""
             ])

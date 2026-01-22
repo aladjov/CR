@@ -1,6 +1,8 @@
 from typing import List
-from ..base import Component, ComponentResult
+
 from customer_retention.generators.orchestration.context import PipelineContext
+
+from ..base import Component, ComponentResult
 
 
 class Validator(Component):
@@ -16,12 +18,12 @@ class Validator(Component):
     def run(self, context: PipelineContext) -> ComponentResult:
         self._start_timer()
         try:
+            from customer_retention.analysis.diagnostics.calibration_analyzer import CalibrationAnalyzer
             from customer_retention.analysis.diagnostics.leakage_detector import LeakageDetector
             from customer_retention.analysis.diagnostics.overfitting_analyzer import OverfittingAnalyzer
-            from customer_retention.analysis.diagnostics.calibration_analyzer import CalibrationAnalyzer
-            leakage = LeakageDetector()
-            overfitting = OverfittingAnalyzer()
-            calibration = CalibrationAnalyzer()
+            LeakageDetector()
+            OverfittingAnalyzer()
+            CalibrationAnalyzer()
             context.validation_results = {
                 "leakage": "checked",
                 "overfitting": "checked",

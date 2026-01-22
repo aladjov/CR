@@ -1,9 +1,13 @@
-import pytest
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
+
 from customer_retention.stages.monitoring import (
-    AlertManager, Alert, AlertLevel, AlertChannel,
-    AlertConfig, AlertCondition, AlertResult
+    Alert,
+    AlertChannel,
+    AlertCondition,
+    AlertConfig,
+    AlertLevel,
+    AlertManager,
 )
 
 

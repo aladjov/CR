@@ -1,20 +1,26 @@
-import pytest
-import pandas as pd
-import numpy as np
-from pathlib import Path
 from datetime import datetime, timedelta
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pandas as pd
+import pytest
 from sklearn.ensemble import RandomForestClassifier
 
 from customer_retention.stages.deployment import (
-    ModelRegistry, ModelStage, BatchScorer, ScoringConfig,
-    RetrainingTrigger, RetrainingTriggerType, ChampionChallenger, RollbackManager
+    BatchScorer,
+    ChampionChallenger,
+    ModelRegistry,
+    ModelStage,
+    RetrainingTrigger,
+    RetrainingTriggerType,
 )
 from customer_retention.stages.monitoring import (
-    DriftDetector, PerformanceMonitor, PerformanceStatus,
-    AlertManager, AlertLevel
+    AlertLevel,
+    AlertManager,
+    DriftDetector,
+    PerformanceMonitor,
+    PerformanceStatus,
 )
-from customer_retention.core.components.enums import Severity
 
 
 @pytest.fixture
@@ -196,7 +202,7 @@ class TestPerformanceMonitoring:
 class TestAlerting:
     def test_ac8_16_alerts_sent_to_correct_channel(self):
         with patch("customer_retention.stages.monitoring.alert_manager.EmailSender") as mock_email:
-            from customer_retention.stages.monitoring import AlertConfig, AlertChannel, Alert
+            from customer_retention.stages.monitoring import Alert, AlertChannel, AlertConfig
             config = AlertConfig(channels=[AlertChannel.EMAIL])
             manager = AlertManager(config=config)
             alert = Alert(
@@ -210,7 +216,6 @@ class TestAlerting:
             mock_email.return_value.send.assert_called()
 
     def test_ac8_17_alert_levels_correct(self):
-        from customer_retention.stages.monitoring import AlertCondition
         manager = AlertManager()
         manager.load_predefined_conditions()
         al001 = next((c for c in manager.conditions if c.alert_id == "AL001"), None)
@@ -219,7 +224,7 @@ class TestAlerting:
         assert al004.level == AlertLevel.WARNING
 
     def test_ac8_18_aggregation_works(self):
-        from customer_retention.stages.monitoring import AlertConfig, Alert
+        from customer_retention.stages.monitoring import Alert, AlertConfig
         config = AlertConfig(aggregation_window_minutes=60)
         manager = AlertManager(config=config)
         alerts = [

@@ -1,13 +1,24 @@
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Optional
+
 import nbformat
 
 from .base import NotebookGenerator, NotebookStage
-from .config import NotebookConfig, Platform
+
+if TYPE_CHECKING:
+    from customer_retention.analysis.auto_explorer import ExplorationFindings
 from .cell_builder import CellBuilder
+from .config import NotebookConfig, Platform
 from .stages import (
-    IngestionStage, ProfilingStage, CleaningStage, TransformationStage,
-    FeatureEngineeringStage, FeatureSelectionStage, ModelTrainingStage,
-    DeploymentStage, MonitoringStage, BatchInferenceStage,
+    BatchInferenceStage,
+    CleaningStage,
+    DeploymentStage,
+    FeatureEngineeringStage,
+    FeatureSelectionStage,
+    IngestionStage,
+    ModelTrainingStage,
+    MonitoringStage,
+    ProfilingStage,
+    TransformationStage,
 )
 
 

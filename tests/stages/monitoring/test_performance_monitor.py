@@ -1,9 +1,12 @@
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
+
 from customer_retention.stages.monitoring import (
-    PerformanceMonitor, PerformanceResult, PerformanceStatus,
-    ProxyMetrics, MonitoringConfig
+    MonitoringConfig,
+    PerformanceMonitor,
+    PerformanceStatus,
+    ProxyMetrics,
 )
 
 

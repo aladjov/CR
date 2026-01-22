@@ -1,9 +1,7 @@
 import pytest
 from pydantic import ValidationError
-from customer_retention.core.config import (
-    SourceType, FileFormat, Grain, DataSourceConfig,
-    ColumnType, ColumnConfig
-)
+
+from customer_retention.core.config import ColumnConfig, ColumnType, DataSourceConfig, FileFormat, Grain, SourceType
 
 
 class TestSourceType:

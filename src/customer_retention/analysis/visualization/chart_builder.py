@@ -1,15 +1,17 @@
-from typing import Dict, List, Optional, Any, TYPE_CHECKING
 from datetime import datetime
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-from customer_retention.core.compat import DataFrame, Series, to_pandas, ensure_pandas_series
+from customer_retention.core.compat import DataFrame, Series, ensure_pandas_series, to_pandas
+
 from .number_formatter import NumberFormatter
 
 if TYPE_CHECKING:
-    from customer_retention.stages.profiling.temporal_analyzer import TemporalAnalysis
     from customer_retention.stages.profiling.segment_analyzer import SegmentationResult
+    from customer_retention.stages.profiling.temporal_analyzer import TemporalAnalysis
     from customer_retention.stages.temporal.cutoff_analyzer import CutoffAnalysis
 
 
@@ -234,7 +236,7 @@ class ChartBuilder:
                                   textfont={"size": 11}, showscale=False, hovertemplate="Actual: %{y}<br>Predicted: %{x}<br>Count: %{z}<extra></extra>"), row=1, col=col)
 
     def _add_roc_curve_to_grid(self, fig: go.Figure, y_test: Any, y_pred_proba: Any, color: str, col: int, n_models: int) -> None:
-        from sklearn.metrics import roc_curve, roc_auc_score
+        from sklearn.metrics import roc_auc_score, roc_curve
         fpr, tpr, _ = roc_curve(y_test, y_pred_proba)
         auc = roc_auc_score(y_test, y_pred_proba)
         fig.add_trace(go.Scatter(x=fpr, y=tpr, mode="lines", line={"color": color, "width": 2}, name=f"AUC={auc:.3f}", showlegend=False,
@@ -245,7 +247,7 @@ class ChartBuilder:
         fig.add_annotation(x=0.95, y=0.05, xref=xref, yref=yref, text=f"AUC={auc:.3f}", showarrow=False, font={"size": 11, "color": color}, bgcolor="rgba(255,255,255,0.8)", xanchor="right")
 
     def _add_pr_curve_to_grid(self, fig: go.Figure, y_test: Any, y_pred_proba: Any, color: str, col: int, n_models: int, baseline: float) -> None:
-        from sklearn.metrics import precision_recall_curve, average_precision_score
+        from sklearn.metrics import average_precision_score, precision_recall_curve
         precision, recall, _ = precision_recall_curve(y_test, y_pred_proba)
         pr_auc = average_precision_score(y_test, y_pred_proba)
         fig.add_trace(go.Scatter(x=recall, y=precision, mode="lines", line={"color": color, "width": 2}, name=f"PR-AUC={pr_auc:.3f}", showlegend=False,
@@ -1664,15 +1666,16 @@ class ChartBuilder:
             max_columns: Maximum number of column tiles to display
             columns_per_row: Number of tiles per row
         """
-        from plotly.subplots import make_subplots
         from pathlib import Path
+
+        from plotly.subplots import make_subplots
 
         df = to_pandas(df)
         formatter = NumberFormatter()
 
         # Calculate metrics
         memory_mb = df.memory_usage(deep=True).sum() / 1024**2
-        completeness = 100 - sum(
+        100 - sum(
             col.universal_metrics.get("null_percentage", 0)
             for col in findings.columns.values()
         ) / max(len(findings.columns), 1)
@@ -1883,8 +1886,8 @@ class ChartBuilder:
     ) -> None:
         """Add categorical column tile with top categories bar."""
         value_counts = series.value_counts().head(5)
-        cardinality = metrics.get('distinct_count', series.nunique())
-        null_pct = metrics.get('null_percentage', 0)
+        metrics.get('distinct_count', series.nunique())
+        metrics.get('null_percentage', 0)
 
         # Gradient colors to show rank
         colors = [self.colors["info"]] + [self.colors["primary"]] * (len(value_counts) - 1)
@@ -1945,8 +1948,9 @@ class ChartBuilder:
         row: int, col: int, n_cols: int
     ) -> None:
         """Add datetime column tile with date range visualization."""
-        import pandas as pd
         import warnings
+
+        import pandas as pd
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             dates = pd.to_datetime(series, errors='coerce').dropna()
@@ -1962,7 +1966,7 @@ class ChartBuilder:
             mode='lines',
             fill='tozeroy',
             line={"color": self.colors["info"]},
-            fillcolor=f"rgba(23, 190, 207, 0.3)",
+            fillcolor="rgba(23, 190, 207, 0.3)",
             hovertemplate="%{x}: %{y:,}<extra></extra>"
         ), row=row, col=col)
 
@@ -2049,8 +2053,8 @@ class ChartBuilder:
         row: int, col: int, n_cols: int, formatter: "NumberFormatter"
     ) -> None:
         """Add generic tile for unknown column types."""
-        distinct = metrics.get('distinct_count', series.nunique())
-        null_pct = metrics.get('null_percentage', 0)
+        metrics.get('distinct_count', series.nunique())
+        metrics.get('null_percentage', 0)
 
         value_counts = series.value_counts().head(5)
 

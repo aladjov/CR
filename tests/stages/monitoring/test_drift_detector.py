@@ -1,10 +1,9 @@
-import pytest
-import pandas as pd
 import numpy as np
-from customer_retention.stages.monitoring import (
-    DriftDetector, DriftType, DriftResult, DriftConfig
-)
+import pandas as pd
+import pytest
+
 from customer_retention.core.components.enums import Severity
+from customer_retention.stages.monitoring import DriftConfig, DriftDetector, DriftType
 
 
 @pytest.fixture

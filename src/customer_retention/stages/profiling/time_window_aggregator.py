@@ -6,11 +6,11 @@ time windows (24h, 7d, 30d, 90d, all_time).
 """
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, List, Dict, Callable
+from typing import Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import pd, DataFrame
+from customer_retention.core.compat import DataFrame, pd
 
 
 class AggregationType(str, Enum):

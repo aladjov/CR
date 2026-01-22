@@ -1,16 +1,16 @@
 """Tests for TemporalPatternAnalyzer - TDD approach."""
-import pytest
-import pandas as pd
+from datetime import timedelta
+
 import numpy as np
-from datetime import datetime, timedelta
+import pandas as pd
+import pytest
 
 from customer_retention.stages.profiling.temporal_pattern_analyzer import (
-    TemporalPatternAnalyzer,
-    TemporalPatternAnalysis,
-    TrendResult,
-    TrendDirection,
-    SeasonalityPeriod,
     RecencyResult,
+    TemporalPatternAnalysis,
+    TemporalPatternAnalyzer,
+    TrendDirection,
+    TrendResult,
 )
 
 

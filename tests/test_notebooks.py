@@ -4,12 +4,10 @@ Notebook execution tests using papermill.
 Run with: pytest tests/test_notebooks.py -v
 Run single: pytest tests/test_notebooks.py::test_notebook_01_data_discovery -v
 """
-import pytest
-import papermill as pm
-import tempfile
-import shutil
 from pathlib import Path
 
+import papermill as pm
+import pytest
 
 # Test data paths
 FIXTURES_DIR = Path(__file__).parent / "fixtures"

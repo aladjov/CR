@@ -3,17 +3,16 @@
 Ensures that the same transformations (scaling, encoding) applied during training
 are replicated exactly during scoring to prevent data leakage and prediction errors.
 """
+import json
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
-import json
-import tempfile
-import os
 
 import joblib
-import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler, RobustScaler, MinMaxScaler, LabelEncoder
+import pandas as pd
+from sklearn.preprocessing import LabelEncoder, MinMaxScaler, RobustScaler, StandardScaler
 
 
 @dataclass
@@ -227,7 +226,6 @@ class TransformerManager:
         return manager
 
     def log_to_mlflow(self, run_id: Optional[str] = None, artifact_path: str = "transformers") -> None:
-        import mlflow
 
         if not self._is_fitted:
             raise ValueError("Cannot log unfitted TransformerManager")

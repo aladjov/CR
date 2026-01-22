@@ -1,11 +1,8 @@
-import pytest
-import pandas as pd
-import numpy as np
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
+
 from sklearn.ensemble import RandomForestClassifier
-from customer_retention.stages.deployment import (
-    ModelRegistry, ModelStage, ModelMetadata, RegistrationResult
-)
+
+from customer_retention.stages.deployment import ModelMetadata, ModelRegistry, ModelStage
 
 
 class TestModelRegistration:

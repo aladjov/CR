@@ -1,13 +1,11 @@
-import pytest
 import tempfile
-import json
 from pathlib import Path
 
-from customer_retention.core.config.column_config import ColumnType
+import pytest
+
 from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
-from customer_retention.generators.orchestration.context import (
-    PipelineContext, ContextManager, setup_notebook_context
-)
+from customer_retention.core.config.column_config import ColumnType
+from customer_retention.generators.orchestration.context import ContextManager, PipelineContext, setup_notebook_context
 
 
 @pytest.fixture

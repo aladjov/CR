@@ -1,8 +1,9 @@
 """Tests for TemporalTargetAnalyzer."""
-import pytest
+from datetime import datetime
+
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
+import pytest
 
 from customer_retention.stages.profiling import TemporalTargetAnalyzer
 

@@ -1,4 +1,5 @@
 from typing import List
+
 import nbformat
 
 from ..base import NotebookStage
@@ -43,9 +44,9 @@ print(f"Target column: {findings.target_column}")'''),
             self.cb.code('''ctx, manager = setup_notebook_context(exploration_findings=findings)
 print(f"Pipeline context initialized for: {ctx.config.project_name}")'''),
             self.cb.section("Load Raw Data"),
-            self.cb.code(f'''registry = DataSourceRegistry()
+            self.cb.code('''registry = DataSourceRegistry()
 df = registry.load(findings.source_path, format=DATA_FORMAT)
-print(f"Loaded {{len(df)}} rows")
+print(f"Loaded {len(df)} rows")
 df.head()'''),
             self.cb.section("Detect Timestamp Scenario"),
             self.cb.code('''detector = ScenarioDetector()
@@ -94,6 +95,6 @@ spark.sql(f"USE SCHEMA {{SCHEMA}}")'''),
 print(f"Loaded {{df_raw.count()}} rows")
 display(df_raw.limit(10))'''),
             self.cb.section("Save to Bronze Table"),
-            self.cb.code(f'''df_raw.write.format("delta").mode("overwrite").saveAsTable(f"{{CATALOG}}.{{SCHEMA}}.bronze_customers")
+            self.cb.code('''df_raw.write.format("delta").mode("overwrite").saveAsTable(f"{CATALOG}.{SCHEMA}.bronze_customers")
 print("Bronze table created")'''),
         ]

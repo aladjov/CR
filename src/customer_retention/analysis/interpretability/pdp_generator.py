@@ -1,11 +1,12 @@
 """Partial Dependence Plot generation."""
 
-from dataclasses import dataclass, field
-from typing import List, Optional, Any, Tuple
+from dataclasses import dataclass
+from typing import Any, List, Optional
+
 import numpy as np
 from sklearn.inspection import partial_dependence
 
-from customer_retention.core.compat import pd, DataFrame
+from customer_retention.core.compat import DataFrame
 
 
 @dataclass

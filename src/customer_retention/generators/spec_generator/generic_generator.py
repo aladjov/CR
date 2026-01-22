@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Dict, List
+
 from .pipeline_spec import PipelineSpec
 
 
@@ -52,7 +53,6 @@ class GenericSpecGenerator:
             '',
         ])
         target_col = spec.model_config.target_column if spec.model_config else "target"
-        feature_cols = spec.model_config.feature_columns if spec.model_config else []
         lines.extend([
             'def build_pipeline():',
             '    """Build the ML pipeline."""',
@@ -76,7 +76,7 @@ class GenericSpecGenerator:
             '',
             '    pipeline = Pipeline([',
             '        ("preprocessor", preprocessor),',
-            f'        ("classifier", GradientBoostingClassifier())',
+            '        ("classifier", GradientBoostingClassifier())',
             '    ])',
             '',
             '    return pipeline',
@@ -116,7 +116,7 @@ class GenericSpecGenerator:
         lines = [
             '"""',
             f'Airflow DAG: {spec.name}',
-            f'Auto-generated pipeline DAG',
+            'Auto-generated pipeline DAG',
             '"""',
             '',
             'from datetime import datetime, timedelta',
@@ -134,7 +134,7 @@ class GenericSpecGenerator:
             '}',
             '',
             '',
-            f'with DAG(',
+            'with DAG(',
             f'    dag_id="{dag_id}",',
             '    default_args=default_args,',
             '    description="Customer retention ML pipeline",',
@@ -193,7 +193,7 @@ class GenericSpecGenerator:
         lines = [
             '"""',
             f'Prefect Flow: {spec.name}',
-            f'Auto-generated pipeline flow',
+            'Auto-generated pipeline flow',
             '"""',
             '',
             'from prefect import flow, task',

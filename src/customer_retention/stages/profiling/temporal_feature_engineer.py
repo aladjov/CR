@@ -19,9 +19,10 @@ Key Concepts:
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, date
+from datetime import datetime
 from enum import Enum
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 
 from customer_retention.core.compat import pd
@@ -507,7 +508,7 @@ class TemporalFeatureEngineer:
                 continue
 
             first_event = entity_df["first_event"].iloc[0]
-            last_event = entity_df["last_event"].iloc[0]
+            entity_df["last_event"].iloc[0]
 
             # Calculate split boundaries
             split1 = first_event + pd.Timedelta(days=history_days * splits[0])

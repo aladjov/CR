@@ -1,15 +1,15 @@
 """Tests for FeatureCapacityAnalyzer - estimates favorable feature-to-data ratios."""
 
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 
 from customer_retention.stages.profiling.feature_capacity import (
+    EffectiveFeaturesResult,
     FeatureCapacityAnalyzer,
     FeatureCapacityResult,
-    SegmentCapacityResult,
-    EffectiveFeaturesResult,
     ModelComplexityGuidance,
+    SegmentCapacityResult,
 )
 
 

@@ -1,12 +1,13 @@
 """SHAP-based model explainability."""
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 import shap
-
-from customer_retention.core.compat import pd, DataFrame, Series
 from sklearn.inspection import permutation_importance
+
+from customer_retention.core.compat import DataFrame, Series
 
 
 @dataclass

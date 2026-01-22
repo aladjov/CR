@@ -1,9 +1,8 @@
-import pytest
-import pandas as pd
 import numpy as np
-from customer_retention.stages.features import (
-    FeatureSelector, SelectionMethod, FeatureSelectionResult
-)
+import pandas as pd
+import pytest
+
+from customer_retention.stages.features import FeatureSelector, SelectionMethod
 
 
 class TestVarianceSelection:

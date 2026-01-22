@@ -7,11 +7,11 @@ quality validation specific to temporal datasets.
 
 import warnings
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any, Tuple
-from enum import Enum
 from datetime import timedelta
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
 
-from customer_retention.core.compat import pd, DataFrame
+from customer_retention.core.compat import DataFrame, pd
 
 
 class DatasetType(Enum):
@@ -252,7 +252,6 @@ class TimeSeriesDetector:
         detected_frequency = TimeSeriesFrequency.UNKNOWN
         median_interval_hours = 0.0
         duplicate_timestamps = 0
-        entities_with_gaps = 0
 
         if timestamp_column and timestamp_column in df.columns:
             # Convert to datetime if needed

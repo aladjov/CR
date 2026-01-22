@@ -1,11 +1,11 @@
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 
 from customer_retention.analysis.recommendations.base import Platform, RecommendationResult
 from customer_retention.analysis.recommendations.encoding.categorical import (
-    OneHotEncodeRecommendation,
     LabelEncodeRecommendation,
+    OneHotEncodeRecommendation,
 )
 
 

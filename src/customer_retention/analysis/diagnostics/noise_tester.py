@@ -1,13 +1,13 @@
 """Noise robustness testing probes."""
 
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import Dict, List
 
 import numpy as np
-
-from customer_retention.core.compat import pd, DataFrame, Series
-from customer_retention.core.components.enums import Severity
 from sklearn.metrics import roc_auc_score
+
+from customer_retention.core.compat import DataFrame, Series
+from customer_retention.core.components.enums import Severity
 
 
 @dataclass

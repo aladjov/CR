@@ -1,4 +1,3 @@
-import pytest
 from customer_retention.stages.ingestion import LoadResult
 
 

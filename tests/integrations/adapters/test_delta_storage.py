@@ -1,7 +1,8 @@
-import pytest
-import pandas as pd
-from pathlib import Path
 from abc import ABC
+from pathlib import Path
+
+import pandas as pd
+import pytest
 
 try:
     import deltalake
@@ -18,7 +19,7 @@ class TestDeltaStorageInterface:
         assert issubclass(DeltaStorage, ABC)
 
     def test_local_delta_implements_interface(self):
-        from customer_retention.integrations.adapters.storage import LocalDelta, DeltaStorage
+        from customer_retention.integrations.adapters.storage import DeltaStorage, LocalDelta
         assert issubclass(LocalDelta, DeltaStorage)
 
     def test_databricks_delta_implements_interface(self):
@@ -166,8 +167,8 @@ class TestLocalDeltaVacuum:
 
 class TestDatabricksDeltaMocked:
     def test_databricks_delta_requires_spark(self):
-        from customer_retention.integrations.adapters.storage import DatabricksDelta
         from customer_retention.core.compat.detection import is_spark_available
+        from customer_retention.integrations.adapters.storage import DatabricksDelta
         if not is_spark_available():
             with pytest.raises(ImportError):
                 storage = DatabricksDelta()

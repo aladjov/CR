@@ -8,14 +8,14 @@ Analyzes time series data to identify:
 - Lag correlations for feature selection
 - Predictive power metrics (IV, KS)
 """
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
 from enum import Enum
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from scipy import stats
 
-from customer_retention.core.compat import pd, DataFrame
+from customer_retention.core.compat import DataFrame, pd
 
 
 class FeatureType(str, Enum):
@@ -295,8 +295,8 @@ class TemporalFeatureAnalyzer:
             on=self.entity_column
         )
 
-        velocity_results = self.calculate_velocity(df, value_columns)
-        momentum_results = self.calculate_momentum(df, value_columns)
+        self.calculate_velocity(df, value_columns)
+        self.calculate_momentum(df, value_columns)
 
         for col in value_columns:
             if col not in df.columns:
@@ -362,7 +362,7 @@ class TemporalFeatureAnalyzer:
                 recommendations.append(FeatureRecommendation(
                     feature_name=f"{col}_velocity_7d",
                     feature_type=FeatureType.VELOCITY,
-                    formula=f"(current - lag_7d) / lag_7d",
+                    formula="(current - lag_7d) / lag_7d",
                     rationale=f"Detected {result.trend_direction} trend",
                     priority=priority,
                     source_column=col
@@ -376,7 +376,7 @@ class TemporalFeatureAnalyzer:
                 recommendations.append(FeatureRecommendation(
                     feature_name=f"{col}_momentum_7_30",
                     feature_type=FeatureType.MOMENTUM,
-                    formula=f"mean_7d / mean_30d",
+                    formula="mean_7d / mean_30d",
                     rationale=f"Momentum indicates {result.interpretation} behavior",
                     priority=priority,
                     source_column=col

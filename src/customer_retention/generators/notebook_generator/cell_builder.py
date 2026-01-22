@@ -1,6 +1,6 @@
 from typing import Dict, List, Optional
-import nbformat
 
+import nbformat
 
 DATABRICKS_SEPARATOR = "\n# COMMAND ----------\n"
 

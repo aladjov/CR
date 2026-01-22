@@ -1,7 +1,7 @@
 """Business Sense Gate (Checkpoint 5) for model validation."""
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional
 
 from customer_retention.core.components.enums import Severity
 

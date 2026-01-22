@@ -1,16 +1,29 @@
-import pytest
 from datetime import datetime, timedelta
 from typing import List
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+
+import pytest
 
 from customer_retention.integrations.streaming import (
-    Event, EventType, EventSource, EventValidator,
-    WindowAggregator, TumblingWindow, FeatureComputer,
-    OnlineFeatureStore, FeatureStoreConfig, FeatureRecord,
-    EarlyWarningModel, EarlyWarningConfig, WarningLevel,
-    RealtimeScorer, ScoringRequest, ScoringConfig,
-    TriggerEngine, TriggerConfig, ThresholdTrigger, ActionType,
-    BatchStreamingBridge, ScoreCombinationStrategy
+    ActionType,
+    BatchStreamingBridge,
+    EarlyWarningConfig,
+    EarlyWarningModel,
+    Event,
+    EventSource,
+    EventType,
+    EventValidator,
+    FeatureComputer,
+    FeatureRecord,
+    FeatureStoreConfig,
+    OnlineFeatureStore,
+    RealtimeScorer,
+    ScoreCombinationStrategy,
+    ScoringRequest,
+    ThresholdTrigger,
+    TriggerConfig,
+    TriggerEngine,
+    WarningLevel,
 )
 
 
@@ -222,7 +235,7 @@ class TestFallbackMechanisms:
 
 class TestAlertManagerIntegration:
     def test_streaming_warnings_create_alerts(self, early_warning_model):
-        from customer_retention.stages.monitoring import AlertManager, AlertLevel
+        from customer_retention.stages.monitoring import AlertManager
         features = {
             "activity_drop_7d": 0.80,
             "days_since_last_order": 25,
@@ -240,8 +253,8 @@ class TestAlertManagerIntegration:
         assert any("CUST001" in str(a.message) for a in pending)
 
     def test_trigger_results_integrate_with_alerts(self):
+        from customer_retention.integrations.streaming import SignalType, WarningResult
         from customer_retention.stages.monitoring import AlertManager
-        from customer_retention.integrations.streaming import WarningResult, SignalType
         warning = WarningResult(
             customer_id="CUST002",
             warning_score=0.92,
@@ -268,7 +281,7 @@ class TestAlertManagerIntegration:
 
 class TestStreamProcessor:
     def test_process_event_batch(self, event_stream):
-        from customer_retention.integrations.streaming import StreamProcessor, ProcessingConfig
+        from customer_retention.integrations.streaming import ProcessingConfig, StreamProcessor
         config = ProcessingConfig(
             checkpoint_interval_seconds=60,
             watermark_delay_minutes=10
@@ -279,7 +292,7 @@ class TestStreamProcessor:
         assert results.features_computed > 0
 
     def test_incremental_processing(self):
-        from customer_retention.integrations.streaming import StreamProcessor, ProcessingConfig
+        from customer_retention.integrations.streaming import ProcessingConfig, StreamProcessor
         processor = StreamProcessor(config=ProcessingConfig())
         batch1 = [
             Event("evt_1", "CUST001", EventType.PAGE_VIEW, datetime.now() - timedelta(minutes=10),
@@ -300,7 +313,7 @@ class TestStreamProcessor:
 class TestDatabricksCompatibility:
     def test_spark_schema_generation(self):
         pytest.importorskip("pyspark", reason="PySpark not installed")
-        from customer_retention.integrations.streaming import Event, EventSchema
+        from customer_retention.integrations.streaming import Event
         spark_schema = Event.to_spark_schema()
         assert "event_id" in [f.name for f in spark_schema.fields]
         assert "customer_id" in [f.name for f in spark_schema.fields]
@@ -323,7 +336,7 @@ class TestDatabricksCompatibility:
 
 class TestMonitoringMetrics:
     def test_processing_latency_tracked(self, event_stream):
-        from customer_retention.integrations.streaming import StreamProcessor, ProcessingConfig
+        from customer_retention.integrations.streaming import ProcessingConfig, StreamProcessor
         processor = StreamProcessor(config=ProcessingConfig())
         processor.process_batch(event_stream)
         metrics = processor.get_metrics()

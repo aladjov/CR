@@ -5,10 +5,10 @@ These tests verify that:
 2. Same feature values produce identical transformed values in both phases
 3. Using different transformers (re-fitting) produces incorrect results
 """
-import pytest
-import pandas as pd
+
 import numpy as np
-from pathlib import Path
+import pandas as pd
+import pytest
 
 
 @pytest.fixture
@@ -225,6 +225,7 @@ class TestScoringPipelineIntegration:
 
     def test_model_prediction_with_consistent_transformers(self, training_data, scoring_data, tmp_path):
         from sklearn.ensemble import RandomForestClassifier
+
         from customer_retention.stages.preprocessing import TransformerManager
 
         feature_cols = ["age", "income", "tenure_months", "gender", "region", "plan_type"]
@@ -255,8 +256,9 @@ class TestScoringPipelineIntegration:
 
     def test_shap_computation_with_consistent_transformers(self, training_data, scoring_data, tmp_path):
         from sklearn.ensemble import RandomForestClassifier
-        from customer_retention.stages.preprocessing import TransformerManager
+
         from customer_retention.analysis.interpretability import ShapExplainer
+        from customer_retention.stages.preprocessing import TransformerManager
 
         feature_cols = ["age", "income", "tenure_months", "gender", "region", "plan_type"]
 
@@ -323,7 +325,7 @@ class TestTransformerManagerCoverage:
         assert loaded.encoder_type == manifest.encoder_type
 
     def test_bundle_serialization(self, training_data):
-        from customer_retention.stages.preprocessing import TransformerManager, TransformerBundle
+        from customer_retention.stages.preprocessing import TransformerBundle, TransformerManager
 
         manager = TransformerManager()
         manager.fit_transform(

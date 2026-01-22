@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from customer_retention.core.compat import DataFrame
+
 from .text_embedder import TextEmbedder
 from .text_reducer import TextDimensionalityReducer
 

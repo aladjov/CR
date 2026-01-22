@@ -1,7 +1,7 @@
 """Cross-validation stability analysis probes."""
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 

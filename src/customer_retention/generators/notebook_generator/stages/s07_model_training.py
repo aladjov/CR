@@ -1,4 +1,5 @@
 from typing import List
+
 import nbformat
 
 from ..base import NotebookStage
@@ -20,7 +21,6 @@ class ModelTrainingStage(StageGenerator):
 
     def generate_local_cells(self) -> List[nbformat.NotebookNode]:
         target = self.get_target_column()
-        model_type = self.config.model_type
         test_size = self.config.test_size
         exp_name = self.config.mlflow.experiment_name
         tracking_uri = self.config.mlflow.tracking_uri
@@ -89,16 +89,16 @@ if snapshot_metadata:
         "snapshot_hash": snapshot_metadata.data_hash,
     }}'''),
             self.cb.section("Train Baseline Models"),
-            self.cb.code(f'''from sklearn.linear_model import LogisticRegression
+            self.cb.code('''from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 
-models = {{
+models = {
     "logistic_regression": LogisticRegression(class_weight="balanced", max_iter=1000),
     "random_forest": RandomForestClassifier(class_weight="balanced", n_estimators=100, random_state=42),
     "gradient_boosting": GradientBoostingClassifier(n_estimators=100, random_state=42),
-}}
+}
 
-results = {{}}
+results = {}
 for name, model in models.items():
     mlflow_adapter.start_run(experiment_name, run_name=name)
     model.fit(X_train, y_train)
@@ -107,14 +107,14 @@ for name, model in models.items():
 
     evaluator = ModelEvaluator()
     metrics = evaluator.evaluate(y_test, y_pred, y_prob)
-    results[name] = {{"model": model, "metrics": metrics, "y_pred": y_pred, "y_prob": y_prob}}
+    results[name] = {"model": model, "metrics": metrics, "y_pred": y_pred, "y_prob": y_prob}
 
-    all_params = {{**model.get_params(), **snapshot_params}}
+    all_params = {**model.get_params(), **snapshot_params}
     mlflow_adapter.log_params(all_params)
     mlflow_adapter.log_metrics(metrics)
     mlflow_adapter.log_model(model, "model")
     mlflow_adapter.end_run()
-    print(f"{{name}}: AUC={{metrics.get('roc_auc', 0):.4f}}, F1={{metrics.get('f1', 0):.4f}}")'''),
+    print(f"{name}: AUC={metrics.get('roc_auc', 0):.4f}, F1={metrics.get('f1', 0):.4f}")'''),
             self.cb.section("Compare Models"),
             self.cb.code('''charts = ChartBuilder()
 fig = charts.model_comparison_grid(results, y_test)

@@ -1,6 +1,3 @@
-import pytest
-from pathlib import Path
-from datetime import datetime
 
 
 class TestNotebookValidationResult:
@@ -20,7 +17,7 @@ class TestNotebookValidationResult:
 
 class TestValidationReport:
     def test_all_passed(self):
-        from customer_retention.generators.notebook_generator.runner import ValidationReport, NotebookValidationResult
+        from customer_retention.generators.notebook_generator.runner import NotebookValidationResult, ValidationReport
         results = [
             NotebookValidationResult("01_ingestion", True, 1.0),
             NotebookValidationResult("02_profiling", True, 2.0),
@@ -32,7 +29,7 @@ class TestValidationReport:
         assert report.failed_count == 0
 
     def test_some_failed(self):
-        from customer_retention.generators.notebook_generator.runner import ValidationReport, NotebookValidationResult
+        from customer_retention.generators.notebook_generator.runner import NotebookValidationResult, ValidationReport
         results = [
             NotebookValidationResult("01_ingestion", True, 1.0),
             NotebookValidationResult("02_profiling", False, 0.5, error="SyntaxError"),
@@ -42,7 +39,7 @@ class TestValidationReport:
         assert report.failed_count == 1
 
     def test_total_duration(self):
-        from customer_retention.generators.notebook_generator.runner import ValidationReport, NotebookValidationResult
+        from customer_retention.generators.notebook_generator.runner import NotebookValidationResult, ValidationReport
         results = [
             NotebookValidationResult("01", True, 1.5),
             NotebookValidationResult("02", True, 2.5),
@@ -51,7 +48,7 @@ class TestValidationReport:
         assert report.total_duration_seconds == 4.0
 
     def test_to_markdown(self):
-        from customer_retention.generators.notebook_generator.runner import ValidationReport, NotebookValidationResult
+        from customer_retention.generators.notebook_generator.runner import NotebookValidationResult, ValidationReport
         results = [NotebookValidationResult("01_ingestion", True, 1.0)]
         report = ValidationReport(results=results, platform="local")
         md = report.to_markdown()
@@ -73,9 +70,14 @@ class TestNotebookRunner:
         assert not runner.validate_syntax(code)
 
     def test_extract_code_from_notebook(self, tmp_path):
-        from customer_retention.generators.notebook_generator.runner import NotebookRunner
-        from customer_retention.generators.notebook_generator import LocalNotebookGenerator, NotebookConfig, NotebookStage
         import nbformat
+
+        from customer_retention.generators.notebook_generator import (
+            LocalNotebookGenerator,
+            NotebookConfig,
+            NotebookStage,
+        )
+        from customer_retention.generators.notebook_generator.runner import NotebookRunner
 
         generator = LocalNotebookGenerator(NotebookConfig(), None)
         nb = generator.generate_stage(NotebookStage.INGESTION)
@@ -89,9 +91,14 @@ class TestNotebookRunner:
         assert "customer_retention" in code
 
     def test_validate_notebook_syntax(self, tmp_path):
-        from customer_retention.generators.notebook_generator.runner import NotebookRunner
-        from customer_retention.generators.notebook_generator import LocalNotebookGenerator, NotebookConfig, NotebookStage
         import nbformat
+
+        from customer_retention.generators.notebook_generator import (
+            LocalNotebookGenerator,
+            NotebookConfig,
+            NotebookStage,
+        )
+        from customer_retention.generators.notebook_generator.runner import NotebookRunner
 
         generator = LocalNotebookGenerator(NotebookConfig(), None)
         nb = generator.generate_stage(NotebookStage.INGESTION)
@@ -104,9 +111,10 @@ class TestNotebookRunner:
         assert result.success
 
     def test_validate_sequence_all_pass(self, tmp_path):
-        from customer_retention.generators.notebook_generator.runner import NotebookRunner
-        from customer_retention.generators.notebook_generator import LocalNotebookGenerator, NotebookConfig
         import nbformat
+
+        from customer_retention.generators.notebook_generator import LocalNotebookGenerator, NotebookConfig
+        from customer_retention.generators.notebook_generator.runner import NotebookRunner
 
         generator = LocalNotebookGenerator(NotebookConfig(), None)
         notebooks = generator.generate_all()
@@ -123,9 +131,10 @@ class TestNotebookRunner:
 
 class TestNotebookRunnerExecution:
     def test_dry_run_mode(self, tmp_path):
-        from customer_retention.generators.notebook_generator.runner import NotebookRunner
-        from customer_retention.generators.notebook_generator import LocalNotebookGenerator, NotebookConfig
         import nbformat
+
+        from customer_retention.generators.notebook_generator import LocalNotebookGenerator, NotebookConfig
+        from customer_retention.generators.notebook_generator.runner import NotebookRunner
 
         generator = LocalNotebookGenerator(NotebookConfig(), None)
         notebooks = generator.generate_all()
@@ -139,8 +148,9 @@ class TestNotebookRunnerExecution:
         assert report.all_passed
 
     def test_stops_on_first_failure_when_configured(self, tmp_path):
-        from customer_retention.generators.notebook_generator.runner import NotebookRunner
         import nbformat
+
+        from customer_retention.generators.notebook_generator.runner import NotebookRunner
 
         nb1 = nbformat.v4.new_notebook()
         nb1.cells = [nbformat.v4.new_code_cell("x = 1")]
@@ -165,7 +175,7 @@ class TestNotebookRunnerExecution:
 
 class TestIntegrationWithGeneration:
     def test_generate_and_validate_local(self, tmp_path):
-        from customer_retention.generators.notebook_generator import generate_orchestration_notebooks, Platform
+        from customer_retention.generators.notebook_generator import Platform, generate_orchestration_notebooks
         from customer_retention.generators.notebook_generator.runner import NotebookRunner
 
         results = generate_orchestration_notebooks(output_dir=str(tmp_path), platforms=[Platform.LOCAL])
@@ -175,7 +185,7 @@ class TestIntegrationWithGeneration:
         assert report.total_notebooks == 10  # Holdout stage disabled by default
 
     def test_generate_and_validate_databricks(self, tmp_path):
-        from customer_retention.generators.notebook_generator import generate_orchestration_notebooks, Platform
+        from customer_retention.generators.notebook_generator import Platform, generate_orchestration_notebooks
         from customer_retention.generators.notebook_generator.runner import NotebookRunner
 
         results = generate_orchestration_notebooks(output_dir=str(tmp_path), platforms=[Platform.DATABRICKS])
@@ -187,14 +197,14 @@ class TestIntegrationWithGeneration:
 
 class TestGenerationResult:
     def test_generation_result_all_valid(self, tmp_path):
-        from customer_retention.generators.notebook_generator import generate_and_validate_notebooks, Platform
+        from customer_retention.generators.notebook_generator import Platform, generate_and_validate_notebooks
         results = generate_and_validate_notebooks(output_dir=str(tmp_path), platforms=[Platform.LOCAL])
         assert Platform.LOCAL in results
         assert results[Platform.LOCAL].all_valid
         assert len(results[Platform.LOCAL].notebook_paths) == 10  # Holdout stage disabled by default
 
     def test_creates_validation_report_file(self, tmp_path):
-        from customer_retention.generators.notebook_generator import generate_and_validate_notebooks, Platform
+        from customer_retention.generators.notebook_generator import Platform, generate_and_validate_notebooks
         generate_and_validate_notebooks(output_dir=str(tmp_path), platforms=[Platform.LOCAL])
         report_path = tmp_path / "local" / "VALIDATION_REPORT.md"
         assert report_path.exists()
@@ -203,7 +213,7 @@ class TestGenerationResult:
         assert "PASSED" in content
 
     def test_both_platforms_generate_reports(self, tmp_path):
-        from customer_retention.generators.notebook_generator import generate_and_validate_notebooks, Platform
+        from customer_retention.generators.notebook_generator import Platform, generate_and_validate_notebooks
         results = generate_and_validate_notebooks(output_dir=str(tmp_path))
         assert Platform.LOCAL in results
         assert Platform.DATABRICKS in results
@@ -211,7 +221,7 @@ class TestGenerationResult:
         assert (tmp_path / "databricks" / "VALIDATION_REPORT.md").exists()
 
     def test_report_contains_all_notebooks(self, tmp_path):
-        from customer_retention.generators.notebook_generator import generate_and_validate_notebooks, Platform
+        from customer_retention.generators.notebook_generator import Platform, generate_and_validate_notebooks
         results = generate_and_validate_notebooks(output_dir=str(tmp_path), platforms=[Platform.LOCAL])
         report = results[Platform.LOCAL].validation_report
         assert report.total_notebooks == 10  # Holdout stage disabled by default

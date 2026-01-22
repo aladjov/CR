@@ -1,12 +1,15 @@
 """Tests for quality scorer module."""
 
 import pytest
-from customer_retention.stages.validation.quality_scorer import (
-    QualityScorer, QualityScoreResult, QualityLevel,
-    ExplorationFindings, ColumnFindings
-)
-from customer_retention.stages.validation import DuplicateResult, DateLogicResult, RangeValidationResult
+
 from customer_retention.core.components.enums import Severity
+from customer_retention.stages.validation import DateLogicResult, DuplicateResult, RangeValidationResult
+from customer_retention.stages.validation.quality_scorer import (
+    ColumnFindings,
+    ExplorationFindings,
+    QualityLevel,
+    QualityScorer,
+)
 
 
 class MockInferredType:

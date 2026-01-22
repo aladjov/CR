@@ -1,10 +1,11 @@
 """Counterfactual explanation generation."""
 
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 
-from customer_retention.core.compat import pd, DataFrame, Series
+from customer_retention.core.compat import DataFrame, Series
 
 
 @dataclass

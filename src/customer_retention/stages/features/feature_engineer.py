@@ -5,24 +5,24 @@ This module provides the FeatureEngineer class that orchestrates
 all feature generation components.
 """
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-import numpy as np
+from customer_retention.core.compat import DataFrame, Timestamp
 
-from customer_retention.core.compat import pd, DataFrame, Timestamp
-
-from customer_retention.stages.features.temporal_features import (
-    TemporalFeatureGenerator,
-    ReferenceDateSource,
-)
+if TYPE_CHECKING:
+    from customer_retention.integrations.feature_store.registry import FeatureRegistry
 from customer_retention.stages.features.behavioral_features import BehavioralFeatureGenerator
-from customer_retention.stages.features.interaction_features import InteractionFeatureGenerator
 from customer_retention.stages.features.feature_definitions import (
-    FeatureDefinition,
-    FeatureCategory,
-    LeakageRisk,
     FeatureCatalog,
+    FeatureCategory,
+    FeatureDefinition,
+    LeakageRisk,
+)
+from customer_retention.stages.features.interaction_features import InteractionFeatureGenerator
+from customer_retention.stages.features.temporal_features import (
+    ReferenceDateSource,
+    TemporalFeatureGenerator,
 )
 from customer_retention.stages.temporal.point_in_time_join import PointInTimeJoiner
 
@@ -433,9 +433,9 @@ class FeatureEngineer:
             Registry containing all generated features
         """
         from customer_retention.integrations.feature_store import (
+            FeatureComputationType,
             FeatureRegistry,
             TemporalFeatureDefinition,
-            FeatureComputationType,
         )
 
         registry = FeatureRegistry()

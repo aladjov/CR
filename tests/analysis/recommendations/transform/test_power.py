@@ -1,9 +1,12 @@
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 
 from customer_retention.analysis.recommendations.base import Platform, RecommendationResult
-from customer_retention.analysis.recommendations.transform.power import LogTransformRecommendation, SqrtTransformRecommendation
+from customer_retention.analysis.recommendations.transform.power import (
+    LogTransformRecommendation,
+    SqrtTransformRecommendation,
+)
 
 
 class TestLogTransformRecommendationInit:

@@ -1,11 +1,12 @@
-import pytest
-import pandas as pd
+import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
-import tempfile
-import shutil
 
-from customer_retention.stages.temporal.snapshot_manager import SnapshotManager, SnapshotMetadata
+import pandas as pd
+import pytest
+
+from customer_retention.stages.temporal.snapshot_manager import SnapshotManager
 
 
 class TestSnapshotManager:

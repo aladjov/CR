@@ -1,16 +1,14 @@
 import pytest
-import pandas as pd
-import numpy as np
 
-from customer_retention.core.config.column_config import ColumnType
 from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
 from customer_retention.analysis.auto_explorer.recommendations import (
+    CleaningRecommendation,
+    FeatureRecommendation,
     RecommendationEngine,
     TargetRecommendation,
-    FeatureRecommendation,
-    CleaningRecommendation,
-    TransformRecommendation
+    TransformRecommendation,
 )
+from customer_retention.core.config.column_config import ColumnType
 
 
 @pytest.fixture

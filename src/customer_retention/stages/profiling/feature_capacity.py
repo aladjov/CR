@@ -16,8 +16,9 @@ Guidelines Based on Common Statistical Practice:
     - Tree models: More flexible, but still benefit from adequate data
 """
 
-from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 
 from customer_retention.core.compat import pd

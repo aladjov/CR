@@ -1,10 +1,12 @@
-import pytest
+from datetime import datetime
+
 import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
+import pytest
 
 from customer_retention.stages.temporal.timestamp_discovery import (
-    TimestampRole, TimestampCandidate, TimestampDiscoveryResult, TimestampDiscoveryEngine
+    TimestampCandidate,
+    TimestampDiscoveryEngine,
+    TimestampRole,
 )
 
 

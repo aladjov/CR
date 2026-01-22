@@ -1,6 +1,3 @@
-import pytest
-from datetime import datetime
-from pathlib import Path
 
 
 class TestRecommendationStatus:
@@ -24,7 +21,9 @@ class TestRecommendationType:
 class TestTrackedRecommendation:
     def test_create_tracked_recommendation(self):
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            TrackedRecommendation, RecommendationType, RecommendationStatus
+            RecommendationStatus,
+            RecommendationType,
+            TrackedRecommendation,
         )
         rec = TrackedRecommendation(
             recommendation_id="rec_001",
@@ -41,7 +40,8 @@ class TestTrackedRecommendation:
 
     def test_generate_id(self):
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            TrackedRecommendation, RecommendationType
+            RecommendationType,
+            TrackedRecommendation,
         )
         rec_id = TrackedRecommendation.generate_id(
             RecommendationType.CLEANING, "age", "impute_median"
@@ -50,7 +50,8 @@ class TestTrackedRecommendation:
 
     def test_to_dict(self):
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            TrackedRecommendation, RecommendationType, RecommendationStatus
+            RecommendationType,
+            TrackedRecommendation,
         )
         rec = TrackedRecommendation(
             recommendation_id="rec_001",
@@ -66,7 +67,9 @@ class TestTrackedRecommendation:
 
     def test_from_dict(self):
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            TrackedRecommendation, RecommendationType, RecommendationStatus
+            RecommendationStatus,
+            RecommendationType,
+            TrackedRecommendation,
         )
         data = {
             "recommendation_id": "rec_002",
@@ -95,7 +98,9 @@ class TestRecommendationTracker:
 
     def test_add_recommendation(self, tmp_path):
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            RecommendationTracker, TrackedRecommendation, RecommendationType
+            RecommendationTracker,
+            RecommendationType,
+            TrackedRecommendation,
         )
         tracker = RecommendationTracker(str(tmp_path / "recommendations.yaml"))
         rec = TrackedRecommendation(
@@ -110,8 +115,8 @@ class TestRecommendationTracker:
         assert tracker.get("rec_001") is not None
 
     def test_add_from_cleaning_recommendation(self, tmp_path):
-        from customer_retention.integrations.iteration.recommendation_tracker import RecommendationTracker
         from customer_retention.analysis.auto_explorer.recommendations import CleaningRecommendation
+        from customer_retention.integrations.iteration.recommendation_tracker import RecommendationTracker
         tracker = RecommendationTracker(str(tmp_path / "recommendations.yaml"))
         cleaning_rec = CleaningRecommendation(
             column_name="income",
@@ -126,8 +131,8 @@ class TestRecommendationTracker:
         assert "outliers" in tracked.action
 
     def test_add_from_transform_recommendation(self, tmp_path):
-        from customer_retention.integrations.iteration.recommendation_tracker import RecommendationTracker
         from customer_retention.analysis.auto_explorer.recommendations import TransformRecommendation
+        from customer_retention.integrations.iteration.recommendation_tracker import RecommendationTracker
         tracker = RecommendationTracker(str(tmp_path / "recommendations.yaml"))
         transform_rec = TransformRecommendation(
             column_name="amount",
@@ -141,8 +146,8 @@ class TestRecommendationTracker:
         assert tracked.action == "log_transform"
 
     def test_add_from_feature_recommendation(self, tmp_path):
-        from customer_retention.integrations.iteration.recommendation_tracker import RecommendationTracker
         from customer_retention.analysis.auto_explorer.recommendations import FeatureRecommendation
+        from customer_retention.integrations.iteration.recommendation_tracker import RecommendationTracker
         tracker = RecommendationTracker(str(tmp_path / "recommendations.yaml"))
         feature_rec = FeatureRecommendation(
             source_column="signup_date",
@@ -156,7 +161,10 @@ class TestRecommendationTracker:
 
     def test_mark_applied(self, tmp_path):
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            RecommendationTracker, TrackedRecommendation, RecommendationType, RecommendationStatus
+            RecommendationStatus,
+            RecommendationTracker,
+            RecommendationType,
+            TrackedRecommendation,
         )
         tracker = RecommendationTracker(str(tmp_path / "recommendations.yaml"))
         rec = TrackedRecommendation(
@@ -174,7 +182,10 @@ class TestRecommendationTracker:
 
     def test_mark_skipped(self, tmp_path):
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            RecommendationTracker, TrackedRecommendation, RecommendationType, RecommendationStatus
+            RecommendationStatus,
+            RecommendationTracker,
+            RecommendationType,
+            TrackedRecommendation,
         )
         tracker = RecommendationTracker(str(tmp_path / "recommendations.yaml"))
         rec = TrackedRecommendation(
@@ -192,7 +203,10 @@ class TestRecommendationTracker:
 
     def test_mark_failed(self, tmp_path):
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            RecommendationTracker, TrackedRecommendation, RecommendationType, RecommendationStatus
+            RecommendationStatus,
+            RecommendationTracker,
+            RecommendationType,
+            TrackedRecommendation,
         )
         tracker = RecommendationTracker(str(tmp_path / "recommendations.yaml"))
         rec = TrackedRecommendation(
@@ -209,7 +223,9 @@ class TestRecommendationTracker:
 
     def test_set_outcome_impact(self, tmp_path):
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            RecommendationTracker, TrackedRecommendation, RecommendationType
+            RecommendationTracker,
+            RecommendationType,
+            TrackedRecommendation,
         )
         tracker = RecommendationTracker(str(tmp_path / "recommendations.yaml"))
         rec = TrackedRecommendation(
@@ -226,7 +242,9 @@ class TestRecommendationTracker:
 
     def test_get_pending(self, tmp_path):
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            RecommendationTracker, TrackedRecommendation, RecommendationType
+            RecommendationTracker,
+            RecommendationType,
+            TrackedRecommendation,
         )
         tracker = RecommendationTracker(str(tmp_path / "recommendations.yaml"))
         for i in range(3):
@@ -244,7 +262,9 @@ class TestRecommendationTracker:
 
     def test_get_applied(self, tmp_path):
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            RecommendationTracker, TrackedRecommendation, RecommendationType
+            RecommendationTracker,
+            RecommendationType,
+            TrackedRecommendation,
         )
         tracker = RecommendationTracker(str(tmp_path / "recommendations.yaml"))
         for i in range(3):
@@ -263,7 +283,9 @@ class TestRecommendationTracker:
 
     def test_get_high_impact(self, tmp_path):
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            RecommendationTracker, TrackedRecommendation, RecommendationType
+            RecommendationTracker,
+            RecommendationType,
+            TrackedRecommendation,
         )
         tracker = RecommendationTracker(str(tmp_path / "recommendations.yaml"))
         for i, impact in enumerate([0.05, 0.25, 0.15, 0.30]):
@@ -284,7 +306,9 @@ class TestRecommendationTracker:
 
     def test_get_by_type(self, tmp_path):
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            RecommendationTracker, TrackedRecommendation, RecommendationType
+            RecommendationTracker,
+            RecommendationType,
+            TrackedRecommendation,
         )
         tracker = RecommendationTracker(str(tmp_path / "recommendations.yaml"))
         tracker.add(TrackedRecommendation("rec_001", RecommendationType.CLEANING, "a", "clean", ""))
@@ -296,7 +320,10 @@ class TestRecommendationTracker:
 
     def test_save_and_load(self, tmp_path):
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            RecommendationTracker, TrackedRecommendation, RecommendationType, RecommendationStatus
+            RecommendationStatus,
+            RecommendationTracker,
+            RecommendationType,
+            TrackedRecommendation,
         )
         path = str(tmp_path / "recommendations.yaml")
         tracker = RecommendationTracker(path)
@@ -321,7 +348,9 @@ class TestRecommendationTracker:
 
     def test_get_summary(self, tmp_path):
         from customer_retention.integrations.iteration.recommendation_tracker import (
-            RecommendationTracker, TrackedRecommendation, RecommendationType
+            RecommendationTracker,
+            RecommendationType,
+            TrackedRecommendation,
         )
         tracker = RecommendationTracker(str(tmp_path / "recommendations.yaml"))
         for i in range(5):

@@ -1,13 +1,13 @@
 """Tests for DatabricksExporter that generates standalone PySpark notebooks."""
 import pytest
 
-from customer_retention.generators.orchestration.databricks_exporter import DatabricksExporter
+from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
 from customer_retention.analysis.auto_explorer.layered_recommendations import (
-    RecommendationRegistry,
     LayeredRecommendation,
+    RecommendationRegistry,
 )
-from customer_retention.analysis.auto_explorer.findings import ExplorationFindings, ColumnFinding
 from customer_retention.core.config.column_config import ColumnType
+from customer_retention.generators.orchestration.databricks_exporter import DatabricksExporter
 
 
 @pytest.fixture

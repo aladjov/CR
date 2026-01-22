@@ -1,5 +1,3 @@
-import pytest
-from pathlib import Path
 import json
 
 
@@ -27,7 +25,7 @@ class TestPipelineSpecAddMethods:
         assert len(spec.gold_transforms) == 1
 
     def test_add_feature(self):
-        from customer_retention.generators.spec_generator.pipeline_spec import PipelineSpec, FeatureSpec
+        from customer_retention.generators.spec_generator.pipeline_spec import FeatureSpec, PipelineSpec
         spec = PipelineSpec(name="test")
         feature = FeatureSpec("new_feature", ["col1"], "sum")
         spec.add_feature(feature)
@@ -44,7 +42,10 @@ class TestPipelineSpecAddMethods:
 class TestPipelineSpecSerialization:
     def test_to_json_and_back(self, tmp_path):
         from customer_retention.generators.spec_generator.pipeline_spec import (
-            PipelineSpec, SourceSpec, TransformSpec, QualityGateSpec
+            PipelineSpec,
+            QualityGateSpec,
+            SourceSpec,
+            TransformSpec,
         )
         spec = PipelineSpec(name="json_test", version="2.0.0")
         spec.sources.append(SourceSpec("src", "/data/test.csv", "csv"))
@@ -61,7 +62,10 @@ class TestPipelineSpecSerialization:
 
     def test_to_yaml_and_back(self, tmp_path):
         from customer_retention.generators.spec_generator.pipeline_spec import (
-            PipelineSpec, SourceSpec, SchemaSpec, ColumnSpec
+            ColumnSpec,
+            PipelineSpec,
+            SchemaSpec,
+            SourceSpec,
         )
         spec = PipelineSpec(name="yaml_test")
         spec.sources.append(SourceSpec("src", "/data/test.csv", "csv"))
@@ -90,7 +94,7 @@ class TestPipelineSpecSerialization:
         assert len(loaded.gold_transforms) == 1
 
     def test_load_with_feature_definitions(self, tmp_path):
-        from customer_retention.generators.spec_generator.pipeline_spec import PipelineSpec, FeatureSpec
+        from customer_retention.generators.spec_generator.pipeline_spec import FeatureSpec, PipelineSpec
         spec = PipelineSpec(name="with_features")
         spec.feature_definitions.append(FeatureSpec("f1", ["col1"], "sum"))
         json_path = tmp_path / "spec.json"
@@ -100,7 +104,7 @@ class TestPipelineSpecSerialization:
         assert loaded.feature_definitions[0].name == "f1"
 
     def test_load_with_model_config(self, tmp_path):
-        from customer_retention.generators.spec_generator.pipeline_spec import PipelineSpec, ModelSpec
+        from customer_retention.generators.spec_generator.pipeline_spec import ModelSpec, PipelineSpec
         spec = PipelineSpec(name="with_model")
         spec.model_config = ModelSpec("model1", "xgboost", "target", ["f1", "f2"])
         json_path = tmp_path / "spec.json"
@@ -139,10 +143,11 @@ class TestPipelineSpecFromDict:
 
 class TestPipelineSpecFromFindingsEdgeCases:
     def test_from_findings_without_target_column(self):
-        from customer_retention.generators.spec_generator.pipeline_spec import PipelineSpec
         from dataclasses import dataclass, field
-        from typing import Dict, Any, List
+        from typing import Any, Dict, List
+
         from customer_retention.core.config import ColumnType
+        from customer_retention.generators.spec_generator.pipeline_spec import PipelineSpec
 
         @dataclass
         class MockCol:
@@ -165,10 +170,11 @@ class TestPipelineSpecFromFindingsEdgeCases:
         assert spec.model_config is None
 
     def test_from_findings_without_datetime_columns(self):
-        from customer_retention.generators.spec_generator.pipeline_spec import PipelineSpec
         from dataclasses import dataclass, field
-        from typing import Dict, Any, List
+        from typing import Any, Dict, List
+
         from customer_retention.core.config import ColumnType
+        from customer_retention.generators.spec_generator.pipeline_spec import PipelineSpec
 
         @dataclass
         class MockCol:
@@ -196,10 +202,11 @@ class TestPipelineSpecFromFindingsEdgeCases:
 
 class TestSchemaSpecFromFindings:
     def test_creates_schema_with_identifier_column(self):
-        from customer_retention.generators.spec_generator.pipeline_spec import SchemaSpec, ColumnSpec
         from dataclasses import dataclass, field
-        from typing import Dict, Any
+        from typing import Any, Dict
+
         from customer_retention.core.config import ColumnType
+        from customer_retention.generators.spec_generator.pipeline_spec import SchemaSpec
 
         @dataclass
         class MockCol:
@@ -224,10 +231,11 @@ class TestSchemaSpecFromFindings:
         assert len(schema.columns) == 2
 
     def test_creates_schema_without_identifier(self):
-        from customer_retention.generators.spec_generator.pipeline_spec import SchemaSpec
         from dataclasses import dataclass, field
-        from typing import Dict, Any
+        from typing import Any, Dict
+
         from customer_retention.core.config import ColumnType
+        from customer_retention.generators.spec_generator.pipeline_spec import SchemaSpec
 
         @dataclass
         class MockCol:

@@ -1,10 +1,9 @@
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 from sklearn.ensemble import RandomForestClassifier
-from customer_retention.analysis.interpretability import (
-    CohortAnalyzer, CohortInsight, CohortComparison
-)
+
+from customer_retention.analysis.interpretability import CohortAnalyzer, CohortComparison, CohortInsight
 
 
 @pytest.fixture

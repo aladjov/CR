@@ -1,4 +1,3 @@
-import pytest
 from pathlib import Path
 
 
@@ -63,8 +62,8 @@ class TestProjectInitializer:
 
 class TestProjectInitializerWithGeneration:
     def test_generate_orchestration_after_init(self, tmp_path):
+        from customer_retention.generators.notebook_generator import Platform, generate_orchestration_notebooks
         from customer_retention.generators.notebook_generator.project_init import ProjectInitializer
-        from customer_retention.generators.notebook_generator import generate_orchestration_notebooks, Platform
         project_dir = tmp_path / "my_project"
         init = ProjectInitializer(project_name="my_project")
         init.initialize(str(project_dir))
@@ -122,8 +121,9 @@ class TestProjectStructure:
 
 class TestExplorationNotebookCopyEdgeCases:
     def test_get_exploration_source_dir_returns_none_when_missing(self, tmp_path, monkeypatch):
-        from customer_retention.generators.notebook_generator.project_init import ProjectInitializer
         from pathlib import Path
+
+        from customer_retention.generators.notebook_generator.project_init import ProjectInitializer
         init = ProjectInitializer(project_name="test")
         monkeypatch.setattr(
             "customer_retention.generators.notebook_generator.project_init.Path",

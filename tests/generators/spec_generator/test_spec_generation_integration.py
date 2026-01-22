@@ -1,12 +1,14 @@
-import pytest
 from pathlib import Path
+
+import pytest
 
 
 class TestSpecGenerationIntegration:
     @pytest.fixture
     def sample_findings(self):
         from dataclasses import dataclass, field
-        from typing import Dict, Any, List
+        from typing import Any, Dict, List
+
         from customer_retention.core.config import ColumnType
 
         @dataclass
@@ -35,9 +37,9 @@ class TestSpecGenerationIntegration:
         return findings
 
     def test_create_spec_from_findings_and_generate_all(self, sample_findings, tmp_path):
-        from customer_retention.generators.spec_generator.pipeline_spec import PipelineSpec
         from customer_retention.generators.spec_generator.databricks_generator import DatabricksSpecGenerator
         from customer_retention.generators.spec_generator.generic_generator import GenericSpecGenerator
+        from customer_retention.generators.spec_generator.pipeline_spec import PipelineSpec
         spec = PipelineSpec.from_findings(sample_findings, name="churn_pipeline")
         assert spec.name == "churn_pipeline"
         assert spec.model_config is not None
@@ -68,9 +70,9 @@ class TestSpecGenerationIntegration:
         assert len(loaded.feature_definitions) == len(spec.feature_definitions)
 
     def test_generated_code_compiles(self, sample_findings, tmp_path):
-        from customer_retention.generators.spec_generator.pipeline_spec import PipelineSpec
         from customer_retention.generators.spec_generator.databricks_generator import DatabricksSpecGenerator
         from customer_retention.generators.spec_generator.generic_generator import GenericSpecGenerator
+        from customer_retention.generators.spec_generator.pipeline_spec import PipelineSpec
         spec = PipelineSpec.from_findings(sample_findings)
         db_generator = DatabricksSpecGenerator()
         artifacts = db_generator.generate_all(spec)
@@ -86,11 +88,17 @@ class TestSpecGenerationIntegration:
 
 class TestSpecGeneratorEndToEnd:
     def test_full_databricks_artifact_generation(self, tmp_path):
-        from customer_retention.generators.spec_generator.pipeline_spec import (
-            PipelineSpec, SourceSpec, SchemaSpec, ColumnSpec,
-            TransformSpec, FeatureSpec, ModelSpec, QualityGateSpec
-        )
         from customer_retention.generators.spec_generator.databricks_generator import DatabricksSpecGenerator
+        from customer_retention.generators.spec_generator.pipeline_spec import (
+            ColumnSpec,
+            FeatureSpec,
+            ModelSpec,
+            PipelineSpec,
+            QualityGateSpec,
+            SchemaSpec,
+            SourceSpec,
+            TransformSpec,
+        )
         spec = PipelineSpec(
             name="e2e_test",
             version="2.0.0",
@@ -143,11 +151,16 @@ class TestSpecGeneratorEndToEnd:
         assert "learning_rate" in mlflow_code
 
     def test_full_generic_artifact_generation(self, tmp_path):
-        from customer_retention.generators.spec_generator.pipeline_spec import (
-            PipelineSpec, SourceSpec, SchemaSpec, ColumnSpec,
-            TransformSpec, QualityGateSpec, ModelSpec
-        )
         from customer_retention.generators.spec_generator.generic_generator import GenericSpecGenerator
+        from customer_retention.generators.spec_generator.pipeline_spec import (
+            ColumnSpec,
+            ModelSpec,
+            PipelineSpec,
+            QualityGateSpec,
+            SchemaSpec,
+            SourceSpec,
+            TransformSpec,
+        )
         spec = PipelineSpec(name="generic_e2e", description="Generic artifacts test")
         spec.sources.append(SourceSpec("data", "/data/input.csv", "csv"))
         spec.schema = SchemaSpec(
@@ -180,12 +193,12 @@ class TestSpecGeneratorEndToEnd:
 
 class TestSpecAndNotebookIntegration:
     def test_spec_informs_notebook_generation(self, tmp_path):
-        from customer_retention.generators.spec_generator.pipeline_spec import (
-            PipelineSpec, SourceSpec, ModelSpec
-        )
         from customer_retention.generators.notebook_generator import (
-            generate_orchestration_notebooks, Platform, NotebookConfig
+            NotebookConfig,
+            Platform,
+            generate_orchestration_notebooks,
         )
+        from customer_retention.generators.spec_generator.pipeline_spec import ModelSpec, PipelineSpec, SourceSpec
         spec = PipelineSpec(name="combined_test")
         spec.sources.append(SourceSpec("data", "/data/test.csv", "csv"))
         spec.model_config = ModelSpec(

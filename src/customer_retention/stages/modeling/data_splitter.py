@@ -1,13 +1,13 @@
 """Data splitting strategies for model training."""
 
+import warnings
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import pd, DataFrame, Series
-import numpy as np
-from sklearn.model_selection import train_test_split, GroupShuffleSplit
-import warnings
+from sklearn.model_selection import GroupShuffleSplit, train_test_split
+
+from customer_retention.core.compat import DataFrame, Series
 
 
 class SplitStrategy(Enum):

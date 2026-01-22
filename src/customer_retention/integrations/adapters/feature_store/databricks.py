@@ -1,8 +1,11 @@
 from typing import Any, Dict, List, Optional
+
 import pandas as pd
-from .base import FeatureStoreAdapter, FeatureViewConfig
+
+from customer_retention.core.compat.detection import get_spark_session, is_spark_available
+
 from ..base import AdapterResult
-from customer_retention.core.compat.detection import is_spark_available, get_spark_session
+from .base import FeatureStoreAdapter, FeatureViewConfig
 
 
 class DatabricksFeatureStore(FeatureStoreAdapter):
@@ -31,7 +34,7 @@ class DatabricksFeatureStore(FeatureStoreAdapter):
         return AdapterResult(success=True, metadata={"name": full_name})
 
     def _schema_to_spark(self, schema: Dict[str, str]) -> Any:
-        from pyspark.sql.types import StructType, StructField, IntegerType, FloatType, StringType
+        from pyspark.sql.types import FloatType, IntegerType, StringType, StructField, StructType
         type_map = {"int": IntegerType(), "float": FloatType(), "string": StringType()}
         fields = [StructField(name, type_map.get(dtype, StringType()), True) for name, dtype in schema.items()]
         return StructType(fields)

@@ -1,13 +1,9 @@
-import pytest
-from pathlib import Path
 import nbformat
 
 
 class TestFullNotebookGenerationWorkflow:
     def test_generate_validate_and_report_local_notebooks(self, tmp_path):
-        from customer_retention.generators.notebook_generator import (
-            generate_and_validate_notebooks, Platform
-        )
+        from customer_retention.generators.notebook_generator import Platform, generate_and_validate_notebooks
         results = generate_and_validate_notebooks(
             output_dir=str(tmp_path),
             platforms=[Platform.LOCAL]
@@ -25,9 +21,7 @@ class TestFullNotebookGenerationWorkflow:
         assert "01_ingestion" in report_content
 
     def test_generate_validate_and_report_databricks_notebooks(self, tmp_path):
-        from customer_retention.generators.notebook_generator import (
-            generate_and_validate_notebooks, Platform
-        )
+        from customer_retention.generators.notebook_generator import Platform, generate_and_validate_notebooks
         results = generate_and_validate_notebooks(
             output_dir=str(tmp_path),
             platforms=[Platform.DATABRICKS]
@@ -37,9 +31,7 @@ class TestFullNotebookGenerationWorkflow:
         assert (tmp_path / "databricks" / "VALIDATION_REPORT.md").exists()
 
     def test_generate_both_platforms_full_workflow(self, tmp_path):
-        from customer_retention.generators.notebook_generator import (
-            generate_and_validate_notebooks, Platform
-        )
+        from customer_retention.generators.notebook_generator import Platform, generate_and_validate_notebooks
         results = generate_and_validate_notebooks(output_dir=str(tmp_path))
         assert Platform.LOCAL in results
         assert Platform.DATABRICKS in results
@@ -49,9 +41,7 @@ class TestFullNotebookGenerationWorkflow:
 
 class TestFullScriptGenerationWorkflow:
     def test_generate_and_validate_local_scripts(self, tmp_path):
-        from customer_retention.generators.notebook_generator import (
-            generate_orchestration_scripts, Platform
-        )
+        from customer_retention.generators.notebook_generator import Platform, generate_orchestration_scripts
         from customer_retention.generators.notebook_generator.runner import ScriptRunner
         results = generate_orchestration_scripts(
             output_dir=str(tmp_path),
@@ -65,9 +55,7 @@ class TestFullScriptGenerationWorkflow:
         assert report.total_notebooks == 10
 
     def test_generate_and_validate_databricks_scripts(self, tmp_path):
-        from customer_retention.generators.notebook_generator import (
-            generate_orchestration_scripts, Platform
-        )
+        from customer_retention.generators.notebook_generator import Platform, generate_orchestration_scripts
         from customer_retention.generators.notebook_generator.runner import ScriptRunner
         results = generate_orchestration_scripts(
             output_dir=str(tmp_path),
@@ -82,7 +70,9 @@ class TestFullScriptGenerationWorkflow:
 class TestFullProjectInitWorkflow:
     def test_initialize_and_generate_orchestration(self, tmp_path):
         from customer_retention.generators.notebook_generator import (
-            initialize_project, generate_orchestration_notebooks, Platform
+            Platform,
+            generate_orchestration_notebooks,
+            initialize_project,
         )
         project_dir = tmp_path / "my_project"
         result = initialize_project(str(project_dir), project_name="my_project")
@@ -110,9 +100,7 @@ class TestFullProjectInitWorkflow:
 
 class TestNotebookContentIntegrity:
     def test_local_notebooks_have_framework_imports(self, tmp_path):
-        from customer_retention.generators.notebook_generator import (
-            generate_orchestration_notebooks, Platform
-        )
+        from customer_retention.generators.notebook_generator import Platform, generate_orchestration_notebooks
         generate_orchestration_notebooks(
             output_dir=str(tmp_path),
             platforms=[Platform.LOCAL]
@@ -125,9 +113,7 @@ class TestNotebookContentIntegrity:
         assert "from customer_retention" in all_code
 
     def test_databricks_notebooks_have_no_framework_imports(self, tmp_path):
-        from customer_retention.generators.notebook_generator import (
-            generate_orchestration_notebooks, Platform
-        )
+        from customer_retention.generators.notebook_generator import Platform, generate_orchestration_notebooks
         generate_orchestration_notebooks(
             output_dir=str(tmp_path),
             platforms=[Platform.DATABRICKS]
@@ -140,9 +126,7 @@ class TestNotebookContentIntegrity:
         assert "spark" in all_code
 
     def test_all_notebooks_have_valid_python_syntax(self, tmp_path):
-        from customer_retention.generators.notebook_generator import (
-            generate_orchestration_notebooks, Platform
-        )
+        from customer_retention.generators.notebook_generator import generate_orchestration_notebooks
         generate_orchestration_notebooks(output_dir=str(tmp_path))
         for platform in ["local", "databricks"]:
             platform_dir = tmp_path / platform
@@ -157,9 +141,7 @@ class TestNotebookContentIntegrity:
 
 class TestScriptContentIntegrity:
     def test_local_scripts_have_framework_imports(self, tmp_path):
-        from customer_retention.generators.notebook_generator import (
-            generate_orchestration_scripts, Platform
-        )
+        from customer_retention.generators.notebook_generator import Platform, generate_orchestration_scripts
         generate_orchestration_scripts(
             output_dir=str(tmp_path),
             platforms=[Platform.LOCAL]
@@ -169,9 +151,7 @@ class TestScriptContentIntegrity:
         assert "customer_retention" in content
 
     def test_databricks_scripts_have_no_framework_imports(self, tmp_path):
-        from customer_retention.generators.notebook_generator import (
-            generate_orchestration_scripts, Platform
-        )
+        from customer_retention.generators.notebook_generator import Platform, generate_orchestration_scripts
         generate_orchestration_scripts(
             output_dir=str(tmp_path),
             platforms=[Platform.DATABRICKS]
@@ -182,9 +162,7 @@ class TestScriptContentIntegrity:
         assert "spark" in content
 
     def test_all_scripts_have_main_block(self, tmp_path):
-        from customer_retention.generators.notebook_generator import (
-            generate_orchestration_scripts, Platform
-        )
+        from customer_retention.generators.notebook_generator import generate_orchestration_scripts
         generate_orchestration_scripts(output_dir=str(tmp_path))
         for platform in ["local", "databricks"]:
             platform_dir = tmp_path / platform
@@ -193,9 +171,7 @@ class TestScriptContentIntegrity:
                 assert 'if __name__ == "__main__"' in content
 
     def test_all_scripts_have_docstrings(self, tmp_path):
-        from customer_retention.generators.notebook_generator import (
-            generate_orchestration_scripts, Platform
-        )
+        from customer_retention.generators.notebook_generator import generate_orchestration_scripts
         generate_orchestration_scripts(output_dir=str(tmp_path))
         for platform in ["local", "databricks"]:
             platform_dir = tmp_path / platform
@@ -207,8 +183,11 @@ class TestScriptContentIntegrity:
 class TestGenerationWithCustomConfig:
     def test_notebooks_with_custom_config(self, tmp_path):
         from customer_retention.generators.notebook_generator import (
-            generate_orchestration_notebooks, Platform, NotebookConfig,
-            MLflowConfig, FeatureStoreConfig
+            FeatureStoreConfig,
+            MLflowConfig,
+            NotebookConfig,
+            Platform,
+            generate_orchestration_notebooks,
         )
         config = NotebookConfig(
             project_name="custom_project",
@@ -236,9 +215,7 @@ class TestGenerationWithCustomConfig:
 
 class TestValidationReportContent:
     def test_report_contains_all_stage_names(self, tmp_path):
-        from customer_retention.generators.notebook_generator import (
-            generate_and_validate_notebooks, Platform
-        )
+        from customer_retention.generators.notebook_generator import Platform, generate_and_validate_notebooks
         results = generate_and_validate_notebooks(
             output_dir=str(tmp_path),
             platforms=[Platform.LOCAL]
@@ -254,9 +231,7 @@ class TestValidationReportContent:
             assert stage in names
 
     def test_markdown_report_is_well_formatted(self, tmp_path):
-        from customer_retention.generators.notebook_generator import (
-            generate_and_validate_notebooks, Platform
-        )
+        from customer_retention.generators.notebook_generator import Platform, generate_and_validate_notebooks
         results = generate_and_validate_notebooks(
             output_dir=str(tmp_path),
             platforms=[Platform.LOCAL]

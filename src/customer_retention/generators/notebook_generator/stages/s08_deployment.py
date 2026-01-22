@@ -1,4 +1,5 @@
 from typing import List
+
 import nbformat
 
 from ..base import NotebookStage
@@ -72,9 +73,9 @@ for v in versions:
             self.cb.code('''latest = max(versions, key=lambda v: int(v.version))
 print(f"Latest version: {latest.version}")'''),
             self.cb.section("Set Production Alias"),
-            self.cb.code(f'''client.set_registered_model_alias(model_full_name, "production", latest.version)
-print(f"Model {{model_full_name}} v{{latest.version}} aliased as 'production'")'''),
+            self.cb.code('''client.set_registered_model_alias(model_full_name, "production", latest.version)
+print(f"Model {model_full_name} v{latest.version} aliased as 'production'")'''),
             self.cb.section("Verify Production Model"),
-            self.cb.code(f'''prod_version = client.get_model_version_by_alias(model_full_name, "production")
-print(f"Production model version: {{prod_version.version}}")'''),
+            self.cb.code('''prod_version = client.get_model_version_by_alias(model_full_name, "production")
+print(f"Production model version: {prod_version.version}")'''),
         ]

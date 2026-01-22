@@ -1,14 +1,20 @@
 from abc import ABC, abstractmethod
-from typing import Optional
-import numpy as np
 from datetime import datetime
-from scipy import stats
+from typing import Optional
 
-from customer_retention.core.compat import pd, Series, is_datetime64_any_dtype, is_bool_dtype, Timestamp
+import numpy as np
+
+from customer_retention.core.compat import Timestamp, is_bool_dtype, is_datetime64_any_dtype, pd
 from customer_retention.core.config.column_config import ColumnType
+
 from .profile_result import (
-    UniversalMetrics, IdentifierMetrics, TargetMetrics,
-    NumericMetrics, CategoricalMetrics, DatetimeMetrics, BinaryMetrics
+    BinaryMetrics,
+    CategoricalMetrics,
+    DatetimeMetrics,
+    IdentifierMetrics,
+    NumericMetrics,
+    TargetMetrics,
+    UniversalMetrics,
 )
 
 
@@ -69,11 +75,10 @@ class IdentifierProfiler(ColumnProfiler):
         }
 
     def detect_format_pattern(self, str_series: pd.Series) -> tuple[Optional[str], Optional[float]]:
-        import re
         if len(str_series) == 0:
             return None, None
 
-        sample = str_series.head(min(100, len(str_series)))
+        str_series.head(min(100, len(str_series)))
         pattern_map = {
             r'^[A-Z]{3}-\d{5}$': 'AAA-99999',
             r'^\d{3}-\d{3}-\d{4}$': '999-999-9999',
@@ -140,7 +145,7 @@ class NumericProfiler(ColumnProfiler):
         try:
             skewness_val = float(clean_series.skew())
             kurtosis_val = float(clean_series.kurtosis())
-        except:
+        except Exception:
             skewness_val = None
             kurtosis_val = None
 
@@ -300,7 +305,7 @@ class DatetimeProfiler(ColumnProfiler):
             else:
                 try:
                     clean_series = pd.to_datetime(clean_series, errors='coerce', format='mixed')
-                except:
+                except Exception:
                     return {"datetime_metrics": None}
 
         min_date = clean_series.min()
@@ -368,7 +373,7 @@ class DatetimeProfiler(ColumnProfiler):
                 try:
                     datetime.strptime(val, fmt)
                     matches += 1
-                except:
+                except Exception:
                     pass
 
             match_pct = (matches / len(sample)) * 100
@@ -426,7 +431,6 @@ class TextProfiler(ColumnProfiler):
 
     def profile(self, series: pd.Series) -> dict:
         """Profile text column."""
-        import re
 
         clean_series = series.dropna()
 

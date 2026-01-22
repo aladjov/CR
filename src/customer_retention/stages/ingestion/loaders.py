@@ -1,9 +1,10 @@
-from abc import ABC, abstractmethod
-from typing import Optional, Any
 import time
+from abc import ABC, abstractmethod
+from typing import Any, Optional
 
-from customer_retention.core.compat import pd, DataFrame
+from customer_retention.core.compat import DataFrame, pd
 from customer_retention.core.config.source_config import DataSourceConfig, FileFormat, SourceType
+
 from .load_result import LoadResult
 
 

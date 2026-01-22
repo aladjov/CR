@@ -1,13 +1,25 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from .base import NotebookStage
+
+if TYPE_CHECKING:
+    from customer_retention.analysis.auto_explorer import ExplorationFindings
+
+    from .stages.base_stage import StageGenerator
 from .config import NotebookConfig, Platform
 from .stages import (
-    IngestionStage, ProfilingStage, CleaningStage, TransformationStage,
-    FeatureEngineeringStage, FeatureSelectionStage, ModelTrainingStage,
-    DeploymentStage, MonitoringStage, BatchInferenceStage,
+    BatchInferenceStage,
+    CleaningStage,
+    DeploymentStage,
+    FeatureEngineeringStage,
+    FeatureSelectionStage,
+    IngestionStage,
+    ModelTrainingStage,
+    MonitoringStage,
+    ProfilingStage,
+    TransformationStage,
 )
 
 
