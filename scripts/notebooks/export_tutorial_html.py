@@ -33,17 +33,76 @@ class ExportConfig:
     kernel_name: str = "python3"
     timeout: int = 600
     allow_errors: bool = True
+    convert_plotly: bool = True  # Convert Plotly figures to static images
 
 
 class TutorialExporter:
     def __init__(self, config: ExportConfig):
         self.config = config
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
+        self._plotly_preprocessor = None
+
+    def _get_plotly_preprocessor(self):
+        if self._plotly_preprocessor is None:
+            try:
+                # Import from same directory
+                import sys
+                sys.path.insert(0, str(SCRIPT_DIR))
+                from plotly_image_preprocessor import PlotlyToImagePreprocessor
+                self._plotly_preprocessor = PlotlyToImagePreprocessor()
+            except ImportError as e:
+                print(f"  Note: Plotly conversion not available ({e})")
+                self._plotly_preprocessor = False
+        return self._plotly_preprocessor
+
+    def _get_warning_filter(self):
+        try:
+            import sys
+            sys.path.insert(0, str(SCRIPT_DIR))
+            from plotly_image_preprocessor import WarningFilterPreprocessor
+            return WarningFilterPreprocessor()
+        except ImportError:
+            return None
+
+    def _preprocess_plotly(self, notebook_path: Path) -> Path:
+        """Convert Plotly figures to static images and filter warnings."""
+        try:
+            import nbformat
+            with open(notebook_path, "r", encoding="utf-8") as f:
+                nb = nbformat.read(f, as_version=4)
+
+            # Apply warning filter first
+            warning_filter = self._get_warning_filter()
+            if warning_filter:
+                nb, _ = warning_filter.preprocess(nb, {})
+
+            # Apply Plotly conversion if enabled
+            if self.config.convert_plotly:
+                preprocessor = self._get_plotly_preprocessor()
+                if preprocessor:
+                    nb, _ = preprocessor.preprocess(nb, {})
+
+            # Save to temp location
+            processed_dir = self.config.output_dir / "_processed"
+            processed_dir.mkdir(parents=True, exist_ok=True)
+            processed_path = processed_dir / notebook_path.name
+
+            with open(processed_path, "w", encoding="utf-8") as f:
+                nbformat.write(nb, f)
+
+            return processed_path
+        except Exception as e:
+            print(f"  Warning: Could not preprocess notebook: {e}")
+            return notebook_path
 
     def export_notebook(self, notebook_path: Path) -> Optional[Path]:
         output_name = notebook_path.stem + ".html"
         output_path = self.config.output_dir / output_name
-        cmd = self._build_nbconvert_command(notebook_path, output_path)
+
+        # Preprocess to convert Plotly figures
+        processed_path = self._preprocess_plotly(notebook_path)
+
+        cmd = self._build_nbconvert_command(processed_path, output_path)
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             print(f"  Exported: {output_path.name}")
@@ -298,6 +357,11 @@ Examples:
         action="store_true",
         help="Execute notebooks during conversion (alternative to --run)"
     )
+    parser.add_argument(
+        "--no-plotly-convert",
+        action="store_true",
+        help="Don't convert Plotly figures to static images"
+    )
     args = parser.parse_args()
     if not args.notebooks:
         parser.print_help()
@@ -306,6 +370,7 @@ Examples:
     config = ExportConfig(
         output_dir=output_dir,
         execute_notebooks=args.execute,
+        convert_plotly=not args.no_plotly_convert,
     )
     exporter = TutorialExporter(config)
     all_exported = []

@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retail Customer Retention Tutorial</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            color: #24292e;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 60px 40px;
+            margin: -40px -20px 40px -20px;
+            text-align: center;
+            border-radius: 0 0 8px 8px;
+        }
+        .header h1 { margin: 0; font-size: 2.5em; }
+        .header p { opacity: 0.9; margin: 15px 0 0 0; font-size: 1.2em; }
+        .section {
+            background: white;
+            border: 1px solid #e1e4e8;
+            border-radius: 8px;
+            padding: 30px;
+            margin-bottom: 30px;
+        }
+        .section h2 {
+            margin-top: 0;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #667eea;
+        }
+        .notebook-list {
+            list-style: none;
+            padding: 0;
+        }
+        .notebook-list li {
+            padding: 15px 20px;
+            border: 1px solid #e1e4e8;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            transition: all 0.2s;
+        }
+        .notebook-list li:hover {
+            border-color: #667eea;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.15);
+        }
+        .notebook-list a {
+            color: #0366d6;
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 1.1em;
+        }
+        .notebook-list a:hover { text-decoration: underline; }
+        .footer {
+            text-align: center;
+            color: #586069;
+            font-size: 0.9em;
+            margin-top: 40px;
+        }
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            background: #f1f8ff;
+            color: #0366d6;
+            border-radius: 20px;
+            font-size: 0.85em;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Retail Customer Retention Tutorial</h1>
+        <p>Customer Retention ML Framework - Sample Run</p>
+    </div>
+
+    <div class="section">
+        <h2>Notebooks</h2>
+        <p>Click on a notebook to view the tutorial. Code cells are collapsed by default - click "Show/Hide Code" to expand.</p>
+        <ul class="notebook-list">
+        <li><a href="00_start_here.html">00. Start Here</a></li>
+        <li><a href="01_data_discovery.html">01. Data Discovery</a></li>
+        <li><a href="01a_a_temporal_text_deep_dive.html">01A A Temporal Text Deep Dive</a></li>
+        <li><a href="01a_temporal_deep_dive.html">01A Temporal Deep Dive</a></li>
+        <li><a href="01b_temporal_quality.html">01B Temporal Quality</a></li>
+        <li><a href="01c_temporal_patterns.html">01C Temporal Patterns</a></li>
+        <li><a href="01d_event_aggregation.html">01D Event Aggregation</a></li>
+        <li><a href="02_column_deep_dive.html">02. Column Deep Dive</a></li>
+        <li><a href="02a_text_columns_deep_dive.html">02A Text Columns Deep Dive</a></li>
+        <li><a href="03_quality_assessment.html">03. Quality Assessment</a></li>
+        <li><a href="04_relationship_analysis.html">04. Relationship Analysis</a></li>
+        <li><a href="05_multi_dataset.html">05. Multi Dataset</a></li>
+        <li><a href="06_feature_opportunities.html">06. Feature Opportunities</a></li>
+        <li><a href="07_modeling_readiness.html">07. Modeling Readiness</a></li>
+        <li><a href="08_baseline_experiments.html">08. Baseline Experiments</a></li>
+        <li><a href="09_business_alignment.html">09. Business Alignment</a></li>
+        <li><a href="10_spec_generation.html">10. Spec Generation</a></li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>Production Validation</h2>
+        <p>Evaluate model performance on point-in-time holdout data and analyze distribution drift.</p>
+        <ul class="notebook-list">
+        <li><a href="scoring_dashboard.html">Scoring Dashboard</a> <span class="badge">Key Insights</span></li>
+        </ul>
+        <p><strong>Key Findings:</strong></p>
+        <ul>
+            <li>Best validation model (XGBoost 0.9854) degraded most in scoring (0.9142)</li>
+            <li>Logistic Regression was most robust: 0.9678 → 0.9441 (only 2.4% gap)</li>
+            <li>Significant drift in email engagement features (+30-45%)</li>
+            <li>Target distribution shifted: 78.4% → 86.4% retention</li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>About This Tutorial</h2>
+        <p>This tutorial demonstrates the Customer Retention ML Framework using a synthetic retail dataset (30,801 customers).
+        Each notebook walks through a stage of the ML pipeline, from data exploration to production validation.</p>
+        <p><strong>Features demonstrated:</strong></p>
+        <ul>
+            <li>Automatic data profiling and type detection</li>
+            <li>Temporal scenario detection and point-in-time splits</li>
+            <li>Data quality assessment (99.7/100 score)</li>
+            <li>Feature engineering and capacity analysis</li>
+            <li>Model training: Logistic Regression, Random Forest, XGBoost</li>
+            <li>SHAP interpretability and feature importance</li>
+            <li>Distribution drift analysis and production validation</li>
+        </ul>
+        <p><strong>Key Lesson:</strong> Simpler models (Logistic Regression) can be more robust to distribution drift than complex models (XGBoost).</p>
+    </div>
+
+    <div class="footer">
+        <p>Generated with Customer Retention ML Framework</p>
+    </div>
+</body>
+</html>

@@ -5,41 +5,58 @@
 {{ super() }}
 <style>
 /* Tutorial-specific styles */
-.tutorial-code-section {
+.jp-CodeCell {
     margin: 1em 0;
     border: 1px solid #e1e4e8;
     border-radius: 6px;
     overflow: hidden;
 }
-.tutorial-code-section summary {
-    padding: 10px 15px;
+/* Collapsible code input */
+.tutorial-code-input {
+    border-bottom: 1px solid #e1e4e8;
+}
+.tutorial-code-input summary {
+    padding: 8px 15px;
     background: #f6f8fa;
     cursor: pointer;
     font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-    font-size: 0.9em;
+    font-size: 0.85em;
     color: #586069;
-    border-bottom: 1px solid #e1e4e8;
     user-select: none;
+    list-style: none;
 }
-.tutorial-code-section summary:hover {
+.tutorial-code-input summary::-webkit-details-marker {
+    display: none;
+}
+.tutorial-code-input summary::before {
+    content: '▶ ';
+    color: #0366d6;
+    font-size: 0.8em;
+}
+.tutorial-code-input[open] summary::before {
+    content: '▼ ';
+}
+.tutorial-code-input summary:hover {
     background: #ebeef1;
 }
-.tutorial-code-section summary::marker {
-    color: #0366d6;
-}
-.tutorial-code-section[open] summary {
-    border-bottom: 1px solid #e1e4e8;
-}
-.tutorial-code-section .jp-InputArea {
+.tutorial-code-input .jp-InputArea {
     margin: 0;
     border: none;
+    border-top: 1px solid #e1e4e8;
 }
-.tutorial-code-section .jp-Cell-inputWrapper {
+.tutorial-code-input .jp-Cell-inputWrapper {
     padding: 0;
 }
-/* Output styling */
+/* Output styling - always visible */
+.jp-Cell-outputWrapper {
+    padding: 0;
+}
 .jp-OutputArea {
     padding: 10px 15px;
+    background: white;
+}
+.jp-OutputArea-child {
+    margin: 5px 0;
 }
 /* Markdown styling improvements */
 .jp-RenderedMarkdown {
@@ -72,57 +89,22 @@
 .dataframe {
     font-size: 0.9em;
 }
-/* Hide code cell numbers */
+/* Hide cell numbers */
 .jp-InputPrompt, .jp-OutputPrompt {
     display: none !important;
 }
-/* Tutorial header */
-.tutorial-header {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    padding: 40px 20px;
-    margin: -20px -20px 30px -20px;
-    text-align: center;
-}
-.tutorial-header h1 {
+/* Stream output (print statements) */
+.jp-OutputArea-output pre {
     margin: 0;
-    border: none;
-    color: white;
-}
-.tutorial-header .subtitle {
-    opacity: 0.9;
-    margin-top: 10px;
-}
-/* Navigation/TOC styling */
-.tutorial-toc {
-    background: #f6f8fa;
-    border: 1px solid #e1e4e8;
-    border-radius: 6px;
-    padding: 20px;
-    margin-bottom: 30px;
-}
-.tutorial-toc h3 {
-    margin-top: 0;
-    border: none;
-}
-.tutorial-toc ul {
-    list-style: none;
-    padding-left: 0;
-}
-.tutorial-toc li {
-    padding: 5px 0;
-}
-.tutorial-toc a {
-    color: #0366d6;
-    text-decoration: none;
-}
-.tutorial-toc a:hover {
-    text-decoration: underline;
+    padding: 8px 0;
+    white-space: pre-wrap;
+    font-size: 0.9em;
 }
 /* Expand/Collapse All buttons */
 .code-toggle-controls {
     text-align: right;
     margin-bottom: 20px;
+    padding: 10px 0;
 }
 .code-toggle-controls button {
     background: #0366d6;
@@ -139,25 +121,29 @@
 }
 /* Print styles */
 @media print {
-    .tutorial-code-section {
+    .jp-CodeCell {
         break-inside: avoid;
     }
     .code-toggle-controls {
         display: none;
     }
+    .tutorial-code-input summary {
+        display: none;
+    }
+    .tutorial-code-input .jp-InputArea {
+        border-top: none;
+    }
 }
 </style>
 {% endblock header %}
 
-{# Wrap code cells in collapsible details #}
-{% block codecell %}
-<div class="jp-Cell jp-CodeCell tutorial-code-section">
-<details>
-<summary>Show/Hide Code Cell</summary>
+{# Override input block to wrap only code in collapsible details #}
+{% block input %}
+<details class="tutorial-code-input">
+<summary>Show/Hide Code</summary>
 {{ super() }}
 </details>
-</div>
-{% endblock codecell %}
+{% endblock input %}
 
 {# Add toggle controls at the end #}
 {% block footer_js %}
@@ -165,13 +151,13 @@
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     // Add toggle controls if there are code cells
-    const codeSections = document.querySelectorAll('.tutorial-code-section');
-    if (codeSections.length > 0) {
+    const codeInputs = document.querySelectorAll('.tutorial-code-input');
+    if (codeInputs.length > 0) {
         const controls = document.createElement('div');
         controls.className = 'code-toggle-controls';
         controls.innerHTML = `
-            <button onclick="toggleAllCode(true)">Expand All Code</button>
-            <button onclick="toggleAllCode(false)">Collapse All Code</button>
+            <button onclick="toggleAllCode(true)">Show All Code</button>
+            <button onclick="toggleAllCode(false)">Hide All Code</button>
         `;
         const firstCell = document.querySelector('.jp-Cell');
         if (firstCell) {
@@ -181,7 +167,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function toggleAllCode(expand) {
-    document.querySelectorAll('.tutorial-code-section details').forEach(function(details) {
+    document.querySelectorAll('.tutorial-code-input').forEach(function(details) {
         details.open = expand;
     });
 }
