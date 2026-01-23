@@ -46,7 +46,14 @@ from .point_in_time_join import PointInTimeJoiner
 from .point_in_time_registry import ConsistencyReport, DatasetSnapshot, PointInTimeRegistry
 from .scenario_detector import ScenarioDetector
 from .snapshot_manager import SnapshotManager, SnapshotMetadata
-from .timestamp_discovery import DatetimeOrderAnalyzer, TimestampCandidate, TimestampDiscoveryEngine, TimestampDiscoveryResult, TimestampRole
+from .synthetic_coordinator import SyntheticCoordinationParams, SyntheticTimestampCoordinator
+from .timestamp_discovery import (
+    DatetimeOrderAnalyzer,
+    TimestampCandidate,
+    TimestampDiscoveryEngine,
+    TimestampDiscoveryResult,
+    TimestampRole,
+)
 from .timestamp_manager import TimestampConfig, TimestampManager, TimestampStrategy
 
 # Columns added by the temporal framework for point-in-time correctness.
@@ -139,6 +146,8 @@ __all__ = [
     "CutoffAnalysis",
     "CutoffAnalyzer",
     "SplitResult",
+    "SyntheticCoordinationParams",
+    "SyntheticTimestampCoordinator",
     "load_data_with_snapshot_preference",
     "TEMPORAL_METADATA_COLS",
 ]

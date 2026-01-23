@@ -17,9 +17,11 @@ import pytest
 
 from customer_retention.stages.profiling import TypeDetector
 from customer_retention.stages.temporal import (
-    CutoffAnalyzer, DatetimeOrderAnalyzer, ScenarioDetector, UnifiedDataPreparer,
+    CutoffAnalyzer,
+    DatetimeOrderAnalyzer,
+    ScenarioDetector,
+    UnifiedDataPreparer,
 )
-
 
 FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
 

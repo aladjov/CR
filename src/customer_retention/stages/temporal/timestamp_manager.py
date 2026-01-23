@@ -194,7 +194,7 @@ class TimestampManager:
             df["feature_timestamp"] = base
             df["label_timestamp"] = base + window
         elif self.config.strategy == TimestampStrategy.SYNTHETIC_INDEX:
-            df["feature_timestamp"] = base + pd.to_timedelta(df.index, unit="D")
+            df["feature_timestamp"] = base + pd.to_timedelta(range(len(df)), unit="D")
             df["label_timestamp"] = df["feature_timestamp"] + window
         elif self.config.strategy == TimestampStrategy.SYNTHETIC_RANDOM:
             np.random.seed(42)

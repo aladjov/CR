@@ -136,7 +136,7 @@ class ScenarioDetector:
         self, result: TimestampDiscoveryResult
     ) -> tuple[str, TimestampConfig, TimestampDiscoveryResult]:
         config = TimestampConfig(
-            strategy=TimestampStrategy.SYNTHETIC_FIXED,
+            strategy=TimestampStrategy.SYNTHETIC_INDEX,
             observation_window_days=self.label_window_days,
             synthetic_base_date="2024-01-01",
         )

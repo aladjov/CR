@@ -13,11 +13,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from customer_retention.stages.temporal.cutoff_analyzer import CutoffAnalyzer, SplitResult
+from customer_retention.stages.temporal.cutoff_analyzer import CutoffAnalyzer
 from customer_retention.stages.temporal.snapshot_manager import SnapshotManager
 from customer_retention.stages.temporal.timestamp_discovery import DatetimeOrderAnalyzer
 from customer_retention.stages.temporal.timestamp_manager import (
-    TimestampConfig, TimestampManager, TimestampStrategy,
+    TimestampConfig,
+    TimestampManager,
+    TimestampStrategy,
 )
 
 

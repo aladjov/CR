@@ -73,7 +73,7 @@ class TestDetectScenario(TestScenarioDetector):
         scenario, config, result = detector.detect(synthetic_df, "churned")
 
         assert scenario == "synthetic"
-        assert config.strategy == TimestampStrategy.SYNTHETIC_FIXED
+        assert config.strategy == TimestampStrategy.SYNTHETIC_INDEX
         assert result.requires_synthetic
 
 
@@ -144,7 +144,7 @@ class TestAutoDetectAndConfigure:
         scenario, config = auto_detect_and_configure(df, "churned")
 
         assert scenario == "synthetic"
-        assert config.strategy == TimestampStrategy.SYNTHETIC_FIXED
+        assert config.strategy == TimestampStrategy.SYNTHETIC_INDEX
 
 
 class TestEdgeCases(TestScenarioDetector):
