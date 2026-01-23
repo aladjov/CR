@@ -143,3 +143,68 @@ class TestCompareSnapshots(TestSnapshotManager):
         assert comparison["snapshot_2"] == meta2.snapshot_id
         assert "row_diff" in comparison
         assert "column_diff" in comparison
+
+
+class TestCreateSnapshotWithTimestampSeries(TestSnapshotManager):
+    def test_uses_provided_series_for_filtering(self, manager, sample_df):
+        # Provide a series that has later timestamps, so all rows pass the cutoff
+        custom_ts = pd.Series(
+            pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04"]),
+            index=sample_df.index,
+        )
+        cutoff = datetime(2024, 1, 10)
+
+        metadata = manager.create_snapshot(
+            sample_df, cutoff, "target", timestamp_series=custom_ts
+        )
+
+        # All label_available_flag==True rows pass (3 rows), all ts <= cutoff
+        assert metadata.row_count == 3
+
+    def test_without_series_uses_feature_timestamp(self, manager, sample_df):
+        cutoff = datetime(2024, 2, 15)
+
+        metadata = manager.create_snapshot(sample_df, cutoff, "target")
+
+        # Only rows A, B have feature_timestamp <= 2024-02-15 AND label_available=True
+        assert metadata.row_count == 2
+
+    def test_coalesced_series_yields_more_rows(self, manager):
+        df = pd.DataFrame({
+            "entity_id": ["A", "B", "C", "D"],
+            "feature_timestamp": pd.to_datetime([
+                "2024-01-01", None, "2024-03-01", "2024-04-01"
+            ]),
+            "label_timestamp": pd.to_datetime([
+                "2024-04-01", "2024-05-01", "2024-06-01", "2024-07-01"
+            ]),
+            "label_available_flag": [True, True, True, True],
+            "target": [1, 0, 1, 0],
+        })
+        # feature_timestamp has a null for B, so using it directly misses B
+        cutoff = datetime(2024, 6, 1)
+
+        meta_default = manager.create_snapshot(df, cutoff, "target")
+
+        # Coalesced series fills in the gap
+        coalesced = df["feature_timestamp"].combine_first(df["label_timestamp"])
+        meta_coalesced = manager.create_snapshot(
+            df, cutoff, "target", snapshot_name="coalesced", timestamp_series=coalesced
+        )
+
+        assert meta_coalesced.row_count >= meta_default.row_count
+
+    def test_series_and_label_available_combined(self, manager, sample_df):
+        # Custom series puts all timestamps early, but label_available_flag still filters
+        custom_ts = pd.Series(
+            pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04"]),
+            index=sample_df.index,
+        )
+        cutoff = datetime(2024, 12, 31)
+
+        metadata = manager.create_snapshot(
+            sample_df, cutoff, "target", timestamp_series=custom_ts
+        )
+
+        # Row D has label_available_flag=False, so only 3 rows
+        assert metadata.row_count == 3

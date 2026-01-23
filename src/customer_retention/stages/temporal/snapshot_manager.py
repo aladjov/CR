@@ -92,10 +92,15 @@ class SnapshotManager:
         self.snapshots_dir.mkdir(parents=True, exist_ok=True)
 
     def create_snapshot(
-        self, df: pd.DataFrame, cutoff_date: datetime, target_column: str, snapshot_name: str = "training"
+        self, df: pd.DataFrame, cutoff_date: datetime, target_column: str,
+        snapshot_name: str = "training", timestamp_series: Optional[pd.Series] = None,
     ) -> SnapshotMetadata:
+        if timestamp_series is not None:
+            ts = timestamp_series
+        else:
+            ts = df["feature_timestamp"]
         snapshot_df = df[
-            (df["label_available_flag"] == True) & (df["feature_timestamp"] <= cutoff_date)
+            (df["label_available_flag"] == True) & (ts <= cutoff_date)
         ].copy()
 
         existing = list(self.snapshots_dir.glob(f"{snapshot_name}_v*.parquet"))

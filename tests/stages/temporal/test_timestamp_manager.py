@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -149,6 +149,175 @@ class TestPointInTimeValidation:
 
         with pytest.raises(ValueError, match="Missing timestamp columns"):
             manager.validate_point_in_time(df)
+
+
+class TestTimestampManagerDerived:
+    def test_derived_without_config_raises(self):
+        config = TimestampConfig(strategy=TimestampStrategy.DERIVED)
+        manager = TimestampManager(config)
+        df = pd.DataFrame({"tenure_months": [12, 24], "value": [1, 2]})
+
+        with pytest.raises(ValueError, match="derivation_config required"):
+            manager.ensure_timestamps(df)
+
+    def test_derived_feature_from_tenure(self):
+        config = TimestampConfig(
+            strategy=TimestampStrategy.DERIVED,
+            observation_window_days=90,
+            derivation_config={
+                "feature_derivation": {
+                    "sources": ["tenure_months"],
+                    "formula": "reference_date - tenure * 30 days",
+                }
+            },
+        )
+        manager = TimestampManager(config)
+        df = pd.DataFrame({"tenure_months": [6, 12], "value": [1, 2]})
+
+        result = manager.ensure_timestamps(df)
+
+        assert "feature_timestamp" in result.columns
+        assert "label_timestamp" in result.columns
+        assert result["label_available_flag"].all()
+        # Longer tenure → earlier feature_timestamp
+        assert result["feature_timestamp"].iloc[0] > result["feature_timestamp"].iloc[1]
+
+    def test_derived_label_derivation(self):
+        config = TimestampConfig(
+            strategy=TimestampStrategy.DERIVED,
+            derivation_config={
+                "feature_derivation": {
+                    "sources": ["tenure_months"],
+                    "formula": "reference_date - tenure * 30 days",
+                },
+                "label_derivation": {
+                    "sources": ["tenure_months"],
+                    "formula": "reference_date - tenure * 30 days",
+                },
+            },
+        )
+        manager = TimestampManager(config)
+        df = pd.DataFrame({"tenure_months": [6, 12], "value": [1, 2]})
+
+        result = manager.ensure_timestamps(df)
+
+        assert "label_timestamp" in result.columns
+        assert result["label_available_flag"].all()
+
+    def test_derived_with_empty_formula_no_op(self):
+        config = TimestampConfig(
+            strategy=TimestampStrategy.DERIVED,
+            derivation_config={
+                "feature_derivation": {"sources": [], "formula": ""},
+            },
+        )
+        manager = TimestampManager(config)
+        df = pd.DataFrame({"value": [1, 2]})
+
+        result = manager.ensure_timestamps(df)
+
+        assert "label_available_flag" in result.columns
+
+    def test_derived_label_defaults_to_feature_plus_window(self):
+        config = TimestampConfig(
+            strategy=TimestampStrategy.DERIVED,
+            observation_window_days=60,
+            derivation_config={
+                "feature_derivation": {
+                    "sources": ["tenure_months"],
+                    "formula": "reference_date - tenure * 30 days",
+                }
+            },
+        )
+        manager = TimestampManager(config)
+        df = pd.DataFrame({"tenure_months": [3], "value": [1]})
+
+        result = manager.ensure_timestamps(df)
+
+        diff = result["label_timestamp"].iloc[0] - result["feature_timestamp"].iloc[0]
+        assert diff == timedelta(days=60)
+
+
+class TestLabelAvailableFlag:
+    def test_sparse_label_timestamps_observation_complete(self):
+        config = TimestampConfig(
+            strategy=TimestampStrategy.PRODUCTION,
+            feature_timestamp_column="feature_date",
+            label_timestamp_column="event_date",
+            observation_window_days=90,
+        )
+        manager = TimestampManager(config)
+        df = pd.DataFrame({
+            "feature_date": pd.to_datetime(["2022-01-01", "2022-02-01", "2022-03-01"]),
+            "event_date": pd.to_datetime([None, "2022-05-01", None]),
+            "value": [1, 2, 3],
+        })
+
+        result = manager.ensure_timestamps(df)
+
+        # All rows: feature_date + 90 days << now, so observation complete
+        assert result["label_available_flag"].all()
+
+    def test_sparse_label_within_observation_window(self):
+        config = TimestampConfig(
+            strategy=TimestampStrategy.PRODUCTION,
+            feature_timestamp_column="feature_date",
+            label_timestamp_column="event_date",
+            observation_window_days=90,
+        )
+        manager = TimestampManager(config)
+        now = datetime.now()
+        recent = now - timedelta(days=30)  # Only 30 days ago, window is 90
+        df = pd.DataFrame({
+            "feature_date": [recent, recent, recent],
+            "event_date": pd.to_datetime([None, None, None]),
+            "value": [1, 2, 3],
+        })
+
+        result = manager.ensure_timestamps(df)
+
+        # Observation window not complete AND no event → label NOT available
+        assert not result["label_available_flag"].any()
+
+    def test_event_happened_within_window_still_available(self):
+        config = TimestampConfig(
+            strategy=TimestampStrategy.PRODUCTION,
+            feature_timestamp_column="feature_date",
+            label_timestamp_column="event_date",
+            observation_window_days=90,
+        )
+        manager = TimestampManager(config)
+        now = datetime.now()
+        recent = now - timedelta(days=30)
+        event_in_past = now - timedelta(days=10)
+        df = pd.DataFrame({
+            "feature_date": [recent, recent],
+            "event_date": [event_in_past, None],
+            "value": [1, 2],
+        })
+
+        result = manager.ensure_timestamps(df)
+
+        # Row 0: event happened in past → available
+        # Row 1: no event and window not complete → not available
+        assert result["label_available_flag"].iloc[0] is True or result["label_available_flag"].iloc[0] == True
+        assert result["label_available_flag"].iloc[1] is False or result["label_available_flag"].iloc[1] == False
+
+    def test_all_labels_present_and_past(self):
+        config = TimestampConfig(
+            strategy=TimestampStrategy.PRODUCTION,
+            feature_timestamp_column="feature_date",
+            label_timestamp_column="event_date",
+        )
+        manager = TimestampManager(config)
+        df = pd.DataFrame({
+            "feature_date": pd.to_datetime(["2022-01-01", "2022-02-01"]),
+            "event_date": pd.to_datetime(["2022-04-01", "2022-05-01"]),
+        })
+
+        result = manager.ensure_timestamps(df)
+
+        assert result["label_available_flag"].all()
 
 
 class TestTimestampSummary:

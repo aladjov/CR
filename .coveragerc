@@ -13,7 +13,7 @@ precision = 2
 show_missing = True
 skip_covered = False
 skip_empty = True
-fail_under = 75
+fail_under = 90
 
 exclude_lines =
     pragma: no cover

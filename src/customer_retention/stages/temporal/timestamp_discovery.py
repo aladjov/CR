@@ -146,6 +146,25 @@ class DatetimeOrderAnalyzer:
         ordering = self.analyze_datetime_ordering(df)
         return ordering[0] if ordering else None
 
+    def derive_last_action_date(self, df: pd.DataFrame) -> Optional[pd.Series]:
+        ordering = self.analyze_datetime_ordering(df)
+        if not ordering:
+            return None
+        coalesced = self._coalesce_datetime_columns(df, list(reversed(ordering)))
+        coalesced.name = "last_action_date"
+        return coalesced
+
+    def _coalesce_datetime_columns(self, df: pd.DataFrame, columns: list[str]) -> pd.Series:
+        result = self._ensure_datetime_column(df, columns[0])
+        for col in columns[1:]:
+            result = result.fillna(self._ensure_datetime_column(df, col))
+        return result
+
+    def _ensure_datetime_column(self, df: pd.DataFrame, col: str) -> pd.Series:
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            return df[col]
+        return pd.to_datetime(df[col], format="mixed", errors="coerce")
+
     def _get_datetime_columns(self, df: pd.DataFrame) -> list[str]:
         result = []
         for col in df.columns:

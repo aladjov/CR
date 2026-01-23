@@ -40,13 +40,13 @@ Timestamp Scenarios:
 """
 
 from .access_guard import AccessContext, DataAccessGuard
-from .cutoff_analyzer import CutoffAnalysis, CutoffAnalyzer
+from .cutoff_analyzer import CutoffAnalysis, CutoffAnalyzer, SplitResult
 from .data_preparer import PreparedData, UnifiedDataPreparer
 from .point_in_time_join import PointInTimeJoiner
 from .point_in_time_registry import ConsistencyReport, DatasetSnapshot, PointInTimeRegistry
 from .scenario_detector import ScenarioDetector
 from .snapshot_manager import SnapshotManager, SnapshotMetadata
-from .timestamp_discovery import TimestampCandidate, TimestampDiscoveryEngine, TimestampDiscoveryResult, TimestampRole
+from .timestamp_discovery import DatetimeOrderAnalyzer, TimestampCandidate, TimestampDiscoveryEngine, TimestampDiscoveryResult, TimestampRole
 from .timestamp_manager import TimestampConfig, TimestampManager, TimestampStrategy
 
 # Columns added by the temporal framework for point-in-time correctness.
@@ -117,6 +117,7 @@ def load_data_with_snapshot_preference(findings, output_dir: str = "../explorati
 
 
 __all__ = [
+    "DatetimeOrderAnalyzer",
     "TimestampStrategy",
     "TimestampConfig",
     "TimestampManager",
@@ -137,6 +138,7 @@ __all__ = [
     "PointInTimeRegistry",
     "CutoffAnalysis",
     "CutoffAnalyzer",
+    "SplitResult",
     "load_data_with_snapshot_preference",
     "TEMPORAL_METADATA_COLS",
 ]

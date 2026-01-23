@@ -82,6 +82,95 @@ class TestDatetimeOrderAnalyzer:
         assert latest == "last_login"
 
 
+class TestDeriveLastActionDate:
+    @pytest.fixture
+    def analyzer(self):
+        return DatetimeOrderAnalyzer()
+
+    def test_coalesces_latest_first(self, analyzer):
+        df = pd.DataFrame({
+            "created": pd.to_datetime(["2020-01-01", "2020-02-01", "2020-03-01"]),
+            "last_order": pd.to_datetime(["2023-01-01", None, None]),
+        })
+
+        result = analyzer.derive_last_action_date(df)
+
+        assert result is not None
+        assert result.notna().all()
+        assert result.iloc[0] == pd.Timestamp("2023-01-01")
+        assert result.iloc[1] == pd.Timestamp("2020-02-01")
+        assert result.iloc[2] == pd.Timestamp("2020-03-01")
+
+    def test_full_coverage_with_sparse_columns(self, analyzer):
+        n = 100
+        created = pd.date_range("2020-01-01", periods=n, freq="D")
+        last_order = pd.Series([pd.NaT] * n)
+        last_order.iloc[0] = pd.Timestamp("2023-06-01")
+        last_order.iloc[50] = pd.Timestamp("2023-07-01")
+        last_order.iloc[99] = pd.Timestamp("2023-08-01")
+
+        df = pd.DataFrame({"created": created, "last_order": last_order})
+
+        result = analyzer.derive_last_action_date(df)
+
+        assert result is not None
+        assert result.notna().sum() == 100
+
+    def test_returns_none_for_no_datetime_columns(self, analyzer):
+        df = pd.DataFrame({"id": [1, 2, 3], "amount": [100, 200, 300]})
+
+        result = analyzer.derive_last_action_date(df)
+
+        assert result is None
+
+    def test_single_datetime_column(self, analyzer):
+        df = pd.DataFrame({
+            "id": [1, 2, 3],
+            "order_date": pd.to_datetime(["2023-01-01", "2023-02-01", "2023-03-01"]),
+        })
+
+        result = analyzer.derive_last_action_date(df)
+
+        assert result is not None
+        assert len(result) == 3
+        assert result.iloc[0] == pd.Timestamp("2023-01-01")
+
+    def test_preserves_index(self, analyzer):
+        df = pd.DataFrame(
+            {"ts": pd.to_datetime(["2023-01-01", "2023-02-01", "2023-03-01"])},
+            index=[10, 20, 30],
+        )
+
+        result = analyzer.derive_last_action_date(df)
+
+        assert list(result.index) == [10, 20, 30]
+
+    def test_respects_ordering_by_median(self, analyzer):
+        df = pd.DataFrame({
+            "early": pd.to_datetime(["2020-01-01", "2020-02-01", "2020-03-01"]),
+            "mid": pd.to_datetime(["2021-06-01", "2021-07-01", None]),
+            "late": pd.to_datetime(["2023-01-01", None, None]),
+        })
+
+        result = analyzer.derive_last_action_date(df)
+
+        # Row 0: has late value -> picks 2023-01-01
+        assert result.iloc[0] == pd.Timestamp("2023-01-01")
+        # Row 1: no late, has mid -> picks 2021-07-01
+        assert result.iloc[1] == pd.Timestamp("2021-07-01")
+        # Row 2: no late, no mid, has early -> picks 2020-03-01
+        assert result.iloc[2] == pd.Timestamp("2020-03-01")
+
+    def test_returns_series_named_last_action_date(self, analyzer):
+        df = pd.DataFrame({
+            "ts": pd.to_datetime(["2023-01-01", "2023-02-01"]),
+        })
+
+        result = analyzer.derive_last_action_date(df)
+
+        assert result.name == "last_action_date"
+
+
 class TestTimestampDiscoveryWithOrdering:
     @pytest.fixture
     def engine(self):

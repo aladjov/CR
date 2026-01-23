@@ -95,10 +95,12 @@ class UnifiedDataPreparer:
         return df
 
     def create_training_snapshot(
-        self, df: pd.DataFrame, cutoff_date: datetime, snapshot_name: str = "training"
+        self, df: pd.DataFrame, cutoff_date: datetime, snapshot_name: str = "training",
+        timestamp_series: Optional[pd.Series] = None,
     ) -> tuple[pd.DataFrame, dict[str, Any]]:
         metadata = self.snapshot_manager.create_snapshot(
-            df=df, cutoff_date=cutoff_date, target_column="target", snapshot_name=snapshot_name
+            df=df, cutoff_date=cutoff_date, target_column="target",
+            snapshot_name=snapshot_name, timestamp_series=timestamp_series,
         )
         snapshot_df, _ = self.snapshot_manager.load_snapshot(metadata.snapshot_id)
         return snapshot_df, self._metadata_to_dict(metadata)

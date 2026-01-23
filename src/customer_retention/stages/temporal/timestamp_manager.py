@@ -134,7 +134,13 @@ class TimestampManager:
         elif self.config.derive_label_from_feature:
             window = timedelta(days=self.config.observation_window_days)
             df["label_timestamp"] = df["feature_timestamp"] + window
-        df["label_available_flag"] = df["label_timestamp"] <= datetime.now()
+        now = datetime.now()
+        has_event = df["label_timestamp"].notna() & (df["label_timestamp"] <= now)
+        observation_complete = (
+            df["feature_timestamp"].notna()
+            & (df["feature_timestamp"] + pd.Timedelta(days=self.config.observation_window_days) <= now)
+        )
+        df["label_available_flag"] = has_event | observation_complete
         return df
 
     def _parse_datetime_column(self, series: pd.Series, col_name: str) -> pd.Series:
