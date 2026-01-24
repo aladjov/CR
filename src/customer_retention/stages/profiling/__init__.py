@@ -71,6 +71,14 @@ from .temporal_analyzer import (
     TemporalRecommendation,
     TemporalRecommendationType,
 )
+from .temporal_coverage import (
+    DriftImplication,
+    EntityWindowCoverage,
+    TemporalCoverageResult,
+    TemporalGap,
+    analyze_temporal_coverage,
+    derive_drift_implications,
+)
 from .temporal_feature_analyzer import (
     FeatureRecommendation,
     FeatureType,
@@ -108,8 +116,22 @@ from .temporal_target_analyzer import TemporalTargetAnalyzer, TemporalTargetResu
 from .text_embedder import EMBEDDING_MODELS, TextEmbedder, get_model_info, list_available_models
 from .text_processor import TextColumnProcessor, TextColumnResult, TextProcessingConfig
 from .text_reducer import ReductionResult, TextDimensionalityReducer
-from .time_series_profiler import DistributionStats, EntityLifecycle, TimeSeriesProfile, TimeSeriesProfiler
+from .time_series_profiler import (
+    ActivitySegmentResult,
+    DistributionStats,
+    EntityLifecycle,
+    LifecycleQuadrantResult,
+    TimeSeriesProfile,
+    TimeSeriesProfiler,
+    classify_activity_segments,
+    classify_lifecycle_quadrants,
+)
 from .time_window_aggregator import AggregationPlan, AggregationType, TimeWindow, TimeWindowAggregator
+from .window_recommendation import (
+    TemporalHeterogeneityResult,
+    WindowRecommendationCollector,
+    WindowUnionResult,
+)
 
 __all__ = [
     "Severity",
@@ -136,6 +158,8 @@ __all__ = [
     "CategoricalTargetAnalyzer", "CategoricalTargetResult",
     "TemporalTargetAnalyzer", "TemporalTargetResult",
     "TimeSeriesProfiler", "TimeSeriesProfile", "DistributionStats", "EntityLifecycle",
+    "LifecycleQuadrantResult", "classify_lifecycle_quadrants",
+    "ActivitySegmentResult", "classify_activity_segments",
     "TemporalQualityCheck", "TemporalQualityResult",
     "DuplicateEventCheck", "TemporalGapCheck", "FutureDateCheck", "EventOrderCheck",
     "TemporalPatternAnalyzer", "TemporalPatternAnalysis",
@@ -152,5 +176,8 @@ __all__ = [
     "ReferenceMode", "FeatureGroup", "FeatureGroupResult", "TemporalFeatureResult",
     "TextEmbedder", "EMBEDDING_MODELS", "get_model_info", "list_available_models",
     "TextDimensionalityReducer", "ReductionResult",
-    "TextColumnProcessor", "TextProcessingConfig", "TextColumnResult"
+    "TextColumnProcessor", "TextProcessingConfig", "TextColumnResult",
+    "WindowRecommendationCollector", "WindowUnionResult", "TemporalHeterogeneityResult",
+    "analyze_temporal_coverage", "TemporalCoverageResult", "TemporalGap", "EntityWindowCoverage",
+    "derive_drift_implications", "DriftImplication",
 ]

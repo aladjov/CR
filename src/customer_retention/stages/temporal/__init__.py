@@ -65,6 +65,21 @@ TEMPORAL_METADATA_COLS = frozenset({
 })
 
 
+def _restore_snapshot_columns(df, findings):
+    """Reverse the entity_id/target renames applied by UnifiedDataPreparer."""
+    renames = {}
+    ts_meta = getattr(findings, "time_series_metadata", None)
+    entity_col = ts_meta.entity_column if ts_meta else None
+    target_col = getattr(findings, "target_column", None)
+
+    if entity_col and "entity_id" in df.columns and entity_col not in df.columns:
+        renames["entity_id"] = entity_col
+    if target_col and "target" in df.columns and target_col not in df.columns:
+        renames["target"] = target_col
+
+    return df.rename(columns=renames) if renames else df
+
+
 def load_data_with_snapshot_preference(findings, output_dir: str = "../explorations"):
     """Load data preferring snapshots over raw source files.
 
@@ -100,7 +115,7 @@ def load_data_with_snapshot_preference(findings, output_dir: str = "../explorati
 
     if snapshot_path and Path(snapshot_path).exists():
         df = pd.read_parquet(snapshot_path)
-        return df, "snapshot"
+        return _restore_snapshot_columns(df, findings), "snapshot"
 
     # Check for snapshots in output directory
     output_path = Path(output_dir) / "snapshots"
@@ -111,7 +126,7 @@ def load_data_with_snapshot_preference(findings, output_dir: str = "../explorati
             latest = snapshot_manager.get_latest_snapshot()
             if latest:
                 df, _ = snapshot_manager.load_snapshot(latest)
-                return df, f"snapshot:{latest}"
+                return _restore_snapshot_columns(df, findings), f"snapshot:{latest}"
 
     # Fall back to source file
     source_path = findings.source_path

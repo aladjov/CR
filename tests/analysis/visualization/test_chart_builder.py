@@ -582,3 +582,661 @@ class TestModelComparisonGrid:
         }
         fig = chart_builder.model_comparison_grid(model_results, y_test)
         assert fig is not None
+
+
+class TestSparkline:
+    def test_creates_figure(self, chart_builder):
+        fig = chart_builder.sparkline([1, 2, 3, 4, 5])
+        assert fig is not None
+        assert fig.layout.height == 60
+        assert fig.layout.width == 200
+
+    def test_with_title(self, chart_builder):
+        fig = chart_builder.sparkline([10, 20, 15, 25], title="Trend")
+        assert fig.layout.title.text == "Trend"
+
+    def test_shows_endpoints(self, chart_builder):
+        fig = chart_builder.sparkline([1, 5, 3, 7], show_endpoints=True)
+        assert len(fig.data) >= 2
+
+    def test_no_endpoints(self, chart_builder):
+        fig = chart_builder.sparkline([1, 5, 3, 7], show_endpoints=False, show_min_max=False)
+        assert len(fig.data) == 1
+
+    def test_shows_min_max_markers(self, chart_builder):
+        fig = chart_builder.sparkline([3, 1, 5, 2], show_min_max=True)
+        assert len(fig.data) >= 3
+
+    def test_custom_dimensions(self, chart_builder):
+        fig = chart_builder.sparkline([1, 2, 3], height=100, width=300)
+        assert fig.layout.height == 100
+        assert fig.layout.width == 300
+
+    def test_single_value(self, chart_builder):
+        fig = chart_builder.sparkline([42])
+        assert fig is not None
+
+
+class TestSparklineGrid:
+    def test_creates_figure(self, chart_builder):
+        data = {"Series A": [1, 2, 3, 4], "Series B": [4, 3, 2, 1]}
+        fig = chart_builder.sparkline_grid(data)
+        assert fig is not None
+
+    def test_multiple_series(self, chart_builder):
+        data = {f"S{i}": list(range(10)) for i in range(6)}
+        fig = chart_builder.sparkline_grid(data, columns=3)
+        assert fig is not None
+
+    def test_trend_coloring(self, chart_builder):
+        data = {"Up": [1, 2, 3, 4], "Down": [4, 3, 2, 1]}
+        fig = chart_builder.sparkline_grid(data)
+        assert len(fig.data) >= 4
+
+    def test_single_series(self, chart_builder):
+        fig = chart_builder.sparkline_grid({"Only": [5, 10, 15]})
+        assert fig is not None
+
+
+class TestCalendarHeatmap:
+    def test_creates_figure(self, chart_builder):
+        dates = pd.Series(pd.date_range("2023-01-01", "2023-06-30", freq="D"))
+        fig = chart_builder.calendar_heatmap(dates)
+        assert fig is not None
+
+    def test_with_values(self, chart_builder):
+        dates = pd.Series(pd.date_range("2023-01-01", "2023-03-31", freq="D"))
+        values = pd.Series(np.random.rand(len(dates)))
+        fig = chart_builder.calendar_heatmap(dates, values=values)
+        assert fig is not None
+
+    def test_with_title(self, chart_builder):
+        dates = pd.Series(pd.date_range("2023-06-01", "2023-06-30", freq="D"))
+        fig = chart_builder.calendar_heatmap(dates, title="June Activity")
+        assert fig.layout.title.text == "June Activity"
+
+    def test_empty_dates(self, chart_builder):
+        dates = pd.Series([], dtype="datetime64[ns]")
+        fig = chart_builder.calendar_heatmap(dates)
+        assert fig is not None
+
+    def test_custom_colorscale(self, chart_builder):
+        dates = pd.Series(pd.date_range("2023-01-01", "2023-01-31", freq="D"))
+        fig = chart_builder.calendar_heatmap(dates, colorscale="Reds")
+        assert fig is not None
+
+
+class TestMonthlyCalendarHeatmap:
+    def test_creates_figure(self, chart_builder):
+        dates = pd.Series(pd.date_range("2022-01-01", "2023-12-31", freq="D"))
+        fig = chart_builder.monthly_calendar_heatmap(dates)
+        assert fig is not None
+
+    def test_with_values(self, chart_builder):
+        dates = pd.Series(pd.date_range("2022-01-01", "2022-12-31", freq="D"))
+        values = pd.Series(np.random.rand(len(dates)))
+        fig = chart_builder.monthly_calendar_heatmap(dates, values=values)
+        assert fig is not None
+
+    def test_with_title(self, chart_builder):
+        dates = pd.Series(pd.date_range("2023-01-01", "2023-06-30", freq="D"))
+        fig = chart_builder.monthly_calendar_heatmap(dates, title="Patterns")
+        assert fig.layout.title.text == "Patterns"
+
+
+class TestTimeSeriesWithAnomalies:
+    def test_creates_figure(self, chart_builder):
+        dates = pd.Series(pd.date_range("2023-01-01", periods=100, freq="D"))
+        np.random.seed(42)
+        values = pd.Series(np.random.randn(100).cumsum())
+        fig = chart_builder.time_series_with_anomalies(dates, values)
+        assert fig is not None
+
+    def test_detects_anomalies(self, chart_builder):
+        dates = pd.Series(pd.date_range("2023-01-01", periods=50, freq="D"))
+        values = pd.Series([1.0] * 50)
+        values.iloc[25] = 100.0
+        fig = chart_builder.time_series_with_anomalies(dates, values, window=5, n_std=2.0)
+        assert len(fig.data) >= 3
+
+    def test_no_anomalies(self, chart_builder):
+        dates = pd.Series(pd.date_range("2023-01-01", periods=30, freq="D"))
+        values = pd.Series([5.0] * 30)
+        fig = chart_builder.time_series_with_anomalies(dates, values)
+        assert fig is not None
+
+    def test_custom_window_and_std(self, chart_builder):
+        dates = pd.Series(pd.date_range("2023-01-01", periods=50, freq="D"))
+        values = pd.Series(np.random.randn(50))
+        fig = chart_builder.time_series_with_anomalies(dates, values, window=14, n_std=3.0)
+        assert fig is not None
+
+    def test_with_title(self, chart_builder):
+        dates = pd.Series(pd.date_range("2023-01-01", periods=20, freq="D"))
+        values = pd.Series(np.random.randn(20))
+        fig = chart_builder.time_series_with_anomalies(dates, values, title="My Anomalies")
+        assert "My Anomalies" in fig.layout.title.text
+
+
+class TestWaterfallChart:
+    def test_creates_figure(self, chart_builder):
+        fig = chart_builder.waterfall_chart(["A", "B", "C"], [10, -5, 15])
+        assert fig is not None
+
+    def test_positive_and_negative(self, chart_builder):
+        fig = chart_builder.waterfall_chart(["Gain", "Loss", "Gain2"], [20, -8, 12])
+        assert fig is not None
+        assert len(fig.data) == 1
+
+    def test_custom_labels(self, chart_builder):
+        fig = chart_builder.waterfall_chart(
+            ["Step1"], [100],
+            initial_label="Begin", final_label="Total"
+        )
+        assert fig is not None
+
+    def test_with_title(self, chart_builder):
+        fig = chart_builder.waterfall_chart(["X"], [5], title="Score")
+        assert fig.layout.title.text == "Score"
+
+    def test_all_negative(self, chart_builder):
+        fig = chart_builder.waterfall_chart(["A", "B"], [-10, -20])
+        assert fig is not None
+
+
+class TestQualityWaterfall:
+    def test_creates_figure(self, chart_builder):
+        checks = [
+            {"name": "Nulls", "passed": True, "weight": 20},
+            {"name": "Types", "passed": False, "weight": 30},
+            {"name": "Range", "passed": True, "weight": 50},
+        ]
+        fig = chart_builder.quality_waterfall(checks)
+        assert fig is not None
+
+    def test_all_passed(self, chart_builder):
+        checks = [
+            {"name": "A", "passed": True, "weight": 50},
+            {"name": "B", "passed": True, "weight": 50},
+        ]
+        fig = chart_builder.quality_waterfall(checks)
+        assert fig is not None
+
+    def test_all_failed(self, chart_builder):
+        checks = [
+            {"name": "A", "passed": False, "weight": 30},
+            {"name": "B", "passed": False, "weight": 70},
+        ]
+        fig = chart_builder.quality_waterfall(checks)
+        assert fig is not None
+
+    def test_custom_max_score(self, chart_builder):
+        checks = [{"name": "Check", "passed": False, "weight": 10}]
+        fig = chart_builder.quality_waterfall(checks, max_score=50)
+        assert fig is not None
+
+
+class TestVelocityAccelerationChart:
+    def test_creates_figure(self, chart_builder):
+        data = {
+            "amount": {
+                "retained": [1, 2, 3, 4, 5],
+                "churned": [5, 4, 3, 2, 1],
+                "velocity_retained": [1, 1, 1, 1, 1],
+                "velocity_churned": [-1, -1, -1, -1, -1],
+                "accel_retained": [0, 0, 0, 0, 0],
+                "accel_churned": [0, 0, 0, 0, 0],
+            }
+        }
+        fig = chart_builder.velocity_acceleration_chart(data)
+        assert fig is not None
+
+    def test_multiple_columns(self, chart_builder):
+        data = {
+            "col1": {"retained": [1, 2, 3], "churned": [3, 2, 1]},
+            "col2": {"retained": [10, 20, 30], "churned": [30, 20, 10]},
+        }
+        fig = chart_builder.velocity_acceleration_chart(data)
+        assert fig is not None
+
+    def test_with_title(self, chart_builder):
+        data = {"x": {"retained": [1, 2], "churned": [2, 1]}}
+        fig = chart_builder.velocity_acceleration_chart(data, title="Custom")
+        assert "Custom" in fig.layout.title.text
+
+
+class TestLagCorrelationHeatmap:
+    def test_creates_figure(self, chart_builder):
+        data = {
+            "feature_a": [0.9, 0.8, 0.7, 0.6, 0.5],
+            "feature_b": [0.3, 0.2, 0.1, 0.0, -0.1],
+        }
+        fig = chart_builder.lag_correlation_heatmap(data)
+        assert fig is not None
+
+    def test_custom_max_lag(self, chart_builder):
+        data = {"col": [0.5] * 20}
+        fig = chart_builder.lag_correlation_heatmap(data, max_lag=10)
+        assert fig is not None
+
+    def test_with_title(self, chart_builder):
+        data = {"x": [0.1, 0.2, 0.3]}
+        fig = chart_builder.lag_correlation_heatmap(data, title="Lags")
+        assert fig.layout.title.text == "Lags"
+
+    def test_single_variable(self, chart_builder):
+        data = {"only": [0.9, 0.7, 0.5, 0.3, 0.1]}
+        fig = chart_builder.lag_correlation_heatmap(data)
+        assert fig is not None
+
+
+class TestPredictivePowerChart:
+    def test_creates_figure(self, chart_builder):
+        iv = {"feat1": 0.4, "feat2": 0.15, "feat3": 0.05}
+        ks = {"feat1": 0.5, "feat2": 0.25, "feat3": 0.1}
+        fig = chart_builder.predictive_power_chart(iv, ks)
+        assert fig is not None
+
+    def test_color_thresholds(self, chart_builder):
+        iv = {"strong": 0.6, "good": 0.35, "weak": 0.12, "none": 0.03}
+        ks = {"strong": 0.5, "good": 0.3, "weak": 0.15, "none": 0.05}
+        fig = chart_builder.predictive_power_chart(iv, ks)
+        assert fig is not None
+
+    def test_with_title(self, chart_builder):
+        iv = {"a": 0.2}
+        ks = {"a": 0.3}
+        fig = chart_builder.predictive_power_chart(iv, ks, title="Power")
+        assert fig.layout.title.text == "Power"
+
+    def test_missing_ks_for_column(self, chart_builder):
+        iv = {"a": 0.5, "b": 0.3}
+        ks = {"a": 0.4}
+        fig = chart_builder.predictive_power_chart(iv, ks)
+        assert fig is not None
+
+
+class TestMomentumComparisonChart:
+    def test_creates_figure(self, chart_builder):
+        data = {
+            "amount": {"retained_7_30": 1.2, "churned_7_30": 0.8,
+                      "retained_30_90": 1.1, "churned_30_90": 0.9},
+        }
+        fig = chart_builder.momentum_comparison_chart(data)
+        assert fig is not None
+
+    def test_multiple_columns(self, chart_builder):
+        data = {
+            "col1": {"retained_7_30": 1.5, "churned_7_30": 0.5},
+            "col2": {"retained_7_30": 1.1, "churned_7_30": 0.9},
+        }
+        fig = chart_builder.momentum_comparison_chart(data)
+        assert fig is not None
+
+    def test_with_title(self, chart_builder):
+        data = {"x": {"retained_7_30": 1.0, "churned_7_30": 1.0}}
+        fig = chart_builder.momentum_comparison_chart(data, title="Momentum")
+        assert fig.layout.title.text == "Momentum"
+
+
+class TestCohortSparklines:
+    def test_creates_figure(self, chart_builder):
+        data = {
+            "amount": {"retained": [1, 2, 3, 4], "churned": [4, 3, 2, 1]},
+        }
+        fig = chart_builder.cohort_sparklines(data)
+        assert fig is not None
+
+    def test_multiple_columns(self, chart_builder):
+        data = {
+            "col1": {"retained": [1, 2, 3], "churned": [3, 2, 1]},
+            "col2": {"retained": [10, 20, 30], "churned": [30, 20, 10]},
+            "col3": {"retained": [5, 5, 5], "churned": [5, 5, 5]},
+        }
+        fig = chart_builder.cohort_sparklines(data)
+        assert fig is not None
+
+    def test_with_title(self, chart_builder):
+        data = {"x": {"retained": [1, 2], "churned": [2, 1]}}
+        fig = chart_builder.cohort_sparklines(data, title="Cohorts")
+        assert fig.layout.title.text == "Cohorts"
+
+
+class TestDescriptiveStatsTiles:
+    @pytest.fixture
+    def mock_findings(self):
+        from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
+        from customer_retention.core.config.column_config import ColumnType
+        return ExplorationFindings(
+            source_path="test.csv",
+            source_format="csv",
+            row_count=100,
+            column_count=4,
+            columns={
+                "num_col": ColumnFinding(
+                    name="num_col", inferred_type=ColumnType.NUMERIC_CONTINUOUS,
+                    confidence=0.9, evidence=["float"],
+                    universal_metrics={"null_count": 0, "null_percentage": 0},
+                    type_metrics={"mean": 5.0, "median": 4.5, "std": 2.0}),
+                "cat_col": ColumnFinding(
+                    name="cat_col", inferred_type=ColumnType.CATEGORICAL_NOMINAL,
+                    confidence=0.9, evidence=["string"],
+                    universal_metrics={"null_count": 0, "distinct_count": 3}),
+                "bin_col": ColumnFinding(
+                    name="bin_col", inferred_type=ColumnType.BINARY,
+                    confidence=0.9, evidence=["binary"],
+                    universal_metrics={"null_count": 0}),
+                "id_col": ColumnFinding(
+                    name="id_col", inferred_type=ColumnType.IDENTIFIER,
+                    confidence=0.9, evidence=["unique"],
+                    universal_metrics={"null_count": 0, "distinct_count": 100}),
+            }
+        )
+
+    @pytest.fixture
+    def sample_df(self):
+        np.random.seed(42)
+        return pd.DataFrame({
+            "num_col": np.random.randn(100),
+            "cat_col": np.random.choice(["A", "B", "C"], 100),
+            "bin_col": np.random.choice([0, 1], 100),
+            "id_col": [f"ID_{i}" for i in range(100)],
+        })
+
+    def test_creates_figure(self, chart_builder, sample_df, mock_findings):
+        fig = chart_builder.descriptive_stats_tiles(sample_df, mock_findings)
+        assert fig is not None
+
+    def test_max_columns(self, chart_builder, sample_df, mock_findings):
+        fig = chart_builder.descriptive_stats_tiles(sample_df, mock_findings, max_columns=2)
+        assert fig is not None
+
+    def test_columns_per_row(self, chart_builder, sample_df, mock_findings):
+        fig = chart_builder.descriptive_stats_tiles(sample_df, mock_findings, columns_per_row=2)
+        assert fig is not None
+
+
+class TestDatasetAtAGlance:
+    @pytest.fixture
+    def mock_findings(self):
+        from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
+        from customer_retention.core.config.column_config import ColumnType
+        return ExplorationFindings(
+            source_path="data.parquet",
+            source_format="parquet",
+            row_count=500,
+            column_count=3,
+            columns={
+                "amount": ColumnFinding(
+                    name="amount", inferred_type=ColumnType.NUMERIC_CONTINUOUS,
+                    confidence=0.9, evidence=["float"],
+                    universal_metrics={"null_count": 5, "null_percentage": 1.0},
+                    type_metrics={"mean": 100.0, "median": 90.0, "std": 30.0}),
+                "category": ColumnFinding(
+                    name="category", inferred_type=ColumnType.CATEGORICAL_NOMINAL,
+                    confidence=0.9, evidence=["string"],
+                    universal_metrics={"null_count": 0, "null_percentage": 0, "distinct_count": 5}),
+                "target": ColumnFinding(
+                    name="target", inferred_type=ColumnType.TARGET,
+                    confidence=0.9, evidence=["binary target"],
+                    universal_metrics={"null_count": 0, "null_percentage": 0}),
+            }
+        )
+
+    @pytest.fixture
+    def sample_df(self):
+        np.random.seed(42)
+        return pd.DataFrame({
+            "amount": np.random.rand(500) * 200,
+            "category": np.random.choice(["X", "Y", "Z", "W", "V"], 500),
+            "target": np.random.choice([0, 1], 500),
+        })
+
+    def test_creates_figure(self, chart_builder, sample_df, mock_findings):
+        fig = chart_builder.dataset_at_a_glance(sample_df, mock_findings)
+        assert fig is not None
+
+    def test_with_source_path(self, chart_builder, sample_df, mock_findings):
+        fig = chart_builder.dataset_at_a_glance(
+            sample_df, mock_findings, source_path="data.parquet"
+        )
+        assert fig is not None
+
+    def test_event_granularity(self, chart_builder, sample_df, mock_findings):
+        fig = chart_builder.dataset_at_a_glance(
+            sample_df, mock_findings, granularity="event"
+        )
+        assert fig is not None
+
+    def test_max_columns(self, chart_builder, sample_df, mock_findings):
+        fig = chart_builder.dataset_at_a_glance(
+            sample_df, mock_findings, max_columns=2
+        )
+        assert fig is not None
+
+
+class TestColumnTiles:
+    def test_numeric_tile(self, chart_builder):
+        from plotly.subplots import make_subplots
+
+        from customer_retention.analysis.visualization.number_formatter import NumberFormatter
+        fig = make_subplots(rows=1, cols=1)
+        series = pd.Series(np.random.randn(100))
+        chart_builder._add_numeric_tile(
+            fig, series, {"null_percentage": 5.0},
+            {"mean": 0.0, "median": 0.1, "std": 1.0},
+            row=1, col=1, n_cols=1, formatter=NumberFormatter()
+        )
+        assert len(fig.data) >= 1
+
+    def test_categorical_tile(self, chart_builder):
+        from plotly.subplots import make_subplots
+
+        from customer_retention.analysis.visualization.number_formatter import NumberFormatter
+        fig = make_subplots(rows=1, cols=1)
+        series = pd.Series(np.random.choice(["A", "B", "C", "D"], 100))
+        chart_builder._add_categorical_tile(
+            fig, series, {"distinct_count": 4, "null_percentage": 0},
+            row=1, col=1, n_cols=1, formatter=NumberFormatter()
+        )
+        assert len(fig.data) >= 1
+
+    def test_binary_tile(self, chart_builder):
+        from plotly.subplots import make_subplots
+
+        from customer_retention.analysis.visualization.number_formatter import NumberFormatter
+        fig = make_subplots(rows=1, cols=1)
+        series = pd.Series([0] * 70 + [1] * 30)
+        chart_builder._add_binary_tile(
+            fig, series, {},
+            row=1, col=1, n_cols=1, formatter=NumberFormatter()
+        )
+        assert len(fig.data) >= 1
+
+    def test_binary_tile_empty(self, chart_builder):
+        from plotly.subplots import make_subplots
+
+        from customer_retention.analysis.visualization.number_formatter import NumberFormatter
+        fig = make_subplots(rows=1, cols=1)
+        series = pd.Series([], dtype=int)
+        chart_builder._add_binary_tile(
+            fig, series, {},
+            row=1, col=1, n_cols=1, formatter=NumberFormatter()
+        )
+        assert len(fig.data) == 0
+
+    def test_datetime_tile(self, chart_builder):
+        from plotly.subplots import make_subplots
+        fig = make_subplots(rows=1, cols=1)
+        series = pd.Series(pd.date_range("2023-01-01", periods=365, freq="D"))
+        chart_builder._add_datetime_tile(
+            fig, series, {},
+            row=1, col=1, n_cols=1
+        )
+        assert len(fig.data) >= 1
+
+    def test_datetime_tile_empty(self, chart_builder):
+        from plotly.subplots import make_subplots
+        fig = make_subplots(rows=1, cols=1)
+        series = pd.Series([], dtype="datetime64[ns]")
+        chart_builder._add_datetime_tile(fig, series, {}, row=1, col=1, n_cols=1)
+        assert len(fig.data) == 0
+
+    def test_identifier_tile(self, chart_builder):
+        from plotly.subplots import make_subplots
+
+        from customer_retention.analysis.visualization.number_formatter import NumberFormatter
+        fig = make_subplots(rows=1, cols=1)
+        series = pd.Series([f"ID_{i}" for i in range(100)])
+        chart_builder._add_identifier_tile(
+            fig, series, {"distinct_count": 100},
+            row=1, col=1, n_cols=1, formatter=NumberFormatter()
+        )
+        assert len(fig.data) >= 2
+
+    def test_target_tile(self, chart_builder):
+        from plotly.subplots import make_subplots
+
+        from customer_retention.analysis.visualization.number_formatter import NumberFormatter
+        fig = make_subplots(rows=1, cols=1)
+        series = pd.Series([0] * 80 + [1] * 20)
+        chart_builder._add_target_tile(
+            fig, series, {},
+            row=1, col=1, n_cols=1, formatter=NumberFormatter()
+        )
+        assert len(fig.data) >= 1
+
+    def test_generic_tile(self, chart_builder):
+        from plotly.subplots import make_subplots
+
+        from customer_retention.analysis.visualization.number_formatter import NumberFormatter
+        fig = make_subplots(rows=1, cols=1)
+        series = pd.Series(["x", "y", "z", "x", "y"])
+        chart_builder._add_generic_tile(
+            fig, series, {"distinct_count": 3, "null_percentage": 0},
+            row=1, col=1, n_cols=1, formatter=NumberFormatter()
+        )
+        assert len(fig.data) >= 1
+
+
+class TestGetAxisRef:
+    def test_first_subplot(self, chart_builder):
+        assert chart_builder._get_axis_ref(1, 1, 4, "x") == "x"
+        assert chart_builder._get_axis_ref(1, 1, 4, "y") == "y"
+
+    def test_second_subplot(self, chart_builder):
+        assert chart_builder._get_axis_ref(1, 2, 4, "x") == "x2"
+
+    def test_second_row(self, chart_builder):
+        assert chart_builder._get_axis_ref(2, 1, 4, "x") == "x5"
+
+    def test_third_position(self, chart_builder):
+        assert chart_builder._get_axis_ref(1, 3, 4, "x") == "x3"
+
+
+class TestCutoffSelectionChart:
+    @pytest.fixture
+    def cutoff_analysis(self):
+        from customer_retention.stages.temporal.cutoff_analyzer import CutoffAnalysis
+        dates = pd.date_range("2023-01-01", periods=12, freq="ME").tolist()
+        bin_counts = [100] * 12
+        train_pcts = [float(i) / 12 * 100 for i in range(1, 13)]
+        score_pcts = [100 - t for t in train_pcts]
+        return CutoffAnalysis(
+            timestamp_column="event_date",
+            total_rows=1200,
+            bins=dates,
+            bin_counts=bin_counts,
+            train_percentages=train_pcts,
+            score_percentages=score_pcts,
+            date_range=(dates[0], dates[-1]),
+        )
+
+    def test_creates_figure(self, chart_builder, cutoff_analysis):
+        fig = chart_builder.cutoff_selection_chart(cutoff_analysis)
+        assert fig is not None
+
+    def test_with_suggested_cutoff(self, chart_builder, cutoff_analysis):
+        suggested = pd.Timestamp("2023-06-30")
+        fig = chart_builder.cutoff_selection_chart(cutoff_analysis, suggested_cutoff=suggested)
+        assert fig is not None
+        assert len(fig.data) >= 3
+
+    def test_with_current_cutoff(self, chart_builder, cutoff_analysis):
+        current = pd.Timestamp("2023-09-30")
+        fig = chart_builder.cutoff_selection_chart(cutoff_analysis, current_cutoff=current)
+        assert fig is not None
+
+    def test_with_both_cutoffs(self, chart_builder, cutoff_analysis):
+        suggested = pd.Timestamp("2023-06-30")
+        current = pd.Timestamp("2023-09-30")
+        fig = chart_builder.cutoff_selection_chart(
+            cutoff_analysis, suggested_cutoff=suggested, current_cutoff=current
+        )
+        assert fig is not None
+
+    def test_cutoff_outside_range(self, chart_builder, cutoff_analysis):
+        current = pd.Timestamp("2025-01-01")
+        fig = chart_builder.cutoff_selection_chart(cutoff_analysis, current_cutoff=current)
+        assert fig is not None
+
+    def test_same_suggested_and_current(self, chart_builder, cutoff_analysis):
+        cutoff = pd.Timestamp("2023-06-30")
+        fig = chart_builder.cutoff_selection_chart(
+            cutoff_analysis, suggested_cutoff=cutoff, current_cutoff=cutoff
+        )
+        assert fig is not None
+
+    def test_empty_analysis(self, chart_builder):
+        from customer_retention.stages.temporal.cutoff_analyzer import CutoffAnalysis
+        empty = CutoffAnalysis(
+            timestamp_column="dt", total_rows=0,
+            bins=[], bin_counts=[], train_percentages=[],
+            score_percentages=[], date_range=(pd.Timestamp("2023-01-01"), pd.Timestamp("2023-01-01")),
+        )
+        fig = chart_builder.cutoff_selection_chart(empty)
+        assert fig is not None
+
+
+class TestAddColumnTileDispatch:
+    @pytest.fixture
+    def findings_col(self):
+        from customer_retention.analysis.auto_explorer.findings import ColumnFinding
+        from customer_retention.core.config.column_config import ColumnType
+        return ColumnFinding(
+            name="test", inferred_type=ColumnType.NUMERIC_CONTINUOUS,
+            confidence=0.9, evidence=[],
+            universal_metrics={"null_count": 0, "null_percentage": 0},
+            type_metrics={"mean": 0, "median": 0, "std": 1}
+        )
+
+    def test_dispatches_numeric(self, chart_builder, findings_col):
+        from plotly.subplots import make_subplots
+
+        from customer_retention.analysis.visualization.number_formatter import NumberFormatter
+        fig = make_subplots(rows=1, cols=1)
+        series = pd.Series(np.random.randn(50))
+        chart_builder._add_column_tile(
+            fig, series, findings_col, "numeric_continuous",
+            row=1, col=1, formatter=NumberFormatter(), n_cols=1
+        )
+        assert len(fig.data) >= 1
+
+    def test_dispatches_datetime(self, chart_builder):
+        from plotly.subplots import make_subplots
+
+        from customer_retention.analysis.auto_explorer.findings import ColumnFinding
+        from customer_retention.analysis.visualization.number_formatter import NumberFormatter
+        from customer_retention.core.config.column_config import ColumnType
+        fig = make_subplots(rows=1, cols=1)
+        series = pd.Series(pd.date_range("2023-01-01", periods=30, freq="D"))
+        col_finding = ColumnFinding(
+            name="dt", inferred_type=ColumnType.DATETIME,
+            confidence=0.9, evidence=[],
+            universal_metrics={}, type_metrics={}
+        )
+        chart_builder._add_column_tile(
+            fig, series, col_finding, "datetime",
+            row=1, col=1, formatter=NumberFormatter(), n_cols=1
+        )
+        assert len(fig.data) >= 1

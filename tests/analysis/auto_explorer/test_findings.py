@@ -489,3 +489,42 @@ class TestTimeSeriesMetadata:
             )
         )
         assert findings_agg.has_aggregated_output is True
+
+    def test_drift_fields_have_none_defaults(self):
+        from customer_retention.analysis.auto_explorer.findings import TimeSeriesMetadata
+
+        metadata = TimeSeriesMetadata()
+        assert metadata.drift_risk_level is None
+        assert metadata.volume_drift_risk is None
+        assert metadata.population_stability is None
+        assert metadata.regime_count is None
+        assert metadata.recommended_training_start is None
+
+    def test_drift_fields_roundtrip_through_yaml(self):
+        from customer_retention.analysis.auto_explorer.findings import TimeSeriesMetadata
+        from customer_retention.core.config import DatasetGranularity
+
+        ts_metadata = TimeSeriesMetadata(
+            granularity=DatasetGranularity.EVENT_LEVEL,
+            entity_column="user_id",
+            time_column="event_date",
+            drift_risk_level="moderate",
+            volume_drift_risk="declining",
+            population_stability=0.72,
+            regime_count=2,
+            recommended_training_start="2020-10-01T00:00:00",
+        )
+        findings = ExplorationFindings(
+            source_path="events.csv",
+            source_format="csv",
+            time_series_metadata=ts_metadata,
+        )
+
+        yaml_str = findings.to_yaml()
+        restored = ExplorationFindings.from_yaml(yaml_str)
+
+        assert restored.time_series_metadata.drift_risk_level == "moderate"
+        assert restored.time_series_metadata.volume_drift_risk == "declining"
+        assert restored.time_series_metadata.population_stability == 0.72
+        assert restored.time_series_metadata.regime_count == 2
+        assert restored.time_series_metadata.recommended_training_start == "2020-10-01T00:00:00"

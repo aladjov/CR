@@ -25,6 +25,169 @@ class DistributionStats:
 
 
 @dataclass
+class LifecycleQuadrantResult:
+    """Result of lifecycle quadrant classification."""
+    lifecycles: DataFrame
+    tenure_threshold: float
+    intensity_threshold: float
+    recommendations: DataFrame
+
+
+_QUADRANT_RECOMMENDATIONS = {
+    "Steady & Loyal": {
+        "Windows": "All (7d-365d)",
+        "Feature Strategy": "Trend/seasonality features, engagement decay",
+        "Risk": "Low churn risk; monitor for engagement decline",
+    },
+    "Occasional & Loyal": {
+        "Windows": "Wide (90d, 180d, 365d)",
+        "Feature Strategy": "Long-window aggregations, recency gap",
+        "Risk": "May churn silently; long gaps are normal",
+    },
+    "Intense & Brief": {
+        "Windows": "Short (7d, 24h, 30d)",
+        "Feature Strategy": "Recency features, burst detection",
+        "Risk": "High churn risk; may be early churners",
+    },
+    "One-shot": {
+        "Windows": "N/A (insufficient history)",
+        "Feature Strategy": "Cold-start fallback, population-level stats",
+        "Risk": "Cannot build temporal features; consider separate handling",
+    },
+}
+
+
+def classify_lifecycle_quadrants(entity_lifecycles: DataFrame) -> LifecycleQuadrantResult:
+    """Classify entities into lifecycle quadrants and produce recommendations.
+
+    Splits on median tenure and median intensity (events/day) to create four
+    quadrants: Steady & Loyal, Occasional & Loyal, Intense & Brief, One-shot.
+
+    Returns a LifecycleQuadrantResult with the classified lifecycles and a
+    recommendations DataFrame ordered by quadrant significance (share desc).
+    """
+    lc = entity_lifecycles.copy()
+    tenure_threshold = float(lc["duration_days"].median())
+    lc["intensity"] = lc["event_count"] / lc["duration_days"].clip(lower=1)
+    intensity_threshold = float(lc["intensity"].median())
+
+    def _assign(row):
+        long = row["duration_days"] >= tenure_threshold
+        high = row["intensity"] >= intensity_threshold
+        if long and high:
+            return "Steady & Loyal"
+        if long:
+            return "Occasional & Loyal"
+        if high:
+            return "Intense & Brief"
+        return "One-shot"
+
+    lc["lifecycle_quadrant"] = lc.apply(_assign, axis=1)
+
+    counts = lc["lifecycle_quadrant"].value_counts()
+    total = len(lc)
+    rows = []
+    for quadrant in counts.index:
+        n = counts[quadrant]
+        rec = _QUADRANT_RECOMMENDATIONS[quadrant]
+        rows.append({
+            "Quadrant": quadrant,
+            "Entities": n,
+            "Share": f"{n / total * 100:.1f}%",
+            "Windows": rec["Windows"],
+            "Feature Strategy": rec["Feature Strategy"],
+            "Risk": rec["Risk"],
+        })
+
+    return LifecycleQuadrantResult(
+        lifecycles=lc,
+        tenure_threshold=tenure_threshold,
+        intensity_threshold=intensity_threshold,
+        recommendations=pd.DataFrame(rows),
+    )
+
+
+@dataclass
+class ActivitySegmentResult:
+    """Result of activity segment classification."""
+    lifecycles: DataFrame
+    q25_threshold: float
+    q75_threshold: float
+    recommendations: DataFrame
+
+
+_SEGMENT_RECOMMENDATIONS = {
+    "One-time": {
+        "Feature Approach": "No temporal features possible; use event-level attributes only",
+        "Modeling Implication": "Cold-start problem; consider population-level fallback or separate model",
+    },
+    "Low Activity": {
+        "Feature Approach": "Wide windows (90d+) with count/recency; sparse aggregations",
+        "Modeling Implication": "Features will be noisy; log-transform counts, handle many zeros",
+    },
+    "Medium Activity": {
+        "Feature Approach": "Standard windows (7d-90d); mean/std aggregations reliable",
+        "Modeling Implication": "Core modeling population; most features well-populated",
+    },
+    "High Activity": {
+        "Feature Approach": "All windows including short (24h, 7d); trends and velocity meaningful",
+        "Modeling Implication": "Rich feature space; watch for dominance in training set",
+    },
+}
+
+
+def classify_activity_segments(entity_lifecycles: DataFrame) -> ActivitySegmentResult:
+    """Classify entities by event count into activity segments with recommendations.
+
+    Segments are defined by quartiles of event_count:
+    - One-time: exactly 1 event
+    - Low Activity: 2 to q25
+    - Medium Activity: q25 to q75
+    - High Activity: above q75
+
+    Returns an ActivitySegmentResult with classified lifecycles and a
+    recommendations DataFrame ordered by segment share (descending).
+    """
+    lc = entity_lifecycles.copy()
+    q25 = float(lc["event_count"].quantile(0.25))
+    q75 = float(lc["event_count"].quantile(0.75))
+
+    def _assign(count):
+        if count <= 1:
+            return "One-time"
+        if count <= q25:
+            return "Low Activity"
+        if count <= q75:
+            return "Medium Activity"
+        return "High Activity"
+
+    lc["activity_segment"] = lc["event_count"].apply(_assign)
+
+    counts = lc["activity_segment"].value_counts()
+    total = len(lc)
+    rows = []
+    for segment in counts.index:
+        n = counts[segment]
+        subset = lc[lc["activity_segment"] == segment]
+        rec = _SEGMENT_RECOMMENDATIONS[segment]
+        rows.append({
+            "Segment": segment,
+            "Entities": n,
+            "Share": f"{n / total * 100:.1f}%",
+            "Avg Events": f"{subset['event_count'].mean():.1f}",
+            "Feature Approach": rec["Feature Approach"],
+            "Modeling Implication": rec["Modeling Implication"],
+        })
+
+    return ActivitySegmentResult(
+        lifecycles=lc,
+        q25_threshold=q25,
+        q75_threshold=q75,
+        recommendations=pd.DataFrame(rows),
+    )
+
+
+@dataclass
 class EntityLifecycle:
     """Lifecycle information for a single entity."""
     entity: str

@@ -34,6 +34,17 @@ class TimeSeriesMetadata:
     time_span_days: Optional[int] = None
     unique_entities: Optional[int] = None
     suggested_aggregations: List[str] = field(default_factory=list)
+    window_coverage_threshold: Optional[float] = None
+    heterogeneity_level: Optional[str] = None
+    eta_squared_intensity: Optional[float] = None
+    eta_squared_event_count: Optional[float] = None
+    temporal_segmentation_advisory: Optional[str] = None
+    temporal_segmentation_recommendation: Optional[str] = None
+    drift_risk_level: Optional[str] = None
+    volume_drift_risk: Optional[str] = None
+    population_stability: Optional[float] = None
+    regime_count: Optional[int] = None
+    recommended_training_start: Optional[str] = None
     aggregation_executed: bool = False
     aggregated_data_path: Optional[str] = None
     aggregated_findings_path: Optional[str] = None

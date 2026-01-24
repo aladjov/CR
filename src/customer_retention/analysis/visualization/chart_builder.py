@@ -749,7 +749,9 @@ class ChartBuilder:
                 ),
                 row=1, col=2
             )
-            fig.update_yaxes(title_text="Target Rate (%)", row=1, col=2, range=[0, 100])
+            max_rate = max(target_rates_clean) * 100
+            y_max = max_rate * 1.3 if max_rate > 0 else 10
+            fig.update_yaxes(title_text="Target Rate (%)", row=1, col=2, range=[0, y_max])
 
         fig.update_layout(
             title=title or f"Segment Overview ({result.n_segments} segments)",
