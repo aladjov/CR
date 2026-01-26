@@ -14,7 +14,8 @@ class InlineLoader(BaseLoader):
 
 
 TEMPLATES = {
-    "config.py.j2": '''from pathlib import Path
+    "config.py.j2": '''import os
+from pathlib import Path
 
 PIPELINE_NAME = "{{ config.name }}"
 TARGET_COLUMN = "{{ config.target_column }}"
@@ -27,7 +28,7 @@ PARENT_ITERATION_ID = {{ '"%s"' % config.parent_iteration_id if config.parent_it
 # Recommendations hash for experiment tracking
 RECOMMENDATIONS_HASH = {{ '"%s"' % config.recommendations_hash if config.recommendations_hash else 'None' }}
 
-# MLflow tracking - centralized at project root
+
 def _find_project_root():
     path = Path(__file__).parent
     for _ in range(10):
@@ -36,21 +37,33 @@ def _find_project_root():
         path = path.parent
     return Path(__file__).parent
 
-PROJECT_ROOT = _find_project_root()
-MLFLOW_TRACKING_URI = str(PROJECT_ROOT / "mlruns")
 
-# Feast feature store configuration
-FEAST_REPO_PATH = str(OUTPUT_DIR / "feature_repo")
+PROJECT_ROOT = _find_project_root()
+
+# Experiments directory - all artifacts (data, mlruns, feast) go here
+# Override with CR_EXPERIMENTS_DIR environment variable for Databricks/custom locations
+_default_experiments = {{ '"%s"' % config.experiments_dir if config.experiments_dir else '"experiments"' }}
+EXPERIMENTS_DIR = Path(os.environ.get("CR_EXPERIMENTS_DIR", str(PROJECT_ROOT / _default_experiments)))
+
+# MLflow tracking - using SQLite backend (recommended over deprecated file-based backend)
+MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", f"sqlite:///{EXPERIMENTS_DIR / 'mlruns.db'}")
+MLFLOW_ARTIFACT_ROOT = str(EXPERIMENTS_DIR / "mlruns" / "artifacts")
+
+# Feast feature store configuration - stored in experiments directory
+FEAST_REPO_PATH = str(EXPERIMENTS_DIR / "feature_repo")
 FEAST_FEATURE_VIEW = "{{ config.feast.feature_view_name if config.feast else config.name + '_features' }}"
 FEAST_ENTITY_NAME = "{{ config.feast.entity_name if config.feast else 'customer' }}"
 FEAST_ENTITY_KEY = "{{ config.feast.entity_key if config.feast else config.sources[0].entity_key }}"
 FEAST_TIMESTAMP_COL = "{{ config.feast.timestamp_column if config.feast else 'event_timestamp' }}"
 FEAST_TTL_DAYS = {{ config.feast.ttl_days if config.feast else 365 }}
 
+# Source paths - findings directory is a subfolder of experiments
+FINDINGS_DIR = EXPERIMENTS_DIR / "findings"
+
 SOURCES = {
 {% for source in config.sources %}
     "{{ source.name }}": {
-        "path": "{{ source.path }}",
+        "path": str(FINDINGS_DIR / "{{ source.path | replace('../experiments/findings/', '') | replace('experiments/findings/', '') }}"),
         "format": "{{ source.format }}",
         "entity_key": "{{ source.entity_key }}",
 {% if source.time_column %}
@@ -63,15 +76,15 @@ SOURCES = {
 
 
 def get_bronze_path(source_name: str) -> Path:
-    return OUTPUT_DIR / "data" / "bronze" / f"{source_name}.parquet"
+    return EXPERIMENTS_DIR / "data" / "bronze" / f"{source_name}.parquet"
 
 
 def get_silver_path() -> Path:
-    return OUTPUT_DIR / "data" / "silver" / "merged.parquet"
+    return EXPERIMENTS_DIR / "data" / "silver" / "merged.parquet"
 
 
 def get_gold_path() -> Path:
-    return OUTPUT_DIR / "data" / "gold" / "features.parquet"
+    return EXPERIMENTS_DIR / "data" / "gold" / "features.parquet"
 
 
 def get_feast_data_path() -> Path:
@@ -79,6 +92,7 @@ def get_feast_data_path() -> Path:
 ''',
 
     "bronze.py.j2": '''import pandas as pd
+from pathlib import Path
 from config import SOURCES, get_bronze_path
 
 SOURCE_NAME = "{{ source }}"
@@ -86,9 +100,12 @@ SOURCE_NAME = "{{ source }}"
 
 def load_{{ source }}():
     source_config = SOURCES[SOURCE_NAME]
+    path = Path(source_config["path"])
+    if not path.exists():
+        raise FileNotFoundError(f"Source file not found: {path}")
     if source_config["format"] == "csv":
-        return pd.read_csv(source_config["path"])
-    return pd.read_parquet(source_config["path"])
+        return pd.read_csv(path)
+    return pd.read_parquet(path)
 
 
 def apply_transformations(df: pd.DataFrame) -> pd.DataFrame:
@@ -154,10 +171,11 @@ if __name__ == "__main__":
 
     "gold.py.j2": '''import pandas as pd
 from datetime import datetime
+from pathlib import Path
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, LabelEncoder
 from config import (get_silver_path, get_gold_path, get_feast_data_path,
                     TARGET_COLUMN, RECOMMENDATIONS_HASH, FEAST_REPO_PATH,
-                    FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL)
+                    FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL, EXPERIMENTS_DIR)
 
 
 def load_silver() -> pd.DataFrame:
@@ -262,9 +280,12 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score,
                              precision_score, recall_score, accuracy_score)
-from config import (TARGET_COLUMN, PIPELINE_NAME, RECOMMENDATIONS_HASH, MLFLOW_TRACKING_URI,
+from config import (TARGET_COLUMN, PIPELINE_NAME, RECOMMENDATIONS_HASH, MLFLOW_TRACKING_URI, MLFLOW_ARTIFACT_ROOT,
                     FEAST_REPO_PATH, FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL,
                     get_feast_data_path)
+
+# Set tracking URI immediately to prevent default mlruns directory creation
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
 
 def get_training_data_from_feast() -> pd.DataFrame:
@@ -376,7 +397,7 @@ def log_feature_importance(model, feature_names):
 
 
 def train_xgboost(X_train, y_train, X_test, y_test, feature_names):
-    mlflow.xgboost.autolog(log_datasets=False)
+    mlflow.xgboost.autolog(log_datasets=False, log_models=False)
     dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=feature_names)
     dtest = xgb.DMatrix(X_test, label=y_test, feature_names=feature_names)
     params = {"objective": "binary:logistic", "eval_metric": ["auc", "logloss"],
@@ -394,8 +415,12 @@ def get_model_name_with_hash(base_name: str) -> str:
 
 def run_experiment():
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    experiment = mlflow.get_experiment_by_name(PIPELINE_NAME)
+    if experiment is None:
+        mlflow.create_experiment(PIPELINE_NAME, artifact_location=MLFLOW_ARTIFACT_ROOT)
     mlflow.set_experiment(PIPELINE_NAME)
     print(f"MLflow tracking: {MLFLOW_TRACKING_URI}")
+    print(f"Artifacts: {MLFLOW_ARTIFACT_ROOT}")
 
     # Load training data from Feast (ensures training/serving consistency)
     print("\\nLoading training data from Feast...")
@@ -407,7 +432,7 @@ def run_experiment():
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
     sklearn_models = {
-        "logistic_regression": LogisticRegression(max_iter=1000, random_state=42),
+        "logistic_regression": LogisticRegression(max_iter=5000, random_state=42),
         "random_forest": RandomForestClassifier(n_estimators=100, random_state=42),
     }
 
@@ -433,7 +458,7 @@ def run_experiment():
                 mlflow.log_metrics({**metrics, "cv_mean": cv.mean(), "cv_std": cv.std()})
                 log_feature_importance(model, feature_names)
                 model_artifact_name = get_model_name_with_hash(f"model_{name}")
-                mlflow.sklearn.log_model(model, model_artifact_name)
+                mlflow.sklearn.log_model(model, name=model_artifact_name)
                 print(f"{name}: ROC-AUC={metrics['roc_auc']:.4f}, PR-AUC={metrics['pr_auc']:.4f}, F1={metrics['f1']:.4f}")
                 if metrics["roc_auc"] > best_auc:
                     best_auc, best_model = metrics["roc_auc"], name
@@ -448,6 +473,8 @@ def run_experiment():
             y_pred = (y_proba > 0.5).astype(int)
             metrics = compute_metrics(y_test, y_proba, y_pred)
             mlflow.log_metrics(metrics)
+            xgb_model_name = get_model_name_with_hash("model_xgboost")
+            mlflow.xgboost.log_model(xgb_model, name=xgb_model_name)
             importance = xgb_model.get_score(importance_type="gain")
             fi = pd.DataFrame({"feature": importance.keys(), "importance": importance.values()})
             fi = fi.sort_values("importance", ascending=False).reset_index(drop=True)
@@ -467,7 +494,7 @@ if __name__ == "__main__":
 ''',
 
     "runner.py.j2": '''from concurrent.futures import ThreadPoolExecutor
-from config import PIPELINE_NAME
+from config import PIPELINE_NAME, EXPERIMENTS_DIR
 {% for source in config.sources %}
 from bronze.bronze_{{ source.name }} import run_bronze_{{ source.name }}
 {% endfor %}
@@ -476,8 +503,18 @@ from gold.gold_features import run_gold_features
 from training.ml_experiment import run_experiment
 
 
+def setup_experiments_dir():
+    """Create experiments directory structure if it doesn't exist."""
+    EXPERIMENTS_DIR.mkdir(parents=True, exist_ok=True)
+    (EXPERIMENTS_DIR / "data" / "bronze").mkdir(parents=True, exist_ok=True)
+    (EXPERIMENTS_DIR / "data" / "silver").mkdir(parents=True, exist_ok=True)
+    (EXPERIMENTS_DIR / "data" / "gold").mkdir(parents=True, exist_ok=True)
+    (EXPERIMENTS_DIR / "mlruns").mkdir(parents=True, exist_ok=True)
+
+
 def run_pipeline():
     print(f"Starting pipeline: {PIPELINE_NAME}")
+    setup_experiments_dir()
     with ThreadPoolExecutor(max_workers={{ config.sources|length }}) as executor:
         bronze_futures = [
 {% for source in config.sources %}
@@ -499,7 +536,12 @@ if __name__ == "__main__":
     run_pipeline()
 ''',
 
-    "run_all.py.j2": '''"""{{ config.name }} - Pipeline Runner with MLflow UI"""
+    "run_all.py.j2": '''"""{{ config.name }} - Pipeline Runner with MLflow UI
+
+All artifacts (data, mlruns, feast) are stored in the experiments directory.
+Override location with CR_EXPERIMENTS_DIR environment variable.
+"""
+import os
 import sys
 import webbrowser
 import subprocess
@@ -509,13 +551,25 @@ from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import PIPELINE_NAME, SOURCES, MLFLOW_TRACKING_URI
+from config import PIPELINE_NAME, SOURCES, MLFLOW_TRACKING_URI, EXPERIMENTS_DIR, FINDINGS_DIR
 {% for source in config.sources %}
 from bronze.bronze_{{ source.name }} import run_bronze_{{ source.name }}
 {% endfor %}
 from silver.silver_merge import run_silver_merge
 from gold.gold_features import run_gold_features
 from training.ml_experiment import run_experiment
+
+
+def setup_experiments_dir():
+    """Create experiments directory structure if it doesn't exist."""
+    EXPERIMENTS_DIR.mkdir(parents=True, exist_ok=True)
+    (EXPERIMENTS_DIR / "data" / "bronze").mkdir(parents=True, exist_ok=True)
+    (EXPERIMENTS_DIR / "data" / "silver").mkdir(parents=True, exist_ok=True)
+    (EXPERIMENTS_DIR / "data" / "gold").mkdir(parents=True, exist_ok=True)
+    (EXPERIMENTS_DIR / "mlruns").mkdir(parents=True, exist_ok=True)
+    print(f"Experiments directory: {EXPERIMENTS_DIR}")
+    print(f"MLflow tracking: {MLFLOW_TRACKING_URI}")
+    print(f"Findings directory: {FINDINGS_DIR}")
 
 
 def run_bronze_parallel():
@@ -559,6 +613,8 @@ def start_mlflow_ui():
 def run_pipeline():
     print(f"Running {PIPELINE_NAME}")
     print("=" * 50)
+
+    setup_experiments_dir()
 
     print("\\n[1/4] Bronze (parallel)...")
     run_bronze_parallel()
@@ -686,19 +742,26 @@ from feast.types import Float32, Float64, Int64, String
 Generates predictions for holdout records using Feast features and MLflow model.
 Compares predictions against original values for validation.
 """
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import pandas as pd
 import numpy as np
 import mlflow
 import yaml
-from pathlib import Path
 from datetime import datetime
 from feast import FeatureStore
 from config import (PIPELINE_NAME, TARGET_COLUMN, RECOMMENDATIONS_HASH, MLFLOW_TRACKING_URI,
                     FEAST_REPO_PATH, FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL,
-                    get_feast_data_path)
+                    EXPERIMENTS_DIR, get_feast_data_path)
+
+# Set tracking URI immediately to prevent default mlruns directory creation
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
 ORIGINAL_COLUMN = f"original_{TARGET_COLUMN}"
-PREDICTIONS_PATH = Path("data/scoring/predictions.parquet")
+PREDICTIONS_PATH = EXPERIMENTS_DIR / "data" / "scoring" / "predictions.parquet"
 
 
 def load_holdout_manifest() -> dict:
@@ -709,10 +772,25 @@ def load_holdout_manifest() -> dict:
         return yaml.safe_load(f)
 
 
+def create_holdout_if_needed(df: pd.DataFrame, holdout_fraction: float = 0.1) -> pd.DataFrame:
+    """Create holdout set by masking target for a fraction of records."""
+    if ORIGINAL_COLUMN in df.columns:
+        return df
+    print(f"Creating holdout set ({holdout_fraction:.0%} of data)...")
+    df = df.copy()
+    n_holdout = int(len(df) * holdout_fraction)
+    holdout_idx = df.sample(n=n_holdout, random_state=42).index
+    df[ORIGINAL_COLUMN] = pd.NA
+    df.loc[holdout_idx, ORIGINAL_COLUMN] = df.loc[holdout_idx, TARGET_COLUMN]
+    df.loc[holdout_idx, TARGET_COLUMN] = pd.NA
+    df.to_parquet(get_feast_data_path(), index=False)
+    print(f"  Holdout records: {n_holdout:,}")
+    return df
+
+
 def get_scoring_data() -> pd.DataFrame:
     features_df = pd.read_parquet(get_feast_data_path())
-    if ORIGINAL_COLUMN not in features_df.columns:
-        raise ValueError(f"Column {ORIGINAL_COLUMN} not found - run holdout creation first")
+    features_df = create_holdout_if_needed(features_df)
     scoring_mask = features_df[TARGET_COLUMN].isna() & features_df[ORIGINAL_COLUMN].notna()
     return features_df[scoring_mask].copy()
 
@@ -854,7 +932,7 @@ if __name__ == "__main__":
     "import matplotlib.pyplot as plt\\n",
     "from IPython.display import display, HTML\\n",
     "from config import (PIPELINE_NAME, TARGET_COLUMN, MLFLOW_TRACKING_URI,\\n",
-    "                    FEAST_ENTITY_KEY, get_feast_data_path)"
+    "                    FEAST_ENTITY_KEY, EXPERIMENTS_DIR, get_feast_data_path)"
    ]
   },
   {
@@ -870,7 +948,7 @@ if __name__ == "__main__":
    "metadata": {},
    "outputs": [],
    "source": [
-    "PREDICTIONS_PATH = Path(\\"data/scoring/predictions.parquet\\")\\n",
+    "PREDICTIONS_PATH = EXPERIMENTS_DIR / \\"data\\" / \\"scoring\\" / \\"predictions.parquet\\"\\n",
     "ORIGINAL_COLUMN = f\\"original_{TARGET_COLUMN}\\"\\n",
     "\\n",
     "# Load predictions\\n",
@@ -1275,7 +1353,7 @@ if __name__ == "__main__":
    "outputs": [],
    "source": [
     "# Export detailed results with feature importance\\n",
-    "output_dir = Path(\\"data/scoring\\")\\n",
+    "output_dir = EXPERIMENTS_DIR / \\"data\\" / \\"scoring\\"\\n",
     "\\n",
     "# Save global feature importance\\n",
     "importance_df.to_csv(output_dir / \\"feature_importance.csv\\", index=False)\\n",

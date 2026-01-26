@@ -102,9 +102,16 @@ class FindingsParser:
             if multi_dataset and name in multi_dataset.datasets:
                 dataset_info = multi_dataset.datasets[name]
                 if dataset_info.findings_path:
-                    path = findings_dir / dataset_info.findings_path
-                    if not path.exists():
-                        path = Path(dataset_info.findings_path)
+                    # Handle relative paths - resolve from findings_dir parent to handle ../
+                    raw_path = Path(dataset_info.findings_path)
+                    if raw_path.is_absolute():
+                        path = raw_path
+                    else:
+                        # Resolve relative to findings_dir, handling ../ prefixes
+                        path = (findings_dir / raw_path).resolve()
+                        if not path.exists():
+                            # Try the filename only in findings_dir
+                            path = findings_dir / raw_path.name
             if path is None or not path.exists():
                 candidates = list(findings_dir.glob(f"{name}_*_findings.yaml"))
                 if candidates:

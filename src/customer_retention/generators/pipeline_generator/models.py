@@ -83,3 +83,4 @@ class PipelineConfig:
     recommendations_hash: Optional[str] = None
     feast: Optional[FeastConfig] = None
     scoring: Optional[ScoringConfig] = None
+    experiments_dir: Optional[str] = None

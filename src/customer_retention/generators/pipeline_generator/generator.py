@@ -7,10 +7,11 @@ from .renderer import CodeRenderer
 
 
 class PipelineGenerator:
-    def __init__(self, findings_dir: str, output_dir: str, pipeline_name: str):
+    def __init__(self, findings_dir: str, output_dir: str, pipeline_name: str, experiments_dir: str = None):
         self._findings_dir = Path(findings_dir)
         self._output_dir = Path(output_dir)
         self._pipeline_name = pipeline_name
+        self._experiments_dir = experiments_dir
         self._parser = FindingsParser(findings_dir)
         self._renderer = CodeRenderer()
 
@@ -18,6 +19,7 @@ class PipelineGenerator:
         config = self._parser.parse()
         config.name = self._pipeline_name
         config.output_dir = "."
+        config.experiments_dir = self._experiments_dir
         generated_files = [
             self._write_run_all(config),
             self._write_config(config),
