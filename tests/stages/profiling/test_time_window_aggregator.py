@@ -657,3 +657,238 @@ class TestMixedNumericAndCategoricalAggregation:
         # mode/nunique work on numeric (amount) too
         assert "amount_mode_30d" in result.columns
         assert "amount_nunique_30d" in result.columns
+
+
+class TestExcludeColumns:
+    """Tests for exclude_columns parameter to prevent data leakage."""
+
+    @pytest.fixture
+    def df_with_target(self):
+        """Sample data with a target column that should be excluded."""
+        ref_date = pd.Timestamp("2023-12-31")
+        return pd.DataFrame({
+            "customer_id": ["C001"] * 5 + ["C002"] * 3,
+            "event_date": [ref_date - timedelta(days=d) for d in [1, 5, 10, 20, 30]] +
+                          [ref_date - timedelta(days=d) for d in [2, 8, 15]],
+            "amount": [100, 150, 200, 50, 75, 300, 250, 100],
+            "target": [1, 1, 1, 1, 1, 0, 0, 0],  # Target column - should NOT be aggregated
+        })
+
+    def test_exclude_columns_removes_from_aggregation(self, df_with_target):
+        aggregator = TimeWindowAggregator(
+            entity_column="customer_id", time_column="event_date"
+        )
+        result = aggregator.aggregate(
+            df_with_target,
+            windows=["30d"],
+            value_columns=["amount", "target"],
+            agg_funcs=["sum", "mean"],
+            exclude_columns=["target"]
+        )
+        # amount should be aggregated
+        assert "amount_sum_30d" in result.columns
+        assert "amount_mean_30d" in result.columns
+        # target should NOT be aggregated (data leakage prevention)
+        assert "target_sum_30d" not in result.columns
+        assert "target_mean_30d" not in result.columns
+
+    def test_exclude_columns_in_generate_plan(self, df_with_target):
+        aggregator = TimeWindowAggregator(
+            entity_column="customer_id", time_column="event_date"
+        )
+        plan = aggregator.generate_plan(
+            df_with_target,
+            windows=["30d"],
+            value_columns=["amount", "target"],
+            agg_funcs=["sum", "mean"],
+            exclude_columns=["target"]
+        )
+        # Plan should not include target features
+        assert "amount_sum_30d" in plan.feature_columns
+        assert "target_sum_30d" not in plan.feature_columns
+        assert "target_mean_30d" not in plan.feature_columns
+
+    def test_exclude_columns_empty_list_has_no_effect(self, df_with_target):
+        aggregator = TimeWindowAggregator(
+            entity_column="customer_id", time_column="event_date"
+        )
+        result = aggregator.aggregate(
+            df_with_target,
+            windows=["30d"],
+            value_columns=["amount", "target"],
+            agg_funcs=["sum"],
+            exclude_columns=[]
+        )
+        # Both should be aggregated when exclude_columns is empty
+        assert "amount_sum_30d" in result.columns
+        assert "target_sum_30d" in result.columns
+
+    def test_exclude_columns_none_has_no_effect(self, df_with_target):
+        aggregator = TimeWindowAggregator(
+            entity_column="customer_id", time_column="event_date"
+        )
+        result = aggregator.aggregate(
+            df_with_target,
+            windows=["30d"],
+            value_columns=["amount", "target"],
+            agg_funcs=["sum"],
+            exclude_columns=None
+        )
+        # Both should be aggregated when exclude_columns is None
+        assert "amount_sum_30d" in result.columns
+        assert "target_sum_30d" in result.columns
+
+    def test_exclude_multiple_columns(self, df_with_target):
+        df_with_target["leaky_feature"] = df_with_target["target"] * 2
+        aggregator = TimeWindowAggregator(
+            entity_column="customer_id", time_column="event_date"
+        )
+        result = aggregator.aggregate(
+            df_with_target,
+            windows=["30d"],
+            value_columns=["amount", "target", "leaky_feature"],
+            agg_funcs=["sum"],
+            exclude_columns=["target", "leaky_feature"]
+        )
+        assert "amount_sum_30d" in result.columns
+        assert "target_sum_30d" not in result.columns
+        assert "leaky_feature_sum_30d" not in result.columns
+
+
+class TestNotebook01dLeakagePrevention:
+    """Integration tests mimicking notebook 01d flow to prevent target leakage."""
+
+    @pytest.fixture
+    def email_events_df(self):
+        """Sample email event data similar to customer_emails dataset."""
+        np.random.seed(42)
+        ref_date = pd.Timestamp("2023-12-31")
+        n_entities = 50
+        data = []
+        for i in range(n_entities):
+            entity_id = f"C{i:04d}"
+            entity_target = np.random.choice([0, 1], p=[0.3, 0.7])
+            n_events = np.random.randint(5, 20)
+            for j in range(n_events):
+                data.append({
+                    "customer_id": entity_id,
+                    "sent_date": ref_date - timedelta(days=np.random.randint(1, 365)),
+                    "opened": np.random.choice([0, 1]),
+                    "clicked": np.random.choice([0, 1]),
+                    "bounced": np.random.choice([0, 1], p=[0.9, 0.1]),
+                    "time_to_open_hours": np.random.uniform(0, 48) if np.random.random() > 0.3 else np.nan,
+                    "target": entity_target,
+                })
+        return pd.DataFrame(data)
+
+    def test_notebook_01d_excludes_target_from_value_columns(self, email_events_df):
+        """Test that notebook 01d logic correctly excludes target from VALUE_COLUMNS."""
+        df = email_events_df
+        ENTITY_COLUMN = "customer_id"
+        TIME_COLUMN = "sent_date"
+        TARGET_COLUMN = "target"
+
+        # This mimics notebook 01d cell-7 logic
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        exclude_cols = {ENTITY_COLUMN, TIME_COLUMN}
+        if TARGET_COLUMN:
+            exclude_cols.add(TARGET_COLUMN)
+        VALUE_COLUMNS = [c for c in numeric_cols if c not in exclude_cols]
+
+        # Target should NOT be in VALUE_COLUMNS
+        assert TARGET_COLUMN not in VALUE_COLUMNS
+        assert "opened" in VALUE_COLUMNS
+        assert "clicked" in VALUE_COLUMNS
+
+    def test_notebook_01d_aggregation_has_no_target_derived_columns(self, email_events_df):
+        """Test that aggregation using notebook 01d logic produces no target-derived columns."""
+        df = email_events_df
+        ENTITY_COLUMN = "customer_id"
+        TIME_COLUMN = "sent_date"
+        TARGET_COLUMN = "target"
+
+        # Mimic notebook 01d cell-7 logic
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        exclude_cols = {ENTITY_COLUMN, TIME_COLUMN, TARGET_COLUMN}
+        VALUE_COLUMNS = [c for c in numeric_cols if c not in exclude_cols]
+
+        # Mimic notebook 01d cell-11 aggregation
+        aggregator = TimeWindowAggregator(entity_column=ENTITY_COLUMN, time_column=TIME_COLUMN)
+        df_aggregated = aggregator.aggregate(
+            df,
+            windows=["180d", "365d", "all_time"],
+            value_columns=VALUE_COLUMNS,
+            agg_funcs=["sum", "mean", "max", "count"],
+            include_event_count=True,
+            include_recency=True,
+            include_tenure=True
+        )
+
+        # Check NO target-derived columns exist
+        target_cols = [c for c in df_aggregated.columns if "target" in c.lower()]
+        assert len(target_cols) == 0, f"Found target-derived columns: {target_cols}"
+
+        # Check legitimate columns DO exist
+        assert "opened_sum_180d" in df_aggregated.columns
+        assert "clicked_mean_365d" in df_aggregated.columns
+        assert "event_count_all_time" in df_aggregated.columns
+
+    def test_target_leakage_causes_perfect_correlation(self, email_events_df):
+        """Demonstrate that including target in aggregation causes perfect correlation (leakage)."""
+        df = email_events_df
+        ENTITY_COLUMN = "customer_id"
+        TIME_COLUMN = "sent_date"
+        TARGET_COLUMN = "target"
+
+        # WRONG: Include target in value_columns (old buggy behavior)
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        VALUE_COLUMNS_WRONG = [c for c in numeric_cols if c not in {ENTITY_COLUMN, TIME_COLUMN}]
+
+        aggregator = TimeWindowAggregator(entity_column=ENTITY_COLUMN, time_column=TIME_COLUMN)
+        df_leaky = aggregator.aggregate(
+            df,
+            windows=["all_time"],
+            value_columns=VALUE_COLUMNS_WRONG,
+            agg_funcs=["max"],
+            include_event_count=True,
+        )
+
+        # Add entity-level target
+        entity_target = df.groupby(ENTITY_COLUMN)[TARGET_COLUMN].max()
+        df_leaky["target"] = df_leaky[ENTITY_COLUMN].map(entity_target)
+
+        # target_max_all_time should be perfectly correlated with target (LEAKAGE!)
+        correlation = df_leaky["target"].corr(df_leaky["target_max_all_time"])
+        assert correlation == 1.0, "This demonstrates the leakage - perfect correlation"
+
+    def test_correct_aggregation_has_reasonable_correlations(self, email_events_df):
+        """Test that correct aggregation (without target) has reasonable correlations."""
+        df = email_events_df
+        ENTITY_COLUMN = "customer_id"
+        TIME_COLUMN = "sent_date"
+        TARGET_COLUMN = "target"
+
+        # CORRECT: Exclude target from value_columns
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        exclude_cols = {ENTITY_COLUMN, TIME_COLUMN, TARGET_COLUMN}
+        VALUE_COLUMNS_CORRECT = [c for c in numeric_cols if c not in exclude_cols]
+
+        aggregator = TimeWindowAggregator(entity_column=ENTITY_COLUMN, time_column=TIME_COLUMN)
+        df_clean = aggregator.aggregate(
+            df,
+            windows=["all_time"],
+            value_columns=VALUE_COLUMNS_CORRECT,
+            agg_funcs=["sum", "mean"],
+            include_event_count=True,
+        )
+
+        # Add entity-level target
+        entity_target = df.groupby(ENTITY_COLUMN)[TARGET_COLUMN].max()
+        df_clean["target"] = df_clean[ENTITY_COLUMN].map(entity_target)
+
+        # No feature should have perfect correlation with target
+        numeric_features = [c for c in df_clean.columns if c not in [ENTITY_COLUMN, "target"]]
+        for col in numeric_features:
+            if df_clean[col].std() > 0:  # Skip constant columns
+                corr = abs(df_clean["target"].corr(df_clean[col]))
+                assert corr < 0.99, f"{col} has suspiciously high correlation: {corr}"

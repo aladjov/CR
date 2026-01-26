@@ -3,7 +3,14 @@ from .cross_validator import CrossValidator, CVResult, CVStrategy
 from .data_splitter import DataSplitter, SplitConfig, SplitResult, SplitStrategy
 from .feature_scaler import FeatureScaler, ScalerType, ScalingResult
 from .hyperparameter_tuner import HyperparameterTuner, SearchStrategy, TuningResult
-from .imbalance_handler import ClassWeightMethod, ImbalanceHandler, ImbalanceResult, ImbalanceStrategy
+from .imbalance_handler import (
+    ClassWeightMethod,
+    ImbalanceHandler,
+    ImbalanceRecommendation,
+    ImbalanceRecommender,
+    ImbalanceResult,
+    ImbalanceStrategy,
+)
 from .mlflow_logger import ExperimentConfig, MLflowLogger
 from .model_comparator import ComparisonResult, ModelComparator, ModelMetrics
 from .model_evaluator import EvaluationResult, ModelEvaluator
@@ -12,6 +19,7 @@ from .threshold_optimizer import OptimizationObjective, ThresholdOptimizer, Thre
 __all__ = [
     "DataSplitter", "SplitStrategy", "SplitResult", "SplitConfig",
     "ImbalanceHandler", "ImbalanceStrategy", "ClassWeightMethod", "ImbalanceResult",
+    "ImbalanceRecommender", "ImbalanceRecommendation",
     "BaselineTrainer", "ModelType", "TrainingConfig", "TrainedModel",
     "ModelEvaluator", "EvaluationResult",
     "CrossValidator", "CVStrategy", "CVResult",

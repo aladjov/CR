@@ -2,7 +2,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from customer_retention.stages.modeling import ClassWeightMethod, ImbalanceHandler, ImbalanceStrategy
+from customer_retention.stages.modeling import (
+    ClassWeightMethod,
+    ImbalanceHandler,
+    ImbalanceRecommender,
+    ImbalanceStrategy,
+)
 
 
 @pytest.fixture
@@ -110,6 +115,28 @@ class TestRandomUndersampling:
         assert resampled_majority < original_majority
 
 
+class TestSMOTEENN:
+    def test_smoteenn_balances_and_cleans(self, imbalanced_data):
+        X, y = imbalanced_data
+        handler = ImbalanceHandler(strategy=ImbalanceStrategy.SMOTEENN, random_state=42)
+        result = handler.fit_transform(X, y)
+
+        assert result.X_resampled is not None
+        assert result.y_resampled is not None
+        assert result.strategy_used == ImbalanceStrategy.SMOTEENN
+
+
+class TestADASYN:
+    def test_adasyn_increases_minority(self, imbalanced_data):
+        X, y = imbalanced_data
+        handler = ImbalanceHandler(strategy=ImbalanceStrategy.ADASYN, random_state=42)
+        result = handler.fit_transform(X, y)
+
+        original_minority = (y == 1).sum()
+        resampled_minority = (result.y_resampled == 1).sum()
+        assert resampled_minority > original_minority
+
+
 class TestNoResampling:
     def test_none_strategy_returns_unchanged(self, imbalanced_data):
         X, y = imbalanced_data
@@ -193,3 +220,95 @@ class TestFitTransformSeparation:
 
         assert result.X_resampled is not None
         assert result.y_resampled is not None
+
+
+class TestImbalanceRecommender:
+    def test_low_imbalance_recommends_class_weights(self):
+        y = pd.Series([0] * 600 + [1] * 400)  # 1.5:1 ratio
+        recommender = ImbalanceRecommender()
+        rec = recommender.recommend(y)
+
+        assert rec.severity == "low"
+        assert rec.primary_strategy == ImbalanceStrategy.CLASS_WEIGHT
+
+    def test_moderate_imbalance_recommends_class_weights_or_smote(self):
+        y = pd.Series([0] * 800 + [1] * 200)  # 4:1 ratio
+        recommender = ImbalanceRecommender()
+        rec = recommender.recommend(y)
+
+        assert rec.severity == "moderate"
+        assert rec.primary_strategy == ImbalanceStrategy.CLASS_WEIGHT
+        assert any(s[0] == ImbalanceStrategy.SMOTE for s in rec.strategies)
+
+    def test_high_imbalance_recommends_smote(self):
+        y = pd.Series([0] * 950 + [1] * 50)  # 19:1 ratio
+        recommender = ImbalanceRecommender()
+        rec = recommender.recommend(y)
+
+        assert rec.severity == "high"
+        assert rec.primary_strategy == ImbalanceStrategy.SMOTE
+
+    def test_severe_imbalance_large_dataset_recommends_undersample(self):
+        y = pd.Series([0] * 100000 + [1] * 3000)  # 33:1 ratio, large dataset
+        recommender = ImbalanceRecommender()
+        rec = recommender.recommend(y, n_samples=103000)
+
+        assert rec.severity == "severe"
+        assert rec.primary_strategy == ImbalanceStrategy.RANDOM_UNDERSAMPLE
+
+    def test_severe_imbalance_small_minority_recommends_oversample(self):
+        y = pd.Series([0] * 995 + [1] * 5)  # 199:1 ratio, tiny minority
+        recommender = ImbalanceRecommender()
+        rec = recommender.recommend(y)
+
+        assert rec.severity == "severe"
+        assert rec.primary_strategy == ImbalanceStrategy.RANDOM_OVERSAMPLE
+
+    def test_recommendation_includes_ratio(self):
+        y = pd.Series([0] * 900 + [1] * 100)  # 9:1 ratio
+        recommender = ImbalanceRecommender()
+        rec = recommender.recommend(y)
+
+        assert rec.ratio == pytest.approx(9.0, rel=0.01)
+
+    def test_recommendation_includes_strategies_list(self):
+        y = pd.Series([0] * 900 + [1] * 100)
+        recommender = ImbalanceRecommender()
+        rec = recommender.recommend(y)
+
+        assert len(rec.strategies) >= 1
+        assert all(isinstance(s[0], ImbalanceStrategy) for s in rec.strategies)
+
+    def test_recommendation_includes_explanation(self):
+        y = pd.Series([0] * 900 + [1] * 100)
+        recommender = ImbalanceRecommender()
+        rec = recommender.recommend(y)
+
+        assert rec.explanation is not None
+        assert len(rec.explanation) > 0
+
+    def test_high_imbalance_small_minority_recommends_oversample(self):
+        y = pd.Series([0] * 95 + [1] * 5)  # 19:1 ratio but only 5 minority samples
+        recommender = ImbalanceRecommender()
+        rec = recommender.recommend(y)
+
+        assert rec.severity == "high"
+        assert rec.primary_strategy == ImbalanceStrategy.RANDOM_OVERSAMPLE
+
+    def test_severe_imbalance_default_recommends_smote(self):
+        y = pd.Series([0] * 970 + [1] * 30)  # 32:1 ratio, enough minority for SMOTE
+        recommender = ImbalanceRecommender()
+        rec = recommender.recommend(y, n_samples=1000)
+
+        assert rec.severity == "severe"
+        assert rec.primary_strategy == ImbalanceStrategy.SMOTE
+
+    def test_print_recommendation(self, capsys):
+        y = pd.Series([0] * 900 + [1] * 100)
+        recommender = ImbalanceRecommender()
+        rec = recommender.recommend(y)
+        rec.print_recommendation()
+
+        captured = capsys.readouterr()
+        assert "Class Imbalance" in captured.out
+        assert "Recommended strategies" in captured.out

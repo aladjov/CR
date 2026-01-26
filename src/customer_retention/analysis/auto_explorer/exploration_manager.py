@@ -255,18 +255,74 @@ class ExplorationManager:
         self._findings_cache: Dict[str, ExplorationFindings] = {}
         self._excluded_datasets: set = set()
 
-    def discover_findings(self) -> List[Path]:
+    def discover_findings(self, prefer_aggregated: bool = True) -> List[Path]:
         """Discover all findings files in the explorations directory.
 
         Excludes multi_dataset_findings.yaml as it has a different structure.
+
+        Args:
+            prefer_aggregated: If True, when both event-level and aggregated findings
+                exist for the same dataset, only return the aggregated one.
         """
         if not self.explorations_dir.exists():
             return []
 
-        return [
+        all_files = [
             f for f in self.explorations_dir.glob("*_findings.yaml")
             if "multi_dataset" not in f.name
         ]
+
+        if not prefer_aggregated:
+            return all_files
+
+        return self._filter_prefer_aggregated(all_files)
+
+    def _filter_prefer_aggregated(self, files: List[Path]) -> List[Path]:
+        """Filter findings files to prefer aggregated over event-level.
+
+        Groups files by base dataset name and returns aggregated version when available.
+        """
+        aggregated = {f for f in files if "_aggregated" in f.name}
+        non_aggregated = [f for f in files if "_aggregated" not in f.name]
+
+        if not aggregated:
+            return files
+
+        result = list(aggregated)
+        aggregated_base_names = {self._get_base_name(f) for f in aggregated}
+
+        for f in non_aggregated:
+            base_name = self._get_base_name(f)
+            if base_name not in aggregated_base_names:
+                result.append(f)
+
+        return result
+
+    def _get_base_name(self, path: Path) -> str:
+        """Extract base dataset name without hash or aggregated suffix."""
+        stem = path.stem.replace("_findings", "")
+        if "_aggregated" in stem:
+            stem = stem.rsplit("_aggregated", 1)[0]
+        parts = stem.rsplit("_", 1)
+        return parts[0] if len(parts) == 2 and len(parts[1]) == 6 else stem
+
+    def get_skipped_event_findings(self) -> List[Path]:
+        """Return event-level findings that were skipped in favor of aggregated versions."""
+        if not self.explorations_dir.exists():
+            return []
+
+        all_files = [
+            f for f in self.explorations_dir.glob("*_findings.yaml")
+            if "multi_dataset" not in f.name
+        ]
+
+        aggregated = {f for f in all_files if "_aggregated" in f.name}
+        if not aggregated:
+            return []
+
+        aggregated_base_names = {self._get_base_name(f) for f in aggregated}
+        return [f for f in all_files if "_aggregated" not in f.name
+                and self._get_base_name(f) in aggregated_base_names]
 
     def load_findings(self, name_pattern: str) -> Optional[ExplorationFindings]:
         """Load findings by name pattern (partial match)."""

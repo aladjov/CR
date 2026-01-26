@@ -23,7 +23,7 @@ VENV_NAME=".venv"
 VENV_PATH="$SCRIPT_DIR/$VENV_NAME"
 
 # Check if uv is installed
-echo -e "${BLUE}[1/6]${NC} Checking for uv..."
+echo -e "${BLUE}[1/5]${NC} Checking for uv..."
 if ! command -v uv &> /dev/null; then
     echo -e "${RED}Error: uv is not installed.${NC}"
     echo -e "${YELLOW}Please install uv first:${NC}"
@@ -35,7 +35,7 @@ echo -e "${GREEN}✓ uv is installed${NC}"
 echo ""
 
 # Check if virtual environment exists
-echo -e "${BLUE}[2/6]${NC} Checking virtual environment..."
+echo -e "${BLUE}[2/5]${NC} Checking virtual environment..."
 if [ -d "$VENV_PATH" ]; then
     echo -e "${YELLOW}Virtual environment '$VENV_NAME' already exists at: $VENV_PATH${NC}"
     read -p "Do you want to recreate it? (y/N): " -n 1 -r
@@ -56,14 +56,24 @@ fi
 echo ""
 
 # Activate virtual environment
-echo -e "${BLUE}[3/6]${NC} Activating virtual environment..."
+echo -e "${BLUE}[3/5]${NC} Activating virtual environment..."
 source "$VENV_PATH/bin/activate"
 echo -e "${GREEN}✓ Virtual environment activated${NC}"
 echo ""
 
-# Install dependencies and package
+# Install dependencies and package (including SHAP based on architecture)
 echo -e "${BLUE}[4/5]${NC} Installing package with all dependencies..."
-uv pip install -e ".[dev,ml]"
+ARCH=$(uname -m)
+if [ "$ARCH" = "arm64" ]; then
+    echo -e "${BLUE}Detected Apple Silicon - installing with ml-shap${NC}"
+    uv pip install -e ".[dev,ml-shap]"
+elif [ "$ARCH" = "x86_64" ] && [ "$(uname)" = "Darwin" ]; then
+    echo -e "${BLUE}Detected Intel Mac - installing with ml-shap-intel${NC}"
+    uv pip install -e ".[dev,ml-shap-intel]"
+else
+    echo -e "${BLUE}Detected Linux - installing with ml-shap${NC}"
+    uv pip install -e ".[dev,ml-shap]"
+fi
 echo -e "${GREEN}✓ Package and dependencies installed${NC}"
 echo ""
 
@@ -110,4 +120,7 @@ echo -e "${BLUE}Environment details:${NC}"
 echo -e "  Virtual env: $VENV_PATH"
 echo -e "  Python: $(python --version)"
 echo -e "  Pytest: $PYTEST_VERSION"
+echo ""
+echo -e "${GREEN}✓ SHAP installed for model interpretation${NC}"
+echo -e "   ${BLUE}Note: On Databricks ML runtime, shap is pre-installed${NC}"
 echo ""

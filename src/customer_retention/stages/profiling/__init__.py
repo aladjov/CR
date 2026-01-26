@@ -45,6 +45,14 @@ from .feature_capacity import (
     ModelComplexityGuidance,
     SegmentCapacityResult,
 )
+from .pattern_analysis_config import (
+    PatternAnalysisConfig,
+    PatternAnalysisResult,
+    SparklineData,
+    SparklineDataBuilder,
+    get_analysis_frequency,
+    get_sparkline_frequency,
+)
 from .relationship_detector import DatasetRelationship, JoinSuggestion, RelationshipDetector, RelationshipType
 from .relationship_recommender import (
     RecommendationCategory,
@@ -63,6 +71,14 @@ from .segment_analyzer import (
     SegmentProfile,
 )
 from .segment_aware_outlier import SegmentAwareOutlierAnalyzer, SegmentAwareOutlierResult
+from .target_level_analyzer import (
+    AggregationMethod,
+    TargetColumnDetector,
+    TargetDistribution,
+    TargetLevel,
+    TargetLevelAnalyzer,
+    TargetLevelResult,
+)
 from .temporal_analyzer import (
     SeasonalityResult,
     TemporalAnalysis,
@@ -110,7 +126,9 @@ from .temporal_quality_checks import (
     FutureDateCheck,
     TemporalGapCheck,
     TemporalQualityCheck,
+    TemporalQualityReporter,
     TemporalQualityResult,
+    TemporalQualityScore,
 )
 from .temporal_target_analyzer import TemporalTargetAnalyzer, TemporalTargetResult
 from .text_embedder import EMBEDDING_MODELS, TextEmbedder, get_model_info, list_available_models
@@ -157,10 +175,15 @@ __all__ = [
     "SegmentAwareOutlierAnalyzer", "SegmentAwareOutlierResult",
     "CategoricalTargetAnalyzer", "CategoricalTargetResult",
     "TemporalTargetAnalyzer", "TemporalTargetResult",
+    "TargetLevelAnalyzer", "TargetLevelResult", "TargetLevel", "AggregationMethod",
+    "TargetDistribution", "TargetColumnDetector",
+    "PatternAnalysisConfig", "PatternAnalysisResult",
+    "SparklineData", "SparklineDataBuilder",
+    "get_analysis_frequency", "get_sparkline_frequency",
     "TimeSeriesProfiler", "TimeSeriesProfile", "DistributionStats", "EntityLifecycle",
     "LifecycleQuadrantResult", "classify_lifecycle_quadrants",
     "ActivitySegmentResult", "classify_activity_segments",
-    "TemporalQualityCheck", "TemporalQualityResult",
+    "TemporalQualityCheck", "TemporalQualityReporter", "TemporalQualityResult", "TemporalQualityScore",
     "DuplicateEventCheck", "TemporalGapCheck", "FutureDateCheck", "EventOrderCheck",
     "TemporalPatternAnalyzer", "TemporalPatternAnalysis",
     "TrendResult", "TrendDirection", "SeasonalityPeriod", "RecencyResult",

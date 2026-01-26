@@ -1461,56 +1461,92 @@ class ChartBuilder:
         self,
         data: Dict[str, Dict[str, float]],
         title: Optional[str] = None,
+        window_label: Optional[str] = None,
     ) -> go.Figure:
         """Create grouped bar chart comparing momentum between cohorts.
 
         Args:
-            data: Dict with {column: {"retained_7_30": x, "churned_7_30": y, "retained_30_90": z, ...}}
+            data: Dict with {column: {"retained": x, "churned": y}} for single window pair
+                  or {column: {"retained_7_30": x, "churned_7_30": y, ...}} for multiple
             title: Chart title
+            window_label: Label for the window pair (e.g., "180d/365d")
         """
-        from plotly.subplots import make_subplots
-
         columns = list(data.keys())
-        col_labels = [c[:12] for c in columns]
+        col_labels = [c[:15] for c in columns]
 
-        fig = make_subplots(
-            rows=1, cols=2,
-            subplot_titles=("7d/30d Momentum", "30d/90d Momentum"),
-        )
+        # Check if data uses simple keys (retained/churned) or compound keys
+        first_col_data = data[columns[0]] if columns else {}
+        uses_simple_keys = "retained" in first_col_data or "churned" in first_col_data
 
-        # 7d/30d
-        fig.add_trace(go.Bar(
-            name="Retained", x=col_labels,
-            y=[data[c].get("retained_7_30", 1) for c in columns],
-            marker_color=self.colors["success"],
-        ), row=1, col=1)
-        fig.add_trace(go.Bar(
-            name="Churned", x=col_labels,
-            y=[data[c].get("churned_7_30", 1) for c in columns],
-            marker_color=self.colors["danger"],
-        ), row=1, col=1)
-        fig.add_hline(y=1.0, line_dash="dash", line_color="gray", row=1, col=1)
+        if uses_simple_keys:
+            # Simple single-pair chart
+            fig = go.Figure()
 
-        # 30d/90d
-        fig.add_trace(go.Bar(
-            name="Retained", x=col_labels,
-            y=[data[c].get("retained_30_90", 1) for c in columns],
-            marker_color=self.colors["success"], showlegend=False,
-        ), row=1, col=2)
-        fig.add_trace(go.Bar(
-            name="Churned", x=col_labels,
-            y=[data[c].get("churned_30_90", 1) for c in columns],
-            marker_color=self.colors["danger"], showlegend=False,
-        ), row=1, col=2)
-        fig.add_hline(y=1.0, line_dash="dash", line_color="gray", row=1, col=2)
+            fig.add_trace(go.Bar(
+                name="🟢 Retained", x=col_labels,
+                y=[data[c].get("retained", 1) for c in columns],
+                marker_color=self.colors["success"],
+            ))
+            fig.add_trace(go.Bar(
+                name="🔴 Churned", x=col_labels,
+                y=[data[c].get("churned", 1) for c in columns],
+                marker_color=self.colors["danger"],
+            ))
+            fig.add_hline(y=1.0, line_dash="dash", line_color="gray",
+                         annotation_text="baseline", annotation_position="right")
 
-        fig.update_layout(
-            title=title or "Momentum by Retention Status",
-            template=self.theme,
-            height=400,
-            barmode="group",
-            legend={"orientation": "h", "y": 1.02, "x": 0.5, "xanchor": "center"},
-        )
+            chart_title = title or f"Momentum Comparison{f' ({window_label})' if window_label else ''}"
+            fig.update_layout(
+                title=chart_title,
+                template=self.theme,
+                height=450,
+                barmode="group",
+                legend={"orientation": "h", "y": -0.15, "x": 0.5, "xanchor": "center"},
+                xaxis_title="Feature",
+                yaxis_title="Momentum (>1 = increasing, <1 = decreasing)",
+                margin={"b": 100},
+            )
+        else:
+            # Multi-pair chart (legacy format with retained_7_30, etc.)
+            from plotly.subplots import make_subplots
+
+            fig = make_subplots(
+                rows=1, cols=2,
+                subplot_titles=(window_label or "Short/Medium", "Medium/Long"),
+            )
+
+            fig.add_trace(go.Bar(
+                name="Retained", x=col_labels,
+                y=[data[c].get("retained_7_30", data[c].get("retained", 1)) for c in columns],
+                marker_color=self.colors["success"],
+            ), row=1, col=1)
+            fig.add_trace(go.Bar(
+                name="Churned", x=col_labels,
+                y=[data[c].get("churned_7_30", data[c].get("churned", 1)) for c in columns],
+                marker_color=self.colors["danger"],
+            ), row=1, col=1)
+            fig.add_hline(y=1.0, line_dash="dash", line_color="gray", row=1, col=1)
+
+            fig.add_trace(go.Bar(
+                name="Retained", x=col_labels,
+                y=[data[c].get("retained_30_90", 1) for c in columns],
+                marker_color=self.colors["success"], showlegend=False,
+            ), row=1, col=2)
+            fig.add_trace(go.Bar(
+                name="Churned", x=col_labels,
+                y=[data[c].get("churned_30_90", 1) for c in columns],
+                marker_color=self.colors["danger"], showlegend=False,
+            ), row=1, col=2)
+            fig.add_hline(y=1.0, line_dash="dash", line_color="gray", row=1, col=2)
+
+            fig.update_layout(
+                title=title or "Momentum by Retention Status",
+                template=self.theme,
+                height=450,
+                barmode="group",
+                legend={"orientation": "h", "y": -0.15, "x": 0.5, "xanchor": "center"},
+                margin={"b": 100},
+            )
         return fig
 
     def cohort_sparklines(

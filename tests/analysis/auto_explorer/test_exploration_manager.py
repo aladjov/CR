@@ -465,3 +465,53 @@ class TestAggregatedFindingsDiscovery:
         # Aggregated findings - should include "aggregated" to distinguish
         agg = manager._extract_dataset_name(Path("events_abc123_aggregated_findings.yaml"))
         assert "events" in agg
+
+    def test_discover_findings_prefer_aggregated_default(
+        self, temp_explorations_dir, sample_entity_findings, event_findings_with_aggregation, aggregated_event_findings
+    ):
+        """By default, discover_findings should prefer aggregated over event-level."""
+        manager = ExplorationManager(explorations_dir=temp_explorations_dir)
+        findings_paths = manager.discover_findings()
+
+        names = [p.name for p in findings_paths]
+        assert any("aggregated" in n for n in names)
+        assert not any(n == "transactions_def456_findings.yaml" for n in names)
+
+    def test_discover_findings_prefer_aggregated_false(
+        self, temp_explorations_dir, sample_entity_findings, event_findings_with_aggregation, aggregated_event_findings
+    ):
+        """With prefer_aggregated=False, all findings should be returned."""
+        manager = ExplorationManager(explorations_dir=temp_explorations_dir)
+        findings_paths = manager.discover_findings(prefer_aggregated=False)
+
+        names = [p.name for p in findings_paths]
+        assert any("aggregated" in n for n in names)
+        assert any(n == "transactions_def456_findings.yaml" for n in names)
+
+    def test_get_skipped_event_findings(
+        self, temp_explorations_dir, sample_entity_findings, event_findings_with_aggregation, aggregated_event_findings
+    ):
+        """get_skipped_event_findings should return event files skipped in favor of aggregated."""
+        manager = ExplorationManager(explorations_dir=temp_explorations_dir)
+        skipped = manager.get_skipped_event_findings()
+
+        assert len(skipped) == 1
+        assert skipped[0].name == "transactions_def456_findings.yaml"
+
+    def test_get_skipped_event_findings_empty_when_no_aggregated(
+        self, temp_explorations_dir, sample_entity_findings, sample_event_findings
+    ):
+        """get_skipped_event_findings should return empty when no aggregated files exist."""
+        manager = ExplorationManager(explorations_dir=temp_explorations_dir)
+        skipped = manager.get_skipped_event_findings()
+
+        assert skipped == []
+
+    def test_get_base_name_extracts_correctly(self, temp_explorations_dir):
+        """_get_base_name should extract base dataset name without hash or aggregated suffix."""
+        manager = ExplorationManager(explorations_dir=temp_explorations_dir)
+
+        assert manager._get_base_name(Path("events_abc123_findings.yaml")) == "events"
+        assert manager._get_base_name(Path("events_abc123_aggregated_findings.yaml")) == "events"
+        assert manager._get_base_name(Path("my_dataset_def456_findings.yaml")) == "my_dataset"
+        assert manager._get_base_name(Path("my_dataset_def456_aggregated_xyz789_findings.yaml")) == "my_dataset"

@@ -12,7 +12,9 @@ from customer_retention.stages.profiling.temporal_quality_checks import (
     FutureDateCheck,
     TemporalGapCheck,
     TemporalQualityCheck,
+    TemporalQualityReporter,
     TemporalQualityResult,
+    TemporalQualityScore,
 )
 
 
@@ -256,3 +258,202 @@ class TestTemporalQualityCheckBase:
         assert check.check_id == "TQ999"
         assert check.check_name == "Test"
         assert check.severity == Severity.MEDIUM
+
+
+class TestTemporalQualityScore:
+    """Tests for the quality score dataclass."""
+
+    def test_grade_emoji(self):
+        score_a = TemporalQualityScore(score=95, grade="A", check_scores=[], passed=4, total=4)
+        score_b = TemporalQualityScore(score=80, grade="B", check_scores=[], passed=3, total=4)
+        score_c = TemporalQualityScore(score=65, grade="C", check_scores=[], passed=2, total=4)
+        score_d = TemporalQualityScore(score=50, grade="D", check_scores=[], passed=1, total=4)
+
+        assert score_a.grade_emoji == "🏆"
+        assert score_b.grade_emoji == "✅"
+        assert score_c.grade_emoji == "⚠️"
+        assert score_d.grade_emoji == "❌"
+
+    def test_grade_message(self):
+        score_a = TemporalQualityScore(score=95, grade="A", check_scores=[], passed=4, total=4)
+        score_b = TemporalQualityScore(score=80, grade="B", check_scores=[], passed=3, total=4)
+
+        assert "Excellent" in score_a.grade_message
+        assert "Good" in score_b.grade_message
+
+
+class TestTemporalQualityReporter:
+    """Tests for the quality reporter."""
+
+    @pytest.fixture
+    def sample_results(self):
+        return [
+            TemporalQualityResult(
+                check_id="TQ001", check_name="Duplicate Events",
+                passed=True, severity=Severity.MEDIUM, message="No duplicates",
+                duplicate_count=0,
+            ),
+            TemporalQualityResult(
+                check_id="TQ002", check_name="Temporal Gaps",
+                passed=True, severity=Severity.MEDIUM, message="No gaps",
+                gap_count=0,
+            ),
+            TemporalQualityResult(
+                check_id="TQ003", check_name="Future Dates",
+                passed=True, severity=Severity.HIGH, message="No future dates",
+                future_count=0,
+            ),
+            TemporalQualityResult(
+                check_id="TQ004", check_name="Event Ordering",
+                passed=True, severity=Severity.LOW, message="Order OK",
+                ambiguous_count=0,
+            ),
+        ]
+
+    @pytest.fixture
+    def results_with_issues(self):
+        return [
+            TemporalQualityResult(
+                check_id="TQ001", check_name="Duplicate Events",
+                passed=False, severity=Severity.MEDIUM, message="Found 10 duplicates",
+                duplicate_count=10, recommendation="Remove duplicates",
+            ),
+            TemporalQualityResult(
+                check_id="TQ002", check_name="Temporal Gaps",
+                passed=False, severity=Severity.MEDIUM, message="Found 5 gaps",
+                gap_count=5,
+            ),
+            TemporalQualityResult(
+                check_id="TQ003", check_name="Future Dates",
+                passed=False, severity=Severity.HIGH, message="Found 3 future dates",
+                future_count=3,
+            ),
+            TemporalQualityResult(
+                check_id="TQ004", check_name="Event Ordering",
+                passed=True, severity=Severity.LOW, message="OK",
+                ambiguous_count=0,
+            ),
+        ]
+
+    def test_reporter_calculates_scores(self, sample_results):
+        reporter = TemporalQualityReporter(sample_results, total_rows=1000)
+        assert reporter.quality_score == 100.0
+        assert reporter.grade == "A"
+        assert reporter.passed == 4
+
+    def test_reporter_with_issues(self, results_with_issues):
+        reporter = TemporalQualityReporter(results_with_issues, total_rows=1000)
+        assert reporter.quality_score < 100.0
+        assert reporter.passed == 1
+
+    def test_get_score_returns_score_object(self, sample_results):
+        reporter = TemporalQualityReporter(sample_results, total_rows=1000)
+        score = reporter.get_score()
+        assert isinstance(score, TemporalQualityScore)
+        assert score.score == reporter.quality_score
+        assert score.grade == reporter.grade
+
+    def test_print_results(self, results_with_issues, capsys):
+        reporter = TemporalQualityReporter(results_with_issues, total_rows=1000)
+        reporter.print_results()
+        captured = capsys.readouterr()
+        assert "TEMPORAL QUALITY CHECK RESULTS" in captured.out
+        assert "TQ001" in captured.out
+
+    def test_print_score(self, sample_results, capsys):
+        reporter = TemporalQualityReporter(sample_results, total_rows=1000)
+        reporter.print_score()
+        captured = capsys.readouterr()
+        assert "QUALITY SCORE" in captured.out
+        assert "Grade" in captured.out
+
+    def test_to_dict(self, sample_results):
+        reporter = TemporalQualityReporter(sample_results, total_rows=1000)
+        result_dict = reporter.to_dict()
+        assert "temporal_quality_score" in result_dict
+        assert "temporal_quality_grade" in result_dict
+        assert "issues" in result_dict
+        assert result_dict["checks_passed"] == 4
+
+    def test_score_from_issues_zero(self, sample_results):
+        reporter = TemporalQualityReporter(sample_results, total_rows=1000)
+        assert reporter._score_from_issues(0, 1000) == 100.0
+
+    def test_score_from_issues_small_percentage(self, sample_results):
+        reporter = TemporalQualityReporter(sample_results, total_rows=1000)
+        score = reporter._score_from_issues(1, 10000)
+        assert score == 99.0
+
+    def test_score_from_issues_medium_percentage(self, sample_results):
+        reporter = TemporalQualityReporter(sample_results, total_rows=1000)
+        score = reporter._score_from_issues(30, 1000)
+        assert score < 90.0
+
+    def test_score_from_issues_high_percentage(self, sample_results):
+        reporter = TemporalQualityReporter(sample_results, total_rows=1000)
+        score = reporter._score_from_issues(100, 1000)
+        assert score < 70.0
+
+    def test_score_from_issues_very_high_percentage(self, sample_results):
+        reporter = TemporalQualityReporter(sample_results, total_rows=1000)
+        score = reporter._score_from_issues(300, 1000)
+        assert score >= 0
+
+    def test_score_from_issues_zero_total(self, sample_results):
+        reporter = TemporalQualityReporter(sample_results, total_rows=0)
+        assert reporter._score_from_issues(0, 0) == 100.0
+
+    def test_grade_boundaries(self):
+        results = [
+            TemporalQualityResult(
+                check_id="TQ001", check_name="Test", passed=True,
+                severity=Severity.LOW, message="OK",
+            )
+        ]
+        reporter_high = TemporalQualityReporter(results, total_rows=100)
+        assert reporter_high.grade in ["A", "B", "C", "D"]
+
+
+class TestDuplicateEventCheckEdgeCases:
+    """Additional edge case tests for duplicate check."""
+
+    def test_empty_dataframe(self):
+        df = pd.DataFrame({"customer_id": [], "date": []})
+        check = DuplicateEventCheck(entity_column="customer_id", time_column="date")
+        result = check.run(df)
+        assert result.passed
+        assert result.duplicate_count == 0
+
+
+class TestTemporalGapCheckEdgeCases:
+    """Additional edge case tests for gap check."""
+
+    def test_single_row(self):
+        df = pd.DataFrame({"id": [1], "date": pd.to_datetime(["2023-01-01"])})
+        check = TemporalGapCheck(time_column="date")
+        result = check.run(df)
+        assert result.passed
+
+
+class TestFutureDateCheckEdgeCases:
+    """Additional edge case tests for future date check."""
+
+    def test_empty_dataframe(self):
+        df = pd.DataFrame({"id": [], "date": []})
+        check = FutureDateCheck(time_column="date")
+        result = check.run(df)
+        assert result.passed
+        assert result.future_count == 0
+
+
+class TestEventOrderCheckEdgeCases:
+    """Additional edge case tests for event order check."""
+
+    def test_single_row(self):
+        df = pd.DataFrame({
+            "entity": ["A"],
+            "date": pd.to_datetime(["2023-01-01"]),
+        })
+        check = EventOrderCheck(entity_column="entity", time_column="date")
+        result = check.run(df)
+        assert result.passed

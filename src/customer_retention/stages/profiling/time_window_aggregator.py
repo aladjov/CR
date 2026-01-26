@@ -99,6 +99,7 @@ class TimeWindowAggregator:
         include_event_count: bool = False,
         include_recency: bool = False,
         include_tenure: bool = False,
+        exclude_columns: Optional[List[str]] = None,
     ) -> DataFrame:
         """
         Aggregate event data into entity-level features.
@@ -112,6 +113,7 @@ class TimeWindowAggregator:
             include_event_count: Add event_count_{window} columns
             include_recency: Add days_since_last_event column
             include_tenure: Add days_since_first_event column
+            exclude_columns: Columns to exclude from aggregation (e.g., target column to prevent leakage)
 
         Returns:
             Entity-level dataframe with aggregated features
@@ -133,6 +135,11 @@ class TimeWindowAggregator:
 
         # Parse windows
         parsed_windows = [TimeWindow.from_string(w) for w in windows]
+
+        # Filter out excluded columns (e.g., target to prevent leakage)
+        exclude_set = set(exclude_columns) if exclude_columns else set()
+        if value_columns:
+            value_columns = [c for c in value_columns if c not in exclude_set]
 
         # Get unique entities
         entities = df[self.entity_column].unique()
@@ -180,10 +187,15 @@ class TimeWindowAggregator:
         self, df: DataFrame, windows: List[str], value_columns: List[str],
         agg_funcs: List[str], include_event_count: bool = True,
         include_recency: bool = False, include_tenure: bool = False,
+        exclude_columns: Optional[List[str]] = None,
     ) -> AggregationPlan:
         parsed_windows = [TimeWindow.from_string(w) for w in windows]
         feature_columns = []
         value_counts_categories: Dict[str, List[str]] = {}
+
+        # Filter out excluded columns (e.g., target to prevent leakage)
+        exclude_set = set(exclude_columns) if exclude_columns else set()
+        value_columns = [c for c in value_columns if c not in exclude_set]
 
         if include_event_count:
             for window in parsed_windows:
