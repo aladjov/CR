@@ -115,6 +115,18 @@ class TimestampDiscoveryResult:
         ]
 
 
+def _looks_like_datetime_strings(sample: pd.Series) -> bool:
+    if len(sample) == 0:
+        return False
+    str_sample = sample.astype(str)
+    datetime_pattern = re.compile(
+        r"\d{4}[-/]|\d{1,2}[-/]\d{1,2}[-/]|\d{1,2}:\d{2}|"
+        r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)", re.IGNORECASE
+    )
+    matches = str_sample.apply(lambda x: bool(datetime_pattern.search(str(x))))
+    return matches.mean() > 0.8
+
+
 class DatetimeOrderAnalyzer:
     ACTIVITY_PATTERNS = [
         r"last_", r"latest_", r"recent_", r"final_", r"most_recent",
@@ -171,13 +183,11 @@ class DatetimeOrderAnalyzer:
             if pd.api.types.is_datetime64_any_dtype(df[col]):
                 result.append(col)
             elif df[col].dtype == object:
-                try:
-                    sample = df[col].dropna().head(100)
+                sample = df[col].dropna().head(100)
+                if _looks_like_datetime_strings(sample):
                     parsed = pd.to_datetime(sample, format="mixed", errors="coerce")
                     if parsed.notna().mean() > 0.8:
                         result.append(col)
-                except Exception:
-                    pass
         return result
 
     def _is_activity_column(self, col_name: str) -> bool:
@@ -281,13 +291,11 @@ class TimestampDiscoveryEngine:
             return self._create_datetime_candidate(df, col)
 
         if df[col].dtype == object:
-            try:
-                sample = df[col].dropna().head(100)
+            sample = df[col].dropna().head(100)
+            if _looks_like_datetime_strings(sample):
                 parsed = pd.to_datetime(sample, format="mixed", errors="coerce")
                 if parsed.notna().mean() > 0.8:
                     return self._create_datetime_candidate(df, col, needs_parsing=True)
-            except Exception:
-                pass
 
         if pd.api.types.is_numeric_dtype(df[col]) and self._looks_like_unix_timestamp(df[col]):
             return self._create_datetime_candidate(df, col, is_unix=True)
