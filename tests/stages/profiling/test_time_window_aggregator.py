@@ -892,3 +892,105 @@ class TestNotebook01dLeakagePrevention:
             if df_clean[col].std() > 0:  # Skip constant columns
                 corr = abs(df_clean["target"].corr(df_clean[col]))
                 assert corr < 0.99, f"{col} has suspiciously high correlation: {corr}"
+
+
+class TestAggregatedDataFrameParquetSerialization:
+    """Regression tests for DataFrame attrs serialization to parquet.
+
+    This test class prevents regression of the bug where pd.Timestamp objects
+    stored in DataFrame.attrs caused JSON serialization errors when saving
+    to parquet (Object of type Timestamp is not JSON serializable).
+
+    Fix: src/customer_retention/stages/profiling/time_window_aggregator.py
+    converts Timestamps to ISO strings before storing in attrs.
+    """
+
+    def test_aggregated_dataframe_can_be_saved_to_parquet(self, transactions_df, tmp_path):
+        """Verify aggregated DataFrame can be saved to parquet without JSON serialization errors."""
+        aggregator = TimeWindowAggregator(
+            entity_column="customer_id",
+            time_column="transaction_date"
+        )
+        result = aggregator.aggregate(
+            transactions_df,
+            windows=["30d", "90d"],
+            value_columns=["amount"],
+            agg_funcs=["sum", "mean"],
+            reference_date=pd.Timestamp("2023-12-31"),
+            include_event_count=True,
+            include_recency=True,
+        )
+
+        # This should NOT raise "Object of type Timestamp is not JSON serializable"
+        output_path = tmp_path / "aggregated.parquet"
+        result.to_parquet(output_path, index=False)
+
+        # Verify file was created and can be read back
+        assert output_path.exists()
+        df_loaded = pd.read_parquet(output_path)
+        assert len(df_loaded) == len(result)
+
+    def test_aggregation_reference_date_stored_as_string(self, transactions_df):
+        """Verify reference_date is stored as ISO string in attrs, not Timestamp."""
+        aggregator = TimeWindowAggregator(
+            entity_column="customer_id",
+            time_column="transaction_date"
+        )
+        ref_date = pd.Timestamp("2023-12-31")
+        result = aggregator.aggregate(
+            transactions_df,
+            windows=["30d"],
+            value_columns=["amount"],
+            agg_funcs=["sum"],
+            reference_date=ref_date,
+        )
+
+        # The attrs should contain string, not Timestamp
+        stored_ref = result.attrs.get("aggregation_reference_date")
+        assert stored_ref is not None
+        assert isinstance(stored_ref, str), f"Expected str, got {type(stored_ref)}"
+        # Should be ISO format
+        assert "2023-12-31" in stored_ref
+
+    def test_aggregation_timestamp_stored_as_string(self, transactions_df):
+        """Verify aggregation_timestamp is stored as ISO string in attrs."""
+        aggregator = TimeWindowAggregator(
+            entity_column="customer_id",
+            time_column="transaction_date"
+        )
+        result = aggregator.aggregate(
+            transactions_df,
+            windows=["30d"],
+            value_columns=["amount"],
+            agg_funcs=["sum"],
+        )
+
+        # The aggregation_timestamp should be a string
+        stored_timestamp = result.attrs.get("aggregation_timestamp")
+        assert stored_timestamp is not None
+        assert isinstance(stored_timestamp, str), f"Expected str, got {type(stored_timestamp)}"
+
+    def test_attrs_are_json_serializable(self, transactions_df):
+        """Verify all attrs can be JSON serialized without errors."""
+        import json
+
+        aggregator = TimeWindowAggregator(
+            entity_column="customer_id",
+            time_column="transaction_date"
+        )
+        result = aggregator.aggregate(
+            transactions_df,
+            windows=["30d"],
+            value_columns=["amount"],
+            agg_funcs=["sum"],
+            reference_date=pd.Timestamp("2023-12-31"),
+        )
+
+        # Should not raise "Object of type Timestamp is not JSON serializable"
+        attrs_json = json.dumps(result.attrs)
+        assert attrs_json is not None
+
+        # Verify we can deserialize it back
+        parsed = json.loads(attrs_json)
+        assert "aggregation_reference_date" in parsed
+        assert "aggregation_timestamp" in parsed

@@ -8,6 +8,8 @@ class TestColumnType:
     def test_all_column_types_exist(self):
         assert ColumnType.IDENTIFIER == "identifier"
         assert ColumnType.TARGET == "target"
+        assert ColumnType.FEATURE_TIMESTAMP == "feature_timestamp"
+        assert ColumnType.LABEL_TIMESTAMP == "label_timestamp"
         assert ColumnType.NUMERIC_CONTINUOUS == "numeric_continuous"
         assert ColumnType.NUMERIC_DISCRETE == "numeric_discrete"
         assert ColumnType.CATEGORICAL_NOMINAL == "categorical_nominal"
@@ -19,7 +21,7 @@ class TestColumnType:
         assert ColumnType.UNKNOWN == "unknown"
 
     def test_column_type_count(self):
-        assert len(ColumnType) == 11
+        assert len(ColumnType) == 13
 
 
 class TestColumnConfig:
@@ -79,6 +81,14 @@ class TestColumnConfig:
 
     def test_should_be_used_as_feature_target(self):
         col = ColumnConfig(name="retained", column_type=ColumnType.TARGET)
+        assert col.should_be_used_as_feature() is False
+
+    def test_should_be_used_as_feature_feature_timestamp(self):
+        col = ColumnConfig(name="feature_ts", column_type=ColumnType.FEATURE_TIMESTAMP)
+        assert col.should_be_used_as_feature() is False
+
+    def test_should_be_used_as_feature_label_timestamp(self):
+        col = ColumnConfig(name="label_ts", column_type=ColumnType.LABEL_TIMESTAMP)
         assert col.should_be_used_as_feature() is False
 
     def test_should_be_used_as_feature_numeric(self):

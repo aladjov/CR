@@ -1,9 +1,39 @@
 from dataclasses import dataclass
-from typing import Tuple
+from typing import FrozenSet, List, Optional, Set, Tuple
 
-from customer_retention.core.compat import Series
+from customer_retention.core.compat import DataFrame, Series
 
 from ..components.enums import Severity
+
+TEMPORAL_METADATA_COLUMNS: FrozenSet[str] = frozenset({
+    "feature_timestamp",
+    "label_timestamp",
+    "label_available_flag",
+    "event_timestamp",
+})
+
+
+def _build_exclusion_set(entity_column: Optional[str], target_column: Optional[str], additional_exclude: Optional[Set[str]]) -> Set[str]:
+    exclude = set(TEMPORAL_METADATA_COLUMNS)
+    if entity_column:
+        exclude.add(entity_column)
+    if target_column:
+        exclude.add(target_column)
+    if additional_exclude:
+        exclude.update(additional_exclude)
+    return exclude
+
+
+def get_valid_feature_columns(
+    df: DataFrame,
+    entity_column: Optional[str] = None,
+    target_column: Optional[str] = None,
+    additional_exclude: Optional[Set[str]] = None,
+) -> List[str]:
+    """Filter DataFrame columns to those valid as model features."""
+    exclude = _build_exclusion_set(entity_column, target_column, additional_exclude)
+    exclude.update(c for c in df.columns if c.startswith("original_"))
+    return [c for c in df.columns if c not in exclude]
 
 
 @dataclass

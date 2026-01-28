@@ -195,9 +195,45 @@ class TestPredictivePower:
 class TestCohortComparison:
     """Tests for retained vs churned comparison."""
 
-    def test_compares_cohorts(self, analyzer, sample_event_data):
+    @pytest.fixture
+    def entity_level_data(self):
+        """Create entity-level data (one row per entity) for cohort comparison."""
+        np.random.seed(42)
+        n_entities = 100
+
+        data = []
+        for entity_id in range(n_entities):
+            is_retained = entity_id % 2 == 0
+            target = 1 if is_retained else 0
+
+            # Single aggregated row per entity
+            if is_retained:
+                value = 120 + np.random.normal(0, 10)  # Higher value for retained
+            else:
+                value = 80 + np.random.normal(0, 10)  # Lower value for churned
+
+            data.append({
+                "entity_id": entity_id,
+                "event_date": pd.Timestamp("2024-01-31"),
+                "metric_value": max(0, value),
+                "target": target
+            })
+
+        return pd.DataFrame(data)
+
+    def test_rejects_event_level_data(self, analyzer, sample_event_data):
+        """compare_cohorts should reject event-level data."""
+        with pytest.raises(ValueError, match="event-level data"):
+            analyzer.compare_cohorts(
+                sample_event_data,
+                value_columns=["metric_value"],
+                target_column="target"
+            )
+
+    def test_compares_cohorts_on_entity_level_data(self, analyzer, entity_level_data):
+        """compare_cohorts works on entity-level data."""
         result = analyzer.compare_cohorts(
-            sample_event_data,
+            entity_level_data,
             value_columns=["metric_value"],
             target_column="target"
         )
@@ -206,18 +242,19 @@ class TestCohortComparison:
         assert "retained" in result["metric_value"]
         assert "churned" in result["metric_value"]
 
-    def test_detects_divergent_velocity(self, analyzer, sample_event_data):
+    def test_detects_divergent_mean_values(self, analyzer, entity_level_data):
+        """Detects difference in mean values between cohorts."""
         result = analyzer.compare_cohorts(
-            sample_event_data,
+            entity_level_data,
             value_columns=["metric_value"],
             target_column="target"
         )
 
-        retained_vel = result["metric_value"]["retained"].velocity
-        churned_vel = result["metric_value"]["churned"].velocity
+        retained_mean = result["metric_value"]["retained"].mean_value
+        churned_mean = result["metric_value"]["churned"].mean_value
 
-        # Retained should have positive velocity, churned negative
-        assert retained_vel > churned_vel
+        # Retained should have higher mean value than churned
+        assert retained_mean > churned_mean
 
 
 class TestFeatureRecommendations:

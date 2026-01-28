@@ -13,7 +13,6 @@ Usage:
     python scripts/notebooks/export_tutorial_html.py --run exploration_notebooks/ --output docs/tutorial/
 """
 import argparse
-import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -34,6 +33,7 @@ class ExportConfig:
     timeout: int = 600
     allow_errors: bool = True
     convert_plotly: bool = True  # Convert Plotly figures to static images
+    filter_warnings: bool = False  # Keep warnings visible by default
 
 
 class TutorialExporter:
@@ -65,16 +65,17 @@ class TutorialExporter:
             return None
 
     def _preprocess_plotly(self, notebook_path: Path) -> Path:
-        """Convert Plotly figures to static images and filter warnings."""
+        """Convert Plotly figures to static images and optionally filter warnings."""
         try:
             import nbformat
             with open(notebook_path, "r", encoding="utf-8") as f:
                 nb = nbformat.read(f, as_version=4)
 
-            # Apply warning filter first
-            warning_filter = self._get_warning_filter()
-            if warning_filter:
-                nb, _ = warning_filter.preprocess(nb, {})
+            # Apply warning filter only if configured
+            if self.config.filter_warnings:
+                warning_filter = self._get_warning_filter()
+                if warning_filter:
+                    nb, _ = warning_filter.preprocess(nb, {})
 
             # Apply Plotly conversion if enabled
             if self.config.convert_plotly:
@@ -104,7 +105,7 @@ class TutorialExporter:
 
         cmd = self._build_nbconvert_command(processed_path, output_path)
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
             print(f"  Exported: {output_path.name}")
             return output_path
         except subprocess.CalledProcessError as e:
@@ -362,6 +363,11 @@ Examples:
         action="store_true",
         help="Don't convert Plotly figures to static images"
     )
+    parser.add_argument(
+        "--filter-warnings",
+        action="store_true",
+        help="Filter out warning messages from notebook outputs"
+    )
     args = parser.parse_args()
     if not args.notebooks:
         parser.print_help()
@@ -371,6 +377,7 @@ Examples:
         output_dir=output_dir,
         execute_notebooks=args.execute,
         convert_plotly=not args.no_plotly_convert,
+        filter_warnings=args.filter_warnings,
     )
     exporter = TutorialExporter(config)
     all_exported = []

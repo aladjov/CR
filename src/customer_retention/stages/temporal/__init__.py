@@ -39,6 +39,9 @@ Timestamp Scenarios:
     - synthetic: No temporal information, must use synthetic timestamps
 """
 
+# Import canonical temporal metadata columns from central location
+from customer_retention.core.utils.leakage import TEMPORAL_METADATA_COLUMNS
+
 from .access_guard import AccessContext, DataAccessGuard
 from .cutoff_analyzer import CutoffAnalysis, CutoffAnalyzer, SplitResult
 from .data_preparer import PreparedData, UnifiedDataPreparer
@@ -56,13 +59,8 @@ from .timestamp_discovery import (
 )
 from .timestamp_manager import TimestampConfig, TimestampManager, TimestampStrategy
 
-# Columns added by the temporal framework for point-in-time correctness.
-# These should be excluded from exploration charts and modeling features.
-TEMPORAL_METADATA_COLS = frozenset({
-    "feature_timestamp",
-    "label_timestamp",
-    "label_available_flag",
-})
+# Backwards compatible alias - prefer TEMPORAL_METADATA_COLUMNS
+TEMPORAL_METADATA_COLS = TEMPORAL_METADATA_COLUMNS
 
 
 def _restore_snapshot_columns(df, findings):

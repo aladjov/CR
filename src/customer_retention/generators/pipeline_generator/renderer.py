@@ -14,7 +14,7 @@ class InlineLoader(BaseLoader):
 
 
 TEMPLATES = {
-    "config.py.j2": '''import os
+    "config.py.j2": """import os
 from pathlib import Path
 
 PIPELINE_NAME = "{{ config.name }}"
@@ -89,9 +89,13 @@ def get_gold_path() -> Path:
 
 def get_feast_data_path() -> Path:
     return Path(FEAST_REPO_PATH) / "data" / f"{FEAST_FEATURE_VIEW}.parquet"
-''',
 
-    "bronze.py.j2": '''import pandas as pd
+
+# Fit mode configuration for training vs scoring separation
+FIT_MODE = {{ 'True' if config.fit_mode else 'False' }}
+ARTIFACTS_PATH = {{ '"%s"' % config.artifacts_path if config.artifacts_path else 'str(EXPERIMENTS_DIR / "artifacts" / (RECOMMENDATIONS_HASH or "default"))' }}
+""",
+    "bronze.py.j2": """import pandas as pd
 from pathlib import Path
 from config import SOURCES, get_bronze_path
 
@@ -132,10 +136,9 @@ def run_bronze_{{ source }}():
 
 if __name__ == "__main__":
     run_bronze_{{ source }}()
-''',
-
+""",
     "silver.py.j2": '''import pandas as pd
-from config import SOURCES, get_bronze_path, get_silver_path
+from config import SOURCES, get_bronze_path, get_silver_path, TARGET_COLUMN
 
 
 def load_bronze_outputs() -> dict:
@@ -156,9 +159,65 @@ def merge_sources(bronze_outputs: dict) -> pd.DataFrame:
     return merged
 
 
-def run_silver_merge():
+def create_holdout_mask(df: pd.DataFrame, holdout_fraction: float = 0.1, random_state: int = 42) -> pd.DataFrame:
+    """Create holdout set by masking target for a fraction of records.
+
+    IMPORTANT: This must happen in the silver layer (BEFORE gold layer feature computation)
+    to prevent temporal leakage. If holdout is created after features are computed,
+    the features may contain information derived from the target values that will be masked.
+
+    Args:
+        df: DataFrame with TARGET_COLUMN
+        holdout_fraction: Fraction of records to use for holdout (default 10%)
+        random_state: Random seed for reproducibility
+
+    Returns:
+        DataFrame with holdout mask applied (original values stored in original_{TARGET_COLUMN})
+    """
+    ORIGINAL_COLUMN = f"original_{TARGET_COLUMN}"
+
+    # Skip if holdout already exists
+    if ORIGINAL_COLUMN in df.columns:
+        print(f"  Holdout already exists ({ORIGINAL_COLUMN}), skipping creation")
+        return df
+
+    if TARGET_COLUMN not in df.columns:
+        print(f"  Warning: TARGET_COLUMN '{TARGET_COLUMN}' not found, skipping holdout creation")
+        return df
+
+    print(f"Creating holdout set ({holdout_fraction:.0%} of data)...")
+    df = df.copy()
+
+    n_holdout = int(len(df) * holdout_fraction)
+    holdout_idx = df.sample(n=n_holdout, random_state=random_state).index
+
+    # Store original values for holdout records only
+    df[ORIGINAL_COLUMN] = pd.NA
+    df.loc[holdout_idx, ORIGINAL_COLUMN] = df.loc[holdout_idx, TARGET_COLUMN]
+
+    # Mask target values for holdout records
+    df.loc[holdout_idx, TARGET_COLUMN] = pd.NA
+
+    print(f"  Holdout records: {n_holdout:,} ({holdout_fraction:.0%})")
+    print(f"  Training records: {len(df) - n_holdout:,} ({1-holdout_fraction:.0%})")
+
+    return df
+
+
+def run_silver_merge(create_holdout: bool = True, holdout_fraction: float = 0.1):
+    """Run silver layer merge with optional holdout creation.
+
+    Args:
+        create_holdout: Whether to create holdout set (default True)
+        holdout_fraction: Fraction for holdout if creating (default 10%)
+    """
     bronze_outputs = load_bronze_outputs()
     silver = merge_sources(bronze_outputs)
+
+    # Create holdout BEFORE gold layer feature computation
+    if create_holdout:
+        silver = create_holdout_mask(silver, holdout_fraction=holdout_fraction)
+
     output_path = get_silver_path()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     silver.to_parquet(output_path, index=False)
@@ -168,14 +227,22 @@ def run_silver_merge():
 if __name__ == "__main__":
     run_silver_merge()
 ''',
-
     "gold.py.j2": '''import pandas as pd
+import warnings
 from datetime import datetime
 from pathlib import Path
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, LabelEncoder
 from config import (get_silver_path, get_gold_path, get_feast_data_path,
                     TARGET_COLUMN, RECOMMENDATIONS_HASH, FEAST_REPO_PATH,
-                    FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL, EXPERIMENTS_DIR)
+                    FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL, EXPERIMENTS_DIR,
+                    ARTIFACTS_PATH, FIT_MODE)
+from customer_retention.artifacts import FitArtifactRegistry
+
+{% if config.fit_mode %}
+_registry = FitArtifactRegistry(Path(ARTIFACTS_PATH))
+{% else %}
+_registry = FitArtifactRegistry.load_manifest(Path(ARTIFACTS_PATH) / "manifest.yaml")
+{% endif %}
 
 
 def load_silver() -> pd.DataFrame:
@@ -187,7 +254,16 @@ def apply_encodings(df: pd.DataFrame) -> pd.DataFrame:
 {% if enc.parameters.get("method") == "one_hot" %}
     df = pd.get_dummies(df, columns=["{{ enc.column }}"], prefix="{{ enc.column }}")
 {% elif enc.parameters.get("method") == "label" %}
-    df["{{ enc.column }}"] = LabelEncoder().fit_transform(df["{{ enc.column }}"].astype(str))
+{% if config.fit_mode %}
+    _enc_{{ enc.column }} = LabelEncoder()
+    df["{{ enc.column }}"] = _enc_{{ enc.column }}.fit_transform(df["{{ enc.column }}"].astype(str))
+    _registry.register(artifact_type="encoder", target_column="{{ enc.column }}", transformer=_enc_{{ enc.column }})
+{% else %}
+    _enc_{{ enc.column }} = _registry.load("{{ enc.column }}_encoder")
+    df["{{ enc.column }}"] = df["{{ enc.column }}"].astype(str).apply(
+        lambda x: _enc_{{ enc.column }}.transform([x])[0] if x in _enc_{{ enc.column }}.classes_ else 0
+    )
+{% endif %}
 {% endif %}
 {% endfor %}
     return df
@@ -196,9 +272,23 @@ def apply_encodings(df: pd.DataFrame) -> pd.DataFrame:
 def apply_scaling(df: pd.DataFrame) -> pd.DataFrame:
 {% for scale in config.gold.scalings %}
 {% if scale.parameters.get("method") == "standard" %}
-    df["{{ scale.column }}"] = StandardScaler().fit_transform(df[["{{ scale.column }}"]])
+{% if config.fit_mode %}
+    _scaler_{{ scale.column }} = StandardScaler()
+    df["{{ scale.column }}"] = _scaler_{{ scale.column }}.fit_transform(df[["{{ scale.column }}"]])
+    _registry.register(artifact_type="scaler", target_column="{{ scale.column }}", transformer=_scaler_{{ scale.column }})
+{% else %}
+    _scaler_{{ scale.column }} = _registry.load("{{ scale.column }}_scaler")
+    df["{{ scale.column }}"] = _scaler_{{ scale.column }}.transform(df[["{{ scale.column }}"]])
+{% endif %}
 {% elif scale.parameters.get("method") == "minmax" %}
-    df["{{ scale.column }}"] = MinMaxScaler().fit_transform(df[["{{ scale.column }}"]])
+{% if config.fit_mode %}
+    _scaler_{{ scale.column }} = MinMaxScaler()
+    df["{{ scale.column }}"] = _scaler_{{ scale.column }}.fit_transform(df[["{{ scale.column }}"]])
+    _registry.register(artifact_type="scaler", target_column="{{ scale.column }}", transformer=_scaler_{{ scale.column }})
+{% else %}
+    _scaler_{{ scale.column }} = _registry.load("{{ scale.column }}_scaler")
+    df["{{ scale.column }}"] = _scaler_{{ scale.column }}.transform(df[["{{ scale.column }}"]])
+{% endif %}
 {% endif %}
 {% endfor %}
     return df
@@ -210,33 +300,35 @@ def get_feature_version_tag() -> str:
     return "v1.0.0"
 
 
-def add_feast_timestamp(df: pd.DataFrame) -> pd.DataFrame:
-    """Add event_timestamp column required by Feast for point-in-time joins."""
+def add_feast_timestamp(df: pd.DataFrame, reference_date=None) -> pd.DataFrame:
     if FEAST_TIMESTAMP_COL not in df.columns:
-        df[FEAST_TIMESTAMP_COL] = datetime.now()
+        if "aggregation_reference_date" in df.attrs:
+            timestamp = df.attrs["aggregation_reference_date"]
+            print(f"  Using aggregation reference_date for Feast timestamp: {timestamp}")
+        elif reference_date is not None:
+            timestamp = reference_date
+            print(f"  Using provided reference_date for Feast timestamp: {timestamp}")
+        else:
+            timestamp = datetime.now()
+            warnings.warn(
+                f"No reference_date available for Feast timestamp. Using datetime.now() ({timestamp}). "
+                "This may cause temporal leakage - features should use actual aggregation dates. "
+                "Set aggregation_reference_date in DataFrame.attrs during aggregation.",
+                UserWarning
+            )
+        df[FEAST_TIMESTAMP_COL] = timestamp
     return df
 
 
 def materialize_to_feast(df: pd.DataFrame) -> None:
-    """Write features to Feast offline store (parquet file for FileSource).
-
-    Excludes original_* columns which contain holdout ground truth values.
-    These columns are reserved for scoring validation and must never leak into training.
-    """
     feast_path = get_feast_data_path()
     feast_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Ensure entity key and timestamp columns exist
     df_feast = df.copy()
     df_feast = add_feast_timestamp(df_feast)
-
-    # Exclude original_* columns from Feast (holdout ground truth - prevents data leakage)
     original_cols = [c for c in df_feast.columns if c.startswith("original_")]
     if original_cols:
         print(f"  Excluding holdout columns from Feast: {original_cols}")
         df_feast = df_feast.drop(columns=original_cols, errors="ignore")
-
-    # Save to Feast data location
     df_feast.to_parquet(feast_path, index=False)
     print(f"Features materialized to Feast: {feast_path}")
     print(f"  Entity key: {FEAST_ENTITY_KEY}")
@@ -248,25 +340,23 @@ def run_gold_features():
     silver = load_silver()
     gold = apply_encodings(silver)
     gold = apply_scaling(gold)
-
-    # Save to gold parquet (backward compatibility)
+{% if config.fit_mode %}
+    _registry.save_manifest()
+    print(f"Fit artifacts saved to: {ARTIFACTS_PATH}")
+{% endif %}
     output_path = get_gold_path()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     gold.attrs["recommendations_hash"] = RECOMMENDATIONS_HASH
     gold.attrs["feature_version"] = get_feature_version_tag()
     gold.to_parquet(output_path, index=False)
     print(f"Gold features saved with version: {get_feature_version_tag()}")
-
-    # Materialize to Feast for training/serving consistency
     materialize_to_feast(gold)
-
     return gold
 
 
 if __name__ == "__main__":
     run_gold_features()
 ''',
-
     "training.py.j2": '''import pandas as pd
 import mlflow
 import mlflow.sklearn
@@ -492,7 +582,6 @@ def run_experiment():
 if __name__ == "__main__":
     run_experiment()
 ''',
-
     "runner.py.j2": '''from concurrent.futures import ThreadPoolExecutor
 from config import PIPELINE_NAME, EXPERIMENTS_DIR
 {% for source in config.sources %}
@@ -535,7 +624,6 @@ def run_pipeline():
 if __name__ == "__main__":
     run_pipeline()
 ''',
-
     "run_all.py.j2": '''"""{{ config.name }} - Pipeline Runner with MLflow UI
 
 All artifacts (data, mlruns, feast) are stored in the experiments directory.
@@ -647,8 +735,7 @@ def run_pipeline():
 if __name__ == "__main__":
     run_pipeline()
 ''',
-
-    "workflow.json.j2": '''{
+    "workflow.json.j2": """{
   "name": "{{ config.name }}_pipeline",
   "tasks": [
 {% for source in config.sources %}
@@ -686,9 +773,8 @@ if __name__ == "__main__":
     }
   ]
 }
-''',
-
-    "feature_store.yaml.j2": '''project: {{ config.name }}
+""",
+    "feature_store.yaml.j2": """project: {{ config.name }}
 registry: data/registry.db
 provider: local
 online_store:
@@ -697,8 +783,7 @@ online_store:
 offline_store:
   type: file
 entity_key_serialization_version: 2
-''',
-
+""",
     "features.py.j2": '''"""Feast Feature Definitions for {{ config.name }}
 
 Auto-generated feature view definitions for training/serving consistency.
@@ -736,7 +821,6 @@ from feast.types import Float32, Float64, Int64, String
     }
 )
 ''',
-
     "run_scoring.py.j2": '''"""{{ config.name }} - Scoring Pipeline
 
 Generates predictions for holdout records using Feast features and MLflow model.
@@ -755,7 +839,10 @@ from datetime import datetime
 from feast import FeatureStore
 from config import (PIPELINE_NAME, TARGET_COLUMN, RECOMMENDATIONS_HASH, MLFLOW_TRACKING_URI,
                     FEAST_REPO_PATH, FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL,
-                    EXPERIMENTS_DIR, get_feast_data_path)
+                    EXPERIMENTS_DIR, get_feast_data_path, ARTIFACTS_PATH)
+from customer_retention.artifacts import FitArtifactRegistry
+
+_registry = FitArtifactRegistry.load_manifest(Path(ARTIFACTS_PATH) / "manifest.yaml")
 
 # Set tracking URI immediately to prevent default mlruns directory creation
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
@@ -772,26 +859,36 @@ def load_holdout_manifest() -> dict:
         return yaml.safe_load(f)
 
 
-def create_holdout_if_needed(df: pd.DataFrame, holdout_fraction: float = 0.1) -> pd.DataFrame:
-    """Create holdout set by masking target for a fraction of records."""
-    if ORIGINAL_COLUMN in df.columns:
-        return df
-    print(f"Creating holdout set ({holdout_fraction:.0%} of data)...")
-    df = df.copy()
-    n_holdout = int(len(df) * holdout_fraction)
-    holdout_idx = df.sample(n=n_holdout, random_state=42).index
-    df[ORIGINAL_COLUMN] = pd.NA
-    df.loc[holdout_idx, ORIGINAL_COLUMN] = df.loc[holdout_idx, TARGET_COLUMN]
-    df.loc[holdout_idx, TARGET_COLUMN] = pd.NA
-    df.to_parquet(get_feast_data_path(), index=False)
-    print(f"  Holdout records: {n_holdout:,}")
-    return df
-
-
 def get_scoring_data() -> pd.DataFrame:
+    """Load scoring data from holdout records.
+
+    IMPORTANT: Holdout must be created in silver layer BEFORE gold layer feature computation.
+    If no holdout exists, this function will raise an error rather than create one,
+    because creating holdout after feature computation causes temporal leakage.
+
+    The holdout was created by silver layer's create_holdout_mask() function.
+    """
     features_df = pd.read_parquet(get_feast_data_path())
-    features_df = create_holdout_if_needed(features_df)
+
+    # Check if holdout already exists (created in silver layer)
+    if ORIGINAL_COLUMN not in features_df.columns:
+        raise ValueError(
+            f"No holdout found (column '{ORIGINAL_COLUMN}' missing). "
+            "Holdout must be created in silver layer BEFORE gold layer feature computation. "
+            "Re-run the pipeline with create_holdout=True in silver layer, or set "
+            "holdout_fraction in run_silver_merge()."
+        )
+
     scoring_mask = features_df[TARGET_COLUMN].isna() & features_df[ORIGINAL_COLUMN].notna()
+    n_scoring = scoring_mask.sum()
+
+    if n_scoring == 0:
+        raise ValueError(
+            "No holdout records found. The holdout mask may have been created incorrectly. "
+            "Check that silver layer's create_holdout_mask() was called before gold layer."
+        )
+
+    print(f"Found {n_scoring:,} holdout records for scoring")
     return features_df[scoring_mask].copy()
 
 
@@ -843,13 +940,25 @@ def load_best_model():
 
 
 def prepare_features(df: pd.DataFrame) -> pd.DataFrame:
-    from sklearn.preprocessing import LabelEncoder
     df = df.copy()
     drop_cols = [FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL, ORIGINAL_COLUMN]
     df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
     df = df.drop(columns=[c for c in df.columns if c.startswith("original_")], errors="ignore")
     for col in df.select_dtypes(include=["object", "category"]).columns:
-        df[col] = LabelEncoder().fit_transform(df[col].astype(str))
+        artifact_id = f"{col}_encoder"
+        if _registry.has_artifact(artifact_id):
+            encoder = _registry.load(artifact_id)
+            df[col] = df[col].astype(str).apply(
+                lambda x: encoder.transform([x])[0] if x in encoder.classes_ else 0
+            )
+        else:
+            from sklearn.preprocessing import LabelEncoder
+            df[col] = LabelEncoder().fit_transform(df[col].astype(str))
+    for col in df.select_dtypes(include=["float64", "float32"]).columns:
+        artifact_id = f"{col}_scaler"
+        if _registry.has_artifact(artifact_id):
+            scaler = _registry.load(artifact_id)
+            df[col] = scaler.transform(df[[col]])
     return df.select_dtypes(include=["int64", "float64", "int32", "float32"]).fillna(0)
 
 
@@ -897,8 +1006,7 @@ def run_scoring():
 if __name__ == "__main__":
     run_scoring()
 ''',
-
-    "scoring_dashboard.ipynb.j2": '''{
+    "scoring_dashboard.ipynb.j2": """{
  "cells": [
   {
    "cell_type": "markdown",
@@ -928,10 +1036,12 @@ if __name__ == "__main__":
     "import pandas as pd\\n",
     "import numpy as np\\n",
     "import mlflow\\n",
+    "import mlflow.sklearn\\n",
+    "import mlflow.xgboost\\n",
     "import shap\\n",
     "import matplotlib.pyplot as plt\\n",
     "from IPython.display import display, HTML\\n",
-    "from config import (PIPELINE_NAME, TARGET_COLUMN, MLFLOW_TRACKING_URI,\\n",
+    "from config import (PIPELINE_NAME, TARGET_COLUMN, MLFLOW_TRACKING_URI, RECOMMENDATIONS_HASH,\\n",
     "                    FEAST_ENTITY_KEY, EXPERIMENTS_DIR, get_feast_data_path)"
    ]
   },
@@ -1039,6 +1149,251 @@ if __name__ == "__main__":
     "\\n",
     "plt.tight_layout()\\n",
     "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 2.5 Model Comparison Grid\\n",
+    "\\n",
+    "Compare all trained models (Logistic Regression, Random Forest, XGBoost) on the holdout set.\\n",
+    "\\n",
+    "**Grid Layout:**\\n",
+    "- **Row 1**: Confusion matrices (counts and percentages)\\n",
+    "- **Row 2**: ROC curves with AUC scores\\n",
+    "- **Row 3**: Precision-Recall curves with PR-AUC scores"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Load and compare all trained models\\n",
+    "from sklearn.preprocessing import LabelEncoder\\n",
+    "from sklearn.metrics import (roc_curve, precision_recall_curve, average_precision_score,\\n",
+    "                             confusion_matrix, roc_auc_score, f1_score, precision_score,\\n",
+    "                             recall_score, accuracy_score)\\n",
+    "import xgboost as xgb\\n",
+    "from config import RECOMMENDATIONS_HASH\\n",
+    "\\n",
+    "mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)\\n",
+    "client = mlflow.tracking.MlflowClient()\\n",
+    "experiment = client.get_experiment_by_name(PIPELINE_NAME)\\n",
+    "\\n",
+    "# Prepare features for scoring\\n",
+    "def prepare_features_for_comparison(df):\\n",
+    "    df = df.copy()\\n",
+    "    drop_cols = [FEAST_ENTITY_KEY, 'event_timestamp', ORIGINAL_COLUMN, TARGET_COLUMN]\\n",
+    "    df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors='ignore')\\n",
+    "    df = df.drop(columns=[c for c in df.columns if c.startswith('original_')], errors='ignore')\\n",
+    "    for col in df.select_dtypes(include=['object', 'category']).columns:\\n",
+    "        df[col] = LabelEncoder().fit_transform(df[col].astype(str))\\n",
+    "    return df.select_dtypes(include=['int64', 'float64', 'int32', 'float32']).fillna(0)\\n",
+    "\\n",
+    "X_holdout = prepare_features_for_comparison(scoring_features)\\n",
+    "y_actual = predictions_df['actual'].values\\n",
+    "\\n",
+    "# Get all logged models\\n",
+    "logged_models = client.search_logged_models(experiment_ids=[experiment.experiment_id])\\n",
+    "\\n",
+    "# Load all 3 model types\\n",
+    "model_types = ['logistic_regression', 'random_forest', 'xgboost']\\n",
+    "model_display_names = ['Logistic Regression', 'Random Forest', 'XGBoost']\\n",
+    "loaded_models = {}\\n",
+    "model_predictions = {}\\n",
+    "\\n",
+    "for model_type, display_name in zip(model_types, model_display_names):\\n",
+    "    model_name_pattern = f'model_{model_type}'\\n",
+    "    if RECOMMENDATIONS_HASH:\\n",
+    "        model_name_pattern = f'{model_name_pattern}_{RECOMMENDATIONS_HASH}'\\n",
+    "    \\n",
+    "    matching_model = None\\n",
+    "    for lm in logged_models:\\n",
+    "        if lm.name == model_name_pattern:\\n",
+    "            if matching_model is None or lm.creation_timestamp > matching_model.creation_timestamp:\\n",
+    "                matching_model = lm\\n",
+    "    \\n",
+    "    if matching_model:\\n",
+    "        try:\\n",
+    "            if 'xgboost' in model_type:\\n",
+    "                model = mlflow.xgboost.load_model(matching_model.model_uri)\\n",
+    "                dmatrix = xgb.DMatrix(X_holdout, feature_names=list(X_holdout.columns))\\n",
+    "                y_proba = model.predict(dmatrix)\\n",
+    "            else:\\n",
+    "                model = mlflow.sklearn.load_model(matching_model.model_uri)\\n",
+    "                y_proba = model.predict_proba(X_holdout)[:, 1]\\n",
+    "            \\n",
+    "            y_pred = (y_proba > 0.5).astype(int)\\n",
+    "            loaded_models[display_name] = model\\n",
+    "            model_predictions[display_name] = {'y_pred': y_pred, 'y_proba': y_proba}\\n",
+    "            print(f'Loaded {display_name}: ROC-AUC = {roc_auc_score(y_actual, y_proba):.4f}')\\n",
+    "        except Exception as e:\\n",
+    "            print(f'Could not load {display_name}: {e}')\\n",
+    "\\n",
+    "print(f'\\\\nLoaded {len(loaded_models)} models for comparison')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Create Model Comparison Grid (3 columns x 3 rows)\\n",
+    "n_models = len(model_predictions)\\n",
+    "if n_models > 0:\\n",
+    "    fig, axes = plt.subplots(3, n_models, figsize=(5 * n_models, 12))\\n",
+    "    if n_models == 1:\\n",
+    "        axes = axes.reshape(-1, 1)\\n",
+    "    \\n",
+    "    colors = ['#1f77b4', '#ff7f0e', '#2ca02c']\\n",
+    "    \\n",
+    "    for col_idx, (name, preds) in enumerate(model_predictions.items()):\\n",
+    "        y_pred = preds['y_pred']\\n",
+    "        y_proba = preds['y_proba']\\n",
+    "        color = colors[col_idx % len(colors)]\\n",
+    "        \\n",
+    "        # Row 1: Confusion Matrix\\n",
+    "        cm = confusion_matrix(y_actual, y_pred)\\n",
+    "        ax = axes[0, col_idx]\\n",
+    "        im = ax.imshow(cm, cmap='Blues')\\n",
+    "        ax.set_xticks([0, 1])\\n",
+    "        ax.set_yticks([0, 1])\\n",
+    "        ax.set_xticklabels(['Pred 0', 'Pred 1'])\\n",
+    "        ax.set_yticklabels(['Actual 0', 'Actual 1'])\\n",
+    "        for i in range(2):\\n",
+    "            for j in range(2):\\n",
+    "                pct = cm[i, j] / cm.sum() * 100\\n",
+    "                ax.text(j, i, f'{cm[i, j]}\\\\n({pct:.1f}%)', ha='center', va='center',\\n",
+    "                       color='white' if cm[i, j] > cm.max()/2 else 'black', fontsize=10)\\n",
+    "        acc = accuracy_score(y_actual, y_pred)\\n",
+    "        ax.set_title(f'{name}\\\\nAccuracy: {acc:.3f}', fontsize=11, fontweight='bold')\\n",
+    "        \\n",
+    "        # Row 2: ROC Curve\\n",
+    "        ax = axes[1, col_idx]\\n",
+    "        fpr, tpr, _ = roc_curve(y_actual, y_proba)\\n",
+    "        auc = roc_auc_score(y_actual, y_proba)\\n",
+    "        ax.plot(fpr, tpr, color=color, lw=2, label=f'AUC = {auc:.4f}')\\n",
+    "        ax.plot([0, 1], [0, 1], 'k--', lw=1, alpha=0.5)\\n",
+    "        ax.fill_between(fpr, tpr, alpha=0.2, color=color)\\n",
+    "        ax.set_xlabel('False Positive Rate')\\n",
+    "        ax.set_ylabel('True Positive Rate')\\n",
+    "        ax.set_title(f'ROC Curve', fontsize=10)\\n",
+    "        ax.legend(loc='lower right')\\n",
+    "        ax.grid(True, alpha=0.3)\\n",
+    "        \\n",
+    "        # Row 3: Precision-Recall Curve\\n",
+    "        ax = axes[2, col_idx]\\n",
+    "        precision, recall, _ = precision_recall_curve(y_actual, y_proba)\\n",
+    "        pr_auc = average_precision_score(y_actual, y_proba)\\n",
+    "        ax.plot(recall, precision, color=color, lw=2, label=f'PR-AUC = {pr_auc:.4f}')\\n",
+    "        baseline = y_actual.sum() / len(y_actual)\\n",
+    "        ax.axhline(y=baseline, color='gray', linestyle='--', lw=1, label=f'Baseline = {baseline:.2f}')\\n",
+    "        ax.fill_between(recall, precision, alpha=0.2, color=color)\\n",
+    "        ax.set_xlabel('Recall')\\n",
+    "        ax.set_ylabel('Precision')\\n",
+    "        ax.set_title(f'Precision-Recall Curve', fontsize=10)\\n",
+    "        ax.legend(loc='lower left')\\n",
+    "        ax.grid(True, alpha=0.3)\\n",
+    "    \\n",
+    "    plt.suptitle('Model Comparison Grid: Holdout Set Performance', fontsize=14, fontweight='bold', y=1.02)\\n",
+    "    plt.tight_layout()\\n",
+    "    plt.show()\\n",
+    "else:\\n",
+    "    print('No models loaded for comparison')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Summary metrics table for all models\\n",
+    "if model_predictions:\\n",
+    "    comparison_results = []\\n",
+    "    for name, preds in model_predictions.items():\\n",
+    "        y_pred = preds['y_pred']\\n",
+    "        y_proba = preds['y_proba']\\n",
+    "        comparison_results.append({\\n",
+    "            'Model': name,\\n",
+    "            'ROC-AUC': roc_auc_score(y_actual, y_proba),\\n",
+    "            'PR-AUC': average_precision_score(y_actual, y_proba),\\n",
+    "            'F1-Score': f1_score(y_actual, y_pred),\\n",
+    "            'Precision': precision_score(y_actual, y_pred, zero_division=0),\\n",
+    "            'Recall': recall_score(y_actual, y_pred, zero_division=0),\\n",
+    "            'Accuracy': accuracy_score(y_actual, y_pred)\\n",
+    "        })\\n",
+    "    \\n",
+    "    comparison_df = pd.DataFrame(comparison_results).set_index('Model')\\n",
+    "    print('\\\\n' + '=' * 70)\\n",
+    "    print('MODEL COMPARISON SUMMARY (Holdout Set)')\\n",
+    "    print('=' * 70)\\n",
+    "    display(comparison_df.style.highlight_max(axis=0, color='lightgreen').format('{:.4f}'))\\n",
+    "    \\n",
+    "    # Identify best model\\n",
+    "    best_model_name = comparison_df['ROC-AUC'].idxmax()\\n",
+    "    best_auc = comparison_df.loc[best_model_name, 'ROC-AUC']\\n",
+    "    print(f'\\\\nBest Model: {best_model_name} (ROC-AUC = {best_auc:.4f})')"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 2.6 Adversarial Pipeline Validation\\n",
+    "\\n",
+    "Validate that scoring pipeline produces identical features to training for holdout entities.\\n",
+    "This catches transformation inconsistencies (e.g., scalers re-fit, encoders handling unseen values differently)."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "from customer_retention.stages.validation import (\\n",
+    "    AdversarialScoringValidator, DriftSeverity\\n",
+    ")\\n",
+    "\\n",
+    "# Load gold features (training pipeline output)\\n",
+    "gold_features = pd.read_parquet(get_feast_data_path())\\n",
+    "\\n",
+    "# Create validator\\n",
+    "validator = AdversarialScoringValidator(\\n",
+    "    gold_features=gold_features,\\n",
+    "    entity_column=FEAST_ENTITY_KEY,\\n",
+    "    target_column=TARGET_COLUMN,\\n",
+    "    tolerance=1e-6,\\n",
+    ")\\n",
+    "\\n",
+    "# Get holdout entity IDs\\n",
+    "holdout_ids = validator.get_holdout_entity_ids()\\n",
+    "print(f'Holdout entities for validation: {len(holdout_ids):,}')\\n",
+    "\\n",
+    "# Validate: compare gold features with scoring features (should be identical)\\n",
+    "# scoring_features was loaded earlier - these are the same entities from the gold file\\n",
+    "result = validator.validate_features(scoring_features)\\n",
+    "\\n",
+    "print('\\\\n' + '=' * 60)\\n",
+    "print('ADVERSARIAL PIPELINE VALIDATION')\\n",
+    "print('=' * 60)\\n",
+    "print(result.summary)\\n",
+    "\\n",
+    "if result.passed:\\n",
+    "    print('\\\\n✓ PASSED: Scoring features match training features')\\n",
+    "else:\\n",
+    "    print('\\\\n✗ FAILED: Feature drift detected!')\\n",
+    "    drift_df = result.to_dataframe()\\n",
+    "    display(drift_df.sort_values('severity', ascending=False))\\n",
+    "    \\n",
+    "    critical_drifts = [d for d in result.feature_drifts if d.severity >= DriftSeverity.HIGH]\\n",
+    "    if critical_drifts:\\n",
+    "        print(f'\\\\n⚠ {len(critical_drifts)} HIGH/CRITICAL severity drifts require investigation')"
    ]
   },
   {
@@ -1389,46 +1744,63 @@ if __name__ == "__main__":
  "nbformat": 4,
  "nbformat_minor": 4
 }
-'''
+""",
 }
 
 
 class CodeRenderer:
+    _TEMPLATE_MAP = {
+        "config": "config.py.j2",
+        "silver": "silver.py.j2",
+        "gold": "gold.py.j2",
+        "training": "training.py.j2",
+        "runner": "runner.py.j2",
+        "workflow": "workflow.json.j2",
+        "run_all": "run_all.py.j2",
+        "feast_config": "feature_store.yaml.j2",
+        "feast_features": "features.py.j2",
+        "scoring": "run_scoring.py.j2",
+        "dashboard": "scoring_dashboard.ipynb.j2",
+    }
+
     def __init__(self):
         self._env = Environment(loader=InlineLoader(TEMPLATES))
 
+    def _render(self, template_key: str, **context) -> str:
+        return self._env.get_template(self._TEMPLATE_MAP[template_key]).render(**context)
+
     def render_config(self, config: PipelineConfig) -> str:
-        return self._env.get_template("config.py.j2").render(config=config)
+        return self._render("config", config=config)
 
     def render_bronze(self, source_name: str, bronze_config: BronzeLayerConfig) -> str:
         return self._env.get_template("bronze.py.j2").render(source=source_name, config=bronze_config)
 
     def render_silver(self, config: PipelineConfig) -> str:
-        return self._env.get_template("silver.py.j2").render(config=config)
+        return self._render("silver", config=config)
 
     def render_gold(self, config: PipelineConfig) -> str:
-        return self._env.get_template("gold.py.j2").render(config=config)
+        return self._render("gold", config=config)
 
     def render_training(self, config: PipelineConfig) -> str:
-        return self._env.get_template("training.py.j2").render(config=config)
+        return self._render("training", config=config)
 
     def render_runner(self, config: PipelineConfig) -> str:
-        return self._env.get_template("runner.py.j2").render(config=config)
+        return self._render("runner", config=config)
 
     def render_workflow(self, config: PipelineConfig) -> str:
-        return self._env.get_template("workflow.json.j2").render(config=config)
+        return self._render("workflow", config=config)
 
     def render_run_all(self, config: PipelineConfig) -> str:
-        return self._env.get_template("run_all.py.j2").render(config=config)
+        return self._render("run_all", config=config)
 
     def render_feast_config(self, config: PipelineConfig) -> str:
-        return self._env.get_template("feature_store.yaml.j2").render(config=config)
+        return self._render("feast_config", config=config)
 
     def render_feast_features(self, config: PipelineConfig) -> str:
-        return self._env.get_template("features.py.j2").render(config=config)
+        return self._render("feast_features", config=config)
 
     def render_scoring(self, config: PipelineConfig) -> str:
-        return self._env.get_template("run_scoring.py.j2").render(config=config)
+        return self._render("scoring", config=config)
 
     def render_dashboard(self, config: PipelineConfig) -> str:
-        return self._env.get_template("scoring_dashboard.ipynb.j2").render(config=config)
+        return self._render("dashboard", config=config)

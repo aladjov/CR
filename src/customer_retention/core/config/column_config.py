@@ -7,6 +7,8 @@ from pydantic import BaseModel, model_validator
 class ColumnType(str, Enum):
     IDENTIFIER = "identifier"
     TARGET = "target"
+    FEATURE_TIMESTAMP = "feature_timestamp"
+    LABEL_TIMESTAMP = "label_timestamp"
     NUMERIC_CONTINUOUS = "numeric_continuous"
     NUMERIC_DISCRETE = "numeric_discrete"
     CATEGORICAL_NOMINAL = "categorical_nominal"
@@ -16,6 +18,15 @@ class ColumnType(str, Enum):
     BINARY = "binary"
     TEXT = "text"
     UNKNOWN = "unknown"
+
+
+# Column types that should NEVER be used as features (leakage risk)
+NON_FEATURE_COLUMN_TYPES = frozenset({
+    ColumnType.IDENTIFIER,
+    ColumnType.TARGET,
+    ColumnType.FEATURE_TIMESTAMP,
+    ColumnType.LABEL_TIMESTAMP,
+})
 
 
 class DatasetGranularity(str, Enum):
@@ -64,7 +75,7 @@ class ColumnConfig(BaseModel):
             return False
         if self.is_feature is not None:
             return self.is_feature
-        return self.column_type not in [ColumnType.IDENTIFIER, ColumnType.TARGET]
+        return self.column_type not in NON_FEATURE_COLUMN_TYPES
 
     def is_categorical(self) -> bool:
         return self.column_type in [

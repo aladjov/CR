@@ -4,6 +4,7 @@ import pytest
 
 from customer_retention.analysis.diagnostics import LeakageDetector
 from customer_retention.core.components.enums import Severity
+from customer_retention.core.utils.leakage import TEMPORAL_METADATA_COLUMNS
 
 
 @pytest.fixture
@@ -260,3 +261,98 @@ class TestRecommendations:
         assert len(result.recommendations) > 0
         for rec in result.recommendations:
             assert len(rec) > 10
+
+
+class TestTemporalMetadataExclusion:
+    """Tests ensuring temporal metadata columns are never analyzed as features."""
+
+    @pytest.fixture
+    def data_with_temporal_metadata(self):
+        """Create data that includes temporal metadata columns with high correlation to target."""
+        np.random.seed(42)
+        n = 500
+        target = np.random.choice([0, 1], n, p=[0.3, 0.7])
+        return pd.DataFrame({
+            "normal_feature": np.random.randn(n),
+            "feature_timestamp": target + np.random.randn(n) * 0.01,  # would be flagged if analyzed
+            "label_timestamp": target + np.random.randn(n) * 0.01,
+            "label_available_flag": target,  # perfectly correlated
+            "event_timestamp": target + np.random.randn(n) * 0.01,
+            "target": target,
+        })
+
+    def test_correlation_check_excludes_temporal_metadata(self, data_with_temporal_metadata):
+        detector = LeakageDetector()
+        X = data_with_temporal_metadata.drop(columns=["target"])
+        y = data_with_temporal_metadata["target"]
+
+        result = detector.check_correlations(X, y)
+
+        flagged_features = {c.feature for c in result.checks}
+        for col in TEMPORAL_METADATA_COLUMNS:
+            assert col not in flagged_features, f"{col} should be excluded from correlation analysis"
+
+    def test_separation_check_excludes_temporal_metadata(self, data_with_temporal_metadata):
+        detector = LeakageDetector()
+        X = data_with_temporal_metadata.drop(columns=["target"])
+        y = data_with_temporal_metadata["target"]
+
+        result = detector.check_separation(X, y)
+
+        flagged_features = {c.feature for c in result.checks}
+        for col in TEMPORAL_METADATA_COLUMNS:
+            assert col not in flagged_features, f"{col} should be excluded from separation analysis"
+
+    def test_temporal_logic_check_excludes_temporal_metadata(self, data_with_temporal_metadata):
+        detector = LeakageDetector()
+        X = data_with_temporal_metadata.drop(columns=["target"])
+        y = data_with_temporal_metadata["target"]
+
+        result = detector.check_temporal_logic(X, y)
+
+        flagged_features = {c.feature for c in result.checks}
+        for col in TEMPORAL_METADATA_COLUMNS:
+            assert col not in flagged_features, f"{col} should be excluded from temporal logic analysis"
+
+    def test_single_feature_auc_excludes_temporal_metadata(self, data_with_temporal_metadata):
+        detector = LeakageDetector()
+        X = data_with_temporal_metadata.drop(columns=["target"])
+        y = data_with_temporal_metadata["target"]
+
+        result = detector.check_single_feature_auc(X, y)
+
+        flagged_features = {c.feature for c in result.checks}
+        for col in TEMPORAL_METADATA_COLUMNS:
+            assert col not in flagged_features, f"{col} should be excluded from AUC analysis"
+
+    def test_run_all_checks_excludes_temporal_metadata_from_feature_analysis(self, data_with_temporal_metadata):
+        """Verify temporal metadata is excluded from feature-based checks (correlation, separation, AUC).
+
+        Note: check_uniform_timestamps and check_point_in_time are allowed to flag
+        temporal metadata columns because they validate timestamp correctness, not feature analysis.
+        """
+        detector = LeakageDetector()
+        X = data_with_temporal_metadata.drop(columns=["target"])
+        y = data_with_temporal_metadata["target"]
+
+        result = detector.run_all_checks(X, y, include_pit=False)
+
+        flagged_features = {c.feature for c in result.checks}
+        for col in TEMPORAL_METADATA_COLUMNS:
+            assert col not in flagged_features, f"{col} should be excluded from feature analysis checks"
+
+    def test_get_analyzable_columns_filters_temporal_metadata(self):
+        detector = LeakageDetector()
+        df = pd.DataFrame({
+            "feature1": [1, 2, 3],
+            "feature_timestamp": [1, 2, 3],
+            "label_timestamp": [1, 2, 3],
+            "label_available_flag": [1, 0, 1],
+            "event_timestamp": [1, 2, 3],
+        })
+
+        analyzable = detector._get_analyzable_columns(df)
+
+        assert "feature1" in analyzable
+        for col in TEMPORAL_METADATA_COLUMNS:
+            assert col not in analyzable

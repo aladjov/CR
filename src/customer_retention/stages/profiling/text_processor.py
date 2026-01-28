@@ -1,10 +1,13 @@
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from customer_retention.core.compat import DataFrame
 
 from .text_embedder import TextEmbedder
 from .text_reducer import TextDimensionalityReducer
+
+if TYPE_CHECKING:
+    from customer_retention.artifacts import FitArtifactRegistry
 
 
 @dataclass
@@ -27,8 +30,10 @@ class TextColumnResult:
 
 
 class TextColumnProcessor:
-    def __init__(self, config: Optional[TextProcessingConfig] = None):
+    def __init__(self, config: Optional[TextProcessingConfig] = None,
+                 registry: Optional["FitArtifactRegistry"] = None):
         self.config = config or TextProcessingConfig()
+        self.registry = registry
         self._embedder: Optional[TextEmbedder] = None
         self._reducers: Dict[str, TextDimensionalityReducer] = {}
 
@@ -44,6 +49,7 @@ class TextColumnProcessor:
         reducer = self._get_or_create_reducer(column, fit)
         if fit:
             result = reducer.fit_transform(embeddings, column)
+            self._register_reducer(column, reducer)
         else:
             result = reducer.transform(embeddings, column)
         output_df = self._add_components_to_df(df, result.components, result.component_names)
@@ -56,6 +62,15 @@ class TextColumnProcessor:
             sample_size=len(df)
         )
 
+    def _register_reducer(self, column: str, reducer: TextDimensionalityReducer) -> None:
+        if self.registry is None or reducer._pca is None:
+            return
+        self.registry.register(
+            artifact_type="reducer",
+            target_column=column,
+            transformer=reducer._pca
+        )
+
     def process_all_text_columns(self, df: DataFrame,
                                   text_columns: List[str]) -> Tuple[DataFrame, List[TextColumnResult]]:
         results = []
@@ -66,12 +81,31 @@ class TextColumnProcessor:
         return output_df, results
 
     def _get_or_create_reducer(self, column: str, fit: bool) -> TextDimensionalityReducer:
-        if fit or column not in self._reducers:
+        if fit:
             self._reducers[column] = TextDimensionalityReducer(
                 variance_threshold=self.config.variance_threshold,
                 max_components=self.config.max_components,
                 min_components=self.config.min_components
             )
+            return self._reducers[column]
+        if column in self._reducers:
+            return self._reducers[column]
+        if self.registry is not None and self.registry.has_artifact(f"{column}_reducer"):
+            pca = self.registry.load(f"{column}_reducer")
+            reducer = TextDimensionalityReducer(
+                variance_threshold=self.config.variance_threshold,
+                max_components=self.config.max_components,
+                min_components=self.config.min_components
+            )
+            reducer._pca = pca
+            reducer._fitted = True
+            self._reducers[column] = reducer
+            return reducer
+        self._reducers[column] = TextDimensionalityReducer(
+            variance_threshold=self.config.variance_threshold,
+            max_components=self.config.max_components,
+            min_components=self.config.min_components
+        )
         return self._reducers[column]
 
     def _add_components_to_df(self, df: DataFrame, components, names: List[str]) -> DataFrame:

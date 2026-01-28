@@ -135,6 +135,38 @@ def get_sparkline_frequency(time_span_days: int) -> str:
     return "W" if time_span_days <= 365 else "ME"
 
 
+def select_columns_by_variance(df: DataFrame, numeric_cols: List[str], max_cols: int = 6) -> List[str]:
+    import numpy as np
+    scores = {}
+    for col in numeric_cols:
+        if col not in df.columns:
+            continue
+        col_data = df[col].dropna()
+        if len(col_data) == 0:
+            continue
+        std_val, mean_val = col_data.std(), abs(col_data.mean())
+        if std_val == 0 or mean_val < 1e-10:
+            continue
+        coeff_of_variation = std_val / mean_val
+        scores[col] = coeff_of_variation if not np.isnan(coeff_of_variation) else 0
+    return sorted(scores, key=scores.get, reverse=True)[:max_cols]
+
+
+def _reject_target_comparison_on_event_level_data(
+    df: DataFrame, entity_column: str, target_column: Optional[str]
+) -> None:
+    if target_column is None:
+        return
+    n_entities, n_rows = df[entity_column].nunique(), len(df)
+    if n_entities < n_rows:
+        raise ValueError(
+            f"Target comparisons not allowed on event-level data. "
+            f"Found {n_rows:,} rows but only {n_entities:,} entities. "
+            f"Aggregate to entity level first using TimeWindowAggregator, "
+            f"or use select_columns_by_variance() for column selection."
+        )
+
+
 def get_analysis_frequency(time_span_days: int) -> Tuple[str, str]:
     if time_span_days <= 90:
         return "D", "Daily"
@@ -170,40 +202,39 @@ class SparklineDataBuilder:
         self.freq = freq
 
     def build(self, df: DataFrame, columns: List[str]) -> Tuple[List[SparklineData], bool]:
-        import numpy as np
         import pandas as pd
+        has_target = self.target_column and self.target_column in df.columns
+        if has_target:
+            _reject_target_comparison_on_event_level_data(df, self.entity_column, self.target_column)
+        df_work = self._prepare_working_df(df, has_target)
+        df_work['_period'] = pd.to_datetime(df_work[self.time_column]).dt.to_period(self.freq).dt.start_time
+        results = [self._build_sparkline_for_column(df_work, col, has_target)
+                   for col in columns if col in df_work.columns]
+        return results, has_target
 
-        if self.target_column and self.target_column in df.columns:
+    def _prepare_working_df(self, df: DataFrame, has_target: bool) -> DataFrame:
+        if has_target:
             entity_target = df.groupby(self.entity_column)[self.target_column].first()
-            df_work = df.merge(
+            return df.merge(
                 entity_target.reset_index().rename(columns={self.target_column: '_target'}),
                 on=self.entity_column)
-            has_target_split = True
-        else:
-            df_work = df.copy()
-            df_work['_target'] = 1
-            has_target_split = False
+        df_work = df.copy()
+        df_work['_target'] = 1
+        return df_work
 
-        df_work['_period'] = pd.to_datetime(df_work[self.time_column]).dt.to_period(self.freq).dt.start_time
-        results = []
-        for col in columns:
-            if col not in df_work.columns:
-                continue
-            if has_target_split:
-                retained = df_work[df_work['_target'] == 1].groupby('_period')[col].mean()
-                churned = df_work[df_work['_target'] == 0].groupby('_period')[col].mean()
-                all_periods = sorted(set(retained.index) | set(churned.index))
-                retained_vals = [retained.get(p, np.nan) for p in all_periods]
-                churned_vals = [churned.get(p, np.nan) for p in all_periods]
-            else:
-                overall = df_work.groupby('_period')[col].mean()
-                all_periods = sorted(overall.index)
-                retained_vals = overall.tolist()
-                churned_vals = None
-            results.append(SparklineData(
-                column=col, weeks=all_periods, retained_values=retained_vals,
-                churned_values=churned_vals, has_target_split=has_target_split))
-        return results, has_target_split
+    def _build_sparkline_for_column(self, df_work: DataFrame, col: str, has_target: bool) -> SparklineData:
+        import numpy as np
+        if has_target:
+            retained = df_work[df_work['_target'] == 1].groupby('_period')[col].mean()
+            churned = df_work[df_work['_target'] == 0].groupby('_period')[col].mean()
+            all_periods = sorted(set(retained.index) | set(churned.index))
+            retained_vals = [retained.get(p, np.nan) for p in all_periods]
+            churned_vals = [churned.get(p, np.nan) for p in all_periods]
+        else:
+            overall = df_work.groupby('_period')[col].mean()
+            all_periods, retained_vals, churned_vals = sorted(overall.index), overall.tolist(), None
+        return SparklineData(column=col, weeks=all_periods, retained_values=retained_vals,
+                             churned_values=churned_vals, has_target_split=has_target)
 
     def print_summary(self, sparkline_data: List[SparklineData], has_target: bool):
         print("=" * 70)

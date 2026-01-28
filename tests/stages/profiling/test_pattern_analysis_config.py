@@ -289,14 +289,37 @@ class TestSparklineDataBuilder:
         assert len(results) == 1
         assert results[0].column == "amount"
 
-    def test_build_with_target(self, sample_df):
+    def test_build_with_target_rejects_event_level_data(self, sample_df):
+        """SparklineDataBuilder rejects target on event-level data.
+
+        Target comparisons are only valid at entity level. Event-level data
+        (multiple rows per entity) should use target_column=None.
+        """
         builder = SparklineDataBuilder(
             entity_column="customer_id",
             time_column="date",
             target_column="target",
             freq="W",
         )
-        results, has_target = builder.build(sample_df, columns=["amount"])
+        with pytest.raises(ValueError, match="event-level data"):
+            builder.build(sample_df, columns=["amount"])
+
+    def test_build_with_target_on_entity_level_data(self):
+        """SparklineDataBuilder works with target on entity-level data."""
+        # Entity-level data: one row per entity
+        entity_df = pd.DataFrame({
+            "customer_id": ["A", "B"],
+            "date": pd.to_datetime(["2023-01-01", "2023-01-01"]),
+            "amount": [100, 50],
+            "target": [1, 0],
+        })
+        builder = SparklineDataBuilder(
+            entity_column="customer_id",
+            time_column="date",
+            target_column="target",
+            freq="W",
+        )
+        results, has_target = builder.build(entity_df, columns=["amount"])
         assert has_target
         assert len(results) == 1
         assert results[0].has_target_split
@@ -310,15 +333,24 @@ class TestSparklineDataBuilder:
         results, _ = builder.build(sample_df, columns=["nonexistent"])
         assert len(results) == 0
 
-    def test_print_summary_with_target(self, sample_df, capsys):
+    def test_print_summary_with_target(self, capsys):
+        """Test print_summary with pre-built target-split data."""
+        # Manually create SparklineData with target split
+        # (simulating entity-level data that would pass validation)
+        sparkline_data = [SparklineData(
+            column="amount",
+            weeks=[pd.Timestamp("2023-01-01"), pd.Timestamp("2023-01-08")],
+            retained_values=[100.0, 110.0],
+            churned_values=[50.0, 55.0],
+            has_target_split=True,
+        )]
         builder = SparklineDataBuilder(
             entity_column="customer_id",
             time_column="date",
             target_column="target",
             freq="W",
         )
-        results, has_target = builder.build(sample_df, columns=["amount"])
-        builder.print_summary(results, has_target)
+        builder.print_summary(sparkline_data, has_target=True)
         captured = capsys.readouterr()
         assert "Retained vs Churned" in captured.out
 

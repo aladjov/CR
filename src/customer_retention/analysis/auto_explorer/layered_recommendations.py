@@ -35,6 +35,7 @@ class LayeredRecommendation:
     source_notebook: str
     priority: int = 1
     dependencies: List[str] = field(default_factory=list)
+    fit_artifact_id: Optional[str] = None
 
 
 @dataclass
@@ -86,7 +87,14 @@ class RecommendationRegistry:
         self.bronze: Optional[BronzeRecommendations] = None
         self.silver: Optional[SilverRecommendations] = None
         self.gold: Optional[GoldRecommendations] = None
+        self.fit_artifacts: Dict[str, str] = {}
         self._id_counter = 0
+
+    def link_fit_artifact(self, recommendation_id: str, artifact_id: str) -> None:
+        self.fit_artifacts[recommendation_id] = artifact_id
+
+    def get_fit_artifact(self, recommendation_id: str) -> Optional[str]:
+        return self.fit_artifacts.get(recommendation_id)
 
     @property
     def source_names(self) -> List[str]:
@@ -366,6 +374,8 @@ class RecommendationRegistry:
             result["silver"] = self._layer_to_dict(self.silver)
         if self.gold:
             result["gold"] = self._layer_to_dict(self.gold)
+        if self.fit_artifacts:
+            result["fit_artifacts"] = self.fit_artifacts.copy()
         return result
 
     def compute_recommendations_hash(self, length: int = 8) -> str:
@@ -401,6 +411,8 @@ class RecommendationRegistry:
             registry.silver = cls._silver_from_dict(data["silver"])
         if "gold" in data:
             registry.gold = cls._gold_from_dict(data["gold"])
+        if "fit_artifacts" in data:
+            registry.fit_artifacts = data["fit_artifacts"].copy()
         return registry
 
     def _create_recommendation(self, layer: str, category: str, action: str, column: str,

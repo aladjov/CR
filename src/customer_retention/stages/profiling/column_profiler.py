@@ -509,6 +509,8 @@ class ProfilerFactory:
     _profilers = {
         ColumnType.IDENTIFIER: IdentifierProfiler,
         ColumnType.TARGET: TargetProfiler,
+        ColumnType.FEATURE_TIMESTAMP: DatetimeProfiler,
+        ColumnType.LABEL_TIMESTAMP: DatetimeProfiler,
         ColumnType.NUMERIC_CONTINUOUS: NumericProfiler,
         ColumnType.NUMERIC_DISCRETE: NumericProfiler,
         ColumnType.CATEGORICAL_NOMINAL: CategoricalProfiler,

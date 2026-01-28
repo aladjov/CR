@@ -84,3 +84,5 @@ class PipelineConfig:
     feast: Optional[FeastConfig] = None
     scoring: Optional[ScoringConfig] = None
     experiments_dir: Optional[str] = None
+    fit_mode: bool = True
+    artifacts_path: Optional[str] = None
