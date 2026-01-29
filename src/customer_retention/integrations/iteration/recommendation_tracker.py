@@ -75,6 +75,8 @@ class TrackedRecommendation:
 
 
 class RecommendationTracker:
+    PATTERN_SECTIONS = ["trend", "seasonality", "cohort", "recency", "categorical"]
+
     def __init__(self, storage_path: str):
         self.storage_path = Path(storage_path)
         self.recommendations: Dict[str, TrackedRecommendation] = {}
@@ -82,77 +84,201 @@ class RecommendationTracker:
     def add(self, recommendation: TrackedRecommendation) -> None:
         self.recommendations[recommendation.recommendation_id] = recommendation
 
-    def add_from_cleaning(self, cleaning_rec) -> TrackedRecommendation:
-        rec_id = TrackedRecommendation.generate_id(
-            RecommendationType.CLEANING,
-            cleaning_rec.column_name,
-            f"{cleaning_rec.issue_type}_{cleaning_rec.strategy}"
-        )
+    def _create_tracked_recommendation(
+        self, rec_type: RecommendationType, source_col: str, action: str, description: str
+    ) -> TrackedRecommendation:
+        rec_id = TrackedRecommendation.generate_id(rec_type, source_col, action)
         tracked = TrackedRecommendation(
             recommendation_id=rec_id,
-            recommendation_type=RecommendationType.CLEANING,
-            source_column=cleaning_rec.column_name,
-            action=f"{cleaning_rec.issue_type}_{cleaning_rec.strategy}",
-            description=cleaning_rec.description
+            recommendation_type=rec_type,
+            source_column=source_col,
+            action=action,
+            description=description
         )
         self.add(tracked)
         return tracked
+
+    def add_from_cleaning(self, cleaning_rec) -> TrackedRecommendation:
+        action = f"{cleaning_rec.issue_type}_{cleaning_rec.strategy}"
+        return self._create_tracked_recommendation(
+            RecommendationType.CLEANING, cleaning_rec.column_name, action, cleaning_rec.description
+        )
 
     def add_from_transform(self, transform_rec) -> TrackedRecommendation:
-        rec_id = TrackedRecommendation.generate_id(
-            RecommendationType.TRANSFORM,
-            transform_rec.column_name,
-            transform_rec.transform_type
+        return self._create_tracked_recommendation(
+            RecommendationType.TRANSFORM, transform_rec.column_name,
+            transform_rec.transform_type, transform_rec.reason
         )
-        tracked = TrackedRecommendation(
-            recommendation_id=rec_id,
-            recommendation_type=RecommendationType.TRANSFORM,
-            source_column=transform_rec.column_name,
-            action=transform_rec.transform_type,
-            description=transform_rec.reason
-        )
-        self.add(tracked)
-        return tracked
 
     def add_from_feature(self, feature_rec) -> TrackedRecommendation:
-        rec_id = TrackedRecommendation.generate_id(
-            RecommendationType.FEATURE,
-            feature_rec.source_column,
-            feature_rec.feature_name
+        return self._create_tracked_recommendation(
+            RecommendationType.FEATURE, feature_rec.source_column,
+            feature_rec.feature_name, feature_rec.description
         )
-        tracked = TrackedRecommendation(
-            recommendation_id=rec_id,
-            recommendation_type=RecommendationType.FEATURE,
-            source_column=feature_rec.source_column,
-            action=feature_rec.feature_name,
-            description=feature_rec.description
+
+    def _add_feature_list(
+        self, rec_dict: Dict[str, Any], default_action: str, source_fn=None
+    ) -> List[TrackedRecommendation]:
+        features = rec_dict.get("features", [])
+        action = rec_dict.get("action", default_action)
+        reason = rec_dict.get("reason", "")
+        description = f"{action}: {reason}"
+        tracked_list = []
+        for feature in features:
+            source = source_fn(feature) if source_fn else default_action.split("_")[0]
+            tracked_list.append(
+                self._create_tracked_recommendation(RecommendationType.FEATURE, source, feature, description)
+            )
+        return tracked_list
+
+    def add_from_recency(self, rec_dict: Dict[str, Any]) -> List[TrackedRecommendation]:
+        return self._add_feature_list(rec_dict, "recency_feature", source_fn=lambda _: "recency")
+
+    def add_from_categorical(self, rec_dict: Dict[str, Any]) -> List[TrackedRecommendation]:
+        return self._add_feature_list(
+            rec_dict, "categorical_feature",
+            source_fn=lambda f: f.replace("_is_high_risk", "") if "_is_high_risk" in f else f,
         )
-        self.add(tracked)
+
+    def _should_add_recommendation(
+        self, rec: TrackedRecommendation, seen_ids: set, tracked: List[TrackedRecommendation]
+    ) -> bool:
+        if rec.recommendation_id in seen_ids:
+            return False
+        seen_ids.add(rec.recommendation_id)
+        self.add(rec)
+        tracked.append(rec)
+        return True
+
+    def add_from_temporal_findings(self, findings: Any) -> List[TrackedRecommendation]:
+        tracked: List[TrackedRecommendation] = []
+        seen_ids: set = set()
+        pattern_meta = findings.metadata.get("temporal_patterns", {}) if findings.metadata else {}
+
+        def add_if_new(rec: TrackedRecommendation) -> bool:
+            return self._should_add_recommendation(rec, seen_ids, tracked)
+
+        self._process_pattern_sections(pattern_meta, add_if_new)
+        self._process_temporal_features(pattern_meta, add_if_new)
+        self._process_sparkline_recommendations(pattern_meta, add_if_new)
+        self._process_effect_size_recommendations(pattern_meta, add_if_new)
+        self._process_predictive_power_recommendations(pattern_meta, add_if_new)
         return tracked
+
+    def _process_section_recommendations(self, pattern_meta: Dict, section: str, add_if_new, skip_actions: Optional[List[str]] = None) -> None:
+        for rec in pattern_meta.get(section, {}).get("recommendations", []):
+            if skip_actions and rec.get("action") in skip_actions:
+                continue
+            features = rec.get("features", [])
+            if not features:
+                continue
+            action = rec.get("action", f"add_{section}_feature")
+            reason = rec.get("reason", f"From {section} analysis")
+            priority = rec.get("priority", "medium")
+            for feature in features:
+                rec_id = TrackedRecommendation.generate_id(RecommendationType.FEATURE, section, feature)
+                add_if_new(TrackedRecommendation(
+                    recommendation_id=rec_id, recommendation_type=RecommendationType.FEATURE,
+                    source_column=section, action=feature, description=f"[{priority}] {action}: {reason}",
+                ))
+
+    def _process_pattern_sections(self, pattern_meta: Dict, add_if_new) -> None:
+        for section in self.PATTERN_SECTIONS:
+            self._process_section_recommendations(pattern_meta, section, add_if_new, ["skip_cohort_features"])
+
+    def _process_temporal_features(self, pattern_meta: Dict, add_if_new) -> None:
+        for section in ["velocity", "momentum", "lag"]:
+            for rec in pattern_meta.get(section, {}).get("recommendations", []):
+                features = rec.get("features", [])
+                if not features:
+                    continue
+                action = rec.get("action", f"add_{section}_feature")
+                description = rec.get("description", f"From {section} analysis")
+                source_col = rec.get("source_column", section)
+                int_priority = rec.get("priority", 2)
+                priority_str = self._get_priority_label(int_priority)
+                effect_size = rec.get("effect_size")
+                effect_info = f" (d={effect_size:.2f})" if effect_size else ""
+                for feature in features:
+                    rec_id = TrackedRecommendation.generate_id(RecommendationType.FEATURE, source_col, feature)
+                    add_if_new(TrackedRecommendation(
+                        recommendation_id=rec_id, recommendation_type=RecommendationType.FEATURE,
+                        source_column=source_col, action=feature,
+                        description=f"[{priority_str}] {action}: {description}{effect_info}",
+                    ))
+
+    def _process_sparkline_recommendations(self, pattern_meta: Dict, add_if_new) -> None:
+        for rec in pattern_meta.get("sparkline", {}).get("recommendations", []):
+            features = rec.get("features", []) or ([rec.get("feature")] if rec.get("feature") else [])
+            if not features:
+                continue
+            action = rec.get("action", "sparkline_feature")
+            reason = rec.get("reason", "From sparkline analysis")
+            priority = rec.get("priority", "medium")
+            for feature in features:
+                rec_id = TrackedRecommendation.generate_id(RecommendationType.FEATURE, "sparkline", feature)
+                add_if_new(TrackedRecommendation(
+                    recommendation_id=rec_id, recommendation_type=RecommendationType.FEATURE,
+                    source_column="sparkline", action=feature, description=f"[{priority}] {action}: {reason}",
+                ))
+
+    def _process_effect_size_recommendations(self, pattern_meta: Dict, add_if_new) -> None:
+        for rec in pattern_meta.get("effect_size", {}).get("recommendations", []):
+            feature = rec.get("feature", "")
+            if not feature or rec.get("action") == "consider_dropping":
+                continue
+            effect_d = rec.get("effect_size", 0)
+            priority = rec.get("priority", "medium")
+            reason = rec.get("reason", f"Effect size d={effect_d:.2f}")
+            rec_id = TrackedRecommendation.generate_id(RecommendationType.FEATURE, "effect_size", feature)
+            add_if_new(TrackedRecommendation(
+                recommendation_id=rec_id, recommendation_type=RecommendationType.FEATURE,
+                source_column="effect_size", action=feature, description=f"[{priority}] prioritize: {reason}",
+            ))
+
+    def _process_predictive_power_recommendations(self, pattern_meta: Dict, add_if_new) -> None:
+        for rec in pattern_meta.get("predictive_power", {}).get("recommendations", []):
+            feature = rec.get("feature", "")
+            if not feature:
+                continue
+            iv, ks = rec.get("iv", 0), rec.get("ks", 0)
+            priority = rec.get("priority", "medium")
+            rec_id = TrackedRecommendation.generate_id(RecommendationType.FEATURE, "predictive_power", feature)
+            add_if_new(TrackedRecommendation(
+                recommendation_id=rec_id, recommendation_type=RecommendationType.FEATURE,
+                source_column="predictive_power", action=feature,
+                description=f"[{priority}] include: IV={iv:.3f}, KS={ks:.3f}",
+            ))
+
+    @staticmethod
+    def _get_priority_label(int_priority: int) -> str:
+        return "high" if int_priority == 1 else "medium"
 
     def get(self, recommendation_id: str) -> Optional[TrackedRecommendation]:
         return self.recommendations.get(recommendation_id)
 
-    def mark_applied(self, recommendation_id: str, iteration_id: str) -> None:
+    def _update_recommendation_status(self, recommendation_id: str, status: RecommendationStatus, **kwargs) -> None:
         rec = self.get(recommendation_id)
         if rec:
-            rec.status = RecommendationStatus.APPLIED
-            rec.applied_in_iteration = iteration_id
+            rec.status = status
             rec.updated_at = datetime.now()
+            for attr, value in kwargs.items():
+                setattr(rec, attr, value)
+
+    def mark_applied(self, recommendation_id: str, iteration_id: str) -> None:
+        self._update_recommendation_status(
+            recommendation_id, RecommendationStatus.APPLIED, applied_in_iteration=iteration_id
+        )
 
     def mark_skipped(self, recommendation_id: str, reason: str) -> None:
-        rec = self.get(recommendation_id)
-        if rec:
-            rec.status = RecommendationStatus.SKIPPED
-            rec.skip_reason = reason
-            rec.updated_at = datetime.now()
+        self._update_recommendation_status(
+            recommendation_id, RecommendationStatus.SKIPPED, skip_reason=reason
+        )
 
     def mark_failed(self, recommendation_id: str, reason: str) -> None:
-        rec = self.get(recommendation_id)
-        if rec:
-            rec.status = RecommendationStatus.FAILED
-            rec.failure_reason = reason
-            rec.updated_at = datetime.now()
+        self._update_recommendation_status(
+            recommendation_id, RecommendationStatus.FAILED, failure_reason=reason
+        )
 
     def set_outcome_impact(self, recommendation_id: str, impact: float) -> None:
         rec = self.get(recommendation_id)
@@ -160,17 +286,20 @@ class RecommendationTracker:
             rec.outcome_impact = impact
             rec.updated_at = datetime.now()
 
+    def _get_by_status(self, status: RecommendationStatus) -> List[TrackedRecommendation]:
+        return [r for r in self.recommendations.values() if r.status == status]
+
     def get_pending(self) -> List[TrackedRecommendation]:
-        return [r for r in self.recommendations.values()
-                if r.status == RecommendationStatus.PENDING]
+        return self._get_by_status(RecommendationStatus.PENDING)
 
     def get_applied(self) -> List[TrackedRecommendation]:
-        return [r for r in self.recommendations.values()
-                if r.status == RecommendationStatus.APPLIED]
+        return self._get_by_status(RecommendationStatus.APPLIED)
 
     def get_skipped(self) -> List[TrackedRecommendation]:
-        return [r for r in self.recommendations.values()
-                if r.status == RecommendationStatus.SKIPPED]
+        return self._get_by_status(RecommendationStatus.SKIPPED)
+
+    def get_failed(self) -> List[TrackedRecommendation]:
+        return self._get_by_status(RecommendationStatus.FAILED)
 
     def get_high_impact(self, threshold: float = 0.1) -> List[TrackedRecommendation]:
         high_impact = [
@@ -190,8 +319,7 @@ class RecommendationTracker:
             "pending": len(self.get_pending()),
             "applied": len(self.get_applied()),
             "skipped": len(self.get_skipped()),
-            "failed": len([r for r in self.recommendations.values()
-                          if r.status == RecommendationStatus.FAILED])
+            "failed": len(self.get_failed()),
         }
 
     def save(self) -> None:

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import pandas as pd
 
@@ -9,6 +9,31 @@ DEFAULT_CANDIDATE_WINDOWS = ["7d", "30d", "90d", "180d", "365d", "all_time"]
 GAP_THRESHOLD_MULTIPLIER = 3.0
 VOLUME_CHANGE_GROWING = 0.25
 VOLUME_CHANGE_DECLINING = -0.25
+
+
+@dataclass
+class FeatureAvailability:
+    column: str
+    first_valid_date: Optional[pd.Timestamp]
+    last_valid_date: Optional[pd.Timestamp]
+    valid_count: int
+    total_count: int
+    coverage_pct: float
+    availability_type: str
+    days_from_start: Optional[int]
+    days_before_end: Optional[int]
+
+
+@dataclass
+class FeatureAvailabilityResult:
+    data_start: pd.Timestamp
+    data_end: pd.Timestamp
+    time_span_days: int
+    features: List[FeatureAvailability]
+    new_tracking: List[str]
+    retired_tracking: List[str]
+    partial_window: List[str]
+    recommendations: List[Dict]
 
 
 @dataclass
@@ -324,4 +349,140 @@ def _build_recommendations(
     if low_coverage:
         windows_str = ", ".join(c.window for c in low_coverage)
         recs.append(f"Very few entities active in windows [{windows_str}] — these may produce mostly zeros")
+    return recs
+
+
+def analyze_feature_availability(df: pd.DataFrame, time_column: str, exclude_columns: Optional[List[str]] = None, late_start_threshold_pct: float = 10.0, early_end_threshold_pct: float = 10.0) -> FeatureAvailabilityResult:
+    times = pd.to_datetime(df[time_column])
+    data_start, data_end = times.min(), times.max()
+    time_span_days = max(1, (data_end - data_start).days)
+    late_threshold_days = time_span_days * late_start_threshold_pct / 100
+    early_threshold_days = time_span_days * early_end_threshold_pct / 100
+
+    exclude = set(exclude_columns or []) | {time_column}
+    columns_to_check = [c for c in df.columns if c not in exclude]
+
+    features = []
+    new_tracking, retired_tracking, partial_window = [], [], []
+
+    for col in columns_to_check:
+        valid_mask = df[col].notna()
+        valid_count = valid_mask.sum()
+        total_count = len(df)
+        coverage_pct = valid_count / total_count * 100 if total_count > 0 else 0
+
+        if valid_count == 0:
+            features.append(FeatureAvailability(
+                column=col, first_valid_date=None, last_valid_date=None,
+                valid_count=0, total_count=total_count, coverage_pct=0,
+                availability_type="empty", days_from_start=None, days_before_end=None
+            ))
+            continue
+
+        valid_times = times[valid_mask]
+        first_valid, last_valid = valid_times.min(), valid_times.max()
+        days_from_start = (first_valid - data_start).days
+        days_before_end = (data_end - last_valid).days
+
+        is_late_start = days_from_start > late_threshold_days
+        is_early_end = days_before_end > early_threshold_days
+
+        if is_late_start and is_early_end:
+            availability_type = "partial_window"
+            partial_window.append(col)
+        elif is_late_start:
+            availability_type = "new_tracking"
+            new_tracking.append(col)
+        elif is_early_end:
+            availability_type = "retired"
+            retired_tracking.append(col)
+        else:
+            availability_type = "full"
+
+        features.append(FeatureAvailability(
+            column=col, first_valid_date=first_valid, last_valid_date=last_valid,
+            valid_count=valid_count, total_count=total_count, coverage_pct=coverage_pct,
+            availability_type=availability_type, days_from_start=days_from_start,
+            days_before_end=days_before_end
+        ))
+
+    recommendations = _build_availability_recommendations(
+        features, new_tracking, retired_tracking, partial_window, time_span_days
+    )
+
+    return FeatureAvailabilityResult(
+        data_start=data_start, data_end=data_end, time_span_days=time_span_days,
+        features=features, new_tracking=new_tracking, retired_tracking=retired_tracking,
+        partial_window=partial_window, recommendations=recommendations
+    )
+
+
+def _find_feature(features: List[FeatureAvailability], col: str) -> Optional[FeatureAvailability]:
+    return next((f for f in features if f.column == col), None)
+
+
+def _build_new_tracking_rec(feat: FeatureAvailability, col: str) -> Dict:
+    return {
+        "column": col, "issue": "new_tracking", "priority": "high",
+        "reason": f"Tracking started {feat.days_from_start}d after data start ({feat.coverage_pct:.0f}% coverage)",
+        "options": [
+            f"Filter training data to start from {feat.first_valid_date.date()}",
+            f"Create '{col}_available' indicator for models",
+            "Exclude from features if coverage too low"
+        ]
+    }
+
+
+def _build_retired_rec(feat: FeatureAvailability, col: str) -> Dict:
+    return {
+        "column": col, "issue": "retired", "priority": "high",
+        "reason": f"Tracking stopped {feat.days_before_end}d before data end ({feat.coverage_pct:.0f}% coverage)",
+        "options": [
+            f"Filter data to end at {feat.last_valid_date.date()} for this feature",
+            f"Create '{col}_available' indicator",
+            "Exclude if feature won't be available for scoring"
+        ]
+    }
+
+
+def _build_partial_window_rec(feat: FeatureAvailability, col: str) -> Dict:
+    return {
+        "column": col, "issue": "partial_window", "priority": "high",
+        "reason": f"Only available {feat.first_valid_date.date()} to {feat.last_valid_date.date()} ({feat.coverage_pct:.0f}% coverage)",
+        "options": [
+            "Use only within available window",
+            "Consider excluding - limited applicability",
+            f"Create '{col}_available' indicator if keeping"
+        ]
+    }
+
+
+def _build_availability_recommendations(
+    features: List[FeatureAvailability], new_tracking: List[str],
+    retired_tracking: List[str], partial_window: List[str], time_span_days: int,
+) -> List[Dict]:
+    recs = []
+    builders = [
+        (new_tracking, _build_new_tracking_rec),
+        (retired_tracking, _build_retired_rec),
+        (partial_window, _build_partial_window_rec),
+    ]
+    for tracking_list, build_fn in builders:
+        for col in tracking_list:
+            feat = _find_feature(features, col)
+            if feat is not None:
+                recs.append(build_fn(feat, col))
+
+    problem_cols = new_tracking + retired_tracking + partial_window
+    if problem_cols:
+        recs.append({
+            "column": "_general_", "issue": "train_test_split", "priority": "high",
+            "reason": f"{len(problem_cols)} columns have availability boundaries",
+            "options": [
+                "Ensure train/test split doesn't cross availability boundaries",
+                "Use time-based split after latest tracking start date",
+                "Document which features are unavailable for which periods"
+            ]
+        })
+
     return recs

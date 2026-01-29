@@ -9,7 +9,6 @@ from customer_retention.core.config.column_config import ColumnConfig, ColumnTyp
 
 
 def _convert_to_native(obj: Any) -> Any:
-    """Convert numpy/pandas types to native Python types for serialization."""
     if obj is None:
         return None
     if isinstance(obj, dict):
@@ -28,6 +27,7 @@ def _convert_to_native(obj: Any) -> Any:
 @dataclass
 class TimeSeriesMetadata:
     granularity: DatasetGranularity = DatasetGranularity.UNKNOWN
+    temporal_pattern: Optional[str] = None  # TIME_SERIES, EVENT_LOG, SNAPSHOT
     entity_column: Optional[str] = None
     time_column: Optional[str] = None
     avg_events_per_entity: Optional[float] = None
@@ -45,6 +45,33 @@ class TimeSeriesMetadata:
     population_stability: Optional[float] = None
     regime_count: Optional[int] = None
     recommended_training_start: Optional[str] = None
+    def populate_from_coverage(self, windows: list, coverage_threshold: float) -> None:
+        self.suggested_aggregations = windows
+        self.window_coverage_threshold = coverage_threshold
+
+    def populate_from_heterogeneity(
+        self, heterogeneity_level: str, eta_squared_intensity: float,
+        eta_squared_event_count: float, segmentation_advisory: str,
+    ) -> None:
+        self.heterogeneity_level = heterogeneity_level
+        self.eta_squared_intensity = eta_squared_intensity
+        self.eta_squared_event_count = eta_squared_event_count
+        self.temporal_segmentation_advisory = segmentation_advisory
+        self.temporal_segmentation_recommendation = (
+            "include_lifecycle_quadrant" if segmentation_advisory != "single_model" else None
+        )
+
+    def populate_from_drift(
+        self, risk_level: str, volume_drift_risk: str,
+        population_stability: float, regime_count: int,
+        recommended_training_start: Optional[str],
+    ) -> None:
+        self.drift_risk_level = risk_level
+        self.volume_drift_risk = volume_drift_risk
+        self.population_stability = population_stability
+        self.regime_count = regime_count
+        self.recommended_training_start = recommended_training_start
+
     aggregation_executed: bool = False
     aggregated_data_path: Optional[str] = None
     aggregated_findings_path: Optional[str] = None
@@ -62,6 +89,27 @@ class TextProcessingMetadata:
     component_columns: List[str]
     variance_threshold_used: float
     processing_approach: str = "pca"
+
+
+@dataclass
+class FeatureAvailabilityInfo:
+    first_valid_date: Optional[str]
+    last_valid_date: Optional[str]
+    coverage_pct: float
+    availability_type: str
+    days_from_start: Optional[int]
+    days_before_end: Optional[int]
+
+
+@dataclass
+class FeatureAvailabilityMetadata:
+    data_start: str
+    data_end: str
+    time_span_days: int
+    new_tracking: List[str]
+    retired_tracking: List[str]
+    partial_window: List[str]
+    features: Dict[str, FeatureAvailabilityInfo] = field(default_factory=dict)
 
 
 @dataclass
@@ -108,6 +156,7 @@ class ExplorationFindings:
     metadata: Dict[str, Any] = field(default_factory=dict)
     time_series_metadata: Optional[TimeSeriesMetadata] = None
     text_processing: Dict[str, TextProcessingMetadata] = field(default_factory=dict)
+    feature_availability: Optional[FeatureAvailabilityMetadata] = None
     iteration_id: Optional[str] = None
     parent_iteration_id: Optional[str] = None
     # Snapshot-related fields (from temporal framework)
@@ -118,14 +167,12 @@ class ExplorationFindings:
 
     @property
     def is_time_series(self) -> bool:
-        """Check if this dataset is time series (event-level)."""
         if self.time_series_metadata is None:
             return False
         return self.time_series_metadata.granularity == DatasetGranularity.EVENT_LEVEL
 
     @property
     def has_aggregated_output(self) -> bool:
-        """Check if this event-level dataset has been aggregated."""
         return (self.time_series_metadata is not None and
                 self.time_series_metadata.aggregation_executed)
 
@@ -137,19 +184,45 @@ class ExplorationFindings:
     def column_configs(self) -> Dict[str, ColumnConfig]:
         return {name: col.to_column_config() for name, col in self.columns.items()}
 
+    @property
+    def has_availability_issues(self) -> bool:
+        if self.feature_availability is None:
+            return False
+        return bool(
+            self.feature_availability.new_tracking
+            or self.feature_availability.retired_tracking
+            or self.feature_availability.partial_window
+        )
+
+    @property
+    def problematic_availability_columns(self) -> List[str]:
+        if self.feature_availability is None:
+            return []
+        return (
+            self.feature_availability.new_tracking
+            + self.feature_availability.retired_tracking
+            + self.feature_availability.partial_window
+        )
+
+    def get_feature_availability(self, column: str) -> Optional[FeatureAvailabilityInfo]:
+        if self.feature_availability is None:
+            return None
+        return self.feature_availability.features.get(column)
+
+    @staticmethod
+    def _normalize_enum_value(obj: Any) -> Any:
+        return obj.value if hasattr(obj, 'value') else obj
+
     def to_dict(self) -> dict:
-        result = asdict(self)
-        result = _convert_to_native(result)
-        for col_name, col_data in result.get("columns", {}).items():
+        result = _convert_to_native(asdict(self))
+        for col_data in result.get("columns", {}).values():
             if "inferred_type" in col_data:
-                col_data["inferred_type"] = col_data["inferred_type"].value if hasattr(col_data["inferred_type"], 'value') else col_data["inferred_type"]
+                col_data["inferred_type"] = self._normalize_enum_value(col_data["inferred_type"])
             if "alternatives" in col_data:
-                col_data["alternatives"] = [t.value if hasattr(t, 'value') else t for t in col_data["alternatives"]]
-        # Handle TimeSeriesMetadata serialization
-        if result.get("time_series_metadata") is not None:
-            ts_meta = result["time_series_metadata"]
-            if "granularity" in ts_meta:
-                ts_meta["granularity"] = ts_meta["granularity"].value if hasattr(ts_meta["granularity"], 'value') else ts_meta["granularity"]
+                col_data["alternatives"] = [self._normalize_enum_value(t) for t in col_data["alternatives"]]
+        ts_meta = result.get("time_series_metadata")
+        if ts_meta is not None and "granularity" in ts_meta:
+            ts_meta["granularity"] = self._normalize_enum_value(ts_meta["granularity"])
         return result
 
     def to_yaml(self) -> str:
@@ -164,7 +237,7 @@ class ExplorationFindings:
             f.write(content)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ExplorationFindings":
+    def _deserialize_columns(cls, data: dict) -> Dict[str, "ColumnFinding"]:
         columns = {}
         for col_name, col_data in data.get("columns", {}).items():
             if "inferred_type" in col_data:
@@ -172,14 +245,32 @@ class ExplorationFindings:
             if "alternatives" in col_data:
                 col_data["alternatives"] = [ColumnType(t) for t in col_data["alternatives"]]
             columns[col_name] = ColumnFinding(**col_data)
-        data["columns"] = columns
-        ts_meta = data.get("time_series_metadata")
-        if ts_meta is not None:
-            if "granularity" in ts_meta:
-                ts_meta["granularity"] = DatasetGranularity(ts_meta["granularity"])
-            data["time_series_metadata"] = TimeSeriesMetadata(**ts_meta)
-        text_proc = data.get("text_processing", {})
-        data["text_processing"] = {k: TextProcessingMetadata(**v) for k, v in text_proc.items()}
+        return columns
+
+    @classmethod
+    def _deserialize_time_series_metadata(cls, ts_meta: Optional[dict]) -> Optional["TimeSeriesMetadata"]:
+        if ts_meta is None:
+            return None
+        if "granularity" in ts_meta:
+            ts_meta["granularity"] = DatasetGranularity(ts_meta["granularity"])
+        return TimeSeriesMetadata(**ts_meta)
+
+    @classmethod
+    def _deserialize_feature_availability(cls, fa_data: Optional[dict]) -> Optional["FeatureAvailabilityMetadata"]:
+        if fa_data is None:
+            return None
+        fa_data["features"] = {
+            k: FeatureAvailabilityInfo(**v)
+            for k, v in fa_data.get("features", {}).items()
+        }
+        return FeatureAvailabilityMetadata(**fa_data)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ExplorationFindings":
+        data["columns"] = cls._deserialize_columns(data)
+        data["time_series_metadata"] = cls._deserialize_time_series_metadata(data.get("time_series_metadata"))
+        data["text_processing"] = {k: TextProcessingMetadata(**v) for k, v in data.get("text_processing", {}).items()}
+        data["feature_availability"] = cls._deserialize_feature_availability(data.get("feature_availability"))
         return cls(**data)
 
     @classmethod

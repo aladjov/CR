@@ -1,4 +1,5 @@
 from customer_retention.core.components.enums import Severity
+from customer_retention.core.utils import compute_effect_size
 
 from .column_profiler import CategoricalProfiler, ColumnProfiler, NumericProfiler, ProfilerFactory
 from .distribution_analysis import (
@@ -37,7 +38,14 @@ from .categorical_distribution import (
     EncodingRecommendation,
     EncodingType,
 )
-from .categorical_target_analyzer import CategoricalTargetAnalyzer, CategoricalTargetResult
+from .categorical_target_analyzer import (
+    CategoricalAnalysisResult,
+    CategoricalFeatureInsight,
+    CategoricalTargetAnalyzer,
+    CategoricalTargetResult,
+    analyze_categorical_features,
+    filter_categorical_columns,
+)
 from .feature_capacity import (
     EffectiveFeaturesResult,
     FeatureCapacityAnalyzer,
@@ -46,12 +54,19 @@ from .feature_capacity import (
     SegmentCapacityResult,
 )
 from .pattern_analysis_config import (
+    AggregationFeatureConfig,
+    FindingsValidationResult,
     PatternAnalysisConfig,
     PatternAnalysisResult,
     SparklineData,
     SparklineDataBuilder,
+    create_momentum_ratio_features,
+    create_recency_bucket_feature,
+    deduplicate_events,
     get_analysis_frequency,
+    get_duplicate_event_count,
     get_sparkline_frequency,
+    validate_temporal_findings,
 )
 from .relationship_detector import DatasetRelationship, JoinSuggestion, RelationshipDetector, RelationshipType
 from .relationship_recommender import (
@@ -90,18 +105,24 @@ from .temporal_analyzer import (
 from .temporal_coverage import (
     DriftImplication,
     EntityWindowCoverage,
+    FeatureAvailability,
+    FeatureAvailabilityResult,
     TemporalCoverageResult,
     TemporalGap,
+    analyze_feature_availability,
     analyze_temporal_coverage,
     derive_drift_implications,
 )
 from .temporal_feature_analyzer import (
+    CohortMomentumResult,
+    CohortVelocityResult,
     FeatureRecommendation,
     FeatureType,
     LagCorrelationResult,
     MomentumResult,
     PredictivePowerResult,
     TemporalFeatureAnalyzer,
+    VelocityRecommendation,
     VelocityResult,
 )
 from .temporal_feature_engineer import (
@@ -113,12 +134,29 @@ from .temporal_feature_engineer import (
     TemporalFeatureResult,
 )
 from .temporal_pattern_analyzer import (
+    AnomalyDiagnostics,
+    CohortDistribution,
+    CohortRecommendation,
+    GroupStats,
+    RecencyBucketStats,
+    RecencyComparisonResult,
+    RecencyInsight,
     RecencyResult,
     SeasonalityPeriod,
     TemporalPatternAnalysis,
     TemporalPatternAnalyzer,
     TrendDirection,
+    TrendRecommendation,
     TrendResult,
+    analyze_cohort_distribution,
+    classify_distribution_pattern,
+    compare_recency_by_target,
+    compute_group_stats,
+    compute_recency_buckets,
+    detect_inflection_bucket,
+    generate_cohort_recommendations,
+    generate_recency_insights,
+    generate_trend_recommendations,
 )
 from .temporal_quality_checks import (
     DuplicateEventCheck,
@@ -174,23 +212,34 @@ __all__ = [
     "SegmentationDecisionMetrics", "FullSegmentationResult",
     "SegmentAwareOutlierAnalyzer", "SegmentAwareOutlierResult",
     "CategoricalTargetAnalyzer", "CategoricalTargetResult",
+    "CategoricalAnalysisResult", "CategoricalFeatureInsight",
+    "analyze_categorical_features", "filter_categorical_columns",
     "TemporalTargetAnalyzer", "TemporalTargetResult",
     "TargetLevelAnalyzer", "TargetLevelResult", "TargetLevel", "AggregationMethod",
     "TargetDistribution", "TargetColumnDetector",
     "PatternAnalysisConfig", "PatternAnalysisResult",
     "SparklineData", "SparklineDataBuilder",
     "get_analysis_frequency", "get_sparkline_frequency",
+    "AggregationFeatureConfig", "FindingsValidationResult", "validate_temporal_findings",
+    "get_duplicate_event_count", "deduplicate_events",
+    "create_recency_bucket_feature", "create_momentum_ratio_features",
     "TimeSeriesProfiler", "TimeSeriesProfile", "DistributionStats", "EntityLifecycle",
     "LifecycleQuadrantResult", "classify_lifecycle_quadrants",
     "ActivitySegmentResult", "classify_activity_segments",
     "TemporalQualityCheck", "TemporalQualityReporter", "TemporalQualityResult", "TemporalQualityScore",
     "DuplicateEventCheck", "TemporalGapCheck", "FutureDateCheck", "EventOrderCheck",
     "TemporalPatternAnalyzer", "TemporalPatternAnalysis",
-    "TrendResult", "TrendDirection", "SeasonalityPeriod", "RecencyResult",
+    "TrendResult", "TrendDirection", "TrendRecommendation", "SeasonalityPeriod", "RecencyResult",
+    "RecencyComparisonResult", "RecencyBucketStats", "RecencyInsight", "AnomalyDiagnostics",
+    "GroupStats", "CohortDistribution", "CohortRecommendation",
+    "generate_trend_recommendations", "generate_cohort_recommendations", "generate_recency_insights",
+    "analyze_cohort_distribution", "compare_recency_by_target",
+    "compute_effect_size", "compute_group_stats", "compute_recency_buckets",
+    "detect_inflection_bucket", "classify_distribution_pattern",
     "RelationshipDetector", "DatasetRelationship", "RelationshipType", "JoinSuggestion",
     "TimeWindowAggregator", "AggregationPlan", "TimeWindow", "AggregationType",
-    "TemporalFeatureAnalyzer", "VelocityResult", "MomentumResult",
-    "LagCorrelationResult", "PredictivePowerResult", "FeatureRecommendation", "FeatureType",
+    "TemporalFeatureAnalyzer", "VelocityResult", "MomentumResult", "CohortVelocityResult",
+    "CohortMomentumResult", "VelocityRecommendation", "LagCorrelationResult", "PredictivePowerResult", "FeatureRecommendation", "FeatureType",
     "RelationshipRecommender", "RelationshipRecommendation",
     "RecommendationCategory", "RelationshipAnalysisSummary",
     "FeatureCapacityAnalyzer", "FeatureCapacityResult",
@@ -203,4 +252,5 @@ __all__ = [
     "WindowRecommendationCollector", "WindowUnionResult", "TemporalHeterogeneityResult",
     "analyze_temporal_coverage", "TemporalCoverageResult", "TemporalGap", "EntityWindowCoverage",
     "derive_drift_implications", "DriftImplication",
+    "analyze_feature_availability", "FeatureAvailability", "FeatureAvailabilityResult",
 ]

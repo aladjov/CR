@@ -519,6 +519,8 @@ def run_experiment():
     y = training_data[TARGET_COLUMN]
     X = prepare_features(training_data.drop(columns=[TARGET_COLUMN]))
     feature_names = list(X.columns)
+    train_mask = y.notna()
+    X, y = X.loc[train_mask], y.loc[train_mask]
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
     sklearn_models = {
@@ -1042,7 +1044,7 @@ if __name__ == "__main__":
     "import matplotlib.pyplot as plt\\n",
     "from IPython.display import display, HTML\\n",
     "from config import (PIPELINE_NAME, TARGET_COLUMN, MLFLOW_TRACKING_URI, RECOMMENDATIONS_HASH,\\n",
-    "                    FEAST_ENTITY_KEY, EXPERIMENTS_DIR, get_feast_data_path)"
+    "                    FEAST_ENTITY_KEY, EXPERIMENTS_DIR, get_feast_data_path, get_gold_path)"
    ]
   },
   {
@@ -1332,7 +1334,7 @@ if __name__ == "__main__":
     "    print('\\\\n' + '=' * 70)\\n",
     "    print('MODEL COMPARISON SUMMARY (Holdout Set)')\\n",
     "    print('=' * 70)\\n",
-    "    display(comparison_df.style.highlight_max(axis=0, color='lightgreen').format('{:.4f}'))\\n",
+    "    display(comparison_df.style.highlight_max(axis=0, props='background-color: #2e7d32; color: white').format('{:.4f}'))\\n",
     "    \\n",
     "    # Identify best model\\n",
     "    best_model_name = comparison_df['ROC-AUC'].idxmax()\\n",
@@ -1360,10 +1362,7 @@ if __name__ == "__main__":
     "    AdversarialScoringValidator, DriftSeverity\\n",
     ")\\n",
     "\\n",
-    "# Load gold features (training pipeline output)\\n",
-    "gold_features = pd.read_parquet(get_feast_data_path())\\n",
-    "\\n",
-    "# Create validator\\n",
+    "gold_features = pd.read_parquet(get_gold_path())\\n",
     "validator = AdversarialScoringValidator(\\n",
     "    gold_features=gold_features,\\n",
     "    entity_column=FEAST_ENTITY_KEY,\\n",
@@ -1371,12 +1370,9 @@ if __name__ == "__main__":
     "    tolerance=1e-6,\\n",
     ")\\n",
     "\\n",
-    "# Get holdout entity IDs\\n",
     "holdout_ids = validator.get_holdout_entity_ids()\\n",
     "print(f'Holdout entities for validation: {len(holdout_ids):,}')\\n",
     "\\n",
-    "# Validate: compare gold features with scoring features (should be identical)\\n",
-    "# scoring_features was loaded earlier - these are the same entities from the gold file\\n",
     "result = validator.validate_features(scoring_features)\\n",
     "\\n",
     "print('\\\\n' + '=' * 60)\\n",
@@ -1714,17 +1710,16 @@ if __name__ == "__main__":
     "importance_df.to_csv(output_dir / \\"feature_importance.csv\\", index=False)\\n",
     "print(f\\"Feature importance saved to {output_dir / 'feature_importance.csv'}\\")\\n",
     "\\n",
-    "# Save detailed predictions with SHAP values for top features\\n",
     "top_features = importance_df.head(10)[\\"feature\\"].tolist()\\n",
-    "detailed_df = predictions_df.copy()\\n",
-    "\\n",
+    "shap_by_entity = pd.DataFrame({FEAST_ENTITY_KEY: scoring_features[FEAST_ENTITY_KEY].values})\\n",
     "for feat in top_features:\\n",
     "    feat_idx = feature_names.index(feat)\\n",
     "    if len(shap_values.shape) == 3:\\n",
-    "        detailed_df[f\\"shap_{feat}\\"] = shap_values[:, feat_idx, 1].values\\n",
+    "        shap_by_entity[f\\"shap_{feat}\\"] = shap_values[:, feat_idx, 1].values\\n",
     "    else:\\n",
-    "        detailed_df[f\\"shap_{feat}\\"] = shap_values[:, feat_idx].values\\n",
+    "        shap_by_entity[f\\"shap_{feat}\\"] = shap_values[:, feat_idx].values\\n",
     "\\n",
+    "detailed_df = predictions_df.merge(shap_by_entity, on=FEAST_ENTITY_KEY, how=\\"left\\")\\n",
     "detailed_df.to_parquet(output_dir / \\"predictions_with_shap.parquet\\", index=False)\\n",
     "print(f\\"Detailed predictions with SHAP saved to {output_dir / 'predictions_with_shap.parquet'}\\")"
    ]

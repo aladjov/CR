@@ -269,21 +269,135 @@ class TestAucChecks:
     def test_compute_single_feature_auc_handles_exception(self):
         """AUC computation should handle exceptions gracefully."""
         detector = LeakageDetector()
-        # Create data that could cause issues
         feature = pd.Series([np.nan] * 10)
         y = pd.Series([0, 1] * 5)
 
         auc = detector._compute_single_feature_auc(feature, y)
-        assert auc == 0.5  # Default value on exception
+        assert auc == 0.5
 
     def test_compute_single_feature_auc_single_class(self):
         """AUC should return 0.5 for single-class target."""
         detector = LeakageDetector()
         feature = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0])
-        y = pd.Series([1, 1, 1, 1, 1])  # Single class
+        y = pd.Series([1, 1, 1, 1, 1])
 
         auc = detector._compute_single_feature_auc(feature, y)
         assert auc == 0.5
+
+    def test_cv_auc_detects_truly_leaky_feature(self):
+        detector = LeakageDetector()
+        np.random.seed(42)
+        n = 500
+        y = pd.Series(np.array([0] * 250 + [1] * 250))
+        feature = pd.Series(y.values + np.random.randn(n) * 0.01)
+        auc = detector._compute_single_feature_auc(feature, y)
+        assert auc > 0.95
+
+    def test_cv_auc_near_chance_for_random_feature(self):
+        detector = LeakageDetector()
+        np.random.seed(42)
+        n = 500
+        y = pd.Series(np.random.choice([0, 1], n))
+        feature = pd.Series(np.random.randn(n))
+        auc = detector._compute_single_feature_auc(feature, y)
+        assert 0.35 < auc < 0.65
+
+    def test_cv_auc_returns_half_when_minority_class_too_small(self):
+        detector = LeakageDetector()
+        y = pd.Series([0] * 9 + [1])
+        feature = pd.Series(np.random.randn(10))
+        auc = detector._compute_single_feature_auc(feature, y)
+        assert auc == 0.5
+
+    def test_cv_auc_handles_many_nans(self):
+        detector = LeakageDetector()
+        np.random.seed(42)
+        n = 100
+        y = pd.Series(np.random.choice([0, 1], n))
+        values = [np.nan] * 80 + list(np.random.randn(20))
+        feature = pd.Series(values)
+        auc = detector._compute_single_feature_auc(feature, y)
+        assert 0.0 <= auc <= 1.0
+
+
+class TestTemporalFeatureAucHandling:
+
+    def test_classify_auc_temporal_high_not_critical(self):
+        detector = LeakageDetector()
+        severity, check_id = detector._classify_auc(0.95, is_temporal=True)
+        assert severity == Severity.HIGH
+        assert check_id == "LD031"
+
+    def test_classify_auc_temporal_moderate_returns_info(self):
+        detector = LeakageDetector()
+        severity, check_id = detector._classify_auc(0.85, is_temporal=True)
+        assert severity == Severity.INFO
+
+    def test_classify_auc_non_temporal_default_unchanged(self):
+        detector = LeakageDetector()
+        severity, check_id = detector._classify_auc(0.95)
+        assert severity == Severity.CRITICAL
+        assert check_id == "LD030"
+
+    def test_auc_recommendation_temporal_suggests_review(self):
+        detector = LeakageDetector()
+        rec = detector._auc_recommendation("days_since_last_event", 0.95, is_temporal=True)
+        assert "REVIEW" in rec
+        assert "REMOVE" not in rec
+
+    def test_auc_recommendation_non_temporal_still_remove(self):
+        detector = LeakageDetector()
+        rec = detector._auc_recommendation("feature_x", 0.95)
+        assert "REMOVE" in rec
+
+    def test_temporal_feature_not_critical_in_check(self):
+        detector = LeakageDetector()
+        np.random.seed(42)
+        n = 500
+        y = pd.Series(np.array([0] * 250 + [1] * 250))
+        X = pd.DataFrame({
+            "days_since_last_event": y.values * 100 + np.random.randn(n) * 5,
+            "normal_feature": np.random.randn(n),
+        })
+        result = detector.check_single_feature_auc(X, y)
+        temporal_checks = [c for c in result.checks if c.feature == "days_since_last_event"]
+        assert len(temporal_checks) > 0
+        assert all(c.severity != Severity.CRITICAL for c in temporal_checks)
+
+    def test_non_temporal_feature_stays_critical(self):
+        detector = LeakageDetector()
+        np.random.seed(42)
+        n = 500
+        y = pd.Series(np.array([0] * 250 + [1] * 250))
+        X = pd.DataFrame({
+            "leaky_score": y.values + np.random.randn(n) * 0.01,
+        })
+        result = detector.check_single_feature_auc(X, y)
+        critical = [c for c in result.checks if c.severity == Severity.CRITICAL]
+        assert len(critical) > 0
+
+    def test_run_all_checks_no_ld030_for_temporal_features(self):
+        detector = LeakageDetector()
+        np.random.seed(42)
+        n = 500
+        y = pd.Series(np.array([0] * 250 + [1] * 250))
+        X = pd.DataFrame({
+            "days_since_last_event": y.values * 100 + np.random.randn(n) * 5,
+        })
+        result = detector.run_all_checks(X, y, include_pit=False)
+        auc_critical = [c for c in result.checks if c.check_id == "LD030"]
+        assert len(auc_critical) == 0
+
+    def test_run_all_checks_passes_with_moderate_temporal_signal(self):
+        detector = LeakageDetector()
+        np.random.seed(42)
+        n = 500
+        y = pd.Series(np.random.choice([0, 1], n, p=[0.6, 0.4]))
+        X = pd.DataFrame({
+            "days_since_last_event": y.values * 20 + np.random.randn(n) * 15,
+        })
+        result = detector.run_all_checks(X, y, include_pit=False)
+        assert result.passed
 
 
 class TestPointInTimeChecks:

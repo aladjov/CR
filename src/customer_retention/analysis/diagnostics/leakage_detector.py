@@ -7,6 +7,7 @@ from typing import List, Optional, Set, Tuple
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import StratifiedKFold, cross_val_predict
 
 from customer_retention.core.compat import DataFrame, Series, pd
 from customer_retention.core.components.enums import Severity
@@ -47,6 +48,7 @@ class LeakageDetector:
     CORRELATION_CRITICAL, CORRELATION_HIGH, CORRELATION_MEDIUM = 0.90, 0.70, 0.50
     SEPARATION_CRITICAL, SEPARATION_HIGH, SEPARATION_MEDIUM = 0.0, 1.0, 5.0
     AUC_CRITICAL, AUC_HIGH = 0.90, 0.80
+    CV_FOLDS = 5
     NUMERIC_DTYPES = (np.float64, np.int64, np.float32, np.int32)
 
     def __init__(self, feature_timestamp_column: str = "feature_timestamp", label_timestamp_column: str = "label_timestamp"):
@@ -148,11 +150,12 @@ class LeakageDetector:
         checks = []
         for col in self._get_numeric_columns(X):
             auc = self._compute_single_feature_auc(X[col], y)
-            severity, check_id = self._classify_auc(auc)
+            is_temporal = bool(self.TEMPORAL_PATTERNS.search(col))
+            severity, check_id = self._classify_auc(auc, is_temporal=is_temporal)
             if severity != Severity.INFO:
                 checks.append(LeakageCheck(
                     check_id=check_id, feature=col, severity=severity,
-                    recommendation=self._auc_recommendation(col, auc), auc=auc,
+                    recommendation=self._auc_recommendation(col, auc, is_temporal=is_temporal), auc=auc,
                 ))
         return self._build_result(checks)
 
@@ -161,23 +164,30 @@ class LeakageDetector:
             X_single = feature.values.reshape(-1, 1)
             mask = ~np.isnan(X_single.flatten())
             X_clean, y_clean = X_single[mask], y.values[mask]
-            if len(np.unique(y_clean)) < 2:
+            if len(np.unique(y_clean)) < 2 or min(np.bincount(y_clean.astype(int))) < self.CV_FOLDS:
                 return 0.5
             model = LogisticRegression(max_iter=200, solver="lbfgs", random_state=42)
-            model.fit(X_clean, y_clean)
-            return roc_auc_score(y_clean, model.predict_proba(X_clean)[:, 1])
+            cv = StratifiedKFold(n_splits=self.CV_FOLDS, shuffle=True, random_state=42)
+            proba = cross_val_predict(model, X_clean, y_clean, cv=cv, method="predict_proba")
+            return roc_auc_score(y_clean, proba[:, 1])
         except Exception:
             return 0.5
 
-    def _classify_auc(self, auc: float) -> Tuple[Severity, str]:
+    def _classify_auc(self, auc: float, *, is_temporal: bool = False) -> Tuple[Severity, str]:
+        if is_temporal:
+            if auc > self.AUC_CRITICAL:
+                return Severity.HIGH, "LD031"
+            return Severity.INFO, "LD000"
         if auc > self.AUC_CRITICAL:
             return Severity.CRITICAL, "LD030"
         if auc > self.AUC_HIGH:
             return Severity.HIGH, "LD031"
         return Severity.INFO, "LD000"
 
-    def _auc_recommendation(self, feature: str, auc: float) -> str:
+    def _auc_recommendation(self, feature: str, auc: float, *, is_temporal: bool = False) -> str:
         if auc > self.AUC_CRITICAL:
+            if is_temporal:
+                return f"REVIEW {feature}: temporal feature AUC {auc:.2f} is high but expected for recency/tenure features"
             return f"REMOVE {feature}: single-feature AUC {auc:.2f} indicates leakage"
         if auc > self.AUC_HIGH:
             return f"INVESTIGATE {feature}: single-feature AUC {auc:.2f} is very high"

@@ -1,7 +1,7 @@
 """Tests for TimeWindowAggregator PIT (point-in-time) correctness features."""
 
 import warnings
-import numpy as np
+
 import pandas as pd
 import pytest
 

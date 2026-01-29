@@ -1,15 +1,11 @@
-"""
-Leakage Detection Gate (Checkpoint 3) for customer retention analysis.
-
-This module provides leakage detection to prevent data leakage
-in features before model training.
-"""
-
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from customer_retention.core.compat import DataFrame, Timestamp, is_numeric_dtype, pd
 from customer_retention.core.components.enums import Severity
+
+if TYPE_CHECKING:
+    from customer_retention.analysis.auto_explorer.findings import FeatureAvailabilityMetadata
 
 
 @dataclass
@@ -23,7 +19,6 @@ class LeakageIssue:
 
 @dataclass
 class LeakageCheckResult:
-    """Result of leakage detection gate."""
     passed: bool
     critical_issues: List[LeakageIssue]
     high_issues: List[LeakageIssue]
@@ -33,33 +28,11 @@ class LeakageCheckResult:
 
 
 class LeakageGate:
-    """
-    Leakage Detection Gate (Checkpoint 3).
-
-    Detects and prevents data leakage in features before model training.
-
-    Parameters
-    ----------
-    target_column : str
-        Name of the target column.
-    correlation_threshold_critical : float, default 0.90
-        Correlation threshold for critical leakage (LK001).
-    correlation_threshold_high : float, default 0.70
-        Correlation threshold for high-risk leakage (LK002).
-    reference_date : Timestamp, optional
-        Reference date for temporal checks.
-    date_columns : List[str], optional
-        Columns containing dates for temporal validation.
-    exclude_features : List[str], optional
-        Features to exclude from leakage checks.
-
-    Attributes
-    ----------
-    correlation_threshold_critical : float
-        Critical correlation threshold.
-    correlation_threshold_high : float
-        High-risk correlation threshold.
-    """
+    _LK011_DESCRIPTIONS = {
+        "new_tracking": "Feature tracking started late ({first_date}). Training data before this date will have missing values.",
+        "retired": "Feature tracking retired ({last_date}). Test/scoring data after this date will have missing values.",
+        "partial_window": "Feature only available {first_date} to {last_date}. Both train and test may have gaps.",
+    }
 
     def __init__(
         self,
@@ -72,6 +45,7 @@ class LeakageGate:
         feature_timestamp_column: Optional[str] = None,
         label_timestamp_column: Optional[str] = None,
         enforce_point_in_time: bool = True,
+        availability_coverage_threshold: float = 50.0,
     ):
         self.target_column = target_column
         self.correlation_threshold_critical = correlation_threshold_critical
@@ -82,53 +56,37 @@ class LeakageGate:
         self.feature_timestamp_column = feature_timestamp_column or "feature_timestamp"
         self.label_timestamp_column = label_timestamp_column or "label_timestamp"
         self.enforce_point_in_time = enforce_point_in_time
+        self.availability_coverage_threshold = availability_coverage_threshold
 
-    def run(self, df: DataFrame) -> LeakageCheckResult:
-        """
-        Run leakage detection on the DataFrame.
-
-        Parameters
-        ----------
-        df : pd.DataFrame
-            DataFrame with features and target.
-
-        Returns
-        -------
-        LeakageCheckResult
-            Result of leakage detection.
-        """
+    def run(
+        self, df: DataFrame, feature_availability: Optional["FeatureAvailabilityMetadata"] = None
+    ) -> LeakageCheckResult:
         critical_issues: List[LeakageIssue] = []
         high_issues: List[LeakageIssue] = []
         suspicious_features: List[str] = []
         recommended_drops: List[str] = []
         leakage_report: Dict[str, Any] = {}
 
-        # Get feature columns (exclude target and excluded features)
         feature_cols = [
             c for c in df.columns
             if c != self.target_column and c not in self.exclude_features
         ]
 
-        # Run correlation checks (LK001, LK002)
         corr_issues, corr_report = self._check_correlations(df, feature_cols)
         critical_issues.extend([i for i in corr_issues if i.severity == Severity.CRITICAL])
         high_issues.extend([i for i in corr_issues if i.severity == Severity.HIGH])
         leakage_report["correlations"] = corr_report
 
-        # Run perfect separation check (LK003)
         sep_issues = self._check_perfect_separation(df, feature_cols)
         critical_issues.extend(sep_issues)
 
-        # Run temporal checks (LK004)
         if self.reference_date and self.date_columns:
             temp_issues = self._check_temporal_leakage(df)
             critical_issues.extend(temp_issues)
 
-        # Run near-constant by class check (LK008)
         const_issues = self._check_near_constant_by_class(df, feature_cols)
         high_issues.extend(const_issues)
 
-        # Run point-in-time checks (LK009, LK010)
         if self.enforce_point_in_time:
             pit_issues = self._check_point_in_time_violations(df)
             critical_issues.extend([i for i in pit_issues if i.severity == Severity.CRITICAL])
@@ -137,14 +95,16 @@ class LeakageGate:
             future_issues = self._check_future_dates_in_features(df, feature_cols)
             critical_issues.extend(future_issues)
 
-        # Compile suspicious features and recommendations
+        if feature_availability is not None:
+            avail_issues = self._check_feature_availability(df, feature_cols, feature_availability)
+            high_issues.extend(avail_issues)
+
         for issue in critical_issues + high_issues:
             if issue.feature not in suspicious_features:
                 suspicious_features.append(issue.feature)
             if issue.severity == Severity.CRITICAL and issue.feature not in recommended_drops:
                 recommended_drops.append(issue.feature)
 
-        # Determine if gate passes
         passed = len(critical_issues) == 0
 
         return LeakageCheckResult(
@@ -156,25 +116,10 @@ class LeakageGate:
             leakage_report=leakage_report,
         )
 
-    def _check_correlations(
-        self,
-        df: DataFrame,
-        feature_cols: List[str]
-    ) -> tuple:
-        """Check for high correlations with target (LK001, LK002)."""
-        issues = []
-        report = {}
-
-        # Get numeric features only
-        numeric_features = [
-            c for c in feature_cols
-            if is_numeric_dtype(df[c])
-        ]
-
+    def _compute_target_correlations(self, df: DataFrame, feature_cols: List[str]) -> Dict[str, float]:
+        numeric_features = [c for c in feature_cols if is_numeric_dtype(df[c])]
         if not numeric_features or self.target_column not in df.columns:
-            return issues, report
-
-        # Compute correlations with target
+            return {}
         correlations = {}
         for feature in numeric_features:
             try:
@@ -183,37 +128,38 @@ class LeakageGate:
                     correlations[feature] = corr
             except Exception:
                 continue
+        return correlations
 
-        report["feature_correlations"] = correlations
-
-        # Check against thresholds
+    def _create_correlation_issues(self, correlations: Dict[str, float]) -> List[LeakageIssue]:
+        issues = []
         for feature, corr in correlations.items():
             abs_corr = abs(corr)
             if abs_corr >= self.correlation_threshold_critical:
                 issues.append(LeakageIssue(
-                    check_id="LK001",
-                    severity=Severity.CRITICAL,
-                    feature=feature,
-                    description=f"High target correlation: {corr:.4f}",
-                    value=corr,
+                    check_id="LK001", severity=Severity.CRITICAL, feature=feature,
+                    description=f"High target correlation: {corr:.4f}", value=corr,
                 ))
             elif abs_corr >= self.correlation_threshold_high:
                 issues.append(LeakageIssue(
-                    check_id="LK002",
-                    severity=Severity.HIGH,
-                    feature=feature,
-                    description=f"Suspicious target correlation: {corr:.4f}",
-                    value=corr,
+                    check_id="LK002", severity=Severity.HIGH, feature=feature,
+                    description=f"Suspicious target correlation: {corr:.4f}", value=corr,
                 ))
+        return issues
 
-        return issues, report
+    def _check_correlations(self, df: DataFrame, feature_cols: List[str]) -> tuple:
+        correlations = self._compute_target_correlations(df, feature_cols)
+        issues = self._create_correlation_issues(correlations)
+        return issues, {"feature_correlations": correlations}
+
+    @staticmethod
+    def _parse_datetime(series, errors="coerce"):
+        return pd.to_datetime(series, errors=errors, format='mixed')
 
     def _check_perfect_separation(
         self,
         df: DataFrame,
         feature_cols: List[str]
     ) -> List[LeakageIssue]:
-        """Check for perfect class separation (LK003)."""
         issues = []
 
         if self.target_column not in df.columns:
@@ -221,21 +167,19 @@ class LeakageGate:
 
         target_values = df[self.target_column].unique()
         if len(target_values) != 2:
-            return issues  # Only check for binary classification
+            return issues
 
         for feature in feature_cols:
             if not is_numeric_dtype(df[feature]):
                 continue
 
             try:
-                # Get feature values for each class
                 class_0 = df[df[self.target_column] == target_values[0]][feature].dropna()
                 class_1 = df[df[self.target_column] == target_values[1]][feature].dropna()
 
                 if len(class_0) == 0 or len(class_1) == 0:
                     continue
 
-                # Check for no overlap
                 if class_0.max() < class_1.min() or class_1.max() < class_0.min():
                     issues.append(LeakageIssue(
                         check_id="LK003",
@@ -249,16 +193,13 @@ class LeakageGate:
         return issues
 
     def _check_temporal_leakage(self, df: DataFrame) -> List[LeakageIssue]:
-        """Check for temporal leakage (LK004)."""
         issues = []
 
         for date_col in self.date_columns:
             if date_col not in df.columns:
                 continue
-
             try:
-                dates = pd.to_datetime(df[date_col], errors='coerce', format='mixed')
-                # Check if any dates are after reference date
+                dates = self._parse_datetime(df[date_col])
                 if (dates > self.reference_date).any():
                     issues.append(LeakageIssue(
                         check_id="LK004",
@@ -276,7 +217,6 @@ class LeakageGate:
         df: DataFrame,
         feature_cols: List[str]
     ) -> List[LeakageIssue]:
-        """Check for features nearly constant within each class (LK008)."""
         issues = []
 
         if self.target_column not in df.columns:
@@ -291,15 +231,11 @@ class LeakageGate:
                 continue
 
             try:
-                # Check variance within each class
                 var_0 = df[df[self.target_column] == target_values[0]][feature].var()
                 var_1 = df[df[self.target_column] == target_values[1]][feature].var()
-
-                # Check mean difference
                 mean_0 = df[df[self.target_column] == target_values[0]][feature].mean()
                 mean_1 = df[df[self.target_column] == target_values[1]][feature].mean()
 
-                # If both variances are very low but means are different
                 if (pd.notna(var_0) and pd.notna(var_1) and
                     var_0 < 0.01 and var_1 < 0.01 and
                     abs(mean_0 - mean_1) > 0.1):
@@ -315,7 +251,6 @@ class LeakageGate:
         return issues
 
     def _check_point_in_time_violations(self, df: DataFrame) -> List[LeakageIssue]:
-        """Check for point-in-time violations (LK009)."""
         issues = []
 
         if self.feature_timestamp_column not in df.columns:
@@ -324,9 +259,8 @@ class LeakageGate:
             return issues
 
         try:
-            feature_ts = pd.to_datetime(df[self.feature_timestamp_column], errors='coerce', format='mixed')
-            label_ts = pd.to_datetime(df[self.label_timestamp_column], errors='coerce', format='mixed')
-
+            feature_ts = self._parse_datetime(df[self.feature_timestamp_column])
+            label_ts = self._parse_datetime(df[self.label_timestamp_column])
             violations = df[feature_ts > label_ts]
             if len(violations) > 0:
                 issues.append(LeakageIssue(
@@ -344,14 +278,13 @@ class LeakageGate:
     def _check_future_dates_in_features(
         self, df: DataFrame, feature_cols: List[str]
     ) -> List[LeakageIssue]:
-        """Check for future dates in feature columns (LK010)."""
         issues = []
 
         if self.feature_timestamp_column not in df.columns:
             return issues
 
         try:
-            feature_ts = pd.to_datetime(df[self.feature_timestamp_column], errors='coerce', format='mixed')
+            feature_ts = self._parse_datetime(df[self.feature_timestamp_column])
         except Exception:
             return issues
 
@@ -362,7 +295,7 @@ class LeakageGate:
 
         for col in datetime_feature_cols:
             try:
-                col_dates = pd.to_datetime(df[col], errors='coerce', format='mixed')
+                col_dates = self._parse_datetime(df[col])
                 if col_dates.isna().all():
                     continue
 
@@ -377,5 +310,43 @@ class LeakageGate:
                     ))
             except Exception:
                 continue
+
+        return issues
+
+    def _check_feature_availability(self, df: DataFrame, feature_cols: List[str], availability: "FeatureAvailabilityMetadata") -> List[LeakageIssue]:
+        issues: List[LeakageIssue] = []
+
+        for col in feature_cols:
+            if col not in df.columns:
+                continue
+            feat_info = availability.features.get(col)
+            if feat_info is None:
+                continue
+
+            first_date = feat_info.first_valid_date or "unknown"
+            last_date = feat_info.last_valid_date or "unknown"
+            availability_lists = [
+                (availability.new_tracking, "new_tracking"),
+                (availability.retired_tracking, "retired"),
+                (availability.partial_window, "partial_window"),
+            ]
+            for tracking_list, tracking_type in availability_lists:
+                if col in tracking_list:
+                    description = self._LK011_DESCRIPTIONS[tracking_type].format(
+                        first_date=first_date, last_date=last_date
+                    )
+                    issues.append(LeakageIssue(
+                        check_id="LK011", severity=Severity.HIGH, feature=col,
+                        description=description, value=feat_info.coverage_pct,
+                    ))
+                    break
+
+            has_availability_issue = any(col in lst for lst, _ in availability_lists)
+            if feat_info.coverage_pct < self.availability_coverage_threshold and not has_availability_issue:
+                issues.append(LeakageIssue(
+                    check_id="LK012", severity=Severity.HIGH, feature=col,
+                    description=f"Low feature coverage ({feat_info.coverage_pct:.1f}% < {self.availability_coverage_threshold}% threshold)",
+                    value=feat_info.coverage_pct,
+                ))
 
         return issues

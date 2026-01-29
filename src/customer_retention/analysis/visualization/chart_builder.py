@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 
 
 class ChartBuilder:
+    DOW_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
     def __init__(self, theme: str = "plotly_white"):
         self.theme = theme
         self.colors = {
@@ -27,10 +29,32 @@ class ChartBuilder:
             "info": "#17becf"
         }
 
+    def _get_quality_colors(self, values: List[float], high: float = 80, mid: float = 60) -> List[str]:
+        return [
+            self.colors["success"] if v > high else self.colors["warning"] if v > mid else self.colors["danger"]
+            for v in values
+        ]
+
+    def _get_iv_colors(self, iv_values: List[float]) -> List[str]:
+        return [
+            self.colors["danger"] if iv > 0.5 else
+            self.colors["success"] if iv > 0.3 else
+            self.colors["warning"] if iv > 0.1 else
+            self.colors["primary"]
+            for iv in iv_values
+        ]
+
+    def _get_ks_colors(self, ks_values: List[float]) -> List[str]:
+        return [
+            self.colors["success"] if ks > 0.4 else
+            self.colors["warning"] if ks > 0.2 else
+            self.colors["primary"]
+            for ks in ks_values
+        ]
+
     def bar_chart(self, x: List[Any], y: List[Any], title: Optional[str] = None,
                   x_label: Optional[str] = None, y_label: Optional[str] = None,
                   horizontal: bool = False, color: Optional[str] = None) -> go.Figure:
-        """Create a simple bar chart."""
         marker_color = color or self.colors["primary"]
         if horizontal:
             fig = go.Figure(go.Bar(y=x, x=y, orientation="h", marker_color=marker_color))
@@ -59,8 +83,7 @@ class ChartBuilder:
     def data_quality_scorecard(self, quality_scores: Dict[str, float]) -> go.Figure:
         columns = list(quality_scores.keys())
         scores = list(quality_scores.values())
-        colors = [self.colors["success"] if s > 80 else self.colors["warning"] if s > 60 else self.colors["danger"] for s in scores]
-        fig = go.Figure(go.Bar(y=columns, x=scores, orientation="h", marker_color=colors))
+        fig = go.Figure(go.Bar(y=columns, x=scores, orientation="h", marker_color=self._get_quality_colors(scores)))
         fig.update_layout(
             title="Data Quality Scores by Column",
             xaxis_title="Quality Score (0-100)",
@@ -171,15 +194,6 @@ class ChartBuilder:
         baseline: Optional[float] = None,
         title: Optional[str] = None,
     ) -> go.Figure:
-        """Create a Precision-Recall curve.
-
-        Args:
-            precision: Array of precision values
-            recall: Array of recall values
-            pr_auc: Area under the PR curve
-            baseline: Optional baseline (proportion of positives). If provided, shown as dashed line.
-            title: Optional chart title
-        """
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=recall, y=precision,
@@ -341,7 +355,6 @@ class ChartBuilder:
         return fig
 
     def histogram(self, series: Series, title: Optional[str] = None, nbins: int = 30) -> go.Figure:
-        """Create a simple histogram."""
         series = ensure_pandas_series(series)
         fig = go.Figure(go.Histogram(x=series.dropna(), nbinsx=nbins, marker_color=self.colors["primary"]))
         fig.update_layout(
@@ -354,7 +367,6 @@ class ChartBuilder:
 
     def heatmap(self, z: Any, x_labels: List[str], y_labels: List[str],
                 title: Optional[str] = None, colorscale: str = "RdBu") -> go.Figure:
-        """Create a generic heatmap."""
         z_array = np.array(z) if not isinstance(z, np.ndarray) else z
         fig = go.Figure(go.Heatmap(
             z=z_array, x=x_labels, y=y_labels,
@@ -367,28 +379,33 @@ class ChartBuilder:
         )
         return fig
 
-    def scatter_matrix(self, df: DataFrame, title: Optional[str] = None,
-                        height: Optional[int] = None, width: Optional[int] = None) -> go.Figure:
-        """Create a scatter plot matrix for numeric columns.
-
-        Args:
-            df: DataFrame with numeric columns to plot
-            title: Optional chart title
-            height: Chart height in pixels (default: auto-sized based on columns)
-            width: Chart width in pixels (default: None for full-width responsive)
-        """
+    def scatter_matrix(
+        self,
+        df: DataFrame,
+        title: Optional[str] = None,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+        color_column: Optional[Series] = None,
+        color_map: Optional[Dict[str, str]] = None,
+    ) -> go.Figure:
         df = to_pandas(df)
         n_cols = len(df.columns)
-
-        # Auto-size height based on number of columns (min 500, ~150px per column)
         auto_height = max(500, n_cols * 150)
 
-        fig = px.scatter_matrix(df, title=title)
-        fig.update_layout(
-            template=self.theme,
-            height=height or auto_height,
-            autosize=True,  # Enable responsive width
-        )
+        if color_column is not None:
+            plot_df = df.copy()
+            plot_df["_color_"] = ensure_pandas_series(color_column).values
+            default_colors = {"Retained": "#2ECC71", "Churned": "#E74C3C"}
+            colors = color_map or default_colors
+            fig = px.scatter_matrix(
+                plot_df, dimensions=df.columns.tolist(), color="_color_",
+                title=title, color_discrete_map=colors
+            )
+            fig.update_traces(marker=dict(opacity=0.6, size=5))
+        else:
+            fig = px.scatter_matrix(df, title=title)
+
+        fig.update_layout(template=self.theme, height=height or auto_height, autosize=True)
         if width:
             fig.update_layout(width=width)
         fig.update_traces(diagonal_visible=False, showupperhalf=False)
@@ -397,7 +414,6 @@ class ChartBuilder:
     def multi_line_chart(self, data: List[Dict[str, Any]], x_key: str, y_key: str,
                          name_key: str, title: Optional[str] = None,
                          x_title: Optional[str] = None, y_title: Optional[str] = None) -> go.Figure:
-        """Create a multi-line chart from a list of data series."""
         fig = go.Figure()
         for series in data:
             fig.add_trace(go.Scatter(
@@ -415,7 +431,6 @@ class ChartBuilder:
         title: Optional[str] = None,
         chart_type: str = "bar",
     ) -> go.Figure:
-        """Create a temporal distribution chart from TemporalAnalysis."""
         period_counts = analysis.period_counts
         if period_counts.empty:
             fig = go.Figure()
@@ -441,7 +456,6 @@ class ChartBuilder:
                 name="Record Count"
             ))
 
-        # Add mean line
         mean_count = y_values.mean()
         fig.add_hline(
             y=mean_count,
@@ -468,7 +482,6 @@ class ChartBuilder:
         title: Optional[str] = None,
         show_trend: bool = True,
     ) -> go.Figure:
-        """Create a temporal trend line chart with optional trend line."""
         period_counts = analysis.period_counts
         if period_counts.empty:
             fig = go.Figure()
@@ -519,7 +532,6 @@ class ChartBuilder:
         dates: Series,
         title: Optional[str] = None,
     ) -> go.Figure:
-        """Create a day-of-week by hour heatmap for datetime data."""
         import pandas as pd
         dates = ensure_pandas_series(dates)
         parsed = pd.to_datetime(dates, errors="coerce").dropna()
@@ -529,11 +541,10 @@ class ChartBuilder:
             fig.add_annotation(text="No valid dates", x=0.5, y=0.5, showarrow=False)
             return fig
 
-        dow_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
         counts = parsed.dt.dayofweek.value_counts().reindex(range(7), fill_value=0)
 
         fig = go.Figure(go.Bar(
-            x=dow_names,
+            x=self.DOW_NAMES,
             y=counts.values,
             marker_color=[self.colors["info"] if i < 5 else self.colors["warning"] for i in range(7)]
         ))
@@ -551,7 +562,6 @@ class ChartBuilder:
         pivot_df: "DataFrame",
         title: Optional[str] = None,
     ) -> go.Figure:
-        """Create a year x month heatmap showing record counts."""
         pivot_df = to_pandas(pivot_df)
         if pivot_df.empty:
             fig = go.Figure()
@@ -1040,12 +1050,11 @@ class ChartBuilder:
         df_daily["year_week"] = df_daily["year"].astype(str) + "-W" + df_daily["week"].astype(str).str.zfill(2)
 
         pivot = df_daily.pivot_table(index="dow", columns="year_week", values="value", aggfunc="sum")
-        dow_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
         fig = go.Figure(go.Heatmap(
             z=pivot.values,
             x=pivot.columns.tolist(),
-            y=[dow_labels[i] for i in pivot.index],
+            y=[self.DOW_NAMES[i] for i in pivot.index],
             colorscale=colorscale,
             hovertemplate="Week: %{x}<br>Day: %{y}<br>Value: %{z:,.0f}<extra></extra>",
         ))
@@ -1083,14 +1092,13 @@ class ChartBuilder:
             df_cal["dow"] = df_cal["date"].dt.dayofweek
             pivot = df_cal.groupby(["dow", "month"]).size().unstack(fill_value=0)
 
-        dow_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
         month_labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
         fig = go.Figure(go.Heatmap(
             z=pivot.values,
             x=[month_labels[i-1] for i in pivot.columns],
-            y=[dow_labels[i] for i in pivot.index],
+            y=[self.DOW_NAMES[i] for i in pivot.index],
             colorscale="YlOrRd",
             hovertemplate="Month: %{x}<br>Day: %{y}<br>Value: %{z:,.1f}<extra></extra>",
         ))
@@ -1355,19 +1363,95 @@ class ChartBuilder:
         )
         return fig
 
-    def lag_correlation_heatmap(
-        self,
-        data: Dict[str, List[float]],
-        max_lag: int = 14,
-        title: Optional[str] = None,
-    ) -> go.Figure:
-        """Create heatmap of lag correlations for multiple variables.
+    def _create_effect_heatmap_trace(self, metric_data: Dict, variables: List[str], windows: List[str], show_colorbar: bool) -> go.Heatmap:
+        z_vals = [[metric_data.get(var, {}).get(w, 0) for w in windows] for var in variables]
+        text_vals = [[f"{metric_data.get(var, {}).get(w, 0):.2f}" for w in windows] for var in variables]
+        return go.Heatmap(
+            z=z_vals, x=windows, y=[v[:15] for v in variables],
+            colorscale="RdBu_r", zmid=0, zmin=-1, zmax=1,
+            text=text_vals, texttemplate="%{text}", textfont={"size": 10},
+            showscale=show_colorbar, colorbar={"title": "Cohen's d"} if show_colorbar else None
+        )
 
-        Args:
-            data: Dict with {column_name: [corr_lag1, corr_lag2, ...]}
-            max_lag: Maximum lag shown
-            title: Chart title
-        """
+    def velocity_signal_heatmap(self, data: Dict[str, Dict[str, Dict[str, float]]], title: Optional[str] = None) -> go.Figure:
+        from plotly.subplots import make_subplots
+        vel_data, accel_data = data.get("velocity", {}), data.get("acceleration", {})
+        if not vel_data and not accel_data:
+            fig = go.Figure()
+            fig.update_layout(title=title or "No data", template=self.theme)
+            return fig
+        variables = list(vel_data.keys()) or list(accel_data.keys())
+        windows = list(next(iter(vel_data.values())).keys()) if vel_data else []
+        fig = make_subplots(
+            rows=2, cols=1, subplot_titles=["Velocity Effect Size (d)", "Acceleration Effect Size (d)"],
+            vertical_spacing=0.15
+        )
+        for row_idx, metric_data in enumerate([vel_data, accel_data], start=1):
+            fig.add_trace(
+                self._create_effect_heatmap_trace(metric_data, variables, windows, row_idx == 2),
+                row=row_idx, col=1
+            )
+        fig.update_layout(
+            title=title or "Velocity & Acceleration Signal Strength",
+            height=max(400, len(variables) * 80 + 200), template=self.theme
+        )
+        return fig
+
+    def cohort_velocity_sparklines(self, results: List[Any], feature_name: str, title: Optional[str] = None) -> go.Figure:
+        from plotly.subplots import make_subplots
+        if not results:
+            fig = go.Figure()
+            fig.update_layout(title=title or f"{feature_name} - No data", template=self.theme)
+            return fig
+        n_windows = len(results)
+        col_titles = [getattr(r, "period_label", f"{r.window_days}d") for r in results]
+        row_titles = ["Retained", "Churned", "Overall", "Retained", "Churned", "Overall"]
+        fig = make_subplots(
+            rows=6, cols=n_windows, row_titles=row_titles, column_titles=col_titles,
+            vertical_spacing=0.06, horizontal_spacing=0.03,
+            row_heights=[1, 1, 1, 1, 1, 1]
+        )
+        styles = {
+            "retained": (self.colors["success"], "rgba(44, 160, 44, 0.2)"),
+            "churned": (self.colors["danger"], "rgba(214, 39, 40, 0.2)"),
+            "overall": (self.colors["info"], "rgba(23, 190, 207, 0.2)"),
+        }
+        for col_idx, r in enumerate(results, start=1):
+            self._add_velocity_sparkline(fig, r.retained_velocity, styles["retained"], 1, col_idx)
+            self._add_velocity_sparkline(fig, r.churned_velocity, styles["churned"], 2, col_idx)
+            self._add_velocity_sparkline(fig, r.overall_velocity, styles["overall"], 3, col_idx)
+            self._add_velocity_sparkline(fig, r.retained_accel, styles["retained"], 4, col_idx)
+            self._add_velocity_sparkline(fig, r.churned_accel, styles["churned"], 5, col_idx)
+            self._add_velocity_sparkline(fig, r.overall_accel, styles["overall"], 6, col_idx)
+        fig.update_xaxes(showticklabels=False, showgrid=False)
+        fig.update_yaxes(showticklabels=False, showgrid=False)
+        fig.update_layout(
+            title=title or f"<b>{feature_name}</b>",
+            height=520, template=self.theme,
+            margin={"t": 60, "b": 20, "l": 80, "r": 70}
+        )
+        fig.add_annotation(
+            text="<b>Velocity</b>", textangle=-90, xref="paper", yref="paper",
+            x=-0.06, y=0.77, showarrow=False, font={"size": 12}
+        )
+        fig.add_annotation(
+            text="<b>Acceleration</b>", textangle=-90, xref="paper", yref="paper",
+            x=-0.06, y=0.23, showarrow=False, font={"size": 12}
+        )
+        return fig
+
+    def _add_velocity_sparkline(
+        self, fig: go.Figure, data: List[float], style: tuple, row: int, col: int
+    ) -> None:
+        if not data:
+            return
+        color, fill = style
+        fig.add_trace(go.Scatter(
+            y=data, mode="lines", line={"color": color, "width": 1.5},
+            fill="tozeroy", fillcolor=fill, showlegend=False
+        ), row=row, col=col)
+
+    def lag_correlation_heatmap(self, data: Dict[str, List[float]], max_lag: int = 14, title: Optional[str] = None) -> go.Figure:
         columns = list(data.keys())
         z_values = [data[col][:max_lag] for col in columns]
         lag_labels = [f"Lag {i}" for i in range(1, max_lag + 1)]
@@ -1419,31 +1503,14 @@ class ChartBuilder:
             subplot_titles=("Information Value (IV)", "KS Statistic"),
         )
 
-        # IV thresholds
-        iv_colors = [
-            self.colors["danger"] if iv > 0.5 else
-            self.colors["success"] if iv > 0.3 else
-            self.colors["warning"] if iv > 0.1 else
-            self.colors["primary"]
-            for iv in ivs
-        ]
-
         fig.add_trace(go.Bar(
-            x=col_labels, y=ivs, marker_color=iv_colors, name="IV"
+            x=col_labels, y=ivs, marker_color=self._get_iv_colors(ivs), name="IV"
         ), row=1, col=1)
         fig.add_hline(y=0.3, line_dash="dash", line_color="green", row=1, col=1)
         fig.add_hline(y=0.1, line_dash="dash", line_color="orange", row=1, col=1)
 
-        # KS thresholds
-        ks_colors = [
-            self.colors["success"] if ks > 0.4 else
-            self.colors["warning"] if ks > 0.2 else
-            self.colors["primary"]
-            for ks in kss
-        ]
-
         fig.add_trace(go.Bar(
-            x=col_labels, y=kss, marker_color=ks_colors, name="KS"
+            x=col_labels, y=kss, marker_color=self._get_ks_colors(kss), name="KS"
         ), row=1, col=2)
         fig.add_hline(y=0.4, line_dash="dash", line_color="green", row=1, col=2)
         fig.add_hline(y=0.2, line_dash="dash", line_color="orange", row=1, col=2)
@@ -1463,149 +1530,320 @@ class ChartBuilder:
         title: Optional[str] = None,
         window_label: Optional[str] = None,
     ) -> go.Figure:
-        """Create grouped bar chart comparing momentum between cohorts.
-
-        Args:
-            data: Dict with {column: {"retained": x, "churned": y}} for single window pair
-                  or {column: {"retained_7_30": x, "churned_7_30": y, ...}} for multiple
-            title: Chart title
-            window_label: Label for the window pair (e.g., "180d/365d")
-        """
         columns = list(data.keys())
-        col_labels = [c[:15] for c in columns]
-
-        # Check if data uses simple keys (retained/churned) or compound keys
         first_col_data = data[columns[0]] if columns else {}
         uses_simple_keys = "retained" in first_col_data or "churned" in first_col_data
 
         if uses_simple_keys:
-            # Simple single-pair chart
-            fig = go.Figure()
+            return self._create_simple_momentum_chart(data, columns, title, window_label)
+        return self._create_multi_window_momentum_chart(data, columns, title, window_label)
 
-            fig.add_trace(go.Bar(
-                name="🟢 Retained", x=col_labels,
-                y=[data[c].get("retained", 1) for c in columns],
-                marker_color=self.colors["success"],
-            ))
-            fig.add_trace(go.Bar(
-                name="🔴 Churned", x=col_labels,
-                y=[data[c].get("churned", 1) for c in columns],
-                marker_color=self.colors["danger"],
-            ))
-            fig.add_hline(y=1.0, line_dash="dash", line_color="gray",
-                         annotation_text="baseline", annotation_position="right")
-
-            chart_title = title or f"Momentum Comparison{f' ({window_label})' if window_label else ''}"
-            fig.update_layout(
-                title=chart_title,
-                template=self.theme,
-                height=450,
-                barmode="group",
-                legend={"orientation": "h", "y": -0.15, "x": 0.5, "xanchor": "center"},
-                xaxis_title="Feature",
-                yaxis_title="Momentum (>1 = increasing, <1 = decreasing)",
-                margin={"b": 100},
-            )
-        else:
-            # Multi-pair chart (legacy format with retained_7_30, etc.)
-            from plotly.subplots import make_subplots
-
-            fig = make_subplots(
-                rows=1, cols=2,
-                subplot_titles=(window_label or "Short/Medium", "Medium/Long"),
-            )
-
-            fig.add_trace(go.Bar(
-                name="Retained", x=col_labels,
-                y=[data[c].get("retained_7_30", data[c].get("retained", 1)) for c in columns],
-                marker_color=self.colors["success"],
-            ), row=1, col=1)
-            fig.add_trace(go.Bar(
-                name="Churned", x=col_labels,
-                y=[data[c].get("churned_7_30", data[c].get("churned", 1)) for c in columns],
-                marker_color=self.colors["danger"],
-            ), row=1, col=1)
-            fig.add_hline(y=1.0, line_dash="dash", line_color="gray", row=1, col=1)
-
-            fig.add_trace(go.Bar(
-                name="Retained", x=col_labels,
-                y=[data[c].get("retained_30_90", 1) for c in columns],
-                marker_color=self.colors["success"], showlegend=False,
-            ), row=1, col=2)
-            fig.add_trace(go.Bar(
-                name="Churned", x=col_labels,
-                y=[data[c].get("churned_30_90", 1) for c in columns],
-                marker_color=self.colors["danger"], showlegend=False,
-            ), row=1, col=2)
-            fig.add_hline(y=1.0, line_dash="dash", line_color="gray", row=1, col=2)
-
-            fig.update_layout(
-                title=title or "Momentum by Retention Status",
-                template=self.theme,
-                height=450,
-                barmode="group",
-                legend={"orientation": "h", "y": -0.15, "x": 0.5, "xanchor": "center"},
-                margin={"b": 100},
-            )
+    def _create_simple_momentum_chart(
+        self, data: Dict, columns: List[str], title: Optional[str], window_label: Optional[str]
+    ) -> go.Figure:
+        col_labels = [c[:15] for c in columns]
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            name="Retained", x=col_labels,
+            y=[data[c].get("retained", 1) for c in columns],
+            marker_color=self.colors["success"],
+        ))
+        fig.add_trace(go.Bar(
+            name="Churned", x=col_labels,
+            y=[data[c].get("churned", 1) for c in columns],
+            marker_color=self.colors["danger"],
+        ))
+        fig.add_hline(y=1.0, line_dash="dash", line_color="gray",
+                     annotation_text="baseline", annotation_position="right")
+        chart_title = title or f"Momentum Comparison{f' ({window_label})' if window_label else ''}"
+        fig.update_layout(
+            title=chart_title, template=self.theme, height=450, barmode="group",
+            legend={"orientation": "h", "y": -0.15, "x": 0.5, "xanchor": "center"},
+            xaxis_title="Feature", yaxis_title="Momentum (>1 = increasing, <1 = decreasing)",
+            margin={"b": 100},
+        )
         return fig
+
+    def _create_multi_window_momentum_chart(
+        self, data: Dict, columns: List[str], title: Optional[str], window_label: Optional[str]
+    ) -> go.Figure:
+        from plotly.subplots import make_subplots
+
+        col_labels = [c[:15] for c in columns]
+        fig = make_subplots(
+            rows=1, cols=2,
+            subplot_titles=(window_label or "Short/Medium", "Medium/Long"),
+        )
+        self._add_momentum_cohort_bars(
+            fig, col_labels, columns, data,
+            retained_key="retained_7_30", churned_key="churned_7_30",
+            col=1, show_legend=True,
+        )
+        self._add_momentum_cohort_bars(
+            fig, col_labels, columns, data,
+            retained_key="retained_30_90", churned_key="churned_30_90",
+            col=2, show_legend=False,
+        )
+        fig.update_layout(
+            title=title or "Momentum by Retention Status",
+            template=self.theme, height=450, barmode="group",
+            legend={"orientation": "h", "y": -0.15, "x": 0.5, "xanchor": "center"},
+            margin={"b": 100},
+        )
+        return fig
+
+    def _add_momentum_cohort_bars(
+        self, fig: go.Figure, col_labels: List[str], columns: List[str],
+        data: Dict, retained_key: str, churned_key: str, col: int, show_legend: bool
+    ) -> None:
+        fig.add_trace(go.Bar(
+            name="Retained", x=col_labels,
+            y=[data[c].get(retained_key, data[c].get("retained", 1)) for c in columns],
+            marker_color=self.colors["success"], showlegend=show_legend,
+        ), row=1, col=col)
+        fig.add_trace(go.Bar(
+            name="Churned", x=col_labels,
+            y=[data[c].get(churned_key, data[c].get("churned", 1)) for c in columns],
+            marker_color=self.colors["danger"], showlegend=show_legend,
+        ), row=1, col=col)
+        fig.add_hline(y=1.0, line_dash="dash", line_color="gray", row=1, col=col)
 
     def cohort_sparklines(
         self,
         data: Dict[str, Dict[str, List[float]]],
-        title: Optional[str] = None,
+        feature_name: str,
+        period_effects: Optional[Dict[str, float]] = None,
     ) -> go.Figure:
-        """Create sparkline grid comparing retained vs churned trends.
-
-        Args:
-            data: Dict with {column: {"retained": [...], "churned": [...]}}
-            title: Chart title
-        """
+        """Create 3x3 sparkline grid: cohorts (rows) × time periods (cols) for one feature."""
         from plotly.subplots import make_subplots
 
-        columns = list(data.keys())
-        n_cols = len(columns)
+        cohorts = ["retained", "churned", "overall"]
+        periods = ["weekly", "monthly", "yearly"]
+        row_titles = ["Retained", "Churned", "Overall"]
+        col_titles = self._build_period_titles(periods, period_effects)
 
         fig = make_subplots(
-            rows=2, cols=n_cols,
-            row_titles=["Retained", "Churned"],
-            subplot_titles=[c[:15] for c in columns],
-            vertical_spacing=0.15,
-            horizontal_spacing=0.05,
+            rows=3, cols=3,
+            row_titles=row_titles,
+            column_titles=col_titles,
+            vertical_spacing=0.08,
+            horizontal_spacing=0.06,
         )
 
-        for i, col in enumerate(columns):
-            col_num = i + 1
-            col_data = data[col]
+        styles = {
+            "retained": (self.colors["success"], "rgba(44, 160, 44, 0.2)"),
+            "churned": (self.colors["danger"], "rgba(214, 39, 40, 0.2)"),
+            "overall": (self.colors["info"], "rgba(23, 190, 207, 0.2)"),
+        }
 
-            # Retained (top row)
-            if "retained" in col_data:
-                fig.add_trace(go.Scatter(
-                    y=col_data["retained"], mode="lines",
-                    line={"color": self.colors["success"], "width": 1.5},
-                    fill="tozeroy",
-                    fillcolor="rgba(44, 160, 44, 0.2)",
-                    showlegend=False,
-                ), row=1, col=col_num)
-
-            # Churned (bottom row)
-            if "churned" in col_data:
-                fig.add_trace(go.Scatter(
-                    y=col_data["churned"], mode="lines",
-                    line={"color": self.colors["danger"], "width": 1.5},
-                    fill="tozeroy",
-                    fillcolor="rgba(214, 39, 40, 0.2)",
-                    showlegend=False,
-                ), row=2, col=col_num)
+        for row_idx, cohort in enumerate(cohorts):
+            if cohort not in data:
+                continue
+            color, fill = styles[cohort]
+            for col_idx, period in enumerate(periods):
+                if period in data[cohort]:
+                    fig.add_trace(go.Scatter(
+                        y=data[cohort][period], mode="lines",
+                        line={"color": color, "width": 1.5},
+                        fill="tozeroy", fillcolor=fill, showlegend=False,
+                    ), row=row_idx + 1, col=col_idx + 1)
 
         fig.update_xaxes(showticklabels=False, showgrid=False)
         fig.update_yaxes(showticklabels=False, showgrid=False)
         fig.update_layout(
-            title=title or "Retained vs Churned Trends",
-            height=300,
+            title=f"<b>{feature_name}</b>",
+            height=280,
             template=self.theme,
-            margin={"t": 80, "b": 30, "l": 60, "r": 20},
+            margin={"t": 50, "b": 20, "l": 70, "r": 20},
         )
         return fig
+
+    def _build_period_titles(self, periods: List[str], effects: Optional[Dict[str, float]]) -> List[str]:
+        labels = {"weekly": "Weekly", "monthly": "Monthly", "yearly": "Yearly"}
+        if not effects:
+            return [labels[p] for p in periods]
+        return [f"{labels[p]} (d={effects.get(p, 0):.2f})" for p in periods]
+
+    def analyze_cohort_trends(
+        self,
+        data: Dict[str, Dict[str, List[float]]],
+        feature_name: str,
+    ) -> Dict[str, Any]:
+        """Analyze separation between retained and churned trends across time periods."""
+        periods_analysis = {}
+        for period in ["weekly", "monthly", "yearly"]:
+            if self._has_cohort_period_data(data, period):
+                periods_analysis[period] = self._analyze_period(data, period)
+
+        best_period = self._find_best_period(periods_analysis)
+        recommendation = self._generate_trend_recommendation(feature_name, periods_analysis, best_period)
+        actions = self._generate_actions(feature_name, periods_analysis, best_period)
+        overall_d = self._compute_overall_effect_size(data)
+
+        return {
+            "feature": feature_name,
+            "periods": periods_analysis,
+            "best_period": best_period,
+            "overall_effect_size": overall_d,
+            "recommendation": recommendation,
+            "actions": actions,
+        }
+
+    def _compute_overall_effect_size(self, data: Dict[str, Dict[str, List[float]]]) -> float:
+        if "retained" not in data or "churned" not in data:
+            return 0.0
+        all_retained = [v for period_data in data["retained"].values() for v in period_data]
+        all_churned = [v for period_data in data["churned"].values() for v in period_data]
+        if len(all_retained) < 2 or len(all_churned) < 2:
+            return 0.0
+        return self._compute_cohens_d(np.array(all_retained), np.array(all_churned))
+
+    def _has_cohort_period_data(self, data: Dict, period: str) -> bool:
+        return ("retained" in data and period in data["retained"] and
+                "churned" in data and period in data["churned"])
+
+    @staticmethod
+    def _classify_slope(slope: float) -> str:
+        if slope > 0.01:
+            return "up"
+        return "down" if slope < -0.01 else "flat"
+
+    def _compute_period_trends(self, retained: np.ndarray, churned: np.ndarray) -> Dict[str, Any]:
+        ret_trend = self._compute_trend_slope(retained)
+        churn_trend = self._compute_trend_slope(churned)
+        return {
+            "retained_trend": self._classify_slope(ret_trend),
+            "churned_trend": self._classify_slope(churn_trend),
+            "opposite_trends": (ret_trend > 0 and churn_trend < 0) or (ret_trend < 0 and churn_trend > 0),
+        }
+
+    @staticmethod
+    def _compute_period_variance(retained: np.ndarray, churned: np.ndarray) -> Dict[str, Any]:
+        ret_var, churn_var = float(np.var(retained)), float(np.var(churned))
+        variance_ratio = ret_var / churn_var if churn_var > 0.001 else (10.0 if ret_var > 0.001 else 1.0)
+        return {
+            "variance_ratio": float(variance_ratio),
+            "high_variance": bool(ret_var > 1.0 or churn_var > 1.0),
+        }
+
+    def _analyze_period(self, data: Dict, period: str) -> Dict[str, Any]:
+        retained = np.array(data["retained"][period])
+        churned = np.array(data["churned"][period])
+        result = {
+            "divergence": self._compute_divergence(retained, churned),
+            "effect_size": self._compute_cohens_d(retained, churned),
+            "seasonality_detected": self._detect_seasonality(retained) or self._detect_seasonality(churned),
+        }
+        result.update(self._compute_period_trends(retained, churned))
+        result.update(self._compute_period_variance(retained, churned))
+        return result
+
+    def _compute_trend_slope(self, values: np.ndarray) -> float:
+        if len(values) < 2:
+            return 0.0
+        x = np.arange(len(values))
+        return float(np.polyfit(x, values, 1)[0])
+
+    def _compute_divergence(self, retained: np.ndarray, churned: np.ndarray) -> float:
+        if len(retained) == 0 or len(churned) == 0:
+            return 0.0
+        combined_std = max(np.std(np.concatenate([retained, churned])), 0.001)
+        return float(abs(np.mean(retained) - np.mean(churned)) / combined_std)
+
+    def _compute_cohens_d(self, retained: np.ndarray, churned: np.ndarray) -> float:
+        if len(retained) < 2 or len(churned) < 2:
+            return 0.0
+        pooled_std = np.sqrt((np.var(retained) + np.var(churned)) / 2)
+        if pooled_std < 0.001:
+            return 0.0
+        return float((np.mean(retained) - np.mean(churned)) / pooled_std)
+
+    def _find_best_period(self, periods: Dict[str, Dict]) -> Optional[str]:
+        if not periods:
+            return None
+        return max(periods.keys(), key=lambda p: abs(periods[p].get("divergence", 0)))
+
+    def _generate_trend_recommendation(self, feature: str, periods: Dict, best: Optional[str]) -> str:
+        if not best or best not in periods:
+            return f"Insufficient data for {feature} trend analysis"
+
+        analysis = periods[best]
+        div, eff = analysis["divergence"], abs(analysis["effect_size"])
+        opposite = analysis["opposite_trends"]
+
+        if div > 1.5 or eff > 0.8:
+            strength = "Strong"
+            action = "high-priority feature for churn prediction"
+        elif div > 0.8 or eff > 0.5:
+            strength = "Moderate"
+            action = "useful discriminator between cohorts"
+        elif div > 0.3 or eff > 0.2:
+            strength = "Weak"
+            action = "consider combining with other features"
+        else:
+            return f"{feature}: No significant separation between retained and churned"
+
+        trend_note = " with opposite trend directions" if opposite else ""
+        period_label = {"weekly": "Weekly", "monthly": "Monthly", "yearly": "Yearly"}[best]
+        return f"{feature}: {strength} separation (d={eff:.2f}) at {period_label} scale{trend_note} - {action}"
+
+    def _detect_seasonality(self, values: np.ndarray) -> bool:
+        if len(values) < 6:
+            return False
+        detrended = values - np.linspace(values[0], values[-1], len(values))
+        autocorr = np.correlate(detrended, detrended, mode='full')
+        autocorr = autocorr[len(autocorr) // 2:]
+        if len(autocorr) < 3 or autocorr[0] < 0.001:
+            return False
+        normalized = autocorr / autocorr[0]
+        peaks = [i for i in range(2, len(normalized) - 1)
+                 if normalized[i] > normalized[i-1] and normalized[i] > normalized[i+1]]
+        return any(normalized[p] > 0.3 for p in peaks[:3]) if peaks else False
+
+    def _generate_actions(self, feature: str, periods: Dict, best: Optional[str]) -> List[Dict[str, Any]]:
+        actions = []
+        if not periods:
+            return actions
+
+        any_seasonality = any(p.get("seasonality_detected") for p in periods.values())
+        any_high_variance = any(p.get("high_variance") for p in periods.values())
+
+        if best and periods.get(best, {}).get("opposite_trends"):
+            actions.append({
+                "action_type": "add_trend_feature",
+                "feature": feature,
+                "reason": f"Opposite trends detected at {best} scale",
+                "params": {"period": best, "method": "slope"},
+            })
+
+        if any_seasonality:
+            period_with_season = next((k for k, v in periods.items() if v.get("seasonality_detected")), None)
+            actions.append({
+                "action_type": "add_time_indicator",
+                "feature": feature,
+                "reason": f"Seasonality detected at {period_with_season} scale",
+                "params": {"period": period_with_season, "indicators": ["cyclical_encoding"]},
+            })
+
+        if any_high_variance:
+            max_var_period = max(periods.keys(), key=lambda k: periods[k].get("variance_ratio", 1.0))
+            var_ratio = periods[max_var_period].get("variance_ratio", 1.0)
+            if var_ratio > 2.0:
+                actions.append({
+                    "action_type": "robust_scale",
+                    "feature": feature,
+                    "reason": f"High variance ratio ({var_ratio:.1f}x) between cohorts",
+                    "params": {"method": "robust_scaler"},
+                })
+            elif any_high_variance:
+                actions.append({
+                    "action_type": "normalize",
+                    "feature": feature,
+                    "reason": "High variance in temporal trends",
+                    "params": {"method": "standard_scaler"},
+                })
+
+        return actions
 
     def descriptive_stats_tiles(
         self,
@@ -1711,12 +1949,7 @@ class ChartBuilder:
         df = to_pandas(df)
         formatter = NumberFormatter()
 
-        # Calculate metrics
         memory_mb = df.memory_usage(deep=True).sum() / 1024**2
-        100 - sum(
-            col.universal_metrics.get("null_percentage", 0)
-            for col in findings.columns.values()
-        ) / max(len(findings.columns), 1)
 
         # Detect format from path
         path = Path(source_path) if source_path else Path("data.csv")
@@ -1924,8 +2157,6 @@ class ChartBuilder:
     ) -> None:
         """Add categorical column tile with top categories bar."""
         value_counts = series.value_counts().head(5)
-        metrics.get('distinct_count', series.nunique())
-        metrics.get('null_percentage', 0)
 
         # Gradient colors to show rank
         colors = [self.colors["info"]] + [self.colors["primary"]] * (len(value_counts) - 1)
@@ -2091,9 +2322,6 @@ class ChartBuilder:
         row: int, col: int, n_cols: int, formatter: "NumberFormatter"
     ) -> None:
         """Add generic tile for unknown column types."""
-        metrics.get('distinct_count', series.nunique())
-        metrics.get('null_percentage', 0)
-
         value_counts = series.value_counts().head(5)
 
         fig.add_trace(go.Bar(
@@ -2223,4 +2451,169 @@ class ChartBuilder:
             xaxis={"title": ""},
         )
 
+        return fig
+
+    def recency_analysis_panel(
+        self, retained_recency: np.ndarray, churned_recency: np.ndarray,
+        bucket_stats: list, retained_median: float, churned_median: float,
+        cap_value: Optional[float] = None
+    ) -> go.Figure:
+        from plotly.subplots import make_subplots
+        from scipy.stats import gaussian_kde
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=["Retained Distribution", "Target Rate by Recency",
+                            "Churned Distribution", "Density Comparison"],
+            row_heights=[0.5, 0.5], column_widths=[0.5, 0.5],
+            horizontal_spacing=0.08, vertical_spacing=0.15,
+            specs=[[{}, {"secondary_y": True}], [{}, {}]]
+        )
+        color_retained, color_churned = "rgba(46,204,113,0.7)", "rgba(231,76,60,0.7)"
+        cap = cap_value or max(np.max(retained_recency), np.max(churned_recency))
+        x_range = [0, cap * 1.05]
+        fig.add_trace(go.Histogram(
+            x=retained_recency, nbinsx=30, marker_color=color_retained, showlegend=False,
+            hovertemplate="Days: %{x}<br>Count: %{y}<extra></extra>"
+        ), row=1, col=1)
+        fig.add_vline(x=retained_median, line_dash="solid", line_color="green",
+                      annotation_text=f"Med: {retained_median:.0f}d", row=1, col=1)
+        fig.add_trace(go.Histogram(
+            x=churned_recency, nbinsx=30, marker_color=color_churned, showlegend=False,
+            hovertemplate="Days: %{x}<br>Count: %{y}<extra></extra>"
+        ), row=2, col=1)
+        fig.add_vline(x=churned_median, line_dash="solid", line_color="red",
+                      annotation_text=f"Med: {churned_median:.0f}d", row=2, col=1)
+        if bucket_stats:
+            labels = [b.bucket_label for b in bucket_stats]
+            counts = [b.entity_count for b in bucket_stats]
+            rates = [b.target_rate * 100 for b in bucket_stats]
+            fig.add_trace(go.Bar(
+                x=labels, y=counts, name="Entity Count", marker_color="lightsteelblue", opacity=0.7,
+                hovertemplate="Bucket: %{x}<br>Count: %{y}<extra></extra>"
+            ), row=1, col=2)
+            fig.add_trace(go.Scatter(
+                x=labels, y=rates, mode="lines+markers", name="Target Rate %",
+                line={"color": "red", "width": 3}, marker={"size": 8},
+                hovertemplate="Bucket: %{x}<br>Rate: %{y:.1f}%<extra></extra>"
+            ), row=1, col=2, secondary_y=True)
+        x_density = np.linspace(0, cap, 200)
+        if len(retained_recency) > 5 and len(churned_recency) > 5:
+            kde_retained = gaussian_kde(retained_recency, bw_method=0.3)
+            kde_churned = gaussian_kde(churned_recency, bw_method=0.3)
+            fig.add_trace(go.Scatter(
+                x=x_density, y=kde_retained(x_density), mode="lines", name="Retained",
+                line={"color": "green", "width": 2}, fill="tozeroy", fillcolor="rgba(46,204,113,0.3)",
+                hovertemplate="Days: %{x:.0f}<br>Density: %{y:.4f}<extra></extra>"
+            ), row=2, col=2)
+            fig.add_trace(go.Scatter(
+                x=x_density, y=kde_churned(x_density), mode="lines", name="Churned",
+                line={"color": "red", "width": 2}, fill="tozeroy", fillcolor="rgba(231,76,60,0.3)",
+                hovertemplate="Days: %{x:.0f}<br>Density: %{y:.4f}<extra></extra>"
+            ), row=2, col=2)
+            fig.add_vline(x=retained_median, line_dash="dash", line_color="green", line_width=1, row=2, col=2)
+            fig.add_vline(x=churned_median, line_dash="dash", line_color="red", line_width=1, row=2, col=2)
+            separation = self._compute_distribution_separation(kde_retained, kde_churned, x_density)
+            fig.add_annotation(x=0.95, y=0.95, xref="x4 domain", yref="y4 domain",
+                               text=f"Separation: {separation:.0%}", showarrow=False,
+                               font={"size": 11}, bgcolor="rgba(255,255,255,0.8)", xanchor="right")
+        fig.update_xaxes(range=x_range, row=1, col=1)
+        fig.update_xaxes(range=x_range, row=2, col=1)
+        fig.update_xaxes(range=x_range, row=2, col=2)
+        fig.update_xaxes(title_text="Days Since Last Event", row=2, col=1)
+        fig.update_xaxes(title_text="Recency Bucket", row=1, col=2)
+        fig.update_xaxes(title_text="Days Since Last Event", row=2, col=2)
+        fig.update_yaxes(title_text="Count", row=1, col=1)
+        fig.update_yaxes(title_text="Count", row=2, col=1)
+        fig.update_yaxes(title_text="Entity Count", row=1, col=2)
+        fig.update_yaxes(title_text="Target Rate %", row=1, col=2, secondary_y=True)
+        fig.update_yaxes(title_text="Density", row=2, col=2)
+        fig.update_layout(
+            title={"text": "Recency Analysis: Distribution Comparison & Target Rate", "x": 0.5},
+            template=self.theme, height=550, showlegend=True, autosize=True,
+            legend={"orientation": "h", "yanchor": "top", "y": -0.08, "xanchor": "center", "x": 0.5},
+            margin={"l": 60, "r": 60, "t": 50, "b": 80}
+        )
+        return fig
+
+    def _compute_distribution_separation(self, kde1, kde2, x_values: np.ndarray) -> float:
+        y1, y2 = kde1(x_values), kde2(x_values)
+        overlap = np.trapezoid(np.minimum(y1, y2), x_values)
+        return 1.0 - overlap
+
+    def categorical_analysis_panel(
+        self, insights: list, overall_rate: float, max_features: int = 6
+    ) -> go.Figure:
+        from plotly.subplots import make_subplots
+        if not insights:
+            fig = go.Figure()
+            fig.add_annotation(text="No categorical features to analyze", showarrow=False,
+                               xref="paper", yref="paper", x=0.5, y=0.5, font={"size": 16})
+            return fig
+        insights = sorted(insights, key=lambda x: x.cramers_v, reverse=True)[:max_features]
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=["Feature Association Strength (Cramér's V)", "Effect Strength Distribution",
+                            "High/Low Risk Category Counts", "Top Feature: Category Target Rates"],
+            row_heights=[0.5, 0.5], column_widths=[0.5, 0.5],
+            horizontal_spacing=0.12, vertical_spacing=0.18
+        )
+        features = [i.feature_name for i in insights]
+        cramers_values = [i.cramers_v for i in insights]
+        # Top-Left: Strength gradient (red=strong, orange=moderate, light blue=weak)
+        strength_colors = ["#c0392b" if v >= 0.3 else "#e67e22" if v >= 0.1 else "#85c1e9" for v in cramers_values]
+        fig.add_trace(go.Bar(
+            y=features, x=cramers_values, orientation="h", marker_color=strength_colors,
+            hovertemplate="Feature: %{y}<br>Cramér's V: %{x:.3f}<extra></extra>", showlegend=False
+        ), row=1, col=1)
+        fig.add_vline(x=0.3, line_dash="dash", line_color="#c0392b", annotation_text="Strong",
+                      annotation_position="top right", row=1, col=1)
+        fig.add_vline(x=0.1, line_dash="dash", line_color="#e67e22", annotation_text="Moderate",
+                      annotation_position="top left", row=1, col=1)
+        # Top-Right: Count distribution (purple palette - distinct from strength colors)
+        effect_counts = {"strong": 0, "moderate": 0, "weak": 0, "negligible": 0}
+        for i in insights:
+            effect_counts[i.effect_strength] = effect_counts.get(i.effect_strength, 0) + 1
+        effect_labels = list(effect_counts.keys())
+        effect_values = list(effect_counts.values())
+        # Purple gradient for counts (darker = more significant category)
+        count_colors = ["#6c3483", "#8e44ad", "#a569bd", "#d2b4de"]
+        fig.add_trace(go.Bar(
+            x=effect_labels, y=effect_values, marker_color=count_colors, showlegend=False,
+            hovertemplate="Effect: %{x}<br>Count: %{y}<extra></extra>"
+        ), row=1, col=2)
+        high_risk = [len(i.high_risk_categories) for i in insights]
+        low_risk = [len(i.low_risk_categories) for i in insights]
+        fig.add_trace(go.Bar(
+            y=features, x=high_risk, orientation="h", name="High Risk Categories",
+            marker_color="rgba(231,76,60,0.7)", hovertemplate="%{y}: %{x} high-risk<extra></extra>"
+        ), row=2, col=1)
+        fig.add_trace(go.Bar(
+            y=features, x=low_risk, orientation="h", name="Low Risk Categories",
+            marker_color="rgba(46,204,113,0.7)", hovertemplate="%{y}: %{x} low-risk<extra></extra>"
+        ), row=2, col=1)
+        top_insight = insights[0]
+        if not top_insight.category_stats.empty:
+            stats = top_insight.category_stats.head(10)
+            categories = stats["category"].astype(str).tolist()
+            rates = (stats["retention_rate"] * 100).tolist()
+            bar_colors = ["#e74c3c" if r < overall_rate * 100 * 0.9 else
+                          "#2ecc71" if r > overall_rate * 100 * 1.1 else "#3498db" for r in rates]
+            fig.add_trace(go.Bar(
+                x=categories, y=rates, marker_color=bar_colors, showlegend=False,
+                hovertemplate="Category: %{x}<br>Target Rate: %{y:.1f}%<extra></extra>"
+            ), row=2, col=2)
+            fig.add_hline(y=overall_rate * 100, line_dash="dash", line_color="gray",
+                          annotation_text=f"Overall: {overall_rate*100:.1f}%", row=2, col=2)
+        fig.update_xaxes(title_text="Cramér's V", row=1, col=1)
+        fig.update_xaxes(title_text="Category Count", row=2, col=1)
+        fig.update_xaxes(title_text="Category", row=2, col=2, tickangle=45)
+        fig.update_yaxes(title_text="Feature", row=1, col=1)
+        fig.update_yaxes(title_text="Feature", row=2, col=1)
+        fig.update_yaxes(title_text="Target Rate %", row=2, col=2)
+        fig.update_layout(
+            title={"text": "Categorical Feature Analysis", "x": 0.5},
+            template=self.theme, height=600, showlegend=True, autosize=True, barmode="group",
+            legend={"orientation": "h", "yanchor": "top", "y": -0.1, "xanchor": "center", "x": 0.5},
+            margin={"l": 120, "r": 60, "t": 60, "b": 100}
+        )
         return fig

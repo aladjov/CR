@@ -1,20 +1,13 @@
-"""
-Time series profiler for analyzing event-level datasets.
-
-Provides profiling capabilities specific to time series data including:
-- Entity lifecycle analysis
-- Event frequency distributions
-- Inter-event timing statistics
-"""
 from dataclasses import dataclass
 from typing import Optional
+
+import numpy as np
 
 from customer_retention.core.compat import DataFrame, pd
 
 
 @dataclass
 class DistributionStats:
-    """Statistics describing a distribution."""
     min: float
     max: float
     mean: float
@@ -26,7 +19,6 @@ class DistributionStats:
 
 @dataclass
 class LifecycleQuadrantResult:
-    """Result of lifecycle quadrant classification."""
     lifecycles: DataFrame
     tenure_threshold: float
     intensity_threshold: float
@@ -35,17 +27,17 @@ class LifecycleQuadrantResult:
 
 _QUADRANT_RECOMMENDATIONS = {
     "Steady & Loyal": {
-        "Windows": "All (7d-365d)",
+        "Windows": "All available windows",
         "Feature Strategy": "Trend/seasonality features, engagement decay",
         "Risk": "Low churn risk; monitor for engagement decline",
     },
     "Occasional & Loyal": {
-        "Windows": "Wide (90d, 180d, 365d)",
+        "Windows": "Wider windows (capture sparse events)",
         "Feature Strategy": "Long-window aggregations, recency gap",
         "Risk": "May churn silently; long gaps are normal",
     },
     "Intense & Brief": {
-        "Windows": "Short (7d, 24h, 30d)",
+        "Windows": "Narrower windows (capture recency)",
         "Feature Strategy": "Recency features, burst detection",
         "Risk": "High churn risk; may be early churners",
     },
@@ -57,32 +49,26 @@ _QUADRANT_RECOMMENDATIONS = {
 }
 
 
+def _assign_lifecycle_quadrant(duration_days: np.ndarray, intensity: np.ndarray,
+                               tenure_threshold: float, intensity_threshold: float) -> np.ndarray:
+    long = duration_days >= tenure_threshold
+    high = intensity >= intensity_threshold
+    result = np.where(long & high, "Steady & Loyal",
+             np.where(long, "Occasional & Loyal",
+             np.where(high, "Intense & Brief", "One-shot")))
+    return result
+
+
 def classify_lifecycle_quadrants(entity_lifecycles: DataFrame) -> LifecycleQuadrantResult:
-    """Classify entities into lifecycle quadrants and produce recommendations.
-
-    Splits on median tenure and median intensity (events/day) to create four
-    quadrants: Steady & Loyal, Occasional & Loyal, Intense & Brief, One-shot.
-
-    Returns a LifecycleQuadrantResult with the classified lifecycles and a
-    recommendations DataFrame ordered by quadrant significance (share desc).
-    """
     lc = entity_lifecycles.copy()
     tenure_threshold = float(lc["duration_days"].median())
     lc["intensity"] = lc["event_count"] / lc["duration_days"].clip(lower=1)
     intensity_threshold = float(lc["intensity"].median())
 
-    def _assign(row):
-        long = row["duration_days"] >= tenure_threshold
-        high = row["intensity"] >= intensity_threshold
-        if long and high:
-            return "Steady & Loyal"
-        if long:
-            return "Occasional & Loyal"
-        if high:
-            return "Intense & Brief"
-        return "One-shot"
-
-    lc["lifecycle_quadrant"] = lc.apply(_assign, axis=1)
+    lc["lifecycle_quadrant"] = _assign_lifecycle_quadrant(
+        lc["duration_days"].values, lc["intensity"].values,
+        tenure_threshold, intensity_threshold
+    )
 
     counts = lc["lifecycle_quadrant"].value_counts()
     total = len(lc)
@@ -109,7 +95,6 @@ def classify_lifecycle_quadrants(entity_lifecycles: DataFrame) -> LifecycleQuadr
 
 @dataclass
 class ActivitySegmentResult:
-    """Result of activity segment classification."""
     lifecycles: DataFrame
     q25_threshold: float
     q75_threshold: float
@@ -122,46 +107,32 @@ _SEGMENT_RECOMMENDATIONS = {
         "Modeling Implication": "Cold-start problem; consider population-level fallback or separate model",
     },
     "Low Activity": {
-        "Feature Approach": "Wide windows (90d+) with count/recency; sparse aggregations",
+        "Feature Approach": "Wider windows with count/recency; sparse aggregations",
         "Modeling Implication": "Features will be noisy; log-transform counts, handle many zeros",
     },
     "Medium Activity": {
-        "Feature Approach": "Standard windows (7d-90d); mean/std aggregations reliable",
+        "Feature Approach": "Standard windows; mean/std aggregations reliable",
         "Modeling Implication": "Core modeling population; most features well-populated",
     },
     "High Activity": {
-        "Feature Approach": "All windows including short (24h, 7d); trends and velocity meaningful",
+        "Feature Approach": "All windows including narrower; trends and velocity meaningful",
         "Modeling Implication": "Rich feature space; watch for dominance in training set",
     },
 }
 
 
+def _assign_activity_segment(event_count: np.ndarray, q25: float, q75: float) -> np.ndarray:
+    return np.where(event_count <= 1, "One-time",
+           np.where(event_count <= q25, "Low Activity",
+           np.where(event_count <= q75, "Medium Activity", "High Activity")))
+
+
 def classify_activity_segments(entity_lifecycles: DataFrame) -> ActivitySegmentResult:
-    """Classify entities by event count into activity segments with recommendations.
-
-    Segments are defined by quartiles of event_count:
-    - One-time: exactly 1 event
-    - Low Activity: 2 to q25
-    - Medium Activity: q25 to q75
-    - High Activity: above q75
-
-    Returns an ActivitySegmentResult with classified lifecycles and a
-    recommendations DataFrame ordered by segment share (descending).
-    """
     lc = entity_lifecycles.copy()
     q25 = float(lc["event_count"].quantile(0.25))
     q75 = float(lc["event_count"].quantile(0.75))
 
-    def _assign(count):
-        if count <= 1:
-            return "One-time"
-        if count <= q25:
-            return "Low Activity"
-        if count <= q75:
-            return "Medium Activity"
-        return "High Activity"
-
-    lc["activity_segment"] = lc["event_count"].apply(_assign)
+    lc["activity_segment"] = _assign_activity_segment(lc["event_count"].values, q25, q75)
 
     counts = lc["activity_segment"].value_counts()
     total = len(lc)
@@ -189,7 +160,6 @@ def classify_activity_segments(entity_lifecycles: DataFrame) -> ActivitySegmentR
 
 @dataclass
 class EntityLifecycle:
-    """Lifecycle information for a single entity."""
     entity: str
     first_event: pd.Timestamp
     last_event: pd.Timestamp
@@ -199,7 +169,6 @@ class EntityLifecycle:
 
 @dataclass
 class TimeSeriesProfile:
-    """Complete profile of a time series dataset."""
     entity_column: str
     time_column: str
     total_events: int
@@ -213,14 +182,13 @@ class TimeSeriesProfile:
 
 
 class TimeSeriesProfiler:
-    """Profiles time series (event-level) datasets."""
+    SECONDS_PER_DAY = 86400
 
     def __init__(self, entity_column: str, time_column: str):
         self.entity_column = entity_column
         self.time_column = time_column
 
     def profile(self, df: DataFrame) -> TimeSeriesProfile:
-        """Generate a complete profile of the time series data."""
         if len(df) == 0:
             return self._empty_profile()
 
@@ -249,21 +217,18 @@ class TimeSeriesProfiler:
         )
 
     def _validate_columns(self, df: DataFrame) -> None:
-        """Ensure required columns exist."""
         if self.entity_column not in df.columns:
             raise KeyError(f"Entity column '{self.entity_column}' not found")
         if self.time_column not in df.columns:
             raise KeyError(f"Time column '{self.time_column}' not found")
 
     def _prepare_dataframe(self, df: DataFrame) -> DataFrame:
-        """Prepare dataframe by parsing dates if needed."""
         df = df.copy()
         if not pd.api.types.is_datetime64_any_dtype(df[self.time_column]):
             df[self.time_column] = pd.to_datetime(df[self.time_column])
         return df
 
     def _compute_entity_lifecycles(self, df: DataFrame) -> DataFrame:
-        """Compute lifecycle metrics for each entity."""
         grouped = df.groupby(self.entity_column)[self.time_column]
 
         lifecycles = pd.DataFrame({
@@ -280,7 +245,6 @@ class TimeSeriesProfiler:
         return lifecycles
 
     def _compute_events_distribution(self, lifecycles: DataFrame) -> DistributionStats:
-        """Compute distribution statistics for events per entity."""
         counts = lifecycles["event_count"]
 
         if len(counts) == 0:
@@ -299,7 +263,6 @@ class TimeSeriesProfiler:
         )
 
     def _compute_time_span(self, df: DataFrame) -> int:
-        """Compute total time span in days."""
         if len(df) == 0:
             return 0
         min_date = df[self.time_column].min()
@@ -307,7 +270,6 @@ class TimeSeriesProfiler:
         return (max_date - min_date).days
 
     def _compute_avg_inter_event_time(self, df: DataFrame) -> Optional[float]:
-        """Compute average time between consecutive events per entity."""
         if len(df) < 2:
             return None
 
@@ -317,7 +279,7 @@ class TimeSeriesProfiler:
                 continue
             sorted_dates = group[self.time_column].sort_values()
             diffs = sorted_dates.diff().dropna()
-            inter_event_days.extend(diffs.dt.total_seconds() / 86400)
+            inter_event_days.extend(diffs.dt.total_seconds() / self.SECONDS_PER_DAY)
 
         if not inter_event_days:
             return None
@@ -325,7 +287,6 @@ class TimeSeriesProfiler:
         return float(sum(inter_event_days) / len(inter_event_days))
 
     def _empty_profile(self) -> TimeSeriesProfile:
-        """Return profile for empty dataset."""
         return TimeSeriesProfile(
             entity_column=self.entity_column,
             time_column=self.time_column,

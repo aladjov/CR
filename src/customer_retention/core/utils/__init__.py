@@ -11,6 +11,7 @@ from .leakage import (
 from .severity import ThresholdConfig, classify_by_thresholds, severity_recommendation
 from .statistics import (
     compute_chi_square,
+    compute_effect_size,
     compute_ks_statistic,
     compute_psi_categorical,
     compute_psi_from_series,
@@ -20,6 +21,7 @@ from .statistics import (
 __all__ = [
     "Severity",
     "compute_psi_numeric", "compute_psi_categorical", "compute_psi_from_series", "compute_ks_statistic", "compute_chi_square",
+    "compute_effect_size",
     "LeakageThresholds", "classify_correlation", "classify_separation", "calculate_class_overlap", "DEFAULT_THRESHOLDS",
     "ThresholdConfig", "classify_by_thresholds", "severity_recommendation",
     "TEMPORAL_METADATA_COLUMNS", "get_valid_feature_columns",

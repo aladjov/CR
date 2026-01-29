@@ -159,6 +159,33 @@ class TestRecommendationTracker:
         assert tracked is not None
         assert tracked.source_column == "signup_date"
 
+    def test_add_from_recency_recommendation(self, tmp_path):
+        from customer_retention.integrations.iteration.recommendation_tracker import (
+            RecommendationTracker,
+            RecommendationType,
+        )
+        tracker = RecommendationTracker(str(tmp_path / "recommendations.yaml"))
+        recency_rec = {
+            "action": "add_recency_features",
+            "priority": "high",
+            "features": ["days_since_last_event", "log_recency"],
+            "reason": "Strong effect size - recency is a key predictor"
+        }
+        tracked_list = tracker.add_from_recency(recency_rec)
+        assert len(tracked_list) == 2
+        assert all(t.recommendation_type == RecommendationType.FEATURE for t in tracked_list)
+        assert all(t.source_column == "recency" for t in tracked_list)
+        feature_names = [t.action for t in tracked_list]
+        assert "days_since_last_event" in feature_names
+        assert "log_recency" in feature_names
+
+    def test_add_from_recency_empty_features(self, tmp_path):
+        from customer_retention.integrations.iteration.recommendation_tracker import RecommendationTracker
+        tracker = RecommendationTracker(str(tmp_path / "recommendations.yaml"))
+        recency_rec = {"action": "investigate_recency", "priority": "medium", "reason": "Unusual pattern"}
+        tracked_list = tracker.add_from_recency(recency_rec)
+        assert len(tracked_list) == 0
+
     def test_mark_applied(self, tmp_path):
         from customer_retention.integrations.iteration.recommendation_tracker import (
             RecommendationStatus,

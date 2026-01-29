@@ -227,6 +227,50 @@ class TestScatterMatrix:
         fig = chart_builder.scatter_matrix(numeric_df, title="Scatter Matrix")
         assert fig is not None
 
+    def test_with_color_column(self, chart_builder):
+        df = pd.DataFrame({
+            "feature1": np.random.randn(50),
+            "feature2": np.random.randn(50),
+            "cohort": ["Retained"] * 25 + ["Churned"] * 25,
+        })
+        fig = chart_builder.scatter_matrix(df[["feature1", "feature2"]], color_column=df["cohort"])
+        assert fig is not None
+        assert len(fig.data) > 0
+
+    def test_color_column_with_custom_colors(self, chart_builder):
+        df = pd.DataFrame({
+            "f1": np.random.randn(40),
+            "f2": np.random.randn(40),
+            "group": ["Retained"] * 20 + ["Churned"] * 20,
+        })
+        color_map = {"Retained": "#2ECC71", "Churned": "#E74C3C"}
+        fig = chart_builder.scatter_matrix(
+            df[["f1", "f2"]], color_column=df["group"], color_map=color_map
+        )
+        assert fig is not None
+
+    def test_color_column_uses_default_cohort_colors(self, chart_builder):
+        df = pd.DataFrame({
+            "x": [1, 2, 3, 4],
+            "y": [4, 3, 2, 1],
+            "cohort": ["Retained", "Retained", "Churned", "Churned"],
+        })
+        fig = chart_builder.scatter_matrix(df[["x", "y"]], color_column=df["cohort"])
+        assert fig is not None
+
+    def test_markers_have_transparency(self, chart_builder):
+        df = pd.DataFrame({
+            "x": np.random.randn(20),
+            "y": np.random.randn(20),
+            "cohort": ["Retained"] * 10 + ["Churned"] * 10,
+        })
+        fig = chart_builder.scatter_matrix(df[["x", "y"]], color_column=df["cohort"])
+        assert fig is not None
+        for trace in fig.data:
+            if hasattr(trace, "marker") and trace.marker is not None:
+                assert trace.marker.opacity is not None
+                assert trace.marker.opacity < 1.0
+
 
 class TestMultiLineChart:
     def test_creates_figure(self, chart_builder):
@@ -532,7 +576,6 @@ class TestPrecisionRecallCurve:
 class TestModelComparisonGrid:
     @pytest.fixture
     def model_results(self):
-        """Create sample model results for testing."""
         np.random.seed(42)
         y_test = np.array([0, 0, 0, 0, 0, 1, 1, 1, 1, 1])
         return {
@@ -880,26 +923,183 @@ class TestMomentumComparisonChart:
 
 
 class TestCohortSparklines:
-    def test_creates_figure(self, chart_builder):
+    def test_creates_3x3_grid(self, chart_builder):
         data = {
-            "amount": {"retained": [1, 2, 3, 4], "churned": [4, 3, 2, 1]},
+            "retained": {"weekly": [1, 2], "monthly": [2, 3], "yearly": [3]},
+            "churned": {"weekly": [2, 1], "monthly": [3, 2], "yearly": [2]},
+            "overall": {"weekly": [1.5], "monthly": [2.5], "yearly": [2.5]},
         }
-        fig = chart_builder.cohort_sparklines(data)
+        fig = chart_builder.cohort_sparklines(data, feature_name="amount")
         assert fig is not None
-
-    def test_multiple_columns(self, chart_builder):
-        data = {
-            "col1": {"retained": [1, 2, 3], "churned": [3, 2, 1]},
-            "col2": {"retained": [10, 20, 30], "churned": [30, 20, 10]},
-            "col3": {"retained": [5, 5, 5], "churned": [5, 5, 5]},
-        }
-        fig = chart_builder.cohort_sparklines(data)
-        assert fig is not None
+        assert len(fig.data) == 9  # 3 cohorts × 3 periods
 
     def test_with_title(self, chart_builder):
-        data = {"x": {"retained": [1, 2], "churned": [2, 1]}}
-        fig = chart_builder.cohort_sparklines(data, title="Cohorts")
-        assert fig.layout.title.text == "Cohorts"
+        data = {"retained": {"weekly": [1]}, "churned": {"weekly": [1]}, "overall": {"weekly": [1]}}
+        fig = chart_builder.cohort_sparklines(data, feature_name="test_feature")
+        assert "test_feature" in fig.layout.title.text
+
+    def test_row_labels_are_cohorts(self, chart_builder):
+        data = {
+            "retained": {"weekly": [1], "monthly": [1], "yearly": [1]},
+            "churned": {"weekly": [1], "monthly": [1], "yearly": [1]},
+            "overall": {"weekly": [1], "monthly": [1], "yearly": [1]},
+        }
+        fig = chart_builder.cohort_sparklines(data, feature_name="col")
+        annotations = [a.text for a in fig.layout.annotations if a.text]
+        assert any("Retained" in str(t) for t in annotations)
+        assert any("Churned" in str(t) for t in annotations)
+        assert any("Overall" in str(t) for t in annotations)
+
+    def test_column_labels_are_periods(self, chart_builder):
+        data = {
+            "retained": {"weekly": [1], "monthly": [1], "yearly": [1]},
+            "churned": {"weekly": [1], "monthly": [1], "yearly": [1]},
+            "overall": {"weekly": [1], "monthly": [1], "yearly": [1]},
+        }
+        fig = chart_builder.cohort_sparklines(data, feature_name="col")
+        annotations = [a.text for a in fig.layout.annotations if a.text]
+        assert any("Weekly" in str(t) for t in annotations)
+        assert any("Monthly" in str(t) for t in annotations)
+        assert any("Yearly" in str(t) for t in annotations)
+
+    def test_no_bounding_boxes(self, chart_builder):
+        data = {"retained": {"weekly": [1]}, "churned": {"weekly": [1]}, "overall": {"weekly": [1]}}
+        fig = chart_builder.cohort_sparklines(data, feature_name="f")
+        assert fig.layout.shapes is None or len(fig.layout.shapes) == 0
+
+
+class TestAnalyzeCohortTrends:
+    def test_returns_analysis_dict(self, chart_builder):
+        data = {
+            "retained": {"weekly": [1, 2, 3, 4, 5], "monthly": [1, 2, 3], "yearly": [1, 2]},
+            "churned": {"weekly": [5, 4, 3, 2, 1], "monthly": [3, 2, 1], "yearly": [2, 1]},
+        }
+        result = chart_builder.analyze_cohort_trends(data, "test_feature")
+        assert isinstance(result, dict)
+        assert "feature" in result
+        assert "periods" in result
+
+    def test_computes_divergence_per_period(self, chart_builder):
+        data = {
+            "retained": {"weekly": [1, 2, 3], "monthly": [1, 2, 3]},
+            "churned": {"weekly": [3, 2, 1], "monthly": [3, 2, 1]},
+        }
+        result = chart_builder.analyze_cohort_trends(data, "col")
+        assert "weekly" in result["periods"]
+        assert "monthly" in result["periods"]
+        assert "divergence" in result["periods"]["weekly"]
+
+    def test_identifies_opposite_trends(self, chart_builder):
+        data = {
+            "retained": {"weekly": [1, 2, 3, 4, 5]},  # upward
+            "churned": {"weekly": [5, 4, 3, 2, 1]},   # downward
+        }
+        result = chart_builder.analyze_cohort_trends(data, "col")
+        assert result["periods"]["weekly"]["opposite_trends"] is True
+
+    def test_identifies_same_direction_trends(self, chart_builder):
+        data = {
+            "retained": {"weekly": [1, 2, 3, 4, 5]},  # upward
+            "churned": {"weekly": [2, 3, 4, 5, 6]},   # also upward
+        }
+        result = chart_builder.analyze_cohort_trends(data, "col")
+        assert result["periods"]["weekly"]["opposite_trends"] is False
+
+    def test_finds_best_period_for_separation(self, chart_builder):
+        data = {
+            "retained": {"weekly": [5, 5, 5], "monthly": [1, 1, 1], "yearly": [1, 2]},
+            "churned": {"weekly": [5, 5, 5], "monthly": [10, 10, 10], "yearly": [2, 1]},
+        }
+        result = chart_builder.analyze_cohort_trends(data, "col")
+        assert result["best_period"] == "monthly"  # monthly has largest mean difference
+
+    def test_generates_recommendation(self, chart_builder):
+        data = {
+            "retained": {"weekly": [1, 2, 3, 4, 5], "monthly": [1, 3, 5]},
+            "churned": {"weekly": [5, 4, 3, 2, 1], "monthly": [5, 3, 1]},
+        }
+        result = chart_builder.analyze_cohort_trends(data, "col")
+        assert "recommendation" in result
+        assert len(result["recommendation"]) > 0
+
+    def test_handles_missing_periods(self, chart_builder):
+        data = {"retained": {"weekly": [1, 2]}, "churned": {"weekly": [2, 1]}}
+        result = chart_builder.analyze_cohort_trends(data, "col")
+        assert "weekly" in result["periods"]
+        assert "monthly" not in result["periods"]
+
+    def test_detects_seasonality(self, chart_builder):
+        seasonal = [1, 5, 1, 5, 1, 5, 1, 5, 1, 5, 1, 5]  # alternating pattern
+        data = {"retained": {"monthly": seasonal}, "churned": {"monthly": [3] * 12}}
+        result = chart_builder.analyze_cohort_trends(data, "col")
+        assert result["periods"]["monthly"]["seasonality_detected"] is True
+
+    def test_no_seasonality_for_flat(self, chart_builder):
+        flat = [5, 5, 5, 5, 5, 5, 5, 5]
+        data = {"retained": {"monthly": flat}, "churned": {"monthly": flat}}
+        result = chart_builder.analyze_cohort_trends(data, "col")
+        assert result["periods"]["monthly"]["seasonality_detected"] is False
+
+    def test_computes_variance_ratio(self, chart_builder):
+        high_var = [1, 10, 2, 9, 3, 8]
+        low_var = [5, 5, 5, 5, 5, 5]
+        data = {"retained": {"weekly": high_var}, "churned": {"weekly": low_var}}
+        result = chart_builder.analyze_cohort_trends(data, "col")
+        assert "variance_ratio" in result["periods"]["weekly"]
+        assert result["periods"]["weekly"]["variance_ratio"] > 1.0
+
+    def test_returns_actionable_recommendations(self, chart_builder):
+        data = {
+            "retained": {"weekly": [1, 2, 3, 4, 5], "monthly": [1, 3, 5]},
+            "churned": {"weekly": [5, 4, 3, 2, 1], "monthly": [5, 3, 1]},
+        }
+        result = chart_builder.analyze_cohort_trends(data, "col")
+        assert "actions" in result
+        assert isinstance(result["actions"], list)
+
+    def test_action_has_required_fields(self, chart_builder):
+        data = {
+            "retained": {"weekly": [1, 2, 3, 4, 5]},
+            "churned": {"weekly": [5, 4, 3, 2, 1]},
+        }
+        result = chart_builder.analyze_cohort_trends(data, "col")
+        if result["actions"]:
+            action = result["actions"][0]
+            assert "action_type" in action
+            assert "feature" in action
+            assert "reason" in action
+
+    def test_returns_overall_effect_size(self, chart_builder):
+        data = {
+            "retained": {"weekly": [1, 2, 3], "monthly": [2, 3, 4]},
+            "churned": {"weekly": [4, 5, 6], "monthly": [5, 6, 7]},
+        }
+        result = chart_builder.analyze_cohort_trends(data, "col")
+        assert "overall_effect_size" in result
+        assert isinstance(result["overall_effect_size"], float)
+
+    def test_overall_effect_size_combines_periods(self, chart_builder):
+        data = {
+            "retained": {"weekly": [1, 2, 1], "monthly": [1, 2, 1], "yearly": [1, 2]},
+            "churned": {"weekly": [8, 9, 8], "monthly": [8, 9, 8], "yearly": [8, 9]},
+        }
+        result = chart_builder.analyze_cohort_trends(data, "col")
+        assert abs(result["overall_effect_size"]) > 1.0  # Large separation
+
+    def test_sparklines_shows_effect_size_per_period(self, chart_builder):
+        data = {
+            "retained": {"weekly": [1, 2], "monthly": [1, 2], "yearly": [1, 2]},
+            "churned": {"weekly": [5, 6], "monthly": [5, 6], "yearly": [5, 6]},
+        }
+        period_effects = {"weekly": 0.5, "monthly": 0.8, "yearly": 1.2}
+        fig = chart_builder.cohort_sparklines(data, feature_name="test", period_effects=period_effects)
+        col_titles = [a.text for a in fig.layout.annotations if a.text and ("Weekly" in a.text or "Monthly" in a.text or "Yearly" in a.text)]
+        assert any("0.5" in t or "0.8" in t or "1.2" in t for t in col_titles)
+
+    def test_sparklines_without_period_effects(self, chart_builder):
+        data = {"retained": {"weekly": [1, 2]}, "churned": {"weekly": [2, 1]}, "overall": {"weekly": [1.5]}}
+        fig = chart_builder.cohort_sparklines(data, feature_name="test")
+        assert fig is not None  # Should work without period_effects
 
 
 class TestDescriptiveStatsTiles:
@@ -1240,3 +1440,126 @@ class TestAddColumnTileDispatch:
             row=1, col=1, formatter=NumberFormatter(), n_cols=1
         )
         assert len(fig.data) >= 1
+
+
+class TestCategoricalAnalysisPanel:
+    @pytest.fixture
+    def mock_insights(self):
+        from dataclasses import dataclass, field
+        @dataclass
+        class MockInsight:
+            feature_name: str
+            cramers_v: float
+            effect_strength: str
+            p_value: float
+            n_categories: int
+            high_risk_categories: list = field(default_factory=list)
+            low_risk_categories: list = field(default_factory=list)
+            category_stats: pd.DataFrame = field(default_factory=lambda: pd.DataFrame({
+                "category": ["A", "B", "C"], "retention_rate": [0.8, 0.5, 0.3]
+            }))
+        return [
+            MockInsight("plan_type", 0.35, "strong", 0.001, 3, ["free"], ["premium"]),
+            MockInsight("region", 0.15, "moderate", 0.01, 4, ["APAC"], ["US"]),
+            MockInsight("device", 0.05, "weak", 0.1, 3, [], []),
+        ]
+
+    def test_creates_figure(self, chart_builder, mock_insights):
+        fig = chart_builder.categorical_analysis_panel(mock_insights, overall_rate=0.4)
+        assert fig is not None
+        assert hasattr(fig, "update_layout")
+
+    def test_empty_insights(self, chart_builder):
+        fig = chart_builder.categorical_analysis_panel([], overall_rate=0.4)
+        assert fig is not None
+
+    def test_respects_max_features(self, chart_builder, mock_insights):
+        fig = chart_builder.categorical_analysis_panel(mock_insights, overall_rate=0.4, max_features=2)
+        assert fig is not None
+
+    def test_has_four_subplots(self, chart_builder, mock_insights):
+        fig = chart_builder.categorical_analysis_panel(mock_insights, overall_rate=0.4)
+        assert len(fig.data) >= 4
+
+
+class TestVelocitySignalHeatmap:
+    @pytest.fixture
+    def effect_size_data(self):
+        return {
+            "velocity": {
+                "metric_a": {"7d": 0.8, "14d": 0.6, "30d": 0.4},
+                "metric_b": {"7d": 0.2, "14d": 0.3, "30d": 0.5},
+            },
+            "acceleration": {
+                "metric_a": {"7d": 0.1, "14d": 0.2, "30d": 0.3},
+                "metric_b": {"7d": 0.05, "14d": 0.1, "30d": 0.15},
+            }
+        }
+
+    def test_creates_figure(self, chart_builder, effect_size_data):
+        fig = chart_builder.velocity_signal_heatmap(effect_size_data)
+        assert fig is not None
+        assert hasattr(fig, "update_layout")
+
+    def test_shows_both_velocity_and_acceleration(self, chart_builder, effect_size_data):
+        fig = chart_builder.velocity_signal_heatmap(effect_size_data)
+        assert len(fig.data) >= 2
+
+    def test_handles_empty_data(self, chart_builder):
+        fig = chart_builder.velocity_signal_heatmap({"velocity": {}, "acceleration": {}})
+        assert fig is not None
+
+    def test_custom_title(self, chart_builder, effect_size_data):
+        fig = chart_builder.velocity_signal_heatmap(effect_size_data, title="Custom Title")
+        assert fig.layout.title.text == "Custom Title"
+
+
+class TestCohortVelocitySparklines:
+    @pytest.fixture
+    def sparkline_data(self):
+        from customer_retention.stages.profiling.temporal_feature_analyzer import CohortVelocityResult
+        return [
+            CohortVelocityResult(
+                column="metric_a", window_days=7,
+                retained_velocity=[0.1, 0.2, 0.15, 0.18, 0.22],
+                churned_velocity=[-0.1, -0.15, -0.2, -0.18, -0.22],
+                overall_velocity=[0.0, 0.05, -0.02, 0.0, 0.01],
+                retained_accel=[0.01, 0.02, -0.01, 0.02, 0.01],
+                churned_accel=[-0.01, -0.02, -0.01, 0.01, -0.02],
+                overall_accel=[0.0, 0.0, -0.01, 0.01, 0.0],
+                velocity_effect_size=0.85, velocity_effect_interp="Large effect",
+                accel_effect_size=0.3, accel_effect_interp="Small effect",
+                period_label="Weekly"
+            ),
+            CohortVelocityResult(
+                column="metric_a", window_days=14,
+                retained_velocity=[0.12, 0.22, 0.17],
+                churned_velocity=[-0.12, -0.17, -0.22],
+                overall_velocity=[0.0, 0.02, -0.02],
+                retained_accel=[0.01, 0.02, -0.01],
+                churned_accel=[-0.01, -0.02, -0.01],
+                overall_accel=[0.0, 0.0, -0.01],
+                velocity_effect_size=0.75, velocity_effect_interp="Medium effect",
+                accel_effect_size=0.25, accel_effect_interp="Small effect",
+                period_label="Bi-weekly"
+            )
+        ]
+
+    def test_creates_figure(self, chart_builder, sparkline_data):
+        fig = chart_builder.cohort_velocity_sparklines(sparkline_data, feature_name="metric_a")
+        assert fig is not None
+        assert hasattr(fig, "update_layout")
+
+    def test_shows_cohort_traces(self, chart_builder, sparkline_data):
+        fig = chart_builder.cohort_velocity_sparklines(sparkline_data, feature_name="metric_a")
+        assert len(fig.data) >= 4
+
+    def test_handles_single_window(self, chart_builder, sparkline_data):
+        fig = chart_builder.cohort_velocity_sparklines([sparkline_data[0]], feature_name="metric_a")
+        assert fig is not None
+
+    def test_includes_period_labels(self, chart_builder, sparkline_data):
+        fig = chart_builder.cohort_velocity_sparklines(sparkline_data, feature_name="metric_a")
+        annotations = fig.layout.annotations or []
+        assert any("Weekly" in str(a.text) for a in annotations)
+        assert any("Velocity" in str(a.text) for a in annotations)

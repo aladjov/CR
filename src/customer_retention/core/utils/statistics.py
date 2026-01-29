@@ -1,4 +1,4 @@
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union
 
 import numpy as np
 from scipy import stats
@@ -6,8 +6,30 @@ from scipy import stats
 from customer_retention.core.compat import Series
 
 
+def _ensure_array(obj: Union[np.ndarray, List[float]]) -> np.ndarray:
+    return obj if isinstance(obj, np.ndarray) else np.array(obj)
+
+
+def compute_effect_size(group1: Union[np.ndarray, List[float]], group2: Union[np.ndarray, List[float]]) -> Tuple[float, str]:
+    arr1 = _ensure_array(group1)
+    arr2 = _ensure_array(group2)
+    if len(arr1) < 2 or len(arr2) < 2:
+        return 0.0, "Negligible"
+    pooled_std = np.sqrt((np.var(arr1) + np.var(arr2)) / 2)
+    if pooled_std == 0:
+        return 0.0, "Negligible"
+    d = float((np.mean(arr1) - np.mean(arr2)) / pooled_std)
+    abs_d = abs(d)
+    if abs_d >= 0.8:
+        return d, "Large effect"
+    if abs_d >= 0.5:
+        return d, "Medium effect"
+    if abs_d >= 0.2:
+        return d, "Small effect"
+    return d, "Negligible"
+
+
 def compute_psi_numeric(current: Series, reference_hist_edges: List[float], reference_hist_counts: List[int], epsilon: float = 1e-10) -> float:
-    """Calculate Population Stability Index for numeric column using reference histogram bins."""
     edges = np.array(reference_hist_edges)
     baseline_counts = np.array(reference_hist_counts)
     current_counts, _ = np.histogram(current.dropna(), bins=edges)
@@ -18,12 +40,16 @@ def compute_psi_numeric(current: Series, reference_hist_edges: List[float], refe
     return float(np.sum((current_prop - baseline_prop) * np.log(current_prop / baseline_prop)))
 
 
+def _is_categorical_dtype(dtype) -> bool:
+    return dtype in ['object', 'category', 'bool']
+
+
 def compute_psi_from_series(reference: Series, current: Series, n_bins: int = 10, epsilon: float = 1e-10) -> float:
-    """Calculate PSI from two series directly (auto-generates bins)."""
     ref_clean, curr_clean = reference.dropna(), current.dropna()
-    if ref_clean.dtype in ['object', 'category', 'bool'] or curr_clean.dtype in ['object', 'category', 'bool']:
+    if _is_categorical_dtype(ref_clean.dtype) or _is_categorical_dtype(curr_clean.dtype):
         return compute_psi_categorical(ref_clean, curr_clean, epsilon)
-    min_val, max_val = min(ref_clean.min(), curr_clean.min()), max(ref_clean.max(), curr_clean.max())
+    min_val = min(ref_clean.min(), curr_clean.min())
+    max_val = max(ref_clean.max(), curr_clean.max())
     bins = np.linspace(min_val, max_val, n_bins + 1)
     ref_hist, _ = np.histogram(ref_clean, bins=bins)
     curr_hist, _ = np.histogram(curr_clean, bins=bins)
@@ -33,7 +59,6 @@ def compute_psi_from_series(reference: Series, current: Series, n_bins: int = 10
 
 
 def compute_psi_categorical(reference: Series, current: Series, epsilon: float = 1e-10) -> float:
-    """Calculate Population Stability Index for categorical column."""
     ref_counts = reference.value_counts(normalize=True)
     curr_counts = current.value_counts(normalize=True)
     all_categories = set(ref_counts.index) | set(curr_counts.index)
@@ -46,14 +71,12 @@ def compute_psi_categorical(reference: Series, current: Series, epsilon: float =
 
 
 def compute_ks_statistic(reference: Series, current: Series) -> Tuple[float, float]:
-    """Calculate Kolmogorov-Smirnov statistic and p-value."""
     ref_clean, curr_clean = reference.dropna(), current.dropna()
     statistic, pvalue = stats.ks_2samp(ref_clean, curr_clean)
     return float(statistic), float(pvalue)
 
 
 def compute_chi_square(current: Series, baseline_proportions: Dict[str, float]) -> Tuple[float, float]:
-    """Calculate Chi-square test statistic comparing current distribution to baseline proportions."""
     current_counts = current.value_counts()
     all_categories = sorted(set(list(current_counts.index) + list(baseline_proportions.keys())))
     observed, expected = [], []

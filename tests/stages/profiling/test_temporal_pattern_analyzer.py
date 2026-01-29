@@ -1,22 +1,29 @@
-"""Tests for TemporalPatternAnalyzer - TDD approach."""
 from datetime import timedelta
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from customer_retention.core.utils import compute_effect_size
 from customer_retention.stages.profiling.temporal_pattern_analyzer import (
+    CohortDistribution,
+    RecencyComparisonResult,
     RecencyResult,
     TemporalPatternAnalysis,
     TemporalPatternAnalyzer,
     TrendDirection,
+    TrendRecommendation,
     TrendResult,
+    analyze_cohort_distribution,
+    compare_recency_by_target,
+    compute_group_stats,
+    generate_cohort_recommendations,
+    generate_trend_recommendations,
 )
 
 
 @pytest.fixture
 def trending_up_data():
-    """Data with clear upward trend."""
     np.random.seed(42)
     dates = pd.date_range("2023-01-01", periods=365, freq="D")
     # Clear upward trend: base + day_number * slope
@@ -30,7 +37,6 @@ def trending_up_data():
 
 @pytest.fixture
 def trending_down_data():
-    """Data with clear downward trend."""
     np.random.seed(42)
     dates = pd.date_range("2023-01-01", periods=365, freq="D")
     values = 300 - np.arange(365) * 0.5 + np.random.normal(0, 10, 365)
@@ -43,7 +49,6 @@ def trending_down_data():
 
 @pytest.fixture
 def seasonal_weekly_data():
-    """Data with weekly seasonality (higher on weekends)."""
     np.random.seed(42)
     dates = pd.date_range("2023-01-01", periods=365, freq="D")
     # Higher values on weekends
@@ -59,7 +64,6 @@ def seasonal_weekly_data():
 
 @pytest.fixture
 def cohort_data():
-    """Data with multiple customer cohorts."""
     np.random.seed(42)
     data = []
 
@@ -92,7 +96,6 @@ def cohort_data():
 
 @pytest.fixture
 def recency_data():
-    """Data for recency analysis with target."""
     np.random.seed(42)
     data = []
 
@@ -118,7 +121,6 @@ def recency_data():
 
 
 class TestTrendDetection:
-    """Tests for trend detection."""
 
     def test_detects_upward_trend(self, trending_up_data):
         analyzer = TemporalPatternAnalyzer(time_column="date")
@@ -136,7 +138,6 @@ class TestTrendDetection:
         assert result.strength > 0.5
 
     def test_stable_data_shows_stable_trend(self):
-        """Random noise around constant mean should be stable."""
         np.random.seed(42)
         dates = pd.date_range("2023-01-01", periods=100, freq="D")
         df = pd.DataFrame({
@@ -158,7 +159,6 @@ class TestTrendDetection:
 
 
 class TestSeasonalityDetection:
-    """Tests for seasonality detection."""
 
     def test_detects_weekly_pattern(self, seasonal_weekly_data):
         analyzer = TemporalPatternAnalyzer(time_column="date")
@@ -170,7 +170,6 @@ class TestSeasonalityDetection:
         assert any(6 <= p <= 8 for p in periods)  # ~7 days
 
     def test_returns_empty_for_non_seasonal_data(self):
-        """Pure random data should not show seasonality."""
         np.random.seed(42)
         dates = pd.date_range("2023-01-01", periods=365, freq="D")
         df = pd.DataFrame({
@@ -187,7 +186,6 @@ class TestSeasonalityDetection:
 
 
 class TestCohortAnalysis:
-    """Tests for cohort analysis."""
 
     def test_identifies_cohorts(self, cohort_data):
         analyzer = TemporalPatternAnalyzer(time_column="event_date")
@@ -217,7 +215,6 @@ class TestCohortAnalysis:
 
 
 class TestRecencyAnalysis:
-    """Tests for recency analysis."""
 
     def test_computes_recency_stats(self, recency_data):
         analyzer = TemporalPatternAnalyzer(time_column="last_event_date")
@@ -246,7 +243,6 @@ class TestRecencyAnalysis:
 
 
 class TestFullAnalysis:
-    """Tests for complete temporal pattern analysis."""
 
     def test_analyze_returns_complete_result(self, trending_up_data):
         analyzer = TemporalPatternAnalyzer(time_column="date")
@@ -268,7 +264,6 @@ class TestFullAnalysis:
 
 
 class TestEdgeCases:
-    """Tests for edge cases."""
 
     def test_single_row_data(self):
         df = pd.DataFrame({
@@ -294,3 +289,167 @@ class TestEdgeCases:
 
         # Should handle nulls gracefully
         assert result is not None
+
+
+class TestComputeCohensD:
+    def test_large_effect_size(self):
+        group1 = np.array([10, 11, 12, 13, 14])
+        group2 = np.array([1, 2, 3, 4, 5])
+        d, interp = compute_effect_size(group1, group2)
+        assert d > 0.8
+        assert interp == "Large effect"
+
+    def test_negligible_effect_size(self):
+        group1 = np.array([100, 101, 102, 103, 104])
+        group2 = np.array([100.1, 101.1, 102.1, 103.1, 104.1])
+        d, interp = compute_effect_size(group1, group2)
+        assert abs(d) < 0.2
+        assert interp == "Negligible"
+
+    def test_zero_variance(self):
+        group1 = np.array([5, 5, 5])
+        group2 = np.array([5, 5, 5])
+        d, interp = compute_effect_size(group1, group2)
+        assert d == 0.0
+        assert interp == "Negligible"
+
+
+class TestComputeGroupStats:
+    def test_basic_stats(self):
+        values = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+        stats = compute_group_stats(values)
+        assert stats.mean == 5.5
+        assert stats.median == 5.5
+        assert stats.count == 10
+        assert stats.q25 == 3.25
+        assert stats.q75 == 7.75
+
+
+class TestGenerateTrendRecommendations:
+    def test_strong_increasing_trend(self):
+        trend = TrendResult(direction=TrendDirection.INCREASING, strength=0.5, slope=0.1, p_value=0.001)
+        recs = generate_trend_recommendations(trend, mean_value=100.0)
+        actions = [r.action for r in recs]
+        assert "add_trend_features" in actions
+        assert "time_based_split" in actions
+        high_priority = [r for r in recs if r.priority == "high"]
+        assert len(high_priority) >= 2
+
+    def test_moderate_trend(self):
+        trend = TrendResult(direction=TrendDirection.DECREASING, strength=0.2, slope=-0.05, p_value=0.03)
+        recs = generate_trend_recommendations(trend, mean_value=100.0)
+        actions = [r.action for r in recs]
+        assert "add_trend_features" in actions
+        medium_priority = [r for r in recs if r.priority == "medium"]
+        assert len(medium_priority) >= 1
+
+    def test_stable_trend(self):
+        trend = TrendResult(direction=TrendDirection.STABLE, strength=0.01, slope=0.0, p_value=0.8)
+        recs = generate_trend_recommendations(trend, mean_value=100.0)
+        actions = [r.action for r in recs]
+        assert "skip_trend_features" in actions
+
+    def test_returns_trend_recommendation_objects(self):
+        trend = TrendResult(direction=TrendDirection.INCREASING, strength=0.5, slope=0.1, p_value=0.001)
+        recs = generate_trend_recommendations(trend)
+        assert all(isinstance(r, TrendRecommendation) for r in recs)
+
+
+class TestAnalyzeCohortDistribution:
+    def test_basic_distribution(self):
+        first_events = pd.DataFrame({
+            "entity": ["A", "B", "C", "D", "E"],
+            "first_event": pd.to_datetime(["2020-01-01", "2020-06-01", "2021-01-01", "2021-06-01", "2021-12-01"])
+        })
+        dist = analyze_cohort_distribution(first_events, "first_event")
+        assert isinstance(dist, CohortDistribution)
+        assert dist.total_entities == 5
+        assert dist.num_years == 2
+        assert 2021 in dist.year_counts
+
+    def test_dominant_year_detection(self):
+        first_events = pd.DataFrame({
+            "entity": list("ABCDEFGHIJ"),
+            "first_event": pd.to_datetime(["2020-01-01"]*8 + ["2021-01-01"]*2)
+        })
+        dist = analyze_cohort_distribution(first_events, "first_event")
+        assert dist.dominant_year == 2020
+        assert dist.dominant_pct == 80.0
+
+
+class TestGenerateCohortRecommendations:
+    def test_skewed_distribution_skips_features(self):
+        dist = CohortDistribution(
+            year_counts={2020: 900, 2021: 100}, total_entities=1000,
+            dominant_year=2020, dominant_pct=90.0, num_years=2
+        )
+        recs = generate_cohort_recommendations(dist)
+        actions = [r.action for r in recs]
+        assert "skip_cohort_features" in actions
+
+    def test_varied_distribution_adds_features(self):
+        dist = CohortDistribution(
+            year_counts={2019: 300, 2020: 350, 2021: 350}, total_entities=1000,
+            dominant_year=2020, dominant_pct=35.0, num_years=3
+        )
+        recs = generate_cohort_recommendations(dist)
+        actions = [r.action for r in recs]
+        assert "add_cohort_features" in actions
+
+    def test_retention_variation_adds_recommendation(self):
+        dist = CohortDistribution(
+            year_counts={2020: 500, 2021: 500}, total_entities=1000,
+            dominant_year=2020, dominant_pct=50.0, num_years=2
+        )
+        recs = generate_cohort_recommendations(dist, retention_variation=0.15)
+        actions = [r.action for r in recs]
+        assert "investigate_cohort_retention" in actions
+
+
+class TestCompareRecencyByTarget:
+    @pytest.fixture
+    def recency_comparison_data(self):
+        np.random.seed(42)
+        data = []
+        ref_date = pd.Timestamp("2023-12-31")
+        for i in range(100):
+            if i < 50:
+                last_event = ref_date - timedelta(days=np.random.randint(60, 120))
+                target = 0
+            else:
+                last_event = ref_date - timedelta(days=np.random.randint(5, 30))
+                target = 1
+            data.append({"entity": f"E{i}", "event_date": last_event, "retained": target})
+        return pd.DataFrame(data)
+
+    def test_returns_comparison_result(self, recency_comparison_data):
+        result = compare_recency_by_target(
+            recency_comparison_data, "entity", "event_date", "retained",
+            pd.Timestamp("2023-12-31")
+        )
+        assert isinstance(result, RecencyComparisonResult)
+        assert result.retained_stats is not None
+        assert result.churned_stats is not None
+
+    def test_detects_churned_higher_recency(self, recency_comparison_data):
+        result = compare_recency_by_target(
+            recency_comparison_data, "entity", "event_date", "retained",
+            pd.Timestamp("2023-12-31")
+        )
+        assert result.churned_higher is True
+        assert result.churned_stats.median > result.retained_stats.median
+
+    def test_generates_recommendations(self, recency_comparison_data):
+        result = compare_recency_by_target(
+            recency_comparison_data, "entity", "event_date", "retained",
+            pd.Timestamp("2023-12-31")
+        )
+        assert len(result.recommendations) > 0
+        assert "add_recency_features" in [r["action"] for r in result.recommendations]
+
+    def test_returns_none_without_target(self):
+        df = pd.DataFrame({
+            "entity": ["A", "B"], "event_date": pd.to_datetime(["2023-01-01", "2023-02-01"])
+        })
+        result = compare_recency_by_target(df, "entity", "event_date", "missing_target")
+        assert result is None

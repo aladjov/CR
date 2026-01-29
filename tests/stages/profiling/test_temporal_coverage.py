@@ -4,6 +4,8 @@ import pytest
 
 from customer_retention.stages.profiling.temporal_coverage import (
     EntityWindowCoverage,
+    FeatureAvailabilityResult,
+    analyze_feature_availability,
     analyze_temporal_coverage,
     derive_drift_implications,
 )
@@ -308,3 +310,107 @@ class TestDriftImplication:
         result = analyze_temporal_coverage(df, "entity", "event_date")
         drift = derive_drift_implications(result)
         assert drift.population_stability < 0.8
+
+
+class TestFeatureAvailability:
+    @pytest.fixture
+    def data_with_new_tracking(self):
+        dates = pd.date_range("2020-01-01", "2020-12-31", freq="D")
+        np.random.seed(42)
+        df = pd.DataFrame({
+            "event_date": dates,
+            "always_present": np.random.rand(len(dates)),
+            "new_feature": [None]*180 + list(np.random.rand(len(dates)-180)),  # starts mid-year
+        })
+        return df
+
+    @pytest.fixture
+    def data_with_retired_tracking(self):
+        dates = pd.date_range("2020-01-01", "2020-12-31", freq="D")
+        np.random.seed(42)
+        df = pd.DataFrame({
+            "event_date": dates,
+            "always_present": np.random.rand(len(dates)),
+            "retired_feature": list(np.random.rand(180)) + [None]*(len(dates)-180),  # stops mid-year
+        })
+        return df
+
+    @pytest.fixture
+    def data_with_partial_window(self):
+        dates = pd.date_range("2020-01-01", "2020-12-31", freq="D")
+        np.random.seed(42)
+        df = pd.DataFrame({
+            "event_date": dates,
+            "always_present": np.random.rand(len(dates)),
+            "partial_feature": [None]*60 + list(np.random.rand(180)) + [None]*(len(dates)-240),
+        })
+        return df
+
+    def test_detects_new_tracking(self, data_with_new_tracking):
+        result = analyze_feature_availability(data_with_new_tracking, "event_date")
+        assert isinstance(result, FeatureAvailabilityResult)
+        assert "new_feature" in result.new_tracking
+        assert "always_present" not in result.new_tracking
+
+    def test_detects_retired_tracking(self, data_with_retired_tracking):
+        result = analyze_feature_availability(data_with_retired_tracking, "event_date")
+        assert "retired_feature" in result.retired_tracking
+        assert "always_present" not in result.retired_tracking
+
+    def test_detects_partial_window(self, data_with_partial_window):
+        result = analyze_feature_availability(data_with_partial_window, "event_date")
+        assert "partial_feature" in result.partial_window
+
+    def test_full_coverage_marked_correctly(self, data_with_new_tracking):
+        result = analyze_feature_availability(data_with_new_tracking, "event_date")
+        always_feat = next(f for f in result.features if f.column == "always_present")
+        assert always_feat.availability_type == "full"
+
+    def test_feature_availability_has_dates(self, data_with_new_tracking):
+        result = analyze_feature_availability(data_with_new_tracking, "event_date")
+        new_feat = next(f for f in result.features if f.column == "new_feature")
+        assert new_feat.first_valid_date is not None
+        assert new_feat.last_valid_date is not None
+        assert new_feat.days_from_start > 0
+
+    def test_generates_recommendations(self, data_with_new_tracking):
+        result = analyze_feature_availability(data_with_new_tracking, "event_date")
+        assert len(result.recommendations) > 0
+        new_recs = [r for r in result.recommendations if r.get("column") == "new_feature"]
+        assert len(new_recs) >= 1
+        assert new_recs[0]["issue"] == "new_tracking"
+
+    def test_train_test_split_warning(self, data_with_new_tracking):
+        result = analyze_feature_availability(data_with_new_tracking, "event_date")
+        general_recs = [r for r in result.recommendations if r.get("column") == "_general_"]
+        assert len(general_recs) >= 1
+        assert "availability" in general_recs[0]["reason"].lower()
+        assert any("split" in opt.lower() for opt in general_recs[0]["options"])
+
+    def test_exclude_columns_respected(self, data_with_new_tracking):
+        result = analyze_feature_availability(
+            data_with_new_tracking, "event_date", exclude_columns=["always_present"]
+        )
+        columns_analyzed = [f.column for f in result.features]
+        assert "always_present" not in columns_analyzed
+
+    def test_empty_column_detected(self):
+        dates = pd.date_range("2020-01-01", "2020-03-31", freq="D")
+        df = pd.DataFrame({
+            "event_date": dates,
+            "empty_col": [None] * len(dates),
+            "full_col": np.random.rand(len(dates)),
+        })
+        result = analyze_feature_availability(df, "event_date")
+        empty_feat = next(f for f in result.features if f.column == "empty_col")
+        assert empty_feat.availability_type == "empty"
+        assert empty_feat.coverage_pct == 0
+
+    def test_threshold_customization(self, data_with_new_tracking):
+        result_strict = analyze_feature_availability(
+            data_with_new_tracking, "event_date", late_start_threshold_pct=5.0
+        )
+        result_lenient = analyze_feature_availability(
+            data_with_new_tracking, "event_date", late_start_threshold_pct=60.0
+        )
+        assert len(result_strict.new_tracking) >= len(result_lenient.new_tracking)
