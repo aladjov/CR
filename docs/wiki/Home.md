@@ -49,7 +49,7 @@ This is an **educational framework** that walks you through building a customer 
 ### Tutorials
 
 - [[Tutorial: Retail Customer Retention|Tutorial-Retail-Churn]] - **Complete example with executed notebooks**
-  - 17 notebooks executed with actual results
+  - 11 notebooks executed with actual results
   - Model performance: AUC 0.9858, PR-AUC 0.9949
   - [Browse HTML Tutorial](https://aladjov.github.io/CR/tutorial/retail-churn/)
 - [[Tutorial: Customer Email Engagement|Tutorial-Customer-Emails]] - **Event-based pipeline with temporal aggregation**
