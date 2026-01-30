@@ -836,6 +836,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import pandas as pd
 import numpy as np
 import mlflow
+import mlflow.xgboost
+import xgboost as xgb
 import yaml
 from datetime import datetime
 from feast import FeatureStore
@@ -917,33 +919,47 @@ def get_scoring_features_from_feast(scoring_df: pd.DataFrame) -> pd.DataFrame:
         return scoring_df
 
 
+def find_best_parent_run(client, experiment_id):
+    runs = client.search_runs(experiment_ids=[experiment_id],
+                              filter_string=f"tags.recommendations_hash = '{RECOMMENDATIONS_HASH}'",
+                              order_by=["metrics.best_roc_auc DESC"], max_results=1)
+    if not runs:
+        runs = client.search_runs(experiment_ids=[experiment_id],
+                                  order_by=["metrics.best_roc_auc DESC"], max_results=1)
+    if not runs:
+        raise ValueError("No runs found")
+    return runs[0]
+
+
+def find_model_child_run(client, experiment_id, parent_run_id, model_tag):
+    child_runs = client.search_runs(
+        experiment_ids=[experiment_id],
+        filter_string=f"tags.mlflow.parentRunId = '{parent_run_id}'",
+    )
+    return next((c for c in child_runs if c.info.run_name == model_tag), None)
+
+
 def load_best_model():
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     client = mlflow.tracking.MlflowClient()
     experiment = client.get_experiment_by_name(PIPELINE_NAME)
     if not experiment:
         raise ValueError(f"Experiment {PIPELINE_NAME} not found")
-    runs = client.search_runs(experiment_ids=[experiment.experiment_id],
-                              filter_string=f"tags.recommendations_hash = '{RECOMMENDATIONS_HASH}'",
-                              order_by=["metrics.best_roc_auc DESC"], max_results=1)
-    if not runs:
-        runs = client.search_runs(experiment_ids=[experiment.experiment_id],
-                                  order_by=["metrics.best_roc_auc DESC"], max_results=1)
-    if not runs:
-        raise ValueError("No runs found")
-    run = runs[0]
-    best_model_tag = run.data.tags.get("best_model", "random_forest")
+    parent_run = find_best_parent_run(client, experiment.experiment_id)
+    best_model_tag = parent_run.data.tags.get("best_model", "random_forest")
     model_name = f"model_{best_model_tag}"
     if RECOMMENDATIONS_HASH:
         model_name = f"{model_name}_{RECOMMENDATIONS_HASH}"
-    model_uri = f"runs:/{run.info.run_id}/{model_name}"
+    model_run = find_model_child_run(client, experiment.experiment_id, parent_run.info.run_id, best_model_tag) or parent_run
+    model_uri = f"runs:/{model_run.info.run_id}/{model_name}"
     print(f"Loading model: {model_uri}")
-    return mlflow.sklearn.load_model(model_uri), run.info.run_id
+    loader = mlflow.xgboost if best_model_tag == "xgboost" else mlflow.sklearn
+    return loader.load_model(model_uri), model_run.info.run_id
 
 
 def prepare_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    drop_cols = [FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL, ORIGINAL_COLUMN]
+    drop_cols = [FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL, ORIGINAL_COLUMN, TARGET_COLUMN]
     df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
     df = df.drop(columns=[c for c in df.columns if c.startswith("original_")], errors="ignore")
     for col in df.select_dtypes(include=["object", "category"]).columns:
@@ -985,7 +1001,10 @@ def run_scoring():
     X = prepare_features(features_df)
     y_true = features_df[ORIGINAL_COLUMN].values
     print(f"\\nGenerating predictions...")
-    y_proba = model.predict_proba(X)[:, 1]
+    if hasattr(model, "predict_proba"):
+        y_proba = model.predict_proba(X)[:, 1]
+    else:
+        y_proba = model.predict(xgb.DMatrix(X, feature_names=list(X.columns)))
     y_pred = (y_proba >= 0.5).astype(int)
     metrics = compute_validation_metrics(y_true, y_pred, y_proba)
     print(f"\\nValidation Metrics (vs original values):")
@@ -1414,12 +1433,25 @@ if __name__ == "__main__":
     "    order_by=[\\"metrics.best_roc_auc DESC\\"],\\n",
     "    max_results=1\\n",
     ")\\n",
-    "run = runs[0]\\n",
+    "parent_run = runs[0]\\n",
     "\\n",
-    "best_model_tag = run.data.tags.get(\\"best_model\\", \\"random_forest\\")\\n",
-    "model_uri = f\\"runs:/{run.info.run_id}/model_{best_model_tag}\\"\\n",
+    "best_model_tag = parent_run.data.tags.get(\\"best_model\\", \\"random_forest\\")\\n",
+    "model_name = f\\"model_{best_model_tag}\\"\\n",
+    "if RECOMMENDATIONS_HASH:\\n",
+    "    model_name = f\\"{model_name}_{RECOMMENDATIONS_HASH}\\"\\n",
+    "\\n",
+    "child_runs = client.search_runs(\\n",
+    "    experiment_ids=[experiment.experiment_id],\\n",
+    "    filter_string=f\\"tags.mlflow.parentRunId = '{parent_run.info.run_id}'\\",\\n",
+    ")\\n",
+    "model_run = next((c for c in child_runs if c.info.run_name == best_model_tag), parent_run)\\n",
+    "\\n",
+    "model_uri = f\\"runs:/{model_run.info.run_id}/{model_name}\\"\\n",
     "print(f\\"Loading model: {model_uri}\\")\\n",
-    "model = mlflow.sklearn.load_model(model_uri)\\n",
+    "if best_model_tag == \\"xgboost\\":\\n",
+    "    model = mlflow.xgboost.load_model(model_uri)\\n",
+    "else:\\n",
+    "    model = mlflow.sklearn.load_model(model_uri)\\n",
     "print(f\\"Model type: {type(model).__name__}\\")"
    ]
   },
