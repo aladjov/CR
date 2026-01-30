@@ -1,0 +1,32 @@
+# Sync docs/wiki/ to the GitHub Wiki repository
+#
+# Prerequisites:
+#   - The wiki must be initialized first (create any page via the Wiki tab on GitHub)
+#   - GITHUB_TOKEN has write access to the wiki by default
+#
+# Trigger: automatic on push to master when wiki files change,
+#          or manual via workflow_dispatch.
+
+name: Sync Wiki
+
+on:
+  push:
+    branches: [master]
+    paths: ['docs/wiki/**']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: Sync Wiki
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Push docs/wiki to GitHub Wiki
+        uses: Andrew-Chen-Wang/github-wiki-action@v4
+        with:
+          path: docs/wiki/
