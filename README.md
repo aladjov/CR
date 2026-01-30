@@ -1781,8 +1781,12 @@ customer-retention/
 │   ├── .coverage                # Coverage data
 │   └── htmlcov/                 # Coverage HTML reports
 │
-├── docs/                        # Architecture documentation
-│   └── architecture_temporal.md # Temporal framework diagrams
+├── docs/                        # Documentation and tutorials
+│   ├── architecture_temporal.md # Temporal framework diagrams
+│   ├── wiki/                    # Wiki pages (Home, Getting Started, tutorials)
+│   └── tutorial/                # Executed tutorial HTML outputs
+│       ├── retail-churn/        # Retail retention tutorial (17 notebooks)
+│       └── customer-emails/     # Email engagement tutorial (16 notebooks)
 │
 └── pyproject.toml
 ```

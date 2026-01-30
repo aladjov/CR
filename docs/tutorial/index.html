@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customer Retention ML Framework - Tutorials</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            color: #24292e;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 60px 40px;
+            margin: -40px -20px 40px -20px;
+            text-align: center;
+            border-radius: 0 0 8px 8px;
+        }
+        .header h1 { margin: 0; font-size: 2.5em; }
+        .header p { opacity: 0.9; margin: 15px 0 0 0; font-size: 1.2em; }
+        .section {
+            background: white;
+            border: 1px solid #e1e4e8;
+            border-radius: 8px;
+            padding: 30px;
+            margin-bottom: 30px;
+        }
+        .section h2 {
+            margin-top: 0;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #667eea;
+        }
+        .tutorial-card {
+            display: block;
+            padding: 25px;
+            border: 1px solid #e1e4e8;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-decoration: none;
+            color: inherit;
+            transition: all 0.2s;
+        }
+        .tutorial-card:hover {
+            border-color: #667eea;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+            transform: translateY(-2px);
+        }
+        .tutorial-card h3 {
+            margin: 0 0 8px 0;
+            color: #0366d6;
+            font-size: 1.3em;
+        }
+        .tutorial-card p { margin: 0 0 12px 0; color: #586069; }
+        .tutorial-meta {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .tutorial-meta span {
+            font-size: 0.9em;
+            color: #586069;
+        }
+        .badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: 500;
+        }
+        .badge-complete { background: #dcffe4; color: #22863a; }
+        .badge-entity { background: #f1f8ff; color: #0366d6; }
+        .badge-event { background: #fff8c5; color: #735c0f; }
+        .footer {
+            text-align: center;
+            color: #586069;
+            font-size: 0.9em;
+            margin-top: 40px;
+        }
+        .footer a { color: #0366d6; text-decoration: none; }
+        .footer a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Tutorials</h1>
+        <p>Customer Retention ML Framework - Executed Examples</p>
+    </div>
+
+    <div class="section">
+        <h2>Available Tutorials</h2>
+        <p>Each tutorial is a complete, executed pipeline from data exploration through production validation. Click to browse the notebooks with full output and visualizations.</p>
+
+        <a href="retail-churn/index.html" class="tutorial-card">
+            <h3>Retail Customer Retention</h3>
+            <p>Entity-level churn prediction on a synthetic retail dataset. Demonstrates the full framework pipeline with point-in-time splits, feature engineering, and production scoring validation.</p>
+            <div class="tutorial-meta">
+                <span><span class="badge badge-complete">Complete</span></span>
+                <span><span class="badge badge-entity">Entity-Level</span></span>
+                <span>17 notebooks</span>
+                <span>30,801 customers</span>
+                <span>AUC 0.9858</span>
+            </div>
+        </a>
+
+        <a href="customer-emails/index.html" class="tutorial-card">
+            <h3>Customer Email Engagement</h3>
+            <p>Event-based pipeline using email interaction data. Shows how the framework detects event-level granularity, performs temporal aggregation, and builds customer-level features from individual events.</p>
+            <div class="tutorial-meta">
+                <span><span class="badge badge-complete">Complete</span></span>
+                <span><span class="badge badge-event">Event-Level</span></span>
+                <span>16 notebooks</span>
+                <span>83,198 events / 4,998 customers</span>
+                <span>AUC 0.962</span>
+            </div>
+        </a>
+    </div>
+
+    <div class="section">
+        <h2>What These Tutorials Cover</h2>
+        <p>Both tutorials walk through the same 11-stage pipeline, but each highlights different aspects of the framework:</p>
+        <ul>
+            <li><strong>Retail Churn</strong> &mdash; Entity-level data, text column processing, point-in-time temporal splits, production drift analysis</li>
+            <li><strong>Customer Emails</strong> &mdash; Event-level data, temporal aggregation across time windows, event-to-entity transformation</li>
+        </ul>
+        <p>Together they demonstrate how the framework adapts to different data shapes while maintaining the same medallion architecture.</p>
+    </div>
+
+    <div class="footer">
+        <p>Generated with <a href="https://github.com/aladjov/CR">Customer Retention ML Framework</a></p>
+    </div>
+</body>
+</html>

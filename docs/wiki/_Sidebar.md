@@ -17,11 +17,14 @@
 
 ### Tutorials
 - [[Retail Retention|Tutorial-Retail-Churn]] ✓ Complete
+- [[Customer Emails|Tutorial-Customer-Emails]] ✓ Complete
 - [[Bank Churn|Tutorial-Bank-Churn]] (Setup only)
 - [[Netflix Churn|Tutorial-Netflix-Churn]] (Setup only)
 
 ### HTML Outputs
-- [Browse Notebooks](tutorial/index.html)
+- [Browse Tutorials](tutorial/index.html)
+- [Retail Churn](tutorial/retail-churn/index.html)
+- [Customer Emails](tutorial/customer-emails/index.html)
 
 ---
 
