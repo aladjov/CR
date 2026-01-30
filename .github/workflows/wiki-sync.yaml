@@ -28,7 +28,6 @@ jobs:
 
       - name: Push docs/wiki to GitHub Wiki
         uses: Andrew-Chen-Wang/github-wiki-action@v4
-        env:
-          GITHUB_TOKEN: ${{ secrets.WIKI_TOKEN }}
         with:
+          token: ${{ secrets.WIKI_TOKEN }}
           path: docs/wiki/
