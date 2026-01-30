@@ -71,11 +71,15 @@ ml = [
 # - Pre-built wheels available for: macOS ARM64, Linux x86_64, Linux ARM64
 # - On Databricks ML runtime: shap is pre-installed (no installation needed)
 # - Intel Mac users: use conda or build from source
+# - shap 0.50+, numba 0.63+, llvmlite 0.46+ require Python >=3.11
 ml-shap = [
     "customer-retention[ml]",
-    "numba>=0.63.0",
-    "llvmlite>=0.46.0",
-    "shap>=0.50.0",
+    "numba>=0.63.0; python_version>='3.11'",
+    "llvmlite>=0.46.0; python_version>='3.11'",
+    "shap>=0.50.0; python_version>='3.11'",
+    "numba>=0.59.0,<0.63.0; python_version<'3.11'",
+    "llvmlite>=0.43.0,<0.46.0; python_version<'3.11'",
+    "shap>=0.44.0,<0.50.0; python_version<'3.11'",
 ]
 
 # SHAP for Intel Macs (x86_64) - uses older numba with pre-built wheels

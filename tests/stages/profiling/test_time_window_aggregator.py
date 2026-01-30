@@ -859,7 +859,7 @@ class TestNotebook01dLeakagePrevention:
 
         # target_max_all_time should be perfectly correlated with target (LEAKAGE!)
         correlation = df_leaky["target"].corr(df_leaky["target_max_all_time"])
-        assert correlation == 1.0, "This demonstrates the leakage - perfect correlation"
+        assert np.isclose(correlation, 1.0), "This demonstrates the leakage - perfect correlation"
 
     def test_correct_aggregation_has_reasonable_correlations(self, email_events_df):
         """Test that correct aggregation (without target) has reasonable correlations."""
