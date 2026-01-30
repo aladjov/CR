@@ -2,7 +2,7 @@
 #
 # Prerequisites:
 #   - The wiki must be initialized first (create any page via the Wiki tab on GitHub)
-#   - GITHUB_TOKEN has write access to the wiki by default
+#   - A PAT with repo write access must be stored as the WIKI_TOKEN secret
 #
 # Trigger: automatic on push to master when wiki files change,
 #          or manual via workflow_dispatch.
@@ -28,5 +28,7 @@ jobs:
 
       - name: Push docs/wiki to GitHub Wiki
         uses: Andrew-Chen-Wang/github-wiki-action@v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.WIKI_TOKEN }}
         with:
           path: docs/wiki/
