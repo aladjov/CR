@@ -1073,7 +1073,6 @@ python generated_pipelines/local/customer_churn/run_all.py
 # Run scoring on holdout data
 python generated_pipelines/local/customer_churn/scoring/run_scoring.py
 ```
-
 ---
 
 ## Next Steps
