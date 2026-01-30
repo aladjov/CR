@@ -51,7 +51,11 @@ This is an **educational framework** that walks you through building a customer 
 - [[Tutorial: Retail Customer Retention|Tutorial-Retail-Churn]] - **Complete example with executed notebooks**
   - 17 notebooks executed with actual results
   - Model performance: AUC 0.9858, PR-AUC 0.9949
-  - [Browse HTML Tutorial](https://aladjov.github.io/CR/tutorial/)
+  - [Browse HTML Tutorial](https://aladjov.github.io/CR/tutorial/retail-churn/)
+- [[Tutorial: Customer Email Engagement|Tutorial-Customer-Emails]] - **Event-based pipeline with temporal aggregation**
+  - 16 notebooks executed with customer emails dataset
+  - Model performance: AUC 0.962, demonstrates event-level aggregation
+  - [Browse HTML Tutorial](https://aladjov.github.io/CR/tutorial/customer-emails/)
 - [[Tutorial: Bank Customer Churn|Tutorial-Bank-Churn]] - Dataset setup instructions
 - [[Tutorial: Netflix Churn|Tutorial-Netflix-Churn]] - Dataset setup instructions
 

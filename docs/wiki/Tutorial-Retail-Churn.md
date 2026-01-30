@@ -2,7 +2,7 @@
 
 This tutorial demonstrates a complete customer retention ML pipeline using a synthetic retail dataset. Rather than just showing *what* we do, we focus on *why* each step matters and *what decisions* follow from the analysis.
 
-**[View Interactive Tutorial (HTML)](https://aladjov.github.io/CR/tutorial/)** - Browse all executed notebooks with visualizations
+**[View Interactive Tutorial (HTML)](https://aladjov.github.io/CR/tutorial/retail-churn/)** - Browse all executed notebooks with visualizations
 
 ---
 
@@ -55,7 +55,7 @@ A retail company wants to predict which customers will churn so they can interve
 
 **Purpose:** Understand dataset structure, detect temporal patterns, and create a point-in-time snapshot that prevents data leakage.
 
-[View Notebook →](https://aladjov.github.io/CR/tutorial/01_data_discovery.html)
+[View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/01_data_discovery.html)
 
 ### Why Point-in-Time Matters
 
@@ -91,7 +91,7 @@ The framework automatically:
 
 **Purpose:** Analyze each column's distribution, detect issues, and determine appropriate transformations.
 
-[View Notebook →](https://aladjov.github.io/CR/tutorial/02_column_deep_dive.html)
+[View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/02_column_deep_dive.html)
 
 ### Why Distribution Analysis Matters
 
@@ -138,7 +138,7 @@ Not all features are created equal. Understanding distributions helps us:
 
 **Purpose:** Deep dive into data quality to ensure we're not modeling noise.
 
-[View Notebook →](https://aladjov.github.io/CR/tutorial/03_quality_assessment.html)
+[View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/03_quality_assessment.html)
 
 ### Why Quality Matters
 
@@ -190,7 +190,7 @@ Garbage in, garbage out. Before investing in modeling, we need to verify:
 
 **Purpose:** Identify which features predict retention and how strongly.
 
-[View Notebook →](https://aladjov.github.io/CR/tutorial/04_relationship_analysis.html)
+[View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/04_relationship_analysis.html)
 
 ### Why Relationship Analysis Matters
 
@@ -252,7 +252,7 @@ Before modeling, we should understand:
 
 **Purpose:** Determine how many features we can safely add and what derived features would help.
 
-[View Notebook →](https://aladjov.github.io/CR/tutorial/06_feature_opportunities.html)
+[View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/06_feature_opportunities.html)
 
 ### Why Feature Capacity Matters
 
@@ -311,7 +311,7 @@ Adding more features isn't always better. With limited data, too many features l
 
 **Purpose:** Establish performance benchmarks with standard models.
 
-[View Notebook →](https://aladjov.github.io/CR/tutorial/08_baseline_experiments.html)
+[View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/08_baseline_experiments.html)
 
 ### Why Baseline First?
 
@@ -383,7 +383,7 @@ Only A/B testing can establish causality. The model predicts, it doesn't explain
 
 **Purpose:** Test models on truly unseen future data to simulate production conditions.
 
-[View Scoring Dashboard →](https://aladjov.github.io/CR/tutorial/scoring_dashboard.html)
+[View Scoring Dashboard →](https://aladjov.github.io/CR/tutorial/retail-churn/scoring_dashboard.html)
 
 ### Why Validation Isn't Enough
 
