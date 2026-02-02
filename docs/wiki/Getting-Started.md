@@ -11,21 +11,21 @@
 
 ```bash
 # Basic (exploration & profiling only)
-pip install customer-retention
+pip install churnkit
 
 # With ML models (recommended)
-pip install "customer-retention[ml]"
+pip install "churnkit[ml]"
 # Includes: scikit-learn, xgboost, lightgbm, shap, mlflow, imbalanced-learn
 
 # With text processing (for TEXT column embeddings)
-pip install "customer-retention[text]"
+pip install "churnkit[text]"
 # Includes: sentence-transformers
 
 # Full installation (ML + text processing)
-pip install "customer-retention[ml,text]"
+pip install "churnkit[ml,text]"
 
 # Development (includes testing tools)
-pip install "customer-retention[dev,ml]"
+pip install "churnkit[dev,ml]"
 ```
 
 ### Using uv (Recommended)

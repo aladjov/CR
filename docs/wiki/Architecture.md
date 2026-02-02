@@ -229,7 +229,7 @@ These artifacts can be used in three ways:
 ## Project Structure
 
 ```
-customer-retention/
+churnkit/
 ├── src/customer_retention/      # Core library
 │   ├── analysis/                # Data analysis components
 │   │   ├── auto_explorer/       # Automatic data exploration

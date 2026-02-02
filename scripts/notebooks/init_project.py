@@ -53,7 +53,7 @@ def find_source_dir() -> Path:
 
     raise FileNotFoundError(
         "Could not find exploration_notebooks directory. "
-        "Make sure you're running from the customer-retention project."
+        "Make sure you're running from the churnkit project."
     )
 
 
@@ -272,13 +272,13 @@ def create_readme(
 
     readme_content = f"""# {name}
 
-Customer retention analysis project bootstrapped from [customer-retention](https://github.com/your-org/customer-retention).
+Customer retention analysis project bootstrapped from [churnkit](https://github.com/aladjov/CR).
 
 ## Setup
 
 ```bash
-# Install the customer-retention library
-pip install customer-retention
+# Install the churnkit library
+pip install churnkit
 
 # Or from source
 pip install -e /path/to/CustomerRetention

@@ -52,7 +52,7 @@ class ProjectInitializer:
     def _readme_content(self) -> str:
         return f"""# {self.project_name}
 
-Customer retention analysis project using the customer-retention framework.
+Customer retention analysis project using the churnkit framework.
 
 ## Structure
 
@@ -115,11 +115,11 @@ build/
         return f"""[project]
 name = "{self.project_name}"
 version = "0.1.0"
-description = "Customer retention analysis using customer-retention framework"
+description = "Customer retention analysis using churnkit framework"
 requires-python = ">=3.9"
 
 dependencies = [
-    "customer-retention",
+    "churnkit",
     "pandas>=2.0",
     "jupyter>=1.0",
 ]

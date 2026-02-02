@@ -49,8 +49,8 @@ We are committed to providing a welcoming and inclusive environment for all cont
 
 ```bash
 # Fork and clone the repository
-git clone https://github.com/YOUR_USERNAME/customer-retention.git
-cd customer-retention
+git clone https://github.com/YOUR_USERNAME/CR.git
+cd CR
 
 # Run the install script
 ./install.sh
@@ -110,10 +110,10 @@ uv pip install -e ".[dev,ml]"
 
 Before creating a bug report:
 
-1. Check existing [issues](https://github.com/yourusername/customer-retention/issues) to avoid duplicates
+1. Check existing [issues](https://github.com/aladjov/CR/issues) to avoid duplicates
 2. Collect relevant information:
    - Python version (`python --version`)
-   - Package version (`pip show customer-retention`)
+   - Package version (`pip show churnkit`)
    - Operating system
    - Full error traceback
    - Minimal code to reproduce the issue
@@ -586,8 +586,8 @@ Update version in:
 
 ## Questions?
 
-- **General questions**: [GitHub Discussions](https://github.com/yourusername/customer-retention/discussions)
-- **Bug reports**: [GitHub Issues](https://github.com/yourusername/customer-retention/issues)
+- **General questions**: [GitHub Discussions](https://github.com/aladjov/CR/discussions)
+- **Bug reports**: [GitHub Issues](https://github.com/aladjov/CR/issues)
 - **Security issues**: Email maintainers directly (do not create public issues)
 
 ---

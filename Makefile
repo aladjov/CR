@@ -1,4 +1,4 @@
-.PHONY: test test-cov test-fast test-verbose test-notebooks test-notebooks-fast clean
+.PHONY: test test-cov test-fast test-verbose test-notebooks test-notebooks-fast clean build clean-build publish publish-test
 
 # Run tests without coverage enforcement (for TDD/VS Code)
 test:
@@ -59,3 +59,21 @@ test-notebook:
 # Run notebook tests via pytest (slower but integrated with test suite)
 test-notebooks-pytest:
 	pytest tests/test_notebooks.py -v --no-cov
+
+# ---------- Build & Publish ----------
+
+# Build sdist and wheel
+build: clean-build
+	uv build
+
+# Remove previous build artifacts
+clean-build:
+	rm -rf dist/ build/ src/*.egg-info
+
+# Upload to Test PyPI (dry-run)
+publish-test: build
+	uvx twine upload --repository testpypi dist/*
+
+# Upload to PyPI (production)
+publish: build
+	uvx twine upload dist/*

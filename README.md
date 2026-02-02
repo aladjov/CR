@@ -37,13 +37,13 @@ It serves two audiences:
 ### 1. Install
 
 ```bash
-pip install "customer-retention[ml]"
+pip install "churnkit[ml]"
 ```
 
 ### 2. Bootstrap notebooks into your project
 
 ```bash
-customer-retention-init --output ./my_project
+churnkit-init --output ./my_project
 cd my_project
 ```
 

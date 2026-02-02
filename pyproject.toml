@@ -1,15 +1,15 @@
 [project]
-name = "customer-retention"
-version = "1.0.0"
-description = "Production-ready ML framework for customer churn prediction and retention optimization"
+name = "churnkit"
+version = "0.75.0a1"
+description = "Structured ML framework for customer churn prediction -- from exploration notebooks to production pipelines, locally or on Databricks."
 readme = "README.md"
 license = {text = "Apache-2.0"}
 authors = [
     {name = "Customer Retention Contributors"}
 ]
-keywords = ["machine-learning", "churn-prediction", "customer-retention", "mlops", "databricks"]
+keywords = ["machine-learning", "churn-prediction", "customer-retention", "mlops", "databricks", "mlflow", "feast", "delta-lake"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: Apache Software License",
@@ -63,7 +63,7 @@ delta = [
 
 # ML dependencies for local/server environments (not needed on Databricks ML runtime)
 ml = [
-    "customer-retention[delta]",
+    "churnkit[delta]",
     "scikit-learn>=1.3.0",
     "xgboost>=2.0.0",
     "lightgbm>=4.0.0",
@@ -79,7 +79,7 @@ ml = [
 # - Intel Mac users: use conda or build from source
 # - shap 0.50+, numba 0.63+, llvmlite 0.46+ require Python >=3.11
 ml-shap = [
-    "customer-retention[ml]",
+    "churnkit[ml]",
     "numba>=0.63.0; python_version>='3.11'",
     "llvmlite>=0.46.0; python_version>='3.11'",
     "shap>=0.50.0; python_version>='3.11'",
@@ -91,7 +91,7 @@ ml-shap = [
 # SHAP for Intel Macs (x86_64) - uses older numba with pre-built wheels
 # Use this if you're on an Intel Mac or x86_64 Python through Rosetta
 ml-shap-intel = [
-    "customer-retention[ml]",
+    "churnkit[ml]",
     "numba>=0.59.0,<0.63.0",
     "llvmlite>=0.43.0,<0.46.0",
     "shap>=0.44.0,<0.50.0",
@@ -99,14 +99,14 @@ ml-shap-intel = [
 
 # PyTorch CPU - for Mac/Linux without GPU
 ml-cpu = [
-    "customer-retention[ml]",
+    "churnkit[ml]",
     "torch>=2.2.0",
     "torchvision>=0.17.0",
 ]
 
 # PyTorch CUDA 12.8 - for Linux servers with NVIDIA GPU
 ml-cuda = [
-    "customer-retention[ml]",
+    "churnkit[ml]",
     "torch>=2.2.0",
     "torchvision>=0.17.0",
 ]
@@ -119,17 +119,23 @@ text = [
 
 # All optional dependencies (without SHAP - smaller footprint)
 all = [
-    "customer-retention[delta,ml,text]",
+    "churnkit[delta,ml,text]",
 ]
 
 # Full ML with SHAP (pre-built wheels available for macOS ARM64 and Linux)
 all-shap = [
-    "customer-retention[ml-shap,text]",
+    "churnkit[ml-shap,text]",
 ]
+
+[project.urls]
+Homepage = "https://github.com/aladjov/CR"
+Documentation = "https://github.com/aladjov/CR/wiki"
+Repository = "https://github.com/aladjov/CR"
+Issues = "https://github.com/aladjov/CR/issues"
 
 [project.scripts]
 # CLI command to bootstrap new projects
-customer-retention-init = "customer_retention.cli:init_project"
+churnkit-init = "customer_retention.cli:init_project"
 
 [build-system]
 requires = ["hatchling"]
@@ -139,7 +145,7 @@ build-backend = "hatchling.build"
 packages = ["src/customer_retention"]
 
 [tool.hatch.build.targets.wheel.shared-data]
-"exploration_notebooks" = "share/customer-retention/exploration_notebooks"
+"exploration_notebooks" = "share/churnkit/exploration_notebooks"
 
 [tool.hatch.build.targets.sdist]
 include = [

@@ -1,5 +1,5 @@
 """
-CLI commands for customer-retention package.
+CLI commands for churnkit package.
 """
 
 from __future__ import annotations
@@ -23,13 +23,13 @@ def init_project() -> int:
         epilog="""
 Examples:
     # Create project in current directory
-    customer-retention-init
+    churnkit-init
 
     # Create in specific directory
-    customer-retention-init --output ./my_churn_analysis
+    churnkit-init --output ./my_churn_analysis
 
     # With customization
-    customer-retention-init --output ./my_project --name "Customer Churn Analysis"
+    churnkit-init --output ./my_project --name "Customer Churn Analysis"
         """,
     )
     parser.add_argument(

@@ -57,7 +57,7 @@ class TestProjectInitializer:
         pyproject = project_dir / "pyproject.toml"
         assert pyproject.exists()
         content = pyproject.read_text()
-        assert "customer-retention" in content
+        assert "churnkit" in content
 
 
 class TestProjectInitializerWithGeneration:

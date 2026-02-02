@@ -10,11 +10,11 @@
 # Environment Variables:
 #   DBR_INSTALL_MODE      - "wheel", "repo", or "huggingface" (default: auto-detect)
 #   DBR_WHEEL_PATH        - Path to wheel file or directory containing wheels
-#                           e.g., /Volumes/catalog/schema/packages/customer_retention-1.0.0-py3-none-any.whl
+#                           e.g., /Volumes/catalog/schema/packages/churnkit-0.75.0a1-py3-none-any.whl
 #                           e.g., /Volumes/catalog/schema/packages/ (finds latest)
 #   DBR_PROJECT_PATH      - Path to project root (for repo mode)
-#   DBR_HF_REPO           - HuggingFace repo (e.g., "your-org/customer-retention")
-#   DBR_HF_FILENAME       - Wheel filename in HF repo (e.g., "customer_retention-1.0.0-py3-none-any.whl")
+#   DBR_HF_REPO           - HuggingFace repo (e.g., "your-org/churnkit")
+#   DBR_HF_FILENAME       - Wheel filename in HF repo (e.g., "churnkit-0.75.0a1-py3-none-any.whl")
 #   HF_TOKEN              - HuggingFace token (for private repos)
 #   DBR_CONSTRAINTS_PATH  - Path to constraints file (optional)
 #   DBR_QUIET             - Set to "1" to suppress output
