@@ -35,11 +35,12 @@ The framework includes a **unified feature store** module that provides point-in
 │   │ FeastBackend│          │ Databricks  │                                   │
 │   │   (Local)   │          │  Backend    │                                   │
 │   │             │          │             │                                   │
-│   │ • Parquet   │          │ • Unity     │                                   │
-│   │ • SQLite    │          │   Catalog   │                                   │
-│   │ • PIT joins │          │ • Delta Lake│                                   │
-│   └─────────────┘          │ • PIT joins │                                   │
-│                            └─────────────┘                                   │
+│   │ • Delta Lake│          │ • Unity     │                                   │
+│   │   (primary) │          │   Catalog   │                                   │
+│   │ • Parquet   │          │ • Delta Lake│                                   │
+│   │   (fallback)│          │ • PIT joins │                                   │
+│   │ • PIT joins │          │             │                                   │
+│   └─────────────┘          └─────────────┘                                   │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -167,13 +168,17 @@ online_features = feature_store.get_online_features(
 
 ## Notebook Integration
 
-The generated notebook stage `11_feature_store.ipynb` demonstrates the complete workflow:
+Feature store setup is handled as part of the pipeline generation (notebook 10). Notebook 11 (`11_scoring_validation.ipynb`) focuses on **scoring validation** — verifying that the scoring pipeline reproduces training features and predictions correctly.
+
+The feature store workflow:
 
 1. Load gold layer data with temporal columns
 2. Define feature registry from numeric columns
 3. Publish features to the feature store
 4. Create point-in-time correct training sets
 5. Validate feature consistency
+
+**Note**: `FEAST_REPO_PATH` defaults to `PRODUCTION_DIR / "feature_repo"`, so the feature repository lives alongside the generated pipeline.
 
 ## Databricks Feature Engineering
 
@@ -192,6 +197,7 @@ feature_store.register_feature_view(config, spark_df)
 
 ## Next Steps
 
+- [[Transforms & Scoring Validation]] - Fit/transform separation and validation gates
 - [[Local Track]] - Complete local execution with Feast
 - [[Databricks Track]] - Production execution with Unity Catalog
 - [[Temporal Framework]] - How temporal columns enable PIT joins

@@ -133,10 +133,12 @@ Exploration Notebooks (exploration_notebooks/)
 08. Baseline Experiments  → Establish performance benchmarks
 09. Business Alignment    → Connect ML to business goals
 10. Spec Generation       → Generate production pipeline specs
+11. Scoring Validation    → Holdout scoring, adversarial validation, SHAP
+12. View Documentation    → Export and browse all notebook HTML docs
 ```
 
 ## Next Steps
 
 - [[Architecture]] - Understand the medallion architecture
 - [[Exploration Loop]] - Deep dive into the notebook workflow
-- [[Tutorial: Bank Customer Churn]] - Hands-on tutorial with real data
+- [[Tutorial: Retail Customer Retention|Tutorial-Retail-Churn]] - Complete hands-on tutorial with real data

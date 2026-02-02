@@ -73,6 +73,8 @@ with open("notebooks/gold_features.py", "w") as f:
 
 **No framework dependency** - the notebooks run standalone on any Databricks cluster.
 
+**Delta Lake is the storage layer** — both `LocalDelta` (delta-rs for local development) and `DatabricksDelta` (PySpark for Databricks) implement the same `DeltaStorage` interface. Code that writes Delta locally produces tables that are structurally identical to Databricks-managed Delta tables.
+
 ### Example Generated Bronze Notebook
 
 ```python
@@ -199,6 +201,22 @@ databricks fs cp dist/customer_retention-*.whl \
 %pip install /Volumes/catalog/schema/wheels/customer_retention-*.whl
 ```
 
+### Option 3: Add Validation Step
+
+After deploying the pipeline, add a validation notebook that compares training and scoring outputs using Delta time travel:
+
+```python
+from customer_retention.stages.validation.pipeline_validation_runner import compare_pipeline_outputs
+
+report = compare_pipeline_outputs(
+    training_output_path="/mnt/delta/gold_features",
+    version_a=3,   # training run version
+    version_b=5,   # scoring run version
+    entity_column="customer_id",
+)
+report.save("/dbfs/validation/report.yaml")
+```
+
 ### Cluster Init Script
 
 For clusters that need the framework pre-installed:
@@ -220,6 +238,7 @@ pip install /dbfs/Volumes/catalog/schema/wheels/customer_retention-*.whl
 | **Environment detection** | The framework auto-detects Databricks vs local |
 | **Test locally first** | Validate with local track before Databricks deployment |
 | **Volume storage** | Store wheels in Unity Catalog Volumes for versioning |
+| **Delta time travel** | Use `version_a` / `version_b` in `compare_pipeline_outputs()` to compare pipeline runs |
 
 ## Environment Detection
 

@@ -9,6 +9,7 @@
 ### Core Concepts
 - [[Exploration Loop]]
 - [[Temporal Framework]]
+- [[Transforms & Scoring Validation]]
 - [[Feature Store]]
 
 ### Execution Tracks

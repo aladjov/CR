@@ -159,7 +159,7 @@ prepared_df = preparer.prepare_from_raw(
 
 ## Versioned Training Snapshots
 
-The `SnapshotManager` creates versioned, integrity-checked training snapshots:
+The `SnapshotManager` creates versioned, integrity-checked training snapshots. Snapshots can be stored as **Delta tables** (with `_delta_log/` for automatic version tracking) or as parquet + JSON metadata:
 
 ```python
 from customer_retention.stages.temporal import SnapshotManager
@@ -189,6 +189,18 @@ df, metadata = manager.load_snapshot("training_v1")
 diff = manager.compare_snapshots("training_v1", "training_v2")
 print(f"Row diff: {diff['row_diff']}")
 print(f"New features: {diff['new_features']}")
+```
+
+When using Delta Lake storage, snapshots benefit from time travel — you can read any historical version by number without maintaining separate snapshot files:
+
+```python
+from customer_retention.integrations.adapters.storage.local import LocalDelta
+
+storage = LocalDelta()
+# Read training snapshot at a specific version
+df_v3 = storage.read("./output/training", version=3)
+# Inspect commit history
+history = storage.history("./output/training")
 ```
 
 ## Leakage Detection
@@ -250,9 +262,11 @@ python scripts/data/migrate_to_temporal.py \
 | Data can be modified silently | SHA256 integrity verification on load |
 | Single training dataset | Versioned snapshots with comparison |
 | Leakage discovered in production | Leakage detected during validation |
+| Manual data versioning | Delta Lake time travel with automatic version tracking |
 
 ## Next Steps
 
+- [[Transforms & Scoring Validation]] - Fit/transform separation and validation gates
 - [[Feature Store]] - Temporal-aware feature management
 - [[Local Track]] - Run pipelines with leakage protection
-- [[Tutorial: Bank Customer Churn]] - See temporal framework in action
+- [[Tutorial: Retail Customer Retention|Tutorial-Retail-Churn]] - See temporal framework in action

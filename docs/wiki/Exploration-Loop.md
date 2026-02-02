@@ -55,7 +55,17 @@ The exploration loop is **iterative by design**. Each iteration is versioned, an
 │  │       • New feature ideas from error analysis     │                       │
 │  │       • Recommendations refined                   │                       │
 │  │                                                   │                       │
-│  │  YES → Proceed to Production Execution            │                       │
+│  │  YES → Continue to notebooks 09-12                │                       │
+│  └───────────────────────────────────────────────────┘                       │
+│         │                                                                    │
+│         ▼                                                                    │
+│  Notebooks 09-12: Release & Validate                                         │
+│  ┌───────────────────────────────────────────────────┐                       │
+│  │  09. Business Alignment  → Connect ML to goals    │                       │
+│  │  10. Spec Generation     → Generate pipeline code │  ← PRODUCTION         │
+│  │  11. Scoring Validation  → Validate scoring       │  ← VALIDATION         │
+│  │      matches training pipeline                    │                       │
+│  │  12. View Documentation  → Export HTML docs       │                       │
 │  └───────────────────────────────────────────────────┘                       │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
@@ -207,6 +217,26 @@ ctx2 = orchestrator.start_child_iteration(IterationTrigger.MANUAL)
 - Iteration lineage (parent → child relationships)
 - Model metrics for comparison across versions
 
+## Closing the Loop: Scoring Validation (Notebook 11)
+
+When exploration is complete and a production pipeline has been generated (notebook 10), notebook 11 validates that the **scoring pipeline reproduces training features identically** for holdout entities. This catches train/serve skew before deployment.
+
+The validation process:
+
+1. **Load gold features** — including holdout entities whose target was masked during training
+2. **Re-run the scoring pipeline** on holdout entities using `TransformExecutor` with `fit_mode=False`
+3. **Compare features** — `AdversarialScoringValidator` checks that recomputed features match the training-produced features within tolerance
+4. **Compare predictions** — `ScoringPipelineValidator` verifies model outputs are consistent
+5. **Generate report** — `ValidationReport` with severity levels (LOW → CRITICAL) and per-feature drift statistics
+
+Notebook 12 then exports all notebook outputs as browsable HTML documentation.
+
+## From Recommendations to Transforms
+
+Recommendations captured in notebook 06 (e.g., "impute nulls in age", "scale revenue") become `TransformationStep` objects stored in the pipeline specification. These steps are replayed by `TransformExecutor` — stateless operations run directly via `ops.py`, while stateful ones (scaling, encoding, power transforms) go through `fitted.py` wrappers that persist their parameters to `ArtifactStore`. This ensures the exact same transformation is applied during scoring as during training.
+
+See [[Transforms & Scoring Validation]] for full details.
+
 ## Multi-Source Pipeline Structure
 
 When you have multiple data sources, the framework generates **parallel bronze notebooks** that merge in silver:
@@ -235,5 +265,6 @@ gold/
 ## Next Steps
 
 - [[Temporal Framework]] - Leakage-safe data preparation
+- [[Transforms & Scoring Validation]] - Fit/transform separation and validation gates
 - [[Local Track]] - Generate and run pipelines locally
-- [[Tutorial: Bank Customer Churn]] - Hands-on example
+- [[Tutorial: Retail Customer Retention|Tutorial-Retail-Churn]] - Complete hands-on example

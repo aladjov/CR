@@ -13,11 +13,11 @@ A hands-on framework for learning and implementing customer churn prediction pip
 
 ## What This Project Is
 
-This is an **educational framework** that walks you through building a customer retention ML pipeline step-by-step. Instead of a black-box solution, you get:
+An **ML governance backbone** for customer retention — designed both as an educational walk-through and as a production-grade lifecycle framework. It covers the full loop: **explore → experiment → release → monitor → retrain**.
 
 - **Guided notebooks** that teach the *why* behind each step, not just the *how*
 - **Modular components** you can understand, modify, and extend
-- **A foundation to build on** as you add more sophisticated techniques
+- **Governance built in** — Delta Lake storage with ACID transactions and time travel, fit/transform separation for scoring integrity, and multi-stage validation gates
 
 ## Current Capabilities
 
@@ -32,9 +32,12 @@ This is an **educational framework** that walks you through building a customer 
 | **Modeling** | Logistic Regression, Random Forest, XGBoost, LightGBM baselines |
 | **Evaluation** | Standard metrics (AUC, precision, recall), threshold tuning |
 | **Interpretability** | SHAP values, feature importance |
-| **Monitoring** | Basic drift detection (KS test, PSI), performance tracking |
+| **Storage** | Delta Lake at every layer — ACID transactions, time travel, version tracking; shared between experiments and production |
+| **Transforms** | Fit/transform separation with artifact persistence (scalers, encoders, power transforms via `ArtifactStore` + `manifest.yaml`) |
+| **Monitoring** | Drift detection (KS test, PSI), performance tracking |
 | **Iteration Support** | Version tracking, recommendation status, feedback loops |
-| **Scoring Pipeline** | Production simulation with holdout validation |
+| **Scoring Pipeline** | Holdout validation, adversarial pipeline checks, transformation consistency gates |
+| **Scoring Validation** | Multi-stage gates: feature drift detection, prediction consistency, adversarial checks, Delta version comparison |
 
 ## Wiki Contents
 
@@ -42,6 +45,7 @@ This is an **educational framework** that walks you through building a customer 
 - [[Architecture]] - Medallion architecture and system design
 - [[Exploration Loop]] - Interactive notebook workflow
 - [[Temporal Framework]] - Leakage-safe data preparation
+- [[Transforms & Scoring Validation]] - Fit/transform separation and validation gates
 - [[Feature Store]] - Feast and Databricks feature management
 - [[Local Track]] - Feast + MLFlow execution path
 - [[Databricks Track]] - Unity Catalog + Delta Lake execution path
