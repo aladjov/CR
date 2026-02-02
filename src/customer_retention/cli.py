@@ -65,11 +65,11 @@ Examples:
 
     # Initialize project using library
     try:
-        initializer = ProjectInitializer(output_dir)
-        initializer.initialize(
-            project_name=args.name,
+        initializer = ProjectInitializer(
+            project_name=args.name or output_dir.name,
             platforms=platforms,
         )
+        initializer.initialize(str(output_dir))
 
         print("\n" + "=" * 50)
         print("Done!")

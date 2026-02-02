@@ -116,7 +116,7 @@ build/
 name = "{self.project_name}"
 version = "0.1.0"
 description = "Customer retention analysis using churnkit framework"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 
 dependencies = [
     "churnkit",
