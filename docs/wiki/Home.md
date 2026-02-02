@@ -45,7 +45,7 @@ An **ML governance backbone** for customer retention — designed both as an edu
 - [[Architecture]] - Medallion architecture and system design
 - [[Exploration Loop]] - Interactive notebook workflow
 - [[Temporal Framework]] - Leakage-safe data preparation
-- [[Transforms & Scoring Validation]] - Fit/transform separation and validation gates
+- [[Transforms & Scoring Validation|Transforms-and-Scoring-Validation]] - Fit/transform separation and validation gates
 - [[Feature Store]] - Feast and Databricks feature management
 - [[Local Track]] - Feast + MLFlow execution path
 - [[Databricks Track]] - Unity Catalog + Delta Lake execution path

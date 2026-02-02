@@ -266,7 +266,7 @@ python scripts/data/migrate_to_temporal.py \
 
 ## Next Steps
 
-- [[Transforms & Scoring Validation]] - Fit/transform separation and validation gates
+- [[Transforms & Scoring Validation|Transforms-and-Scoring-Validation]] - Fit/transform separation and validation gates
 - [[Feature Store]] - Temporal-aware feature management
 - [[Local Track]] - Run pipelines with leakage protection
 - [[Tutorial: Retail Customer Retention|Tutorial-Retail-Churn]] - See temporal framework in action

@@ -359,6 +359,6 @@ print(f"Feature mismatches: {len(report.feature_mismatches)}")
 ## Next Steps
 
 - [[Databricks Track]] - Deploy to Databricks
-- [[Transforms & Scoring Validation]] - Deep dive into fit/transform separation and validation gates
+- [[Transforms & Scoring Validation|Transforms-and-Scoring-Validation]] - Deep dive into fit/transform separation and validation gates
 - [[Feature Store]] - Deep dive into feature management
 - [[Tutorial: Retail Customer Retention|Tutorial-Retail-Churn]] - Complete hands-on example

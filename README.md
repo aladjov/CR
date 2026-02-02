@@ -1,4 +1,7 @@
 # Customer Retention ML Framework
+A structured backbone for the messy, iterative reality of ML model development. Exploration and production deployment are treated as parts of the same process -- not separate phases -- reflecting how data science actually works: you explore, decide, build, evaluate, learn something new, and circle back.
+
+Handles both entity-level and event-level datasets. Experiments and production can share the same tables without copying data (Delta Lake), features are served consistently across training and inference (Feast / Feature Store), and every experiment is tracked and reproducible (MLflow). Runs locally or deploys to Databricks.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-green.svg)](LICENSE)
@@ -8,10 +11,6 @@
 [![Typed](https://img.shields.io/badge/typed-Pydantic-blue)](https://docs.pydantic.dev/)
 [![MLflow](https://img.shields.io/badge/MLflow-integrated-0194E2?logo=mlflow)](https://mlflow.org/)
 [![Databricks](https://img.shields.io/badge/Databricks-compatible-FF3621?logo=databricks)](https://databricks.com/)
-
-A structured backbone for the messy, iterative reality of ML model development. Exploration and production deployment are treated as parts of the same process -- not separate phases -- reflecting how data science actually works: you explore, decide, build, evaluate, learn something new, and circle back.
-
-Handles both entity-level and event-level datasets. Experiments and production can share the same tables without copying data (Delta Lake), features are served consistently across training and inference (Feast / Feature Store), and every experiment is tracked and reproducible (MLflow). Runs locally or deploys to Databricks.
 
 ---
 

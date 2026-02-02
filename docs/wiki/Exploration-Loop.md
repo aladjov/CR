@@ -235,7 +235,7 @@ Notebook 12 then exports all notebook outputs as browsable HTML documentation.
 
 Recommendations captured in notebook 06 (e.g., "impute nulls in age", "scale revenue") become `TransformationStep` objects stored in the pipeline specification. These steps are replayed by `TransformExecutor` — stateless operations run directly via `ops.py`, while stateful ones (scaling, encoding, power transforms) go through `fitted.py` wrappers that persist their parameters to `ArtifactStore`. This ensures the exact same transformation is applied during scoring as during training.
 
-See [[Transforms & Scoring Validation]] for full details.
+See [[Transforms & Scoring Validation|Transforms-and-Scoring-Validation]] for full details.
 
 ## Multi-Source Pipeline Structure
 
@@ -265,6 +265,6 @@ gold/
 ## Next Steps
 
 - [[Temporal Framework]] - Leakage-safe data preparation
-- [[Transforms & Scoring Validation]] - Fit/transform separation and validation gates
+- [[Transforms & Scoring Validation|Transforms-and-Scoring-Validation]] - Fit/transform separation and validation gates
 - [[Local Track]] - Generate and run pipelines locally
 - [[Tutorial: Retail Customer Retention|Tutorial-Retail-Churn]] - Complete hands-on example
