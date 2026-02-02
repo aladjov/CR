@@ -1,6 +1,6 @@
 # Tutorial: Customer Email Engagement & Retention
 
-This tutorial demonstrates a complete customer retention ML pipeline using an **event-based email engagement** dataset. Unlike the [[Tutorial-Retail-Churn|retail tutorial]] which works with entity-level data (one row per customer), this tutorial shows how the framework handles **event-level data** -- where each row is an email event and multiple rows belong to a single customer. The focus is on *why* aggregation and temporal analysis drive every downstream decision.
+This tutorial demonstrates a complete customer retention ML pipeline using an **event-based email engagement** dataset. Unlike the [[Retail Retention|Tutorial-Retail-Churn]] which works with entity-level data (one row per customer), this tutorial shows how the framework handles **event-level data** -- where each row is an email event and multiple rows belong to a single customer. The focus is on *why* aggregation and temporal analysis drive every downstream decision.
 
 **[View Interactive Tutorial (HTML)](https://aladjov.github.io/CR/tutorial/customer-emails/)** - Browse all executed notebooks with visualizations
 
