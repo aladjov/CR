@@ -1,5 +1,6 @@
 """Tests for medallion architecture layered recommendations."""
 from dataclasses import asdict
+from pathlib import Path
 
 from customer_retention.analysis.auto_explorer.layered_recommendations import (
     BronzeRecommendations,
@@ -1253,3 +1254,87 @@ class TestRecommendationsHash:
 
         hashes = [registry.compute_recommendations_hash() for _ in range(10)]
         assert len(set(hashes)) == 1
+
+
+class TestRecommendationRegistrySaveLoad:
+    def test_save_creates_yaml_file(self, tmp_path):
+        registry = RecommendationRegistry()
+        registry.init_bronze("data.csv")
+        registry.add_bronze_null("age", "median", "5% nulls", "03")
+        path = str(tmp_path / "recs.yaml")
+        registry.save(path)
+        assert Path(path).exists()
+
+    def test_save_writes_valid_yaml(self, tmp_path):
+        import yaml
+
+        registry = RecommendationRegistry()
+        registry.init_bronze("data.csv")
+        registry.add_bronze_null("age", "median", "5% nulls", "03")
+        path = str(tmp_path / "recs.yaml")
+        registry.save(path)
+        with open(path) as f:
+            data = yaml.safe_load(f)
+        assert "bronze" in data
+        assert data["bronze"]["source_file"] == "data.csv"
+
+    def test_load_roundtrips_with_save(self, tmp_path):
+        registry = RecommendationRegistry()
+        registry.init_bronze("data.csv")
+        registry.init_silver("customer_id", time_column="event_date")
+        registry.init_gold("churned")
+        registry.add_bronze_null("age", "median", "5% nulls", "03")
+        registry.add_silver_aggregation("revenue", "sum", ["7d"], "trend", "04")
+        registry.add_gold_encoding("contract", "one_hot", "low card", "06")
+
+        path = str(tmp_path / "recs.yaml")
+        registry.save(path)
+        loaded = RecommendationRegistry.load(path)
+
+        assert len(loaded.all_recommendations) == len(registry.all_recommendations)
+        assert loaded.bronze.source_file == "data.csv"
+        assert loaded.silver.entity_column == "customer_id"
+        assert loaded.gold.target_column == "churned"
+
+    def test_load_restores_all_layers(self, tmp_path):
+        registry = RecommendationRegistry()
+        registry.init_bronze("data.csv")
+        registry.init_silver("customer_id")
+        registry.init_gold("churned")
+        registry.add_bronze_null("a", "median", "", "")
+        registry.add_silver_derived("b", "expr", "recency", "", "")
+        registry.add_gold_scaling("c", "standard", "", "")
+
+        path = str(tmp_path / "recs.yaml")
+        registry.save(path)
+        loaded = RecommendationRegistry.load(path)
+
+        assert loaded.bronze is not None
+        assert loaded.silver is not None
+        assert loaded.gold is not None
+        assert len(loaded.get_by_layer("bronze")) == 1
+        assert len(loaded.get_by_layer("silver")) == 1
+        assert len(loaded.get_by_layer("gold")) == 1
+
+    def test_save_matches_manual_yaml_dump(self, tmp_path):
+        import yaml
+
+        registry = RecommendationRegistry()
+        registry.init_bronze("data.csv")
+        registry.add_bronze_null("age", "median", "5% nulls", "03")
+
+        # Manual dump
+        manual_path = tmp_path / "manual.yaml"
+        with open(manual_path, "w") as f:
+            yaml.dump(registry.to_dict(), f, default_flow_style=False, sort_keys=False)
+
+        # save() method
+        save_path = str(tmp_path / "save.yaml")
+        registry.save(save_path)
+
+        with open(manual_path) as f:
+            manual_content = f.read()
+        with open(save_path) as f:
+            save_content = f.read()
+
+        assert manual_content == save_content

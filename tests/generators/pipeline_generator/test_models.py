@@ -185,3 +185,165 @@ class TestPipelineConfig:
                                 bronze=bronze, silver=SilverLayerConfig(), gold=GoldLayerConfig(), output_dir="/out")
         assert len(config.sources) == 2
         assert len(config.bronze) == 2
+
+
+class TestTimestampCoalesceConfig:
+
+    def test_construction_with_ordered_columns(self):
+        from customer_retention.generators.pipeline_generator.models import TimestampCoalesceConfig
+        cfg = TimestampCoalesceConfig(datetime_columns_ordered=["sent_date", "unsubscribe_date"])
+        assert cfg.datetime_columns_ordered == ["sent_date", "unsubscribe_date"]
+        assert cfg.output_column == "feature_timestamp"
+
+    def test_custom_output_column(self):
+        from customer_retention.generators.pipeline_generator.models import TimestampCoalesceConfig
+        cfg = TimestampCoalesceConfig(datetime_columns_ordered=["a", "b"], output_column="ts")
+        assert cfg.output_column == "ts"
+
+
+class TestLabelTimestampConfig:
+
+    def test_defaults(self):
+        from customer_retention.generators.pipeline_generator.models import LabelTimestampConfig
+        cfg = LabelTimestampConfig()
+        assert cfg.label_column is None
+        assert cfg.fallback_window_days == 180
+        assert cfg.output_column == "label_timestamp"
+
+    def test_custom_values(self):
+        from customer_retention.generators.pipeline_generator.models import LabelTimestampConfig
+        cfg = LabelTimestampConfig(label_column="unsub_date", fallback_window_days=90)
+        assert cfg.label_column == "unsub_date"
+        assert cfg.fallback_window_days == 90
+
+
+class TestBronzeEventConfig:
+
+    def test_construction_minimal(self):
+        from customer_retention.generators.pipeline_generator.models import BronzeEventConfig, SourceConfig
+        src = SourceConfig(name="emails", path="emails.csv", format="csv", entity_key="cid")
+        cfg = BronzeEventConfig(source=src, entity_column="cid", time_column="sent_date")
+        assert cfg.deduplicate is False
+        assert cfg.pre_shaping == []
+        assert cfg.aggregation is None
+        assert cfg.lifecycle is None
+        assert cfg.post_shaping == []
+        assert cfg.raw_time_column is None
+
+    def test_construction_full(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+            BronzeEventConfig,
+            LifecycleConfig,
+            PipelineTransformationType,
+            SourceConfig,
+            TransformationStep,
+        )
+        src = SourceConfig(name="emails", path="emails.csv", format="csv", entity_key="cid")
+        agg = AggregationWindowConfig(windows=["7d", "30d"], value_columns=["clicks"], agg_funcs=["sum"])
+        lc = LifecycleConfig(include_recency_bucket=True)
+        step = TransformationStep(
+            type=PipelineTransformationType.CAP_OUTLIER, column="clicks",
+            parameters={"lower": 0, "upper": 100}, rationale="cap",
+        )
+        cfg = BronzeEventConfig(
+            source=src, entity_column="cid", time_column="sent_date",
+            deduplicate=True, pre_shaping=[step], aggregation=agg,
+            lifecycle=lc, post_shaping=[], raw_time_column="raw_ts",
+        )
+        assert cfg.deduplicate is True
+        assert len(cfg.pre_shaping) == 1
+        assert cfg.aggregation.windows == ["7d", "30d"]
+        assert cfg.lifecycle.include_recency_bucket is True
+        assert cfg.raw_time_column == "raw_ts"
+
+
+class TestSlimmedLandingLayerConfig:
+
+    def test_landing_has_no_aggregation_field(self):
+        from customer_retention.generators.pipeline_generator.models import LandingLayerConfig, SourceConfig
+        src = SourceConfig(name="e", path="e.csv", format="csv", entity_key="cid")
+        cfg = LandingLayerConfig(
+            source=src, raw_source_path="/data/e.csv", raw_source_format="csv",
+            entity_column="cid", time_column="ts", target_column="target",
+        )
+        assert not hasattr(cfg, "deduplicate")
+        assert not hasattr(cfg, "aggregation")
+        assert not hasattr(cfg, "lifecycle")
+        assert not hasattr(cfg, "pre_agg_transformations")
+
+    def test_landing_has_timestamp_coalesce(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            LandingLayerConfig,
+            SourceConfig,
+            TimestampCoalesceConfig,
+        )
+        src = SourceConfig(name="e", path="e.csv", format="csv", entity_key="cid")
+        coalesce = TimestampCoalesceConfig(datetime_columns_ordered=["a", "b"])
+        cfg = LandingLayerConfig(
+            source=src, raw_source_path="/data/e.csv", raw_source_format="csv",
+            entity_column="cid", time_column="ts", target_column="target",
+            timestamp_coalesce=coalesce,
+        )
+        assert cfg.timestamp_coalesce.datetime_columns_ordered == ["a", "b"]
+
+    def test_landing_has_label_timestamp(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            LabelTimestampConfig,
+            LandingLayerConfig,
+            SourceConfig,
+        )
+        src = SourceConfig(name="e", path="e.csv", format="csv", entity_key="cid")
+        label = LabelTimestampConfig(label_column="unsub_date", fallback_window_days=90)
+        cfg = LandingLayerConfig(
+            source=src, raw_source_path="/data/e.csv", raw_source_format="csv",
+            entity_column="cid", time_column="ts", target_column="target",
+            label_timestamp=label,
+        )
+        assert cfg.label_timestamp.label_column == "unsub_date"
+
+    def test_landing_defaults_none_for_optional_fields(self):
+        from customer_retention.generators.pipeline_generator.models import LandingLayerConfig, SourceConfig
+        src = SourceConfig(name="e", path="e.csv", format="csv", entity_key="cid")
+        cfg = LandingLayerConfig(
+            source=src, raw_source_path="/data/e.csv", raw_source_format="csv",
+            entity_column="cid", time_column="ts", target_column="target",
+        )
+        assert cfg.timestamp_coalesce is None
+        assert cfg.label_timestamp is None
+        assert cfg.raw_time_column is None
+
+
+class TestPipelineConfigBronzeEvent:
+
+    def test_bronze_event_defaults_empty(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            GoldLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
+        src = SourceConfig(name="c", path="c.csv", format="csv", entity_key="id")
+        cfg = PipelineConfig(
+            name="test", target_column="t", sources=[src],
+            bronze={}, silver=SilverLayerConfig(), gold=GoldLayerConfig(), output_dir=".",
+        )
+        assert cfg.bronze_event == {}
+
+    def test_bronze_event_populated(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeEventConfig,
+            GoldLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
+        src = SourceConfig(name="e", path="e.csv", format="csv", entity_key="cid")
+        be = BronzeEventConfig(source=src, entity_column="cid", time_column="ts")
+        cfg = PipelineConfig(
+            name="test", target_column="t", sources=[src],
+            bronze={}, silver=SilverLayerConfig(), gold=GoldLayerConfig(),
+            output_dir=".", bronze_event={"events": be},
+        )
+        assert "events" in cfg.bronze_event
+        assert cfg.bronze_event["events"].entity_column == "cid"

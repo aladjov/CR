@@ -233,6 +233,51 @@ class TestValidateFeatureTransformation:
         assert not report.passed
 
 
+class TestValidateFeatureTransformationDifferentLengths:
+    def test_transform_that_drops_entity_column(self):
+        np.random.seed(42)
+        n_train, n_score = 90, 10
+        train_df = pd.DataFrame({
+            "customer_id": [f"c{i}" for i in range(n_train)],
+            "feature_a": np.random.randn(n_train),
+            "feature_b": np.random.randn(n_train),
+        })
+        score_df = pd.DataFrame({
+            "customer_id": [f"c{i}" for i in range(n_train, n_train + n_score)],
+            "feature_a": np.random.randn(n_score),
+            "feature_b": np.random.randn(n_score),
+        })
+
+        def drop_entity_transform(df):
+            return df.drop(columns=["customer_id"]).copy()
+
+        report = validate_feature_transformation(
+            train_df, score_df, drop_entity_transform,
+            entity_column="customer_id", verbose=False,
+        )
+        assert report.passed
+
+    def test_transform_drops_entity_and_shifts_values_fails(self):
+        np.random.seed(42)
+        train_df = pd.DataFrame({
+            "customer_id": [f"c{i}" for i in range(90)],
+            "feature_a": np.random.randn(90),
+        })
+        score_df = pd.DataFrame({
+            "customer_id": [f"c{i}" for i in range(90, 100)],
+            "feature_a": np.random.randn(10) + 100,
+        })
+
+        def drop_entity_transform(df):
+            return df.drop(columns=["customer_id"]).copy()
+
+        report = validate_feature_transformation(
+            train_df, score_df, drop_entity_transform,
+            entity_column="customer_id", verbose=False,
+        )
+        assert not report.passed
+
+
 class TestComparePipelineOutputs:
     def test_compares_identical_outputs(self, tmp_path, sample_gold_features):
         path1 = tmp_path / "output1.parquet"

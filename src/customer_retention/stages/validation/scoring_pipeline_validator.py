@@ -224,6 +224,10 @@ class ScoringPipelineValidator:
 
     def _compare_numeric_column(self, train_col: pd.Series, score_col: pd.Series, col_name: str) -> Optional[FeatureMismatch]:
         train_vals, score_vals = train_col.values.astype(float), score_col.values.astype(float)
+
+        if len(train_vals) != len(score_vals):
+            return self._compare_numeric_statistical(col_name, train_vals, score_vals)
+
         train_nan_mask, score_nan_mask = np.isnan(train_vals), np.isnan(score_vals)
 
         if not np.array_equal(train_nan_mask, score_nan_mask):
@@ -249,6 +253,38 @@ class ScoringPipelineValidator:
             training_std=float(np.std(train_valid)) if len(train_valid) > 1 else None,
             scoring_std=float(np.std(score_valid)) if len(score_valid) > 1 else None)
 
+    def _compare_numeric_statistical(self, col_name: str, train_vals, score_vals) -> Optional[FeatureMismatch]:
+        train_nan_rate = np.isnan(train_vals).mean()
+        score_nan_rate = np.isnan(score_vals).mean()
+        nan_rate_diff = abs(train_nan_rate - score_nan_rate)
+        train_mean, score_mean = float(np.nanmean(train_vals)), float(np.nanmean(score_vals))
+        mean_diff = abs(train_mean - score_mean)
+        train_std, score_std = float(np.nanstd(train_vals)), float(np.nanstd(score_vals))
+        pooled_std = max(train_std, score_std, 1e-10)
+        normalized_diff = mean_diff / pooled_std
+        if normalized_diff < 1.0 and nan_rate_diff < 0.1:
+            return None
+        mismatch_pct = max(nan_rate_diff * 100, normalized_diff * 100)
+        return FeatureMismatch(
+            feature_name=col_name, severity=self._classify_severity(mismatch_pct, mean_diff, train_mean),
+            training_mean=train_mean, scoring_mean=score_mean,
+            max_absolute_diff=mean_diff, mismatch_percentage=mismatch_pct,
+            training_std=train_std if len(train_vals) > 1 else None,
+            scoring_std=score_std if len(score_vals) > 1 else None)
+
+    def _compare_categorical_statistical(self, col_name: str, train_vals, score_vals) -> Optional[FeatureMismatch]:
+        train_dist = pd.Series(train_vals).value_counts(normalize=True)
+        score_dist = pd.Series(score_vals).value_counts(normalize=True)
+        all_values = set(train_dist.index) | set(score_dist.index)
+        max_diff = max(abs(train_dist.get(v, 0) - score_dist.get(v, 0)) for v in all_values)
+        if max_diff <= 0.15:
+            return None
+        mismatch_pct = max_diff * 100
+        return FeatureMismatch(
+            feature_name=col_name, severity=self._classify_severity(mismatch_pct),
+            training_mean=0.0, scoring_mean=0.0,
+            max_absolute_diff=max_diff, mismatch_percentage=mismatch_pct)
+
     def _create_nan_mismatch(self, col_name: str, train_vals, score_vals, train_nan, score_nan) -> FeatureMismatch:
         nan_diff_count = np.sum(train_nan != score_nan)
         mismatch_pct = nan_diff_count / len(train_vals) * 100 if len(train_vals) > 0 else 0
@@ -266,6 +302,8 @@ class ScoringPipelineValidator:
     def _compare_categorical_column(self, train_col: pd.Series, score_col: pd.Series, col_name: str) -> Optional[FeatureMismatch]:
         train_vals = train_col.astype(str).values
         score_vals = score_col.astype(str).values
+        if len(train_vals) != len(score_vals):
+            return self._compare_categorical_statistical(col_name, train_vals, score_vals)
         mismatches = train_vals != score_vals
         mismatch_count = np.sum(mismatches)
         if mismatch_count == 0:

@@ -4,6 +4,8 @@ import pandas as pd
 import pytest
 import yaml
 
+from customer_retention.generators.pipeline_generator import PipelineGenerator
+
 
 @pytest.fixture
 def full_findings_setup(tmp_path):
@@ -94,15 +96,21 @@ def full_findings_setup(tmp_path):
     return {"findings_dir": findings_dir, "data_dir": data_dir, "tmp_path": tmp_path}
 
 
+@pytest.fixture
+def generated_output(full_findings_setup):
+    findings_dir = full_findings_setup["findings_dir"]
+    output_dir = full_findings_setup["tmp_path"] / "output"
+    generator = PipelineGenerator(str(findings_dir), str(output_dir), "test_pipeline")
+    generator.generate()
+    return output_dir
+
+
 class TestEndToEndPipelineGeneration:
     def test_generate_complete_pipeline(self, full_findings_setup):
-        from customer_retention.generators.pipeline_generator import PipelineGenerator
         findings_dir = full_findings_setup["findings_dir"]
         output_dir = full_findings_setup["tmp_path"] / "output"
-
         generator = PipelineGenerator(str(findings_dir), str(output_dir), "churn_pipeline")
         files = generator.generate()
-
         assert len(files) >= 7
         assert output_dir.exists()
         assert (output_dir / "config.py").exists()
@@ -114,37 +122,29 @@ class TestEndToEndPipelineGeneration:
         assert (output_dir / "workflow.json").exists()
 
     def test_generated_config_has_correct_sources(self, full_findings_setup):
-        from customer_retention.generators.pipeline_generator import PipelineGenerator
         findings_dir = full_findings_setup["findings_dir"]
         output_dir = full_findings_setup["tmp_path"] / "output"
         data_dir = full_findings_setup["data_dir"]
-
         generator = PipelineGenerator(str(findings_dir), str(output_dir), "test_config")
         generator.generate()
-
         config_content = (output_dir / "config.py").read_text()
         assert "customers" in config_content
         assert "orders" in config_content
         assert str(data_dir) in config_content
 
     def test_workflow_has_correct_task_dependencies(self, full_findings_setup):
-        from customer_retention.generators.pipeline_generator import PipelineGenerator
         findings_dir = full_findings_setup["findings_dir"]
         output_dir = full_findings_setup["tmp_path"] / "output"
-
         generator = PipelineGenerator(str(findings_dir), str(output_dir), "workflow_test")
         generator.generate()
-
         workflow_content = (output_dir / "workflow.json").read_text()
         workflow = json.loads(workflow_content)
-
         task_keys = [t["task_key"] for t in workflow["tasks"]]
         assert "bronze_customers" in task_keys
         assert "bronze_orders" in task_keys
         assert "silver_merge" in task_keys
         assert "gold_features" in task_keys
         assert "ml_experiment" in task_keys
-
         silver_task = next(t for t in workflow["tasks"] if t["task_key"] == "silver_merge")
         depends_on_keys = [d["task_key"] for d in silver_task["depends_on"]]
         assert "bronze_customers" in depends_on_keys
@@ -152,67 +152,40 @@ class TestEndToEndPipelineGeneration:
 
 
 class TestBronzeLayerGeneration:
-    def test_bronze_applies_impute_null(self, full_findings_setup):
-        from customer_retention.generators.pipeline_generator import PipelineGenerator
-        findings_dir = full_findings_setup["findings_dir"]
-        output_dir = full_findings_setup["tmp_path"] / "output"
+    def test_bronze_applies_impute_null(self, generated_output):
+        bronze_content = (generated_output / "bronze" / "bronze_customers.py").read_text()
+        assert "apply_impute_null" in bronze_content
 
-        generator = PipelineGenerator(str(findings_dir), str(output_dir), "bronze_test")
-        generator.generate()
+    def test_bronze_event_has_pre_shaping_cap_outlier(self, generated_output):
+        bronze_content = (generated_output / "bronze" / "bronze_orders.py").read_text()
+        assert "apply_pre_shaping" in bronze_content
+        assert "apply_cap_outlier" in bronze_content
+        assert "apply_reshaping" in bronze_content
 
-        bronze_content = (output_dir / "bronze" / "bronze_customers.py").read_text()
-        assert "fillna" in bronze_content
-
-    def test_bronze_applies_cap_outlier(self, full_findings_setup):
-        from customer_retention.generators.pipeline_generator import PipelineGenerator
-        findings_dir = full_findings_setup["findings_dir"]
-        output_dir = full_findings_setup["tmp_path"] / "output"
-
-        generator = PipelineGenerator(str(findings_dir), str(output_dir), "bronze_outlier_test")
-        generator.generate()
-
-        bronze_content = (output_dir / "bronze" / "bronze_orders.py").read_text()
-        assert "clip" in bronze_content
+    def test_landing_is_slim(self, generated_output):
+        landing_content = (generated_output / "landing" / "landing_orders.py").read_text()
+        assert "load_raw_data" in landing_content
+        assert "apply_pre_agg_transformations" not in landing_content
+        assert "aggregate_time_windows" not in landing_content
 
 
 class TestSilverLayerGeneration:
-    def test_silver_includes_merge_logic(self, full_findings_setup):
-        from customer_retention.generators.pipeline_generator import PipelineGenerator
-        findings_dir = full_findings_setup["findings_dir"]
-        output_dir = full_findings_setup["tmp_path"] / "output"
-
-        generator = PipelineGenerator(str(findings_dir), str(output_dir), "silver_test")
-        generator.generate()
-
-        silver_content = (output_dir / "silver" / "silver_merge.py").read_text()
+    def test_silver_includes_merge_logic(self, generated_output):
+        silver_content = (generated_output / "silver" / "silver_merge.py").read_text()
         assert "merge" in silver_content
         assert "customer_id" in silver_content
 
 
 class TestGoldLayerGeneration:
-    def test_gold_includes_feature_engineering(self, full_findings_setup):
-        from customer_retention.generators.pipeline_generator import PipelineGenerator
-        findings_dir = full_findings_setup["findings_dir"]
-        output_dir = full_findings_setup["tmp_path"] / "output"
-
-        generator = PipelineGenerator(str(findings_dir), str(output_dir), "gold_test")
-        generator.generate()
-
-        gold_content = (output_dir / "gold" / "gold_features.py").read_text()
+    def test_gold_includes_feature_engineering(self, generated_output):
+        gold_content = (generated_output / "gold" / "gold_features.py").read_text()
         assert "apply_encodings" in gold_content or "encoding" in gold_content.lower()
         assert "apply_scaling" in gold_content or "scal" in gold_content.lower()
 
 
 class TestTrainingGeneration:
-    def test_training_includes_model_and_metrics(self, full_findings_setup):
-        from customer_retention.generators.pipeline_generator import PipelineGenerator
-        findings_dir = full_findings_setup["findings_dir"]
-        output_dir = full_findings_setup["tmp_path"] / "output"
-
-        generator = PipelineGenerator(str(findings_dir), str(output_dir), "training_test")
-        generator.generate()
-
-        training_content = (output_dir / "training" / "ml_experiment.py").read_text()
+    def test_training_includes_model_and_metrics(self, generated_output):
+        training_content = (generated_output / "training" / "ml_experiment.py").read_text()
         assert "RandomForestClassifier" in training_content
         assert "roc_auc_score" in training_content
         assert "train_test_split" in training_content

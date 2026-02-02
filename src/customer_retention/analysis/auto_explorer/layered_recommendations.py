@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+import yaml
 
 
 def _to_native(value: Any) -> Any:
@@ -89,6 +90,15 @@ class RecommendationRegistry:
         self.gold: Optional[GoldRecommendations] = None
         self.fit_artifacts: Dict[str, str] = {}
         self._id_counter = 0
+
+    def save(self, path: str) -> None:
+        with open(path, "w") as f:
+            yaml.dump(self.to_dict(), f, default_flow_style=False, sort_keys=False)
+
+    @classmethod
+    def load(cls, path: str) -> "RecommendationRegistry":
+        with open(path) as f:
+            return cls.from_dict(yaml.safe_load(f))
 
     def link_fit_artifact(self, recommendation_id: str, artifact_id: str) -> None:
         self.fit_artifacts[recommendation_id] = artifact_id

@@ -50,7 +50,7 @@ class TutorialExporter:
                 sys.path.insert(0, str(SCRIPT_DIR))
                 from plotly_image_preprocessor import PlotlyToImagePreprocessor
                 self._plotly_preprocessor = PlotlyToImagePreprocessor()
-            except ImportError as e:
+            except (ImportError, TypeError) as e:
                 print(f"  Note: Plotly conversion not available ({e})")
                 self._plotly_preprocessor = False
         return self._plotly_preprocessor

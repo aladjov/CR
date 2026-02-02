@@ -1,6 +1,153 @@
+from collections import OrderedDict, namedtuple
+from typing import List, Tuple
+
 from jinja2 import BaseLoader, Environment
 
-from .models import BronzeLayerConfig, PipelineConfig
+from .models import (
+    BronzeEventConfig,
+    BronzeLayerConfig,
+    LandingLayerConfig,
+    PipelineConfig,
+    PipelineTransformationType,
+    TransformationStep,
+)
+
+SECTION_MAP = {
+    PipelineTransformationType.IMPUTE_NULL: "Missing Value Analysis",
+    PipelineTransformationType.DROP_COLUMN: "Missing Value Analysis",
+    PipelineTransformationType.CAP_OUTLIER: "Global Outlier Detection",
+    PipelineTransformationType.WINSORIZE: "Global Outlier Detection",
+    PipelineTransformationType.SEGMENT_AWARE_CAP: "Segment-Aware Outlier Analysis",
+    PipelineTransformationType.LOG_TRANSFORM: "Feature Distributions",
+    PipelineTransformationType.SQRT_TRANSFORM: "Feature Distributions",
+    PipelineTransformationType.YEO_JOHNSON: "Feature Distributions",
+    PipelineTransformationType.CAP_THEN_LOG: "Feature Distributions",
+    PipelineTransformationType.ZERO_INFLATION_HANDLING: "Feature Distributions",
+    PipelineTransformationType.ENCODE: "Categorical Feature Analysis",
+    PipelineTransformationType.SCALE: "Feature-Target Correlations",
+    PipelineTransformationType.FEATURE_SELECT: "Feature Selection Recommendations",
+    PipelineTransformationType.DERIVED_COLUMN: "Feature Engineering Recommendations",
+    PipelineTransformationType.TYPE_CAST: "Data Consistency Checks",
+}
+
+ANCHOR_MAP = {
+    PipelineTransformationType.IMPUTE_NULL: "3.5-Missing-Value-Analysis",
+    PipelineTransformationType.DROP_COLUMN: "3.5-Missing-Value-Analysis",
+    PipelineTransformationType.CAP_OUTLIER: "3.8-Global-Outlier-Detection",
+    PipelineTransformationType.WINSORIZE: "3.8-Global-Outlier-Detection",
+    PipelineTransformationType.SEGMENT_AWARE_CAP: "3.7-Segment-Aware-Outlier-Analysis",
+    PipelineTransformationType.LOG_TRANSFORM: "4.4-Feature-Distributions-by-Retention-Status",
+    PipelineTransformationType.SQRT_TRANSFORM: "4.4-Feature-Distributions-by-Retention-Status",
+    PipelineTransformationType.YEO_JOHNSON: "4.4-Feature-Distributions-by-Retention-Status",
+    PipelineTransformationType.CAP_THEN_LOG: "4.4-Feature-Distributions-by-Retention-Status",
+    PipelineTransformationType.ZERO_INFLATION_HANDLING: "4.4-Feature-Distributions-by-Retention-Status",
+    PipelineTransformationType.ENCODE: "4.6-Categorical-Feature-Analysis",
+    PipelineTransformationType.SCALE: "4.5-Feature-Target-Correlations",
+    PipelineTransformationType.FEATURE_SELECT: "4.9.1-Feature-Selection-Recommendations",
+    PipelineTransformationType.DERIVED_COLUMN: "4.9.4-Feature-Engineering-Recommendations",
+    PipelineTransformationType.TYPE_CAST: "3.11-Data-Consistency-Checks",
+}
+
+DEFAULT_NOTEBOOK_MAP = {
+    PipelineTransformationType.IMPUTE_NULL: "03_quality_assessment",
+    PipelineTransformationType.DROP_COLUMN: "03_quality_assessment",
+    PipelineTransformationType.CAP_OUTLIER: "03_quality_assessment",
+    PipelineTransformationType.WINSORIZE: "03_quality_assessment",
+    PipelineTransformationType.SEGMENT_AWARE_CAP: "03_quality_assessment",
+    PipelineTransformationType.TYPE_CAST: "03_quality_assessment",
+    PipelineTransformationType.LOG_TRANSFORM: "04_relationship_analysis",
+    PipelineTransformationType.SQRT_TRANSFORM: "04_relationship_analysis",
+    PipelineTransformationType.YEO_JOHNSON: "04_relationship_analysis",
+    PipelineTransformationType.CAP_THEN_LOG: "04_relationship_analysis",
+    PipelineTransformationType.ZERO_INFLATION_HANDLING: "04_relationship_analysis",
+    PipelineTransformationType.ENCODE: "04_relationship_analysis",
+    PipelineTransformationType.SCALE: "04_relationship_analysis",
+    PipelineTransformationType.FEATURE_SELECT: "04_relationship_analysis",
+    PipelineTransformationType.DERIVED_COLUMN: "04_relationship_analysis",
+}
+
+
+def _notebook_title(notebook: str) -> str:
+    name = notebook.split("_", 1)[1] if "_" in notebook else notebook
+    return name.replace("_", " ").title()
+
+
+def provenance_docstring(step: TransformationStep) -> str:
+    notebook = step.source_notebook or DEFAULT_NOTEBOOK_MAP.get(step.type)
+    if not notebook:
+        return ""
+    title = _notebook_title(notebook)
+    anchor = ANCHOR_MAP.get(step.type)
+    section = SECTION_MAP.get(step.type)
+    if anchor:
+        return f"{title} {section}\n    docs/{notebook}.html#{anchor}"
+    return f"{title}\n    docs/{notebook}.html"
+
+
+def provenance_docstring_block(steps) -> str:
+    seen = set()
+    entries = []
+    for step in steps:
+        key = provenance_key(step)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        entry = provenance_docstring(step)
+        if entry:
+            entries.append(entry)
+    if not entries:
+        return ""
+    body = "\n    ".join(entries)
+    return f'    """\n    {body}\n    """'
+
+
+def provenance_key(step: TransformationStep) -> str:
+    notebook = step.source_notebook or DEFAULT_NOTEBOOK_MAP.get(step.type)
+    section = SECTION_MAP.get(step.type, "")
+    return f"{notebook}:{section}" if notebook else ""
+
+
+class StepGrouper:
+
+    _TYPE_TO_FUNC = {
+        PipelineTransformationType.DROP_COLUMN: "drop_unusable_columns",
+        PipelineTransformationType.IMPUTE_NULL: "impute_remaining_nulls",
+        PipelineTransformationType.CAP_OUTLIER: "cap_outliers",
+        PipelineTransformationType.TYPE_CAST: "apply_type_casts",
+        PipelineTransformationType.WINSORIZE: "winsorize_outliers",
+        PipelineTransformationType.SEGMENT_AWARE_CAP: "cap_segment_aware_outliers",
+        PipelineTransformationType.LOG_TRANSFORM: "apply_log_transforms",
+        PipelineTransformationType.SQRT_TRANSFORM: "apply_sqrt_transforms",
+        PipelineTransformationType.ZERO_INFLATION_HANDLING: "handle_zero_inflation",
+        PipelineTransformationType.CAP_THEN_LOG: "apply_cap_then_log_transforms",
+        PipelineTransformationType.YEO_JOHNSON: "apply_power_transforms",
+        PipelineTransformationType.FEATURE_SELECT: "apply_feature_selection",
+    }
+
+    _DERIVED_ACTION_TO_FUNC = {
+        "ratio": "create_ratio_features",
+        "interaction": "create_interaction_features",
+        "composite": "create_composite_features",
+    }
+
+    @classmethod
+    def group(cls, steps: List[TransformationStep]) -> List[Tuple[str, List[TransformationStep]]]:
+        if not steps:
+            return []
+        groups: OrderedDict[str, List[TransformationStep]] = OrderedDict()
+        for step in steps:
+            groups.setdefault(cls._func_name(step), []).append(step)
+        return list(groups.items())
+
+    @classmethod
+    def _func_name(cls, step: TransformationStep) -> str:
+        if step.type == PipelineTransformationType.DERIVED_COLUMN:
+            action = step.parameters.get("action", "ratio")
+            return cls._DERIVED_ACTION_TO_FUNC.get(action, f"create_{action}_features")
+        return cls._TYPE_TO_FUNC.get(step.type, f"apply_{step.type.value}")
+
+
+group_steps = StepGrouper.group
 
 
 class InlineLoader(BaseLoader):
@@ -45,12 +192,22 @@ PROJECT_ROOT = _find_project_root()
 _default_experiments = {{ '"%s"' % config.experiments_dir if config.experiments_dir else '"experiments"' }}
 EXPERIMENTS_DIR = Path(os.environ.get("CR_EXPERIMENTS_DIR", str(PROJECT_ROOT / _default_experiments)))
 
+# Documentation base URL for provenance links in generated code
+# Local: file:// URI to HTML docs (from export_tutorial_html.py)
+# Databricks: set to workspace notebook path for exploration report
+DOCS_BASE_URL = os.environ.get("CR_DOCS_BASE_URL", str(EXPERIMENTS_DIR / "docs"))
+
+# Production output directory - all pipeline writes go here
+# Override with CR_PRODUCTION_DIR environment variable
+_default_production = {{ '"%s"' % config.production_dir if config.production_dir else 'str(EXPERIMENTS_DIR / "production")' }}
+PRODUCTION_DIR = Path(os.environ.get("CR_PRODUCTION_DIR", _default_production))
+
 # MLflow tracking - using SQLite backend (recommended over deprecated file-based backend)
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", f"sqlite:///{EXPERIMENTS_DIR / 'mlruns.db'}")
 MLFLOW_ARTIFACT_ROOT = str(EXPERIMENTS_DIR / "mlruns" / "artifacts")
 
 # Feast feature store configuration - stored in experiments directory
-FEAST_REPO_PATH = str(EXPERIMENTS_DIR / "feature_repo")
+FEAST_REPO_PATH = str(PRODUCTION_DIR / "feature_repo")
 FEAST_FEATURE_VIEW = "{{ config.feast.feature_view_name if config.feast else config.name + '_features' }}"
 FEAST_ENTITY_NAME = "{{ config.feast.entity_name if config.feast else 'customer' }}"
 FEAST_ENTITY_KEY = "{{ config.feast.entity_key if config.feast else config.sources[0].entity_key }}"
@@ -63,7 +220,7 @@ FINDINGS_DIR = EXPERIMENTS_DIR / "findings"
 SOURCES = {
 {% for source in config.sources %}
     "{{ source.name }}": {
-        "path": str(FINDINGS_DIR / "{{ source.path | replace('../experiments/findings/', '') | replace('experiments/findings/', '') }}"),
+        "path": str(FINDINGS_DIR / "{{ source.path }}"),
         "format": "{{ source.format }}",
         "entity_key": "{{ source.entity_key }}",
 {% if source.time_column %}
@@ -76,15 +233,15 @@ SOURCES = {
 
 
 def get_bronze_path(source_name: str) -> Path:
-    return EXPERIMENTS_DIR / "data" / "bronze" / f"{source_name}.parquet"
+    return PRODUCTION_DIR / "data" / "bronze" / f"{source_name}.parquet"
 
 
 def get_silver_path() -> Path:
-    return EXPERIMENTS_DIR / "data" / "silver" / "merged.parquet"
+    return PRODUCTION_DIR / "data" / "silver" / "merged.parquet"
 
 
 def get_gold_path() -> Path:
-    return EXPERIMENTS_DIR / "data" / "gold" / "features.parquet"
+    return PRODUCTION_DIR / "data" / "gold" / "features.parquet"
 
 
 def get_feast_data_path() -> Path:
@@ -93,11 +250,42 @@ def get_feast_data_path() -> Path:
 
 # Fit mode configuration for training vs scoring separation
 FIT_MODE = {{ 'True' if config.fit_mode else 'False' }}
-ARTIFACTS_PATH = {{ '"%s"' % config.artifacts_path if config.artifacts_path else 'str(EXPERIMENTS_DIR / "artifacts" / (RECOMMENDATIONS_HASH or "default"))' }}
+ARTIFACTS_PATH = {{ '"%s"' % config.artifacts_path if config.artifacts_path else 'str(PRODUCTION_DIR / "artifacts" / (RECOMMENDATIONS_HASH or "default"))' }}
+
+RAW_SOURCES = {
+{% for name, landing in config.landing.items() %}
+    "{{ name }}": {
+        "path": "{{ landing.raw_source_path }}",
+        "format": "{{ landing.raw_source_format }}",
+        "entity_key": "{{ landing.entity_column }}",
+        "time_column": "{{ landing.time_column }}",
+    },
+{% endfor %}
+}
+
+EXCLUDED_SOURCES = [
+{% for source in config.sources %}
+{% if source.excluded %}
+    "{{ source.name }}",
+{% endif %}
+{% endfor %}
+]
+
+EXPLORATION_ARTIFACTS = {
+    "bronze": {name: str(EXPERIMENTS_DIR / "data" / "bronze" / f"{name}.parquet") for name in SOURCES},
+    "silver": str(EXPERIMENTS_DIR / "data" / "silver" / "merged.parquet"),
+    "gold": str(EXPERIMENTS_DIR / "data" / "gold" / "features.parquet"),
+    "scoring": str(EXPERIMENTS_DIR / "data" / "scoring" / "predictions.parquet"),
+}
 """,
     "bronze.py.j2": """import pandas as pd
+import numpy as np
 from pathlib import Path
-from config import SOURCES, get_bronze_path
+{% set ops, fitted = collect_imports(config.transformations, False) %}
+{% if ops %}
+from customer_retention.transforms import {{ ops | sort | join(', ') }}
+{% endif %}
+from config import SOURCES, get_bronze_path{{ ', RAW_SOURCES' if config.lifecycle else '' }}
 
 SOURCE_NAME = "{{ source }}"
 
@@ -112,22 +300,143 @@ def load_{{ source }}():
     return pd.read_parquet(path)
 
 
+{% set groups = group_steps(config.transformations) %}
+
 def apply_transformations(df: pd.DataFrame) -> pd.DataFrame:
-{% for t in config.transformations %}
-{% if t.type.value == "impute_null" %}
-    df["{{ t.column }}"] = df["{{ t.column }}"].fillna({{ t.parameters.get("value", 0) }})
-{% elif t.type.value == "cap_outlier" %}
-    df["{{ t.column }}"] = df["{{ t.column }}"].clip(lower={{ t.parameters.get("lower", 0) }}, upper={{ t.parameters.get("upper", 1000000) }})
-{% elif t.type.value == "type_cast" %}
-    df["{{ t.column }}"] = df["{{ t.column }}"].astype("{{ t.parameters.get("dtype", "float") }}")
+{%- if groups %}
+{%- for func_name, steps in groups %}
+    df = {{ func_name }}(df)
+{%- endfor %}
+{%- endif %}
+    return df
+
+{% for func_name, steps in groups %}
+
+def {{ func_name }}(df: pd.DataFrame) -> pd.DataFrame:
+{%- set _prov = provenance_docstring_block(steps) %}
+{%- if _prov %}
+{{ _prov }}
+{%- endif %}
+{%- for t in steps %}
+    # {{ t.rationale }}
+    # {{ action_description(t) }}
+    df = {{ render_step_call(t) }}
+{%- endfor %}
+    return df
+{% endfor %}
+
+{% if config.lifecycle %}
+
+# --- Lifecycle enrichment (computed on cleaned data) ---
+
+ENTITY_COLUMN = "{{ config.entity_column or config.source.entity_key }}"
+TIME_COLUMN = "{{ config.time_column or config.source.time_column }}"
+
+
+def _load_raw_events():
+    source = RAW_SOURCES[SOURCE_NAME]
+    path = Path(source["path"])
+    if not path.exists():
+        raise FileNotFoundError(f"Raw source not found: {path}")
+    if source["format"] == "csv":
+        return pd.read_csv(path)
+    return pd.read_parquet(path)
+
+{% if config.lifecycle.include_recency_bucket %}
+
+def add_recency_tenure(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
+    raw_df[TIME_COLUMN] = pd.to_datetime(raw_df[TIME_COLUMN])
+    reference_date = raw_df[TIME_COLUMN].max()
+    entity_stats = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].agg(["min", "max"])
+    entity_stats["days_since_last"] = (reference_date - entity_stats["max"]).dt.days
+    entity_stats["days_since_first"] = (reference_date - entity_stats["min"]).dt.days
+    df = df.merge(entity_stats[["days_since_last", "days_since_first"]], left_on=ENTITY_COLUMN, right_index=True, how="left")
+    return df
+
+
+def add_recency_buckets(df: pd.DataFrame) -> pd.DataFrame:
+    if "days_since_last" in df.columns:
+        df["recency_bucket"] = pd.cut(df["days_since_last"], bins=[0, 7, 30, 90, 180, 365, float("inf")],
+                                       labels=["0-7d", "7-30d", "30-90d", "90-180d", "180-365d", "365d+"])
+    return df
+
 {% endif %}
+{% if config.lifecycle.include_lifecycle_quadrant %}
+
+def add_lifecycle_quadrant(df: pd.DataFrame) -> pd.DataFrame:
+    if "days_since_first" not in df.columns:
+        return df
+    tenure = df["days_since_first"]
+    intensity_col = [c for c in df.columns if c.startswith("event_count_")]
+    if not intensity_col:
+        return df
+    intensity = df[intensity_col[0]]
+    tenure_med = tenure.median()
+    intensity_med = intensity.median()
+    conditions = [
+        (tenure >= tenure_med) & (intensity >= intensity_med),
+        (tenure >= tenure_med) & (intensity < intensity_med),
+        (tenure < tenure_med) & (intensity >= intensity_med),
+        (tenure < tenure_med) & (intensity < intensity_med),
+    ]
+    labels = ["loyal", "at_risk", "new_active", "new_inactive"]
+    df["lifecycle_quadrant"] = np.select(conditions, labels, default="unknown")
+    return df
+
+{% endif %}
+{% if config.lifecycle.include_cyclical_features %}
+
+def add_cyclical_features(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
+    raw_df[TIME_COLUMN] = pd.to_datetime(raw_df[TIME_COLUMN])
+    mean_dow = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].apply(lambda x: x.dt.dayofweek.mean())
+    df = df.merge(mean_dow.rename("mean_dow"), left_on=ENTITY_COLUMN, right_index=True, how="left")
+    df["dow_sin"] = np.sin(2 * np.pi * df["mean_dow"] / 7)
+    df["dow_cos"] = np.cos(2 * np.pi * df["mean_dow"] / 7)
+    df = df.drop(columns=["mean_dow"], errors="ignore")
+    return df
+
+{% endif %}
+{% if config.lifecycle.momentum_pairs %}
+
+def add_momentum_ratios(df: pd.DataFrame) -> pd.DataFrame:
+{% for pair in config.lifecycle.momentum_pairs %}
+    short_col = "event_count_{{ pair.short_window }}"
+    long_col = "event_count_{{ pair.long_window }}"
+    if short_col in df.columns and long_col in df.columns:
+        df["momentum_{{ pair.short_window }}_{{ pair.long_window }}"] = df[short_col] / df[long_col].replace(0, float("nan"))
 {% endfor %}
     return df
+
+{% endif %}
+
+def enrich_lifecycle(df: pd.DataFrame) -> pd.DataFrame:
+    raw_df = _load_raw_events()
+{% if config.raw_time_column %}
+    raw_df = raw_df.rename(columns={"{{ config.raw_time_column }}": TIME_COLUMN})
+{% endif %}
+{% if config.lifecycle.include_recency_bucket %}
+    df = add_recency_tenure(df, raw_df)
+    df = add_recency_buckets(df)
+{% endif %}
+{% if config.lifecycle.include_lifecycle_quadrant %}
+    df = add_lifecycle_quadrant(df)
+{% endif %}
+{% if config.lifecycle.include_cyclical_features %}
+    df = add_cyclical_features(df, raw_df)
+{% endif %}
+{% if config.lifecycle.momentum_pairs %}
+    df = add_momentum_ratios(df)
+{% endif %}
+    return df
+{% endif %}
 
 
 def run_bronze_{{ source }}():
     df = load_{{ source }}()
     df = apply_transformations(df)
+{% if config.lifecycle %}
+    df = enrich_lifecycle(df)
+{% endif %}
     output_path = get_bronze_path(SOURCE_NAME)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(output_path, index=False)
@@ -138,11 +447,16 @@ if __name__ == "__main__":
     run_bronze_{{ source }}()
 """,
     "silver.py.j2": '''import pandas as pd
+{% set ops, fitted = collect_imports(config.silver.derived_columns, False) %}
+{% if ops %}
+from customer_retention.transforms import {{ ops | sort | join(', ') }}
+{% endif %}
 from config import SOURCES, get_bronze_path, get_silver_path, TARGET_COLUMN
 
 
 def load_bronze_outputs() -> dict:
-    return {name: pd.read_parquet(get_bronze_path(name)) for name in SOURCES.keys()}
+    return {name: pd.read_parquet(get_bronze_path(name))
+            for name in SOURCES.keys() if not SOURCES[name].get("excluded")}
 
 
 def merge_sources(bronze_outputs: dict) -> pd.DataFrame:
@@ -182,7 +496,7 @@ def create_holdout_mask(df: pd.DataFrame, holdout_fraction: float = 0.1, random_
         return df
 
     if TARGET_COLUMN not in df.columns:
-        print(f"  Warning: TARGET_COLUMN '{TARGET_COLUMN}' not found, skipping holdout creation")
+        print(f"  Warning: TARGET_COLUMN \\'{TARGET_COLUMN}\\' not found, skipping holdout creation")
         return df
 
     print(f"Creating holdout set ({holdout_fraction:.0%} of data)...")
@@ -204,17 +518,37 @@ def create_holdout_mask(df: pd.DataFrame, holdout_fraction: float = 0.1, random_
     return df
 
 
-def run_silver_merge(create_holdout: bool = True, holdout_fraction: float = 0.1):
-    """Run silver layer merge with optional holdout creation.
+{% set derived_groups = group_steps(config.silver.derived_columns) %}
 
-    Args:
-        create_holdout: Whether to create holdout set (default True)
-        holdout_fraction: Fraction for holdout if creating (default 10%)
-    """
+def create_derived_columns(df: pd.DataFrame) -> pd.DataFrame:
+{%- if derived_groups %}
+{%- for func_name, steps in derived_groups %}
+    df = {{ func_name }}(df)
+{%- endfor %}
+{%- endif %}
+    return df
+
+{% for func_name, steps in derived_groups %}
+
+def {{ func_name }}(df: pd.DataFrame) -> pd.DataFrame:
+{%- set _prov = provenance_docstring_block(steps) %}
+{%- if _prov %}
+{{ _prov }}
+{%- endif %}
+{%- for dc in steps %}
+    # {{ dc.rationale }}
+    # {{ action_description(dc) }}
+    df = {{ render_step_call(dc) }}
+{%- endfor %}
+    return df
+{% endfor %}
+
+
+def run_silver_merge(create_holdout: bool = True, holdout_fraction: float = 0.1):
     bronze_outputs = load_bronze_outputs()
     silver = merge_sources(bronze_outputs)
+    silver = create_derived_columns(silver)
 
-    # Create holdout BEFORE gold layer feature computation
     if create_holdout:
         silver = create_holdout_mask(silver, holdout_fraction=holdout_fraction)
 
@@ -231,66 +565,110 @@ if __name__ == "__main__":
 import warnings
 from datetime import datetime
 from pathlib import Path
-from sklearn.preprocessing import StandardScaler, MinMaxScaler, LabelEncoder
+{% set all_gold_steps = config.gold.transformations + config.gold.encodings + config.gold.scalings %}
+{% set ops, fitted = collect_imports(all_gold_steps, True) %}
+{% set fs_ops = ['apply_feature_select'] if config.gold.feature_selections else [] %}
+from customer_retention.transforms import ArtifactStore{{ (', ' + (ops | sort | join(', '))) if ops }}{{ (', ' + (fs_ops | join(', '))) if fs_ops and 'apply_feature_select' not in ops }}
+{% if fitted %}
+from customer_retention.transforms.fitted import {{ fitted | sort | join(', ') }}
+{% endif %}
 from config import (get_silver_path, get_gold_path, get_feast_data_path,
                     TARGET_COLUMN, RECOMMENDATIONS_HASH, FEAST_REPO_PATH,
                     FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL, EXPERIMENTS_DIR,
                     ARTIFACTS_PATH, FIT_MODE)
-from customer_retention.artifacts import FitArtifactRegistry
 
 {% if config.fit_mode %}
-_registry = FitArtifactRegistry(Path(ARTIFACTS_PATH))
+_store = ArtifactStore(Path(ARTIFACTS_PATH))
 {% else %}
-_registry = FitArtifactRegistry.load_manifest(Path(ARTIFACTS_PATH) / "manifest.yaml")
+_store = ArtifactStore.from_manifest(Path(ARTIFACTS_PATH) / "manifest.yaml")
 {% endif %}
+
+from customer_retention.generators.pipeline_generator.models import (
+    PipelineTransformationType,
+    TransformationStep,
+)
+
+ENCODINGS = [
+{% for enc in config.gold.encodings %}
+    TransformationStep(type=PipelineTransformationType.ENCODE, column="{{ enc.column }}", parameters={{ enc.parameters }}, rationale="{{ enc.rationale }}"),
+{% endfor %}
+]
+
+SCALINGS = [
+{% for scale in config.gold.scalings %}
+    TransformationStep(type=PipelineTransformationType.SCALE, column="{{ scale.column }}", parameters={{ scale.parameters }}, rationale="{{ scale.rationale }}"),
+{% endfor %}
+]
 
 
 def load_silver() -> pd.DataFrame:
     return pd.read_parquet(get_silver_path())
 
 
-def apply_encodings(df: pd.DataFrame) -> pd.DataFrame:
-{% for enc in config.gold.encodings %}
-{% if enc.parameters.get("method") == "one_hot" %}
-    df = pd.get_dummies(df, columns=["{{ enc.column }}"], prefix="{{ enc.column }}")
-{% elif enc.parameters.get("method") == "label" %}
-{% if config.fit_mode %}
-    _enc_{{ enc.column }} = LabelEncoder()
-    df["{{ enc.column }}"] = _enc_{{ enc.column }}.fit_transform(df["{{ enc.column }}"].astype(str))
-    _registry.register(artifact_type="encoder", target_column="{{ enc.column }}", transformer=_enc_{{ enc.column }})
-{% else %}
-    _enc_{{ enc.column }} = _registry.load("{{ enc.column }}_encoder")
-    df["{{ enc.column }}"] = df["{{ enc.column }}"].astype(str).apply(
-        lambda x: _enc_{{ enc.column }}.transform([x])[0] if x in _enc_{{ enc.column }}.classes_ else 0
-    )
-{% endif %}
-{% endif %}
+{% set transform_groups = group_steps(config.gold.transformations) %}
+
+def apply_gold_transformations(df: pd.DataFrame) -> pd.DataFrame:
+{%- if transform_groups %}
+{%- for func_name, steps in transform_groups %}
+    df = {{ func_name }}(df)
+{%- endfor %}
+{%- endif %}
+    return df
+
+{% for func_name, steps in transform_groups %}
+
+def {{ func_name }}(df: pd.DataFrame) -> pd.DataFrame:
+{%- set _prov = provenance_docstring_block(steps) %}
+{%- if _prov %}
+{{ _prov }}
+{%- endif %}
+{%- for t in steps %}
+    # {{ t.rationale }}
+    # {{ action_description(t) }}
+    df = {{ render_step_call(t, config.fit_mode) }}
+{%- endfor %}
+    return df
 {% endfor %}
+
+
+def apply_encodings(df: pd.DataFrame) -> pd.DataFrame:
+{%- set _prov = provenance_docstring_block(config.gold.encodings) %}
+{%- if _prov %}
+{{ _prov }}
+{%- endif %}
+{%- if config.gold.encodings %}
+{%- for enc in config.gold.encodings %}
+    # {{ enc.rationale }}
+    # {{ action_description(enc) }}
+    df = {{ render_step_call(enc, config.fit_mode) }}
+{%- endfor %}
+{%- endif %}
     return df
 
 
 def apply_scaling(df: pd.DataFrame) -> pd.DataFrame:
-{% for scale in config.gold.scalings %}
-{% if scale.parameters.get("method") == "standard" %}
-{% if config.fit_mode %}
-    _scaler_{{ scale.column }} = StandardScaler()
-    df["{{ scale.column }}"] = _scaler_{{ scale.column }}.fit_transform(df[["{{ scale.column }}"]])
-    _registry.register(artifact_type="scaler", target_column="{{ scale.column }}", transformer=_scaler_{{ scale.column }})
-{% else %}
-    _scaler_{{ scale.column }} = _registry.load("{{ scale.column }}_scaler")
-    df["{{ scale.column }}"] = _scaler_{{ scale.column }}.transform(df[["{{ scale.column }}"]])
-{% endif %}
-{% elif scale.parameters.get("method") == "minmax" %}
-{% if config.fit_mode %}
-    _scaler_{{ scale.column }} = MinMaxScaler()
-    df["{{ scale.column }}"] = _scaler_{{ scale.column }}.fit_transform(df[["{{ scale.column }}"]])
-    _registry.register(artifact_type="scaler", target_column="{{ scale.column }}", transformer=_scaler_{{ scale.column }})
-{% else %}
-    _scaler_{{ scale.column }} = _registry.load("{{ scale.column }}_scaler")
-    df["{{ scale.column }}"] = _scaler_{{ scale.column }}.transform(df[["{{ scale.column }}"]])
-{% endif %}
-{% endif %}
+{%- set _prov = provenance_docstring_block(config.gold.scalings) %}
+{%- if _prov %}
+{{ _prov }}
+{%- endif %}
+{%- if config.gold.scalings %}
+{%- for scale in config.gold.scalings %}
+    # {{ scale.rationale }}
+    # {{ action_description(scale) }}
+    df = {{ render_step_call(scale, config.fit_mode) }}
+{%- endfor %}
+{%- endif %}
+    return df
+
+
+def apply_feature_selection(df: pd.DataFrame) -> pd.DataFrame:
+{% if config.gold.feature_selections %}
+{% for fs in config.gold.feature_selections %}
+    # Feature selection
+    # drop {{ fs }} (feature selection)
+    df = apply_feature_select(df, '{{ fs }}')
 {% endfor %}
+{% endif %}
     return df
 
 
@@ -338,10 +716,12 @@ def materialize_to_feast(df: pd.DataFrame) -> None:
 
 def run_gold_features():
     silver = load_silver()
-    gold = apply_encodings(silver)
+    gold = apply_gold_transformations(silver)
+    gold = apply_encodings(gold)
     gold = apply_scaling(gold)
+    gold = apply_feature_selection(gold)
 {% if config.fit_mode %}
-    _registry.save_manifest()
+    _store.save_manifest()
     print(f"Fit artifacts saved to: {ARTIFACTS_PATH}")
 {% endif %}
     output_path = get_gold_path()
@@ -584,10 +964,17 @@ def run_experiment():
 if __name__ == "__main__":
     run_experiment()
 ''',
-    "runner.py.j2": '''from concurrent.futures import ThreadPoolExecutor
-from config import PIPELINE_NAME, EXPERIMENTS_DIR
-{% for source in config.sources %}
-from bronze.bronze_{{ source.name }} import run_bronze_{{ source.name }}
+    "runner.py.j2": '''import argparse
+from concurrent.futures import ThreadPoolExecutor
+from config import PIPELINE_NAME, EXPERIMENTS_DIR, PRODUCTION_DIR
+{% for name in config.landing %}
+from landing.landing_{{ name }} import run_landing_{{ name }}
+{% endfor %}
+{% for name, _ in config.bronze.items() %}
+from bronze.bronze_{{ name }} import run_bronze_{{ name }}
+{% endfor %}
+{% for name, _ in config.bronze_event.items() %}
+from bronze.bronze_{{ name }} import run_bronze_{{ name }}
 {% endfor %}
 from silver.silver_merge import run_silver_merge
 from gold.gold_features import run_gold_features
@@ -595,36 +982,73 @@ from training.ml_experiment import run_experiment
 
 
 def setup_experiments_dir():
-    """Create experiments directory structure if it doesn't exist."""
     EXPERIMENTS_DIR.mkdir(parents=True, exist_ok=True)
-    (EXPERIMENTS_DIR / "data" / "bronze").mkdir(parents=True, exist_ok=True)
-    (EXPERIMENTS_DIR / "data" / "silver").mkdir(parents=True, exist_ok=True)
-    (EXPERIMENTS_DIR / "data" / "gold").mkdir(parents=True, exist_ok=True)
     (EXPERIMENTS_DIR / "mlruns").mkdir(parents=True, exist_ok=True)
+    PRODUCTION_DIR.mkdir(parents=True, exist_ok=True)
+    (PRODUCTION_DIR / "data" / "bronze").mkdir(parents=True, exist_ok=True)
+    (PRODUCTION_DIR / "data" / "silver").mkdir(parents=True, exist_ok=True)
+    (PRODUCTION_DIR / "data" / "gold").mkdir(parents=True, exist_ok=True)
 
 
-def run_pipeline():
+def run_pipeline(validate=False):
     print(f"Starting pipeline: {PIPELINE_NAME}")
     setup_experiments_dir()
-    with ThreadPoolExecutor(max_workers={{ config.sources|length }}) as executor:
+{% if config.landing %}
+
+    print("\\n[1/6] Landing (event sources)...")
+{% for name in config.landing %}
+    run_landing_{{ name }}()
+{% endfor %}
+    print("Landing complete")
+    if validate:
+        from validation.validate_pipeline import validate_landing
+        validate_landing()
+{% endif %}
+
+    print("\\n[{{ '2/6' if config.landing else '1/4' }}] Bronze (parallel)...")
+    with ThreadPoolExecutor(max_workers={{ (config.bronze | length) + (config.bronze_event | length) }}) as executor:
         bronze_futures = [
-{% for source in config.sources %}
-            executor.submit(run_bronze_{{ source.name }}),
+{% for name in config.bronze %}
+            executor.submit(run_bronze_{{ name }}),
+{% endfor %}
+{% for name in config.bronze_event %}
+            executor.submit(run_bronze_{{ name }}),
 {% endfor %}
         ]
         for f in bronze_futures:
             f.result()
     print("Bronze complete")
+    if validate:
+        from validation.validate_pipeline import validate_bronze
+        validate_bronze()
+
+    print("\\n[{{ '3/6' if config.landing else '2/4' }}] Silver...")
     run_silver_merge()
     print("Silver complete")
+    if validate:
+        from validation.validate_pipeline import validate_silver
+        validate_silver()
+
+    print("\\n[{{ '4/6' if config.landing else '3/4' }}] Gold...")
     run_gold_features()
     print("Gold complete")
+    if validate:
+        from validation.validate_pipeline import validate_gold
+        validate_gold()
+
+    print("\\n[{{ '5/6' if config.landing else '4/4' }}] Training...")
     run_experiment()
     print("Training complete")
+    if validate:
+        from validation.validate_pipeline import validate_training
+        validate_training()
 
 
 if __name__ == "__main__":
-    run_pipeline()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--validate", action="store_true")
+    args = parser.parse_args()
+    run_pipeline(validate=args.validate)
 ''',
     "run_all.py.j2": '''"""{{ config.name }} - Pipeline Runner with MLflow UI
 
@@ -641,9 +1065,15 @@ from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import PIPELINE_NAME, SOURCES, MLFLOW_TRACKING_URI, EXPERIMENTS_DIR, FINDINGS_DIR
-{% for source in config.sources %}
-from bronze.bronze_{{ source.name }} import run_bronze_{{ source.name }}
+from config import PIPELINE_NAME, SOURCES, MLFLOW_TRACKING_URI, EXPERIMENTS_DIR, PRODUCTION_DIR, FINDINGS_DIR
+{% for name in config.landing %}
+from landing.landing_{{ name }} import run_landing_{{ name }}
+{% endfor %}
+{% for name in config.bronze %}
+from bronze.bronze_{{ name }} import run_bronze_{{ name }}
+{% endfor %}
+{% for name in config.bronze_event %}
+from bronze.bronze_{{ name }} import run_bronze_{{ name }}
 {% endfor %}
 from silver.silver_merge import run_silver_merge
 from gold.gold_features import run_gold_features
@@ -651,24 +1081,35 @@ from training.ml_experiment import run_experiment
 
 
 def setup_experiments_dir():
-    """Create experiments directory structure if it doesn't exist."""
     EXPERIMENTS_DIR.mkdir(parents=True, exist_ok=True)
-    (EXPERIMENTS_DIR / "data" / "bronze").mkdir(parents=True, exist_ok=True)
-    (EXPERIMENTS_DIR / "data" / "silver").mkdir(parents=True, exist_ok=True)
-    (EXPERIMENTS_DIR / "data" / "gold").mkdir(parents=True, exist_ok=True)
     (EXPERIMENTS_DIR / "mlruns").mkdir(parents=True, exist_ok=True)
+    PRODUCTION_DIR.mkdir(parents=True, exist_ok=True)
+    (PRODUCTION_DIR / "data" / "bronze").mkdir(parents=True, exist_ok=True)
+    (PRODUCTION_DIR / "data" / "silver").mkdir(parents=True, exist_ok=True)
+    (PRODUCTION_DIR / "data" / "gold").mkdir(parents=True, exist_ok=True)
     print(f"Experiments directory: {EXPERIMENTS_DIR}")
+    print(f"Production directory: {PRODUCTION_DIR}")
     print(f"MLflow tracking: {MLFLOW_TRACKING_URI}")
     print(f"Findings directory: {FINDINGS_DIR}")
 
 
+def run_landing():
+{% for name in config.landing %}
+    run_landing_{{ name }}()
+{% endfor %}
+    pass
+
+
 def run_bronze_parallel():
     bronze_funcs = [
-{% for source in config.sources %}
-        run_bronze_{{ source.name }},
+{% for name in config.bronze %}
+        run_bronze_{{ name }},
+{% endfor %}
+{% for name in config.bronze_event %}
+        run_bronze_{{ name }},
 {% endfor %}
     ]
-    with ThreadPoolExecutor(max_workers={{ config.sources|length }}) as ex:
+    with ThreadPoolExecutor(max_workers={{ (config.bronze | length) + (config.bronze_event | length) }}) as ex:
         list(ex.map(lambda f: f(), bronze_funcs))
 
 
@@ -705,20 +1146,26 @@ def run_pipeline():
     print("=" * 50)
 
     setup_experiments_dir()
+{% if config.landing %}
 
-    print("\\n[1/4] Bronze (parallel)...")
+    print("\\n[1/6] Landing (event sources)...")
+    run_landing()
+    print("Landing complete")
+{% endif %}
+
+    print("\\n[{{ '2/6' if config.landing else '1/4' }}] Bronze (parallel)...")
     run_bronze_parallel()
     print("Bronze complete")
 
-    print("\\n[2/4] Silver...")
+    print("\\n[{{ '3/6' if config.landing else '2/4' }}] Silver...")
     run_silver_merge()
     print("Silver complete")
 
-    print("\\n[3/4] Gold...")
+    print("\\n[{{ '4/6' if config.landing else '3/4' }}] Gold...")
     run_gold_features()
     print("Gold complete")
 
-    print("\\n[4/4] Training...")
+    print("\\n[{{ '5/6' if config.landing else '4/4' }}] Training...")
     run_experiment()
     print("Training complete")
 
@@ -740,9 +1187,24 @@ if __name__ == "__main__":
     "workflow.json.j2": """{
   "name": "{{ config.name }}_pipeline",
   "tasks": [
+{% for name in config.landing %}
+    {
+      "task_key": "landing_{{ name }}",
+      "notebook_task": {
+        "notebook_path": "/Workspace/orchestration/{{ config.name }}/landing/landing_{{ name }}"
+      }
+    },
+{% endfor %}
 {% for source in config.sources %}
     {
       "task_key": "bronze_{{ source.name }}",
+{% if config.landing %}
+      "depends_on": [
+{% for name in config.landing %}
+        {"task_key": "landing_{{ name }}"}{{ "," if not loop.last else "" }}
+{% endfor %}
+      ],
+{% endif %}
       "notebook_task": {
         "notebook_path": "/Workspace/orchestration/{{ config.name }}/bronze/bronze_{{ source.name }}"
       }
@@ -823,955 +1285,494 @@ from feast.types import Float32, Float64, Int64, String
     }
 )
 ''',
-    "run_scoring.py.j2": '''"""{{ config.name }} - Scoring Pipeline
+    "landing.py.j2": '''import pandas as pd
+import numpy as np
+from pathlib import Path
+from config import RAW_SOURCES, PRODUCTION_DIR
 
-Generates predictions for holdout records using Feast features and MLflow model.
-Compares predictions against original values for validation.
-"""
-import sys
+SOURCE_NAME = "{{ name }}"
+ENTITY_COLUMN = "{{ config.entity_column }}"
+TIME_COLUMN = "{{ config.time_column }}"
+TARGET_COLUMN = "{{ config.target_column }}"
+
+
+def load_raw_data() -> pd.DataFrame:
+    source = RAW_SOURCES[SOURCE_NAME]
+    path = Path(source["path"])
+    if not path.exists():
+        raise FileNotFoundError(f"Raw source not found: {path}")
+    if source["format"] == "csv":
+        return pd.read_csv(path)
+    return pd.read_parquet(path)
+
+{% if config.timestamp_coalesce %}
+
+def coalesce_timestamps(df: pd.DataFrame) -> pd.DataFrame:
+{% set cols = config.timestamp_coalesce.datetime_columns_ordered %}
+{% set out = config.timestamp_coalesce.output_column %}
+    df["{{ out }}"] = pd.to_datetime(df["{{ cols[-1] }}"], errors="coerce")
+{% for col in cols[:-1] | reverse %}
+    df["{{ out }}"] = df["{{ out }}"].fillna(pd.to_datetime(df["{{ col }}"], errors="coerce"))
+{% endfor %}
+    return df
+{% endif %}
+
+{% if config.label_timestamp %}
+
+def derive_label_timestamp(df: pd.DataFrame) -> pd.DataFrame:
+{% set lt = config.label_timestamp %}
+{% set feature_ts = config.timestamp_coalesce.output_column if config.timestamp_coalesce else config.time_column %}
+{% if lt.label_column %}
+    df["{{ lt.output_column }}"] = pd.to_datetime(df["{{ lt.label_column }}"], errors="coerce")
+    df["{{ lt.output_column }}"] = df["{{ lt.output_column }}"].fillna(
+        pd.to_datetime(df["{{ feature_ts }}"], errors="coerce") + pd.Timedelta(days={{ lt.fallback_window_days }})
+    )
+{% else %}
+    df["{{ lt.output_column }}"] = pd.to_datetime(df["{{ feature_ts }}"], errors="coerce") + pd.Timedelta(days={{ lt.fallback_window_days }})
+{% endif %}
+    return df
+{% endif %}
+
+
+def get_landing_output_path() -> Path:
+    return PRODUCTION_DIR / "data" / "landing" / f"{SOURCE_NAME}.parquet"
+
+
+def run_landing_{{ name }}():
+    print(f"Landing: {SOURCE_NAME}")
+    df = load_raw_data()
+    print(f"  Raw records: {len(df):,}")
+{% if config.raw_time_column %}
+    df = df.rename(columns={"{{ config.raw_time_column }}": TIME_COLUMN})
+{% endif %}
+{% if config.original_target_column %}
+    df = df.rename(columns={"{{ config.original_target_column }}": TARGET_COLUMN})
+{% endif %}
+{% if config.timestamp_coalesce %}
+    df = coalesce_timestamps(df)
+{% endif %}
+{% if config.label_timestamp %}
+    df = derive_label_timestamp(df)
+{% endif %}
+    output_path = get_landing_output_path()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(output_path, index=False)
+    print(f"  Records: {len(df):,}")
+    print(f"  Output: {output_path}")
+    return df
+
+
+if __name__ == "__main__":
+    run_landing_{{ name }}()
+''',
+    "bronze_event.py.j2": '''import pandas as pd
+import numpy as np
+from pathlib import Path
+{% set ops, fitted = collect_imports(config.pre_shaping + config.post_shaping, False) %}
+{% if ops %}
+from customer_retention.transforms import {{ ops | sort | join(', ') }}
+{% endif %}
+from config import PRODUCTION_DIR, RAW_SOURCES, TARGET_COLUMN
+
+SOURCE_NAME = "{{ source }}"
+ENTITY_COLUMN = "{{ config.entity_column }}"
+TIME_COLUMN = "{{ config.time_column }}"
+
+{% set pre_groups = group_steps(config.pre_shaping) %}
+
+def apply_pre_shaping(df: pd.DataFrame) -> pd.DataFrame:
+{% if config.deduplicate %}
+    df = df.drop_duplicates(subset=[ENTITY_COLUMN, TIME_COLUMN], keep="first")
+{% endif %}
+{%- if pre_groups %}
+{%- for func_name, steps in pre_groups %}
+    df = {{ func_name }}(df)
+{%- endfor %}
+{%- endif %}
+    return df
+
+{% for func_name, steps in pre_groups %}
+
+def {{ func_name }}(df: pd.DataFrame) -> pd.DataFrame:
+{%- set _prov = provenance_docstring_block(steps) %}
+{%- if _prov %}
+{{ _prov }}
+{%- endif %}
+{%- for t in steps %}
+    # {{ t.rationale }}
+    # {{ action_description(t) }}
+    df = {{ render_step_call(t) }}
+{%- endfor %}
+    return df
+{% endfor %}
+
+{% if config.aggregation %}
+def _parse_window(window_str):
+    if window_str == "all_time":
+        return None
+    if window_str.endswith("d"):
+        return pd.Timedelta(days=int(window_str[:-1]))
+    if window_str.endswith("h"):
+        return pd.Timedelta(hours=int(window_str[:-1]))
+    if window_str.endswith("w"):
+        return pd.Timedelta(weeks=int(window_str[:-1]))
+    return pd.Timedelta(days=int(window_str))
+
+
+AGGREGATION_WINDOWS = {{ config.aggregation.windows }}
+VALUE_COLUMNS = {{ config.aggregation.value_columns }}
+AGG_FUNCS = {{ config.aggregation.agg_funcs }}
+{% endif %}
+
+
+def apply_reshaping(df: pd.DataFrame) -> pd.DataFrame:
+{% if config.aggregation %}
+    df[TIME_COLUMN] = pd.to_datetime(df[TIME_COLUMN])
+    reference_date = df[TIME_COLUMN].max()
+    result = df.groupby(ENTITY_COLUMN).agg("first")[[]]
+    if TARGET_COLUMN in df.columns:
+        result[TARGET_COLUMN] = df.groupby(ENTITY_COLUMN)[TARGET_COLUMN].first()
+    for window in AGGREGATION_WINDOWS:
+        td = _parse_window(window)
+        window_df = df if td is None else df[df[TIME_COLUMN] >= (reference_date - td)]
+        for col in VALUE_COLUMNS:
+            for func in AGG_FUNCS:
+                result[f"{col}_{func}_{window}"] = window_df.groupby(ENTITY_COLUMN)[col].agg(func)
+        result[f"event_count_{window}"] = window_df.groupby(ENTITY_COLUMN).size()
+    df = result.reset_index()
+{% endif %}
+    return df
+
+{% if config.lifecycle %}
+
+def _load_raw_events():
+    source = RAW_SOURCES[SOURCE_NAME]
+    path = Path(source["path"])
+    if not path.exists():
+        raise FileNotFoundError(f"Raw source not found: {path}")
+    if source["format"] == "csv":
+        return pd.read_csv(path)
+    return pd.read_parquet(path)
+
+{% if config.lifecycle.include_recency_bucket %}
+
+def add_recency_tenure(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
+    raw_df[TIME_COLUMN] = pd.to_datetime(raw_df[TIME_COLUMN])
+    reference_date = raw_df[TIME_COLUMN].max()
+    entity_stats = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].agg(["min", "max"])
+    entity_stats["days_since_last"] = (reference_date - entity_stats["max"]).dt.days
+    entity_stats["days_since_first"] = (reference_date - entity_stats["min"]).dt.days
+    df = df.merge(entity_stats[["days_since_last", "days_since_first"]], left_on=ENTITY_COLUMN, right_index=True, how="left")
+    return df
+
+
+def add_recency_buckets(df: pd.DataFrame) -> pd.DataFrame:
+    if "days_since_last" in df.columns:
+        df["recency_bucket"] = pd.cut(df["days_since_last"], bins=[0, 7, 30, 90, 180, 365, float("inf")],
+                                       labels=["0-7d", "7-30d", "30-90d", "90-180d", "180-365d", "365d+"])
+    return df
+
+{% endif %}
+{% if config.lifecycle.include_lifecycle_quadrant %}
+
+def add_lifecycle_quadrant(df: pd.DataFrame) -> pd.DataFrame:
+    if "days_since_first" not in df.columns:
+        return df
+    tenure = df["days_since_first"]
+    intensity_col = [c for c in df.columns if c.startswith("event_count_")]
+    if not intensity_col:
+        return df
+    intensity = df[intensity_col[0]]
+    tenure_med = tenure.median()
+    intensity_med = intensity.median()
+    conditions = [
+        (tenure >= tenure_med) & (intensity >= intensity_med),
+        (tenure >= tenure_med) & (intensity < intensity_med),
+        (tenure < tenure_med) & (intensity >= intensity_med),
+        (tenure < tenure_med) & (intensity < intensity_med),
+    ]
+    labels = ["loyal", "at_risk", "new_active", "new_inactive"]
+    df["lifecycle_quadrant"] = np.select(conditions, labels, default="unknown")
+    return df
+
+{% endif %}
+{% if config.lifecycle.include_cyclical_features %}
+
+def add_cyclical_features(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
+    raw_df[TIME_COLUMN] = pd.to_datetime(raw_df[TIME_COLUMN])
+    mean_dow = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].apply(lambda x: x.dt.dayofweek.mean())
+    df = df.merge(mean_dow.rename("mean_dow"), left_on=ENTITY_COLUMN, right_index=True, how="left")
+    df["dow_sin"] = np.sin(2 * np.pi * df["mean_dow"] / 7)
+    df["dow_cos"] = np.cos(2 * np.pi * df["mean_dow"] / 7)
+    df = df.drop(columns=["mean_dow"], errors="ignore")
+    return df
+
+{% endif %}
+{% if config.lifecycle.momentum_pairs %}
+
+def add_momentum_ratios(df: pd.DataFrame) -> pd.DataFrame:
+{% for pair in config.lifecycle.momentum_pairs %}
+    short_col = "event_count_{{ pair.short_window }}"
+    long_col = "event_count_{{ pair.long_window }}"
+    if short_col in df.columns and long_col in df.columns:
+        df["momentum_{{ pair.short_window }}_{{ pair.long_window }}"] = df[short_col] / df[long_col].replace(0, float("nan"))
+{% endfor %}
+    return df
+
+{% endif %}
+
+def enrich_lifecycle(df: pd.DataFrame) -> pd.DataFrame:
+    raw_df = _load_raw_events()
+{% if config.raw_time_column %}
+    raw_df = raw_df.rename(columns={"{{ config.raw_time_column }}": TIME_COLUMN})
+{% endif %}
+{% if config.lifecycle.include_recency_bucket %}
+    df = add_recency_tenure(df, raw_df)
+    df = add_recency_buckets(df)
+{% endif %}
+{% if config.lifecycle.include_lifecycle_quadrant %}
+    df = add_lifecycle_quadrant(df)
+{% endif %}
+{% if config.lifecycle.include_cyclical_features %}
+    df = add_cyclical_features(df, raw_df)
+{% endif %}
+{% if config.lifecycle.momentum_pairs %}
+    df = add_momentum_ratios(df)
+{% endif %}
+    return df
+{% endif %}
+
+{% set post_groups = group_steps(config.post_shaping) %}
+
+def apply_post_shaping(df: pd.DataFrame) -> pd.DataFrame:
+{% if config.lifecycle %}
+    df = enrich_lifecycle(df)
+{% endif %}
+{%- if post_groups %}
+{%- for func_name, steps in post_groups %}
+    df = {{ func_name }}(df)
+{%- endfor %}
+{%- endif %}
+    return df
+
+{% for func_name, steps in post_groups %}
+
+def {{ func_name }}(df: pd.DataFrame) -> pd.DataFrame:
+{%- set _prov = provenance_docstring_block(steps) %}
+{%- if _prov %}
+{{ _prov }}
+{%- endif %}
+{%- for t in steps %}
+    # {{ t.rationale }}
+    # {{ action_description(t) }}
+    df = {{ render_step_call(t) }}
+{%- endfor %}
+    return df
+{% endfor %}
+
+
+def run_bronze_{{ source }}():
+    landing_path = PRODUCTION_DIR / "data" / "landing" / f"{SOURCE_NAME}.parquet"
+    if not landing_path.exists():
+        raise FileNotFoundError(f"Landing output not found: {landing_path}")
+    df = pd.read_parquet(landing_path)
+    df = apply_pre_shaping(df)
+    df = apply_reshaping(df)
+    df = apply_post_shaping(df)
+    output_path = PRODUCTION_DIR / "data" / "bronze" / f"{SOURCE_NAME}.parquet"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(output_path, index=False)
+    return df
+
+
+if __name__ == "__main__":
+    run_bronze_{{ source }}()
+''',
+    "validate.py.j2": '''import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pandas as pd
 import numpy as np
-import mlflow
-import mlflow.xgboost
-import xgboost as xgb
-import yaml
-from datetime import datetime
-from feast import FeatureStore
-from config import (PIPELINE_NAME, TARGET_COLUMN, RECOMMENDATIONS_HASH, MLFLOW_TRACKING_URI,
-                    FEAST_REPO_PATH, FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL,
-                    EXPERIMENTS_DIR, get_feast_data_path, ARTIFACTS_PATH)
-from customer_retention.artifacts import FitArtifactRegistry
-
-_registry = FitArtifactRegistry.load_manifest(Path(ARTIFACTS_PATH) / "manifest.yaml")
-
-# Set tracking URI immediately to prevent default mlruns directory creation
-mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-
-ORIGINAL_COLUMN = f"original_{TARGET_COLUMN}"
-PREDICTIONS_PATH = EXPERIMENTS_DIR / "data" / "scoring" / "predictions.parquet"
+from config import SOURCES, EXPLORATION_ARTIFACTS, EXPERIMENTS_DIR, PRODUCTION_DIR, TARGET_COLUMN
 
 
-def load_holdout_manifest() -> dict:
-    manifest_path = Path("holdout_manifest.yaml")
-    if not manifest_path.exists():
-        manifest_path = Path("../explorations/holdout_manifest.yaml")
-    with open(manifest_path) as f:
-        return yaml.safe_load(f)
+def _compare_dataframes(stage, production_path, exploration_path, entity_key=None, tolerance=1e-5):
+    if not Path(production_path).exists():
+        raise FileNotFoundError(f"[{stage}] Production output not found: {production_path}")
+    if not Path(exploration_path).exists():
+        print(f"[{stage}] SKIP - exploration artifact not found: {exploration_path}")
+        return True
+
+    prod = pd.read_parquet(production_path)
+    expl = pd.read_parquet(exploration_path)
+
+    if entity_key and entity_key in prod.columns and entity_key in expl.columns:
+        prod = prod.sort_values(entity_key).reset_index(drop=True)
+        expl = expl.sort_values(entity_key).reset_index(drop=True)
+
+    if prod.shape[0] != expl.shape[0]:
+        raise AssertionError(f"[{stage}] Row count: production={prod.shape[0]} vs exploration={expl.shape[0]}")
+
+    prod_cols = set(prod.columns)
+    expl_cols = set(expl.columns)
+    missing = expl_cols - prod_cols
+    extra = prod_cols - expl_cols
+    if missing:
+        print(f"[{stage}] WARNING: missing columns: {missing}")
+    if extra:
+        print(f"[{stage}] INFO: extra columns: {extra}")
+
+    common = sorted(prod_cols & expl_cols)
+    for col in common:
+        if pd.api.types.is_numeric_dtype(prod[col]) and pd.api.types.is_numeric_dtype(expl[col]):
+            try:
+                pd.testing.assert_series_equal(prod[col], expl[col], check_exact=False, rtol=tolerance, check_names=False)
+            except AssertionError as e:
+                delta = (prod[col].astype(float) - expl[col].astype(float)).abs()
+                max_idx = delta.idxmax()
+                raise AssertionError(
+                    f"[{stage}] Column '{col}' diverges at row {max_idx}: "
+                    f"production={prod[col].iloc[max_idx]} vs exploration={expl[col].iloc[max_idx]} "
+                    f"(max delta={delta.max():.2e})"
+                ) from None
+
+    print(f"[{stage}] PASS - {prod.shape[0]} rows, {len(common)} common cols, tolerance={tolerance}")
+    return True
 
 
-def get_scoring_data() -> pd.DataFrame:
-    """Load scoring data from holdout records.
-
-    IMPORTANT: Holdout must be created in silver layer BEFORE gold layer feature computation.
-    If no holdout exists, this function will raise an error rather than create one,
-    because creating holdout after feature computation causes temporal leakage.
-
-    The holdout was created by silver layer's create_holdout_mask() function.
-    """
-    features_df = pd.read_parquet(get_feast_data_path())
-
-    # Check if holdout already exists (created in silver layer)
-    if ORIGINAL_COLUMN not in features_df.columns:
-        raise ValueError(
-            f"No holdout found (column '{ORIGINAL_COLUMN}' missing). "
-            "Holdout must be created in silver layer BEFORE gold layer feature computation. "
-            "Re-run the pipeline with create_holdout=True in silver layer, or set "
-            "holdout_fraction in run_silver_merge()."
-        )
-
-    scoring_mask = features_df[TARGET_COLUMN].isna() & features_df[ORIGINAL_COLUMN].notna()
-    n_scoring = scoring_mask.sum()
-
-    if n_scoring == 0:
-        raise ValueError(
-            "No holdout records found. The holdout mask may have been created incorrectly. "
-            "Check that silver layer's create_holdout_mask() was called before gold layer."
-        )
-
-    print(f"Found {n_scoring:,} holdout records for scoring")
-    return features_df[scoring_mask].copy()
+def validate_landing(tolerance=1e-5):
+    landing_dir = PRODUCTION_DIR / "data" / "landing"
+    if not landing_dir.exists():
+        print("[Landing] SKIP - no landing directory")
+        return True
+    for path in landing_dir.glob("*.parquet"):
+        name = path.stem
+        expl_key = f"landing_{name}" if f"landing_{name}" in EXPLORATION_ARTIFACTS else "landing"
+        if expl_key in EXPLORATION_ARTIFACTS:
+            _compare_dataframes(f"Landing/{name}", str(path), EXPLORATION_ARTIFACTS[expl_key])
+    return True
 
 
-def get_scoring_features_from_feast(scoring_df: pd.DataFrame) -> pd.DataFrame:
-    feast_path = Path(FEAST_REPO_PATH)
-    if not (feast_path / "feature_store.yaml").exists():
-        print("Feast not initialized, using parquet directly")
-        return scoring_df
-    try:
-        store = FeatureStore(repo_path=str(feast_path))
-        entity_df = scoring_df[[FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL]].copy()
-        exclude_cols = {FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL, TARGET_COLUMN, ORIGINAL_COLUMN}
-        feature_cols = [c for c in scoring_df.columns if c not in exclude_cols and not c.startswith("original_")]
-        feature_refs = [f"{FEAST_FEATURE_VIEW}:{col}" for col in feature_cols]
-        result_df = store.get_online_features(
-            features=feature_refs,
-            entity_rows=[{FEAST_ENTITY_KEY: eid} for eid in scoring_df[FEAST_ENTITY_KEY]]
-        ).to_df()
-        result_df[ORIGINAL_COLUMN] = scoring_df[ORIGINAL_COLUMN].values
-        result_df[FEAST_ENTITY_KEY] = scoring_df[FEAST_ENTITY_KEY].values
-        return result_df
-    except Exception as e:
-        print(f"Feast retrieval failed ({e}), using parquet")
-        return scoring_df
+def validate_bronze(tolerance=1e-5):
+    bronze_artifacts = EXPLORATION_ARTIFACTS.get("bronze", {})
+    for name, expl_path in bronze_artifacts.items():
+        prod_path = PRODUCTION_DIR / "data" / "bronze" / f"{name}.parquet"
+        _compare_dataframes(f"Bronze/{name}", str(prod_path), expl_path, tolerance=tolerance)
+    return True
 
 
-def find_best_parent_run(client, experiment_id):
-    runs = client.search_runs(experiment_ids=[experiment_id],
-                              filter_string=f"tags.recommendations_hash = '{RECOMMENDATIONS_HASH}'",
-                              order_by=["metrics.best_roc_auc DESC"], max_results=1)
-    if not runs:
-        runs = client.search_runs(experiment_ids=[experiment_id],
-                                  order_by=["metrics.best_roc_auc DESC"], max_results=1)
-    if not runs:
-        raise ValueError("No runs found")
-    return runs[0]
+def validate_silver(tolerance=1e-5):
+    prod_path = PRODUCTION_DIR / "data" / "silver" / "merged.parquet"
+    expl_path = EXPLORATION_ARTIFACTS.get("silver", "")
+    entity_key = list(SOURCES.values())[0]["entity_key"] if SOURCES else None
+    _compare_dataframes("Silver", str(prod_path), expl_path, entity_key=entity_key, tolerance=tolerance)
+    return True
 
 
-def find_model_child_run(client, experiment_id, parent_run_id, model_tag):
-    child_runs = client.search_runs(
-        experiment_ids=[experiment_id],
-        filter_string=f"tags.mlflow.parentRunId = '{parent_run_id}'",
-    )
-    return next((c for c in child_runs if c.info.run_name == model_tag), None)
+def validate_gold(tolerance=1e-5):
+    prod_path = PRODUCTION_DIR / "data" / "gold" / "features.parquet"
+    expl_path = EXPLORATION_ARTIFACTS.get("gold", "")
+    entity_key = list(SOURCES.values())[0]["entity_key"] if SOURCES else None
+    _compare_dataframes("Gold", str(prod_path), expl_path, entity_key=entity_key, tolerance=tolerance)
+    return True
 
 
-def load_best_model():
-    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-    client = mlflow.tracking.MlflowClient()
-    experiment = client.get_experiment_by_name(PIPELINE_NAME)
-    if not experiment:
-        raise ValueError(f"Experiment {PIPELINE_NAME} not found")
-    parent_run = find_best_parent_run(client, experiment.experiment_id)
-    best_model_tag = parent_run.data.tags.get("best_model", "random_forest")
-    model_name = f"model_{best_model_tag}"
-    if RECOMMENDATIONS_HASH:
-        model_name = f"{model_name}_{RECOMMENDATIONS_HASH}"
-    model_run = find_model_child_run(client, experiment.experiment_id, parent_run.info.run_id, best_model_tag) or parent_run
-    model_uri = f"runs:/{model_run.info.run_id}/{model_name}"
-    print(f"Loading model: {model_uri}")
-    loader = mlflow.xgboost if best_model_tag == "xgboost" else mlflow.sklearn
-    return loader.load_model(model_uri), model_run.info.run_id
+def validate_training():
+    print("[Training] PASS - training validation requires MLflow comparison (not yet implemented)")
+    return True
 
 
-def prepare_features(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    drop_cols = [FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL, ORIGINAL_COLUMN, TARGET_COLUMN]
-    df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
-    df = df.drop(columns=[c for c in df.columns if c.startswith("original_")], errors="ignore")
-    for col in df.select_dtypes(include=["object", "category"]).columns:
-        artifact_id = f"{col}_encoder"
-        if _registry.has_artifact(artifact_id):
-            encoder = _registry.load(artifact_id)
-            df[col] = df[col].astype(str).apply(
-                lambda x: encoder.transform([x])[0] if x in encoder.classes_ else 0
-            )
-        else:
-            from sklearn.preprocessing import LabelEncoder
-            df[col] = LabelEncoder().fit_transform(df[col].astype(str))
-    for col in df.select_dtypes(include=["float64", "float32"]).columns:
-        artifact_id = f"{col}_scaler"
-        if _registry.has_artifact(artifact_id):
-            scaler = _registry.load(artifact_id)
-            df[col] = scaler.transform(df[[col]])
-    return df.select_dtypes(include=["int64", "float64", "int32", "float32"]).fillna(0)
+def validate_scoring(tolerance=1e-5):
+    prod_path = PRODUCTION_DIR / "data" / "scoring" / "predictions.parquet"
+    expl_path = EXPLORATION_ARTIFACTS.get("scoring", "")
+    _compare_dataframes("Scoring", str(prod_path), expl_path, tolerance=tolerance)
+    return True
 
 
-def compute_validation_metrics(y_true, y_pred, y_proba) -> dict:
-    from sklearn.metrics import roc_auc_score, accuracy_score, precision_score, recall_score, f1_score
-    return {
-        "accuracy": accuracy_score(y_true, y_pred),
-        "precision": precision_score(y_true, y_pred, zero_division=0),
-        "recall": recall_score(y_true, y_pred, zero_division=0),
-        "f1": f1_score(y_true, y_pred, zero_division=0),
-        "roc_auc": roc_auc_score(y_true, y_proba) if len(np.unique(y_true)) > 1 else 0.0
-    }
+def run_all_validations(tolerance=1e-5):
+    stages = [
+        ("Landing", lambda: validate_landing(tolerance)),
+        ("Bronze", lambda: validate_bronze(tolerance)),
+        ("Silver", lambda: validate_silver(tolerance)),
+        ("Gold", lambda: validate_gold(tolerance)),
+        ("Training", validate_training),
+        ("Scoring", lambda: validate_scoring(tolerance)),
+    ]
+    results = []
+    for name, fn in stages:
+        try:
+            fn()
+            results.append((name, "PASS"))
+        except Exception as e:
+            results.append((name, f"FAIL: {e}"))
+            break
 
-
-def run_scoring():
-    print(f"Scoring Pipeline: {PIPELINE_NAME}")
+    print("\\nStage Validation Report")
     print("=" * 50)
-    scoring_df = get_scoring_data()
-    print(f"\\nScoring records: {len(scoring_df):,}")
-    features_df = get_scoring_features_from_feast(scoring_df)
-    model, run_id = load_best_model()
-    X = prepare_features(features_df)
-    y_true = features_df[ORIGINAL_COLUMN].values
-    print(f"\\nGenerating predictions...")
-    if hasattr(model, "predict_proba"):
-        y_proba = model.predict_proba(X)[:, 1]
-    else:
-        y_proba = model.predict(xgb.DMatrix(X, feature_names=list(X.columns)))
-    y_pred = (y_proba >= 0.5).astype(int)
-    metrics = compute_validation_metrics(y_true, y_pred, y_proba)
-    print(f"\\nValidation Metrics (vs original values):")
-    for name, value in metrics.items():
-        print(f"  {name}: {value:.4f}")
-    results_df = pd.DataFrame({
-        FEAST_ENTITY_KEY: scoring_df[FEAST_ENTITY_KEY].values,
-        "prediction": y_pred,
-        "probability": y_proba,
-        "actual": y_true,
-        "correct": (y_pred == y_true).astype(int)
-    })
-    PREDICTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    results_df.to_parquet(PREDICTIONS_PATH, index=False)
-    print(f"\\nPredictions saved: {PREDICTIONS_PATH}")
-    print(f"Correct: {results_df['correct'].sum():,}/{len(results_df):,} ({results_df['correct'].mean():.1%})")
-    return results_df, metrics
+    for name, status in results:
+        print(f"[{status.split(':')[0]:4s}] {name}")
+    return results
+''',
+    "run_validation.py.j2": '''"""{{ config.name }} - Standalone Validation Runner
+
+Compares pipeline outputs against exploration artifacts.
+Run after pipeline completes to verify correctness.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from validation.validate_pipeline import run_all_validations
 
 
 if __name__ == "__main__":
-    run_scoring()
+    import argparse
+    parser = argparse.ArgumentParser(description="Validate pipeline outputs")
+    parser.add_argument("--tolerance", type=float, default=1e-5)
+    args = parser.parse_args()
+
+    results = run_all_validations(tolerance=args.tolerance)
+    failures = [r for r in results if not r[1].startswith("PASS")]
+    sys.exit(1 if failures else 0)
 ''',
-    "scoring_dashboard.ipynb.j2": """{
- "cells": [
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "# {{ config.name }} - Scoring Dashboard\\n",
-    "\\n",
-    "Interactive dashboard for exploring scoring results and understanding predictions.\\n",
-    "\\n",
-    "**Features:**\\n",
-    "- Summary metrics and model performance\\n",
-    "- Customer-by-customer prediction browser\\n",
-    "- SHAP-based feature explanations\\n",
-    "- Comparison against ground truth (holdout validation)"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "import sys\\n",
-    "from pathlib import Path\\n",
-    "sys.path.insert(0, str(Path.cwd().parent))\\n",
-    "\\n",
-    "import pandas as pd\\n",
-    "import numpy as np\\n",
-    "import mlflow\\n",
-    "import mlflow.sklearn\\n",
-    "import mlflow.xgboost\\n",
-    "import shap\\n",
-    "import matplotlib.pyplot as plt\\n",
-    "from IPython.display import display, HTML\\n",
-    "from config import (PIPELINE_NAME, TARGET_COLUMN, MLFLOW_TRACKING_URI, RECOMMENDATIONS_HASH,\\n",
-    "                    FEAST_ENTITY_KEY, EXPERIMENTS_DIR, get_feast_data_path, get_gold_path)"
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "## 1. Load Scoring Results"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "PREDICTIONS_PATH = EXPERIMENTS_DIR / \\"data\\" / \\"scoring\\" / \\"predictions.parquet\\"\\n",
-    "ORIGINAL_COLUMN = f\\"original_{TARGET_COLUMN}\\"\\n",
-    "\\n",
-    "# Load predictions\\n",
-    "predictions_df = pd.read_parquet(PREDICTIONS_PATH)\\n",
-    "print(f\\"Loaded {len(predictions_df):,} predictions\\")\\n",
-    "predictions_df.head()"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# Load feature data for explanations\\n",
-    "features_df = pd.read_parquet(get_feast_data_path())\\n",
-    "scoring_mask = features_df[TARGET_COLUMN].isna() & features_df[ORIGINAL_COLUMN].notna()\\n",
-    "scoring_features = features_df[scoring_mask].copy()\\n",
-    "print(f\\"Features for {len(scoring_features):,} scoring records\\")"
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "## 2. Summary Metrics"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "from sklearn.metrics import (accuracy_score, precision_score, recall_score,\\n",
-    "                             f1_score, roc_auc_score, confusion_matrix)\\n",
-    "\\n",
-    "y_true = predictions_df[\\"actual\\"]\\n",
-    "y_pred = predictions_df[\\"prediction\\"]\\n",
-    "y_proba = predictions_df[\\"probability\\"]\\n",
-    "\\n",
-    "metrics = {\\n",
-    "    \\"Accuracy\\": accuracy_score(y_true, y_pred),\\n",
-    "    \\"Precision\\": precision_score(y_true, y_pred, zero_division=0),\\n",
-    "    \\"Recall\\": recall_score(y_true, y_pred, zero_division=0),\\n",
-    "    \\"F1 Score\\": f1_score(y_true, y_pred, zero_division=0),\\n",
-    "    \\"ROC-AUC\\": roc_auc_score(y_true, y_proba) if len(np.unique(y_true)) > 1 else 0.0\\n",
-    "}\\n",
-    "\\n",
-    "print(\\"\\\\n=== Scoring Validation Metrics ===\\")\\n",
-    "for name, value in metrics.items():\\n",
-    "    print(f\\"  {name}: {value:.4f}\\")\\n",
-    "\\n",
-    "# Confusion matrix\\n",
-    "cm = confusion_matrix(y_true, y_pred)\\n",
-    "print(f\\"\\\\nConfusion Matrix:\\")\\n",
-    "print(f\\"  TN={cm[0,0]:,}  FP={cm[0,1]:,}\\")\\n",
-    "print(f\\"  FN={cm[1,0]:,}  TP={cm[1,1]:,}\\")"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# Visualize metrics\\n",
-    "fig, axes = plt.subplots(1, 2, figsize=(12, 4))\\n",
-    "\\n",
-    "# ROC curve (if possible)\\n",
-    "from sklearn.metrics import roc_curve\\n",
-    "fpr, tpr, _ = roc_curve(y_true, y_proba)\\n",
-    "axes[0].plot(fpr, tpr, \\"b-\\", lw=2, label=f\\"ROC (AUC={metrics['ROC-AUC']:.3f})\\")\\n",
-    "axes[0].plot([0, 1], [0, 1], \\"k--\\", lw=1)\\n",
-    "axes[0].set_xlabel(\\"False Positive Rate\\")\\n",
-    "axes[0].set_ylabel(\\"True Positive Rate\\")\\n",
-    "axes[0].set_title(\\"ROC Curve\\")\\n",
-    "axes[0].legend()\\n",
-    "\\n",
-    "# Probability distribution\\n",
-    "axes[1].hist(y_proba[y_true == 0], bins=30, alpha=0.5, label=\\"Actual=0\\", color=\\"blue\\")\\n",
-    "axes[1].hist(y_proba[y_true == 1], bins=30, alpha=0.5, label=\\"Actual=1\\", color=\\"red\\")\\n",
-    "axes[1].axvline(x=0.5, color=\\"black\\", linestyle=\\"--\\", label=\\"Threshold\\")\\n",
-    "axes[1].set_xlabel(\\"Predicted Probability\\")\\n",
-    "axes[1].set_ylabel(\\"Count\\")\\n",
-    "axes[1].set_title(\\"Probability Distribution\\")\\n",
-    "axes[1].legend()\\n",
-    "\\n",
-    "plt.tight_layout()\\n",
-    "plt.show()"
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "## 2.5 Model Comparison Grid\\n",
-    "\\n",
-    "Compare all trained models (Logistic Regression, Random Forest, XGBoost) on the holdout set.\\n",
-    "\\n",
-    "**Grid Layout:**\\n",
-    "- **Row 1**: Confusion matrices (counts and percentages)\\n",
-    "- **Row 2**: ROC curves with AUC scores\\n",
-    "- **Row 3**: Precision-Recall curves with PR-AUC scores"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# Load and compare all trained models\\n",
-    "from sklearn.preprocessing import LabelEncoder\\n",
-    "from sklearn.metrics import (roc_curve, precision_recall_curve, average_precision_score,\\n",
-    "                             confusion_matrix, roc_auc_score, f1_score, precision_score,\\n",
-    "                             recall_score, accuracy_score)\\n",
-    "import xgboost as xgb\\n",
-    "from config import RECOMMENDATIONS_HASH\\n",
-    "\\n",
-    "mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)\\n",
-    "client = mlflow.tracking.MlflowClient()\\n",
-    "experiment = client.get_experiment_by_name(PIPELINE_NAME)\\n",
-    "\\n",
-    "# Prepare features for scoring\\n",
-    "def prepare_features_for_comparison(df):\\n",
-    "    df = df.copy()\\n",
-    "    drop_cols = [FEAST_ENTITY_KEY, 'event_timestamp', ORIGINAL_COLUMN, TARGET_COLUMN]\\n",
-    "    df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors='ignore')\\n",
-    "    df = df.drop(columns=[c for c in df.columns if c.startswith('original_')], errors='ignore')\\n",
-    "    for col in df.select_dtypes(include=['object', 'category']).columns:\\n",
-    "        df[col] = LabelEncoder().fit_transform(df[col].astype(str))\\n",
-    "    return df.select_dtypes(include=['int64', 'float64', 'int32', 'float32']).fillna(0)\\n",
-    "\\n",
-    "X_holdout = prepare_features_for_comparison(scoring_features)\\n",
-    "y_actual = predictions_df['actual'].values\\n",
-    "\\n",
-    "# Get all logged models\\n",
-    "logged_models = client.search_logged_models(experiment_ids=[experiment.experiment_id])\\n",
-    "\\n",
-    "# Load all 3 model types\\n",
-    "model_types = ['logistic_regression', 'random_forest', 'xgboost']\\n",
-    "model_display_names = ['Logistic Regression', 'Random Forest', 'XGBoost']\\n",
-    "loaded_models = {}\\n",
-    "model_predictions = {}\\n",
-    "\\n",
-    "for model_type, display_name in zip(model_types, model_display_names):\\n",
-    "    model_name_pattern = f'model_{model_type}'\\n",
-    "    if RECOMMENDATIONS_HASH:\\n",
-    "        model_name_pattern = f'{model_name_pattern}_{RECOMMENDATIONS_HASH}'\\n",
-    "    \\n",
-    "    matching_model = None\\n",
-    "    for lm in logged_models:\\n",
-    "        if lm.name == model_name_pattern:\\n",
-    "            if matching_model is None or lm.creation_timestamp > matching_model.creation_timestamp:\\n",
-    "                matching_model = lm\\n",
-    "    \\n",
-    "    if matching_model:\\n",
-    "        try:\\n",
-    "            if 'xgboost' in model_type:\\n",
-    "                model = mlflow.xgboost.load_model(matching_model.model_uri)\\n",
-    "                dmatrix = xgb.DMatrix(X_holdout, feature_names=list(X_holdout.columns))\\n",
-    "                y_proba = model.predict(dmatrix)\\n",
-    "            else:\\n",
-    "                model = mlflow.sklearn.load_model(matching_model.model_uri)\\n",
-    "                y_proba = model.predict_proba(X_holdout)[:, 1]\\n",
-    "            \\n",
-    "            y_pred = (y_proba > 0.5).astype(int)\\n",
-    "            loaded_models[display_name] = model\\n",
-    "            model_predictions[display_name] = {'y_pred': y_pred, 'y_proba': y_proba}\\n",
-    "            print(f'Loaded {display_name}: ROC-AUC = {roc_auc_score(y_actual, y_proba):.4f}')\\n",
-    "        except Exception as e:\\n",
-    "            print(f'Could not load {display_name}: {e}')\\n",
-    "\\n",
-    "print(f'\\\\nLoaded {len(loaded_models)} models for comparison')"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# Create Model Comparison Grid (3 columns x 3 rows)\\n",
-    "n_models = len(model_predictions)\\n",
-    "if n_models > 0:\\n",
-    "    fig, axes = plt.subplots(3, n_models, figsize=(5 * n_models, 12))\\n",
-    "    if n_models == 1:\\n",
-    "        axes = axes.reshape(-1, 1)\\n",
-    "    \\n",
-    "    colors = ['#1f77b4', '#ff7f0e', '#2ca02c']\\n",
-    "    \\n",
-    "    for col_idx, (name, preds) in enumerate(model_predictions.items()):\\n",
-    "        y_pred = preds['y_pred']\\n",
-    "        y_proba = preds['y_proba']\\n",
-    "        color = colors[col_idx % len(colors)]\\n",
-    "        \\n",
-    "        # Row 1: Confusion Matrix\\n",
-    "        cm = confusion_matrix(y_actual, y_pred)\\n",
-    "        ax = axes[0, col_idx]\\n",
-    "        im = ax.imshow(cm, cmap='Blues')\\n",
-    "        ax.set_xticks([0, 1])\\n",
-    "        ax.set_yticks([0, 1])\\n",
-    "        ax.set_xticklabels(['Pred 0', 'Pred 1'])\\n",
-    "        ax.set_yticklabels(['Actual 0', 'Actual 1'])\\n",
-    "        for i in range(2):\\n",
-    "            for j in range(2):\\n",
-    "                pct = cm[i, j] / cm.sum() * 100\\n",
-    "                ax.text(j, i, f'{cm[i, j]}\\\\n({pct:.1f}%)', ha='center', va='center',\\n",
-    "                       color='white' if cm[i, j] > cm.max()/2 else 'black', fontsize=10)\\n",
-    "        acc = accuracy_score(y_actual, y_pred)\\n",
-    "        ax.set_title(f'{name}\\\\nAccuracy: {acc:.3f}', fontsize=11, fontweight='bold')\\n",
-    "        \\n",
-    "        # Row 2: ROC Curve\\n",
-    "        ax = axes[1, col_idx]\\n",
-    "        fpr, tpr, _ = roc_curve(y_actual, y_proba)\\n",
-    "        auc = roc_auc_score(y_actual, y_proba)\\n",
-    "        ax.plot(fpr, tpr, color=color, lw=2, label=f'AUC = {auc:.4f}')\\n",
-    "        ax.plot([0, 1], [0, 1], 'k--', lw=1, alpha=0.5)\\n",
-    "        ax.fill_between(fpr, tpr, alpha=0.2, color=color)\\n",
-    "        ax.set_xlabel('False Positive Rate')\\n",
-    "        ax.set_ylabel('True Positive Rate')\\n",
-    "        ax.set_title(f'ROC Curve', fontsize=10)\\n",
-    "        ax.legend(loc='lower right')\\n",
-    "        ax.grid(True, alpha=0.3)\\n",
-    "        \\n",
-    "        # Row 3: Precision-Recall Curve\\n",
-    "        ax = axes[2, col_idx]\\n",
-    "        precision, recall, _ = precision_recall_curve(y_actual, y_proba)\\n",
-    "        pr_auc = average_precision_score(y_actual, y_proba)\\n",
-    "        ax.plot(recall, precision, color=color, lw=2, label=f'PR-AUC = {pr_auc:.4f}')\\n",
-    "        baseline = y_actual.sum() / len(y_actual)\\n",
-    "        ax.axhline(y=baseline, color='gray', linestyle='--', lw=1, label=f'Baseline = {baseline:.2f}')\\n",
-    "        ax.fill_between(recall, precision, alpha=0.2, color=color)\\n",
-    "        ax.set_xlabel('Recall')\\n",
-    "        ax.set_ylabel('Precision')\\n",
-    "        ax.set_title(f'Precision-Recall Curve', fontsize=10)\\n",
-    "        ax.legend(loc='lower left')\\n",
-    "        ax.grid(True, alpha=0.3)\\n",
-    "    \\n",
-    "    plt.suptitle('Model Comparison Grid: Holdout Set Performance', fontsize=14, fontweight='bold', y=1.02)\\n",
-    "    plt.tight_layout()\\n",
-    "    plt.show()\\n",
-    "else:\\n",
-    "    print('No models loaded for comparison')"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# Summary metrics table for all models\\n",
-    "if model_predictions:\\n",
-    "    comparison_results = []\\n",
-    "    for name, preds in model_predictions.items():\\n",
-    "        y_pred = preds['y_pred']\\n",
-    "        y_proba = preds['y_proba']\\n",
-    "        comparison_results.append({\\n",
-    "            'Model': name,\\n",
-    "            'ROC-AUC': roc_auc_score(y_actual, y_proba),\\n",
-    "            'PR-AUC': average_precision_score(y_actual, y_proba),\\n",
-    "            'F1-Score': f1_score(y_actual, y_pred),\\n",
-    "            'Precision': precision_score(y_actual, y_pred, zero_division=0),\\n",
-    "            'Recall': recall_score(y_actual, y_pred, zero_division=0),\\n",
-    "            'Accuracy': accuracy_score(y_actual, y_pred)\\n",
-    "        })\\n",
-    "    \\n",
-    "    comparison_df = pd.DataFrame(comparison_results).set_index('Model')\\n",
-    "    print('\\\\n' + '=' * 70)\\n",
-    "    print('MODEL COMPARISON SUMMARY (Holdout Set)')\\n",
-    "    print('=' * 70)\\n",
-    "    display(comparison_df.style.highlight_max(axis=0, props='background-color: #2e7d32; color: white').format('{:.4f}'))\\n",
-    "    \\n",
-    "    # Identify best model\\n",
-    "    best_model_name = comparison_df['ROC-AUC'].idxmax()\\n",
-    "    best_auc = comparison_df.loc[best_model_name, 'ROC-AUC']\\n",
-    "    print(f'\\\\nBest Model: {best_model_name} (ROC-AUC = {best_auc:.4f})')"
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "## 2.6 Adversarial Pipeline Validation\\n",
-    "\\n",
-    "Validate that scoring pipeline produces identical features to training for holdout entities.\\n",
-    "This catches transformation inconsistencies (e.g., scalers re-fit, encoders handling unseen values differently)."
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "from customer_retention.stages.validation import (\\n",
-    "    AdversarialScoringValidator, DriftSeverity\\n",
-    ")\\n",
-    "\\n",
-    "gold_features = pd.read_parquet(get_gold_path())\\n",
-    "validator = AdversarialScoringValidator(\\n",
-    "    gold_features=gold_features,\\n",
-    "    entity_column=FEAST_ENTITY_KEY,\\n",
-    "    target_column=TARGET_COLUMN,\\n",
-    "    tolerance=1e-6,\\n",
-    ")\\n",
-    "\\n",
-    "holdout_ids = validator.get_holdout_entity_ids()\\n",
-    "print(f'Holdout entities for validation: {len(holdout_ids):,}')\\n",
-    "\\n",
-    "result = validator.validate_features(scoring_features)\\n",
-    "\\n",
-    "print('\\\\n' + '=' * 60)\\n",
-    "print('ADVERSARIAL PIPELINE VALIDATION')\\n",
-    "print('=' * 60)\\n",
-    "print(result.summary)\\n",
-    "\\n",
-    "if result.passed:\\n",
-    "    print('\\\\n✓ PASSED: Scoring features match training features')\\n",
-    "else:\\n",
-    "    print('\\\\n✗ FAILED: Feature drift detected!')\\n",
-    "    drift_df = result.to_dataframe()\\n",
-    "    display(drift_df.sort_values('severity', ascending=False))\\n",
-    "    \\n",
-    "    critical_drifts = [d for d in result.feature_drifts if d.severity >= DriftSeverity.HIGH]\\n",
-    "    if critical_drifts:\\n",
-    "        print(f'\\\\n⚠ {len(critical_drifts)} HIGH/CRITICAL severity drifts require investigation')"
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "## 3. Load Model for Explanations"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)\\n",
-    "client = mlflow.tracking.MlflowClient()\\n",
-    "\\n",
-    "experiment = client.get_experiment_by_name(PIPELINE_NAME)\\n",
-    "runs = client.search_runs(\\n",
-    "    experiment_ids=[experiment.experiment_id],\\n",
-    "    order_by=[\\"metrics.best_roc_auc DESC\\"],\\n",
-    "    max_results=1\\n",
-    ")\\n",
-    "parent_run = runs[0]\\n",
-    "\\n",
-    "best_model_tag = parent_run.data.tags.get(\\"best_model\\", \\"random_forest\\")\\n",
-    "model_name = f\\"model_{best_model_tag}\\"\\n",
-    "if RECOMMENDATIONS_HASH:\\n",
-    "    model_name = f\\"{model_name}_{RECOMMENDATIONS_HASH}\\"\\n",
-    "\\n",
-    "child_runs = client.search_runs(\\n",
-    "    experiment_ids=[experiment.experiment_id],\\n",
-    "    filter_string=f\\"tags.mlflow.parentRunId = '{parent_run.info.run_id}'\\",\\n",
-    ")\\n",
-    "model_run = next((c for c in child_runs if c.info.run_name == best_model_tag), parent_run)\\n",
-    "\\n",
-    "model_uri = f\\"runs:/{model_run.info.run_id}/{model_name}\\"\\n",
-    "print(f\\"Loading model: {model_uri}\\")\\n",
-    "if best_model_tag == \\"xgboost\\":\\n",
-    "    model = mlflow.xgboost.load_model(model_uri)\\n",
-    "else:\\n",
-    "    model = mlflow.sklearn.load_model(model_uri)\\n",
-    "print(f\\"Model type: {type(model).__name__}\\")"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# Prepare features for SHAP\\n",
-    "from sklearn.preprocessing import LabelEncoder\\n",
-    "\\n",
-    "def prepare_features(df):\\n",
-    "    df = df.copy()\\n",
-    "    drop_cols = [FEAST_ENTITY_KEY, \\"event_timestamp\\", ORIGINAL_COLUMN, TARGET_COLUMN]\\n",
-    "    df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors=\\"ignore\\")\\n",
-    "    df = df.drop(columns=[c for c in df.columns if c.startswith(\\"original_\\")], errors=\\"ignore\\")\\n",
-    "    for col in df.select_dtypes(include=[\\"object\\", \\"category\\"]).columns:\\n",
-    "        df[col] = LabelEncoder().fit_transform(df[col].astype(str))\\n",
-    "    return df.select_dtypes(include=[\\"int64\\", \\"float64\\", \\"int32\\", \\"float32\\"]).fillna(0)\\n",
-    "\\n",
-    "X = prepare_features(scoring_features)\\n",
-    "feature_names = list(X.columns)\\n",
-    "print(f\\"Prepared {len(feature_names)} features for SHAP analysis\\")"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# Create SHAP explainer\\n",
-    "print(\\"Creating SHAP explainer (may take a moment)...\\")\\n",
-    "\\n",
-    "# Use background sample for efficiency\\n",
-    "background_size = min(100, len(X))\\n",
-    "background = shap.sample(X, background_size)\\n",
-    "\\n",
-    "if hasattr(model, \\"predict_proba\\"):\\n",
-    "    explainer = shap.Explainer(model.predict_proba, background, feature_names=feature_names)\\n",
-    "else:\\n",
-    "    explainer = shap.Explainer(model, background, feature_names=feature_names)\\n",
-    "\\n",
-    "print(\\"Computing SHAP values...\\")\\n",
-    "shap_values = explainer(X)\\n",
-    "print(f\\"SHAP values computed for {len(shap_values)} records\\")"
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "## 4. Global Feature Importance"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# Use positive class SHAP values if multi-output\\n",
-    "if len(shap_values.shape) == 3:\\n",
-    "    shap_vals = shap_values[:, :, 1]  # Positive class\\n",
-    "else:\\n",
-    "    shap_vals = shap_values\\n",
-    "\\n",
-    "plt.figure(figsize=(10, 8))\\n",
-    "shap.summary_plot(shap_vals, X, feature_names=feature_names, show=False, max_display=20)\\n",
-    "plt.title(\\"Feature Importance (SHAP Summary)\\")\\n",
-    "plt.tight_layout()\\n",
-    "plt.show()"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# Mean absolute SHAP values\\n",
-    "mean_shap = np.abs(shap_vals.values).mean(axis=0)\\n",
-    "importance_df = pd.DataFrame({\\n",
-    "    \\"feature\\": feature_names,\\n",
-    "    \\"importance\\": mean_shap\\n",
-    "}).sort_values(\\"importance\\", ascending=False)\\n",
-    "\\n",
-    "print(\\"Top 15 Most Important Features:\\")\\n",
-    "display(importance_df.head(15))"
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "## 5. Customer Browser"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# Create combined dataset for browsing\\n",
-    "browser_df = predictions_df.merge(\\n",
-    "    scoring_features[[FEAST_ENTITY_KEY] + feature_names],\\n",
-    "    on=FEAST_ENTITY_KEY,\\n",
-    "    how=\\"left\\"\\n",
-    ")\\n",
-    "\\n",
-    "print(f\\"Customer browser ready with {len(browser_df):,} records\\")\\n",
-    "print(f\\"\\\\nPrediction Distribution:\\")\\n",
-    "print(f\\"  Predicted Positive: {(browser_df['prediction'] == 1).sum():,}\\")\\n",
-    "print(f\\"  Predicted Negative: {(browser_df['prediction'] == 0).sum():,}\\")\\n",
-    "print(f\\"\\\\nCorrect Predictions: {browser_df['correct'].sum():,}/{len(browser_df):,} ({browser_df['correct'].mean():.1%})\\")"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "def show_customer(idx: int):\\n",
-    "    \\"\\"\\"Display details and SHAP explanation for a single customer.\\"\\"\\"\\n",
-    "    row = browser_df.iloc[idx]\\n",
-    "    entity_id = row[FEAST_ENTITY_KEY]\\n",
-    "    \\n",
-    "    print(f\\"=== Customer {entity_id} ===\\")\\n",
-    "    print(f\\"Prediction: {int(row['prediction'])} (probability: {row['probability']:.3f})\\")\\n",
-    "    print(f\\"Actual: {int(row['actual'])}\\")\\n",
-    "    print(f\\"Correct: {'Yes' if row['correct'] else 'No'}\\")\\n",
-    "    print()\\n",
-    "    \\n",
-    "    # Show top features\\n",
-    "    feature_vals = X.iloc[idx]\\n",
-    "    if len(shap_values.shape) == 3:\\n",
-    "        customer_shap = shap_values[idx, :, 1].values\\n",
-    "    else:\\n",
-    "        customer_shap = shap_values[idx].values\\n",
-    "    \\n",
-    "    feature_impact = pd.DataFrame({\\n",
-    "        \\"feature\\": feature_names,\\n",
-    "        \\"value\\": feature_vals.values,\\n",
-    "        \\"shap_impact\\": customer_shap\\n",
-    "    }).sort_values(\\"shap_impact\\", key=abs, ascending=False)\\n",
-    "    \\n",
-    "    print(\\"Top Contributing Features:\\")\\n",
-    "    display(feature_impact.head(10))\\n",
-    "    \\n",
-    "    # Waterfall plot\\n",
-    "    plt.figure(figsize=(10, 6))\\n",
-    "    if len(shap_values.shape) == 3:\\n",
-    "        shap.plots.waterfall(shap_values[idx, :, 1], max_display=10, show=False)\\n",
-    "    else:\\n",
-    "        shap.plots.waterfall(shap_values[idx], max_display=10, show=False)\\n",
-    "    plt.title(f\\"SHAP Explanation for Customer {entity_id}\\")\\n",
-    "    plt.tight_layout()\\n",
-    "    plt.show()"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# Show first few customers\\n",
-    "print(\\"Showing first 3 customers:\\\\n\\")\\n",
-    "for i in range(min(3, len(browser_df))):\\n",
-    "    show_customer(i)\\n",
-    "    print(\\"\\\\n\\" + \\"=\\" * 60 + \\"\\\\n\\")"
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "## 6. Interactive Customer Lookup"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# Change this to browse different customers\\n",
-    "CUSTOMER_INDEX = 0  # Change to explore different customers (0 to N-1)\\n",
-    "\\n",
-    "show_customer(CUSTOMER_INDEX)"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# Look up by entity ID\\n",
-    "def lookup_customer(entity_id):\\n",
-    "    \\"\\"\\"Find and display a customer by their entity ID.\\"\\"\\"\\n",
-    "    mask = browser_df[FEAST_ENTITY_KEY] == entity_id\\n",
-    "    if not mask.any():\\n",
-    "        print(f\\"Customer {entity_id} not found in scoring set\\")\\n",
-    "        return\\n",
-    "    idx = browser_df[mask].index[0]\\n",
-    "    # Find position in X\\n",
-    "    x_idx = browser_df.index.get_loc(idx)\\n",
-    "    show_customer(x_idx)\\n",
-    "\\n",
-    "# Example: lookup_customer(12345)\\n",
-    "print(\\"Available entity IDs (first 10):\\")\\n",
-    "print(browser_df[FEAST_ENTITY_KEY].head(10).tolist())"
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "## 7. Error Analysis"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# Analyze misclassified customers\\n",
-    "incorrect = browser_df[browser_df[\\"correct\\"] == 0]\\n",
-    "print(f\\"Misclassified customers: {len(incorrect):,}\\")\\n",
-    "\\n",
-    "# False positives (predicted 1, actual 0)\\n",
-    "fp = incorrect[incorrect[\\"prediction\\"] == 1]\\n",
-    "print(f\\"  False Positives: {len(fp):,}\\")\\n",
-    "\\n",
-    "# False negatives (predicted 0, actual 1)  \\n",
-    "fn = incorrect[incorrect[\\"prediction\\"] == 0]\\n",
-    "print(f\\"  False Negatives: {len(fn):,}\\")"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# Show example false positive\\n",
-    "if len(fp) > 0:\\n",
-    "    print(\\"\\\\n=== Example False Positive ===\\")\\n",
-    "    fp_idx = browser_df.index.get_loc(fp.index[0])\\n",
-    "    show_customer(fp_idx)"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# Show example false negative\\n",
-    "if len(fn) > 0:\\n",
-    "    print(\\"\\\\n=== Example False Negative ===\\")\\n",
-    "    fn_idx = browser_df.index.get_loc(fn.index[0])\\n",
-    "    show_customer(fn_idx)"
-   ]
-  },
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "## 8. Export Results"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# Export detailed results with feature importance\\n",
-    "output_dir = EXPERIMENTS_DIR / \\"data\\" / \\"scoring\\"\\n",
-    "\\n",
-    "# Save global feature importance\\n",
-    "importance_df.to_csv(output_dir / \\"feature_importance.csv\\", index=False)\\n",
-    "print(f\\"Feature importance saved to {output_dir / 'feature_importance.csv'}\\")\\n",
-    "\\n",
-    "top_features = importance_df.head(10)[\\"feature\\"].tolist()\\n",
-    "shap_by_entity = pd.DataFrame({FEAST_ENTITY_KEY: scoring_features[FEAST_ENTITY_KEY].values})\\n",
-    "for feat in top_features:\\n",
-    "    feat_idx = feature_names.index(feat)\\n",
-    "    if len(shap_values.shape) == 3:\\n",
-    "        shap_by_entity[f\\"shap_{feat}\\"] = shap_values[:, feat_idx, 1].values\\n",
-    "    else:\\n",
-    "        shap_by_entity[f\\"shap_{feat}\\"] = shap_values[:, feat_idx].values\\n",
-    "\\n",
-    "detailed_df = predictions_df.merge(shap_by_entity, on=FEAST_ENTITY_KEY, how=\\"left\\")\\n",
-    "detailed_df.to_parquet(output_dir / \\"predictions_with_shap.parquet\\", index=False)\\n",
-    "print(f\\"Detailed predictions with SHAP saved to {output_dir / 'predictions_with_shap.parquet'}\\")"
-   ]
-  }
- ],
- "metadata": {
-  "kernelspec": {
-   "display_name": "Python 3",
-   "language": "python",
-   "name": "python3"
-  },
-  "language_info": {
-   "name": "python",
-   "version": "3.12.0"
-  }
- },
- "nbformat": 4,
- "nbformat_minor": 4
-}
-""",
+    "exploration_report.py.j2": '''"""Exploration Report Viewer
+
+Opens HTML documentation for the exploration notebooks that informed
+the pipeline transformations. Works both locally (file:// URI) and
+on Databricks (displayHTML with scroll-to-anchor injection).
+"""
+import os
+import webbrowser
+from pathlib import Path
+
+# Known notebooks referenced by pipeline provenance comments
+KNOWN_NOTEBOOKS = [
+{% for nb in notebooks %}
+    "{{ nb }}",
+{% endfor %}
+]
+
+DOCS_DIR = Path(os.environ.get("CR_DOCS_BASE_URL", str(Path(__file__).parent)))
+
+
+def _is_databricks():
+    return "DATABRICKS_RUNTIME_VERSION" in os.environ
+
+
+def list_reports():
+    for nb in KNOWN_NOTEBOOKS:
+        html_path = DOCS_DIR / f"{nb}.html"
+        status = "available" if html_path.exists() else "missing"
+        print(f"  {nb}: {status}")
+
+
+if __name__ == "__main__":
+    print("Available exploration reports:")
+    list_reports()
+''',
 }
 
 
@@ -1786,12 +1787,22 @@ class CodeRenderer:
         "run_all": "run_all.py.j2",
         "feast_config": "feature_store.yaml.j2",
         "feast_features": "features.py.j2",
-        "scoring": "run_scoring.py.j2",
-        "dashboard": "scoring_dashboard.ipynb.j2",
+
+        "landing": "landing.py.j2",
+        "bronze_event": "bronze_event.py.j2",
+        "validation": "validate.py.j2",
+        "run_validation": "run_validation.py.j2",
+        "exploration_report": "exploration_report.py.j2",
     }
 
     def __init__(self):
         self._env = Environment(loader=InlineLoader(TEMPLATES))
+        self._env.globals["action_description"] = action_description
+        self._env.globals["render_step_call"] = render_step_call
+        self._env.globals["collect_imports"] = collect_imports
+        self._env.globals["group_steps"] = group_steps
+        self._env.globals["provenance_docstring_block"] = provenance_docstring_block
+        self._env.globals["provenance_key"] = provenance_key
 
     def _render(self, template_key: str, **context) -> str:
         return self._env.get_template(self._TEMPLATE_MAP[template_key]).render(**context)
@@ -1826,8 +1837,185 @@ class CodeRenderer:
     def render_feast_features(self, config: PipelineConfig) -> str:
         return self._render("feast_features", config=config)
 
-    def render_scoring(self, config: PipelineConfig) -> str:
-        return self._render("scoring", config=config)
 
-    def render_dashboard(self, config: PipelineConfig) -> str:
-        return self._render("dashboard", config=config)
+    def render_landing(self, name: str, config: LandingLayerConfig) -> str:
+        return self._env.get_template("landing.py.j2").render(name=name, config=config)
+
+    def render_bronze_event(self, source_name: str, config: BronzeEventConfig) -> str:
+        return self._env.get_template("bronze_event.py.j2").render(source=source_name, config=config)
+
+    def render_validation(self, config: PipelineConfig) -> str:
+        return self._render("validation", config=config)
+
+    def render_run_validation(self, config: PipelineConfig) -> str:
+        return self._render("run_validation", config=config)
+
+    def render_exploration_report(self, config: PipelineConfig) -> str:
+        notebooks = set()
+        for bronze in config.bronze.values():
+            for step in bronze.transformations:
+                nb = step.source_notebook or DEFAULT_NOTEBOOK_MAP.get(step.type)
+                if nb:
+                    notebooks.add(nb)
+        for step in config.gold.transformations + config.gold.encodings + config.gold.scalings:
+            nb = step.source_notebook or DEFAULT_NOTEBOOK_MAP.get(step.type)
+            if nb:
+                notebooks.add(nb)
+        for step in config.silver.derived_columns:
+            nb = step.source_notebook or DEFAULT_NOTEBOOK_MAP.get(step.type)
+            if nb:
+                notebooks.add(nb)
+        for be in config.bronze_event.values():
+            for step in be.pre_shaping + be.post_shaping:
+                nb = step.source_notebook or DEFAULT_NOTEBOOK_MAP.get(step.type)
+                if nb:
+                    notebooks.add(nb)
+        return self._render("exploration_report", notebooks=sorted(notebooks))
+
+
+_StepMeta = namedtuple("_StepMeta", ["desc_tpl", "call_tpl", "import_name", "param_defaults"])
+
+_STATELESS_REGISTRY = {
+    PipelineTransformationType.IMPUTE_NULL: _StepMeta(
+        "impute nulls in {col} with {value}",
+        "apply_impute_null(df, '{col}', value='{value}')",
+        "apply_impute_null", {"value": 0}),
+    PipelineTransformationType.CAP_OUTLIER: _StepMeta(
+        "cap outliers in {col} to [{lower}, {upper}]",
+        "apply_cap_outlier(df, '{col}', lower={lower}, upper={upper})",
+        "apply_cap_outlier", {"lower": 0, "upper": 1000000}),
+    PipelineTransformationType.TYPE_CAST: _StepMeta(
+        "cast {col} to {dtype}",
+        "apply_type_cast(df, '{col}', dtype='{dtype}')",
+        "apply_type_cast", {"dtype": "float"}),
+    PipelineTransformationType.DROP_COLUMN: _StepMeta(
+        "drop column {col}",
+        "apply_drop_column(df, '{col}')",
+        "apply_drop_column", {}),
+    PipelineTransformationType.WINSORIZE: _StepMeta(
+        "winsorize {col} to [{lower_bound}, {upper_bound}]",
+        "apply_winsorize(df, '{col}', lower_bound={lower_bound}, upper_bound={upper_bound})",
+        "apply_winsorize", {"lower_bound": 0, "upper_bound": 1000000}),
+    PipelineTransformationType.SEGMENT_AWARE_CAP: _StepMeta(
+        "segment-aware outlier cap on {col} ({n_segments} segments)",
+        "apply_segment_aware_cap(df, '{col}', n_segments={n_segments})",
+        "apply_segment_aware_cap", {"n_segments": 2}),
+    PipelineTransformationType.LOG_TRANSFORM: _StepMeta(
+        "log-transform {col}",
+        "apply_log_transform(df, '{col}')",
+        "apply_log_transform", {}),
+    PipelineTransformationType.SQRT_TRANSFORM: _StepMeta(
+        "sqrt-transform {col}",
+        "apply_sqrt_transform(df, '{col}')",
+        "apply_sqrt_transform", {}),
+    PipelineTransformationType.ZERO_INFLATION_HANDLING: _StepMeta(
+        "handle zero-inflation in {col}",
+        "apply_zero_inflation_handling(df, '{col}')",
+        "apply_zero_inflation_handling", {}),
+    PipelineTransformationType.CAP_THEN_LOG: _StepMeta(
+        "cap at p99 then log-transform {col}",
+        "apply_cap_then_log(df, '{col}')",
+        "apply_cap_then_log", {}),
+    PipelineTransformationType.FEATURE_SELECT: _StepMeta(
+        "drop {col} (feature selection)",
+        "apply_feature_select(df, '{col}')",
+        "apply_feature_select", {}),
+}
+
+
+def _extract_params(step, meta):
+    return {k: step.parameters.get(k, v) for k, v in meta.param_defaults.items()}
+
+
+def action_description(step: TransformationStep) -> str:
+    t, col, p = step.type, step.column, step.parameters
+    meta = _STATELESS_REGISTRY.get(t)
+    if meta is not None:
+        return meta.desc_tpl.format(col=col, **_extract_params(step, meta))
+    if t == PipelineTransformationType.YEO_JOHNSON:
+        return f"yeo-johnson transform {col}"
+    if t == PipelineTransformationType.ENCODE:
+        method = p.get("method", "one_hot")
+        if method in ("one_hot", "onehot"):
+            return f"one-hot encode {col}"
+        return f"label-encode {col}"
+    if t == PipelineTransformationType.SCALE:
+        method = p.get("method", "standard")
+        if method == "minmax":
+            return f"min-max scale {col}"
+        return f"standard-scale {col}"
+    if t == PipelineTransformationType.DERIVED_COLUMN:
+        action = p.get("action", "ratio")
+        if action == "ratio":
+            return f"create {col} = {p.get('numerator', '?')} / {p.get('denominator', '?')}"
+        if action == "interaction":
+            features = p.get("features", [])
+            col_a = features[0] if len(features) > 0 else p.get("col_a", "?")
+            col_b = features[1] if len(features) > 1 else p.get("col_b", "?")
+            return f"create {col} = {col_a} * {col_b}"
+        if action == "composite":
+            return f"create {col} = mean({', '.join(p.get('columns', []))})"
+    return f"transform {col}"
+
+
+def render_step_call(step: TransformationStep, fit_mode: bool = True) -> str:
+    t, col, p = step.type, step.column, step.parameters
+    meta = _STATELESS_REGISTRY.get(t)
+    if meta is not None:
+        return meta.call_tpl.format(col=col, **_extract_params(step, meta))
+    if t == PipelineTransformationType.YEO_JOHNSON:
+        method = "fit_transform" if fit_mode else "transform"
+        return f"FittedPowerTransform().{method}(df, '{col}', _store)"
+    if t == PipelineTransformationType.ENCODE:
+        method = p.get("method", "one_hot")
+        if method in ("one_hot", "onehot"):
+            return f"apply_one_hot_encode(df, '{col}')"
+        fit_method = "fit_transform" if fit_mode else "transform"
+        return f"FittedEncoder().{fit_method}(df, '{col}', _store)"
+    if t == PipelineTransformationType.SCALE:
+        method = p.get("method", "standard")
+        fit_method = "fit_transform" if fit_mode else "transform"
+        return f"FittedScaler('{method}').{fit_method}(df, '{col}', _store)"
+    if t == PipelineTransformationType.DERIVED_COLUMN:
+        action = p.get("action", "ratio")
+        if action == "ratio":
+            return f"apply_derived_ratio(df, '{col}', numerator='{p.get('numerator', '')}', denominator='{p.get('denominator', '')}')"
+        if action == "interaction":
+            features = p.get("features", [])
+            col_a = features[0] if len(features) > 0 else p.get("col_a", "")
+            col_b = features[1] if len(features) > 1 else p.get("col_b", "")
+            return f"apply_derived_interaction(df, '{col}', col_a='{col_a}', col_b='{col_b}')"
+        if action == "composite":
+            return f"apply_derived_composite(df, '{col}', columns={p.get('columns', [])})"
+    raise ValueError(f"Unknown transformation type: {step.type}")
+
+
+def collect_imports(steps, include_fitted):
+    ops = set()
+    fitted = set()
+    _OPS_MAP = {k: v.import_name for k, v in _STATELESS_REGISTRY.items()}
+    for step in steps:
+        t, p = step.type, step.parameters
+        if t in _OPS_MAP:
+            ops.add(_OPS_MAP[t])
+        elif t == PipelineTransformationType.ENCODE:
+            method = p.get("method", "one_hot")
+            if method in ("one_hot", "onehot"):
+                ops.add("apply_one_hot_encode")
+            elif include_fitted:
+                fitted.add("FittedEncoder")
+        elif t == PipelineTransformationType.SCALE:
+            if include_fitted:
+                fitted.add("FittedScaler")
+        elif t == PipelineTransformationType.YEO_JOHNSON:
+            if include_fitted:
+                fitted.add("FittedPowerTransform")
+        elif t == PipelineTransformationType.DERIVED_COLUMN:
+            action = p.get("action", "ratio")
+            if action == "ratio":
+                ops.add("apply_derived_ratio")
+            elif action == "interaction":
+                ops.add("apply_derived_interaction")
+            elif action == "composite":
+                ops.add("apply_derived_composite")
+    return ops, fitted

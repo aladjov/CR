@@ -1,4 +1,5 @@
 import ast
+from dataclasses import replace
 
 import pytest
 
@@ -11,6 +12,11 @@ from customer_retention.generators.pipeline_generator.models import (
     TransformationStep,
 )
 from customer_retention.generators.pipeline_generator.renderer import CodeRenderer
+
+
+@pytest.fixture
+def renderer():
+    return CodeRenderer()
 
 
 @pytest.fixture
@@ -34,16 +40,12 @@ def basic_config():
 
 @pytest.fixture
 def fit_mode_true_config(basic_config):
-    basic_config.fit_mode = True
-    basic_config.artifacts_path = "./experiments/artifacts/abc12345"
-    return basic_config
+    return replace(basic_config, fit_mode=True, artifacts_path="./experiments/artifacts/abc12345")
 
 
 @pytest.fixture
 def fit_mode_false_config(basic_config):
-    basic_config.fit_mode = False
-    basic_config.artifacts_path = "./experiments/artifacts/abc12345"
-    return basic_config
+    return replace(basic_config, fit_mode=False, artifacts_path="./experiments/artifacts/abc12345")
 
 
 class TestPipelineConfigFitMode:
@@ -75,90 +77,54 @@ class TestPipelineConfigFitMode:
 
 
 class TestGoldTemplateFitMode:
-    def test_gold_template_fit_mode_true_imports_registry(self, fit_mode_true_config):
-        renderer = CodeRenderer()
+    def test_gold_template_fit_mode_true_imports_artifact_store(self, renderer, fit_mode_true_config):
         code = renderer.render_gold(fit_mode_true_config)
-        assert "FitArtifactRegistry" in code
+        assert "ArtifactStore" in code
 
-    def test_gold_template_fit_mode_true_creates_registry(self, fit_mode_true_config):
-        renderer = CodeRenderer()
+    def test_gold_template_fit_mode_true_creates_store(self, renderer, fit_mode_true_config):
         code = renderer.render_gold(fit_mode_true_config)
-        assert "_registry = FitArtifactRegistry" in code
+        assert "_store = ArtifactStore(" in code
 
-    def test_gold_template_fit_mode_true_registers_scalers(self, fit_mode_true_config):
-        renderer = CodeRenderer()
+    def test_gold_template_fit_mode_true_uses_fit_transform(self, renderer, fit_mode_true_config):
         code = renderer.render_gold(fit_mode_true_config)
-        assert "_registry.register(" in code
-        assert 'artifact_type="scaler"' in code
+        assert "fit_transform" in code
 
-    def test_gold_template_fit_mode_true_registers_encoders(self, fit_mode_true_config):
-        renderer = CodeRenderer()
+    def test_gold_template_fit_mode_true_has_scaling(self, renderer, fit_mode_true_config):
         code = renderer.render_gold(fit_mode_true_config)
-        assert 'artifact_type="encoder"' in code
+        assert "FittedScaler" in code
 
-    def test_gold_template_fit_mode_true_saves_manifest(self, fit_mode_true_config):
-        renderer = CodeRenderer()
+    def test_gold_template_fit_mode_true_saves_manifest(self, renderer, fit_mode_true_config):
         code = renderer.render_gold(fit_mode_true_config)
-        assert "_registry.save_manifest()" in code
+        assert "_store.save_manifest()" in code
 
-    def test_gold_template_fit_mode_false_loads_registry(self, fit_mode_false_config):
-        renderer = CodeRenderer()
+    def test_gold_template_fit_mode_false_loads_store(self, renderer, fit_mode_false_config):
         code = renderer.render_gold(fit_mode_false_config)
-        assert "FitArtifactRegistry.load_manifest" in code
+        assert "ArtifactStore.from_manifest" in code
 
-    def test_gold_template_fit_mode_false_loads_transformers(self, fit_mode_false_config):
-        renderer = CodeRenderer()
+    def test_gold_template_fit_mode_false_uses_transform(self, renderer, fit_mode_false_config):
         code = renderer.render_gold(fit_mode_false_config)
-        assert "_registry.load(" in code
-
-    def test_gold_template_is_valid_python(self, fit_mode_true_config):
-        renderer = CodeRenderer()
-        code = renderer.render_gold(fit_mode_true_config)
-        ast.parse(code)
-
-    def test_gold_template_fit_mode_false_is_valid_python(self, fit_mode_false_config):
-        renderer = CodeRenderer()
-        code = renderer.render_gold(fit_mode_false_config)
-        ast.parse(code)
-
-
-class TestScoringTemplateFitMode:
-    def test_scoring_template_loads_fit_artifact_registry(self, fit_mode_false_config):
-        renderer = CodeRenderer()
-        code = renderer.render_scoring(fit_mode_false_config)
-        assert "FitArtifactRegistry" in code
-
-    def test_scoring_template_loads_manifest(self, fit_mode_false_config):
-        renderer = CodeRenderer()
-        code = renderer.render_scoring(fit_mode_false_config)
-        assert "load_manifest" in code
-
-    def test_scoring_template_uses_transform_not_fit(self, fit_mode_false_config):
-        renderer = CodeRenderer()
-        code = renderer.render_scoring(fit_mode_false_config)
         assert ".transform(" in code
-        assert ".fit_transform(" not in code or "# Training" not in code
 
-    def test_scoring_template_is_valid_python(self, fit_mode_false_config):
-        renderer = CodeRenderer()
-        code = renderer.render_scoring(fit_mode_false_config)
+    def test_gold_template_is_valid_python(self, renderer, fit_mode_true_config):
+        code = renderer.render_gold(fit_mode_true_config)
+        ast.parse(code)
+
+    def test_gold_template_fit_mode_false_is_valid_python(self, renderer, fit_mode_false_config):
+        code = renderer.render_gold(fit_mode_false_config)
         ast.parse(code)
 
 
 class TestConfigTemplateArtifactsPath:
-    def test_config_template_includes_artifacts_path(self, fit_mode_true_config):
-        renderer = CodeRenderer()
+    def test_config_template_includes_artifacts_path(self, renderer, fit_mode_true_config):
         code = renderer.render_config(fit_mode_true_config)
         assert "ARTIFACTS_PATH" in code or "artifacts" in code.lower()
 
-    def test_config_template_is_valid_python(self, fit_mode_true_config):
-        renderer = CodeRenderer()
+    def test_config_template_is_valid_python(self, renderer, fit_mode_true_config):
         code = renderer.render_config(fit_mode_true_config)
         ast.parse(code)
 
 
 class TestGoldTemplateNoFitMode:
-    def test_gold_template_default_behavior_when_no_fit_mode(self, basic_config):
-        renderer = CodeRenderer()
+    def test_gold_template_default_behavior_when_no_fit_mode(self, renderer, basic_config):
         code = renderer.render_gold(basic_config)
         ast.parse(code)

@@ -495,6 +495,58 @@ class TestScoringPipelineValidatorSeverityClassification:
         assert any(m.severity == MismatchSeverity.CRITICAL for m in report.feature_mismatches)
 
 
+class TestScoringPipelineValidatorDifferentLengths:
+    def test_numeric_comparison_with_similar_distributions_passes(self):
+        np.random.seed(42)
+        train = pd.DataFrame({"value": np.random.randn(100)})
+        score = pd.DataFrame({"value": np.random.randn(20)})
+        validator = ScoringPipelineValidator(training_features=train, scoring_features=score)
+        report = validator.validate_features()
+        assert report.passed
+
+    def test_numeric_comparison_with_shifted_distribution_fails(self):
+        np.random.seed(42)
+        train = pd.DataFrame({"value": np.random.randn(100)})
+        score = pd.DataFrame({"value": np.random.randn(20) + 100})
+        validator = ScoringPipelineValidator(training_features=train, scoring_features=score)
+        report = validator.validate_features()
+        assert not report.passed
+        assert any(m.feature_name == "value" for m in report.feature_mismatches)
+
+    def test_categorical_comparison_with_similar_distributions_passes(self):
+        np.random.seed(42)
+        train = pd.DataFrame({"cat": np.random.choice(["A", "B", "C"], 200)})
+        score = pd.DataFrame({"cat": np.random.choice(["A", "B", "C"], 30)})
+        validator = ScoringPipelineValidator(training_features=train, scoring_features=score)
+        report = validator.validate_features()
+        assert report.passed
+
+    def test_categorical_comparison_with_different_distributions_fails(self):
+        train = pd.DataFrame({"cat": ["A"] * 50 + ["B"] * 50})
+        score = pd.DataFrame({"cat": ["C"] * 20})
+        validator = ScoringPipelineValidator(training_features=train, scoring_features=score)
+        report = validator.validate_features()
+        assert not report.passed
+
+    def test_numeric_with_different_nan_rates_reports_mismatch(self):
+        train = pd.DataFrame({"value": [1.0, 2.0, np.nan, 4.0, 5.0] * 20})
+        score = pd.DataFrame({"value": [np.nan] * 10 + [1.0] * 5})
+        validator = ScoringPipelineValidator(training_features=train, scoring_features=score)
+        report = validator.validate_features()
+        assert not report.passed
+
+    def test_reports_statistics_for_different_lengths(self):
+        np.random.seed(42)
+        train = pd.DataFrame({"value": np.random.randn(100) + 50})
+        score = pd.DataFrame({"value": np.random.randn(20) + 50})
+        validator = ScoringPipelineValidator(training_features=train, scoring_features=score)
+        report = validator.validate_features()
+        if report.feature_mismatches:
+            m = report.feature_mismatches[0]
+            assert m.training_std is not None
+            assert m.scoring_std is not None
+
+
 class TestScoringPipelineValidatorWithModel:
     def test_validate_with_model_inference(self, sample_validation_features, fitted_model):
         feature_cols = ["numeric_a", "numeric_b"]

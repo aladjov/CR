@@ -4,6 +4,10 @@ from pathlib import Path
 import pytest
 import yaml
 
+from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
+from customer_retention.generators.pipeline_generator.models import PipelineTransformationType
+
 
 @pytest.fixture
 def sample_findings_dir(tmp_path):
@@ -76,19 +80,16 @@ def sample_findings_dir(tmp_path):
 
 class TestPipelineGeneratorInit:
     def test_generator_takes_required_params(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
         generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "test_pipeline")
         assert generator._pipeline_name == "test_pipeline"
 
     def test_generator_sets_output_dir(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
         generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "my_pipeline")
         assert generator._output_dir == Path(tmp_path)
 
 
 class TestPipelineGeneratorGenerate:
     def test_generate_creates_all_required_files(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
         generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "test_pipeline")
         generated_files = generator.generate()
         assert len(generated_files) > 0
@@ -98,7 +99,6 @@ class TestPipelineGeneratorGenerate:
         assert "workflow.json" in file_names
 
     def test_generate_creates_correct_directory_structure(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
         generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "test_pipeline")
         generator.generate()
         assert tmp_path.exists()
@@ -108,7 +108,6 @@ class TestPipelineGeneratorGenerate:
         assert (tmp_path / "training").exists()
 
     def test_generate_with_single_source(self, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
         findings_dir = tmp_path / "findings"
         findings_dir.mkdir()
 
@@ -143,7 +142,6 @@ class TestPipelineGeneratorGenerate:
         assert len(files) > 0
 
     def test_generate_with_multiple_sources(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
         generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "multi_source")
         generator.generate()
         bronze_dir = tmp_path / "bronze"
@@ -153,7 +151,6 @@ class TestPipelineGeneratorGenerate:
     def test_output_files_are_valid_python(self, sample_findings_dir, tmp_path):
         import ast
 
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
         generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "valid_python")
         files = generator.generate()
         for file_path in files:
@@ -162,7 +159,6 @@ class TestPipelineGeneratorGenerate:
                 ast.parse(content)
 
     def test_workflow_json_is_valid(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
         generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "workflow_test")
         generator.generate()
         workflow_path = tmp_path / "workflow.json"
@@ -173,7 +169,6 @@ class TestPipelineGeneratorGenerate:
 
 class TestPipelineGeneratorReturnsFilePaths:
     def test_generate_returns_list_of_paths(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
         generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "paths_test")
         files = generator.generate()
         assert isinstance(files, list)
@@ -181,103 +176,88 @@ class TestPipelineGeneratorReturnsFilePaths:
             assert isinstance(f, Path)
 
     def test_generated_paths_exist(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
         generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "exists_test")
         files = generator.generate()
         for f in files:
             assert f.exists()
 
 
-class TestScoringPipelineGeneration:
-    def test_generate_creates_scoring_directory(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
-        generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "scoring_test")
-        generator.generate()
-        assert (tmp_path / "scoring").exists()
+class TestBronzeDedup:
 
-    def test_generate_creates_scoring_file(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
-        generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "scoring_test")
-        files = generator.generate()
-        scoring_file = tmp_path / "scoring" / "run_scoring.py"
-        assert scoring_file.exists()
-        assert scoring_file in files
+    def test_duplicate_bronze_steps_deduplicated(self, tmp_path):
+        """Build config with duplicate (SEGMENT_AWARE_CAP, col) pairs — verify dedup."""
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
 
-    def test_scoring_file_is_valid_python(self, sample_findings_dir, tmp_path):
-        import ast
+        multi_dataset = {
+            "datasets": {
+                "customers": {
+                    "name": "customers",
+                    "findings_path": str(findings_dir / "customers_findings.yaml"),
+                    "source_path": "/data/customers.csv",
+                    "granularity": "entity_level",
+                    "row_count": 100, "column_count": 3, "excluded": False,
+                }
+            },
+            "relationships": [],
+            "primary_entity_dataset": "customers",
+            "event_datasets": [],
+            "excluded_datasets": [],
+        }
+        (findings_dir / "multi_dataset_findings.yaml").write_text(yaml.dump(multi_dataset))
 
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
-        generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "scoring_valid")
-        generator.generate()
-        scoring_file = tmp_path / "scoring" / "run_scoring.py"
-        content = scoring_file.read_text()
-        ast.parse(content)
+        customers_findings = {
+            "source_path": "/data/customers.csv",
+            "source_format": "csv",
+            "row_count": 100,
+            "column_count": 3,
+            "columns": {
+                "id": {"name": "id", "inferred_type": "identifier", "confidence": 0.95,
+                       "evidence": [], "quality_score": 100,
+                       "cleaning_needed": False, "cleaning_recommendations": []},
+                "revenue": {"name": "revenue", "inferred_type": "numeric_continuous", "confidence": 0.9,
+                           "evidence": [], "quality_score": 80,
+                           "cleaning_needed": True, "cleaning_recommendations": ["cap_outlier:iqr"]},
+                "target": {"name": "target", "inferred_type": "binary", "confidence": 0.99,
+                          "evidence": [], "quality_score": 100,
+                          "cleaning_needed": False, "cleaning_recommendations": []},
+            },
+            "target_column": "target",
+            "identifier_columns": ["id"],
+        }
+        (findings_dir / "customers_findings.yaml").write_text(yaml.dump(customers_findings))
 
-    def test_scoring_file_contains_pipeline_name(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
-        generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "my_scoring_pipeline")
-        generator.generate()
-        scoring_file = tmp_path / "scoring" / "run_scoring.py"
-        content = scoring_file.read_text()
-        assert "my_scoring_pipeline" in content
+        # Recommendations with duplicate segment_aware_cap entries for same column
+        recommendations = {
+            "sources": {
+                "customers": {
+                    "source_file": "/data/customers.csv",
+                    "null_handling": [],
+                    "outlier_handling": [
+                        {"id": "bronze_outlier_revenue_1", "layer": "bronze",
+                         "category": "outlier", "source_notebook": "03_quality",
+                         "target_column": "revenue", "action": "segment_aware_cap",
+                         "parameters": {"method": "segment_iqr", "n_segments": 2},
+                         "rationale": "Cap revenue outliers"},
+                        {"id": "bronze_outlier_revenue_2", "layer": "bronze",
+                         "category": "outlier", "source_notebook": "03_quality",
+                         "target_column": "revenue", "action": "segment_aware_cap",
+                         "parameters": {"method": "segment_iqr", "n_segments": 2},
+                         "rationale": "Cap revenue outliers (duplicate)"},
+                    ],
+                }
+            },
+        }
+        (findings_dir / "recommendations.yaml").write_text(yaml.dump(recommendations))
 
-    def test_scoring_file_imports_feast(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
-        generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "feast_scoring")
-        generator.generate()
-        scoring_file = tmp_path / "scoring" / "run_scoring.py"
-        content = scoring_file.read_text()
-        assert "feast" in content.lower()
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
 
-    def test_scoring_file_imports_mlflow(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
-        generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "mlflow_scoring")
-        generator.generate()
-        scoring_file = tmp_path / "scoring" / "run_scoring.py"
-        content = scoring_file.read_text()
-        assert "mlflow" in content.lower()
-
-
-class TestDashboardNotebookGeneration:
-    def test_generate_creates_dashboard_file(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
-        generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "dashboard_test")
-        files = generator.generate()
-        dashboard_file = tmp_path / "scoring" / "scoring_dashboard.ipynb"
-        assert dashboard_file.exists()
-        assert dashboard_file in files
-
-    def test_dashboard_file_is_valid_json(self, sample_findings_dir, tmp_path):
-        import json
-
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
-        generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "dashboard_json")
-        generator.generate()
-        dashboard_file = tmp_path / "scoring" / "scoring_dashboard.ipynb"
-        content = dashboard_file.read_text()
-        parsed = json.loads(content)
-        assert "cells" in parsed
-
-    def test_dashboard_file_contains_pipeline_name(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
-        generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "my_dashboard_pipeline")
-        generator.generate()
-        dashboard_file = tmp_path / "scoring" / "scoring_dashboard.ipynb"
-        content = dashboard_file.read_text()
-        assert "my_dashboard_pipeline" in content
-
-    def test_dashboard_includes_shap_analysis(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
-        generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "shap_dashboard")
-        generator.generate()
-        dashboard_file = tmp_path / "scoring" / "scoring_dashboard.ipynb"
-        content = dashboard_file.read_text()
-        assert "shap" in content.lower()
-
-    def test_dashboard_includes_customer_browser(self, sample_findings_dir, tmp_path):
-        from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
-        generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "browser_dashboard")
-        generator.generate()
-        dashboard_file = tmp_path / "scoring" / "scoring_dashboard.ipynb"
-        content = dashboard_file.read_text()
-        assert "customer" in content.lower()
+        bronze = config.bronze["customers"]
+        segment_caps = [
+            t for t in bronze.transformations
+            if t.type == PipelineTransformationType.SEGMENT_AWARE_CAP and t.column == "revenue"
+        ]
+        assert len(segment_caps) == 1, (
+            f"Expected 1 SEGMENT_AWARE_CAP for revenue, got {len(segment_caps)}"
+        )

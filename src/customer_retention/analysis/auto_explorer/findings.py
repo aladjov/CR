@@ -164,6 +164,9 @@ class ExplorationFindings:
     snapshot_path: Optional[str] = None
     timestamp_scenario: Optional[str] = None
     timestamp_strategy: Optional[str] = None
+    datetime_ordering: List[str] = field(default_factory=list)
+    label_timestamp_column: Optional[str] = None
+    observation_window_days: int = 180
 
     @property
     def is_time_series(self) -> bool:
