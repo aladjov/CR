@@ -1,4 +1,5 @@
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -143,13 +144,30 @@ dev = [
         return copied
 
     def _get_exploration_source_dir(self) -> Optional[Path]:
-        possible_paths = [
-            Path(__file__).parent.parent.parent.parent / "exploration_notebooks",
-            Path("exploration_notebooks"),
-        ]
-        for path in possible_paths:
-            if path.exists():
-                return path
+        # 1. Development / editable install: notebooks live in the source tree
+        dev_path = Path(__file__).parent.parent.parent.parent / "exploration_notebooks"
+        if dev_path.is_dir():
+            return dev_path
+
+        # 2. Installed package: resolve from package metadata RECORD.
+        #    Works across pip, conda, uv, pipx — any PEP 376 compliant installer.
+        try:
+            from importlib.metadata import distribution
+            dist = distribution("churnkit")
+            for f in dist.files or []:
+                if str(f).endswith("exploration_notebooks/00_start_here.ipynb"):
+                    resolved = Path(dist.locate_file(f)).resolve()
+                    if resolved.parent.is_dir():
+                        return resolved.parent
+        except Exception:
+            pass
+
+        # 3. Fallback: common shared-data location under sys.prefix
+        #    (covers cases where RECORD is missing, e.g. conda --no-record)
+        prefix_path = Path(sys.prefix) / "share" / "churnkit" / "exploration_notebooks"
+        if prefix_path.is_dir():
+            return prefix_path
+
         return None
 
     def _generate_orchestration(self, project_path: Path) -> None:
