@@ -582,17 +582,26 @@ def evaluate_model(model, X_test: pd.DataFrame, y_test: pd.Series) -> Dict[str, 
 
     def _generate_main(self, findings: ExplorationFindings) -> str:
         source_path = findings.source_path
-        load_func = "pd.read_csv" if findings.source_format == "csv" else "pd.read_parquet"
+        if findings.source_format == "csv":
+            load_expr = f'pd.read_csv("{source_path}")'
+        else:
+            load_expr = (
+                f'get_delta(force_local=True).read("{source_path}") '
+                f'if Path("{source_path}").is_dir() and (Path("{source_path}") / "_delta_log").is_dir() '
+                f'else pd.read_parquet("{source_path}")'
+            )
 
         main_body = f'''
 def main():
     """Run the complete ML pipeline with MLflow tracking."""
+    from pathlib import Path
+    from customer_retention.integrations.adapters.factory import get_delta
     setup_mlflow()
 
     with mlflow.start_run(run_name="full_pipeline"):
         # Load data
         print("Loading data...")
-        df = {load_func}("{source_path}")'''
+        df = {load_expr}'''
 
         if self.mlflow_config.log_data_quality:
             main_body += "\n        log_data_quality_metrics(df, prefix='raw')"

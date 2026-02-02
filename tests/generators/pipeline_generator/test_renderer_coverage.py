@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+import customer_retention.generators.pipeline_generator.renderer as renderer_mod
 from customer_retention.generators.pipeline_generator.models import (
     BronzeLayerConfig,
     FeastConfig,
@@ -300,6 +301,13 @@ class TestCodeRendererGold:
 
         assert "original_" in result
         assert "Excluding holdout columns" in result or "exclude" in result.lower()
+
+    def test_render_gold_has_load_gold(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+
+        assert "def load_gold" in result
+        assert "get_gold_path" in result
+        assert "_delta_log" in result
 
 
 class TestCodeRendererTraining:
@@ -1124,6 +1132,29 @@ class TestProvenanceDocstring:
         ]
         result = provenance_docstring_block(steps)
         assert result == ""
+
+    def test_set_docs_base_uses_absolute_file_uri(self):
+        renderer = CodeRenderer()
+        renderer.set_docs_base("/tmp/my_project/experiments")
+        step = TransformationStep(
+            type=PipelineTransformationType.CAP_OUTLIER, column="x",
+            parameters={}, rationale="test",
+        )
+        result = provenance_docstring(step)
+        assert result.startswith("Quality Assessment Global Outlier Detection")
+        assert "file://" in result
+        assert "/docs/03_quality_assessment.html#3.8-Global-Outlier-Detection" in result
+        renderer_mod._docs_base = "docs"
+
+    def test_set_docs_base_none_uses_relative(self):
+        renderer = CodeRenderer()
+        renderer.set_docs_base(None)
+        step = TransformationStep(
+            type=PipelineTransformationType.CAP_OUTLIER, column="x",
+            parameters={}, rationale="test",
+        )
+        result = provenance_docstring(step)
+        assert "docs/03_quality_assessment.html" in result
 
 
 class TestProvenanceInTemplates:

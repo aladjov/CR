@@ -1,8 +1,6 @@
 """Tests for notebook progress tracker."""
 import json
-import threading
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from customer_retention.analysis.notebook_progress import track_and_export_previous
 

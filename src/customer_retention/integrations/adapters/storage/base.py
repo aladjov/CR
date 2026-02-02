@@ -11,7 +11,8 @@ class DeltaStorage(ABC):
 
     @abstractmethod
     def write(self, df: pd.DataFrame, path: str, mode: str = "overwrite",
-              partition_by: Optional[List[str]] = None) -> None:
+              partition_by: Optional[List[str]] = None,
+              metadata: Optional[Dict[str, str]] = None) -> None:
         pass
 
     @abstractmethod
@@ -25,4 +26,8 @@ class DeltaStorage(ABC):
 
     @abstractmethod
     def vacuum(self, path: str, retention_hours: int = 168) -> None:
+        pass
+
+    @abstractmethod
+    def exists(self, path: str) -> bool:
         pass

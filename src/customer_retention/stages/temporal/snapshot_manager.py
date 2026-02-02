@@ -81,15 +81,11 @@ class SnapshotManager:
         >>> df, meta = manager.load_snapshot("training_v1")
     """
 
-    def __init__(self, base_path: Path):
-        """Initialize the SnapshotManager.
-
-        Args:
-            base_path: Base directory for storing snapshots
-        """
+    def __init__(self, base_path: Path, storage=None):
         self.base_path = Path(base_path)
         self.snapshots_dir = self.base_path / "snapshots"
         self.snapshots_dir.mkdir(parents=True, exist_ok=True)
+        self.storage = storage or _get_storage()
 
     def create_snapshot(
         self, df: pd.DataFrame, cutoff_date: datetime, target_column: str,
@@ -103,16 +99,15 @@ class SnapshotManager:
             (df["label_available_flag"] == True) & (ts <= cutoff_date)
         ].copy()
 
-        existing = list(self.snapshots_dir.glob(f"{snapshot_name}_v*.parquet"))
-        version = len(existing) + 1
+        table_path = self.snapshots_dir / snapshot_name
+        version = self._next_version(table_path, snapshot_name)
         snapshot_id = f"{snapshot_name}_v{version}"
         data_hash = self._compute_hash(snapshot_df, cutoff_date)
 
         metadata_cols = ["feature_timestamp", "label_timestamp", "label_available_flag"]
         feature_cols = [c for c in snapshot_df.columns if c not in metadata_cols and c != target_column]
 
-        snapshot_path = self.snapshots_dir / f"{snapshot_id}.parquet"
-        snapshot_df.to_parquet(snapshot_path, index=False)
+        self._write_snapshot(snapshot_df, str(table_path), snapshot_id)
 
         metadata = SnapshotMetadata(
             snapshot_id=snapshot_id, version=version, created_at=datetime.now(),
@@ -126,11 +121,18 @@ class SnapshotManager:
         return metadata
 
     def load_snapshot(self, snapshot_id: str) -> tuple[pd.DataFrame, SnapshotMetadata]:
-        snapshot_path = self.snapshots_dir / f"{snapshot_id}.parquet"
-        if not snapshot_path.exists():
-            raise FileNotFoundError(f"Snapshot not found: {snapshot_id}")
+        snapshot_name, version = self._parse_snapshot_id(snapshot_id)
+        table_path = self.snapshots_dir / snapshot_name
 
-        df = pd.read_parquet(snapshot_path)
+        if self.storage and self.storage.exists(str(table_path)):
+            delta_version = version - 1
+            df = self.storage.read(str(table_path), version=delta_version)
+        else:
+            parquet_path = self.snapshots_dir / f"{snapshot_id}.parquet"
+            if not parquet_path.exists():
+                raise FileNotFoundError(f"Snapshot not found: {snapshot_id}")
+            df = pd.read_parquet(parquet_path)
+
         metadata = self._load_metadata(snapshot_id)
 
         current_hash = self._compute_hash(df, metadata.cutoff_date)
@@ -140,7 +142,18 @@ class SnapshotManager:
         return df, metadata
 
     def list_snapshots(self) -> list[str]:
-        return [p.stem for p in self.snapshots_dir.glob("*_v*.parquet")]
+        snapshots = []
+        for p in self.snapshots_dir.glob("*_v*.parquet"):
+            snapshots.append(p.stem)
+        if self.storage:
+            for subdir in self.snapshots_dir.iterdir():
+                if subdir.is_dir() and self.storage.exists(str(subdir)):
+                    history_len = len(self.storage.history(str(subdir)))
+                    for v in range(1, history_len + 1):
+                        sid = f"{subdir.name}_v{v}"
+                        if sid not in snapshots:
+                            snapshots.append(sid)
+        return snapshots
 
     def get_latest_snapshot(self, snapshot_name: str = "training") -> Optional[str]:
         snapshots = [s for s in self.list_snapshots() if s.startswith(f"{snapshot_name}_v")]
@@ -163,15 +176,40 @@ class SnapshotManager:
             "removed_features": set(meta1.feature_columns) - set(meta2.feature_columns),
         }
 
+    def _write_snapshot(self, df: pd.DataFrame, table_path: str, snapshot_id: str) -> None:
+        if self.storage and len(df) > 0:
+            metadata = {"snapshot_id": snapshot_id, "created_at": datetime.now().isoformat()}
+            self.storage.write(df.reset_index(drop=True), table_path, mode="overwrite", metadata=metadata)
+        else:
+            parquet_path = Path(table_path).parent / f"{snapshot_id}.parquet"
+            df.to_parquet(parquet_path, index=False)
+
+    def _next_version(self, table_path: Path, snapshot_name: str) -> int:
+        if self.storage and self.storage.exists(str(table_path)):
+            return len(self.storage.history(str(table_path))) + 1
+        parquet_count = len(list(self.snapshots_dir.glob(f"{snapshot_name}_v*.parquet")))
+        if self.storage and table_path.is_dir():
+            return len(self.storage.history(str(table_path))) + 1
+        return parquet_count + 1
+
+    def _parse_snapshot_id(self, snapshot_id: str) -> tuple[str, int]:
+        parts = snapshot_id.rsplit("_v", 1)
+        return parts[0], int(parts[1])
+
     def _compute_hash(self, df: pd.DataFrame, cutoff_date: Optional[datetime] = None) -> str:
         df_stable = df.reset_index(drop=True).copy()
-        for col in df_stable.select_dtypes(include=["datetime64", "datetime64[ns]", "datetime64[ns, UTC]"]).columns:
-            df_stable[col] = df_stable[col].astype(str)
+        for col in df_stable.columns:
+            if pd.api.types.is_datetime64_any_dtype(df_stable[col]):
+                df_stable[col] = df_stable[col].dt.floor("us").astype(str)
+        for col in df_stable.columns:
+            if pd.api.types.is_extension_array_dtype(df_stable[col]):
+                df_stable[col] = df_stable[col].astype(object)
         df_stable = df_stable[sorted(df_stable.columns)]
 
         data_bytes = pd.util.hash_pandas_object(df_stable).values.tobytes()
         if cutoff_date:
-            data_bytes += cutoff_date.isoformat().encode("utf-8")
+            normalized = datetime.fromisoformat(cutoff_date.isoformat())
+            data_bytes += normalized.isoformat().encode("utf-8")
 
         return hashlib.sha256(data_bytes).hexdigest()[:16]
 
@@ -211,3 +249,11 @@ class SnapshotManager:
             target_column=data["target_column"],
             timestamp_config=data["timestamp_config"],
         )
+
+
+def _get_storage():
+    try:
+        from customer_retention.integrations.adapters.factory import get_delta
+        return get_delta(force_local=True)
+    except ImportError:
+        return None

@@ -56,8 +56,14 @@ dev = [
     "pre-commit>=3.7.0",
 ]
 
+# Delta Lake storage (used by snapshots, materializer, validation, feature store, etc.)
+delta = [
+    "deltalake>=0.17.0",
+]
+
 # ML dependencies for local/server environments (not needed on Databricks ML runtime)
 ml = [
+    "customer-retention[delta]",
     "scikit-learn>=1.3.0",
     "xgboost>=2.0.0",
     "lightgbm>=4.0.0",
@@ -113,7 +119,7 @@ text = [
 
 # All optional dependencies (without SHAP - smaller footprint)
 all = [
-    "customer-retention[ml,text]",
+    "customer-retention[delta,ml,text]",
 ]
 
 # Full ML with SHAP (pre-built wheels available for macOS ARM64 and Linux)

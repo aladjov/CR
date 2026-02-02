@@ -75,8 +75,9 @@ class TestPrepareFromRaw(TestUnifiedDataPreparer):
         preparer = UnifiedDataPreparer(temp_dir, synthetic_config)
         preparer.prepare_from_raw(raw_df, "churned", "customer_id")
 
-        unified_path = temp_dir / "unified" / "unified_dataset.parquet"
-        assert unified_path.exists()
+        delta_path = temp_dir / "unified" / "unified_dataset"
+        parquet_path = temp_dir / "unified" / "unified_dataset.parquet"
+        assert delta_path.exists() or parquet_path.exists()
 
     def test_prepare_production_validates_timestamps(self, temp_dir, production_config, production_df):
         preparer = UnifiedDataPreparer(temp_dir, production_config)

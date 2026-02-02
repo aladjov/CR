@@ -67,18 +67,20 @@ class UnifiedDataPreparer:
         >>> snapshot_df, meta = preparer.create_training_snapshot(df, cutoff)
     """
 
-    def __init__(self, output_path: Path, timestamp_config: TimestampConfig):
+    def __init__(self, output_path: Path, timestamp_config: TimestampConfig, storage=None):
         """Initialize the UnifiedDataPreparer.
 
         Args:
             output_path: Directory for output files (unified data, snapshots)
             timestamp_config: Configuration for timestamp handling
+            storage: Optional DeltaStorage backend
         """
         self.output_path = Path(output_path)
         self.timestamp_manager = TimestampManager(timestamp_config)
-        self.snapshot_manager = SnapshotManager(output_path)
+        self.snapshot_manager = SnapshotManager(output_path, storage=storage)
         self.timestamp_config = timestamp_config
         self.pit_joiner = PointInTimeJoiner()
+        self.storage = storage or _get_storage()
 
     def prepare_from_raw(
         self, df: pd.DataFrame, target_column: str, entity_column: str
@@ -88,9 +90,13 @@ class UnifiedDataPreparer:
 
         df = df.rename(columns={target_column: "target", entity_column: "entity_id"})
 
-        unified_path = self.output_path / "unified" / "unified_dataset.parquet"
-        unified_path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(unified_path, index=False)
+        unified_dir = self.output_path / "unified" / "unified_dataset"
+        unified_dir.parent.mkdir(parents=True, exist_ok=True)
+        if self.storage and len(df) > 0:
+            self.storage.write(df, str(unified_dir))
+        else:
+            parquet_path = self.output_path / "unified" / "unified_dataset.parquet"
+            df.to_parquet(parquet_path, index=False)
 
         return df
 
@@ -162,3 +168,11 @@ class UnifiedDataPreparer:
             "feature_columns": metadata.feature_columns,
             "target_column": metadata.target_column,
         }
+
+
+def _get_storage():
+    try:
+        from customer_retention.integrations.adapters.factory import get_delta
+        return get_delta(force_local=True)
+    except ImportError:
+        return None

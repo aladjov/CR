@@ -165,6 +165,62 @@ class TestLocalDeltaVacuum:
         storage.vacuum(delta_path, retention_hours=0)
 
 
+@requires_delta
+class TestLocalDeltaExists:
+    def test_exists_returns_true_after_write(self, tmp_path):
+        from customer_retention.integrations.adapters.storage import LocalDelta
+        storage = LocalDelta()
+        delta_path = str(tmp_path / "test_table")
+        df = pd.DataFrame({"a": [1, 2]})
+        storage.write(df, delta_path)
+        assert storage.exists(delta_path) is True
+
+    def test_exists_returns_false_for_nonexistent(self, tmp_path):
+        from customer_retention.integrations.adapters.storage import LocalDelta
+        storage = LocalDelta()
+        assert storage.exists(str(tmp_path / "nonexistent")) is False
+
+    def test_exists_returns_false_for_plain_directory(self, tmp_path):
+        from customer_retention.integrations.adapters.storage import LocalDelta
+        storage = LocalDelta()
+        plain_dir = tmp_path / "plain_dir"
+        plain_dir.mkdir()
+        assert storage.exists(str(plain_dir)) is False
+
+
+@requires_delta
+class TestLocalDeltaCommitMetadata:
+    def test_write_with_metadata_stores_in_history(self, tmp_path):
+        from customer_retention.integrations.adapters.storage import LocalDelta
+        storage = LocalDelta()
+        delta_path = str(tmp_path / "test_table")
+        df = pd.DataFrame({"a": [1, 2]})
+        storage.write(df, delta_path, metadata={"run_id": "abc123", "run_type": "exploration"})
+        history = storage.history(delta_path)
+        assert len(history) >= 1
+        latest = history[0]
+        assert latest.get("clientVersion") is not None or "userMetadata" in str(latest)
+
+    def test_write_without_metadata_still_works(self, tmp_path):
+        from customer_retention.integrations.adapters.storage import LocalDelta
+        storage = LocalDelta()
+        delta_path = str(tmp_path / "test_table")
+        df = pd.DataFrame({"a": [1, 2]})
+        storage.write(df, delta_path)
+        result = storage.read(delta_path)
+        assert len(result) == 2
+
+    def test_multiple_writes_with_different_metadata(self, tmp_path):
+        from customer_retention.integrations.adapters.storage import LocalDelta
+        storage = LocalDelta()
+        delta_path = str(tmp_path / "test_table")
+        df = pd.DataFrame({"a": [1, 2]})
+        storage.write(df, delta_path, metadata={"run_type": "exploration"})
+        storage.write(df, delta_path, mode="overwrite", metadata={"run_type": "production"})
+        history = storage.history(delta_path)
+        assert len(history) >= 2
+
+
 class TestDatabricksDeltaMocked:
     def test_databricks_delta_requires_spark(self):
         from customer_retention.core.compat.detection import is_spark_available

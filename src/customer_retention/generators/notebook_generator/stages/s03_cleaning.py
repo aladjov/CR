@@ -47,7 +47,9 @@ class CleaningStage(StageGenerator):
 mlflow_adapter.start_run("{exp_name}", run_name="03_data_cleaning")
 cleaning_stats = {{}}'''),
             self.cb.section("Load Bronze Data"),
-            self.cb.code('''df = pd.read_parquet("./experiments/data/bronze/customers.parquet")
+            self.cb.code('''from customer_retention.integrations.adapters.factory import get_delta
+storage = get_delta(force_local=True)
+df = storage.read("./experiments/data/bronze/customers")
 initial_shape = df.shape
 initial_nulls = df.isnull().sum().sum()
 print(f"Initial shape: {df.shape}")
@@ -111,7 +113,7 @@ mlflow_adapter.log_metrics({
 })
 print(f"Logged {len(cleaning_stats)} cleaning statistics to MLflow")'''),
             self.cb.section("Save to Silver Layer"),
-            self.cb.code('''df.to_parquet("./experiments/data/silver/customers_cleaned.parquet", index=False)
+            self.cb.code('''storage.write(df, "./experiments/data/silver/customers_cleaned")
 mlflow_adapter.end_run()
 print(f"Silver layer saved: {df.shape}")'''),
         ])

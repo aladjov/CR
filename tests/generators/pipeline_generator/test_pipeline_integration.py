@@ -274,6 +274,7 @@ class TestMultiDatasetGeneration:
         _ALLOWED_IMPORTS = {
             "from customer_retention.transforms",
             "from customer_retention.generators.pipeline_generator.models",
+            "from customer_retention.integrations.adapters.factory",
         }
         for f in generated_output.rglob("*.py"):
             if f.stat().st_size > 0:

@@ -25,8 +25,15 @@ class LocalDelta(DeltaStorage):
         return dt.to_pandas()
 
     def write(self, df: pd.DataFrame, path: str, mode: str = "overwrite",
-              partition_by: Optional[List[str]] = None) -> None:
-        write_deltalake(path, df, mode=mode, partition_by=partition_by)
+              partition_by: Optional[List[str]] = None,
+              metadata: Optional[Dict[str, str]] = None) -> None:
+        kwargs = {"mode": mode}
+        if partition_by:
+            kwargs["partition_by"] = partition_by
+        if metadata:
+            from deltalake import CommitProperties
+            kwargs["commit_properties"] = CommitProperties(custom_metadata=metadata)
+        write_deltalake(path, df, **kwargs)
 
     def merge(self, df: pd.DataFrame, path: str, condition: str,
               update_cols: Optional[List[str]] = None) -> None:
@@ -46,3 +53,7 @@ class LocalDelta(DeltaStorage):
     def vacuum(self, path: str, retention_hours: int = 168) -> None:
         dt = DeltaTable(path)
         dt.vacuum(retention_hours=retention_hours, enforce_retention_duration=False, dry_run=False)
+
+    def exists(self, path: str) -> bool:
+        from pathlib import Path
+        return Path(path).joinpath("_delta_log").is_dir()

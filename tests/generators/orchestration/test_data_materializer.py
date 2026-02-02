@@ -136,7 +136,7 @@ class TestMaterialization:
             materializer = DataMaterializer(full_registry, output_dir=tmpdir)
             result_df, output_path = materializer.materialize(sample_df, "prepared_data")
             assert os.path.exists(output_path)
-            assert output_path.endswith(".parquet")
+            assert "prepared_data" in output_path
             loaded = pd.read_parquet(output_path)
             assert len(loaded) == len(result_df)
 

@@ -57,6 +57,18 @@ class TestPipelineContextCreation:
         ctx = PipelineContext()
         assert ctx.started_at is not None
 
+    def test_default_delta_versions(self):
+        ctx = PipelineContext()
+        assert ctx.delta_versions == {}
+
+    def test_default_run_type(self):
+        ctx = PipelineContext()
+        assert ctx.run_type == "exploration"
+
+    def test_custom_run_type(self):
+        ctx = PipelineContext(run_type="production")
+        assert ctx.run_type == "production"
+
 
 class TestPipelineContextProperties:
     def test_column_types_without_findings(self):
@@ -86,6 +98,27 @@ class TestPipelineContextProperties:
         assert ctx.target_column == "churned"
 
 
+class TestBuildCommitMetadata:
+    def test_returns_correct_keys(self):
+        ctx = PipelineContext()
+        meta = ctx.build_commit_metadata()
+        assert set(meta.keys()) == {"run_id", "run_type", "pipeline_stage", "timestamp"}
+
+    def test_reflects_context_values(self):
+        ctx = PipelineContext(run_type="production", current_stage="gold")
+        meta = ctx.build_commit_metadata()
+        assert meta["run_id"] == ctx.run_id
+        assert meta["run_type"] == "production"
+        assert meta["pipeline_stage"] == "gold"
+        assert meta["timestamp"] == ctx.started_at
+
+    def test_all_values_are_strings(self):
+        ctx = PipelineContext()
+        meta = ctx.build_commit_metadata()
+        for v in meta.values():
+            assert isinstance(v, str)
+
+
 class TestPipelineContextPersistence:
     def test_save_creates_file(self, sample_findings):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -111,6 +144,32 @@ class TestPipelineContextPersistence:
             assert loaded.run_id == ctx.run_id
             assert loaded.project_name == "test_project"
             assert loaded.target_column == "churned"
+
+    def test_save_and_load_delta_versions(self, sample_findings):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ctx = PipelineContext(exploration_findings=sample_findings)
+            ctx._context_dir = tmpdir
+            ctx.delta_versions = {"bronze/customers": 3, "silver/features": 1}
+            ctx.run_type = "production"
+            ctx.save()
+
+            context_path = Path(tmpdir) / f"{ctx.run_id}_context.json"
+            loaded = PipelineContext.load(str(context_path))
+
+            assert loaded.delta_versions == {"bronze/customers": 3, "silver/features": 1}
+            assert loaded.run_type == "production"
+
+    def test_load_without_delta_fields_uses_defaults(self, sample_findings):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ctx = PipelineContext(exploration_findings=sample_findings)
+            ctx._context_dir = tmpdir
+            ctx.save()
+
+            context_path = Path(tmpdir) / f"{ctx.run_id}_context.json"
+            loaded = PipelineContext.load(str(context_path))
+
+            assert loaded.delta_versions == {}
+            assert loaded.run_type == "exploration"
 
     def test_save_includes_exploration_findings(self, sample_findings):
         with tempfile.TemporaryDirectory() as tmpdir:

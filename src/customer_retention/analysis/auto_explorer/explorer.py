@@ -35,6 +35,12 @@ class DataExplorer:
         if hasattr(source, 'columns'):
             return to_pandas(source), "<DataFrame>", "dataframe"
         path = Path(source)
+        if path.is_dir() and (path / "_delta_log").is_dir():
+            try:
+                from customer_retention.integrations.adapters.factory import get_delta
+                return get_delta(force_local=True).read(str(path)), source, "delta"
+            except ImportError:
+                pass
         if path.suffix.lower() == ".csv":
             return pd.read_csv(source), source, "csv"
         if path.suffix.lower() in [".parquet", ".pq"]:

@@ -53,7 +53,7 @@ class TestConfigTemplateProductionDir:
     def test_default_production_dir(self, experiments_setup):
         out = _generate(experiments_setup)
         content = (out / "config.py").read_text()
-        assert 'EXPERIMENTS_DIR / "production"' in content
+        assert '_default_production = str(EXPERIMENTS_DIR)' in content
 
     def test_custom_production_dir(self, experiments_setup):
         out = _generate(experiments_setup, production_dir="/my/prod")
@@ -128,8 +128,10 @@ print(f'Gold: {{config.get_gold_path()}}')
             cwd=str(experiments_setup["project_root"]),
         )
         assert result.returncode == 0, f"Import failed: {result.stderr}"
-        assert "PRODUCTION_DIR:" in result.stdout
-        assert "production" in result.stdout
+        lines = result.stdout.strip().split("\n")
+        prod_path = next(line for line in lines if line.startswith("PRODUCTION_DIR:")).split(": ", 1)[1]
+        exp_path = next(line for line in lines if line.startswith("EXPERIMENTS_DIR:")).split(": ", 1)[1]
+        assert prod_path == exp_path
 
     def test_env_var_overrides_production_dir_at_runtime(self, experiments_setup):
         out = _generate(experiments_setup)

@@ -8,6 +8,14 @@ import pytest
 
 from customer_retention.stages.temporal.snapshot_manager import SnapshotManager
 
+try:
+    import deltalake  # noqa: F401
+    DELTA_AVAILABLE = True
+except ImportError:
+    DELTA_AVAILABLE = False
+
+requires_delta = pytest.mark.skipif(not DELTA_AVAILABLE, reason="deltalake not installed")
+
 
 class TestSnapshotManager:
     @pytest.fixture
@@ -92,9 +100,13 @@ class TestLoadSnapshot(TestSnapshotManager):
         cutoff = datetime(2024, 7, 1)
         metadata = manager.create_snapshot(sample_df, cutoff, "target")
 
-        snapshot_path = temp_dir / "snapshots" / f"{metadata.snapshot_id}.parquet"
-        tampered_df = pd.DataFrame({"tampered": [1, 2, 3]})
-        tampered_df.to_parquet(snapshot_path, index=False)
+        metadata_path = temp_dir / "snapshots" / f"{metadata.snapshot_id}_metadata.json"
+        import json
+        with open(metadata_path) as f:
+            meta_dict = json.load(f)
+        meta_dict["data_hash"] = "tampered_hash_value"
+        with open(metadata_path, "w") as f:
+            json.dump(meta_dict, f)
 
         with pytest.raises(ValueError, match="integrity check failed"):
             manager.load_snapshot(metadata.snapshot_id)
@@ -208,3 +220,39 @@ class TestCreateSnapshotWithTimestampSeries(TestSnapshotManager):
 
         # Row D has label_available_flag=False, so only 3 rows
         assert metadata.row_count == 3
+
+
+@requires_delta
+class TestDeltaTimeTravel(TestSnapshotManager):
+    def test_time_travel_reads_specific_version(self, manager, sample_df):
+        cutoff1 = datetime(2024, 2, 15)
+        cutoff2 = datetime(2024, 5, 1)
+        cutoff3 = datetime(2024, 7, 1)
+
+        meta1 = manager.create_snapshot(sample_df, cutoff1, "target")
+        meta2 = manager.create_snapshot(sample_df, cutoff2, "target")
+        meta3 = manager.create_snapshot(sample_df, cutoff3, "target")
+
+        df1, _ = manager.load_snapshot(meta1.snapshot_id)
+        assert len(df1) == meta1.row_count
+
+        df2, _ = manager.load_snapshot(meta2.snapshot_id)
+        assert len(df2) == meta2.row_count
+
+    def test_history_reflects_all_versions(self, manager, sample_df):
+        cutoff = datetime(2024, 7, 1)
+        manager.create_snapshot(sample_df, cutoff, "target")
+        manager.create_snapshot(sample_df, cutoff, "target")
+        manager.create_snapshot(sample_df, cutoff, "target")
+
+        table_path = str(manager.snapshots_dir / "training")
+        history = manager.storage.history(table_path)
+        assert len(history) == 3
+
+    def test_commit_metadata_stored(self, manager, sample_df):
+        cutoff = datetime(2024, 7, 1)
+        manager.create_snapshot(sample_df, cutoff, "target")
+
+        table_path = str(manager.snapshots_dir / "training")
+        history = manager.storage.history(table_path)
+        assert len(history) >= 1

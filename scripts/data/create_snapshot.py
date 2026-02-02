@@ -12,9 +12,9 @@ Usage:
 """
 
 import argparse
+import sys
 from datetime import datetime
 from pathlib import Path
-import sys
 
 # Add src to path for development
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
@@ -48,7 +48,10 @@ def create_snapshot(
 
     # Load data
     print(f"Loading data from {input_path}...")
-    if input_path.suffix == ".csv":
+    if input_path.is_dir() and (input_path / "_delta_log").is_dir():
+        from customer_retention.integrations.adapters.factory import get_delta
+        df = get_delta(force_local=True).read(str(input_path))
+    elif input_path.suffix == ".csv":
         df = pd.read_csv(input_path)
     elif input_path.suffix in [".parquet", ".pq"]:
         df = pd.read_parquet(input_path)
@@ -73,7 +76,7 @@ def create_snapshot(
         description=description,
     )
 
-    print(f"\n  Snapshot created successfully!")
+    print("\n  Snapshot created successfully!")
     print(f"  ID: {metadata.snapshot_id}")
     print(f"  Version: {metadata.version}")
     print(f"  Data hash: {metadata.data_hash[:16]}...")
@@ -134,7 +137,7 @@ def compare_snapshots(output_dir: str, snapshot_id1: str, snapshot_id2: str) -> 
 
     comparison = snapshot_manager.compare_snapshots(snapshot_id1, snapshot_id2)
 
-    print(f"\nSnapshot Comparison:")
+    print("\nSnapshot Comparison:")
     print(f"  Snapshot 1: {snapshot_id1}")
     print(f"  Snapshot 2: {snapshot_id2}")
     print(f"\n  Data identical: {comparison['identical']}")

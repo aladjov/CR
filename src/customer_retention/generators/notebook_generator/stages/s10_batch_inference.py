@@ -109,14 +109,22 @@ print(f"Available tables: {manager.list_tables()}")'''),
 # These are customers we want to make predictions for
 
 # Option 1: Load from a specific file
-customers_path = Path("./experiments/data/gold/customers_to_score.parquet")
-if customers_path.exists():
-    df_customers = pd.read_parquet(customers_path)
+from customer_retention.integrations.adapters.factory import get_delta
+storage = get_delta(force_local=True)
+
+customers_delta = Path("./experiments/data/gold/customers_to_score")
+customers_parquet = Path("./experiments/data/gold/customers_to_score.parquet")
+if customers_delta.is_dir() and (customers_delta / "_delta_log").is_dir():
+    df_customers = storage.read(str(customers_delta))
+elif customers_parquet.exists():
+    df_customers = pd.read_parquet(customers_parquet)
 else:
-    # Option 2: Use the gold layer customers
-    gold_path = Path("./experiments/data/gold/customers_features.parquet")
-    if gold_path.exists():
-        df_customers = pd.read_parquet(gold_path)
+    gold_delta = Path("./experiments/data/gold/customers_features")
+    gold_parquet = Path("./experiments/data/gold/customers_features.parquet")
+    if gold_delta.is_dir() and (gold_delta / "_delta_log").is_dir():
+        df_customers = storage.read(str(gold_delta))
+    elif gold_parquet.exists():
+        df_customers = pd.read_parquet(gold_parquet)
     else:
         # Option 3: Fall back to latest snapshot
         snapshot_manager = SnapshotManager(Path("./experiments/data"))
@@ -330,12 +338,12 @@ output_dir.mkdir(parents=True, exist_ok=True)
 timestamp_str = INFERENCE_TIMESTAMP.strftime('%Y%m%d_%H%M%S')
 output_file = output_dir / f"batch_predictions_{timestamp_str}.parquet"
 
-# Save with all metadata
-results_df.to_parquet(output_file, index=False)
+# Save with all metadata via delta
+storage.write(results_df, str(output_dir / f"batch_predictions_{timestamp_str}"))
 
 # Also save a "latest" version for downstream consumption
-latest_file = output_dir / "batch_predictions_latest.parquet"
-results_df.to_parquet(latest_file, index=False)
+latest_file = output_dir / "batch_predictions_latest"
+storage.write(results_df, str(latest_file))
 
 print(f"✅ Predictions saved:")
 print(f"   Timestamped: {output_file}")

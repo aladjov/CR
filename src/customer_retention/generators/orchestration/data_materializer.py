@@ -9,13 +9,15 @@ from customer_retention.analysis.auto_explorer.layered_recommendations import (
     LayeredRecommendation,
     RecommendationRegistry,
 )
-from customer_retention.core.compat.detection import is_databricks
 
 
 class DataMaterializer:
-    def __init__(self, registry: RecommendationRegistry, output_dir: Optional[str] = None):
+    def __init__(self, registry: RecommendationRegistry, output_dir: Optional[str] = None,
+                 storage=None, context=None):
         self.registry = registry
         self.output_dir = output_dir or "./prepared_data"
+        self.storage = storage or _get_storage()
+        self.context = context
 
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
         df = self.apply_bronze(df)
@@ -154,18 +156,33 @@ class DataMaterializer:
 
     def _save(self, df: pd.DataFrame, output_name: str) -> str:
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
-        if is_databricks():
-            output_path = f"{self.output_dir}/{output_name}"
-            self._save_delta(df, output_path)
+        output_path = f"{self.output_dir}/{output_name}"
+        if self.storage:
+            metadata = self.context.build_commit_metadata() if self.context else None
+            self.storage.write(df, output_path, metadata=metadata)
+            if self.context:
+                version = len(self.storage.history(output_path)) - 1
+                self.context.delta_versions[output_path] = version
         else:
-            output_path = f"{self.output_dir}/{output_name}.parquet"
+            output_path = f"{output_path}.parquet"
             df.to_parquet(output_path, index=False)
         return output_path
 
-    def _save_delta(self, df: pd.DataFrame, path: str) -> None:
-        try:
-            from customer_retention.integrations.adapters.storage.local import LocalDelta
-            storage = LocalDelta()
-            storage.write(df, path)
-        except ImportError:
-            df.to_parquet(f"{path}.parquet", index=False)
+    def compare_runs(self, path: str, version_a: int, version_b: int) -> pd.DataFrame:
+        if not self.storage:
+            raise RuntimeError("DeltaStorage required for version comparison")
+        df_a = self.storage.read(path, version=version_a)
+        df_b = self.storage.read(path, version=version_b)
+        return pd.DataFrame({
+            "metric": ["row_count", "column_count"],
+            "version_a": [len(df_a), len(df_a.columns)],
+            "version_b": [len(df_b), len(df_b.columns)],
+        })
+
+
+def _get_storage():
+    try:
+        from customer_retention.integrations.adapters.factory import get_delta
+        return get_delta(force_local=True)
+    except ImportError:
+        return None

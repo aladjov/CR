@@ -28,7 +28,9 @@ class ProfilingStage(StageGenerator):
                 "pandas": ["pd"],
             }),
             self.cb.section("Load Bronze Data"),
-            self.cb.code('''df = pd.read_parquet("./experiments/data/bronze/customers.parquet")
+            self.cb.code('''from customer_retention.integrations.adapters.factory import get_delta
+storage = get_delta(force_local=True)
+df = storage.read("./experiments/data/bronze/customers")
 print(f"Loaded {len(df)} rows, {len(df.columns)} columns")'''),
             self.cb.section("Type Detection"),
             self.cb.code('''detector = TypeDetector()

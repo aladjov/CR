@@ -13,6 +13,14 @@ from .scoring_pipeline_validator import (
 )
 
 
+def load_artifact(path: Union[str, Path], version: Optional[int] = None) -> pd.DataFrame:
+    path = Path(path)
+    if path.is_dir() and (path / "_delta_log").is_dir():
+        from customer_retention.integrations.adapters.factory import get_delta
+        return get_delta(force_local=True).read(str(path), version=version)
+    return pd.read_parquet(path)
+
+
 @dataclass
 class PipelineValidationConfig:
     entity_column: str = "customer_id"
@@ -39,9 +47,9 @@ class PipelineValidationRunner:
         features_path: Union[str, Path],
         predictions_path: Optional[Union[str, Path]] = None,
     ) -> "PipelineValidationRunner":
-        self._training_features = pd.read_parquet(features_path)
+        self._training_features = load_artifact(features_path)
         if predictions_path:
-            self._training_predictions = pd.read_parquet(predictions_path)
+            self._training_predictions = load_artifact(predictions_path)
         return self
 
     def load_scoring_artifacts(
@@ -49,9 +57,9 @@ class PipelineValidationRunner:
         features_path: Union[str, Path],
         predictions_path: Optional[Union[str, Path]] = None,
     ) -> "PipelineValidationRunner":
-        self._scoring_features = pd.read_parquet(features_path)
+        self._scoring_features = load_artifact(features_path)
         if predictions_path:
-            self._scoring_predictions = pd.read_parquet(predictions_path)
+            self._scoring_predictions = load_artifact(predictions_path)
         return self
 
     def set_model(self, model: Any) -> "PipelineValidationRunner":
@@ -114,7 +122,7 @@ def run_pipeline_validation(
     model: Optional[Any] = None, feature_columns: Optional[List[str]] = None, verbose: bool = True,
 ) -> ValidationReport:
     _print_header(verbose)
-    gold_df = pd.read_parquet(gold_features_path)
+    gold_df = load_artifact(gold_features_path)
     _log(verbose, f"Loaded {len(gold_df):,} records from {gold_features_path}")
 
     training_df, validation_df = _split_training_validation(
@@ -228,12 +236,18 @@ def validate_feature_transformation(
 
 
 def compare_pipeline_outputs(
-    training_output_path: Union[str, Path], scoring_output_path: Union[str, Path],
+    training_output_path: Union[str, Path], scoring_output_path: Optional[Union[str, Path]] = None,
     entity_column: str = "customer_id", target_column: str = "target",
     output_report_path: Optional[Union[str, Path]] = None, verbose: bool = True,
+    version_a: Optional[int] = None, version_b: Optional[int] = None,
 ) -> ValidationReport:
-    training_df = pd.read_parquet(training_output_path)
-    scoring_df = pd.read_parquet(scoring_output_path)
+    if version_a is not None and version_b is not None and scoring_output_path is None:
+        training_df = load_artifact(training_output_path, version=version_a)
+        scoring_df = load_artifact(training_output_path, version=version_b)
+    else:
+        scoring_output_path = scoring_output_path or training_output_path
+        training_df = load_artifact(training_output_path, version=version_a)
+        scoring_df = load_artifact(scoring_output_path, version=version_b)
     _log(verbose, f"Training output: {len(training_df):,} records, {len(training_df.columns)} columns")
     _log(verbose, f"Scoring output: {len(scoring_df):,} records, {len(scoring_df.columns)} columns")
 

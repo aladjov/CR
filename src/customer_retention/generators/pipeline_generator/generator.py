@@ -22,6 +22,7 @@ class PipelineGenerator:
         config.output_dir = "."
         config.experiments_dir = self._experiments_dir
         config.production_dir = self._production_dir
+        self._renderer.set_docs_base(self._experiments_dir)
         generated_files = [
             self._write_run_all(config),
             self._write_config(config),

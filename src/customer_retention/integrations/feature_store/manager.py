@@ -75,6 +75,7 @@ class FeastBackend(FeatureStoreBackend):
         self._store = None
         self._tables: dict[str, dict] = {}
         self._load_table_metadata()
+        self.storage = _get_storage()
 
     @property
     def store(self):
@@ -156,16 +157,25 @@ class FeastBackend(FeatureStoreBackend):
         mode: str = "merge",
         cutoff_date: Optional[datetime] = None,
     ) -> None:
-        data_path = self.repo_path / "data" / f"{table_name}.parquet"
-        data_path.parent.mkdir(parents=True, exist_ok=True)
+        delta_path = self.repo_path / "data" / table_name
+        parquet_path = self.repo_path / "data" / f"{table_name}.parquet"
+        delta_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if mode == "merge" and data_path.exists():
-            existing = pd.read_parquet(data_path)
-            if table_name in self._tables:
-                entity_key = self._tables[table_name]["entity_key"]
-                df = pd.concat([existing, df]).drop_duplicates(subset=[entity_key], keep="last")
-
-        df.to_parquet(data_path, index=False)
+        if self.storage:
+            if mode == "merge" and self.storage.exists(str(delta_path)):
+                entity_key = self._tables.get(table_name, {}).get("entity_key", "entity_id")
+                condition = f"source.{entity_key} = target.{entity_key}"
+                self.storage.merge(df, str(delta_path), condition=condition)
+                df = self.storage.read(str(delta_path))
+            else:
+                self.storage.write(df, str(delta_path))
+        else:
+            if mode == "merge" and parquet_path.exists():
+                existing = pd.read_parquet(parquet_path)
+                if table_name in self._tables:
+                    entity_key = self._tables[table_name]["entity_key"]
+                    df = pd.concat([existing, df]).drop_duplicates(subset=[entity_key], keep="last")
+            df.to_parquet(parquet_path, index=False)
 
         effective_cutoff = cutoff_date or (
             datetime.fromisoformat(self._tables[table_name]["cutoff_date"])
@@ -210,12 +220,9 @@ class FeastBackend(FeatureStoreBackend):
                 continue
 
             table_name, feature_name = parts
-            data_path = self.repo_path / "data" / f"{table_name}.parquet"
-
-            if not data_path.exists():
+            feature_df = self._read_table_data(table_name)
+            if feature_df is None:
                 continue
-
-            feature_df = pd.read_parquet(data_path)
             if feature_name not in feature_df.columns:
                 continue
 
@@ -277,7 +284,21 @@ class FeastBackend(FeatureStoreBackend):
         data_dir = self.repo_path / "data"
         if not data_dir.exists():
             return []
-        return [p.stem for p in data_dir.glob("*.parquet")]
+        tables = [p.stem for p in data_dir.glob("*.parquet")]
+        if self.storage:
+            for subdir in data_dir.iterdir():
+                if subdir.is_dir() and self.storage.exists(str(subdir)) and subdir.name not in tables:
+                    tables.append(subdir.name)
+        return tables
+
+    def _read_table_data(self, table_name: str) -> Optional[pd.DataFrame]:
+        delta_path = self.repo_path / "data" / table_name
+        parquet_path = self.repo_path / "data" / f"{table_name}.parquet"
+        if self.storage and self.storage.exists(str(delta_path)):
+            return self.storage.read(str(delta_path))
+        if parquet_path.exists():
+            return pd.read_parquet(parquet_path)
+        return None
 
 
 class DatabricksBackend(FeatureStoreBackend):
@@ -713,3 +734,11 @@ def get_feature_store_manager(
             backend = "feast"
 
     return FeatureStoreManager.create(backend=backend, **kwargs)
+
+
+def _get_storage():
+    try:
+        from customer_retention.integrations.adapters.factory import get_delta
+        return get_delta(force_local=True)
+    except ImportError:
+        return None

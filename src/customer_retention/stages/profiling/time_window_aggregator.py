@@ -343,3 +343,34 @@ def _extract_temporal_metadata(df: DataFrame) -> Dict[str, str]:
             value = df.attrs[key]
             metadata[key] = value.isoformat() if hasattr(value, "isoformat") else str(value)
     return metadata
+
+
+def save_aggregated_delta(df: DataFrame, path: Union[str, Path]) -> Dict[str, str]:
+    import json as _json
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    metadata = _extract_temporal_metadata(df)
+
+    try:
+        from customer_retention.integrations.adapters.factory import get_delta
+        storage = get_delta(force_local=True)
+        storage.write(df.copy(), str(path))
+    except ImportError:
+        df.to_parquet(str(path) + ".parquet", index=False)
+
+    if metadata:
+        sidecar_path = path.parent / f"{path.name}_temporal_metadata.json"
+        with open(sidecar_path, "w") as f:
+            _json.dump(metadata, f, indent=2)
+
+    return metadata
+
+
+def save_aggregated(df: DataFrame, path: Union[str, Path]) -> Dict[str, str]:
+    try:
+        from customer_retention.integrations.adapters.factory import get_delta  # noqa: F401
+        return save_aggregated_delta(df, path)
+    except ImportError:
+        return save_aggregated_parquet(df, path)

@@ -48,7 +48,9 @@ class TransformationStage(StageGenerator):
 mlflow_adapter.start_run("{exp_name}", run_name="04_transformation")
 transform_stats = {{}}'''),
             self.cb.section("Load Silver Data"),
-            self.cb.code('''df = pd.read_parquet("./experiments/data/silver/customers_cleaned.parquet")
+            self.cb.code('''from customer_retention.integrations.adapters.factory import get_delta
+storage = get_delta(force_local=True)
+df = storage.read("./experiments/data/silver/customers_cleaned")
 print(f"Loaded shape: {df.shape}")
 mlflow_adapter.log_metric("input_rows", df.shape[0])
 mlflow_adapter.log_metric("input_columns", df.shape[1])'''),
@@ -107,7 +109,7 @@ print("Scoring pipeline will use these same transformers for consistency")'''),
 })
 print(f"Logged {len(transform_stats)} transformation statistics")'''),
             self.cb.section("Save Transformed Data"),
-            self.cb.code('''df.to_parquet("./experiments/data/silver/customers_transformed.parquet", index=False)
+            self.cb.code('''storage.write(df, "./experiments/data/silver/customers_transformed")
 mlflow_adapter.end_run()
 print(f"Transformed data saved: {df.shape}")'''),
         ])

@@ -38,7 +38,9 @@ if latest_snapshot:
     print(f"Loaded snapshot: {latest_snapshot}")
     print(f"Rows: {len(df)}, Features: {len(df.columns)}")
 else:
-    df = pd.read_parquet("./experiments/data/silver/customers_transformed.parquet")
+    from customer_retention.integrations.adapters.factory import get_delta
+    storage = get_delta(force_local=True)
+    df = storage.read("./experiments/data/silver/customers_transformed")
     print(f"No snapshot found, loaded transformed data: {df.shape}")'''),
             self.cb.section("Point-in-Time Feature Engineering"),
             self.cb.markdown('''**Important**: All temporal features are calculated relative to `feature_timestamp` to prevent data leakage.'''),
@@ -76,7 +78,9 @@ if len(numeric_cols) >= 2:
     df["avg_transaction_value"] = df["total_spend"] / (df["num_transactions"] + 1)
     print("Created avg_transaction_value feature")'''),
             self.cb.section("Save to Gold Layer"),
-            self.cb.code('''df.to_parquet("./experiments/data/gold/customers_features.parquet", index=False)
+            self.cb.code('''from customer_retention.integrations.adapters.factory import get_delta
+storage = get_delta(force_local=True)
+storage.write(df, "./experiments/data/gold/customers_features")
 print(f"Gold layer saved: {df.shape}")'''),
         ]
 

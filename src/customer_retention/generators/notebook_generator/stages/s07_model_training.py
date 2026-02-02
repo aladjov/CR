@@ -47,7 +47,9 @@ if latest_snapshot:
     print(f"Data hash: {snapshot_metadata.data_hash}")
     print(f"Rows: {snapshot_metadata.row_count}")
 else:
-    df = pd.read_parquet("./experiments/data/gold/customers_selected.parquet")
+    from customer_retention.integrations.adapters.factory import get_delta
+    storage = get_delta(force_local=True)
+    df = storage.read("./experiments/data/gold/customers_selected")
     snapshot_metadata = None
     print(f"Warning: No snapshot found, loading from gold layer: {df.shape}")'''),
             self.cb.section("Prepare Train/Test Split"),

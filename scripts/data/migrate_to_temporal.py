@@ -10,9 +10,9 @@ Usage:
 """
 
 import argparse
+import sys
 from datetime import datetime
 from pathlib import Path
-import sys
 
 # Add src to path for development
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
@@ -22,7 +22,6 @@ import pandas as pd
 from customer_retention.stages.temporal import (
     ScenarioDetector,
     UnifiedDataPreparer,
-    SnapshotManager,
 )
 
 
@@ -51,7 +50,10 @@ def migrate_dataset(
 
     # Load data
     print(f"Loading data from {input_path}...")
-    if input_path.suffix == ".csv":
+    if input_path.is_dir() and (input_path / "_delta_log").is_dir():
+        from customer_retention.integrations.adapters.factory import get_delta
+        df = get_delta(force_local=True).read(str(input_path))
+    elif input_path.suffix == ".csv":
         df = pd.read_csv(input_path)
     elif input_path.suffix in [".parquet", ".pq"]:
         df = pd.read_parquet(input_path)
@@ -105,13 +107,20 @@ def migrate_dataset(
         entity_column=entity_column,
     )
 
-    print(f"  Added columns: feature_timestamp, label_timestamp, label_available_flag")
+    print("  Added columns: feature_timestamp, label_timestamp, label_available_flag")
     print(f"  Output rows: {len(unified_df):,}")
 
     # Save unified data
-    unified_path = output_path / "unified" / f"{input_path.stem}_unified.parquet"
-    unified_path.parent.mkdir(parents=True, exist_ok=True)
-    unified_df.to_parquet(unified_path, index=False)
+    unified_dir = output_path / "unified"
+    unified_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        from customer_retention.integrations.adapters.factory import get_delta
+        storage = get_delta(force_local=True)
+        storage.write(unified_df, str(unified_dir / f"{input_path.stem}_unified"))
+        unified_path = unified_dir / f"{input_path.stem}_unified"
+    except ImportError:
+        unified_path = unified_dir / f"{input_path.stem}_unified.parquet"
+        unified_df.to_parquet(unified_path, index=False)
     print(f"\n  Unified data saved to: {unified_path}")
 
     result = {

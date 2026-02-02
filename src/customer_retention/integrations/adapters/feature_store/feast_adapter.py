@@ -14,6 +14,7 @@ class FeastAdapter(FeatureStoreAdapter):
         self._store = None
         self._feature_views: Dict[str, FeatureViewConfig] = {}
         self._data_sources: Dict[str, pd.DataFrame] = {}
+        self.storage = _get_storage()
 
     @property
     def store(self):
@@ -25,9 +26,12 @@ class FeastAdapter(FeatureStoreAdapter):
     def register_feature_view(self, config: FeatureViewConfig, df: pd.DataFrame) -> str:
         self._feature_views[config.name] = config
         self._data_sources[config.name] = df
-        data_path = Path(self._repo_path) / "data" / f"{config.name}.parquet"
-        data_path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(data_path, index=False)
+        data_dir = Path(self._repo_path) / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        if self.storage:
+            self.storage.write(df, str(data_dir / config.name))
+        else:
+            df.to_parquet(data_dir / f"{config.name}.parquet", index=False)
         return config.name
 
     def get_historical_features(self, entity_df: pd.DataFrame, feature_refs: List[str]) -> pd.DataFrame:
@@ -58,9 +62,12 @@ class FeastAdapter(FeatureStoreAdapter):
 
     def read_table(self, name: str, version: Optional[int] = None) -> pd.DataFrame:
         if name not in self._data_sources:
-            data_path = Path(self._repo_path) / "data" / f"{name}.parquet"
-            if data_path.exists():
-                return pd.read_parquet(data_path)
+            delta_path = Path(self._repo_path) / "data" / name
+            parquet_path = Path(self._repo_path) / "data" / f"{name}.parquet"
+            if self.storage and delta_path.is_dir() and self.storage.exists(str(delta_path)):
+                return self.storage.read(str(delta_path), version=version)
+            if parquet_path.exists():
+                return pd.read_parquet(parquet_path)
             raise KeyError(f"Feature view {name} not found")
         return self._data_sources[name]
 
@@ -80,3 +87,11 @@ class FeastAdapter(FeatureStoreAdapter):
         if name in self._data_sources:
             del self._data_sources[name]
         return AdapterResult(success=True)
+
+
+def _get_storage():
+    try:
+        from customer_retention.integrations.adapters.factory import get_delta
+        return get_delta(force_local=True)
+    except ImportError:
+        return None

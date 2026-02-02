@@ -29,6 +29,8 @@ class PipelineContext:
     current_df: Optional[Any] = None
     current_stage: str = "raw"
     artifacts: Dict[str, str] = field(default_factory=dict)
+    delta_versions: Dict[str, int] = field(default_factory=dict)
+    run_type: str = "exploration"
     _context_dir: str = "./runs"
 
     @property
@@ -42,6 +44,14 @@ class PipelineContext:
     @property
     def target_column(self) -> Optional[str]:
         return self.exploration_findings.target_column if self.exploration_findings else None
+
+    def build_commit_metadata(self) -> Dict[str, str]:
+        return {
+            "run_id": self.run_id,
+            "run_type": self.run_type,
+            "pipeline_stage": self.current_stage,
+            "timestamp": self.started_at,
+        }
 
     def save(self, path: str = None):
         Path(self._context_dir).mkdir(parents=True, exist_ok=True)
@@ -57,6 +67,8 @@ class PipelineContext:
             "gold_path": self.gold_path,
             "current_stage": self.current_stage,
             "artifacts": self.artifacts,
+            "delta_versions": self.delta_versions,
+            "run_type": self.run_type,
             "exploration_findings_path": None
         }
         if self.exploration_findings:
@@ -84,6 +96,8 @@ class PipelineContext:
             gold_path=data.get("gold_path"),
             current_stage=data.get("current_stage", "raw"),
             artifacts=data.get("artifacts", {}),
+            delta_versions=data.get("delta_versions", {}),
+            run_type=data.get("run_type", "exploration"),
             exploration_findings=exploration_findings
         )
         ctx._context_dir = str(Path(path).parent)

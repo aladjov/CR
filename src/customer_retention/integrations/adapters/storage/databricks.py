@@ -1,3 +1,4 @@
+import json
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -29,7 +30,13 @@ class DatabricksDelta(DeltaStorage):
         return reader.load(path).toPandas()
 
     def write(self, df: pd.DataFrame, path: str, mode: str = "overwrite",
-              partition_by: Optional[List[str]] = None) -> None:
+              partition_by: Optional[List[str]] = None,
+              metadata: Optional[Dict[str, str]] = None) -> None:
+        if metadata:
+            self.spark.conf.set(
+                "spark.databricks.delta.commitInfo.userMetadata",
+                json.dumps(metadata),
+            )
         spark_df = self.spark.createDataFrame(df)
         writer = spark_df.write.format("delta").mode(mode)
         if partition_by:
@@ -59,3 +66,11 @@ class DatabricksDelta(DeltaStorage):
         from delta.tables import DeltaTable
         dt = DeltaTable.forPath(self.spark, path)
         dt.vacuum(retention_hours)
+
+    def exists(self, path: str) -> bool:
+        from delta.tables import DeltaTable
+        try:
+            DeltaTable.forPath(self.spark, path)
+            return True
+        except Exception:
+            return False

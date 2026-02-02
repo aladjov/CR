@@ -31,8 +31,14 @@ class GenericSpecGenerator:
         ]
         if spec.sources and spec.sources[0].format == "csv":
             lines.append('    return pd.read_csv(path)')
-        elif spec.sources and spec.sources[0].format == "parquet":
-            lines.append('    return pd.read_parquet(path)')
+        elif spec.sources and spec.sources[0].format in ("parquet", "delta"):
+            lines.extend([
+                '    from pathlib import Path as _P',
+                '    if _P(path).is_dir() and (_P(path) / "_delta_log").is_dir():',
+                '        from customer_retention.integrations.adapters.factory import get_delta',
+                '        return get_delta(force_local=True).read(path)',
+                '    return pd.read_parquet(path)',
+            ])
         else:
             lines.append('    return pd.read_csv(path)')
         lines.extend([

@@ -1,4 +1,5 @@
 from collections import OrderedDict, namedtuple
+from pathlib import Path
 from typing import List, Tuple
 
 from jinja2 import BaseLoader, Environment
@@ -67,6 +68,9 @@ DEFAULT_NOTEBOOK_MAP = {
 }
 
 
+_docs_base: str = "docs"
+
+
 def _notebook_title(notebook: str) -> str:
     name = notebook.split("_", 1)[1] if "_" in notebook else notebook
     return name.replace("_", " ").title()
@@ -79,9 +83,10 @@ def provenance_docstring(step: TransformationStep) -> str:
     title = _notebook_title(notebook)
     anchor = ANCHOR_MAP.get(step.type)
     section = SECTION_MAP.get(step.type)
+    base = _docs_base
     if anchor:
-        return f"{title} {section}\n    docs/{notebook}.html#{anchor}"
-    return f"{title}\n    docs/{notebook}.html"
+        return f"{title} {section}\n    {base}/{notebook}.html#{anchor}"
+    return f"{title}\n    {base}/{notebook}.html"
 
 
 def provenance_docstring_block(steps) -> str:
@@ -199,7 +204,7 @@ DOCS_BASE_URL = os.environ.get("CR_DOCS_BASE_URL", str(EXPERIMENTS_DIR / "docs")
 
 # Production output directory - all pipeline writes go here
 # Override with CR_PRODUCTION_DIR environment variable
-_default_production = {{ '"%s"' % config.production_dir if config.production_dir else 'str(EXPERIMENTS_DIR / "production")' }}
+_default_production = {{ '"%s"' % config.production_dir if config.production_dir else 'str(EXPERIMENTS_DIR)' }}
 PRODUCTION_DIR = Path(os.environ.get("CR_PRODUCTION_DIR", _default_production))
 
 # MLflow tracking - using SQLite backend (recommended over deprecated file-based backend)
@@ -293,6 +298,9 @@ SOURCE_NAME = "{{ source }}"
 def load_{{ source }}():
     source_config = SOURCES[SOURCE_NAME]
     path = Path(source_config["path"])
+    if path.is_dir() and (path / "_delta_log").is_dir():
+        from customer_retention.integrations.adapters.factory import get_delta
+        return get_delta(force_local=True).read(str(path))
     if not path.exists():
         raise FileNotFoundError(f"Source file not found: {path}")
     if source_config["format"] == "csv":
@@ -336,6 +344,9 @@ TIME_COLUMN = "{{ config.time_column or config.source.time_column }}"
 def _load_raw_events():
     source = RAW_SOURCES[SOURCE_NAME]
     path = Path(source["path"])
+    if path.is_dir() and (path / "_delta_log").is_dir():
+        from customer_retention.integrations.adapters.factory import get_delta
+        return get_delta(force_local=True).read(str(path))
     if not path.exists():
         raise FileNotFoundError(f"Raw source not found: {path}")
     if source["format"] == "csv":
@@ -438,8 +449,14 @@ def run_bronze_{{ source }}():
     df = enrich_lifecycle(df)
 {% endif %}
     output_path = get_bronze_path(SOURCE_NAME)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(output_path, index=False)
+    output_dir = output_path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        from customer_retention.integrations.adapters.factory import get_delta
+        storage = get_delta(force_local=True)
+        storage.write(df, str(output_dir / SOURCE_NAME))
+    except ImportError:
+        df.to_parquet(output_path, index=False)
     return df
 
 
@@ -454,8 +471,17 @@ from customer_retention.transforms import {{ ops | sort | join(', ') }}
 from config import SOURCES, get_bronze_path, get_silver_path, TARGET_COLUMN
 
 
+def _load_artifact(path):
+    from pathlib import Path as _P
+    p = _P(path)
+    if p.parent.is_dir() and (p.parent / p.stem / "_delta_log").is_dir():
+        from customer_retention.integrations.adapters.factory import get_delta
+        return get_delta(force_local=True).read(str(p.parent / p.stem))
+    return pd.read_parquet(path)
+
+
 def load_bronze_outputs() -> dict:
-    return {name: pd.read_parquet(get_bronze_path(name))
+    return {name: _load_artifact(get_bronze_path(name))
             for name in SOURCES.keys() if not SOURCES[name].get("excluded")}
 
 
@@ -553,8 +579,14 @@ def run_silver_merge(create_holdout: bool = True, holdout_fraction: float = 0.1)
         silver = create_holdout_mask(silver, holdout_fraction=holdout_fraction)
 
     output_path = get_silver_path()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    silver.to_parquet(output_path, index=False)
+    output_dir = output_path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        from customer_retention.integrations.adapters.factory import get_delta
+        storage = get_delta(force_local=True)
+        storage.write(silver, str(output_dir / "silver"))
+    except ImportError:
+        silver.to_parquet(output_path, index=False)
     return silver
 
 
@@ -602,7 +634,22 @@ SCALINGS = [
 
 
 def load_silver() -> pd.DataFrame:
-    return pd.read_parquet(get_silver_path())
+    path = get_silver_path()
+    parent = path.parent
+    delta_path = parent / "silver"
+    if delta_path.is_dir() and (delta_path / "_delta_log").is_dir():
+        from customer_retention.integrations.adapters.factory import get_delta
+        return get_delta(force_local=True).read(str(delta_path))
+    return pd.read_parquet(path)
+
+
+def load_gold() -> pd.DataFrame:
+    path = get_gold_path()
+    delta_path = path.parent / "gold"
+    if delta_path.is_dir() and (delta_path / "_delta_log").is_dir():
+        from customer_retention.integrations.adapters.factory import get_delta
+        return get_delta(force_local=True).read(str(delta_path))
+    return pd.read_parquet(path)
 
 
 {% set transform_groups = group_steps(config.gold.transformations) %}
@@ -707,7 +754,12 @@ def materialize_to_feast(df: pd.DataFrame) -> None:
     if original_cols:
         print(f"  Excluding holdout columns from Feast: {original_cols}")
         df_feast = df_feast.drop(columns=original_cols, errors="ignore")
-    df_feast.to_parquet(feast_path, index=False)
+    try:
+        from customer_retention.integrations.adapters.factory import get_delta
+        storage = get_delta(force_local=True)
+        storage.write(df_feast, str(feast_path.parent / feast_path.stem))
+    except ImportError:
+        df_feast.to_parquet(feast_path, index=False)
     print(f"Features materialized to Feast: {feast_path}")
     print(f"  Entity key: {FEAST_ENTITY_KEY}")
     print(f"  Feature view: {FEAST_FEATURE_VIEW}")
@@ -728,7 +780,12 @@ def run_gold_features():
     output_path.parent.mkdir(parents=True, exist_ok=True)
     gold.attrs["recommendations_hash"] = RECOMMENDATIONS_HASH
     gold.attrs["feature_version"] = get_feature_version_tag()
-    gold.to_parquet(output_path, index=False)
+    try:
+        from customer_retention.integrations.adapters.factory import get_delta
+        storage = get_delta(force_local=True)
+        storage.write(gold, str(output_path.parent / "gold"))
+    except ImportError:
+        gold.to_parquet(output_path, index=False)
     print(f"Gold features saved with version: {get_feature_version_tag()}")
     materialize_to_feast(gold)
     return gold
@@ -758,6 +815,15 @@ from config import (TARGET_COLUMN, PIPELINE_NAME, RECOMMENDATIONS_HASH, MLFLOW_T
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
 
+def _load_feast_data():
+    feast_path = get_feast_data_path()
+    delta_path = feast_path.parent / feast_path.stem
+    if delta_path.is_dir() and (delta_path / "_delta_log").is_dir():
+        from customer_retention.integrations.adapters.factory import get_delta
+        return get_delta(force_local=True).read(str(delta_path))
+    return pd.read_parquet(feast_path)
+
+
 def get_training_data_from_feast() -> pd.DataFrame:
     """Retrieve training data from Feast for training/serving consistency.
 
@@ -768,14 +834,14 @@ def get_training_data_from_feast() -> pd.DataFrame:
 
     # Check if Feast repo is initialized
     if not (feast_path / "feature_store.yaml").exists():
-        print("Feast repo not initialized, falling back to parquet file")
-        return pd.read_parquet(get_feast_data_path())
+        print("Feast repo not initialized, falling back to data file")
+        return _load_feast_data()
 
     try:
         store = FeatureStore(repo_path=str(feast_path))
 
         # Read the materialized features to get entity keys and timestamps
-        features_df = pd.read_parquet(get_feast_data_path())
+        features_df = _load_feast_data()
 
         # Create entity dataframe for historical feature retrieval
         entity_df = features_df[[FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL]].copy()
@@ -809,8 +875,8 @@ def get_training_data_from_feast() -> pd.DataFrame:
         return training_df
 
     except Exception as e:
-        print(f"Feast retrieval failed ({e}), falling back to parquet file")
-        return pd.read_parquet(get_feast_data_path())
+        print(f"Feast retrieval failed ({e}), falling back to data file")
+        return _load_feast_data()
 
 
 def prepare_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -1299,6 +1365,9 @@ TARGET_COLUMN = "{{ config.target_column }}"
 def load_raw_data() -> pd.DataFrame:
     source = RAW_SOURCES[SOURCE_NAME]
     path = Path(source["path"])
+    if path.is_dir() and (path / "_delta_log").is_dir():
+        from customer_retention.integrations.adapters.factory import get_delta
+        return get_delta(force_local=True).read(str(path))
     if not path.exists():
         raise FileNotFoundError(f"Raw source not found: {path}")
     if source["format"] == "csv":
@@ -1355,8 +1424,14 @@ def run_landing_{{ name }}():
     df = derive_label_timestamp(df)
 {% endif %}
     output_path = get_landing_output_path()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(output_path, index=False)
+    output_dir = output_path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        from customer_retention.integrations.adapters.factory import get_delta
+        storage = get_delta(force_local=True)
+        storage.write(df, str(output_dir / SOURCE_NAME))
+    except ImportError:
+        df.to_parquet(output_path, index=False)
     print(f"  Records: {len(df):,}")
     print(f"  Output: {output_path}")
     return df
@@ -1448,6 +1523,9 @@ def apply_reshaping(df: pd.DataFrame) -> pd.DataFrame:
 def _load_raw_events():
     source = RAW_SOURCES[SOURCE_NAME]
     path = Path(source["path"])
+    if path.is_dir() and (path / "_delta_log").is_dir():
+        from customer_retention.integrations.adapters.factory import get_delta
+        return get_delta(force_local=True).read(str(path))
     if not path.exists():
         raise FileNotFoundError(f"Raw source not found: {path}")
     if source["format"] == "csv":
@@ -1572,16 +1650,27 @@ def {{ func_name }}(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def run_bronze_{{ source }}():
-    landing_path = PRODUCTION_DIR / "data" / "landing" / f"{SOURCE_NAME}.parquet"
-    if not landing_path.exists():
-        raise FileNotFoundError(f"Landing output not found: {landing_path}")
-    df = pd.read_parquet(landing_path)
+    landing_dir = PRODUCTION_DIR / "data" / "landing" / SOURCE_NAME
+    landing_parquet = PRODUCTION_DIR / "data" / "landing" / f"{SOURCE_NAME}.parquet"
+    if landing_dir.is_dir() and (landing_dir / "_delta_log").is_dir():
+        from customer_retention.integrations.adapters.factory import get_delta
+        df = get_delta(force_local=True).read(str(landing_dir))
+    elif landing_parquet.exists():
+        df = pd.read_parquet(landing_parquet)
+    else:
+        raise FileNotFoundError(f"Landing output not found: {landing_parquet}")
     df = apply_pre_shaping(df)
     df = apply_reshaping(df)
     df = apply_post_shaping(df)
-    output_path = PRODUCTION_DIR / "data" / "bronze" / f"{SOURCE_NAME}.parquet"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(output_path, index=False)
+    bronze_dir = PRODUCTION_DIR / "data" / "bronze"
+    bronze_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        from customer_retention.integrations.adapters.factory import get_delta
+        storage = get_delta(force_local=True)
+        storage.write(df, str(bronze_dir / SOURCE_NAME))
+    except ImportError:
+        output_path = bronze_dir / f"{SOURCE_NAME}.parquet"
+        df.to_parquet(output_path, index=False)
     return df
 
 
@@ -1598,15 +1687,23 @@ import numpy as np
 from config import SOURCES, EXPLORATION_ARTIFACTS, EXPERIMENTS_DIR, PRODUCTION_DIR, TARGET_COLUMN
 
 
+def _load_artifact(path):
+    path = Path(path)
+    if path.is_dir() and (path / "_delta_log").is_dir():
+        from customer_retention.integrations.adapters.factory import get_delta
+        return get_delta(force_local=True).read(str(path))
+    return pd.read_parquet(path)
+
+
 def _compare_dataframes(stage, production_path, exploration_path, entity_key=None, tolerance=1e-5):
-    if not Path(production_path).exists():
+    if not Path(production_path).exists() and not (Path(production_path).is_dir() and (Path(production_path) / "_delta_log").is_dir()):
         raise FileNotFoundError(f"[{stage}] Production output not found: {production_path}")
-    if not Path(exploration_path).exists():
+    if not Path(exploration_path).exists() and not (Path(exploration_path).is_dir() and (Path(exploration_path) / "_delta_log").is_dir()):
         print(f"[{stage}] SKIP - exploration artifact not found: {exploration_path}")
         return True
 
-    prod = pd.read_parquet(production_path)
-    expl = pd.read_parquet(exploration_path)
+    prod = _load_artifact(production_path)
+    expl = _load_artifact(exploration_path)
 
     if entity_key and entity_key in prod.columns and entity_key in expl.columns:
         prod = prod.sort_values(entity_key).reset_index(drop=True)
@@ -1803,6 +1900,13 @@ class CodeRenderer:
         self._env.globals["group_steps"] = group_steps
         self._env.globals["provenance_docstring_block"] = provenance_docstring_block
         self._env.globals["provenance_key"] = provenance_key
+
+    def set_docs_base(self, experiments_dir: str | None) -> None:
+        global _docs_base
+        if experiments_dir:
+            _docs_base = f"file://{Path(experiments_dir).resolve() / 'docs'}"
+        else:
+            _docs_base = "docs"
 
     def _render(self, template_key: str, **context) -> str:
         return self._env.get_template(self._TEMPLATE_MAP[template_key]).render(**context)
