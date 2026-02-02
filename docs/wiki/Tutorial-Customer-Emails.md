@@ -96,13 +96,13 @@ The `label_window_days` parameter (180 days) defines the **inactivity period** a
 
 ### The 90/10 + Holdout Strategy
 
-The cutoff date creates a **90% train / 10% score** split at the event level. Within the training portion, the pipeline further holds out ~10% of *entities* for scoring validation (with their target values masked in the silver layer). This two-level split approximates a standard 80/20 train/test split but with an important benefit: the scoring holdout records flow through the *same* Bronze-Silver-Gold pipeline as training data. This means the scoring pipeline validates not just model accuracy but also the correctness of the entire data processing chain -- any bug in feature engineering, encoding, or scaling would show up as degraded holdout performance. We'll see this pay off in Stage 11, when the production pipeline reproduces the exploration-phase results almost exactly.
+The cutoff date creates a **90% train / 10% score** split at the event level. Within the training portion, the pipeline further holds out ~10% of *entities* for scoring validation (with their target values masked in the silver layer). This two-level split approximates a standard 80/20 train/test split but with an important benefit: the scoring holdout records flow through the *same* Bronze-Silver-Gold pipeline as training data. This means the scoring pipeline validates not just model accuracy but also the correctness of the entire data processing chain -- any bug in feature engineering, encoding, or scaling would show up as degraded holdout performance. We'll see this pay off in Stage 12, when the production pipeline reproduces the exploration-phase results almost exactly.
 
 ### What We Take Forward
 
 - **Activated temporal track** (notebooks 01a-01d) for event aggregation -- this is the path unique to event-level data
 - **Cutoff date 2022-09-26** derived from the 90th percentile of the coalesced `last_action_date` -- this date anchors every windowed feature in Stage 5
-- **Holdout: ~10% of entities** masked in silver layer for end-to-end pipeline validation -- our final test in Stage 11
+- **Holdout: ~10% of entities** masked in silver layer for end-to-end pipeline validation -- our final test in Stage 12
 - **Coalesced timestamps** used because no single datetime column has full coverage
 - The misleading event-level target (97.4:2.6) will be corrected in Stage 4 after aggregation reveals the true 60.5:39.5 split
 - All downstream notebooks load from the versioned snapshot
@@ -656,7 +656,7 @@ Both features have low cardinality, making one-hot encoding straightforward.
 
 ### 54 Transformation Recommendations
 
-The framework auto-derives 54 transformation recommendations for the Gold layer. These feed directly into the generated pipeline (Stage 10's spec generation), ensuring that the production pipeline applies the same transforms as the exploration notebooks.
+The framework auto-derives 54 transformation recommendations for the Gold layer. These feed directly into the generated pipeline (Stage 11's spec generation), ensuring that the production pipeline applies the same transforms as the exploration notebooks.
 
 ### Decision Made
 - **Zero-inflation handling** for 180d features: Binary indicator for "has activity" + log transform of non-zero values
@@ -809,11 +809,53 @@ The framework auto-derives recommendations from the relationship analysis:
 
 ---
 
-## Stage 9: Feature Opportunities -- Do We Have Enough Data?
+## Stage 9: Multi-Dataset Integration & Feature Capacity
 
-A practical checkpoint before modeling. We've built 72 features for 4,998 customers. Is there enough data to learn from all of them without overfitting?
+Before modeling, two practical questions: how do our datasets connect, and do we have enough data for the features we've built? The multi-dataset notebook establishes relationships between datasets and configures temporal feature generation, while the feature capacity analysis checks whether 72 features for 4,998 customers risks overfitting.
 
-[View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/06_feature_opportunities.html)
+[View Multi-Dataset Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/05_multi_dataset.html) | [View Feature Opportunities Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/06_feature_opportunities.html)
+
+### Multi-Dataset Discovery
+
+**Why we do this:** In production, retention models typically combine multiple data sources -- transactions, emails, support tickets, product usage. This notebook establishes how datasets relate and configures cross-dataset feature aggregation. Even with a single dataset, the framework validates the entity structure and prepares the temporal feature configuration.
+
+**What the analysis shows:**
+
+| Metric | Value |
+|--------|-------|
+| **Explored datasets found** | 1 (aggregated entity-level) |
+| **Event-level skipped** | 1 (already aggregated in Stage 5) |
+| **Primary entity** | `customer_emails_aggregated` |
+| **Granularity** | Entity-level (4,998 rows, 72 columns) |
+| **Target column** | `target` |
+| **Relationships detected** | 0 (single-dataset scenario) |
+
+Because the email events were already aggregated in Stage 5, this is a single-dataset scenario. In a multi-dataset scenario (e.g., emails + transactions + support tickets), this notebook would detect shared entity keys, define join relationships, and configure cross-dataset feature aggregation.
+
+### Temporal Feature Configuration
+
+**Why we configure this:** Even with pre-aggregated data, the framework establishes a temporal feature generation strategy for production use -- how to create lagged, velocity, and lifecycle features from the entity-level data.
+
+**What the analysis shows:**
+
+| Setting | Value |
+|---------|-------|
+| Reference Mode | `per_customer` |
+| Lag Windows | 4 x 30 days |
+| Aggregations | sum, mean, count, max |
+| Feature Groups | 7 enabled |
+
+The seven feature groups available for production feature engineering:
+
+| Group | Example Features | Purpose |
+|-------|-----------------|---------|
+| Lagged Windows | `lag0_{metric}_{agg}`, `lag1_{metric}_{agg}` | Sequential non-overlapping time windows |
+| Velocity | `{metric}_velocity`, `{metric}_velocity_pct` | Rate of change between windows |
+| Acceleration | `{metric}_acceleration`, `{metric}_momentum` | Change in velocity, weighted direction |
+| Lifecycle | `{metric}_beginning`, `{metric}_middle`, `{metric}_end` | Beginning/middle/end of history |
+| Recency | `days_since_last_event`, `active_span_days` | How recently customer was active |
+| Regularity | `event_frequency`, `regularity_score` | Consistency of engagement |
+| Cohort Comparison | `{metric}_cohort_zscore` | Customer vs peer group |
 
 ### Feature Capacity (EPV)
 
@@ -850,17 +892,72 @@ EPV of 33.3 is well above the minimum of 10, meaning we have ample data for all 
 **Auto-derived recommendation:** Single global model with `lifecycle_quadrant` as a feature, confirming the Stage 2 advisory.
 
 ### Decision Made
+- **Single-dataset scenario** -- event data already aggregated; no cross-dataset joins needed
+- **Temporal feature configuration** saved for production pipeline generation
 - **Single global model** (not segment-specific)
 - **Feature budget: ample** -- current 59 features well within capacity limits
-- **No additional derived features needed** -- existing temporal features provide sufficient signal
+
+### Alternative Approaches
+- **Multi-dataset joins**: If transaction or support data were available, join on `customer_id` and aggregate per the temporal configuration
+- **Segment-specific models**: Rejected -- smallest segment EPV = 1.0, far below the minimum of 10
+- **Feature reduction**: The 29 redundant features could be removed, but tree-based models handle collinearity natively
 
 ---
 
-## Stage 10: Baseline Experiments -- Can These Features Predict Churn?
+## Stage 10: Modeling Readiness & Baseline Experiments
 
-The analysis has produced 72 features with strong recency signal, lifecycle segmentation, and clean data. Now we test: can these features actually predict churn?
+Two connected steps: first validate that the data is ready for machine learning (checking for leakage, class imbalance, missing values), then train baseline models to test whether the features actually predict churn.
 
-[View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/08_baseline_experiments.html)
+[View Readiness Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/07_modeling_readiness.html) | [View Experiments Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/08_baseline_experiments.html)
+
+### Modeling Readiness Checklist
+
+**Why we validate this:** Training on data with leakage produces models that look excellent in development but fail in production. Missing value patterns and class imbalance require specific handling strategies. This is the final safety gate before committing to model training.
+
+**What the analysis shows:**
+
+| Check | Status | Detail |
+|-------|--------|--------|
+| Target column identified | Pass | `target` (binary) |
+| Feature columns available | Pass | 70 usable features |
+| No columns with >50% missing | **Fail** | 22 columns from windowed aggregation |
+| Quality score >= 70 | Pass | 89/100 |
+| Sufficient sample size (>=100) | Pass | 4,998 rows |
+| No data leakage detected | Pass | No columns with >0.9 target correlation |
+
+**Readiness Score: 85/100 (MOSTLY READY)** -- deducted 15 points for high-missingness columns. This is expected: the 57.7% null rate in 180-day features traces back to the quarterly engagement cadence from Stage 2 and was preserved as informative signal through Stages 3 and 5.
+
+### Class Imbalance Assessment
+
+**Why we assess this:** Severe imbalance requires specialized handling (oversampling, threshold tuning). Mild imbalance only needs class weights.
+
+**What the analysis shows:**
+
+| Metric | Value |
+|--------|-------|
+| Majority Class (0) | 3,034 (60.7%) |
+| Minority Class (1) | 1,964 (39.3%) |
+| Imbalance Ratio | 1.54:1 (**LOW**) |
+| Recommended Strategy | `class_weight='balanced'` |
+| Sklearn Weights | `{0: 0.824, 1: 1.272}` |
+
+### Leakage Risk Assessment
+
+**Why we check this:** Features that encode the target (directly or indirectly) produce artificially inflated performance.
+
+**What the analysis shows:** No obvious leakage risks detected. No columns with >0.9 correlation with target. No suspicious column names (future, outcome, result, after).
+
+### Feature Type Distribution
+
+| Type | Count |
+|------|-------|
+| Binary | 9 |
+| Categorical (nominal) | 2 |
+| Identifier | 1 |
+| Numeric (continuous) | 30 |
+| Numeric (discrete) | 29 |
+| Target | 1 |
+| **Usable for modeling** | **70** |
 
 ### Data Preparation
 
@@ -917,7 +1014,7 @@ The analysis has produced 72 features with strong recency signal, lifecycle segm
 
 `days_since_last_event` accounts for **18.5% of total importance** -- confirming Stage 4's prediction that recency would dominate. The 365-day window features fill positions 2-7, validating Stage 2's window analysis (365d captures the most predictive signal). 180-day features are notably absent from the top 10 -- their 57.7% null rate limits their utility, though the nulls themselves are captured through the binary indicator transforms from Stage 6.
 
-**Alternative technique:** Permutation importance or SHAP values provide model-agnostic importance rankings. SHAP is explored in the scoring dashboard (Stage 11).
+**Alternative technique:** Permutation importance or SHAP values provide model-agnostic importance rankings. SHAP is explored in the scoring dashboard (Stage 12).
 
 ### PR Curves
 
@@ -926,6 +1023,8 @@ The analysis has produced 72 features with strong recency signal, lifecycle segm
 **What the analysis shows:** PR-AUC follows the same ranking as ROC-AUC. No model looks artificially good on one metric but poor on the other.
 
 ### Decision Made
+- **Readiness score: 85/100** -- high-missingness columns are expected and informative
+- **No leakage detected** -- safe to proceed
 - **Primary model:** Gradient Boosting (best AUC at 0.9620)
 - **Fallback model:** Logistic Regression (nearly identical performance, more interpretable, likely more robust to drift)
 - **Class weights:** Balanced (handles 1.54:1 imbalance)
@@ -935,10 +1034,138 @@ The analysis has produced 72 features with strong recency signal, lifecycle segm
 - **Hyperparameter tuning**: Could improve AUC by 1-2%
 - **Feature selection**: The 29 redundant features could be removed with minimal impact
 - **Model without recency**: Test performance without `days_since_last_event` to assess recency dependence
+- **SMOTE oversampling**: Overkill for 1.54:1 ratio; class weights are sufficient
 
 ---
 
-## Stage 11: Production Reality Check -- Does It Hold Up?
+## Stage 11: Business Alignment & Pipeline Generation
+
+With a working model, two questions remain before production: does the model align with business objectives, and can we generate a reproducible pipeline? This stage documents business context, success criteria, and intervention strategies, then auto-generates a complete medallion architecture pipeline from the exploration findings.
+
+[View Business Alignment Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/09_business_alignment.html) | [View Spec Generation Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/10_spec_generation.html)
+
+### Business Context
+
+**Why we document this:** A model with AUC 0.96 is useless if it doesn't align with how the business will act on predictions. The intervention strategy, budget constraints, and success metrics determine how the model gets used -- and whether the project delivers value.
+
+**What the analysis shows:**
+
+| Setting | Value |
+|---------|-------|
+| **Business Objective** | Reduce customer churn by 20% through proactive retention campaigns |
+| **Stakeholders** | Marketing Team, Customer Success, Data Science |
+| **Budget** | $50k/month for retention campaigns |
+| **Timeline** | Q1 2025 |
+
+### Success Metrics
+
+**Why we define these:** Without explicit success criteria, model improvements become open-ended. These metrics create a concrete definition of "done."
+
+| Metric | Target | Priority | Rationale |
+|--------|--------|----------|-----------|
+| Model AUC | >= 0.80 | High | Strong discrimination for prioritizing high-risk customers |
+| Precision at 20% | >= 0.60 | High | Limited budget -- can only target top 20% of predictions |
+| Churn Rate Reduction | 20% | High | Primary business objective |
+| Model Latency | < 100ms | Medium | Required for real-time scoring |
+| Fairness (Demographic Parity) | Ratio >= 0.8 | Medium | Equitable treatment across segments |
+
+Our model already exceeds the AUC target (0.96 vs 0.80 required), giving substantial headroom for production degradation.
+
+### Deployment Requirements
+
+| Requirement | Value |
+|-------------|-------|
+| Scoring Mode | Both batch and real-time |
+| Batch Frequency | Daily |
+| Real-time Latency | < 100ms p99 |
+| Infrastructure | Databricks |
+| Model Registry | MLflow |
+| Monitoring | Drift detection + performance tracking |
+| Retraining | Monthly or on significant drift |
+
+### Intervention Strategy
+
+**Why we define this:** The model produces probability scores. The intervention strategy maps those scores to concrete business actions with known costs and expected returns.
+
+| Risk Level | Intervention | Cost | Expected Retention |
+|------------|-------------|------|--------------------|
+| High (>0.8) | Personal call from account manager | $50/customer | 40% |
+| Medium (0.5-0.8) | Personalized email + discount offer | $10/customer | 20% |
+| Low (<0.5) | Automated engagement email | $0.50/customer | 5% |
+
+This tiered approach concentrates budget on high-risk customers where personal outreach has the highest return, while maintaining low-cost touchpoints for the broader population.
+
+### Pipeline Generation
+
+**Why we generate rather than hand-code:** The exploration notebooks made hundreds of decisions -- window sizes, aggregation functions, transforms, encodings, feature selections. Hand-coding a pipeline that reproduces all of these introduces errors. Auto-generation ensures the production pipeline exactly matches the exploration findings.
+
+**What gets generated:**
+
+| Layer | Recommendations Applied |
+|-------|------------------------|
+| **Bronze** | 52 recommendations (null handling, imputation strategies) |
+| **Silver** | 8 recommendations (derived ratios, interactions) |
+| **Gold** | 303 recommendations (encoding, scaling, transformations, feature selection) |
+
+### Generated Pipeline Structure
+
+```
+generated_pipelines/local/customer_churn/
+├── landing/landing_customer_emails_aggregated.py
+├── bronze/bronze_customer_emails_aggregated.py
+├── silver/silver_merge.py
+├── gold/gold_features.py            # 303 Gold-layer transforms
+├── training/ml_experiment.py        # MLflow experiment tracking
+├── scoring/run_scoring.py
+├── feature_repo/                    # Feast feature store definitions
+│   ├── feature_store.yaml
+│   └── features.py
+├── validation/validate_pipeline.py
+├── config.py
+├── pipeline_runner.py
+├── run_all.py                       # Single entry point
+└── workflow.json
+```
+
+### Pipeline Execution Results
+
+**Why we run the pipeline immediately:** Generating code is not validation. The pipeline must execute end-to-end, reproduce the exploration-phase results, and produce a trained model registered in MLflow.
+
+**What the analysis shows:**
+
+| Stage | Output |
+|-------|--------|
+| **Landing** | 83,198 raw events loaded |
+| **Bronze** | Event aggregation applied |
+| **Silver** | Holdout: 499 entities (10%), Training: 4,499 (90%) |
+| **Gold** | Fit artifacts saved (version `v1.0.0_4131c25b`), features materialized to Feast (4,998 rows) |
+| **Training** | 3 models trained via MLflow |
+
+**Pipeline model results:**
+
+| Model | ROC-AUC | PR-AUC | F1 |
+|-------|---------|--------|-----|
+| **Logistic Regression** | **0.9996** | **0.9484** | **0.8000** |
+| Random Forest | 0.9993 | 0.8734 | 0.6000 |
+| XGBoost | 0.9985 | 0.7996 | 0.6000 |
+
+The pipeline-trained models achieve AUC >0.99 -- slightly higher than the exploration-phase models because the pipeline applies the full recommendation set (303 Gold-layer transforms). The recommendations hash (`4131c25b`) ensures version traceability between the generated pipeline and the exploration findings that produced it.
+
+### Decision Made
+- **Business alignment documented** -- success criteria, deployment requirements, intervention strategy
+- **Pipeline generated** for local track (Feast + MLflow)
+- **Pipeline executed successfully** -- all layers (Landing through Training) complete
+- **Best pipeline model:** Logistic Regression (ROC-AUC 0.9996)
+- **Artifacts versioned:** `v1.0.0_4131c25b` with full recommendation traceability
+
+### Alternative Approaches
+- **Databricks track**: Generate DLT + Unity Catalog + Feature Store pipeline instead of local Feast + MLflow
+- **Manual pipeline**: Hand-code each layer -- higher risk of diverging from exploration findings
+- **Skip business alignment**: Proceed directly to generation -- risks building a model that doesn't serve business needs
+
+---
+
+## Stage 12: Scoring Validation -- Production Reality Check
 
 Cross-validation tells us how well our model generalizes to *similar* data. But production data comes from the *future* -- it may have different patterns due to seasonality, campaign changes, customer behavior shifts, or data quality drift. The scoring pipeline tests our models on a **point-in-time holdout** (the 10% of entities masked before feature computation in Stage 1), simulating true deployment conditions.
 
@@ -1011,7 +1238,7 @@ All three models perform remarkably similarly (AUC spread <0.5%), suggesting the
 
 Looking back across the analysis, a clear arc emerges. We started with 83,000 email events -- raw data that couldn't be modeled directly because each customer had many events and the data was organized by *what happened*, not by *who it happened to*. The first half (Stages 1-4) was entirely about understanding the data well enough to make the aggregation decisions in Stage 5: which time windows to use (driven by the 93-day median cadence from Stage 2), which derived features to create (driven by the recency and momentum signals from Stage 4), and how to handle the heterogeneity across customer segments (driven by Stage 2's eta-squared analysis and validated at every subsequent stage).
 
-Stage 5 was the pivot point -- the transformation from events to entities that every downstream analysis depended on. The second half (Stages 6-11) progressively validated that the aggregated features carried the signal we expected. The zero-inflation in Stage 6 traced back to the quarterly cadence. The false outlier problem in Stage 7 was the segment heterogeneity from Stage 2 manifesting as a practical hazard. The feature importance rankings in Stages 8, 10, and 11 consistently confirmed recency as the dominant predictor, with its Cohen's d growing from 2.23 at the event level (Stage 4) to 2.44 after aggregation (Stage 8) to 4.8x importance dominance in production (Stage 11).
+Stage 5 was the pivot point -- the transformation from events to entities that every downstream analysis depended on. The second half (Stages 6-12) progressively validated that the aggregated features carried the signal we expected. The zero-inflation in Stage 6 traced back to the quarterly cadence. The false outlier problem in Stage 7 was the segment heterogeneity from Stage 2 manifesting as a practical hazard. The feature importance rankings in Stages 8, 10, and 12 consistently confirmed recency as the dominant predictor, with its Cohen's d growing from 2.23 at the event level (Stage 4) to 2.44 after aggregation (Stage 8) to 4.8x importance dominance in production (Stage 12). Stage 11 bridged the gap between exploration and production -- documenting business context, generating a complete pipeline, and executing it end-to-end to validate reproducibility.
 
 The final models achieved AUC >0.95 regardless of algorithm, which tells us the most important lesson: **aggregation choices mattered more than model choices**. The first five stages -- understanding, validating, and transforming the data -- determined the outcome. The modeling stages confirmed it.
 
@@ -1025,7 +1252,7 @@ The final models achieved AUC >0.95 regardless of algorithm, which tells us the 
 
 **Event-level targets mislead.** The raw 97.4:2.6 split (Stage 1) was misleading -- most individual emails don't trigger unsubscription. After entity-level aggregation via `max` (Stage 4), the true distribution was 60.5:39.5 -- a manageable imbalance that only needed `class_weight='balanced'` (Stage 7), not the extreme imbalance handling the event-level view would have suggested.
 
-**Recency dominates -- and that's both a strength and a risk.** `days_since_last_event` achieved Cohen's d of 2.23 at the event level (Stage 4), 2.44 after aggregation (Stage 8), 18.5% of model importance (Stage 10), and 4.8x dominance in production (Stage 11). This consistency across stages builds confidence that the signal is real. But over-reliance on a single feature creates fragility -- if recency patterns shift (new campaign cadences, seasonal changes), the model degrades rapidly. The caution from Stage 4 about trailing vs. leading indicators remains unresolved.
+**Recency dominates -- and that's both a strength and a risk.** `days_since_last_event` achieved Cohen's d of 2.23 at the event level (Stage 4), 2.44 after aggregation (Stage 8), 18.5% of model importance (Stage 10), and 4.8x dominance in production (Stage 12). This consistency across stages builds confidence that the signal is real. But over-reliance on a single feature creates fragility -- if recency patterns shift (new campaign cadences, seasonal changes), the model degrades rapidly. The caution from Stage 4 about trailing vs. leading indicators remains unresolved.
 
 ### What Wasn't Explored (Future Work)
 
@@ -1057,11 +1284,19 @@ git clone https://github.com/aladjov/CR.git
 cd CR
 pip install -e ".[dev,ml]"
 
-# Start with the first notebook
+# Option 1: Run all notebooks sequentially (recommended)
+python scripts/notebooks/run_exploration.py
+
+# Option 2: Run with a dry run first to see which notebooks will execute
+python scripts/notebooks/run_exploration.py --dry-run
+
+# Option 3: Open notebooks interactively
 jupyter lab exploration_notebooks/00_start_here.ipynb
 ```
 
 Set `DATA_PATH = "tests/fixtures/customer_emails.csv"` in the data discovery notebook.
+
+**Automated execution:** `run_exploration.py` runs all notebooks in the correct order with smart skip logic -- temporal notebooks (01a-01d) are skipped when no event-level data is detected, and text notebooks (01a_a, 02a) are skipped when no TEXT columns exist. For this dataset, 17 of 19 notebooks execute (the two text-specific notebooks are skipped).
 
 **Note on the temporal track:** When 01_data_discovery detects event-level data, it automatically activates notebooks 01a through 01d. These notebooks handle temporal analysis and aggregation before the standard column analysis (02+) can proceed. The aggregated data is saved as a parquet file that downstream notebooks load automatically.
 
@@ -1073,6 +1308,8 @@ python generated_pipelines/local/customer_churn/run_all.py
 # Run scoring on holdout data
 python generated_pipelines/local/customer_churn/scoring/run_scoring.py
 ```
+
+**Experiments directory:** After execution, all findings, artifacts, and data are stored in `experiments/`. For a full walkthrough of the directory structure, embedded configuration files, hash versioning, and reproducibility guide, see the [Experiments Overview](../tutorial/customer-emails/experiments_overview.html) reference page.
 ---
 
 ## Next Steps

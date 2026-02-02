@@ -187,6 +187,7 @@ def _run_notebook(
 def run_all(
     notebooks_dir: Path,
     findings_dir: Optional[Path] = None,
+    docs_dir: Optional[Path] = None,
     dry_run: bool = False,
     timeout: int = 600,
     kernel: str = "python3",
@@ -251,7 +252,42 @@ def run_all(
             print(f"    Error: {error[:200]}")
 
     _print_summary(results)
+
+    # Export notebooks to HTML docs
+    if not dry_run:
+        if docs_dir is None:
+            docs_dir = notebooks_dir.parent / "docs" / "tutorial" / "customer-emails"
+        _export_html(notebooks_dir, docs_dir)
+
     return results
+
+
+def _export_html(notebooks_dir: Path, docs_dir: Path) -> None:
+    """Export executed notebooks to HTML in the docs directory."""
+    try:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from export_tutorial_html import ExportConfig, TutorialExporter
+
+        config = ExportConfig(output_dir=docs_dir)
+        exporter = TutorialExporter(config)
+
+        notebooks = sorted(notebooks_dir.glob("*.ipynb"))
+        if not notebooks:
+            print(f"\nNo notebooks found in {notebooks_dir} for HTML export")
+            return
+
+        print(f"\nExporting {len(notebooks)} notebooks to HTML in {docs_dir} ...")
+        exported = []
+        for nb_path in notebooks:
+            result = exporter.export_notebook(nb_path)
+            if result:
+                exported.append(result)
+
+        if exported:
+            exporter.create_index_page(exported, "Customer Retention Tutorial")
+        print(f"HTML export complete: {len(exported)} notebooks exported")
+    except Exception as e:
+        print(f"\nHTML export failed: {e}")
 
 
 def _print_summary(results: Dict[str, str]) -> None:
@@ -309,12 +345,19 @@ def main():
         default="python3",
         help="Jupyter kernel name (default: python3)",
     )
+    parser.add_argument(
+        "--docs-dir",
+        default=None,
+        help="Output directory for HTML export (default: docs/tutorial/customer-emails)",
+    )
     args = parser.parse_args()
     notebooks_dir = Path(args.notebooks_dir).resolve()
     findings_dir = Path(args.findings_dir).resolve() if args.findings_dir else None
+    docs_dir = Path(args.docs_dir).resolve() if args.docs_dir else None
     results = run_all(
         notebooks_dir,
         findings_dir=findings_dir,
+        docs_dir=docs_dir,
         dry_run=args.dry_run,
         timeout=args.timeout,
         kernel=args.kernel,

@@ -7332,7 +7332,12 @@ a.anchor-link {
     if (!diagrams.length) {
       return;
     }
-    const mermaid = (await import("https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.7.0/mermaid.esm.min.mjs")).default;
+    const mermaid = (await import("https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.10.0/mermaid.esm.min.mjs")).default;
+    const elkUrl = "https://cdnjs.cloudflare.com/ajax/libs/mermaid-layout-elk/0.1.9/mermaid-layout-elk.esm.min.mjs";
+    if(elkUrl) {
+      const elkLayouts = (await import(elkUrl)).default;
+      mermaid.registerLayoutLoaders(elkLayouts);
+    }
     const parser = new DOMParser();
 
     mermaid.initialize({
@@ -7429,7 +7434,8 @@ a.anchor-link {
      * Post-process to ensure mermaid diagrams contain only valid SVG and XHTML.
      */
     function cleanMermaidSvg(svg) {
-      return svg.replace(RE_VOID_ELEMENT, replaceVoidElement);
+      svg = svg.replace(RE_VOID_ELEMENT, replaceVoidElement);
+      return `${SVG_XML_HEADER}${svg}`;
     }
 
 
@@ -7455,6 +7461,285 @@ a.anchor-link {
       }
       return `<${tag} ${rest}>`;
     }
+
+
+  /**
+   * Named HTML entities with their decimal equivalent codes.
+   *
+   * @see https://www.w3.org/TR/WD-html40-970708/sgml/entities.html
+   * */
+  const HTML_ENTITIES = `<!ENTITY Aacute "&#193;">
+<!ENTITY aacute "&#225;">
+<!ENTITY Acirc "&#194;">
+<!ENTITY acirc "&#226;">
+<!ENTITY acute "&#180;">
+<!ENTITY AElig "&#198;">
+<!ENTITY aelig "&#230;">
+<!ENTITY Agrave "&#192;">
+<!ENTITY agrave "&#224;">
+<!ENTITY alefsym "&#8501;">
+<!ENTITY Alpha "&#913;">
+<!ENTITY alpha "&#945;">
+<!ENTITY amp "&#38;">
+<!ENTITY and "&#8869;">
+<!ENTITY ang "&#8736;">
+<!ENTITY Aring "&#197;">
+<!ENTITY aring "&#229;">
+<!ENTITY asymp "&#8776;">
+<!ENTITY Atilde "&#195;">
+<!ENTITY atilde "&#227;">
+<!ENTITY Auml "&#196;">
+<!ENTITY auml "&#228;">
+<!ENTITY bdquo "&#8222;">
+<!ENTITY Beta "&#914;">
+<!ENTITY beta "&#946;">
+<!ENTITY brvbar "&#166;">
+<!ENTITY bull "&#8226;">
+<!ENTITY cap "&#8745;">
+<!ENTITY Ccedil "&#199;">
+<!ENTITY ccedil "&#231;">
+<!ENTITY cedil "&#184;">
+<!ENTITY cent "&#162;">
+<!ENTITY Chi "&#935;">
+<!ENTITY chi "&#967;">
+<!ENTITY circ "&#710;">
+<!ENTITY clubs "&#9827;">
+<!ENTITY cong "&#8773;">
+<!ENTITY copy "&#169;">
+<!ENTITY crarr "&#8629;">
+<!ENTITY cup "&#8746;">
+<!ENTITY curren "&#164;">
+<!ENTITY dagger "&#8224;">
+<!ENTITY Dagger "&#8225;">
+<!ENTITY darr "&#8595;">
+<!ENTITY dArr "&#8659;">
+<!ENTITY deg "&#176;">
+<!ENTITY Delta "&#916;">
+<!ENTITY delta "&#948;">
+<!ENTITY diams "&#9830;">
+<!ENTITY divide "&#247;">
+<!ENTITY Eacute "&#201;">
+<!ENTITY eacute "&#233;">
+<!ENTITY Ecirc "&#202;">
+<!ENTITY ecirc "&#234;">
+<!ENTITY Egrave "&#200;">
+<!ENTITY egrave "&#232;">
+<!ENTITY empty "&#8709;">
+<!ENTITY emsp "&#8195;">
+<!ENTITY ensp "&#8194;">
+<!ENTITY epsilon "&#949;">
+<!ENTITY Epsilon "&#917;">
+<!ENTITY equiv "&#8801;">
+<!ENTITY Eta "&#919;">
+<!ENTITY eta "&#951;">
+<!ENTITY ETH "&#208;">
+<!ENTITY eth "&#240;">
+<!ENTITY Euml "&#203;">
+<!ENTITY euml "&#235;">
+<!ENTITY exist "&#8707;">
+<!ENTITY fnof "&#402;">
+<!ENTITY forall "&#8704;">
+<!ENTITY frac12 "&#189;">
+<!ENTITY frac14 "&#188;">
+<!ENTITY frac34 "&#190;">
+<!ENTITY frasl "&#8260;">
+<!ENTITY Gamma "&#915;">
+<!ENTITY gamma "&#947;">
+<!ENTITY ge "&#8805;">
+<!ENTITY gt "&#62;">
+<!ENTITY harr "&#8596;">
+<!ENTITY hArr "&#8660;">
+<!ENTITY hearts "&#9829;">
+<!ENTITY hellip "&#8230;">
+<!ENTITY Iacute "&#205;">
+<!ENTITY iacute "&#237;">
+<!ENTITY Icirc "&#206;">
+<!ENTITY icirc "&#238;">
+<!ENTITY iexcl "&#161;">
+<!ENTITY Igrave "&#204;">
+<!ENTITY igrave "&#236;">
+<!ENTITY image "&#8465;">
+<!ENTITY infin "&#8734;">
+<!ENTITY int "&#8747;">
+<!ENTITY Iota "&#921;">
+<!ENTITY iota "&#953;">
+<!ENTITY iquest "&#191;">
+<!ENTITY isin "&#8712;">
+<!ENTITY Iuml "&#207;">
+<!ENTITY iuml "&#239;">
+<!ENTITY Kappa "&#922;">
+<!ENTITY kappa "&#954;">
+<!ENTITY Lambda "&#923;">
+<!ENTITY lambda "&#955;">
+<!ENTITY lang "&#9001;">
+<!ENTITY laquo "&#171;">
+<!ENTITY larr "&#8592;">
+<!ENTITY lArr "&#8656;">
+<!ENTITY lceil "&#8968;">
+<!ENTITY ldquo "&#8220;">
+<!ENTITY le "&#8804;">
+<!ENTITY lfloor "&#8970;">
+<!ENTITY lowast "&#8727;">
+<!ENTITY loz "&#9674;">
+<!ENTITY lrm "&#8206;">
+<!ENTITY lsaquo "&#8249;">
+<!ENTITY lsquo "&#8216;">
+<!ENTITY lt "&#60;">
+<!ENTITY macr "&#175;">
+<!ENTITY mdash "&#8212;">
+<!ENTITY micro "&#181;">
+<!ENTITY middot "&#183;">
+<!ENTITY minus "&#8722;">
+<!ENTITY Mu "&#924;">
+<!ENTITY mu "&#956;">
+<!ENTITY nabla "&#8711;">
+<!ENTITY nbsp "&#160;">
+<!ENTITY ndash "&#8211;">
+<!ENTITY ne "&#8800;">
+<!ENTITY ni "&#8715;">
+<!ENTITY not "&#172;">
+<!ENTITY notin "&#8713;">
+<!ENTITY nsub "&#8836;">
+<!ENTITY Ntilde "&#209;">
+<!ENTITY ntilde "&#241;">
+<!ENTITY Nu "&#925;">
+<!ENTITY nu "&#957;">
+<!ENTITY Oacute "&#211;">
+<!ENTITY oacute "&#243;">
+<!ENTITY Ocirc "&#212;">
+<!ENTITY ocirc "&#244;">
+<!ENTITY OElig "&#338;">
+<!ENTITY oelig "&#339;">
+<!ENTITY Ograve "&#210;">
+<!ENTITY ograve "&#242;">
+<!ENTITY oline "&#8254;">
+<!ENTITY Omega "&#937;">
+<!ENTITY omega "&#969;">
+<!ENTITY Omicron "&#927;">
+<!ENTITY omicron "&#959;">
+<!ENTITY oplus "&#8853;">
+<!ENTITY or "&#8870;">
+<!ENTITY ordf "&#170;">
+<!ENTITY ordm "&#186;">
+<!ENTITY Oslash "&#216;">
+<!ENTITY oslash "&#248;">
+<!ENTITY Otilde "&#213;">
+<!ENTITY otilde "&#245;">
+<!ENTITY otimes "&#8855;">
+<!ENTITY Ouml "&#214;">
+<!ENTITY ouml "&#246;">
+<!ENTITY para "&#182;">
+<!ENTITY part "&#8706;">
+<!ENTITY permil "&#8240;">
+<!ENTITY perp "&#8869;">
+<!ENTITY Phi "&#934;">
+<!ENTITY phi "&#966;">
+<!ENTITY Pi "&#928;">
+<!ENTITY pi "&#960;">
+<!ENTITY piv "&#982;">
+<!ENTITY plusmn "&#177;">
+<!ENTITY pound "&#163;">
+<!ENTITY prime "&#8242;">
+<!ENTITY Prime "&#8243;">
+<!ENTITY prod "&#8719;">
+<!ENTITY prop "&#8733;">
+<!ENTITY Psi "&#936;">
+<!ENTITY psi "&#968;">
+<!ENTITY quot "&#34;">
+<!ENTITY radic "&#8730;">
+<!ENTITY rang "&#9002;">
+<!ENTITY raquo "&#187;">
+<!ENTITY rarr "&#8594;">
+<!ENTITY rArr "&#8658;">
+<!ENTITY rceil "&#8969;">
+<!ENTITY rdquo "&#8221;">
+<!ENTITY real "&#8476;">
+<!ENTITY reg "&#174;">
+<!ENTITY rfloor "&#8971;">
+<!ENTITY Rho "&#929;">
+<!ENTITY rho "&#961;">
+<!ENTITY rlm "&#8207;">
+<!ENTITY rsaquo "&#8250;">
+<!ENTITY rsquo "&#8217;">
+<!ENTITY sbquo "&#8218;">
+<!ENTITY Scaron "&#352;">
+<!ENTITY scaron "&#353;">
+<!ENTITY sdot "&#8901;">
+<!ENTITY sect "&#167;">
+<!ENTITY shy "&#173;">
+<!ENTITY Sigma "&#931;">
+<!ENTITY sigma "&#963;">
+<!ENTITY sigmaf "&#962;">
+<!ENTITY sim "&#8764;">
+<!ENTITY spades "&#9824;">
+<!ENTITY sub "&#8834;">
+<!ENTITY sube "&#8838;">
+<!ENTITY sum "&#8721;">
+<!ENTITY sup "&#8835;">
+<!ENTITY sup1 "&#185;">
+<!ENTITY sup2 "&#178;">
+<!ENTITY sup3 "&#179;">
+<!ENTITY supe "&#8839;">
+<!ENTITY szlig "&#223;">
+<!ENTITY Tau "&#932;">
+<!ENTITY tau "&#964;">
+<!ENTITY there4 "&#8756;">
+<!ENTITY Theta "&#920;">
+<!ENTITY theta "&#952;">
+<!ENTITY thetasym "&#977;">
+<!ENTITY thinsp "&#8201;">
+<!ENTITY THORN "&#222;">
+<!ENTITY thorn "&#254;">
+<!ENTITY tilde "&#732;">
+<!ENTITY times "&#215;">
+<!ENTITY trade "&#8482;">
+<!ENTITY Uacute "&#218;">
+<!ENTITY uacute "&#250;">
+<!ENTITY uarr "&#8593;">
+<!ENTITY uArr "&#8657;">
+<!ENTITY Ucirc "&#219;">
+<!ENTITY ucirc "&#251;">
+<!ENTITY Ugrave "&#217;">
+<!ENTITY ugrave "&#249;">
+<!ENTITY uml "&#168;">
+<!ENTITY upsih "&#978;">
+<!ENTITY Upsilon "&#933;">
+<!ENTITY upsilon "&#965;">
+<!ENTITY Uuml "&#220;">
+<!ENTITY uuml "&#252;">
+<!ENTITY weierp "&#8472;">
+<!ENTITY Xi "&#926;">
+<!ENTITY xi "&#958;">
+<!ENTITY Yacute "&#221;">
+<!ENTITY yacute "&#253;">
+<!ENTITY yen "&#165;">
+<!ENTITY Yuml "&#376;">
+<!ENTITY yuml "&#255;">
+<!ENTITY Zeta "&#918;">
+<!ENTITY zeta "&#950;">
+<!ENTITY zwj "&#8205;">
+<!ENTITY zwnj "&#8204;">`.replace(/\n/g, ' ');
+
+  /**
+   * A reasonably strict xml declaration.
+   */
+  const XML_DECL = '<?xml version="1.0" standalone="no"?>';
+
+  /**
+   * The beginning of the XML doctype declaration.
+   */
+  const DOCTYPE_START = `<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [`;
+
+  /**
+   * The end of the XML docype declaration.
+   */
+  const DOCTYPE_END = ']>';
+
+  /**
+   * A full header for an SVG XML document.
+   */
+  const SVG_XML_HEADER = `${XML_DECL}
+    ${DOCTYPE_START}${HTML_ENTITIES}${DOCTYPE_END}`;
 
     void Promise.all([...diagrams].map(renderOneMarmaid));
   });
@@ -7643,7 +7928,7 @@ a.anchor-link {
 </style>
 <body class="jp-Notebook" data-jp-theme-light="true" data-jp-theme-name="JupyterLab Light">
 <main>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=d606872b">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=d428a219">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7666,7 +7951,7 @@ a.anchor-link {
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=0466e710">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=0b596fe5">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7676,7 +7961,7 @@ a.anchor-link {
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=8a70a02b">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=b805976d">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7686,7 +7971,10 @@ a.anchor-link {
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.notebook_progress</span><span class="w"> </span><span class="kn">import</span> <span class="n">track_and_export_previous</span>
+<span class="n">track_and_export_previous</span><span class="p">(</span><span class="s2">"10_spec_generation.ipynb"</span><span class="p">)</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">enum</span><span class="w"> </span><span class="kn">import</span> <span class="n">Enum</span>
 
 <span class="k">class</span><span class="w"> </span><span class="nc">GenerationTarget</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
@@ -7737,7 +8025,7 @@ Format: py
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=a73f46fa">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=2ebe3689">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7747,7 +8035,7 @@ Format: py
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=da968603">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=1ae682f2">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7834,7 +8122,7 @@ Multi-dataset: Loaded
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=f777c05c">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=7ad0f92a">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7849,7 +8137,7 @@ Multi-dataset: Loaded
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=5a1dca4e">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=2dd7c21d">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7920,7 +8208,7 @@ GOLD (303 recommendations):
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=4f72471b">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=d2939644">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7931,7 +8219,7 @@ GOLD (303 recommendations):
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=13071a94">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=2b072a27">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7967,7 +8255,7 @@ GOLD (303 recommendations):
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=212ece85">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=ebf9479d">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7977,7 +8265,7 @@ GOLD (303 recommendations):
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=fb514612">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cdac3474">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8006,16 +8294,16 @@ GOLD (303 recommendations):
         <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">saved</span><span class="p">:</span>
             <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  </span><span class="si">{</span><span class="n">f</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
     
-    <span class="k">if</span> <span class="n">multi_dataset</span><span class="p">:</span>
-        <span class="n">pipeline_gen</span> <span class="o">=</span> <span class="n">PipelineGenerator</span><span class="p">(</span>
-            <span class="n">findings_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">FINDINGS_DIR</span><span class="p">),</span>
-            <span class="n">output_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">output_dir</span><span class="p">),</span>
-            <span class="n">pipeline_name</span><span class="o">=</span><span class="n">PIPELINE_NAME</span>
-        <span class="p">)</span>
-        <span class="n">orch_files</span> <span class="o">=</span> <span class="n">pipeline_gen</span><span class="o">.</span><span class="n">generate</span><span class="p">()</span>
-        <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Generated pipeline files (Bronze/Silver/Gold/Training):"</span><span class="p">)</span>
-        <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">orch_files</span><span class="p">:</span>
-            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  </span><span class="si">{</span><span class="n">f</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="n">pipeline_gen</span> <span class="o">=</span> <span class="n">PipelineGenerator</span><span class="p">(</span>
+        <span class="n">findings_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">FINDINGS_DIR</span><span class="p">),</span>
+        <span class="n">output_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">output_dir</span><span class="p">),</span>
+        <span class="n">pipeline_name</span><span class="o">=</span><span class="n">PIPELINE_NAME</span><span class="p">,</span>
+        <span class="n">experiments_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">EXPERIMENTS_DIR</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="n">orch_files</span> <span class="o">=</span> <span class="n">pipeline_gen</span><span class="o">.</span><span class="n">generate</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Generated pipeline files (Bronze/Silver/Gold/Training):"</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">orch_files</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  </span><span class="si">{</span><span class="n">f</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="k">else</span><span class="p">:</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Skipping Local generation (target is </span><span class="si">{</span><span class="n">GENERATION_TARGET</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
 </pre></div>
@@ -8044,6 +8332,7 @@ GOLD (303 recommendations):
 Generated pipeline files (Bronze/Silver/Gold/Training):
   ../generated_pipelines/local/customer_churn/run_all.py
   ../generated_pipelines/local/customer_churn/config.py
+  ../generated_pipelines/local/customer_churn/landing/landing_customer_emails_aggregated.py
   ../generated_pipelines/local/customer_churn/bronze/bronze_customer_emails_aggregated.py
   ../generated_pipelines/local/customer_churn/silver/silver_merge.py
   ../generated_pipelines/local/customer_churn/gold/gold_features.py
@@ -8052,15 +8341,17 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
   ../generated_pipelines/local/customer_churn/workflow.json
   ../generated_pipelines/local/customer_churn/feature_repo/feature_store.yaml
   ../generated_pipelines/local/customer_churn/feature_repo/features.py
-  ../generated_pipelines/local/customer_churn/scoring/run_scoring.py
-  ../generated_pipelines/local/customer_churn/scoring/scoring_dashboard.ipynb
+  ../generated_pipelines/local/customer_churn/validation/__init__.py
+  ../generated_pipelines/local/customer_churn/validation/validate_pipeline.py
+  ../generated_pipelines/local/customer_churn/validation/run_validation.py
+  ../generated_pipelines/local/customer_churn/docs/exploration_report.py
 </pre>
 </div>
 </div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=b3bd2b40">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=ad9a65a4">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8070,7 +8361,7 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=e1a47899">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=49d55480">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8133,7 +8424,7 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=306c4c63">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=1ed22b7d">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8143,7 +8434,7 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=e2ecf763">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=fffd0b3a">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8322,7 +8613,7 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=0a2ac87f">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=09cfe62c">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8333,7 +8624,7 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=dda5fc77">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=8a006314">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8402,7 +8693,7 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=f077300d">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=6e53142b">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8413,7 +8704,7 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=afa15261">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=482c6e06">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8428,27 +8719,26 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 
 <span class="n">RUN_PIPELINE</span> <span class="o">=</span> <span class="kc">True</span>
 
-<span class="n">run_all_path</span> <span class="o">=</span> <span class="n">output_dir</span> <span class="o">/</span> <span class="s2">"run_all.py"</span>
+<span class="n">runner_path</span> <span class="o">=</span> <span class="n">output_dir</span> <span class="o">/</span> <span class="s2">"pipeline_runner.py"</span>
 
 <span class="k">if</span> <span class="n">RUN_PIPELINE</span> <span class="ow">and</span> <span class="n">GENERATION_TARGET</span> <span class="o">==</span> <span class="n">GenerationTarget</span><span class="o">.</span><span class="n">LOCAL_FEAST_MLFLOW</span><span class="p">:</span>
     <span class="kn">import</span><span class="w"> </span><span class="nn">subprocess</span>
-    <span class="k">if</span> <span class="n">run_all_path</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Running: python </span><span class="si">{</span><span class="n">run_all_path</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-        <span class="nb">print</span><span class="p">(</span><span class="s2">"Pipeline will run and MLflow UI will open automatically..."</span><span class="p">)</span>
-        <span class="n">subprocess</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="s2">"python"</span><span class="p">,</span> <span class="s2">"run_all.py"</span><span class="p">],</span> <span class="n">cwd</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">run_all_path</span><span class="o">.</span><span class="n">parent</span><span class="o">.</span><span class="n">resolve</span><span class="p">()))</span>
+    <span class="k">if</span> <span class="n">runner_path</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Running: python </span><span class="si">{</span><span class="n">runner_path</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"Pipeline will run Bronze → Silver → Gold → Training..."</span><span class="p">)</span>
+        <span class="n">subprocess</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="s2">"python"</span><span class="p">,</span> <span class="s2">"pipeline_runner.py"</span><span class="p">],</span> <span class="n">cwd</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">output_dir</span><span class="o">.</span><span class="n">resolve</span><span class="p">()))</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"run_all.py not found. Generate first by running cells above."</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"pipeline_runner.py not found. Generate first by running cells above."</span><span class="p">)</span>
 <span class="k">else</span><span class="p">:</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">"To run the complete pipeline:"</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">  cd </span><span class="si">{</span><span class="n">output_dir</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  python run_all.py"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  python pipeline_runner.py"</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">This will:"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"  1. Run Bronze layers (parallel)"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"  2. Run Silver merge"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"  3. Run Gold features"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"  4. Train models with MLflow"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"  5. Auto-start MLflow UI and open browser"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"  6. Press Ctrl+C to stop MLflow UI when done"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"  1. Run Landing layers (event sources)"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"  2. Run Bronze layers (parallel)"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"  3. Run Silver merge"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"  4. Run Gold features"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"  5. Train models with MLflow"</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -8462,64 +8752,151 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>Running: python ../generated_pipelines/local/customer_churn/run_all.py
-Pipeline will run and MLflow UI will open automatically...
-</pre>
-</div>
-</div>
-<div class="jp-OutputArea-child">
-<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
-<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>Running customer_churn
-==================================================
-Experiments directory: /Users/Vital/python/CustomerRetention/experiments
-MLflow tracking: sqlite:////Users/Vital/python/CustomerRetention/experiments/mlruns.db
-Findings directory: /Users/Vital/python/CustomerRetention/experiments/findings
-
-[1/4] Bronze (parallel)...
+<pre>Running: python pipeline_runner.py
+Pipeline will run Bronze → Silver → Gold → Training...
 </pre>
 </div>
 </div>
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="application/vnd.jupyter.stderr" tabindex="0">
-<pre>Traceback (most recent call last):
-  File "/Users/Vital/python/CustomerRetention/generated_pipelines/local/customer_churn/run_all.py", line 110, in &lt;module&gt;
-    run_pipeline()
-  File "/Users/Vital/python/CustomerRetention/generated_pipelines/local/customer_churn/run_all.py", line 82, in run_pipeline
-    run_bronze_parallel()
-  File "/Users/Vital/python/CustomerRetention/generated_pipelines/local/customer_churn/run_all.py", line 44, in run_bronze_parallel
-    list(ex.map(lambda f: f(), bronze_funcs))
-  File "/opt/anaconda3/lib/python3.12/concurrent/futures/_base.py", line 619, in result_iterator
-    yield _result_or_cancel(fs.pop())
-          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/anaconda3/lib/python3.12/concurrent/futures/_base.py", line 317, in _result_or_cancel
-    return fut.result(timeout)
-           ^^^^^^^^^^^^^^^^^^^
-  File "/opt/anaconda3/lib/python3.12/concurrent/futures/_base.py", line 456, in result
-    return self.__get_result()
-           ^^^^^^^^^^^^^^^^^^^
-  File "/opt/anaconda3/lib/python3.12/concurrent/futures/_base.py", line 401, in __get_result
-    raise self._exception
-  File "/opt/anaconda3/lib/python3.12/concurrent/futures/thread.py", line 58, in run
-    result = self.fn(*self.args, **self.kwargs)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/Vital/python/CustomerRetention/generated_pipelines/local/customer_churn/run_all.py", line 44, in &lt;lambda&gt;
-    list(ex.map(lambda f: f(), bronze_funcs))
-                          ^^^
-  File "/Users/Vital/python/CustomerRetention/generated_pipelines/local/customer_churn/bronze/bronze_customer_emails_aggregated.py", line 24, in run_bronze_customer_emails_aggregated
-    df = load_customer_emails_aggregated()
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/Vital/python/CustomerRetention/generated_pipelines/local/customer_churn/bronze/bronze_customer_emails_aggregated.py", line 12, in load_customer_emails_aggregated
-    raise FileNotFoundError(f"Source file not found: {path}")
-FileNotFoundError: Source file not found: /Users/Vital/python/CustomerRetention/customer_emails_408768_aggregated.parquet
+<pre>2026/02/02 08:04:07 INFO alembic.runtime.plugins: setup plugin alembic.autogenerate.schemas
+2026/02/02 08:04:07 INFO alembic.runtime.plugins: setup plugin alembic.autogenerate.tables
+2026/02/02 08:04:07 INFO alembic.runtime.plugins: setup plugin alembic.autogenerate.types
+2026/02/02 08:04:07 INFO alembic.runtime.plugins: setup plugin alembic.autogenerate.constraints
+2026/02/02 08:04:07 INFO alembic.runtime.plugins: setup plugin alembic.autogenerate.defaults
+2026/02/02 08:04:07 INFO alembic.runtime.plugins: setup plugin alembic.autogenerate.comments
+2026/02/02 08:04:07 INFO mlflow.store.db.utils: Creating initial MLflow database tables...
+2026/02/02 08:04:07 INFO mlflow.store.db.utils: Updating database tables
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Context impl SQLiteImpl.
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Will assume non-transactional DDL.
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade  -&gt; 451aebb31d03, add metric step
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 451aebb31d03 -&gt; 90e64c465722, migrate user column to tags
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 90e64c465722 -&gt; 181f10493468, allow nulls for metric values
+</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="application/vnd.jupyter.stderr" tabindex="0">
+<pre>2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 181f10493468 -&gt; df50e92ffc5e, Add Experiment Tags Table
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade df50e92ffc5e -&gt; 7ac759974ad8, Update run tags with larger limit
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 7ac759974ad8 -&gt; 89d4b8295536, create latest metrics table
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 89d4b8295536 -&gt; 2b4d017a5e9b, add model registry tables to db
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 2b4d017a5e9b -&gt; cfd24bdc0731, Update run status constraint with killed
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade cfd24bdc0731 -&gt; 0a8213491aaa, drop_duplicate_killed_constraint
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 0a8213491aaa -&gt; 728d730b5ebd, add registered model tags table
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 728d730b5ebd -&gt; 27a6a02d2cf1, add model version tags table
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 27a6a02d2cf1 -&gt; 84291f40a231, add run_link to model_version
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 84291f40a231 -&gt; a8c4a736bde6, allow nulls for run_id
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade a8c4a736bde6 -&gt; 39d1c3be5f05, add_is_nan_constraint_for_metrics_tables_if_necessary
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 39d1c3be5f05 -&gt; c48cb773bb87, reset_default_value_for_is_nan_in_metrics_table_for_mysql
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade c48cb773bb87 -&gt; bd07f7e963c5, create index on run_uuid
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade bd07f7e963c5 -&gt; 0c779009ac13, add deleted_time field to runs table
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 0c779009ac13 -&gt; cc1f77228345, change param value length to 500
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade cc1f77228345 -&gt; 97727af70f4d, Add creation_time and last_update_time to experiments table
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 97727af70f4d -&gt; 3500859a5d39, Add Model Aliases table
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 3500859a5d39 -&gt; 7f2a7d5fae7d, add datasets inputs input_tags tables
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 7f2a7d5fae7d -&gt; 2d6e25af4d3e, increase max param val length from 500 to 8000
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 2d6e25af4d3e -&gt; acf3f17fdcc7, add storage location field to model versions
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade acf3f17fdcc7 -&gt; 867495a8f9d4, add trace tables
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 867495a8f9d4 -&gt; 5b0e9adcef9c, add cascade deletion to trace tables foreign keys
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 5b0e9adcef9c -&gt; 4465047574b1, increase max dataset schema size
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 4465047574b1 -&gt; f5a4f2784254, increase run tag value limit to 8000
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade f5a4f2784254 -&gt; 0584bdc529eb, add cascading deletion to datasets from experiments
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 0584bdc529eb -&gt; 400f98739977, add logged model tables
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 400f98739977 -&gt; 6953534de441, add step to inputs table
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 6953534de441 -&gt; bda7b8c39065, increase_model_version_tag_value_limit
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade bda7b8c39065 -&gt; cbc13b556ace, add V3 trace schema columns
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade cbc13b556ace -&gt; 770bee3ae1dd, add assessments table
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 770bee3ae1dd -&gt; a1b2c3d4e5f6, add spans table
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade a1b2c3d4e5f6 -&gt; de4033877273, create entity_associations table
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade de4033877273 -&gt; 1a0cddfcaa16, Add webhooks and webhook_events tables
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 1a0cddfcaa16 -&gt; 534353b11cbc, add scorer tables
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 534353b11cbc -&gt; 71994744cf8e, add evaluation datasets
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 71994744cf8e -&gt; 3da73c924c2f, add outputs to dataset record
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 3da73c924c2f -&gt; bf29a5ff90ea, add jobs table
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade bf29a5ff90ea -&gt; 1bd49d398cd23, add secrets tables
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 1bd49d398cd23 -&gt; b7c8d9e0f1a2, add trace metrics table
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade b7c8d9e0f1a2 -&gt; 5d2d30f0abce, update job table
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 5d2d30f0abce -&gt; c9d4e5f6a7b8, add routing strategy to endpoints and linkage type to mappings
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade c9d4e5f6a7b8 -&gt; 2c33131f4dae, add online_scoring_configs table
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Running upgrade 2c33131f4dae -&gt; d3e4f5a6b7c8, add display_name to endpoint_bindings
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Context impl SQLiteImpl.
+2026/02/02 08:04:07 INFO alembic.runtime.migration: Will assume non-transactional DDL.
+</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="application/vnd.jupyter.stderr" tabindex="0">
+<pre>2026/02/02 08:04:10 WARNING mlflow.utils.environment: Failed to resolve installed pip version. ``pip`` will be added to conda.yaml environment spec without a version specifier.
+</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="application/vnd.jupyter.stderr" tabindex="0">
+<pre>2026/02/02 08:04:13 WARNING mlflow.utils.environment: Failed to resolve installed pip version. ``pip`` will be added to conda.yaml environment spec without a version specifier.
+</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="application/vnd.jupyter.stderr" tabindex="0">
+<pre>2026/02/02 08:04:16 WARNING mlflow.utils.environment: Failed to resolve installed pip version. ``pip`` will be added to conda.yaml environment spec without a version specifier.
+</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>Starting pipeline: customer_churn
+
+[1/6] Landing (event sources)...
+Landing: customer_emails_aggregated
+  Raw records: 83,198
+  Records: 83,198
+  Output: /Users/Vital/python/CustomerRetention/experiments/data/landing/customer_emails_aggregated.parquet
+Landing complete
+
+[2/6] Bronze (parallel)...
+Bronze complete
+
+[3/6] Silver...
+Creating holdout set (10% of data)...
+  Holdout records: 499 (10%)
+  Training records: 4,499 (90%)
+Silver complete
+
+[4/6] Gold...
+Fit artifacts saved to: /Users/Vital/python/CustomerRetention/experiments/artifacts/4131c25b
+Gold features saved with version: v1.0.0_4131c25b
+  Excluding holdout columns from Feast: ['original_target']
+Features materialized to Feast: /Users/Vital/python/CustomerRetention/experiments/feature_repo/data/customer_churn_features.parquet
+  Entity key: customer_id
+  Feature view: customer_churn_features
+  Rows: 4,998
+Gold complete
+
+[5/6] Training...
+MLflow tracking: sqlite:////Users/Vital/python/CustomerRetention/experiments/mlruns.db
+Artifacts: /Users/Vital/python/CustomerRetention/experiments/mlruns/artifacts
+
+Loading training data from Feast...
+Feast repo not initialized, falling back to data file
+logistic_regression: ROC-AUC=0.9996, PR-AUC=0.9484, F1=0.8000
+random_forest: ROC-AUC=0.9993, PR-AUC=0.8734, F1=0.6000
+xgboost: ROC-AUC=0.9985, PR-AUC=0.7996, F1=0.6000
+Best: logistic_regression (ROC-AUC=0.9996)
+Training complete
 </pre>
 </div>
 </div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=aff846b6">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=4598ce61">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8530,7 +8907,7 @@ FileNotFoundError: Source file not found: /Users/Vital/python/CustomerRetention/
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=20fc9754">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=985dd6db">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8583,45 +8960,51 @@ Format: py
 Output: ../generated_pipelines/local/customer_churn
 
 ├── __pycache__/
-│   └── config.cpython-312.pyc (3,040 bytes)
+│   └── config.cpython-312.pyc (4,028 bytes)
 ├── bronze/
 │   ├── __pycache__/
-│   │   └── bronze_customer_emails_aggregated.cpython-312.pyc (1,709 bytes)
-│   └── bronze_customer_emails_aggregated.py (891 bytes)
+│   │   └── bronze_customer_emails_aggregated.cpython-312.pyc (14,975 bytes)
+│   └── bronze_customer_emails_aggregated.py (15,765 bytes)
+├── docs/
+│   └── exploration_report.py (941 bytes)
 ├── feature_repo/
 │   ├── data/
-│   │   └── registry.db (55 bytes)
 │   ├── feature_store.yaml (188 bytes)
 │   └── features.py (1,112 bytes)
 ├── gold/
 │   ├── __pycache__/
-│   │   └── gold_features.cpython-312.pyc (4,998 bytes)
-│   └── gold_features.py (3,269 bytes)
-├── scoring/
-│   ├── mlruns/
-│   ├── run_scoring.py (8,077 bytes)
-│   └── scoring_dashboard.ipynb (26,598 bytes)
+│   │   └── gold_features.cpython-312.pyc (18,442 bytes)
+│   └── gold_features.py (30,114 bytes)
+├── landing/
+│   ├── __pycache__/
+│   │   └── landing_customer_emails_aggregated.cpython-312.pyc (2,960 bytes)
+│   └── landing_customer_emails_aggregated.py (1,685 bytes)
 ├── silver/
 │   ├── __pycache__/
-│   │   └── silver_merge.cpython-312.pyc (4,034 bytes)
-│   └── silver_merge.py (2,940 bytes)
+│   │   └── silver_merge.cpython-312.pyc (7,278 bytes)
+│   └── silver_merge.py (6,823 bytes)
 ├── training/
 │   ├── __pycache__/
-│   │   └── ml_experiment.cpython-312.pyc (13,281 bytes)
-│   └── ml_experiment.py (10,130 bytes)
-├── config.py (2,403 bytes)
-├── pipeline.py (8,589 bytes)
-├── pipeline_runner.py (1,343 bytes)
+│   │   └── ml_experiment.cpython-312.pyc (13,754 bytes)
+│   └── ml_experiment.py (10,434 bytes)
+├── validation/
+│   ├── __init__.py (0 bytes)
+│   ├── run_validation.py (701 bytes)
+│   └── validate_pipeline.py (5,484 bytes)
+├── config.py (3,613 bytes)
+├── feature_importance.csv (348 bytes)
+├── pipeline.py (9,095 bytes)
+├── pipeline_runner.py (2,428 bytes)
 ├── requirements.txt (111 bytes)
-├── run_all.py (3,312 bytes)
-└── workflow.json (968 bytes)
+├── run_all.py (3,636 bytes)
+└── workflow.json (1,276 bytes)
 </pre>
 </div>
 </div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=e98b2e5e">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=1dc48b8c">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8632,7 +9015,7 @@ Output: ../generated_pipelines/local/customer_churn
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=219e8376">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=91b4ade3">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8726,7 +9109,7 @@ Use this hash to:
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=967af89a">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=caef46fa">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8737,7 +9120,7 @@ Use this hash to:
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=ba7a26e4">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cd13afb0">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8857,7 +9240,7 @@ Use this hash to:
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=d153f651">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=d0ccb535">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8898,6 +9281,20 @@ python<span class="w"> </span>run_all.py
 </ul>
 <hr/>
 <h2 id="Complete!">Complete!<a class="anchor-link" href="#Complete!">¶</a></h2>
+</div>
+</div>
+</div>
+</div>
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=53e908ce">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
+</div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
+<blockquote>
+<p><strong>Save Reminder:</strong> Save this notebook (Ctrl+S / Cmd+S) before running the next one.
+The next notebook will automatically export this notebook's HTML documentation from the saved file.</p>
+</blockquote>
 </div>
 </div>
 </div>
