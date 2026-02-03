@@ -5,9 +5,12 @@ import pandas as pd
 import pytest
 
 from customer_retention.stages.profiling.temporal_analyzer import (
+    SeasonalityResult,
     TemporalAnalysis,
     TemporalAnalyzer,
     TemporalGranularity,
+    TemporalRecommendation,
+    TemporalRecommendationType,
 )
 
 
@@ -332,3 +335,170 @@ class TestTemporalRecommendations:
         recs = analyzer.recommend_features(dates, "account_created")
         has_tenure = any("tenure" in r.feature_name.lower() for r in recs)
         assert has_tenure
+
+
+class TestActionDescription:
+
+    def test_feature_engineering_description(self):
+        rec = TemporalRecommendation(
+            feature_name="days_since_signup",
+            recommendation_type=TemporalRecommendationType.FEATURE_ENGINEERING,
+            category="recency",
+            reason="test",
+            priority="medium",
+        )
+        assert rec.action_description == "Create feature: days_since_signup"
+
+    def test_modeling_strategy_description(self):
+        rec = TemporalRecommendation(
+            feature_name="time_based_split",
+            recommendation_type=TemporalRecommendationType.MODELING_STRATEGY,
+            category="split",
+            reason="test",
+            priority="high",
+        )
+        assert rec.action_description == "Modeling: time_based_split"
+
+    def test_data_quality_description(self):
+        rec = TemporalRecommendation(
+            feature_name="placeholder_flag",
+            recommendation_type=TemporalRecommendationType.DATA_QUALITY,
+            category="filter",
+            reason="test",
+            priority="high",
+        )
+        assert rec.action_description == "Data quality: placeholder_flag"
+
+
+class TestEdgeCases:
+
+    @pytest.fixture
+    def analyzer(self):
+        return TemporalAnalyzer()
+
+    def test_detect_granularity_empty_dates(self, analyzer):
+        dates = pd.Series([], dtype="datetime64[ns]")
+        assert analyzer.detect_granularity(dates) == TemporalGranularity.MONTH
+
+    def test_detect_granularity_all_nat(self, analyzer):
+        dates = pd.Series([pd.NaT, pd.NaT])
+        assert analyzer.detect_granularity(dates) == TemporalGranularity.MONTH
+
+    def test_aggregate_by_granularity_empty(self, analyzer):
+        dates = pd.Series([], dtype="datetime64[ns]")
+        result = analyzer.aggregate_by_granularity(dates, TemporalGranularity.MONTH)
+        assert result.empty
+
+    def test_analyze_all_nulls(self, analyzer):
+        dates = pd.Series([pd.NaT, None, pd.NaT])
+        analysis = analyzer.analyze(dates)
+        assert analysis.span_days == 0
+        assert pd.isna(analysis.min_date)
+        assert pd.isna(analysis.max_date)
+        assert analysis.null_count == 3
+        assert analysis.total_count == 3
+
+    def test_null_percentage_zero_total(self):
+        analysis = TemporalAnalysis(
+            granularity=TemporalGranularity.MONTH,
+            min_date=pd.NaT,
+            max_date=pd.NaT,
+            span_days=0,
+            total_count=0,
+            null_count=0,
+            period_counts=pd.DataFrame(),
+        )
+        assert analysis.null_percentage == 0.0
+
+    def test_growth_rate_single_month_data(self, analyzer):
+        dates = pd.Series([datetime(2023, 1, 15)] * 100)
+        result = analyzer.calculate_growth_rate(dates)
+        assert result["has_data"] is False
+
+    def test_growth_rate_zero_first_month(self, analyzer):
+        # Two months with first month having 0 records - impossible directly
+        # but test with first month count = 0 via small data
+        dates = pd.Series([datetime(2023, 1, 1), datetime(2023, 3, 1)])
+        result = analyzer.calculate_growth_rate(dates)
+        assert result["has_data"] is True
+
+    def test_recommend_features_empty_dates(self, analyzer):
+        dates = pd.Series([], dtype="datetime64[ns]")
+        recs = analyzer.recommend_features(dates, "test_col")
+        assert recs == []
+
+    def test_recommend_features_all_nat(self, analyzer):
+        dates = pd.Series([pd.NaT, pd.NaT])
+        recs = analyzer.recommend_features(dates, "test_col")
+        assert recs == []
+
+    def test_recommend_features_moderate_trend(self, analyzer):
+        # Moderate growth (20-50%) should recommend time_aware_validation
+        dates = []
+        for month in range(1, 13):
+            # Moderate growth: 100 -> 130 over the year
+            count = 100 + month * 3
+            dates.extend([datetime(2023, month, 15)] * count)
+        recs = analyzer.recommend_features(pd.Series(dates), "order_date")
+        split_recs = [r for r in recs if r.category == "split"]
+        if split_recs:
+            assert any("time_aware_validation" in r.feature_name for r in split_recs)
+
+    def test_extract_period_quarter(self, analyzer):
+        dates = pd.Series(pd.date_range("2020-01-01", "2023-12-31", freq="MS"))
+        parsed = pd.to_datetime(dates)
+        result = analyzer._extract_period(parsed, TemporalGranularity.QUARTER)
+        assert len(result) == len(dates)
+
+    def test_extract_period_week(self, analyzer):
+        dates = pd.Series(pd.date_range("2023-01-01", periods=30, freq="D"))
+        parsed = pd.to_datetime(dates)
+        result = analyzer._extract_period(parsed, TemporalGranularity.WEEK)
+        assert len(result) == 30
+
+    def test_seasonality_low_month_count(self, analyzer):
+        # Enough data but only 2 distinct months
+        dates = pd.Series(
+            pd.date_range("2023-01-01", periods=40, freq="D")
+        )
+        result = analyzer.analyze_seasonality(dates)
+        # Should still produce peak/trough if >= 3 months
+        assert isinstance(result, SeasonalityResult)
+
+    def test_weekend_imbalance_recommendation(self, analyzer):
+        # Create data with strong weekday bias
+        dates = []
+        for d in pd.date_range("2022-01-01", "2023-12-31", freq="D"):
+            if d.weekday() < 5:
+                dates.extend([d] * 10)  # 10 records per weekday
+            else:
+                dates.extend([d] * 2)   # 2 records per weekend day
+        recs = analyzer.recommend_features(pd.Series(dates), "activity_date")
+        weekend_recs = [r for r in recs if r.category == "extraction"]
+        assert len(weekend_recs) >= 1
+        assert "weekend" in weekend_recs[0].feature_name
+
+    def test_seasonality_with_weekly_cv_above_threshold(self, analyzer):
+        # Create data with high weekly CV
+        dates = []
+        for year in range(2020, 2023):
+            for month in range(1, 13):
+                for day in range(1, 28):
+                    d = datetime(year, month, day)
+                    if d.weekday() < 5:
+                        dates.extend([d] * 5)
+                    else:
+                        dates.extend([d] * 1)
+        result = analyzer.analyze_seasonality(pd.Series(dates))
+        assert result.has_seasonality
+        assert result.dominant_period == "weekly"
+        assert result.confidence > 0
+
+    def test_growth_rate_declining_overall(self, analyzer):
+        dates = []
+        for month in range(1, 7):
+            count = 200 - month * 30
+            dates.extend([datetime(2023, month, 15)] * max(count, 1))
+        result = analyzer.calculate_growth_rate(pd.Series(dates))
+        assert result["has_data"] is True
+        assert result["overall_growth_pct"] < 0

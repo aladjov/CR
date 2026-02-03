@@ -93,7 +93,7 @@ def main():
         explorations_dir.mkdir()
 
         print(f"\n{'='*60}")
-        print(f"NOTEBOOK VALIDATION")
+        print("NOTEBOOK VALIDATION")
         print(f"{'='*60}")
         print(f"Notebooks to test: {', '.join(to_run)}")
         print(f"Test data: {TEST_DATA_PATH}")
@@ -139,7 +139,7 @@ def main():
 
         # Summary
         print(f"\n{'='*60}")
-        print(f"SUMMARY")
+        print("SUMMARY")
         print(f"{'='*60}")
 
         passed = sum(1 for r in results if r[2] == "PASS")
@@ -149,14 +149,14 @@ def main():
         print(f"Time: {total_time:.1f}s")
 
         if failed > 0:
-            print(f"\nFailed notebooks:")
+            print("\nFailed notebooks:")
             for nb_num, desc, status, error in results:
                 if status == "FAIL":
                     print(f"  - {nb_num}: {desc}")
                     print(f"    {error[:200]}")
             sys.exit(1)
         else:
-            print(f"\nAll notebooks passed!")
+            print("\nAll notebooks passed!")
             sys.exit(0)
 
 

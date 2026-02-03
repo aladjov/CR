@@ -32,7 +32,7 @@ class DeduplicateRecommendation(CleaningRecommendation):
         dup_count = len(duplicated_df) - duplicated_df.drop_duplicates(subset=existing_keys).shape[0]
         self._fit_params["duplicate_count"] = dup_count
         first_key = existing_keys[0]
-        self._fit_params["duplicate_keys"] = duplicated_df[first_key].unique().tolist()
+        self._fit_params["duplicate_keys"] = list(duplicated_df[first_key].unique())
 
     def _transform_local(self, df: pd.DataFrame) -> RecommendationResult:
         df = df.copy()

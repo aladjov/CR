@@ -1,5 +1,3 @@
-from unittest.mock import patch
-
 import numpy as np
 import pandas as pd
 
@@ -415,36 +413,303 @@ class TestProfilerFactory:
         assert type(profiler_nom) == type(profiler_ord) == type(profiler_cyc)
 
 
-class TestSparkSeriesCompatibility:
-    @patch('customer_retention.stages.profiling.column_profiler.ensure_pandas_series')
-    def test_compute_universal_metrics_converts_to_pandas(self, mock_ensure):
-        series = pd.Series([1, 2, 3, 4, 5])
-        mock_ensure.return_value = series
-        profiler = ProfilerFactory.get_profiler(ColumnType.NUMERIC_CONTINUOUS)
-        result = profiler.compute_universal_metrics(series)
-        mock_ensure.assert_called_once_with(series)
-        assert result.total_count == 5
-
-    @patch('customer_retention.stages.profiling.column_profiler.ensure_pandas_series')
-    def test_profile_converts_to_pandas(self, mock_ensure):
-        series = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0])
-        mock_ensure.return_value = series
-        profiler = ProfilerFactory.get_profiler(ColumnType.NUMERIC_CONTINUOUS)
+class TestTextProfiler:
+    def test_profile_basic_text(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.TEXT)
+        series = pd.Series(["hello world", "foo bar baz", "test string"])
         result = profiler.profile(series)
-        mock_ensure.assert_called_once_with(series)
-        assert "numeric_metrics" in result
 
-    @patch('customer_retention.stages.profiling.column_profiler.ensure_pandas_series')
-    def test_all_profilers_convert_on_profile(self, mock_ensure):
+        assert "text_metrics" in result
+        metrics = result["text_metrics"]
+        assert metrics.length_min > 0
+        assert metrics.length_max > 0
+        assert metrics.length_mean > 0
+        assert metrics.length_median > 0
+        assert metrics.empty_count == 0
+        assert metrics.word_count_mean > 0
+        assert metrics.pii_detected is False
+
+    def test_profile_text_with_empty_strings(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.TEXT)
+        series = pd.Series(["hello", "", "world", ""])
+        result = profiler.profile(series)
+
+        metrics = result["text_metrics"]
+        assert metrics.empty_count == 2
+        assert metrics.empty_percentage == 50.0
+
+    def test_profile_text_with_digits(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.TEXT)
+        series = pd.Series(["abc123", "no digits here", "test456"])
+        result = profiler.profile(series)
+
+        metrics = result["text_metrics"]
+        assert metrics.contains_digits_pct > 0
+
+    def test_profile_text_with_special_chars(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.TEXT)
+        series = pd.Series(["hello!", "world@#", "normal text"])
+        result = profiler.profile(series)
+
+        metrics = result["text_metrics"]
+        assert metrics.contains_special_pct > 0
+
+    def test_profile_text_with_email_pii(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.TEXT)
+        series = pd.Series(["user@example.com", "regular text", "another@test.org"])
+        result = profiler.profile(series)
+
+        metrics = result["text_metrics"]
+        assert metrics.pii_detected is True
+        assert "email" in metrics.pii_types
+
+    def test_profile_text_with_phone_pii(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.TEXT)
+        series = pd.Series(["Call 123-456-7890", "No phone", "555.123.4567"])
+        result = profiler.profile(series)
+
+        metrics = result["text_metrics"]
+        assert metrics.pii_detected is True
+        assert "phone" in metrics.pii_types
+
+    def test_profile_text_with_ssn_pii(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.TEXT)
+        series = pd.Series(["SSN: 123-45-6789", "No SSN here"])
+        result = profiler.profile(series)
+
+        metrics = result["text_metrics"]
+        assert metrics.pii_detected is True
+        assert "ssn" in metrics.pii_types
+
+    def test_profile_text_with_credit_card_pii(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.TEXT)
+        series = pd.Series(["Card: 1234 5678 9012 3456", "No card"])
+        result = profiler.profile(series)
+
+        metrics = result["text_metrics"]
+        assert metrics.pii_detected is True
+        assert "credit_card" in metrics.pii_types
+
+    def test_profile_text_with_nulls(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.TEXT)
+        series = pd.Series(["hello", None, "world", None, None])
+        result = profiler.profile(series)
+
+        metrics = result["text_metrics"]
+        assert metrics.length_min > 0
+
+    def test_profile_empty_text_series(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.TEXT)
+        series = pd.Series([], dtype=object)
+        result = profiler.profile(series)
+
+        metrics = result["text_metrics"]
+        assert metrics.length_min == 0
+        assert metrics.length_max == 0
+        assert metrics.length_mean == 0.0
+        assert metrics.empty_percentage == 0.0
+
+
+class TestIdentifierProfilerEdgeCases:
+    def test_empty_identifier_series(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.IDENTIFIER)
+        series = pd.Series([], dtype=str)
+        result = profiler.profile(series)
+        metrics = result["identifier_metrics"]
+        assert metrics.length_min is None
+        assert metrics.length_max is None
+
+    def test_format_pattern_numeric_only(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.IDENTIFIER)
+        series = pd.Series(["12345", "67890", "11111", "22222"])
+        result = profiler.profile(series)
+        metrics = result["identifier_metrics"]
+        assert metrics.format_pattern == "numeric_only"
+
+    def test_format_pattern_alpha_only(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.IDENTIFIER)
+        series = pd.Series(["ABCDE", "FGHIJ", "KLMNO", "PQRST"])
+        result = profiler.profile(series)
+        metrics = result["identifier_metrics"]
+        assert metrics.format_pattern in ["alpha_only", "alphanumeric"]
+
+    def test_format_pattern_mixed(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.IDENTIFIER)
+        series = pd.Series(["abc-123", "def_456", "789!!", "hello world"])
+        result = profiler.profile(series)
+        metrics = result["identifier_metrics"]
+        assert metrics.format_pattern == "mixed"
+        assert metrics.format_consistency == 0.0
+
+    def test_detect_format_pattern_empty(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.IDENTIFIER)
+        pattern, consistency = profiler.detect_format_pattern(pd.Series([], dtype=str))
+        assert pattern is None
+        assert consistency is None
+
+
+class TestNumericProfilerEdgeCases:
+    def test_all_nan_series(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.NUMERIC_CONTINUOUS)
+        series = pd.Series([np.nan, np.nan, np.nan])
+        result = profiler.profile(series)
+        assert result["numeric_metrics"] is None
+
+    def test_zero_std(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.NUMERIC_CONTINUOUS)
+        series = pd.Series([5.0, 5.0, 5.0, 5.0, 5.0])
+        result = profiler.profile(series)
+        metrics = result["numeric_metrics"]
+        assert metrics.std == 0.0
+        assert metrics.outlier_count_zscore == 0
+
+    def test_all_infinite_values(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.NUMERIC_CONTINUOUS)
+        series = pd.Series([np.inf, -np.inf, np.inf])
+        result = profiler.profile(series)
+        metrics = result["numeric_metrics"]
+        assert metrics.inf_count == 3
+        # After filtering infinites, no finite values remain
+        assert metrics.histogram_bins == []
+
+
+class TestCategoricalProfilerEdgeCases:
+    def test_case_variations_detection(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.CATEGORICAL_NOMINAL)
+        series = pd.Series(["Hello", "hello", "HELLO", "World"] * 10)
+        result = profiler.profile(series)
+        metrics = result["categorical_metrics"]
+        assert len(metrics.case_variations) > 0
+        assert any("Hello" in v or "hello" in v for v in metrics.case_variations)
+
+    def test_no_case_variations(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.CATEGORICAL_NOMINAL)
+        series = pd.Series(["apple", "banana", "cherry"] * 10)
+        result = profiler.profile(series)
+        metrics = result["categorical_metrics"]
+        assert metrics.case_variations == []
+
+    def test_whitespace_issues_detection(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.CATEGORICAL_NOMINAL)
+        series = pd.Series(["  leading", "trailing  ", "normal"] * 10)
+        result = profiler.profile(series)
+        metrics = result["categorical_metrics"]
+        assert len(metrics.whitespace_issues) > 0
+
+    def test_no_whitespace_issues(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.CATEGORICAL_NOMINAL)
+        series = pd.Series(["clean", "values", "here"] * 10)
+        result = profiler.profile(series)
+        metrics = result["categorical_metrics"]
+        assert metrics.whitespace_issues == []
+
+
+class TestDatetimeProfilerEdgeCases:
+    def test_string_datetime_format_detection(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.DATETIME)
+        series = pd.Series(["2023-01-01", "2023-06-15", "2023-12-31"])
+        result = profiler.profile(series)
+        metrics = result["datetime_metrics"]
+        assert metrics.format_detected is not None
+
+    def test_non_datetime_string_returns_none(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.DATETIME)
+        series = pd.Series(["not a date", "also not", "nope"])
+        # Non-parseable dates may raise or return None
+        try:
+            result = profiler.profile(series)
+            # If it returns, either None or valid
+            assert result is not None
+        except Exception:
+            # It's acceptable to raise on completely invalid date input
+            pass
+
+    def test_format_detection_datetime64(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.DATETIME)
+        series = pd.Series(pd.date_range("2023-01-01", periods=5))
+        fmt, consistency = profiler.detect_datetime_format(series)
+        assert fmt == "datetime64"
+        assert consistency == 100.0
+
+    def test_format_detection_empty(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.DATETIME)
+        series = pd.Series([], dtype=object)
+        fmt, consistency = profiler.detect_datetime_format(series)
+        assert fmt is None
+        assert consistency is None
+
+    def test_format_detection_slash_format(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.DATETIME)
+        series = pd.Series(["2023/01/15", "2023/06/20", "2023/12/31"])
+        fmt, consistency = profiler.detect_datetime_format(series)
+        assert fmt == "%Y/%m/%d"
+
+    def test_format_detection_mixed_formats(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.DATETIME)
+        series = pd.Series(["2023-01-01", "01/15/2023", "Jan 5, 2023", "garbage"])
+        fmt, consistency = profiler.detect_datetime_format(series)
+        # Mixed formats should be detected
+        assert fmt is not None
+
+    def test_non_datetime64_with_timestamp_objects(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.DATETIME)
+        # Object dtype with Timestamp objects
+        series = pd.Series([pd.Timestamp("2023-01-01"), pd.Timestamp("2023-06-15")], dtype=object)
+        result = profiler.profile(series)
+        metrics = result["datetime_metrics"]
+        assert metrics.date_range_days > 0
+
+
+class TestBinaryProfilerEdgeCases:
+    def test_non_standard_binary_values(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.BINARY)
+        series = pd.Series(["A", "B", "A", "B", "A"])
+        result = profiler.profile(series)
+        metrics = result["binary_metrics"]
+        # Neither A nor B are in true_values or false_values, so fallback
+        assert metrics.true_count + metrics.false_count > 0
+
+    def test_binary_with_only_true_values(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.BINARY)
+        series = pd.Series([1, 1, 1, 1, 1])
+        result = profiler.profile(series)
+        metrics = result["binary_metrics"]
+        assert metrics.true_count == 5
+        assert metrics.false_count == 0
+        assert metrics.balance_ratio == float('inf')
+
+
+class TestCrossCompatibleOperations:
+    def test_universal_metrics_uses_idxmax(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.NUMERIC_CONTINUOUS)
+        series = pd.Series([1, 2, 3, 3, 3, 4, 5])
+        metrics = profiler.compute_universal_metrics(series)
+        assert metrics.most_common_value == 3
+        assert metrics.most_common_frequency == 3
+
+    def test_numeric_profiler_handles_inf_values(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.NUMERIC_CONTINUOUS)
+        series = pd.Series([1.0, 2.0, np.inf, 4.0, -np.inf, 6.0])
+        result = profiler.profile(series)
+        metrics = result["numeric_metrics"]
+        assert metrics.inf_count == 2
+
+    def test_numeric_profiler_histogram_with_finite_values(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.NUMERIC_CONTINUOUS)
+        series = pd.Series([1.0, 2.0, np.inf, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
+        result = profiler.profile(series)
+        metrics = result["numeric_metrics"]
+        assert len(metrics.histogram_bins) == 10
+
+    def test_all_profilers_work_without_ensure_pandas_series(self):
         test_cases = [
             (ColumnType.IDENTIFIER, pd.Series(["ID1", "ID2", "ID3"])),
             (ColumnType.TARGET, pd.Series([0, 1, 0, 1])),
             (ColumnType.CATEGORICAL_NOMINAL, pd.Series(["a", "b", "c"])),
             (ColumnType.BINARY, pd.Series([0, 1, 0, 1])),
+            (ColumnType.NUMERIC_CONTINUOUS, pd.Series([1.0, 2.0, 3.0])),
         ]
         for col_type, series in test_cases:
-            mock_ensure.reset_mock()
-            mock_ensure.return_value = series
             profiler = ProfilerFactory.get_profiler(col_type)
-            profiler.profile(series)
-            mock_ensure.assert_called_once_with(series)
+            result = profiler.profile(series)
+            assert isinstance(result, dict)

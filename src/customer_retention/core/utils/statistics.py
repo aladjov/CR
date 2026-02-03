@@ -3,7 +3,7 @@ from typing import Dict, List, Tuple, Union
 import numpy as np
 from scipy import stats
 
-from customer_retention.core.compat import Series, ensure_pandas_series
+from customer_retention.core.compat import Series
 
 
 def _ensure_array(obj: Union[np.ndarray, List[float]]) -> np.ndarray:
@@ -30,10 +30,9 @@ def compute_effect_size(group1: Union[np.ndarray, List[float]], group2: Union[np
 
 
 def compute_psi_numeric(current: Series, reference_hist_edges: List[float], reference_hist_counts: List[int], epsilon: float = 1e-10) -> float:
-    current = ensure_pandas_series(current)
     edges = np.array(reference_hist_edges)
     baseline_counts = np.array(reference_hist_counts)
-    current_counts, _ = np.histogram(current.dropna(), bins=edges)
+    current_counts, _ = np.histogram(current.dropna().to_numpy(), bins=edges)
     baseline_prop = baseline_counts / baseline_counts.sum()
     current_prop = current_counts / current_counts.sum() if current_counts.sum() > 0 else np.zeros_like(current_counts, dtype=float)
     baseline_prop = np.maximum(baseline_prop, epsilon)
@@ -46,22 +45,20 @@ def _is_categorical_dtype(dtype) -> bool:
 
 
 def compute_psi_from_series(reference: Series, current: Series, n_bins: int = 10, epsilon: float = 1e-10) -> float:
-    reference, current = ensure_pandas_series(reference), ensure_pandas_series(current)
     ref_clean, curr_clean = reference.dropna(), current.dropna()
     if _is_categorical_dtype(ref_clean.dtype) or _is_categorical_dtype(curr_clean.dtype):
         return compute_psi_categorical(ref_clean, curr_clean, epsilon)
     min_val = min(ref_clean.min(), curr_clean.min())
     max_val = max(ref_clean.max(), curr_clean.max())
     bins = np.linspace(min_val, max_val, n_bins + 1)
-    ref_hist, _ = np.histogram(ref_clean, bins=bins)
-    curr_hist, _ = np.histogram(curr_clean, bins=bins)
+    ref_hist, _ = np.histogram(ref_clean.to_numpy(), bins=bins)
+    curr_hist, _ = np.histogram(curr_clean.to_numpy(), bins=bins)
     ref_pct = ref_hist / len(ref_clean) + epsilon
     curr_pct = curr_hist / len(curr_clean) + epsilon if len(curr_clean) > 0 else np.full_like(ref_hist, epsilon, dtype=float)
     return float(np.sum((curr_pct - ref_pct) * np.log(curr_pct / ref_pct)))
 
 
 def compute_psi_categorical(reference: Series, current: Series, epsilon: float = 1e-10) -> float:
-    reference, current = ensure_pandas_series(reference), ensure_pandas_series(current)
     ref_counts = reference.value_counts(normalize=True)
     curr_counts = current.value_counts(normalize=True)
     all_categories = set(ref_counts.index) | set(curr_counts.index)
@@ -74,14 +71,12 @@ def compute_psi_categorical(reference: Series, current: Series, epsilon: float =
 
 
 def compute_ks_statistic(reference: Series, current: Series) -> Tuple[float, float]:
-    reference, current = ensure_pandas_series(reference), ensure_pandas_series(current)
     ref_clean, curr_clean = reference.dropna(), current.dropna()
-    statistic, pvalue = stats.ks_2samp(ref_clean, curr_clean)
+    statistic, pvalue = stats.ks_2samp(ref_clean.to_numpy(), curr_clean.to_numpy())
     return float(statistic), float(pvalue)
 
 
 def compute_chi_square(current: Series, baseline_proportions: Dict[str, float]) -> Tuple[float, float]:
-    current = ensure_pandas_series(current)
     current_counts = current.value_counts()
     all_categories = sorted(set(list(current_counts.index) + list(baseline_proportions.keys())))
     observed, expected = [], []

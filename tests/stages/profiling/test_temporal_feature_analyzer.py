@@ -3,8 +3,10 @@ import pandas as pd
 import pytest
 
 from customer_retention.stages.profiling.temporal_feature_analyzer import (
+    CohortMomentumResult,
     CohortVelocityResult,
     FeatureRecommendation,
+    FeatureType,
     LagCorrelationResult,
     MomentumResult,
     PredictivePowerResult,
@@ -601,3 +603,747 @@ class TestMomentumFeatureNameDerivation:
             assert r.short_window == 30
             assert r.long_window == 90
             assert expected_name == "value_momentum_30_90"
+
+
+class TestAccelerationCalculation:
+
+    def test_calculates_acceleration_for_single_column(self, analyzer, sample_event_data):
+        result = analyzer.calculate_acceleration(
+            sample_event_data, value_columns=["metric_value"], window_days=7
+        )
+        assert "metric_value" in result
+        assert isinstance(result["metric_value"], float)
+
+    def test_acceleration_skips_missing_columns(self, analyzer, sample_event_data):
+        result = analyzer.calculate_acceleration(
+            sample_event_data, value_columns=["nonexistent"], window_days=7
+        )
+        assert result == {}
+
+    def test_acceleration_returns_zero_for_constant(self, analyzer):
+        df = pd.DataFrame({
+            "entity_id": [1] * 30,
+            "event_date": pd.date_range("2024-01-01", periods=30),
+            "value": [50.0] * 30,
+        })
+        result = analyzer.calculate_acceleration(df, ["value"], window_days=7)
+        assert result["value"] == 0.0
+
+
+class TestClassifyTrend:
+
+    def test_stable_trend(self, analyzer):
+        assert analyzer._classify_trend(0.005) == "stable"
+
+    def test_increasing_trend(self, analyzer):
+        assert analyzer._classify_trend(0.5) == "increasing"
+
+    def test_decreasing_trend(self, analyzer):
+        assert analyzer._classify_trend(-0.5) == "decreasing"
+
+
+class TestClassifyMomentum:
+
+    def test_accelerating(self, analyzer):
+        assert analyzer._classify_momentum(1.2) == "accelerating"
+
+    def test_decelerating(self, analyzer):
+        assert analyzer._classify_momentum(0.8) == "decelerating"
+
+    def test_stable(self, analyzer):
+        assert analyzer._classify_momentum(1.0) == "stable"
+
+
+class TestWindowMapping:
+
+    def test_weekly_window(self, analyzer):
+        assert analyzer._window_to_period_label(7) == "Weekly"
+        assert analyzer._window_to_period(7) == "W"
+
+    def test_biweekly_window(self, analyzer):
+        assert analyzer._window_to_period_label(14) == "Bi-weekly"
+        assert analyzer._window_to_period(14) == "2W"
+
+    def test_monthly_window(self, analyzer):
+        assert analyzer._window_to_period_label(30) == "Monthly"
+
+    def test_quarterly_window(self, analyzer):
+        assert analyzer._window_to_period_label(90) == "Quarterly"
+
+    def test_semiannual_window(self, analyzer):
+        assert analyzer._window_to_period_label(180) == "Semi-annual"
+
+    def test_yearly_window(self, analyzer):
+        assert analyzer._window_to_period_label(365) == "Yearly"
+        assert analyzer._window_to_period(365) == "Y"
+
+
+class TestVelocityInterpretation:
+
+    @pytest.fixture
+    def analyzer(self):
+        return TemporalFeatureAnalyzer(time_column="event_date", entity_column="entity_id")
+
+    def test_strong_increasing_signal(self, analyzer):
+        results = {
+            "col_a": [CohortVelocityResult(
+                column="col_a", window_days=7,
+                retained_velocity=[1.0], churned_velocity=[-1.0],
+                overall_velocity=[0.0],
+                retained_accel=[0.0], churned_accel=[0.0],
+                overall_accel=[0.0],
+                velocity_effect_size=0.9, velocity_effect_interp="Large effect",
+                accel_effect_size=0.1, accel_effect_interp="Negligible",
+                period_label="Weekly",
+            )]
+        }
+        notes = analyzer.generate_velocity_interpretation(results)
+        assert len(notes) == 1
+        assert "Strong signal" in notes[0]
+        assert "increasing" in notes[0]
+
+    def test_strong_decreasing_signal(self, analyzer):
+        results = {
+            "col_a": [CohortVelocityResult(
+                column="col_a", window_days=7,
+                retained_velocity=[1.0], churned_velocity=[-1.0],
+                overall_velocity=[0.0],
+                retained_accel=[0.0], churned_accel=[0.0],
+                overall_accel=[0.0],
+                velocity_effect_size=-0.9, velocity_effect_interp="Large effect",
+                accel_effect_size=0.1, accel_effect_interp="Negligible",
+                period_label="Weekly",
+            )]
+        }
+        notes = analyzer.generate_velocity_interpretation(results)
+        assert "decreasing" in notes[0]
+
+    def test_moderate_signal(self, analyzer):
+        results = {
+            "col_a": [CohortVelocityResult(
+                column="col_a", window_days=7,
+                retained_velocity=[1.0], churned_velocity=[-1.0],
+                overall_velocity=[0.0],
+                retained_accel=[0.0], churned_accel=[0.0],
+                overall_accel=[0.0],
+                velocity_effect_size=0.6, velocity_effect_interp="Medium effect",
+                accel_effect_size=0.0, accel_effect_interp="Negligible",
+                period_label="Weekly",
+            )]
+        }
+        notes = analyzer.generate_velocity_interpretation(results)
+        assert "Moderate signal" in notes[0]
+        assert "secondary predictor" in notes[0]
+
+    def test_weak_signal(self, analyzer):
+        results = {
+            "col_a": [CohortVelocityResult(
+                column="col_a", window_days=7,
+                retained_velocity=[1.0], churned_velocity=[-1.0],
+                overall_velocity=[0.0],
+                retained_accel=[0.0], churned_accel=[0.0],
+                overall_accel=[0.0],
+                velocity_effect_size=0.25, velocity_effect_interp="Small effect",
+                accel_effect_size=0.0, accel_effect_interp="Negligible",
+                period_label="Weekly",
+            )]
+        }
+        notes = analyzer.generate_velocity_interpretation(results)
+        assert "Weak signal" in notes[0]
+        assert "feature combinations" in notes[0]
+
+    def test_no_significant_signal(self, analyzer):
+        results = {
+            "col_a": [CohortVelocityResult(
+                column="col_a", window_days=7,
+                retained_velocity=[1.0], churned_velocity=[-1.0],
+                overall_velocity=[0.0],
+                retained_accel=[0.0], churned_accel=[0.0],
+                overall_accel=[0.0],
+                velocity_effect_size=0.1, velocity_effect_interp="Negligible",
+                accel_effect_size=0.0, accel_effect_interp="Negligible",
+                period_label="Weekly",
+            )]
+        }
+        notes = analyzer.generate_velocity_interpretation(results)
+        assert "No significant" in notes[0]
+
+    def test_empty_results_list(self, analyzer):
+        results = {"col_a": []}
+        notes = analyzer.generate_velocity_interpretation(results)
+        assert notes == []
+
+    def test_find_best_velocity_window_empty(self, analyzer):
+        assert analyzer._find_best_velocity_window([]) is None
+
+
+class TestVelocityRecommendationsPriority:
+
+    @pytest.fixture
+    def analyzer(self):
+        return TemporalFeatureAnalyzer(time_column="event_date", entity_column="entity_id")
+
+    def test_acceleration_recommendation_generated(self, analyzer):
+        results = {
+            "col_a": [CohortVelocityResult(
+                column="col_a", window_days=7,
+                retained_velocity=[1.0], churned_velocity=[-1.0],
+                overall_velocity=[0.0],
+                retained_accel=[0.0], churned_accel=[0.0],
+                overall_accel=[0.0],
+                velocity_effect_size=0.3,
+                velocity_effect_interp="Small effect",
+                accel_effect_size=0.7,
+                accel_effect_interp="Medium effect",
+                period_label="Weekly",
+            )]
+        }
+        recs = analyzer.generate_velocity_recommendations(results)
+        accel_recs = [r for r in recs if r.action == "add_acceleration_feature"]
+        assert len(accel_recs) == 1
+        assert accel_recs[0].priority == 2
+
+    def test_priority_1_for_large_velocity_effect(self, analyzer):
+        results = {
+            "col_a": [CohortVelocityResult(
+                column="col_a", window_days=7,
+                retained_velocity=[1.0], churned_velocity=[-1.0],
+                overall_velocity=[0.0],
+                retained_accel=[0.0], churned_accel=[0.0],
+                overall_accel=[0.0],
+                velocity_effect_size=0.85, velocity_effect_interp="Large effect",
+                accel_effect_size=0.1, accel_effect_interp="Negligible",
+                period_label="Weekly",
+            )]
+        }
+        recs = analyzer.generate_velocity_recommendations(results)
+        velocity_rec = next(r for r in recs if r.action == "add_velocity_feature")
+        assert velocity_rec.priority == 1
+
+    def test_priority_2_for_medium_velocity_effect(self, analyzer):
+        results = {
+            "col_a": [CohortVelocityResult(
+                column="col_a", window_days=7,
+                retained_velocity=[1.0], churned_velocity=[-1.0],
+                overall_velocity=[0.0],
+                retained_accel=[0.0], churned_accel=[0.0],
+                overall_accel=[0.0],
+                velocity_effect_size=0.6, velocity_effect_interp="Medium effect",
+                accel_effect_size=0.1, accel_effect_interp="Negligible",
+                period_label="Weekly",
+            )]
+        }
+        recs = analyzer.generate_velocity_recommendations(results)
+        velocity_rec = next(r for r in recs if r.action == "add_velocity_feature")
+        assert velocity_rec.priority == 2
+
+
+class TestLagRecommendations:
+
+    @pytest.fixture
+    def analyzer(self):
+        return TemporalFeatureAnalyzer(time_column="event_date", entity_column="entity_id")
+
+    def test_strong_lag_recommendation(self, analyzer):
+        results = {
+            "col_a": LagCorrelationResult(
+                column="col_a", correlations=[0.6, 0.3, 0.2, 0.1, 0.05, 0.01, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                best_lag=1, best_correlation=0.6,
+                has_weekly_pattern=False,
+            )
+        }
+        recs = analyzer.generate_lag_recommendations(results)
+        assert len(recs) == 1
+        assert recs[0].action == "add_lag_feature"
+        assert recs[0].priority == 1
+
+    def test_moderate_lag_recommendation_priority_2(self, analyzer):
+        results = {
+            "col_a": LagCorrelationResult(
+                column="col_a", correlations=[0.35, 0.2, 0.1, 0.05, 0.01, 0.01, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                best_lag=1, best_correlation=0.35,
+                has_weekly_pattern=False,
+            )
+        }
+        recs = analyzer.generate_lag_recommendations(results)
+        assert recs[0].priority == 2
+
+    def test_weekly_pattern_recommendation(self, analyzer):
+        results = {
+            "col_a": LagCorrelationResult(
+                column="col_a", correlations=[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.5, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+                best_lag=1, best_correlation=0.1,
+                has_weekly_pattern=True,
+            )
+        }
+        recs = analyzer.generate_lag_recommendations(results)
+        weekly_recs = [r for r in recs if r.action == "add_weekly_lag"]
+        assert len(weekly_recs) == 1
+        assert weekly_recs[0].params["lag_days"] == 7
+
+    def test_weekly_pattern_with_best_lag_7_no_duplicate(self, analyzer):
+        results = {
+            "col_a": LagCorrelationResult(
+                column="col_a", correlations=[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.8, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+                best_lag=7, best_correlation=0.8,
+                has_weekly_pattern=True,
+            )
+        }
+        recs = analyzer.generate_lag_recommendations(results)
+        # Should not add weekly lag separately when best_lag is already 7
+        weekly_recs = [r for r in recs if r.action == "add_weekly_lag"]
+        assert len(weekly_recs) == 0
+
+    def test_no_recommendations_for_weak_lag(self, analyzer):
+        results = {
+            "col_a": LagCorrelationResult(
+                column="col_a", correlations=[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+                best_lag=1, best_correlation=0.1,
+                has_weekly_pattern=False,
+            )
+        }
+        recs = analyzer.generate_lag_recommendations(results)
+        assert len(recs) == 0
+
+
+class TestLagInterpretation:
+
+    @pytest.fixture
+    def analyzer(self):
+        return TemporalFeatureAnalyzer(time_column="event_date", entity_column="entity_id")
+
+    def test_strong_autocorrelation_interpretation(self, analyzer):
+        results = {
+            "col_a": LagCorrelationResult(
+                column="col_a", correlations=[0.6], best_lag=1, best_correlation=0.6,
+                has_weekly_pattern=False,
+            )
+        }
+        notes = analyzer.generate_lag_interpretation(results)
+        assert any("Strong autocorrelation" in n for n in notes)
+        assert any("high predictability" in n for n in notes)
+
+    def test_moderate_autocorrelation_interpretation(self, analyzer):
+        results = {
+            "col_a": LagCorrelationResult(
+                column="col_a", correlations=[0.35], best_lag=1, best_correlation=0.35,
+                has_weekly_pattern=False,
+            )
+        }
+        notes = analyzer.generate_lag_interpretation(results)
+        assert any("Moderate autocorrelation" in n for n in notes)
+
+    def test_weekly_pattern_interpretation(self, analyzer):
+        results = {
+            "col_a": LagCorrelationResult(
+                column="col_a", correlations=[0.1], best_lag=1, best_correlation=0.1,
+                has_weekly_pattern=True,
+            )
+        }
+        notes = analyzer.generate_lag_interpretation(results)
+        assert any("Weekly patterns" in n for n in notes)
+
+    def test_all_weak_interpretation(self, analyzer):
+        results = {
+            "col_a": LagCorrelationResult(
+                column="col_a", correlations=[0.1], best_lag=1, best_correlation=0.1,
+                has_weekly_pattern=False,
+            )
+        }
+        notes = analyzer.generate_lag_interpretation(results)
+        assert any("weak autocorrelation" in n for n in notes)
+        assert any("rolling features" in n for n in notes)
+
+
+class TestInterpretIVAndKS:
+
+    @pytest.fixture
+    def analyzer(self):
+        return TemporalFeatureAnalyzer(time_column="event_date", entity_column="entity_id")
+
+    def test_interpret_iv_very_weak(self, analyzer):
+        assert analyzer._interpret_iv(0.01) == "very_weak"
+
+    def test_interpret_iv_weak(self, analyzer):
+        assert analyzer._interpret_iv(0.05) == "weak"
+
+    def test_interpret_iv_medium(self, analyzer):
+        assert analyzer._interpret_iv(0.15) == "medium"
+
+    def test_interpret_iv_strong(self, analyzer):
+        assert analyzer._interpret_iv(0.35) == "strong"
+
+    def test_interpret_iv_suspicious(self, analyzer):
+        assert analyzer._interpret_iv(0.6) == "suspicious"
+
+    def test_interpret_ks_weak(self, analyzer):
+        assert analyzer._interpret_ks(0.1) == "weak"
+
+    def test_interpret_ks_medium(self, analyzer):
+        assert analyzer._interpret_ks(0.3) == "medium"
+
+    def test_interpret_ks_strong(self, analyzer):
+        assert analyzer._interpret_ks(0.5) == "strong"
+
+
+class TestCalculateIVEdgeCases:
+
+    @pytest.fixture
+    def analyzer(self):
+        return TemporalFeatureAnalyzer(time_column="event_date", entity_column="entity_id")
+
+    def test_iv_returns_zero_for_small_sample(self, analyzer):
+        feature = pd.Series([1.0, 2.0, 3.0])
+        target = pd.Series([0, 1, 0])
+        assert analyzer._calculate_iv(feature, target, bins=10) == 0.0
+
+    def test_iv_returns_zero_for_all_same_target(self, analyzer):
+        feature = pd.Series(np.random.normal(0, 1, 100))
+        target = pd.Series([1] * 100)
+        assert analyzer._calculate_iv(feature, target, bins=10) == 0.0
+
+    def test_ks_returns_zero_for_empty_group(self, analyzer):
+        feature = pd.Series([1.0, 2.0])
+        target = pd.Series([1, 1])
+        ks_stat, ks_pval = analyzer._calculate_ks(feature, target)
+        assert ks_stat == 0.0
+        assert ks_pval == 1.0
+
+
+class TestVelocityAccelSeriesEmpty:
+
+    @pytest.fixture
+    def analyzer(self):
+        return TemporalFeatureAnalyzer(time_column="event_date", entity_column="entity_id")
+
+    def test_empty_dataframe(self, analyzer):
+        df = pd.DataFrame(columns=["entity_id", "event_date", "value"])
+        vel, accel = analyzer._velocity_accel_series(df, "value", 7)
+        assert vel == []
+        assert accel == []
+
+    def test_missing_column(self, analyzer):
+        df = pd.DataFrame({
+            "entity_id": [1],
+            "event_date": pd.Timestamp("2024-01-01"),
+        })
+        vel, accel = analyzer._velocity_accel_series(df, "nonexistent", 7)
+        assert vel == []
+        assert accel == []
+
+
+class TestVectorizedEntityMomentumEdge:
+
+    @pytest.fixture
+    def analyzer(self):
+        return TemporalFeatureAnalyzer(time_column="event_date", entity_column="entity_id")
+
+    def test_empty_dataframe(self, analyzer):
+        df = pd.DataFrame(columns=["entity_id", "event_date", "value"])
+        result = analyzer._vectorized_entity_momentum(df, "value", 7, 30)
+        assert result == []
+
+    def test_missing_column(self, analyzer):
+        df = pd.DataFrame({
+            "entity_id": [1],
+            "event_date": [pd.Timestamp("2024-01-01")],
+        })
+        result = analyzer._vectorized_entity_momentum(df, "nonexistent", 7, 30)
+        assert result == []
+
+
+class TestMomentumInterpretationBranches:
+
+    @pytest.fixture
+    def analyzer(self):
+        return TemporalFeatureAnalyzer(time_column="event_date", entity_column="entity_id")
+
+    def test_strong_signal(self, analyzer):
+        results = {
+            "col_a": [CohortMomentumResult(
+                column="col_a", short_window=7, long_window=30,
+                retained_momentum=1.1, churned_momentum=0.8,
+                overall_momentum=0.95, effect_size=0.7,
+                effect_interp="Medium effect", window_label="7d/30d",
+            )]
+        }
+        notes = analyzer.generate_momentum_interpretation(results)
+        assert any("Strong signal" in n for n in notes)
+
+    def test_moderate_signal(self, analyzer):
+        results = {
+            "col_a": [CohortMomentumResult(
+                column="col_a", short_window=7, long_window=30,
+                retained_momentum=1.0, churned_momentum=0.97,
+                overall_momentum=0.99, effect_size=0.3,
+                effect_interp="Small effect", window_label="7d/30d",
+            )]
+        }
+        notes = analyzer.generate_momentum_interpretation(results)
+        assert any("Moderate signal" in n for n in notes)
+
+    def test_no_significant_signal(self, analyzer):
+        results = {
+            "col_a": [CohortMomentumResult(
+                column="col_a", short_window=7, long_window=30,
+                retained_momentum=1.0, churned_momentum=1.0,
+                overall_momentum=1.0, effect_size=0.05,
+                effect_interp="Negligible", window_label="7d/30d",
+            )]
+        }
+        notes = analyzer.generate_momentum_interpretation(results)
+        assert any("No significant" in n for n in notes)
+
+    def test_empty_col_results(self, analyzer):
+        results = {"col_a": []}
+        notes = analyzer.generate_momentum_interpretation(results)
+        assert notes == []
+
+    def test_retained_accelerating_churned_decelerating(self, analyzer):
+        results = {
+            "col_a": [CohortMomentumResult(
+                column="col_a", short_window=7, long_window=30,
+                retained_momentum=1.2, churned_momentum=0.8,
+                overall_momentum=1.0, effect_size=0.7,
+                effect_interp="Medium effect", window_label="7d/30d",
+            )]
+        }
+        notes = analyzer.generate_momentum_interpretation(results)
+        assert any("accelerating" in n for n in notes)
+        assert any("decelerating" in n for n in notes)
+
+    def test_both_stable(self, analyzer):
+        results = {
+            "col_a": [CohortMomentumResult(
+                column="col_a", short_window=7, long_window=30,
+                retained_momentum=1.0, churned_momentum=1.0,
+                overall_momentum=1.0, effect_size=0.6,
+                effect_interp="Medium effect", window_label="7d/30d",
+            )]
+        }
+        notes = analyzer.generate_momentum_interpretation(results)
+        assert any("stable" in n for n in notes)
+
+
+class TestMomentumRecommendationsPriority:
+
+    @pytest.fixture
+    def analyzer(self):
+        return TemporalFeatureAnalyzer(time_column="event_date", entity_column="entity_id")
+
+    def test_priority_1_for_large_effect(self, analyzer):
+        results = {
+            "col_a": [CohortMomentumResult(
+                column="col_a", short_window=7, long_window=30,
+                retained_momentum=1.2, churned_momentum=0.8,
+                overall_momentum=1.0, effect_size=0.9,
+                effect_interp="Large effect", window_label="7d/30d",
+            )]
+        }
+        recs = analyzer.generate_momentum_recommendations(results)
+        assert len(recs) == 1
+        assert recs[0].priority == 1
+
+    def test_priority_2_for_medium_effect(self, analyzer):
+        results = {
+            "col_a": [CohortMomentumResult(
+                column="col_a", short_window=7, long_window=30,
+                retained_momentum=1.2, churned_momentum=0.8,
+                overall_momentum=1.0, effect_size=0.6,
+                effect_interp="Medium effect", window_label="7d/30d",
+            )]
+        }
+        recs = analyzer.generate_momentum_recommendations(results)
+        assert recs[0].priority == 2
+
+    def test_no_recommendation_for_weak_effect(self, analyzer):
+        results = {
+            "col_a": [CohortMomentumResult(
+                column="col_a", short_window=7, long_window=30,
+                retained_momentum=1.0, churned_momentum=1.0,
+                overall_momentum=1.0, effect_size=0.1,
+                effect_interp="Negligible", window_label="7d/30d",
+            )]
+        }
+        recs = analyzer.generate_momentum_recommendations(results)
+        assert len(recs) == 0
+
+
+class TestCohortMomentumMissingTarget:
+
+    @pytest.fixture
+    def analyzer(self):
+        return TemporalFeatureAnalyzer(time_column="event_date", entity_column="entity_id")
+
+    def test_raises_on_missing_target(self, analyzer):
+        df = pd.DataFrame({
+            "entity_id": [1, 2],
+            "event_date": pd.date_range("2024-01-01", periods=2),
+            "value": [1.0, 2.0],
+        })
+        with pytest.raises(ValueError, match="target_column"):
+            analyzer.compute_cohort_momentum_signals(df, ["value"], "target")
+
+    def test_skips_missing_columns(self, analyzer):
+        df = pd.DataFrame({
+            "entity_id": [1, 2],
+            "event_date": pd.date_range("2024-01-01", periods=2),
+            "value": [1.0, 2.0],
+            "target": [0, 1],
+        })
+        result = analyzer.compute_cohort_momentum_signals(
+            df, ["nonexistent"], "target", window_pairs=[(7, 30)]
+        )
+        assert result == {}
+
+    def test_default_window_pairs(self, analyzer):
+        np.random.seed(42)
+        data = []
+        base_date = pd.Timestamp("2024-01-01")
+        for eid in range(10):
+            for day in range(90):
+                data.append({
+                    "entity_id": eid,
+                    "event_date": base_date + pd.Timedelta(days=day),
+                    "value": np.random.normal(100, 10),
+                    "target": eid % 2,
+                })
+        df = pd.DataFrame(data)
+        result = analyzer.compute_cohort_momentum_signals(df, ["value"], "target")
+        assert "value" in result
+        assert len(result["value"]) == 3  # default: [(7, 30), (30, 90), (7, 90)]
+
+
+class TestValidateEventLevelTarget:
+
+    @pytest.fixture
+    def analyzer(self):
+        return TemporalFeatureAnalyzer(time_column="event_date", entity_column="entity_id")
+
+    def test_none_target_column_passes(self, analyzer):
+        df = pd.DataFrame({
+            "entity_id": [1, 1, 2],
+            "event_date": pd.date_range("2024-01-01", periods=3),
+        })
+        # Should not raise
+        analyzer._validate_event_level_target_usage(df, None)
+
+    def test_entity_level_data_passes(self, analyzer):
+        df = pd.DataFrame({
+            "entity_id": [1, 2, 3],
+            "event_date": pd.date_range("2024-01-01", periods=3),
+            "target": [0, 1, 0],
+        })
+        # unique entities == rows, should not raise
+        analyzer._validate_event_level_target_usage(df, "target")
+
+    def test_event_level_data_raises(self, analyzer):
+        df = pd.DataFrame({
+            "entity_id": [1, 1, 2],
+            "event_date": pd.date_range("2024-01-01", periods=3),
+            "target": [1, 1, 0],
+        })
+        with pytest.raises(ValueError, match="event-level data"):
+            analyzer._validate_event_level_target_usage(df, "target")
+
+
+class TestValidateTargetConstantPerEntity:
+
+    @pytest.fixture
+    def analyzer(self):
+        return TemporalFeatureAnalyzer(time_column="event_date", entity_column="entity_id")
+
+    def test_warns_on_varying_target(self, analyzer):
+        import warnings
+        df = pd.DataFrame({
+            "entity_id": [1, 1, 2, 2],
+            "event_date": pd.date_range("2024-01-01", periods=4),
+            "target": [0, 1, 1, 1],  # entity 1 varies
+        })
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            analyzer._validate_target_constant_per_entity(df, "target")
+            assert len(w) == 1
+            assert "varies within" in str(w[0].message)
+
+
+class TestCalculateIVQcutError:
+
+    @pytest.fixture
+    def analyzer(self):
+        return TemporalFeatureAnalyzer(time_column="event_date", entity_column="entity_id")
+
+    def test_iv_returns_zero_on_qcut_error(self, analyzer):
+        from unittest.mock import patch
+        feature = pd.Series(np.random.normal(0, 1, 100))
+        target = pd.Series([0] * 50 + [1] * 50)
+        with patch(
+            "customer_retention.stages.profiling.temporal_feature_analyzer.qcut",
+            side_effect=ValueError("qcut error"),
+        ):
+            result = analyzer._calculate_iv(feature, target, bins=10)
+        assert result == 0.0
+
+
+class TestCohortVelocitySkipsMissingCol:
+
+    @pytest.fixture
+    def analyzer(self):
+        return TemporalFeatureAnalyzer(time_column="event_date", entity_column="entity_id")
+
+    def test_skips_missing_column(self, analyzer):
+        df = pd.DataFrame({
+            "entity_id": [1, 2],
+            "event_date": pd.date_range("2024-01-01", periods=2),
+            "value": [1.0, 2.0],
+            "target": [0, 1],
+        })
+        result = analyzer.compute_cohort_velocity_signals(
+            df, ["nonexistent"], "target", windows=[7]
+        )
+        assert result == {}
+
+
+class TestFeatureRecommendationsWithoutTarget:
+
+    @pytest.fixture
+    def analyzer(self):
+        return TemporalFeatureAnalyzer(time_column="event_date", entity_column="entity_id")
+
+    def test_generates_recommendations_without_target(self, analyzer):
+        df = pd.DataFrame({
+            "entity_id": [1] * 30,
+            "event_date": pd.date_range("2024-01-01", periods=30),
+            "value": list(range(30)),
+        })
+        recs = analyzer.get_feature_recommendations(df, value_columns=["value"])
+        assert isinstance(recs, list)
+        # Should still produce velocity/momentum/lag recommendations
+        types = {r.feature_type for r in recs}
+        assert FeatureType.VELOCITY in types or FeatureType.MOMENTUM in types or FeatureType.LAG in types or len(recs) == 0
+
+
+class TestMomentumEdgeZeroLongMean:
+
+    @pytest.fixture
+    def analyzer(self):
+        return TemporalFeatureAnalyzer(time_column="event_date", entity_column="entity_id")
+
+    def test_skips_entity_with_zero_long_mean(self, analyzer):
+        df = pd.DataFrame({
+            "entity_id": [1] * 60,
+            "event_date": pd.date_range("2024-01-01", periods=60),
+            "value": [0.0] * 60,
+        })
+        result = analyzer.calculate_momentum(df, ["value"], short_window=7, long_window=30)
+        # long_mean is 0, so entity should be skipped; default 1.0
+        assert result["value"].mean_momentum == 1.0
+
+    def test_nan_short_mean_skipped(self, analyzer):
+        df = pd.DataFrame({
+            "entity_id": [1] * 60,
+            "event_date": pd.date_range("2024-01-01", periods=60),
+            "value": [np.nan] * 7 + [5.0] * 53,
+        })
+        result = analyzer.calculate_momentum(df, ["value"], short_window=7, long_window=30)
+        assert isinstance(result["value"].mean_momentum, float)

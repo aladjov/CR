@@ -1563,3 +1563,202 @@ class TestCohortVelocitySparklines:
         annotations = fig.layout.annotations or []
         assert any("Weekly" in str(a.text) for a in annotations)
         assert any("Velocity" in str(a.text) for a in annotations)
+
+    def test_empty_results(self, chart_builder):
+        fig = chart_builder.cohort_velocity_sparklines([], feature_name="empty")
+        assert fig is not None
+
+
+class TestScatterMatrixWidth:
+    def test_with_width(self, chart_builder):
+        df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+        fig = chart_builder.scatter_matrix(df, width=800)
+        assert fig.layout.width == 800
+
+
+class TestTemporalDistributionEmpty:
+    def test_empty_period_counts(self, chart_builder):
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.profiling.temporal_analyzer import TemporalGranularity
+        analysis = MagicMock()
+        analysis.period_counts = pd.DataFrame()
+        analysis.granularity = TemporalGranularity.MONTH
+        fig = chart_builder.temporal_distribution(analysis)
+        assert fig is not None
+
+
+class TestTemporalTrendEmpty:
+    def test_empty_period_counts(self, chart_builder):
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.profiling.temporal_analyzer import TemporalGranularity
+        analysis = MagicMock()
+        analysis.period_counts = pd.DataFrame()
+        analysis.granularity = TemporalGranularity.MONTH
+        fig = chart_builder.temporal_trend(analysis)
+        assert fig is not None
+
+
+class TestSegmentOverviewEdgeCases:
+    def test_empty_profiles(self, chart_builder):
+        from customer_retention.stages.profiling import SegmentationMethod, SegmentationResult
+        result = SegmentationResult(
+            n_segments=0,
+            method=SegmentationMethod.KMEANS,
+            quality_score=0.0,
+            profiles=[],
+            target_variance_ratio=None,
+            recommendation="single_model",
+            confidence=0.5,
+            rationale=[],
+            labels=np.array([]),
+        )
+        fig = chart_builder.segment_overview(result)
+        assert fig is not None
+
+    def test_no_target_rate(self, chart_builder):
+        from customer_retention.stages.profiling import SegmentationMethod, SegmentationResult, SegmentProfile
+        result = SegmentationResult(
+            n_segments=2,
+            method=SegmentationMethod.KMEANS,
+            quality_score=0.5,
+            profiles=[
+                SegmentProfile(segment_id=0, size=50, size_pct=50.0, target_rate=None,
+                              defining_features={}),
+                SegmentProfile(segment_id=1, size=50, size_pct=50.0, target_rate=None,
+                              defining_features={}),
+            ],
+            target_variance_ratio=None,
+            recommendation="single_model",
+            confidence=0.5,
+            rationale=[],
+            labels=np.array([0] * 50 + [1] * 50),
+        )
+        fig = chart_builder.segment_overview(result)
+        assert fig is not None
+
+
+class TestSegmentFeatureComparisonEdgeCases:
+    def test_empty_profiles(self, chart_builder):
+        from customer_retention.stages.profiling import SegmentationMethod, SegmentationResult
+        result = SegmentationResult(
+            n_segments=0,
+            method=SegmentationMethod.KMEANS,
+            quality_score=0.0,
+            profiles=[],
+            target_variance_ratio=None,
+            recommendation="single_model",
+            confidence=0.5,
+            rationale=[],
+            labels=np.array([]),
+        )
+        fig = chart_builder.segment_feature_comparison(result)
+        assert fig is not None
+
+    def test_no_features(self, chart_builder):
+        from customer_retention.stages.profiling import SegmentationMethod, SegmentationResult, SegmentProfile
+        result = SegmentationResult(
+            n_segments=1,
+            method=SegmentationMethod.KMEANS,
+            quality_score=0.5,
+            profiles=[
+                SegmentProfile(segment_id=0, size=50, size_pct=100.0, target_rate=0.5,
+                              defining_features={}),
+            ],
+            target_variance_ratio=None,
+            recommendation="single_model",
+            confidence=0.5,
+            rationale=[],
+            labels=np.array([0] * 50),
+        )
+        fig = chart_builder.segment_feature_comparison(result)
+        assert fig is not None
+
+
+class TestSegmentRecommendationCardEdgeCases:
+    def test_no_target_variance(self, chart_builder):
+        from customer_retention.stages.profiling import SegmentationMethod, SegmentationResult, SegmentProfile
+        result = SegmentationResult(
+            n_segments=1,
+            method=SegmentationMethod.KMEANS,
+            quality_score=0.5,
+            profiles=[SegmentProfile(0, 50, 100.0, 0.5, {})],
+            target_variance_ratio=None,
+            recommendation="unknown_recommendation",
+            confidence=0.6,
+            rationale=["test"],
+            labels=np.array([0] * 50),
+        )
+        fig = chart_builder.segment_recommendation_card(result)
+        assert fig is not None
+
+
+class TestMomentumComparisonSimple:
+    def test_simple_momentum_keys(self, chart_builder):
+        """Test momentum chart with simple retained/churned keys."""
+        data = {
+            "amount": {"retained": 1.2, "churned": 0.8},
+            "frequency": {"retained": 1.1, "churned": 0.9},
+        }
+        fig = chart_builder.momentum_comparison_chart(data)
+        assert fig is not None
+
+
+class TestRecencyAnalysisPanel:
+    def test_creates_figure(self, chart_builder):
+        from dataclasses import dataclass
+
+        @dataclass
+        class MockBucketStat:
+            bucket_label: str
+            entity_count: int
+            target_rate: float
+
+        np.random.seed(42)
+        retained = np.random.exponential(30, 200)
+        churned = np.random.exponential(10, 200)
+        bucket_stats = [
+            MockBucketStat("0-7d", 80, 0.1),
+            MockBucketStat("7-14d", 60, 0.2),
+            MockBucketStat("14-30d", 40, 0.3),
+            MockBucketStat("30+d", 20, 0.5),
+        ]
+        fig = chart_builder.recency_analysis_panel(
+            retained, churned, bucket_stats,
+            retained_median=float(np.median(retained)),
+            churned_median=float(np.median(churned)),
+        )
+        assert fig is not None
+        assert len(fig.data) >= 4
+
+    def test_with_cap_value(self, chart_builder):
+        from dataclasses import dataclass
+
+        @dataclass
+        class MockBucketStat:
+            bucket_label: str
+            entity_count: int
+            target_rate: float
+
+        np.random.seed(42)
+        retained = np.random.exponential(30, 200)
+        churned = np.random.exponential(10, 200)
+        fig = chart_builder.recency_analysis_panel(
+            retained, churned, [],
+            retained_median=25.0,
+            churned_median=10.0,
+            cap_value=100.0,
+        )
+        assert fig is not None
+
+    def test_no_bucket_stats(self, chart_builder):
+        np.random.seed(42)
+        retained = np.random.exponential(30, 200)
+        churned = np.random.exponential(10, 200)
+        fig = chart_builder.recency_analysis_panel(
+            retained, churned, [],
+            retained_median=25.0,
+            churned_median=10.0,
+        )
+        assert fig is not None

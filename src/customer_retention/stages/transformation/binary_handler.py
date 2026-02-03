@@ -3,7 +3,7 @@ from typing import Any, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import Series, ensure_pandas_series
+from customer_retention.core.compat import Series
 
 
 @dataclass
@@ -26,9 +26,8 @@ class BinaryHandler:
         self._is_fitted = False
 
     def fit(self, series: Series) -> "BinaryHandler":
-        series = ensure_pandas_series(series)
         clean = series.dropna()
-        unique_vals = clean.unique().tolist()
+        unique_vals = list(clean.unique())
         self._original_values = unique_vals
 
         if self.positive_class is not None:
@@ -43,7 +42,6 @@ class BinaryHandler:
     def transform(self, series: Series) -> BinaryTransformResult:
         if not self._is_fitted:
             raise ValueError("Handler not fitted. Call fit() or fit_transform() first.")
-        series = ensure_pandas_series(series)
         return self._apply_transform(series)
 
     def fit_transform(self, series: Series) -> BinaryTransformResult:

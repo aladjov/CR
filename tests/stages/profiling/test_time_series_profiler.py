@@ -6,9 +6,13 @@ import pandas as pd
 import pytest
 
 from customer_retention.stages.profiling.time_series_profiler import (
+    ActivitySegmentResult,
     DistributionStats,
+    LifecycleQuadrantResult,
     TimeSeriesProfile,
     TimeSeriesProfiler,
+    classify_activity_segments,
+    classify_lifecycle_quadrants,
 )
 
 
@@ -296,3 +300,142 @@ class TestEdgeCases:
 
         with pytest.raises(KeyError):
             profiler.profile(sample_transactions)
+
+    def test_all_entities_single_event_inter_event_none(self):
+        """Avg inter-event time should be None when all entities have 1 event."""
+        df = pd.DataFrame({
+            "entity": ["A", "B", "C"],
+            "date": pd.to_datetime(["2023-01-01", "2023-02-01", "2023-03-01"]),
+            "value": [1, 2, 3],
+        })
+        profiler = TimeSeriesProfiler(entity_column="entity", time_column="date")
+        result = profiler.profile(df)
+
+        assert result.avg_inter_event_days is None
+
+    def test_empty_profile_lifecycle_columns(self):
+        """Empty profile should have correct lifecycle DataFrame columns."""
+        df = pd.DataFrame(columns=["entity", "date", "value"])
+        profiler = TimeSeriesProfiler(entity_column="entity", time_column="date")
+        result = profiler.profile(df)
+
+        assert "entity" in result.entity_lifecycles.columns
+        assert "first_event" in result.entity_lifecycles.columns
+        assert "last_event" in result.entity_lifecycles.columns
+        assert "duration_days" in result.entity_lifecycles.columns
+        assert "event_count" in result.entity_lifecycles.columns
+        assert result.avg_inter_event_days is None
+        assert result.first_event_date is None
+        assert result.last_event_date is None
+
+    def test_single_row_inter_event_time(self):
+        """Single-row DataFrame should have None avg_inter_event_days."""
+        df = pd.DataFrame({
+            "entity": ["A"],
+            "date": [pd.Timestamp("2023-01-01")],
+            "value": [100],
+        })
+        profiler = TimeSeriesProfiler(entity_column="entity", time_column="date")
+        result = profiler.profile(df)
+
+        assert result.avg_inter_event_days is None
+
+
+class TestClassifyLifecycleQuadrants:
+    """Tests for classify_lifecycle_quadrants function."""
+
+    @pytest.fixture
+    def entity_lifecycles(self):
+        """Create entity lifecycles with varied durations and event counts."""
+        return pd.DataFrame({
+            "entity": ["A", "B", "C", "D", "E", "F", "G", "H"],
+            "first_event": pd.to_datetime(["2023-01-01"] * 8),
+            "last_event": pd.to_datetime([
+                "2023-12-31", "2023-12-31", "2023-01-15", "2023-01-02",
+                "2023-06-30", "2023-06-30", "2023-01-10", "2023-01-05",
+            ]),
+            "duration_days": [365, 365, 14, 1, 180, 180, 9, 4],
+            "event_count": [100, 5, 50, 2, 80, 3, 30, 1],
+        })
+
+    def test_returns_lifecycle_quadrant_result(self, entity_lifecycles):
+        result = classify_lifecycle_quadrants(entity_lifecycles)
+
+        assert isinstance(result, LifecycleQuadrantResult)
+        assert "lifecycle_quadrant" in result.lifecycles.columns
+
+    def test_quadrant_assignment(self, entity_lifecycles):
+        result = classify_lifecycle_quadrants(entity_lifecycles)
+        quadrants = set(result.lifecycles["lifecycle_quadrant"].unique())
+
+        # All quadrants should be from the known set
+        valid_quadrants = {"Steady & Loyal", "Occasional & Loyal", "Intense & Brief", "One-shot"}
+        assert quadrants.issubset(valid_quadrants)
+
+    def test_recommendations_structure(self, entity_lifecycles):
+        result = classify_lifecycle_quadrants(entity_lifecycles)
+
+        assert "Quadrant" in result.recommendations.columns
+        assert "Entities" in result.recommendations.columns
+        assert "Share" in result.recommendations.columns
+        assert "Windows" in result.recommendations.columns
+        assert "Feature Strategy" in result.recommendations.columns
+        assert "Risk" in result.recommendations.columns
+
+    def test_tenure_and_intensity_thresholds_computed(self, entity_lifecycles):
+        result = classify_lifecycle_quadrants(entity_lifecycles)
+
+        assert result.tenure_threshold > 0
+        assert result.intensity_threshold > 0
+
+
+class TestClassifyActivitySegments:
+    """Tests for classify_activity_segments function."""
+
+    @pytest.fixture
+    def entity_lifecycles(self):
+        """Create entity lifecycles with varied event counts."""
+        return pd.DataFrame({
+            "entity": ["A", "B", "C", "D", "E", "F", "G", "H"],
+            "first_event": pd.to_datetime(["2023-01-01"] * 8),
+            "last_event": pd.to_datetime(["2023-12-31"] * 8),
+            "duration_days": [365] * 8,
+            "event_count": [1, 2, 5, 10, 20, 50, 100, 200],
+        })
+
+    def test_returns_activity_segment_result(self, entity_lifecycles):
+        result = classify_activity_segments(entity_lifecycles)
+
+        assert isinstance(result, ActivitySegmentResult)
+        assert "activity_segment" in result.lifecycles.columns
+
+    def test_segment_assignment(self, entity_lifecycles):
+        result = classify_activity_segments(entity_lifecycles)
+        segments = set(result.lifecycles["activity_segment"].unique())
+
+        valid_segments = {"One-time", "Low Activity", "Medium Activity", "High Activity"}
+        assert segments.issubset(valid_segments)
+
+    def test_one_time_segment(self, entity_lifecycles):
+        result = classify_activity_segments(entity_lifecycles)
+        one_time = result.lifecycles[result.lifecycles["activity_segment"] == "One-time"]
+
+        # Entity with 1 event should be "One-time"
+        assert len(one_time) >= 1
+        assert all(one_time["event_count"] <= 1)
+
+    def test_recommendations_structure(self, entity_lifecycles):
+        result = classify_activity_segments(entity_lifecycles)
+
+        assert "Segment" in result.recommendations.columns
+        assert "Entities" in result.recommendations.columns
+        assert "Share" in result.recommendations.columns
+        assert "Avg Events" in result.recommendations.columns
+        assert "Feature Approach" in result.recommendations.columns
+        assert "Modeling Implication" in result.recommendations.columns
+
+    def test_thresholds_computed(self, entity_lifecycles):
+        result = classify_activity_segments(entity_lifecycles)
+
+        assert result.q25_threshold >= 0
+        assert result.q75_threshold >= result.q25_threshold

@@ -38,7 +38,6 @@ class DuplicateEventCheck(TemporalQualityCheck):
         self.time_column = time_column
 
     def run(self, df: DataFrame) -> TemporalQualityResult:
-        df = to_pandas(df)
         if len(df) == 0:
             return self._pass_result("No data to check")
 
@@ -46,7 +45,7 @@ class DuplicateEventCheck(TemporalQualityCheck):
         duplicate_count = duplicates.sum() - df[duplicates].groupby([self.entity_column, self.time_column]).ngroups
 
         if duplicate_count > 0:
-            examples = df[duplicates].head(10)[[self.entity_column, self.time_column]].to_dict('records')
+            examples = to_pandas(df[duplicates].head(10)[[self.entity_column, self.time_column]]).to_dict('records')
             return TemporalQualityResult(
                 check_id=self.check_id, check_name=self.check_name, passed=False, severity=self.severity,
                 message=f"Found {duplicate_count} duplicate events (same entity + timestamp)",
@@ -71,7 +70,6 @@ class TemporalGapCheck(TemporalQualityCheck):
         self.max_gap_multiple = max_gap_multiple
 
     def run(self, df: DataFrame) -> TemporalQualityResult:
-        df = to_pandas(df)
         if len(df) < 2:
             return self._pass_result("Insufficient data to check gaps")
 
@@ -89,7 +87,7 @@ class TemporalGapCheck(TemporalQualityCheck):
                 check_id=self.check_id, check_name=self.check_name, passed=False, severity=self.severity,
                 message=f"Found {len(large_gaps)} gaps exceeding {threshold_days:.1f} days",
                 details={"threshold_days": threshold_days, "expected_frequency": self.expected_frequency,
-                         "gap_locations": large_gaps.index.tolist()[:10]},
+                         "gap_locations": list(large_gaps.index)[:10]},
                 recommendation="Investigate data collection gaps or missing data",
                 gap_count=len(large_gaps), max_gap_days=max_gap)
 
@@ -110,7 +108,6 @@ class FutureDateCheck(TemporalQualityCheck):
         self.reference_date = reference_date or Timestamp.now()
 
     def run(self, df: DataFrame) -> TemporalQualityResult:
-        df = to_pandas(df)
         if len(df) == 0:
             return self._pass_result("No data to check")
 
@@ -141,7 +138,6 @@ class EventOrderCheck(TemporalQualityCheck):
         self.time_column = time_column
 
     def run(self, df: DataFrame) -> TemporalQualityResult:
-        df = to_pandas(df)
         if len(df) < 2:
             return self._pass_result("Insufficient data to check ordering")
 

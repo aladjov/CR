@@ -215,3 +215,76 @@ class TestEdgeCases:
         result = encoder.fit_transform(series)
 
         assert any("other" in col.lower() or len(result.columns_created) < 5 for col in result.columns_created)
+
+    def test_ordinal_without_categories_raises_error(self):
+        """Cover line 99: ordinal encoding without categories parameter."""
+        series = pd.Series(["Low", "Medium", "High"])
+        encoder = CategoricalEncoder(strategy=EncodingStrategy.ORDINAL)
+        with pytest.raises(ValueError, match="Ordinal encoding requires categories"):
+            encoder.fit_transform(series)
+
+    def test_cyclical_without_period_raises_error(self):
+        """Cover line 104: cyclical encoding without period parameter."""
+        series = pd.Series([0, 1, 2, 3])
+        encoder = CategoricalEncoder(strategy=EncodingStrategy.CYCLICAL)
+        with pytest.raises(ValueError, match="Cyclical encoding requires period"):
+            encoder.fit_transform(series)
+
+    def test_target_without_target_raises_error(self):
+        """Cover line 139: target encoding without target parameter."""
+        series = pd.Series(["A", "B", "C"])
+        encoder = CategoricalEncoder(strategy=EncodingStrategy.TARGET)
+        with pytest.raises(ValueError, match="Target encoding requires target"):
+            encoder.fit_transform(series)
+
+    def test_cyclical_with_day_names(self):
+        """Cover lines 107-123: cyclical encoding with day-of-week string names."""
+        series = pd.Series(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
+        encoder = CategoricalEncoder(strategy=EncodingStrategy.CYCLICAL, period=7)
+        result = encoder.fit_transform(series)
+
+        assert len(result.columns_created) == 2
+        assert result.mapping is not None
+        assert "Monday" in result.mapping
+
+    def test_cyclical_with_month_names(self):
+        """Cover lines 124-125: cyclical encoding with month string names."""
+        series = pd.Series(["January", "February", "March", "April"])
+        encoder = CategoricalEncoder(strategy=EncodingStrategy.CYCLICAL, period=12)
+        result = encoder.fit_transform(series)
+
+        assert len(result.columns_created) == 2
+        assert result.mapping is not None
+        assert "January" in result.mapping
+
+    def test_cyclical_with_generic_strings(self):
+        """Cover lines 126-128: cyclical encoding with non-day/month strings."""
+        series = pd.Series(["phase_a", "phase_b", "phase_c"])
+        encoder = CategoricalEncoder(strategy=EncodingStrategy.CYCLICAL, period=3)
+        result = encoder.fit_transform(series)
+
+        assert len(result.columns_created) == 2
+        assert result.mapping is not None
+
+    def test_fallback_strategy(self):
+        """Cover line 167: unsupported strategy falls through to default return."""
+        series = pd.Series(["A", "B", "C"])
+        encoder = CategoricalEncoder(strategy=EncodingStrategy.HASH)
+        encoder._is_fitted = True
+        result = encoder.transform(series)
+
+        assert result.series is not None
+        assert result.strategy == EncodingStrategy.HASH
+
+    def test_ordinal_encoding_handle_unknown_ignore(self):
+        """Cover line 202 branch: ordinal with unknown categories and handle_unknown != error."""
+        series = pd.Series(["Low", "Medium", "High"])
+        categories = ["Low", "Medium", "High"]
+        encoder = CategoricalEncoder(
+            strategy=EncodingStrategy.ORDINAL,
+            categories=categories,
+            handle_unknown="ignore",
+        )
+        encoder.fit(series)
+        result = encoder.transform(pd.Series(["Low", "Very High"]))
+        assert result.series is not None

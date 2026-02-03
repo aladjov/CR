@@ -1,3 +1,4 @@
+from unittest.mock import patch
 
 import pytest
 
@@ -78,3 +79,31 @@ class TestFactoryWithForcedEnvironment:
         from customer_retention.integrations.adapters.mlflow import LocalMLflow
         adapter = get_mlflow(tracking_uri=str(tmp_path), force_local=True)
         assert isinstance(adapter, LocalMLflow)
+
+
+@requires_delta
+class TestFactoryWithMockedSparkAvailable:
+    @patch("customer_retention.integrations.adapters.storage.databricks.is_spark_available", return_value=True)
+    @patch("customer_retention.integrations.adapters.factory.is_spark_available", return_value=True)
+    def test_get_delta_returns_databricks_when_spark_available(self, mock_factory_spark, mock_storage_spark):
+        from customer_retention.integrations.adapters import get_delta
+        from customer_retention.integrations.adapters.storage import DatabricksDelta
+        storage = get_delta()
+        assert isinstance(storage, DatabricksDelta)
+
+    @patch("customer_retention.integrations.adapters.feature_store.databricks.is_spark_available", return_value=True)
+    @patch("customer_retention.integrations.adapters.factory.is_spark_available", return_value=True)
+    def test_get_feature_store_returns_databricks_when_spark_available(self, mock_factory_spark, mock_fs_spark):
+        from customer_retention.integrations.adapters import get_feature_store
+        from customer_retention.integrations.adapters.feature_store import DatabricksFeatureStore
+        store = get_feature_store()
+        assert isinstance(store, DatabricksFeatureStore)
+
+    @requires_mlflow
+    @patch("customer_retention.integrations.adapters.mlflow.databricks.is_spark_available", return_value=True)
+    @patch("customer_retention.integrations.adapters.factory.is_spark_available", return_value=True)
+    def test_get_mlflow_returns_databricks_when_spark_available(self, mock_factory_spark, mock_mlflow_spark):
+        from customer_retention.integrations.adapters import get_mlflow
+        from customer_retention.integrations.adapters.mlflow import DatabricksMLflow
+        adapter = get_mlflow()
+        assert isinstance(adapter, DatabricksMLflow)

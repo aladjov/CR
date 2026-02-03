@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Union
+from typing import Any, Union
 
-import numpy as np
 import pandas as _pandas
 
 from .detection import (
@@ -38,10 +37,6 @@ else:
     Series = _pandas.Series
 
 
-def get_pandas() -> Any:
-    return _pandas
-
-
 def to_pandas(df: Any) -> _pandas.DataFrame:
     if isinstance(df, _pandas.DataFrame):
         return df
@@ -59,33 +54,6 @@ def to_pandas(df: Any) -> _pandas.DataFrame:
     except ImportError:
         pass
     return _pandas.DataFrame(df)
-
-
-def to_spark_pandas(df: Any) -> Any:
-    if not _SPARK_PANDAS_AVAILABLE:
-        return df if isinstance(df, _pandas.DataFrame) else _pandas.DataFrame(df)
-    try:
-        import pyspark.pandas as ps
-        if isinstance(df, ps.DataFrame):
-            return df
-        if isinstance(df, _pandas.DataFrame):
-            return ps.from_pandas(df)
-        return ps.DataFrame(df)
-    except ImportError:
-        return df
-
-
-def ensure_pandas_series(series: Any) -> _pandas.Series:
-    if isinstance(series, _pandas.Series):
-        return series
-    if _SPARK_PANDAS_AVAILABLE:
-        try:
-            import pyspark.pandas as ps
-            if isinstance(series, ps.Series):
-                return series.to_pandas()
-        except ImportError:
-            pass
-    return _pandas.Series(series)
 
 
 def concat(objs: list, axis: int = 0, ignore_index: bool = False, **kwargs: Any) -> Any:
@@ -177,21 +145,16 @@ def safe_memory_usage_bytes(obj: Any) -> int:
 
 
 def safe_to_datetime(series: Any, **kwargs: Any) -> _pandas.Series:
-    """Convert a Series to datetime, handling Spark LongType epoch integers.
-
-    Like ``pd.to_datetime`` but automatically detects integer epoch columns
-    and passes the correct ``unit`` parameter.  Any extra *kwargs* are
-    forwarded to ``pd.to_datetime``.
-    """
-    series = ensure_pandas_series(series)
     if _pandas.api.types.is_datetime64_any_dtype(series):
-        return series
-    if _pandas.api.types.is_integer_dtype(series):
-        non_null = series.dropna()
+        return series if isinstance(series, _pandas.Series) else _pandas.Series(series)
+    arr = series.to_numpy() if hasattr(series, 'to_numpy') else _pandas.array(series)
+    if _pandas.api.types.is_integer_dtype(arr) or _pandas.api.types.is_integer_dtype(series):
+        arr = _pandas.to_numeric(arr, errors='coerce')
+        non_null = arr[~_pandas.isna(arr)]
         if len(non_null) > 0:
-            unit = _infer_epoch_unit(non_null.iloc[0])
-            return _pandas.to_datetime(series, unit=unit, **kwargs)
-    return _pandas.to_datetime(series, **kwargs)
+            unit = _infer_epoch_unit(non_null[0])
+            return _pandas.Series(_pandas.to_datetime(arr, unit=unit, **kwargs))
+    return _pandas.Series(_pandas.to_datetime(arr, **kwargs))
 
 
 def ensure_datetime_column(df: _pandas.DataFrame, column: str) -> _pandas.DataFrame:
@@ -206,21 +169,13 @@ def ensure_datetime_column(df: _pandas.DataFrame, column: str) -> _pandas.DataFr
     return df
 
 
-class PandasCompat:
-    @staticmethod
-    def value_counts_normalize(series: Any, normalize: bool = False) -> Any:
-        return series.value_counts(normalize=normalize)
-
-    @staticmethod
-    def apply_with_meta(df: Any, func: Any, meta: Any = None, **kwargs: Any) -> Any:
-        return df.apply(func, **kwargs)
-
-    @staticmethod
-    def groupby_apply(grouped: Any, func: Any, **kwargs: Any) -> Any:
-        return grouped.apply(func, **kwargs)
+def safe_isinf(series: Any) -> Any:
+    return (series == float('inf')) | (series == float('-inf'))
 
 
-compat = PandasCompat()
+def safe_isfinite(series: Any) -> Any:
+    return series.notna() & ~safe_isinf(series)
+
 
 __all__ = [
     "pd",
@@ -244,10 +199,9 @@ __all__ = [
     "isna",
     "is_spark_available",
     "is_pandas_api_on_spark",
-    "get_pandas",
     "to_pandas",
-    "to_spark_pandas",
-    "ensure_pandas_series",
+    "safe_isinf",
+    "safe_isfinite",
     "concat",
     "merge",
     "api_types",
@@ -262,8 +216,6 @@ __all__ = [
     "set_spark_config",
     "enable_arrow_optimization",
     "configure_spark_pandas",
-    "compat",
-    "PandasCompat",
     "is_databricks",
     "is_notebook",
     "get_display_function",

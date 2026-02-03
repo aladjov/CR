@@ -128,3 +128,21 @@ class TestEdgeCases:
         result = handler.fit_transform(series)
 
         assert set(result.series.unique()) == {0, 1}
+
+    def test_single_false_value(self):
+        """Cover line 56: single value that is false-like returns mapping to 0."""
+        series = pd.Series([0, 0, 0])
+        handler = BinaryHandler()
+        result = handler.fit_transform(series)
+
+        assert result.positive_class is None
+        assert result.mapping == {0: 0}
+
+    def test_more_than_two_unmapped_values(self):
+        """Cover line 76: >2 unique values that don't match known true/false."""
+        series = pd.Series(["red", "green", "blue"])
+        handler = BinaryHandler()
+        result = handler.fit_transform(series)
+
+        assert len(result.mapping) == 3
+        assert result.positive_class == "red" or result.positive_class is not None

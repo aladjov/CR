@@ -9,7 +9,6 @@ import json
 import re
 from pathlib import Path
 
-
 EXPERIMENTS_IMPORT = 'from customer_retention.core.config.experiments import FINDINGS_DIR, EXPERIMENTS_DIR, OUTPUT_DIR, setup_experiments_structure'
 
 

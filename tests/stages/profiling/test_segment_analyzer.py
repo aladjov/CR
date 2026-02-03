@@ -571,3 +571,449 @@ class TestRunFullAnalysis:
         assert len(summary) > 0
         # Should contain key decision information
         assert any(word in summary.lower() for word in ["segment", "model", "recommend"])
+
+
+class TestDecisionSummaryBranches:
+    """Test all get_decision_summary branches."""
+
+    def _make_full_result(self, recommendation):
+        metrics = SegmentationDecisionMetrics(
+            silhouette_score=0.3,
+            silhouette_interpretation="Reasonable",
+            target_variance_ratio=0.2,
+            target_variance_interpretation="Moderate",
+            n_segments=2,
+            segments_interpretation="Manageable",
+            confidence=0.5,
+            confidence_interpretation="Medium",
+            recommendation=recommendation,
+            rationale=[],
+        )
+        return FullSegmentationResult(
+            metrics=metrics,
+            profiles=[],
+            size_distribution={},
+            visualization=None,
+            segmentation_result=None,
+        )
+
+    def test_strong_segmentation_summary(self):
+        result = self._make_full_result("strong_segmentation")
+        summary = result.get_decision_summary()
+        assert "STRONG EVIDENCE" in summary
+
+    def test_consider_segmentation_summary(self):
+        result = self._make_full_result("consider_segmentation")
+        summary = result.get_decision_summary()
+        assert "MODERATE EVIDENCE" in summary
+
+    def test_single_model_summary(self):
+        result = self._make_full_result("single_model")
+        summary = result.get_decision_summary()
+        assert "SINGLE MODEL" in summary
+
+    def test_has_visualization_true(self):
+        viz = ClusterVisualizationResult(
+            x=np.array([1.0]),
+            y=np.array([2.0]),
+            labels=np.array([0]),
+            method=DimensionReductionMethod.PCA,
+        )
+        result = self._make_full_result("single_model")
+        result.visualization = viz
+        assert result.has_visualization is True
+
+
+class TestFromSegmentationResultBranches:
+    """Test all branches of SegmentationDecisionMetrics.from_segmentation_result."""
+
+    def _make_seg_result(self, quality_score, target_variance, n_segments, confidence):
+        return SegmentationResult(
+            n_segments=n_segments,
+            method=SegmentationMethod.KMEANS,
+            quality_score=quality_score,
+            profiles=[],
+            target_variance_ratio=target_variance,
+            recommendation="single_model",
+            confidence=confidence,
+            rationale=[],
+            labels=np.array([0]),
+        )
+
+    def test_strong_silhouette(self):
+        # quality_score > 0.7 => silhouette > 0.5 => "Strong structure"
+        result = self._make_seg_result(0.85, 0.5, 2, 0.7)
+        metrics = SegmentationDecisionMetrics.from_segmentation_result(result)
+        assert metrics.silhouette_interpretation == "Strong structure"
+
+    def test_reasonable_silhouette(self):
+        # quality_score between 0.625 and 0.75 => silhouette between 0.25 and 0.5
+        result = self._make_seg_result(0.7, 0.2, 2, 0.5)
+        metrics = SegmentationDecisionMetrics.from_segmentation_result(result)
+        assert metrics.silhouette_interpretation == "Reasonable"
+
+    def test_weak_silhouette(self):
+        # quality_score between 0.5 and 0.625 => silhouette between 0 and 0.25
+        result = self._make_seg_result(0.55, 0.1, 2, 0.3)
+        metrics = SegmentationDecisionMetrics.from_segmentation_result(result)
+        assert metrics.silhouette_interpretation == "Weak structure"
+
+    def test_no_structure_silhouette(self):
+        # quality_score < 0.5 => silhouette < 0
+        result = self._make_seg_result(0.3, None, 2, 0.1)
+        metrics = SegmentationDecisionMetrics.from_segmentation_result(result)
+        assert metrics.silhouette_interpretation == "No structure"
+
+    def test_target_variance_high(self):
+        result = self._make_seg_result(0.6, 0.5, 2, 0.5)
+        metrics = SegmentationDecisionMetrics.from_segmentation_result(result)
+        assert metrics.target_variance_interpretation == "High separation"
+
+    def test_target_variance_moderate(self):
+        result = self._make_seg_result(0.6, 0.2, 2, 0.5)
+        metrics = SegmentationDecisionMetrics.from_segmentation_result(result)
+        assert metrics.target_variance_interpretation == "Moderate"
+
+    def test_target_variance_low(self):
+        result = self._make_seg_result(0.6, 0.1, 2, 0.5)
+        metrics = SegmentationDecisionMetrics.from_segmentation_result(result)
+        assert metrics.target_variance_interpretation == "Low separation"
+
+    def test_target_variance_none(self):
+        result = self._make_seg_result(0.6, None, 2, 0.5)
+        metrics = SegmentationDecisionMetrics.from_segmentation_result(result)
+        assert metrics.target_variance_interpretation == "N/A"
+
+    def test_complex_segments(self):
+        result = self._make_seg_result(0.6, 0.2, 6, 0.5)
+        metrics = SegmentationDecisionMetrics.from_segmentation_result(result)
+        assert metrics.segments_interpretation == "Complex"
+
+    def test_manageable_segments(self):
+        result = self._make_seg_result(0.6, 0.2, 3, 0.5)
+        metrics = SegmentationDecisionMetrics.from_segmentation_result(result)
+        assert metrics.segments_interpretation == "Manageable"
+
+    def test_high_confidence(self):
+        result = self._make_seg_result(0.6, 0.2, 2, 0.7)
+        metrics = SegmentationDecisionMetrics.from_segmentation_result(result)
+        assert metrics.confidence_interpretation == "High"
+
+    def test_medium_confidence(self):
+        result = self._make_seg_result(0.6, 0.2, 2, 0.4)
+        metrics = SegmentationDecisionMetrics.from_segmentation_result(result)
+        assert metrics.confidence_interpretation == "Medium"
+
+    def test_low_confidence(self):
+        result = self._make_seg_result(0.6, 0.2, 2, 0.2)
+        metrics = SegmentationDecisionMetrics.from_segmentation_result(result)
+        assert metrics.confidence_interpretation == "Low"
+
+
+class TestAnalyzeEdgeCasesExtended:
+    """Additional edge cases for the analyze method."""
+
+    def test_no_numeric_features(self):
+        """No numeric features => _empty_result."""
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({
+            "cat_a": ["a", "b", "c", "a", "b"],
+            "cat_b": ["x", "y", "z", "x", "y"],
+        })
+        result = analyzer.analyze(df)
+        assert result.n_segments == 1
+        assert result.recommendation == "single_model"
+        assert result.quality_score == 0.0
+
+    def test_too_few_rows_after_dropna(self):
+        """Fewer than 10 valid rows => _single_segment_result."""
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({
+            "feature_a": [1, 2, 3, 4, 5],
+            "target": [0, 1, 0, 1, 0],
+        })
+        result = analyzer.analyze(df, target_col="target")
+        assert result.n_segments == 1
+        assert result.recommendation == "single_model"
+
+    def test_single_segment_result_without_target(self):
+        """_single_segment_result with no target column."""
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({
+            "feature_a": [1, 2, 3, 4, 5],
+        })
+        result = analyzer.analyze(df)
+        assert result.n_segments == 1
+        assert result.profiles[0].target_rate is None
+
+    def test_single_segment_result_non_numeric_target(self):
+        """_single_segment_result when target is non-numeric."""
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({
+            "feature_a": [1, 2, 3, 4, 5],
+            "target": ["a", "b", "a", "b", "a"],
+        })
+        result = analyzer.analyze(df, target_col="target")
+        assert result.n_segments == 1
+        assert result.profiles[0].target_rate is None
+
+    def test_hierarchical_method(self):
+        """Test HIERARCHICAL clustering method."""
+        np.random.seed(42)
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({
+            "feature_a": np.concatenate([np.random.normal(0, 1, 50), np.random.normal(10, 1, 50)]),
+            "feature_b": np.concatenate([np.random.normal(0, 1, 50), np.random.normal(10, 1, 50)]),
+            "target": [0] * 50 + [1] * 50,
+        })
+        result = analyzer.analyze(df, target_col="target", method=SegmentationMethod.HIERARCHICAL)
+        assert result.method == SegmentationMethod.HIERARCHICAL
+
+    def test_dbscan_method(self):
+        """Test DBSCAN clustering method."""
+        np.random.seed(42)
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({
+            "feature_a": np.concatenate([np.random.normal(0, 1, 50), np.random.normal(10, 1, 50)]),
+            "feature_b": np.concatenate([np.random.normal(0, 1, 50), np.random.normal(10, 1, 50)]),
+            "target": [0] * 50 + [1] * 50,
+        })
+        result = analyzer.analyze(df, target_col="target", method=SegmentationMethod.DBSCAN)
+        assert result.method == SegmentationMethod.DBSCAN
+
+    def test_feature_cols_not_in_df(self):
+        """Feature cols specified but none exist in df."""
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({"a": [1, 2, 3]})
+        result = analyzer.analyze(df, feature_cols=["x", "y"])
+        assert result.n_segments == 1
+        assert result.recommendation == "single_model"
+
+    def test_select_features_removes_target(self):
+        """Auto-selected features should exclude target column."""
+        analyzer = SegmentAnalyzer()
+        np.random.seed(42)
+        n = 100
+        df = pd.DataFrame({
+            "feature_a": np.random.normal(0, 1, n),
+            "feature_b": np.random.normal(5, 1, n),
+            "target": np.random.choice([0, 1], n),
+        })
+        cols = analyzer._select_features(df, None, "target")
+        assert "target" not in cols
+
+
+class TestFindOptimalSegmentsEdgeCases:
+    def test_very_small_data(self):
+        """Fewer than 10 rows => return 1."""
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({"a": [1, 2, 3, 4, 5], "b": [5, 4, 3, 2, 1]})
+        n = analyzer.find_optimal_segments(df, ["a", "b"])
+        assert n == 1
+
+    def test_max_k_less_than_2(self):
+        """max_k computed < 2 => return 1."""
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({"a": list(range(10)), "b": list(range(10, 20))})
+        # max_k = min(2, 10//3, 10) = min(2, 3, 10) = 2, so still k=2
+        # But if we pass max_k=1, it triggers max_k < 2
+        n = analyzer.find_optimal_segments(df, ["a", "b"], max_k=1)
+        assert n == 1
+
+
+class TestCalculateQualityEdgeCases:
+    def test_single_label(self):
+        """Only one unique label => quality 0.0."""
+        analyzer = SegmentAnalyzer()
+        scaled = np.array([[1, 2], [3, 4], [5, 6]])
+        labels = np.array([0, 0, 0])
+        assert analyzer._calculate_quality(scaled, labels) == 0.0
+
+
+class TestCalculateTargetVarianceEdgeCases:
+    def test_no_target_col(self):
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({"a": [1, 2, 3]})
+        labels = np.array([0, 0, 1])
+        assert analyzer._calculate_target_variance(df, labels, None) is None
+
+    def test_target_not_in_df(self):
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({"a": [1, 2, 3]})
+        labels = np.array([0, 0, 1])
+        assert analyzer._calculate_target_variance(df, labels, "missing") is None
+
+    def test_non_numeric_target(self):
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({"target": ["a", "b", "c"]})
+        labels = np.array([0, 0, 1])
+        assert analyzer._calculate_target_variance(df, labels, "target") is None
+
+    def test_non_binary_target(self):
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({"target": [0, 1, 2, 3, 4]})
+        labels = np.array([0, 0, 1, 1, 1])
+        assert analyzer._calculate_target_variance(df, labels, "target") is None
+
+    def test_single_segment_returns_zero(self):
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({"target": [0, 1, 0, 1]})
+        labels = np.array([0, 0, 0, 0])
+        assert analyzer._calculate_target_variance(df, labels, "target") == 0.0
+
+
+class TestMakeRecommendationBranches:
+    def test_high_quality_high_variance_large_segments(self):
+        """All favorable conditions => strong_segmentation."""
+        analyzer = SegmentAnalyzer()
+        profiles = [
+            SegmentProfile(segment_id=0, size=50, size_pct=50.0, target_rate=0.2, defining_features={}),
+            SegmentProfile(segment_id=1, size=50, size_pct=50.0, target_rate=0.8, defining_features={}),
+        ]
+        rec, conf, rationale = analyzer._make_recommendation(0.8, 0.5, 2, profiles)
+        assert rec == "strong_segmentation"
+        assert conf > 0.6
+
+    def test_moderate_quality(self):
+        """Moderate cluster quality branch."""
+        analyzer = SegmentAnalyzer()
+        profiles = [
+            SegmentProfile(segment_id=0, size=50, size_pct=50.0, target_rate=0.5, defining_features={}),
+            SegmentProfile(segment_id=1, size=50, size_pct=50.0, target_rate=0.5, defining_features={}),
+        ]
+        rec, conf, rationale = analyzer._make_recommendation(0.6, 0.2, 2, profiles)
+        assert any("Moderate cluster quality" in r for r in rationale)
+
+    def test_low_target_variance(self):
+        """Low target rate variation branch."""
+        analyzer = SegmentAnalyzer()
+        profiles = [
+            SegmentProfile(segment_id=0, size=50, size_pct=50.0, target_rate=0.5, defining_features={}),
+            SegmentProfile(segment_id=1, size=50, size_pct=50.0, target_rate=0.5, defining_features={}),
+        ]
+        rec, conf, rationale = analyzer._make_recommendation(0.4, 0.05, 2, profiles)
+        assert any("Low target rate" in r for r in rationale)
+
+    def test_small_segments(self):
+        """Some segments < 10% but >= 5%."""
+        analyzer = SegmentAnalyzer()
+        profiles = [
+            SegmentProfile(segment_id=0, size=92, size_pct=92.0, target_rate=0.5, defining_features={}),
+            SegmentProfile(segment_id=1, size=8, size_pct=8.0, target_rate=0.5, defining_features={}),
+        ]
+        rec, conf, rationale = analyzer._make_recommendation(0.4, None, 2, profiles)
+        assert any("small" in r.lower() for r in rationale)
+
+    def test_very_small_segments(self):
+        """Very small segments < 5%."""
+        analyzer = SegmentAnalyzer()
+        profiles = [
+            SegmentProfile(segment_id=0, size=97, size_pct=97.0, target_rate=0.5, defining_features={}),
+            SegmentProfile(segment_id=1, size=3, size_pct=3.0, target_rate=0.5, defining_features={}),
+        ]
+        rec, conf, rationale = analyzer._make_recommendation(0.4, None, 2, profiles)
+        assert any("Very small" in r for r in rationale)
+
+    def test_many_segments_penalty(self):
+        """More than 5 segments adds penalty."""
+        analyzer = SegmentAnalyzer()
+        profiles = [
+            SegmentProfile(segment_id=i, size=10, size_pct=10.0, target_rate=0.5, defining_features={})
+            for i in range(10)
+        ]
+        rec, conf, rationale = analyzer._make_recommendation(0.4, None, 10, profiles)
+        assert any("Many segments" in r for r in rationale)
+
+    def test_no_target_variance(self):
+        """target_variance is None => no variance rationale."""
+        analyzer = SegmentAnalyzer()
+        profiles = [
+            SegmentProfile(segment_id=0, size=50, size_pct=50.0, target_rate=None, defining_features={}),
+        ]
+        rec, conf, rationale = analyzer._make_recommendation(0.4, None, 2, profiles)
+        assert not any("target rate" in r.lower() for r in rationale)
+
+    def test_empty_profiles(self):
+        """Empty profiles list."""
+        analyzer = SegmentAnalyzer()
+        rec, conf, rationale = analyzer._make_recommendation(0.4, None, 2, [])
+        assert rec in ["single_model", "consider_segmentation", "strong_segmentation"]
+
+
+class TestGetClusterVisualizationEdgeCases:
+    def test_too_few_valid_rows(self):
+        """Less than 2 valid rows => early return with NaN."""
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({"a": [np.nan], "b": [np.nan]})
+        labels = np.array([0])
+        viz = analyzer.get_cluster_visualization(df, labels, ["a", "b"])
+        assert np.isnan(viz.x[0])
+        assert np.isnan(viz.y[0])
+        assert viz.explained_variance_ratio is None
+
+    def test_umap_fallback_to_pca(self):
+        """UMAP not installed => fallback to PCA."""
+        np.random.seed(42)
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({
+            "a": np.random.normal(0, 1, 50),
+            "b": np.random.normal(5, 1, 50),
+        })
+        labels = np.array([0] * 25 + [1] * 25)
+        viz = analyzer.get_cluster_visualization(
+            df, labels, ["a", "b"], method=DimensionReductionMethod.UMAP
+        )
+        # If umap not installed, falls back to PCA
+        assert viz.method in (DimensionReductionMethod.UMAP, DimensionReductionMethod.PCA)
+        assert len(viz.x) == 50
+
+
+class TestProfileSegmentsEdgeCases:
+    def test_non_numeric_column(self):
+        """Non-numeric feature column is skipped."""
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({
+            "cat": ["a", "b", "c"],
+            "num": [1.0, 2.0, 3.0],
+        })
+        labels = np.array([0, 0, 1])
+        profiles = analyzer.profile_segments(df, labels, ["cat", "num"])
+        for p in profiles:
+            assert "cat" not in p.defining_features
+            assert "num" in p.defining_features
+
+    def test_empty_col_data_after_dropna(self):
+        """Feature column all NaN in segment."""
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({
+            "a": [np.nan, np.nan, 1.0, 2.0],
+        })
+        labels = np.array([0, 0, 1, 1])
+        profiles = analyzer.profile_segments(df, labels, ["a"])
+        # Segment 0 has all NaN, so no defining features for "a"
+        seg0 = [p for p in profiles if p.segment_id == 0][0]
+        assert "a" not in seg0.defining_features
+
+    def test_non_binary_target_ignored_for_rate(self):
+        """Target with values other than 0/1 => target_rate is None."""
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({
+            "a": [1, 2, 3, 4],
+            "target": [2, 3, 4, 5],
+        })
+        labels = np.array([0, 0, 1, 1])
+        profiles = analyzer.profile_segments(df, labels, ["a"], target_col="target")
+        for p in profiles:
+            assert p.target_rate is None
+
+
+class TestRunFullAnalysisSingleSegment:
+    def test_no_visualization_for_single_segment(self):
+        """Single segment => no visualization generated."""
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({
+            "a": [1, 2, 3, 4, 5],
+            "b": [5, 4, 3, 2, 1],
+        })
+        result = analyzer.run_full_analysis(df, feature_cols=["a", "b"])
+        assert result.visualization is None

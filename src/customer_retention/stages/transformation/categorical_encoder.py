@@ -4,7 +4,7 @@ from typing import Optional
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, Series, ensure_pandas_series, to_numeric
+from customer_retention.core.compat import DataFrame, Series, to_numeric
 
 
 class EncodingStrategy(str, Enum):
@@ -55,7 +55,6 @@ class CategoricalEncoder:
         self._is_fitted = False
 
     def fit(self, series: Series, target: Optional[Series] = None) -> "CategoricalEncoder":
-        series = ensure_pandas_series(series)
         clean = series.dropna()
 
         if self.strategy == EncodingStrategy.ONE_HOT:
@@ -77,7 +76,6 @@ class CategoricalEncoder:
     def transform(self, series: Series, target: Optional[Series] = None) -> CategoricalEncodeResult:
         if not self._is_fitted:
             raise ValueError("Encoder not fitted. Call fit() or fit_transform() first.")
-        series = ensure_pandas_series(series)
         return self._apply_encoding(series, target)
 
     def fit_transform(self, series: Series, target: Optional[Series] = None) -> CategoricalEncodeResult:
@@ -85,7 +83,7 @@ class CategoricalEncoder:
         return self._apply_encoding(series, target)
 
     def _fit_one_hot(self, clean: Series):
-        categories = clean.unique().tolist()
+        categories = list(clean.unique())
         if self.min_frequency is not None:
             value_counts = clean.value_counts()
             categories = [c for c in categories if value_counts.get(c, 0) >= self.min_frequency]
@@ -93,7 +91,7 @@ class CategoricalEncoder:
         self._mapping = {cat: i for i, cat in enumerate(self._categories)}
 
     def _fit_label(self, clean: Series):
-        categories = sorted(clean.unique().tolist())
+        categories = sorted(list(clean.unique()))
         self._mapping = {cat: i for i, cat in enumerate(categories)}
 
     def _fit_ordinal(self, clean: Series):
@@ -106,7 +104,7 @@ class CategoricalEncoder:
             raise ValueError("Cyclical encoding requires period parameter")
         # Check if values are strings and need mapping to indices
         if clean.dtype == object:
-            unique_values = sorted(clean.unique().tolist())
+            unique_values = sorted(list(clean.unique()))
             # Auto-detect day of week names
             day_names = {
                 'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
@@ -169,7 +167,7 @@ class CategoricalEncoder:
         return CategoricalEncodeResult(series=series, strategy=self.strategy)
 
     def _encode_one_hot(self, series: Series) -> CategoricalEncodeResult:
-        categories = self._categories if self._categories else sorted(series.dropna().unique().tolist())
+        categories = self._categories if self._categories else sorted(list(series.dropna().unique()))
         if self.drop_first and len(categories) > 0:
             categories = categories[1:]
 
@@ -202,7 +200,7 @@ class CategoricalEncoder:
     def _encode_ordinal(self, series: Series) -> CategoricalEncodeResult:
         unknown = series[series.notna() & ~series.isin(self._mapping.keys())]
         if len(unknown) > 0 and self.handle_unknown == "error":
-            raise ValueError(f"Found unknown categories: {unknown.unique().tolist()}")
+            raise ValueError(f"Found unknown categories: {list(unknown.unique())}")
 
         result = series.map(self._mapping)
         return CategoricalEncodeResult(

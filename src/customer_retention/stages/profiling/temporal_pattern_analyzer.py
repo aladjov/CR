@@ -11,8 +11,8 @@ from customer_retention.core.compat import (
     cut,
     ensure_datetime_column,
     native_pd,
+    pd,
     safe_to_datetime,
-    to_pandas,
 )
 from customer_retention.core.utils import compute_effect_size
 
@@ -185,12 +185,11 @@ def generate_trend_recommendations(trend: TrendResult, mean_value: float = 1.0) 
 
 
 def analyze_cohort_distribution(first_events: DataFrame, time_column: str) -> CohortDistribution:
-    first_events = to_pandas(first_events)
     ensure_datetime_column(first_events, time_column)
     years = first_events[time_column].dt.year
     year_counts = years.value_counts().sort_index().to_dict()
     total = len(first_events)
-    dominant_year = years.mode().iloc[0] if len(years) > 0 else 0
+    dominant_year = years.value_counts().idxmax() if len(years) > 0 else 0
     dominant_pct = (year_counts.get(dominant_year, 0) / total * 100) if total > 0 else 0
     return CohortDistribution(
         year_counts=year_counts, total_entities=total,
@@ -241,7 +240,6 @@ def compute_recency_buckets(
     df: DataFrame, entity_column: str, time_column: str, target_column: str,
     reference_date: Timestamp, bucket_edges: Optional[List[float]] = None
 ) -> List[RecencyBucketStats]:
-    df = to_pandas(df)
     ensure_datetime_column(df, time_column)
     edges = bucket_edges or DEFAULT_BUCKET_EDGES
     labels = _generate_bucket_labels(edges)
@@ -308,7 +306,6 @@ def classify_distribution_pattern(buckets: List[RecencyBucketStats]) -> str:
 def _diagnose_anomaly_pattern(
     df: DataFrame, entity_column: str, time_column: str, target_column: str
 ) -> AnomalyDiagnostics:
-    df = to_pandas(df)
     ensure_datetime_column(df, time_column)
     entity_target = df.groupby(entity_column)[target_column].first()
     target_1_pct = float(entity_target.mean() * 100)
@@ -316,7 +313,7 @@ def _diagnose_anomaly_pattern(
     entity_first = df.groupby(entity_column)[time_column].min()
     entity_last = df.groupby(entity_column)[time_column].max()
     tenure = (entity_last - entity_first).dt.days
-    tenure_by_target = native_pd.DataFrame({"target": entity_target, "tenure": tenure})
+    tenure_by_target = pd.DataFrame({"target": entity_target, "tenure": tenure})
     retained_tenure = tenure_by_target[tenure_by_target["target"] == 1]["tenure"]
     churned_tenure = tenure_by_target[tenure_by_target["target"] == 0]["tenure"]
     retained_median_tenure = float(retained_tenure.median()) if len(retained_tenure) > 0 else None
@@ -445,7 +442,6 @@ def compare_recency_by_target(
     df: DataFrame, entity_column: str, time_column: str, target_column: str,
     reference_date: Optional[Timestamp] = None, cap_percentile: float = 0.99
 ) -> Optional[RecencyComparisonResult]:
-    df = to_pandas(df)
     if target_column not in df.columns:
         return None
     ensure_datetime_column(df, time_column)
@@ -456,8 +452,8 @@ def compare_recency_by_target(
     entity_recency = entity_last.merge(entity_target, on=entity_column)
     cap = entity_recency["recency_days"].quantile(cap_percentile)
     entity_capped = entity_recency[entity_recency["recency_days"] <= cap]
-    retained = entity_capped[entity_capped[target_column] == 1]["recency_days"].values
-    churned = entity_capped[entity_capped[target_column] == 0]["recency_days"].values
+    retained = entity_capped[entity_capped[target_column] == 1]["recency_days"].to_numpy()
+    churned = entity_capped[entity_capped[target_column] == 0]["recency_days"].to_numpy()
     if len(retained) < 2 or len(churned) < 2:
         return None
     cohens_d, effect_interp = compute_effect_size(retained, churned)
@@ -511,15 +507,15 @@ class TemporalPatternAnalyzer:
         if len(df) < 3:
             return self._unknown_trend()
 
-        df_clean = to_pandas(df)[[self.time_column, value_column]].dropna()
+        df_clean = df[[self.time_column, value_column]].dropna()
         if len(df_clean) < 3:
             return self._unknown_trend()
 
         time_col = safe_to_datetime(df_clean[self.time_column])
         x = (time_col - time_col.min()).dt.total_seconds() / 86400
-        y = df_clean[value_column].values
+        y = df_clean[value_column].to_numpy()
 
-        slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
+        slope, intercept, r_value, p_value, std_err = stats.linregress(x.to_numpy(), y)
         r_squared = r_value ** 2
 
         mean_y = np.mean(y)
@@ -599,7 +595,7 @@ class TemporalPatternAnalyzer:
         if len(df) == 0:
             return native_pd.DataFrame()
 
-        df_copy = to_pandas(df).copy()
+        df_copy = df.copy()
         ensure_datetime_column(df_copy, cohort_column)
         entity_first_event = df_copy.groupby(entity_column)[cohort_column].min()
         df_copy["_cohort"] = df_copy[entity_column].map(entity_first_event)
@@ -628,7 +624,6 @@ class TemporalPatternAnalyzer:
         if len(df) == 0:
             return RecencyResult(avg_recency_days=0, median_recency_days=0, min_recency_days=0, max_recency_days=0)
 
-        df = to_pandas(df)
         ensure_datetime_column(df, self.time_column)
         ref_date = reference_date or Timestamp.now()
 
@@ -638,10 +633,10 @@ class TemporalPatternAnalyzer:
         target_correlation = None
         if target_column and target_column in df.columns:
             entity_target = df.groupby(entity_column)[target_column].first()
-            combined = native_pd.DataFrame({"recency": recency_days, "target": entity_target}).dropna()
+            combined = pd.DataFrame({"recency": recency_days, "target": entity_target}).dropna()
 
             if len(combined) > 2:
-                corr, _ = stats.pearsonr(combined["recency"], combined["target"])
+                corr, _ = stats.pearsonr(combined["recency"].to_numpy(), combined["target"].to_numpy())
                 target_correlation = corr
 
         return RecencyResult(

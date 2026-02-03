@@ -10,7 +10,7 @@ from sklearn.manifold import TSNE
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
-from customer_retention.core.compat import DataFrame, to_pandas
+from customer_retention.core.compat import DataFrame
 
 
 class SegmentationMethod(Enum):
@@ -176,7 +176,6 @@ class SegmentAnalyzer:
         max_segments: int = 5,
         method: Optional[SegmentationMethod] = None,
     ) -> SegmentationResult:
-        df = to_pandas(df)
         method = method or self.default_method
 
         feature_cols = self._select_features(df, feature_cols, target_col)
@@ -194,7 +193,7 @@ class SegmentAnalyzer:
             df.loc[valid_indices], feature_cols, max_k=max_segments
         )
 
-        scaled_features = self._scaler.fit_transform(features_df)
+        scaled_features = self._scaler.fit_transform(features_df.to_numpy())
         labels = self._fit_clusters(scaled_features, n_segments, method)
 
         full_labels = np.full(len(df), -1)
@@ -225,7 +224,6 @@ class SegmentAnalyzer:
         feature_cols: List[str],
         max_k: int = 10,
     ) -> int:
-        df = to_pandas(df)
         features_df = df[feature_cols].dropna()
 
         if len(features_df) < 10:
@@ -235,7 +233,7 @@ class SegmentAnalyzer:
         if max_k < 2:
             return 1
 
-        scaled = self._scaler.fit_transform(features_df)
+        scaled = self._scaler.fit_transform(features_df.to_numpy())
 
         silhouette_scores = []
         for k in range(2, max_k + 1):
@@ -258,7 +256,6 @@ class SegmentAnalyzer:
         feature_cols: List[str],
         target_col: Optional[str] = None,
     ) -> List[SegmentProfile]:
-        df = to_pandas(df)
         profiles = []
         unique_labels = sorted(set(labels[labels >= 0]))
         total_valid = sum(labels >= 0)
@@ -489,7 +486,6 @@ class SegmentAnalyzer:
         Returns:
             ClusterVisualizationResult with 2D coordinates and labels.
         """
-        df = to_pandas(df)
         feature_cols = [c for c in feature_cols if c in df.columns]
 
         # Initialize output arrays with NaN
@@ -508,7 +504,7 @@ class SegmentAnalyzer:
             )
 
         # Scale features
-        scaled = self._scaler.fit_transform(features_df.loc[valid_indices])
+        scaled = self._scaler.fit_transform(features_df.loc[valid_indices].to_numpy())
 
         # Apply dimensionality reduction
         explained_variance = None
@@ -583,8 +579,6 @@ class SegmentAnalyzer:
         Returns:
             FullSegmentationResult with metrics, profiles, and visualization.
         """
-        df = to_pandas(df)
-
         # Run segmentation
         seg_result = self.analyze(
             df,

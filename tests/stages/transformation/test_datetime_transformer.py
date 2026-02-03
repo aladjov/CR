@@ -228,3 +228,41 @@ class TestResultOutput:
         assert "year" in result.extracted_features
         assert "month" in result.extracted_features
         assert "day" in result.extracted_features
+
+
+class TestFitAndTransformSeparation:
+    def test_fit_returns_self(self):
+        """Cover line 63: fit method returns self."""
+        series = pd.Series(pd.to_datetime(["2024-01-01", "2024-06-15"]))
+        transformer = DatetimeTransformer(extract_features=["year"])
+        result = transformer.fit(series)
+        assert result is transformer
+
+    def test_transform_after_fit(self):
+        """Cover line 66: transform method called separately from fit."""
+        series = pd.Series(pd.to_datetime(["2024-01-01", "2024-06-15"]))
+        transformer = DatetimeTransformer(extract_features=["year", "month"])
+        transformer.fit(series)
+        result = transformer.transform(series)
+        assert "year" in result.df.columns
+        assert "month" in result.df.columns
+
+    def test_unknown_feature_name_skipped(self):
+        """Cover branch 77->76: unknown feature name is not in FEATURE_EXTRACTORS."""
+        series = pd.Series(pd.to_datetime(["2024-01-01", "2024-06-15"]))
+        transformer = DatetimeTransformer(extract_features=["year", "nonexistent_feature"])
+        result = transformer.fit_transform(series)
+        assert "year" in result.df.columns
+        assert "nonexistent_feature" not in result.df.columns
+
+    def test_cyclical_feature_without_known_period(self):
+        """Cover branch 84->76: cyclical feature not in CYCLICAL_PERIODS."""
+        series = pd.Series(pd.to_datetime(["2024-01-01", "2024-06-15"]))
+        transformer = DatetimeTransformer(
+            extract_features=["year"],
+            cyclical_features=["year"],
+        )
+        result = transformer.fit_transform(series)
+        assert "year" in result.df.columns
+        assert "year_sin" not in result.df.columns
+        assert "year_cos" not in result.df.columns

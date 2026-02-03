@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, pd, to_pandas
+from customer_retention.core.compat import DataFrame, pd
 from customer_retention.stages.cleaning.outlier_handler import OutlierDetectionMethod, OutlierHandler, OutlierResult
 
 from .segment_analyzer import SegmentAnalyzer, SegmentationResult
@@ -54,8 +54,6 @@ class SegmentAwareOutlierAnalyzer:
         segment_col: Optional[str] = None,
         target_col: Optional[str] = None
     ) -> SegmentAwareOutlierResult:
-        df = to_pandas(df)
-
         if len(df) == 0 or all(df[col].isna().all() for col in feature_cols if col in df.columns):
             return self._empty_result(feature_cols)
 

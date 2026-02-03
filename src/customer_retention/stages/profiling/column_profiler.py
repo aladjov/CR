@@ -6,10 +6,11 @@ import numpy as np
 
 from customer_retention.core.compat import (
     Timestamp,
-    ensure_pandas_series,
     is_bool_dtype,
     is_datetime64_any_dtype,
     pd,
+    safe_isfinite,
+    safe_isinf,
     safe_memory_usage_bytes,
     to_datetime,
 )
@@ -28,7 +29,6 @@ from .profile_result import (
 
 class ColumnProfiler(ABC):
     def compute_universal_metrics(self, series: pd.Series) -> UniversalMetrics:
-        series = ensure_pandas_series(series)
         total_count = len(series)
         null_count = int(series.isna().sum())
         null_percentage = (null_count / total_count * 100) if total_count > 0 else 0
@@ -37,7 +37,7 @@ class ColumnProfiler(ABC):
         distinct_percentage = (distinct_count / total_count * 100) if total_count > 0 else 0
 
         value_counts = series.value_counts()
-        most_common_value = value_counts.index[0] if len(value_counts) > 0 else None
+        most_common_value = value_counts.idxmax() if len(value_counts) > 0 else None
         most_common_frequency = int(value_counts.iloc[0]) if len(value_counts) > 0 else None
 
         memory_size = safe_memory_usage_bytes(series)
@@ -53,20 +53,17 @@ class ColumnProfiler(ABC):
             memory_size_bytes=int(memory_size)
         )
 
-    def profile(self, series: pd.Series) -> dict:
-        return self._profile_impl(ensure_pandas_series(series))
-
     @abstractmethod
-    def _profile_impl(self, series: pd.Series) -> dict:
+    def profile(self, series: pd.Series) -> dict:
         pass
 
 
 class IdentifierProfiler(ColumnProfiler):
-    def _profile_impl(self, series: pd.Series) -> dict:
+    def profile(self, series: pd.Series) -> dict:
         is_unique = series.nunique() == len(series.dropna())
         duplicates = series[series.duplicated(keep=False)]
         duplicate_count = len(duplicates.unique())
-        duplicate_values = duplicates.unique().tolist()[:10]
+        duplicate_values = list(duplicates.unique())[:10]
 
         str_series = series.dropna().astype(str)
         lengths = str_series.str.len()
@@ -112,7 +109,7 @@ class IdentifierProfiler(ColumnProfiler):
 
 
 class TargetProfiler(ColumnProfiler):
-    def _profile_impl(self, series: pd.Series) -> dict:
+    def profile(self, series: pd.Series) -> dict:
         value_counts = series.value_counts()
         class_distribution = {str(k): int(v) for k, v in value_counts.items()}
 
@@ -138,7 +135,7 @@ class TargetProfiler(ColumnProfiler):
 
 
 class NumericProfiler(ColumnProfiler):
-    def _profile_impl(self, series: pd.Series) -> dict:
+    def profile(self, series: pd.Series) -> dict:
         clean_series = series.dropna()
         if len(clean_series) == 0:
             return {"numeric_metrics": None}
@@ -167,24 +164,23 @@ class NumericProfiler(ColumnProfiler):
         negative_count = int((clean_series < 0).sum())
         negative_percentage = round((negative_count / len(clean_series) * 100), 2)
 
-        inf_count = int(np.isinf(clean_series).sum())
+        inf_count = int(safe_isinf(clean_series).sum())
         inf_percentage = round((inf_count / len(clean_series) * 100), 2)
 
         outliers_iqr = ((clean_series < (q1 - 1.5 * iqr)) | (clean_series > (q3 + 1.5 * iqr)))
         outlier_count_iqr = int(outliers_iqr.sum())
 
         if std_val > 0:
-            z_scores = np.abs((clean_series - mean_val) / std_val)
+            z_scores = ((clean_series - mean_val) / std_val).abs()
             outlier_count_zscore = int((z_scores > 3).sum())
         else:
             outlier_count_zscore = 0
 
         outlier_percentage = round((outlier_count_iqr / len(clean_series) * 100), 2)
 
-        # Filter out infinite values for histogram calculation
-        finite_series = clean_series[np.isfinite(clean_series)]
+        finite_series = clean_series[safe_isfinite(clean_series)]
         if len(finite_series) > 0:
-            histogram, bin_edges = np.histogram(finite_series, bins=10)
+            histogram, bin_edges = np.histogram(finite_series.to_numpy(), bins=10)
             histogram_bins = [
                 (round(float(bin_edges[i]), 4), round(float(bin_edges[i + 1]), 4), int(histogram[i]))
                 for i in range(len(histogram))
@@ -220,7 +216,7 @@ class NumericProfiler(ColumnProfiler):
 
 
 class CategoricalProfiler(ColumnProfiler):
-    def _profile_impl(self, series: pd.Series) -> dict:
+    def profile(self, series: pd.Series) -> dict:
         clean_series = series.dropna()
         if len(clean_series) == 0:
             return {"categorical_metrics": None}
@@ -303,7 +299,7 @@ class CategoricalProfiler(ColumnProfiler):
 
 
 class DatetimeProfiler(ColumnProfiler):
-    def _profile_impl(self, series: pd.Series) -> dict:
+    def profile(self, series: pd.Series) -> dict:
         clean_series = series.dropna()
         if len(clean_series) == 0:
             return {"datetime_metrics": None}
@@ -400,13 +396,13 @@ class DatetimeProfiler(ColumnProfiler):
 
 
 class BinaryProfiler(ColumnProfiler):
-    def _profile_impl(self, series: pd.Series) -> dict:
+    def profile(self, series: pd.Series) -> dict:
         clean_series = series.dropna()
         if len(clean_series) == 0:
             return {"binary_metrics": None}
 
         value_counts = clean_series.value_counts()
-        values_found = value_counts.index.tolist()
+        values_found = list(value_counts.index)
 
         true_values = {1, 1.0, True, "1", "yes", "Yes", "YES", "true", "True", "TRUE", "y", "Y"}
         false_values = {0, 0.0, False, "0", "no", "No", "NO", "false", "False", "FALSE", "n", "N"}
@@ -439,7 +435,7 @@ class BinaryProfiler(ColumnProfiler):
 
 
 class TextProfiler(ColumnProfiler):
-    def _profile_impl(self, series: pd.Series) -> dict:
+    def profile(self, series: pd.Series) -> dict:
 
         clean_series = series.dropna()
 

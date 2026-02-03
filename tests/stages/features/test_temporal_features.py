@@ -251,3 +251,104 @@ class TestFeatureOutput:
 
         assert hasattr(generator, 'generated_features')
         assert len(generator.generated_features) > 0
+
+
+class TestErrorPaths:
+    """Tests for error handling and validation."""
+
+    def test_transform_before_fit_raises(self):
+        """Calling transform() without fit() should raise ValueError."""
+        df = pd.DataFrame({
+            "created": pd.to_datetime(["2024-01-01"]),
+        })
+        generator = TemporalFeatureGenerator(
+            reference_date=pd.Timestamp("2024-07-01"),
+            created_column="created"
+        )
+
+        with pytest.raises(ValueError, match="not fitted"):
+            generator.transform(df)
+
+    def test_config_source_without_reference_date_raises(self):
+        """CONFIG source without a reference_date should raise ValueError."""
+        df = pd.DataFrame({
+            "created": pd.to_datetime(["2024-01-01"]),
+        })
+        generator = TemporalFeatureGenerator(
+            reference_date=None,
+            reference_date_source=ReferenceDateSource.CONFIG,
+        )
+
+        with pytest.raises(ValueError, match="reference_date must be provided"):
+            generator.fit(df)
+
+    def test_max_date_source_without_date_column_raises(self):
+        """MAX_DATE source without date_column should raise ValueError."""
+        df = pd.DataFrame({
+            "created": pd.to_datetime(["2024-01-01"]),
+        })
+        generator = TemporalFeatureGenerator(
+            reference_date_source=ReferenceDateSource.MAX_DATE,
+            date_column=None,
+        )
+
+        with pytest.raises(ValueError, match="date_column must be provided"):
+            generator.fit(df)
+
+    def test_column_source_without_reference_date_column_raises(self):
+        """COLUMN source without reference_date_column should raise ValueError."""
+        df = pd.DataFrame({
+            "created": pd.to_datetime(["2024-01-01"]),
+        })
+        generator = TemporalFeatureGenerator(
+            reference_date_source=ReferenceDateSource.COLUMN,
+            reference_date_column=None,
+        )
+
+        with pytest.raises(ValueError, match="reference_date_column must be provided"):
+            generator.fit(df)
+
+    def test_feature_timestamp_source(self):
+        """FEATURE_TIMESTAMP source should use feature_timestamp column."""
+        df = pd.DataFrame({
+            "created": pd.to_datetime(["2024-01-01", "2024-03-01"]),
+            "feature_timestamp": pd.to_datetime(["2024-07-01", "2024-07-15"]),
+        })
+        generator = TemporalFeatureGenerator(
+            reference_date_source=ReferenceDateSource.FEATURE_TIMESTAMP,
+            created_column="created",
+        )
+        result = generator.fit_transform(df)
+
+        assert "tenure_days" in result.columns
+        assert generator.reference_date_column == "feature_timestamp"
+        # First row: 2024-07-01 - 2024-01-01 = 182 days
+        assert result["tenure_days"].iloc[0] == 182
+
+    def test_feature_timestamp_source_without_column_raises(self):
+        """FEATURE_TIMESTAMP source without the column should raise ValueError."""
+        df = pd.DataFrame({
+            "created": pd.to_datetime(["2024-01-01"]),
+        })
+        generator = TemporalFeatureGenerator(
+            reference_date_source=ReferenceDateSource.FEATURE_TIMESTAMP,
+        )
+
+        with pytest.raises(ValueError, match="feature_timestamp"):
+            generator.fit(df)
+
+    def test_no_created_column_skips_tenure(self):
+        """When created_column is not in the DataFrame, skip tenure features."""
+        df = pd.DataFrame({
+            "custid": ["C001"],
+            "lastorder": pd.to_datetime(["2024-06-01"]),
+        })
+        generator = TemporalFeatureGenerator(
+            reference_date=pd.Timestamp("2024-07-01"),
+            created_column="created",  # Not in df
+            last_order_column="lastorder",
+        )
+        result = generator.fit_transform(df)
+
+        assert "tenure_days" not in result.columns
+        assert "days_since_last_order" in result.columns

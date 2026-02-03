@@ -23,13 +23,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import re
 import shutil
 import sys
-from pathlib import Path
 from datetime import datetime
-
+from pathlib import Path
 
 # Source directory relative to this script
 SCRIPT_DIR = Path(__file__).parent
@@ -176,7 +173,7 @@ def create_project_structure(output_dir: Path) -> None:
         if not gitkeep.exists():
             gitkeep.touch()
 
-    print(f"  Created project directories")
+    print("  Created project directories")
 
 
 def create_config_template(
@@ -218,7 +215,7 @@ def create_config_template(
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
-    print(f"  Created config: configs/project_config.json")
+    print("  Created config: configs/project_config.json")
 
 
 def create_gitignore(output_dir: Path) -> None:
@@ -456,12 +453,12 @@ Examples:
     print(f"\n{'='*50}")
     print("Project bootstrapped successfully!")
     print(f"{'='*50}")
-    print(f"\nNext steps:")
+    print("\nNext steps:")
     print(f"  1. cd {output_dir}")
-    print(f"  2. Add your data to experiments/data/")
-    print(f"  3. Open exploration_notebooks/01_data_discovery.ipynb")
-    print(f"  4. Set DATA_PATH to your data file")
-    print(f"  5. Run all cells - auto-discovery will do the rest!")
+    print("  2. Add your data to experiments/data/")
+    print("  3. Open exploration_notebooks/01_data_discovery.ipynb")
+    print("  4. Set DATA_PATH to your data file")
+    print("  5. Run all cells - auto-discovery will do the rest!")
     print()
     print("Tip: Exploration notebooks are visual & interactive.")
     print("     Generate production pipelines after exploration is complete.")

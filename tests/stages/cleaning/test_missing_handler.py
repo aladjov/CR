@@ -215,3 +215,59 @@ class TestEdgeCases:
         result = handler.fit_transform(series)
 
         assert result.series[2] in ["A", "B"]
+
+
+class TestErrorStrategyNoMissing:
+    def test_error_strategy_no_missing_values_passes(self):
+        """ERROR strategy with no missing values should return unchanged."""
+        series = pd.Series(["ID001", "ID002", "ID003"])
+        handler = MissingValueHandler(strategy=ImputationStrategy.ERROR)
+        result = handler.fit_transform(series)
+        assert result.values_imputed == 0
+        assert result.strategy_used == ImputationStrategy.ERROR
+        pd.testing.assert_series_equal(result.series, series)
+
+
+class TestKNNImputationPaths:
+    def test_knn_without_reference_df_uses_median(self):
+        """KNN without reference_df falls back to median."""
+        series = pd.Series([1.0, 2.0, None, 4.0, 5.0], name="val")
+        handler = MissingValueHandler(strategy=ImputationStrategy.KNN)
+        result = handler.fit_transform(series, reference_df=None)
+        assert result.series.isna().sum() == 0
+        # Falls back to median
+        expected_median = series.dropna().median()
+        assert result.series[2] == pytest.approx(expected_median)
+        assert result.strategy_used == ImputationStrategy.KNN
+
+    def test_knn_with_column_not_in_reference(self):
+        """KNN when series name is NOT already in reference_df."""
+        df = pd.DataFrame({
+            "B": [1.1, 2.1, 3.1, 4.1, 5.1],
+            "C": [10.0, 20.0, 30.0, 40.0, 50.0],
+        })
+        series = pd.Series([1.0, 2.0, None, 4.0, 5.0], name="new_col")
+        handler = MissingValueHandler(strategy=ImputationStrategy.KNN, knn_neighbors=2)
+        result = handler.fit_transform(series, reference_df=df)
+        assert result.series.isna().sum() == 0
+
+    def test_knn_with_column_in_reference(self):
+        """KNN when series name IS already in reference_df."""
+        df = pd.DataFrame({
+            "A": [1.0, 2.0, None, 4.0, 5.0],
+            "B": [1.1, 2.1, 3.1, 4.1, 5.1],
+        })
+        series = pd.Series([1.0, 2.0, None, 4.0, 5.0], name="A")
+        handler = MissingValueHandler(strategy=ImputationStrategy.KNN, knn_neighbors=2)
+        result = handler.fit_transform(series, reference_df=df)
+        assert result.series.isna().sum() == 0
+
+    def test_knn_unnamed_series(self):
+        """KNN with unnamed series uses default column name."""
+        df = pd.DataFrame({
+            "B": [1.1, 2.1, 3.1, 4.1, 5.1],
+        })
+        series = pd.Series([1.0, 2.0, None, 4.0, 5.0])
+        handler = MissingValueHandler(strategy=ImputationStrategy.KNN, knn_neighbors=2)
+        result = handler.fit_transform(series, reference_df=df)
+        assert result.series.isna().sum() == 0

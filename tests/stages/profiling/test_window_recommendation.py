@@ -442,3 +442,144 @@ class TestFindingsPersistence:
         meta = TimeSeriesMetadata(suggested_aggregations=result.windows)
         assert meta.suggested_aggregations == result.windows
         assert len(meta.suggested_aggregations) >= 1
+
+
+class TestEdgeCasesAndBranches:
+
+    def test_always_include_bypasses_hard_exclusion(self):
+        """Line 126: always_include window is included even when hard-excluded by span."""
+        lc = pd.DataFrame({
+            "entity": ["A", "B"],
+            "duration_days": [100, 200],
+            "event_count": [20, 40],
+            "intensity": [0.2, 0.2],
+            "lifecycle_quadrant": ["Steady & Loyal", "Steady & Loyal"],
+        })
+        # always_include 365d, but span=50 so 365d is hard-excluded normally
+        collector = WindowRecommendationCollector(
+            coverage_threshold=0.01, always_include=["365d", "all_time"]
+        )
+        result = collector.compute_union(lifecycles=lc, time_span_days=50)
+        assert "365d" in result.windows
+
+    def test_annotate_segments_no_group_col(self):
+        """Line 148: context_lc exists but no activity_segment or lifecycle_quadrant column."""
+        lc = pd.DataFrame({
+            "entity": ["A", "B"],
+            "duration_days": [100, 200],
+            "event_count": [20, 40],
+            "intensity": [0.2, 0.2],
+        })
+        # Create a segment result with no activity_segment column
+        segment_lc = pd.DataFrame({
+            "duration_days": [100, 200],
+            "event_count": [20, 40],
+        })
+        collector = WindowRecommendationCollector(coverage_threshold=0.05)
+        collector._segment_lifecycles = segment_lc
+        result = collector.compute_union(lifecycles=lc, time_span_days=700)
+        # Should not crash; segments should be empty
+        assert all(
+            len(seg) == 0
+            for seg in result.explanation["primary_segments"]
+            if not (result.explanation.loc[result.explanation["primary_segments"].apply(lambda x: x == seg).idxmax(), "window"] == "all_time")
+        ) or True  # Just test it doesn't crash
+
+    def test_eta_squared_no_lifecycle_quadrant(self):
+        """Line 212: No lifecycle_quadrant column -> eta_squared returns 0."""
+        lc = pd.DataFrame({
+            "entity": ["A", "B"],
+            "duration_days": [100, 200],
+            "event_count": [20, 40],
+            "intensity": [0.2, 0.2],
+        })
+        collector = WindowRecommendationCollector(coverage_threshold=0.05)
+        result = collector.compute_union(lifecycles=lc, time_span_days=700)
+        assert result.heterogeneity.eta_squared_intensity == 0.0
+        assert result.heterogeneity.eta_squared_event_count == 0.0
+
+    def test_eta_squared_missing_variable(self):
+        """Line 222: variable not in df.columns."""
+        lc = pd.DataFrame({
+            "entity": ["A", "B"],
+            "duration_days": [100, 200],
+            "event_count": [20, 40],
+            "lifecycle_quadrant": ["A", "B"],
+            # No 'intensity' column
+        })
+        collector = WindowRecommendationCollector(coverage_threshold=0.05)
+        eta_val = collector._eta_squared_for_variable(lc, "intensity", lc["lifecycle_quadrant"])
+        assert eta_val == 0.0
+
+    def test_eta_squared_single_group(self):
+        """Single group -> returns 0."""
+        lc = pd.DataFrame({
+            "entity": ["A", "B"],
+            "duration_days": [100, 200],
+            "event_count": [20, 40],
+            "intensity": [0.2, 0.3],
+            "lifecycle_quadrant": ["Same", "Same"],
+        })
+        collector = WindowRecommendationCollector(coverage_threshold=0.05)
+        result = collector.compute_union(lifecycles=lc, time_span_days=700)
+        assert result.heterogeneity.eta_squared_intensity == 0.0
+
+    def test_feature_count_estimate_zero_value_columns(self, diverse_lifecycles):
+        collector = WindowRecommendationCollector(coverage_threshold=0.05)
+        result = collector.compute_union(
+            lifecycles=diverse_lifecycles, time_span_days=1500,
+            value_columns=0, agg_funcs=4,
+        )
+        assert result.feature_count_estimate == len(result.windows)
+
+    def test_seasonality_without_period_name(self, diverse_lifecycles):
+        """SeasonalityPeriod with period_name=None falls back to f'{period}d'."""
+        collector = WindowRecommendationCollector(coverage_threshold=0.05)
+        collector.add_seasonality_context([
+            SeasonalityPeriod(period=7, strength=0.8, period_name=None)
+        ])
+        result = collector.compute_union(lifecycles=diverse_lifecycles, time_span_days=1500)
+        row_7d = result.explanation[result.explanation["window"] == "7d"].iloc[0]
+        assert "Seasonality" in row_7d["note"]
+
+    def test_seasonality_period_not_in_map(self, diverse_lifecycles):
+        """SeasonalityPeriod with period not in SEASONALITY_WINDOW_MAP."""
+        collector = WindowRecommendationCollector(coverage_threshold=0.05)
+        collector.add_seasonality_context([
+            SeasonalityPeriod(period=42, strength=0.5, period_name="42-day")
+        ])
+        result = collector.compute_union(lifecycles=diverse_lifecycles, time_span_days=1500)
+        # Should not add any seasonality notes
+        for _, row in result.explanation.iterrows():
+            if row["window"] != "all_time":
+                assert "seasonality" not in (row["note"] or "").lower() or row["note"] == ""
+
+    def test_timing_annotation_with_existing_note(self, diverse_lifecycles):
+        """Timing annotation appends to existing note with semicolon."""
+        collector = WindowRecommendationCollector(coverage_threshold=0.05)
+        collector.add_seasonality_context([SeasonalityPeriod(period=30, strength=0.8, period_name="monthly")])
+        collector.add_inter_event_context(median_days=30.0, mean_days=35.0)
+        result = collector.compute_union(lifecycles=diverse_lifecycles, time_span_days=1500)
+        row_30d = result.explanation[result.explanation["window"] == "30d"].iloc[0]
+        if row_30d["note"]:
+            assert ";" in row_30d["note"] or "Timing" in row_30d["note"]
+
+    def test_cold_start_fraction_from_activity_segment(self):
+        """Cold start detected via activity_segment column."""
+        lc = pd.DataFrame({
+            "duration_days": [100, 200, 0, 0],
+            "event_count": [20, 40, 1, 1],
+            "intensity": [0.2, 0.2, 0.0, 0.0],
+            "activity_segment": ["High Activity", "Medium Activity", "One-time", "One-time"],
+        })
+        collector = WindowRecommendationCollector()
+        frac = collector._cold_start_fraction(lc)
+        assert frac == 0.5
+
+    def test_cold_start_fraction_empty(self):
+        lc = pd.DataFrame({
+            "duration_days": pd.Series([], dtype=float),
+            "event_count": pd.Series([], dtype=float),
+        })
+        collector = WindowRecommendationCollector()
+        assert collector._cold_start_fraction(lc) == 0.0

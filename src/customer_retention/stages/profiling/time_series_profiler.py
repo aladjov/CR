@@ -8,7 +8,6 @@ from customer_retention.core.compat import (
     Timestamp,
     ensure_datetime_column,
     native_pd,
-    to_pandas,
 )
 
 
@@ -230,7 +229,7 @@ class TimeSeriesProfiler:
             raise KeyError(f"Time column '{self.time_column}' not found")
 
     def _prepare_dataframe(self, df: DataFrame) -> DataFrame:
-        df = to_pandas(df).copy()
+        df = df.copy()
         ensure_datetime_column(df, self.time_column)
         return df
 

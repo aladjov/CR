@@ -5,7 +5,7 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 
-from customer_retention.core.compat import DataFrame, to_pandas
+from customer_retention.core.compat import DataFrame
 
 
 @dataclass
@@ -59,7 +59,6 @@ class TemporalTargetAnalyzer:
         target_col: str
     ) -> TemporalTargetResult:
         """Analyze relationship between datetime feature and binary target."""
-        df = to_pandas(df)
 
         if len(df) == 0 or datetime_col not in df.columns or target_col not in df.columns:
             return self._empty_result(datetime_col, target_col)

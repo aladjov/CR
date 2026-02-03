@@ -1,3 +1,4 @@
+
 import pandas as pd
 import pytest
 
@@ -212,3 +213,116 @@ class TestDeduplicateRecommendationEdgeCases:
         rec = DeduplicateRecommendation(key_columns=["id"], rationale="test")
         result = rec.fit_transform(df)
         assert len(result.data) == 0
+
+
+class TestDeduplicateCoverageWorkaround:
+    """Tests using mock to bypass numpy/coverage.py tracing bug in df.duplicated + boolean indexing."""
+
+    def _make_fitted(self, rec):
+        """Mark recommendation as fitted without triggering the numpy/coverage bug."""
+        rec._is_fitted = True
+        rec._fit_params["duplicate_count"] = 0
+        rec._fit_params["duplicate_keys"] = []
+
+    def test_fit_no_existing_keys(self):
+        """Cover lines 27-29: _fit_impl when key columns are not in dataframe."""
+        df = pd.DataFrame({"other_col": [1, 2, 3]})
+        rec = DeduplicateRecommendation(key_columns=["id"], rationale="test")
+        rec.fit(df)
+        assert rec._fit_params["duplicate_count"] == 0
+        assert rec._fit_params["duplicate_keys"] == []
+
+    def test_transform_local_no_existing_keys(self):
+        """Cover lines 41-45: _transform_local when key columns are not in dataframe."""
+        df = pd.DataFrame({"other_col": [1, 2, 3]})
+        rec = DeduplicateRecommendation(key_columns=["id"], rationale="test")
+        self._make_fitted(rec)
+        result = rec.transform(df)
+        assert result.rows_before == 3
+        assert result.rows_after == 3
+        assert result.metadata["duplicates_removed"] == 0
+
+    def test_transform_local_keep_first(self):
+        """Cover line 47: keep_first strategy.
+        Calls _transform_local directly to avoid numpy/coverage.py tracing bug.
+        """
+        df = pd.DataFrame({"id": ["a", "b", "b", "c"], "value": ["x", "y", "z", "w"]})
+        rec = DeduplicateRecommendation(key_columns=["id"], strategy="keep_first", rationale="test")
+        self._make_fitted(rec)
+        result = rec._transform_local(df)
+        assert len(result.data) == 3
+
+    def test_transform_local_keep_last(self):
+        """Cover lines 48-49: keep_last strategy."""
+        df = pd.DataFrame({"id": ["a", "b", "b", "c"], "value": ["x", "y", "z", "w"]})
+        rec = DeduplicateRecommendation(key_columns=["id"], strategy="keep_last", rationale="test")
+        self._make_fitted(rec)
+        result = rec._transform_local(df)
+        assert len(result.data) == 3
+
+    def test_transform_local_keep_most_recent(self):
+        """Cover lines 50-53: keep_most_recent strategy with timestamp."""
+        df = pd.DataFrame({
+            "id": ["a", "b", "b", "c"],
+            "value": ["x", "y", "z", "w"],
+            "ts": ["2024-01-01", "2024-01-01", "2024-01-05", "2024-01-01"],
+        })
+        rec = DeduplicateRecommendation(
+            key_columns=["id"], strategy="keep_most_recent",
+            timestamp_column="ts", rationale="test"
+        )
+        self._make_fitted(rec)
+        result = rec._transform_local(df)
+        assert len(result.data) == 3
+
+    def test_transform_local_drop_exact(self):
+        """Cover lines 54-55: drop_exact strategy."""
+        df = pd.DataFrame({"id": ["a", "b", "b"], "value": ["x", "y", "y"]})
+        rec = DeduplicateRecommendation(
+            key_columns=["id", "value"], strategy="drop_exact", rationale="test"
+        )
+        self._make_fitted(rec)
+        result = rec._transform_local(df)
+        assert len(result.data) == 2
+
+    def test_transform_databricks(self):
+        """Cover lines 63-66: _transform_databricks delegates to local."""
+        df = pd.DataFrame({"id": ["a", "b", "b"], "value": ["x", "y", "z"]})
+        rec = DeduplicateRecommendation(key_columns=["id"], rationale="test")
+        self._make_fitted(rec)
+        result = rec._transform_databricks(df)
+        assert len(result.data) == 2
+
+    def test_generate_local_code_drop_exact(self):
+        """Cover lines 79-80: local code gen for drop_exact."""
+        rec = DeduplicateRecommendation(
+            key_columns=["id"], strategy="drop_exact", rationale="test"
+        )
+        rec._is_fitted = True
+        code = rec.generate_code(Platform.LOCAL)
+        assert "drop_duplicates" in code
+        assert "'id'" in code
+
+    def test_generate_databricks_code_keep_most_recent(self):
+        """Cover lines 87-91: databricks code gen for keep_most_recent."""
+        rec = DeduplicateRecommendation(
+            key_columns=["id"], strategy="keep_most_recent",
+            timestamp_column="updated_at", rationale="test"
+        )
+        rec._is_fitted = True
+        code = rec.generate_code(Platform.DATABRICKS)
+        assert "Window" in code
+        assert "row_number" in code
+        assert "updated_at" in code
+
+    def test_default_rationale(self):
+        """Cover line 14: auto-generated rationale."""
+        rec = DeduplicateRecommendation(key_columns=["id"], strategy="keep_last")
+        assert "keep_last" in rec.rationale
+
+    def test_fit_with_no_duplicates(self):
+        """Test _fit_impl with data that has no duplicates (avoids numpy/coverage bug)."""
+        df = pd.DataFrame({"id": [1, 2, 3], "value": ["a", "b", "c"]})
+        rec = DeduplicateRecommendation(key_columns=["id"], rationale="test")
+        rec.fit(df)
+        assert rec._fit_params["duplicate_count"] == 0

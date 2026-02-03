@@ -11,7 +11,7 @@ from datetime import timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
-from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype, pd, to_datetime, to_pandas
+from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype, pd, to_datetime
 
 
 class DatasetType(Enum):
@@ -181,7 +181,6 @@ class TimeSeriesDetector:
         TimeSeriesCharacteristics
             Detected characteristics of the dataset
         """
-        df = to_pandas(df)
         evidence = []
 
         # Auto-detect entity column if not provided
@@ -510,8 +509,6 @@ class TimeSeriesValidator:
             Validation results with quality metrics
         """
         issues = []
-
-        df = to_pandas(df)
 
         # Validate inputs
         if entity_column not in df.columns:

@@ -182,3 +182,32 @@ class TestConsistencyNormalizeEdgeCases:
         rec = ConsistencyNormalizeRecommendation(columns=["city"], normalization="lowercase", rationale="test")
         result = rec.fit_transform(df)
         assert result.metadata["values_changed"]["city"] == 0
+
+    def test_unknown_normalization_returns_series_unchanged(self):
+        """Cover line 49: unknown normalization falls through to return series."""
+        df = pd.DataFrame({"city": ["NYC", "nyc"]})
+        rec = ConsistencyNormalizeRecommendation(
+            columns=["city"], normalization="unknown_method", rationale="test"
+        )
+        result = rec.fit_transform(df)
+        assert result.data["city"].tolist() == ["NYC", "nyc"]
+
+    def test_transform_databricks_platform(self):
+        """Cover lines 73-76: _transform_databricks delegates to _transform_local."""
+        df = pd.DataFrame({"city": ["NYC", "nyc"]})
+        rec = ConsistencyNormalizeRecommendation(
+            columns=["city"], normalization="lowercase", rationale="test"
+        )
+        rec.fit(df)
+        result = rec.transform(df, platform=Platform.DATABRICKS)
+        assert result.data["city"].tolist() == ["nyc", "nyc"]
+
+    def test_generate_databricks_code_collapse_whitespace(self):
+        """Cover line 104: databricks code for collapse_whitespace."""
+        rec = ConsistencyNormalizeRecommendation(
+            columns=["city"], normalization="collapse_whitespace", rationale="normalize"
+        )
+        rec._is_fitted = True
+        code = rec.generate_code(Platform.DATABRICKS)
+        assert "regexp_replace" in code
+        assert "'city'" in code

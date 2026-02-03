@@ -152,7 +152,7 @@ class WindowRecommendationCollector:
         for row in rows:
             window_days = row["window_days"]
             if window_days is None:
-                row["primary_segments"] = sorted(groups.unique().tolist())
+                row["primary_segments"] = sorted(list(groups.unique()))
                 continue
             has_span = duration >= window_days
             expected_events = event_count * (window_days / duration.clip(lower=1))
@@ -160,7 +160,7 @@ class WindowRecommendationCollector:
             if not beneficial.any():
                 continue
             group_coverage = groups[beneficial].value_counts(normalize=True)
-            top = group_coverage[group_coverage >= 0.15].index.tolist()
+            top = list(group_coverage[group_coverage >= 0.15].index)
             row["primary_segments"] = sorted(top[:3])
 
     def _annotate_seasonality(self, rows: List[Dict]) -> None:

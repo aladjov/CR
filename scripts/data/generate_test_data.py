@@ -13,11 +13,12 @@ Usage:
     python scripts/data/generate_test_data.py
 """
 
-import pandas as pd
-import numpy as np
+import hashlib
 from datetime import datetime, timedelta
 from pathlib import Path
-import hashlib
+
+import numpy as np
+import pandas as pd
 
 # Seed for reproducibility
 np.random.seed(42)

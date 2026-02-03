@@ -6,7 +6,10 @@ import pytest
 
 from customer_retention.core.utils import compute_effect_size
 from customer_retention.stages.profiling.temporal_pattern_analyzer import (
+    AnomalyDiagnostics,
     CohortDistribution,
+    GroupStats,
+    RecencyBucketStats,
     RecencyComparisonResult,
     RecencyResult,
     TemporalPatternAnalysis,
@@ -14,10 +17,17 @@ from customer_retention.stages.profiling.temporal_pattern_analyzer import (
     TrendDirection,
     TrendRecommendation,
     TrendResult,
+    _diagnose_anomaly_pattern,
+    _effect_size_description,
+    _generate_bucket_labels,
+    _generate_enhanced_recommendations,
     analyze_cohort_distribution,
+    classify_distribution_pattern,
     compare_recency_by_target,
     compute_group_stats,
+    detect_inflection_bucket,
     generate_cohort_recommendations,
+    generate_recency_insights,
     generate_trend_recommendations,
 )
 
@@ -453,3 +463,470 @@ class TestCompareRecencyByTarget:
         })
         result = compare_recency_by_target(df, "entity", "event_date", "missing_target")
         assert result is None
+
+    def test_returns_none_insufficient_data(self):
+        """Too few retained or churned entities => None."""
+        df = pd.DataFrame({
+            "entity": ["A", "A", "B", "B"],
+            "event_date": pd.to_datetime(["2023-01-01", "2023-01-15", "2023-02-01", "2023-02-15"]),
+            "retained": [1, 1, 1, 1],
+        })
+        result = compare_recency_by_target(df, "entity", "event_date", "retained",
+                                           pd.Timestamp("2023-12-31"))
+        assert result is None
+
+    def test_uses_default_reference_date(self, recency_comparison_data):
+        """When no reference_date given, uses max date."""
+        result = compare_recency_by_target(
+            recency_comparison_data, "entity", "event_date", "retained"
+        )
+        assert result is not None
+
+    def test_anomaly_diagnostics_when_churned_not_higher(self):
+        """Anomaly path: churned have LOWER recency than retained."""
+        np.random.seed(42)
+        data = []
+        ref_date = pd.Timestamp("2023-12-31")
+        # Churned: very recent
+        for i in range(50):
+            last_event = ref_date - timedelta(days=np.random.randint(1, 10))
+            data.append({"entity": f"E{i}", "event_date": last_event, "retained": 0})
+        # Retained: longer ago
+        for i in range(50, 100):
+            last_event = ref_date - timedelta(days=np.random.randint(60, 120))
+            data.append({"entity": f"E{i}", "event_date": last_event, "retained": 1})
+        df = pd.DataFrame(data)
+        result = compare_recency_by_target(df, "entity", "event_date", "retained", ref_date)
+        assert result is not None
+        assert result.churned_higher is False
+        assert result.anomaly_diagnostics is not None
+
+
+class TestDetectInflectionBucket:
+    def test_less_than_two_buckets(self):
+        buckets = [RecencyBucketStats("0-7d", (0, 7), 50, 0.8)]
+        assert detect_inflection_bucket(buckets) is None
+
+    def test_detects_inflection(self):
+        buckets = [
+            RecencyBucketStats("0-7d", (0, 7), 50, 0.9),
+            RecencyBucketStats("8-30d", (8, 30), 50, 0.5),
+            RecencyBucketStats("31-90d", (31, 90), 50, 0.4),
+        ]
+        result = detect_inflection_bucket(buckets)
+        assert result == "8-30d"
+
+    def test_no_inflection_when_small_drops(self):
+        buckets = [
+            RecencyBucketStats("0-7d", (0, 7), 50, 0.5),
+            RecencyBucketStats("8-30d", (8, 30), 50, 0.49),
+            RecencyBucketStats("31-90d", (31, 90), 50, 0.48),
+        ]
+        assert detect_inflection_bucket(buckets) is None
+
+
+class TestClassifyDistributionPattern:
+    def test_insufficient_data(self):
+        buckets = [RecencyBucketStats("0-7d", (0, 7), 50, 0.8)]
+        assert classify_distribution_pattern(buckets) == "insufficient_data"
+
+    def test_flat_pattern(self):
+        buckets = [
+            RecencyBucketStats("0-7d", (0, 7), 50, 0.5),
+            RecencyBucketStats("8-30d", (8, 30), 50, 0.5),
+            RecencyBucketStats("31-90d", (31, 90), 50, 0.5),
+        ]
+        assert classify_distribution_pattern(buckets) == "flat_no_pattern"
+
+    def test_monotonic_decline(self):
+        buckets = [
+            RecencyBucketStats("0-7d", (0, 7), 50, 0.9),
+            RecencyBucketStats("8-30d", (8, 30), 50, 0.7),
+            RecencyBucketStats("31-90d", (31, 90), 50, 0.5),
+            RecencyBucketStats("91-180d", (91, 180), 50, 0.3),
+        ]
+        assert classify_distribution_pattern(buckets) == "monotonic_decline"
+
+    def test_threshold_step(self):
+        # Need max_drop > avg_drop*2 and max_drop >= 0.10
+        # rates = [0.9, 0.3, 0.3] => drops=[0.6, 0.0], total_drop=0.6
+        # avg_drop=0.3, max_drop=0.6 > 0.6 => need more buckets for the math
+        # rates = [0.9, 0.2, 0.19, 0.19] => total_drop=0.71, avg_drop=0.2367
+        # max_drop=0.7 > 0.4733 => True
+        buckets = [
+            RecencyBucketStats("0-7d", (0, 7), 50, 0.9),
+            RecencyBucketStats("8-30d", (8, 30), 50, 0.2),
+            RecencyBucketStats("31-90d", (31, 90), 50, 0.19),
+            RecencyBucketStats("91-180d", (91, 180), 50, 0.19),
+        ]
+        assert classify_distribution_pattern(buckets) == "threshold_step"
+
+    def test_variable_pattern(self):
+        # Need: not flat, not threshold_step, not monotonic
+        # rates=[0.7, 0.8, 0.6, 0.5] => total_drop=0.2, drops=[-0.1, 0.2, 0.1]
+        # avg_drop=0.0667, max_drop=0.2 > 0.133 => threshold_step
+        # Need max_drop <= avg_drop*2 AND some negative drop
+        # rates=[0.8, 0.9, 0.6, 0.2] => total_drop=0.6, drops=[-0.1, 0.3, 0.4]
+        # avg_drop=0.2, max_drop=0.4 > 0.4 => borderline. Use 5 buckets:
+        # rates=[0.8, 0.9, 0.7, 0.5, 0.2] => total_drop=0.6, drops=[-0.1, 0.2, 0.2, 0.3]
+        # avg_drop=0.15, max_drop=0.3 > 0.3 => borderline again
+        # Let's make drops nearly equal with one negative
+        # rates=[0.7, 0.8, 0.6, 0.4, 0.2] => total_drop=0.5, drops=[-0.1, 0.2, 0.2, 0.2]
+        # avg_drop=0.125, max_drop=0.2 > 0.25 => False, not monotonic (-0.1 < -0.05) => variable
+        buckets = [
+            RecencyBucketStats("0-7d", (0, 7), 50, 0.7),
+            RecencyBucketStats("8-30d", (8, 30), 50, 0.8),
+            RecencyBucketStats("31-90d", (31, 90), 50, 0.6),
+            RecencyBucketStats("91-180d", (91, 180), 50, 0.4),
+            RecencyBucketStats(">180d", (180, 9999), 50, 0.2),
+        ]
+        assert classify_distribution_pattern(buckets) == "variable"
+
+
+class TestDiagnoseAnomalyPattern:
+    def test_basic_anomaly_diagnosis(self):
+        df = pd.DataFrame({
+            "entity": ["A", "A", "B", "B", "C", "C"],
+            "time": pd.to_datetime(["2023-01-01", "2023-06-01",
+                                    "2023-01-01", "2023-03-01",
+                                    "2023-01-01", "2023-02-01"]),
+            "target": [1, 1, 0, 0, 0, 0],
+        })
+        result = _diagnose_anomaly_pattern(df, "entity", "time", "target")
+        assert isinstance(result, AnomalyDiagnostics)
+        assert isinstance(result.target_1_is_minority, bool)
+        assert result.target_1_pct > 0
+
+    def test_tenure_explains_pattern(self):
+        """Retained have much longer tenure => tenure_explains_pattern = True."""
+        df = pd.DataFrame({
+            "entity": ["A", "A", "B", "B"],
+            "time": pd.to_datetime(["2023-01-01", "2023-12-01",
+                                    "2023-06-01", "2023-06-10"]),
+            "target": [1, 1, 0, 0],
+        })
+        result = _diagnose_anomaly_pattern(df, "entity", "time", "target")
+        # Retained entity A: 334 days tenure, Churned entity B: 9 days
+        assert result.tenure_explains_pattern is True
+
+    def test_no_retained(self):
+        """All churned => retained_median_tenure is None."""
+        df = pd.DataFrame({
+            "entity": ["A", "B"],
+            "time": pd.to_datetime(["2023-01-01", "2023-06-01"]),
+            "target": [0, 0],
+        })
+        result = _diagnose_anomaly_pattern(df, "entity", "time", "target")
+        assert result.retained_median_tenure is None
+        assert result.tenure_explains_pattern is False
+
+
+class TestGenerateRecencyInsights:
+    def _make_group_stats(self, median):
+        return GroupStats(mean=median, median=median, std=10, q25=median - 10, q75=median + 10, count=50)
+
+    def test_churned_higher_insights(self):
+        result = RecencyComparisonResult(
+            retained_stats=self._make_group_stats(10),
+            churned_stats=self._make_group_stats(60),
+            cohens_d=0.9, effect_interpretation="Large effect",
+            churned_higher=True, recommendations=[],
+        )
+        result.inflection_bucket = "31-90d"
+        result.distribution_pattern = "threshold_step"
+        insights = generate_recency_insights(result)
+        findings = [i.finding for i in insights]
+        assert any("longer" in f for f in findings)
+        # Verify inflection insight present when churned_higher is True
+        assert len(insights) >= 3, f"Expected at least 3 insights, got {len(insights)}: {findings}"
+        metric_names = [i.metric_name for i in insights]
+        assert "inflection_point" in metric_names, f"Got metric names: {metric_names}, findings: {findings}"
+
+    def test_anomaly_insights_minority_target(self):
+        diag = AnomalyDiagnostics(
+            target_1_is_minority=True, target_1_pct=20.0,
+            retained_median_tenure=100, churned_median_tenure=50,
+            tenure_explains_pattern=True,
+        )
+        result = RecencyComparisonResult(
+            retained_stats=self._make_group_stats(60),
+            churned_stats=self._make_group_stats(10),
+            cohens_d=-0.5, effect_interpretation="Medium effect",
+            churned_higher=False, recommendations=[],
+            anomaly_diagnostics=diag,
+        )
+        insights = generate_recency_insights(result)
+        assert any("minority" in i.finding.lower() for i in insights)
+        assert any("Tenure gap" in i.finding for i in insights)
+
+    def test_anomaly_insights_majority_target(self):
+        diag = AnomalyDiagnostics(
+            target_1_is_minority=False, target_1_pct=70.0,
+            retained_median_tenure=100, churned_median_tenure=80,
+            tenure_explains_pattern=False,
+        )
+        result = RecencyComparisonResult(
+            retained_stats=self._make_group_stats(60),
+            churned_stats=self._make_group_stats(10),
+            cohens_d=-0.3, effect_interpretation="Small effect",
+            churned_higher=False, recommendations=[],
+            anomaly_diagnostics=diag,
+        )
+        insights = generate_recency_insights(result)
+        assert any("majority" in i.finding.lower() for i in insights)
+
+    def test_no_inflection_when_churned_not_higher(self):
+        result = RecencyComparisonResult(
+            retained_stats=self._make_group_stats(60),
+            churned_stats=self._make_group_stats(10),
+            cohens_d=-0.3, effect_interpretation="Small effect",
+            churned_higher=False, recommendations=[],
+            inflection_bucket="31-90d",
+        )
+        insights = generate_recency_insights(result)
+        assert not any("inflection" in i.finding.lower() for i in insights)
+
+
+class TestEffectSizeDescription:
+    def test_large_effect(self):
+        desc = _effect_size_description(0.9, "Large effect")
+        assert "strongly" in desc
+
+    def test_moderate_effect(self):
+        desc = _effect_size_description(0.6, "Medium effect")
+        assert "moderately" in desc
+
+    def test_weak_effect(self):
+        desc = _effect_size_description(0.3, "Small effect")
+        assert "weakly" in desc
+
+    def test_minimal_effect(self):
+        desc = _effect_size_description(0.1, "Negligible")
+        assert "minimal" in desc
+
+
+class TestGenerateEnhancedRecommendations:
+    def test_churned_not_higher_minority_target(self):
+        diag = AnomalyDiagnostics(
+            target_1_is_minority=True, target_1_pct=20.0,
+        )
+        recs = _generate_enhanced_recommendations(False, 0.5, None, "flat", [], diag)
+        assert any(r["action"] == "invert_target_interpretation" for r in recs)
+
+    def test_churned_not_higher_tenure_explains(self):
+        diag = AnomalyDiagnostics(
+            target_1_is_minority=False, target_1_pct=70.0,
+            retained_median_tenure=200, churned_median_tenure=50,
+            tenure_explains_pattern=True,
+        )
+        recs = _generate_enhanced_recommendations(False, 0.5, None, "flat", [], diag)
+        assert any(r["action"] == "use_tenure_adjusted_recency" for r in recs)
+
+    def test_churned_not_higher_unexplained(self):
+        diag = AnomalyDiagnostics(
+            target_1_is_minority=False, target_1_pct=70.0,
+            tenure_explains_pattern=False,
+        )
+        recs = _generate_enhanced_recommendations(False, 0.5, None, "flat", [], diag)
+        assert any(r["action"] == "investigate_further" for r in recs)
+        assert any(r["action"] == "check_pre_churn_activity" for r in recs)
+
+    def test_churned_higher_strong_effect(self):
+        recs = _generate_enhanced_recommendations(True, 0.6, None, "flat", [])
+        assert any(r["action"] == "add_recency_features" for r in recs)
+
+    def test_churned_higher_threshold_step(self):
+        recs = _generate_enhanced_recommendations(True, 0.6, "31-90d", "threshold_step", [])
+        assert any(r["action"] == "create_activity_threshold_flag" for r in recs)
+
+    def test_churned_higher_monotonic_decline(self):
+        recs = _generate_enhanced_recommendations(True, 0.3, None, "monotonic_decline", [])
+        assert any(r["action"] == "use_continuous_recency" for r in recs)
+
+    def test_churned_higher_fallback_buckets(self):
+        """When few recommendations and bucket_stats exist, add bucket rec."""
+        bucket_stats = [RecencyBucketStats("0-7d", (0, 7), 50, 0.8)]
+        recs = _generate_enhanced_recommendations(True, 0.3, None, "variable", bucket_stats)
+        assert any(r["action"] == "add_recency_buckets" for r in recs)
+
+
+class TestDetectTrendEdgeCases:
+    def test_less_than_3_rows(self):
+        df = pd.DataFrame({
+            "date": pd.to_datetime(["2023-01-01", "2023-01-02"]),
+            "value": [1, 2],
+        })
+        analyzer = TemporalPatternAnalyzer(time_column="date")
+        result = analyzer.detect_trend(df, "value")
+        assert result.direction == TrendDirection.UNKNOWN
+
+    def test_less_than_3_after_dropna(self):
+        df = pd.DataFrame({
+            "date": pd.to_datetime(["2023-01-01", "2023-01-02", "2023-01-03", "2023-01-04"]),
+            "value": [1, np.nan, np.nan, 4],
+        })
+        analyzer = TemporalPatternAnalyzer(time_column="date")
+        result = analyzer.detect_trend(df, "value")
+        # Only 2 non-null values, so should return unknown
+        assert result.direction == TrendDirection.UNKNOWN
+
+    def test_zero_mean(self):
+        """Values centered around zero => normalized_slope uses 0 path."""
+        df = pd.DataFrame({
+            "date": pd.date_range("2023-01-01", periods=10, freq="D"),
+            "value": [-5, -4, -3, -2, -1, 1, 2, 3, 4, 5],
+        })
+        analyzer = TemporalPatternAnalyzer(time_column="date")
+        result = analyzer.detect_trend(df, "value")
+        assert result.direction in [TrendDirection.INCREASING, TrendDirection.STABLE, TrendDirection.DECREASING]
+
+
+class TestSeasonalityEdgeCases:
+    def test_less_than_14_rows(self):
+        df = pd.DataFrame({
+            "date": pd.date_range("2023-01-01", periods=10, freq="D"),
+            "value": range(10),
+        })
+        analyzer = TemporalPatternAnalyzer(time_column="date")
+        result = analyzer.detect_seasonality(df, "value")
+        assert result == []
+
+    def test_less_than_14_after_dropna(self):
+        dates = pd.date_range("2023-01-01", periods=20, freq="D")
+        values = [1.0, 2.0] + [np.nan] * 12 + [3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+        df = pd.DataFrame({"date": dates, "value": values})
+        analyzer = TemporalPatternAnalyzer(time_column="date")
+        result = analyzer.detect_seasonality(df, "value")
+        assert result == []
+
+    def test_lag_exceeds_half_data(self):
+        """Lags bigger than len(values)//2 should be skipped."""
+        dates = pd.date_range("2023-01-01", periods=20, freq="D")
+        df = pd.DataFrame({"date": dates, "value": np.random.normal(0, 1, 20)})
+        analyzer = TemporalPatternAnalyzer(time_column="date")
+        # additional_lags=[15] but 15 >= 20//2=10, so skipped
+        result = analyzer.detect_seasonality(df, "value", additional_lags=[15])
+        # Just verify it doesn't crash
+        assert isinstance(result, list)
+
+    def test_zero_variance_autocorrelation(self):
+        """All same values => variance = 0 => autocorrelation returns 0."""
+        analyzer = TemporalPatternAnalyzer(time_column="date")
+        series = np.array([5.0] * 20)
+        assert analyzer._autocorrelation(series, 3) == 0.0
+
+    def test_lag_exceeds_n(self):
+        """Lag >= len(series) => 0.0."""
+        analyzer = TemporalPatternAnalyzer(time_column="date")
+        series = np.array([1, 2, 3])
+        assert analyzer._autocorrelation(series, 5) == 0.0
+
+
+class TestAnalyzeCohortsEdgeCases:
+    def test_empty_dataframe(self):
+        df = pd.DataFrame(columns=["customer_id", "event_date", "signup_date"])
+        analyzer = TemporalPatternAnalyzer(time_column="event_date")
+        result = analyzer.analyze_cohorts(df, "customer_id", "signup_date")
+        assert len(result) == 0
+
+
+class TestAnalyzeRecencyEdgeCases:
+    def test_empty_dataframe(self):
+        df = pd.DataFrame(columns=["customer_id", "event_date"])
+        analyzer = TemporalPatternAnalyzer(time_column="event_date")
+        result = analyzer.analyze_recency(df, "customer_id")
+        assert result.avg_recency_days == 0
+        assert result.median_recency_days == 0
+
+    def test_default_reference_date(self):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B"],
+            "event_date": pd.to_datetime(["2023-01-01", "2023-06-01"]),
+        })
+        analyzer = TemporalPatternAnalyzer(time_column="event_date")
+        result = analyzer.analyze_recency(df, "customer_id")
+        assert result.avg_recency_days > 0
+
+    def test_insufficient_data_for_correlation(self):
+        """Only 2 entities => no correlation computed."""
+        df = pd.DataFrame({
+            "customer_id": ["A", "B"],
+            "event_date": pd.to_datetime(["2023-01-01", "2023-06-01"]),
+            "target": [0, 1],
+        })
+        analyzer = TemporalPatternAnalyzer(time_column="event_date")
+        result = analyzer.analyze_recency(df, "customer_id", target_column="target",
+                                          reference_date=pd.Timestamp("2023-12-31"))
+        assert result.target_correlation is None
+
+
+class TestTrendResultProperties:
+    def test_is_significant_true(self):
+        t = TrendResult(direction=TrendDirection.INCREASING, strength=0.5, p_value=0.01)
+        assert t.is_significant is True
+
+    def test_is_significant_false(self):
+        t = TrendResult(direction=TrendDirection.STABLE, strength=0.1, p_value=0.5)
+        assert t.is_significant is False
+
+    def test_is_significant_none_pvalue(self):
+        t = TrendResult(direction=TrendDirection.UNKNOWN, strength=0.0, p_value=None)
+        assert t.is_significant is False
+
+    def test_has_direction_true(self):
+        t = TrendResult(direction=TrendDirection.INCREASING, strength=0.5)
+        assert t.has_direction is True
+
+    def test_has_direction_false(self):
+        t = TrendResult(direction=TrendDirection.STABLE, strength=0.0)
+        assert t.has_direction is False
+
+
+class TestGenerateTrendRecommendationsEdgeCases:
+    def test_no_slope(self):
+        """slope is None => daily_pct = 0."""
+        trend = TrendResult(direction=TrendDirection.UNKNOWN, strength=0.0, slope=None, p_value=0.5)
+        recs = generate_trend_recommendations(trend)
+        assert isinstance(recs, list)
+
+    def test_weak_non_significant_trend(self):
+        """Has direction and strength > 0.1 but not significant."""
+        trend = TrendResult(direction=TrendDirection.INCREASING, strength=0.2, slope=0.05, p_value=0.1)
+        recs = generate_trend_recommendations(trend)
+        # Neither strong nor moderate nor stable => empty
+        assert len(recs) == 0
+
+
+class TestGenerateCohortRecommendationsElse:
+    def test_moderate_variation(self):
+        """Two years, dominant_pct between 60 and 80 => consider_cohort_features."""
+        dist = CohortDistribution(
+            year_counts={2020: 600, 2021: 400}, total_entities=1000,
+            dominant_year=2020, dominant_pct=60.0, num_years=2
+        )
+        recs = generate_cohort_recommendations(dist)
+        actions = [r.action for r in recs]
+        assert "consider_cohort_features" in actions
+
+    def test_no_retention_variation(self):
+        dist = CohortDistribution(
+            year_counts={2020: 500, 2021: 500}, total_entities=1000,
+            dominant_year=2020, dominant_pct=50.0, num_years=2
+        )
+        recs = generate_cohort_recommendations(dist, retention_variation=None)
+        assert not any(r.action == "investigate_cohort_retention" for r in recs)
+
+    def test_low_retention_variation(self):
+        dist = CohortDistribution(
+            year_counts={2020: 500, 2021: 500}, total_entities=1000,
+            dominant_year=2020, dominant_pct=50.0, num_years=2
+        )
+        recs = generate_cohort_recommendations(dist, retention_variation=0.05)
+        assert not any(r.action == "investigate_cohort_retention" for r in recs)
+
+
+class TestGenerateBucketLabels:
+    def test_generates_correct_labels(self):
+        edges = [0, 7, 30, float("inf")]
+        labels = _generate_bucket_labels(edges)
+        assert labels == ["0-7d", "8-30d", ">30d"]

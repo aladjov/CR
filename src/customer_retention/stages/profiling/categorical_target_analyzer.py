@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import chi2_contingency
 
-from customer_retention.core.compat import DataFrame, to_pandas
+from customer_retention.core.compat import DataFrame
 
 CARDINALITY_THRESHOLD = 0.5
 MIN_CATEGORIES_FOR_ANALYSIS = 2
@@ -113,7 +113,6 @@ def _generate_categorical_recommendations(insights: List[CategoricalFeatureInsig
 
 
 def analyze_categorical_features(df: DataFrame, entity_column: str, target_column: str, cardinality_threshold: float = CARDINALITY_THRESHOLD) -> CategoricalAnalysisResult:
-    df = to_pandas(df)
     valid_cols = filter_categorical_columns(df, entity_column, target_column, cardinality_threshold)
     filter_reasons = _get_filter_reasons(df, entity_column, target_column, cardinality_threshold)
     filtered_cols = [c for c in filter_reasons if c not in valid_cols and c not in [entity_column, target_column]]
@@ -174,7 +173,6 @@ class CategoricalTargetAnalyzer:
         self.min_samples_per_category = min_samples_per_category
 
     def analyze(self, df: DataFrame, categorical_col: str, target_col: str) -> CategoricalTargetResult:
-        df = to_pandas(df)
         if len(df) == 0 or categorical_col not in df.columns or target_col not in df.columns:
             return self._empty_result(categorical_col, target_col)
         clean_df = df[[categorical_col, target_col]].dropna()

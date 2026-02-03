@@ -326,6 +326,168 @@ class TestValidation(TestTimeSeriesValidator):
 
         assert result.entities_with_ordering_issues >= 1
 
+    def test_high_dup_rate_penalty(self, validator):
+        """Test dup_rate > 0.1 triggers 20 point penalty."""
+        # 2 entities, both with duplicate timestamps => dup_rate = 1.0 > 0.1
+        data = [
+            {'customer_id': 1, 'date': '2023-01-01', 'amount': 100},
+            {'customer_id': 1, 'date': '2023-01-01', 'amount': 150},
+            {'customer_id': 1, 'date': '2023-02-01', 'amount': 200},
+            {'customer_id': 2, 'date': '2023-01-01', 'amount': 100},
+            {'customer_id': 2, 'date': '2023-01-01', 'amount': 200},
+            {'customer_id': 2, 'date': '2023-02-01', 'amount': 300},
+        ]
+        df = pd.DataFrame(data)
+        df['date'] = pd.to_datetime(df['date'])
+        result = validator.validate(df, entity_column='customer_id', timestamp_column='date')
+
+        # dup_rate = 2/2 = 1.0 > 0.1 => -20 penalty => score <= 80
+        assert result.temporal_quality_score <= 80
+
+    def test_moderate_dup_rate_penalty(self, validator):
+        """Test 0.01 < dup_rate <= 0.1 triggers 10 point penalty."""
+        # Many entities, only one with dups => dup_rate ~0.05
+        data = []
+        for cust_id in range(1, 21):  # 20 entities
+            for month in range(1, 4):
+                data.append({
+                    'customer_id': cust_id,
+                    'date': pd.Timestamp(f'2023-{month:02d}-01'),
+                    'amount': 100,
+                })
+        # Add a duplicate for customer 1
+        data.append({'customer_id': 1, 'date': pd.Timestamp('2023-01-01'), 'amount': 200})
+        df = pd.DataFrame(data)
+        result = validator.validate(df, entity_column='customer_id', timestamp_column='date')
+
+        # dup_rate = 1/20 = 0.05 > 0.01 => -10
+        assert result.temporal_quality_score <= 90
+
+    def test_high_order_rate_penalty(self, validator):
+        """Test order_rate > 0.1 triggers 20 point penalty."""
+        # All entities have ordering issues
+        data = []
+        for cust_id in range(1, 4):
+            data.extend([
+                {'customer_id': cust_id, 'date': pd.Timestamp('2023-03-01'), 'amount': 300},
+                {'customer_id': cust_id, 'date': pd.Timestamp('2023-01-01'), 'amount': 100},
+                {'customer_id': cust_id, 'date': pd.Timestamp('2023-02-01'), 'amount': 200},
+            ])
+        df = pd.DataFrame(data)
+        result = validator.validate(df, entity_column='customer_id', timestamp_column='date')
+
+        # order_rate = 3/3 = 1.0 > 0.1 => -20
+        assert result.temporal_quality_score <= 80
+
+    def test_moderate_order_rate_penalty(self, validator):
+        """Test 0.01 < order_rate <= 0.1 triggers 10 point penalty."""
+        data = []
+        for cust_id in range(1, 21):
+            data.extend([
+                {'customer_id': cust_id, 'date': pd.Timestamp('2023-01-01'), 'amount': 100},
+                {'customer_id': cust_id, 'date': pd.Timestamp('2023-02-01'), 'amount': 200},
+                {'customer_id': cust_id, 'date': pd.Timestamp('2023-03-01'), 'amount': 300},
+            ])
+        # Make customer 1 out of order
+        data[0] = {'customer_id': 1, 'date': pd.Timestamp('2023-03-01'), 'amount': 300}
+        data[2] = {'customer_id': 1, 'date': pd.Timestamp('2023-01-01'), 'amount': 100}
+        df = pd.DataFrame(data)
+        result = validator.validate(df, entity_column='customer_id', timestamp_column='date')
+
+        # order_rate = 1/20 = 0.05 > 0.01 => -10
+        assert result.temporal_quality_score <= 90
+
+    def test_high_gap_rate_penalty(self, validator):
+        """Test gap_rate > 0.2 triggers 20 point penalty."""
+        # All entities have gaps
+        data = []
+        for cust_id in range(1, 4):
+            data.extend([
+                {'customer_id': cust_id, 'date': pd.Timestamp('2023-01-01'), 'amount': 100},
+                {'customer_id': cust_id, 'date': pd.Timestamp('2023-06-01'), 'amount': 200},
+            ])
+        df = pd.DataFrame(data)
+        result = validator.validate(
+            df, entity_column='customer_id', timestamp_column='date',
+            expected_frequency='monthly', max_allowed_gap_periods=1
+        )
+
+        # gap_rate = 3/3 = 1.0 > 0.2 => -20
+        assert result.temporal_quality_score <= 80
+
+    def test_moderate_gap_rate_penalty(self, validator):
+        """Test 0.05 < gap_rate <= 0.1 triggers 5 point penalty."""
+        data = []
+        for cust_id in range(1, 21):
+            data.extend([
+                {'customer_id': cust_id, 'date': pd.Timestamp('2023-01-01'), 'amount': 100},
+                {'customer_id': cust_id, 'date': pd.Timestamp('2023-02-01'), 'amount': 200},
+                {'customer_id': cust_id, 'date': pd.Timestamp('2023-03-01'), 'amount': 300},
+            ])
+        # Customer 1 gets a big gap
+        data[0] = {'customer_id': 1, 'date': pd.Timestamp('2023-01-01'), 'amount': 100}
+        data[1] = {'customer_id': 1, 'date': pd.Timestamp('2023-08-01'), 'amount': 200}
+        data[2] = {'customer_id': 1, 'date': pd.Timestamp('2023-09-01'), 'amount': 300}
+        # Customer 2 also gets a big gap
+        data[3] = {'customer_id': 2, 'date': pd.Timestamp('2023-01-01'), 'amount': 100}
+        data[4] = {'customer_id': 2, 'date': pd.Timestamp('2023-08-01'), 'amount': 200}
+        data[5] = {'customer_id': 2, 'date': pd.Timestamp('2023-09-01'), 'amount': 300}
+        df = pd.DataFrame(data)
+        result = validator.validate(
+            df, entity_column='customer_id', timestamp_column='date',
+            expected_frequency='monthly', max_allowed_gap_periods=1
+        )
+
+        # gap_rate = 2/20 = 0.1 => triggers 10 (0.1 > 0.05)
+        assert result.temporal_quality_score <= 95
+
+    def test_gap_analysis_with_estimated_interval(self, validator):
+        """Test gap analysis when no expected_frequency is given (estimated from data)."""
+        data = []
+        for cust_id in range(1, 4):
+            for month in range(1, 7):
+                data.append({
+                    'customer_id': cust_id,
+                    'date': pd.Timestamp(f'2023-{month:02d}-01'),
+                    'amount': 100,
+                })
+        df = pd.DataFrame(data)
+        result = validator.validate(
+            df, entity_column='customer_id', timestamp_column='date',
+            # No expected_frequency - will estimate from data
+        )
+
+        assert result.temporal_quality_score >= 80
+
+    def test_gap_analysis_none_interval(self, validator):
+        """Test gap analysis when interval cannot be estimated."""
+        # Single obs per entity => no interval can be estimated
+        df = pd.DataFrame({
+            'customer_id': [1, 2, 3],
+            'date': pd.to_datetime(['2023-01-01', '2023-02-01', '2023-03-01']),
+            'amount': [100, 200, 300],
+        })
+        result = validator.validate(
+            df, entity_column='customer_id', timestamp_column='date',
+        )
+
+        # Should handle gracefully
+        assert result.entities_with_gaps == 0
+
+    def test_ordering_check_entity_with_single_observation(self, validator):
+        """Test ordering check skips entities with < 2 observations."""
+        data = [
+            {'customer_id': 1, 'date': pd.Timestamp('2023-01-01'), 'amount': 100},
+            {'customer_id': 2, 'date': pd.Timestamp('2023-01-01'), 'amount': 200},
+            {'customer_id': 2, 'date': pd.Timestamp('2023-02-01'), 'amount': 300},
+        ]
+        df = pd.DataFrame(data)
+        result = validator.validate(
+            df, entity_column='customer_id', timestamp_column='date',
+        )
+
+        assert result.entities_with_ordering_issues == 0
+
     def test_missing_entity_column(self, validator, clean_timeseries_df):
         """Test validation with missing entity column."""
         result = validator.validate(
@@ -422,3 +584,196 @@ class TestEdgeCases:
 
         # Should handle gracefully
         assert result.is_time_series is True
+
+    def test_detect_timeseries_with_duplicate_timestamps(self, detector):
+        """Test detection of time series data that contains duplicate timestamps."""
+        data = []
+        for cust_id in range(1, 4):
+            for month in range(1, 7):
+                data.append({
+                    'customer_id': cust_id,
+                    'date': pd.Timestamp(f'2023-{month:02d}-01'),
+                    'value': 100,
+                })
+        # Add duplicate timestamps for customer 1
+        data.append({'customer_id': 1, 'date': pd.Timestamp('2023-01-01'), 'value': 200})
+        data.append({'customer_id': 1, 'date': pd.Timestamp('2023-02-01'), 'value': 300})
+        df = pd.DataFrame(data)
+        result = detector.detect(df, entity_column='customer_id', timestamp_column='date')
+
+        assert result.is_time_series is True
+        assert result.duplicate_timestamps_count > 0
+        assert any('duplicate' in e.lower() for e in result.evidence)
+
+    def test_auto_detect_entity_column_by_characteristics(self, detector):
+        """Test entity column auto-detection by column characteristics (fallback path)."""
+        # No column matches ENTITY_PATTERNS; detection falls through to heuristic
+        df = pd.DataFrame({
+            'category': ['A', 'A', 'B', 'B', 'C', 'C', 'A', 'B', 'C', 'A'],
+            'date': pd.date_range('2023-01-01', periods=10, freq='D'),
+            'value': range(10),
+        })
+        result = detector.detect(df)
+
+        # Should auto-detect 'category' based on cardinality heuristic
+        assert result.entity_column == 'category'
+
+    def test_auto_detect_entity_column_returns_none(self, detector):
+        """Test entity column auto-detection returns None when no column fits."""
+        # All columns are unique or don't match
+        df = pd.DataFrame({
+            'col_a': [1.0, 2.0, 3.0],
+            'col_b': [4.0, 5.0, 6.0],
+        })
+        result = detector.detect(df)
+
+        assert result.is_time_series is False
+        assert result.dataset_type == DatasetType.UNKNOWN
+
+    def test_detect_timestamp_column_name_match_and_parsable(self, detector):
+        """Test timestamp detection with a name-matching parsable string column."""
+        df = pd.DataFrame({
+            'customer_id': [1, 1, 2, 2, 3, 3],
+            'event_date': ['2023-01-01', '2023-02-01', '2023-01-01', '2023-02-01',
+                           '2023-01-01', '2023-02-01'],
+            'value': range(6),
+        })
+        result = detector.detect(df, entity_column='customer_id')
+
+        assert result.timestamp_column == 'event_date'
+
+    def test_detect_timestamp_column_parsable_no_name_match(self, detector):
+        """Test timestamp detection for a parsable column with no name match."""
+        df = pd.DataFrame({
+            'customer_id': [1, 1, 2, 2, 3, 3],
+            'xyz': ['2023-01-01', '2023-02-01', '2023-01-01', '2023-02-01',
+                    '2023-01-01', '2023-02-01'],
+            'value': range(6),
+        })
+        result = detector.detect(df, entity_column='customer_id')
+
+        # Should detect 'xyz' as parsable datetime even though name doesn't match
+        assert result.timestamp_column == 'xyz'
+
+    def test_detect_timestamp_column_returns_none(self, detector):
+        """Test timestamp detection returns None when no columns match."""
+        df = pd.DataFrame({
+            'customer_id': [1, 1, 2, 2, 3, 3],
+            'value': [10, 20, 30, 40, 50, 60],
+        })
+        result = detector.detect(df, entity_column='customer_id')
+
+        assert result.timestamp_column is None
+
+    def test_frequency_detection_hourly(self, detector):
+        """Test hourly frequency detection."""
+        dates = pd.date_range('2023-01-01', periods=30, freq='h')
+        df = pd.DataFrame({
+            'customer_id': [1] * 30,
+            'date': dates,
+            'value': range(30),
+        })
+        result = detector.detect(df, entity_column='customer_id', timestamp_column='date')
+
+        assert result.detected_frequency == TimeSeriesFrequency.HOURLY
+
+    def test_frequency_detection_quarterly(self, detector):
+        """Test quarterly frequency detection."""
+        dates = pd.date_range('2020-01-01', periods=12, freq='QS')
+        df = pd.DataFrame({
+            'customer_id': [1] * 12,
+            'date': dates,
+            'value': range(12),
+        })
+        result = detector.detect(df, entity_column='customer_id', timestamp_column='date')
+
+        assert result.detected_frequency == TimeSeriesFrequency.QUARTERLY
+
+    def test_frequency_detection_yearly(self, detector):
+        """Test yearly frequency detection."""
+        dates = pd.date_range('2010-01-01', periods=10, freq='YS')
+        df = pd.DataFrame({
+            'customer_id': [1] * 10,
+            'date': dates,
+            'value': range(10),
+        })
+        result = detector.detect(df, entity_column='customer_id', timestamp_column='date')
+
+        assert result.detected_frequency == TimeSeriesFrequency.YEARLY
+
+    def test_frequency_detection_empty_intervals(self, detector):
+        """Test frequency detection when all entities have single observations."""
+        df = pd.DataFrame({
+            'customer_id': [1, 2, 3],
+            'date': pd.to_datetime(['2023-01-01', '2023-02-01', '2023-03-01']),
+            'value': [10, 20, 30],
+        })
+        # avg_obs = 1 so this is a snapshot, test detection directly
+        freq, median = detector._detect_frequency(df, 'customer_id', 'date')
+
+        assert freq == TimeSeriesFrequency.UNKNOWN
+        assert median == 0.0
+
+    def test_frequency_detection_entity_with_single_observation(self, detector):
+        """Test frequency detection skips entities with < 2 observations."""
+        df = pd.DataFrame({
+            'customer_id': [1, 2, 2, 2],
+            'date': pd.to_datetime(['2023-01-01', '2023-01-01', '2023-02-01', '2023-03-01']),
+            'value': [10, 20, 30, 40],
+        })
+        freq, median = detector._detect_frequency(df, 'customer_id', 'date')
+
+        # Should still compute from entity 2 only
+        assert freq != TimeSeriesFrequency.UNKNOWN
+
+    def test_frequency_detection_entity_with_null_timestamps(self, detector):
+        """Test frequency detection when entity has all null timestamps after coerce."""
+        df = pd.DataFrame({
+            'customer_id': [1, 1, 1],
+            'date': ['not-a-date', 'also-bad', 'still-bad'],
+            'value': [1, 2, 3],
+        })
+        freq, median = detector._detect_frequency(df, 'customer_id', 'date')
+
+        assert freq == TimeSeriesFrequency.UNKNOWN
+        assert median == 0.0
+
+    def test_confidence_mid_range_observations(self, detector):
+        """Test confidence calculation with 5-9 avg observations."""
+        dates = pd.date_range('2023-01-01', periods=7, freq='D')
+        df = pd.DataFrame({
+            'customer_id': [1] * 7 + [2] * 7,
+            'date': list(dates) * 2,
+            'value': range(14),
+        })
+        result = detector.detect(df, entity_column='customer_id', timestamp_column='date')
+
+        # avg_obs=7, has_timestamp=True, has_frequency=True
+        # confidence = 0.5 + 0.2 + 0.1 + 0.1 = 0.9
+        assert result.confidence == pytest.approx(0.9, abs=0.05)
+
+    def test_detect_timeseries_no_timestamp_column(self, detector):
+        """Test detection with multiple obs per entity but no timestamp column found."""
+        df = pd.DataFrame({
+            'customer_id': [1, 1, 1, 2, 2, 2],
+            'value': [10, 20, 30, 40, 50, 60],
+        })
+        result = detector.detect(df, entity_column='customer_id')
+
+        # Should be time series (avg_obs=3) but unknown frequency
+        assert result.is_time_series is True
+        assert result.detected_frequency == TimeSeriesFrequency.UNKNOWN
+
+    def test_snapshot_with_borderline_avg(self, detector):
+        """Test snapshot detection when avg_obs is between 1.5 and 2."""
+        df = pd.DataFrame({
+            'customer_id': [1, 1, 2, 3],
+            'date': pd.to_datetime(['2023-01-01', '2023-02-01', '2023-01-01', '2023-01-01']),
+            'value': [10, 20, 30, 40],
+        })
+        # avg_obs = 4/3 ~= 1.33 which is < 1.5
+        result = detector.detect(df, entity_column='customer_id', timestamp_column='date')
+
+        assert result.is_time_series is False
+        assert result.dataset_type == DatasetType.SNAPSHOT
+        assert result.confidence == 0.8

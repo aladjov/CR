@@ -28,7 +28,7 @@ class ConsistencyNormalizeRecommendation(CleaningRecommendation):
                 continue
             unique_before[col] = df[col].nunique()
             if df[col].dtype == object:
-                variants[col] = df[col].dropna().unique().tolist()[:20]
+                variants[col] = list(df[col].dropna().unique())[:20]
         self._fit_params["variants"] = variants
         self._fit_params["unique_before"] = unique_before
         self._unique_before = unique_before

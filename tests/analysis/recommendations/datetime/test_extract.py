@@ -133,3 +133,83 @@ class TestDatetimeRecommendationEdgeCases:
         result = rec.fit_transform(df)
         assert "date1_month" in result.data.columns
         assert "date2_month" in result.data.columns
+
+
+class TestExtractMonthDatabricksTransform:
+    @pytest.fixture
+    def date_df(self):
+        return pd.DataFrame({
+            "date": pd.to_datetime(["2023-01-15", "2023-06-20", "2023-12-01"])
+        })
+
+    def test_transform_databricks_delegates_to_local(self, date_df):
+        rec = ExtractMonthRecommendation(columns=["date"])
+        result = rec.fit_transform(date_df, platform=Platform.DATABRICKS)
+        assert "date_month" in result.data.columns
+        assert list(result.data["date_month"]) == [1, 6, 12]
+
+
+class TestExtractDayOfWeekDatabricksTransform:
+    @pytest.fixture
+    def date_df(self):
+        return pd.DataFrame({
+            "date": pd.to_datetime(["2023-01-02", "2023-01-07"])
+        })
+
+    def test_transform_databricks_delegates_to_local(self, date_df):
+        rec = ExtractDayOfWeekRecommendation(columns=["date"])
+        result = rec.fit_transform(date_df, platform=Platform.DATABRICKS)
+        assert "date_dayofweek" in result.data.columns
+        assert result.data["date_dayofweek"].iloc[0] == 0
+        assert result.data["date_dayofweek"].iloc[1] == 5
+
+    def test_default_rationale(self):
+        rec = ExtractDayOfWeekRecommendation(columns=["date"])
+        assert "day of week" in rec.rationale.lower()
+
+    def test_column_not_in_dataframe(self):
+        df = pd.DataFrame({"other": pd.to_datetime(["2023-01-01"])})
+        rec = ExtractDayOfWeekRecommendation(columns=["date"])
+        result = rec.fit_transform(df)
+        assert "date_dayofweek" not in result.data.columns
+
+    def test_generate_local_code(self):
+        rec = ExtractDayOfWeekRecommendation(columns=["date"])
+        code = rec.generate_code(Platform.LOCAL)
+        assert "dt.dayofweek" in code
+
+    def test_generate_databricks_code(self):
+        rec = ExtractDayOfWeekRecommendation(columns=["date"])
+        code = rec.generate_code(Platform.DATABRICKS)
+        assert "dayofweek" in code
+        assert "withColumn" in code
+
+
+class TestDaysSinceDatabricksTransform:
+    @pytest.fixture
+    def date_df(self):
+        return pd.DataFrame({
+            "date": pd.to_datetime(["2023-01-01", "2023-01-11"])
+        })
+
+    def test_transform_databricks_delegates_to_local(self, date_df):
+        ref = datetime(2023, 1, 21)
+        rec = DaysSinceRecommendation(columns=["date"], reference_date=ref)
+        result = rec.fit_transform(date_df, platform=Platform.DATABRICKS)
+        assert "date_days_since" in result.data.columns
+        assert result.data["date_days_since"].iloc[0] == 20
+
+    def test_column_not_in_dataframe(self):
+        df = pd.DataFrame({"other": pd.to_datetime(["2023-01-01"])})
+        ref = datetime(2023, 1, 21)
+        rec = DaysSinceRecommendation(columns=["date"], reference_date=ref)
+        result = rec.fit_transform(df)
+        assert "date_days_since" not in result.data.columns
+
+    def test_generate_databricks_code(self):
+        ref = datetime(2023, 6, 15)
+        rec = DaysSinceRecommendation(columns=["date"], reference_date=ref)
+        code = rec.generate_code(Platform.DATABRICKS)
+        assert "datediff" in code
+        assert "2023-06-15" in code
+        assert "withColumn" in code

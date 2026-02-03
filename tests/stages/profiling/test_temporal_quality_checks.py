@@ -457,3 +457,23 @@ class TestEventOrderCheckEdgeCases:
         check = EventOrderCheck(entity_column="entity", time_column="date")
         result = check.run(df)
         assert result.passed
+
+
+class TestPrintResultsRecommendationBranch:
+    """Test the elif r.recommendation branch in print_results."""
+
+    def test_print_results_with_recommendation_no_ml_impact(self, capsys):
+        """Result has recommendation but check_id not in ML_IMPACTS => elif branch."""
+        results = [
+            TemporalQualityResult(
+                check_id="TQ999", check_name="Custom Check",
+                passed=False, severity=Severity.LOW,
+                message="Some issue found",
+                recommendation="Try a custom fix",
+                duplicate_count=5,
+            ),
+        ]
+        reporter = TemporalQualityReporter(results, total_rows=100)
+        reporter.print_results()
+        captured = capsys.readouterr()
+        assert "Try a custom fix" in captured.out

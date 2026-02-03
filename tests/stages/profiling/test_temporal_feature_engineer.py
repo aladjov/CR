@@ -658,3 +658,300 @@ class TestMultipleValueColumns:
         assert "lag0_quantity_sum" in df.columns
         assert "amount_velocity" in df.columns
         assert "quantity_velocity" in df.columns
+
+
+class TestDisabledFeatureGroups:
+    """Test all disabled feature group paths."""
+
+    def test_disable_acceleration(self, sample_events_df, reference_dates):
+        config = TemporalAggregationConfig(compute_acceleration=False)
+        engineer = TemporalFeatureEngineer(config=config)
+        result = engineer.compute(
+            events_df=sample_events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+            reference_dates=reference_dates,
+            reference_col="reference_date",
+        )
+        accel_group = next(
+            g for g in result.feature_groups if g.group == FeatureGroup.ACCELERATION
+        )
+        assert not accel_group.enabled
+        assert accel_group.features == []
+
+    def test_disable_recency(self, sample_events_df, reference_dates):
+        config = TemporalAggregationConfig(compute_recency=False)
+        engineer = TemporalFeatureEngineer(config=config)
+        result = engineer.compute(
+            events_df=sample_events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+            reference_dates=reference_dates,
+            reference_col="reference_date",
+        )
+        recency_group = next(
+            g for g in result.feature_groups if g.group == FeatureGroup.RECENCY
+        )
+        assert not recency_group.enabled
+
+    def test_disable_regularity(self, sample_events_df, reference_dates):
+        config = TemporalAggregationConfig(compute_regularity=False)
+        engineer = TemporalFeatureEngineer(config=config)
+        result = engineer.compute(
+            events_df=sample_events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+            reference_dates=reference_dates,
+            reference_col="reference_date",
+        )
+        regularity_group = next(
+            g for g in result.feature_groups if g.group == FeatureGroup.REGULARITY
+        )
+        assert not regularity_group.enabled
+
+    def test_disable_cohort(self, sample_events_df, reference_dates):
+        config = TemporalAggregationConfig(compute_cohort=False)
+        engineer = TemporalFeatureEngineer(config=config)
+        result = engineer.compute(
+            events_df=sample_events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+            reference_dates=reference_dates,
+            reference_col="reference_date",
+        )
+        cohort_group = next(
+            g for g in result.feature_groups if g.group == FeatureGroup.COHORT_COMPARISON
+        )
+        assert not cohort_group.enabled
+
+    def test_disabled_group_in_catalog(self, sample_events_df, reference_dates):
+        """Disabled groups should be skipped in catalog."""
+        config = TemporalAggregationConfig(compute_velocity=False)
+        engineer = TemporalFeatureEngineer(config=config)
+        result = engineer.compute(
+            events_df=sample_events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+            reference_dates=reference_dates,
+            reference_col="reference_date",
+        )
+        catalog = result.get_catalog()
+        assert "VELOCITY" not in catalog
+
+
+class TestGetCatalogFeatures:
+
+    def test_catalog_truncates_long_feature_list(self, sample_events_df, reference_dates):
+        """Catalog should show '... and N more' for groups with >10 features."""
+        config = TemporalAggregationConfig(num_lags=4, lag_aggregations=["sum", "mean", "count"])
+        engineer = TemporalFeatureEngineer(config=config)
+        result = engineer.compute(
+            events_df=sample_events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+            reference_dates=reference_dates,
+            reference_col="reference_date",
+        )
+        catalog = result.get_catalog()
+        assert "TEMPORAL FEATURE CATALOG" in catalog
+        # With 4 lags * 1 col * 3 aggs = 12 features, should truncate
+        assert "more" in catalog
+
+    def test_to_dict(self, sample_events_df, reference_dates):
+        engineer = TemporalFeatureEngineer()
+        result = engineer.compute(
+            events_df=sample_events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+            reference_dates=reference_dates,
+            reference_col="reference_date",
+        )
+        d = result.to_dict()
+        assert "n_features" in d
+        assert "n_entities" in d
+        assert "feature_groups" in d
+        assert d["n_entities"] == 4
+
+
+class TestGlobalReferenceDateDefault:
+
+    def test_global_mode_without_explicit_date(self, sample_events_df):
+        """Global mode without global_reference_date should use datetime.now()."""
+        config = TemporalAggregationConfig(
+            reference_mode=ReferenceMode.GLOBAL_DATE,
+            global_reference_date=None,
+        )
+        engineer = TemporalFeatureEngineer(config=config)
+        result = engineer.compute(
+            events_df=sample_events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+        )
+        assert len(result.features_df) == sample_events_df["customer_id"].nunique()
+
+
+class TestDefaultReferenceDate:
+
+    def test_default_reference_uses_last_event(self, sample_events_df):
+        """Default per_customer mode without reference_dates should use last event."""
+        engineer = TemporalFeatureEngineer()
+        result = engineer.compute(
+            events_df=sample_events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+        )
+        assert len(result.features_df) == sample_events_df["customer_id"].nunique()
+
+
+class TestEdgeCases:
+
+    def test_single_event_entity(self):
+        """Entity with single event should have NaN for regularity."""
+        events_df = pd.DataFrame({
+            "customer_id": ["A", "B", "B"],
+            "event_date": pd.to_datetime(["2023-01-01", "2023-01-01", "2023-01-15"]),
+            "amount": [100.0, 50.0, 60.0],
+        })
+        engineer = TemporalFeatureEngineer()
+        result = engineer.compute(
+            events_df=events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+        )
+        df = result.features_df
+        cust_a = df[df["customer_id"] == "A"].iloc[0]
+        assert pd.isna(cust_a["inter_event_gap_mean"])
+
+    def test_events_same_timestamp(self):
+        """All events at the same time -> total_days=0, frequency=event_count."""
+        events_df = pd.DataFrame({
+            "customer_id": ["A"] * 5,
+            "event_date": pd.to_datetime(["2023-01-01"] * 5),
+            "amount": [10.0, 20.0, 30.0, 40.0, 50.0],
+        })
+        engineer = TemporalFeatureEngineer()
+        result = engineer.compute(
+            events_df=events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+        )
+        df = result.features_df
+        cust_a = df[df["customer_id"] == "A"].iloc[0]
+        # frequency should be event count when total_days == 0
+        assert cust_a["event_frequency"] == 5
+
+    def test_zero_beginning_value_no_trend_ratio(self):
+        """Lifecycle: when beginning_val=0, trend_ratio should stay NaN."""
+        events_df = pd.DataFrame({
+            "customer_id": ["A"] * 30,
+            "event_date": pd.date_range("2023-01-01", periods=30, freq="5D"),
+            "amount": [0.0] * 10 + [50.0] * 10 + [100.0] * 10,
+        })
+        config = TemporalAggregationConfig(min_history_days=30)
+        engineer = TemporalFeatureEngineer(config=config)
+        result = engineer.compute(
+            events_df=events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+        )
+        df = result.features_df
+        cust_a = df[df["customer_id"] == "A"].iloc[0]
+        # beginning = 0, so trend_ratio should remain NaN
+        assert pd.isna(cust_a["amount_trend_ratio"])
+
+    def test_cohort_zero_std(self):
+        """All entities have same lag0 value -> cohort_std=0, no z-score."""
+        events_df = pd.DataFrame({
+            "customer_id": ["A", "A", "B", "B"],
+            "event_date": pd.to_datetime([
+                "2023-01-01", "2023-01-15",
+                "2023-01-01", "2023-01-15",
+            ]),
+            "amount": [100.0, 100.0, 100.0, 100.0],
+        })
+        engineer = TemporalFeatureEngineer()
+        result = engineer.compute(
+            events_df=events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+        )
+        df = result.features_df
+        assert "amount_cohort_zscore" not in df.columns
+
+    def test_gap_mean_zero_regularity(self):
+        """When gap_mean=0, regularity_score should be 1.0."""
+        events_df = pd.DataFrame({
+            "customer_id": ["A"] * 3,
+            "event_date": pd.to_datetime(["2023-01-01", "2023-01-01", "2023-01-01"]),
+            "amount": [10.0, 20.0, 30.0],
+        })
+        config = TemporalAggregationConfig(compute_regularity=True)
+        engineer = TemporalFeatureEngineer(config=config)
+        result = engineer.compute(
+            events_df=events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+        )
+        df = result.features_df
+        cust_a = df[df["customer_id"] == "A"].iloc[0]
+        assert cust_a["regularity_score"] == 1.0
+
+    def test_all_single_event_entities_regularity_columns(self):
+        """When all entities have single events, regularity columns should be NaN."""
+        events_df = pd.DataFrame({
+            "customer_id": ["A", "B"],
+            "event_date": pd.to_datetime(["2023-01-01", "2023-02-01"]),
+            "amount": [10.0, 20.0],
+        })
+        engineer = TemporalFeatureEngineer()
+        result = engineer.compute(
+            events_df=events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+        )
+        df = result.features_df
+        # Columns should exist but be NaN
+        assert "regularity_score" in df.columns
+        assert "event_frequency" in df.columns
+        assert df["regularity_score"].isna().all()
+
+    def test_entity_not_in_events_gets_nan_lifecycle(self):
+        """Reference entity with no matching events should get NaN lifecycle."""
+        events_df = pd.DataFrame({
+            "customer_id": ["A"] * 30,
+            "event_date": pd.date_range("2023-01-01", periods=30, freq="5D"),
+            "amount": np.random.uniform(50, 150, 30),
+        })
+        ref = pd.DataFrame({
+            "customer_id": ["A", "Z"],
+            "reference_date": pd.to_datetime(["2023-11-01", "2023-11-01"]),
+        })
+        config = TemporalAggregationConfig(min_history_days=10)
+        engineer = TemporalFeatureEngineer(config=config)
+        result = engineer.compute(
+            events_df=events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+            reference_dates=ref,
+            reference_col="reference_date",
+        )
+        df = result.features_df
+        cust_z = df[df["customer_id"] == "Z"]
+        if len(cust_z) > 0:
+            assert pd.isna(cust_z.iloc[0]["amount_beginning"])

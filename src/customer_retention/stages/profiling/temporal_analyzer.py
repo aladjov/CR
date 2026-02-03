@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from customer_retention.core.compat import Series, ensure_pandas_series
+from customer_retention.core.compat import Series
 
 
 class TemporalGranularity(Enum):
@@ -87,7 +87,7 @@ class TemporalAnalyzer:
     }
 
     def detect_granularity(self, dates: Series) -> TemporalGranularity:
-        dates = ensure_pandas_series(dates)
+
         clean_dates = pd.to_datetime(dates, errors="coerce").dropna()
         if len(clean_dates) == 0:
             return TemporalGranularity.MONTH
@@ -101,7 +101,7 @@ class TemporalAnalyzer:
     def aggregate_by_granularity(
         self, dates: Series, granularity: TemporalGranularity
     ) -> pd.DataFrame:
-        dates = ensure_pandas_series(dates)
+
         clean_dates = pd.to_datetime(dates, errors="coerce").dropna()
         if len(clean_dates) == 0:
             return pd.DataFrame({"period": [], "count": []})
@@ -130,7 +130,7 @@ class TemporalAnalyzer:
         dates: Series,
         granularity: Optional[TemporalGranularity] = None,
     ) -> TemporalAnalysis:
-        dates = ensure_pandas_series(dates)
+
         total_count = len(dates)
         parsed_dates = pd.to_datetime(dates, errors="coerce")
         null_count = parsed_dates.isna().sum()
@@ -162,7 +162,7 @@ class TemporalAnalyzer:
 
     def analyze_seasonality(self, dates: Series) -> SeasonalityResult:
         """Analyze seasonality patterns in datetime data."""
-        dates = ensure_pandas_series(dates)
+
         parsed = pd.to_datetime(dates, errors="coerce").dropna()
 
         if len(parsed) < 30:
@@ -219,7 +219,7 @@ class TemporalAnalyzer:
 
     def year_over_year_comparison(self, dates: Series) -> pd.DataFrame:
         """Compare record counts year-over-year by month."""
-        dates = ensure_pandas_series(dates)
+
         parsed = pd.to_datetime(dates, errors="coerce").dropna()
 
         if len(parsed) == 0:
@@ -239,7 +239,7 @@ class TemporalAnalyzer:
 
     def calculate_growth_rate(self, dates: Series) -> Dict[str, Any]:
         """Calculate growth metrics over time."""
-        dates = ensure_pandas_series(dates)
+
         parsed = pd.to_datetime(dates, errors="coerce").dropna()
 
         if len(parsed) < 2:
@@ -279,7 +279,7 @@ class TemporalAnalyzer:
     def recommend_features(
         self, dates: Series, column_name: str, other_date_columns: Optional[List[str]] = None
     ) -> List[TemporalRecommendation]:
-        dates = ensure_pandas_series(dates)
+
         parsed = pd.to_datetime(dates, errors="coerce")
         valid_dates = parsed.dropna()
         recommendations = []

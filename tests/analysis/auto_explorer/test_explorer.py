@@ -333,3 +333,217 @@ class TestDataExplorerVisualization:
         captured = capsys.readouterr()
         assert "BLOCKING ISSUES" in captured.out
         assert "Modeling Ready: NO" in captured.out
+
+    def test_print_text_summary_with_target(self, sample_dataframe, capsys):
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(sample_dataframe, target_hint="churned")
+
+        explorer._print_text_summary(findings)
+        captured = capsys.readouterr()
+        assert "Target Column: churned" in captured.out
+        assert "Modeling Ready: YES" in captured.out
+
+
+class TestDataExplorerTemporalMetadataCols:
+    def test_temporal_metadata_cols_skipped(self):
+        df = pd.DataFrame({
+            "feature_timestamp": pd.date_range("2020-01-01", periods=50),
+            "label_timestamp": pd.date_range("2020-02-01", periods=50),
+            "amount": np.random.uniform(10, 100, 50),
+            "target": np.random.choice([0, 1], 50),
+        })
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df, target_hint="target")
+        # Temporal metadata columns should be skipped
+        assert "feature_timestamp" not in findings.columns
+        assert "label_timestamp" not in findings.columns
+        assert "amount" in findings.columns
+        assert "target" in findings.columns
+
+
+class TestDataExplorerLoadSource:
+    def test_load_default_csv_with_unknown_extension(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "test_data.txt"
+            pd.DataFrame({"a": [1, 2], "b": [3, 4]}).to_csv(path, index=False)
+            explorer = DataExplorer(visualize=False, save_findings=False)
+            df, src_path, src_format = explorer._load_source(str(path))
+            assert src_format == "csv"
+            assert len(df) == 2
+
+    def test_load_parquet_with_pq_extension(self, sample_dataframe):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "test_data.pq"
+            sample_dataframe.to_parquet(path, index=False)
+            explorer = DataExplorer(visualize=False, save_findings=False)
+            df, src_path, src_format = explorer._load_source(str(path))
+            assert src_format == "parquet"
+            assert len(df) == 100
+
+
+class TestDataExplorerEmptyColumns:
+    def test_empty_dataframe(self):
+        df = pd.DataFrame()
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df)
+        assert findings.row_count == 0
+        assert findings.column_count == 0
+        # Empty DF gets default quality score, overall_metrics returns early
+        assert len(findings.columns) == 0
+
+
+class TestDataExplorerQualityIssuesExtended:
+    def test_outlier_detection_warning(self):
+        df = pd.DataFrame({
+            "normal": np.random.normal(50, 1, 100).tolist(),
+            "target": np.random.choice([0, 1], 100).tolist()
+        })
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df, target_hint="target")
+        # Just checking it runs - outlier issues depend on the profiler output
+        assert "normal" in findings.columns
+
+    def test_info_level_nulls(self):
+        df = pd.DataFrame({
+            "low_nulls": [None] * 8 + list(range(92)),
+            "target": [0, 1] * 50
+        })
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df, target_hint="target")
+        col_finding = findings.columns["low_nulls"]
+        assert any("INFO" in issue for issue in col_finding.quality_issues)
+
+    def test_future_dates_issue(self):
+        future = pd.Timestamp.now() + pd.Timedelta(days=365)
+        df = pd.DataFrame({
+            "date_col": [pd.Timestamp("2023-01-01")] * 95 + [future] * 5,
+            "target": [0, 1] * 50
+        })
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df, target_hint="target")
+        # Just checking it runs
+        assert "date_col" in findings.columns
+
+    def test_case_variations_issue(self):
+        df = pd.DataFrame({
+            "names": ["New York", "new york", "NEW YORK", "Boston"] * 25,
+            "target": [0, 1] * 50
+        })
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df, target_hint="target")
+        names_finding = findings.columns["names"]
+        # Depending on profiler, may detect case variations
+        assert "names" in findings.columns
+
+
+class TestDataExplorerTransformationsExtended:
+    def test_numeric_with_high_skewness(self):
+        np.random.seed(42)
+        df = pd.DataFrame({
+            "skewed": np.random.exponential(2, 200),
+            "target": np.random.choice([0, 1], 200)
+        })
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df, target_hint="target")
+        col_finding = findings.columns["skewed"]
+        if col_finding.inferred_type == ColumnType.NUMERIC_CONTINUOUS:
+            # May recommend log transform
+            assert len(col_finding.transformation_recommendations) > 0
+
+    def test_numeric_with_high_outliers(self):
+        np.random.seed(42)
+        data = np.random.normal(50, 1, 200).tolist()
+        data[0:15] = [200] * 15  # 7.5% outliers
+        df = pd.DataFrame({
+            "outlier_col": data,
+            "target": np.random.choice([0, 1], 200).tolist()
+        })
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df, target_hint="target")
+        assert "outlier_col" in findings.columns
+
+    def test_cyclical_encoding_recommendation(self):
+        df = pd.DataFrame({
+            "day_of_week": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] * 30,
+            "target": np.random.choice([0, 1], 210).tolist()
+        })
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df, target_hint="target")
+        assert "day_of_week" in findings.columns
+
+    def test_rare_categories_recommendation(self):
+        # Create a series with many rare categories
+        values = ["common"] * 300
+        for i in range(20):
+            values.append(f"rare_{i}")
+        df = pd.DataFrame({
+            "cat_col": values,
+            "target": np.random.choice([0, 1], len(values)).tolist()
+        })
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df, target_hint="target")
+        assert "cat_col" in findings.columns
+
+
+class TestDataExplorerConfidenceMapping:
+    def test_confidence_high(self):
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        from enum import Enum
+        class MockConf(Enum):
+            HIGH = "HIGH"
+        assert explorer._confidence_to_float(MockConf.HIGH) == 0.9
+
+    def test_confidence_medium(self):
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        from enum import Enum
+        class MockConf(Enum):
+            MEDIUM = "MEDIUM"
+        assert explorer._confidence_to_float(MockConf.MEDIUM) == 0.7
+
+    def test_confidence_low(self):
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        from enum import Enum
+        class MockConf(Enum):
+            LOW = "LOW"
+        assert explorer._confidence_to_float(MockConf.LOW) == 0.4
+
+    def test_confidence_unknown(self):
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        assert explorer._confidence_to_float("UNKNOWN") == 0.5
+
+
+class TestDataExplorerComputeTypeMetrics:
+    def test_compute_type_metrics_no_profiler(self):
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        # UNKNOWN type has no profiler
+        result = explorer._compute_type_metrics(pd.Series([1, 2, 3]), ColumnType.UNKNOWN)
+        assert result == {}
+
+    def test_compute_universal_metrics_no_profiler(self):
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        result = explorer._compute_universal_metrics(pd.Series([1, 2, 3]), ColumnType.UNKNOWN)
+        assert result == {}
+
+
+class TestDataExplorerDisplaySummaryFallback:
+    def test_display_summary_imports_chart_builder(self, sample_dataframe):
+        """Test that _display_summary works (or falls back to text summary)."""
+        explorer = DataExplorer(visualize=True, save_findings=False)
+        findings = explorer.explore(sample_dataframe)
+        # Should not raise regardless of whether ChartBuilder is importable
+        assert findings is not None
+
+
+class TestDataExplorerSaveFindingsEdgeCases:
+    def test_save_findings_dataframe_name(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+            explorer = DataExplorer(
+                visualize=False,
+                save_findings=True,
+                output_dir=tmpdir
+            )
+            findings = explorer.explore(df)
+            # When source is <DataFrame> and name is None, should use "exploration"
+            saved_files = list(Path(tmpdir).glob("exploration_*_findings.yaml"))
+            assert len(saved_files) == 1

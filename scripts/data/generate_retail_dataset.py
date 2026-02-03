@@ -1,7 +1,8 @@
-import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
 
 np.random.seed(42)
 
@@ -71,12 +72,12 @@ df = pd.DataFrame({
 output_path = FIXTURES_DIR / "customer_retention_retail.csv"
 df.to_csv(output_path, index=False)
 
-print(f"\n✅ Dataset generated successfully!")
+print("\n✅ Dataset generated successfully!")
 print(f"   Rows: {len(df)}")
 print(f"   Columns: {len(df.columns)}")
 print(f"   Saved to: {output_path}")
-print(f"\nColumn summary:")
+print("\nColumn summary:")
 print(df.info())
-print(f"\nFirst 5 rows:")
+print("\nFirst 5 rows:")
 print(df.head())
 print(f"\nRetention rate: {df['retained'].mean():.2%}")

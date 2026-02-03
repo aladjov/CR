@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import ensure_pandas_series, pd
+from customer_retention.core.compat import pd
 from customer_retention.core.config import ColumnType
 from customer_retention.core.utils.statistics import (
     compute_chi_square,
@@ -37,7 +37,6 @@ class BaselineDriftChecker:
         self.baseline: Optional[Dict[str, Dict]] = None
 
     def set_baseline(self, column_name: str, series: pd.Series, column_type: ColumnType):
-        series = ensure_pandas_series(series)
         if self.baseline is None:
             self.baseline = {}
 
@@ -67,8 +66,8 @@ class BaselineDriftChecker:
             "q3": float(clean_series.quantile(0.75)),
             # Store histogram for PSI calculation
             "histogram_bins": 10,
-            "histogram_edges": [float(x) for x in np.histogram(clean_series, bins=10)[1]],
-            "histogram_counts": [int(x) for x in np.histogram(clean_series, bins=10)[0]],
+            "histogram_edges": [float(x) for x in np.histogram(clean_series.to_numpy(), bins=10)[1]],
+            "histogram_counts": [int(x) for x in np.histogram(clean_series.to_numpy(), bins=10)[0]],
         }
 
     def _capture_categorical_baseline(self, series: pd.Series) -> Dict:
@@ -76,13 +75,12 @@ class BaselineDriftChecker:
         clean_series = series.dropna()
         value_counts = clean_series.value_counts()
         return {
-            "categories": value_counts.index.tolist(),
-            "counts": value_counts.values.tolist(),
+            "categories": list(value_counts.index),
+            "counts": list(value_counts.values),
             "proportions": (value_counts / len(clean_series)).to_dict(),
         }
 
     def detect_drift(self, column_name: str, series: pd.Series, column_type: ColumnType) -> DriftResult:
-        series = ensure_pandas_series(series)
         if self.baseline is None or column_name not in self.baseline:
             raise ValueError(f"No baseline found for column '{column_name}'")
 
@@ -173,7 +171,7 @@ class BaselineDriftChecker:
 
         # Get current distribution
         current_counts = clean_series.value_counts()
-        current_categories = set(current_counts.index.tolist())
+        current_categories = set(list(current_counts.index))
         baseline_categories = set(baseline["categories"])
 
         # New and missing categories

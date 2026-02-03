@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Union
 
-from customer_retention.core.compat import DataFrame, Series, Timedelta, Timestamp, pd, safe_to_datetime, to_pandas
+from customer_retention.core.compat import DataFrame, Series, Timedelta, Timestamp, pd, safe_to_datetime
 
 
 class ReferenceDateSource(Enum):
@@ -122,7 +122,7 @@ class TemporalFeatureGenerator:
         if not self._is_fitted:
             raise ValueError("Generator not fitted. Call fit() first.")
 
-        result = to_pandas(df).copy()
+        result = df.copy()
         self.generated_features = []
         warnings_list = []
 

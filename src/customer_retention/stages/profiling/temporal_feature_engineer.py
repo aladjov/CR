@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import Timedelta, native_pd, pd, to_datetime, to_pandas
+from customer_retention.core.compat import Timedelta, native_pd, pd, to_datetime
 
 
 class ReferenceMode(Enum):
@@ -179,7 +179,7 @@ class TemporalFeatureEngineer:
         Returns:
             TemporalFeatureResult with features DataFrame and metadata
         """
-        events_df = to_pandas(events_df).copy()
+        events_df = events_df.copy()
         events_df[time_col] = to_datetime(events_df[time_col])
 
         # Determine reference dates per entity
@@ -313,7 +313,7 @@ class TemporalFeatureEngineer:
             })
 
         if reference_dates is not None and reference_col is not None:
-            ref_df = to_pandas(reference_dates)[[entity_col, reference_col]].copy()
+            ref_df = reference_dates[[entity_col, reference_col]].copy()
             ref_df.columns = [entity_col, "reference_date"]
             ref_df["reference_date"] = to_datetime(ref_df["reference_date"])
             return ref_df

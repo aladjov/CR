@@ -5,7 +5,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-from customer_retention.core.compat import DataFrame, Series, ensure_pandas_series, safe_to_datetime, to_pandas
+from customer_retention.core.compat import DataFrame, Series, safe_memory_usage_bytes, safe_to_datetime, to_pandas
 
 from .number_formatter import NumberFormatter
 
@@ -101,7 +101,7 @@ class ChartBuilder:
         return fig
 
     def histogram_with_stats(self, series: Series, title: Optional[str] = None) -> go.Figure:
-        series = ensure_pandas_series(series)
+
         clean = series.dropna()
         mean_val = clean.mean()
         median_val = clean.median()
@@ -118,13 +118,13 @@ class ChartBuilder:
         return fig
 
     def box_plot(self, series: Series, title: Optional[str] = None) -> go.Figure:
-        series = ensure_pandas_series(series)
+
         fig = px.box(y=series.dropna(), title=title or f"Box Plot: {series.name}")
         fig.update_layout(template=self.theme)
         return fig
 
     def outlier_visualization(self, series: Series, method: str = "iqr") -> go.Figure:
-        series = ensure_pandas_series(series)
+
         clean = series.dropna().reset_index(drop=True)
         q1, q3 = clean.quantile(0.25), clean.quantile(0.75)
         iqr = q3 - q1
@@ -139,7 +139,7 @@ class ChartBuilder:
         return fig
 
     def category_bar_chart(self, series: Series, top_n: int = 20) -> go.Figure:
-        series = ensure_pandas_series(series)
+
         value_counts = series.value_counts().head(top_n)
         fig = go.Figure(go.Bar(x=value_counts.index.astype(str), y=value_counts.values, marker_color=self.colors["primary"]))
         fig.update_layout(
@@ -151,9 +151,8 @@ class ChartBuilder:
         return fig
 
     def correlation_heatmap(self, df: DataFrame, method: str = "pearson") -> go.Figure:
-        df = to_pandas(df)
         corr = df.corr(method=method)
-        fig = go.Figure(go.Heatmap(z=corr.values, x=corr.columns, y=corr.columns, colorscale="RdBu", zmid=0))
+        fig = go.Figure(go.Heatmap(z=corr.to_numpy(), x=list(corr.columns), y=list(corr.columns), colorscale="RdBu", zmid=0))
         fig.update_layout(
             title=f"Correlation Matrix ({method})",
             template=self.theme,
@@ -303,7 +302,6 @@ class ChartBuilder:
         return fig
 
     def feature_importance_plot(self, importance_df: DataFrame) -> go.Figure:
-        importance_df = to_pandas(importance_df)
         fig = go.Figure(go.Bar(
             y=importance_df["feature"],
             x=importance_df["importance"],
@@ -331,19 +329,17 @@ class ChartBuilder:
         return fig
 
     def time_series_plot(self, df: DataFrame, date_col: str, value_col: str) -> go.Figure:
-        df = to_pandas(df)
-        fig = px.line(df, x=date_col, y=value_col)
+        fig = px.line(to_pandas(df), x=date_col, y=value_col)
         fig.update_layout(title=f"{value_col} over Time", template=self.theme)
         return fig
 
     def cohort_retention_heatmap(self, retention_matrix: DataFrame) -> go.Figure:
-        retention_matrix = to_pandas(retention_matrix)
         fig = go.Figure(go.Heatmap(
-            z=retention_matrix.values,
-            x=retention_matrix.columns,
-            y=retention_matrix.index,
+            z=retention_matrix.to_numpy(),
+            x=list(retention_matrix.columns),
+            y=list(retention_matrix.index),
             colorscale="Greens",
-            text=np.round(retention_matrix.values, 2),
+            text=np.round(retention_matrix.to_numpy(), 2),
             texttemplate="%{text:.0%}"
         ))
         fig.update_layout(
@@ -355,7 +351,7 @@ class ChartBuilder:
         return fig
 
     def histogram(self, series: Series, title: Optional[str] = None, nbins: int = 30) -> go.Figure:
-        series = ensure_pandas_series(series)
+
         fig = go.Figure(go.Histogram(x=series.dropna(), nbinsx=nbins, marker_color=self.colors["primary"]))
         fig.update_layout(
             title=title or f"Distribution of {series.name}",
@@ -388,22 +384,21 @@ class ChartBuilder:
         color_column: Optional[Series] = None,
         color_map: Optional[Dict[str, str]] = None,
     ) -> go.Figure:
-        df = to_pandas(df)
         n_cols = len(df.columns)
         auto_height = max(500, n_cols * 150)
 
         if color_column is not None:
             plot_df = df.copy()
-            plot_df["_color_"] = ensure_pandas_series(color_column).values
+            plot_df["_color_"] = color_column.to_numpy()
             default_colors = {"Retained": "#2ECC71", "Churned": "#E74C3C"}
             colors = color_map or default_colors
             fig = px.scatter_matrix(
-                plot_df, dimensions=df.columns.tolist(), color="_color_",
+                to_pandas(plot_df), dimensions=list(df.columns), color="_color_",
                 title=title, color_discrete_map=colors
             )
             fig.update_traces(marker=dict(opacity=0.6, size=5))
         else:
-            fig = px.scatter_matrix(df, title=title)
+            fig = px.scatter_matrix(to_pandas(df), title=title)
 
         fig.update_layout(template=self.theme, height=height or auto_height, autosize=True)
         if width:
@@ -532,7 +527,7 @@ class ChartBuilder:
         dates: Series,
         title: Optional[str] = None,
     ) -> go.Figure:
-        dates = ensure_pandas_series(dates)
+
         parsed = safe_to_datetime(dates, errors="coerce").dropna()
 
         if len(parsed) == 0:
@@ -561,18 +556,17 @@ class ChartBuilder:
         pivot_df: "DataFrame",
         title: Optional[str] = None,
     ) -> go.Figure:
-        pivot_df = to_pandas(pivot_df)
-        if pivot_df.empty:
+        if len(pivot_df) == 0:
             fig = go.Figure()
             fig.add_annotation(text="No data available", x=0.5, y=0.5, showarrow=False)
             return fig
 
         fig = go.Figure(go.Heatmap(
-            z=pivot_df.values,
-            x=pivot_df.columns.tolist(),
-            y=pivot_df.index.astype(str).tolist(),
+            z=pivot_df.to_numpy(),
+            x=list(pivot_df.columns),
+            y=[str(i) for i in pivot_df.index],
             colorscale="Blues",
-            text=pivot_df.values,
+            text=pivot_df.to_numpy(),
             texttemplate="%{text:,}",
             textfont={"size": 10},
             hovertemplate="Year: %{y}<br>Month: %{x}<br>Count: %{z:,}<extra></extra>"
@@ -593,7 +587,6 @@ class ChartBuilder:
         title: Optional[str] = None,
     ) -> go.Figure:
         """Create a cumulative growth chart."""
-        cumulative_series = ensure_pandas_series(cumulative_series)
         if len(cumulative_series) == 0:
             fig = go.Figure()
             fig.add_annotation(text="No data available", x=0.5, y=0.5, showarrow=False)
@@ -625,8 +618,7 @@ class ChartBuilder:
         title: Optional[str] = None,
     ) -> go.Figure:
         """Create year-over-year comparison line chart."""
-        pivot_df = to_pandas(pivot_df)
-        if pivot_df.empty:
+        if len(pivot_df) == 0:
             fig = go.Figure()
             fig.add_annotation(text="No data available", x=0.5, y=0.5, showarrow=False)
             return fig
@@ -636,8 +628,8 @@ class ChartBuilder:
 
         for i, year in enumerate(pivot_df.index):
             fig.add_trace(go.Scatter(
-                x=pivot_df.columns.tolist(),
-                y=pivot_df.loc[year].values,
+                x=list(pivot_df.columns),
+                y=pivot_df.loc[year].to_numpy(),
                 mode="lines+markers",
                 name=str(year),
                 line={"color": colors[i % len(colors)], "width": 2},
@@ -1027,11 +1019,11 @@ class ChartBuilder:
         If values not provided, shows count of occurrences per day.
         """
         import pandas as pd
-        dates = ensure_pandas_series(dates)
+
         parsed = safe_to_datetime(dates, errors="coerce")
 
         if values is not None:
-            values = ensure_pandas_series(values)
+
             df_cal = pd.DataFrame({"date": parsed, "value": values}).dropna()
             daily = df_cal.groupby(df_cal["date"].dt.date)["value"].sum()
         else:
@@ -1076,11 +1068,11 @@ class ChartBuilder:
     ) -> go.Figure:
         """Create a month x day-of-week heatmap for pattern discovery."""
         import pandas as pd
-        dates = ensure_pandas_series(dates)
+
         parsed = safe_to_datetime(dates, errors="coerce").dropna()
 
         if values is not None:
-            values = ensure_pandas_series(values)
+
             df_cal = pd.DataFrame({"date": parsed, "value": values}).dropna()
             df_cal["month"] = df_cal["date"].dt.month
             df_cal["dow"] = df_cal["date"].dt.dayofweek
@@ -1123,8 +1115,6 @@ class ChartBuilder:
         Points outside bounds are highlighted as anomalies.
         """
         import pandas as pd
-        dates = ensure_pandas_series(dates)
-        values = ensure_pandas_series(values)
 
         df = pd.DataFrame({"date": safe_to_datetime(dates), "value": values}).dropna()
         df = df.sort_values("date")
@@ -1868,7 +1858,6 @@ class ChartBuilder:
         """
         from plotly.subplots import make_subplots
 
-        df = to_pandas(df)
         formatter = NumberFormatter()
 
         # Exclude temporal metadata columns from visualization
@@ -1945,10 +1934,9 @@ class ChartBuilder:
 
         from plotly.subplots import make_subplots
 
-        df = to_pandas(df)
         formatter = NumberFormatter()
 
-        memory_mb = df.memory_usage(deep=True).sum() / 1024**2
+        memory_mb = safe_memory_usage_bytes(df) / 1024**2
 
         # Detect format from path
         path = Path(source_path) if source_path else Path("data.csv")
@@ -2081,7 +2069,7 @@ class ChartBuilder:
         n_cols: int = 4,
     ) -> None:
         """Add a single column tile to the subplot grid."""
-        series = ensure_pandas_series(series)
+
         metrics = col_finding.universal_metrics if col_finding else {}
         type_metrics = col_finding.type_metrics if col_finding else {}
 

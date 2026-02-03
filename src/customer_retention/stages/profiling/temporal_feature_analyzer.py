@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from scipy import stats
 
-from customer_retention.core.compat import DataFrame, ensure_datetime_column, native_pd, pd, qcut, to_pandas
+from customer_retention.core.compat import DataFrame, ensure_datetime_column, native_pd, pd, qcut
 from customer_retention.core.utils import compute_effect_size
 
 
@@ -626,7 +626,7 @@ class TemporalFeatureAnalyzer:
         return next_priority
 
     def _prepare_dataframe(self, df: DataFrame) -> DataFrame:
-        df = to_pandas(df).copy()
+        df = df.copy()
         ensure_datetime_column(df, self.time_column)
         return df
 
