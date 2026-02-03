@@ -27,7 +27,10 @@ def track_and_export_previous(current_notebook: str) -> None:
     Returns ``None`` — the export runs asynchronously.
     """
     experiments_dir = get_notebook_experiments_dir()
-    experiments_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        experiments_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
     progress_file = experiments_dir / "notebook_progress.json"
     docs_dir = experiments_dir / "docs"
 

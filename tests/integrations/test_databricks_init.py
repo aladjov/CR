@@ -448,6 +448,37 @@ class TestDatabricksInitExperimentStructure:
             databricks_init(copy_notebooks=False)
 
 
+class TestEnsureExperimentsVolumeExists:
+    def test_creates_volume_via_spark_sql(self, databricks_env):
+        mock_spark = MagicMock()
+        with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
+            from customer_retention.integrations.databricks_init import _ensure_experiments_volume_exists
+
+            _ensure_experiments_volume_exists("churnkit", "analysis")
+        mock_spark.sql.assert_called_once_with("CREATE VOLUME IF NOT EXISTS churnkit.analysis.experiments")
+
+    def test_handles_no_spark_session(self, databricks_env):
+        with patch("customer_retention.core.compat.detection.get_spark_session", return_value=None):
+            from customer_retention.integrations.databricks_init import _ensure_experiments_volume_exists
+
+            _ensure_experiments_volume_exists("churnkit", "analysis")
+
+    def test_handles_spark_sql_error(self, databricks_env):
+        mock_spark = MagicMock()
+        mock_spark.sql.side_effect = Exception("permission denied")
+        with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
+            from customer_retention.integrations.databricks_init import _ensure_experiments_volume_exists
+
+            _ensure_experiments_volume_exists("churnkit", "analysis")
+
+    def test_called_during_init(self, databricks_env):
+        with patch("customer_retention.integrations.databricks_init._ensure_experiments_volume_exists") as mock_ensure:
+            from customer_retention.integrations.databricks_init import databricks_init
+
+            databricks_init(catalog="churnkit", schema="analysis", copy_notebooks=False)
+        mock_ensure.assert_called_once_with("churnkit", "analysis")
+
+
 class TestEnsureWorkspaceDirectory:
     def test_creates_workspace_directory(self, monkeypatch, databricks_env, tmp_path):
         import customer_retention.integrations.databricks_init as mod

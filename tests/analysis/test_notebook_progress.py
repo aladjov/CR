@@ -1,5 +1,6 @@
 """Tests for notebook progress tracker."""
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from customer_retention.analysis.notebook_progress import (
@@ -78,6 +79,16 @@ class TestTrackAndExportPrevious:
         assert result is None
         data = json.loads(progress.read_text())
         assert data["last_notebook"] == "02_column_deep_dive.ipynb"
+
+    def test_handles_oserror_on_mkdir_gracefully(self):
+        mock_dir = MagicMock(spec=Path)
+        mock_dir.mkdir.side_effect = OSError(95, "Operation not supported")
+        with patch(
+            "customer_retention.analysis.notebook_progress.get_notebook_experiments_dir",
+            return_value=mock_dir,
+        ):
+            result = track_and_export_previous("01.ipynb")
+        assert result is None
 
     def test_creates_experiments_dir_if_missing(self, tmp_path):
         """Experiments dir doesn't exist → created."""

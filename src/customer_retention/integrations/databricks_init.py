@@ -47,6 +47,7 @@ def databricks_init(
     resolved_experiment_name = _make_absolute_experiment_path(resolved_experiment_name, workspace_path)
     _set_experiment_name_env_var(resolved_experiment_name)
     _reload_config_constants()
+    _ensure_experiments_volume_exists(catalog, schema)
     _setup_experiment_directories()
     _configure_mlflow_experiment(resolved_experiment_name)
     notebooks_copied: list[str] = []
@@ -94,6 +95,18 @@ def _reload_config_constants() -> None:
     from customer_retention.core.config.experiments import reload_config
 
     reload_config()
+
+
+def _ensure_experiments_volume_exists(catalog: str, schema: str) -> None:
+    from customer_retention.core.compat.detection import get_spark_session
+
+    spark = get_spark_session()
+    if not spark:
+        return
+    try:
+        spark.sql(f"CREATE VOLUME IF NOT EXISTS {catalog}.{schema}.experiments")
+    except Exception:
+        pass
 
 
 def _setup_experiment_directories() -> None:
