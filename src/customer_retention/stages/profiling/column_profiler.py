@@ -4,7 +4,14 @@ from typing import Optional
 
 import numpy as np
 
-from customer_retention.core.compat import Timestamp, is_bool_dtype, is_datetime64_any_dtype, pd, to_datetime
+from customer_retention.core.compat import (
+    Timestamp,
+    is_bool_dtype,
+    is_datetime64_any_dtype,
+    pd,
+    safe_memory_usage_bytes,
+    to_datetime,
+)
 from customer_retention.core.config.column_config import ColumnType
 
 from .profile_result import (
@@ -31,7 +38,7 @@ class ColumnProfiler(ABC):
         most_common_value = value_counts.index[0] if len(value_counts) > 0 else None
         most_common_frequency = int(value_counts.iloc[0]) if len(value_counts) > 0 else None
 
-        memory_size = series.memory_usage(deep=True)
+        memory_size = safe_memory_usage_bytes(series)
 
         return UniversalMetrics(
             total_count=total_count,

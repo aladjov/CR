@@ -167,6 +167,15 @@ def _infer_epoch_unit(value: int) -> str:
     return "s"
 
 
+def safe_memory_usage_bytes(obj: Any) -> int:
+    """Return memory usage in bytes, returning 0 when unsupported (e.g. PySpark)."""
+    try:
+        usage = obj.memory_usage(deep=True)
+        return int(usage.sum()) if hasattr(usage, 'sum') else int(usage)
+    except Exception:
+        return 0
+
+
 def safe_to_datetime(series: Any, **kwargs: Any) -> _pandas.Series:
     """Convert a Series to datetime, handling Spark LongType epoch integers.
 
@@ -259,6 +268,7 @@ __all__ = [
     "is_notebook",
     "get_display_function",
     "get_dbutils",
+    "safe_memory_usage_bytes",
     "safe_to_datetime",
     "ensure_datetime_column",
     "ops",

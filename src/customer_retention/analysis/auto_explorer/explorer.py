@@ -2,7 +2,7 @@ import hashlib
 from pathlib import Path
 from typing import List, Optional, Union
 
-from customer_retention.core.compat import DataFrame, Series, pd, to_pandas
+from customer_retention.core.compat import DataFrame, Series, pd, safe_memory_usage_bytes, to_pandas
 from customer_retention.core.config.column_config import ColumnType
 from customer_retention.stages.profiling import ProfilerFactory, TypeDetector
 from customer_retention.stages.temporal import TEMPORAL_METADATA_COLS
@@ -53,7 +53,7 @@ class DataExplorer:
             source_format=source_format,
             row_count=len(df),
             column_count=len(df.columns),
-            memory_usage_mb=df.memory_usage(deep=True).sum() / (1024 * 1024)
+            memory_usage_mb=safe_memory_usage_bytes(df) / (1024 * 1024)
         )
 
     def _explore_all_columns(self, df: DataFrame, findings: ExplorationFindings, target_hint: Optional[str]):
