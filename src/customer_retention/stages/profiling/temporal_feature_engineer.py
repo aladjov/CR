@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import pd
+from customer_retention.core.compat import Timedelta, pd, to_datetime, to_pandas
 
 
 class ReferenceMode(Enum):
@@ -179,8 +179,8 @@ class TemporalFeatureEngineer:
         Returns:
             TemporalFeatureResult with features DataFrame and metadata
         """
-        events_df = events_df.copy()
-        events_df[time_col] = pd.to_datetime(events_df[time_col])
+        events_df = to_pandas(events_df).copy()
+        events_df[time_col] = to_datetime(events_df[time_col])
 
         # Determine reference dates per entity
         ref_dates = self._get_reference_dates(
@@ -313,9 +313,9 @@ class TemporalFeatureEngineer:
             })
 
         if reference_dates is not None and reference_col is not None:
-            ref_df = reference_dates[[entity_col, reference_col]].copy()
+            ref_df = to_pandas(reference_dates)[[entity_col, reference_col]].copy()
             ref_df.columns = [entity_col, "reference_date"]
-            ref_df["reference_date"] = pd.to_datetime(ref_df["reference_date"])
+            ref_df["reference_date"] = to_datetime(ref_df["reference_date"])
             return ref_df
 
         # Default: Use last event date per entity
@@ -511,8 +511,8 @@ class TemporalFeatureEngineer:
             entity_df["last_event"].iloc[0]
 
             # Calculate split boundaries
-            split1 = first_event + pd.Timedelta(days=history_days * splits[0])
-            split2 = first_event + pd.Timedelta(days=history_days * (splits[0] + splits[1]))
+            split1 = first_event + Timedelta(days=history_days * splits[0])
+            split2 = first_event + Timedelta(days=history_days * (splits[0] + splits[1]))
 
             for col in value_cols:
                 beginning_val = entity_df[entity_df[time_col] < split1][col].sum()

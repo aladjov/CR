@@ -4,7 +4,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from customer_retention.analysis.notebook_html_exporter import export_notebook_html
+from customer_retention.core.compat import is_databricks
 from customer_retention.core.config.experiments import get_notebook_experiments_dir
 
 
@@ -25,7 +25,7 @@ def track_and_export_previous(current_notebook: str) -> None:
     previous = _read_last_notebook(progress_file)
     _write_current_notebook(progress_file, current_notebook)
 
-    if previous:
+    if previous and not is_databricks():
         _export_in_background(previous, docs_dir)
 
 
@@ -40,6 +40,8 @@ def _read_last_notebook(progress_file: Path) -> Optional[str]:
 
 def _export_notebook(notebook_name: str, docs_dir: Path) -> Optional[Path]:
     """Export *notebook_name* to HTML in *docs_dir*."""
+    from customer_retention.analysis.notebook_html_exporter import export_notebook_html
+
     return export_notebook_html(Path(notebook_name), docs_dir)
 
 

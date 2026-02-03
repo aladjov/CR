@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
-from customer_retention.core.compat import DataFrame, Timestamp, to_datetime
+from customer_retention.core.compat import DataFrame, Timestamp, to_datetime, to_pandas
 from customer_retention.core.components.enums import Severity
 
 
@@ -73,6 +73,7 @@ class TemporalGapCheck(TemporalQualityCheck):
         if len(df) < 2:
             return self._pass_result("Insufficient data to check gaps")
 
+        df = to_pandas(df)
         time_col = to_datetime(df.sort_values(self.time_column)[self.time_column])
         diffs_days = time_col.diff().dropna().dt.total_seconds() / 86400
         expected_days = self.FREQ_TO_DAYS.get(self.expected_frequency, 1)

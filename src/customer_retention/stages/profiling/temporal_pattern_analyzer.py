@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 from scipy import stats
 
-from customer_retention.core.compat import DataFrame, Timestamp, cut, pd, to_datetime
+from customer_retention.core.compat import DataFrame, Timestamp, cut, pd, to_datetime, to_pandas
 from customer_retention.core.utils import compute_effect_size
 
 
@@ -231,6 +231,7 @@ def compute_recency_buckets(
     df: DataFrame, entity_column: str, time_column: str, target_column: str,
     reference_date: Timestamp, bucket_edges: Optional[List[float]] = None
 ) -> List[RecencyBucketStats]:
+    df = to_pandas(df)
     edges = bucket_edges or DEFAULT_BUCKET_EDGES
     labels = _generate_bucket_labels(edges)
     entity_last = df.groupby(entity_column)[time_column].max().reset_index()
@@ -296,6 +297,7 @@ def classify_distribution_pattern(buckets: List[RecencyBucketStats]) -> str:
 def _diagnose_anomaly_pattern(
     df: DataFrame, entity_column: str, time_column: str, target_column: str
 ) -> AnomalyDiagnostics:
+    df = to_pandas(df)
     entity_target = df.groupby(entity_column)[target_column].first()
     target_1_pct = float(entity_target.mean() * 100)
     target_1_is_minority = target_1_pct < 50
@@ -431,6 +433,7 @@ def compare_recency_by_target(
     df: DataFrame, entity_column: str, time_column: str, target_column: str,
     reference_date: Optional[Timestamp] = None, cap_percentile: float = 0.99
 ) -> Optional[RecencyComparisonResult]:
+    df = to_pandas(df)
     if target_column not in df.columns:
         return None
     ref_date = reference_date or df[time_column].max()
@@ -495,7 +498,7 @@ class TemporalPatternAnalyzer:
         if len(df) < 3:
             return self._unknown_trend()
 
-        df_clean = df[[self.time_column, value_column]].dropna()
+        df_clean = to_pandas(df)[[self.time_column, value_column]].dropna()
         if len(df_clean) < 3:
             return self._unknown_trend()
 
@@ -583,7 +586,7 @@ class TemporalPatternAnalyzer:
         if len(df) == 0:
             return pd.DataFrame()
 
-        df_copy = df.copy()
+        df_copy = to_pandas(df).copy()
         entity_first_event = df_copy.groupby(entity_column)[cohort_column].min()
         df_copy["_cohort"] = df_copy[entity_column].map(entity_first_event)
         df_copy["_cohort"] = to_datetime(df_copy["_cohort"]).dt.to_period(period)
@@ -611,6 +614,7 @@ class TemporalPatternAnalyzer:
         if len(df) == 0:
             return RecencyResult(avg_recency_days=0, median_recency_days=0, min_recency_days=0, max_recency_days=0)
 
+        df = to_pandas(df)
         ref_date = reference_date or Timestamp.now()
         to_datetime(df[self.time_column])
 

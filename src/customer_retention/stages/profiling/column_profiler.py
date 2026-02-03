@@ -4,7 +4,7 @@ from typing import Optional
 
 import numpy as np
 
-from customer_retention.core.compat import Timestamp, is_bool_dtype, is_datetime64_any_dtype, pd
+from customer_retention.core.compat import Timestamp, is_bool_dtype, is_datetime64_any_dtype, pd, to_datetime
 from customer_retention.core.config.column_config import ColumnType
 
 from .profile_result import (
@@ -304,7 +304,7 @@ class DatetimeProfiler(ColumnProfiler):
                 pass
             else:
                 try:
-                    clean_series = pd.to_datetime(clean_series, errors='coerce', format='mixed')
+                    clean_series = to_datetime(clean_series, errors='coerce', format='mixed')
                 except Exception:
                     return {"datetime_metrics": None}
 

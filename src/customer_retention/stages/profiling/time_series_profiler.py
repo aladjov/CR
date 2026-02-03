@@ -9,6 +9,7 @@ from customer_retention.core.compat import (
     is_datetime64_any_dtype,
     pd,
     to_datetime,
+    to_pandas,
 )
 
 
@@ -229,7 +230,7 @@ class TimeSeriesProfiler:
             raise KeyError(f"Time column '{self.time_column}' not found")
 
     def _prepare_dataframe(self, df: DataFrame) -> DataFrame:
-        df = df.copy()
+        df = to_pandas(df).copy()
         if not is_datetime64_any_dtype(df[self.time_column]):
             df[self.time_column] = to_datetime(df[self.time_column])
         return df
