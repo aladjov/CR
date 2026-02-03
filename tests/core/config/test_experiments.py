@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -10,12 +11,14 @@ from customer_retention.core.config.experiments import (
     MLRUNS_DIR,
     OUTPUT_DIR,
     _find_project_root,
+    _load_persisted_databricks_config,
     get_data_dir,
     get_experiments_dir,
     get_feature_store_dir,
     get_findings_dir,
     get_mlruns_dir,
     get_notebook_experiments_dir,
+    persist_databricks_config,
     setup_experiments_structure,
 )
 
@@ -228,4 +231,185 @@ class TestGetNotebookExperimentsDir:
         empty_dir.mkdir()
         monkeypatch.chdir(empty_dir)
         result = get_notebook_experiments_dir()
+        assert result.name == "experiments"
+
+
+class TestPersistedDatabricksConfig:
+    def test_load_returns_none_outside_databricks(self, monkeypatch):
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        assert _load_persisted_databricks_config() is None
+
+    def test_load_returns_none_when_file_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "17.3")
+        monkeypatch.setenv("CR_WORKSPACE_PATH", "Users/me/project")
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: tmp_path / "nonexistent.json",
+        )
+        assert _load_persisted_databricks_config() is None
+
+    def test_load_reads_via_workspace_path_env_var(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "17.3")
+        monkeypatch.setenv("CR_WORKSPACE_PATH", "Users/me/project")
+        config_file = tmp_path / ".churnkit_config.json"
+        config_file.write_text(json.dumps({
+            "experiments_dir": "/Volumes/cat/sch/experiments",
+            "catalog": "cat", "schema": "sch",
+        }))
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        result = _load_persisted_databricks_config()
+        assert result["experiments_dir"] == "/Volumes/cat/sch/experiments"
+        assert result["catalog"] == "cat"
+
+    def test_load_walks_up_from_cwd(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "17.3")
+        monkeypatch.delenv("CR_WORKSPACE_PATH", raising=False)
+        project_dir = tmp_path / "project"
+        notebooks_dir = project_dir / "exploration_notebooks"
+        notebooks_dir.mkdir(parents=True)
+        (project_dir / ".churnkit_config.json").write_text(json.dumps({
+            "experiments_dir": "/Volumes/cat/sch/experiments",
+        }))
+        monkeypatch.chdir(notebooks_dir)
+        result = _load_persisted_databricks_config()
+        assert result["experiments_dir"] == "/Volumes/cat/sch/experiments"
+
+    def test_load_returns_none_on_corrupt_json(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "17.3")
+        monkeypatch.setenv("CR_WORKSPACE_PATH", "Users/me")
+        config_file = tmp_path / ".churnkit_config.json"
+        config_file.write_text("not json{{{")
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        assert _load_persisted_databricks_config() is None
+
+    def test_persist_writes_config_file(self, tmp_path, monkeypatch):
+        config_file = tmp_path / ".churnkit_config.json"
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        persist_databricks_config("/Volumes/mycat/mysch/experiments", "mycat", "mysch", "Users/me")
+        data = json.loads(config_file.read_text())
+        assert data["experiments_dir"] == "/Volumes/mycat/mysch/experiments"
+        assert data["catalog"] == "mycat"
+        assert data["schema"] == "mysch"
+
+    def test_persist_skips_without_workspace_path(self, tmp_path, monkeypatch):
+        config_file = tmp_path / ".churnkit_config.json"
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        persist_databricks_config("/Volumes/c/s/experiments", "c", "s")
+        assert not config_file.exists()
+
+    def test_persist_overwrites_existing(self, tmp_path, monkeypatch):
+        config_file = tmp_path / ".churnkit_config.json"
+        config_file.write_text(json.dumps({"experiments_dir": "/old"}))
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        persist_databricks_config("/Volumes/new/sch/experiments", "new", "sch", "Users/me")
+        data = json.loads(config_file.read_text())
+        assert data["experiments_dir"] == "/Volumes/new/sch/experiments"
+
+    def test_persist_handles_write_error_gracefully(self, monkeypatch):
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: Path("/nonexistent_dir/subdir/config.json"),
+        )
+        persist_databricks_config("/Volumes/c/s/experiments", "c", "s", "Users/me")
+
+    def test_persist_treats_empty_string_workspace_as_no_workspace(self, tmp_path, monkeypatch):
+        config_file = tmp_path / ".churnkit_config.json"
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        persist_databricks_config("/Volumes/c/s/experiments", "c", "s", "")
+        assert not config_file.exists()
+
+    def test_load_returns_none_when_config_missing_experiments_dir_key(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "17.3")
+        monkeypatch.setenv("CR_WORKSPACE_PATH", "Users/me")
+        config_file = tmp_path / ".churnkit_config.json"
+        config_file.write_text(json.dumps({"catalog": "cat", "schema": "sch"}))
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        result = _load_persisted_databricks_config()
+        assert result is not None
+        assert "experiments_dir" not in result
+
+    def test_load_cwd_walk_returns_none_when_no_config_found(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "17.3")
+        monkeypatch.delenv("CR_WORKSPACE_PATH", raising=False)
+        empty_dir = tmp_path / "deep" / "nested" / "dir"
+        empty_dir.mkdir(parents=True)
+        monkeypatch.chdir(empty_dir)
+        assert _load_persisted_databricks_config() is None
+
+    def test_get_experiments_dir_ignores_config_without_experiments_dir_key(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "17.3")
+        monkeypatch.setenv("CR_WORKSPACE_PATH", "Users/me")
+        config_file = tmp_path / ".churnkit_config.json"
+        config_file.write_text(json.dumps({"catalog": "cat"}))
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        result = get_experiments_dir()
+        assert result.name == "experiments"
+
+
+class TestGetExperimentsDirWithPersistedConfig:
+    def test_env_var_takes_precedence_over_persisted(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CR_EXPERIMENTS_DIR", str(tmp_path / "from_env"))
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "17.3")
+        monkeypatch.setenv("CR_WORKSPACE_PATH", "Users/me/project")
+        config_file = tmp_path / ".churnkit_config.json"
+        config_file.write_text(json.dumps({"experiments_dir": "/Volumes/other/path/experiments"}))
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        assert str(get_experiments_dir()) == str(tmp_path / "from_env")
+
+    def test_uses_persisted_config_when_no_env_var(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "17.3")
+        monkeypatch.setenv("CR_WORKSPACE_PATH", "Users/me/project")
+        config_file = tmp_path / ".churnkit_config.json"
+        config_file.write_text(json.dumps({"experiments_dir": "/Volumes/cat/sch/experiments"}))
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        assert str(get_experiments_dir()) == "/Volumes/cat/sch/experiments"
+
+    def test_default_param_takes_precedence_over_persisted(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "17.3")
+        monkeypatch.setenv("CR_WORKSPACE_PATH", "Users/me/project")
+        config_file = tmp_path / ".churnkit_config.json"
+        config_file.write_text(json.dumps({"experiments_dir": "/Volumes/cat/sch/experiments"}))
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        assert str(get_experiments_dir(default="/explicit/default")) == "/explicit/default"
+
+    def test_falls_back_to_project_root_when_no_persisted_config(self, monkeypatch):
+        monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        result = get_experiments_dir()
         assert result.name == "experiments"

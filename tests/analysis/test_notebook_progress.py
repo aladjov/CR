@@ -2,7 +2,10 @@
 import json
 from unittest.mock import MagicMock, patch
 
-from customer_retention.analysis.notebook_progress import track_and_export_previous
+from customer_retention.analysis.notebook_progress import (
+    _ensure_databricks_config_loaded,
+    track_and_export_previous,
+)
 
 
 def _patch_experiments_dir(tmp_path):
@@ -143,3 +146,17 @@ class TestTrackAndExportPrevious:
         assert result is None
         data = json.loads(progress_file.read_text())
         assert data["last_notebook"] == "02.ipynb"
+
+
+class TestEnsureDatabricksConfigLoaded:
+    def test_reloads_config_on_databricks(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        with patch("customer_retention.analysis.notebook_progress.reload_config") as mock_reload:
+            _ensure_databricks_config_loaded()
+        mock_reload.assert_called_once()
+
+    def test_skips_reload_outside_databricks(self, monkeypatch):
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        with patch("customer_retention.analysis.notebook_progress.reload_config") as mock_reload:
+            _ensure_databricks_config_loaded()
+        mock_reload.assert_not_called()

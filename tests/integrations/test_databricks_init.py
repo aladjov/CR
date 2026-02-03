@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -377,3 +378,98 @@ class TestDatabricksInitCellScenario:
         assert "test_cat" in captured.out
         assert "test_sch" in captured.out
         assert "Initialization Complete" in captured.out
+
+    def test_display_summary_includes_version(self, monkeypatch, databricks_env, capsys):
+        from customer_retention import __version__
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        databricks_init(copy_notebooks=False)
+        captured = capsys.readouterr()
+        assert __version__ in captured.out
+
+
+class TestDatabricksInitConfigPersistence:
+    def test_persists_config_to_workspace(self, monkeypatch, databricks_env, tmp_path):
+        config_file = tmp_path / ".churnkit_config.json"
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        databricks_init(
+            catalog="churnkit", schema="analysis", workspace_path="Users/me/proj", copy_notebooks=False,
+        )
+        data = json.loads(config_file.read_text())
+        assert data["experiments_dir"] == "/Volumes/churnkit/analysis/experiments"
+        assert data["catalog"] == "churnkit"
+        assert data["schema"] == "analysis"
+
+    def test_persisted_config_survives_for_subsequent_import(self, monkeypatch, databricks_env, tmp_path):
+        config_file = tmp_path / ".churnkit_config.json"
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        databricks_init(catalog="churnkit", schema="prod", workspace_path="Users/me/proj", copy_notebooks=False)
+        monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
+        from customer_retention.core.config.experiments import get_experiments_dir
+
+        assert str(get_experiments_dir()) == "/Volumes/churnkit/prod/experiments"
+
+    def test_no_config_persisted_without_workspace_path(self, monkeypatch, databricks_env, tmp_path):
+        config_file = tmp_path / ".churnkit_config.json"
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        databricks_init(copy_notebooks=False)
+        assert not config_file.exists()
+
+
+class TestDatabricksInitExperimentStructure:
+    def test_invokes_setup_experiments_structure(self, monkeypatch, databricks_env):
+        with patch("customer_retention.core.config.experiments.setup_experiments_structure") as mock_setup:
+            from customer_retention.integrations.databricks_init import databricks_init
+
+            databricks_init(copy_notebooks=False)
+        mock_setup.assert_called_once()
+
+    def test_handles_oserror_gracefully(self, monkeypatch, databricks_env):
+        with patch(
+            "customer_retention.core.config.experiments.setup_experiments_structure", side_effect=OSError("read-only"),
+        ):
+            from customer_retention.integrations.databricks_init import databricks_init
+
+            databricks_init(copy_notebooks=False)
+
+
+class TestEnsureWorkspaceDirectory:
+    def test_creates_workspace_directory(self, monkeypatch, databricks_env, tmp_path):
+        import customer_retention.integrations.databricks_init as mod
+
+        real_path = mod.Path
+
+        def redirect_path(p):
+            if "/Workspace/" in str(p):
+                return tmp_path / "workspace_dir"
+            return real_path(p)
+
+        monkeypatch.setattr(mod, "Path", redirect_path)
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: tmp_path / ".churnkit_config.json",
+        )
+        mod.databricks_init(workspace_path="Users/me/project", copy_notebooks=False)
+        assert (tmp_path / "workspace_dir").exists()
+
+    def test_no_workspace_path_skips_directory_creation(self, monkeypatch, databricks_env):
+        with patch("customer_retention.integrations.databricks_init._ensure_workspace_directory") as mock_ensure:
+            from customer_retention.integrations.databricks_init import databricks_init
+
+            databricks_init(copy_notebooks=False)
+        mock_ensure.assert_not_called()

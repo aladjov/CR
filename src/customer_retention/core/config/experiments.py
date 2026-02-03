@@ -1,6 +1,48 @@
+import json
 import os
 from pathlib import Path
 from typing import Optional
+
+_DATABRICKS_CONFIG_FILENAME = ".churnkit_config.json"
+
+
+def _workspace_config_path(workspace_path: str) -> Path:
+    return Path(f"/Workspace/{workspace_path}") / _DATABRICKS_CONFIG_FILENAME
+
+
+def _read_config_file(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text()) if path.exists() else None
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _load_persisted_databricks_config() -> dict | None:
+    if not os.environ.get("DATABRICKS_RUNTIME_VERSION"):
+        return None
+    workspace_path = os.environ.get("CR_WORKSPACE_PATH")
+    if workspace_path:
+        return _read_config_file(_workspace_config_path(workspace_path))
+    cwd = Path.cwd()
+    for _ in range(5):
+        result = _read_config_file(cwd / _DATABRICKS_CONFIG_FILENAME)
+        if result:
+            return result
+        if cwd.parent == cwd:
+            break
+        cwd = cwd.parent
+    return None
+
+
+def persist_databricks_config(experiments_dir: str, catalog: str, schema: str, workspace_path: str | None = None) -> None:
+    if not workspace_path:
+        return
+    try:
+        _workspace_config_path(workspace_path).write_text(json.dumps({
+            "experiments_dir": experiments_dir, "catalog": catalog, "schema": schema,
+        }))
+    except OSError:
+        pass
 
 
 def _find_project_root() -> Path:
@@ -17,6 +59,9 @@ def get_experiments_dir(default: Optional[str] = None) -> Path:
         return Path(os.environ["CR_EXPERIMENTS_DIR"])
     if default:
         return Path(default)
+    persisted = _load_persisted_databricks_config()
+    if persisted and "experiments_dir" in persisted:
+        return Path(persisted["experiments_dir"])
     return _find_project_root() / "experiments"
 
 

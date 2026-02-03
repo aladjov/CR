@@ -5,7 +5,16 @@ from pathlib import Path
 from typing import Optional
 
 from customer_retention.core.compat import is_databricks
-from customer_retention.core.config.experiments import get_notebook_experiments_dir
+from customer_retention.core.config.experiments import get_notebook_experiments_dir, reload_config
+
+
+def _ensure_databricks_config_loaded() -> None:
+    if not is_databricks():
+        return
+    reload_config()
+
+
+_ensure_databricks_config_loaded()
 
 
 def track_and_export_previous(current_notebook: str) -> None:
