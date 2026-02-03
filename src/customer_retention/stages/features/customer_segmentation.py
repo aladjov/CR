@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import DataFrame, pd
+from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype, isna, to_datetime
 
 
 class SegmentationType(Enum):
@@ -220,7 +220,7 @@ class CustomerSegmenter:
         lapsing_days = thresholds.get("lapsing", 180)
 
         def assign_recency_bucket(days):
-            if pd.isna(days):
+            if isna(days):
                 return "Unknown"
             days = int(days)
             if days <= active_days:
@@ -300,7 +300,7 @@ class CustomerSegmenter:
         df_result = df.copy()
 
         def assign_engagement(score):
-            if pd.isna(score):
+            if isna(score):
                 return "Unknown"
             if score >= high_threshold:
                 return "High_Engagement"
@@ -428,14 +428,14 @@ class CustomerSegmenter:
         df_result = df.copy()
 
         # Ensure datetime
-        if not pd.api.types.is_datetime64_any_dtype(df_result[created_column]):
-            df_result[created_column] = pd.to_datetime(df_result[created_column], errors='coerce', format='mixed')
+        if not is_datetime64_any_dtype(df_result[created_column]):
+            df_result[created_column] = to_datetime(df_result[created_column], errors='coerce', format='mixed')
 
         # Set reference date
         if reference_date is None:
             reference_date = df_result[created_column].max()
         else:
-            reference_date = pd.to_datetime(reference_date)
+            reference_date = to_datetime(reference_date)
 
         prefix = f"{output_prefix}_" if output_prefix else ""
 
@@ -447,7 +447,7 @@ class CustomerSegmenter:
 
         # Tenure bucket
         def tenure_bucket(days):
-            if pd.isna(days) or days < 0:
+            if isna(days) or days < 0:
                 return "Unknown"
             if days <= 90:
                 return "New_0_3m"
@@ -491,14 +491,14 @@ class CustomerSegmenter:
         df_result = df.copy()
 
         # Ensure datetime
-        if not pd.api.types.is_datetime64_any_dtype(df_result[last_activity_column]):
-            df_result[last_activity_column] = pd.to_datetime(df_result[last_activity_column], errors='coerce', format='mixed')
+        if not is_datetime64_any_dtype(df_result[last_activity_column]):
+            df_result[last_activity_column] = to_datetime(df_result[last_activity_column], errors='coerce', format='mixed')
 
         # Set reference date
         if reference_date is None:
             reference_date = df_result[last_activity_column].max()
         else:
-            reference_date = pd.to_datetime(reference_date)
+            reference_date = to_datetime(reference_date)
 
         df_result[output_column] = (reference_date - df_result[last_activity_column]).dt.days
 

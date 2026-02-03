@@ -105,6 +105,17 @@ CategoricalDtype = _pandas.CategoricalDtype
 NA = _pandas.NA
 NaT = _pandas.NaT
 
+# Utility functions (always use real pandas, never pyspark.pandas)
+to_datetime = _pandas.to_datetime
+to_timedelta = _pandas.to_timedelta
+to_numeric = _pandas.to_numeric
+cut = _pandas.cut
+qcut = _pandas.qcut
+get_dummies = _pandas.get_dummies
+crosstab = _pandas.crosstab
+notna = _pandas.notna
+isna = _pandas.isna
+
 api_types = _pandas.api.types
 
 
@@ -162,6 +173,15 @@ __all__ = [
     "CategoricalDtype",
     "NA",
     "NaT",
+    "to_datetime",
+    "to_timedelta",
+    "to_numeric",
+    "cut",
+    "qcut",
+    "get_dummies",
+    "crosstab",
+    "notna",
+    "isna",
     "is_spark_available",
     "is_pandas_api_on_spark",
     "get_pandas",

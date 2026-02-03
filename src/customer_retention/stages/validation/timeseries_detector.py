@@ -11,7 +11,7 @@ from datetime import timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
-from customer_retention.core.compat import DataFrame, pd
+from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype, pd, to_datetime
 
 
 class DatasetType(Enum):
@@ -255,7 +255,7 @@ class TimeSeriesDetector:
 
         if timestamp_column and timestamp_column in df.columns:
             # Convert to datetime if needed
-            ts_series = pd.to_datetime(
+            ts_series = to_datetime(
                 df[timestamp_column], errors='coerce', format='mixed'
             )
             valid_ts = ts_series.notna()
@@ -342,7 +342,7 @@ class TimeSeriesDetector:
             name_match = any(pattern in col_lower for pattern in self.TIMESTAMP_PATTERNS)
 
             # Check if column is datetime type
-            is_datetime = pd.api.types.is_datetime64_any_dtype(df[col])
+            is_datetime = is_datetime64_any_dtype(df[col])
 
             # Try to parse as datetime
             can_parse = False
@@ -350,7 +350,7 @@ class TimeSeriesDetector:
                 try:
                     with warnings.catch_warnings():
                         warnings.filterwarnings('ignore', category=FutureWarning)
-                        parsed = pd.to_datetime(
+                        parsed = to_datetime(
                             df[col].head(100), errors='coerce', format='mixed'
                         )
                     can_parse = parsed.notna().mean() > 0.8
@@ -389,7 +389,7 @@ class TimeSeriesDetector:
             if len(entity_data) < 2:
                 continue
 
-            ts = pd.to_datetime(
+            ts = to_datetime(
                 entity_data[timestamp_column], errors='coerce', format='mixed'
             )
             ts = ts.dropna().sort_values()
@@ -525,7 +525,7 @@ class TimeSeriesValidator:
 
         # Convert timestamp
         df_copy = df.copy()
-        df_copy['_ts'] = pd.to_datetime(
+        df_copy['_ts'] = to_datetime(
             df_copy[timestamp_column], errors='coerce', format='mixed'
         )
 

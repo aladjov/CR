@@ -4,7 +4,7 @@ from typing import Optional
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, pd
+from customer_retention.core.compat import DataFrame, notna
 from customer_retention.core.config import ColumnType
 from customer_retention.stages.cleaning import MissingValueHandler, OutlierHandler, OutlierTreatmentStrategy
 
@@ -198,7 +198,7 @@ class TransformationPipeline:
             if col in working_df.columns and working_df[col].isna().any():
                 # Fill with median for extracted datetime features
                 median_val = working_df[col].median()
-                if pd.notna(median_val):
+                if notna(median_val):
                     working_df[col] = working_df[col].fillna(median_val)
 
         for col, transformer in self._numeric_transformers.items():

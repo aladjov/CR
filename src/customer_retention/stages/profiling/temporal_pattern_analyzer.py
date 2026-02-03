@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 from scipy import stats
 
-from customer_retention.core.compat import DataFrame, pd
+from customer_retention.core.compat import DataFrame, Timestamp, cut, pd, to_datetime
 from customer_retention.core.utils import compute_effect_size
 
 
@@ -229,7 +229,7 @@ MONOTONIC_TOLERANCE = 0.05
 
 def compute_recency_buckets(
     df: DataFrame, entity_column: str, time_column: str, target_column: str,
-    reference_date: pd.Timestamp, bucket_edges: Optional[List[float]] = None
+    reference_date: Timestamp, bucket_edges: Optional[List[float]] = None
 ) -> List[RecencyBucketStats]:
     edges = bucket_edges or DEFAULT_BUCKET_EDGES
     labels = _generate_bucket_labels(edges)
@@ -237,7 +237,7 @@ def compute_recency_buckets(
     entity_last["recency_days"] = (reference_date - entity_last[time_column]).dt.days
     entity_target = df.groupby(entity_column)[target_column].first().reset_index()
     entity_data = entity_last.merge(entity_target, on=entity_column)
-    entity_data["bucket"] = pd.cut(entity_data["recency_days"], bins=edges, labels=labels, include_lowest=True)
+    entity_data["bucket"] = cut(entity_data["recency_days"], bins=edges, labels=labels, include_lowest=True)
     bucket_stats = []
     for i, label in enumerate(labels):
         bucket_data = entity_data[entity_data["bucket"] == label]
@@ -429,7 +429,7 @@ def _extract_threshold_from_bucket(bucket_label: str) -> int:
 
 def compare_recency_by_target(
     df: DataFrame, entity_column: str, time_column: str, target_column: str,
-    reference_date: Optional[pd.Timestamp] = None, cap_percentile: float = 0.99
+    reference_date: Optional[Timestamp] = None, cap_percentile: float = 0.99
 ) -> Optional[RecencyComparisonResult]:
     if target_column not in df.columns:
         return None
@@ -499,7 +499,7 @@ class TemporalPatternAnalyzer:
         if len(df_clean) < 3:
             return self._unknown_trend()
 
-        time_col = pd.to_datetime(df_clean[self.time_column])
+        time_col = to_datetime(df_clean[self.time_column])
         x = (time_col - time_col.min()).dt.total_seconds() / 86400
         y = df_clean[value_column].values
 
@@ -586,7 +586,7 @@ class TemporalPatternAnalyzer:
         df_copy = df.copy()
         entity_first_event = df_copy.groupby(entity_column)[cohort_column].min()
         df_copy["_cohort"] = df_copy[entity_column].map(entity_first_event)
-        df_copy["_cohort"] = pd.to_datetime(df_copy["_cohort"]).dt.to_period(period)
+        df_copy["_cohort"] = to_datetime(df_copy["_cohort"]).dt.to_period(period)
 
         entity_cohorts = df_copy.groupby(entity_column)["_cohort"].first().reset_index()
         entity_cohorts.columns = [entity_column, "_cohort"]
@@ -607,15 +607,15 @@ class TemporalPatternAnalyzer:
 
         return cohort_stats.sort_values("cohort")
 
-    def analyze_recency(self, df: DataFrame, entity_column: str, target_column: Optional[str] = None, reference_date: Optional[pd.Timestamp] = None) -> RecencyResult:
+    def analyze_recency(self, df: DataFrame, entity_column: str, target_column: Optional[str] = None, reference_date: Optional[Timestamp] = None) -> RecencyResult:
         if len(df) == 0:
             return RecencyResult(avg_recency_days=0, median_recency_days=0, min_recency_days=0, max_recency_days=0)
 
-        ref_date = reference_date or pd.Timestamp.now()
-        pd.to_datetime(df[self.time_column])
+        ref_date = reference_date or Timestamp.now()
+        to_datetime(df[self.time_column])
 
         entity_last = df.groupby(entity_column)[self.time_column].max()
-        entity_last = pd.to_datetime(entity_last)
+        entity_last = to_datetime(entity_last)
         recency_days = (ref_date - entity_last).dt.days
 
         target_correlation = None

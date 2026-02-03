@@ -1,6 +1,6 @@
 import time
 
-from customer_retention.core.compat import DataFrame, Timestamp, is_datetime64_any_dtype, pd
+from customer_retention.core.compat import DataFrame, Timestamp, is_datetime64_any_dtype, to_datetime, to_numeric
 from customer_retention.core.config.column_config import ColumnType
 from customer_retention.core.config.pipeline_config import BronzeConfig, PipelineConfig
 
@@ -159,7 +159,7 @@ class DataQualityGate(ValidationGate):
                     continue
 
                 if not is_datetime64_any_dtype(df_temp):
-                    df_temp = pd.to_datetime(df_temp, errors='coerce', format='mixed')
+                    df_temp = to_datetime(df_temp, errors='coerce', format='mixed')
 
                 future_dates = df_temp > Timestamp.now()
                 future_count = future_dates.sum()
@@ -185,8 +185,8 @@ class DataQualityGate(ValidationGate):
                 if len(df_temp) == 0:
                     return issues
 
-                created = pd.to_datetime(df_temp['created'], errors='coerce', format='mixed')
-                firstorder = pd.to_datetime(df_temp['firstorder'], errors='coerce', format='mixed')
+                created = to_datetime(df_temp['created'], errors='coerce', format='mixed')
+                firstorder = to_datetime(df_temp['firstorder'], errors='coerce', format='mixed')
 
                 violations = created > firstorder
                 violation_count = violations.sum()
@@ -214,7 +214,7 @@ class DataQualityGate(ValidationGate):
 
                 if col_config.is_numeric() and column_data.dtype == 'object':
                     try:
-                        pd.to_numeric(column_data.dropna(), errors='raise')
+                        to_numeric(column_data.dropna(), errors='raise')
                         issues.append(self.create_issue(
                             "DQ040", "Numeric column stored as string",
                             Severity.MEDIUM, col_config.name, len(df), len(df),

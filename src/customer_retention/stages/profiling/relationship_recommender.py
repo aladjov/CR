@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import pd
+from customer_retention.core.compat import crosstab, pd
 
 
 class RecommendationCategory(Enum):
@@ -323,7 +323,7 @@ class RelationshipRecommender:
         """Calculate Cramér's V for categorical association."""
         try:
             from scipy.stats import chi2_contingency
-            contingency = pd.crosstab(df[col], df[target_col])
+            contingency = crosstab(df[col], df[target_col])
             chi2, _, _, _ = chi2_contingency(contingency)
             n = len(df)
             min_dim = min(contingency.shape) - 1

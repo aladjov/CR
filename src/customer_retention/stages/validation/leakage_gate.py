@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from customer_retention.core.compat import DataFrame, Timestamp, is_numeric_dtype, pd
+from customer_retention.core.compat import DataFrame, Timestamp, is_numeric_dtype, notna, to_datetime
 from customer_retention.core.components.enums import Severity
 
 if TYPE_CHECKING:
@@ -124,7 +124,7 @@ class LeakageGate:
         for feature in numeric_features:
             try:
                 corr = df[feature].corr(df[self.target_column])
-                if pd.notna(corr):
+                if notna(corr):
                     correlations[feature] = corr
             except Exception:
                 continue
@@ -153,7 +153,7 @@ class LeakageGate:
 
     @staticmethod
     def _parse_datetime(series, errors="coerce"):
-        return pd.to_datetime(series, errors=errors, format='mixed')
+        return to_datetime(series, errors=errors, format='mixed')
 
     def _check_perfect_separation(
         self,
@@ -236,7 +236,7 @@ class LeakageGate:
                 mean_0 = df[df[self.target_column] == target_values[0]][feature].mean()
                 mean_1 = df[df[self.target_column] == target_values[1]][feature].mean()
 
-                if (pd.notna(var_0) and pd.notna(var_1) and
+                if (notna(var_0) and notna(var_1) and
                     var_0 < 0.01 and var_1 < 0.01 and
                     abs(mean_0 - mean_1) > 0.1):
                     issues.append(LeakageIssue(

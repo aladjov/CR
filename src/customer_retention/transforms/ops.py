@@ -12,7 +12,7 @@ from typing import Any
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, pd
+from customer_retention.core.compat import DataFrame, get_dummies, pd
 
 
 def _requires_column(fn):
@@ -113,7 +113,7 @@ def apply_cap_then_log(df: DataFrame, column: str) -> DataFrame:
 
 @_requires_column
 def apply_one_hot_encode(df: DataFrame, column: str) -> DataFrame:
-    return pd.get_dummies(df, columns=[column], prefix=column)
+    return get_dummies(df, columns=[column], prefix=column)
 
 
 def apply_feature_select(df: DataFrame, column: str) -> DataFrame:

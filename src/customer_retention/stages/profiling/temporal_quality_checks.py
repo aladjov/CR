@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
-from customer_retention.core.compat import DataFrame, pd
+from customer_retention.core.compat import DataFrame, Timestamp, to_datetime
 from customer_retention.core.components.enums import Severity
 
 
@@ -73,7 +73,7 @@ class TemporalGapCheck(TemporalQualityCheck):
         if len(df) < 2:
             return self._pass_result("Insufficient data to check gaps")
 
-        time_col = pd.to_datetime(df.sort_values(self.time_column)[self.time_column])
+        time_col = to_datetime(df.sort_values(self.time_column)[self.time_column])
         diffs_days = time_col.diff().dropna().dt.total_seconds() / 86400
         expected_days = self.FREQ_TO_DAYS.get(self.expected_frequency, 1)
         threshold_days = expected_days * self.max_gap_multiple
@@ -101,16 +101,16 @@ class TemporalGapCheck(TemporalQualityCheck):
 
 
 class FutureDateCheck(TemporalQualityCheck):
-    def __init__(self, time_column: str, reference_date: Optional[pd.Timestamp] = None):
+    def __init__(self, time_column: str, reference_date: Optional[Timestamp] = None):
         super().__init__("TQ003", "Future Dates", Severity.HIGH)
         self.time_column = time_column
-        self.reference_date = reference_date or pd.Timestamp.now()
+        self.reference_date = reference_date or Timestamp.now()
 
     def run(self, df: DataFrame) -> TemporalQualityResult:
         if len(df) == 0:
             return self._pass_result("No data to check")
 
-        time_col = pd.to_datetime(df[self.time_column])
+        time_col = to_datetime(df[self.time_column])
         future_mask = time_col > self.reference_date
         future_count = future_mask.sum()
 
@@ -140,7 +140,7 @@ class EventOrderCheck(TemporalQualityCheck):
         if len(df) < 2:
             return self._pass_result("Insufficient data to check ordering")
 
-        df_check = df.assign(_parsed_time=pd.to_datetime(df[self.time_column]))
+        df_check = df.assign(_parsed_time=to_datetime(df[self.time_column]))
         collision_counts = df_check.groupby([self.entity_column, "_parsed_time"]).size()
         ambiguous = collision_counts[collision_counts > 1]
         ambiguous_count = ambiguous.sum() - len(ambiguous)

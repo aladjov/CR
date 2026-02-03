@@ -8185,6 +8185,16 @@ Loaded findings for 16 columns from ../tests/fixtures/customer_emails.csv
 <div class="jp-OutputArea jp-Cell-outputArea">
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="application/vnd.jupyter.stderr" tabindex="0">
+<pre>/Users/Vital/python/CustomerRetention/.venv/lib/python3.12/site-packages/tqdm/auto.py:21: TqdmWarning:
+
+IProgress not found. Please update jupyter and ipywidgets. See https://ipywidgets.readthedocs.io/en/stable/user_install.html
+
+</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
 <pre>Loaded 74,842 rows x 16 columns
 Data source: snapshot:training_v1
@@ -9781,20 +9791,8 @@ Expected events per window (at median cadence):
 Column Temporal Variability (within-entity CV vs between-entity CV):
 Column                    Within-CV    Between-CV   Ratio    Aggregation Guidance
 ------------------------------------------------------------------------------------------
-</pre>
-</div>
-</div>
-<div class="jp-OutputArea-child">
-<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
-<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>send_hour                 0.28         0.09         3.13     Stable per entity -&gt; all_time mean sufficient
-</pre>
-</div>
-</div>
-<div class="jp-OutputArea-child">
-<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
-<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>time_to_open_hours        0.82         0.63         1.30     Mixed -&gt; both short and long windows add value
+send_hour                 0.28         0.09         3.13     Stable per entity -&gt; all_time mean sufficient
+time_to_open_hours        0.82         0.63         1.30     Mixed -&gt; both short and long windows add value
 
 Interpretation:
   Within-CV: how much each entity's values vary across their events

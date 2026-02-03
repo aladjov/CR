@@ -6,7 +6,14 @@ from typing import Dict, List, Optional, Union
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, pd
+from customer_retention.core.compat import (
+    DataFrame,
+    Timedelta,
+    Timestamp,
+    is_numeric_dtype,
+    pd,
+    to_datetime,
+)
 
 
 class AggregationType(str, Enum):
@@ -71,7 +78,7 @@ class TimeWindowAggregator:
     def aggregate(
         self, df: DataFrame, windows: Optional[List[str]] = None,
         value_columns: Optional[List[str]] = None, agg_funcs: Optional[List[str]] = None,
-        reference_date: Optional[pd.Timestamp] = None, include_event_count: bool = False,
+        reference_date: Optional[Timestamp] = None, include_event_count: bool = False,
         include_recency: bool = False, include_tenure: bool = False,
         exclude_columns: Optional[List[str]] = None,
     ) -> DataFrame:
@@ -79,7 +86,7 @@ class TimeWindowAggregator:
             return pd.DataFrame()
 
         df = df.copy()
-        df[self.time_column] = pd.to_datetime(df[self.time_column])
+        df[self.time_column] = to_datetime(df[self.time_column])
         reference_date = self._validate_reference_date(df, reference_date)
         parsed_windows = [TimeWindow.from_string(w) for w in (windows or ["30d"])]
 
@@ -107,13 +114,13 @@ class TimeWindowAggregator:
         result = pd.DataFrame(result_data)
         result.attrs["aggregation_reference_date"] = (
             reference_date.isoformat() if hasattr(reference_date, "isoformat") else str(reference_date))
-        result.attrs["aggregation_timestamp"] = pd.Timestamp.now().isoformat()
+        result.attrs["aggregation_timestamp"] = Timestamp.now().isoformat()
         return result
 
     def _add_value_aggregations(
         self, result_data: Dict, df: DataFrame, entities: np.ndarray,
         windows: List[TimeWindow], value_columns: List[str], agg_funcs: List[str],
-        reference_date: pd.Timestamp,
+        reference_date: Timestamp,
     ) -> None:
         for window in windows:
             for col in value_columns:
@@ -169,9 +176,9 @@ class TimeWindowAggregator:
 
         return feature_columns, value_counts_categories
 
-    def _validate_reference_date(self, df: DataFrame, reference_date: Optional[pd.Timestamp]) -> pd.Timestamp:
+    def _validate_reference_date(self, df: DataFrame, reference_date: Optional[Timestamp]) -> Timestamp:
         data_min, data_max = df[self.time_column].min(), df[self.time_column].max()
-        current_date = pd.Timestamp.now()
+        current_date = Timestamp.now()
 
         if reference_date is None:
             warnings.warn(
@@ -196,16 +203,16 @@ class TimeWindowAggregator:
         return reference_date
 
     def _compute_event_counts(
-        self, df: DataFrame, entities: np.ndarray, window: TimeWindow, reference_date: pd.Timestamp,
+        self, df: DataFrame, entities: np.ndarray, window: TimeWindow, reference_date: Timestamp,
     ) -> np.ndarray:
         filtered_df = self._filter_by_window(df, window, reference_date)
         counts = filtered_df.groupby(self.entity_column).size()
         return np.array([counts.get(e, 0) for e in entities])
 
-    def _filter_by_window(self, df: DataFrame, window: TimeWindow, reference_date: pd.Timestamp) -> DataFrame:
+    def _filter_by_window(self, df: DataFrame, window: TimeWindow, reference_date: Timestamp) -> DataFrame:
         if window.days is None:
             return df
-        cutoff = reference_date - pd.Timedelta(days=window.days)
+        cutoff = reference_date - Timedelta(days=window.days)
         return df[df[self.time_column] >= cutoff]
 
     def _compute_aggregation(
@@ -215,14 +222,14 @@ class TimeWindowAggregator:
         value_column: str,
         agg_func: str,
         window: TimeWindow,
-        reference_date: pd.Timestamp,
+        reference_date: Timestamp,
     ) -> np.ndarray:
         filtered_df = self._filter_by_window(df, window, reference_date)
         if len(filtered_df) == 0:
             default = 0 if agg_func in ["sum", "count", "nunique"] else np.nan
             return np.full(len(entities), default)
 
-        is_numeric = pd.api.types.is_numeric_dtype(df[value_column])
+        is_numeric = is_numeric_dtype(df[value_column])
         if agg_func in CATEGORICAL_AGG_FUNCS:
             return self._compute_categorical_agg(filtered_df, entities, value_column, agg_func)
         elif agg_func in NUMERIC_AGG_FUNCS and not is_numeric:
@@ -288,7 +295,7 @@ class TimeWindowAggregator:
         return np.array([entropy_result.get(e, np.nan) for e in entities])
 
     def _compute_value_counts(
-        self, df: DataFrame, entities: np.ndarray, col: str, window: TimeWindow, reference_date: pd.Timestamp
+        self, df: DataFrame, entities: np.ndarray, col: str, window: TimeWindow, reference_date: Timestamp
     ) -> Dict[str, np.ndarray]:
         filtered_df = self._filter_by_window(df, window, reference_date)
         unique_values = df[col].dropna().unique()
@@ -302,12 +309,12 @@ class TimeWindowAggregator:
                 result[col_name] = np.array([counts.get(e, 0) for e in entities])
         return result
 
-    def _compute_recency(self, df: DataFrame, entities: np.ndarray, reference_date: pd.Timestamp) -> np.ndarray:
+    def _compute_recency(self, df: DataFrame, entities: np.ndarray, reference_date: Timestamp) -> np.ndarray:
         last_dates = df.groupby(self.entity_column)[self.time_column].max()
         days_since_last = (reference_date - last_dates).dt.days
         return np.array([days_since_last.get(e, np.nan) for e in entities])
 
-    def _compute_tenure(self, df: DataFrame, entities: np.ndarray, reference_date: pd.Timestamp) -> np.ndarray:
+    def _compute_tenure(self, df: DataFrame, entities: np.ndarray, reference_date: Timestamp) -> np.ndarray:
         first_dates = df.groupby(self.entity_column)[self.time_column].min()
         days_since_first = (reference_date - first_dates).dt.days
         return np.array([days_since_first.get(e, np.nan) for e in entities])

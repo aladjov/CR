@@ -8,7 +8,7 @@ including duplicate detection, date logic validation, and value range validation
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import DataFrame, pd
+from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype, pd, to_datetime
 from customer_retention.core.components.enums import Severity
 
 
@@ -249,8 +249,8 @@ class DataValidator:
         # Convert to datetime if needed
         df_dates = df[order].copy()
         for col in order:
-            if not pd.api.types.is_datetime64_any_dtype(df_dates[col]):
-                df_dates[col] = pd.to_datetime(df_dates[col], errors='coerce', format='mixed')
+            if not is_datetime64_any_dtype(df_dates[col]):
+                df_dates[col] = to_datetime(df_dates[col], errors='coerce', format='mixed')
 
         # Check sequential ordering
         violations = []

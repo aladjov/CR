@@ -4,7 +4,7 @@ from typing import Optional
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, Series, pd
+from customer_retention.core.compat import DataFrame, Series, to_numeric
 
 
 class EncodingStrategy(str, Enum):
@@ -212,7 +212,7 @@ class CategoricalEncoder:
         if hasattr(self, '_cyclical_mapping') and self._cyclical_mapping is not None:
             numeric = series.map(self._cyclical_mapping)
         else:
-            numeric = pd.to_numeric(series, errors='coerce')
+            numeric = to_numeric(series, errors='coerce')
 
         sin_vals = np.sin(2 * np.pi * numeric / self.period)
         cos_vals = np.cos(2 * np.pi * numeric / self.period)

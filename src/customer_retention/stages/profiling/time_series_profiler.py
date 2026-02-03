@@ -3,7 +3,13 @@ from typing import Optional
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, pd
+from customer_retention.core.compat import (
+    DataFrame,
+    Timestamp,
+    is_datetime64_any_dtype,
+    pd,
+    to_datetime,
+)
 
 
 @dataclass
@@ -161,8 +167,8 @@ def classify_activity_segments(entity_lifecycles: DataFrame) -> ActivitySegmentR
 @dataclass
 class EntityLifecycle:
     entity: str
-    first_event: pd.Timestamp
-    last_event: pd.Timestamp
+    first_event: Timestamp
+    last_event: Timestamp
     duration_days: int
     event_count: int
 
@@ -177,8 +183,8 @@ class TimeSeriesProfile:
     events_per_entity: DistributionStats
     entity_lifecycles: DataFrame
     avg_inter_event_days: Optional[float] = None
-    first_event_date: Optional[pd.Timestamp] = None
-    last_event_date: Optional[pd.Timestamp] = None
+    first_event_date: Optional[Timestamp] = None
+    last_event_date: Optional[Timestamp] = None
 
 
 class TimeSeriesProfiler:
@@ -224,8 +230,8 @@ class TimeSeriesProfiler:
 
     def _prepare_dataframe(self, df: DataFrame) -> DataFrame:
         df = df.copy()
-        if not pd.api.types.is_datetime64_any_dtype(df[self.time_column]):
-            df[self.time_column] = pd.to_datetime(df[self.time_column])
+        if not is_datetime64_any_dtype(df[self.time_column]):
+            df[self.time_column] = to_datetime(df[self.time_column])
         return df
 
     def _compute_entity_lifecycles(self, df: DataFrame) -> DataFrame:

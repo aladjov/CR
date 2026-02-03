@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 import numpy as np
 import shap
 
-from customer_retention.core.compat import DataFrame, Series, pd
+from customer_retention.core.compat import DataFrame, Series, cut
 
 
 @dataclass
@@ -167,19 +167,19 @@ class CohortAnalyzer:
                               bins: List[float] = None) -> Series:
         bins = bins or [0, 90, 365, float("inf")]
         labels = ["New", "Established", "Mature"]
-        return pd.cut(tenure, bins=bins, labels=labels)
+        return cut(tenure, bins=bins, labels=labels)
 
     @staticmethod
     def create_value_cohorts(value: Series,
                              quantiles: List[float] = None) -> Series:
         quantiles = quantiles or [0.33, 0.66]
         q1, q2 = value.quantile(quantiles[0]), value.quantile(quantiles[1])
-        return pd.cut(value, bins=[-float("inf"), q1, q2, float("inf")],
+        return cut(value, bins=[-float("inf"), q1, q2, float("inf")],
                       labels=["Low", "Medium", "High"])
 
     @staticmethod
     def create_activity_cohorts(activity: Series,
                                 thresholds: List[float] = None) -> Series:
         thresholds = thresholds or [5, 15]
-        return pd.cut(activity, bins=[-float("inf"), thresholds[0], thresholds[1], float("inf")],
+        return cut(activity, bins=[-float("inf"), thresholds[0], thresholds[1], float("inf")],
                       labels=["Dormant", "Moderate", "Active"])

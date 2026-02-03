@@ -6,7 +6,7 @@ from typing import Dict, List
 import numpy as np
 from sklearn.metrics import average_precision_score, precision_score, recall_score, roc_auc_score
 
-from customer_retention.core.compat import DataFrame, Series, pd
+from customer_retention.core.compat import DataFrame, Series, cut, pd, qcut
 from customer_retention.core.components.enums import Severity
 
 
@@ -39,9 +39,9 @@ class SegmentPerformanceAnalyzer:
             return pd.Series(["all"] * len(X))
         values = X[segment_column]
         if segment_type == "tenure":
-            return pd.cut(values, bins=[0, 90, 365, np.inf], labels=["new", "established", "mature"])
+            return cut(values, bins=[0, 90, 365, np.inf], labels=["new", "established", "mature"])
         if segment_type == "quantile":
-            return pd.qcut(values, q=3, labels=["low", "medium", "high"], duplicates="drop")
+            return qcut(values, q=3, labels=["low", "medium", "high"], duplicates="drop")
         return Series(["all"] * len(X))
 
     def analyze_performance(self, model, X: DataFrame, y: Series, segments: Series) -> SegmentResult:

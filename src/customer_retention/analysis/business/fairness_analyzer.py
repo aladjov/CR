@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from customer_retention.core.compat import Series, pd
+from customer_retention.core.compat import Series, cut
 
 
 @dataclass
@@ -138,7 +138,7 @@ class FairnessAnalyzer:
             mask = protected == group
             y_t = y_true[mask]
             y_p = y_proba[mask]
-            bins = pd.cut(y_p, bins=10, labels=False)
+            bins = cut(y_p, bins=10, labels=False)
             calibration_error = 0
             for b in range(10):
                 bin_mask = bins == b

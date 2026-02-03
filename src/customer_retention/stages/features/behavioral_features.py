@@ -10,7 +10,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, pd
+from customer_retention.core.compat import DataFrame, cut, to_datetime
 
 
 @dataclass
@@ -238,7 +238,7 @@ class BehavioralFeatureGenerator:
         """Generate recency bucket feature."""
         if self.days_since_last_order_column:
             if self.days_since_last_order_column in df.columns:
-                df["recency_bucket"] = pd.cut(
+                df["recency_bucket"] = cut(
                     df[self.days_since_last_order_column],
                     bins=self.recency_bins,
                     labels=self.recency_labels,
@@ -253,7 +253,7 @@ class BehavioralFeatureGenerator:
         if self.feature_timestamp_column not in df.columns:
             return
 
-        feature_ts = pd.to_datetime(df[self.feature_timestamp_column], format='mixed')
+        feature_ts = to_datetime(df[self.feature_timestamp_column], format='mixed')
         datetime_cols = df.select_dtypes(include=["datetime64"]).columns
 
         for col in datetime_cols:

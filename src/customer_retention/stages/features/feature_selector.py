@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, is_numeric_dtype, pd
+from customer_retention.core.compat import DataFrame, is_numeric_dtype, isna
 
 if TYPE_CHECKING:
     from customer_retention.analysis.auto_explorer.findings import FeatureAvailabilityMetadata
@@ -126,7 +126,7 @@ class FeatureSelector:
                 continue
 
             variance = series.var()
-            if pd.isna(variance) or variance < self.variance_threshold:
+            if isna(variance) or variance < self.variance_threshold:
                 if feature in self.selected_features:
                     self.selected_features.remove(feature)
                     self.dropped_features.append(feature)
