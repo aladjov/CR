@@ -180,6 +180,8 @@ ignore = [
 "tests/core/compat/*.py" = ["F401"]
 # Storage adapters check for optional dependencies
 "src/customer_retention/integrations/adapters/storage/*.py" = ["F401"]
+# Notebooks: cross-cell variables (F821) and try/except availability imports (F401)
+"exploration_notebooks/*.ipynb" = ["F821", "F401"]
 
 [tool.uv]
 # PyTorch CUDA index - used when installing ml-cuda extras
