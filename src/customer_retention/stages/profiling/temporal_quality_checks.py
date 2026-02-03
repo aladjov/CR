@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
-from customer_retention.core.compat import DataFrame, Timestamp, to_datetime, to_pandas
+from customer_retention.core.compat import DataFrame, Timestamp, ensure_datetime_column, safe_to_datetime, to_pandas
 from customer_retention.core.components.enums import Severity
 
 
@@ -38,6 +38,7 @@ class DuplicateEventCheck(TemporalQualityCheck):
         self.time_column = time_column
 
     def run(self, df: DataFrame) -> TemporalQualityResult:
+        df = to_pandas(df)
         if len(df) == 0:
             return self._pass_result("No data to check")
 
@@ -70,11 +71,12 @@ class TemporalGapCheck(TemporalQualityCheck):
         self.max_gap_multiple = max_gap_multiple
 
     def run(self, df: DataFrame) -> TemporalQualityResult:
+        df = to_pandas(df)
         if len(df) < 2:
             return self._pass_result("Insufficient data to check gaps")
 
-        df = to_pandas(df)
-        time_col = to_datetime(df.sort_values(self.time_column)[self.time_column])
+        ensure_datetime_column(df, self.time_column)
+        time_col = df.sort_values(self.time_column)[self.time_column]
         diffs_days = time_col.diff().dropna().dt.total_seconds() / 86400
         expected_days = self.FREQ_TO_DAYS.get(self.expected_frequency, 1)
         threshold_days = expected_days * self.max_gap_multiple
@@ -108,10 +110,11 @@ class FutureDateCheck(TemporalQualityCheck):
         self.reference_date = reference_date or Timestamp.now()
 
     def run(self, df: DataFrame) -> TemporalQualityResult:
+        df = to_pandas(df)
         if len(df) == 0:
             return self._pass_result("No data to check")
 
-        time_col = to_datetime(df[self.time_column])
+        time_col = safe_to_datetime(df[self.time_column])
         future_mask = time_col > self.reference_date
         future_count = future_mask.sum()
 
@@ -138,10 +141,11 @@ class EventOrderCheck(TemporalQualityCheck):
         self.time_column = time_column
 
     def run(self, df: DataFrame) -> TemporalQualityResult:
+        df = to_pandas(df)
         if len(df) < 2:
             return self._pass_result("Insufficient data to check ordering")
 
-        df_check = df.assign(_parsed_time=to_datetime(df[self.time_column]))
+        df_check = df.assign(_parsed_time=safe_to_datetime(df[self.time_column]))
         collision_counts = df_check.groupby([self.entity_column, "_parsed_time"]).size()
         ambiguous = collision_counts[collision_counts > 1]
         ambiguous_count = ambiguous.sum() - len(ambiguous)

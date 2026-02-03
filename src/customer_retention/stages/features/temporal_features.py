@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Union
 
-from customer_retention.core.compat import DataFrame, Series, Timedelta, Timestamp, pd
+from customer_retention.core.compat import DataFrame, Series, Timedelta, Timestamp, pd, safe_to_datetime, to_pandas
 
 
 class ReferenceDateSource(Enum):
@@ -122,19 +122,19 @@ class TemporalFeatureGenerator:
         if not self._is_fitted:
             raise ValueError("Generator not fitted. Call fit() first.")
 
-        result = df.copy()
+        result = to_pandas(df).copy()
         self.generated_features = []
         warnings_list = []
 
         # Get reference date(s) for this transform
         if self.reference_date_source in [ReferenceDateSource.COLUMN, ReferenceDateSource.FEATURE_TIMESTAMP]:
-            ref_dates = pd.to_datetime(df[self.reference_date_column], format='mixed')
+            ref_dates = safe_to_datetime(df[self.reference_date_column])
         else:
             ref_dates = self.reference_date
 
         # Tenure features
         if self.created_column and self.created_column in df.columns:
-            created = pd.to_datetime(df[self.created_column], format='mixed')
+            created = safe_to_datetime(df[self.created_column])
             tenure_days = self._compute_days_diff(ref_dates, created)
             result["tenure_days"] = tenure_days
             self.generated_features.append("tenure_days")
@@ -154,7 +154,7 @@ class TemporalFeatureGenerator:
 
         # Recency features
         if self.last_order_column and self.last_order_column in df.columns:
-            last_order = pd.to_datetime(df[self.last_order_column], format='mixed')
+            last_order = safe_to_datetime(df[self.last_order_column])
             days_since_last = self._compute_days_diff(ref_dates, last_order)
             result["days_since_last_order"] = days_since_last
             self.generated_features.append("days_since_last_order")
@@ -162,8 +162,8 @@ class TemporalFeatureGenerator:
         # Activation features
         if (self.first_order_column and self.first_order_column in df.columns and
                 self.created_column and self.created_column in df.columns):
-            created = pd.to_datetime(df[self.created_column], format='mixed')
-            first_order = pd.to_datetime(df[self.first_order_column], format='mixed')
+            created = safe_to_datetime(df[self.created_column])
+            first_order = safe_to_datetime(df[self.first_order_column])
             days_to_first = self._compute_days_diff(first_order, created)
             result["days_to_first_order"] = days_to_first
             self.generated_features.append("days_to_first_order")
@@ -171,8 +171,8 @@ class TemporalFeatureGenerator:
         # Active period
         if (self.first_order_column and self.first_order_column in df.columns and
                 self.last_order_column and self.last_order_column in df.columns):
-            first_order = pd.to_datetime(df[self.first_order_column], format='mixed')
-            last_order = pd.to_datetime(df[self.last_order_column], format='mixed')
+            first_order = safe_to_datetime(df[self.first_order_column])
+            last_order = safe_to_datetime(df[self.last_order_column])
             active_period = self._compute_days_diff(last_order, first_order)
             result["active_period_days"] = active_period
             self.generated_features.append("active_period_days")
@@ -210,21 +210,21 @@ class TemporalFeatureGenerator:
                 raise ValueError(
                     "date_column must be provided when source is MAX_DATE"
                 )
-            self.reference_date = pd.to_datetime(df[self.date_column], format='mixed').max()
+            self.reference_date = safe_to_datetime(df[self.date_column]).max()
 
         elif self.reference_date_source == ReferenceDateSource.COLUMN:
             if self.reference_date_column is None:
                 raise ValueError(
                     "reference_date_column must be provided when source is COLUMN"
                 )
-            self.reference_date = pd.to_datetime(df[self.reference_date_column], format='mixed')
+            self.reference_date = safe_to_datetime(df[self.reference_date_column])
 
         elif self.reference_date_source == ReferenceDateSource.FEATURE_TIMESTAMP:
             if "feature_timestamp" not in df.columns:
                 raise ValueError(
                     "feature_timestamp column required when source is FEATURE_TIMESTAMP"
                 )
-            self.reference_date = pd.to_datetime(df["feature_timestamp"], format='mixed')
+            self.reference_date = safe_to_datetime(df["feature_timestamp"])
             self.reference_date_column = "feature_timestamp"
 
     def _compute_days_diff(

@@ -6,9 +6,8 @@ import numpy as np
 from customer_retention.core.compat import (
     DataFrame,
     Timestamp,
-    is_datetime64_any_dtype,
+    ensure_datetime_column,
     pd,
-    to_datetime,
     to_pandas,
 )
 
@@ -196,11 +195,12 @@ class TimeSeriesProfiler:
         self.time_column = time_column
 
     def profile(self, df: DataFrame) -> TimeSeriesProfile:
+        df = self._prepare_dataframe(df)
+
         if len(df) == 0:
             return self._empty_profile()
 
         self._validate_columns(df)
-        df = self._prepare_dataframe(df)
 
         total_events = len(df)
         unique_entities = df[self.entity_column].nunique()
@@ -231,8 +231,7 @@ class TimeSeriesProfiler:
 
     def _prepare_dataframe(self, df: DataFrame) -> DataFrame:
         df = to_pandas(df).copy()
-        if not is_datetime64_any_dtype(df[self.time_column]):
-            df[self.time_column] = to_datetime(df[self.time_column])
+        ensure_datetime_column(df, self.time_column)
         return df
 
     def _compute_entity_lifecycles(self, df: DataFrame) -> DataFrame:

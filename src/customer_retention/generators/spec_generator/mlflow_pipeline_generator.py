@@ -395,6 +395,7 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
         code_lines = [
             "def engineer_features(df: pd.DataFrame) -> pd.DataFrame:",
             '    """Engineer features based on exploration findings."""',
+            "    from customer_retention.core.compat import safe_to_datetime",
             "    df = df.copy()",
             "    new_features = []",
             "",
@@ -411,7 +412,7 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
             code_lines.extend([
                 f"    # Datetime features from {col_name}",
                 f"    if '{col_name}' in df.columns:",
-                f"        df['{col_name}'] = pd.to_datetime(df['{col_name}'], errors='coerce')",
+                f"        df['{col_name}'] = safe_to_datetime(df['{col_name}'], errors='coerce')",
                 "",
             ])
 

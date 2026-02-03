@@ -3,7 +3,14 @@ from typing import Optional, Union
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, Series, Timestamp, is_datetime64_any_dtype, pd
+from customer_retention.core.compat import (
+    DataFrame,
+    Series,
+    Timestamp,
+    ensure_pandas_series,
+    is_datetime64_any_dtype,
+    safe_to_datetime,
+)
 
 
 @dataclass
@@ -92,6 +99,7 @@ class DatetimeTransformer:
         )
 
     def _ensure_datetime(self, series: Series) -> Series:
+        series = ensure_pandas_series(series)
         if is_datetime64_any_dtype(series):
             return series
-        return pd.to_datetime(series, errors='coerce', format='mixed')
+        return safe_to_datetime(series, errors='coerce')

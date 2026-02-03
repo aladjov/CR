@@ -290,6 +290,7 @@ from pathlib import Path
 {% if ops %}
 from customer_retention.transforms import {{ ops | sort | join(', ') }}
 {% endif %}
+from customer_retention.core.compat import ensure_datetime_column, safe_to_datetime
 from config import SOURCES, get_bronze_path{{ ', RAW_SOURCES' if config.lifecycle else '' }}
 
 SOURCE_NAME = "{{ source }}"
@@ -356,7 +357,7 @@ def _load_raw_events():
 {% if config.lifecycle.include_recency_bucket %}
 
 def add_recency_tenure(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
-    raw_df[TIME_COLUMN] = pd.to_datetime(raw_df[TIME_COLUMN])
+    ensure_datetime_column(raw_df, TIME_COLUMN)
     reference_date = raw_df[TIME_COLUMN].max()
     entity_stats = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].agg(["min", "max"])
     entity_stats["days_since_last"] = (reference_date - entity_stats["max"]).dt.days
@@ -398,7 +399,7 @@ def add_lifecycle_quadrant(df: pd.DataFrame) -> pd.DataFrame:
 {% if config.lifecycle.include_cyclical_features %}
 
 def add_cyclical_features(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
-    raw_df[TIME_COLUMN] = pd.to_datetime(raw_df[TIME_COLUMN])
+    ensure_datetime_column(raw_df, TIME_COLUMN)
     mean_dow = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].apply(lambda x: x.dt.dayofweek.mean())
     df = df.merge(mean_dow.rename("mean_dow"), left_on=ENTITY_COLUMN, right_index=True, how="left")
     df["dow_sin"] = np.sin(2 * np.pi * df["mean_dow"] / 7)
@@ -1447,6 +1448,7 @@ from pathlib import Path
 {% if ops %}
 from customer_retention.transforms import {{ ops | sort | join(', ') }}
 {% endif %}
+from customer_retention.core.compat import ensure_datetime_column, safe_to_datetime
 from config import PRODUCTION_DIR, RAW_SOURCES, TARGET_COLUMN
 
 SOURCE_NAME = "{{ source }}"
@@ -1502,7 +1504,7 @@ AGG_FUNCS = {{ config.aggregation.agg_funcs }}
 
 def apply_reshaping(df: pd.DataFrame) -> pd.DataFrame:
 {% if config.aggregation %}
-    df[TIME_COLUMN] = pd.to_datetime(df[TIME_COLUMN])
+    ensure_datetime_column(df, TIME_COLUMN)
     reference_date = df[TIME_COLUMN].max()
     result = df.groupby(ENTITY_COLUMN).agg("first")[[]]
     if TARGET_COLUMN in df.columns:
@@ -1535,7 +1537,7 @@ def _load_raw_events():
 {% if config.lifecycle.include_recency_bucket %}
 
 def add_recency_tenure(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
-    raw_df[TIME_COLUMN] = pd.to_datetime(raw_df[TIME_COLUMN])
+    ensure_datetime_column(raw_df, TIME_COLUMN)
     reference_date = raw_df[TIME_COLUMN].max()
     entity_stats = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].agg(["min", "max"])
     entity_stats["days_since_last"] = (reference_date - entity_stats["max"]).dt.days
@@ -1577,7 +1579,7 @@ def add_lifecycle_quadrant(df: pd.DataFrame) -> pd.DataFrame:
 {% if config.lifecycle.include_cyclical_features %}
 
 def add_cyclical_features(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
-    raw_df[TIME_COLUMN] = pd.to_datetime(raw_df[TIME_COLUMN])
+    ensure_datetime_column(raw_df, TIME_COLUMN)
     mean_dow = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].apply(lambda x: x.dt.dayofweek.mean())
     df = df.merge(mean_dow.rename("mean_dow"), left_on=ENTITY_COLUMN, right_index=True, how="left")
     df["dow_sin"] = np.sin(2 * np.pi * df["mean_dow"] / 7)

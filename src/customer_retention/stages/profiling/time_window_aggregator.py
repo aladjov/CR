@@ -10,9 +10,10 @@ from customer_retention.core.compat import (
     DataFrame,
     Timedelta,
     Timestamp,
+    ensure_datetime_column,
     is_numeric_dtype,
     pd,
-    to_datetime,
+    to_pandas,
 )
 
 
@@ -82,11 +83,12 @@ class TimeWindowAggregator:
         include_recency: bool = False, include_tenure: bool = False,
         exclude_columns: Optional[List[str]] = None,
     ) -> DataFrame:
+        df = to_pandas(df)
         if len(df) == 0:
             return pd.DataFrame()
 
         df = df.copy()
-        df[self.time_column] = to_datetime(df[self.time_column])
+        ensure_datetime_column(df, self.time_column)
         reference_date = self._validate_reference_date(df, reference_date)
         parsed_windows = [TimeWindow.from_string(w) for w in (windows or ["30d"])]
 

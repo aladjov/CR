@@ -5,7 +5,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-from customer_retention.core.compat import DataFrame, Series, ensure_pandas_series, to_pandas
+from customer_retention.core.compat import DataFrame, Series, ensure_pandas_series, safe_to_datetime, to_pandas
 
 from .number_formatter import NumberFormatter
 
@@ -532,9 +532,8 @@ class ChartBuilder:
         dates: Series,
         title: Optional[str] = None,
     ) -> go.Figure:
-        import pandas as pd
         dates = ensure_pandas_series(dates)
-        parsed = pd.to_datetime(dates, errors="coerce").dropna()
+        parsed = safe_to_datetime(dates, errors="coerce").dropna()
 
         if len(parsed) == 0:
             fig = go.Figure()
@@ -1029,7 +1028,7 @@ class ChartBuilder:
         """
         import pandas as pd
         dates = ensure_pandas_series(dates)
-        parsed = pd.to_datetime(dates, errors="coerce")
+        parsed = safe_to_datetime(dates, errors="coerce")
 
         if values is not None:
             values = ensure_pandas_series(values)
@@ -1078,7 +1077,7 @@ class ChartBuilder:
         """Create a month x day-of-week heatmap for pattern discovery."""
         import pandas as pd
         dates = ensure_pandas_series(dates)
-        parsed = pd.to_datetime(dates, errors="coerce").dropna()
+        parsed = safe_to_datetime(dates, errors="coerce").dropna()
 
         if values is not None:
             values = ensure_pandas_series(values)
@@ -1127,7 +1126,7 @@ class ChartBuilder:
         dates = ensure_pandas_series(dates)
         values = ensure_pandas_series(values)
 
-        df = pd.DataFrame({"date": pd.to_datetime(dates), "value": values}).dropna()
+        df = pd.DataFrame({"date": safe_to_datetime(dates), "value": values}).dropna()
         df = df.sort_values("date")
 
         df["rolling_mean"] = df["value"].rolling(window=window, center=True, min_periods=1).mean()
@@ -2222,7 +2221,7 @@ class ChartBuilder:
         import pandas as pd
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            dates = pd.to_datetime(series, errors='coerce').dropna()
+            dates = safe_to_datetime(pd.Series(series), errors='coerce').dropna()
         if len(dates) == 0:
             return
 

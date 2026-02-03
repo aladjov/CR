@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from customer_retention.core.compat import DataFrame
+from customer_retention.core.compat import DataFrame, ensure_datetime_column, to_pandas
 
 
 @dataclass
@@ -216,12 +216,13 @@ class SparklineDataBuilder:
         self.freq = freq
 
     def build(self, df: DataFrame, columns: List[str]) -> Tuple[List[SparklineData], bool]:
-        import pandas as pd
+        df = to_pandas(df)
         has_target = self.target_column is not None and self.target_column in df.columns
         if has_target:
             validate_not_event_level(df, self.entity_column, self.target_column)
         df_work = self._prepare_working_df(df, has_target)
-        df_work['_period'] = pd.to_datetime(df_work[self.time_column]).dt.to_period(self.freq).dt.start_time
+        ensure_datetime_column(df_work, self.time_column)
+        df_work['_period'] = df_work[self.time_column].dt.to_period(self.freq).dt.start_time
         results = [self._build_sparkline_for_column(df_work, col, has_target)
                    for col in columns if col in df_work.columns]
         return results, has_target

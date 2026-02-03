@@ -147,6 +147,54 @@ def is_float_dtype(arr_or_dtype: Any) -> bool:
     return _pandas.api.types.is_float_dtype(arr_or_dtype)
 
 
+def _infer_epoch_unit(value: int) -> str:
+    """Infer the epoch unit from a representative integer timestamp value.
+
+    Spark LongType timestamps become int64 after ``to_pandas()``.  The bare
+    ``pd.to_datetime()`` call assumes nanoseconds for large integers, which
+    silently produces wrong dates when the source used seconds or milliseconds.
+    This helper picks the right ``unit`` based on magnitude.
+    """
+    abs_val = abs(int(value))
+    if abs_val > 1e17:
+        return "ns"
+    if abs_val > 1e14:
+        return "us"
+    if abs_val > 1e11:
+        return "ms"
+    return "s"
+
+
+def safe_to_datetime(series: Any, **kwargs: Any) -> _pandas.Series:
+    """Convert a Series to datetime, handling Spark LongType epoch integers.
+
+    Like ``pd.to_datetime`` but automatically detects integer epoch columns
+    and passes the correct ``unit`` parameter.  Any extra *kwargs* are
+    forwarded to ``pd.to_datetime``.
+    """
+    series = ensure_pandas_series(series)
+    if _pandas.api.types.is_datetime64_any_dtype(series):
+        return series
+    if _pandas.api.types.is_integer_dtype(series):
+        non_null = series.dropna()
+        if len(non_null) > 0:
+            unit = _infer_epoch_unit(non_null.iloc[0])
+            return _pandas.to_datetime(series, unit=unit, **kwargs)
+    return _pandas.to_datetime(series, **kwargs)
+
+
+def ensure_datetime_column(df: _pandas.DataFrame, column: str) -> _pandas.DataFrame:
+    """Ensure *column* in a **pandas** DataFrame is ``datetime64``.
+
+    Call this after ``to_pandas()`` to safely convert columns that may have
+    arrived as int64 epoch values from Spark.  Returns the DataFrame
+    (modified in-place).
+    """
+    if not _pandas.api.types.is_datetime64_any_dtype(df[column]):
+        df[column] = safe_to_datetime(df[column])
+    return df
+
+
 class PandasCompat:
     @staticmethod
     def value_counts_normalize(series: Any, normalize: bool = False) -> Any:
@@ -208,6 +256,8 @@ __all__ = [
     "is_notebook",
     "get_display_function",
     "get_dbutils",
+    "safe_to_datetime",
+    "ensure_datetime_column",
     "ops",
     "DataOps",
 ]
