@@ -6,6 +6,7 @@ import pytest
 
 try:
     import deltalake
+
     DELTA_AVAILABLE = True
 except ImportError:
     DELTA_AVAILABLE = False
@@ -16,14 +17,17 @@ requires_delta = pytest.mark.skipif(not DELTA_AVAILABLE, reason="deltalake not i
 class TestFeatureStoreAdapterInterface:
     def test_feature_store_adapter_is_abstract(self):
         from customer_retention.integrations.adapters.feature_store import FeatureStoreAdapter
+
         assert issubclass(FeatureStoreAdapter, ABC)
 
     def test_local_feature_store_implements_interface(self):
         from customer_retention.integrations.adapters.feature_store import FeatureStoreAdapter, LocalFeatureStore
+
         assert issubclass(LocalFeatureStore, FeatureStoreAdapter)
 
     def test_databricks_feature_store_implements_interface(self):
         from customer_retention.integrations.adapters.feature_store import DatabricksFeatureStore, FeatureStoreAdapter
+
         assert issubclass(DatabricksFeatureStore, FeatureStoreAdapter)
 
 
@@ -32,6 +36,7 @@ class TestLocalFeatureStoreCreateTable:
     def test_create_table_returns_adapter_result(self, tmp_path):
         from customer_retention.integrations.adapters.base import AdapterResult
         from customer_retention.integrations.adapters.feature_store import LocalFeatureStore
+
         store = LocalFeatureStore(base_path=str(tmp_path))
         result = store.create_table("test_features", schema={"id": "int", "feature1": "float"}, primary_keys=["id"])
         assert isinstance(result, AdapterResult)
@@ -39,6 +44,7 @@ class TestLocalFeatureStoreCreateTable:
 
     def test_create_table_creates_metadata(self, tmp_path):
         from customer_retention.integrations.adapters.feature_store import LocalFeatureStore
+
         store = LocalFeatureStore(base_path=str(tmp_path))
         store.create_table("test_features", schema={"id": "int"}, primary_keys=["id"])
         assert (Path(tmp_path) / "registry.json").exists()
@@ -48,6 +54,7 @@ class TestLocalFeatureStoreCreateTable:
 class TestLocalFeatureStoreWriteRead:
     def test_write_table_stores_data(self, tmp_path):
         from customer_retention.integrations.adapters.feature_store import LocalFeatureStore
+
         store = LocalFeatureStore(base_path=str(tmp_path))
         store.create_table("features", schema={"id": "int", "value": "float"}, primary_keys=["id"])
         df = pd.DataFrame({"id": [1, 2], "value": [1.5, 2.5]})
@@ -56,6 +63,7 @@ class TestLocalFeatureStoreWriteRead:
 
     def test_read_table_returns_dataframe(self, tmp_path):
         from customer_retention.integrations.adapters.feature_store import LocalFeatureStore
+
         store = LocalFeatureStore(base_path=str(tmp_path))
         store.create_table("features", schema={"id": "int", "value": "float"}, primary_keys=["id"])
         df = pd.DataFrame({"id": [1, 2], "value": [1.5, 2.5]})
@@ -66,6 +74,7 @@ class TestLocalFeatureStoreWriteRead:
 
     def test_write_merge_mode_updates(self, tmp_path):
         from customer_retention.integrations.adapters.feature_store import LocalFeatureStore
+
         store = LocalFeatureStore(base_path=str(tmp_path))
         store.create_table("features", schema={"id": "int", "value": "float"}, primary_keys=["id"])
         df1 = pd.DataFrame({"id": [1, 2], "value": [1.0, 2.0]})
@@ -80,12 +89,14 @@ class TestLocalFeatureStoreWriteRead:
 class TestLocalFeatureStoreListTables:
     def test_list_tables_returns_list(self, tmp_path):
         from customer_retention.integrations.adapters.feature_store import LocalFeatureStore
+
         store = LocalFeatureStore(base_path=str(tmp_path))
         tables = store.list_tables()
         assert isinstance(tables, list)
 
     def test_list_tables_includes_created_tables(self, tmp_path):
         from customer_retention.integrations.adapters.feature_store import LocalFeatureStore
+
         store = LocalFeatureStore(base_path=str(tmp_path))
         store.create_table("table1", schema={"id": "int"}, primary_keys=["id"])
         store.create_table("table2", schema={"id": "int"}, primary_keys=["id"])
@@ -98,6 +109,7 @@ class TestLocalFeatureStoreListTables:
 class TestLocalFeatureStoreMetadata:
     def test_get_table_metadata_returns_dict(self, tmp_path):
         from customer_retention.integrations.adapters.feature_store import LocalFeatureStore
+
         store = LocalFeatureStore(base_path=str(tmp_path))
         store.create_table("features", schema={"id": "int"}, primary_keys=["id"])
         metadata = store.get_table_metadata("features")
@@ -110,14 +122,52 @@ class TestDatabricksFeatureStoreMocked:
     def test_databricks_store_requires_spark(self):
         from customer_retention.core.compat.detection import is_spark_available
         from customer_retention.integrations.adapters.feature_store import DatabricksFeatureStore
+
         if not is_spark_available():
             with pytest.raises(ImportError):
                 DatabricksFeatureStore()
 
 
+class TestDatabricksFeatureStoreMergeOnly:
+    def test_write_table_with_merge_succeeds(self):
+        from customer_retention.integrations.adapters.feature_store.databricks import _validate_write_mode
+
+        _validate_write_mode("merge")
+
+    def test_write_table_with_overwrite_raises_value_error(self):
+        from customer_retention.integrations.adapters.feature_store.databricks import _validate_write_mode
+
+        with pytest.raises(ValueError, match="mode='merge'"):
+            _validate_write_mode("overwrite")
+
+
+class TestDatabricksFeatureStoreTimeseries:
+    def test_create_table_signature_accepts_timeseries_column(self):
+        import inspect
+
+        from customer_retention.integrations.adapters.feature_store import DatabricksFeatureStore
+
+        sig = inspect.signature(DatabricksFeatureStore.create_table)
+        assert "timeseries_column" in sig.parameters
+
+    def test_feature_view_config_has_timeseries_column(self):
+        from customer_retention.integrations.adapters.feature_store import FeatureViewConfig
+
+        config = FeatureViewConfig(name="test", entity_key="id", features=["f1"], timeseries_column="event_ts")
+        assert config.timeseries_column == "event_ts"
+
+
+class TestDatabricksFeatureStoreImportFallback:
+    def test_import_function_exists(self):
+        from customer_retention.integrations.adapters.feature_store.databricks import _import_feature_engineering_client
+
+        assert callable(_import_feature_engineering_client)
+
+
 class TestFeatureViewConfig:
     def test_feature_view_config_creation(self):
         from customer_retention.integrations.adapters.feature_store import FeatureViewConfig
+
         config = FeatureViewConfig(name="test_view", entity_key="customer_id", features=["feat1", "feat2"])
         assert config.name == "test_view"
         assert config.entity_key == "customer_id"
@@ -127,6 +177,7 @@ class TestFeatureViewConfig:
 
     def test_feature_view_config_with_optional_fields(self):
         from customer_retention.integrations.adapters.feature_store import FeatureViewConfig
+
         config = FeatureViewConfig(name="test_view", entity_key="id", features=["f1"], ttl_days=7, tags={"env": "prod"})
         assert config.ttl_days == 7
         assert config.tags == {"env": "prod"}
@@ -134,6 +185,7 @@ class TestFeatureViewConfig:
 
 try:
     import feast
+
     FEAST_AVAILABLE = True
 except ImportError:
     FEAST_AVAILABLE = False
@@ -144,38 +196,46 @@ requires_feast = pytest.mark.skipif(not FEAST_AVAILABLE, reason="feast not insta
 class TestFeastAdapterInterface:
     def test_feast_adapter_implements_interface(self):
         from customer_retention.integrations.adapters.feature_store import FeastAdapter, FeatureStoreAdapter
+
         assert issubclass(FeastAdapter, FeatureStoreAdapter)
 
     def test_feast_adapter_has_register_feature_view(self):
         from customer_retention.integrations.adapters.feature_store import FeastAdapter
+
         assert hasattr(FeastAdapter, "register_feature_view")
 
     def test_feast_adapter_has_get_historical_features(self):
         from customer_retention.integrations.adapters.feature_store import FeastAdapter
+
         assert hasattr(FeastAdapter, "get_historical_features")
 
     def test_feast_adapter_has_materialize(self):
         from customer_retention.integrations.adapters.feature_store import FeastAdapter
+
         assert hasattr(FeastAdapter, "materialize")
 
     def test_feast_adapter_has_get_online_features(self):
         from customer_retention.integrations.adapters.feature_store import FeastAdapter
+
         assert hasattr(FeastAdapter, "get_online_features")
 
 
 class TestFeastAdapterInit:
     def test_lazy_store_initialization(self, tmp_path):
         from customer_retention.integrations.adapters.feature_store import FeastAdapter
+
         adapter = FeastAdapter(repo_path=str(tmp_path))
         assert adapter._store is None
 
     def test_default_repo_path(self):
         from customer_retention.integrations.adapters.feature_store import FeastAdapter
+
         adapter = FeastAdapter()
         assert adapter._repo_path == "./feature_store/feature_repo"
 
     def test_custom_repo_path(self, tmp_path):
         from customer_retention.integrations.adapters.feature_store import FeastAdapter
+
         adapter = FeastAdapter(repo_path=str(tmp_path / "custom"))
         assert adapter._repo_path == str(tmp_path / "custom")
 
@@ -186,6 +246,7 @@ class TestFeastAdapterRegisterFeatureView:
         from unittest.mock import MagicMock
 
         from customer_retention.integrations.adapters.feature_store import FeastAdapter, FeatureViewConfig
+
         adapter = FeastAdapter(repo_path=str(tmp_path))
         adapter._store = MagicMock()
         config = FeatureViewConfig(name="test_view", entity_key="customer_id", features=["feat1"])
@@ -197,6 +258,7 @@ class TestFeastAdapterRegisterFeatureView:
         from unittest.mock import MagicMock
 
         from customer_retention.integrations.adapters.feature_store import FeastAdapter, FeatureViewConfig
+
         adapter = FeastAdapter(repo_path=str(tmp_path))
         adapter._store = MagicMock()
         config = FeatureViewConfig(name="test_view", entity_key="id", features=["f1"], ttl_days=30)
@@ -211,6 +273,7 @@ class TestFeastAdapterHistoricalFeatures:
         from unittest.mock import MagicMock
 
         from customer_retention.integrations.adapters.feature_store import FeastAdapter
+
         adapter = FeastAdapter(repo_path=str(tmp_path))
         mock_result = MagicMock()
         mock_result.to_df.return_value = pd.DataFrame({"customer_id": [1], "feat1": [1.0]})
@@ -224,6 +287,7 @@ class TestFeastAdapterHistoricalFeatures:
         from unittest.mock import MagicMock
 
         from customer_retention.integrations.adapters.feature_store import FeastAdapter
+
         adapter = FeastAdapter(repo_path=str(tmp_path))
         mock_result = MagicMock()
         mock_result.to_df.return_value = pd.DataFrame()
@@ -240,6 +304,7 @@ class TestFeastAdapterMaterialize:
         from unittest.mock import MagicMock
 
         from customer_retention.integrations.adapters.feature_store import FeastAdapter
+
         adapter = FeastAdapter(repo_path=str(tmp_path))
         adapter._store = MagicMock()
         adapter.materialize(["view1"], "2024-01-01", "2024-01-31")
@@ -252,6 +317,7 @@ class TestFeastAdapterOnlineFeatures:
         from unittest.mock import MagicMock
 
         from customer_retention.integrations.adapters.feature_store import FeastAdapter
+
         adapter = FeastAdapter(repo_path=str(tmp_path))
         mock_result = MagicMock()
         mock_result.to_dict.return_value = {"customer_id": [1], "feat1": [1.0]}

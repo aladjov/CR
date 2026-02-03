@@ -10,6 +10,7 @@ from customer_retention.core.compat import (
     Timestamp,
     cut,
     ensure_datetime_column,
+    native_pd,
     pd,
     safe_to_datetime,
     to_pandas,
@@ -316,7 +317,7 @@ def _diagnose_anomaly_pattern(
     entity_first = df.groupby(entity_column)[time_column].min()
     entity_last = df.groupby(entity_column)[time_column].max()
     tenure = (entity_last - entity_first).dt.days
-    tenure_by_target = pd.DataFrame({"target": entity_target, "tenure": tenure})
+    tenure_by_target = native_pd.DataFrame({"target": entity_target, "tenure": tenure})
     retained_tenure = tenure_by_target[tenure_by_target["target"] == 1]["tenure"]
     churned_tenure = tenure_by_target[tenure_by_target["target"] == 0]["tenure"]
     retained_median_tenure = float(retained_tenure.median()) if len(retained_tenure) > 0 else None
@@ -597,7 +598,7 @@ class TemporalPatternAnalyzer:
 
     def analyze_cohorts(self, df: DataFrame, entity_column: str, cohort_column: str, target_column: Optional[str] = None, period: str = "M") -> DataFrame:
         if len(df) == 0:
-            return pd.DataFrame()
+            return native_pd.DataFrame()
 
         df_copy = to_pandas(df).copy()
         ensure_datetime_column(df_copy, cohort_column)
@@ -638,7 +639,7 @@ class TemporalPatternAnalyzer:
         target_correlation = None
         if target_column and target_column in df.columns:
             entity_target = df.groupby(entity_column)[target_column].first()
-            combined = pd.DataFrame({"recency": recency_days, "target": entity_target}).dropna()
+            combined = native_pd.DataFrame({"recency": recency_days, "target": entity_target}).dropna()
 
             if len(combined) > 2:
                 corr, _ = stats.pearsonr(combined["recency"], combined["target"])

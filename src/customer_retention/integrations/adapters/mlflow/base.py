@@ -30,3 +30,11 @@ class MLflowAdapter(ABC):
     @abstractmethod
     def transition_stage(self, model_name: str, version: str, stage: str) -> None:
         pass
+
+    @abstractmethod
+    def set_alias(self, model_name: str, alias: str, version: str) -> None:
+        pass
+
+    @abstractmethod
+    def get_model_by_alias(self, model_name: str, alias: str) -> Any:
+        pass

@@ -7,6 +7,7 @@ from customer_retention.core.compat import (
     DataFrame,
     Timestamp,
     ensure_datetime_column,
+    native_pd,
     pd,
     to_pandas,
 )
@@ -95,7 +96,7 @@ def classify_lifecycle_quadrants(entity_lifecycles: DataFrame) -> LifecycleQuadr
         lifecycles=lc,
         tenure_threshold=tenure_threshold,
         intensity_threshold=intensity_threshold,
-        recommendations=pd.DataFrame(rows),
+        recommendations=native_pd.DataFrame(rows),
     )
 
 
@@ -160,7 +161,7 @@ def classify_activity_segments(entity_lifecycles: DataFrame) -> ActivitySegmentR
         lifecycles=lc,
         q25_threshold=q25,
         q75_threshold=q75,
-        recommendations=pd.DataFrame(rows),
+        recommendations=native_pd.DataFrame(rows),
     )
 
 
@@ -237,7 +238,7 @@ class TimeSeriesProfiler:
     def _compute_entity_lifecycles(self, df: DataFrame) -> DataFrame:
         grouped = df.groupby(self.entity_column)[self.time_column]
 
-        lifecycles = pd.DataFrame({
+        lifecycles = native_pd.DataFrame({
             "entity": grouped.first().index.tolist(),
             "first_event": grouped.min().values,
             "last_event": grouped.max().values,
@@ -302,7 +303,7 @@ class TimeSeriesProfiler:
             events_per_entity=DistributionStats(
                 min=0, max=0, mean=0, median=0, std=0, q25=0, q75=0
             ),
-            entity_lifecycles=pd.DataFrame(columns=[
+            entity_lifecycles=native_pd.DataFrame(columns=[
                 "entity", "first_event", "last_event", "duration_days", "event_count"
             ]),
             avg_inter_event_days=None,

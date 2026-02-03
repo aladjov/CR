@@ -34,11 +34,13 @@ It serves two audiences:
 
 ## Quick Start
 
-### 1. Install
+### 1. Install (local)
 
 ```bash
 pip install "churnkit[ml]"
 ```
+
+For **Databricks**, see the [Databricks Installation](https://github.com/aladjov/CR/wiki/Databricks-Installation) guide.
 
 ### 2. Bootstrap notebooks into your project
 
@@ -70,6 +72,7 @@ Detailed documentation lives in the [Wiki](https://github.com/aladjov/CR/wiki):
 | Topic | Wiki Page |
 |-------|-----------|
 | Installation options & environment setup | [Getting Started](https://github.com/aladjov/CR/wiki/Getting-Started) |
+| Databricks install & `databricks_init()` setup | [Databricks Installation](https://github.com/aladjov/CR/wiki/Databricks-Installation) |
 | Medallion architecture & system design | [Architecture](https://github.com/aladjov/CR/wiki/Architecture) |
 | Notebook workflow & iteration tracking | [Exploration Loop](https://github.com/aladjov/CR/wiki/Exploration-Loop) |
 | Leakage-safe temporal data preparation | [Temporal Framework](https://github.com/aladjov/CR/wiki/Temporal-Framework) |

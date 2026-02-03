@@ -5,6 +5,7 @@ from .base import MLflowAdapter
 try:
     import mlflow
     from mlflow.tracking import MlflowClient
+
     MLFLOW_AVAILABLE = True
 except ImportError:
     MLFLOW_AVAILABLE = False
@@ -48,3 +49,9 @@ class LocalMLflow(MLflowAdapter):
 
     def transition_stage(self, model_name: str, version: str, stage: str) -> None:
         self._client.transition_model_version_stage(name=model_name, version=version, stage=stage)
+
+    def set_alias(self, model_name: str, alias: str, version: str) -> None:
+        self._client.set_registered_model_alias(name=model_name, alias=alias, version=version)
+
+    def get_model_by_alias(self, model_name: str, alias: str) -> Any:
+        return self._client.get_model_version_by_alias(name=model_name, alias=alias)

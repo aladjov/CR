@@ -17,6 +17,7 @@ class FeatureViewConfig:
     tags: Dict[str, str] = field(default_factory=dict)
     cutoff_date: Optional[datetime] = None
     data_hash: Optional[str] = None
+    timeseries_column: Optional[str] = None
 
 
 class FeatureStoreAdapter(ABC):

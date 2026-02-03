@@ -34,4 +34,14 @@ __all__ = [
     "is_spark_available",
     "is_databricks",
     "is_notebook",
+    # Databricks initialization
+    "databricks_init",
 ]
+
+
+def __getattr__(name: str):
+    if name == "databricks_init":
+        from .integrations.databricks_init import databricks_init
+
+        return databricks_init
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

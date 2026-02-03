@@ -247,6 +247,17 @@ class TestTransformerManifest:
 
 
 class TestTransformerManagerMLflowIntegration:
+    @pytest.fixture(autouse=True)
+    def _reset_mlflow(self, tmp_path):
+        """Reset global mlflow state that earlier tests may have polluted."""
+        import mlflow
+
+        mlflow.end_run()
+        mlflow.set_tracking_uri(f"file://{tmp_path}/mlruns")
+        mlflow.set_experiment("Default")
+        yield
+        mlflow.end_run()
+
     def test_log_to_mlflow_creates_artifacts(self, sample_df, tmp_path, monkeypatch):
         import mlflow
 

@@ -7,9 +7,12 @@ from .base import MLflowAdapter
 try:
     import mlflow
     from mlflow.tracking import MlflowClient
+
     MLFLOW_AVAILABLE = True
+    MLFLOW_MAJOR_VERSION = int(mlflow.__version__.split(".")[0])
 except ImportError:
     MLFLOW_AVAILABLE = False
+    MLFLOW_MAJOR_VERSION = 0
 
 
 class DatabricksMLflow(MLflowAdapter):
@@ -18,7 +21,8 @@ class DatabricksMLflow(MLflowAdapter):
             raise ImportError("PySpark required for DatabricksMLflow")
         if not MLFLOW_AVAILABLE:
             raise ImportError("mlflow package required")
-        mlflow.set_registry_uri(registry_uri)
+        if MLFLOW_MAJOR_VERSION < 3:
+            mlflow.set_registry_uri(registry_uri)
         self.registry_uri = registry_uri
         self._client = MlflowClient()
         self._run_id = None
@@ -44,7 +48,10 @@ class DatabricksMLflow(MLflowAdapter):
         mlflow.log_metrics(metrics)
 
     def log_model(self, model: Any, artifact_path: str, registered_name: Optional[str] = None) -> str:
-        info = mlflow.sklearn.log_model(model, artifact_path, registered_model_name=registered_name)
+        if MLFLOW_MAJOR_VERSION >= 3:
+            info = mlflow.sklearn.log_model(model, name=artifact_path, registered_model_name=registered_name)
+        else:
+            info = mlflow.sklearn.log_model(model, artifact_path, registered_model_name=registered_name)
         return info.model_uri
 
     def load_model(self, model_uri: str) -> Any:
@@ -52,3 +59,9 @@ class DatabricksMLflow(MLflowAdapter):
 
     def transition_stage(self, model_name: str, version: str, stage: str) -> None:
         self._client.set_model_version_tag(name=model_name, version=version, key="stage", value=stage)
+
+    def set_alias(self, model_name: str, alias: str, version: str) -> None:
+        self._client.set_registered_model_alias(name=model_name, alias=alias, version=version)
+
+    def get_model_by_alias(self, model_name: str, alias: str) -> Any:
+        return self._client.get_model_version_by_alias(name=model_name, alias=alias)

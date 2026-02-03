@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from scipy import stats
 
-from customer_retention.core.compat import DataFrame, ensure_datetime_column, pd, qcut, to_pandas
+from customer_retention.core.compat import DataFrame, ensure_datetime_column, native_pd, pd, qcut, to_pandas
 from customer_retention.core.utils import compute_effect_size
 
 
@@ -642,7 +642,7 @@ class TemporalFeatureAnalyzer:
             )
 
     def _calculate_iv(self, feature: pd.Series, target: pd.Series, bins: int = 10) -> float:
-        df_iv = pd.DataFrame({"feature": feature, "target": target}).dropna()
+        df_iv = native_pd.DataFrame({"feature": feature, "target": target}).dropna()
         if len(df_iv) < bins * 2:
             return 0.0
         try:
@@ -666,7 +666,7 @@ class TemporalFeatureAnalyzer:
         return float(grouped["iv"].sum())
 
     def _calculate_ks(self, feature: pd.Series, target: pd.Series) -> Tuple[float, float]:
-        df_ks = pd.DataFrame({"feature": feature, "target": target}).dropna()
+        df_ks = native_pd.DataFrame({"feature": feature, "target": target}).dropna()
         group0, group1 = df_ks[df_ks["target"] == 0]["feature"], df_ks[df_ks["target"] == 1]["feature"]
         if len(group0) == 0 or len(group1) == 0:
             return 0.0, 1.0

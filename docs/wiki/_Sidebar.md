@@ -15,6 +15,7 @@
 ### Execution Tracks
 - [[Local Track]]
 - [[Databricks Track]]
+- [[Databricks Installation]]
 
 ### Tutorials
 - [[Retail Retention|Tutorial-Retail-Churn]] ✓ Complete

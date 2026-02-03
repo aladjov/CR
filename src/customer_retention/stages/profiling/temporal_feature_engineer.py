@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import Timedelta, pd, to_datetime, to_pandas
+from customer_retention.core.compat import Timedelta, native_pd, pd, to_datetime, to_pandas
 
 
 class ReferenceMode(Enum):
@@ -307,7 +307,7 @@ class TemporalFeatureEngineer:
 
         if self.config.reference_mode == ReferenceMode.GLOBAL_DATE:
             ref_date = self.config.global_reference_date or datetime.now()
-            return pd.DataFrame({
+            return native_pd.DataFrame({
                 entity_col: entities,
                 "reference_date": ref_date,
             })

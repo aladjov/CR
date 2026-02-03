@@ -98,6 +98,8 @@ def merge(left: Any, right: Any, how: str = "inner", on: Any = None, **kwargs: A
     return pd.merge(left, right, how=how, on=on, **kwargs)
 
 
+native_pd = _pandas
+
 Timestamp = _pandas.Timestamp
 Timedelta = _pandas.Timedelta
 DatetimeIndex = _pandas.DatetimeIndex
@@ -213,6 +215,7 @@ compat = PandasCompat()
 
 __all__ = [
     "pd",
+    "native_pd",
     "DataFrame",
     "Series",
     "Timestamp",

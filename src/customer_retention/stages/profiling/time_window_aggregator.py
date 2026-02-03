@@ -12,6 +12,7 @@ from customer_retention.core.compat import (
     Timestamp,
     ensure_datetime_column,
     is_numeric_dtype,
+    native_pd,
     pd,
     to_pandas,
 )
@@ -85,7 +86,7 @@ class TimeWindowAggregator:
     ) -> DataFrame:
         df = to_pandas(df)
         if len(df) == 0:
-            return pd.DataFrame()
+            return native_pd.DataFrame()
 
         df = df.copy()
         ensure_datetime_column(df, self.time_column)
@@ -113,7 +114,7 @@ class TimeWindowAggregator:
         if include_tenure:
             result_data["days_since_first_event"] = self._compute_tenure(df, entities, reference_date)
 
-        result = pd.DataFrame(result_data)
+        result = native_pd.DataFrame(result_data)
         result.attrs["aggregation_reference_date"] = (
             reference_date.isoformat() if hasattr(reference_date, "isoformat") else str(reference_date))
         result.attrs["aggregation_timestamp"] = Timestamp.now().isoformat()

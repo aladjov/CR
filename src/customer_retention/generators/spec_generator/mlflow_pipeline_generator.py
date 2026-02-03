@@ -84,6 +84,9 @@ class MLflowConfig:
     log_feature_importance: bool = True
     nested_runs: bool = True
     model_name: Optional[str] = None
+    databricks: bool = False
+    catalog: str = "main"
+    schema: str = "default"
 
 
 class MLflowPipelineGenerator:
@@ -106,14 +109,16 @@ class MLflowPipelineGenerator:
         if self.mlflow_config.log_data_quality:
             sections.append(self._generate_data_quality_logging())
 
-        sections.extend([
-            self.generate_cleaning_functions(findings),
-            self.generate_transform_functions(findings),
-            self.generate_feature_engineering(findings),
-            self.generate_model_training(findings),
-            self.generate_monitoring(findings),
-            self._generate_main(findings),
-        ])
+        sections.extend(
+            [
+                self.generate_cleaning_functions(findings),
+                self.generate_transform_functions(findings),
+                self.generate_feature_engineering(findings),
+                self.generate_model_training(findings),
+                self.generate_monitoring(findings),
+                self._generate_main(findings),
+            ]
+        )
         return "\n\n".join(sections)
 
     def _generate_docstring(self, findings: ExplorationFindings) -> str:
@@ -122,13 +127,13 @@ MLflow-tracked ML Pipeline
 Generated from exploration findings
 
 Source: {findings.source_path}
-Target: {findings.target_column or 'Not specified'}
+Target: {findings.target_column or "Not specified"}
 Rows: {findings.row_count:,}
 Features: {findings.column_count}
 """'''
 
     def _generate_imports(self) -> str:
-        return """import pandas as pd
+        base_imports = """import pandas as pd
 import numpy as np
 from datetime import datetime
 from typing import Dict, List, Tuple, Any
@@ -146,8 +151,20 @@ from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     roc_auc_score, classification_report, confusion_matrix
 )"""
+        if self.mlflow_config.databricks:
+            base_imports += "\nfrom mlflow.tracking import MlflowClient"
+        return base_imports
 
     def _generate_mlflow_setup(self) -> str:
+        if self.mlflow_config.databricks:
+            return f'''
+EXPERIMENT_NAME = "{self.mlflow_config.experiment_name}"
+
+
+def setup_mlflow():
+    """Initialize MLflow tracking (Databricks auto-configures tracking URI)."""
+    mlflow.set_experiment(EXPERIMENT_NAME)
+    return mlflow.get_experiment_by_name(EXPERIMENT_NAME)'''
         return f'''
 MLFLOW_TRACKING_URI = "{self.mlflow_config.tracking_uri}"
 EXPERIMENT_NAME = "{self.mlflow_config.experiment_name}"
@@ -194,11 +211,13 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
                 for action in actions:
                     code_lines.extend(self._action_to_cleaning_code(col_name, action))
 
-        code_lines.extend([
-            "",
-            "    mlflow.log_params({f'cleaned_{k}': v for k, v in cleaning_stats.items()})",
-            "    return df",
-        ])
+        code_lines.extend(
+            [
+                "",
+                "    mlflow.log_params({f'cleaned_{k}': v for k, v in cleaning_stats.items()})",
+                "    return df",
+            ]
+        )
 
         return "\n".join(code_lines)
 
@@ -224,65 +243,73 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
 
         if action.action_type == "impute":
             if action.strategy == "median":
-                lines.extend([
-                    f"    # Impute {col_name} with median",
-                    f"    if df['{col_name}'].isna().any():",
-                    f"        median_val = df['{col_name}'].median()",
-                    f"        cleaning_stats['{col_name}_imputed'] = df['{col_name}'].isna().sum()",
-                    f"        df['{col_name}'] = df['{col_name}'].fillna(median_val)",
-                    "",
-                ])
+                lines.extend(
+                    [
+                        f"    # Impute {col_name} with median",
+                        f"    if df['{col_name}'].isna().any():",
+                        f"        median_val = df['{col_name}'].median()",
+                        f"        cleaning_stats['{col_name}_imputed'] = df['{col_name}'].isna().sum()",
+                        f"        df['{col_name}'] = df['{col_name}'].fillna(median_val)",
+                        "",
+                    ]
+                )
             elif action.strategy == "mode":
-                lines.extend([
-                    f"    # Impute {col_name} with mode",
-                    f"    if df['{col_name}'].isna().any():",
-                    f"        mode_val = df['{col_name}'].mode().iloc[0] if not df['{col_name}'].mode().empty else None",
-                    "        if mode_val is not None:",
-                    f"            cleaning_stats['{col_name}_imputed'] = df['{col_name}'].isna().sum()",
-                    f"            df['{col_name}'] = df['{col_name}'].fillna(mode_val)",
-                    "",
-                ])
+                lines.extend(
+                    [
+                        f"    # Impute {col_name} with mode",
+                        f"    if df['{col_name}'].isna().any():",
+                        f"        mode_val = df['{col_name}'].mode().iloc[0] if not df['{col_name}'].mode().empty else None",
+                        "        if mode_val is not None:",
+                        f"            cleaning_stats['{col_name}_imputed'] = df['{col_name}'].isna().sum()",
+                        f"            df['{col_name}'] = df['{col_name}'].fillna(mode_val)",
+                        "",
+                    ]
+                )
             elif action.strategy == "constant":
                 fill_value = action.params.get("fill_value", 0)
-                lines.extend([
-                    f"    # Impute {col_name} with constant",
-                    f"    if df['{col_name}'].isna().any():",
-                    f"        cleaning_stats['{col_name}_imputed'] = df['{col_name}'].isna().sum()",
-                    f"        df['{col_name}'] = df['{col_name}'].fillna({repr(fill_value)})",
-                    "",
-                ])
+                lines.extend(
+                    [
+                        f"    # Impute {col_name} with constant",
+                        f"    if df['{col_name}'].isna().any():",
+                        f"        cleaning_stats['{col_name}_imputed'] = df['{col_name}'].isna().sum()",
+                        f"        df['{col_name}'] = df['{col_name}'].fillna({repr(fill_value)})",
+                        "",
+                    ]
+                )
 
         elif action.action_type == "cap_outliers":
             percentile = action.params.get("percentile", 99)
-            lines.extend([
-                f"    # Cap outliers in {col_name} at {percentile}th percentile",
-                f"    lower = df['{col_name}'].quantile({(100 - percentile) / 100})",
-                f"    upper = df['{col_name}'].quantile({percentile / 100})",
-                f"    outliers = ((df['{col_name}'] < lower) | (df['{col_name}'] > upper)).sum()",
-                f"    cleaning_stats['{col_name}_outliers_capped'] = outliers",
-                f"    df['{col_name}'] = df['{col_name}'].clip(lower, upper)",
-                "",
-            ])
+            lines.extend(
+                [
+                    f"    # Cap outliers in {col_name} at {percentile}th percentile",
+                    f"    lower = df['{col_name}'].quantile({(100 - percentile) / 100})",
+                    f"    upper = df['{col_name}'].quantile({percentile / 100})",
+                    f"    outliers = ((df['{col_name}'] < lower) | (df['{col_name}'] > upper)).sum()",
+                    f"    cleaning_stats['{col_name}_outliers_capped'] = outliers",
+                    f"    df['{col_name}'] = df['{col_name}'].clip(lower, upper)",
+                    "",
+                ]
+            )
 
         elif action.action_type == "drop_rare":
             threshold = action.params.get("threshold_percent", 5)
-            lines.extend([
-                f"    # Drop rare categories in {col_name} (< {threshold}%)",
-                f"    value_counts = df['{col_name}'].value_counts(normalize=True)",
-                f"    rare_values = value_counts[value_counts < {threshold / 100}].index",
-                "    if len(rare_values) > 0:",
-                f"        cleaning_stats['{col_name}_rare_dropped'] = len(rare_values)",
-                f"        df.loc[df['{col_name}'].isin(rare_values), '{col_name}'] = df['{col_name}'].mode().iloc[0]",
-                "",
-            ])
+            lines.extend(
+                [
+                    f"    # Drop rare categories in {col_name} (< {threshold}%)",
+                    f"    value_counts = df['{col_name}'].value_counts(normalize=True)",
+                    f"    rare_values = value_counts[value_counts < {threshold / 100}].index",
+                    "    if len(rare_values) > 0:",
+                    f"        cleaning_stats['{col_name}_rare_dropped'] = len(rare_values)",
+                    f"        df.loc[df['{col_name}'].isin(rare_values), '{col_name}'] = df['{col_name}'].mode().iloc[0]",
+                    "",
+                ]
+            )
 
         return lines
 
     def generate_transform_functions(self, findings: ExplorationFindings) -> str:
-        self._get_columns_by_type(findings,
-            [ColumnType.NUMERIC_CONTINUOUS, ColumnType.NUMERIC_DISCRETE])
-        self._get_columns_by_type(findings,
-            [ColumnType.CATEGORICAL_NOMINAL, ColumnType.CATEGORICAL_ORDINAL])
+        self._get_columns_by_type(findings, [ColumnType.NUMERIC_CONTINUOUS, ColumnType.NUMERIC_DISCRETE])
+        self._get_columns_by_type(findings, [ColumnType.CATEGORICAL_NOMINAL, ColumnType.CATEGORICAL_ORDINAL])
 
         transform_actions = self._build_transform_actions(findings)
 
@@ -295,79 +322,102 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
         ]
 
         # Log transform for skewed columns
-        log_cols = [col for col, actions in transform_actions.items()
-                   if any(a.method == "log1p" for a in actions)]
+        log_cols = [col for col, actions in transform_actions.items() if any(a.method == "log1p" for a in actions)]
         if log_cols:
             for col in log_cols:
-                code_lines.extend([
-                    f"    # Log transform {col} (recommended for skewness)",
-                    f"    df['{col}_log'] = np.log1p(df['{col}'].clip(lower=0))",
-                    f"    transformers['{col}_log_transform'] = True",
-                    "",
-                ])
+                code_lines.extend(
+                    [
+                        f"    # Log transform {col} (recommended for skewness)",
+                        f"    df['{col}_log'] = np.log1p(df['{col}'].clip(lower=0))",
+                        f"    transformers['{col}_log_transform'] = True",
+                        "",
+                    ]
+                )
 
         # Standard scaling
-        scale_standard = [col for col, actions in transform_actions.items()
-                        if any(a.action_type == "scale" and a.method == "standard" for a in actions)]
+        scale_standard = [
+            col
+            for col, actions in transform_actions.items()
+            if any(a.action_type == "scale" and a.method == "standard" for a in actions)
+        ]
         if scale_standard:
-            code_lines.extend([
-                "    # Standard scaling",
-                f"    standard_cols = {scale_standard}",
-                "    if standard_cols:",
-                "        scaler = StandardScaler()",
-                "        df[standard_cols] = scaler.fit_transform(df[standard_cols])",
-                "        transformers['standard_scaler'] = {'columns': standard_cols}",
-                "",
-            ])
+            code_lines.extend(
+                [
+                    "    # Standard scaling",
+                    f"    standard_cols = {scale_standard}",
+                    "    if standard_cols:",
+                    "        scaler = StandardScaler()",
+                    "        df[standard_cols] = scaler.fit_transform(df[standard_cols])",
+                    "        transformers['standard_scaler'] = {'columns': standard_cols}",
+                    "",
+                ]
+            )
 
         # MinMax scaling
-        scale_minmax = [col for col, actions in transform_actions.items()
-                       if any(a.action_type == "scale" and a.method == "minmax" for a in actions)]
+        scale_minmax = [
+            col
+            for col, actions in transform_actions.items()
+            if any(a.action_type == "scale" and a.method == "minmax" for a in actions)
+        ]
         if scale_minmax:
-            code_lines.extend([
-                "    # MinMax scaling",
-                f"    minmax_cols = {scale_minmax}",
-                "    if minmax_cols:",
-                "        minmax_scaler = MinMaxScaler()",
-                "        df[minmax_cols] = minmax_scaler.fit_transform(df[minmax_cols])",
-                "        transformers['minmax_scaler'] = {'columns': minmax_cols}",
-                "",
-            ])
+            code_lines.extend(
+                [
+                    "    # MinMax scaling",
+                    f"    minmax_cols = {scale_minmax}",
+                    "    if minmax_cols:",
+                    "        minmax_scaler = MinMaxScaler()",
+                    "        df[minmax_cols] = minmax_scaler.fit_transform(df[minmax_cols])",
+                    "        transformers['minmax_scaler'] = {'columns': minmax_cols}",
+                    "",
+                ]
+            )
 
         # One-hot encoding
-        onehot_cols = [col for col, actions in transform_actions.items()
-                      if any(a.action_type == "encode" and a.method == "onehot" for a in actions)]
+        onehot_cols = [
+            col
+            for col, actions in transform_actions.items()
+            if any(a.action_type == "encode" and a.method == "onehot" for a in actions)
+        ]
         if onehot_cols:
-            code_lines.extend([
-                "    # One-hot encoding",
-                f"    onehot_cols = {onehot_cols}",
-                "    for col in onehot_cols:",
-                "        dummies = pd.get_dummies(df[col], prefix=col, drop_first=True)",
-                "        df = pd.concat([df.drop(columns=[col]), dummies], axis=1)",
-                "        transformers[f'{col}_onehot'] = list(dummies.columns)",
-                "",
-            ])
+            code_lines.extend(
+                [
+                    "    # One-hot encoding",
+                    f"    onehot_cols = {onehot_cols}",
+                    "    for col in onehot_cols:",
+                    "        dummies = pd.get_dummies(df[col], prefix=col, drop_first=True)",
+                    "        df = pd.concat([df.drop(columns=[col]), dummies], axis=1)",
+                    "        transformers[f'{col}_onehot'] = list(dummies.columns)",
+                    "",
+                ]
+            )
 
         # Label encoding
-        label_cols = [col for col, actions in transform_actions.items()
-                     if any(a.action_type == "encode" and a.method == "label" for a in actions)]
+        label_cols = [
+            col
+            for col, actions in transform_actions.items()
+            if any(a.action_type == "encode" and a.method == "label" for a in actions)
+        ]
         if label_cols:
-            code_lines.extend([
-                "    # Label encoding",
-                f"    label_cols = {label_cols}",
-                "    label_encoders = {{}}",
-                "    for col in label_cols:",
-                "        le = LabelEncoder()",
-                "        df[col] = le.fit_transform(df[col].astype(str))",
-                "        label_encoders[col] = le",
-                "    transformers['label_encoders'] = label_encoders",
-                "",
-            ])
+            code_lines.extend(
+                [
+                    "    # Label encoding",
+                    f"    label_cols = {label_cols}",
+                    "    label_encoders = {{}}",
+                    "    for col in label_cols:",
+                    "        le = LabelEncoder()",
+                    "        df[col] = le.fit_transform(df[col].astype(str))",
+                    "        label_encoders[col] = le",
+                    "    transformers['label_encoders'] = label_encoders",
+                    "",
+                ]
+            )
 
-        code_lines.extend([
-            "    mlflow.log_params({f'transform_{k}': str(v)[:250] for k, v in transformers.items()})",
-            "    return df, transformers",
-        ])
+        code_lines.extend(
+            [
+                "    mlflow.log_params({f'transform_{k}': str(v)[:250] for k, v in transformers.items()})",
+                "    return df, transformers",
+            ]
+        )
 
         return "\n".join(code_lines)
 
@@ -409,12 +459,14 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
             if not extract_types:
                 extract_types = ["month", "dayofweek", "days_since"]
 
-            code_lines.extend([
-                f"    # Datetime features from {col_name}",
-                f"    if '{col_name}' in df.columns:",
-                f"        df['{col_name}'] = safe_to_datetime(df['{col_name}'], errors='coerce')",
-                "",
-            ])
+            code_lines.extend(
+                [
+                    f"    # Datetime features from {col_name}",
+                    f"    if '{col_name}' in df.columns:",
+                    f"        df['{col_name}'] = safe_to_datetime(df['{col_name}'], errors='coerce')",
+                    "",
+                ]
+            )
 
             for ext_type in extract_types:
                 if ext_type == "month":
@@ -433,19 +485,23 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
                     code_lines.append(f"        df['{col_name}_year'] = df['{col_name}'].dt.year")
                     code_lines.append(f"        new_features.append('{col_name}_year')")
                 elif ext_type == "days_since":
-                    code_lines.extend([
-                        f"        reference_date = df['{col_name}'].max()",
-                        f"        df['{col_name}_days_since'] = (reference_date - df['{col_name}']).dt.days",
-                        f"        new_features.append('{col_name}_days_since')",
-                    ])
+                    code_lines.extend(
+                        [
+                            f"        reference_date = df['{col_name}'].max()",
+                            f"        df['{col_name}_days_since'] = (reference_date - df['{col_name}']).dt.days",
+                            f"        new_features.append('{col_name}_days_since')",
+                        ]
+                    )
 
             code_lines.append("")
 
-        code_lines.extend([
-            "    if new_features:",
-            "        mlflow.log_param('engineered_features', new_features)",
-            "    return df",
-        ])
+        code_lines.extend(
+            [
+                "    if new_features:",
+                "        mlflow.log_param('engineered_features', new_features)",
+                "    return df",
+            ]
+        )
 
         return "\n".join(code_lines)
 
@@ -455,7 +511,7 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
         datetime_cols = findings.datetime_columns or []
         exclude_cols = set(identifier_cols + datetime_cols + [target])
 
-        return f'''
+        main_body = f'''
 def train_model(
     df: pd.DataFrame,
     target_column: str = "{target}",
@@ -544,7 +600,7 @@ def train_model(
             # Log everything
             mlflow.log_params(model.get_params())
             mlflow.log_metrics({{**val_metrics, **test_metrics, **cv_metrics}})
-            mlflow.sklearn.log_model(model, f"model_{{name}}")
+            mlflow.sklearn.log_model(model, name=f"model_{{name}}")
 
             results[name] = {{
                 "model": model,
@@ -558,9 +614,29 @@ def train_model(
                 best_model = name
 
     mlflow.log_param("best_model", best_model)
-    mlflow.log_metric("best_val_roc_auc", best_auc)
+    mlflow.log_metric("best_val_roc_auc", best_auc)'''
 
-    return {{"results": results, "best_model": best_model}}'''
+        if self.mlflow_config.databricks and self.mlflow_config.model_name:
+            reg_name = f"{self.mlflow_config.catalog}.{self.mlflow_config.schema}.{self.mlflow_config.model_name}"
+            main_body += f'''
+
+    # Register best model in Unity Catalog and set alias
+    if best_model:
+        best_run = results[best_model]
+        model_info = mlflow.sklearn.log_model(
+            best_run["model"],
+            name="best_model",
+            registered_model_name="{reg_name}",
+        )
+        client = MlflowClient()
+        latest_version = client.get_latest_versions("{reg_name}")[0].version
+        client.set_registered_model_alias("{reg_name}", "champion", latest_version)'''
+
+        main_body += """
+
+    return {"results": results, "best_model": best_model}"""
+
+        return main_body
 
     def generate_monitoring(self, findings: ExplorationFindings) -> str:
         return '''
@@ -607,16 +683,16 @@ def main():
         if self.mlflow_config.log_data_quality:
             main_body += "\n        log_data_quality_metrics(df, prefix='raw')"
 
-        main_body += '''
+        main_body += """
 
         # Clean data
         print("Cleaning data...")
-        df = clean_data(df)'''
+        df = clean_data(df)"""
 
         if self.mlflow_config.log_data_quality:
             main_body += "\n        log_data_quality_metrics(df, prefix='cleaned')"
 
-        main_body += '''
+        main_body += """
 
         # Apply transformations
         print("Applying transformations...")
@@ -624,12 +700,12 @@ def main():
 
         # Engineer features
         print("Engineering features...")
-        df = engineer_features(df)'''
+        df = engineer_features(df)"""
 
         if self.mlflow_config.log_data_quality:
             main_body += "\n        log_data_quality_metrics(df, prefix='final')"
 
-        main_body += '''
+        main_body += """
 
         # Train models
         print("Training models...")
@@ -642,7 +718,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()'''
+    main()"""
 
         return main_body
 
@@ -651,10 +727,7 @@ if __name__ == "__main__":
         findings: ExplorationFindings,
         col_types: List[ColumnType],
     ) -> List[str]:
-        return [
-            name for name, col in findings.columns.items()
-            if col.inferred_type in col_types
-        ]
+        return [name for name, col in findings.columns.items() if col.inferred_type in col_types]
 
     def generate_all(self, findings: ExplorationFindings) -> Dict[str, str]:
         return {
