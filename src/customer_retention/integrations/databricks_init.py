@@ -40,6 +40,7 @@ def databricks_init(
     _validate_databricks_environment()
     _set_environment_variables(catalog, schema, workspace_path)
     resolved_experiment_name = experiment_name or _resolve_experiment_name_from_notebook_path()
+    resolved_experiment_name = _make_absolute_experiment_path(resolved_experiment_name, workspace_path)
     _set_experiment_name_env_var(resolved_experiment_name)
     _configure_mlflow_experiment(resolved_experiment_name)
     notebooks_copied: list[str] = []
@@ -95,6 +96,17 @@ def _get_dbutils() -> Any | None:
         return get_dbutils()
     except Exception:
         return None
+
+
+def _make_absolute_experiment_path(experiment_name: str, workspace_path: str | None) -> str:
+    if experiment_name.startswith("/"):
+        return experiment_name
+    if not workspace_path:
+        return experiment_name
+    base = workspace_path.removeprefix("/Workspace")
+    if not base.startswith("/"):
+        base = f"/{base}"
+    return f"{base}/{experiment_name}"
 
 
 def _configure_mlflow_experiment(experiment_name: str) -> None:

@@ -76,6 +76,36 @@ class TestDatabricksInitValidation:
         assert result.catalog == "main"
 
 
+class TestMakeAbsoluteExperimentPath:
+    def test_already_absolute_path_unchanged(self):
+        from customer_retention.integrations.databricks_init import _make_absolute_experiment_path
+
+        assert _make_absolute_experiment_path("/Users/me/exp", None) == "/Users/me/exp"
+
+    def test_relative_name_with_workspace_path(self):
+        from customer_retention.integrations.databricks_init import _make_absolute_experiment_path
+
+        result = _make_absolute_experiment_path("my_exp", "Users/me/project")
+        assert result == "/Users/me/project/my_exp"
+
+    def test_relative_name_with_workspace_path_including_workspace_prefix(self):
+        from customer_retention.integrations.databricks_init import _make_absolute_experiment_path
+
+        result = _make_absolute_experiment_path("my_exp", "/Workspace/Users/me/project")
+        assert result == "/Users/me/project/my_exp"
+
+    def test_relative_name_without_workspace_path_unchanged(self):
+        from customer_retention.integrations.databricks_init import _make_absolute_experiment_path
+
+        assert _make_absolute_experiment_path("my_exp", None) == "my_exp"
+
+    def test_absolute_path_ignores_workspace_path(self):
+        from customer_retention.integrations.databricks_init import _make_absolute_experiment_path
+
+        result = _make_absolute_experiment_path("/Users/other/exp", "Users/me/project")
+        assert result == "/Users/other/exp"
+
+
 class TestDatabricksInitMLflowConfiguration:
     @patch("customer_retention.integrations.databricks_init.mlflow", create=True)
     def test_calls_mlflow_set_experiment(self, mock_mlflow_module, monkeypatch, databricks_env):
@@ -93,6 +123,14 @@ class TestDatabricksInitMLflowConfiguration:
 
         result = databricks_init(experiment_name="custom_exp", copy_notebooks=False)
         assert result.experiment_name == "custom_exp"
+
+    def test_experiment_name_made_absolute_with_workspace_path(self, monkeypatch, databricks_env):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        result = databricks_init(
+            experiment_name="my_exp", workspace_path="Users/me/project", copy_notebooks=False,
+        )
+        assert result.experiment_name == "/Users/me/project/my_exp"
 
     def test_auto_resolves_experiment_name_from_notebook_path(self, monkeypatch, databricks_env):
         from customer_retention.integrations.databricks_init import databricks_init
@@ -204,7 +242,7 @@ class TestDatabricksInitResult:
         )
         assert result.catalog == "analytics"
         assert result.schema == "churn"
-        assert result.experiment_name == "exp"
+        assert result.experiment_name == "/Users/me/project/exp"
         assert result.workspace_path == "Users/me/project"
         assert result.model_name == "my_model"
 
@@ -221,7 +259,7 @@ class TestDatabricksInitResult:
         env_vars = result.environment_variables
         assert env_vars["CR_CATALOG"] == "analytics"
         assert env_vars["CR_SCHEMA"] == "churn"
-        assert env_vars["CR_EXPERIMENT_NAME"] == "exp"
+        assert env_vars["CR_EXPERIMENT_NAME"] == "/Users/me/project/exp"
         assert env_vars["CR_WORKSPACE_PATH"] == "Users/me/project"
         assert "CR_EXPERIMENTS_DIR" in env_vars
 

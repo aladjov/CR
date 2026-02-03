@@ -13,7 +13,6 @@ from customer_retention.core.compat import (
     ensure_datetime_column,
     is_numeric_dtype,
     native_pd,
-    pd,
     to_pandas,
 )
 

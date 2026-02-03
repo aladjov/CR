@@ -8,7 +8,6 @@ from customer_retention.core.compat import (
     Timestamp,
     ensure_datetime_column,
     native_pd,
-    pd,
     to_pandas,
 )
 

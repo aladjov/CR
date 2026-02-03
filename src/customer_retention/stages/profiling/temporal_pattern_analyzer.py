@@ -11,7 +11,6 @@ from customer_retention.core.compat import (
     cut,
     ensure_datetime_column,
     native_pd,
-    pd,
     safe_to_datetime,
     to_pandas,
 )
