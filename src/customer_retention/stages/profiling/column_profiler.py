@@ -6,6 +6,7 @@ import numpy as np
 
 from customer_retention.core.compat import (
     Timestamp,
+    ensure_pandas_series,
     is_bool_dtype,
     is_datetime64_any_dtype,
     pd,
@@ -27,6 +28,7 @@ from .profile_result import (
 
 class ColumnProfiler(ABC):
     def compute_universal_metrics(self, series: pd.Series) -> UniversalMetrics:
+        series = ensure_pandas_series(series)
         total_count = len(series)
         null_count = int(series.isna().sum())
         null_percentage = (null_count / total_count * 100) if total_count > 0 else 0
@@ -51,13 +53,16 @@ class ColumnProfiler(ABC):
             memory_size_bytes=int(memory_size)
         )
 
-    @abstractmethod
     def profile(self, series: pd.Series) -> dict:
+        return self._profile_impl(ensure_pandas_series(series))
+
+    @abstractmethod
+    def _profile_impl(self, series: pd.Series) -> dict:
         pass
 
 
 class IdentifierProfiler(ColumnProfiler):
-    def profile(self, series: pd.Series) -> dict:
+    def _profile_impl(self, series: pd.Series) -> dict:
         is_unique = series.nunique() == len(series.dropna())
         duplicates = series[series.duplicated(keep=False)]
         duplicate_count = len(duplicates.unique())
@@ -107,7 +112,7 @@ class IdentifierProfiler(ColumnProfiler):
 
 
 class TargetProfiler(ColumnProfiler):
-    def profile(self, series: pd.Series) -> dict:
+    def _profile_impl(self, series: pd.Series) -> dict:
         value_counts = series.value_counts()
         class_distribution = {str(k): int(v) for k, v in value_counts.items()}
 
@@ -133,7 +138,7 @@ class TargetProfiler(ColumnProfiler):
 
 
 class NumericProfiler(ColumnProfiler):
-    def profile(self, series: pd.Series) -> dict:
+    def _profile_impl(self, series: pd.Series) -> dict:
         clean_series = series.dropna()
         if len(clean_series) == 0:
             return {"numeric_metrics": None}
@@ -215,7 +220,7 @@ class NumericProfiler(ColumnProfiler):
 
 
 class CategoricalProfiler(ColumnProfiler):
-    def profile(self, series: pd.Series) -> dict:
+    def _profile_impl(self, series: pd.Series) -> dict:
         clean_series = series.dropna()
         if len(clean_series) == 0:
             return {"categorical_metrics": None}
@@ -298,7 +303,7 @@ class CategoricalProfiler(ColumnProfiler):
 
 
 class DatetimeProfiler(ColumnProfiler):
-    def profile(self, series: pd.Series) -> dict:
+    def _profile_impl(self, series: pd.Series) -> dict:
         clean_series = series.dropna()
         if len(clean_series) == 0:
             return {"datetime_metrics": None}
@@ -395,7 +400,7 @@ class DatetimeProfiler(ColumnProfiler):
 
 
 class BinaryProfiler(ColumnProfiler):
-    def profile(self, series: pd.Series) -> dict:
+    def _profile_impl(self, series: pd.Series) -> dict:
         clean_series = series.dropna()
         if len(clean_series) == 0:
             return {"binary_metrics": None}
@@ -434,10 +439,7 @@ class BinaryProfiler(ColumnProfiler):
 
 
 class TextProfiler(ColumnProfiler):
-    """Profile text columns with PII detection."""
-
-    def profile(self, series: pd.Series) -> dict:
-        """Profile text column."""
+    def _profile_impl(self, series: pd.Series) -> dict:
 
         clean_series = series.dropna()
 

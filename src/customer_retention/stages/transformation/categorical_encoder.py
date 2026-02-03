@@ -4,7 +4,7 @@ from typing import Optional
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, Series, to_numeric
+from customer_retention.core.compat import DataFrame, Series, ensure_pandas_series, to_numeric
 
 
 class EncodingStrategy(str, Enum):
@@ -55,6 +55,7 @@ class CategoricalEncoder:
         self._is_fitted = False
 
     def fit(self, series: Series, target: Optional[Series] = None) -> "CategoricalEncoder":
+        series = ensure_pandas_series(series)
         clean = series.dropna()
 
         if self.strategy == EncodingStrategy.ONE_HOT:
@@ -76,6 +77,7 @@ class CategoricalEncoder:
     def transform(self, series: Series, target: Optional[Series] = None) -> CategoricalEncodeResult:
         if not self._is_fitted:
             raise ValueError("Encoder not fitted. Call fit() or fit_transform() first.")
+        series = ensure_pandas_series(series)
         return self._apply_encoding(series, target)
 
     def fit_transform(self, series: Series, target: Optional[Series] = None) -> CategoricalEncodeResult:

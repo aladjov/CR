@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, Series, pd
+from customer_retention.core.compat import DataFrame, Series, ensure_pandas_series, pd
 from customer_retention.core.config import ColumnType
 
 
@@ -69,6 +69,7 @@ class MissingValueHandler:
         return cls(strategy=strategy, fill_value=fill_value, **kwargs)
 
     def fit(self, series: Series, reference_df: Optional[DataFrame] = None) -> "MissingValueHandler":
+        series = ensure_pandas_series(series)
         clean_series = series.dropna()
         if len(clean_series) == 0:
             raise ValueError("Cannot fit imputer: all values are missing")
@@ -80,6 +81,7 @@ class MissingValueHandler:
     def transform(self, series: Series, reference_df: Optional[DataFrame] = None) -> ImputationResult:
         if not self._is_fitted:
             raise ValueError("Handler not fitted. Call fit() or fit_transform() first.")
+        series = ensure_pandas_series(series)
         return self._apply_imputation(series, reference_df)
 
     def fit_transform(self, series: Series, reference_df: Optional[DataFrame] = None) -> ImputationResult:

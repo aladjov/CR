@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import pd
+from customer_retention.core.compat import ensure_pandas_series, pd
 from customer_retention.core.config import ColumnType
 from customer_retention.core.utils.statistics import (
     compute_chi_square,
@@ -37,7 +37,7 @@ class BaselineDriftChecker:
         self.baseline: Optional[Dict[str, Dict]] = None
 
     def set_baseline(self, column_name: str, series: pd.Series, column_type: ColumnType):
-        """Set baseline distribution for a column."""
+        series = ensure_pandas_series(series)
         if self.baseline is None:
             self.baseline = {}
 
@@ -82,7 +82,7 @@ class BaselineDriftChecker:
         }
 
     def detect_drift(self, column_name: str, series: pd.Series, column_type: ColumnType) -> DriftResult:
-        """Detect drift for a single column."""
+        series = ensure_pandas_series(series)
         if self.baseline is None or column_name not in self.baseline:
             raise ValueError(f"No baseline found for column '{column_name}'")
 

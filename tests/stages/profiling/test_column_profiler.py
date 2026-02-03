@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import numpy as np
 import pandas as pd
 
@@ -411,3 +413,38 @@ class TestProfilerFactory:
         profiler_ord = ProfilerFactory.get_profiler(ColumnType.CATEGORICAL_ORDINAL)
         profiler_cyc = ProfilerFactory.get_profiler(ColumnType.CATEGORICAL_CYCLICAL)
         assert type(profiler_nom) == type(profiler_ord) == type(profiler_cyc)
+
+
+class TestSparkSeriesCompatibility:
+    @patch('customer_retention.stages.profiling.column_profiler.ensure_pandas_series')
+    def test_compute_universal_metrics_converts_to_pandas(self, mock_ensure):
+        series = pd.Series([1, 2, 3, 4, 5])
+        mock_ensure.return_value = series
+        profiler = ProfilerFactory.get_profiler(ColumnType.NUMERIC_CONTINUOUS)
+        result = profiler.compute_universal_metrics(series)
+        mock_ensure.assert_called_once_with(series)
+        assert result.total_count == 5
+
+    @patch('customer_retention.stages.profiling.column_profiler.ensure_pandas_series')
+    def test_profile_converts_to_pandas(self, mock_ensure):
+        series = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0])
+        mock_ensure.return_value = series
+        profiler = ProfilerFactory.get_profiler(ColumnType.NUMERIC_CONTINUOUS)
+        result = profiler.profile(series)
+        mock_ensure.assert_called_once_with(series)
+        assert "numeric_metrics" in result
+
+    @patch('customer_retention.stages.profiling.column_profiler.ensure_pandas_series')
+    def test_all_profilers_convert_on_profile(self, mock_ensure):
+        test_cases = [
+            (ColumnType.IDENTIFIER, pd.Series(["ID1", "ID2", "ID3"])),
+            (ColumnType.TARGET, pd.Series([0, 1, 0, 1])),
+            (ColumnType.CATEGORICAL_NOMINAL, pd.Series(["a", "b", "c"])),
+            (ColumnType.BINARY, pd.Series([0, 1, 0, 1])),
+        ]
+        for col_type, series in test_cases:
+            mock_ensure.reset_mock()
+            mock_ensure.return_value = series
+            profiler = ProfilerFactory.get_profiler(col_type)
+            profiler.profile(series)
+            mock_ensure.assert_called_once_with(series)
