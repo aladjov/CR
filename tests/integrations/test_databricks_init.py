@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -40,11 +41,17 @@ class TestDatabricksInitEnvironmentVariables:
         databricks_init(experiment_name="my_exp", copy_notebooks=False)
         assert os.environ["CR_EXPERIMENT_NAME"] == "my_exp"
 
-    def test_sets_cr_experiments_dir_from_workspace_path(self, monkeypatch, databricks_env):
+    def test_sets_cr_experiments_dir_from_catalog_and_schema(self, monkeypatch, databricks_env):
         from customer_retention.integrations.databricks_init import databricks_init
 
-        databricks_init(workspace_path="Users/me/project", copy_notebooks=False)
-        assert os.environ["CR_EXPERIMENTS_DIR"] == "/Workspace/Users/me/project/experiments"
+        databricks_init(catalog="churnkit", schema="prod", copy_notebooks=False)
+        assert os.environ["CR_EXPERIMENTS_DIR"] == "/Volumes/churnkit/prod/experiments"
+
+    def test_sets_cr_experiments_dir_with_defaults(self, monkeypatch, databricks_env):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        databricks_init(copy_notebooks=False)
+        assert os.environ["CR_EXPERIMENTS_DIR"] == "/Volumes/main/default/experiments"
 
     def test_idempotent_multiple_calls(self, monkeypatch, databricks_env):
         from customer_retention.integrations.databricks_init import databricks_init
@@ -59,6 +66,31 @@ class TestDatabricksInitEnvironmentVariables:
         databricks_init(catalog="first", copy_notebooks=False)
         databricks_init(catalog="second", copy_notebooks=False)
         assert os.environ["CR_CATALOG"] == "second"
+
+
+class TestNormalizeWorkspacePath:
+    def test_strips_workspace_prefix(self):
+        from customer_retention.integrations.databricks_init import _normalize_workspace_path
+
+        assert _normalize_workspace_path("/Workspace/Users/me/project") == "Users/me/project"
+
+    def test_leaves_relative_path_unchanged(self):
+        from customer_retention.integrations.databricks_init import _normalize_workspace_path
+
+        assert _normalize_workspace_path("Users/me/project") == "Users/me/project"
+
+    def test_env_vars_correct_when_workspace_prefix_passed(self, monkeypatch, databricks_env):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        databricks_init(workspace_path="/Workspace/Users/me/project", copy_notebooks=False)
+        assert os.environ["CR_WORKSPACE_PATH"] == "Users/me/project"
+        assert os.environ["CR_EXPERIMENTS_DIR"] == "/Volumes/main/default/experiments"
+
+    def test_result_workspace_path_normalized(self, monkeypatch, databricks_env):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        result = databricks_init(workspace_path="/Workspace/Users/me/project", copy_notebooks=False)
+        assert result.workspace_path == "Users/me/project"
 
 
 class TestDatabricksInitValidation:
@@ -261,7 +293,7 @@ class TestDatabricksInitResult:
         assert env_vars["CR_SCHEMA"] == "churn"
         assert env_vars["CR_EXPERIMENT_NAME"] == "/Users/me/project/exp"
         assert env_vars["CR_WORKSPACE_PATH"] == "Users/me/project"
-        assert "CR_EXPERIMENTS_DIR" in env_vars
+        assert env_vars["CR_EXPERIMENTS_DIR"] == "/Volumes/analytics/churn/experiments"
 
 
 class TestDatabricksInitDefaults:
@@ -315,11 +347,21 @@ class TestDatabricksInitCellScenario:
         result = databricks_init(workspace_path=None, copy_notebooks=True)
         assert result.notebooks_copied == []
 
-    def test_result_env_vars_empty_experiments_dir_without_workspace(self, monkeypatch, databricks_env):
+    def test_experiments_dir_set_without_workspace_path(self, monkeypatch, databricks_env):
         from customer_retention.integrations.databricks_init import databricks_init
 
         result = databricks_init(copy_notebooks=False)
-        assert result.environment_variables["CR_EXPERIMENTS_DIR"] == ""
+        assert result.environment_variables["CR_EXPERIMENTS_DIR"] == "/Volumes/main/default/experiments"
+
+    def test_refreshes_config_module_constants(self, monkeypatch, databricks_env):
+        import customer_retention.core.config.experiments as exp_module
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        databricks_init(catalog="churnkit", schema="prod", copy_notebooks=False)
+        assert exp_module.EXPERIMENTS_DIR == Path("/Volumes/churnkit/prod/experiments")
+        assert exp_module.FINDINGS_DIR == Path("/Volumes/churnkit/prod/experiments/findings")
+        assert exp_module.CATALOG == "churnkit"
+        assert exp_module.SCHEMA == "prod"
 
     def test_mlflow_import_missing_does_not_raise(self, monkeypatch, databricks_env):
         from customer_retention.integrations.databricks_init import _configure_mlflow_experiment

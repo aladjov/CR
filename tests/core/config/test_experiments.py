@@ -143,6 +143,29 @@ class TestModuleLevelConstants:
         assert OUTPUT_DIR == FINDINGS_DIR
 
 
+class TestReloadConfig:
+    def test_refreshes_experiments_dir_from_env(self, tmp_path, monkeypatch):
+        import customer_retention.core.config.experiments as exp_module
+
+        monkeypatch.setenv("CR_EXPERIMENTS_DIR", str(tmp_path / "refreshed"))
+        exp_module.reload_config()
+        assert exp_module.EXPERIMENTS_DIR == tmp_path / "refreshed"
+        assert exp_module.FINDINGS_DIR == tmp_path / "refreshed" / "findings"
+        assert exp_module.DATA_DIR == tmp_path / "refreshed" / "data"
+        assert exp_module.MLRUNS_DIR == tmp_path / "refreshed" / "mlruns"
+        assert exp_module.FEATURE_STORE_DIR == tmp_path / "refreshed" / "feature_repo"
+        assert exp_module.OUTPUT_DIR == exp_module.FINDINGS_DIR
+
+    def test_refreshes_catalog_and_schema_from_env(self, monkeypatch):
+        import customer_retention.core.config.experiments as exp_module
+
+        monkeypatch.setenv("CR_CATALOG", "my_catalog")
+        monkeypatch.setenv("CR_SCHEMA", "my_schema")
+        exp_module.reload_config()
+        assert exp_module.CATALOG == "my_catalog"
+        assert exp_module.SCHEMA == "my_schema"
+
+
 class TestSetupExperimentsStructure:
     def test_creates_all_directories(self, tmp_path):
         setup_experiments_structure(tmp_path)

@@ -64,6 +64,21 @@ WORKSPACE_PATH = get_workspace_path()
 EXPERIMENT_NAME = get_experiment_name()
 
 
+def reload_config() -> None:
+    global EXPERIMENTS_DIR, FINDINGS_DIR, DATA_DIR, MLRUNS_DIR, FEATURE_STORE_DIR
+    global OUTPUT_DIR, CATALOG, SCHEMA, WORKSPACE_PATH, EXPERIMENT_NAME
+    EXPERIMENTS_DIR = get_experiments_dir()
+    FINDINGS_DIR = get_findings_dir()
+    DATA_DIR = get_data_dir()
+    MLRUNS_DIR = get_mlruns_dir()
+    FEATURE_STORE_DIR = get_feature_store_dir()
+    OUTPUT_DIR = FINDINGS_DIR
+    CATALOG = get_catalog()
+    SCHEMA = get_schema()
+    WORKSPACE_PATH = get_workspace_path()
+    EXPERIMENT_NAME = get_experiment_name()
+
+
 def setup_experiments_structure(experiments_dir: Optional[Path] = None) -> None:
     base = experiments_dir or get_experiments_dir()
     directories = [

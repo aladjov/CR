@@ -70,7 +70,7 @@ After `databricks_init()`, these environment variables are available:
 | `CR_SCHEMA` | `churn` | Unity Catalog schema |
 | `CR_WORKSPACE_PATH` | `Users/me/project` | Workspace base path |
 | `CR_EXPERIMENT_NAME` | `churn_analysis` | MLflow experiment name |
-| `CR_EXPERIMENTS_DIR` | `/Workspace/Users/me/project/experiments` | Experiments output directory |
+| `CR_EXPERIMENTS_DIR` | `/Volumes/analytics/churn/experiments` | Experiments output directory (Unity Catalog Volume) |
 
 All subsequent ChurnKit calls (feature store, MLflow, data loading) automatically use these values.
 
