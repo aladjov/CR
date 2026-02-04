@@ -10,14 +10,14 @@ try:
     import pyspark.pandas as ps
     _SPARK_PANDAS_AVAILABLE = True
     _PANDAS_API_ON_SPARK = True
-except ImportError:
+except Exception:
     pass
 
 if not _SPARK_PANDAS_AVAILABLE:
     try:
         import databricks.koalas as ps
         _SPARK_PANDAS_AVAILABLE = True
-    except ImportError:
+    except Exception:
         pass
 
 

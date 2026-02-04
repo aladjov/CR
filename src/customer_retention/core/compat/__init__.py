@@ -26,11 +26,17 @@ if _SPARK_PANDAS_AVAILABLE:
         pd = ps
         DataFrame = Union[ps.DataFrame, _pandas.DataFrame]
         Series = Union[ps.Series, _pandas.Series]
-    except ImportError:
-        import databricks.koalas as ps
-        pd = ps
-        DataFrame = Union[ps.DataFrame, _pandas.DataFrame]
-        Series = Union[ps.Series, _pandas.Series]
+    except Exception:
+        try:
+            import databricks.koalas as ps
+            pd = ps
+            DataFrame = Union[ps.DataFrame, _pandas.DataFrame]
+            Series = Union[ps.Series, _pandas.Series]
+        except Exception:
+            _SPARK_PANDAS_AVAILABLE = False
+            pd = _pandas
+            DataFrame = _pandas.DataFrame
+            Series = _pandas.Series
 else:
     pd = _pandas
     DataFrame = _pandas.DataFrame
@@ -45,7 +51,7 @@ def to_pandas(df: Any) -> _pandas.DataFrame:
             import pyspark.pandas as ps
             if isinstance(df, ps.DataFrame):
                 return df.to_pandas()
-        except ImportError:
+        except Exception:
             pass
     try:
         from pyspark.sql import DataFrame as NativeSparkDF

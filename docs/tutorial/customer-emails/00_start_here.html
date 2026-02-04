@@ -7970,17 +7970,22 @@ a.anchor-link {
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.notebook_progress</span><span class="w"> </span><span class="kn">import</span> <span class="n">track_and_export_previous</span>
+
 <span class="n">track_and_export_previous</span><span class="p">(</span><span class="s2">"00_start_here.ipynb"</span><span class="p">)</span>
 
 <span class="k">try</span><span class="p">:</span>
     <span class="kn">import</span><span class="w"> </span><span class="nn">customer_retention</span>
-    <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.core.config.experiments</span><span class="w"> </span><span class="kn">import</span> <span class="n">FINDINGS_DIR</span><span class="p">,</span> <span class="n">EXPERIMENTS_DIR</span><span class="p">,</span> <span class="n">OUTPUT_DIR</span><span class="p">,</span> <span class="n">setup_experiments_structure</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"customer_retention is installed"</span><span class="p">)</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.core.config.experiments</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+        <span class="n">EXPERIMENTS_DIR</span><span class="p">,</span>
+        <span class="n">FINDINGS_DIR</span><span class="p">,</span>
+        <span class="n">OUTPUT_DIR</span><span class="p">,</span>
+        <span class="n">setup_experiments_structure</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"customer_retention is installed"</span><span class="p">)</span>
 <span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">"customer_retention not found. Install with:"</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">"  uv sync"</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">"  # or: pip install -e ."</span><span class="p">)</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.stages.temporal</span><span class="w"> </span><span class="kn">import</span> <span class="n">TEMPORAL_METADATA_COLS</span>
 </pre></div>
 </div>
 </div>
@@ -8221,8 +8226,8 @@ To set up:
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="c1"># Download Bank Customer Churn dataset</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">subprocess</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">shutil</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">subprocess</span>
 
 <span class="n">FIXTURES_DIR</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <span class="n">bank_churn_path</span> <span class="o">=</span> <span class="n">FIXTURES_DIR</span> <span class="o">/</span> <span class="s2">"bank_customer_churn.csv"</span>
@@ -8389,7 +8394,13 @@ netflix_customer_churn.csv:
   Rows: 5,000
   Columns: 14
   Columns: customer_id, age, gender, subscription_type, watch_hours...
-
+</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>
 customer_transactions.csv:
   Rows: 50,000
   Columns: 15

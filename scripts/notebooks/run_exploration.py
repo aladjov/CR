@@ -103,11 +103,11 @@ def _has_event_level_data(findings_dir: Path) -> bool:
             )
 
             multi = MultiDatasetFindings.load(str(multi_path))
-            return bool(multi.event_datasets)
+            if multi.event_datasets:
+                return True
         except Exception:
             pass
 
-    # Fallback: scan individual findings for event_level granularity
     from customer_retention.core.config.column_config import DatasetGranularity
 
     for path in _iter_findings_files(findings_dir):
@@ -249,10 +249,10 @@ def run_all(
 
         if ok:
             results[stem] = f"OK ({elapsed:.0f}s)"
-            print(f" OK ({elapsed:.0f}s)")
+            print(f"\n  [{stem}] OK ({elapsed:.0f}s)")
         else:
             results[stem] = f"FAILED: {error}"
-            print(f" FAILED ({elapsed:.0f}s)")
+            print(f"\n  [{stem}] FAILED ({elapsed:.0f}s)")
             print(f"    Error: {error[:200]}")
 
     _print_summary(results, timings, time.time() - total_start)
