@@ -81,9 +81,10 @@ class SnapshotManager:
         >>> df, meta = manager.load_snapshot("training_v1")
     """
 
-    def __init__(self, base_path: Path, storage=None):
+    def __init__(self, base_path: Path, storage=None, dataset_name=None):
         self.base_path = Path(base_path)
-        self.snapshots_dir = self.base_path / "snapshots"
+        base = self.base_path / "snapshots"
+        self.snapshots_dir = base / dataset_name if dataset_name else base
         self.snapshots_dir.mkdir(parents=True, exist_ok=True)
         self.storage = storage or _get_storage()
 

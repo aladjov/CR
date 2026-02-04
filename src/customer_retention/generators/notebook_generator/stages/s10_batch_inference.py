@@ -40,6 +40,7 @@ This notebook:
     def generate_local_cells(self) -> List[nbformat.NotebookNode]:
         """Generate cells for local Feast-based batch inference."""
         threshold = self.config.threshold
+        name = self.get_dataset_name()
         return self.header_cells() + [
             self.cb.section("1. Setup and Imports"),
             self.cb.code('''import pandas as pd
@@ -112,15 +113,15 @@ print(f"Available tables: {manager.list_tables()}")'''),
 from customer_retention.integrations.adapters.factory import get_delta
 storage = get_delta(force_local=True)
 
-customers_delta = Path("./experiments/data/gold/customers_to_score")
-customers_parquet = Path("./experiments/data/gold/customers_to_score.parquet")
+customers_delta = Path("./experiments/data/gold/{name}_to_score")
+customers_parquet = Path("./experiments/data/gold/{name}_to_score.parquet")
 if customers_delta.is_dir() and (customers_delta / "_delta_log").is_dir():
     df_customers = storage.read(str(customers_delta))
 elif customers_parquet.exists():
     df_customers = pd.read_parquet(customers_parquet)
 else:
-    gold_delta = Path("./experiments/data/gold/customers_features")
-    gold_parquet = Path("./experiments/data/gold/customers_features.parquet")
+    gold_delta = Path("./experiments/data/gold/{name}_features")
+    gold_parquet = Path("./experiments/data/gold/{name}_features.parquet")
     if gold_delta.is_dir() and (gold_delta / "_delta_log").is_dir():
         df_customers = storage.read(str(gold_delta))
     elif gold_parquet.exists():

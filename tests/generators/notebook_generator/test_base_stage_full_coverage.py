@@ -49,6 +49,28 @@ class TestStageGeneratorDescription:
         assert len(header_cells) == 1
 
 
+class TestStageGeneratorGetDatasetName:
+    def test_returns_stem_from_findings_source_path(self):
+        from customer_retention.generators.notebook_generator.config import NotebookConfig
+        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
+        findings = MockExplorationFindings(source_path="/data/customer_emails.csv")
+        stage = IngestionStage(NotebookConfig(), findings)
+        assert stage.get_dataset_name() == "customer_emails"
+
+    def test_returns_fallback_without_findings(self):
+        from customer_retention.generators.notebook_generator.config import NotebookConfig
+        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
+        stage = IngestionStage(NotebookConfig(), None)
+        assert stage.get_dataset_name() == "dataset"
+
+    def test_returns_fallback_with_empty_source_path(self):
+        from customer_retention.generators.notebook_generator.config import NotebookConfig
+        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
+        findings = MockExplorationFindings(source_path="")
+        stage = IngestionStage(NotebookConfig(), findings)
+        assert stage.get_dataset_name() == "dataset"
+
+
 class TestStageGeneratorGetTargetColumn:
     def test_returns_target_from_findings(self):
         from customer_retention.generators.notebook_generator.config import NotebookConfig
@@ -159,6 +181,61 @@ class TestStageGeneratorGetCategoricalColumns:
         assert "gender" in categorical
         assert "tier" in categorical
         assert "age" not in categorical
+
+
+class TestStagePathsUseDatasetName:
+    def _code_for_stage(self, stage_cls, source_path="/data/customer_emails.csv"):
+        from customer_retention.generators.notebook_generator.config import NotebookConfig
+        findings = MockExplorationFindings(source_path=source_path)
+        stage = stage_cls(NotebookConfig(), findings)
+        cells = stage.generate_local_cells()
+        return "\n".join(c.source for c in cells if c.cell_type == "code")
+
+    def test_ingestion_passes_dataset_name_to_preparer(self):
+        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
+        code = self._code_for_stage(IngestionStage)
+        assert 'dataset_name="customer_emails"' in code
+
+    def test_cleaning_uses_dataset_name_in_paths(self):
+        from customer_retention.generators.notebook_generator.stages.s03_cleaning import CleaningStage
+        code = self._code_for_stage(CleaningStage)
+        assert "bronze/customer_emails" in code
+        assert "silver/customer_emails_cleaned" in code
+
+    def test_transformation_uses_dataset_name_in_paths(self):
+        from customer_retention.generators.notebook_generator.stages.s04_transformation import TransformationStage
+        code = self._code_for_stage(TransformationStage)
+        assert "silver/customer_emails_cleaned" in code
+        assert "silver/customer_emails_transformed" in code
+
+    def test_feature_engineering_uses_dataset_name_in_paths(self):
+        from customer_retention.generators.notebook_generator.stages.s05_feature_engineering import (
+            FeatureEngineeringStage,
+        )
+        code = self._code_for_stage(FeatureEngineeringStage)
+        assert "silver/customer_emails_transformed" in code
+        assert "gold/customer_emails_features" in code
+
+    def test_feature_selection_uses_dataset_name_in_paths(self):
+        from customer_retention.generators.notebook_generator.stages.s06_feature_selection import FeatureSelectionStage
+        code = self._code_for_stage(FeatureSelectionStage)
+        assert "gold/customer_emails_features.parquet" in code
+        assert "gold/customer_emails_selected.parquet" in code
+
+    def test_batch_inference_uses_dataset_name_in_paths(self):
+        from customer_retention.generators.notebook_generator.stages.s10_batch_inference import BatchInferenceStage
+        code = self._code_for_stage(BatchInferenceStage)
+        assert "gold/customer_emails_to_score" in code
+        assert "gold/customer_emails_features" in code
+
+    def test_fallback_dataset_name_without_findings(self):
+        from customer_retention.generators.notebook_generator.config import NotebookConfig
+        from customer_retention.generators.notebook_generator.stages.s03_cleaning import CleaningStage
+        stage = CleaningStage(NotebookConfig(), None)
+        cells = stage.generate_local_cells()
+        code = "\n".join(c.source for c in cells if c.cell_type == "code")
+        assert "bronze/dataset" in code
+        assert "silver/dataset_cleaned" in code
 
 
 class TestAllStageProperties:

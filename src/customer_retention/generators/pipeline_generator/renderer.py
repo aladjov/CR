@@ -242,11 +242,11 @@ def get_bronze_path(source_name: str) -> Path:
 
 
 def get_silver_path() -> Path:
-    return PRODUCTION_DIR / "data" / "silver" / "merged.parquet"
+    return PRODUCTION_DIR / "data" / "silver" / PIPELINE_NAME / "merged.parquet"
 
 
 def get_gold_path() -> Path:
-    return PRODUCTION_DIR / "data" / "gold" / "features.parquet"
+    return PRODUCTION_DIR / "data" / "gold" / PIPELINE_NAME / "features.parquet"
 
 
 def get_feast_data_path() -> Path:
@@ -278,8 +278,8 @@ EXCLUDED_SOURCES = [
 
 EXPLORATION_ARTIFACTS = {
     "bronze": {name: str(EXPERIMENTS_DIR / "data" / "bronze" / f"{name}.parquet") for name in SOURCES},
-    "silver": str(EXPERIMENTS_DIR / "data" / "silver" / "merged.parquet"),
-    "gold": str(EXPERIMENTS_DIR / "data" / "gold" / "features.parquet"),
+    "silver": str(EXPERIMENTS_DIR / "data" / "silver" / PIPELINE_NAME / "merged.parquet"),
+    "gold": str(EXPERIMENTS_DIR / "data" / "gold" / PIPELINE_NAME / "features.parquet"),
     "scoring": str(EXPERIMENTS_DIR / "data" / "scoring" / "predictions.parquet"),
 }
 """,
@@ -1763,7 +1763,7 @@ def validate_bronze(tolerance=1e-5):
 
 
 def validate_silver(tolerance=1e-5):
-    prod_path = PRODUCTION_DIR / "data" / "silver" / "merged.parquet"
+    prod_path = PRODUCTION_DIR / "data" / "silver" / PIPELINE_NAME / "merged.parquet"
     expl_path = EXPLORATION_ARTIFACTS.get("silver", "")
     entity_key = list(SOURCES.values())[0]["entity_key"] if SOURCES else None
     _compare_dataframes("Silver", str(prod_path), expl_path, entity_key=entity_key, tolerance=tolerance)
@@ -1771,7 +1771,7 @@ def validate_silver(tolerance=1e-5):
 
 
 def validate_gold(tolerance=1e-5):
-    prod_path = PRODUCTION_DIR / "data" / "gold" / "features.parquet"
+    prod_path = PRODUCTION_DIR / "data" / "gold" / PIPELINE_NAME / "features.parquet"
     expl_path = EXPLORATION_ARTIFACTS.get("gold", "")
     entity_key = list(SOURCES.values())[0]["entity_key"] if SOURCES else None
     _compare_dataframes("Gold", str(prod_path), expl_path, entity_key=entity_key, tolerance=tolerance)

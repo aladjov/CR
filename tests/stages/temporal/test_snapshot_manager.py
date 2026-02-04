@@ -222,6 +222,28 @@ class TestCreateSnapshotWithTimestampSeries(TestSnapshotManager):
         assert metadata.row_count == 3
 
 
+class TestDatasetNameNamespacing(TestSnapshotManager):
+    def test_dataset_name_namespaces_snapshots(self, temp_dir, sample_df):
+        manager = SnapshotManager(temp_dir, dataset_name="retail")
+        assert manager.snapshots_dir == temp_dir / "snapshots" / "retail"
+
+    def test_no_dataset_name_flat_snapshots(self, temp_dir):
+        manager = SnapshotManager(temp_dir)
+        assert manager.snapshots_dir == temp_dir / "snapshots"
+
+    def test_two_datasets_isolated(self, temp_dir, sample_df):
+        mgr_a = SnapshotManager(temp_dir, dataset_name="email")
+        mgr_b = SnapshotManager(temp_dir, dataset_name="retail")
+        cutoff = datetime(2024, 7, 1)
+
+        mgr_a.create_snapshot(sample_df, cutoff, "target")
+        mgr_b.create_snapshot(sample_df, cutoff, "target")
+
+        assert mgr_a.list_snapshots() == ["training_v1"]
+        assert mgr_b.list_snapshots() == ["training_v1"]
+        assert mgr_a.snapshots_dir != mgr_b.snapshots_dir
+
+
 @requires_delta
 class TestDeltaTimeTravel(TestSnapshotManager):
     def test_time_travel_reads_specific_version(self, manager, sample_df):

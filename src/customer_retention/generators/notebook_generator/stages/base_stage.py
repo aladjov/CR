@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional
 
 import nbformat
@@ -49,6 +50,11 @@ class StageGenerator(ABC):
         if self.description:
             cells.append(self.cb.markdown(self.description))
         return cells
+
+    def get_dataset_name(self) -> str:
+        if self.findings and hasattr(self.findings, "source_path") and self.findings.source_path:
+            return Path(self.findings.source_path).stem
+        return "dataset"
 
     def get_target_column(self) -> str:
         if self.findings and hasattr(self.findings, "target_column") and self.findings.target_column:

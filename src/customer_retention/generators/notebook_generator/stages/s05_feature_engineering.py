@@ -20,6 +20,7 @@ class FeatureEngineeringStage(StageGenerator):
         return "Create derived features, interactions, and aggregations."
 
     def generate_local_cells(self) -> List[nbformat.NotebookNode]:
+        name = self.get_dataset_name()
         return self.header_cells() + [
             self.cb.section("Imports"),
             self.cb.from_imports_cell({
@@ -31,17 +32,17 @@ class FeatureEngineeringStage(StageGenerator):
                 "numpy": ["np"],
             }),
             self.cb.section("Load Latest Training Snapshot"),
-            self.cb.code('''snapshot_manager = SnapshotManager(Path("./experiments/data"))
+            self.cb.code(f'''snapshot_manager = SnapshotManager(Path("./experiments/data"))
 latest_snapshot = snapshot_manager.get_latest_snapshot()
 if latest_snapshot:
     df, metadata = snapshot_manager.load_snapshot(latest_snapshot)
-    print(f"Loaded snapshot: {latest_snapshot}")
-    print(f"Rows: {len(df)}, Features: {len(df.columns)}")
+    print(f"Loaded snapshot: {{latest_snapshot}}")
+    print(f"Rows: {{len(df)}}, Features: {{len(df.columns)}}")
 else:
     from customer_retention.integrations.adapters.factory import get_delta
     storage = get_delta(force_local=True)
-    df = storage.read("./experiments/data/silver/customers_transformed")
-    print(f"No snapshot found, loaded transformed data: {df.shape}")'''),
+    df = storage.read("./experiments/data/silver/{name}_transformed")
+    print(f"No snapshot found, loaded transformed data: {{df.shape}}")'''),
             self.cb.section("Point-in-Time Feature Engineering"),
             self.cb.markdown('''**Important**: All temporal features are calculated relative to `feature_timestamp` to prevent data leakage.'''),
             self.cb.code('''if "feature_timestamp" in df.columns:
@@ -79,10 +80,10 @@ if len(numeric_cols) >= 2:
     df["avg_transaction_value"] = df["total_spend"] / (df["num_transactions"] + 1)
     print("Created avg_transaction_value feature")'''),
             self.cb.section("Save to Gold Layer"),
-            self.cb.code('''from customer_retention.integrations.adapters.factory import get_delta
+            self.cb.code(f'''from customer_retention.integrations.adapters.factory import get_delta
 storage = get_delta(force_local=True)
-storage.write(df, "./experiments/data/gold/customers_features")
-print(f"Gold layer saved: {df.shape}")'''),
+storage.write(df, "./experiments/data/gold/{name}_features")
+print(f"Gold layer saved: {{df.shape}}")'''),
         ]
 
     def generate_databricks_cells(self) -> List[nbformat.NotebookNode]:

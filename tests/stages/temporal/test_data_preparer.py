@@ -53,6 +53,26 @@ class TestUnifiedDataPreparer:
         })
 
 
+class TestDatasetName(TestUnifiedDataPreparer):
+    def test_dataset_name_in_unified_path(self, temp_dir, synthetic_config, raw_df):
+        preparer = UnifiedDataPreparer(temp_dir, synthetic_config, dataset_name="retail")
+        preparer.prepare_from_raw(raw_df, "churned", "customer_id")
+        delta_path = temp_dir / "unified" / "retail"
+        parquet_path = temp_dir / "unified" / "retail.parquet"
+        assert delta_path.exists() or parquet_path.exists()
+
+    def test_default_dataset_name(self, temp_dir, synthetic_config, raw_df):
+        preparer = UnifiedDataPreparer(temp_dir, synthetic_config)
+        preparer.prepare_from_raw(raw_df, "churned", "customer_id")
+        delta_path = temp_dir / "unified" / "unified_dataset"
+        parquet_path = temp_dir / "unified" / "unified_dataset.parquet"
+        assert delta_path.exists() or parquet_path.exists()
+
+    def test_dataset_name_forwarded_to_snapshot_manager(self, temp_dir, synthetic_config):
+        preparer = UnifiedDataPreparer(temp_dir, synthetic_config, dataset_name="email")
+        assert preparer.snapshot_manager.snapshots_dir == temp_dir / "snapshots" / "email"
+
+
 class TestPrepareFromRaw(TestUnifiedDataPreparer):
     def test_prepare_adds_timestamps(self, temp_dir, synthetic_config, raw_df):
         preparer = UnifiedDataPreparer(temp_dir, synthetic_config)

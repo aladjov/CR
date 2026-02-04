@@ -34,6 +34,7 @@ class TransformationStage(StageGenerator):
         tracking_uri = self.config.mlflow.tracking_uri
         exp_name = self.config.mlflow.experiment_name
         transform_recs = self._get_transform_recommendations()
+        name = self.get_dataset_name()
 
         cells = self.header_cells() + [
             self.cb.section("Imports"),
@@ -48,10 +49,10 @@ class TransformationStage(StageGenerator):
 mlflow_adapter.start_run("{exp_name}", run_name="04_transformation")
 transform_stats = {{}}'''),
             self.cb.section("Load Silver Data"),
-            self.cb.code('''from customer_retention.integrations.adapters.factory import get_delta
+            self.cb.code(f'''from customer_retention.integrations.adapters.factory import get_delta
 storage = get_delta(force_local=True)
-df = storage.read("./experiments/data/silver/customers_cleaned")
-print(f"Loaded shape: {df.shape}")
+df = storage.read("./experiments/data/silver/{name}_cleaned")
+print(f"Loaded shape: {{df.shape}}")
 mlflow_adapter.log_metric("input_rows", df.shape[0])
 mlflow_adapter.log_metric("input_columns", df.shape[1])'''),
         ]
@@ -109,9 +110,9 @@ print("Scoring pipeline will use these same transformers for consistency")'''),
 })
 print(f"Logged {len(transform_stats)} transformation statistics")'''),
             self.cb.section("Save Transformed Data"),
-            self.cb.code('''storage.write(df, "./experiments/data/silver/customers_transformed")
+            self.cb.code(f'''storage.write(df, "./experiments/data/silver/{name}_transformed")
 mlflow_adapter.end_run()
-print(f"Transformed data saved: {df.shape}")'''),
+print(f"Transformed data saved: {{df.shape}}")'''),
         ])
         return cells
 

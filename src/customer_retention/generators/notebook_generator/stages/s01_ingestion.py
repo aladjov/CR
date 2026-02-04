@@ -22,6 +22,7 @@ class IngestionStage(StageGenerator):
     def generate_local_cells(self) -> List[nbformat.NotebookNode]:
         findings_path = self.findings.source_path if self.findings else "./data/customers.csv"
         source_format = getattr(self.findings, "source_format", "csv") if self.findings else "csv"
+        name = self.get_dataset_name()
         return self.header_cells() + [
             self.cb.section("Imports"),
             self.cb.from_imports_cell({
@@ -55,13 +56,13 @@ print(f"Detected scenario: {scenario}")
 print(f"Strategy: {ts_config.strategy.value}")
 print(f"Recommendation: {discovery_result.recommendation}")'''),
             self.cb.section("Prepare Data with Timestamps"),
-            self.cb.code('''preparer = UnifiedDataPreparer(OUTPUT_DIR, ts_config)
+            self.cb.code(f'''preparer = UnifiedDataPreparer(OUTPUT_DIR, ts_config, dataset_name="{name}")
 unified_df = preparer.prepare_from_raw(
     df,
     target_column=findings.target_column,
     entity_column=findings.entity_id_column or "custid"
 )
-print(f"Prepared {len(unified_df)} rows with timestamps")
+print(f"Prepared {{len(unified_df)}} rows with timestamps")
 print(f"Timestamp columns: feature_timestamp, label_timestamp, label_available_flag")'''),
             self.cb.section("Create Training Snapshot"),
             self.cb.code('''cutoff_date = datetime.now()

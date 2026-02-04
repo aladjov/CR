@@ -34,6 +34,7 @@ class CleaningStage(StageGenerator):
         tracking_uri = self.config.mlflow.tracking_uri
         exp_name = self.config.mlflow.experiment_name
         cleaning_recs = self._get_cleaning_recommendations()
+        name = self.get_dataset_name()
 
         cells = self.header_cells() + [
             self.cb.section("Imports"),
@@ -47,19 +48,19 @@ class CleaningStage(StageGenerator):
 mlflow_adapter.start_run("{exp_name}", run_name="03_data_cleaning")
 cleaning_stats = {{}}'''),
             self.cb.section("Load Bronze Data"),
-            self.cb.code('''from customer_retention.integrations.adapters.factory import get_delta
+            self.cb.code(f'''from customer_retention.integrations.adapters.factory import get_delta
 storage = get_delta(force_local=True)
-df = storage.read("./experiments/data/bronze/customers")
+df = storage.read("./experiments/data/bronze/{name}")
 initial_shape = df.shape
 initial_nulls = df.isnull().sum().sum()
-print(f"Initial shape: {df.shape}")
-print(f"Total missing values: {initial_nulls}")
+print(f"Initial shape: {{df.shape}}")
+print(f"Total missing values: {{initial_nulls}}")
 
-mlflow_adapter.log_metrics({
+mlflow_adapter.log_metrics({{
     "bronze_rows": initial_shape[0],
     "bronze_columns": initial_shape[1],
     "bronze_total_nulls": initial_nulls,
-})'''),
+}})'''),
         ]
 
         if cleaning_recs:
@@ -113,9 +114,9 @@ mlflow_adapter.log_metrics({
 })
 print(f"Logged {len(cleaning_stats)} cleaning statistics to MLflow")'''),
             self.cb.section("Save to Silver Layer"),
-            self.cb.code('''storage.write(df, "./experiments/data/silver/customers_cleaned")
+            self.cb.code(f'''storage.write(df, "./experiments/data/silver/{name}_cleaned")
 mlflow_adapter.end_run()
-print(f"Silver layer saved: {df.shape}")'''),
+print(f"Silver layer saved: {{df.shape}}")'''),
         ])
         return cells
 

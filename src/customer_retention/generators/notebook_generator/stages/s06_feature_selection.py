@@ -23,6 +23,7 @@ class FeatureSelectionStage(StageGenerator):
         target = self.get_target_column()
         var_thresh = self.config.variance_threshold
         corr_thresh = self.config.correlation_threshold
+        name = self.get_dataset_name()
         return self.header_cells() + [
             self.cb.section("Imports"),
             self.cb.from_imports_cell({
@@ -31,8 +32,8 @@ class FeatureSelectionStage(StageGenerator):
                 "numpy": ["np"],
             }),
             self.cb.section("Load Gold Data"),
-            self.cb.code('''df = pd.read_parquet("./experiments/data/gold/customers_features.parquet")
-print(f"Input shape: {df.shape}")'''),
+            self.cb.code(f'''df = pd.read_parquet("./experiments/data/gold/{name}_features.parquet")
+print(f"Input shape: {{df.shape}}")'''),
             self.cb.section("Identify Feature Columns"),
             self.cb.code(f'''target_col = "{target}"
 id_cols = {self.get_identifier_columns()}
@@ -54,9 +55,9 @@ high_corr = [c for c in upper.columns if any(upper[c] > correlation_threshold)]
 print(f"High correlation features ({{len(high_corr)}}): {{high_corr[:5]}}")
 X = X.drop(columns=high_corr)'''),
             self.cb.section("Save Selected Features"),
-            self.cb.code('''selected_df = df[[*id_cols, *X.columns, target_col]].dropna(subset=[target_col])
-selected_df.to_parquet("./experiments/data/gold/customers_selected.parquet", index=False)
-print(f"Selected {len(X.columns)} features, saved {len(selected_df)} rows")'''),
+            self.cb.code(f'''selected_df = df[[*id_cols, *X.columns, target_col]].dropna(subset=[target_col])
+selected_df.to_parquet("./experiments/data/gold/{name}_selected.parquet", index=False)
+print(f"Selected {{len(X.columns)}} features, saved {{len(selected_df)}} rows")'''),
         ]
 
     def generate_databricks_cells(self) -> List[nbformat.NotebookNode]:
