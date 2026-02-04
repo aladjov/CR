@@ -63,8 +63,19 @@ class TestFeatureStoreStage:
     def test_generate_local_cells_has_feature_store_imports(self, stage):
         cells = stage.generate_local_cells()
         code = "\n".join(c.source for c in cells if c.cell_type == "code")
-        assert "FeatureStoreManager" in code
+        assert "get_feature_store_manager" in code
         assert "FeatureRegistry" in code
+
+    def test_generate_local_cells_uses_auto_detection(self, stage):
+        cells = stage.generate_local_cells()
+        code = "\n".join(c.source for c in cells if c.cell_type == "code")
+        assert "is_databricks" in code
+        assert 'backend="feast"' not in code
+
+    def test_generate_local_cells_no_direct_feast_import(self, stage):
+        cells = stage.generate_local_cells()
+        code = "\n".join(c.source for c in cells if c.cell_type == "code")
+        assert "from feast import" not in code
 
     def test_generate_local_cells_has_sections(self, stage):
         cells = stage.generate_local_cells()

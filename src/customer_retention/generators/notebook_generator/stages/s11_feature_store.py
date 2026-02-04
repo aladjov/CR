@@ -44,12 +44,13 @@ from pathlib import Path
 from datetime import datetime
 
 from customer_retention.integrations.feature_store import (
-    FeatureStoreManager,
     FeatureRegistry,
     TemporalFeatureDefinition,
     FeatureComputationType,
     TemporalAggregation,
+    get_feature_store_manager,
 )
+from customer_retention.core.compat.detection import is_databricks
 from customer_retention.stages.temporal import SnapshotManager
 
 print("Feature store imports loaded")'''),
@@ -107,14 +108,12 @@ print(f"Features: {registry.list_features()[:10]}...")  # Show first 10
 '''),
 
             self.cb.section("4. Initialize Feature Store Manager"),
-            self.cb.code('''# Create feature store manager (uses Feast locally)
-manager = FeatureStoreManager.create(
-    backend="feast",
+            self.cb.code('''manager = get_feature_store_manager(
     repo_path="./experiments/feature_store/feature_repo",
     output_path="./experiments/data",
 )
 
-print("Feature store manager initialized")
+print(f"Feature store manager initialized (backend: {'databricks' if is_databricks() else 'feast'})")
 print(f"Existing tables: {manager.list_tables()}")
 '''),
 

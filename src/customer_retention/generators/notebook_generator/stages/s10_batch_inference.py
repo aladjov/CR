@@ -51,7 +51,8 @@ import joblib
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from customer_retention.integrations.feature_store import FeatureStoreManager, FeatureRegistry
+from customer_retention.integrations.feature_store import FeatureRegistry, get_feature_store_manager
+from customer_retention.core.compat.detection import is_databricks
 from customer_retention.stages.temporal import SnapshotManager
 
 print("Batch inference imports loaded")'''),
@@ -95,14 +96,12 @@ else:
     registry = None'''),
 
             self.cb.section("4. Initialize Feature Store Manager"),
-            self.cb.code('''# Create feature store manager (Feast backend for local)
-manager = FeatureStoreManager.create(
-    backend="feast",
+            self.cb.code('''manager = get_feature_store_manager(
     repo_path="./experiments/feature_store/feature_repo",
     output_path="./experiments/data",
 )
 
-print(f"Feature store initialized")
+print(f"Feature store initialized (backend: {'databricks' if is_databricks() else 'feast'})")
 print(f"Available tables: {manager.list_tables()}")'''),
 
             self.cb.section("5. Load Customers to Score"),
