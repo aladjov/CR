@@ -341,8 +341,9 @@ class TestTypeDetectorSparkCompat:
 
     def test_is_binary_uses_safe_to_list(self):
         detector = TypeDetector()
+        series = pd.Series([0, 1, 0, 1])
         with patch(self.PATCH_TARGET, wraps=safe_to_list) as mock:
-            detector.is_binary(pd.Series([0, 1, 0, 1]))
+            detector.is_binary(series, series.nunique())
             mock.assert_called_once()
 
     def test_is_datetime_string_uses_safe_to_list(self):
@@ -361,7 +362,7 @@ class TestTypeDetectorSparkCompat:
         detector = TypeDetector()
         series = pd.Series(["2023-01-01", "2023-01-02", "2023-01-03"])
         with patch(self.PATCH_TARGET, wraps=safe_to_list) as mock:
-            detector.is_identifier(series, "random_col")
+            detector.is_identifier(series, "random_col", series.nunique())
             assert mock.called
 
     def test_detect_time_column_uses_safe_to_list(self):

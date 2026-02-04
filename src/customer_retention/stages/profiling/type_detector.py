@@ -30,21 +30,23 @@ class TypeDetector:
     def detect_type(self, series: pd.Series, column_name: str) -> TypeInference:
         self.evidence = []
 
-        if self.is_identifier(series, column_name):
+        distinct_count = series.nunique() if len(series) > 0 else 0
+
+        if self.is_identifier(series, column_name, distinct_count):
             return TypeInference(
                 inferred_type=ColumnType.IDENTIFIER,
                 confidence=TypeConfidence.HIGH,
                 evidence=self.evidence.copy()
             )
 
-        if self.is_target(series, column_name):
+        if self.is_target(column_name, distinct_count):
             return TypeInference(
                 inferred_type=ColumnType.TARGET,
                 confidence=TypeConfidence.HIGH,
                 evidence=self.evidence.copy()
             )
 
-        if self.is_binary(series):
+        if self.is_binary(series, distinct_count):
             return TypeInference(
                 inferred_type=ColumnType.BINARY,
                 confidence=TypeConfidence.HIGH,
@@ -59,10 +61,10 @@ class TypeDetector:
             )
 
         if is_numeric_dtype(series):
-            return self.detect_numeric_type(series)
+            return self.detect_numeric_type(distinct_count)
 
         if is_string_dtype(series) or series.dtype == object:
-            return self.detect_categorical_type(series)
+            return self.detect_categorical_type(series, distinct_count)
 
         return TypeInference(
             inferred_type=ColumnType.UNKNOWN,
@@ -70,7 +72,7 @@ class TypeDetector:
             evidence=["Could not determine type"]
         )
 
-    def is_identifier(self, series: pd.Series, column_name: str) -> bool:
+    def is_identifier(self, series: pd.Series, column_name: str, distinct_count: int) -> bool:
         column_lower = column_name.lower()
         if any(pattern in column_lower for pattern in self.IDENTIFIER_PATTERNS):
             self.evidence.append("Column name contains identifier pattern")
@@ -85,7 +87,6 @@ class TypeDetector:
         if is_numeric_dtype(series):
             return False
 
-        distinct_count = series.nunique()
         distinct_ratio = distinct_count / len(series)
 
         if distinct_ratio == 1.0 and distinct_count <= 100:
@@ -108,9 +109,8 @@ class TypeDetector:
 
         return False
 
-    def is_target(self, series: pd.Series, column_name: str) -> bool:
+    def is_target(self, column_name: str, distinct_count: int) -> bool:
         column_lower = column_name.lower()
-        distinct_count = series.nunique()
         if distinct_count > 10:
             return False
 
@@ -131,8 +131,7 @@ class TypeDetector:
 
         return False
 
-    def is_binary(self, series: pd.Series) -> bool:
-        distinct_count = series.nunique()
+    def is_binary(self, series: pd.Series, distinct_count: int) -> bool:
         if distinct_count != 2:
             return False
 
@@ -182,9 +181,7 @@ class TypeDetector:
 
         return False
 
-    def detect_numeric_type(self, series: pd.Series) -> TypeInference:
-        distinct_count = series.nunique()
-
+    def detect_numeric_type(self, distinct_count: int) -> TypeInference:
         if distinct_count <= 20:
             self.evidence.append(f"Numeric with {distinct_count} unique values (≤20)")
             return TypeInference(
@@ -201,15 +198,13 @@ class TypeDetector:
             evidence=self.evidence.copy()
         )
 
-    def detect_categorical_type(self, series: pd.Series) -> TypeInference:
+    def detect_categorical_type(self, series: pd.Series, distinct_count: int) -> TypeInference:
         if len(series) == 0 or series.dropna().empty:
             return TypeInference(
                 inferred_type=ColumnType.UNKNOWN,
                 confidence=TypeConfidence.LOW,
                 evidence=["Empty or all-null series"]
             )
-
-        distinct_count = series.nunique()
 
         if self.is_cyclical_pattern(series):
             return TypeInference(

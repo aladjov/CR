@@ -1,7 +1,71 @@
 import numpy as np
 import pandas as pd
 
+from customer_retention.core.compat import (
+    _extract_dtype,
+    is_bool_dtype,
+    is_categorical_dtype,
+    is_datetime64_any_dtype,
+    is_float_dtype,
+    is_integer_dtype,
+    is_numeric_dtype,
+    is_string_dtype,
+)
 from customer_retention.core.config import ColumnType
+
+
+class TestExtractDtypePreventsPySparkIterCrash:
+
+    def test_extract_dtype_from_series(self):
+        series = pd.Series(["a", "b", "c"])
+        result = _extract_dtype(series)
+        assert result == series.dtype
+
+    def test_extract_dtype_from_dtype_directly(self):
+        result = _extract_dtype(np.dtype("float64"))
+        assert result == np.dtype("float64")
+
+    def test_extract_dtype_from_string(self):
+        result = _extract_dtype("int64")
+        assert result == "int64"
+
+    def test_is_string_dtype_with_object_series(self):
+        series = pd.Series(["hello", "world"], dtype=object)
+        assert is_string_dtype(series) is True
+
+    def test_is_string_dtype_with_numeric_series(self):
+        series = pd.Series([1, 2, 3])
+        assert is_string_dtype(series) is False
+
+    def test_is_numeric_dtype_with_series(self):
+        assert is_numeric_dtype(pd.Series([1.0, 2.0])) is True
+        assert is_numeric_dtype(pd.Series(["a", "b"])) is False
+
+    def test_is_datetime64_any_dtype_with_series(self):
+        assert is_datetime64_any_dtype(pd.Series(pd.date_range("2023-01-01", periods=3))) is True
+        assert is_datetime64_any_dtype(pd.Series([1, 2, 3])) is False
+
+    def test_is_bool_dtype_with_series(self):
+        assert is_bool_dtype(pd.Series([True, False])) is True
+        assert is_bool_dtype(pd.Series([1, 2])) is False
+
+    def test_is_integer_dtype_with_series(self):
+        assert is_integer_dtype(pd.Series([1, 2, 3])) is True
+        assert is_integer_dtype(pd.Series([1.5, 2.5])) is False
+
+    def test_is_float_dtype_with_series(self):
+        assert is_float_dtype(pd.Series([1.0, 2.0])) is True
+        assert is_float_dtype(pd.Series([1, 2])) is False
+
+    def test_is_categorical_dtype_with_series(self):
+        assert is_categorical_dtype(pd.Categorical(["a", "b"])) is True
+        assert is_categorical_dtype(pd.Series([1, 2])) is False
+
+    def test_dtype_wrappers_accept_raw_dtype(self):
+        """All wrappers should also accept raw dtype objects (no regression)."""
+        assert is_numeric_dtype(np.dtype("float64")) is True
+        assert is_string_dtype(np.dtype("O")) is True
+        assert is_integer_dtype(np.dtype("int32")) is True
 
 
 class TestExplorerUsesCompatPd:

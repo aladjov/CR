@@ -89,32 +89,36 @@ isna = _pandas.isna
 api_types = _pandas.api.types
 
 
+def _extract_dtype(arr_or_dtype: Any) -> Any:
+    return arr_or_dtype.dtype if hasattr(arr_or_dtype, "dtype") else arr_or_dtype
+
+
 def is_numeric_dtype(arr_or_dtype: Any) -> bool:
-    return _pandas.api.types.is_numeric_dtype(arr_or_dtype)
+    return _pandas.api.types.is_numeric_dtype(_extract_dtype(arr_or_dtype))
 
 
 def is_string_dtype(arr_or_dtype: Any) -> bool:
-    return _pandas.api.types.is_string_dtype(arr_or_dtype)
+    return _pandas.api.types.is_string_dtype(_extract_dtype(arr_or_dtype))
 
 
 def is_datetime64_any_dtype(arr_or_dtype: Any) -> bool:
-    return _pandas.api.types.is_datetime64_any_dtype(arr_or_dtype)
+    return _pandas.api.types.is_datetime64_any_dtype(_extract_dtype(arr_or_dtype))
 
 
 def is_bool_dtype(arr_or_dtype: Any) -> bool:
-    return _pandas.api.types.is_bool_dtype(arr_or_dtype)
+    return _pandas.api.types.is_bool_dtype(_extract_dtype(arr_or_dtype))
 
 
 def is_categorical_dtype(arr_or_dtype: Any) -> bool:
-    return _pandas.api.types.is_categorical_dtype(arr_or_dtype)
+    return _pandas.api.types.is_categorical_dtype(_extract_dtype(arr_or_dtype))
 
 
 def is_integer_dtype(arr_or_dtype: Any) -> bool:
-    return _pandas.api.types.is_integer_dtype(arr_or_dtype)
+    return _pandas.api.types.is_integer_dtype(_extract_dtype(arr_or_dtype))
 
 
 def is_float_dtype(arr_or_dtype: Any) -> bool:
-    return _pandas.api.types.is_float_dtype(arr_or_dtype)
+    return _pandas.api.types.is_float_dtype(_extract_dtype(arr_or_dtype))
 
 
 def _infer_epoch_unit(value: int) -> str:
@@ -222,6 +226,7 @@ __all__ = [
     "is_categorical_dtype",
     "is_integer_dtype",
     "is_float_dtype",
+    "_extract_dtype",
     "get_spark_session",
     "set_spark_config",
     "enable_arrow_optimization",

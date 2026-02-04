@@ -143,15 +143,16 @@ class NumericProfiler(ColumnProfiler):
         if len(clean_series) == 0:
             return {"numeric_metrics": None}
 
-        mean_val = float(clean_series.mean())
-        std_val = float(clean_series.std())
-        min_val = float(clean_series.min())
-        max_val = float(clean_series.max())
+        desc = clean_series.describe(percentiles=[0.25, 0.5, 0.75])
+        mean_val = float(desc["mean"])
+        std_val = float(desc["std"])
+        min_val = float(desc["min"])
+        max_val = float(desc["max"])
         range_val = max_val - min_val
 
-        median_val = float(clean_series.median())
-        q1 = float(clean_series.quantile(0.25))
-        q3 = float(clean_series.quantile(0.75))
+        median_val = float(desc["50%"])
+        q1 = float(desc["25%"])
+        q3 = float(desc["75%"])
         iqr = q3 - q1
 
         try:
