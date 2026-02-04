@@ -1,0 +1,171 @@
+import textwrap
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from customer_retention.stages.scoring.config import ScoringConfig
+
+
+@pytest.fixture
+def databricks_env(monkeypatch):
+    monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+    monkeypatch.setenv("CR_CATALOG", "analytics")
+    monkeypatch.setenv("CR_SCHEMA", "churn")
+    monkeypatch.setenv("CR_EXPERIMENT_NAME", "customer_churn")
+    monkeypatch.setenv("CR_EXPERIMENTS_DIR", "/Volumes/analytics/churn/experiments")
+
+
+@pytest.fixture
+def mock_mlflow_client():
+    client = MagicMock()
+    experiment = MagicMock()
+    experiment.experiment_id = "123"
+    client.get_experiment_by_name.return_value = experiment
+    run = MagicMock()
+    run.data.tags = {
+        "recommendations_hash": "abc123",
+        "target_column": "unsubscribed",
+        "entity_key": "customer_id",
+        "timestamp_column": "event_timestamp",
+    }
+    run.data.params = {}
+    client.search_runs.return_value = [run]
+    return client
+
+
+@pytest.fixture
+def local_pipeline_dir(tmp_path):
+    pipeline_dir = tmp_path / "customer_churn"
+    pipeline_dir.mkdir()
+    config_content = textwrap.dedent("""\
+        from pathlib import Path
+        PIPELINE_NAME = "customer_churn"
+        TARGET_COLUMN = "unsubscribed"
+        RECOMMENDATIONS_HASH = "4131c25b"
+        FEAST_ENTITY_KEY = "customer_id"
+        FEAST_TIMESTAMP_COL = "event_timestamp"
+        FEAST_REPO_PATH = "/tmp/feast_repo"
+        FEAST_FEATURE_VIEW = "customer_churn_features"
+        MLFLOW_TRACKING_URI = "sqlite:///mlruns.db"
+        EXPERIMENTS_DIR = Path("/tmp/experiments")
+        PRODUCTION_DIR = Path("/tmp/production")
+        ARTIFACTS_PATH = "/tmp/production/artifacts/4131c25b"
+    """)
+    (pipeline_dir / "config.py").write_text(config_content)
+    return pipeline_dir
+
+
+class TestFromLocalConfig:
+    def test_reads_generated_config(self, local_pipeline_dir):
+        config = ScoringConfig.from_local_config(local_pipeline_dir)
+        assert config.pipeline_name == "customer_churn"
+        assert config.target_column == "unsubscribed"
+        assert config.entity_key == "customer_id"
+        assert config.timestamp_column == "event_timestamp"
+        assert config.recommendations_hash == "4131c25b"
+        assert config.feast_repo_path == "/tmp/feast_repo"
+        assert config.feast_feature_view == "customer_churn_features"
+        assert config.mlflow_tracking_uri == "sqlite:///mlruns.db"
+        assert config.experiments_dir == Path("/tmp/experiments")
+        assert config.production_dir == Path("/tmp/production")
+        assert config.artifacts_path == Path("/tmp/production/artifacts/4131c25b")
+
+    def test_missing_dir_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            ScoringConfig.from_local_config(tmp_path / "nonexistent")
+
+    def test_missing_config_py_raises(self, tmp_path):
+        empty_dir = tmp_path / "empty_pipeline"
+        empty_dir.mkdir()
+        with pytest.raises(FileNotFoundError):
+            ScoringConfig.from_local_config(empty_dir)
+
+    def test_catalog_and_schema_empty_for_local(self, local_pipeline_dir):
+        config = ScoringConfig.from_local_config(local_pipeline_dir)
+        assert config.catalog == ""
+        assert config.schema == ""
+
+
+class TestFromDatabricks:
+    def test_reads_env_vars(self, databricks_env, mock_mlflow_client):
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=mock_mlflow_client):
+            config = ScoringConfig.from_databricks()
+        assert config.catalog == "analytics"
+        assert config.schema == "churn"
+        assert config.pipeline_name == "customer_churn"
+        assert config.experiments_dir == Path("/Volumes/analytics/churn/experiments")
+
+    def test_discovers_target_from_mlflow(self, databricks_env, mock_mlflow_client):
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=mock_mlflow_client):
+            config = ScoringConfig.from_databricks()
+        assert config.target_column == "unsubscribed"
+        assert config.entity_key == "customer_id"
+        assert config.recommendations_hash == "abc123"
+
+    def test_missing_experiment_raises(self, databricks_env):
+        client = MagicMock()
+        client.get_experiment_by_name.return_value = None
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=client):
+            with pytest.raises(ValueError, match="not found"):
+                ScoringConfig.from_databricks()
+
+    def test_empty_runs_raises(self, databricks_env):
+        client = MagicMock()
+        experiment = MagicMock()
+        experiment.experiment_id = "123"
+        client.get_experiment_by_name.return_value = experiment
+        client.search_runs.return_value = []
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=client):
+            with pytest.raises(ValueError, match="No runs found"):
+                ScoringConfig.from_databricks()
+
+    def test_defaults_for_missing_tags(self, databricks_env):
+        client = MagicMock()
+        experiment = MagicMock()
+        experiment.experiment_id = "123"
+        client.get_experiment_by_name.return_value = experiment
+        run = MagicMock()
+        run.data.tags = {}
+        run.data.params = {"target_column": "churn"}
+        client.search_runs.return_value = [run]
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=client):
+            config = ScoringConfig.from_databricks()
+        assert config.target_column == "churn"
+        assert config.entity_key == "customer_id"
+        assert config.recommendations_hash == ""
+
+    def test_artifacts_path_on_volumes(self, databricks_env, mock_mlflow_client):
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=mock_mlflow_client):
+            config = ScoringConfig.from_databricks()
+        assert str(config.artifacts_path).startswith("/Volumes/")
+
+    def test_mlflow_tracking_uri_databricks(self, databricks_env, mock_mlflow_client):
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=mock_mlflow_client):
+            config = ScoringConfig.from_databricks()
+        assert config.mlflow_tracking_uri == "databricks"
+
+    def test_feast_fields_empty_on_databricks(self, databricks_env, mock_mlflow_client):
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=mock_mlflow_client):
+            config = ScoringConfig.from_databricks()
+        assert config.feast_repo_path == ""
+        assert config.feast_feature_view == ""
+
+
+class TestScoringConfigProperties:
+    def test_original_column(self, local_pipeline_dir):
+        config = ScoringConfig.from_local_config(local_pipeline_dir)
+        assert config.original_column == "original_unsubscribed"
+
+    def test_is_databricks_false_for_local(self, local_pipeline_dir):
+        config = ScoringConfig.from_local_config(local_pipeline_dir)
+        assert not config.is_databricks
+
+    def test_is_databricks_true(self, databricks_env, mock_mlflow_client):
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=mock_mlflow_client):
+            config = ScoringConfig.from_databricks()
+        assert config.is_databricks
+
+    def test_scoring_output_dir(self, local_pipeline_dir):
+        config = ScoringConfig.from_local_config(local_pipeline_dir)
+        assert config.scoring_output_dir == Path("/tmp/experiments/data/scoring")
