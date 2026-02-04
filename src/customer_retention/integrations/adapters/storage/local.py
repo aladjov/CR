@@ -28,6 +28,8 @@ class LocalDelta(DeltaStorage):
               partition_by: Optional[List[str]] = None,
               metadata: Optional[Dict[str, str]] = None) -> None:
         kwargs = {"mode": mode}
+        if mode == "overwrite":
+            kwargs["schema_mode"] = "overwrite"
         if partition_by:
             kwargs["partition_by"] = partition_by
         if metadata:

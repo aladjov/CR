@@ -97,6 +97,18 @@ class TestLocalDeltaWrite:
         result = storage.read(delta_path)
         assert len(result) == 3
 
+    def test_write_overwrite_with_schema_change(self, tmp_path):
+        from customer_retention.integrations.adapters.storage import LocalDelta
+        storage = LocalDelta()
+        delta_path = str(tmp_path / "test_table")
+        df1 = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+        df2 = pd.DataFrame({"a": [5, 6], "c": [7, 8]})
+        storage.write(df1, delta_path)
+        storage.write(df2, delta_path, mode="overwrite")
+        result = storage.read(delta_path)
+        assert set(result.columns) == {"a", "c"}
+        assert len(result) == 2
+
     def test_write_append_mode(self, tmp_path):
         from customer_retention.integrations.adapters.storage import LocalDelta
         storage = LocalDelta()

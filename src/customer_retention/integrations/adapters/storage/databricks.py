@@ -39,6 +39,8 @@ class DatabricksDelta(DeltaStorage):
             )
         spark_df = self.spark.createDataFrame(df)
         writer = spark_df.write.format("delta").mode(mode)
+        if mode == "overwrite":
+            writer = writer.option("overwriteSchema", "true")
         if partition_by:
             writer = writer.partitionBy(*partition_by)
         writer.save(path)
