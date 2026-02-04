@@ -48,7 +48,12 @@ from .data_preparer import PreparedData, UnifiedDataPreparer
 from .point_in_time_join import PointInTimeJoiner
 from .point_in_time_registry import ConsistencyReport, DatasetSnapshot, PointInTimeRegistry
 from .scenario_detector import ScenarioDetector
-from .snapshot_manager import SnapshotManager, SnapshotMetadata
+from .snapshot_manager import (
+    SnapshotManager,
+    SnapshotMetadata,
+    compute_composite_dataset_name,
+    require_consistent_cutoffs,
+)
 from .synthetic_coordinator import SyntheticCoordinationParams, SyntheticTimestampCoordinator
 from .timestamp_discovery import (
     DatetimeOrderAnalyzer,
@@ -78,7 +83,7 @@ def _restore_snapshot_columns(df, findings):
     return df.rename(columns=renames) if renames else df
 
 
-def load_data_with_snapshot_preference(findings, output_dir: str = "../explorations"):
+def load_data_with_snapshot_preference(findings, output_dir: str = "../explorations", dataset_name: str = None):
     """Load data preferring snapshots over raw source files.
 
     This function implements the recommended data loading pattern for exploration
@@ -91,6 +96,10 @@ def load_data_with_snapshot_preference(findings, output_dir: str = "../explorati
         The findings object loaded from a previous exploration
     output_dir : str
         Directory containing explorations and snapshots
+    dataset_name : str, optional
+        Explicit dataset namespace for snapshot discovery. When provided, used
+        directly (e.g. a composite name from compute_composite_dataset_name).
+        When None, derived from findings.source_path stem.
 
     Returns
     -------
@@ -108,23 +117,14 @@ def load_data_with_snapshot_preference(findings, output_dir: str = "../explorati
 
     import pandas as pd
 
-    # Check if snapshot exists in findings
-    snapshot_path = getattr(findings, 'snapshot_path', None)
-
-    if snapshot_path and Path(snapshot_path).exists():
-        df = pd.read_parquet(snapshot_path)
-        return _restore_snapshot_columns(df, findings), "snapshot"
-
-    # Check for snapshots in output directory
-    output_path = Path(output_dir) / "snapshots"
-    if output_path.exists():
-        snapshot_manager = SnapshotManager(Path(output_dir))
-        snapshots = snapshot_manager.list_snapshots()
-        if snapshots:
-            latest = snapshot_manager.get_latest_snapshot()
-            if latest:
-                df, _ = snapshot_manager.load_snapshot(latest)
-                return _restore_snapshot_columns(df, findings), f"snapshot:{latest}"
+    if not dataset_name and not findings.source_path:
+        raise ValueError("findings.source_path is required for snapshot discovery")
+    resolved_name = dataset_name or Path(findings.source_path).stem
+    mgr = SnapshotManager(Path(output_dir), dataset_name=resolved_name)
+    latest = mgr.get_latest_snapshot()
+    if latest:
+        df, _ = mgr.load_snapshot(latest)
+        return _restore_snapshot_columns(df, findings), f"snapshot:{latest}"
 
     # Fall back to source file
     source_path = findings.source_path
@@ -161,6 +161,8 @@ __all__ = [
     "SplitResult",
     "SyntheticCoordinationParams",
     "SyntheticTimestampCoordinator",
+    "compute_composite_dataset_name",
+    "require_consistent_cutoffs",
     "load_data_with_snapshot_preference",
     "TEMPORAL_METADATA_COLS",
 ]

@@ -68,6 +68,7 @@ class MultiDatasetFindings:
     event_datasets: List[str] = field(default_factory=list)
     excluded_datasets: List[str] = field(default_factory=list)
     aggregation_windows: List[str] = field(default_factory=lambda: ["24h", "7d", "30d", "90d", "180d", "365d", "all_time"])
+    composite_dataset_name: Optional[str] = None
     notes: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -196,6 +197,7 @@ class MultiDatasetFindings:
             "event_datasets": self.event_datasets,
             "excluded_datasets": self.excluded_datasets,
             "aggregation_windows": self.aggregation_windows,
+            "composite_dataset_name": self.composite_dataset_name,
             "notes": self.notes,
         }
 
@@ -243,6 +245,7 @@ class MultiDatasetFindings:
             event_datasets=data.get("event_datasets", []),
             excluded_datasets=data.get("excluded_datasets", []),
             aggregation_windows=data.get("aggregation_windows", ["24h", "7d", "30d", "90d", "180d", "365d", "all_time"]),
+            composite_dataset_name=data.get("composite_dataset_name"),
             notes=data.get("notes", {}),
         )
 

@@ -34,6 +34,30 @@ from typing import Any, Optional
 import pandas as pd
 
 
+def compute_composite_dataset_name(dataset_names: list[str]) -> str:
+    cleaned = [n.strip() for n in dataset_names if n.strip()]
+    if not cleaned:
+        raise ValueError("dataset_names must contain at least one non-blank name")
+    joined = "\0".join(sorted(cleaned))
+    return f"combined_{hashlib.md5(joined.encode()).hexdigest()[:6]}"
+
+
+def require_consistent_cutoffs(registry, dataset_names: list[str]) -> str:
+    composite_name = compute_composite_dataset_name(dataset_names)
+    missing = [n for n in dataset_names if registry.get_snapshot(n) is None]
+    if missing:
+        raise ValueError(f"Datasets not registered in PIT registry: {', '.join(missing)}")
+    cutoffs = {n: registry.get_snapshot(n).cutoff_date for n in dataset_names}
+    reference_date = next(iter(cutoffs.values())).date()
+    inconsistent = [n for n, c in cutoffs.items() if c.date() != reference_date]
+    if inconsistent:
+        raise ValueError(
+            f"Inconsistent cutoff dates for merge. Reference: {reference_date}. "
+            f"Out of sync: {', '.join(inconsistent)}. Re-run exploration for these datasets."
+        )
+    return composite_name
+
+
 @dataclass
 class SnapshotMetadata:
     """Metadata for a training data snapshot.

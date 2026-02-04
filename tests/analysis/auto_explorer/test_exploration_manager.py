@@ -515,3 +515,30 @@ class TestAggregatedFindingsDiscovery:
         assert manager._get_base_name(Path("events_abc123_aggregated_findings.yaml")) == "events"
         assert manager._get_base_name(Path("my_dataset_def456_findings.yaml")) == "my_dataset"
         assert manager._get_base_name(Path("my_dataset_def456_aggregated_xyz789_findings.yaml")) == "my_dataset"
+
+
+class TestCompositeDatasetNamePersistence:
+    def test_composite_dataset_name_defaults_to_none(self):
+        multi = MultiDatasetFindings()
+        assert multi.composite_dataset_name is None
+
+    def test_composite_dataset_name_persists_through_save_load(self, temp_explorations_dir, sample_entity_findings, sample_event_findings):
+        manager = ExplorationManager(explorations_dir=temp_explorations_dir)
+        multi = manager.create_multi_dataset_findings()
+        multi.composite_dataset_name = "combined_abc123"
+
+        save_path = temp_explorations_dir / "multi_dataset_findings.yaml"
+        multi.save(str(save_path))
+
+        loaded = MultiDatasetFindings.load(str(save_path))
+        assert loaded.composite_dataset_name == "combined_abc123"
+
+    def test_composite_dataset_name_none_persists_through_save_load(self, temp_explorations_dir, sample_entity_findings):
+        manager = ExplorationManager(explorations_dir=temp_explorations_dir)
+        multi = manager.create_multi_dataset_findings()
+
+        save_path = temp_explorations_dir / "multi_dataset_findings.yaml"
+        multi.save(str(save_path))
+
+        loaded = MultiDatasetFindings.load(str(save_path))
+        assert loaded.composite_dataset_name is None
