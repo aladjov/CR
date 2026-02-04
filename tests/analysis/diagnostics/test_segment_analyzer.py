@@ -66,13 +66,13 @@ class TestSegmentPerformance:
 
     def test_sg003_flags_small_segments(self, sample_data, trained_model):
         X, y = sample_data
-        segments = pd.Series(["large"] * 475 + ["small"] * 25)
+        segments = pd.Series(["large"] * 480 + ["small"] * 20)
 
         analyzer = SegmentPerformanceAnalyzer()
         result = analyzer.analyze_performance(trained_model, X, y, segments)
 
         small_segment_checks = [c for c in result.checks if "small" in c.segment.lower() or c.check_id == "SG003"]
-        assert len(small_segment_checks) >= 0
+        assert len(small_segment_checks) > 0
 
 
 class TestSegmentResult:

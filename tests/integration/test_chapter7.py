@@ -47,8 +47,8 @@ class TestGlobalInterpretability:
         X = retail_data[feature_columns].fillna(0)
         explainer = ShapExplainer(trained_model, X)
         result = explainer.explain_global(X.head(50))
-        assert result is not None
-        assert result.shap_values is not None
+        assert result.shap_values.shape[0] == 50
+        assert result.shap_values.shape[1] == len(feature_columns)
 
     def test_ac7_2_feature_ranking_returned(self, trained_model, retail_data, feature_columns):
         X = retail_data[feature_columns].fillna(0)
@@ -62,7 +62,8 @@ class TestGlobalInterpretability:
         explainer = ShapExplainer(trained_model, X, feature_translations=translations)
         result = explainer.explain_global(X.head(50))
         for fi in result.feature_importance:
-            assert fi.business_description is not None
+            assert isinstance(fi.business_description, str)
+            assert len(fi.business_description) > 0
 
 
 class TestCohortInterpretability:
@@ -89,7 +90,8 @@ class TestCohortInterpretability:
         analyzer = CohortAnalyzer(trained_model, X)
         result = analyzer.analyze(X, y, cohorts)
         for insight in result.cohort_insights:
-            assert insight.recommended_strategy is not None
+            assert isinstance(insight.recommended_strategy, str)
+            assert len(insight.recommended_strategy) > 0
 
 
 class TestIndividualInterpretability:
@@ -97,7 +99,7 @@ class TestIndividualInterpretability:
         X = retail_data[feature_columns].fillna(0)
         explainer = IndividualExplainer(trained_model, X)
         result = explainer.explain(X.iloc[0])
-        assert result.shap_values is not None
+        assert len(result.shap_values) == len(feature_columns)
 
     def test_ac7_9_risk_factors_extracted(self, trained_model, retail_data, feature_columns):
         X = retail_data[feature_columns].fillna(0)
@@ -117,7 +119,7 @@ class TestCounterfactuals:
         X = retail_data[feature_columns].fillna(0)
         generator = CounterfactualGenerator(trained_model, X, actionable_features=["ordfreq", "eopenrate"])
         result = generator.generate(X.iloc[0])
-        assert result is not None
+        assert hasattr(result, "changes")
 
     def test_ac7_12_changes_are_actionable(self, trained_model, retail_data, feature_columns):
         X = retail_data[feature_columns].fillna(0)
@@ -131,7 +133,8 @@ class TestCounterfactuals:
         X = retail_data[feature_columns].fillna(0)
         generator = CounterfactualGenerator(trained_model, X, actionable_features=["ordfreq"])
         result = generator.generate(X.iloc[0])
-        assert result.business_interpretation is not None
+        assert isinstance(result.business_interpretation, str)
+        assert len(result.business_interpretation) > 0
 
 
 class TestRiskProfiles:
@@ -140,8 +143,8 @@ class TestRiskProfiles:
         profiler = RiskProfiler(trained_model, X)
         profile = profiler.generate_profile(X.iloc[0], customer_id="CUST001")
         assert profile.customer_id == "CUST001"
-        assert profile.churn_probability is not None
-        assert profile.risk_segment is not None
+        assert 0.0 <= profile.churn_probability <= 1.0
+        assert profile.risk_segment is not None  # Enum value, presence is semantic
 
     def test_ac7_15_segments_assigned(self, trained_model, retail_data, feature_columns):
         X = retail_data[feature_columns].fillna(0)
@@ -156,7 +159,7 @@ class TestRiskProfiles:
         X = retail_data[feature_columns].fillna(0)
         profiler = RiskProfiler(trained_model, X)
         profile = profiler.generate_profile(X.iloc[0])
-        assert len(profile.recommended_interventions) >= 0
+        assert isinstance(profile.recommended_interventions, list)
 
 
 class TestROIAnalysis:
@@ -167,7 +170,7 @@ class TestROIAnalysis:
             success_rates={"email": 0.10, "phone": 0.25}
         )
         result = analyzer.calculate_roi("phone", 100, 0.30)
-        assert result.roi_pct is not None
+        assert isinstance(result.roi_pct, (int, float))
 
     def test_ac7_18_positive_roi_strategies_exist(self):
         analyzer = ROIAnalyzer(
@@ -253,7 +256,7 @@ class TestFairness:
         protected = pd.Series(["GroupA" if i % 2 == 0 else "GroupB" for i in range(len(y))])
         analyzer = FairnessAnalyzer(threshold=0.8)
         result = analyzer.analyze(y, y_pred, protected)
-        assert result.passed is not None
+        assert isinstance(result.passed, bool)
 
     def test_ac7_25_recommendations_provided(self, trained_model, retail_data, feature_columns):
         X = retail_data[feature_columns].fillna(0)
@@ -262,7 +265,7 @@ class TestFairness:
         protected = pd.Series(["GroupA" if i % 2 == 0 else "GroupB" for i in range(len(y))])
         analyzer = FairnessAnalyzer()
         result = analyzer.analyze(y, y_pred, protected)
-        assert result.recommendations is not None
+        assert isinstance(result.recommendations, list)
 
 
 class TestPDPGeneration:
@@ -303,11 +306,11 @@ class TestFullInterpretabilityPipeline:
         assert len(global_result.feature_importance) > 0
         individual_explainer = IndividualExplainer(trained_model, X)
         individual_result = individual_explainer.explain(X.iloc[0])
-        assert individual_result.churn_probability is not None
+        assert 0.0 <= individual_result.churn_probability <= 1.0
         profiler = RiskProfiler(trained_model, X, avg_customer_ltv=500)
         profile = profiler.generate_profile(X.iloc[0], customer_id="CUST001")
-        assert profile.risk_segment is not None
-        assert len(profile.recommended_interventions) >= 0
+        assert profile.risk_segment is not None  # Enum value
+        assert isinstance(profile.recommended_interventions, list)
         customer_data = pd.DataFrame({
             "customer_id": ["CUST001"],
             "churn_probability": [profile.churn_probability],
@@ -319,4 +322,4 @@ class TestFullInterpretabilityPipeline:
             customer_data=customer_data,
             model_metrics={"pr_auc": 0.75}
         )
-        assert dashboard is not None
+        assert dashboard.total_customers == 1

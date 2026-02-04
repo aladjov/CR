@@ -315,7 +315,7 @@ class TestRecommendationEngineIntegration:
 
         assert target_rec is not None
         assert len(feature_recs) > 0
-        assert len(cleaning_recs) >= 0
+        assert len(cleaning_recs) > 0
         assert len(transform_recs) > 0
 
     def test_generate_summary(self, sample_findings):

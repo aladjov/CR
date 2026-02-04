@@ -39,77 +39,77 @@ class TestColumnTypeDistribution:
     def test_creates_figure(self, chart_builder):
         type_counts = {"numeric_continuous": 5, "categorical_nominal": 3, "target": 1}
         fig = chart_builder.column_type_distribution(type_counts)
-        assert fig is not None
+        assert fig.data is not None
         assert hasattr(fig, "update_layout")
 
     def test_empty_input(self, chart_builder):
         fig = chart_builder.column_type_distribution({})
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestDataQualityScorecard:
     def test_creates_figure(self, chart_builder):
         scores = {"col1": 95.0, "col2": 75.0, "col3": 45.0}
         fig = chart_builder.data_quality_scorecard(scores)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_colors_by_score(self, chart_builder):
         scores = {"good": 90.0, "medium": 70.0, "bad": 40.0}
         fig = chart_builder.data_quality_scorecard(scores)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestMissingValueBars:
     def test_creates_figure(self, chart_builder):
         null_pcts = {"col1": 0.0, "col2": 10.0, "col3": 50.0}
         fig = chart_builder.missing_value_bars(null_pcts)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestHistogramWithStats:
     def test_creates_figure(self, chart_builder, sample_dataframe):
         fig = chart_builder.histogram_with_stats(sample_dataframe["numeric_col"])
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_custom_title(self, chart_builder, sample_dataframe):
         fig = chart_builder.histogram_with_stats(sample_dataframe["numeric_col"], title="Custom Title")
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestBoxPlot:
     def test_creates_figure(self, chart_builder, sample_dataframe):
         fig = chart_builder.box_plot(sample_dataframe["numeric_col"])
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestOutlierVisualization:
     def test_creates_figure(self, chart_builder, sample_dataframe):
         fig = chart_builder.outlier_visualization(sample_dataframe["numeric_col"])
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestCategoryBarChart:
     def test_creates_figure(self, chart_builder, sample_dataframe):
         fig = chart_builder.category_bar_chart(sample_dataframe["categorical_col"])
-        assert fig is not None
+        assert fig.data is not None
 
     def test_top_n_parameter(self, chart_builder, sample_dataframe):
         fig = chart_builder.category_bar_chart(sample_dataframe["categorical_col"], top_n=2)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestCorrelationHeatmap:
     def test_creates_figure(self, chart_builder, sample_dataframe):
         numeric_df = sample_dataframe[["numeric_col", "target"]]
         fig = chart_builder.correlation_heatmap(numeric_df)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestTargetCorrelationBars:
     def test_creates_figure(self, chart_builder):
         correlations = {"feature1": 0.5, "feature2": -0.3, "feature3": 0.1}
         fig = chart_builder.target_correlation_bars(correlations, "target")
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestROCCurve:
@@ -117,19 +117,19 @@ class TestROCCurve:
         fpr = [0.0, 0.1, 0.2, 0.5, 1.0]
         tpr = [0.0, 0.4, 0.6, 0.8, 1.0]
         fig = chart_builder.roc_curve(fpr, tpr, auc_score=0.85)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestConfusionMatrixHeatmap:
     def test_creates_figure(self, chart_builder):
         cm = [[50, 10], [5, 35]]
         fig = chart_builder.confusion_matrix_heatmap(cm)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_labels(self, chart_builder):
         cm = [[50, 10], [5, 35]]
         fig = chart_builder.confusion_matrix_heatmap(cm, labels=["Negative", "Positive"])
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestFeatureImportancePlot:
@@ -139,7 +139,7 @@ class TestFeatureImportancePlot:
             "importance": [0.5, 0.3, 0.2]
         })
         fig = chart_builder.feature_importance_plot(importance_df)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestLiftCurve:
@@ -147,7 +147,7 @@ class TestLiftCurve:
         percentiles = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
         lift_values = [3.0, 2.5, 2.0, 1.8, 1.5, 1.3, 1.1, 1.0, 0.9, 0.8]
         fig = chart_builder.lift_curve(percentiles, lift_values)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestTimeSeriesPlot:
@@ -157,7 +157,7 @@ class TestTimeSeriesPlot:
             "value": np.random.randn(10)
         })
         fig = chart_builder.time_series_plot(df, "date", "value")
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestCohortRetentionHeatmap:
@@ -168,64 +168,64 @@ class TestCohortRetentionHeatmap:
             "Month 2": [0.6, 0.5, 0.7]
         }, index=["Cohort A", "Cohort B", "Cohort C"])
         fig = chart_builder.cohort_retention_heatmap(retention_matrix)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestBarChart:
     def test_creates_figure(self, chart_builder):
         fig = chart_builder.bar_chart(["A", "B", "C"], [10, 20, 30], title="Test Bar")
-        assert fig is not None
+        assert fig.data is not None
 
     def test_horizontal_bar(self, chart_builder):
         fig = chart_builder.bar_chart(["A", "B"], [10, 20], horizontal=True)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_labels(self, chart_builder):
         fig = chart_builder.bar_chart(["X", "Y"], [5, 15], x_label="Category", y_label="Count")
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestHistogram:
     def test_creates_figure(self, chart_builder, sample_dataframe):
         fig = chart_builder.histogram(sample_dataframe["numeric_col"])
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_title(self, chart_builder, sample_dataframe):
         fig = chart_builder.histogram(sample_dataframe["numeric_col"], title="Custom Histogram")
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_nbins(self, chart_builder, sample_dataframe):
         fig = chart_builder.histogram(sample_dataframe["numeric_col"], nbins=10)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestHeatmap:
     def test_creates_figure(self, chart_builder):
         z = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
         fig = chart_builder.heatmap(z, ["A", "B", "C"], ["X", "Y", "Z"])
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_title(self, chart_builder):
         z = [[0.5, -0.3], [-0.3, 0.8]]
         fig = chart_builder.heatmap(z, ["a", "b"], ["a", "b"], title="Correlation")
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_custom_colorscale(self, chart_builder):
         z = [[1, 2], [3, 4]]
         fig = chart_builder.heatmap(z, ["A", "B"], ["X", "Y"], colorscale="Blues")
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestScatterMatrix:
     def test_creates_figure(self, chart_builder, sample_dataframe):
         numeric_df = sample_dataframe[["numeric_col", "target"]]
         fig = chart_builder.scatter_matrix(numeric_df)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_title(self, chart_builder, sample_dataframe):
         numeric_df = sample_dataframe[["numeric_col", "target"]]
         fig = chart_builder.scatter_matrix(numeric_df, title="Scatter Matrix")
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_color_column(self, chart_builder):
         df = pd.DataFrame({
@@ -234,7 +234,7 @@ class TestScatterMatrix:
             "cohort": ["Retained"] * 25 + ["Churned"] * 25,
         })
         fig = chart_builder.scatter_matrix(df[["feature1", "feature2"]], color_column=df["cohort"])
-        assert fig is not None
+        assert fig.data is not None
         assert len(fig.data) > 0
 
     def test_color_column_with_custom_colors(self, chart_builder):
@@ -247,7 +247,7 @@ class TestScatterMatrix:
         fig = chart_builder.scatter_matrix(
             df[["f1", "f2"]], color_column=df["group"], color_map=color_map
         )
-        assert fig is not None
+        assert fig.data is not None
 
     def test_color_column_uses_default_cohort_colors(self, chart_builder):
         df = pd.DataFrame({
@@ -256,7 +256,7 @@ class TestScatterMatrix:
             "cohort": ["Retained", "Retained", "Churned", "Churned"],
         })
         fig = chart_builder.scatter_matrix(df[["x", "y"]], color_column=df["cohort"])
-        assert fig is not None
+        assert fig.data is not None
 
     def test_markers_have_transparency(self, chart_builder):
         df = pd.DataFrame({
@@ -265,7 +265,7 @@ class TestScatterMatrix:
             "cohort": ["Retained"] * 10 + ["Churned"] * 10,
         })
         fig = chart_builder.scatter_matrix(df[["x", "y"]], color_column=df["cohort"])
-        assert fig is not None
+        assert fig.data is not None
         for trace in fig.data:
             if hasattr(trace, "marker") and trace.marker is not None:
                 assert trace.marker.opacity is not None
@@ -279,12 +279,12 @@ class TestMultiLineChart:
             {"fpr": [0, 0.5, 1], "tpr": [0, 0.6, 1], "name": "Model B"}
         ]
         fig = chart_builder.multi_line_chart(data, "fpr", "tpr", "name", title="ROC Comparison")
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_axis_titles(self, chart_builder):
         data = [{"x": [1, 2, 3], "y": [1, 4, 9], "label": "Quadratic"}]
         fig = chart_builder.multi_line_chart(data, "x", "y", "label", x_title="X", y_title="Y")
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestTemporalDistribution:
@@ -297,19 +297,19 @@ class TestTemporalDistribution:
 
     def test_creates_figure(self, chart_builder, temporal_analysis):
         fig = chart_builder.temporal_distribution(temporal_analysis)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_bar_chart_type(self, chart_builder, temporal_analysis):
         fig = chart_builder.temporal_distribution(temporal_analysis, chart_type="bar")
-        assert fig is not None
+        assert fig.data is not None
 
     def test_line_chart_type(self, chart_builder, temporal_analysis):
         fig = chart_builder.temporal_distribution(temporal_analysis, chart_type="line")
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_title(self, chart_builder, temporal_analysis):
         fig = chart_builder.temporal_distribution(temporal_analysis, title="Custom Title")
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestTemporalTrend:
@@ -322,31 +322,31 @@ class TestTemporalTrend:
 
     def test_creates_figure(self, chart_builder, temporal_analysis):
         fig = chart_builder.temporal_trend(temporal_analysis)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_trend_line(self, chart_builder, temporal_analysis):
         fig = chart_builder.temporal_trend(temporal_analysis, show_trend=True)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_without_trend_line(self, chart_builder, temporal_analysis):
         fig = chart_builder.temporal_trend(temporal_analysis, show_trend=False)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestTemporalHeatmap:
     def test_creates_figure(self, chart_builder):
         dates = pd.Series(pd.date_range("2023-01-01", "2023-12-31", freq="D"))
         fig = chart_builder.temporal_heatmap(dates)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_title(self, chart_builder):
         dates = pd.Series(pd.date_range("2023-01-01", "2023-03-31", freq="D"))
         fig = chart_builder.temporal_heatmap(dates, title="Day of Week")
-        assert fig is not None
+        assert fig.data is not None
 
     def test_handles_empty_series(self, chart_builder):
         fig = chart_builder.temporal_heatmap(pd.Series([], dtype="datetime64[ns]"))
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestYearMonthHeatmap:
@@ -357,22 +357,22 @@ class TestYearMonthHeatmap:
             columns=["Jan", "Feb", "Mar"]
         )
         fig = chart_builder.year_month_heatmap(pivot_df)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_handles_empty_dataframe(self, chart_builder):
         fig = chart_builder.year_month_heatmap(pd.DataFrame())
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestCumulativeGrowthChart:
     def test_creates_figure(self, chart_builder):
         cumulative = pd.Series([100, 250, 450, 700], index=["Q1", "Q2", "Q3", "Q4"])
         fig = chart_builder.cumulative_growth_chart(cumulative)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_handles_empty_series(self, chart_builder):
         fig = chart_builder.cumulative_growth_chart(pd.Series([], dtype=float))
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestYearOverYearLines:
@@ -383,11 +383,11 @@ class TestYearOverYearLines:
             columns=["Jan", "Feb", "Mar"]
         )
         fig = chart_builder.year_over_year_lines(pivot_df)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_handles_empty_dataframe(self, chart_builder):
         fig = chart_builder.year_over_year_lines(pd.DataFrame())
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestGrowthSummaryIndicators:
@@ -400,11 +400,11 @@ class TestGrowthSummaryIndicators:
             "trend_slope": 15.3,
         }
         fig = chart_builder.growth_summary_indicators(growth_data)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_handles_no_data(self, chart_builder):
         fig = chart_builder.growth_summary_indicators({"has_data": False})
-        assert fig is not None
+        assert fig.data is not None
 
     def test_declining_trend(self, chart_builder):
         growth_data = {
@@ -415,7 +415,7 @@ class TestGrowthSummaryIndicators:
             "trend_slope": -10.2,
         }
         fig = chart_builder.growth_summary_indicators(growth_data)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestSegmentOverview:
@@ -443,11 +443,11 @@ class TestSegmentOverview:
 
     def test_creates_figure(self, chart_builder, segmentation_result):
         fig = chart_builder.segment_overview(segmentation_result)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_title(self, chart_builder, segmentation_result):
         fig = chart_builder.segment_overview(segmentation_result, title="Custom Title")
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestSegmentFeatureComparison:
@@ -484,13 +484,13 @@ class TestSegmentFeatureComparison:
 
     def test_creates_figure(self, chart_builder, segmentation_result):
         fig = chart_builder.segment_feature_comparison(segmentation_result)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_selected_features(self, chart_builder, segmentation_result):
         fig = chart_builder.segment_feature_comparison(
             segmentation_result, features=["feature_a"]
         )
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestSegmentRecommendationCard:
@@ -514,7 +514,7 @@ class TestSegmentRecommendationCard:
 
     def test_creates_figure(self, chart_builder, segmentation_result):
         fig = chart_builder.segment_recommendation_card(segmentation_result)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_single_model_recommendation(self, chart_builder):
         from customer_retention.stages.profiling import SegmentationMethod, SegmentationResult, SegmentProfile
@@ -530,7 +530,7 @@ class TestSegmentRecommendationCard:
             labels=np.array([0] * 100),
         )
         fig = chart_builder.segment_recommendation_card(result)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_strong_segmentation_recommendation(self, chart_builder):
         from customer_retention.stages.profiling import SegmentationMethod, SegmentationResult, SegmentProfile
@@ -550,7 +550,7 @@ class TestSegmentRecommendationCard:
             labels=np.array([0] * 100 + [1] * 100 + [2] * 100),
         )
         fig = chart_builder.segment_recommendation_card(result)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestPrecisionRecallCurve:
@@ -558,19 +558,19 @@ class TestPrecisionRecallCurve:
         precision = [1.0, 0.8, 0.6, 0.4, 0.2]
         recall = [0.0, 0.3, 0.6, 0.8, 1.0]
         fig = chart_builder.precision_recall_curve(precision, recall, pr_auc=0.75)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_baseline(self, chart_builder):
         precision = [1.0, 0.9, 0.7, 0.5]
         recall = [0.0, 0.4, 0.7, 1.0]
         fig = chart_builder.precision_recall_curve(precision, recall, pr_auc=0.80, baseline=0.3)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_without_baseline(self, chart_builder):
         precision = [0.9, 0.8, 0.6]
         recall = [0.2, 0.5, 0.9]
         fig = chart_builder.precision_recall_curve(precision, recall, pr_auc=0.65)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestModelComparisonGrid:
@@ -592,19 +592,19 @@ class TestModelComparisonGrid:
     def test_creates_figure(self, chart_builder, model_results):
         y_test = np.array([0, 0, 0, 0, 0, 1, 1, 1, 1, 1])
         fig = chart_builder.model_comparison_grid(model_results, y_test)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_class_labels(self, chart_builder, model_results):
         y_test = np.array([0, 0, 0, 0, 0, 1, 1, 1, 1, 1])
         fig = chart_builder.model_comparison_grid(
             model_results, y_test, class_labels=["Retained", "Churned"]
         )
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_title(self, chart_builder, model_results):
         y_test = np.array([0, 0, 0, 0, 0, 1, 1, 1, 1, 1])
         fig = chart_builder.model_comparison_grid(model_results, y_test, title="Model Comparison")
-        assert fig is not None
+        assert fig.data is not None
 
     def test_single_model(self, chart_builder):
         y_test = np.array([0, 0, 0, 1, 1, 1])
@@ -615,7 +615,7 @@ class TestModelComparisonGrid:
             }
         }
         fig = chart_builder.model_comparison_grid(model_results, y_test)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_three_models(self, chart_builder, model_results):
         y_test = np.array([0, 0, 0, 0, 0, 1, 1, 1, 1, 1])
@@ -624,13 +624,13 @@ class TestModelComparisonGrid:
             "y_pred_proba": np.array([0.15, 0.25, 0.35, 0.52, 0.45, 0.85, 0.92, 0.75, 0.97, 0.91]),
         }
         fig = chart_builder.model_comparison_grid(model_results, y_test)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestSparkline:
     def test_creates_figure(self, chart_builder):
         fig = chart_builder.sparkline([1, 2, 3, 4, 5])
-        assert fig is not None
+        assert fig.data is not None
         assert fig.layout.height == 60
         assert fig.layout.width == 200
 
@@ -657,19 +657,19 @@ class TestSparkline:
 
     def test_single_value(self, chart_builder):
         fig = chart_builder.sparkline([42])
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestSparklineGrid:
     def test_creates_figure(self, chart_builder):
         data = {"Series A": [1, 2, 3, 4], "Series B": [4, 3, 2, 1]}
         fig = chart_builder.sparkline_grid(data)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_multiple_series(self, chart_builder):
         data = {f"S{i}": list(range(10)) for i in range(6)}
         fig = chart_builder.sparkline_grid(data, columns=3)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_trend_coloring(self, chart_builder):
         data = {"Up": [1, 2, 3, 4], "Down": [4, 3, 2, 1]}
@@ -678,20 +678,20 @@ class TestSparklineGrid:
 
     def test_single_series(self, chart_builder):
         fig = chart_builder.sparkline_grid({"Only": [5, 10, 15]})
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestCalendarHeatmap:
     def test_creates_figure(self, chart_builder):
         dates = pd.Series(pd.date_range("2023-01-01", "2023-06-30", freq="D"))
         fig = chart_builder.calendar_heatmap(dates)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_values(self, chart_builder):
         dates = pd.Series(pd.date_range("2023-01-01", "2023-03-31", freq="D"))
         values = pd.Series(np.random.rand(len(dates)))
         fig = chart_builder.calendar_heatmap(dates, values=values)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_title(self, chart_builder):
         dates = pd.Series(pd.date_range("2023-06-01", "2023-06-30", freq="D"))
@@ -701,25 +701,25 @@ class TestCalendarHeatmap:
     def test_empty_dates(self, chart_builder):
         dates = pd.Series([], dtype="datetime64[ns]")
         fig = chart_builder.calendar_heatmap(dates)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_custom_colorscale(self, chart_builder):
         dates = pd.Series(pd.date_range("2023-01-01", "2023-01-31", freq="D"))
         fig = chart_builder.calendar_heatmap(dates, colorscale="Reds")
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestMonthlyCalendarHeatmap:
     def test_creates_figure(self, chart_builder):
         dates = pd.Series(pd.date_range("2022-01-01", "2023-12-31", freq="D"))
         fig = chart_builder.monthly_calendar_heatmap(dates)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_values(self, chart_builder):
         dates = pd.Series(pd.date_range("2022-01-01", "2022-12-31", freq="D"))
         values = pd.Series(np.random.rand(len(dates)))
         fig = chart_builder.monthly_calendar_heatmap(dates, values=values)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_title(self, chart_builder):
         dates = pd.Series(pd.date_range("2023-01-01", "2023-06-30", freq="D"))
@@ -733,7 +733,7 @@ class TestTimeSeriesWithAnomalies:
         np.random.seed(42)
         values = pd.Series(np.random.randn(100).cumsum())
         fig = chart_builder.time_series_with_anomalies(dates, values)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_detects_anomalies(self, chart_builder):
         dates = pd.Series(pd.date_range("2023-01-01", periods=50, freq="D"))
@@ -746,13 +746,13 @@ class TestTimeSeriesWithAnomalies:
         dates = pd.Series(pd.date_range("2023-01-01", periods=30, freq="D"))
         values = pd.Series([5.0] * 30)
         fig = chart_builder.time_series_with_anomalies(dates, values)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_custom_window_and_std(self, chart_builder):
         dates = pd.Series(pd.date_range("2023-01-01", periods=50, freq="D"))
         values = pd.Series(np.random.randn(50))
         fig = chart_builder.time_series_with_anomalies(dates, values, window=14, n_std=3.0)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_title(self, chart_builder):
         dates = pd.Series(pd.date_range("2023-01-01", periods=20, freq="D"))
@@ -764,11 +764,11 @@ class TestTimeSeriesWithAnomalies:
 class TestWaterfallChart:
     def test_creates_figure(self, chart_builder):
         fig = chart_builder.waterfall_chart(["A", "B", "C"], [10, -5, 15])
-        assert fig is not None
+        assert fig.data is not None
 
     def test_positive_and_negative(self, chart_builder):
         fig = chart_builder.waterfall_chart(["Gain", "Loss", "Gain2"], [20, -8, 12])
-        assert fig is not None
+        assert fig.data is not None
         assert len(fig.data) == 1
 
     def test_custom_labels(self, chart_builder):
@@ -776,7 +776,7 @@ class TestWaterfallChart:
             ["Step1"], [100],
             initial_label="Begin", final_label="Total"
         )
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_title(self, chart_builder):
         fig = chart_builder.waterfall_chart(["X"], [5], title="Score")
@@ -784,7 +784,7 @@ class TestWaterfallChart:
 
     def test_all_negative(self, chart_builder):
         fig = chart_builder.waterfall_chart(["A", "B"], [-10, -20])
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestQualityWaterfall:
@@ -795,7 +795,7 @@ class TestQualityWaterfall:
             {"name": "Range", "passed": True, "weight": 50},
         ]
         fig = chart_builder.quality_waterfall(checks)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_all_passed(self, chart_builder):
         checks = [
@@ -803,7 +803,7 @@ class TestQualityWaterfall:
             {"name": "B", "passed": True, "weight": 50},
         ]
         fig = chart_builder.quality_waterfall(checks)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_all_failed(self, chart_builder):
         checks = [
@@ -811,12 +811,12 @@ class TestQualityWaterfall:
             {"name": "B", "passed": False, "weight": 70},
         ]
         fig = chart_builder.quality_waterfall(checks)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_custom_max_score(self, chart_builder):
         checks = [{"name": "Check", "passed": False, "weight": 10}]
         fig = chart_builder.quality_waterfall(checks, max_score=50)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestVelocityAccelerationChart:
@@ -832,7 +832,7 @@ class TestVelocityAccelerationChart:
             }
         }
         fig = chart_builder.velocity_acceleration_chart(data)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_multiple_columns(self, chart_builder):
         data = {
@@ -840,7 +840,7 @@ class TestVelocityAccelerationChart:
             "col2": {"retained": [10, 20, 30], "churned": [30, 20, 10]},
         }
         fig = chart_builder.velocity_acceleration_chart(data)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_title(self, chart_builder):
         data = {"x": {"retained": [1, 2], "churned": [2, 1]}}
@@ -855,12 +855,12 @@ class TestLagCorrelationHeatmap:
             "feature_b": [0.3, 0.2, 0.1, 0.0, -0.1],
         }
         fig = chart_builder.lag_correlation_heatmap(data)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_custom_max_lag(self, chart_builder):
         data = {"col": [0.5] * 20}
         fig = chart_builder.lag_correlation_heatmap(data, max_lag=10)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_title(self, chart_builder):
         data = {"x": [0.1, 0.2, 0.3]}
@@ -870,7 +870,7 @@ class TestLagCorrelationHeatmap:
     def test_single_variable(self, chart_builder):
         data = {"only": [0.9, 0.7, 0.5, 0.3, 0.1]}
         fig = chart_builder.lag_correlation_heatmap(data)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestPredictivePowerChart:
@@ -878,13 +878,13 @@ class TestPredictivePowerChart:
         iv = {"feat1": 0.4, "feat2": 0.15, "feat3": 0.05}
         ks = {"feat1": 0.5, "feat2": 0.25, "feat3": 0.1}
         fig = chart_builder.predictive_power_chart(iv, ks)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_color_thresholds(self, chart_builder):
         iv = {"strong": 0.6, "good": 0.35, "weak": 0.12, "none": 0.03}
         ks = {"strong": 0.5, "good": 0.3, "weak": 0.15, "none": 0.05}
         fig = chart_builder.predictive_power_chart(iv, ks)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_title(self, chart_builder):
         iv = {"a": 0.2}
@@ -896,7 +896,7 @@ class TestPredictivePowerChart:
         iv = {"a": 0.5, "b": 0.3}
         ks = {"a": 0.4}
         fig = chart_builder.predictive_power_chart(iv, ks)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestMomentumComparisonChart:
@@ -906,7 +906,7 @@ class TestMomentumComparisonChart:
                       "retained_30_90": 1.1, "churned_30_90": 0.9},
         }
         fig = chart_builder.momentum_comparison_chart(data)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_multiple_columns(self, chart_builder):
         data = {
@@ -914,7 +914,7 @@ class TestMomentumComparisonChart:
             "col2": {"retained_7_30": 1.1, "churned_7_30": 0.9},
         }
         fig = chart_builder.momentum_comparison_chart(data)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_title(self, chart_builder):
         data = {"x": {"retained_7_30": 1.0, "churned_7_30": 1.0}}
@@ -930,7 +930,7 @@ class TestCohortSparklines:
             "overall": {"weekly": [1.5], "monthly": [2.5], "yearly": [2.5]},
         }
         fig = chart_builder.cohort_sparklines(data, feature_name="amount")
-        assert fig is not None
+        assert fig.data is not None
         assert len(fig.data) == 9  # 3 cohorts × 3 periods
 
     def test_with_title(self, chart_builder):
@@ -1099,7 +1099,7 @@ class TestAnalyzeCohortTrends:
     def test_sparklines_without_period_effects(self, chart_builder):
         data = {"retained": {"weekly": [1, 2]}, "churned": {"weekly": [2, 1]}, "overall": {"weekly": [1.5]}}
         fig = chart_builder.cohort_sparklines(data, feature_name="test")
-        assert fig is not None  # Should work without period_effects
+        assert fig.data is not None  # Should work without period_effects
 
 
 class TestDescriptiveStatsTiles:
@@ -1145,15 +1145,15 @@ class TestDescriptiveStatsTiles:
 
     def test_creates_figure(self, chart_builder, sample_df, mock_findings):
         fig = chart_builder.descriptive_stats_tiles(sample_df, mock_findings)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_max_columns(self, chart_builder, sample_df, mock_findings):
         fig = chart_builder.descriptive_stats_tiles(sample_df, mock_findings, max_columns=2)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_columns_per_row(self, chart_builder, sample_df, mock_findings):
         fig = chart_builder.descriptive_stats_tiles(sample_df, mock_findings, columns_per_row=2)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestDatasetAtAGlance:
@@ -1194,25 +1194,25 @@ class TestDatasetAtAGlance:
 
     def test_creates_figure(self, chart_builder, sample_df, mock_findings):
         fig = chart_builder.dataset_at_a_glance(sample_df, mock_findings)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_source_path(self, chart_builder, sample_df, mock_findings):
         fig = chart_builder.dataset_at_a_glance(
             sample_df, mock_findings, source_path="data.parquet"
         )
-        assert fig is not None
+        assert fig.data is not None
 
     def test_event_granularity(self, chart_builder, sample_df, mock_findings):
         fig = chart_builder.dataset_at_a_glance(
             sample_df, mock_findings, granularity="event"
         )
-        assert fig is not None
+        assert fig.data is not None
 
     def test_max_columns(self, chart_builder, sample_df, mock_findings):
         fig = chart_builder.dataset_at_a_glance(
             sample_df, mock_findings, max_columns=2
         )
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestColumnTiles:
@@ -1354,18 +1354,18 @@ class TestCutoffSelectionChart:
 
     def test_creates_figure(self, chart_builder, cutoff_analysis):
         fig = chart_builder.cutoff_selection_chart(cutoff_analysis)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_suggested_cutoff(self, chart_builder, cutoff_analysis):
         suggested = pd.Timestamp("2023-06-30")
         fig = chart_builder.cutoff_selection_chart(cutoff_analysis, suggested_cutoff=suggested)
-        assert fig is not None
+        assert fig.data is not None
         assert len(fig.data) >= 3
 
     def test_with_current_cutoff(self, chart_builder, cutoff_analysis):
         current = pd.Timestamp("2023-09-30")
         fig = chart_builder.cutoff_selection_chart(cutoff_analysis, current_cutoff=current)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_with_both_cutoffs(self, chart_builder, cutoff_analysis):
         suggested = pd.Timestamp("2023-06-30")
@@ -1373,19 +1373,19 @@ class TestCutoffSelectionChart:
         fig = chart_builder.cutoff_selection_chart(
             cutoff_analysis, suggested_cutoff=suggested, current_cutoff=current
         )
-        assert fig is not None
+        assert fig.data is not None
 
     def test_cutoff_outside_range(self, chart_builder, cutoff_analysis):
         current = pd.Timestamp("2025-01-01")
         fig = chart_builder.cutoff_selection_chart(cutoff_analysis, current_cutoff=current)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_same_suggested_and_current(self, chart_builder, cutoff_analysis):
         cutoff = pd.Timestamp("2023-06-30")
         fig = chart_builder.cutoff_selection_chart(
             cutoff_analysis, suggested_cutoff=cutoff, current_cutoff=cutoff
         )
-        assert fig is not None
+        assert fig.data is not None
 
     def test_empty_analysis(self, chart_builder):
         from customer_retention.stages.temporal.cutoff_analyzer import CutoffAnalysis
@@ -1395,7 +1395,7 @@ class TestCutoffSelectionChart:
             score_percentages=[], date_range=(pd.Timestamp("2023-01-01"), pd.Timestamp("2023-01-01")),
         )
         fig = chart_builder.cutoff_selection_chart(empty)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestAddColumnTileDispatch:
@@ -1466,16 +1466,16 @@ class TestCategoricalAnalysisPanel:
 
     def test_creates_figure(self, chart_builder, mock_insights):
         fig = chart_builder.categorical_analysis_panel(mock_insights, overall_rate=0.4)
-        assert fig is not None
+        assert fig.data is not None
         assert hasattr(fig, "update_layout")
 
     def test_empty_insights(self, chart_builder):
         fig = chart_builder.categorical_analysis_panel([], overall_rate=0.4)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_respects_max_features(self, chart_builder, mock_insights):
         fig = chart_builder.categorical_analysis_panel(mock_insights, overall_rate=0.4, max_features=2)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_has_four_subplots(self, chart_builder, mock_insights):
         fig = chart_builder.categorical_analysis_panel(mock_insights, overall_rate=0.4)
@@ -1498,7 +1498,7 @@ class TestVelocitySignalHeatmap:
 
     def test_creates_figure(self, chart_builder, effect_size_data):
         fig = chart_builder.velocity_signal_heatmap(effect_size_data)
-        assert fig is not None
+        assert fig.data is not None
         assert hasattr(fig, "update_layout")
 
     def test_shows_both_velocity_and_acceleration(self, chart_builder, effect_size_data):
@@ -1507,7 +1507,7 @@ class TestVelocitySignalHeatmap:
 
     def test_handles_empty_data(self, chart_builder):
         fig = chart_builder.velocity_signal_heatmap({"velocity": {}, "acceleration": {}})
-        assert fig is not None
+        assert fig.data is not None
 
     def test_custom_title(self, chart_builder, effect_size_data):
         fig = chart_builder.velocity_signal_heatmap(effect_size_data, title="Custom Title")
@@ -1547,7 +1547,7 @@ class TestCohortVelocitySparklines:
 
     def test_creates_figure(self, chart_builder, sparkline_data):
         fig = chart_builder.cohort_velocity_sparklines(sparkline_data, feature_name="metric_a")
-        assert fig is not None
+        assert fig.data is not None
         assert hasattr(fig, "update_layout")
 
     def test_shows_cohort_traces(self, chart_builder, sparkline_data):
@@ -1556,7 +1556,7 @@ class TestCohortVelocitySparklines:
 
     def test_handles_single_window(self, chart_builder, sparkline_data):
         fig = chart_builder.cohort_velocity_sparklines([sparkline_data[0]], feature_name="metric_a")
-        assert fig is not None
+        assert fig.data is not None
 
     def test_includes_period_labels(self, chart_builder, sparkline_data):
         fig = chart_builder.cohort_velocity_sparklines(sparkline_data, feature_name="metric_a")
@@ -1566,7 +1566,7 @@ class TestCohortVelocitySparklines:
 
     def test_empty_results(self, chart_builder):
         fig = chart_builder.cohort_velocity_sparklines([], feature_name="empty")
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestScatterMatrixWidth:
@@ -1585,7 +1585,7 @@ class TestTemporalDistributionEmpty:
         analysis.period_counts = pd.DataFrame()
         analysis.granularity = TemporalGranularity.MONTH
         fig = chart_builder.temporal_distribution(analysis)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestTemporalTrendEmpty:
@@ -1597,7 +1597,7 @@ class TestTemporalTrendEmpty:
         analysis.period_counts = pd.DataFrame()
         analysis.granularity = TemporalGranularity.MONTH
         fig = chart_builder.temporal_trend(analysis)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestSegmentOverviewEdgeCases:
@@ -1615,7 +1615,7 @@ class TestSegmentOverviewEdgeCases:
             labels=np.array([]),
         )
         fig = chart_builder.segment_overview(result)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_no_target_rate(self, chart_builder):
         from customer_retention.stages.profiling import SegmentationMethod, SegmentationResult, SegmentProfile
@@ -1636,7 +1636,7 @@ class TestSegmentOverviewEdgeCases:
             labels=np.array([0] * 50 + [1] * 50),
         )
         fig = chart_builder.segment_overview(result)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestSegmentFeatureComparisonEdgeCases:
@@ -1654,7 +1654,7 @@ class TestSegmentFeatureComparisonEdgeCases:
             labels=np.array([]),
         )
         fig = chart_builder.segment_feature_comparison(result)
-        assert fig is not None
+        assert fig.data is not None
 
     def test_no_features(self, chart_builder):
         from customer_retention.stages.profiling import SegmentationMethod, SegmentationResult, SegmentProfile
@@ -1673,7 +1673,7 @@ class TestSegmentFeatureComparisonEdgeCases:
             labels=np.array([0] * 50),
         )
         fig = chart_builder.segment_feature_comparison(result)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestSegmentRecommendationCardEdgeCases:
@@ -1691,7 +1691,7 @@ class TestSegmentRecommendationCardEdgeCases:
             labels=np.array([0] * 50),
         )
         fig = chart_builder.segment_recommendation_card(result)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestMomentumComparisonSimple:
@@ -1702,7 +1702,7 @@ class TestMomentumComparisonSimple:
             "frequency": {"retained": 1.1, "churned": 0.9},
         }
         fig = chart_builder.momentum_comparison_chart(data)
-        assert fig is not None
+        assert fig.data is not None
 
 
 class TestRecencyAnalysisPanel:
@@ -1729,7 +1729,7 @@ class TestRecencyAnalysisPanel:
             retained_median=float(np.median(retained)),
             churned_median=float(np.median(churned)),
         )
-        assert fig is not None
+        assert fig.data is not None
         assert len(fig.data) >= 4
 
     def test_with_cap_value(self, chart_builder):
@@ -1750,7 +1750,7 @@ class TestRecencyAnalysisPanel:
             churned_median=10.0,
             cap_value=100.0,
         )
-        assert fig is not None
+        assert fig.data is not None
 
     def test_no_bucket_stats(self, chart_builder):
         np.random.seed(42)
@@ -1761,4 +1761,4 @@ class TestRecencyAnalysisPanel:
             retained_median=25.0,
             churned_median=10.0,
         )
-        assert fig is not None
+        assert fig.data is not None

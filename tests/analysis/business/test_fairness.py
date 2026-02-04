@@ -73,7 +73,7 @@ class TestFairnessThresholds:
         analyzer = FairnessAnalyzer(threshold=0.8)
         result = analyzer.analyze(y, y_pred, protected)
         failed = [m for m in result.metrics if not m.passed]
-        assert len(failed) >= 0
+        assert len(failed) > 0
 
 
 class TestFairnessRecommendations:

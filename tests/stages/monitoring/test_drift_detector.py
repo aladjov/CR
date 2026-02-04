@@ -112,7 +112,7 @@ class TestPSIDrift:
         detector = DriftDetector(reference_data=reference_data, config=DriftConfig(psi_critical_threshold=0.15))
         result = detector.detect_drift(current_data_with_drift, method="psi")
         critical = [r for r in result.feature_results if r.severity == Severity.CRITICAL]
-        assert len(critical) >= 0
+        assert len(critical) > 0
 
 
 class TestMeanShiftDrift:

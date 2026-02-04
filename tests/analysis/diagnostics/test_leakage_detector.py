@@ -149,20 +149,23 @@ class TestTemporalLogicCheck:
 
     def test_identifies_temporal_features_by_name(self):
         np.random.seed(42)
-        n = 100
+        n = 500
+        target = np.random.choice([0, 1], n, p=[0.3, 0.7])
+        # Create temporal features with correlation to target so they get flagged
+        days_since = target * 10 + np.random.randn(n) * 0.5
         df = pd.DataFrame({
-            "days_since_last_order": np.random.randn(n),
+            "days_since_last_order": days_since,
             "tenure_days": np.random.randn(n),
             "recency_score": np.random.randn(n),
             "normal_feature": np.random.randn(n),
         })
-        target = pd.Series(np.random.choice([0, 1], n))
 
         detector = LeakageDetector()
-        result = detector.check_temporal_logic(df, target)
+        result = detector.check_temporal_logic(df, pd.Series(target))
 
-        temporal_features = [c.feature for c in result.checks if "temporal" in c.check_id.lower() or c.check_id.startswith("LD02")]
-        assert len(temporal_features) >= 0
+        temporal_features = [c.feature for c in result.checks if c.check_id.startswith("LD02")]
+        assert len(temporal_features) > 0
+        assert "days_since_last_order" in temporal_features
 
 
 class TestSingleFeatureAUC:

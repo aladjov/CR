@@ -92,7 +92,8 @@ class TestExplorationManager:
 
     def test_create_manager(self, temp_explorations_dir):
         manager = ExplorationManager(explorations_dir=temp_explorations_dir)
-        assert manager is not None
+        assert isinstance(manager, ExplorationManager)
+        assert manager.explorations_dir == temp_explorations_dir
 
     def test_discover_findings(self, temp_explorations_dir, sample_entity_findings, sample_event_findings):
         manager = ExplorationManager(explorations_dir=temp_explorations_dir)
@@ -104,7 +105,7 @@ class TestExplorationManager:
         manager = ExplorationManager(explorations_dir=temp_explorations_dir)
         findings = manager.load_findings("customers")
 
-        assert findings is not None
+        assert isinstance(findings, ExplorationFindings)
         assert findings.source_path == "/data/customers.csv"
 
     def test_list_datasets(self, temp_explorations_dir, sample_entity_findings, sample_event_findings):
@@ -139,7 +140,8 @@ class TestMultiDatasetFindings:
         multi = manager.create_multi_dataset_findings()
 
         # Should identify which dataset is the primary entity dataset
-        assert multi.primary_entity_dataset is not None
+        assert isinstance(multi.primary_entity_dataset, str)
+        assert len(multi.primary_entity_dataset) > 0
 
     def test_multi_findings_has_event_datasets(self, temp_explorations_dir, sample_entity_findings, sample_event_findings):
         manager = ExplorationManager(explorations_dir=temp_explorations_dir)
@@ -169,7 +171,7 @@ class TestDatasetRelationships:
         multi = manager.create_multi_dataset_findings()
 
         # Should detect that transactions relate to customers via customer_id
-        assert len(multi.relationships) >= 0  # May be empty if can't load actual data
+        assert isinstance(multi.relationships, list)  # May be empty if can't load actual data
 
     def test_add_manual_relationship(self, temp_explorations_dir, sample_entity_findings, sample_event_findings):
         manager = ExplorationManager(explorations_dir=temp_explorations_dir)
@@ -235,9 +237,7 @@ class TestAggregationPlanning:
         # Get aggregation plan for event datasets
         plan = multi.get_aggregation_plan()
 
-        assert plan is not None
-        # Should suggest windows for event datasets
-        assert "transactions" in plan or len(plan) >= 0
+        assert isinstance(plan, dict)
 
 
 class TestEdgeCases:
@@ -320,7 +320,7 @@ class TestDatasetSelectionPersistence:
 
         loaded = MultiDatasetFindings.load(str(save_path))
         emails_info = loaded.datasets.get("emails")
-        assert emails_info is not None
+        assert isinstance(emails_info, DatasetInfo)
         assert emails_info.excluded is True
 
 
@@ -358,8 +358,8 @@ class TestSelectionConnectsToRegistry:
 
         registry = multi.to_recommendation_registry()
 
-        assert registry.silver is not None
-        assert len(registry.silver.joins) >= 0  # May convert relationships to joins
+        assert registry.silver is not None  # Silver layer should be initialized
+        assert isinstance(registry.silver.joins, list)
 
 
 class TestAggregatedFindingsDiscovery:
@@ -423,7 +423,7 @@ class TestAggregatedFindingsDiscovery:
 
         aggregated = manager.get_aggregated_path(str(event_findings_with_aggregation))
 
-        assert aggregated is not None
+        assert isinstance(aggregated, str)
         assert "aggregated" in aggregated
 
     def test_get_aggregated_path_returns_none_for_entity_level(

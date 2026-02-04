@@ -385,7 +385,7 @@ class TestTemporalFeatureEngineering:
         result_df = generator.fit_transform(unified_df)
 
         # Temporal features should be created
-        assert len(generator.generated_features) >= 0  # May be 0 if no applicable columns
+        assert isinstance(generator.generated_features, list)
 
 
 class TestSnapshotManager:

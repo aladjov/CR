@@ -238,9 +238,9 @@ class TestDisplayFigure:
 
 
 class TestDisplayTable:
-    def test_terminal_with_title_and_to_string(self):
+    def test_terminal_with_title_and_to_string(self, capsys):
         df = MagicMock()
-        df.to_string = MagicMock()
+        df.to_string = MagicMock(return_value="col1  col2\n1     2")
         df.head = MagicMock(return_value=df)
 
         with patch(
@@ -249,10 +249,14 @@ class TestDisplayTable:
         ):
             display_table(df, title="My Table")
             df.head.assert_called_once_with(50)
+            df.to_string.assert_called_once()
+
+        captured = capsys.readouterr()
+        assert "My Table" in captured.out
 
     def test_terminal_without_title(self):
         df = MagicMock()
-        df.to_string = MagicMock()
+        df.to_string = MagicMock(return_value="col1\n1")
         df.head = MagicMock(return_value=df)
 
         with patch(
@@ -261,8 +265,9 @@ class TestDisplayTable:
         ):
             display_table(df)
             df.head.assert_called_once_with(50)
+            df.to_string.assert_called_once()
 
-    def test_terminal_no_to_string(self):
+    def test_terminal_no_to_string(self, capsys):
         df = MagicMock(spec=[])  # No to_string
 
         with patch(
@@ -270,6 +275,9 @@ class TestDisplayTable:
             return_value="terminal",
         ):
             display_table(df, title="Title")
+
+        captured = capsys.readouterr()
+        assert "Title" in captured.out
 
     def test_jupyter_with_to_html(self):
         df = MagicMock()
@@ -326,7 +334,7 @@ class TestDisplaySummary:
         findings.memory_usage_mb = memory_mb
         return findings
 
-    def test_display_summary_terminal(self):
+    def test_display_summary_terminal(self, capsys):
         findings = self._make_findings()
         charts = MagicMock()
 
@@ -335,6 +343,10 @@ class TestDisplaySummary:
             return_value="terminal",
         ):
             display_summary(findings, charts)
+
+        captured = capsys.readouterr()
+        assert "data.csv" in captured.out
+        assert "100" in captured.out
 
     def test_display_summary_jupyter(self):
         findings = self._make_findings()
@@ -344,9 +356,17 @@ class TestDisplaySummary:
             "customer_retention.analysis.visualization.display.detect_environment",
             return_value="jupyter",
         ):
-            display_summary(findings, charts)
+            with patch(
+                "customer_retention.analysis.visualization.display.DisplayManager.create_summary_html",
+                return_value="<html>summary</html>",
+            ) as mock_html:
+                display_summary(findings, charts)
+                mock_html.assert_called_once()
+                call_kwargs = mock_html.call_args
+                assert call_kwargs[0][0] == "data.csv"  # source_path
+                assert call_kwargs[0][1] == 100  # row_count
 
-    def test_display_summary_no_memory(self):
+    def test_display_summary_no_memory(self, capsys):
         findings = self._make_findings(memory_mb=0, row_count=100, column_count=10)
         charts = MagicMock()
 
@@ -356,7 +376,10 @@ class TestDisplaySummary:
         ):
             display_summary(findings, charts)
 
-    def test_display_summary_no_columns(self):
+        captured = capsys.readouterr()
+        assert "data.csv" in captured.out
+
+    def test_display_summary_no_columns(self, capsys):
         findings = MagicMock()
         findings.columns.values.return_value = []
         findings.source_path = "data.csv"
@@ -371,6 +394,9 @@ class TestDisplaySummary:
         ):
             display_summary(findings, charts)
 
+        captured = capsys.readouterr()
+        assert "data.csv" in captured.out
+
     def test_display_summary_databricks(self):
         findings = self._make_findings()
         charts = MagicMock()
@@ -379,7 +405,12 @@ class TestDisplaySummary:
             "customer_retention.analysis.visualization.display.detect_environment",
             return_value="databricks",
         ):
-            display_summary(findings, charts)
+            with patch(
+                "customer_retention.analysis.visualization.display.DisplayManager.create_summary_html",
+                return_value="<html>summary</html>",
+            ) as mock_html:
+                display_summary(findings, charts)
+                mock_html.assert_called_once()
 
     def test_display_summary_jupyter_import_error(self):
         findings = self._make_findings()

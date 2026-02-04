@@ -164,11 +164,11 @@ class TestFeatureCatalog:
         ))
 
         feature = catalog.get("tenure_days")
-        assert feature.name is not None
-        assert feature.description is not None
-        assert feature.category is not None
-        assert feature.business_meaning is not None
-        assert feature.leakage_risk is not None
+        assert isinstance(feature.name, str)
+        assert isinstance(feature.description, str)
+        assert feature.category is not None  # Enum value
+        assert isinstance(feature.business_meaning, str)
+        assert feature.leakage_risk is not None  # Enum value
 
     def test_feature_catalog_exportable(self):
         catalog = FeatureCatalog()
@@ -216,7 +216,7 @@ class TestFeatureSelection:
         result = selector.fit_transform(retail_data)
 
         # Should provide drop reasons
-        assert result.drop_reasons is not None
+        assert isinstance(result.drop_reasons, dict)
 
     def test_selection_preserves_required_features(self, retail_data):
         # Add a constant column
@@ -244,12 +244,12 @@ class TestFeatureManifestCreation:
             entity_column="custid"
         )
 
-        assert manifest.manifest_id is not None
+        assert isinstance(manifest.manifest_id, str)
         assert manifest.created_at is not None
         assert manifest.row_count == len(retail_data)
         assert manifest.column_count == len(feature_cols)
         assert manifest.features_included == feature_cols
-        assert manifest.checksum is not None
+        assert isinstance(manifest.checksum, str)
 
 
 class TestFeatureSetManagement:
@@ -266,7 +266,7 @@ class TestFeatureSetManagement:
         registry.register(feature_set)
         retrieved = registry.get("retail_baseline", "1.0.0")
 
-        assert retrieved is not None
+        assert isinstance(retrieved, FeatureSet)
         assert retrieved.name == "retail_baseline"
 
     def test_version_comparison_works(self):
@@ -315,7 +315,7 @@ class TestLeakageGateIntegration:
         gate = LeakageGate(target_column="retained")
         result = gate.run(retail_data)
 
-        assert result.leakage_report is not None
+        assert isinstance(result.leakage_report, dict)
         assert "correlations" in result.leakage_report
 
 
@@ -340,7 +340,6 @@ class TestFullFeatureEngineeringPipeline:
         engineer = FeatureEngineer(config)
         result = engineer.fit_transform(retail_data)
 
-        assert result.df is not None
         assert len(result.df) == len(retail_data)
         assert len(result.generated_features) > 0
 
@@ -444,12 +443,12 @@ class TestAcceptanceCriteria:
         catalog.add(feature)
 
         retrieved = catalog.get("test_feature")
-        assert retrieved.name is not None
-        assert retrieved.description is not None
-        assert retrieved.category is not None
-        assert retrieved.derivation is not None
-        assert retrieved.business_meaning is not None
-        assert retrieved.leakage_risk is not None
+        assert isinstance(retrieved.name, str)
+        assert isinstance(retrieved.description, str)
+        assert retrieved.category is not None  # Enum value
+        assert isinstance(retrieved.derivation, str)
+        assert isinstance(retrieved.business_meaning, str)
+        assert retrieved.leakage_risk is not None  # Enum value
 
     def test_ac4_14_manifest_captures_all_info(self, retail_data):
         """AC4.14: Manifest captures all info."""
@@ -459,12 +458,12 @@ class TestAcceptanceCriteria:
             entity_column="custid"
         )
 
-        assert manifest.manifest_id is not None
+        assert isinstance(manifest.manifest_id, str)
         assert manifest.created_at is not None
-        assert manifest.features_included is not None
-        assert manifest.row_count is not None
-        assert manifest.column_count is not None
-        assert manifest.checksum is not None
+        assert manifest.features_included == ["avgorder", "ordfreq"]
+        assert manifest.row_count == len(retail_data)
+        assert manifest.column_count == 2
+        assert isinstance(manifest.checksum, str)
 
     def test_ac4_18_high_correlation_detected(self, retail_data):
         """AC4.18: High correlation detected."""

@@ -30,7 +30,7 @@ class TestErrorAnalyzerPatterns:
         result = analyzer.analyze_errors(model, X, y)
         # Should find pattern in feature_a since FP values differ from correct
         pattern_features = [p.feature for p in result.error_patterns]
-        assert len(result.error_patterns) >= 0  # May or may not find depending on model
+        assert isinstance(result.error_patterns, list)
 
     def test_hypothesis_high_confidence_fn(self, analyzer):
         """Line 100: high_fn hypothesis generated."""
