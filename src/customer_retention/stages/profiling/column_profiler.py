@@ -12,6 +12,7 @@ from customer_retention.core.compat import (
     safe_isfinite,
     safe_isinf,
     safe_memory_usage_bytes,
+    safe_to_list,
     to_datetime,
 )
 from customer_retention.core.config.column_config import ColumnType
@@ -62,13 +63,14 @@ class IdentifierProfiler(ColumnProfiler):
     def profile(self, series: pd.Series) -> dict:
         is_unique = series.nunique() == len(series.dropna())
         duplicates = series[series.duplicated(keep=False)]
-        duplicate_count = len(duplicates.unique())
-        duplicate_values = list(duplicates.unique())[:10]
+        duplicate_count = int(duplicates.nunique())
+        duplicate_values = safe_to_list(duplicates.drop_duplicates().head(10))
 
         str_series = series.dropna().astype(str)
         lengths = str_series.str.len()
 
         format_pattern, format_consistency = self.detect_format_pattern(str_series)
+        mode_result = lengths.mode()
 
         return {
             "identifier_metrics": IdentifierMetrics(
@@ -79,7 +81,7 @@ class IdentifierProfiler(ColumnProfiler):
                 format_consistency=format_consistency,
                 length_min=int(lengths.min()) if len(lengths) > 0 else None,
                 length_max=int(lengths.max()) if len(lengths) > 0 else None,
-                length_mode=int(lengths.mode().iloc[0]) if len(lengths.mode()) > 0 else None
+                length_mode=int(mode_result.iloc[0]) if len(mode_result) > 0 else None
             )
         }
 
@@ -111,14 +113,15 @@ class IdentifierProfiler(ColumnProfiler):
 class TargetProfiler(ColumnProfiler):
     def profile(self, series: pd.Series) -> dict:
         value_counts = series.value_counts()
-        class_distribution = {str(k): int(v) for k, v in value_counts.items()}
+        vc_dict = value_counts.to_dict()
+        class_distribution = {str(k): int(v) for k, v in vc_dict.items()}
 
         total = len(series.dropna())
-        class_percentages = {str(k): round((v / total * 100), 2) for k, v in value_counts.items()}
+        class_percentages = {str(k): round((v / total * 100), 2) for k, v in vc_dict.items()}
 
         minority_class = value_counts.idxmin()
-        minority_count = value_counts.min()
-        majority_count = value_counts.max()
+        minority_count = int(value_counts.min())
+        majority_count = int(value_counts.max())
         minority_percentage = round((minority_count / total * 100), 2) if total > 0 else 0
         imbalance_ratio = round((majority_count / minority_count), 2) if minority_count > 0 else float('inf')
 
@@ -225,19 +228,21 @@ class CategoricalProfiler(ColumnProfiler):
         cardinality_ratio = round((cardinality / len(clean_series)), 4)
 
         value_counts = clean_series.value_counts()
-        value_counts_dict = {str(k): int(v) for k, v in value_counts.items()}
+        vc_dict = value_counts.to_dict()
+        value_counts_dict = {str(k): int(v) for k, v in vc_dict.items()}
 
-        top_categories = [(str(k), int(v)) for k, v in value_counts.head(10).items()]
+        top_categories = [(str(k), int(v)) for k, v in list(vc_dict.items())[:10]]
 
         rare_threshold = len(clean_series) * 0.01
-        rare_categories = [str(k) for k, v in value_counts.items() if v < rare_threshold]
+        rare_categories = [str(k) for k, v in vc_dict.items() if v < rare_threshold]
         rare_category_count = len(rare_categories)
 
-        rare_rows = sum(v for k, v in value_counts.items() if v < rare_threshold)
+        rare_rows = sum(v for v in vc_dict.values() if v < rare_threshold)
         rare_category_percentage = round((rare_rows / len(clean_series) * 100), 2)
 
         unknown_values = {"unknown", "other", "n/a", "na", "none", "null", "missing"}
-        contains_unknown = any(str(v).lower() in unknown_values for v in clean_series.unique()[:100])
+        unique_sample = safe_to_list(clean_series.drop_duplicates().head(100))
+        contains_unknown = any(str(v).lower() in unknown_values for v in unique_sample)
 
         case_variations = self.detect_case_variations(clean_series)
         whitespace_issues = self.detect_whitespace_issues(clean_series)
@@ -264,7 +269,7 @@ class CategoricalProfiler(ColumnProfiler):
         str_series = clean_series.astype(str)
         lower_to_originals = {}
 
-        for value in str_series.unique():
+        for value in safe_to_list(str_series.drop_duplicates()):
             lower_val = value.lower()
             if lower_val not in lower_to_originals:
                 lower_to_originals[lower_val] = []
@@ -281,7 +286,7 @@ class CategoricalProfiler(ColumnProfiler):
         str_series = clean_series.astype(str)
         issues = []
 
-        for value in str_series.unique()[:100]:
+        for value in safe_to_list(str_series.drop_duplicates().head(100)):
             if value != value.strip():
                 issues.append(value)
 
@@ -307,7 +312,7 @@ class DatetimeProfiler(ColumnProfiler):
         format_detected, format_consistency = self.detect_datetime_format(series)
 
         if not is_datetime64_any_dtype(clean_series):
-            sample = clean_series.head(10)
+            sample = safe_to_list(clean_series.head(10))
             if len(sample) > 0 and all(isinstance(v, (Timestamp, datetime)) for v in sample):
                 pass
             else:
@@ -328,12 +333,16 @@ class DatetimeProfiler(ColumnProfiler):
             Timestamp('1900-01-01'),
             Timestamp('9999-12-31')
         ]
-        placeholder_count = int(sum((clean_series == pd_date).sum() for pd_date in placeholder_dates))
+        placeholder_count = int(sum(int((clean_series == pd_date).sum()) for pd_date in placeholder_dates))
 
         if is_datetime64_any_dtype(clean_series):
             weekend_count = int(clean_series.dt.dayofweek.isin([5, 6]).sum())
         else:
-            weekend_count = int(sum(1 for v in clean_series if isinstance(v, Timestamp) and v.dayofweek in [5, 6]))
+            try:
+                dt_series = to_datetime(clean_series, errors='coerce')
+                weekend_count = int(dt_series.dt.dayofweek.isin([5, 6]).sum())
+            except Exception:
+                weekend_count = 0
         weekend_percentage = round((weekend_count / len(clean_series) * 100), 2)
 
         return {
@@ -354,7 +363,7 @@ class DatetimeProfiler(ColumnProfiler):
         if is_datetime64_any_dtype(series):
             return 'datetime64', 100.0
 
-        sample = series.dropna().astype(str).head(min(100, len(series)))
+        sample = safe_to_list(series.dropna().astype(str).head(min(100, len(series))))
         if len(sample) == 0:
             return None, None
 
@@ -402,17 +411,19 @@ class BinaryProfiler(ColumnProfiler):
             return {"binary_metrics": None}
 
         value_counts = clean_series.value_counts()
-        values_found = list(value_counts.index)
+        vc_dict = value_counts.to_dict()
+        values_found = list(vc_dict.keys())
 
         true_values = {1, 1.0, True, "1", "yes", "Yes", "YES", "true", "True", "TRUE", "y", "Y"}
         false_values = {0, 0.0, False, "0", "no", "No", "NO", "false", "False", "FALSE", "n", "N"}
 
-        true_count = int(sum(value_counts.get(v, 0) for v in values_found if v in true_values))
-        false_count = int(sum(value_counts.get(v, 0) for v in values_found if v in false_values))
+        true_count = int(sum(vc_dict.get(v, 0) for v in values_found if v in true_values))
+        false_count = int(sum(vc_dict.get(v, 0) for v in values_found if v in false_values))
 
         if true_count == 0 and false_count == 0:
-            true_count = int(value_counts.iloc[0]) if len(value_counts) > 0 else 0
-            false_count = int(value_counts.iloc[1]) if len(value_counts) > 1 else 0
+            vc_values = list(vc_dict.values())
+            true_count = int(vc_values[0]) if len(vc_values) > 0 else 0
+            false_count = int(vc_values[1]) if len(vc_values) > 1 else 0
 
         total = true_count + false_count
         true_percentage = round((true_count / total * 100), 2) if total > 0 else 0

@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from customer_retention.core.compat import pd
+from customer_retention.core.compat import pd, safe_to_list
 
 
 @dataclass
@@ -288,7 +288,7 @@ class FeatureCapacityAnalyzer:
         viable_segments = []
         insufficient_segments = []
 
-        for segment_value in df[segment_col].unique():
+        for segment_value in safe_to_list(df[segment_col].unique()):
             segment_df = df[df[segment_col] == segment_value]
             capacity = self.analyze(segment_df, feature_cols, target_col)
             segment_capacities[str(segment_value)] = capacity

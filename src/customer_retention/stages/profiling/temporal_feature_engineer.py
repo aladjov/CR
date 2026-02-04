@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import Timedelta, native_pd, pd, to_datetime
+from customer_retention.core.compat import Timedelta, native_pd, pd, safe_to_list, to_datetime
 
 
 class ReferenceMode(Enum):
@@ -496,7 +496,7 @@ class TemporalFeatureEngineer:
             ])
 
         # Process each entity
-        for entity in result[entity_col].unique():
+        for entity in safe_to_list(result[entity_col].unique()):
             entity_df = df[df[entity_col] == entity]
             if len(entity_df) == 0:
                 continue
@@ -604,7 +604,7 @@ class TemporalFeatureEngineer:
         """Compute frequency and regularity features (Group 6)."""
         result = ref_dates[[entity_col]].copy()
 
-        for entity in result[entity_col].unique():
+        for entity in safe_to_list(result[entity_col].unique()):
             entity_events = events_df[events_df[entity_col] == entity].sort_values(time_col)
 
             if len(entity_events) < 2:

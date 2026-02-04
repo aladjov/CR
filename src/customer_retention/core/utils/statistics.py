@@ -59,13 +59,13 @@ def compute_psi_from_series(reference: Series, current: Series, n_bins: int = 10
 
 
 def compute_psi_categorical(reference: Series, current: Series, epsilon: float = 1e-10) -> float:
-    ref_counts = reference.value_counts(normalize=True)
-    curr_counts = current.value_counts(normalize=True)
-    all_categories = set(ref_counts.index) | set(curr_counts.index)
+    ref_dict = reference.value_counts(normalize=True).to_dict()
+    curr_dict = current.value_counts(normalize=True).to_dict()
+    all_categories = set(ref_dict.keys()) | set(curr_dict.keys())
     psi = 0.0
     for cat in all_categories:
-        ref_pct = ref_counts.get(cat, epsilon)
-        curr_pct = curr_counts.get(cat, epsilon)
+        ref_pct = ref_dict.get(cat, epsilon)
+        curr_pct = curr_dict.get(cat, epsilon)
         psi += (curr_pct - ref_pct) * np.log((curr_pct + epsilon) / (ref_pct + epsilon))
     return float(psi)
 
@@ -77,12 +77,12 @@ def compute_ks_statistic(reference: Series, current: Series) -> Tuple[float, flo
 
 
 def compute_chi_square(current: Series, baseline_proportions: Dict[str, float]) -> Tuple[float, float]:
-    current_counts = current.value_counts()
-    all_categories = sorted(set(list(current_counts.index) + list(baseline_proportions.keys())))
+    cc_dict = current.value_counts().to_dict()
+    all_categories = sorted(set(list(cc_dict.keys()) + list(baseline_proportions.keys())))
     observed, expected = [], []
     total_current = len(current)
     for cat in all_categories:
-        observed.append(current_counts.get(cat, 0))
+        observed.append(cc_dict.get(cat, 0))
         expected.append(max(baseline_proportions.get(cat, 0) * total_current, 1e-10))
     expected_arr = np.array(expected)
     expected_arr = expected_arr * (sum(observed) / sum(expected_arr)) if sum(expected_arr) > 0 else expected_arr

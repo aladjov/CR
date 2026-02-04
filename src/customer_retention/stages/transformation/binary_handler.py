@@ -3,7 +3,7 @@ from typing import Any, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import Series
+from customer_retention.core.compat import Series, safe_to_list
 
 
 @dataclass
@@ -27,7 +27,7 @@ class BinaryHandler:
 
     def fit(self, series: Series) -> "BinaryHandler":
         clean = series.dropna()
-        unique_vals = list(clean.unique())
+        unique_vals = safe_to_list(clean.unique())
         self._original_values = unique_vals
 
         if self.positive_class is not None:

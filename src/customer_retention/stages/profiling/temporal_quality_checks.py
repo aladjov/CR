@@ -1,7 +1,14 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
-from customer_retention.core.compat import DataFrame, Timestamp, ensure_datetime_column, safe_to_datetime, to_pandas
+from customer_retention.core.compat import (
+    DataFrame,
+    Timestamp,
+    ensure_datetime_column,
+    safe_to_datetime,
+    safe_to_list,
+    to_pandas,
+)
 from customer_retention.core.components.enums import Severity
 
 
@@ -87,7 +94,7 @@ class TemporalGapCheck(TemporalQualityCheck):
                 check_id=self.check_id, check_name=self.check_name, passed=False, severity=self.severity,
                 message=f"Found {len(large_gaps)} gaps exceeding {threshold_days:.1f} days",
                 details={"threshold_days": threshold_days, "expected_frequency": self.expected_frequency,
-                         "gap_locations": list(large_gaps.index)[:10]},
+                         "gap_locations": safe_to_list(large_gaps.index)[:10]},
                 recommendation="Investigate data collection gaps or missing data",
                 gap_count=len(large_gaps), max_gap_days=max_gap)
 

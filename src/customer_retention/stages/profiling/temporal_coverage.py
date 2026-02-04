@@ -244,7 +244,7 @@ def _detect_gaps(events_over_time: pd.Series, freq: str) -> List[TemporalGap]:
 
     gaps: List[TemporalGap] = []
     gap_start = None
-    for ts, vol in series.items():
+    for ts, vol in series.to_dict().items():
         if vol < threshold:
             if gap_start is None:
                 gap_start = ts

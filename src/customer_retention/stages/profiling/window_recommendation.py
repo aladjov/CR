@@ -3,6 +3,8 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from customer_retention.core.compat import safe_to_list
+
 from .temporal_pattern_analyzer import SeasonalityPeriod
 from .time_series_profiler import ActivitySegmentResult, LifecycleQuadrantResult
 
@@ -152,7 +154,7 @@ class WindowRecommendationCollector:
         for row in rows:
             window_days = row["window_days"]
             if window_days is None:
-                row["primary_segments"] = sorted(list(groups.unique()))
+                row["primary_segments"] = sorted(safe_to_list(groups.unique()))
                 continue
             has_span = duration >= window_days
             expected_events = event_count * (window_days / duration.clip(lower=1))
@@ -160,7 +162,7 @@ class WindowRecommendationCollector:
             if not beneficial.any():
                 continue
             group_coverage = groups[beneficial].value_counts(normalize=True)
-            top = list(group_coverage[group_coverage >= 0.15].index)
+            top = safe_to_list(group_coverage[group_coverage >= 0.15].index)
             row["primary_segments"] = sorted(top[:3])
 
     def _annotate_seasonality(self, rows: List[Dict]) -> None:

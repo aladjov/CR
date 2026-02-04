@@ -5,7 +5,14 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-from customer_retention.core.compat import DataFrame, Series, safe_memory_usage_bytes, safe_to_datetime, to_pandas
+from customer_retention.core.compat import (
+    DataFrame,
+    Series,
+    safe_memory_usage_bytes,
+    safe_to_datetime,
+    safe_to_list,
+    to_pandas,
+)
 
 from .number_formatter import NumberFormatter
 
@@ -337,7 +344,7 @@ class ChartBuilder:
         fig = go.Figure(go.Heatmap(
             z=retention_matrix.to_numpy(),
             x=list(retention_matrix.columns),
-            y=list(retention_matrix.index),
+            y=safe_to_list(retention_matrix.index),
             colorscale="Greens",
             text=np.round(retention_matrix.to_numpy(), 2),
             texttemplate="%{text:.0%}"

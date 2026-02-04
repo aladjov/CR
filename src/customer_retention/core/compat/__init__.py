@@ -169,6 +169,16 @@ def ensure_datetime_column(df: _pandas.DataFrame, column: str) -> _pandas.DataFr
     return df
 
 
+def safe_to_list(obj: Any) -> list:
+    if isinstance(obj, (_pandas.Series, _pandas.Index)):
+        return obj.to_list()
+    if hasattr(obj, 'to_numpy'):
+        return obj.to_numpy().tolist()
+    if hasattr(obj, 'tolist'):
+        return obj.tolist()
+    return list(obj)
+
+
 def safe_isinf(series: Any) -> Any:
     return (series == float('inf')) | (series == float('-inf'))
 
@@ -221,6 +231,7 @@ __all__ = [
     "get_display_function",
     "get_dbutils",
     "safe_memory_usage_bytes",
+    "safe_to_list",
     "safe_to_datetime",
     "ensure_datetime_column",
     "ops",

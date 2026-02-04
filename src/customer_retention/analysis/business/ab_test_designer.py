@@ -7,7 +7,7 @@ from typing import List, Optional
 import numpy as np
 from scipy import stats
 
-from customer_retention.core.compat import DataFrame, concat
+from customer_retention.core.compat import DataFrame, concat, safe_to_list
 
 
 @dataclass
@@ -121,7 +121,7 @@ class ABTestDesigner:
             sample = customer_pool.sample(n=total_needed, random_state=42)
         if stratify_by and stratify_by in sample.columns:
             assignments = []
-            for stratum in sample[stratify_by].unique():
+            for stratum in safe_to_list(sample[stratify_by].unique()):
                 stratum_data = sample[sample[stratify_by] == stratum]
                 n_per_group = len(stratum_data) // len(groups)
                 shuffled = stratum_data.sample(frac=1, random_state=42)

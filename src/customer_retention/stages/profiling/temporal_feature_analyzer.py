@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from scipy import stats
 
-from customer_retention.core.compat import DataFrame, ensure_datetime_column, native_pd, pd, qcut
+from customer_retention.core.compat import DataFrame, ensure_datetime_column, native_pd, pd, qcut, safe_to_list
 from customer_retention.core.utils import compute_effect_size
 
 
@@ -293,7 +293,7 @@ class TemporalFeatureAnalyzer:
         self, df: DataFrame, col: str, short_window: int, long_window: int, reference_date
     ) -> MomentumResult:
         entity_momentum = []
-        for entity_id in df[self.entity_column].unique():
+        for entity_id in safe_to_list(df[self.entity_column].unique()):
             entity_data = df[df[self.entity_column] == entity_id].copy()
             entity_data["days_ago"] = (reference_date - entity_data[self.time_column]).dt.days
             short_mean = entity_data[entity_data["days_ago"] <= short_window][col].mean()
