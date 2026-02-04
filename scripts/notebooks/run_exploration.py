@@ -201,6 +201,8 @@ def run_all(
         print(f"No notebooks found in {notebooks_dir}")
         return {}
 
+    total_start = time.time()
+
     # Skip detection is deferred until after 01_data_discovery runs,
     # because that notebook creates/updates the findings files needed
     # for accurate event-level and text-column detection.
@@ -212,6 +214,7 @@ def run_all(
     print("(skip detection deferred until after data discovery)\n")
 
     results: Dict[str, str] = {}
+    timings: Dict[str, float] = {}
     for nb_path in notebooks:
         stem = nb_path.stem
 
@@ -242,6 +245,7 @@ def run_all(
         start = time.time()
         ok, error = _run_notebook(nb_path, timeout=timeout, kernel=kernel)
         elapsed = time.time() - start
+        timings[stem] = elapsed
 
         if ok:
             results[stem] = f"OK ({elapsed:.0f}s)"
@@ -251,7 +255,7 @@ def run_all(
             print(f" FAILED ({elapsed:.0f}s)")
             print(f"    Error: {error[:200]}")
 
-    _print_summary(results)
+    _print_summary(results, timings, time.time() - total_start)
 
     # Export notebooks to HTML docs
     if not dry_run:
@@ -290,7 +294,17 @@ def _export_html(notebooks_dir: Path, docs_dir: Path) -> None:
         print(f"\nHTML export failed: {e}")
 
 
-def _print_summary(results: Dict[str, str]) -> None:
+def _format_duration(seconds: float) -> str:
+    mins, secs = divmod(int(seconds), 60)
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    if mins < 60:
+        return f"{mins}m {secs}s"
+    hours, mins = divmod(mins, 60)
+    return f"{hours}h {mins}m {secs}s"
+
+
+def _print_summary(results: Dict[str, str], timings: Dict[str, float], total_elapsed: float) -> None:
     print("\n" + "=" * 60)
     print("Summary")
     print("=" * 60)
@@ -313,6 +327,15 @@ def _print_summary(results: Dict[str, str]) -> None:
         for stem, status in results.items():
             if status.startswith("FAILED"):
                 print(f"  - {stem}: {status}")
+    if timings:
+        max_name_len = max(len(s) for s in timings)
+        print("\nTiming:")
+        for stem, elapsed in timings.items():
+            print(f"  {stem:<{max_name_len}}  {_format_duration(elapsed)}")
+        print(f"  {'─' * max_name_len}  ────────")
+        print(f"  {'Total':<{max_name_len}}  {_format_duration(total_elapsed)}")
+    else:
+        print(f"\nTotal: {_format_duration(total_elapsed)}")
 
 
 def main():
