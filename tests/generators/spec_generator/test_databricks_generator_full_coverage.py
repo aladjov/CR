@@ -121,13 +121,18 @@ class TestDatabricksSpecGeneratorFullCoverage:
         from customer_retention.generators.spec_generator.databricks_generator import DatabricksSpecGenerator
         generator = DatabricksSpecGenerator(output_dir=str(tmp_path))
         files = generator.save_all(full_spec)
-        assert len(files) == 6
-        assert (tmp_path / "test_pipeline_lakeflow_connect.json").exists()
-        assert (tmp_path / "test_pipeline_dlt_pipeline.py").exists()
-        assert (tmp_path / "test_pipeline_workflow_jobs.json").exists()
-        assert (tmp_path / "test_pipeline_feature_tables.py").exists()
-        assert (tmp_path / "test_pipeline_mlflow_experiment.py").exists()
-        assert (tmp_path / "test_pipeline_unity_catalog.sql").exists()
+        assert len(files) == 11
+        assert (tmp_path / "config.py").exists()
+        assert (tmp_path / "pipeline_runner.py").exists()
+        assert (tmp_path / "landing" / "lakeflow_connect.json").exists()
+        assert (tmp_path / "bronze" / "bronze_layer.py").exists()
+        assert (tmp_path / "silver" / "silver_merge.py").exists()
+        assert (tmp_path / "gold" / "gold_features.py").exists()
+        assert (tmp_path / "training" / "ml_experiment.py").exists()
+        assert (tmp_path / "feature_tables.py").exists()
+        assert (tmp_path / "unity_catalog.sql").exists()
+        assert (tmp_path / "workflow_jobs.json").exists()
+        assert (tmp_path / "dlt_pipeline.py").exists()
 
 
 class TestDatabricksSpecGeneratorEdgeCases:

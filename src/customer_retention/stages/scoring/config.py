@@ -76,7 +76,13 @@ class ScoringConfig:
         client = MlflowClient()
         experiment = client.get_experiment_by_name(experiment_name)
         if not experiment:
-            raise ValueError(f"MLflow experiment '{experiment_name}' not found")
+            experiment = _search_experiment_by_suffix(client, experiment_name)
+        if not experiment:
+            tried = [experiment_name, f"*{experiment_name}* (search)"]
+            raise ValueError(
+                f"MLflow experiment not found. Tried: {tried}. "
+                "Set CR_EXPERIMENT_NAME to the full experiment path."
+            )
         runs = client.search_runs(
             experiment_ids=[experiment.experiment_id],
             order_by=["metrics.best_roc_auc DESC"],
@@ -107,6 +113,15 @@ class ScoringConfig:
             catalog=catalog,
             schema=schema,
         )
+
+
+def _search_experiment_by_suffix(client, experiment_name: str):
+    results = client.search_experiments(
+        filter_string=f"name LIKE '%{experiment_name}'"
+    )
+    if not results:
+        return None
+    return max(results, key=lambda e: getattr(e, "creation_time", 0))
 
 
 def _load_module_from_path(module_name: str, path: Path):

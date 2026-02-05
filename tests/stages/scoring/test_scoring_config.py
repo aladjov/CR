@@ -139,6 +139,38 @@ class TestFromDatabricks:
     def test_missing_experiment_raises(self, databricks_env):
         client = MagicMock()
         client.get_experiment_by_name.return_value = None
+        client.search_experiments.return_value = []
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=client):
+            with pytest.raises(ValueError, match="not found"):
+                ScoringConfig.from_databricks()
+
+    def test_from_databricks_finds_experiment_by_search(self, databricks_env):
+        client = MagicMock()
+        client.get_experiment_by_name.return_value = None
+        experiment = MagicMock()
+        experiment.experiment_id = "456"
+        experiment.name = "/Users/someone/customer_churn"
+        experiment.creation_time = 1000
+        client.search_experiments.return_value = [experiment]
+        run = MagicMock()
+        run.data.tags = {
+            "target_column": "churned",
+            "entity_key": "customer_id",
+            "timestamp_column": "event_timestamp",
+            "recommendations_hash": "abc123",
+            "composite_name": "test__abc1234",
+        }
+        run.data.params = {}
+        client.search_runs.return_value = [run]
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=client):
+            config = ScoringConfig.from_databricks()
+        assert config.pipeline_name == "customer_churn"
+        assert config.target_column == "churned"
+
+    def test_from_databricks_raises_when_no_experiment_anywhere(self, databricks_env):
+        client = MagicMock()
+        client.get_experiment_by_name.return_value = None
+        client.search_experiments.return_value = []
         with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=client):
             with pytest.raises(ValueError, match="not found"):
                 ScoringConfig.from_databricks()

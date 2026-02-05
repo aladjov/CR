@@ -48,11 +48,11 @@ class TestSpecGenerationIntegration:
         assert len(spec.feature_definitions) > 0
         db_generator = DatabricksSpecGenerator(output_dir=str(tmp_path / "databricks"))
         db_files = db_generator.save_all(spec)
-        assert len(db_files) == 6
+        assert len(db_files) == 11
         generic_generator = GenericSpecGenerator(output_dir=str(tmp_path / "generic"))
         generic_files = generic_generator.save_all(spec)
         assert len(generic_files) == 6
-        dlt_content = (tmp_path / "databricks" / "churn_pipeline_dlt_pipeline.py").read_text()
+        dlt_content = (tmp_path / "databricks" / "dlt_pipeline.py").read_text()
         assert "dlt.table" in dlt_content
         pipeline_content = (tmp_path / "generic" / "pipeline.py").read_text()
         assert "def load_data" in pipeline_content
@@ -138,15 +138,15 @@ class TestSpecGeneratorEndToEnd:
             output_dir=str(tmp_path)
         )
         files = generator.save_all(spec)
-        assert len(files) == 6
+        assert len(files) == 11
         for file_path in files:
             assert Path(file_path).exists()
-        dlt_code = (tmp_path / "e2e_test_dlt_pipeline.py").read_text()
+        dlt_code = (tmp_path / "dlt_pipeline.py").read_text()
         assert "ml_catalog" not in dlt_code or "e2e_test_bronze" in dlt_code
-        sql_code = (tmp_path / "e2e_test_unity_catalog.sql").read_text()
+        sql_code = (tmp_path / "unity_catalog.sql").read_text()
         assert "ml_catalog.churn_detection" in sql_code
         assert "customer_id STRING NOT NULL" in sql_code
-        mlflow_code = (tmp_path / "e2e_test_mlflow_experiment.py").read_text()
+        mlflow_code = (tmp_path / "training" / "ml_experiment.py").read_text()
         assert "max_depth" in mlflow_code
         assert "learning_rate" in mlflow_code
 

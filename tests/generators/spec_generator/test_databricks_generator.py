@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
@@ -259,6 +261,138 @@ class TestGenerateUnityCatalogSchema:
         assert "age" in sql or "INT" in sql.upper() or "STRING" in sql.upper()
 
 
+class TestGenerateConfig:
+    def test_returns_string(self, sample_spec):
+        generator = DatabricksSpecGenerator(catalog="analytics", schema="ml_features")
+        code = generator.generate_config(sample_spec)
+        assert isinstance(code, str)
+
+    def test_contains_catalog(self, sample_spec):
+        generator = DatabricksSpecGenerator(catalog="analytics", schema="ml_features")
+        code = generator.generate_config(sample_spec)
+        assert 'CATALOG = "analytics"' in code
+
+    def test_contains_schema(self, sample_spec):
+        generator = DatabricksSpecGenerator(catalog="analytics", schema="ml_features")
+        code = generator.generate_config(sample_spec)
+        assert 'SCHEMA = "ml_features"' in code
+
+    def test_contains_pipeline_name(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        code = generator.generate_config(sample_spec)
+        assert 'PIPELINE_NAME = "churn_pipeline"' in code
+
+    def test_contains_table_paths(self, sample_spec):
+        generator = DatabricksSpecGenerator(catalog="analytics", schema="ml_features")
+        code = generator.generate_config(sample_spec)
+        assert "analytics.ml_features.churn_pipeline_bronze" in code
+        assert "analytics.ml_features.churn_pipeline_silver" in code
+        assert "analytics.ml_features.churn_pipeline_gold" in code
+
+    def test_contains_experiment_name(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        code = generator.generate_config(sample_spec)
+        assert "EXPERIMENT_NAME" in code
+
+
+class TestGenerateBronzeLayer:
+    def test_returns_string(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        code = generator.generate_bronze_layer(sample_spec)
+        assert isinstance(code, str)
+
+    def test_has_run_function(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        code = generator.generate_bronze_layer(sample_spec)
+        assert "def run(" in code
+
+    def test_contains_pyspark_read(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        code = generator.generate_bronze_layer(sample_spec)
+        assert "spark" in code.lower()
+
+    def test_contains_delta_write(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        code = generator.generate_bronze_layer(sample_spec)
+        assert "delta" in code.lower() or "write" in code.lower()
+
+    def test_not_dlt(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        code = generator.generate_bronze_layer(sample_spec)
+        assert "@dlt" not in code
+
+
+class TestGenerateSilverLayer:
+    def test_returns_string(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        code = generator.generate_silver_layer(sample_spec)
+        assert isinstance(code, str)
+
+    def test_has_run_function(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        code = generator.generate_silver_layer(sample_spec)
+        assert "def run(" in code
+
+    def test_reads_bronze_table(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        code = generator.generate_silver_layer(sample_spec)
+        assert "bronze" in code.lower()
+
+    def test_not_dlt(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        code = generator.generate_silver_layer(sample_spec)
+        assert "@dlt" not in code
+
+
+class TestGenerateGoldLayer:
+    def test_returns_string(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        code = generator.generate_gold_layer(sample_spec)
+        assert isinstance(code, str)
+
+    def test_has_run_function(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        code = generator.generate_gold_layer(sample_spec)
+        assert "def run(" in code
+
+    def test_reads_silver_table(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        code = generator.generate_gold_layer(sample_spec)
+        assert "silver" in code.lower()
+
+    def test_not_dlt(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        code = generator.generate_gold_layer(sample_spec)
+        assert "@dlt" not in code
+
+
+class TestGeneratePipelineRunner:
+    def test_returns_string(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        code = generator.generate_pipeline_runner(sample_spec)
+        assert isinstance(code, str)
+
+    def test_has_run_pipeline_function(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        code = generator.generate_pipeline_runner(sample_spec)
+        assert "def run_pipeline(" in code
+
+    def test_imports_layers(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        code = generator.generate_pipeline_runner(sample_spec)
+        assert "bronze" in code.lower()
+        assert "silver" in code.lower()
+        assert "gold" in code.lower()
+
+    def test_contains_execution_sequence(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        code = generator.generate_pipeline_runner(sample_spec)
+        bronze_pos = code.lower().find("bronze")
+        silver_pos = code.lower().find("silver", bronze_pos + 1)
+        gold_pos = code.lower().find("gold", silver_pos + 1)
+        assert bronze_pos < silver_pos < gold_pos
+
+
 class TestGenerateAll:
     def test_returns_dict(self, sample_spec):
         generator = DatabricksSpecGenerator()
@@ -272,6 +406,13 @@ class TestGenerateAll:
 
         expected_keys = ["dlt_pipeline", "workflow_jobs", "feature_tables"]
         for key in expected_keys:
+            assert key in artifacts
+
+    def test_contains_new_artifacts(self, sample_spec):
+        generator = DatabricksSpecGenerator()
+        artifacts = generator.generate_all(sample_spec)
+
+        for key in ["config", "bronze_layer", "silver_layer", "gold_layer", "pipeline_runner"]:
             assert key in artifacts
 
     def test_all_artifacts_non_empty(self, sample_spec):
@@ -299,6 +440,53 @@ class TestSaveArtifacts:
         files = generator.save_all(sample_spec)
 
         for file_path in files:
-            assert (tmp_path / file_path.split("/")[-1]).exists() or any(
-                f.name == file_path.split("/")[-1] for f in tmp_path.iterdir()
-            )
+            assert Path(file_path).exists()
+
+    def test_save_all_creates_config(self, sample_spec, tmp_path):
+        generator = DatabricksSpecGenerator(output_dir=str(tmp_path))
+        generator.save_all(sample_spec)
+
+        assert (tmp_path / "config.py").exists()
+
+    def test_save_all_creates_pipeline_runner(self, sample_spec, tmp_path):
+        generator = DatabricksSpecGenerator(output_dir=str(tmp_path))
+        generator.save_all(sample_spec)
+
+        assert (tmp_path / "pipeline_runner.py").exists()
+
+    def test_save_all_creates_layer_dirs(self, sample_spec, tmp_path):
+        generator = DatabricksSpecGenerator(output_dir=str(tmp_path))
+        generator.save_all(sample_spec)
+
+        for subdir in ["landing", "bronze", "silver", "gold", "training"]:
+            assert (tmp_path / subdir).is_dir()
+
+    def test_save_all_bronze_in_subdir(self, sample_spec, tmp_path):
+        generator = DatabricksSpecGenerator(output_dir=str(tmp_path))
+        generator.save_all(sample_spec)
+
+        assert (tmp_path / "bronze" / "bronze_layer.py").exists()
+
+    def test_save_all_silver_in_subdir(self, sample_spec, tmp_path):
+        generator = DatabricksSpecGenerator(output_dir=str(tmp_path))
+        generator.save_all(sample_spec)
+
+        assert (tmp_path / "silver" / "silver_merge.py").exists()
+
+    def test_save_all_gold_in_subdir(self, sample_spec, tmp_path):
+        generator = DatabricksSpecGenerator(output_dir=str(tmp_path))
+        generator.save_all(sample_spec)
+
+        assert (tmp_path / "gold" / "gold_features.py").exists()
+
+    def test_save_all_training_in_subdir(self, sample_spec, tmp_path):
+        generator = DatabricksSpecGenerator(output_dir=str(tmp_path))
+        generator.save_all(sample_spec)
+
+        assert (tmp_path / "training" / "ml_experiment.py").exists()
+
+    def test_save_all_landing_in_subdir(self, sample_spec, tmp_path):
+        generator = DatabricksSpecGenerator(output_dir=str(tmp_path))
+        generator.save_all(sample_spec)
+
+        assert (tmp_path / "landing" / "lakeflow_connect.json").exists()

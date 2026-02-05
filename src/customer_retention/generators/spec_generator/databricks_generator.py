@@ -384,6 +384,138 @@ class DatabricksSpecGenerator:
         }
         return type_map.get(data_type.lower(), "STRING")
 
+    def generate_config(self, spec: PipelineSpec) -> str:
+        bronze_table = f"{self.catalog}.{self.schema}.{spec.name}_bronze"
+        silver_table = f"{self.catalog}.{self.schema}.{spec.name}_silver"
+        gold_table = f"{self.catalog}.{self.schema}.{spec.name}_gold"
+        target = spec.model_config.target_column if spec.model_config else "target"
+        lines = [
+            f'CATALOG = "{self.catalog}"',
+            f'SCHEMA = "{self.schema}"',
+            f'PIPELINE_NAME = "{spec.name}"',
+            f'EXPERIMENT_NAME = "{spec.name}_experiment"',
+            f'TARGET_COLUMN = "{target}"',
+            "",
+            f'BRONZE_TABLE = "{bronze_table}"',
+            f'SILVER_TABLE = "{silver_table}"',
+            f'GOLD_TABLE = "{gold_table}"',
+        ]
+        return "\n".join(lines)
+
+    def generate_bronze_layer(self, spec: PipelineSpec) -> str:
+        lines = [
+            "from pyspark.sql import functions as F",
+            "",
+            "",
+            "def run(spark, catalog, schema):",
+            f'    table_name = f"{{catalog}}.{{schema}}.{spec.name}_bronze"',
+        ]
+        for source in spec.sources:
+            lines.extend([
+                f'    df = spark.read.format("{source.format}").load("{source.path}")',
+                '    df = df.dropDuplicates()',
+                '    df.write.format("delta").mode("overwrite").saveAsTable(table_name)',
+            ])
+        lines.extend([
+            '    print(f"Bronze layer written to {table_name}")',
+            '    return df',
+        ])
+        return "\n".join(lines)
+
+    def generate_silver_layer(self, spec: PipelineSpec) -> str:
+        bronze_table = f"{spec.name}_bronze"
+        silver_table = f"{spec.name}_silver"
+        lines = [
+            "from pyspark.sql import functions as F",
+            "",
+            "",
+            "def run(spark, catalog, schema):",
+            f'    bronze_table = f"{{catalog}}.{{schema}}.{bronze_table}"',
+            f'    silver_table = f"{{catalog}}.{{schema}}.{silver_table}"',
+            '    df = spark.table(bronze_table)',
+        ]
+        if spec.silver_transforms:
+            for transform in spec.silver_transforms:
+                if transform.transform_type == "standard_scaling":
+                    col = transform.input_columns[0]
+                    out_col = transform.output_columns[0]
+                    lines.append(f'    df = df.withColumn("{out_col}", F.col("{col}"))')
+        lines.extend([
+            '    df.write.format("delta").mode("overwrite").saveAsTable(silver_table)',
+            '    print(f"Silver layer written to {silver_table}")',
+            '    return df',
+        ])
+        return "\n".join(lines)
+
+    def generate_gold_layer(self, spec: PipelineSpec) -> str:
+        silver_table = f"{spec.name}_silver"
+        gold_table = f"{spec.name}_gold"
+        lines = [
+            "from pyspark.sql import functions as F",
+            "",
+            "",
+            "def run(spark, catalog, schema):",
+            f'    silver_table = f"{{catalog}}.{{schema}}.{silver_table}"',
+            f'    gold_table = f"{{catalog}}.{{schema}}.{gold_table}"',
+            '    df = spark.table(silver_table)',
+        ]
+        if spec.feature_definitions:
+            for feature in spec.feature_definitions:
+                if feature.computation == "days_since_today":
+                    col = feature.source_columns[0]
+                    lines.append(
+                        f'    df = df.withColumn("{feature.name}", '
+                        f'F.datediff(F.current_date(), F.col("{col}")))'
+                    )
+        lines.extend([
+            '    df.write.format("delta").mode("overwrite").saveAsTable(gold_table)',
+            '    print(f"Gold layer written to {gold_table}")',
+            '    return df',
+        ])
+        return "\n".join(lines)
+
+    def generate_pipeline_runner(self, spec: PipelineSpec) -> str:
+        lines = [
+            "import importlib",
+            "import sys",
+            "from pathlib import Path",
+            "",
+            "",
+            "def run_pipeline():",
+            f'    catalog = "{self.catalog}"',
+            f'    schema = "{self.schema}"',
+            f'    print("Starting Databricks pipeline: {spec.name}")',
+            "",
+            "    try:",
+            "        from pyspark.sql import SparkSession",
+            '        spark = SparkSession.builder.getOrCreate()',
+            "    except ImportError:",
+            '        print("PySpark not available. Run this on a Databricks cluster.")',
+            "        return",
+            "",
+            '    print("[1/4] Bronze layer...")',
+            "    from bronze.bronze_layer import run as run_bronze",
+            "    run_bronze(spark, catalog, schema)",
+            "",
+            '    print("[2/4] Silver layer...")',
+            "    from silver.silver_merge import run as run_silver",
+            "    run_silver(spark, catalog, schema)",
+            "",
+            '    print("[3/4] Gold layer...")',
+            "    from gold.gold_features import run as run_gold",
+            "    run_gold(spark, catalog, schema)",
+            "",
+            '    print("[4/4] Training...")',
+            "    print(\"Run training/ml_experiment.py in a Databricks notebook.\")",
+            "",
+            '    print("Pipeline complete.")',
+            "",
+            "",
+            'if __name__ == "__main__":',
+            "    run_pipeline()",
+        ]
+        return "\n".join(lines)
+
     def generate_all(self, spec: PipelineSpec) -> Dict[str, Any]:
         return {
             "lakeflow_connect": self.generate_lakeflow_connect(spec),
@@ -391,7 +523,12 @@ class DatabricksSpecGenerator:
             "workflow_jobs": self.generate_workflow_jobs(spec),
             "feature_tables": self.generate_feature_tables(spec),
             "mlflow_experiment": self.generate_mlflow_experiment(spec),
-            "unity_catalog_schema": self.generate_unity_catalog_schema(spec)
+            "unity_catalog_schema": self.generate_unity_catalog_schema(spec),
+            "config": self.generate_config(spec),
+            "bronze_layer": self.generate_bronze_layer(spec),
+            "silver_layer": self.generate_silver_layer(spec),
+            "gold_layer": self.generate_gold_layer(spec),
+            "pipeline_runner": self.generate_pipeline_runner(spec),
         }
 
     def save_all(self, spec: PipelineSpec) -> List[str]:
@@ -400,34 +537,53 @@ class DatabricksSpecGenerator:
 
         artifacts = self.generate_all(spec)
 
-        lakeflow_path = self.output_dir / f"{spec.name}_lakeflow_connect.json"
+        for subdir in ["landing", "bronze", "silver", "gold", "training"]:
+            (self.output_dir / subdir).mkdir(parents=True, exist_ok=True)
+
+        config_path = self.output_dir / "config.py"
+        config_path.write_text(artifacts["config"])
+        saved_files.append(str(config_path))
+
+        runner_path = self.output_dir / "pipeline_runner.py"
+        runner_path.write_text(artifacts["pipeline_runner"])
+        saved_files.append(str(runner_path))
+
+        lakeflow_path = self.output_dir / "landing" / "lakeflow_connect.json"
         with open(lakeflow_path, "w") as f:
             json.dump(artifacts["lakeflow_connect"], f, indent=2)
         saved_files.append(str(lakeflow_path))
 
-        dlt_path = self.output_dir / f"{spec.name}_dlt_pipeline.py"
-        with open(dlt_path, "w") as f:
-            f.write(artifacts["dlt_pipeline"])
-        saved_files.append(str(dlt_path))
+        bronze_path = self.output_dir / "bronze" / "bronze_layer.py"
+        bronze_path.write_text(artifacts["bronze_layer"])
+        saved_files.append(str(bronze_path))
 
-        jobs_path = self.output_dir / f"{spec.name}_workflow_jobs.json"
+        silver_path = self.output_dir / "silver" / "silver_merge.py"
+        silver_path.write_text(artifacts["silver_layer"])
+        saved_files.append(str(silver_path))
+
+        gold_path = self.output_dir / "gold" / "gold_features.py"
+        gold_path.write_text(artifacts["gold_layer"])
+        saved_files.append(str(gold_path))
+
+        training_path = self.output_dir / "training" / "ml_experiment.py"
+        training_path.write_text(artifacts["mlflow_experiment"])
+        saved_files.append(str(training_path))
+
+        features_path = self.output_dir / "feature_tables.py"
+        features_path.write_text(artifacts["feature_tables"])
+        saved_files.append(str(features_path))
+
+        schema_path = self.output_dir / "unity_catalog.sql"
+        schema_path.write_text(artifacts["unity_catalog_schema"])
+        saved_files.append(str(schema_path))
+
+        jobs_path = self.output_dir / "workflow_jobs.json"
         with open(jobs_path, "w") as f:
             json.dump(artifacts["workflow_jobs"], f, indent=2)
         saved_files.append(str(jobs_path))
 
-        features_path = self.output_dir / f"{spec.name}_feature_tables.py"
-        with open(features_path, "w") as f:
-            f.write(artifacts["feature_tables"])
-        saved_files.append(str(features_path))
-
-        mlflow_path = self.output_dir / f"{spec.name}_mlflow_experiment.py"
-        with open(mlflow_path, "w") as f:
-            f.write(artifacts["mlflow_experiment"])
-        saved_files.append(str(mlflow_path))
-
-        schema_path = self.output_dir / f"{spec.name}_unity_catalog.sql"
-        with open(schema_path, "w") as f:
-            f.write(artifacts["unity_catalog_schema"])
-        saved_files.append(str(schema_path))
+        dlt_path = self.output_dir / "dlt_pipeline.py"
+        dlt_path.write_text(artifacts["dlt_pipeline"])
+        saved_files.append(str(dlt_path))
 
         return saved_files
