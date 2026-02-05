@@ -12,7 +12,7 @@ Main module categories:
 - analysis: Analysis tools (diagnostics, interpretability, visualization,
             business, auto_explorer, discovery, recommendations)
 - generators: Auto-generation tools (notebook_generator, pipeline_generator,
-              spec_generator, orchestration)
+              orchestration)
 - integrations: External system adapters (adapters, feature_store, streaming,
                 llm_context, iteration)
 """
