@@ -1000,7 +1000,12 @@ if __name__ == "__main__":
     run_experiment()
 ''',
     "runner.py.j2": '''import argparse
+import sys
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+
+sys.path.insert(0, str(Path(__file__).parent))
+
 from config import PIPELINE_NAME, COMPOSITE_NAME, EXPERIMENTS_DIR, PRODUCTION_DIR
 {% for name in config.landing %}
 from landing.landing_{{ name }} import run_landing_{{ name }}

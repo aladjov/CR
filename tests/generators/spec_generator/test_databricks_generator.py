@@ -301,10 +301,11 @@ class TestGenerateBronzeLayer:
         code = generator.generate_bronze_layer(sample_spec)
         assert isinstance(code, str)
 
-    def test_has_run_function(self, sample_spec):
+    def test_is_databricks_notebook(self, sample_spec):
         generator = DatabricksSpecGenerator()
         code = generator.generate_bronze_layer(sample_spec)
-        assert "def run(" in code
+        assert "# Databricks notebook source" in code
+        assert 'dbutils.widgets.text("catalog"' in code
 
     def test_contains_pyspark_read(self, sample_spec):
         generator = DatabricksSpecGenerator()
@@ -328,10 +329,11 @@ class TestGenerateSilverLayer:
         code = generator.generate_silver_layer(sample_spec)
         assert isinstance(code, str)
 
-    def test_has_run_function(self, sample_spec):
+    def test_is_databricks_notebook(self, sample_spec):
         generator = DatabricksSpecGenerator()
         code = generator.generate_silver_layer(sample_spec)
-        assert "def run(" in code
+        assert "# Databricks notebook source" in code
+        assert 'dbutils.widgets.text("catalog"' in code
 
     def test_reads_bronze_table(self, sample_spec):
         generator = DatabricksSpecGenerator()
@@ -350,10 +352,11 @@ class TestGenerateGoldLayer:
         code = generator.generate_gold_layer(sample_spec)
         assert isinstance(code, str)
 
-    def test_has_run_function(self, sample_spec):
+    def test_is_databricks_notebook(self, sample_spec):
         generator = DatabricksSpecGenerator()
         code = generator.generate_gold_layer(sample_spec)
-        assert "def run(" in code
+        assert "# Databricks notebook source" in code
+        assert 'dbutils.widgets.text("catalog"' in code
 
     def test_reads_silver_table(self, sample_spec):
         generator = DatabricksSpecGenerator()
@@ -372,14 +375,15 @@ class TestGeneratePipelineRunner:
         code = generator.generate_pipeline_runner(sample_spec)
         assert isinstance(code, str)
 
-    def test_has_run_pipeline_function(self, sample_spec):
+    def test_is_databricks_notebook(self, sample_spec):
         generator = DatabricksSpecGenerator()
         code = generator.generate_pipeline_runner(sample_spec)
-        assert "def run_pipeline(" in code
+        assert "# Databricks notebook source" in code
 
-    def test_imports_layers(self, sample_spec):
+    def test_uses_dbutils_notebook_run(self, sample_spec):
         generator = DatabricksSpecGenerator()
         code = generator.generate_pipeline_runner(sample_spec)
+        assert "dbutils.notebook.run" in code
         assert "bronze" in code.lower()
         assert "silver" in code.lower()
         assert "gold" in code.lower()

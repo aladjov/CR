@@ -57,3 +57,4 @@ experiments/
 
 # Generated pipelines (transient outputs, can be regenerated)
 generated_pipelines/
+tests/.coverage*

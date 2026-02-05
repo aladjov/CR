@@ -293,33 +293,34 @@ class DatabricksSpecGenerator:
         model_name = spec.model_config.name if spec.model_config else "model"
 
         lines = [
+            "# Databricks notebook source",
+            "",
             "import mlflow",
             "import mlflow.spark",
             "from pyspark.ml.classification import GBTClassifier, RandomForestClassifier",
             "from pyspark.ml.evaluation import BinaryClassificationEvaluator",
             "",
-            f"# MLflow Experiment: {spec.name}",
+            'dbutils.widgets.text("catalog", "")',
+            'dbutils.widgets.text("schema", "")',
+            'catalog = dbutils.widgets.get("catalog")',
+            'schema = dbutils.widgets.get("schema")',
             "",
             f'mlflow.set_experiment("/Users/{{username}}/{spec.name}_experiment")',
             "",
             f'with mlflow.start_run(run_name="{model_name}"):',
-            '    # Load training data',
-            f'    df = spark.table("{self.catalog}.{self.schema}.{spec.name}_gold")',
+            f'    df = spark.table(f"{{catalog}}.{{schema}}.{spec.name}_gold")',
             "",
-            '    # Log parameters',
             f'    mlflow.log_param("target_column", "{target}")',
             f'    mlflow.log_param("model_type", "{model_type}")',
             ""
         ]
 
         if spec.model_config and spec.model_config.hyperparameters:
-            lines.append("    # Log hyperparameters")
             for key, value in spec.model_config.hyperparameters.items():
                 lines.append(f'    mlflow.log_param("{key}", {repr(value)})')
             lines.append("")
 
         lines.extend([
-            '    # Train model',
             '    model = GBTClassifier(',
             '        featuresCol="features",',
             f'        labelCol="{target}",',
@@ -328,13 +329,11 @@ class DatabricksSpecGenerator:
             "",
             '    trained_model = model.fit(df)',
             "",
-            '    # Log model',
             f'    mlflow.spark.log_model(trained_model, "{model_name}")',
             "",
-            '    # Register model in Unity Catalog',
             '    mlflow.register_model(',
             f'        f"runs/{{mlflow.active_run().info.run_id}}/{model_name}",',
-            f'        "{self.catalog}.{self.schema}.{spec.name}_model"',
+            f'        f"{{catalog}}.{{schema}}.{spec.name}_model"',
             '    )',
         ])
 
@@ -402,117 +401,101 @@ class DatabricksSpecGenerator:
         ]
         return "\n".join(lines)
 
-    def generate_bronze_layer(self, spec: PipelineSpec) -> str:
-        lines = [
+    def _notebook_header(self) -> List[str]:
+        return [
+            "# Databricks notebook source",
+            "",
             "from pyspark.sql import functions as F",
             "",
+            'dbutils.widgets.text("catalog", "")',
+            'dbutils.widgets.text("schema", "")',
+            'catalog = dbutils.widgets.get("catalog")',
+            'schema = dbutils.widgets.get("schema")',
             "",
-            "def run(spark, catalog, schema):",
-            f'    table_name = f"{{catalog}}.{{schema}}.{spec.name}_bronze"',
         ]
+
+    def generate_bronze_layer(self, spec: PipelineSpec) -> str:
+        lines = self._notebook_header()
+        lines.append(f'table_name = f"{{catalog}}.{{schema}}.{spec.name}_bronze"')
         for source in spec.sources:
             lines.extend([
-                f'    df = spark.read.format("{source.format}").load("{source.path}")',
-                '    df = df.dropDuplicates()',
-                '    df.write.format("delta").mode("overwrite").saveAsTable(table_name)',
+                f'df = spark.read.format("{source.format}").load("{source.path}")',
+                'df = df.dropDuplicates()',
+                'df.write.format("delta").mode("overwrite").saveAsTable(table_name)',
             ])
         lines.extend([
-            '    print(f"Bronze layer written to {table_name}")',
-            '    return df',
+            'print(f"Bronze layer written to {table_name}")',
         ])
         return "\n".join(lines)
 
     def generate_silver_layer(self, spec: PipelineSpec) -> str:
         bronze_table = f"{spec.name}_bronze"
         silver_table = f"{spec.name}_silver"
-        lines = [
-            "from pyspark.sql import functions as F",
-            "",
-            "",
-            "def run(spark, catalog, schema):",
-            f'    bronze_table = f"{{catalog}}.{{schema}}.{bronze_table}"',
-            f'    silver_table = f"{{catalog}}.{{schema}}.{silver_table}"',
-            '    df = spark.table(bronze_table)',
-        ]
+        lines = self._notebook_header()
+        lines.extend([
+            f'bronze_table = f"{{catalog}}.{{schema}}.{bronze_table}"',
+            f'silver_table = f"{{catalog}}.{{schema}}.{silver_table}"',
+            'df = spark.table(bronze_table)',
+        ])
         if spec.silver_transforms:
             for transform in spec.silver_transforms:
                 if transform.transform_type == "standard_scaling":
                     col = transform.input_columns[0]
                     out_col = transform.output_columns[0]
-                    lines.append(f'    df = df.withColumn("{out_col}", F.col("{col}"))')
+                    lines.append(f'df = df.withColumn("{out_col}", F.col("{col}"))')
         lines.extend([
-            '    df.write.format("delta").mode("overwrite").saveAsTable(silver_table)',
-            '    print(f"Silver layer written to {silver_table}")',
-            '    return df',
+            'df.write.format("delta").mode("overwrite").saveAsTable(silver_table)',
+            'print(f"Silver layer written to {silver_table}")',
         ])
         return "\n".join(lines)
 
     def generate_gold_layer(self, spec: PipelineSpec) -> str:
         silver_table = f"{spec.name}_silver"
         gold_table = f"{spec.name}_gold"
-        lines = [
-            "from pyspark.sql import functions as F",
-            "",
-            "",
-            "def run(spark, catalog, schema):",
-            f'    silver_table = f"{{catalog}}.{{schema}}.{silver_table}"',
-            f'    gold_table = f"{{catalog}}.{{schema}}.{gold_table}"',
-            '    df = spark.table(silver_table)',
-        ]
+        lines = self._notebook_header()
+        lines.extend([
+            f'silver_table = f"{{catalog}}.{{schema}}.{silver_table}"',
+            f'gold_table = f"{{catalog}}.{{schema}}.{gold_table}"',
+            'df = spark.table(silver_table)',
+        ])
         if spec.feature_definitions:
             for feature in spec.feature_definitions:
                 if feature.computation == "days_since_today":
                     col = feature.source_columns[0]
                     lines.append(
-                        f'    df = df.withColumn("{feature.name}", '
+                        f'df = df.withColumn("{feature.name}", '
                         f'F.datediff(F.current_date(), F.col("{col}")))'
                     )
         lines.extend([
-            '    df.write.format("delta").mode("overwrite").saveAsTable(gold_table)',
-            '    print(f"Gold layer written to {gold_table}")',
-            '    return df',
+            'df.write.format("delta").mode("overwrite").saveAsTable(gold_table)',
+            'print(f"Gold layer written to {gold_table}")',
         ])
         return "\n".join(lines)
 
     def generate_pipeline_runner(self, spec: PipelineSpec) -> str:
         lines = [
-            "import importlib",
-            "import sys",
-            "from pathlib import Path",
+            "# Databricks notebook source",
             "",
+            f'catalog = "{self.catalog}"',
+            f'schema = "{self.schema}"',
+            f'print("Starting Databricks pipeline: {spec.name}")',
             "",
-            "def run_pipeline():",
-            f'    catalog = "{self.catalog}"',
-            f'    schema = "{self.schema}"',
-            f'    print("Starting Databricks pipeline: {spec.name}")',
+            'params = {"catalog": catalog, "schema": schema}',
+            'timeout = 3600',
             "",
-            "    try:",
-            "        from pyspark.sql import SparkSession",
-            '        spark = SparkSession.builder.getOrCreate()',
-            "    except ImportError:",
-            '        print("PySpark not available. Run this on a Databricks cluster.")',
-            "        return",
+            'print("[1/4] Bronze layer...")',
+            'dbutils.notebook.run("./bronze/bronze_layer", timeout, params)',
             "",
-            '    print("[1/4] Bronze layer...")',
-            "    from bronze.bronze_layer import run as run_bronze",
-            "    run_bronze(spark, catalog, schema)",
+            'print("[2/4] Silver layer...")',
+            'dbutils.notebook.run("./silver/silver_merge", timeout, params)',
             "",
-            '    print("[2/4] Silver layer...")',
-            "    from silver.silver_merge import run as run_silver",
-            "    run_silver(spark, catalog, schema)",
+            'print("[3/4] Gold layer...")',
+            'dbutils.notebook.run("./gold/gold_features", timeout, params)',
             "",
-            '    print("[3/4] Gold layer...")',
-            "    from gold.gold_features import run as run_gold",
-            "    run_gold(spark, catalog, schema)",
+            'print("[4/4] Training...")',
+            'dbutils.notebook.run("./training/ml_experiment", timeout, params)',
             "",
-            '    print("[4/4] Training...")',
-            "    print(\"Run training/ml_experiment.py in a Databricks notebook.\")",
-            "",
-            '    print("Pipeline complete.")',
-            "",
-            "",
-            'if __name__ == "__main__":',
-            "    run_pipeline()",
+            'print("Pipeline complete.")',
         ]
         return "\n".join(lines)
 
