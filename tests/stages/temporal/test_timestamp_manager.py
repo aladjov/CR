@@ -135,6 +135,21 @@ class TestTimestampManagerSynthetic:
         expected_feature_ts = [base + timedelta(days=i) for i in range(5)]
         assert list(result["feature_timestamp"]) == expected_feature_ts
 
+    def test_synthetic_index_large_dataset_no_overflow(self):
+        large_df = pd.DataFrame({"value": range(110_000)})
+        config = TimestampConfig(
+            strategy=TimestampStrategy.SYNTHETIC_INDEX,
+            synthetic_base_date="2024-01-01",
+            observation_window_days=90,
+        )
+        result = TimestampManager(config).ensure_timestamps(large_df)
+
+        assert len(result) == 110_000
+        assert result["feature_timestamp"].is_monotonic_increasing
+        assert (result["label_timestamp"] > result["feature_timestamp"]).all()
+        assert result["label_available_flag"].all()
+        assert result["feature_timestamp"].iloc[0] == pd.to_datetime("2024-01-01")
+
     def test_synthetic_random_timestamps(self, raw_df):
         config = TimestampConfig(
             strategy=TimestampStrategy.SYNTHETIC_RANDOM,

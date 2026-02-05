@@ -29,6 +29,12 @@ import numpy as np
 import pandas as pd
 
 
+def _safe_index_timedeltas(row_count: int) -> pd.TimedeltaIndex:
+    if row_count <= pd.Timedelta.max.days:
+        return pd.to_timedelta(range(row_count), unit="D")
+    return pd.to_timedelta(np.arange(row_count), unit="s")
+
+
 def _strip_tz(series: pd.Series) -> pd.Series:
     if hasattr(series.dtype, "tz") and series.dtype.tz is not None:
         return series.dt.tz_localize(None)
@@ -202,7 +208,7 @@ class TimestampManager:
             df["feature_timestamp"] = base
             df["label_timestamp"] = base + window
         elif self.config.strategy == TimestampStrategy.SYNTHETIC_INDEX:
-            df["feature_timestamp"] = base + pd.to_timedelta(range(len(df)), unit="D")
+            df["feature_timestamp"] = base + _safe_index_timedeltas(len(df))
             df["label_timestamp"] = df["feature_timestamp"] + window
         elif self.config.strategy == TimestampStrategy.SYNTHETIC_RANDOM:
             np.random.seed(42)
