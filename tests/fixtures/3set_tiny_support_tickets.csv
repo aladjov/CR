@@ -1,0 +1,3 @@
+ticket_id,customer_id,created_at,first_response_at,resolved_at,status,category,subcategory,priority,channel,related_transaction_id,first_response_hours,time_to_close_hours,sla_first_response_hours,sla_breached,satisfaction,activity_tier,risk_tier
+Z000000001,C00001,2024-06-11T10:00:00Z,2024-06-11T12:30:00Z,2024-06-12T08:00:00Z,closed,How-to,API usage,normal,email,,2.5,22.0,8,0,5,mid,low
+Z000000002,C00002,2024-12-20T11:00:00Z,2024-12-21T09:00:00Z,2024-12-27T16:00:00Z,closed,EDI Failure,Validation error,high,phone,T000000002,22.0,173.0,4,1,2,mid,high

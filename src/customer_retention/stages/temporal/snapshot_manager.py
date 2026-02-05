@@ -34,6 +34,16 @@ from typing import Any, Optional
 import pandas as pd
 
 
+def _strip_tz_series(s: pd.Series) -> pd.Series:
+    if hasattr(s.dtype, "tz") and s.dtype.tz is not None:
+        return s.dt.tz_localize(None)
+    return s
+
+
+def _as_naive(dt: datetime) -> datetime:
+    return dt.replace(tzinfo=None) if dt.tzinfo else dt
+
+
 def compute_composite_dataset_name(dataset_names: list[str]) -> str:
     cleaned = [n.strip() for n in dataset_names if n.strip()]
     if not cleaned:
@@ -117,11 +127,12 @@ class SnapshotManager:
         snapshot_name: str = "training", timestamp_series: Optional[pd.Series] = None,
     ) -> SnapshotMetadata:
         if timestamp_series is not None:
-            ts = timestamp_series
+            ts = _strip_tz_series(timestamp_series)
         else:
-            ts = df["feature_timestamp"]
+            ts = _strip_tz_series(df["feature_timestamp"])
+        naive_cutoff = _as_naive(cutoff_date)
         snapshot_df = df[
-            (df["label_available_flag"] == True) & (ts <= cutoff_date)
+            (df["label_available_flag"] == True) & (ts <= naive_cutoff)
         ].copy()
 
         table_path = self.snapshots_dir / snapshot_name

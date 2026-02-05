@@ -171,6 +171,78 @@ class TestDeriveLastActionDate:
         assert result.name == "last_action_date"
 
 
+class TestFutureDateExclusion:
+    @pytest.fixture
+    def analyzer(self):
+        return DatetimeOrderAnalyzer()
+
+    def test_excludes_column_with_future_dates(self, analyzer):
+        df = pd.DataFrame({
+            "contract_start": pd.to_datetime(["2022-01-01", "2023-01-01", "2024-01-01"]),
+            "contract_end": pd.to_datetime(["2023-01-01", "2024-01-01", "2028-01-01"]),
+            "churn_end": pd.to_datetime(["2022-06-01", "2023-06-01", "2024-06-01"]),
+        })
+
+        ordering = analyzer.analyze_datetime_ordering(df)
+
+        assert "contract_end" not in ordering
+        assert "contract_start" in ordering
+        assert "churn_end" in ordering
+
+    def test_keeps_column_with_all_past_dates(self, analyzer):
+        df = pd.DataFrame({
+            "created": pd.to_datetime(["2020-01-01", "2020-06-01", "2021-01-01"]),
+            "last_order": pd.to_datetime(["2023-01-01", "2023-06-01", "2024-01-01"]),
+        })
+
+        ordering = analyzer.analyze_datetime_ordering(df)
+
+        assert len(ordering) == 2
+
+    def test_derive_last_action_date_skips_future_column(self, analyzer):
+        df = pd.DataFrame({
+            "contract_start": pd.to_datetime(["2022-10-01", "2023-03-01", "2024-08-01"]),
+            "contract_end": pd.to_datetime(["2023-10-01", "2024-03-01", "2027-08-01"]),
+            "churn_end": pd.to_datetime(["2023-05-01", None, None]),
+        })
+
+        result = analyzer.derive_last_action_date(df)
+
+        assert result is not None
+        assert result.iloc[0] == pd.Timestamp("2023-05-01")
+        assert result.iloc[2] == pd.Timestamp("2024-08-01")
+
+    def test_excludes_tz_aware_future_column(self, analyzer):
+        df = pd.DataFrame({
+            "observed": pd.to_datetime(["2023-01-01", "2024-01-01"]).tz_localize("UTC"),
+            "scheduled": pd.to_datetime(["2024-01-01", "2028-01-01"]).tz_localize("UTC"),
+        })
+
+        ordering = analyzer.analyze_datetime_ordering(df)
+
+        assert "scheduled" not in ordering
+        assert "observed" in ordering
+
+    def test_all_columns_future_returns_empty(self, analyzer):
+        df = pd.DataFrame({
+            "future_a": pd.to_datetime(["2028-01-01", "2029-01-01"]),
+            "future_b": pd.to_datetime(["2030-01-01", "2031-01-01"]),
+        })
+
+        ordering = analyzer.analyze_datetime_ordering(df)
+
+        assert ordering == []
+
+    def test_derive_returns_none_when_all_future(self, analyzer):
+        df = pd.DataFrame({
+            "future_a": pd.to_datetime(["2028-01-01", "2029-01-01"]),
+        })
+
+        result = analyzer.derive_last_action_date(df)
+
+        assert result is None
+
+
 class TestTimestampDiscoveryWithOrdering:
     @pytest.fixture
     def engine(self):

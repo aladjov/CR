@@ -76,6 +76,24 @@ multi = manager.create_multi_dataset_findings()
 # - Join keys: customer_id
 ```
 
+### Multi-Dataset: Start with Notebook 00
+
+When working with multiple datasets, define all paths in notebook 00's `DATASET_PATHS`. The scanner identifies which dataset holds the target and discovers join keys. Then explore each dataset in notebook 01 — start with the target dataset first. Non-target datasets automatically mount the target column for full analysis (correlations, effect sizes, aggregation strategy).
+
+### Generating the EDI Ticketing 3-Set
+
+You can generate a synthetic multi-dataset bundle (customer profiles, EDI transactions, and support tickets) by running:
+
+```bash
+python scripts/data/generate_edi_ticketing_dataset.py
+```
+
+This writes three CSVs to `tests/fixtures/`: `3set_customer_profiles.csv`, `3set_edi_transactions.csv`, and `3set_support_tickets.csv`. Use `--n-customers` and `--churn-rate` to control size and label balance:
+
+```bash
+python scripts/data/generate_edi_ticketing_dataset.py --n-customers 5000 --churn-rate 0.15
+```
+
 ## Time-Window Aggregations
 
 For event-level data, aggregate to entity level with configurable windows:

@@ -1,6 +1,10 @@
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+
+def _as_naive(dt: datetime) -> datetime:
+    return dt.replace(tzinfo=None) if dt.tzinfo else dt
+
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
@@ -2334,9 +2338,8 @@ class ChartBuilder:
         if len(df) == 0:
             return go.Figure().add_annotation(text="No temporal data available", showarrow=False)
 
-        # Get data date range to check if cutoffs are within bounds
-        min_date = df["date"].min()
-        max_date = df["date"].max()
+        min_date = _as_naive(df["date"].min())
+        max_date = _as_naive(df["date"].max())
 
         fig = go.Figure()
 
@@ -2382,7 +2385,7 @@ class ChartBuilder:
         if suggested_cutoff:
             split = cutoff_analysis.get_split_at_date(suggested_cutoff)
             # Check if suggested cutoff is within data range
-            if min_date <= suggested_cutoff <= max_date:
+            if min_date <= _as_naive(suggested_cutoff) <= max_date:
                 fig.add_vline(
                     x=suggested_cutoff, line={"color": self.colors["info"], "dash": "dash", "width": 2}
                 )
@@ -2404,9 +2407,9 @@ class ChartBuilder:
         if current_cutoff:
             split = cutoff_analysis.get_split_at_date(current_cutoff)
             # Check if registry cutoff is within data range
-            cutoff_in_range = min_date <= current_cutoff <= max_date
+            cutoff_in_range = min_date <= _as_naive(current_cutoff) <= max_date
             # Determine if registry and selected cutoffs are at the same position
-            same_as_selected = suggested_cutoff and current_cutoff == suggested_cutoff
+            same_as_selected = suggested_cutoff and _as_naive(current_cutoff) == _as_naive(suggested_cutoff)
             if cutoff_in_range:
                 fig.add_vline(
                     x=current_cutoff, line={"color": self.colors["danger"], "dash": "dot", "width": 2}

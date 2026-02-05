@@ -237,10 +237,16 @@ class TypeDetector:
             alternatives=[ColumnType.CATEGORICAL_NOMINAL]
         )
 
+    MAX_CYCLICAL_VALUE_LENGTH = 15
+
     def is_cyclical_pattern(self, series: pd.Series) -> bool:
         sample_values = [str(v).lower() for v in safe_to_list(series.dropna().unique()[:20])]
 
         if len(sample_values) == 0:
+            return False
+
+        median_length = sorted(len(v) for v in sample_values)[len(sample_values) // 2]
+        if median_length > self.MAX_CYCLICAL_VALUE_LENGTH:
             return False
 
         day_matches = sum(1 for v in sample_values if any(day in v for day in self.CYCLICAL_DAY_PATTERNS))

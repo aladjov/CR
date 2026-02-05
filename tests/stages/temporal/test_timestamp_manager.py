@@ -70,6 +70,36 @@ class TestTimestampManagerProduction:
         expected_label = pd.to_datetime("2024-01-01") + timedelta(days=90)
         assert result["label_timestamp"].iloc[0] == expected_label
 
+    def test_tz_aware_timestamps_produce_label_flag(self):
+        df = pd.DataFrame({
+            "feature_date": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]).tz_localize("UTC"),
+            "label_date": pd.to_datetime(["2024-04-01", "2024-05-01", "2024-06-01"]).tz_localize("UTC"),
+            "value": [100, 200, 300],
+        })
+        config = TimestampConfig(
+            strategy=TimestampStrategy.PRODUCTION,
+            feature_timestamp_column="feature_date",
+            label_timestamp_column="label_date",
+        )
+        result = TimestampManager(config).ensure_timestamps(df)
+
+        assert "label_available_flag" in result.columns
+        assert result["label_available_flag"].all()
+
+    def test_tz_aware_derived_label_produces_flag(self):
+        df = pd.DataFrame({
+            "feature_date": pd.to_datetime(["2024-01-01", "2024-02-01"]).tz_localize("UTC"),
+            "value": [100, 200],
+        })
+        config = TimestampConfig(
+            strategy=TimestampStrategy.PRODUCTION,
+            feature_timestamp_column="feature_date",
+            derive_label_from_feature=True, observation_window_days=90,
+        )
+        result = TimestampManager(config).ensure_timestamps(df)
+
+        assert "label_available_flag" in result.columns
+
 
 class TestTimestampManagerSynthetic:
     @pytest.fixture

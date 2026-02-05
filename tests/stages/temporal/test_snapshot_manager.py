@@ -221,6 +221,41 @@ class TestCreateSnapshotWithTimestampSeries(TestSnapshotManager):
         # Row D has label_available_flag=False, so only 3 rows
         assert metadata.row_count == 3
 
+    def test_tz_aware_series_with_naive_cutoff(self, manager, sample_df):
+        tz_ts = pd.Series(
+            pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04"]).tz_localize("UTC"),
+            index=sample_df.index,
+        )
+        cutoff = datetime(2024, 1, 10)
+
+        metadata = manager.create_snapshot(
+            sample_df, cutoff, "target", timestamp_series=tz_ts
+        )
+
+        assert metadata.row_count == 3
+
+    def test_naive_series_with_tz_aware_cutoff(self, manager, sample_df):
+        from datetime import timezone
+        cutoff = datetime(2024, 7, 1, tzinfo=timezone.utc)
+
+        metadata = manager.create_snapshot(sample_df, cutoff, "target")
+
+        assert metadata.row_count == 3
+
+    def test_tz_aware_feature_timestamp_column(self, manager):
+        df = pd.DataFrame({
+            "entity_id": ["A", "B", "C"],
+            "feature_timestamp": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]).tz_localize("UTC"),
+            "label_timestamp": pd.to_datetime(["2024-04-01", "2024-05-01", "2024-06-01"]).tz_localize("UTC"),
+            "label_available_flag": [True, True, True],
+            "target": [1, 0, 1],
+        })
+        cutoff = datetime(2024, 2, 15)
+
+        metadata = manager.create_snapshot(df, cutoff, "target")
+
+        assert metadata.row_count == 2
+
 
 class TestDatasetNameNamespacing(TestSnapshotManager):
     def test_dataset_name_namespaces_snapshots(self, temp_dir, sample_df):

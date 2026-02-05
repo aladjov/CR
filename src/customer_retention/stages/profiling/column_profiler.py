@@ -322,6 +322,9 @@ class DatetimeProfiler(ColumnProfiler):
                 except Exception:
                     return {"datetime_metrics": None}
 
+        if hasattr(clean_series.dtype, "tz") and clean_series.dtype.tz is not None:
+            clean_series = clean_series.dt.tz_localize(None)
+
         min_date = clean_series.min()
         max_date = clean_series.max()
         date_range_days = (max_date - min_date).days

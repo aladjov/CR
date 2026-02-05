@@ -134,7 +134,7 @@ class DatetimeOrderAnalyzer:
     ]
 
     def analyze_datetime_ordering(self, df: pd.DataFrame) -> list[str]:
-        datetime_cols = self._get_datetime_columns(df)
+        datetime_cols = [c for c in self._get_datetime_columns(df) if not self._has_future_dates(df, c)]
         if not datetime_cols:
             return []
         median_dates = {}
@@ -193,6 +193,17 @@ class DatetimeOrderAnalyzer:
     def _is_activity_column(self, col_name: str) -> bool:
         col_lower = col_name.lower()
         return any(re.search(p, col_lower) for p in self.ACTIVITY_PATTERNS)
+
+    def _has_future_dates(self, df: pd.DataFrame, col: str) -> bool:
+        series = df[col].dropna()
+        if not pd.api.types.is_datetime64_any_dtype(series):
+            series = pd.to_datetime(series, format="mixed", errors="coerce")
+        series = series.dropna()
+        if series.empty:
+            return False
+        if hasattr(series.dtype, "tz") and series.dtype.tz is not None:
+            series = series.dt.tz_localize(None)
+        return series.max() > datetime.now()
 
     def _select_chronologically_latest(self, df: pd.DataFrame, cols: list[str]) -> str:
         max_dates = {}
@@ -284,7 +295,11 @@ class TimestampDiscoveryEngine:
         )
 
     def _discover_datetime_columns(self, df: pd.DataFrame) -> list[TimestampCandidate]:
-        return [c for col in df.columns if (c := self._analyze_column_for_datetime(df, col))]
+        return [
+            c for col in df.columns
+            if (c := self._analyze_column_for_datetime(df, col))
+            and not self.order_analyzer._has_future_dates(df, col)
+        ]
 
     def _analyze_column_for_datetime(self, df: pd.DataFrame, col: str) -> Optional[TimestampCandidate]:
         if pd.api.types.is_datetime64_any_dtype(df[col]):

@@ -1,3 +1,4 @@
+from .dataset_context import DatasetContext, DatasetContextScanner, DatasetEntry, mount_target_column
 from .exploration_manager import (
     AggregationPlanItem,
     DatasetInfo,
@@ -59,4 +60,8 @@ __all__ = [
     "BronzeBuilder",
     "SilverBuilder",
     "GoldBuilder",
+    "DatasetContext",
+    "DatasetContextScanner",
+    "DatasetEntry",
+    "mount_target_column",
 ]

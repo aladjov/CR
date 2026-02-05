@@ -29,6 +29,12 @@ import numpy as np
 import pandas as pd
 
 
+def _strip_tz(series: pd.Series) -> pd.Series:
+    if hasattr(series.dtype, "tz") and series.dtype.tz is not None:
+        return series.dt.tz_localize(None)
+    return series
+
+
 class TimestampStrategy(Enum):
     """Strategy for handling timestamps in the ML pipeline.
 
@@ -135,10 +141,12 @@ class TimestampManager:
             window = timedelta(days=self.config.observation_window_days)
             df["label_timestamp"] = df["feature_timestamp"] + window
         now = datetime.now()
-        has_event = df["label_timestamp"].notna() & (df["label_timestamp"] <= now)
+        label_naive = _strip_tz(df["label_timestamp"])
+        feature_naive = _strip_tz(df["feature_timestamp"])
+        has_event = label_naive.notna() & (label_naive <= now)
         observation_complete = (
-            df["feature_timestamp"].notna()
-            & (df["feature_timestamp"] + pd.Timedelta(days=self.config.observation_window_days) <= now)
+            feature_naive.notna()
+            & (feature_naive + pd.Timedelta(days=self.config.observation_window_days) <= now)
         )
         df["label_available_flag"] = has_event | observation_complete
         return df

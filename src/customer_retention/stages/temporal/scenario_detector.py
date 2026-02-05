@@ -48,10 +48,34 @@ class ScenarioDetector:
         self.label_window_days = label_window_days
         self.discovery_engine = TimestampDiscoveryEngine(reference_date, label_window_days)
 
+    _TARGET_PATTERNS = (
+        "churned", "churn", "retained", "retention", "attrition",
+        "unsubscribe", "cancel", "terminate",
+        "target", "label", "outcome",
+    )
+
+    def _resolve_target_column(self, df: pd.DataFrame, target_column: Optional[str]) -> Optional[str]:
+        if target_column and target_column in df.columns:
+            return target_column
+        if target_column is not None:
+            return target_column
+        for col in df.columns:
+            if any(p in col.lower() for p in self._TARGET_PATTERNS):
+                if df[col].nunique() <= 10:
+                    return col
+        return None
+
+    def _effective_window(self, df: pd.DataFrame, target_column: Optional[str]) -> int:
+        resolved = self._resolve_target_column(df, target_column)
+        if resolved and resolved in df.columns and len(df) > 0 and df[resolved].notna().all():
+            return 0
+        return self.label_window_days
+
     def detect(
         self, df: pd.DataFrame, target_column: str
     ) -> tuple[str, TimestampConfig, TimestampDiscoveryResult]:
         discovery_result = self.discovery_engine.discover(df, target_column)
+        window = self._effective_window(df, target_column)
 
         has_explicit_feature = discovery_result.feature_timestamp and not discovery_result.feature_timestamp.is_derived
         has_explicit_label = discovery_result.label_timestamp and not discovery_result.label_timestamp.is_derived
@@ -63,19 +87,19 @@ class ScenarioDetector:
         )
 
         if has_explicit_feature and has_explicit_label:
-            return self._configure_production_scenario(discovery_result)
+            return self._configure_production_scenario(discovery_result, window)
         elif has_explicit_feature and label_derived_from_feature:
-            return self._configure_partial_scenario(discovery_result)
+            return self._configure_partial_scenario(discovery_result, window)
         elif discovery_result.feature_timestamp and discovery_result.label_timestamp:
-            return self._configure_production_scenario(discovery_result)
+            return self._configure_production_scenario(discovery_result, window)
         elif discovery_result.feature_timestamp:
-            return self._configure_partial_scenario(discovery_result)
+            return self._configure_partial_scenario(discovery_result, window)
         elif discovery_result.derivable_options:
             return self._configure_derivable_scenario(discovery_result)
         return self._configure_synthetic_scenario(discovery_result)
 
     def _configure_production_scenario(
-        self, result: TimestampDiscoveryResult
+        self, result: TimestampDiscoveryResult, window: int
     ) -> tuple[str, TimestampConfig, TimestampDiscoveryResult]:
         feature_col = result.feature_timestamp.column_name if result.feature_timestamp else None
         label_col = result.label_timestamp.column_name if result.label_timestamp else None
@@ -96,7 +120,7 @@ class ScenarioDetector:
             strategy=TimestampStrategy.PRODUCTION,
             feature_timestamp_column=feature_col if not (result.feature_timestamp and result.feature_timestamp.is_derived) else None,
             label_timestamp_column=label_col if not (result.label_timestamp and result.label_timestamp.is_derived) else None,
-            observation_window_days=self.label_window_days,
+            observation_window_days=window,
             derivation_config=derivation_config if derivation_config else None,
         )
 
@@ -104,13 +128,13 @@ class ScenarioDetector:
         return (scenario, config, result)
 
     def _configure_partial_scenario(
-        self, result: TimestampDiscoveryResult
+        self, result: TimestampDiscoveryResult, window: int
     ) -> tuple[str, TimestampConfig, TimestampDiscoveryResult]:
         config = TimestampConfig(
             strategy=TimestampStrategy.PRODUCTION,
             feature_timestamp_column=result.feature_timestamp.column_name if result.feature_timestamp else None,
             label_timestamp_column=None,
-            observation_window_days=self.label_window_days,
+            observation_window_days=window,
             derive_label_from_feature=True,
         )
         return ("partial", config, result)

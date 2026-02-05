@@ -46,6 +46,10 @@ tests/htmlcov/
 *.log
 
 # Test fixtures - large datasets (not included in repo)
+tests/fixtures/3set_customer_profiles.csv
+tests/fixtures/3set_edi_transactions.csv
+tests/fixtures/3set_support_tickets.csv
+
 tests/fixtures/bank_customer_churn.csv
 tests/fixtures/netflix_customer_churn.csv
 #tests/fixtures/customer_emails.csv

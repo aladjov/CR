@@ -88,11 +88,16 @@ class TestConfigureScenarios(TestScenarioDetector):
         _, config, _ = detector.detect(partial_df, "churned")
 
         assert config.derive_label_from_feature is True
-        assert config.observation_window_days == 180
+        assert config.observation_window_days == 0
 
-    def test_custom_label_window_days(self, partial_df):
+    def test_custom_label_window_days_with_nulls(self):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "last_activity_date": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "churned": [1, None, 1],
+        })
         detector = ScenarioDetector(label_window_days=90)
-        _, config, _ = detector.detect(partial_df, "churned")
+        _, config, _ = detector.detect(df, "churned")
 
         assert config.observation_window_days == 90
 
@@ -145,6 +150,130 @@ class TestAutoDetectAndConfigure:
 
         assert scenario == "synthetic"
         assert config.strategy == TimestampStrategy.SYNTHETIC_INDEX
+
+
+class TestFullyPopulatedTargetOptimization(TestScenarioDetector):
+    def test_partial_scenario_zero_window_when_target_fully_populated(self, detector):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "last_activity_date": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "churned": [1, 0, 1],
+        })
+
+        scenario, config, _ = detector.detect(df, "churned")
+
+        assert scenario == "partial"
+        assert config.derive_label_from_feature is True
+        assert config.observation_window_days == 0
+
+    def test_partial_scenario_keeps_window_when_target_has_nulls(self, detector):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "last_activity_date": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "churned": [1, None, 1],
+        })
+
+        scenario, config, _ = detector.detect(df, "churned")
+
+        assert scenario == "partial"
+        assert config.derive_label_from_feature is True
+        assert config.observation_window_days == 180
+
+    def test_production_scenario_zero_window_when_target_fully_populated(self, detector):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "last_activity_date": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "churn_date": pd.to_datetime(["2024-04-01", "2024-05-01", "2024-06-01"]),
+            "churned": [1, 0, 1],
+        })
+
+        scenario, config, _ = detector.detect(df, "churned")
+
+        assert config.observation_window_days == 0
+
+    def test_production_scenario_keeps_window_when_target_has_nulls(self, detector):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "last_activity_date": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "churn_date": pd.to_datetime(["2024-04-01", "2024-05-01", "2024-06-01"]),
+            "churned": [1, None, 1],
+        })
+
+        scenario, config, _ = detector.detect(df, "churned")
+
+        assert config.observation_window_days == 180
+
+    def test_label_timestamp_equals_feature_timestamp_when_fully_populated(self):
+        from customer_retention.stages.temporal.timestamp_manager import (
+            TimestampConfig,
+            TimestampManager,
+            TimestampStrategy,
+        )
+
+        config = TimestampConfig(
+            strategy=TimestampStrategy.PRODUCTION,
+            feature_timestamp_column="last_activity_date",
+            derive_label_from_feature=True,
+            observation_window_days=0,
+        )
+        manager = TimestampManager(config)
+
+        df = pd.DataFrame({
+            "last_activity_date": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "churned": [1, 0, 1],
+        })
+
+        result = manager.ensure_timestamps(df)
+
+        pd.testing.assert_series_equal(
+            result["feature_timestamp"], result["label_timestamp"], check_names=False,
+        )
+
+
+class TestTargetColumnResolution(TestScenarioDetector):
+    def test_none_target_resolves_churned_column(self, detector):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "last_activity_date": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "churned": [1, 0, 1],
+        })
+
+        _, config, _ = detector.detect(df, None)
+
+        assert config.observation_window_days == 0
+
+    def test_none_target_resolves_churn_column(self, detector):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "last_activity_date": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "churn": [1, 0, 1],
+        })
+
+        _, config, _ = detector.detect(df, None)
+
+        assert config.observation_window_days == 0
+
+    def test_none_target_with_nulls_keeps_window(self, detector):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "last_activity_date": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "churned": [1, None, 1],
+        })
+
+        _, config, _ = detector.detect(df, None)
+
+        assert config.observation_window_days == 180
+
+    def test_none_target_no_match_keeps_window(self, detector):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "last_activity_date": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "value": [100, 200, 300],
+        })
+
+        _, config, _ = detector.detect(df, None)
+
+        assert config.observation_window_days == 180
 
 
 class TestEdgeCases(TestScenarioDetector):

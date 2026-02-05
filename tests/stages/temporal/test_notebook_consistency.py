@@ -286,17 +286,19 @@ class TestNotebookFlowWithSyntheticData:
     def test_label_available_flag_partially_filters_stays_consistent(self, output_dir):
         n = 1000
         now = datetime.now()
-        # Half the data is recent (within observation window)
         old_ts = pd.date_range("2020-01-01", periods=n // 2, freq="D")
         recent_ts = pd.date_range(
             now - pd.Timedelta(days=30), periods=n // 2, freq="h"
         )
         all_ts = pd.concat([pd.Series(old_ts), pd.Series(recent_ts)]).reset_index(drop=True)
 
+        targets = list(np.random.RandomState(42).randint(0, 2, n // 2))
+        targets += [np.nan] * (n // 2)
+
         raw_df = pd.DataFrame({
             "entity_id": [f"E{i}" for i in range(n)],
             "obs_date": all_ts.astype(str),
-            "target_col": np.random.RandomState(42).randint(0, 2, n),
+            "target_col": targets,
         })
 
         from customer_retention.stages.temporal import TimestampConfig, TimestampStrategy
@@ -317,13 +319,11 @@ class TestNotebookFlowWithSyntheticData:
         preparer = UnifiedDataPreparer(output_dir, ts_config)
         prepared = preparer.prepare_from_raw(raw_df, "target_col", "entity_id")
 
-        # Recent rows should have label_available_flag=False (within window)
         available = prepared["label_available_flag"].sum()
-        assert available < n  # Not all rows available
+        assert available < n
 
         _, meta = preparer.create_training_snapshot(
             prepared, cutoff, timestamp_series=last_action
         )
 
-        # Snapshot should be <= available rows (filtered by both ts and flag)
         assert meta["row_count"] <= available

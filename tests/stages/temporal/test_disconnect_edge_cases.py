@@ -204,7 +204,7 @@ class TestObservationWindowMismatch:
 
         df = pd.DataFrame({
             "obs_date": pd.date_range("2022-01-01", periods=100, freq="D"),
-            "target": [0] * 100,
+            "target": [0] * 90 + [None] * 10,
         })
 
         detector = ScenarioDetector(label_window_days=60)

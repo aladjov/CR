@@ -203,6 +203,67 @@ class TestPointInTimeRegistryUpdateAll:
         assert registry.get_snapshot("bank").cutoff_date == new_cutoff
 
 
+class TestPointInTimeRegistryScopedConsistency:
+    def _registry_with_leftovers(self, tmp_path):
+        registry = PointInTimeRegistry(tmp_path)
+        registry.register_snapshot("profiles", "snap_001", datetime(2024, 6, 1), "/data/profiles.csv", 5000)
+        registry.register_snapshot("transactions", "snap_002", datetime(2024, 6, 1), "/data/transactions.csv", 50000)
+        registry.register_snapshot("old_retail", "snap_003", datetime(2023, 1, 1), "/data/old.csv", 1000)
+        return registry
+
+    def test_unscoped_check_sees_leftover_as_inconsistent(self, tmp_path):
+        registry = self._registry_with_leftovers(tmp_path)
+
+        report = registry.check_consistency()
+
+        assert not report.is_consistent
+        assert "old_retail" in report.inconsistent_datasets
+
+    def test_scoped_check_ignores_leftover(self, tmp_path):
+        registry = self._registry_with_leftovers(tmp_path)
+
+        report = registry.check_consistency(dataset_names=["profiles", "transactions"])
+
+        assert report.is_consistent
+        assert report.reference_cutoff.date() == datetime(2024, 6, 1).date()
+
+    def test_scoped_check_detects_inconsistency_within_scope(self, tmp_path):
+        registry = PointInTimeRegistry(tmp_path)
+        registry.register_snapshot("profiles", "snap_001", datetime(2024, 6, 1), "/data/profiles.csv", 5000)
+        registry.register_snapshot("transactions", "snap_002", datetime(2024, 7, 1), "/data/transactions.csv", 50000)
+        registry.register_snapshot("old_retail", "snap_003", datetime(2024, 6, 1), "/data/old.csv", 1000)
+
+        report = registry.check_consistency(dataset_names=["profiles", "transactions"])
+
+        assert not report.is_consistent
+        assert "transactions" in report.inconsistent_datasets
+        assert "old_retail" not in report.inconsistent_datasets
+
+    def test_scoped_check_with_single_dataset(self, tmp_path):
+        registry = self._registry_with_leftovers(tmp_path)
+
+        report = registry.check_consistency(dataset_names=["profiles"])
+
+        assert report.is_consistent
+        assert report.reference_cutoff.date() == datetime(2024, 6, 1).date()
+
+    def test_scoped_check_with_missing_dataset_returns_consistent(self, tmp_path):
+        registry = self._registry_with_leftovers(tmp_path)
+
+        report = registry.check_consistency(dataset_names=["nonexistent"])
+
+        assert report.is_consistent
+        assert report.reference_cutoff is None
+
+    def test_scoped_check_empty_list_returns_consistent(self, tmp_path):
+        registry = self._registry_with_leftovers(tmp_path)
+
+        report = registry.check_consistency(dataset_names=[])
+
+        assert report.is_consistent
+        assert report.reference_cutoff is None
+
+
 class TestPointInTimeRegistryPersistence:
     def test_persists_across_instances(self, tmp_path):
         cutoff = datetime(2024, 6, 1)

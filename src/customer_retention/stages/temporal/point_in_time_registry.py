@@ -72,15 +72,16 @@ class PointInTimeRegistry:
             return None
         return next(iter(self.snapshots.values())).cutoff_date
 
-    def check_consistency(self) -> ConsistencyReport:
-        if not self.snapshots:
+    def check_consistency(self, dataset_names: Optional[list[str]] = None) -> ConsistencyReport:
+        scoped = {n: self.snapshots[n] for n in dataset_names if n in self.snapshots} if dataset_names is not None else self.snapshots
+        if not scoped:
             return ConsistencyReport(
                 is_consistent=True, reference_cutoff=None, inconsistent_datasets=[], message="No datasets registered"
             )
 
-        reference_cutoff = self.get_reference_cutoff()
+        reference_cutoff = next(iter(scoped.values())).cutoff_date
         inconsistent = [
-            name for name, snap in self.snapshots.items() if snap.cutoff_date.date() != reference_cutoff.date()
+            name for name, snap in scoped.items() if snap.cutoff_date.date() != reference_cutoff.date()
         ]
 
         if inconsistent:
@@ -96,7 +97,7 @@ class PointInTimeRegistry:
             is_consistent=True,
             reference_cutoff=reference_cutoff,
             inconsistent_datasets=[],
-            message=f"All {len(self.snapshots)} datasets use consistent cutoff: {reference_cutoff.date()}",
+            message=f"All {len(scoped)} datasets use consistent cutoff: {reference_cutoff.date()}",
         )
 
     def validate_cutoff(self, proposed_cutoff: datetime) -> tuple[bool, str]:

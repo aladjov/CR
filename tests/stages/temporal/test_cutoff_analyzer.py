@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -489,3 +489,76 @@ class TestSplitEdgeCases(TestCutoffAnalyzer):
         suggested = result.suggest_cutoff(train_ratio=1.0)
 
         assert isinstance(suggested, datetime)
+
+
+class TestTimezoneHandling(TestCutoffAnalyzer):
+    def test_get_train_percentage_with_tz_aware_cutoff(self, analyzer, sample_df):
+        result = analyzer.analyze(sample_df, timestamp_column="feature_timestamp")
+        tz_cutoff = datetime(2024, 6, 1, tzinfo=timezone.utc)
+
+        pct = result.get_train_percentage(tz_cutoff)
+
+        assert 0 < pct < 100
+
+    def test_get_split_at_date_with_tz_aware_cutoff(self, analyzer, sample_df):
+        result = analyzer.analyze(sample_df, timestamp_column="feature_timestamp")
+        tz_cutoff = datetime(2024, 6, 1, tzinfo=timezone.utc)
+
+        split = result.get_split_at_date(tz_cutoff)
+
+        assert split["train_count"] + split["score_count"] == result.total_rows
+        assert 0 < split["train_pct"] < 100
+
+    def test_split_at_cutoff_with_tz_aware_cutoff(self, analyzer, sample_df):
+        result = analyzer.analyze(sample_df, timestamp_column="feature_timestamp")
+        tz_cutoff = datetime(2024, 6, 1, tzinfo=timezone.utc)
+
+        split = result.split_at_cutoff(tz_cutoff)
+
+        assert split.train_count + split.score_count == len(sample_df)
+        assert split.train_count > 0
+        assert split.score_count > 0
+
+    def test_split_at_cutoff_with_tz_aware_series(self, analyzer):
+        dates = pd.date_range("2023-01-01", "2024-12-31", freq="D", tz="UTC")
+        df = pd.DataFrame({
+            "feature_timestamp": dates,
+            "value": range(len(dates)),
+        })
+
+        result = analyzer.analyze(df, timestamp_column="feature_timestamp")
+        cutoff = datetime(2024, 6, 1)
+
+        split = result.split_at_cutoff(cutoff)
+
+        assert split.train_count + split.score_count == len(df)
+
+    def test_split_at_cutoff_both_tz_aware(self, analyzer):
+        dates = pd.date_range("2023-01-01", "2024-12-31", freq="D", tz="UTC")
+        df = pd.DataFrame({
+            "feature_timestamp": dates,
+            "value": range(len(dates)),
+        })
+
+        result = analyzer.analyze(df, timestamp_column="feature_timestamp")
+        tz_cutoff = datetime(2024, 6, 1, tzinfo=timezone.utc)
+
+        split = result.split_at_cutoff(tz_cutoff)
+
+        assert split.train_count + split.score_count == len(df)
+        assert split.train_count > 0
+        assert split.score_count > 0
+
+    def test_get_train_percentage_with_tz_aware_bins(self, analyzer):
+        dates = pd.date_range("2023-01-01", "2024-12-31", freq="D", tz="UTC")
+        df = pd.DataFrame({
+            "feature_timestamp": dates,
+            "value": range(len(dates)),
+        })
+
+        result = analyzer.analyze(df, timestamp_column="feature_timestamp")
+        naive_cutoff = datetime(2024, 6, 1)
+
+        pct = result.get_train_percentage(naive_cutoff)
+
+        assert 0 < pct < 100

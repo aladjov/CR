@@ -179,6 +179,52 @@ class TestTimestampDiscoveryConfidence:
                 assert unknown_candidates[0].confidence < 0.8
 
 
+class TestFutureDateExclusionInDiscovery:
+    @pytest.fixture
+    def engine(self):
+        return TimestampDiscoveryEngine()
+
+    def test_future_column_excluded_from_candidates(self, engine):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "contract_start": pd.to_datetime(["2022-10-01", "2024-08-01", "2025-01-01"]),
+            "contract_end": pd.to_datetime(["2023-10-01", "2025-08-01", "2027-01-01"]),
+            "churn_end": pd.to_datetime(["2023-05-01", None, None]),
+        })
+
+        result = engine.discover(df)
+
+        candidate_names = [c.column_name for c in result.all_candidates]
+        assert "contract_end" not in candidate_names
+
+    def test_feature_timestamp_not_from_future_column(self, engine):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "contract_start": pd.to_datetime(["2022-10-01", "2024-08-01", "2025-01-01"]),
+            "contract_end": pd.to_datetime(["2023-10-01", "2025-08-01", "2027-01-01"]),
+            "churn_end": pd.to_datetime(["2023-05-01", None, None]),
+        })
+
+        result = engine.discover(df)
+
+        if result.feature_timestamp:
+            assert result.feature_timestamp.column_name != "contract_end"
+
+    def test_past_only_columns_still_discovered(self, engine):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "contract_start": pd.to_datetime(["2022-10-01", "2024-08-01", "2025-01-01"]),
+            "contract_end": pd.to_datetime(["2023-10-01", "2025-08-01", "2027-01-01"]),
+            "churn_end": pd.to_datetime(["2023-05-01", None, None]),
+        })
+
+        result = engine.discover(df)
+
+        candidate_names = [c.column_name for c in result.all_candidates]
+        assert "contract_start" in candidate_names
+        assert "churn_end" in candidate_names
+
+
 class TestLabelTimestampPatterns:
     @pytest.fixture
     def engine(self):

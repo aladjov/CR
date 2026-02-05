@@ -84,6 +84,30 @@ The heart of this framework is a series of **interactive notebooks** that guide 
 
 **Why this matters**: Most ML tutorials jump straight to `model.fit()`. Real-world projects fail because of data issues, leakage, or misaligned metrics—problems you catch in exploration.
 
+## Early Target Mount
+
+In multi-dataset projects, the target column (e.g., `churned`) typically lives in only one dataset (e.g., customer profiles). Notebooks 01-04 need the target for correlations, effect sizes, and aggregation strategy — but non-target datasets don't have it.
+
+The **Early Target Mount** mechanism solves this:
+
+1. **Notebook 00** scans all datasets using `DatasetContextScanner`, which detects the target holder, join keys, and relationship types. Results are saved to `dataset_context.yaml`.
+2. **Notebook 01** checks for `dataset_context.yaml` when no target is detected. If found, it calls `mount_target_column()` to left-join the target from the target dataset onto the current DataFrame.
+3. Notebooks 02-04 then have full target-aware analysis available for all datasets.
+
+This is a lightweight early-stage mechanism. Notebook 05 handles the full multi-dataset join and selection workflow for pipeline generation.
+
+```python
+from customer_retention.analysis.auto_explorer import DatasetContextScanner, mount_target_column
+
+scanner = DatasetContextScanner()
+context = scanner.scan(["profiles.csv", "transactions.csv", "tickets.csv"])
+# context.target_dataset = "profiles", context.target_column = "churned"
+
+# Mount target onto a non-target dataset
+df_transactions, info = mount_target_column(df, context, "transactions")
+# df_transactions now has "churned" column joined via customer_id
+```
+
 ## Dataset Selection (Notebook 05)
 
 Select which datasets to include in your pipeline. Choices are **persisted** and respected by all exports:

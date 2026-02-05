@@ -83,6 +83,9 @@ class UnifiedDataPreparer:
         df = self.timestamp_manager.ensure_timestamps(df)
         self.timestamp_manager.validate_point_in_time(df)
 
+        if target_column in df.columns and "label_available_flag" in df.columns:
+            df.loc[df[target_column].notna(), "label_available_flag"] = True
+
         df = df.rename(columns={target_column: "target", entity_column: "entity_id"})
 
         unified_dir = self.output_path / "unified" / self.dataset_name

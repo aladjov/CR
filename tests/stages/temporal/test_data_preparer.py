@@ -163,6 +163,52 @@ class TestPrepareWithValidation(TestUnifiedDataPreparer):
         assert prepared.validation_report is not None
 
 
+class TestLabelAvailableFlagOverride(TestUnifiedDataPreparer):
+    def test_populated_target_overrides_timestamp_based_flag(self, temp_dir):
+        config = TimestampConfig(
+            strategy=TimestampStrategy.PRODUCTION,
+            feature_timestamp_column="contract_end",
+            derive_label_from_feature=True,
+            observation_window_days=180,
+        )
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "contract_end": pd.to_datetime(["2024-01-01", "2026-06-01", "2027-01-01"]),
+            "churned": [1, 0, 0],
+            "feature_1": [10, 20, 30],
+        })
+        preparer = UnifiedDataPreparer(temp_dir, config)
+        result = preparer.prepare_from_raw(df, "churned", "customer_id")
+
+        assert result["label_available_flag"].all()
+
+    def test_null_target_keeps_flag_false(self, temp_dir):
+        config = TimestampConfig(
+            strategy=TimestampStrategy.PRODUCTION,
+            feature_timestamp_column="contract_end",
+            derive_label_from_feature=True,
+            observation_window_days=180,
+        )
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "contract_end": pd.to_datetime(["2024-01-01", "2026-06-01", "2027-01-01"]),
+            "churned": [1, None, 0],
+            "feature_1": [10, 20, 30],
+        })
+        preparer = UnifiedDataPreparer(temp_dir, config)
+        result = preparer.prepare_from_raw(df, "churned", "customer_id")
+
+        assert result.loc[0, "label_available_flag"] is True or result.loc[0, "label_available_flag"] == True
+        assert result.loc[1, "label_available_flag"] == False
+        assert result.loc[2, "label_available_flag"] is True or result.loc[2, "label_available_flag"] == True
+
+    def test_synthetic_strategy_unaffected(self, temp_dir, synthetic_config, raw_df):
+        preparer = UnifiedDataPreparer(temp_dir, synthetic_config)
+        result = preparer.prepare_from_raw(raw_df, "churned", "customer_id")
+
+        assert result["label_available_flag"].all()
+
+
 class TestListAndGetSnapshots(TestUnifiedDataPreparer):
     def test_list_available_snapshots(self, temp_dir, synthetic_config, raw_df):
         preparer = UnifiedDataPreparer(temp_dir, synthetic_config)

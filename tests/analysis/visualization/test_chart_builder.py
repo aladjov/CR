@@ -1397,6 +1397,57 @@ class TestCutoffSelectionChart:
         fig = chart_builder.cutoff_selection_chart(empty)
         assert fig.data is not None
 
+    def test_with_tz_aware_suggested_cutoff(self, chart_builder, cutoff_analysis):
+        suggested = pd.Timestamp("2023-06-30", tz="UTC")
+        fig = chart_builder.cutoff_selection_chart(cutoff_analysis, suggested_cutoff=suggested)
+        assert fig.data is not None
+        assert len(fig.data) >= 3
+
+    def test_with_tz_aware_current_cutoff(self, chart_builder, cutoff_analysis):
+        current = pd.Timestamp("2023-09-30", tz="UTC")
+        fig = chart_builder.cutoff_selection_chart(cutoff_analysis, current_cutoff=current)
+        assert fig.data is not None
+
+    def test_with_tz_aware_both_cutoffs(self, chart_builder, cutoff_analysis):
+        suggested = pd.Timestamp("2023-06-30", tz="UTC")
+        current = pd.Timestamp("2023-09-30", tz="UTC")
+        fig = chart_builder.cutoff_selection_chart(
+            cutoff_analysis, suggested_cutoff=suggested, current_cutoff=current
+        )
+        assert fig.data is not None
+
+    @pytest.fixture
+    def tz_aware_cutoff_analysis(self):
+        from customer_retention.stages.temporal.cutoff_analyzer import CutoffAnalysis
+        dates = pd.date_range("2023-01-01", periods=12, freq="ME", tz="UTC").tolist()
+        bin_counts = [100] * 12
+        train_pcts = [float(i) / 12 * 100 for i in range(1, 13)]
+        score_pcts = [100 - t for t in train_pcts]
+        return CutoffAnalysis(
+            timestamp_column="event_date", total_rows=1200,
+            bins=dates, bin_counts=bin_counts,
+            train_percentages=train_pcts, score_percentages=score_pcts,
+            date_range=(dates[0], dates[-1]),
+        )
+
+    def test_tz_aware_bins_with_naive_suggested(self, chart_builder, tz_aware_cutoff_analysis):
+        suggested = pd.Timestamp("2023-06-30")
+        fig = chart_builder.cutoff_selection_chart(tz_aware_cutoff_analysis, suggested_cutoff=suggested)
+        assert fig.data is not None
+
+    def test_tz_aware_bins_with_naive_current(self, chart_builder, tz_aware_cutoff_analysis):
+        current = pd.Timestamp("2023-09-30")
+        fig = chart_builder.cutoff_selection_chart(tz_aware_cutoff_analysis, current_cutoff=current)
+        assert fig.data is not None
+
+    def test_tz_aware_bins_with_tz_aware_cutoffs(self, chart_builder, tz_aware_cutoff_analysis):
+        suggested = pd.Timestamp("2023-06-30", tz="UTC")
+        current = pd.Timestamp("2023-09-30", tz="UTC")
+        fig = chart_builder.cutoff_selection_chart(
+            tz_aware_cutoff_analysis, suggested_cutoff=suggested, current_cutoff=current
+        )
+        assert fig.data is not None
+
 
 class TestAddColumnTileDispatch:
     @pytest.fixture

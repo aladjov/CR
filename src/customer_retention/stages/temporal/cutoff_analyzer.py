@@ -9,6 +9,10 @@ import pandas as pd
 from customer_retention.stages.temporal.timestamp_discovery import DatetimeOrderAnalyzer
 
 
+def _as_naive(dt: datetime) -> datetime:
+    return dt.replace(tzinfo=None) if dt.tzinfo else dt
+
+
 @dataclass
 class SplitResult:
     train_df: pd.DataFrame
@@ -48,8 +52,9 @@ class CutoffAnalysis:
         return self.bins[-1]
 
     def get_train_percentage(self, cutoff_date: datetime) -> float:
+        naive_cutoff = _as_naive(cutoff_date)
         for i, bin_date in enumerate(self.bins):
-            if bin_date >= cutoff_date:
+            if _as_naive(bin_date) >= naive_cutoff:
                 return self.train_percentages[max(0, i - 1)]
         return self.train_percentages[-1]
 
@@ -75,8 +80,10 @@ class CutoffAnalysis:
                 "Re-run analyze() to populate the source reference."
             )
 
-        cutoff = cutoff_date or self.suggest_cutoff()
+        cutoff = _as_naive(cutoff_date) if cutoff_date else self.suggest_cutoff()
         ts = self.resolved_timestamp_series
+        if hasattr(ts.dtype, "tz") and ts.dtype.tz is not None:
+            ts = ts.dt.tz_localize(None)
         df = self._source_df
 
         not_null_mask = ts.notna()

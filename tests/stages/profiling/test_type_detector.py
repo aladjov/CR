@@ -179,6 +179,39 @@ class TestTypeDetector:
         assert result.inferred_type == ColumnType.CATEGORICAL_CYCLICAL
         assert result.confidence == TypeConfidence.MEDIUM
 
+    def test_address_column_not_detected_as_cyclical(self):
+        detector = TypeDetector()
+        base_addresses = [
+            "8366 Market St, Suite 422, Phoenix, FL 42449",
+            "9978 Market St, Suite 461, Miami, NJ 14259",
+            "9080 Market St, San Jose, AZ 41704",
+            "6417 Main St, Dallas, NJ 24236",
+            "3832 Broadway, Chicago, WA 89782",
+            "9748 Industrial Rd, Suite 996, Phoenix, AZ 82129",
+            "6770 Main St, Suite 538, San Jose, AZ 30945",
+            "8520 Main St, Dallas, CA 23279",
+            "8390 Broadway, San Jose, TX 62069",
+            "1200 Market St, March Field, FL 33101",
+        ]
+        series = pd.Series([f"{a[:-3]}{i:03d}" for i, a in enumerate(base_addresses * 20)])
+        result = detector.detect_type(series, "address")
+
+        assert result.inferred_type != ColumnType.CATEGORICAL_CYCLICAL
+
+    def test_short_month_abbreviations_still_detected(self):
+        detector = TypeDetector()
+        series = pd.Series(["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jan", "Feb"])
+        result = detector.detect_type(series, "month")
+
+        assert result.inferred_type == ColumnType.CATEGORICAL_CYCLICAL
+
+    def test_short_day_abbreviations_still_detected(self):
+        detector = TypeDetector()
+        series = pd.Series(["Mon", "Tue", "Wed", "Thu", "Fri", "Mon", "Tue"])
+        result = detector.detect_type(series, "day")
+
+        assert result.inferred_type == ColumnType.CATEGORICAL_CYCLICAL
+
     def test_detect_text_high_cardinality(self):
         detector = TypeDetector()
         series = pd.Series([f"text_{i}" for i in range(150)])

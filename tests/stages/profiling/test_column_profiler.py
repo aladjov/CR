@@ -659,6 +659,24 @@ class TestDatetimeProfilerEdgeCases:
         metrics = result["datetime_metrics"]
         assert metrics.date_range_days > 0
 
+    def test_tz_aware_series_profiles_without_error(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.DATETIME)
+        series = pd.Series(pd.date_range("2023-01-01", periods=30, tz="UTC"))
+        result = profiler.profile(series)
+        metrics = result["datetime_metrics"]
+        assert metrics.date_range_days == 29
+        assert metrics.future_date_count == 0
+
+    def test_tz_aware_series_detects_future_dates(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.DATETIME)
+        future = pd.Timestamp.now(tz="UTC") + pd.Timedelta(days=365)
+        series = pd.Series(
+            [pd.Timestamp("2023-01-01", tz="UTC"), future]
+        )
+        result = profiler.profile(series)
+        metrics = result["datetime_metrics"]
+        assert metrics.future_date_count == 1
+
 
 class TestBinaryProfilerEdgeCases:
     def test_non_standard_binary_values(self):
