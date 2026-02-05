@@ -281,7 +281,7 @@ class TestProductionScenarioEndToEnd:
         snapshot_df, metadata = preparer.create_training_snapshot(unified_df, cutoff)
 
         # Load snapshot
-        snapshot_manager = SnapshotManager(tmp_path)
+        snapshot_manager = SnapshotManager(tmp_path, dataset_name="unified_dataset")
         loaded_df, loaded_metadata = snapshot_manager.load_snapshot(metadata["snapshot_id"])
 
         # Should be identical
@@ -411,7 +411,7 @@ class TestSnapshotManager:
         preparer.create_training_snapshot(unified_df, datetime(2024, 2, 1))
 
         # List snapshots
-        manager = SnapshotManager(tmp_path)
+        manager = SnapshotManager(tmp_path, dataset_name="unified_dataset")
         snapshots = manager.list_snapshots()
 
         assert len(snapshots) >= 2
@@ -438,7 +438,7 @@ class TestSnapshotManager:
         _, meta2 = preparer.create_training_snapshot(unified_df, cutoff)
 
         # Compare
-        manager = SnapshotManager(tmp_path)
+        manager = SnapshotManager(tmp_path, dataset_name="unified_dataset")
         comparison = manager.compare_snapshots(meta1["snapshot_id"], meta2["snapshot_id"])
 
         # Snapshots from same data with same cutoff should have no row/column diff
@@ -473,7 +473,7 @@ class TestModelTrainingWithSnapshots:
         _, metadata = preparer.create_training_snapshot(unified_df, datetime.now())
 
         # Load from snapshot
-        manager = SnapshotManager(tmp_path)
+        manager = SnapshotManager(tmp_path, dataset_name="unified_dataset")
         snapshot_df, loaded_metadata = manager.load_snapshot(metadata["snapshot_id"])
 
         # Prepare features
