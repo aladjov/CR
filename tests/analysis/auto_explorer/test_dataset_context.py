@@ -240,6 +240,24 @@ class TestMountTargetColumn:
         result, info = mount_target_column(df, ctx, "3set_tiny_customer_profiles")
         assert info is None
 
+    def test_mount_with_renamed_entity_column(self):
+        import pandas as pd
+        ctx = self._scan_context()
+        df = pd.read_csv(TINY_TRANSACTIONS)
+        df = df.rename(columns={"customer_id": "entity_id"})
+        result, info = mount_target_column(df, ctx, "3set_tiny_edi_transactions")
+        assert "churned" in result.columns
+        assert info is not None
+        assert len(result) == len(df)
+
+    def test_mount_with_missing_join_key_and_no_entity_id(self):
+        import pandas as pd
+        ctx = self._scan_context()
+        df = pd.read_csv(TINY_TRANSACTIONS)
+        df = df.rename(columns={"customer_id": "some_other_col"})
+        result, info = mount_target_column(df, ctx, "3set_tiny_edi_transactions")
+        assert info is None
+
     def test_mount_no_join_key_returns_none(self):
         import pandas as pd
         ctx = self._scan_context()
@@ -247,6 +265,110 @@ class TestMountTargetColumn:
         df = pd.read_csv(TINY_TRANSACTIONS)
         result, info = mount_target_column(df, ctx, "3set_tiny_edi_transactions")
         assert info is None
+
+
+class TestMountTargetWithLabelTimestamp:
+    def _scan_context(self):
+        return DatasetContextScanner().scan([TINY_PROFILES, TINY_TRANSACTIONS, TINY_TICKETS])
+
+    def _make_target_label_df(self):
+        import pandas as pd
+        return pd.DataFrame({
+            "entity_id": ["C00001", "C00002", "C00003"],
+            "target": [0, 1, 0],
+            "label_timestamp": pd.to_datetime(["2025-01-15", "2025-03-01", "2025-02-01"]),
+            "label_available_flag": [True, True, False],
+        })
+
+    def test_mount_with_label_df_adds_target(self):
+        import pandas as pd
+        ctx = self._scan_context()
+        df = pd.read_csv(TINY_TRANSACTIONS)
+        target_df = self._make_target_label_df()
+        result, info = mount_target_column(df, ctx, "3set_tiny_edi_transactions", target_label_df=target_df)
+        assert ctx.target_column in result.columns
+
+    def test_mount_with_label_df_adds_label_timestamp(self):
+        import pandas as pd
+        ctx = self._scan_context()
+        df = pd.read_csv(TINY_TRANSACTIONS)
+        target_df = self._make_target_label_df()
+        result, _ = mount_target_column(df, ctx, "3set_tiny_edi_transactions", target_label_df=target_df)
+        assert "label_timestamp" in result.columns
+
+    def test_mount_with_label_df_adds_label_available_flag(self):
+        import pandas as pd
+        ctx = self._scan_context()
+        df = pd.read_csv(TINY_TRANSACTIONS)
+        target_df = self._make_target_label_df()
+        result, _ = mount_target_column(df, ctx, "3set_tiny_edi_transactions", target_label_df=target_df)
+        assert "label_available_flag" in result.columns
+
+    def test_mount_with_label_df_preserves_row_count(self):
+        import pandas as pd
+        ctx = self._scan_context()
+        df = pd.read_csv(TINY_TRANSACTIONS)
+        target_df = self._make_target_label_df()
+        result, _ = mount_target_column(df, ctx, "3set_tiny_edi_transactions", target_label_df=target_df)
+        assert len(result) == len(df)
+
+    def test_mount_with_label_df_correct_label_values(self):
+        import pandas as pd
+        ctx = self._scan_context()
+        df = pd.read_csv(TINY_TRANSACTIONS)
+        target_df = self._make_target_label_df()
+        result, _ = mount_target_column(df, ctx, "3set_tiny_edi_transactions", target_label_df=target_df)
+        c1_label = result[result["customer_id"] == "C00001"].iloc[0]["label_timestamp"]
+        c2_label = result[result["customer_id"] == "C00002"].iloc[0]["label_timestamp"]
+        assert pd.Timestamp(c1_label) == pd.Timestamp("2025-01-15")
+        assert pd.Timestamp(c2_label) == pd.Timestamp("2025-03-01")
+
+    def test_mount_with_label_df_replaces_existing_label_timestamp(self):
+        import pandas as pd
+        ctx = self._scan_context()
+        df = pd.read_csv(TINY_TRANSACTIONS)
+        df["label_timestamp"] = pd.Timestamp("2099-01-01")
+        target_df = self._make_target_label_df()
+        result, _ = mount_target_column(df, ctx, "3set_tiny_edi_transactions", target_label_df=target_df)
+        assert (result["label_timestamp"] != pd.Timestamp("2099-01-01")).any()
+
+    def test_mount_with_label_df_replaces_existing_label_available_flag(self):
+        import pandas as pd
+        ctx = self._scan_context()
+        df = pd.read_csv(TINY_TRANSACTIONS)
+        df["label_available_flag"] = False
+        target_df = self._make_target_label_df()
+        result, _ = mount_target_column(df, ctx, "3set_tiny_edi_transactions", target_label_df=target_df)
+        c1_flag = result[result["customer_id"] == "C00001"].iloc[0]["label_available_flag"]
+        assert bool(c1_flag) is True
+
+    def test_mount_info_records_label_mounted(self):
+        import pandas as pd
+        ctx = self._scan_context()
+        df = pd.read_csv(TINY_TRANSACTIONS)
+        target_df = self._make_target_label_df()
+        _, info = mount_target_column(df, ctx, "3set_tiny_edi_transactions", target_label_df=target_df)
+        assert info["label_timestamp_mounted"] is True
+
+    def test_mount_without_label_df_no_label_timestamp(self):
+        import pandas as pd
+        ctx = self._scan_context()
+        df = pd.read_csv(TINY_TRANSACTIONS)
+        result, info = mount_target_column(df, ctx, "3set_tiny_edi_transactions")
+        assert "label_timestamp" not in result.columns
+        assert info.get("label_timestamp_mounted") is not True
+
+    def test_mount_label_df_without_label_timestamp_column(self):
+        import pandas as pd
+        ctx = self._scan_context()
+        df = pd.read_csv(TINY_TRANSACTIONS)
+        target_df = pd.DataFrame({
+            "entity_id": ["C00001", "C00002"],
+            "target": [0, 1],
+        })
+        result, info = mount_target_column(df, ctx, "3set_tiny_edi_transactions", target_label_df=target_df)
+        assert ctx.target_column in result.columns
+        assert info.get("label_timestamp_mounted") is not True
 
 
 class TestDatasetContextCutoffDate:

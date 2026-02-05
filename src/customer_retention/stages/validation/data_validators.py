@@ -344,6 +344,9 @@ class DataValidator:
             if total_values == 0:
                 continue
 
+            if not pd.api.types.is_numeric_dtype(series):
+                continue
+
             rule_type = rule.get("type", "range")
             min_val = rule.get("min")
             max_val = rule.get("max")

@@ -205,6 +205,28 @@ class TestValidateValueRanges(TestDataValidator):
         # Note: all values are valid so results may be empty or have 0 invalid
 
 
+    def test_non_numeric_column_skipped(self, validator):
+        df = pd.DataFrame({
+            "status": ["active", "inactive", "pending", "active", "inactive"]
+        })
+        rules = {"status": {"type": "range", "min": 0, "max": 100}}
+        results = validator.validate_value_ranges(df, rules)
+        assert len(results) == 0
+
+    def test_mixed_numeric_and_string_columns(self, validator):
+        df = pd.DataFrame({
+            "amount": [10.0, 20.0, 150.0, -5.0, 50.0],
+            "category": ["A", "B", "C", "A", "B"],
+        })
+        rules = {
+            "amount": {"type": "percentage", "min": 0, "max": 100},
+            "category": {"type": "range", "min": 0, "max": 100},
+        }
+        results = validator.validate_value_ranges(df, rules)
+        assert len(results) == 1
+        assert results[0].column_name == "amount"
+
+
 class TestValidateAll(TestDataValidator):
     """Tests for validate_all method."""
 

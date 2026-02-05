@@ -235,7 +235,7 @@ from pyspark.sql import functions as F
 
 # COMMAND ----------
 
-# MAGIC %run ./config
+# MAGIC %run ../config
 
 # COMMAND ----------
 
@@ -341,7 +341,7 @@ from pyspark.sql.window import Window
 
 # COMMAND ----------
 
-# MAGIC %run ./config
+# MAGIC %run ../config
 
 # COMMAND ----------
 
@@ -443,7 +443,7 @@ from pyspark.sql import functions as F
 
 # COMMAND ----------
 
-# MAGIC %run ./config
+# MAGIC %run ../config
 
 # COMMAND ----------
 
@@ -544,7 +544,7 @@ from pyspark.sql import functions as F
 
 # COMMAND ----------
 
-# MAGIC %run ./config
+# MAGIC %run ../config
 
 # COMMAND ----------
 
@@ -608,7 +608,7 @@ from pyspark.sql import functions as F
 
 # COMMAND ----------
 
-# MAGIC %run ./config
+# MAGIC %run ../config
 
 # COMMAND ----------
 
@@ -726,7 +726,7 @@ from pyspark.sql import functions as F
 
 # COMMAND ----------
 
-# MAGIC %run ./config
+# MAGIC %run ../config
 
 # COMMAND ----------
 

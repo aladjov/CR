@@ -441,7 +441,7 @@ def enrich_lifecycle(df: pd.DataFrame) -> pd.DataFrame:
 {% endif %}
 
 
-def run_bronze_{{ source }}():
+def run_bronze_entity_{{ source }}():
     df = load_{{ source }}()
     df = apply_transformations(df)
 {% if config.lifecycle %}
@@ -455,7 +455,7 @@ def run_bronze_{{ source }}():
 
 
 if __name__ == "__main__":
-    run_bronze_{{ source }}()
+    run_bronze_entity_{{ source }}()
 """,
     "silver.py.j2": '''import pandas as pd
 {% set ops, fitted = collect_imports(config.silver.derived_columns, False) %}

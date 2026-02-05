@@ -9,12 +9,14 @@ TEMPORAL_METADATA_COLUMNS: FrozenSet[str] = frozenset({
     "feature_timestamp",
     "label_timestamp",
     "label_available_flag",
-    "event_timestamp",
 })
 
 
+SOURCE_TIMESTAMP_COLUMNS: FrozenSet[str] = frozenset({"event_timestamp"})
+
+
 def _build_exclusion_set(entity_column: Optional[str], target_column: Optional[str], additional_exclude: Optional[Set[str]]) -> Set[str]:
-    exclude = set(TEMPORAL_METADATA_COLUMNS)
+    exclude = set(TEMPORAL_METADATA_COLUMNS) | set(SOURCE_TIMESTAMP_COLUMNS)
     if entity_column:
         exclude.add(entity_column)
     if target_column:

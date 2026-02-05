@@ -301,6 +301,39 @@ class TestDatabricksRenderConfig:
         ast.parse(result)
 
 
+class TestDatabricksConfigRunPath:
+    def test_bronze_entity_uses_parent_config_path(self, renderer, sample_pipeline_config):
+        result = renderer.render_bronze("customers", sample_pipeline_config.bronze["customers"])
+        assert "%run ../config" in result
+        assert "%run ./config" not in result
+
+    def test_bronze_event_uses_parent_config_path(self, renderer, sample_pipeline_config):
+        result = renderer.render_bronze_event("orders", sample_pipeline_config.bronze_event["orders"])
+        assert "%run ../config" in result
+        assert "%run ./config" not in result
+
+    def test_bronze_entity_aggregated_uses_parent_config_path(self, renderer, sample_pipeline_config):
+        event_config = sample_pipeline_config.bronze_event["orders"]
+        result = renderer.render_bronze_entity("orders_aggregated", event_config, "orders", "orders")
+        assert "%run ../config" in result
+        assert "%run ./config" not in result
+
+    def test_silver_uses_parent_config_path(self, renderer, sample_pipeline_config):
+        result = renderer.render_silver(sample_pipeline_config)
+        assert "%run ../config" in result
+        assert "%run ./config" not in result
+
+    def test_gold_uses_parent_config_path(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "%run ../config" in result
+        assert "%run ./config" not in result
+
+    def test_training_uses_parent_config_path(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "%run ../config" in result
+        assert "%run ./config" not in result
+
+
 class TestDatabricksRenderBronze:
     def test_render_bronze_returns_string(self, renderer, sample_pipeline_config):
         result = renderer.render_bronze("customers", sample_pipeline_config.bronze["customers"])
@@ -383,6 +416,12 @@ class TestDatabricksRenderBronzeEntity:
             "orders_aggregated", event_config, "orders_aggregated", "orders",
         )
         assert "delta" in result.lower() or "saveAsTable" in result or "save_as_table" in result
+
+    def test_render_bronze_entity_reads_from_source_events_table(self, renderer, sample_pipeline_config):
+        event_config = sample_pipeline_config.bronze_event["orders"]
+        result = renderer.render_bronze_entity("orders_aggregated", event_config, "orders", "orders")
+        assert 'bronze_table("orders_events")' in result
+        assert "orders_aggregated_events" not in result
 
     def test_render_bronze_entity_with_lifecycle(self, renderer):
         source = SourceConfig(

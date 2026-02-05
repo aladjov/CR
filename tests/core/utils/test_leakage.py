@@ -9,9 +9,12 @@ from customer_retention.core.utils.leakage import (
 
 
 class TestTemporalMetadataColumns:
-    def test_contains_expected_columns(self):
-        expected = {"feature_timestamp", "label_timestamp", "label_available_flag", "event_timestamp"}
+    def test_contains_pipeline_derived_columns_only(self):
+        expected = {"feature_timestamp", "label_timestamp", "label_available_flag"}
         assert TEMPORAL_METADATA_COLUMNS == expected
+
+    def test_event_timestamp_not_in_metadata(self):
+        assert "event_timestamp" not in TEMPORAL_METADATA_COLUMNS
 
     def test_is_frozenset(self):
         assert isinstance(TEMPORAL_METADATA_COLUMNS, frozenset)
@@ -99,3 +102,7 @@ class TestGetValidFeatureColumns:
         result = get_valid_feature_columns(sample_df, additional_exclude=None)
         assert "feature1" in result
         assert "feature2" in result
+
+    def test_event_timestamp_excluded_from_features(self, sample_df):
+        result = get_valid_feature_columns(sample_df)
+        assert "event_timestamp" not in result

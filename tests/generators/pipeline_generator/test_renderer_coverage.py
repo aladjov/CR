@@ -255,7 +255,7 @@ class TestCodeRendererBronze:
         assert 'SOURCE_NAME = "customers"' in result
         assert "def load_customers" in result
         assert "def apply_transformations" in result
-        assert "def run_bronze_customers" in result
+        assert "def run_bronze_entity_customers" in result
 
         assert "apply_impute_null" in result
         assert "apply_cap_outlier" in result

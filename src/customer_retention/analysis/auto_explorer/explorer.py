@@ -27,8 +27,9 @@ class DataExplorer:
         self._check_modeling_readiness(findings)
         if self.visualize:
             self._display_summary(findings)
+        self.last_findings_path = self._compute_findings_path(findings, name)
         if self.save_findings:
-            self._save_findings(findings, name)
+            self._save_findings(findings)
         return findings
 
     def _load_source(self, source: Union[str, DataFrame]) -> tuple:
@@ -247,12 +248,13 @@ class DataExplorer:
         print(f"Modeling Ready: {'YES' if findings.modeling_ready else 'NO'}")
         print(f"{'='*60}\n")
 
-    def _save_findings(self, findings: ExplorationFindings, name: Optional[str]):
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+    def _compute_findings_path(self, findings: ExplorationFindings, name: Optional[str]) -> str:
         if name is None:
             name = Path(findings.source_path).stem if findings.source_path != "<DataFrame>" else "exploration"
         path_hash = hashlib.md5(findings.source_path.encode()).hexdigest()[:6]
-        path = self.output_dir / f"{name}_{path_hash}_findings.yaml"
-        findings.save(str(path))
-        self.last_findings_path = str(path)
-        print(f"Findings saved to: {path}")
+        return str(self.output_dir / f"{name}_{path_hash}_findings.yaml")
+
+    def _save_findings(self, findings: ExplorationFindings):
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        findings.save(self.last_findings_path)
+        print(f"Findings saved to: {self.last_findings_path}")

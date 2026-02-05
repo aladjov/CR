@@ -71,7 +71,7 @@ class DatabricksPipelineGenerator:
             entity_script = script_name("bronze_entity", agg_name)
             entity_path = bronze_dir / f"{entity_script}.py"
             entity_path.write_text(
-                self._renderer.render_bronze_entity(agg_name, event_config, agg_name, source_name),
+                self._renderer.render_bronze_entity(agg_name, event_config, source_name, source_name),
             )
             paths.append(entity_path)
         return paths

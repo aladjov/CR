@@ -198,37 +198,80 @@ class DatasetContextScanner:
         return Path(stem)
 
 
+_LABEL_COLS = ("label_timestamp", "label_available_flag")
+
+
 def mount_target_column(
     df: pd.DataFrame, context: DatasetContext, dataset_name: str,
+    target_label_df: Optional[pd.DataFrame] = None,
 ) -> tuple[pd.DataFrame, Optional[dict]]:
     if not context.target_dataset or not context.target_column:
         return df, None
 
     entry = context.datasets.get(dataset_name)
-    if entry is None:
-        return df, None
-
-    if entry.has_target:
-        return df, None
-
-    if not entry.join_key:
+    if entry is None or entry.has_target or not entry.join_key:
         return df, None
 
     target_entry = context.datasets.get(context.target_dataset)
     if target_entry is None:
         return df, None
 
-    target_df = pd.read_csv(target_entry.path, usecols=[context.entity_column, context.target_column])
-    target_df = target_df.drop_duplicates(subset=[context.entity_column])
+    left_key = _resolve_left_key(entry.join_key, df)
+    if left_key is None:
+        return df, None
 
-    result = df.merge(target_df, left_on=entry.join_key, right_on=context.entity_column, how="left")
+    mount_df, label_mounted = _build_mount_df(
+        target_label_df, target_entry, context,
+    )
 
-    if entry.join_key != context.entity_column and context.entity_column in result.columns:
+    drop_before_merge = [c for c in _LABEL_COLS if label_mounted and c in df.columns]
+    merge_input = df.drop(columns=drop_before_merge) if drop_before_merge else df
+    result = merge_input.merge(mount_df, left_on=left_key, right_on=context.entity_column, how="left")
+
+    if entry.join_key != context.entity_column:
         extra = f"{context.entity_column}_y"
         if extra in result.columns:
             result = result.drop(columns=[extra])
 
-    return result, {
+    info = {
         "target_mounted_from": context.target_dataset,
         "target_mount_key": entry.join_key,
     }
+    if label_mounted:
+        info["label_timestamp_mounted"] = True
+    return result, info
+
+
+def _resolve_left_key(join_key: str, df: pd.DataFrame) -> Optional[str]:
+    if join_key in df.columns:
+        return join_key
+    if "entity_id" in df.columns:
+        return "entity_id"
+    return None
+
+
+def _build_mount_df(
+    target_label_df: Optional[pd.DataFrame],
+    target_entry: DatasetEntry, context: DatasetContext,
+) -> tuple[pd.DataFrame, bool]:
+    if target_label_df is not None:
+        return _mount_df_from_label_source(target_label_df, context)
+    usecols = [context.entity_column, context.target_column]
+    target_df = pd.read_csv(target_entry.path, usecols=usecols)
+    return target_df.drop_duplicates(subset=[context.entity_column]), False
+
+
+def _mount_df_from_label_source(
+    target_label_df: pd.DataFrame, context: DatasetContext,
+) -> tuple[pd.DataFrame, bool]:
+    entity_col = "entity_id" if "entity_id" in target_label_df.columns else context.entity_column
+    target_col = "target" if "target" in target_label_df.columns else context.target_column
+    keep = [entity_col, target_col]
+    available_label_cols = [c for c in _LABEL_COLS if c in target_label_df.columns]
+    keep.extend(available_label_cols)
+    mount_df = target_label_df[keep].drop_duplicates(subset=[entity_col])
+    if entity_col != context.entity_column:
+        mount_df = mount_df.rename(columns={entity_col: context.entity_column})
+    if target_col != context.target_column:
+        mount_df = mount_df.rename(columns={target_col: context.target_column})
+    return mount_df, len(available_label_cols) > 0

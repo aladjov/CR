@@ -347,6 +347,27 @@ class TestDatabricksE2E:
         assert "my_catalog" in config_content
         assert "my_schema" in config_content
 
+    def test_aggregated_entity_reads_from_event_table(self, sample_findings_dir, tmp_path):
+        generator = DatabricksPipelineGenerator(
+            str(sample_findings_dir), str(tmp_path), "table_ref_test",
+        )
+        generator.generate()
+        agg_path = tmp_path / "bronze" / "bronze_entity_orders_aggregated.py"
+        content = agg_path.read_text()
+        assert 'bronze_table("orders_events")' in content
+        assert "orders_aggregated_events" not in content
+
+    def test_all_notebooks_use_parent_config_path(self, sample_findings_dir, tmp_path):
+        generator = DatabricksPipelineGenerator(
+            str(sample_findings_dir), str(tmp_path), "config_path_test",
+        )
+        files = generator.generate()
+        for file_path in files:
+            if file_path.suffix == ".py" and file_path.name != "config.py" and file_path.name != "pipeline_runner.py":
+                content = file_path.read_text()
+                assert "%run ../config" in content, f"{file_path.name} should use ../config"
+                assert "%run ./config" not in content, f"{file_path.name} should not use ./config"
+
     def test_single_source_generates(self, tmp_path):
         findings_dir = tmp_path / "findings"
         findings_dir.mkdir()

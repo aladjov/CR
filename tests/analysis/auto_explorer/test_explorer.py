@@ -534,6 +534,28 @@ class TestDataExplorerDisplaySummaryFallback:
         assert findings is not None
 
 
+class TestDataExplorerLastFindingsPath:
+    def test_last_findings_path_set_when_save_disabled(self, sample_dataframe):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            explorer = DataExplorer(visualize=False, save_findings=False, output_dir=tmpdir)
+            explorer.explore(sample_dataframe, name="test_dataset")
+            assert explorer.last_findings_path is not None
+            assert "test_dataset" in explorer.last_findings_path
+            assert explorer.last_findings_path.endswith("_findings.yaml")
+
+    def test_last_findings_path_no_file_written_when_save_disabled(self, sample_dataframe):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            explorer = DataExplorer(visualize=False, save_findings=False, output_dir=tmpdir)
+            explorer.explore(sample_dataframe, name="test_dataset")
+            assert not Path(explorer.last_findings_path).exists()
+
+    def test_last_findings_path_file_written_when_save_enabled(self, sample_dataframe):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            explorer = DataExplorer(visualize=False, save_findings=True, output_dir=tmpdir)
+            explorer.explore(sample_dataframe, name="test_dataset")
+            assert Path(explorer.last_findings_path).exists()
+
+
 class TestDataExplorerSaveFindingsEdgeCases:
     def test_save_findings_dataframe_name(self):
         with tempfile.TemporaryDirectory() as tmpdir:
