@@ -245,13 +245,13 @@ class TestBronzeEventTargetPreservation:
 
     def test_bronze_event_preserves_target_in_reshaping(self):
         result = self._render_bronze_event()
-        assert "result[TARGET_COLUMN] = df.groupby(ENTITY_COLUMN)[TARGET_COLUMN].first()" in result
+        assert "df.groupby(ENTITY_COLUMN)[TARGET_COLUMN].first()" in result
 
     def test_bronze_event_target_preserved_before_window_aggregation(self):
         result = self._render_bronze_event()
-        reshaping_fn = result[result.index("def apply_reshaping"):]
-        target_pos = reshaping_fn.index("TARGET_COLUMN")
-        window_pos = reshaping_fn.index("for window in")
+        agg_fn = result[result.index("def apply_event_aggregation"):]
+        target_pos = agg_fn.index("TARGET_COLUMN")
+        window_pos = agg_fn.index("for window in")
         assert target_pos < window_pos
 
 

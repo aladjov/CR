@@ -153,6 +153,7 @@ class PipelineConfig:
     silver: SilverLayerConfig
     gold: GoldLayerConfig
     output_dir: str
+    composite_name: Optional[str] = None
     iteration_id: Optional[str] = None
     parent_iteration_id: Optional[str] = None
     recommendations_hash: Optional[str] = None

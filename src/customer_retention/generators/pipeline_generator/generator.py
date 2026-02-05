@@ -1,6 +1,8 @@
 from pathlib import Path
 from typing import List
 
+from customer_retention.core.naming import Manifest, composite_name, script_name
+
 from .findings_parser import FindingsParser
 from .models import PipelineConfig
 from .renderer import CodeRenderer
@@ -22,6 +24,11 @@ class PipelineGenerator:
         config.output_dir = "."
         config.experiments_dir = self._experiments_dir
         config.production_dir = self._production_dir
+        source_names = [
+            f"{s.name}_aggregated" if s.is_event_level else s.name
+            for s in config.sources if not s.excluded
+        ]
+        config.composite_name = composite_name(source_names)
         self._renderer.set_docs_base(self._experiments_dir)
         generated_files = [
             self._write_run_all(config),
@@ -36,8 +43,16 @@ class PipelineGenerator:
             *self._write_feast_repo(config),
             *self._write_validation(config),
             self._write_exploration_report(config),
+            self._write_manifest(config),
         ]
         return generated_files
+
+    def _write_manifest(self, config: PipelineConfig) -> Path:
+        source_names = [s.name for s in config.sources if not s.excluded]
+        manifest = Manifest.from_sources(source_names, config.name, config.recommendations_hash or "")
+        path = self._output_dir / "manifest.json"
+        manifest.save(path)
+        return path
 
     def _write_run_all(self, config: PipelineConfig) -> Path:
         path = self._output_dir / "run_all.py"
@@ -68,23 +83,34 @@ class PipelineGenerator:
         bronze_dir.mkdir(parents=True, exist_ok=True)
         paths = []
         for source_name, bronze_config in config.bronze.items():
-            path = bronze_dir / f"bronze_{source_name}.py"
+            entity_script = script_name("bronze_entity", source_name)
+            path = bronze_dir / f"{entity_script}.py"
             path.write_text(self._renderer.render_bronze(source_name, bronze_config))
             paths.append(path)
         for source_name, event_config in config.bronze_event.items():
-            path = bronze_dir / f"bronze_{source_name}.py"
+            event_script = script_name("bronze_event", source_name)
+            path = bronze_dir / f"{event_script}.py"
             path.write_text(self._renderer.render_bronze_event(source_name, event_config))
             paths.append(path)
+            agg_name = f"{source_name}_aggregated"
+            entity_script = script_name("bronze_entity", agg_name)
+            entity_path = bronze_dir / f"{entity_script}.py"
+            entity_path.write_text(self._renderer.render_bronze_entity(agg_name, event_config, agg_name, source_name))
+            paths.append(entity_path)
         return paths
 
     def _write_silver(self, config: PipelineConfig) -> Path:
-        path = self._output_dir / "silver" / "silver_merge.py"
+        cn = config.composite_name
+        silver_script = script_name("silver", cn)
+        path = self._output_dir / "silver" / f"{silver_script}.py"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self._renderer.render_silver(config))
         return path
 
     def _write_gold(self, config: PipelineConfig) -> Path:
-        path = self._output_dir / "gold" / "gold_features.py"
+        cn = config.composite_name
+        gold_script = script_name("gold", cn)
+        path = self._output_dir / "gold" / f"{gold_script}.py"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self._renderer.render_gold(config))
         return path
@@ -117,7 +143,6 @@ class PipelineGenerator:
         features_path.write_text(self._renderer.render_feast_features(config))
         paths.append(features_path)
         return paths
-
 
     def _write_exploration_report(self, config: PipelineConfig) -> Path:
         docs_dir = self._output_dir / "docs"

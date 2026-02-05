@@ -1022,15 +1022,15 @@ class TestSourcePathFilenameOnly:
 
 
 class TestRawSourceFormatInference:
-    def test_landing_raw_source_format_inferred_csv(self, sample_findings_dir):
-        """Landing for orders has raw_source_path ending in .parquet -> format parquet."""
+    def test_landing_raw_source_format_inferred_delta(self, sample_findings_dir):
+        """Landing for orders has non-CSV raw_source_path -> format delta."""
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
 
         parser = FindingsParser(str(sample_findings_dir))
         config = parser.parse()
         assert "orders" in config.landing
         landing = config.landing["orders"]
-        assert landing.raw_source_format == "parquet"
+        assert landing.raw_source_format == "delta"
 
     def test_landing_raw_source_format_inferred_from_csv(self, aggregated_event_setup):
         """Discovered event landing with raw CSV -> format csv."""

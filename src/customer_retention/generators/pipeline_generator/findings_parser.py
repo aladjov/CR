@@ -115,14 +115,20 @@ class FindingsParser:
             primary_entity_dataset=first_name,
         )
 
+    def _strip_aggregated(self, name: str) -> str:
+        if name and name.endswith("_aggregated"):
+            return name[: -len("_aggregated")]
+        return name
+
     def _dict_to_multi_dataset_findings(self, data: Dict) -> MultiDatasetFindings:
         from customer_retention.core.config.column_config import DatasetGranularity
         datasets = {}
         for name, info in data.get("datasets", {}).items():
+            clean_name = self._strip_aggregated(name)
             granularity_str = info.get("granularity", "unknown")
             granularity = DatasetGranularity(granularity_str) if granularity_str else DatasetGranularity.UNKNOWN
-            datasets[name] = DatasetInfo(
-                name=info["name"],
+            datasets[clean_name] = DatasetInfo(
+                name=self._strip_aggregated(info["name"]),
                 findings_path=info.get("findings_path", ""),
                 source_path=info.get("source_path", ""),
                 granularity=granularity,
@@ -148,8 +154,8 @@ class FindingsParser:
         return MultiDatasetFindings(
             datasets=datasets,
             relationships=relationships,
-            primary_entity_dataset=data.get("primary_entity_dataset"),
-            event_datasets=data.get("event_datasets", []),
+            primary_entity_dataset=self._strip_aggregated(data.get("primary_entity_dataset", "") or ""),
+            event_datasets=[self._strip_aggregated(e) for e in data.get("event_datasets", [])],
             excluded_datasets=data.get("excluded_datasets", []),
             aggregation_windows=data.get("aggregation_windows", ["24h", "7d", "30d", "90d", "180d", "365d", "all_time"]),
             notes=data.get("notes", {}),
@@ -724,4 +730,4 @@ class FindingsParser:
         ext = Path(path).suffix.lower()
         if ext == ".csv":
             return "csv"
-        return "parquet"
+        return "delta"

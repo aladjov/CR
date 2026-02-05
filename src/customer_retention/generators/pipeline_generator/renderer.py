@@ -170,7 +170,9 @@ TEMPLATES = {
 from pathlib import Path
 
 PIPELINE_NAME = "{{ config.name }}"
+COMPOSITE_NAME = "{{ config.composite_name or config.name }}"
 TARGET_COLUMN = "{{ config.target_column }}"
+TIMESTAMP_COLUMN = "event_timestamp"
 OUTPUT_DIR = Path("{{ config.output_dir }}")
 
 # Iteration tracking
@@ -213,7 +215,7 @@ MLFLOW_ARTIFACT_ROOT = str(EXPERIMENTS_DIR / "mlruns" / "artifacts")
 
 # Feast feature store configuration - stored in experiments directory
 FEAST_REPO_PATH = str(PRODUCTION_DIR / "feature_repo")
-FEAST_FEATURE_VIEW = "{{ config.feast.feature_view_name if config.feast else config.name + '_features' }}"
+FEAST_FEATURE_VIEW = "{{ config.feast.feature_view_name if config.feast else 'featureset_' + (config.composite_name or config.name) }}"
 FEAST_ENTITY_NAME = "{{ config.feast.entity_name if config.feast else 'customer' }}"
 FEAST_ENTITY_KEY = "{{ config.feast.entity_key if config.feast else config.sources[0].entity_key }}"
 FEAST_TIMESTAMP_COL = "{{ config.feast.timestamp_column if config.feast else 'event_timestamp' }}"
@@ -238,19 +240,19 @@ SOURCES = {
 
 
 def get_bronze_path(source_name: str) -> Path:
-    return PRODUCTION_DIR / "data" / "bronze" / f"{source_name}.parquet"
+    return PRODUCTION_DIR / "data" / "bronze" / source_name
 
 
 def get_silver_path() -> Path:
-    return PRODUCTION_DIR / "data" / "silver" / PIPELINE_NAME / "merged.parquet"
+    return PRODUCTION_DIR / "data" / "silver" / f"silver_featureset_{COMPOSITE_NAME}"
 
 
 def get_gold_path() -> Path:
-    return PRODUCTION_DIR / "data" / "gold" / PIPELINE_NAME / "features.parquet"
+    return PRODUCTION_DIR / "data" / "gold" / f"gold_features_{COMPOSITE_NAME}"
 
 
 def get_feast_data_path() -> Path:
-    return Path(FEAST_REPO_PATH) / "data" / f"{FEAST_FEATURE_VIEW}.parquet"
+    return Path(FEAST_REPO_PATH) / "data" / FEAST_FEATURE_VIEW
 
 
 # Fit mode configuration for training vs scoring separation
@@ -277,10 +279,10 @@ EXCLUDED_SOURCES = [
 ]
 
 EXPLORATION_ARTIFACTS = {
-    "bronze": {name: str(EXPERIMENTS_DIR / "data" / "bronze" / f"{name}.parquet") for name in SOURCES},
-    "silver": str(EXPERIMENTS_DIR / "data" / "silver" / PIPELINE_NAME / "merged.parquet"),
-    "gold": str(EXPERIMENTS_DIR / "data" / "gold" / PIPELINE_NAME / "features.parquet"),
-    "scoring": str(EXPERIMENTS_DIR / "data" / "scoring" / "predictions.parquet"),
+    "bronze": {name: str(EXPERIMENTS_DIR / "data" / "bronze" / name) for name in SOURCES},
+    "silver": str(EXPERIMENTS_DIR / "data" / "silver" / f"silver_featureset_{COMPOSITE_NAME}"),
+    "gold": str(EXPERIMENTS_DIR / "data" / "gold" / f"gold_features_{COMPOSITE_NAME}"),
+    "scoring": str(EXPERIMENTS_DIR / "data" / "scoring" / "predictions"),
 }
 """,
     "bronze.py.j2": """import pandas as pd
@@ -299,14 +301,12 @@ SOURCE_NAME = "{{ source }}"
 def load_{{ source }}():
     source_config = SOURCES[SOURCE_NAME]
     path = Path(source_config["path"])
-    if path.is_dir() and (path / "_delta_log").is_dir():
-        from customer_retention.integrations.adapters.factory import get_delta
-        return get_delta(force_local=True).read(str(path))
     if not path.exists():
         raise FileNotFoundError(f"Source file not found: {path}")
     if source_config["format"] == "csv":
         return pd.read_csv(path)
-    return pd.read_parquet(path)
+    from customer_retention.integrations.adapters.factory import get_delta
+    return get_delta().read(str(path))
 
 
 {% set groups = group_steps(config.transformations) %}
@@ -345,14 +345,12 @@ TIME_COLUMN = "{{ config.time_column or config.source.time_column }}"
 def _load_raw_events():
     source = RAW_SOURCES[SOURCE_NAME]
     path = Path(source["path"])
-    if path.is_dir() and (path / "_delta_log").is_dir():
-        from customer_retention.integrations.adapters.factory import get_delta
-        return get_delta(force_local=True).read(str(path))
     if not path.exists():
         raise FileNotFoundError(f"Raw source not found: {path}")
     if source["format"] == "csv":
         return pd.read_csv(path)
-    return pd.read_parquet(path)
+    from customer_retention.integrations.adapters.factory import get_delta
+    return get_delta().read(str(path))
 
 {% if config.lifecycle.include_recency_bucket %}
 
@@ -450,14 +448,9 @@ def run_bronze_{{ source }}():
     df = enrich_lifecycle(df)
 {% endif %}
     output_path = get_bronze_path(SOURCE_NAME)
-    output_dir = output_path.parent
-    output_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        from customer_retention.integrations.adapters.factory import get_delta
-        storage = get_delta(force_local=True)
-        storage.write(df, str(output_dir / SOURCE_NAME))
-    except ImportError:
-        df.to_parquet(output_path, index=False)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    from customer_retention.integrations.adapters.factory import get_delta
+    get_delta().write(df, str(output_path))
     return df
 
 
@@ -473,17 +466,17 @@ from config import SOURCES, get_bronze_path, get_silver_path, TARGET_COLUMN
 
 
 def _load_artifact(path):
-    from pathlib import Path as _P
-    p = _P(path)
-    if p.parent.is_dir() and (p.parent / p.stem / "_delta_log").is_dir():
-        from customer_retention.integrations.adapters.factory import get_delta
-        return get_delta(force_local=True).read(str(p.parent / p.stem))
-    return pd.read_parquet(path)
+    from customer_retention.integrations.adapters.factory import get_delta
+    return get_delta().read(str(path))
+
+
+def _bronze_output_name(name: str) -> str:
+    return f"{name}_aggregated" if SOURCES[name].get("is_event_level") else name
 
 
 def load_bronze_outputs() -> dict:
-    return {name: _load_artifact(get_bronze_path(name))
-            for name in SOURCES.keys() if not SOURCES[name].get("excluded")}
+    return {name: _load_artifact(get_bronze_path(_bronze_output_name(name)))
+            for name in SOURCES if not SOURCES[name].get("excluded")}
 
 
 def merge_sources(bronze_outputs: dict) -> pd.DataFrame:
@@ -580,14 +573,9 @@ def run_silver_merge(create_holdout: bool = True, holdout_fraction: float = 0.1)
         silver = create_holdout_mask(silver, holdout_fraction=holdout_fraction)
 
     output_path = get_silver_path()
-    output_dir = output_path.parent
-    output_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        from customer_retention.integrations.adapters.factory import get_delta
-        storage = get_delta(force_local=True)
-        storage.write(silver, str(output_dir / "silver"))
-    except ImportError:
-        silver.to_parquet(output_path, index=False)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    from customer_retention.integrations.adapters.factory import get_delta
+    get_delta().write(silver, str(output_path))
     return silver
 
 
@@ -635,22 +623,13 @@ SCALINGS = [
 
 
 def load_silver() -> pd.DataFrame:
-    path = get_silver_path()
-    parent = path.parent
-    delta_path = parent / "silver"
-    if delta_path.is_dir() and (delta_path / "_delta_log").is_dir():
-        from customer_retention.integrations.adapters.factory import get_delta
-        return get_delta(force_local=True).read(str(delta_path))
-    return pd.read_parquet(path)
+    from customer_retention.integrations.adapters.factory import get_delta
+    return get_delta().read(str(get_silver_path()))
 
 
 def load_gold() -> pd.DataFrame:
-    path = get_gold_path()
-    delta_path = path.parent / "gold"
-    if delta_path.is_dir() and (delta_path / "_delta_log").is_dir():
-        from customer_retention.integrations.adapters.factory import get_delta
-        return get_delta(force_local=True).read(str(delta_path))
-    return pd.read_parquet(path)
+    from customer_retention.integrations.adapters.factory import get_delta
+    return get_delta().read(str(get_gold_path()))
 
 
 {% set transform_groups = group_steps(config.gold.transformations) %}
@@ -729,7 +708,7 @@ def get_feature_version_tag() -> str:
 def add_feast_timestamp(df: pd.DataFrame, reference_date=None) -> pd.DataFrame:
     if FEAST_TIMESTAMP_COL not in df.columns:
         if "aggregation_reference_date" in df.attrs:
-            timestamp = df.attrs["aggregation_reference_date"]
+            timestamp = pd.Timestamp(df.attrs["aggregation_reference_date"])
             print(f"  Using aggregation reference_date for Feast timestamp: {timestamp}")
         elif reference_date is not None:
             timestamp = reference_date
@@ -755,12 +734,8 @@ def materialize_to_feast(df: pd.DataFrame) -> None:
     if original_cols:
         print(f"  Excluding holdout columns from Feast: {original_cols}")
         df_feast = df_feast.drop(columns=original_cols, errors="ignore")
-    try:
-        from customer_retention.integrations.adapters.factory import get_delta
-        storage = get_delta(force_local=True)
-        storage.write(df_feast, str(feast_path.parent / feast_path.stem))
-    except ImportError:
-        df_feast.to_parquet(feast_path, index=False)
+    from customer_retention.integrations.adapters.factory import get_delta
+    get_delta().write(df_feast, str(feast_path))
     print(f"Features materialized to Feast: {feast_path}")
     print(f"  Entity key: {FEAST_ENTITY_KEY}")
     print(f"  Feature view: {FEAST_FEATURE_VIEW}")
@@ -781,12 +756,8 @@ def run_gold_features():
     output_path.parent.mkdir(parents=True, exist_ok=True)
     gold.attrs["recommendations_hash"] = RECOMMENDATIONS_HASH
     gold.attrs["feature_version"] = get_feature_version_tag()
-    try:
-        from customer_retention.integrations.adapters.factory import get_delta
-        storage = get_delta(force_local=True)
-        storage.write(gold, str(output_path.parent / "gold"))
-    except ImportError:
-        gold.to_parquet(output_path, index=False)
+    from customer_retention.integrations.adapters.factory import get_delta
+    get_delta().write(gold, str(output_path))
     print(f"Gold features saved with version: {get_feature_version_tag()}")
     materialize_to_feast(gold)
     return gold
@@ -808,21 +779,17 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score,
                              precision_score, recall_score, accuracy_score)
-from config import (TARGET_COLUMN, PIPELINE_NAME, RECOMMENDATIONS_HASH, MLFLOW_TRACKING_URI, MLFLOW_ARTIFACT_ROOT,
-                    FEAST_REPO_PATH, FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL,
-                    get_feast_data_path)
+from config import (TARGET_COLUMN, PIPELINE_NAME, COMPOSITE_NAME, RECOMMENDATIONS_HASH, MLFLOW_TRACKING_URI,
+                    MLFLOW_ARTIFACT_ROOT, FEAST_REPO_PATH, FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY,
+                    FEAST_TIMESTAMP_COL, get_feast_data_path)
 
 # Set tracking URI immediately to prevent default mlruns directory creation
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
 
 def _load_feast_data():
-    feast_path = get_feast_data_path()
-    delta_path = feast_path.parent / feast_path.stem
-    if delta_path.is_dir() and (delta_path / "_delta_log").is_dir():
-        from customer_retention.integrations.adapters.factory import get_delta
-        return get_delta(force_local=True).read(str(delta_path))
-    return pd.read_parquet(feast_path)
+    from customer_retention.integrations.adapters.factory import get_delta
+    return get_delta().read(str(get_feast_data_path()))
 
 
 def get_training_data_from_feast() -> pd.DataFrame:
@@ -980,6 +947,7 @@ def run_experiment():
         mlflow.log_params({"train_samples": len(X_train), "test_samples": len(X_test), "n_features": X.shape[1]})
         mlflow.set_tag("feature_source", "feast")
         mlflow.set_tag("feast_feature_view", FEAST_FEATURE_VIEW)
+        mlflow.set_tag("composite_name", COMPOSITE_NAME)
         if RECOMMENDATIONS_HASH:
             mlflow.set_tag("recommendations_hash", RECOMMENDATIONS_HASH)
         best_model, best_auc = None, 0
@@ -1033,18 +1001,20 @@ if __name__ == "__main__":
 ''',
     "runner.py.j2": '''import argparse
 from concurrent.futures import ThreadPoolExecutor
-from config import PIPELINE_NAME, EXPERIMENTS_DIR, PRODUCTION_DIR
+from config import PIPELINE_NAME, COMPOSITE_NAME, EXPERIMENTS_DIR, PRODUCTION_DIR
 {% for name in config.landing %}
 from landing.landing_{{ name }} import run_landing_{{ name }}
 {% endfor %}
-{% for name, _ in config.bronze.items() %}
-from bronze.bronze_{{ name }} import run_bronze_{{ name }}
+{% for name in config.bronze %}
+from bronze.bronze_entity_{{ name }} import run_bronze_entity_{{ name }}
 {% endfor %}
-{% for name, _ in config.bronze_event.items() %}
-from bronze.bronze_{{ name }} import run_bronze_{{ name }}
+{% for name in config.bronze_event %}
+from bronze.bronze_event_{{ name }} import run_bronze_event_{{ name }}
+from bronze.bronze_entity_{{ name }}_aggregated import run_bronze_entity_{{ name }}_aggregated
 {% endfor %}
-from silver.silver_merge import run_silver_merge
-from gold.gold_features import run_gold_features
+{% set cn = config.composite_name or config.name %}
+from silver.silver_featureset_{{ cn }} import run_silver_merge
+from gold.gold_features_{{ cn }} import run_gold_features
 from training.ml_experiment import run_experiment
 
 
@@ -1072,31 +1042,37 @@ def run_pipeline(validate=False):
         validate_landing()
 {% endif %}
 
-    print("\\n[{{ '2/6' if config.landing else '1/4' }}] Bronze (parallel)...")
+    print("\\n[{{ '2/6' if config.landing else '1/4' }}] Bronze event...")
+{% for name in config.bronze_event %}
+    run_bronze_event_{{ name }}()
+{% endfor %}
+    print("Bronze event complete")
+
+    print("\\n[{{ '3/6' if config.landing else '2/4' }}] Bronze entity (parallel)...")
     with ThreadPoolExecutor(max_workers={{ (config.bronze | length) + (config.bronze_event | length) }}) as executor:
         bronze_futures = [
 {% for name in config.bronze %}
-            executor.submit(run_bronze_{{ name }}),
+            executor.submit(run_bronze_entity_{{ name }}),
 {% endfor %}
 {% for name in config.bronze_event %}
-            executor.submit(run_bronze_{{ name }}),
+            executor.submit(run_bronze_entity_{{ name }}_aggregated),
 {% endfor %}
         ]
         for f in bronze_futures:
             f.result()
-    print("Bronze complete")
+    print("Bronze entity complete")
     if validate:
         from validation.validate_pipeline import validate_bronze
         validate_bronze()
 
-    print("\\n[{{ '3/6' if config.landing else '2/4' }}] Silver...")
+    print("\\n[{{ '4/6' if config.landing else '3/4' }}] Silver...")
     run_silver_merge()
     print("Silver complete")
     if validate:
         from validation.validate_pipeline import validate_silver
         validate_silver()
 
-    print("\\n[{{ '4/6' if config.landing else '3/4' }}] Gold...")
+    print("\\n[{{ '5/6' if config.landing else '4/4' }}] Gold...")
     run_gold_features()
     print("Gold complete")
     if validate:
@@ -1132,18 +1108,20 @@ from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import PIPELINE_NAME, SOURCES, MLFLOW_TRACKING_URI, EXPERIMENTS_DIR, PRODUCTION_DIR, FINDINGS_DIR
+from config import PIPELINE_NAME, COMPOSITE_NAME, SOURCES, MLFLOW_TRACKING_URI, EXPERIMENTS_DIR, PRODUCTION_DIR, FINDINGS_DIR
 {% for name in config.landing %}
 from landing.landing_{{ name }} import run_landing_{{ name }}
 {% endfor %}
 {% for name in config.bronze %}
-from bronze.bronze_{{ name }} import run_bronze_{{ name }}
+from bronze.bronze_entity_{{ name }} import run_bronze_entity_{{ name }}
 {% endfor %}
 {% for name in config.bronze_event %}
-from bronze.bronze_{{ name }} import run_bronze_{{ name }}
+from bronze.bronze_event_{{ name }} import run_bronze_event_{{ name }}
+from bronze.bronze_entity_{{ name }}_aggregated import run_bronze_entity_{{ name }}_aggregated
 {% endfor %}
-from silver.silver_merge import run_silver_merge
-from gold.gold_features import run_gold_features
+{% set cn = config.composite_name or config.name %}
+from silver.silver_featureset_{{ cn }} import run_silver_merge
+from gold.gold_features_{{ cn }} import run_gold_features
 from training.ml_experiment import run_experiment
 
 
@@ -1167,13 +1145,20 @@ def run_landing():
     pass
 
 
-def run_bronze_parallel():
+def run_bronze_event():
+{% for name in config.bronze_event %}
+    run_bronze_event_{{ name }}()
+{% endfor %}
+    pass
+
+
+def run_bronze_entity_parallel():
     bronze_funcs = [
 {% for name in config.bronze %}
-        run_bronze_{{ name }},
+        run_bronze_entity_{{ name }},
 {% endfor %}
 {% for name in config.bronze_event %}
-        run_bronze_{{ name }},
+        run_bronze_entity_{{ name }}_aggregated,
 {% endfor %}
     ]
     with ThreadPoolExecutor(max_workers={{ (config.bronze | length) + (config.bronze_event | length) }}) as ex:
@@ -1199,9 +1184,18 @@ def start_mlflow_ui():
     print(f"\\nStarting MLflow UI (tracking: {MLFLOW_TRACKING_URI})...")
     process = subprocess.Popen(
         ["mlflow", "ui", "--backend-store-uri", MLFLOW_TRACKING_URI, "--port", str(port)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
     )
-    time.sleep(2)
+    for _ in range(10):
+        time.sleep(1)
+        if process.poll() is not None:
+            err = process.stderr.read().decode() if process.stderr else ""
+            print(f"\\n✗ MLflow UI failed to start (exit code {process.returncode})")
+            if err:
+                print(err)
+            return None
+        if is_port_in_use(port):
+            break
     webbrowser.open(f"http://localhost:{port}")
     print(f"MLflow UI running at http://localhost:{port}")
     print("Press Ctrl+C to stop")
@@ -1220,19 +1214,23 @@ def run_pipeline():
     print("Landing complete")
 {% endif %}
 
-    print("\\n[{{ '2/6' if config.landing else '1/4' }}] Bronze (parallel)...")
-    run_bronze_parallel()
-    print("Bronze complete")
+    print("\\n[{{ '2/6' if config.landing else '1/4' }}] Bronze event...")
+    run_bronze_event()
+    print("Bronze event complete")
 
-    print("\\n[{{ '3/6' if config.landing else '2/4' }}] Silver...")
+    print("\\n[{{ '3/6' if config.landing else '2/4' }}] Bronze entity (parallel)...")
+    run_bronze_entity_parallel()
+    print("Bronze entity complete")
+
+    print("\\n[{{ '4/6' if config.landing else '3/4' }}] Silver...")
     run_silver_merge()
     print("Silver complete")
 
-    print("\\n[{{ '4/6' if config.landing else '3/4' }}] Gold...")
+    print("\\n[{{ '5/6' if config.landing else '4/4' }}] Gold...")
     run_gold_features()
     print("Gold complete")
 
-    print("\\n[{{ '5/6' if config.landing else '4/4' }}] Training...")
+    print("\\n[{{ '6/6' if config.landing else '5/4' }}] Training...")
     run_experiment()
     print("Training complete")
 
@@ -1252,6 +1250,7 @@ if __name__ == "__main__":
     run_pipeline()
 ''',
     "workflow.json.j2": """{
+{% set cn = config.composite_name or config.name %}
   "name": "{{ config.name }}_pipeline",
   "tasks": [
 {% for name in config.landing %}
@@ -1262,42 +1261,67 @@ if __name__ == "__main__":
       }
     },
 {% endfor %}
-{% for source in config.sources %}
+{% for name in config.bronze_event %}
     {
-      "task_key": "bronze_{{ source.name }}",
+      "task_key": "bronze_event_{{ name }}",
 {% if config.landing %}
       "depends_on": [
-{% for name in config.landing %}
-        {"task_key": "landing_{{ name }}"}{{ "," if not loop.last else "" }}
+{% for lname in config.landing %}
+        {"task_key": "landing_{{ lname }}"}{{ "," if not loop.last else "" }}
 {% endfor %}
       ],
 {% endif %}
       "notebook_task": {
-        "notebook_path": "/Workspace/orchestration/{{ config.name }}/bronze/bronze_{{ source.name }}"
+        "notebook_path": "/Workspace/orchestration/{{ config.name }}/bronze/bronze_event_{{ name }}"
+      }
+    },
+    {
+      "task_key": "bronze_entity_{{ name }}_aggregated",
+      "depends_on": [{"task_key": "bronze_event_{{ name }}"}],
+      "notebook_task": {
+        "notebook_path": "/Workspace/orchestration/{{ config.name }}/bronze/bronze_entity_{{ name }}_aggregated"
+      }
+    },
+{% endfor %}
+{% for name in config.bronze %}
+    {
+      "task_key": "bronze_entity_{{ name }}",
+{% if config.landing %}
+      "depends_on": [
+{% for lname in config.landing %}
+        {"task_key": "landing_{{ lname }}"}{{ "," if not loop.last else "" }}
+{% endfor %}
+      ],
+{% endif %}
+      "notebook_task": {
+        "notebook_path": "/Workspace/orchestration/{{ config.name }}/bronze/bronze_entity_{{ name }}"
       }
     },
 {% endfor %}
     {
-      "task_key": "silver_merge",
+      "task_key": "silver_featureset_{{ cn }}",
       "depends_on": [
-{% for source in config.sources %}
-        {"task_key": "bronze_{{ source.name }}"}{{ "," if not loop.last else "" }}
+{% for name in config.bronze_event %}
+        {"task_key": "bronze_entity_{{ name }}_aggregated"},
+{% endfor %}
+{% for name in config.bronze %}
+        {"task_key": "bronze_entity_{{ name }}"}{{ "," if not loop.last else "" }}
 {% endfor %}
       ],
       "notebook_task": {
-        "notebook_path": "/Workspace/orchestration/{{ config.name }}/silver/silver_merge"
+        "notebook_path": "/Workspace/orchestration/{{ config.name }}/silver/silver_featureset_{{ cn }}"
       }
     },
     {
-      "task_key": "gold_features",
-      "depends_on": [{"task_key": "silver_merge"}],
+      "task_key": "gold_features_{{ cn }}",
+      "depends_on": [{"task_key": "silver_featureset_{{ cn }}"}],
       "notebook_task": {
-        "notebook_path": "/Workspace/orchestration/{{ config.name }}/gold/gold_features"
+        "notebook_path": "/Workspace/orchestration/{{ config.name }}/gold/gold_features_{{ cn }}"
       }
     },
     {
       "task_key": "ml_experiment",
-      "depends_on": [{"task_key": "gold_features"}],
+      "depends_on": [{"task_key": "gold_features_{{ cn }}"}],
       "notebook_task": {
         "notebook_path": "/Workspace/orchestration/{{ config.name }}/training/ml_experiment"
       }
@@ -1315,40 +1339,35 @@ offline_store:
   type: file
 entity_key_serialization_version: 2
 """,
-    "features.py.j2": '''"""Feast Feature Definitions for {{ config.name }}
-
-Auto-generated feature view definitions for training/serving consistency.
-Feature version: {{ config.recommendations_hash or "unversioned" }}
-"""
-from datetime import timedelta
+    "features.py.j2": '''from datetime import timedelta
 from feast import Entity, FeatureView, Field, FileSource
 from feast.types import Float32, Float64, Int64, String
 
-# Entity definition
-{{ config.feast.entity_name if config.feast else "customer" }} = Entity(
-    name="{{ config.feast.entity_name if config.feast else 'customer' }}",
-    join_keys=["{{ config.feast.entity_key if config.feast else config.sources[0].entity_key }}"],
-    description="Primary entity for {{ config.name }} pipeline"
+{% set fv_name = config.feast.feature_view_name if config.feast else 'featureset_' + (config.composite_name or config.name) %}
+{% set entity_name = config.feast.entity_name if config.feast else 'customer' %}
+{% set entity_key = config.feast.entity_key if config.feast else config.sources[0].entity_key %}
+{% set ts_col = config.feast.timestamp_column if config.feast else 'event_timestamp' %}
+{% set ttl = config.feast.ttl_days if config.feast else 365 %}
+
+{{ entity_name }} = Entity(
+    name="{{ entity_name }}",
+    join_keys=["{{ entity_key }}"],
 )
 
-# File source pointing to materialized features
-{{ config.feast.feature_view_name if config.feast else config.name + '_features' }}_source = FileSource(
-    path="data/{{ config.feast.feature_view_name if config.feast else config.name + '_features' }}.parquet",
-    timestamp_field="{{ config.feast.timestamp_column if config.feast else 'event_timestamp' }}"
+{{ fv_name }}_source = FileSource(
+    path="data/{{ fv_name }}",
+    timestamp_field="{{ ts_col }}"
 )
 
-# Feature view definition
-# Note: Features are dynamically determined from the parquet file schema
-# This is a placeholder that gets populated when feast apply is run
-{{ config.feast.feature_view_name if config.feast else config.name + '_features' }} = FeatureView(
-    name="{{ config.feast.feature_view_name if config.feast else config.name + '_features' }}",
-    entities=[{{ config.feast.entity_name if config.feast else "customer" }}],
-    ttl=timedelta(days={{ config.feast.ttl_days if config.feast else 365 }}),
-    source={{ config.feast.feature_view_name if config.feast else config.name + '_features' }}_source,
+{{ fv_name }} = FeatureView(
+    name="{{ fv_name }}",
+    entities=[{{ entity_name }}],
+    ttl=timedelta(days={{ ttl }}),
+    source={{ fv_name }}_source,
     tags={
         "pipeline": "{{ config.name }}",
+        "composite_name": "{{ config.composite_name or '' }}",
         "recommendations_hash": "{{ config.recommendations_hash or 'none' }}",
-        "version": "v1.0.0_{{ config.recommendations_hash or 'unversioned' }}"
     }
 )
 ''',
@@ -1366,46 +1385,58 @@ TARGET_COLUMN = "{{ config.target_column }}"
 def load_raw_data() -> pd.DataFrame:
     source = RAW_SOURCES[SOURCE_NAME]
     path = Path(source["path"])
-    if path.is_dir() and (path / "_delta_log").is_dir():
-        from customer_retention.integrations.adapters.factory import get_delta
-        return get_delta(force_local=True).read(str(path))
     if not path.exists():
         raise FileNotFoundError(f"Raw source not found: {path}")
     if source["format"] == "csv":
         return pd.read_csv(path)
-    return pd.read_parquet(path)
+    from customer_retention.integrations.adapters.factory import get_delta
+    return get_delta().read(str(path))
 
+
+def derive_feature_timestamp(df: pd.DataFrame) -> pd.DataFrame:
 {% if config.timestamp_coalesce %}
-
-def coalesce_timestamps(df: pd.DataFrame) -> pd.DataFrame:
 {% set cols = config.timestamp_coalesce.datetime_columns_ordered %}
-{% set out = config.timestamp_coalesce.output_column %}
-    df["{{ out }}"] = pd.to_datetime(df["{{ cols[-1] }}"], errors="coerce")
+    df["feature_timestamp"] = pd.to_datetime(df["{{ cols[-1] }}"], errors="coerce")
 {% for col in cols[:-1] | reverse %}
-    df["{{ out }}"] = df["{{ out }}"].fillna(pd.to_datetime(df["{{ col }}"], errors="coerce"))
+    df["feature_timestamp"] = df["feature_timestamp"].fillna(pd.to_datetime(df["{{ col }}"], errors="coerce"))
 {% endfor %}
-    return df
+{% else %}
+    df["feature_timestamp"] = pd.to_datetime(df[TIME_COLUMN], errors="coerce")
 {% endif %}
+    return df
 
-{% if config.label_timestamp %}
 
 def derive_label_timestamp(df: pd.DataFrame) -> pd.DataFrame:
+{% if config.label_timestamp %}
 {% set lt = config.label_timestamp %}
-{% set feature_ts = config.timestamp_coalesce.output_column if config.timestamp_coalesce else config.time_column %}
 {% if lt.label_column %}
-    df["{{ lt.output_column }}"] = pd.to_datetime(df["{{ lt.label_column }}"], errors="coerce")
-    df["{{ lt.output_column }}"] = df["{{ lt.output_column }}"].fillna(
-        pd.to_datetime(df["{{ feature_ts }}"], errors="coerce") + pd.Timedelta(days={{ lt.fallback_window_days }})
+    df["label_timestamp"] = pd.to_datetime(df["{{ lt.label_column }}"], errors="coerce")
+    df["label_timestamp"] = df["label_timestamp"].fillna(
+        df["feature_timestamp"] + pd.Timedelta(days={{ lt.fallback_window_days }})
     )
 {% else %}
-    df["{{ lt.output_column }}"] = pd.to_datetime(df["{{ feature_ts }}"], errors="coerce") + pd.Timedelta(days={{ lt.fallback_window_days }})
+    df["label_timestamp"] = df["feature_timestamp"] + pd.Timedelta(days={{ lt.fallback_window_days }})
+{% endif %}
+{% else %}
+    df["label_timestamp"] = df["feature_timestamp"] + pd.Timedelta(days=180)
 {% endif %}
     return df
-{% endif %}
+
+
+def derive_label_available_flag(df: pd.DataFrame) -> pd.DataFrame:
+    df["label_available_flag"] = df[TARGET_COLUMN].notna() if TARGET_COLUMN in df.columns else False
+    return df
+
+
+def derive_temporal_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = derive_feature_timestamp(df)
+    df = derive_label_timestamp(df)
+    df = derive_label_available_flag(df)
+    return df
 
 
 def get_landing_output_path() -> Path:
-    return PRODUCTION_DIR / "data" / "landing" / f"{SOURCE_NAME}.parquet"
+    return PRODUCTION_DIR / "data" / "landing" / SOURCE_NAME
 
 
 def run_landing_{{ name }}():
@@ -1418,21 +1449,11 @@ def run_landing_{{ name }}():
 {% if config.original_target_column %}
     df = df.rename(columns={"{{ config.original_target_column }}": TARGET_COLUMN})
 {% endif %}
-{% if config.timestamp_coalesce %}
-    df = coalesce_timestamps(df)
-{% endif %}
-{% if config.label_timestamp %}
-    df = derive_label_timestamp(df)
-{% endif %}
+    df = derive_temporal_columns(df)
     output_path = get_landing_output_path()
-    output_dir = output_path.parent
-    output_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        from customer_retention.integrations.adapters.factory import get_delta
-        storage = get_delta(force_local=True)
-        storage.write(df, str(output_dir / SOURCE_NAME))
-    except ImportError:
-        df.to_parquet(output_path, index=False)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    from customer_retention.integrations.adapters.factory import get_delta
+    get_delta().write(df, str(output_path))
     print(f"  Records: {len(df):,}")
     print(f"  Output: {output_path}")
     return df
@@ -1444,12 +1465,12 @@ if __name__ == "__main__":
     "bronze_event.py.j2": '''import pandas as pd
 import numpy as np
 from pathlib import Path
-{% set ops, fitted = collect_imports(config.pre_shaping + config.post_shaping, False) %}
+{% set ops, fitted = collect_imports(config.pre_shaping, False) %}
 {% if ops %}
 from customer_retention.transforms import {{ ops | sort | join(', ') }}
 {% endif %}
 from customer_retention.core.compat import ensure_datetime_column, safe_to_datetime
-from config import PRODUCTION_DIR, RAW_SOURCES, TARGET_COLUMN
+from config import PRODUCTION_DIR, TARGET_COLUMN
 
 SOURCE_NAME = "{{ source }}"
 ENTITY_COLUMN = "{{ config.entity_column }}"
@@ -1502,37 +1523,71 @@ AGG_FUNCS = {{ config.aggregation.agg_funcs }}
 {% endif %}
 
 
-def apply_reshaping(df: pd.DataFrame) -> pd.DataFrame:
+def apply_event_aggregation(df: pd.DataFrame) -> pd.DataFrame:
 {% if config.aggregation %}
     ensure_datetime_column(df, TIME_COLUMN)
     reference_date = df[TIME_COLUMN].max()
-    result = df.groupby(ENTITY_COLUMN).agg("first")[[]]
+    base = df.groupby(ENTITY_COLUMN).agg("first")[[]]
+    parts = []
     if TARGET_COLUMN in df.columns:
-        result[TARGET_COLUMN] = df.groupby(ENTITY_COLUMN)[TARGET_COLUMN].first()
+        parts.append(df.groupby(ENTITY_COLUMN)[TARGET_COLUMN].first())
     for window in AGGREGATION_WINDOWS:
         td = _parse_window(window)
         window_df = df if td is None else df[df[TIME_COLUMN] >= (reference_date - td)]
         for col in VALUE_COLUMNS:
             for func in AGG_FUNCS:
-                result[f"{col}_{func}_{window}"] = window_df.groupby(ENTITY_COLUMN)[col].agg(func)
-        result[f"event_count_{window}"] = window_df.groupby(ENTITY_COLUMN).size()
-    df = result.reset_index()
+                parts.append(window_df.groupby(ENTITY_COLUMN)[col].agg(func).rename(f"{col}_{func}_{window}"))
+        parts.append(window_df.groupby(ENTITY_COLUMN).size().rename(f"event_count_{window}"))
+    df = pd.concat([base] + parts, axis=1).reset_index()
+    df.attrs["aggregation_reference_date"] = str(reference_date)
 {% endif %}
     return df
+
+
+def run_bronze_event_{{ source }}():
+    from customer_retention.integrations.adapters.factory import get_delta
+    storage = get_delta()
+    landing_path = str(PRODUCTION_DIR / "data" / "landing" / SOURCE_NAME)
+    if not storage.exists(landing_path):
+        raise FileNotFoundError(f"Landing output not found: {landing_path}")
+    df = storage.read(landing_path)
+    df = apply_pre_shaping(df)
+    df = apply_event_aggregation(df)
+    output_name = f"{SOURCE_NAME}_aggregated"
+    bronze_dir = PRODUCTION_DIR / "data" / "bronze"
+    bronze_dir.mkdir(parents=True, exist_ok=True)
+    storage.write(df, str(bronze_dir / output_name))
+    return df
+
+
+if __name__ == "__main__":
+    run_bronze_event_{{ source }}()
+''',
+    "bronze_entity.py.j2": '''import pandas as pd
+import numpy as np
+from pathlib import Path
+{% set ops, fitted = collect_imports(config.post_shaping, False) %}
+{% if ops %}
+from customer_retention.transforms import {{ ops | sort | join(', ') }}
+{% endif %}
+from customer_retention.core.compat import ensure_datetime_column, safe_to_datetime
+from config import PRODUCTION_DIR, RAW_SOURCES, get_bronze_path
+
+SOURCE_NAME = "{{ source }}"
+ENTITY_COLUMN = "{{ config.entity_column }}"
+TIME_COLUMN = "{{ config.time_column }}"
 
 {% if config.lifecycle %}
 
 def _load_raw_events():
-    source = RAW_SOURCES[SOURCE_NAME]
+    source = RAW_SOURCES["{{ raw_source }}"]
     path = Path(source["path"])
-    if path.is_dir() and (path / "_delta_log").is_dir():
-        from customer_retention.integrations.adapters.factory import get_delta
-        return get_delta(force_local=True).read(str(path))
     if not path.exists():
         raise FileNotFoundError(f"Raw source not found: {path}")
     if source["format"] == "csv":
         return pd.read_csv(path)
-    return pd.read_parquet(path)
+    from customer_retention.integrations.adapters.factory import get_delta
+    return get_delta().read(str(path))
 
 {% if config.lifecycle.include_recency_bucket %}
 
@@ -1624,7 +1679,7 @@ def enrich_lifecycle(df: pd.DataFrame) -> pd.DataFrame:
 
 {% set post_groups = group_steps(config.post_shaping) %}
 
-def apply_post_shaping(df: pd.DataFrame) -> pd.DataFrame:
+def apply_quality_transforms(df: pd.DataFrame) -> pd.DataFrame:
 {% if config.lifecycle %}
     df = enrich_lifecycle(df)
 {% endif %}
@@ -1651,33 +1706,21 @@ def {{ func_name }}(df: pd.DataFrame) -> pd.DataFrame:
 {% endfor %}
 
 
-def run_bronze_{{ source }}():
-    landing_dir = PRODUCTION_DIR / "data" / "landing" / SOURCE_NAME
-    landing_parquet = PRODUCTION_DIR / "data" / "landing" / f"{SOURCE_NAME}.parquet"
-    if landing_dir.is_dir() and (landing_dir / "_delta_log").is_dir():
-        from customer_retention.integrations.adapters.factory import get_delta
-        df = get_delta(force_local=True).read(str(landing_dir))
-    elif landing_parquet.exists():
-        df = pd.read_parquet(landing_parquet)
-    else:
-        raise FileNotFoundError(f"Landing output not found: {landing_parquet}")
-    df = apply_pre_shaping(df)
-    df = apply_reshaping(df)
-    df = apply_post_shaping(df)
-    bronze_dir = PRODUCTION_DIR / "data" / "bronze"
-    bronze_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        from customer_retention.integrations.adapters.factory import get_delta
-        storage = get_delta(force_local=True)
-        storage.write(df, str(bronze_dir / SOURCE_NAME))
-    except ImportError:
-        output_path = bronze_dir / f"{SOURCE_NAME}.parquet"
-        df.to_parquet(output_path, index=False)
+def run_bronze_entity_{{ source }}():
+    from customer_retention.integrations.adapters.factory import get_delta
+    storage = get_delta()
+    bronze_path = get_bronze_path("{{ bronze_input_name }}")
+    if not storage.exists(str(bronze_path)):
+        raise FileNotFoundError(f"Bronze input not found: {bronze_path}")
+    df = storage.read(str(bronze_path))
+    df = apply_quality_transforms(df)
+    bronze_path.parent.mkdir(parents=True, exist_ok=True)
+    storage.write(df, str(bronze_path))
     return df
 
 
 if __name__ == "__main__":
-    run_bronze_{{ source }}()
+    run_bronze_entity_{{ source }}()
 ''',
     "validate.py.j2": '''import sys
 from pathlib import Path
@@ -1686,21 +1729,21 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pandas as pd
 import numpy as np
-from config import SOURCES, EXPLORATION_ARTIFACTS, EXPERIMENTS_DIR, PRODUCTION_DIR, TARGET_COLUMN
+from config import (SOURCES, EXPLORATION_ARTIFACTS, EXPERIMENTS_DIR, PRODUCTION_DIR,
+                    TARGET_COLUMN, get_silver_path, get_gold_path)
 
 
 def _load_artifact(path):
-    path = Path(path)
-    if path.is_dir() and (path / "_delta_log").is_dir():
-        from customer_retention.integrations.adapters.factory import get_delta
-        return get_delta(force_local=True).read(str(path))
-    return pd.read_parquet(path)
+    from customer_retention.integrations.adapters.factory import get_delta
+    return get_delta().read(str(path))
 
 
 def _compare_dataframes(stage, production_path, exploration_path, entity_key=None, tolerance=1e-5):
-    if not Path(production_path).exists() and not (Path(production_path).is_dir() and (Path(production_path) / "_delta_log").is_dir()):
+    from customer_retention.integrations.adapters.factory import get_delta
+    storage = get_delta()
+    if not storage.exists(str(production_path)):
         raise FileNotFoundError(f"[{stage}] Production output not found: {production_path}")
-    if not Path(exploration_path).exists() and not (Path(exploration_path).is_dir() and (Path(exploration_path) / "_delta_log").is_dir()):
+    if not storage.exists(str(exploration_path)):
         print(f"[{stage}] SKIP - exploration artifact not found: {exploration_path}")
         return True
 
@@ -1746,24 +1789,27 @@ def validate_landing(tolerance=1e-5):
     if not landing_dir.exists():
         print("[Landing] SKIP - no landing directory")
         return True
-    for path in landing_dir.glob("*.parquet"):
-        name = path.stem
-        expl_key = f"landing_{name}" if f"landing_{name}" in EXPLORATION_ARTIFACTS else "landing"
-        if expl_key in EXPLORATION_ARTIFACTS:
-            _compare_dataframes(f"Landing/{name}", str(path), EXPLORATION_ARTIFACTS[expl_key])
+    from customer_retention.integrations.adapters.factory import get_delta
+    storage = get_delta()
+    for path in landing_dir.iterdir():
+        if storage.exists(str(path)):
+            name = path.name
+            expl_key = f"landing_{name}" if f"landing_{name}" in EXPLORATION_ARTIFACTS else "landing"
+            if expl_key in EXPLORATION_ARTIFACTS:
+                _compare_dataframes(f"Landing/{name}", str(path), EXPLORATION_ARTIFACTS[expl_key])
     return True
 
 
 def validate_bronze(tolerance=1e-5):
     bronze_artifacts = EXPLORATION_ARTIFACTS.get("bronze", {})
     for name, expl_path in bronze_artifacts.items():
-        prod_path = PRODUCTION_DIR / "data" / "bronze" / f"{name}.parquet"
+        prod_path = PRODUCTION_DIR / "data" / "bronze" / name
         _compare_dataframes(f"Bronze/{name}", str(prod_path), expl_path, tolerance=tolerance)
     return True
 
 
 def validate_silver(tolerance=1e-5):
-    prod_path = PRODUCTION_DIR / "data" / "silver" / PIPELINE_NAME / "merged.parquet"
+    prod_path = get_silver_path()
     expl_path = EXPLORATION_ARTIFACTS.get("silver", "")
     entity_key = list(SOURCES.values())[0]["entity_key"] if SOURCES else None
     _compare_dataframes("Silver", str(prod_path), expl_path, entity_key=entity_key, tolerance=tolerance)
@@ -1771,7 +1817,7 @@ def validate_silver(tolerance=1e-5):
 
 
 def validate_gold(tolerance=1e-5):
-    prod_path = PRODUCTION_DIR / "data" / "gold" / PIPELINE_NAME / "features.parquet"
+    prod_path = get_gold_path()
     expl_path = EXPLORATION_ARTIFACTS.get("gold", "")
     entity_key = list(SOURCES.values())[0]["entity_key"] if SOURCES else None
     _compare_dataframes("Gold", str(prod_path), expl_path, entity_key=entity_key, tolerance=tolerance)
@@ -1784,7 +1830,7 @@ def validate_training():
 
 
 def validate_scoring(tolerance=1e-5):
-    prod_path = PRODUCTION_DIR / "data" / "scoring" / "predictions.parquet"
+    prod_path = PRODUCTION_DIR / "data" / "scoring" / "predictions"
     expl_path = EXPLORATION_ARTIFACTS.get("scoring", "")
     _compare_dataframes("Scoring", str(prod_path), expl_path, tolerance=tolerance)
     return True
@@ -1949,6 +1995,12 @@ class CodeRenderer:
 
     def render_bronze_event(self, source_name: str, config: BronzeEventConfig) -> str:
         return self._env.get_template("bronze_event.py.j2").render(source=source_name, config=config)
+
+    def render_bronze_entity(self, source_name: str, config: BronzeEventConfig, bronze_input_name: str, raw_source_name: str = "") -> str:
+        return self._env.get_template("bronze_entity.py.j2").render(
+            source=source_name, config=config, bronze_input_name=bronze_input_name,
+            raw_source=raw_source_name or source_name,
+        )
 
     def render_validation(self, config: PipelineConfig) -> str:
         return self._render("validation", config=config)

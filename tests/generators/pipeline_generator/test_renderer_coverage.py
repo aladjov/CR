@@ -5,9 +5,12 @@ import pytest
 
 import customer_retention.generators.pipeline_generator.renderer as renderer_mod
 from customer_retention.generators.pipeline_generator.models import (
+    AggregationWindowConfig,
+    BronzeEventConfig,
     BronzeLayerConfig,
     FeastConfig,
     GoldLayerConfig,
+    LifecycleConfig,
     PipelineConfig,
     PipelineTransformationType,
     SilverLayerConfig,
@@ -161,7 +164,16 @@ def sample_pipeline_config(
         sources=[sample_source_config, sample_event_source_config],
         bronze={
             "customers": sample_bronze_config,
-            "events": BronzeLayerConfig(source=sample_event_source_config, transformations=[]),
+        },
+        bronze_event={
+            "events": BronzeEventConfig(
+                source=sample_event_source_config,
+                entity_column="customer_id",
+                time_column="event_date",
+                aggregation=AggregationWindowConfig(
+                    windows=["30d"], value_columns=["amount"], agg_funcs=["sum"],
+                ),
+            ),
         },
         silver=sample_silver_config,
         gold=sample_gold_config,
@@ -307,7 +319,7 @@ class TestCodeRendererGold:
 
         assert "def load_gold" in result
         assert "get_gold_path" in result
-        assert "_delta_log" in result
+        assert "get_delta" in result
 
 
 class TestCodeRendererTraining:
@@ -340,8 +352,8 @@ class TestCodeRendererRunner:
         result = renderer.render_runner(sample_pipeline_config)
 
         assert "run_pipeline" in result
-        assert "run_bronze_customers" in result
-        assert "run_bronze_events" in result
+        assert "run_bronze_entity_customers" in result
+        assert "run_bronze_event_events" in result
         assert "run_silver_merge" in result
         assert "run_gold_features" in result
 
@@ -352,7 +364,7 @@ class TestCodeRendererRunAll:
         result = renderer.render_run_all(sample_pipeline_config)
 
         assert "run_pipeline" in result
-        assert "run_bronze_parallel" in result
+        assert "run_bronze_entity_parallel" in result
         assert "start_mlflow_ui" in result
         assert "setup_experiments_dir" in result
 
@@ -580,7 +592,7 @@ class TestBronzeEventPreShapingTransformations:
         assert "apply_cap_outlier" in result
         assert "def apply_pre_shaping" in result
         assert "def cap_outliers" in result
-        assert "def apply_reshaping" in result
+        assert "def apply_event_aggregation" in result
         assert "from customer_retention.transforms import" in result
 
     def test_bronze_event_no_transforms_when_empty(self, renderer):
@@ -638,13 +650,13 @@ class TestRendererEdgeCases:
         result = renderer.render_config(minimal_pipeline_config)
 
         assert "FEAST_FEATURE_VIEW" in result
-        assert "minimal_pipeline_features" in result
+        assert "featureset_minimal_pipeline" in result
 
-    def test_render_bronze_with_parquet_format(self, renderer, sample_event_source_config):
+    def test_render_bronze_uses_delta(self, renderer, sample_event_source_config):
         bronze_config = BronzeLayerConfig(source=sample_event_source_config, transformations=[])
         result = renderer.render_bronze("events", bronze_config)
 
-        assert "read_parquet" in result
+        assert "get_delta" in result
 
 
 def _step(t, col="x", params=None, rationale="test"):
@@ -1562,3 +1574,29 @@ class TestGoldEncodingsScalingsExports:
         scl_end = result.index("]", scl_start) + 1
         scl_block = result[scl_start:scl_end]
         assert 'column="age"' in scl_block
+
+
+class TestBronzeEntityRawSourceLookup:
+
+    def test_load_raw_events_uses_base_source_name(self):
+        import ast
+        source = SourceConfig(
+            name="orders", path="orders.parquet", format="parquet",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="order_date",
+            lifecycle=LifecycleConfig(include_recency_bucket=True),
+        )
+        result = CodeRenderer().render_bronze_entity("orders_aggregated", config, "orders_aggregated", "orders")
+        ast.parse(result)
+        assert 'RAW_SOURCES["orders"]' in result
+        assert 'RAW_SOURCES["orders_aggregated"]' not in result
+
+
+class TestSilverLoadsAggregatedBronze:
+
+    def test_silver_loads_aggregated_path_for_event_sources(self, renderer, sample_pipeline_config):
+        result = renderer.render_silver(sample_pipeline_config)
+        assert 'get_bronze_path(f"{name}_aggregated")' in result or '_aggregated' in result
+        assert 'is_event_level' in result

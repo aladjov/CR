@@ -455,16 +455,14 @@ class ExplorationManager:
         # Remove _findings suffix
         stem = stem.replace("_findings", "")
 
-        # Check for _aggregated suffix
+        # Check for _aggregated suffix (describes findings file, not dataset)
         if "_aggregated" in stem:
-            # Keep "aggregated" as part of name to distinguish from original
             parts = stem.rsplit("_aggregated", 1)
             base_name = parts[0]
-            # Remove hash from base_name
             name_parts = base_name.rsplit("_", 1)
             if len(name_parts) == 2:
-                return f"{name_parts[0]}_aggregated"
-            return f"{base_name}_aggregated"
+                return name_parts[0]
+            return base_name
 
         # Regular findings - remove hash
         parts = stem.rsplit("_", 1)

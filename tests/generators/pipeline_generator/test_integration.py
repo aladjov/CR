@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 import yaml
 
+from customer_retention.core.naming import composite_name
 from customer_retention.generators.pipeline_generator import PipelineGenerator
 
 
@@ -140,27 +141,29 @@ class TestEndToEndPipelineGeneration:
         workflow_content = (output_dir / "workflow.json").read_text()
         workflow = json.loads(workflow_content)
         task_keys = [t["task_key"] for t in workflow["tasks"]]
-        assert "bronze_customers" in task_keys
-        assert "bronze_orders" in task_keys
-        assert "silver_merge" in task_keys
-        assert "gold_features" in task_keys
+        cn = composite_name(["customers", "orders_aggregated"])
+        assert "bronze_entity_customers" in task_keys
+        assert "bronze_event_orders" in task_keys
+        assert "bronze_entity_orders_aggregated" in task_keys
+        assert f"silver_featureset_{cn}" in task_keys
+        assert f"gold_features_{cn}" in task_keys
         assert "ml_experiment" in task_keys
-        silver_task = next(t for t in workflow["tasks"] if t["task_key"] == "silver_merge")
+        silver_task = next(t for t in workflow["tasks"] if t["task_key"] == f"silver_featureset_{cn}")
         depends_on_keys = [d["task_key"] for d in silver_task["depends_on"]]
-        assert "bronze_customers" in depends_on_keys
-        assert "bronze_orders" in depends_on_keys
+        assert "bronze_entity_customers" in depends_on_keys
+        assert "bronze_entity_orders_aggregated" in depends_on_keys
 
 
 class TestBronzeLayerGeneration:
-    def test_bronze_applies_impute_null(self, generated_output):
-        bronze_content = (generated_output / "bronze" / "bronze_customers.py").read_text()
+    def test_bronze_entity_applies_impute_null(self, generated_output):
+        bronze_content = (generated_output / "bronze" / "bronze_entity_customers.py").read_text()
         assert "apply_impute_null" in bronze_content
 
     def test_bronze_event_has_pre_shaping_cap_outlier(self, generated_output):
-        bronze_content = (generated_output / "bronze" / "bronze_orders.py").read_text()
+        bronze_content = (generated_output / "bronze" / "bronze_event_orders.py").read_text()
         assert "apply_pre_shaping" in bronze_content
         assert "apply_cap_outlier" in bronze_content
-        assert "apply_reshaping" in bronze_content
+        assert "apply_event_aggregation" in bronze_content
 
     def test_landing_is_slim(self, generated_output):
         landing_content = (generated_output / "landing" / "landing_orders.py").read_text()
@@ -171,14 +174,16 @@ class TestBronzeLayerGeneration:
 
 class TestSilverLayerGeneration:
     def test_silver_includes_merge_logic(self, generated_output):
-        silver_content = (generated_output / "silver" / "silver_merge.py").read_text()
+        cn = composite_name(["customers", "orders_aggregated"])
+        silver_content = (generated_output / "silver" / f"silver_featureset_{cn}.py").read_text()
         assert "merge" in silver_content
         assert "customer_id" in silver_content
 
 
 class TestGoldLayerGeneration:
     def test_gold_includes_feature_engineering(self, generated_output):
-        gold_content = (generated_output / "gold" / "gold_features.py").read_text()
+        cn = composite_name(["customers", "orders_aggregated"])
+        gold_content = (generated_output / "gold" / f"gold_features_{cn}.py").read_text()
         assert "apply_encodings" in gold_content or "encoding" in gold_content.lower()
         assert "apply_scaling" in gold_content or "scal" in gold_content.lower()
 

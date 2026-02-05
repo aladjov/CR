@@ -145,8 +145,11 @@ class TestPipelineGeneratorGenerate:
         generator = PipelineGenerator(str(sample_findings_dir), str(tmp_path), "multi_source")
         generator.generate()
         bronze_dir = tmp_path / "bronze"
-        bronze_files = list(bronze_dir.glob("*.py"))
-        assert len(bronze_files) == 2
+        bronze_files = sorted(f.name for f in bronze_dir.glob("*.py"))
+        assert len(bronze_files) == 3
+        assert "bronze_entity_customers.py" in bronze_files
+        assert "bronze_event_orders.py" in bronze_files
+        assert "bronze_entity_orders_aggregated.py" in bronze_files
 
     def test_output_files_are_valid_python(self, sample_findings_dir, tmp_path):
         import ast

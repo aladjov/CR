@@ -16,6 +16,7 @@ except ImportError:  # pragma: no cover
 @dataclass
 class ScoringConfig:
     pipeline_name: str
+    composite_name: str
     target_column: str
     entity_key: str
     timestamp_column: str
@@ -28,6 +29,7 @@ class ScoringConfig:
     schema: str = ""
     feast_repo_path: str = ""
     feast_feature_view: str = ""
+    pipeline_dir: Path = Path()
 
     @property
     def original_column(self) -> str:
@@ -48,8 +50,10 @@ class ScoringConfig:
         if not config_path.exists():
             raise FileNotFoundError(f"No config.py found in {pipeline_dir}")
         module = _load_module_from_path("_scoring_config_gen", config_path)
+        cn = getattr(module, "COMPOSITE_NAME", module.PIPELINE_NAME)
         return cls(
             pipeline_name=module.PIPELINE_NAME,
+            composite_name=cn,
             target_column=module.TARGET_COLUMN,
             entity_key=module.FEAST_ENTITY_KEY,
             timestamp_column=module.FEAST_TIMESTAMP_COL,
@@ -60,6 +64,7 @@ class ScoringConfig:
             production_dir=Path(module.PRODUCTION_DIR),
             feast_repo_path=module.FEAST_REPO_PATH,
             feast_feature_view=module.FEAST_FEATURE_VIEW,
+            pipeline_dir=pipeline_dir,
         )
 
     @classmethod
@@ -86,9 +91,11 @@ class ScoringConfig:
         entity_key = tags.get("entity_key", params.get("entity_key", "customer_id"))
         timestamp_column = tags.get("timestamp_column", params.get("timestamp_column", "event_timestamp"))
         recommendations_hash = tags.get("recommendations_hash", "")
+        cn = tags.get("composite_name", experiment_name)
         artifacts_subdir = recommendations_hash or "default"
         return cls(
             pipeline_name=experiment_name,
+            composite_name=cn,
             target_column=target_column,
             entity_key=entity_key,
             timestamp_column=timestamp_column,

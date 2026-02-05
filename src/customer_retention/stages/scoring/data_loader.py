@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
 from typing import Any, Tuple
 
 import pandas as pd
 
 from customer_retention.core.compat.detection import get_spark_session
-from customer_retention.stages.scoring.config import ScoringConfig
+from customer_retention.integrations.adapters.factory import get_delta
+from customer_retention.stages.scoring.config import ScoringConfig, _load_module_from_path
 from customer_retention.transforms import ArtifactStore, TransformExecutor
 
 try:
@@ -33,12 +32,15 @@ class ScoringDataLoader:
     def load_gold_features(self) -> pd.DataFrame:
         if self.config.is_databricks:
             return self._load_gold_from_spark()
-        return self._load_gold_from_parquet()
+        return self._load_gold_from_delta()
 
     def load_scoring_features(self, scoring_df: pd.DataFrame) -> pd.DataFrame:
         if self.config.is_databricks or not self.config.feast_repo_path:
             return scoring_df
-        return self._try_feast_features(scoring_df)
+        feast_path = Path(self.config.feast_repo_path)
+        if not (feast_path / "feature_store.yaml").exists():
+            return scoring_df
+        return self._load_feast_features(scoring_df)
 
     def load_model(self) -> Tuple[Any, str]:
         mlflow.set_tracking_uri(self.config.mlflow_tracking_uri)
@@ -76,37 +78,35 @@ class ScoringDataLoader:
         spark = get_spark_session()
         if not spark:
             raise RuntimeError("Spark session unavailable on Databricks")
-        table_name = f"{self.config.catalog}.{self.config.schema}.gold_features"
+        cn = self.config.composite_name
+        table_name = f"{self.config.catalog}.{self.config.schema}.gold_features_{cn}"
         return spark.table(table_name).toPandas()
 
-    def _load_gold_from_parquet(self) -> pd.DataFrame:
-        gold_path = self.config.production_dir / "data" / "gold" / self.config.pipeline_name / "features.parquet"
-        if not gold_path.exists():
+    def _load_gold_from_delta(self) -> pd.DataFrame:
+        cn = self.config.composite_name
+        gold_path = self.config.production_dir / "data" / "gold" / f"gold_features_{cn}"
+        storage = get_delta()
+        if not storage.exists(str(gold_path)):
             raise FileNotFoundError(f"Gold features not found at {gold_path}")
-        return pd.read_parquet(gold_path)
+        return storage.read(str(gold_path))
 
-    def _try_feast_features(self, scoring_df: pd.DataFrame) -> pd.DataFrame:
+    def _load_feast_features(self, scoring_df: pd.DataFrame) -> pd.DataFrame:
         feast_path = Path(self.config.feast_repo_path)
-        if not (feast_path / "feature_store.yaml").exists():
-            return scoring_df
-        try:
-            store = FeatureStore(repo_path=str(feast_path))
-            exclude_cols = {self.config.entity_key, self.config.timestamp_column,
-                            self.config.target_column, self.config.original_column}
-            feature_cols = [
-                c for c in scoring_df.columns
-                if c not in exclude_cols and not c.startswith("original_")
-            ]
-            feature_refs = [f"{self.config.feast_feature_view}:{col}" for col in feature_cols]
-            result_df = store.get_online_features(
-                features=feature_refs,
-                entity_rows=[{self.config.entity_key: eid} for eid in scoring_df[self.config.entity_key]],
-            ).to_df()
-            result_df[self.config.original_column] = scoring_df[self.config.original_column].values
-            result_df[self.config.entity_key] = scoring_df[self.config.entity_key].values
-            return result_df
-        except Exception:
-            return scoring_df
+        store = FeatureStore(repo_path=str(feast_path))
+        exclude_cols = {self.config.entity_key, self.config.timestamp_column,
+                        self.config.target_column, self.config.original_column}
+        feature_cols = [
+            c for c in scoring_df.columns
+            if c not in exclude_cols and not c.startswith("original_")
+        ]
+        feature_refs = [f"{self.config.feast_feature_view}:{col}" for col in feature_cols]
+        result_df = store.get_online_features(
+            features=feature_refs,
+            entity_rows=[{self.config.entity_key: eid} for eid in scoring_df[self.config.entity_key]],
+        ).to_df()
+        result_df[self.config.original_column] = scoring_df[self.config.original_column].values
+        result_df[self.config.entity_key] = scoring_df[self.config.entity_key].values
+        return result_df
 
     def _find_best_parent_run(self, client, experiment_id: str):
         if self.config.recommendations_hash:
@@ -137,24 +137,14 @@ class ScoringDataLoader:
     def _load_gold_module(self):
         if self.config.is_databricks:
             raise FileNotFoundError("Gold module not available on Databricks; transforms stored in MLflow artifacts")
-        pipeline_dir = self.config.production_dir.parent
-        gold_dir = None
-        for candidate in [
-            self.config.production_dir / "gold",
-            pipeline_dir / "gold",
-        ]:
-            if (candidate / "gold_features.py").exists():
-                gold_dir = candidate
-                break
-        if not gold_dir:
-            search_root = self.config.production_dir.parent
-            for gf in search_root.rglob("gold_features.py"):
-                gold_dir = gf.parent
-                break
-        if not gold_dir:
-            raise FileNotFoundError(f"gold_features.py not found near {self.config.production_dir}")
-        spec = importlib.util.spec_from_file_location("_gold_features_gen", str(gold_dir / "gold_features.py"))
-        module = importlib.util.module_from_spec(spec)
-        sys.modules["_gold_features_gen"] = module
-        spec.loader.exec_module(module)
-        return module
+        config_path = self.config.pipeline_dir / "config.py"
+        if not config_path.exists():
+            raise FileNotFoundError(f"config.py not found at {config_path}")
+        cn = self.config.composite_name
+        gold_path = self.config.pipeline_dir / "gold" / f"gold_features_{cn}.py"
+        if not gold_path.exists():
+            gold_path = self.config.pipeline_dir / "gold" / "gold_features.py"
+        if not gold_path.exists():
+            raise FileNotFoundError(f"gold_features.py not found in {self.config.pipeline_dir / 'gold'}")
+        _load_module_from_path("config", config_path)
+        return _load_module_from_path("_gold_features_gen", gold_path)

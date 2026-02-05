@@ -235,8 +235,8 @@ class TestValidationTemplateProductionDir:
         out = _generate(experiments_setup)
         content = (out / "validation" / "validate_pipeline.py").read_text()
         assert 'PRODUCTION_DIR / "data" / "bronze"' in content
-        assert 'PRODUCTION_DIR / "data" / "silver"' in content
-        assert 'PRODUCTION_DIR / "data" / "gold"' in content
+        assert "get_silver_path" in content
+        assert "get_gold_path" in content
 
     def test_exploration_paths_use_experiments_dir(self, experiments_setup):
         out = _generate(experiments_setup)

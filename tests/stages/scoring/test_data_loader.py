@@ -1,3 +1,4 @@
+import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +14,7 @@ from customer_retention.stages.scoring.data_loader import ScoringDataLoader
 def local_config():
     return ScoringConfig(
         pipeline_name="customer_churn",
+        composite_name="cust_emails_prof__a1b2c3d",
         target_column="unsubscribed",
         entity_key="customer_id",
         timestamp_column="event_timestamp",
@@ -22,7 +24,7 @@ def local_config():
         mlflow_tracking_uri="sqlite:///mlruns.db",
         production_dir=Path("/tmp/production"),
         feast_repo_path="/tmp/feast_repo",
-        feast_feature_view="customer_churn_features",
+        feast_feature_view="featureset_cust_emails_prof__a1b2c3d",
     )
 
 
@@ -30,6 +32,7 @@ def local_config():
 def databricks_config():
     return ScoringConfig(
         pipeline_name="customer_churn",
+        composite_name="cust_emails_prof__a1b2c3d",
         target_column="unsubscribed",
         entity_key="customer_id",
         timestamp_column="event_timestamp",
@@ -75,10 +78,13 @@ def mock_mlflow_client():
 
 
 class TestLoadGoldFeaturesLocal:
-    def test_loads_from_parquet(self, local_config, sample_gold_df, tmp_path):
-        gold_path = tmp_path / "data" / "gold" / "customer_churn" / "features.parquet"
-        gold_path.parent.mkdir(parents=True)
-        sample_gold_df.to_parquet(gold_path, index=False)
+    def test_loads_from_delta_with_cn(self, local_config, sample_gold_df, tmp_path):
+        from customer_retention.integrations.adapters.factory import get_delta
+        cn = local_config.composite_name
+        gold_dir = tmp_path / "data" / "gold" / f"gold_features_{cn}"
+        gold_dir.parent.mkdir(parents=True)
+        storage = get_delta(force_local=True)
+        storage.write(sample_gold_df, str(gold_dir))
         local_config.production_dir = tmp_path
         loader = ScoringDataLoader(local_config)
         result = loader.load_gold_features()
@@ -93,14 +99,15 @@ class TestLoadGoldFeaturesLocal:
 
 
 class TestLoadGoldFeaturesDatabricks:
-    def test_loads_from_spark_table(self, databricks_config):
+    def test_loads_from_spark_table_with_cn(self, databricks_config):
         mock_spark = MagicMock()
         mock_pdf = pd.DataFrame({"customer_id": ["c1"], "feature_a": [1.0]})
         mock_spark.table.return_value.toPandas.return_value = mock_pdf
+        cn = databricks_config.composite_name
         with patch("customer_retention.stages.scoring.data_loader.get_spark_session", return_value=mock_spark):
             loader = ScoringDataLoader(databricks_config)
             result = loader.load_gold_features()
-        mock_spark.table.assert_called_once_with("analytics.churn.gold_features")
+        mock_spark.table.assert_called_once_with(f"analytics.churn.gold_features_{cn}")
         assert len(result) == 1
 
     def test_spark_unavailable_raises(self, databricks_config):
@@ -183,12 +190,12 @@ class TestLoadModel:
 
 
 class TestLoadScoringFeatures:
-    def test_feast_fallback_to_direct(self, local_config, sample_gold_df):
+    def test_feast_missing_repo_falls_back_to_scoring_df(self, local_config, sample_gold_df):
         local_config.feast_repo_path = "/nonexistent/feast"
         loader = ScoringDataLoader(local_config)
         holdout = sample_gold_df[sample_gold_df["unsubscribed"].isna()].copy()
         result = loader.load_scoring_features(holdout)
-        assert len(result) == len(holdout)
+        pd.testing.assert_frame_equal(result, holdout)
 
     def test_feast_loads_when_available(self, local_config, sample_gold_df, tmp_path):
         feast_path = tmp_path / "feast"
@@ -204,7 +211,7 @@ class TestLoadScoringFeatures:
             result = loader.load_scoring_features(holdout)
         assert "original_unsubscribed" in result.columns
 
-    def test_feast_exception_falls_back(self, local_config, sample_gold_df, tmp_path):
+    def test_feast_exception_propagates(self, local_config, sample_gold_df, tmp_path):
         feast_path = tmp_path / "feast"
         feast_path.mkdir()
         (feast_path / "feature_store.yaml").write_text("project: test")
@@ -212,8 +219,8 @@ class TestLoadScoringFeatures:
         holdout = sample_gold_df[sample_gold_df["unsubscribed"].isna()].copy()
         with patch("customer_retention.stages.scoring.data_loader.FeatureStore", side_effect=Exception("boom")):
             loader = ScoringDataLoader(local_config)
-            result = loader.load_scoring_features(holdout)
-        assert len(result) == len(holdout)
+            with pytest.raises(Exception, match="boom"):
+                loader.load_scoring_features(holdout)
 
     def test_databricks_uses_direct(self, databricks_config, sample_gold_df):
         loader = ScoringDataLoader(databricks_config)
@@ -284,3 +291,109 @@ class TestPrepareFeatures:
         mock_executor.apply_all.side_effect = lambda df, *a, **kw: df
         result = loader.prepare_features(df, [], mock_executor, MagicMock())
         assert result["val"].isna().sum() == 0
+
+
+@pytest.fixture
+def local_pipeline_with_gold(tmp_path):
+    pipeline_dir = tmp_path / "my_pipeline"
+    pipeline_dir.mkdir()
+    (pipeline_dir / "config.py").write_text(textwrap.dedent("""\
+        ENCODINGS = [{"type": "label", "column": "cat_a"}]
+        SCALINGS = [{"type": "standard", "column": "num_b"}]
+    """))
+    gold_dir = pipeline_dir / "gold"
+    gold_dir.mkdir()
+    (gold_dir / "gold_features.py").write_text(textwrap.dedent("""\
+        from config import ENCODINGS, SCALINGS
+    """))
+    return pipeline_dir
+
+
+class TestLoadGoldModule:
+    def test_loads_gold_module_with_config_dependency(self, local_pipeline_with_gold):
+        config = ScoringConfig(
+            pipeline_name="my_pipeline",
+            composite_name="my_pipe__abc1234",
+            target_column="target",
+            entity_key="customer_id",
+            timestamp_column="event_timestamp",
+            recommendations_hash="",
+            experiments_dir=Path("/tmp/experiments"),
+            artifacts_path=Path("/tmp/artifacts"),
+            mlflow_tracking_uri="sqlite:///mlruns.db",
+            production_dir=Path("/tmp/production"),
+            pipeline_dir=local_pipeline_with_gold,
+        )
+        loader = ScoringDataLoader(config)
+        module = loader._load_gold_module()
+        assert module.ENCODINGS == [{"type": "label", "column": "cat_a"}]
+        assert module.SCALINGS == [{"type": "standard", "column": "num_b"}]
+
+    def test_missing_gold_features_raises(self, tmp_path):
+        pipeline_dir = tmp_path / "no_gold"
+        pipeline_dir.mkdir()
+        (pipeline_dir / "config.py").write_text("X = 1\n")
+        gold_dir = pipeline_dir / "gold"
+        gold_dir.mkdir()
+        config = ScoringConfig(
+            pipeline_name="test",
+            composite_name="test__abc1234",
+            target_column="target",
+            entity_key="customer_id",
+            timestamp_column="event_timestamp",
+            recommendations_hash="",
+            experiments_dir=Path("/tmp/experiments"),
+            artifacts_path=Path("/tmp/artifacts"),
+            mlflow_tracking_uri="sqlite:///mlruns.db",
+            production_dir=Path("/tmp/production"),
+            pipeline_dir=pipeline_dir,
+        )
+        loader = ScoringDataLoader(config)
+        with pytest.raises(FileNotFoundError, match="gold_features"):
+            loader._load_gold_module()
+
+    def test_missing_config_in_pipeline_dir_raises(self, tmp_path):
+        pipeline_dir = tmp_path / "no_config"
+        pipeline_dir.mkdir()
+        gold_dir = pipeline_dir / "gold"
+        gold_dir.mkdir()
+        (gold_dir / "gold_features.py").write_text("X = 1\n")
+        config = ScoringConfig(
+            pipeline_name="test",
+            composite_name="test__abc1234",
+            target_column="target",
+            entity_key="customer_id",
+            timestamp_column="event_timestamp",
+            recommendations_hash="",
+            experiments_dir=Path("/tmp/experiments"),
+            artifacts_path=Path("/tmp/artifacts"),
+            mlflow_tracking_uri="sqlite:///mlruns.db",
+            production_dir=Path("/tmp/production"),
+            pipeline_dir=pipeline_dir,
+        )
+        loader = ScoringDataLoader(config)
+        with pytest.raises(FileNotFoundError, match="config.py"):
+            loader._load_gold_module()
+
+    def test_databricks_raises_file_not_found(self, databricks_config):
+        loader = ScoringDataLoader(databricks_config)
+        with pytest.raises(FileNotFoundError, match="Databricks"):
+            loader._load_gold_module()
+
+    def test_empty_pipeline_dir_raises(self):
+        config = ScoringConfig(
+            pipeline_name="test",
+            composite_name="test__abc1234",
+            target_column="target",
+            entity_key="customer_id",
+            timestamp_column="event_timestamp",
+            recommendations_hash="",
+            experiments_dir=Path("/tmp/experiments"),
+            artifacts_path=Path("/tmp/artifacts"),
+            mlflow_tracking_uri="sqlite:///mlruns.db",
+            production_dir=Path("/tmp/production"),
+            pipeline_dir=Path(),
+        )
+        loader = ScoringDataLoader(config)
+        with pytest.raises(FileNotFoundError, match="config.py"):
+            loader._load_gold_module()
