@@ -10,18 +10,20 @@ default_install_hook_types: [pre-commit, pre-push]
 repos:
   # Ruff - fast Python linter and formatter
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.4
+    rev: v0.14.14
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
-      - id: ruff-format
+      # ruff-format intentionally excluded - compact code style per Coding_Practices.md
 
   # Standard pre-commit hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
       - id: trailing-whitespace
+        exclude: '\.(html|md|csv)$|^(docs/|LICENSE|\.vscode/)'
       - id: end-of-file-fixer
+        exclude: '\.(html|md|csv)$|^(docs/|LICENSE|\.vscode/)|__init__\.py$'
       - id: check-yaml
       - id: check-toml
       - id: check-added-large-files
@@ -53,7 +55,7 @@ repos:
       # Reminder about --no-verify
       - id: no-verify-warning
         name: coverage enforcement reminder
-        entry: python -c "print('\n⚠️  Remember: CI enforces 75% coverage. PRs bypassing pre-push hooks will be rejected.\n')"
+        entry: "python -c \"print('\\nRemember - CI enforces 75% coverage. PRs bypassing pre-push hooks will be rejected.\\n')\""
         language: system
         pass_filenames: false
         always_run: true
