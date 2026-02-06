@@ -35,10 +35,10 @@ def _cap_outlier(col, p):
     lower = p.get("lower", 0)
     upper = p.get("upper", 1000000)
     return (
-        f"df.withColumn(\"{col}\", "
-        f"F.when(F.col(\"{col}\") < {lower}, {lower})"
-        f".when(F.col(\"{col}\") > {upper}, {upper})"
-        f".otherwise(F.col(\"{col}\")))"
+        f'df.withColumn("{col}", '
+        f'F.when(F.col("{col}") < {lower}, {lower})'
+        f'.when(F.col("{col}") > {upper}, {upper})'
+        f'.otherwise(F.col("{col}")))'
     )
 
 
@@ -50,10 +50,10 @@ def _winsorize(col, p):
     lower = p.get("lower_bound", 0)
     upper = p.get("upper_bound", 1000000)
     return (
-        f"df.withColumn(\"{col}\", "
-        f"F.when(F.col(\"{col}\") < {lower}, {lower})"
-        f".when(F.col(\"{col}\") > {upper}, {upper})"
-        f".otherwise(F.col(\"{col}\")))"
+        f'df.withColumn("{col}", '
+        f'F.when(F.col("{col}") < {lower}, {lower})'
+        f'.when(F.col("{col}") > {upper}, {upper})'
+        f'.otherwise(F.col("{col}")))'
     )
 
 
@@ -66,15 +66,11 @@ def _sqrt_transform(col, _p):
 
 
 def _encode_one_hot(col, _p):
-    return (
-        f"_encode_one_hot(df, \"{col}\")"
-    )
+    return f'_encode_one_hot(df, "{col}")'
 
 
 def _scale_standard(col, _p):
-    return (
-        f"_scale_standard(df, \"{col}\")"
-    )
+    return f'_scale_standard(df, "{col}")'
 
 
 def _feature_select(col, _p):
@@ -85,8 +81,7 @@ def _derived_ratio(col, p):
     num = p.get("numerator", "")
     den = p.get("denominator", "")
     return (
-        f"df.withColumn(\"{col}\", "
-        f"F.col(\"{num}\") / F.when(F.col(\"{den}\") != 0, F.col(\"{den}\")).otherwise(F.lit(None)))"
+        f'df.withColumn("{col}", F.col("{num}") / F.when(F.col("{den}") != 0, F.col("{den}")).otherwise(F.lit(None)))'
     )
 
 
@@ -107,23 +102,18 @@ def _derived_composite(col, p):
 
 def _segment_aware_cap(col, p):
     n_segments = p.get("n_segments", 2)
-    return (
-        f"_segment_aware_cap(df, \"{col}\", n_segments={n_segments})"
-    )
+    return f'_segment_aware_cap(df, "{col}", n_segments={n_segments})'
 
 
 def _zero_inflation_handling(col, _p):
     return (
-        f"df.withColumn(\"{col}_is_zero\", F.when(F.col(\"{col}\") == 0, 1).otherwise(0))"
-        f".withColumn(\"{col}_log\", F.when(F.col(\"{col}\") > 0, F.log1p(F.col(\"{col}\"))).otherwise(0))"
+        f'df.withColumn("{col}_is_zero", F.when(F.col("{col}") == 0, 1).otherwise(0))'
+        f'.withColumn("{col}_log", F.when(F.col("{col}") > 0, F.log1p(F.col("{col}"))).otherwise(0))'
     )
 
 
 def _cap_then_log(col, _p):
-    return (
-        f"df.withColumn(\"{col}\", "
-        f"F.log1p(F.least(F.col(\"{col}\"), F.lit(F.col(\"{col}\").cast(\"double\")))))"
-    )
+    return f'df.withColumn("{col}", F.log1p(F.least(F.col("{col}"), F.lit(F.col("{col}").cast("double")))))'
 
 
 def _type_cast(col, p):
@@ -254,7 +244,6 @@ SOURCES = {
 {% endfor %}
 }
 """,
-
     "databricks_bronze.py.j2": """# Databricks notebook source
 # MAGIC %md
 # MAGIC # Bronze: {{ source }} (entity)
@@ -370,7 +359,6 @@ def run_bronze():
 result = run_bronze()
 display(result)
 """,
-
     "databricks_bronze_event.py.j2": """# Databricks notebook source
 # MAGIC %md
 # MAGIC # Bronze Event: {{ source }}
@@ -484,7 +472,6 @@ def run_bronze_event():
 result = run_bronze_event()
 display(result)
 """,
-
     "databricks_bronze_entity.py.j2": """# Databricks notebook source
 # MAGIC %md
 # MAGIC # Bronze Entity: {{ source }} (aggregated)
@@ -598,7 +585,6 @@ def run_bronze_entity():
 result = run_bronze_entity()
 display(result)
 """,
-
     "databricks_silver.py.j2": """# Databricks notebook source
 # MAGIC %md
 # MAGIC # Silver: Feature Set {{ config.composite_name or config.name }}
@@ -675,7 +661,6 @@ def run_silver():
 result = run_silver()
 display(result)
 """,
-
     "databricks_gold.py.j2": """# Databricks notebook source
 # MAGIC %md
 # MAGIC # Gold: Features {{ config.composite_name or config.name }}
@@ -807,7 +792,6 @@ def run_gold():
 result = run_gold()
 display(result)
 """,
-
     "databricks_training.py.j2": """# Databricks notebook source
 # MAGIC %md
 # MAGIC # Training: {{ config.name }}
@@ -891,7 +875,6 @@ def train_and_evaluate():
 best_name, best_auc = train_and_evaluate()
 print(f"Best model: {best_name} with AUC: {best_auc:.4f}")
 """,
-
     "databricks_runner.py.j2": """# Databricks notebook source
 # MAGIC %md
 # MAGIC # Pipeline Runner: {{ config.name }}
@@ -996,9 +979,13 @@ class DatabricksCodeRenderer:
     def render_bronze_event(self, source_name: str, config: BronzeEventConfig) -> str:
         return self._render("bronze_event", source=source_name, config=config)
 
-    def render_bronze_entity(self, source_name: str, config: BronzeEventConfig, bronze_input_name: str, raw_source_name: str = "") -> str:
+    def render_bronze_entity(
+        self, source_name: str, config: BronzeEventConfig, bronze_input_name: str, raw_source_name: str = ""
+    ) -> str:
         return self._render(
-            "bronze_entity", source=source_name, config=config,
+            "bronze_entity",
+            source=source_name,
+            config=config,
             bronze_input_name=bronze_input_name,
             raw_source=raw_source_name or source_name,
         )

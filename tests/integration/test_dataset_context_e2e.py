@@ -8,7 +8,6 @@ from customer_retention.analysis.auto_explorer.dataset_context import (
     mount_target_column,
 )
 
-
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 TINY_PROFILES = FIXTURES / "3set_tiny_customer_profiles.csv"
 TINY_TRANSACTIONS = FIXTURES / "3set_tiny_edi_transactions.csv"

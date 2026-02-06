@@ -23,7 +23,7 @@ VENV_NAME=".venv"
 VENV_PATH="$SCRIPT_DIR/$VENV_NAME"
 
 # Check if uv is installed
-echo -e "${BLUE}[1/5]${NC} Checking for uv..."
+echo -e "${BLUE}[1/6]${NC} Checking for uv..."
 if ! command -v uv &> /dev/null; then
     echo -e "${RED}Error: uv is not installed.${NC}"
     echo -e "${YELLOW}Please install uv first:${NC}"
@@ -35,7 +35,7 @@ echo -e "${GREEN}✓ uv is installed${NC}"
 echo ""
 
 # Check if virtual environment exists
-echo -e "${BLUE}[2/5]${NC} Checking virtual environment..."
+echo -e "${BLUE}[2/6]${NC} Checking virtual environment..."
 if [ -d "$VENV_PATH" ]; then
     echo -e "${YELLOW}Virtual environment '$VENV_NAME' already exists at: $VENV_PATH${NC}"
     read -p "Do you want to recreate it? (y/N): " -n 1 -r
@@ -56,13 +56,13 @@ fi
 echo ""
 
 # Activate virtual environment
-echo -e "${BLUE}[3/5]${NC} Activating virtual environment..."
+echo -e "${BLUE}[3/6]${NC} Activating virtual environment..."
 source "$VENV_PATH/bin/activate"
 echo -e "${GREEN}✓ Virtual environment activated${NC}"
 echo ""
 
 # Install dependencies and package (including SHAP based on architecture)
-echo -e "${BLUE}[4/5]${NC} Installing package with all dependencies..."
+echo -e "${BLUE}[4/6]${NC} Installing package with all dependencies..."
 ARCH=$(uname -m)
 if [ "$ARCH" = "arm64" ]; then
     echo -e "${BLUE}Detected Apple Silicon - installing with ml-shap${NC}"
@@ -77,8 +77,23 @@ fi
 echo -e "${GREEN}✓ Package and dependencies installed${NC}"
 echo ""
 
+# Install pre-commit hooks
+echo -e "${BLUE}[5/6]${NC} Installing pre-commit hooks..."
+if command -v pre-commit &> /dev/null; then
+    pre-commit install
+    pre-commit install --hook-type pre-push
+    echo -e "${GREEN}✓ pre-commit and pre-push hooks installed${NC}"
+else
+    echo -e "${YELLOW}Warning: pre-commit not found, installing via pip...${NC}"
+    pip install pre-commit
+    pre-commit install
+    pre-commit install --hook-type pre-push
+    echo -e "${GREEN}✓ pre-commit and pre-push hooks installed${NC}"
+fi
+echo ""
+
 # Verify pytest installation
-echo -e "${BLUE}[5/5]${NC} Verifying installation..."
+echo -e "${BLUE}[6/6]${NC} Verifying installation..."
 if ! python -m pytest --version &> /dev/null; then
     echo -e "${RED}Error: pytest not found after installation${NC}"
     exit 1

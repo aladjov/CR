@@ -29,31 +29,39 @@ def renderer():
 @pytest.fixture
 def sample_pipeline_config():
     source1 = SourceConfig(
-        name="customers", path="/data/customers.csv",
-        format="csv", entity_key="customer_id",
+        name="customers",
+        path="/data/customers.csv",
+        format="csv",
+        entity_key="customer_id",
     )
     source2 = SourceConfig(
-        name="orders", path="/data/orders.parquet",
-        format="parquet", entity_key="customer_id",
-        time_column="order_date", is_event_level=True,
+        name="orders",
+        path="/data/orders.parquet",
+        format="parquet",
+        entity_key="customer_id",
+        time_column="order_date",
+        is_event_level=True,
     )
     bronze1 = BronzeLayerConfig(
         source=source1,
         transformations=[
             TransformationStep(
                 type=PipelineTransformationType.IMPUTE_NULL,
-                column="age", parameters={"value": 0},
+                column="age",
+                parameters={"value": 0},
                 rationale="Fill nulls",
             ),
         ],
     )
     silver = SilverLayerConfig(
-        joins=[{
-            "left_key": "customer_id",
-            "right_key": "customer_id",
-            "right_source": "orders",
-            "how": "left",
-        }],
+        joins=[
+            {
+                "left_key": "customer_id",
+                "right_key": "customer_id",
+                "right_source": "orders",
+                "how": "left",
+            }
+        ],
         aggregations=[],
         derived_columns=[
             TransformationStep(
@@ -143,7 +151,9 @@ class TestRenderSparkStepCall:
     def test_impute_null(self):
         step = TransformationStep(
             type=PipelineTransformationType.IMPUTE_NULL,
-            column="age", parameters={"value": 0}, rationale="",
+            column="age",
+            parameters={"value": 0},
+            rationale="",
         )
         result = render_spark_step_call(step)
         assert "fillna" in result
@@ -152,7 +162,9 @@ class TestRenderSparkStepCall:
     def test_cap_outlier(self):
         step = TransformationStep(
             type=PipelineTransformationType.CAP_OUTLIER,
-            column="amount", parameters={"lower": 0, "upper": 10000}, rationale="",
+            column="amount",
+            parameters={"lower": 0, "upper": 10000},
+            rationale="",
         )
         result = render_spark_step_call(step)
         assert "F.when" in result
@@ -162,7 +174,9 @@ class TestRenderSparkStepCall:
     def test_drop_column(self):
         step = TransformationStep(
             type=PipelineTransformationType.DROP_COLUMN,
-            column="junk", parameters={}, rationale="",
+            column="junk",
+            parameters={},
+            rationale="",
         )
         result = render_spark_step_call(step)
         assert "drop" in result
@@ -182,7 +196,9 @@ class TestRenderSparkStepCall:
     def test_log_transform(self):
         step = TransformationStep(
             type=PipelineTransformationType.LOG_TRANSFORM,
-            column="revenue", parameters={}, rationale="",
+            column="revenue",
+            parameters={},
+            rationale="",
         )
         result = render_spark_step_call(step)
         assert "F.log1p" in result
@@ -191,7 +207,9 @@ class TestRenderSparkStepCall:
     def test_sqrt_transform(self):
         step = TransformationStep(
             type=PipelineTransformationType.SQRT_TRANSFORM,
-            column="count", parameters={}, rationale="",
+            column="count",
+            parameters={},
+            rationale="",
         )
         result = render_spark_step_call(step)
         assert "F.sqrt" in result
@@ -200,7 +218,9 @@ class TestRenderSparkStepCall:
     def test_encode_one_hot(self):
         step = TransformationStep(
             type=PipelineTransformationType.ENCODE,
-            column="category", parameters={"method": "one_hot"}, rationale="",
+            column="category",
+            parameters={"method": "one_hot"},
+            rationale="",
         )
         result = render_spark_step_call(step)
         assert "encode_one_hot" in result
@@ -209,7 +229,9 @@ class TestRenderSparkStepCall:
     def test_scale_standard(self):
         step = TransformationStep(
             type=PipelineTransformationType.SCALE,
-            column="amount", parameters={"method": "standard"}, rationale="",
+            column="amount",
+            parameters={"method": "standard"},
+            rationale="",
         )
         result = render_spark_step_call(step)
         assert "scale_standard" in result
@@ -218,7 +240,9 @@ class TestRenderSparkStepCall:
     def test_feature_select(self):
         step = TransformationStep(
             type=PipelineTransformationType.FEATURE_SELECT,
-            column="bad_col", parameters={}, rationale="",
+            column="bad_col",
+            parameters={},
+            rationale="",
         )
         result = render_spark_step_call(step)
         assert "drop" in result
@@ -251,7 +275,9 @@ class TestRenderSparkStepCall:
     def test_segment_aware_cap(self):
         step = TransformationStep(
             type=PipelineTransformationType.SEGMENT_AWARE_CAP,
-            column="revenue", parameters={"n_segments": 2}, rationale="",
+            column="revenue",
+            parameters={"n_segments": 2},
+            rationale="",
         )
         result = render_spark_step_call(step)
         assert "revenue" in result
@@ -259,7 +285,9 @@ class TestRenderSparkStepCall:
     def test_zero_inflation_handling(self):
         step = TransformationStep(
             type=PipelineTransformationType.ZERO_INFLATION_HANDLING,
-            column="transactions", parameters={}, rationale="",
+            column="transactions",
+            parameters={},
+            rationale="",
         )
         result = render_spark_step_call(step)
         assert "transactions" in result
@@ -267,7 +295,9 @@ class TestRenderSparkStepCall:
     def test_cap_then_log(self):
         step = TransformationStep(
             type=PipelineTransformationType.CAP_THEN_LOG,
-            column="revenue", parameters={}, rationale="",
+            column="revenue",
+            parameters={},
+            rationale="",
         )
         result = render_spark_step_call(step)
         assert "revenue" in result
@@ -400,21 +430,30 @@ class TestDatabricksRenderBronzeEntity:
     def test_render_bronze_entity_returns_string(self, renderer, sample_pipeline_config):
         event_config = sample_pipeline_config.bronze_event["orders"]
         result = renderer.render_bronze_entity(
-            "orders_aggregated", event_config, "orders_aggregated", "orders",
+            "orders_aggregated",
+            event_config,
+            "orders_aggregated",
+            "orders",
         )
         assert isinstance(result, str)
 
     def test_render_bronze_entity_is_valid_python(self, renderer, sample_pipeline_config):
         event_config = sample_pipeline_config.bronze_event["orders"]
         result = renderer.render_bronze_entity(
-            "orders_aggregated", event_config, "orders_aggregated", "orders",
+            "orders_aggregated",
+            event_config,
+            "orders_aggregated",
+            "orders",
         )
         ast.parse(result)
 
     def test_render_bronze_entity_uses_delta(self, renderer, sample_pipeline_config):
         event_config = sample_pipeline_config.bronze_event["orders"]
         result = renderer.render_bronze_entity(
-            "orders_aggregated", event_config, "orders_aggregated", "orders",
+            "orders_aggregated",
+            event_config,
+            "orders_aggregated",
+            "orders",
         )
         assert "delta" in result.lower() or "saveAsTable" in result or "save_as_table" in result
 
@@ -426,9 +465,12 @@ class TestDatabricksRenderBronzeEntity:
 
     def test_render_bronze_entity_with_lifecycle(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.csv",
-            format="csv", entity_key="customer_id",
-            time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
             source=source,
@@ -441,7 +483,10 @@ class TestDatabricksRenderBronzeEntity:
             post_shaping=[],
         )
         result = renderer.render_bronze_entity(
-            "orders_aggregated", config, "orders_aggregated", "orders",
+            "orders_aggregated",
+            config,
+            "orders_aggregated",
+            "orders",
         )
         assert "lifecycle" in result.lower() or "recency" in result.lower()
 
@@ -573,14 +618,21 @@ class TestDatabricksRenderRunner:
 class TestDatabricksConfigSourcePaths:
     def test_config_uses_raw_source_path_when_available(self, renderer):
         source = SourceConfig(
-            name="emails", path="emails.parquet",
-            format="parquet", entity_key="customer_id",
+            name="emails",
+            path="emails.parquet",
+            format="parquet",
+            entity_key="customer_id",
             raw_source_path="/dbfs/data/emails.parquet",
         )
         config = PipelineConfig(
-            name="test", target_column="churn", sources=[source],
-            bronze={}, silver=SilverLayerConfig(), gold=GoldLayerConfig(),
-            output_dir=".", composite_name="emai__abc1234",
+            name="test",
+            target_column="churn",
+            sources=[source],
+            bronze={},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(),
+            output_dir=".",
+            composite_name="emai__abc1234",
         )
         result = renderer.render_config(config)
         assert "/dbfs/data/emails.parquet" in result
@@ -588,13 +640,20 @@ class TestDatabricksConfigSourcePaths:
 
     def test_config_falls_back_to_path_when_no_raw(self, renderer):
         source = SourceConfig(
-            name="emails", path="/data/emails.csv",
-            format="csv", entity_key="customer_id",
+            name="emails",
+            path="/data/emails.csv",
+            format="csv",
+            entity_key="customer_id",
         )
         config = PipelineConfig(
-            name="test", target_column="churn", sources=[source],
-            bronze={}, silver=SilverLayerConfig(), gold=GoldLayerConfig(),
-            output_dir=".", composite_name="emai__abc1234",
+            name="test",
+            target_column="churn",
+            sources=[source],
+            bronze={},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(),
+            output_dir=".",
+            composite_name="emai__abc1234",
         )
         result = renderer.render_config(config)
         assert "/data/emails.csv" in result
@@ -603,15 +662,21 @@ class TestDatabricksConfigSourcePaths:
 class TestDatabricksLoadSourceFormat:
     def test_bronze_event_load_source_uses_dynamic_format(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.parquet",
-            format="parquet", entity_key="customer_id",
-            time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.parquet",
+            format="parquet",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id",
-            time_column="order_date", deduplicate=False,
+            source=source,
+            entity_column="customer_id",
+            time_column="order_date",
+            deduplicate=False,
             aggregation=AggregationWindowConfig(
-                windows=["30d"], value_columns=["amount"],
+                windows=["30d"],
+                value_columns=["amount"],
                 agg_funcs=["sum", "count"],
             ),
         )
@@ -620,8 +685,10 @@ class TestDatabricksLoadSourceFormat:
 
     def test_bronze_load_source_uses_dynamic_format(self, renderer):
         source = SourceConfig(
-            name="customers", path="/data/customers.parquet",
-            format="parquet", entity_key="customer_id",
+            name="customers",
+            path="/data/customers.parquet",
+            format="parquet",
+            entity_key="customer_id",
         )
         config = BronzeLayerConfig(source=source)
         result = renderer.render_bronze("customers", config)
@@ -629,13 +696,18 @@ class TestDatabricksLoadSourceFormat:
 
     def test_bronze_event_load_source_still_handles_csv(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.csv",
-            format="csv", entity_key="customer_id",
-            time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id",
-            time_column="order_date", deduplicate=False,
+            source=source,
+            entity_column="customer_id",
+            time_column="order_date",
+            deduplicate=False,
         )
         result = renderer.render_bronze_event("orders", config)
         assert "inferSchema" in result
@@ -649,7 +721,9 @@ class TestSparkProvenanceBlock:
         steps = [
             TransformationStep(
                 type=PipelineTransformationType.IMPUTE_NULL,
-                column="age", parameters={"value": 0}, rationale="Fill nulls",
+                column="age",
+                parameters={"value": 0},
+                rationale="Fill nulls",
             ),
         ]
         result = spark_provenance_block(steps)
@@ -661,7 +735,9 @@ class TestSparkProvenanceBlock:
         steps = [
             TransformationStep(
                 type=PipelineTransformationType.IMPUTE_NULL,
-                column="age", parameters={"value": 0}, rationale="Fill nulls",
+                column="age",
+                parameters={"value": 0},
+                rationale="Fill nulls",
                 source_notebook="05_custom_analysis",
             ),
         ]
@@ -673,11 +749,15 @@ class TestSparkProvenanceBlock:
         steps = [
             TransformationStep(
                 type=PipelineTransformationType.IMPUTE_NULL,
-                column="age", parameters={"value": 0}, rationale="Fill age",
+                column="age",
+                parameters={"value": 0},
+                rationale="Fill age",
             ),
             TransformationStep(
                 type=PipelineTransformationType.IMPUTE_NULL,
-                column="income", parameters={"value": 0}, rationale="Fill income",
+                column="income",
+                parameters={"value": 0},
+                rationale="Fill income",
             ),
         ]
         result = spark_provenance_block(steps)
@@ -687,7 +767,8 @@ class TestSparkProvenanceBlock:
         steps = [
             TransformationStep(
                 type=PipelineTransformationType.CAP_OUTLIER,
-                column="revenue", parameters={"lower": 0, "upper": 10000},
+                column="revenue",
+                parameters={"lower": 0, "upper": 10000},
                 rationale="Cap outliers",
             ),
         ]
@@ -700,7 +781,9 @@ class TestSparkProvenanceBlock:
         steps = [
             TransformationStep(
                 type=PipelineTransformationType.LOG_TRANSFORM,
-                column="revenue", parameters={}, rationale="Log transform",
+                column="revenue",
+                parameters={},
+                rationale="Log transform",
             ),
         ]
         result = spark_provenance_block(steps)
@@ -711,23 +794,30 @@ class TestSparkProvenanceBlock:
 class TestBronzeStepGrouping:
     def test_bronze_groups_transformations_into_functions(self, renderer):
         source = SourceConfig(
-            name="customers", path="/data/customers.csv",
-            format="csv", entity_key="customer_id",
+            name="customers",
+            path="/data/customers.csv",
+            format="csv",
+            entity_key="customer_id",
         )
         config = BronzeLayerConfig(
             source=source,
             transformations=[
                 TransformationStep(
                     type=PipelineTransformationType.IMPUTE_NULL,
-                    column="age", parameters={"value": 0}, rationale="Fill age",
+                    column="age",
+                    parameters={"value": 0},
+                    rationale="Fill age",
                 ),
                 TransformationStep(
                     type=PipelineTransformationType.IMPUTE_NULL,
-                    column="income", parameters={"value": 0}, rationale="Fill income",
+                    column="income",
+                    parameters={"value": 0},
+                    rationale="Fill income",
                 ),
                 TransformationStep(
                     type=PipelineTransformationType.CAP_OUTLIER,
-                    column="revenue", parameters={"lower": 0, "upper": 10000},
+                    column="revenue",
+                    parameters={"lower": 0, "upper": 10000},
                     rationale="Cap revenue",
                 ),
             ],
@@ -740,15 +830,19 @@ class TestBronzeStepGrouping:
 
     def test_bronze_grouped_has_provenance_docstring(self, renderer):
         source = SourceConfig(
-            name="customers", path="/data/customers.csv",
-            format="csv", entity_key="customer_id",
+            name="customers",
+            path="/data/customers.csv",
+            format="csv",
+            entity_key="customer_id",
         )
         config = BronzeLayerConfig(
             source=source,
             transformations=[
                 TransformationStep(
                     type=PipelineTransformationType.IMPUTE_NULL,
-                    column="age", parameters={"value": 0}, rationale="Fill age",
+                    column="age",
+                    parameters={"value": 0},
+                    rationale="Fill age",
                 ),
             ],
         )
@@ -758,19 +852,24 @@ class TestBronzeStepGrouping:
 
     def test_bronze_grouped_is_valid_python(self, renderer):
         source = SourceConfig(
-            name="customers", path="/data/customers.csv",
-            format="csv", entity_key="customer_id",
+            name="customers",
+            path="/data/customers.csv",
+            format="csv",
+            entity_key="customer_id",
         )
         config = BronzeLayerConfig(
             source=source,
             transformations=[
                 TransformationStep(
                     type=PipelineTransformationType.IMPUTE_NULL,
-                    column="age", parameters={"value": 0}, rationale="Fill age",
+                    column="age",
+                    parameters={"value": 0},
+                    rationale="Fill age",
                 ),
                 TransformationStep(
                     type=PipelineTransformationType.CAP_OUTLIER,
-                    column="revenue", parameters={"lower": 0, "upper": 10000},
+                    column="revenue",
+                    parameters={"lower": 0, "upper": 10000},
                     rationale="Cap revenue",
                 ),
             ],
@@ -780,8 +879,10 @@ class TestBronzeStepGrouping:
 
     def test_bronze_no_transformations_still_valid(self, renderer):
         source = SourceConfig(
-            name="customers", path="/data/customers.csv",
-            format="csv", entity_key="customer_id",
+            name="customers",
+            path="/data/customers.csv",
+            format="csv",
+            entity_key="customer_id",
         )
         config = BronzeLayerConfig(source=source, transformations=[])
         result = renderer.render_bronze("customers", config)
@@ -792,22 +893,28 @@ class TestBronzeStepGrouping:
 class TestBronzeEventStepGrouping:
     def test_bronze_event_groups_pre_shaping(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.csv",
-            format="csv", entity_key="customer_id",
-            time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id",
+            source=source,
+            entity_column="customer_id",
             time_column="order_date",
             pre_shaping=[
                 TransformationStep(
                     type=PipelineTransformationType.CAP_OUTLIER,
-                    column="amount", parameters={"lower": 0, "upper": 10000},
+                    column="amount",
+                    parameters={"lower": 0, "upper": 10000},
                     rationale="Cap outliers",
                 ),
                 TransformationStep(
                     type=PipelineTransformationType.IMPUTE_NULL,
-                    column="quantity", parameters={"value": 1},
+                    column="quantity",
+                    parameters={"value": 1},
                     rationale="Fill nulls",
                 ),
             ],
@@ -819,22 +926,28 @@ class TestBronzeEventStepGrouping:
 
     def test_bronze_event_grouped_is_valid_python(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.csv",
-            format="csv", entity_key="customer_id",
-            time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id",
+            source=source,
+            entity_column="customer_id",
             time_column="order_date",
             pre_shaping=[
                 TransformationStep(
                     type=PipelineTransformationType.CAP_OUTLIER,
-                    column="amount", parameters={"lower": 0, "upper": 10000},
+                    column="amount",
+                    parameters={"lower": 0, "upper": 10000},
                     rationale="Cap outliers",
                 ),
             ],
             aggregation=AggregationWindowConfig(
-                windows=["30d"], value_columns=["amount"],
+                windows=["30d"],
+                value_columns=["amount"],
                 agg_funcs=["sum", "count"],
             ),
         )
@@ -843,17 +956,22 @@ class TestBronzeEventStepGrouping:
 
     def test_bronze_event_pre_shaping_has_provenance(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.csv",
-            format="csv", entity_key="customer_id",
-            time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id",
+            source=source,
+            entity_column="customer_id",
             time_column="order_date",
             pre_shaping=[
                 TransformationStep(
                     type=PipelineTransformationType.CAP_OUTLIER,
-                    column="amount", parameters={"lower": 0, "upper": 10000},
+                    column="amount",
+                    parameters={"lower": 0, "upper": 10000},
                     rationale="Cap outliers",
                 ),
             ],
@@ -866,51 +984,68 @@ class TestBronzeEventStepGrouping:
 class TestBronzeEntityStepGrouping:
     def test_bronze_entity_groups_post_shaping(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.csv",
-            format="csv", entity_key="customer_id",
-            time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id",
+            source=source,
+            entity_column="customer_id",
             time_column="order_date",
             post_shaping=[
                 TransformationStep(
                     type=PipelineTransformationType.IMPUTE_NULL,
-                    column="total", parameters={"value": 0},
+                    column="total",
+                    parameters={"value": 0},
                     rationale="Fill total",
                 ),
                 TransformationStep(
                     type=PipelineTransformationType.LOG_TRANSFORM,
-                    column="total", parameters={},
+                    column="total",
+                    parameters={},
                     rationale="Log transform total",
                 ),
             ],
         )
         result = renderer.render_bronze_entity(
-            "orders_aggregated", config, "orders", "orders",
+            "orders_aggregated",
+            config,
+            "orders",
+            "orders",
         )
         assert "def impute_remaining_nulls(df):" in result
         assert "def apply_log_transforms(df):" in result
 
     def test_bronze_entity_grouped_is_valid_python(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.csv",
-            format="csv", entity_key="customer_id",
-            time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id",
+            source=source,
+            entity_column="customer_id",
             time_column="order_date",
             post_shaping=[
                 TransformationStep(
                     type=PipelineTransformationType.IMPUTE_NULL,
-                    column="total", parameters={"value": 0},
+                    column="total",
+                    parameters={"value": 0},
                     rationale="Fill total",
                 ),
             ],
         )
         result = renderer.render_bronze_entity(
-            "orders_aggregated", config, "orders", "orders",
+            "orders_aggregated",
+            config,
+            "orders",
+            "orders",
         )
         ast.parse(result)
 
@@ -955,39 +1090,50 @@ class TestGoldStepGrouping:
 
     def test_gold_no_transformations_still_valid(self, renderer):
         source = SourceConfig(
-            name="customers", path="/data/customers.csv",
-            format="csv", entity_key="customer_id",
+            name="customers",
+            path="/data/customers.csv",
+            format="csv",
+            entity_key="customer_id",
         )
         config = PipelineConfig(
-            name="test", target_column="churn",
-            sources=[source], bronze={},
+            name="test",
+            target_column="churn",
+            sources=[source],
+            bronze={},
             silver=SilverLayerConfig(),
             gold=GoldLayerConfig(),
-            output_dir=".", composite_name="cust__abc1234",
+            output_dir=".",
+            composite_name="cust__abc1234",
         )
         result = renderer.render_gold(config)
         ast.parse(result)
 
     def test_gold_with_source_notebook_override(self, renderer):
         source = SourceConfig(
-            name="customers", path="/data/customers.csv",
-            format="csv", entity_key="customer_id",
+            name="customers",
+            path="/data/customers.csv",
+            format="csv",
+            entity_key="customer_id",
         )
         config = PipelineConfig(
-            name="test", target_column="churn",
-            sources=[source], bronze={},
+            name="test",
+            target_column="churn",
+            sources=[source],
+            bronze={},
             silver=SilverLayerConfig(),
             gold=GoldLayerConfig(
                 encodings=[
                     TransformationStep(
                         type=PipelineTransformationType.ENCODE,
-                        column="category", parameters={"method": "one_hot"},
+                        column="category",
+                        parameters={"method": "one_hot"},
                         rationale="Encode category",
                         source_notebook="06_custom_report",
                     ),
                 ],
             ),
-            output_dir=".", composite_name="cust__abc1234",
+            output_dir=".",
+            composite_name="cust__abc1234",
         )
         result = renderer.render_gold(config)
         assert "Custom Report" in result

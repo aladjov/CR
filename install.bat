@@ -55,7 +55,7 @@ echo [+] Virtual environment activated
 echo.
 
 REM Install dependencies and package
-echo [4/5] Installing package with all dependencies...
+echo [4/6] Installing package with all dependencies...
 uv pip install -e ".[dev]"
 if %ERRORLEVEL% NEQ 0 (
     echo Error: Failed to install package and dependencies
@@ -64,8 +64,20 @@ if %ERRORLEVEL% NEQ 0 (
 echo [+] Package and dependencies installed
 echo.
 
+REM Install pre-commit hooks
+echo [5/6] Installing pre-commit hooks...
+where pre-commit >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    echo Warning: pre-commit not found, installing via pip...
+    pip install pre-commit
+)
+pre-commit install
+pre-commit install --hook-type pre-push
+echo [+] pre-commit and pre-push hooks installed
+echo.
+
 REM Verify installation
-echo [5/5] Verifying installation...
+echo [6/6] Verifying installation...
 python -m pytest --version >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
     echo Error: pytest not found after installation

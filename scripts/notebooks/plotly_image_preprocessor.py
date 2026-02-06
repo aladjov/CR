@@ -5,6 +5,7 @@ Includes:
 - PlotlyToImagePreprocessor: Convert Plotly figures to static PNG images (imported from src/)
 - WarningFilterPreprocessor: Remove warning/stderr outputs from cells
 """
+
 import re
 
 from nbconvert.preprocessors import Preprocessor
@@ -20,13 +21,13 @@ class WarningFilterPreprocessor(Preprocessor):
 
     # Patterns to filter out
     WARNING_PATTERNS = [
-        r'FutureWarning:',
-        r'UserWarning:',
-        r'DeprecationWarning:',
-        r'RuntimeWarning:',
-        r'warnings\.warn\(',
-        r'/.*\.py:\d+:.*Warning',
-        r'^\s*/.*site-packages/.*\.py:\d+',
+        r"FutureWarning:",
+        r"UserWarning:",
+        r"DeprecationWarning:",
+        r"RuntimeWarning:",
+        r"warnings\.warn\(",
+        r"/.*\.py:\d+:.*Warning",
+        r"^\s*/.*site-packages/.*\.py:\d+",
     ]
 
     def preprocess_cell(self, cell, resources, index):
@@ -53,8 +54,6 @@ class WarningFilterPreprocessor(Preprocessor):
         if output_type != "stream":
             return True
 
-        # Check stream name - stderr often contains warnings
-        name = getattr(output, "name", None) or output.get("name", "")
         text = getattr(output, "text", None) or output.get("text", "")
 
         if isinstance(text, list):
@@ -92,6 +91,7 @@ def convert_notebook_plotly_to_images(notebook_path: str, output_path: str = Non
 
 if __name__ == "__main__":
     import sys
+
     if len(sys.argv) < 2:
         print("Usage: python plotly_image_preprocessor.py <notebook.ipynb> [output.ipynb]")
         sys.exit(1)
