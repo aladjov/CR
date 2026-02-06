@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from customer_retention.core.compat import DataFrame, Timestamp, is_numeric_dtype, notna, to_datetime
+from customer_retention.core.compat import DataFrame, Timestamp, as_tz_naive, is_numeric_dtype, notna, to_datetime
 from customer_retention.core.components.enums import Severity
 
 if TYPE_CHECKING:
@@ -199,8 +199,8 @@ class LeakageGate:
             if date_col not in df.columns:
                 continue
             try:
-                dates = self._parse_datetime(df[date_col])
-                if (dates > self.reference_date).any():
+                dates = as_tz_naive(self._parse_datetime(df[date_col]))
+                if (dates > as_tz_naive(self.reference_date)).any():
                     issues.append(LeakageIssue(
                         check_id="LK004",
                         severity=Severity.CRITICAL,
@@ -259,8 +259,8 @@ class LeakageGate:
             return issues
 
         try:
-            feature_ts = self._parse_datetime(df[self.feature_timestamp_column])
-            label_ts = self._parse_datetime(df[self.label_timestamp_column])
+            feature_ts = as_tz_naive(self._parse_datetime(df[self.feature_timestamp_column]))
+            label_ts = as_tz_naive(self._parse_datetime(df[self.label_timestamp_column]))
             violations = df[feature_ts > label_ts]
             if len(violations) > 0:
                 issues.append(LeakageIssue(
@@ -284,7 +284,7 @@ class LeakageGate:
             return issues
 
         try:
-            feature_ts = self._parse_datetime(df[self.feature_timestamp_column])
+            feature_ts = as_tz_naive(self._parse_datetime(df[self.feature_timestamp_column]))
         except Exception:
             return issues
 
@@ -295,7 +295,7 @@ class LeakageGate:
 
         for col in datetime_feature_cols:
             try:
-                col_dates = self._parse_datetime(df[col])
+                col_dates = as_tz_naive(self._parse_datetime(df[col]))
                 if col_dates.isna().all():
                     continue
 

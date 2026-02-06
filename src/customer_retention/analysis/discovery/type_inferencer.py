@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Union
 
 import pandas as pd
 
-from customer_retention.core.compat import ops
+from customer_retention.core.compat import is_datetime64_any_dtype, is_integer_dtype, is_numeric_dtype, ops
 from customer_retention.core.config.column_config import ColumnType
 
 
@@ -78,7 +78,7 @@ class TypeInferencer:
             return ColumnInference(column_name, ColumnType.DATETIME, InferenceConfidence.HIGH, evidence)
         if self._is_binary(series, evidence):
             return ColumnInference(column_name, ColumnType.BINARY, InferenceConfidence.HIGH, evidence)
-        if pd.api.types.is_numeric_dtype(series):
+        if is_numeric_dtype(series):
             return self._infer_numeric(series, column_name, evidence)
         return self._infer_categorical(series, column_name, evidence)
 
@@ -87,7 +87,7 @@ class TypeInferencer:
             if series.nunique() == len(series):
                 evidence.append("unique values, id pattern in name")
                 return True
-        if series.nunique() == len(series) and pd.api.types.is_integer_dtype(series):
+        if series.nunique() == len(series) and is_integer_dtype(series):
             evidence.append("unique integer values")
             return True
         return False
@@ -100,7 +100,7 @@ class TypeInferencer:
         return False
 
     def _is_datetime(self, series: pd.Series, evidence: List[str]) -> bool:
-        if pd.api.types.is_datetime64_any_dtype(series):
+        if is_datetime64_any_dtype(series):
             evidence.append("datetime dtype")
             return True
         if series.dtype == object:

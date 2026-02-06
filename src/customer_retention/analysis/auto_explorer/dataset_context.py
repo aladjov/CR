@@ -48,7 +48,9 @@ class DatasetContext:
             data["cutoff_date"] = naive.isoformat()
         if self.join_dataset_name is not None:
             data["join_dataset_name"] = self.join_dataset_name
-        Path(path).write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
 
     @classmethod
     def load(cls, path: str | Path) -> DatasetContext:

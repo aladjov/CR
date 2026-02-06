@@ -8,7 +8,7 @@ including duplicate detection, date logic validation, and value range validation
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype, pd, to_datetime
+from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype, is_numeric_dtype, pd, to_datetime
 from customer_retention.core.components.enums import Severity
 
 
@@ -344,7 +344,7 @@ class DataValidator:
             if total_values == 0:
                 continue
 
-            if not pd.api.types.is_numeric_dtype(series):
+            if not is_numeric_dtype(series):
                 continue
 
             rule_type = rule.get("type", "range")

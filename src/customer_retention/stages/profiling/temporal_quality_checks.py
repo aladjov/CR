@@ -4,6 +4,7 @@ from typing import Optional
 from customer_retention.core.compat import (
     DataFrame,
     Timestamp,
+    as_tz_naive,
     ensure_datetime_column,
     safe_to_datetime,
     safe_to_list,
@@ -118,8 +119,8 @@ class FutureDateCheck(TemporalQualityCheck):
         if len(df) == 0:
             return self._pass_result("No data to check")
 
-        time_col = safe_to_datetime(df[self.time_column])
-        future_mask = time_col > self.reference_date
+        time_col = as_tz_naive(safe_to_datetime(df[self.time_column]))
+        future_mask = time_col > as_tz_naive(self.reference_date)
         future_count = future_mask.sum()
 
         if future_count > 0:

@@ -28,6 +28,8 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
+from customer_retention.core.compat import as_tz_naive, is_datetime64_any_dtype
+
 
 def _safe_index_timedeltas(row_count: int) -> pd.TimedeltaIndex:
     if row_count <= pd.Timedelta.max.days:
@@ -36,9 +38,7 @@ def _safe_index_timedeltas(row_count: int) -> pd.TimedeltaIndex:
 
 
 def _strip_tz(series: pd.Series) -> pd.Series:
-    if hasattr(series.dtype, "tz") and series.dtype.tz is not None:
-        return series.dt.tz_localize(None)
-    return series
+    return as_tz_naive(series)
 
 
 class TimestampStrategy(Enum):
@@ -158,7 +158,7 @@ class TimestampManager:
         return df
 
     def _parse_datetime_column(self, series: pd.Series, col_name: str) -> pd.Series:
-        if pd.api.types.is_datetime64_any_dtype(series):
+        if is_datetime64_any_dtype(series):
             return series
         parsed = pd.to_datetime(series, format="mixed", errors="coerce")
         invalid_count = parsed.isna().sum() - series.isna().sum()
@@ -237,7 +237,7 @@ class TimestampManager:
         if "feature_timestamp" not in df.columns or "label_timestamp" not in df.columns:
             raise ValueError("Missing timestamp columns for point-in-time validation")
 
-        violations = df[df["feature_timestamp"] > df["label_timestamp"]]
+        violations = df[as_tz_naive(df["feature_timestamp"]) > as_tz_naive(df["label_timestamp"])]
         if len(violations) > 0:
             raise ValueError(
                 f"Point-in-time violation: {len(violations)} rows have "

@@ -184,11 +184,11 @@ class TestFutureDateExclusionInDiscovery:
     def engine(self):
         return TimestampDiscoveryEngine()
 
-    def test_future_column_excluded_from_candidates(self, engine):
+    def test_majority_future_column_excluded_from_candidates(self, engine):
         df = pd.DataFrame({
             "customer_id": ["A", "B", "C"],
             "contract_start": pd.to_datetime(["2022-10-01", "2024-08-01", "2025-01-01"]),
-            "contract_end": pd.to_datetime(["2023-10-01", "2025-08-01", "2027-01-01"]),
+            "contract_end": pd.to_datetime(["2026-10-01", "2027-08-01", "2028-01-01"]),
             "churn_end": pd.to_datetime(["2023-05-01", None, None]),
         })
 
@@ -197,11 +197,11 @@ class TestFutureDateExclusionInDiscovery:
         candidate_names = [c.column_name for c in result.all_candidates]
         assert "contract_end" not in candidate_names
 
-    def test_feature_timestamp_not_from_future_column(self, engine):
+    def test_feature_timestamp_not_from_majority_future_column(self, engine):
         df = pd.DataFrame({
             "customer_id": ["A", "B", "C"],
             "contract_start": pd.to_datetime(["2022-10-01", "2024-08-01", "2025-01-01"]),
-            "contract_end": pd.to_datetime(["2023-10-01", "2025-08-01", "2027-01-01"]),
+            "contract_end": pd.to_datetime(["2026-10-01", "2027-08-01", "2028-01-01"]),
             "churn_end": pd.to_datetime(["2023-05-01", None, None]),
         })
 
@@ -214,7 +214,7 @@ class TestFutureDateExclusionInDiscovery:
         df = pd.DataFrame({
             "customer_id": ["A", "B", "C"],
             "contract_start": pd.to_datetime(["2022-10-01", "2024-08-01", "2025-01-01"]),
-            "contract_end": pd.to_datetime(["2023-10-01", "2025-08-01", "2027-01-01"]),
+            "contract_end": pd.to_datetime(["2026-10-01", "2027-08-01", "2028-01-01"]),
             "churn_end": pd.to_datetime(["2023-05-01", None, None]),
         })
 
@@ -223,6 +223,18 @@ class TestFutureDateExclusionInDiscovery:
         candidate_names = [c.column_name for c in result.all_candidates]
         assert "contract_start" in candidate_names
         assert "churn_end" in candidate_names
+
+    def test_column_with_few_future_dates_not_excluded(self, engine):
+        dates = pd.date_range("2022-01-01", periods=90, freq="15D").tolist()
+        df = pd.DataFrame({
+            "customer_id": [f"C{i}" for i in range(90)],
+            "event_timestamp": dates,
+        })
+
+        result = engine.discover(df)
+
+        candidate_names = [c.column_name for c in result.all_candidates]
+        assert "event_timestamp" in candidate_names
 
 
 class TestLabelTimestampPatterns:
@@ -306,3 +318,103 @@ class TestLabelTimestampPatterns:
         result = engine.discover(df)
         label_candidates = [c for c in result.all_candidates if c.role == TimestampRole.LABEL_TIMESTAMP]
         assert any(c.column_name == column_name for c in label_candidates)
+
+
+class TestEventTimePatterns:
+    @pytest.fixture
+    def engine(self):
+        return TimestampDiscoveryEngine()
+
+    @pytest.mark.parametrize("column_name", [
+        "event_timestamp", "event_time",
+        "transaction_timestamp", "transaction_time", "transaction_date",
+        "occurred_at", "recorded_at", "log_timestamp",
+    ])
+    def test_event_time_role_assigned(self, engine, column_name):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            column_name: pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+        })
+        result = engine.discover(df)
+        event_candidates = [c for c in result.all_candidates if c.role in (
+            TimestampRole.EVENT_TIME, TimestampRole.FEATURE_TIMESTAMP,
+        )]
+        assert any(c.column_name == column_name for c in event_candidates)
+
+    def test_event_time_promoted_to_feature_when_no_explicit_feature(self, engine):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "event_timestamp": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "value": [100, 200, 300],
+        })
+        result = engine.discover(df)
+        assert result.feature_timestamp is not None
+        assert result.feature_timestamp.column_name == "event_timestamp"
+
+    def test_event_time_not_promoted_when_feature_exists(self, engine):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "last_activity_date": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "event_timestamp": pd.to_datetime(["2023-06-01", "2023-07-01", "2023-08-01"]),
+        })
+        result = engine.discover(df)
+        assert result.feature_timestamp.column_name == "last_activity_date"
+        event_candidates = [c for c in result.all_candidates if c.column_name == "event_timestamp"]
+        assert len(event_candidates) == 1
+        assert event_candidates[0].role == TimestampRole.EVENT_TIME
+
+    def test_event_time_confidence_higher_than_unknown(self, engine):
+        df = pd.DataFrame({
+            "event_timestamp": pd.to_datetime(["2024-01-01", "2024-02-01"]),
+            "some_date": pd.to_datetime(["2024-01-01", "2024-02-01"]),
+        })
+        result = engine.discover(df)
+        event_cand = next(c for c in result.all_candidates if c.column_name == "event_timestamp")
+        unknown_cand = [c for c in result.all_candidates if c.column_name == "some_date"]
+        if unknown_cand and unknown_cand[0].role == TimestampRole.UNKNOWN:
+            assert event_cand.confidence > unknown_cand[0].confidence
+
+
+class TestEdiTransactionsScenario:
+    def test_iso_string_event_timestamp_detected(self):
+        engine = TimestampDiscoveryEngine()
+        df = pd.DataFrame({
+            "transaction_id": [f"T{i}" for i in range(20)],
+            "customer_id": ["C001"] * 20,
+            "event_timestamp": [f"2024-{m:02d}-15T10:30:00.000Z" for m in range(1, 13)]
+            + [f"2025-{m:02d}-15T10:30:00.000Z" for m in range(1, 9)],
+            "status": ["success"] * 20,
+            "amount": [100.0] * 20,
+        })
+        result = engine.discover(df)
+        assert result.feature_timestamp is not None
+        assert result.feature_timestamp.column_name == "event_timestamp"
+        assert not result.requires_synthetic
+
+    def test_event_timestamp_with_some_future_dates_still_detected(self):
+        engine = TimestampDiscoveryEngine()
+        past = [f"2023-{m:02d}-15T10:30:00.000Z" for m in range(1, 13)]
+        past += [f"2024-{m:02d}-15T10:30:00.000Z" for m in range(1, 13)]
+        future = ["2027-06-15T10:30:00.000Z", "2027-09-15T10:30:00.000Z"]
+        df = pd.DataFrame({
+            "transaction_id": [f"T{i}" for i in range(26)],
+            "customer_id": ["C001"] * 26,
+            "event_timestamp": past + future,
+            "amount": [100.0] * 26,
+        })
+        result = engine.discover(df)
+        assert result.feature_timestamp is not None
+        assert result.feature_timestamp.column_name == "event_timestamp"
+
+    def test_scenario_detector_partial_for_event_data_without_target(self):
+        from customer_retention.stages.temporal.scenario_detector import ScenarioDetector
+        detector = ScenarioDetector()
+        df = pd.DataFrame({
+            "transaction_id": [f"T{i}" for i in range(10)],
+            "customer_id": ["C001"] * 10,
+            "event_timestamp": [f"2024-{m:02d}-15T10:30:00.000Z" for m in range(1, 11)],
+            "amount": [100.0] * 10,
+        })
+        scenario, config, _ = detector.detect(df, None)
+        assert scenario == "partial"
+        assert config.feature_timestamp_column == "event_timestamp"

@@ -459,6 +459,63 @@ class TestEventOrderCheckEdgeCases:
         assert result.passed
 
 
+class TestTzAwareDatetimeComparisons:
+    """Tz-aware data must not raise TypeError on comparison with tz-naive scalars."""
+
+    def test_future_date_check_with_utc_timestamps(self):
+        dates = pd.to_datetime(["2023-01-01", "2023-06-15"]).tz_localize("UTC")
+        df = pd.DataFrame({"id": [1, 2], "date": dates})
+        check = FutureDateCheck(time_column="date")
+        result = check.run(df)
+        assert result.passed
+        assert result.future_count == 0
+
+    def test_future_date_check_with_utc_and_reference_date(self):
+        dates = pd.to_datetime(["2023-01-01", "2023-12-31"]).tz_localize("UTC")
+        df = pd.DataFrame({"id": [1, 2], "date": dates})
+        check = FutureDateCheck(time_column="date", reference_date=pd.Timestamp("2023-06-01"))
+        result = check.run(df)
+        assert not result.passed
+        assert result.future_count == 1
+
+    def test_future_date_check_with_nonutc_timezone(self):
+        dates = pd.to_datetime(["2023-01-01", "2023-06-15"]).tz_localize("US/Eastern")
+        df = pd.DataFrame({"id": [1, 2], "date": dates})
+        check = FutureDateCheck(time_column="date")
+        result = check.run(df)
+        assert result.passed
+
+    def test_temporal_gap_check_with_utc_timestamps(self):
+        dates = pd.date_range("2023-01-01", periods=10, freq="D", tz="UTC")
+        df = pd.DataFrame({"id": range(10), "date": dates})
+        check = TemporalGapCheck(time_column="date", expected_frequency="D", max_gap_multiple=2)
+        result = check.run(df)
+        assert result.passed
+
+    def test_event_order_check_with_utc_timestamps(self):
+        dates = pd.to_datetime(["2023-01-01", "2023-01-02", "2023-01-03"]).tz_localize("UTC")
+        df = pd.DataFrame({"entity": ["A", "A", "A"], "date": dates})
+        check = EventOrderCheck(entity_column="entity", time_column="date")
+        result = check.run(df)
+        assert result.passed
+
+    def test_all_checks_with_utc_timestamps(self):
+        dates = pd.date_range("2023-01-01", periods=10, freq="D", tz="UTC")
+        df = pd.DataFrame({
+            "customer_id": [f"C{i % 3:03d}" for i in range(10)],
+            "date": dates,
+        })
+        checks = [
+            DuplicateEventCheck(entity_column="customer_id", time_column="date"),
+            TemporalGapCheck(time_column="date", expected_frequency="D"),
+            FutureDateCheck(time_column="date"),
+            EventOrderCheck(entity_column="customer_id", time_column="date"),
+        ]
+        results = [check.run(df) for check in checks]
+        reporter = TemporalQualityReporter(results, len(df))
+        assert reporter.grade in ["A", "B", "C", "D"]
+
+
 class TestPrintResultsRecommendationBranch:
     """Test the elif r.recommendation branch in print_results."""
 

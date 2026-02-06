@@ -26,6 +26,8 @@ from typing import Any, Optional
 
 import pandas as pd
 
+from customer_retention.core.compat import is_datetime64_any_dtype, is_numeric_dtype
+
 
 class TimestampRole(Enum):
     """Role classification for timestamp columns.
@@ -140,7 +142,7 @@ class DatetimeOrderAnalyzer:
         median_dates = {}
         for col in datetime_cols:
             series = df[col].dropna()
-            if not pd.api.types.is_datetime64_any_dtype(series):
+            if not is_datetime64_any_dtype(series):
                 series = pd.to_datetime(series, format="mixed", errors="coerce")
             median_dates[col] = series.dropna().median()
         return sorted(datetime_cols, key=lambda c: median_dates[c])
@@ -173,14 +175,14 @@ class DatetimeOrderAnalyzer:
         return result
 
     def _ensure_datetime_column(self, df: pd.DataFrame, col: str) -> pd.Series:
-        if pd.api.types.is_datetime64_any_dtype(df[col]):
+        if is_datetime64_any_dtype(df[col]):
             return df[col]
         return pd.to_datetime(df[col], format="mixed", errors="coerce")
 
     def _get_datetime_columns(self, df: pd.DataFrame) -> list[str]:
         result = []
         for col in df.columns:
-            if pd.api.types.is_datetime64_any_dtype(df[col]):
+            if is_datetime64_any_dtype(df[col]):
                 result.append(col)
             elif df[col].dtype == object:
                 sample = df[col].dropna().head(100)
@@ -196,20 +198,20 @@ class DatetimeOrderAnalyzer:
 
     def _has_future_dates(self, df: pd.DataFrame, col: str) -> bool:
         series = df[col].dropna()
-        if not pd.api.types.is_datetime64_any_dtype(series):
+        if not is_datetime64_any_dtype(series):
             series = pd.to_datetime(series, format="mixed", errors="coerce")
         series = series.dropna()
         if series.empty:
             return False
         if hasattr(series.dtype, "tz") and series.dtype.tz is not None:
             series = series.dt.tz_localize(None)
-        return series.max() > datetime.now()
+        return series.median() > datetime.now()
 
     def _select_chronologically_latest(self, df: pd.DataFrame, cols: list[str]) -> str:
         max_dates = {}
         for col in cols:
             series = df[col].dropna()
-            if not pd.api.types.is_datetime64_any_dtype(series):
+            if not is_datetime64_any_dtype(series):
                 series = pd.to_datetime(series, format="mixed", errors="coerce")
             max_dates[col] = series.dropna().max()
         return max(cols, key=lambda c: max_dates[c])
@@ -254,6 +256,13 @@ class TimestampDiscoveryEngine:
         r"signup_date", r"registration_date", r"created_at", r"create_date",
         r"join_date", r"account_created", r"first_order", r"first_purchase",
         r"onboarding_date", r"start_date", r"activation_date",
+    ]
+
+    EVENT_TIME_PATTERNS = [
+        r"event_timestamp", r"event_time",
+        r"transaction_timestamp", r"transaction_time", r"transaction_date",
+        r"occurred_at", r"happened_at", r"recorded_at",
+        r"log_time", r"log_timestamp", r"log_date",
     ]
 
     TENURE_PATTERNS = [r"tenure", r"account_age", r"customer_age", r"months_active"]
@@ -302,7 +311,7 @@ class TimestampDiscoveryEngine:
         ]
 
     def _analyze_column_for_datetime(self, df: pd.DataFrame, col: str) -> Optional[TimestampCandidate]:
-        if pd.api.types.is_datetime64_any_dtype(df[col]):
+        if is_datetime64_any_dtype(df[col]):
             return self._create_datetime_candidate(df, col)
 
         if df[col].dtype == object:
@@ -312,7 +321,7 @@ class TimestampDiscoveryEngine:
                 if parsed.notna().mean() > 0.8:
                     return self._create_datetime_candidate(df, col, needs_parsing=True)
 
-        if pd.api.types.is_numeric_dtype(df[col]) and self._looks_like_unix_timestamp(df[col]):
+        if is_numeric_dtype(df[col]) and self._looks_like_unix_timestamp(df[col]):
             return self._create_datetime_candidate(df, col, is_unix=True)
 
         return None
@@ -360,10 +369,10 @@ class TimestampDiscoveryEngine:
         for col in df.columns:
             col_lower = col.lower()
             if any(re.search(p, col_lower) for p in self.TENURE_PATTERNS):
-                if pd.api.types.is_numeric_dtype(df[col]):
+                if is_numeric_dtype(df[col]):
                     derivable.append(self._create_tenure_derived_candidate(df, col))
             if any(re.search(p, col_lower) for p in self.CONTRACT_PATTERNS):
-                if pd.api.types.is_numeric_dtype(df[col]):
+                if is_numeric_dtype(df[col]):
                     start_col = self._find_related_start_date(df, col)
                     if start_col:
                         derivable.append(self._create_contract_derived_candidate(df, col, start_col))
@@ -402,7 +411,7 @@ class TimestampDiscoveryEngine:
     def _find_related_start_date(self, df: pd.DataFrame, length_col: str) -> Optional[str]:
         for col in df.columns:
             if any(p in col.lower() for p in ["start", "begin", "signup", "created"]):
-                if pd.api.types.is_datetime64_any_dtype(df[col]):
+                if is_datetime64_any_dtype(df[col]):
                     return col
                 try:
                     pd.to_datetime(df[col].dropna().head(10), format="mixed")
@@ -422,15 +431,18 @@ class TimestampDiscoveryEngine:
         for pattern in self.ENTITY_CREATED_PATTERNS:
             if re.search(pattern, col_lower):
                 return TimestampRole.ENTITY_CREATED
+        for pattern in self.EVENT_TIME_PATTERNS:
+            if re.search(pattern, col_lower):
+                return TimestampRole.EVENT_TIME
         if re.search(r"update|modif", col_lower):
             return TimestampRole.ENTITY_UPDATED
         return TimestampRole.UNKNOWN
 
     def _calculate_confidence(self, col_name: str, role: TimestampRole, coverage: float) -> float:
         base = 0.5
-        if role in [TimestampRole.FEATURE_TIMESTAMP, TimestampRole.LABEL_TIMESTAMP]:
+        if role in (TimestampRole.FEATURE_TIMESTAMP, TimestampRole.LABEL_TIMESTAMP):
             base += 0.3
-        elif role == TimestampRole.ENTITY_CREATED:
+        elif role in (TimestampRole.ENTITY_CREATED, TimestampRole.EVENT_TIME):
             base += 0.2
         return min(base + coverage * 0.2, 1.0)
 
@@ -438,7 +450,7 @@ class TimestampDiscoveryEngine:
         has_feature_ts = any(c.role == TimestampRole.FEATURE_TIMESTAMP for c in candidates)
         if not has_feature_ts:
             for c in candidates:
-                if c.role == TimestampRole.ENTITY_UPDATED:
+                if c.role in (TimestampRole.EVENT_TIME, TimestampRole.ENTITY_UPDATED):
                     c.role = TimestampRole.FEATURE_TIMESTAMP
                     c.notes += " (promoted to feature_timestamp)"
                     break

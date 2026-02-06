@@ -127,6 +127,10 @@ def is_float_dtype(arr_or_dtype: Any) -> bool:
     return _pandas.api.types.is_float_dtype(_extract_dtype(arr_or_dtype))
 
 
+def is_extension_array_dtype(arr_or_dtype: Any) -> bool:
+    return _pandas.api.types.is_extension_array_dtype(_extract_dtype(arr_or_dtype))
+
+
 def _infer_epoch_unit(value: int) -> str:
     """Infer the epoch unit from a representative integer timestamp value.
 
@@ -177,6 +181,16 @@ def ensure_datetime_column(df: _pandas.DataFrame, column: str) -> _pandas.DataFr
     if not _pandas.api.types.is_datetime64_any_dtype(df[column]):
         df[column] = safe_to_datetime(df[column])
     return df
+
+
+def as_tz_naive(value: Any) -> Any:
+    if isinstance(value, _pandas.Series):
+        if hasattr(value.dtype, "tz") and value.dtype.tz is not None:
+            return value.dt.tz_localize(None)
+        return value
+    if hasattr(value, "tzinfo") and value.tzinfo is not None:
+        return value.replace(tzinfo=None)
+    return value
 
 
 def safe_to_list(obj: Any) -> list:
@@ -232,6 +246,7 @@ __all__ = [
     "is_categorical_dtype",
     "is_integer_dtype",
     "is_float_dtype",
+    "is_extension_array_dtype",
     "_extract_dtype",
     "get_spark_session",
     "set_spark_config",
@@ -242,6 +257,7 @@ __all__ = [
     "get_display_function",
     "get_dbutils",
     "safe_memory_usage_bytes",
+    "as_tz_naive",
     "safe_to_list",
     "safe_to_datetime",
     "ensure_datetime_column",

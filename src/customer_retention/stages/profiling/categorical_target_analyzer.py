@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import chi2_contingency
 
-from customer_retention.core.compat import DataFrame
+from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype
 
 CARDINALITY_THRESHOLD = 0.5
 MIN_CATEGORIES_FOR_ANALYSIS = 2
@@ -38,7 +38,7 @@ class CategoricalAnalysisResult:
 def _validate_categorical_column(col: str, df: DataFrame, entity_column: str, target_column: str, n_entities: int, cardinality_threshold: float) -> tuple:
     if col in [entity_column, target_column]:
         return False, "entity or target column"
-    if pd.api.types.is_datetime64_any_dtype(df[col]):
+    if is_datetime64_any_dtype(df[col]):
         return False, "datetime column"
     n_unique = df[col].nunique()
     ratio = n_unique / n_entities

@@ -403,6 +403,49 @@ class TestFutureDateInFeaturesLK010:
         assert len(lk010_issues) >= 2
 
 
+class TestTzAwareLeakageDetection:
+    def test_temporal_leakage_with_utc_reference_date(self):
+        df = pd.DataFrame({
+            "future_date": pd.to_datetime(["2024-08-01", "2024-08-15"]).tz_localize("UTC"),
+            "target": [0, 1],
+        })
+        gate = LeakageGate(
+            target_column="target",
+            reference_date=pd.Timestamp("2024-07-01"),
+            date_columns=["future_date"],
+        )
+        result = gate.run(df)
+        assert not result.passed
+
+    def test_temporal_leakage_utc_dates_naive_reference(self):
+        df = pd.DataFrame({
+            "event_date": pd.to_datetime(["2024-08-01", "2024-06-15"]).tz_localize("UTC"),
+            "target": [0, 1],
+        })
+        gate = LeakageGate(
+            target_column="target",
+            reference_date=pd.Timestamp("2024-07-01"),
+            date_columns=["event_date"],
+        )
+        result = gate.run(df)
+        assert not result.passed
+
+    def test_pit_violations_utc_timestamps(self):
+        df = pd.DataFrame({
+            "feature_timestamp": pd.to_datetime(["2024-06-01", "2024-04-01"]).tz_localize("UTC"),
+            "label_timestamp": pd.to_datetime(["2024-04-01", "2024-04-01"]).tz_localize("UTC"),
+            "target": [0, 1],
+        })
+        gate = LeakageGate(
+            target_column="target",
+            feature_timestamp_column="feature_timestamp",
+            label_timestamp_column="label_timestamp",
+        )
+        result = gate.run(df)
+        lk009 = [i for i in result.critical_issues if i.check_id == "LK009"]
+        assert len(lk009) == 1
+
+
 class TestAntiPatternsIntegration:
     """Integration tests for anti-patterns identified in the leakage-safe refactoring plan."""
 

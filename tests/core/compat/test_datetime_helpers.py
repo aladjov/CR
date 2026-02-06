@@ -6,6 +6,7 @@ import pytest
 
 from customer_retention.core.compat import (
     _infer_epoch_unit,
+    as_tz_naive,
     ensure_datetime_column,
     safe_to_datetime,
 )
@@ -129,6 +130,49 @@ class TestEnsureDatetimeColumn:
         ensure_datetime_column(df, "ts")
         assert df["val"].iloc[0] == 42
         assert df["name"].iloc[0] == "test"
+
+
+class TestAsTzNaive:
+    def test_naive_scalar_unchanged(self):
+        ts = pd.Timestamp("2023-06-15")
+        assert as_tz_naive(ts) == ts
+
+    def test_aware_scalar_stripped(self):
+        ts = pd.Timestamp("2023-06-15", tz="UTC")
+        result = as_tz_naive(ts)
+        assert result.tzinfo is None
+        assert result == pd.Timestamp("2023-06-15")
+
+    def test_datetime_scalar_naive_unchanged(self):
+        dt = datetime(2023, 6, 15)
+        assert as_tz_naive(dt) == dt
+
+    def test_datetime_scalar_aware_stripped(self):
+        from zoneinfo import ZoneInfo
+        dt = datetime(2023, 6, 15, tzinfo=ZoneInfo("UTC"))
+        result = as_tz_naive(dt)
+        assert result.tzinfo is None
+
+    def test_naive_series_unchanged(self):
+        series = pd.Series(pd.to_datetime(["2023-01-01", "2023-06-15"]))
+        result = as_tz_naive(series)
+        pd.testing.assert_series_equal(result, series)
+
+    def test_aware_series_stripped(self):
+        series = pd.Series(pd.to_datetime(["2023-01-01", "2023-06-15"]).tz_localize("UTC"))
+        result = as_tz_naive(series)
+        assert not hasattr(result.dtype, "tz") or result.dtype.tz is None
+        assert result.iloc[0] == pd.Timestamp("2023-01-01")
+
+    def test_non_datetime_passthrough(self):
+        assert as_tz_naive(42) == 42
+        assert as_tz_naive("hello") == "hello"
+
+    def test_aware_series_comparison_with_naive_scalar(self):
+        series = pd.Series(pd.to_datetime(["2023-01-01", "2025-01-01"]).tz_localize("UTC"))
+        cutoff = pd.Timestamp("2024-01-01")
+        mask = as_tz_naive(series) > as_tz_naive(cutoff)
+        assert mask.sum() == 1
 
 
 class TestTimeSeriesProfilerWithEpochIntegers:

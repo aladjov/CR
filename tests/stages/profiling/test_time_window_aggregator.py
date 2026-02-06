@@ -894,6 +894,66 @@ class TestNotebook01dLeakagePrevention:
                 assert corr < 0.99, f"{col} has suspiciously high correlation: {corr}"
 
 
+class TestTzAwareTimeWindowAggregation:
+    """Tz-aware timestamps must not cause TypeError in aggregation."""
+
+    def test_aggregate_with_utc_timestamps(self):
+        ref_date = pd.Timestamp("2023-12-31", tz="UTC")
+        df = pd.DataFrame({
+            "customer_id": ["C001"] * 3 + ["C002"] * 2,
+            "event_date": pd.to_datetime([
+                "2023-12-20", "2023-12-25", "2023-12-30",
+                "2023-12-10", "2023-12-28",
+            ]).tz_localize("UTC"),
+            "amount": [100, 150, 200, 300, 250],
+        })
+        agg = TimeWindowAggregator("customer_id", "event_date")
+        result = agg.aggregate(
+            df, windows=["30d"], value_columns=["amount"], agg_funcs=["sum"],
+            reference_date=ref_date, include_event_count=True,
+        )
+        assert len(result) == 2
+        assert "amount_sum_30d" in result.columns
+
+    def test_aggregate_with_utc_data_naive_reference(self):
+        df = pd.DataFrame({
+            "customer_id": ["C001"] * 3,
+            "event_date": pd.to_datetime(["2023-12-20", "2023-12-25", "2023-12-30"]).tz_localize("UTC"),
+            "amount": [100, 150, 200],
+        })
+        agg = TimeWindowAggregator("customer_id", "event_date")
+        result = agg.aggregate(
+            df, windows=["30d"], value_columns=["amount"], agg_funcs=["sum"],
+            reference_date=pd.Timestamp("2023-12-31"),
+        )
+        assert len(result) == 1
+
+    def test_aggregate_no_reference_date_with_utc_data(self):
+        df = pd.DataFrame({
+            "customer_id": ["C001"] * 3,
+            "event_date": pd.to_datetime(["2023-12-20", "2023-12-25", "2023-12-30"]).tz_localize("UTC"),
+            "amount": [100, 150, 200],
+        })
+        agg = TimeWindowAggregator("customer_id", "event_date")
+        result = agg.aggregate(df, windows=["30d"], value_columns=["amount"], agg_funcs=["sum"])
+        assert len(result) == 1
+
+    def test_recency_tenure_with_utc_timestamps(self):
+        ref_date = pd.Timestamp("2023-12-31", tz="UTC")
+        df = pd.DataFrame({
+            "customer_id": ["C001"] * 3,
+            "event_date": pd.to_datetime(["2023-12-20", "2023-12-25", "2023-12-30"]).tz_localize("UTC"),
+            "amount": [100, 150, 200],
+        })
+        agg = TimeWindowAggregator("customer_id", "event_date")
+        result = agg.aggregate(
+            df, windows=["30d"], reference_date=ref_date,
+            include_recency=True, include_tenure=True,
+        )
+        assert result.iloc[0]["days_since_last_event"] == 1
+        assert result.iloc[0]["days_since_first_event"] == 11
+
+
 class TestAggregatedDataFrameParquetSerialization:
     """Regression tests for DataFrame attrs serialization to parquet.
 

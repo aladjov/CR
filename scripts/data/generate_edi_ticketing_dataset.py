@@ -384,7 +384,7 @@ def generate(
                     "status": status[j],
                     "error_code": err_code[j],
                     "amount": float(amounts[j]),
-                    "currency": str(curr),
+                    "currency": str(curr[j]),
                     "file_size_kb": int(file_kb[j]),
                     "processing_time_ms": int(proc_ms[j]),
                 }

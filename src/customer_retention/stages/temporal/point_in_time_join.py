@@ -24,6 +24,8 @@ from typing import Any
 
 import pandas as pd
 
+from customer_retention.core.compat import as_tz_naive, is_datetime64_any_dtype
+
 
 class PointInTimeJoiner:
     """Utility class for point-in-time correct feature joins.
@@ -49,7 +51,7 @@ class PointInTimeJoiner:
 
         feature_df = feature_df.rename(columns={feature_timestamp_col: "_feature_ts"})
         merged = base_df.merge(feature_df, on=entity_key, how="left")
-        valid_mask = merged["_feature_ts"] <= merged[base_timestamp_col]
+        valid_mask = as_tz_naive(merged["_feature_ts"]) <= as_tz_naive(merged[base_timestamp_col])
 
         merged = (
             merged[valid_mask]
@@ -67,8 +69,8 @@ class PointInTimeJoiner:
     ) -> dict[str, Any]:
         issues: dict[str, Any] = {}
         for col in check_columns:
-            if pd.api.types.is_datetime64_any_dtype(df[col]):
-                future_rows = df[df[col] > df[reference_timestamp_col]]
+            if is_datetime64_any_dtype(df[col]):
+                future_rows = df[as_tz_naive(df[col]) > as_tz_naive(df[reference_timestamp_col])]
                 if len(future_rows) > 0:
                     issues[col] = {
                         "violation_count": len(future_rows),
@@ -107,7 +109,7 @@ class PointInTimeJoiner:
         report = {"valid": True, "issues": []}
 
         if "feature_timestamp" in df.columns and "label_timestamp" in df.columns:
-            violations = df[df["feature_timestamp"] > df["label_timestamp"]]
+            violations = df[as_tz_naive(df["feature_timestamp"]) > as_tz_naive(df["label_timestamp"])]
             if len(violations) > 0:
                 report["valid"] = False
                 report["issues"].append({
@@ -116,12 +118,12 @@ class PointInTimeJoiner:
                     "message": f"{len(violations)} rows have feature_timestamp > label_timestamp"
                 })
 
-        datetime_cols = df.select_dtypes(include=["datetime64"]).columns
+        datetime_cols = [c for c in df.columns if is_datetime64_any_dtype(df[c])]
         for col in datetime_cols:
             if col in ["feature_timestamp", "label_timestamp"]:
                 continue
             if "feature_timestamp" in df.columns:
-                future = df[df[col] > df["feature_timestamp"]]
+                future = df[as_tz_naive(df[col]) > as_tz_naive(df["feature_timestamp"])]
                 if len(future) > 0:
                     report["valid"] = False
                     report["issues"].append({

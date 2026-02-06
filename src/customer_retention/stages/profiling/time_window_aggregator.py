@@ -10,6 +10,7 @@ from customer_retention.core.compat import (
     DataFrame,
     Timedelta,
     Timestamp,
+    as_tz_naive,
     ensure_datetime_column,
     is_numeric_dtype,
     native_pd,
@@ -89,6 +90,7 @@ class TimeWindowAggregator:
 
         df = df.copy()
         ensure_datetime_column(df, self.time_column)
+        df[self.time_column] = as_tz_naive(df[self.time_column])
         reference_date = self._validate_reference_date(df, reference_date)
         parsed_windows = [TimeWindow.from_string(w) for w in (windows or ["30d"])]
 
@@ -181,6 +183,9 @@ class TimeWindowAggregator:
     def _validate_reference_date(self, df: DataFrame, reference_date: Optional[Timestamp]) -> Timestamp:
         data_min, data_max = df[self.time_column].min(), df[self.time_column].max()
         current_date = Timestamp.now()
+
+        if reference_date is not None:
+            reference_date = as_tz_naive(reference_date)
 
         if reference_date is None:
             warnings.warn(

@@ -330,3 +330,42 @@ class TestDataQualityGate:
 
         assert result.timestamp is not None
         assert len(result.timestamp) > 0
+
+    def test_check_temporal_validity_utc_timestamps_no_future(self):
+        dates = pd.to_datetime(["2023-01-01", "2023-06-15"]).tz_localize("UTC")
+        df = pd.DataFrame({"created": dates})
+        columns = [ColumnConfig(name="created", column_type=ColumnType.DATETIME)]
+        source = DataSourceConfig(
+            name="test", source_type=SourceType.BATCH_FILE, primary_key="id",
+            path="/data/test.csv", file_format=FileFormat.CSV, columns=columns,
+        )
+        config = PipelineConfig(project_name="test", data_sources=[source])
+        gate = DataQualityGate()
+        issues = gate.check_temporal_validity(df, config)
+        future_issues = [i for i in issues if i.code == "DQ030"]
+        assert len(future_issues) == 0
+
+    def test_check_temporal_validity_utc_timestamps_with_future(self):
+        dates = pd.to_datetime(["2023-01-01", "2030-01-01"]).tz_localize("UTC")
+        df = pd.DataFrame({"created": dates})
+        columns = [ColumnConfig(name="created", column_type=ColumnType.DATETIME)]
+        source = DataSourceConfig(
+            name="test", source_type=SourceType.BATCH_FILE, primary_key="id",
+            path="/data/test.csv", file_format=FileFormat.CSV, columns=columns,
+        )
+        config = PipelineConfig(project_name="test", data_sources=[source])
+        gate = DataQualityGate()
+        issues = gate.check_temporal_validity(df, config)
+        future_issues = [i for i in issues if i.code == "DQ030"]
+        assert len(future_issues) == 1
+
+    def test_check_temporal_logic_utc_timestamps(self):
+        df = pd.DataFrame({
+            "created": pd.to_datetime(["2023-06-01", "2023-01-01"]).tz_localize("UTC"),
+            "firstorder": pd.to_datetime(["2023-01-01", "2023-01-02"]).tz_localize("UTC"),
+        })
+        config = PipelineConfig(project_name="test", data_sources=[])
+        gate = DataQualityGate()
+        issues = gate.check_temporal_logic(df, config)
+        assert len(issues) == 1
+        assert issues[0].code == "DQ031"

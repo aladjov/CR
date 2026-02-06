@@ -166,3 +166,43 @@ class TestValidateTemporalIntegrity(TestPointInTimeJoiner):
 
         future_issues = [i for i in report["issues"] if i["type"] == "future_data"]
         assert len(future_issues) >= 1
+
+
+class TestTzAwarePointInTimeJoin(TestPointInTimeJoiner):
+    def test_join_features_utc_timestamps(self):
+        base = pd.DataFrame({
+            "entity_id": ["A", "B"],
+            "feature_timestamp": pd.to_datetime(["2024-06-01", "2024-05-01"]).tz_localize("UTC"),
+            "val": [1, 2],
+        })
+        features = pd.DataFrame({
+            "entity_id": ["A", "A", "B"],
+            "feature_timestamp": pd.to_datetime(["2024-01-01", "2024-05-01", "2024-03-01"]).tz_localize("UTC"),
+            "ext": [10, 20, 30],
+        })
+        result = PointInTimeJoiner.join_features(base, features, "entity_id")
+        assert len(result) == 2
+
+    def test_validate_no_future_data_utc(self):
+        df = pd.DataFrame({
+            "feature_timestamp": pd.to_datetime(["2024-03-01", "2024-03-01"]).tz_localize("UTC"),
+            "event_date": pd.to_datetime(["2024-04-01", "2024-02-01"]).tz_localize("UTC"),
+        })
+        issues = PointInTimeJoiner.validate_no_future_data(df, "feature_timestamp", ["event_date"])
+        assert "event_date" in issues
+
+    def test_validate_temporal_integrity_utc(self):
+        df = pd.DataFrame({
+            "feature_timestamp": pd.to_datetime(["2024-06-01", "2024-02-01"]).tz_localize("UTC"),
+            "label_timestamp": pd.to_datetime(["2024-04-01", "2024-05-01"]).tz_localize("UTC"),
+        })
+        report = PointInTimeJoiner.validate_temporal_integrity(df)
+        assert report["valid"] is False
+
+    def test_validate_temporal_integrity_mixed_tz(self):
+        df = pd.DataFrame({
+            "feature_timestamp": pd.to_datetime(["2024-01-01", "2024-02-01"]).tz_localize("UTC"),
+            "label_timestamp": pd.to_datetime(["2024-04-01", "2024-05-01"]),
+        })
+        report = PointInTimeJoiner.validate_temporal_integrity(df)
+        assert report["valid"] is True

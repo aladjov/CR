@@ -176,10 +176,10 @@ class TestFutureDateExclusion:
     def analyzer(self):
         return DatetimeOrderAnalyzer()
 
-    def test_excludes_column_with_future_dates(self, analyzer):
+    def test_excludes_column_with_majority_future_dates(self, analyzer):
         df = pd.DataFrame({
             "contract_start": pd.to_datetime(["2022-01-01", "2023-01-01", "2024-01-01"]),
-            "contract_end": pd.to_datetime(["2023-01-01", "2024-01-01", "2028-01-01"]),
+            "contract_end": pd.to_datetime(["2026-06-01", "2027-06-01", "2028-01-01"]),
             "churn_end": pd.to_datetime(["2022-06-01", "2023-06-01", "2024-06-01"]),
         })
 
@@ -199,10 +199,10 @@ class TestFutureDateExclusion:
 
         assert len(ordering) == 2
 
-    def test_derive_last_action_date_skips_future_column(self, analyzer):
+    def test_derive_last_action_date_skips_majority_future_column(self, analyzer):
         df = pd.DataFrame({
             "contract_start": pd.to_datetime(["2022-10-01", "2023-03-01", "2024-08-01"]),
-            "contract_end": pd.to_datetime(["2023-10-01", "2024-03-01", "2027-08-01"]),
+            "contract_end": pd.to_datetime(["2026-10-01", "2027-03-01", "2028-08-01"]),
             "churn_end": pd.to_datetime(["2023-05-01", None, None]),
         })
 
@@ -212,16 +212,24 @@ class TestFutureDateExclusion:
         assert result.iloc[0] == pd.Timestamp("2023-05-01")
         assert result.iloc[2] == pd.Timestamp("2024-08-01")
 
-    def test_excludes_tz_aware_future_column(self, analyzer):
+    def test_excludes_tz_aware_majority_future_column(self, analyzer):
         df = pd.DataFrame({
             "observed": pd.to_datetime(["2023-01-01", "2024-01-01"]).tz_localize("UTC"),
-            "scheduled": pd.to_datetime(["2024-01-01", "2028-01-01"]).tz_localize("UTC"),
+            "scheduled": pd.to_datetime(["2027-01-01", "2028-01-01"]).tz_localize("UTC"),
         })
 
         ordering = analyzer.analyze_datetime_ordering(df)
 
         assert "scheduled" not in ordering
         assert "observed" in ordering
+
+    def test_column_with_few_future_dates_not_excluded(self, analyzer):
+        dates = pd.date_range("2022-01-01", periods=50, freq="30D")
+        df = pd.DataFrame({"event_timestamp": dates})
+
+        ordering = analyzer.analyze_datetime_ordering(df)
+
+        assert "event_timestamp" in ordering
 
     def test_all_columns_future_returns_empty(self, analyzer):
         df = pd.DataFrame({

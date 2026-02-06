@@ -6,6 +6,7 @@ import numpy as np
 
 from customer_retention.core.compat import (
     Timestamp,
+    as_tz_naive,
     is_bool_dtype,
     is_datetime64_any_dtype,
     pd,
@@ -322,8 +323,7 @@ class DatetimeProfiler(ColumnProfiler):
                 except Exception:
                     return {"datetime_metrics": None}
 
-        if hasattr(clean_series.dtype, "tz") and clean_series.dtype.tz is not None:
-            clean_series = clean_series.dt.tz_localize(None)
+        clean_series = as_tz_naive(clean_series)
 
         min_date = clean_series.min()
         max_date = clean_series.max()

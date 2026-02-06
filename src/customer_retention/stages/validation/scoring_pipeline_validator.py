@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from customer_retention.core.compat import is_numeric_dtype
 from customer_retention.core.utils.leakage import get_valid_feature_columns
 
 
@@ -338,7 +339,7 @@ class ScoringPipelineValidator:
                 continue
             train_col = train_aligned[col]
             score_col = score_aligned[col]
-            if pd.api.types.is_numeric_dtype(train_col):
+            if is_numeric_dtype(train_col):
                 mismatch = self._compare_numeric_column(train_col, score_col, col)
             else:
                 mismatch = self._compare_categorical_column(train_col, score_col, col)

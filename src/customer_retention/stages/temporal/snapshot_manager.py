@@ -33,6 +33,8 @@ from typing import Any, Optional
 
 import pandas as pd
 
+from customer_retention.core.compat import is_datetime64_any_dtype, is_extension_array_dtype
+
 
 def _strip_tz_series(s: pd.Series) -> pd.Series:
     if hasattr(s.dtype, "tz") and s.dtype.tz is not None:
@@ -235,10 +237,10 @@ class SnapshotManager:
     def _compute_hash(self, df: pd.DataFrame, cutoff_date: Optional[datetime] = None) -> str:
         df_stable = df.reset_index(drop=True).copy()
         for col in df_stable.columns:
-            if pd.api.types.is_datetime64_any_dtype(df_stable[col]):
+            if is_datetime64_any_dtype(df_stable[col]):
                 df_stable[col] = df_stable[col].dt.floor("us").astype(str)
         for col in df_stable.columns:
-            if pd.api.types.is_extension_array_dtype(df_stable[col]):
+            if is_extension_array_dtype(df_stable[col]):
                 df_stable[col] = df_stable[col].astype(object)
         df_stable = df_stable[sorted(df_stable.columns)]
 

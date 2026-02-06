@@ -6,6 +6,7 @@ from customer_retention.core.compat import (
     is_bool_dtype,
     is_categorical_dtype,
     is_datetime64_any_dtype,
+    is_extension_array_dtype,
     is_float_dtype,
     is_integer_dtype,
     is_numeric_dtype,
@@ -60,6 +61,10 @@ class TestExtractDtypePreventsPySparkIterCrash:
     def test_is_categorical_dtype_with_series(self):
         assert is_categorical_dtype(pd.Categorical(["a", "b"])) is True
         assert is_categorical_dtype(pd.Series([1, 2])) is False
+
+    def test_is_extension_array_dtype_with_nullable_int(self):
+        assert is_extension_array_dtype(pd.array([1, 2, None], dtype="Int64")) is True
+        assert is_extension_array_dtype(pd.Series([1, 2, 3])) is False
 
     def test_dtype_wrappers_accept_raw_dtype(self):
         """All wrappers should also accept raw dtype objects (no regression)."""

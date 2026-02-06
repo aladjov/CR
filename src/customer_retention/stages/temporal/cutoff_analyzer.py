@@ -6,11 +6,12 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from customer_retention.core.compat import as_tz_naive, is_datetime64_any_dtype
 from customer_retention.stages.temporal.timestamp_discovery import DatetimeOrderAnalyzer
 
 
 def _as_naive(dt: datetime) -> datetime:
-    return dt.replace(tzinfo=None) if dt.tzinfo else dt
+    return as_tz_naive(dt)
 
 
 @dataclass
@@ -208,7 +209,7 @@ class CutoffAnalyzer:
         raise ValueError("No timestamp column found")
 
     def _ensure_datetime_series_full(self, series: pd.Series) -> pd.Series:
-        if pd.api.types.is_datetime64_any_dtype(series):
+        if is_datetime64_any_dtype(series):
             return series
         return pd.to_datetime(series, format="mixed", errors="coerce")
 
