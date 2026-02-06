@@ -7,6 +7,13 @@ from .models import (
     PipelineTransformationType,
     TransformationStep,
 )
+from .renderer import (
+    DEFAULT_NOTEBOOK_MAP,
+    SECTION_MAP,
+    _notebook_title,
+    group_steps,
+    provenance_key,
+)
 
 
 def render_spark_step_call(step: TransformationStep) -> str:
@@ -173,6 +180,29 @@ _SPARK_REGISTRY = {
 }
 
 
+def spark_provenance_block(steps) -> str:
+    seen = set()
+    entries = []
+    for step in steps:
+        key = provenance_key(step)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        notebook = step.source_notebook or DEFAULT_NOTEBOOK_MAP.get(step.type)
+        if not notebook:
+            continue
+        title = _notebook_title(notebook)
+        section = SECTION_MAP.get(step.type, "")
+        if section:
+            entries.append(f"{title} > {section}")
+        else:
+            entries.append(title)
+    if not entries:
+        return ""
+    body = "\n    ".join(f"Source: {e}" for e in entries)
+    return f'    """\n    {body}\n    """'
+
+
 class _InlineLoader(BaseLoader):
     def __init__(self, templates: dict):
         self._templates = templates
@@ -213,7 +243,7 @@ def gold_table() -> str:
 SOURCES = {
 {% for source in config.sources %}
     "{{ source.name }}": {
-        "path": "{{ source.path }}",
+        "path": "{{ source.raw_source_path or source.path }}",
         "format": "{{ source.format }}",
         "entity_key": "{{ source.entity_key }}",
 {% if source.time_column %}
@@ -247,16 +277,27 @@ def load_source():
     fmt = source_config["format"]
     if fmt == "csv":
         return spark.read.option("header", "true").option("inferSchema", "true").csv(path)
-    return spark.read.format("delta").load(path)
+    return spark.read.format(fmt).load(path)
 
+{% set groups = group_steps(config.transformations) %}
 def apply_transformations(df):
-{% if config.transformations %}
-{% for step in config.transformations %}
-    # {{ step.rationale }}
-    df = {{ render_spark_step_call(step) }}
-{% endfor %}
-{% endif %}
+{%- for func_name, steps in groups %}
+    df = {{ func_name }}(df)
+{%- endfor %}
     return df
+
+{% for func_name, steps in groups %}
+def {{ func_name }}(df):
+{%- set _prov = spark_provenance_block(steps) %}
+{%- if _prov %}
+{{ _prov }}
+{%- endif %}
+{%- for t in steps %}
+    # {{ t.rationale }}
+    df = {{ render_spark_step_call(t) }}
+{%- endfor %}
+    return df
+{% endfor %}
 
 {% if config.lifecycle %}
 {% if config.lifecycle.include_recency_bucket %}
@@ -355,16 +396,27 @@ def load_source():
     fmt = source_config["format"]
     if fmt == "csv":
         return spark.read.option("header", "true").option("inferSchema", "true").csv(path)
-    return spark.read.format("delta").load(path)
+    return spark.read.format(fmt).load(path)
 
+{% set pre_groups = group_steps(config.pre_shaping) %}
 def apply_pre_shaping(df):
-{% if config.pre_shaping %}
-{% for step in config.pre_shaping %}
-    # {{ step.rationale }}
-    df = {{ render_spark_step_call(step) }}
-{% endfor %}
-{% endif %}
+{%- for func_name, steps in pre_groups %}
+    df = {{ func_name }}(df)
+{%- endfor %}
     return df
+
+{% for func_name, steps in pre_groups %}
+def {{ func_name }}(df):
+{%- set _prov = spark_provenance_block(steps) %}
+{%- if _prov %}
+{{ _prov }}
+{%- endif %}
+{%- for t in steps %}
+    # {{ t.rationale }}
+    df = {{ render_spark_step_call(t) }}
+{%- endfor %}
+    return df
+{% endfor %}
 
 {% if config.deduplicate %}
 def deduplicate(df):
@@ -453,13 +505,26 @@ ENTITY_COLUMN = "{{ config.entity_column }}"
 def load_aggregated():
     return spark.table(bronze_table("{{ bronze_input_name }}_events"))
 
+{% set post_groups = group_steps(config.post_shaping) %}
 {% if config.post_shaping %}
 def apply_post_shaping(df):
-{% for step in config.post_shaping %}
-    # {{ step.rationale }}
-    df = {{ render_spark_step_call(step) }}
-{% endfor %}
+{%- for func_name, steps in post_groups %}
+    df = {{ func_name }}(df)
+{%- endfor %}
     return df
+
+{% for func_name, steps in post_groups %}
+def {{ func_name }}(df):
+{%- set _prov = spark_provenance_block(steps) %}
+{%- if _prov %}
+{{ _prov }}
+{%- endif %}
+{%- for t in steps %}
+    # {{ t.rationale }}
+    df = {{ render_spark_step_call(t) }}
+{%- endfor %}
+    return df
+{% endfor %}
 {% endif %}
 
 {% if config.lifecycle %}
@@ -573,13 +638,26 @@ def merge_sources(bronze_outputs):
 {% endfor %}
     return merged
 
+{% set derived_groups = group_steps(config.silver.derived_columns) %}
 {% if config.silver.derived_columns %}
 def apply_derived_columns(df):
-{% for step in config.silver.derived_columns %}
-    # {{ step.rationale }}
-    df = {{ render_spark_step_call(step) }}
-{% endfor %}
+{%- for func_name, steps in derived_groups %}
+    df = {{ func_name }}(df)
+{%- endfor %}
     return df
+
+{% for func_name, steps in derived_groups %}
+def {{ func_name }}(df):
+{%- set _prov = spark_provenance_block(steps) %}
+{%- if _prov %}
+{{ _prov }}
+{%- endif %}
+{%- for t in steps %}
+    # {{ t.rationale }}
+    df = {{ render_spark_step_call(t) }}
+{%- endfor %}
+    return df
+{% endfor %}
 {% endif %}
 
 # COMMAND ----------
@@ -662,6 +740,10 @@ def _segment_aware_cap(df, col, n_segments=2):
 # COMMAND ----------
 
 def apply_encodings(df):
+{%- set _prov = spark_provenance_block(config.gold.encodings) %}
+{%- if _prov %}
+{{ _prov }}
+{%- endif %}
 {% if config.gold.encodings %}
 {% for step in config.gold.encodings %}
     # {{ step.rationale }}
@@ -671,6 +753,10 @@ def apply_encodings(df):
     return df
 
 def apply_scalings(df):
+{%- set _prov = spark_provenance_block(config.gold.scalings) %}
+{%- if _prov %}
+{{ _prov }}
+{%- endif %}
 {% if config.gold.scalings %}
 {% for step in config.gold.scalings %}
     # {{ step.rationale }}
@@ -679,14 +765,25 @@ def apply_scalings(df):
 {% endif %}
     return df
 
+{% set transform_groups = group_steps(config.gold.transformations) %}
 def apply_transformations(df):
-{% if config.gold.transformations %}
-{% for step in config.gold.transformations %}
-    # {{ step.rationale }}
-    df = {{ render_spark_step_call(step) }}
-{% endfor %}
-{% endif %}
+{%- for func_name, steps in transform_groups %}
+    df = {{ func_name }}(df)
+{%- endfor %}
     return df
+
+{% for func_name, steps in transform_groups %}
+def {{ func_name }}(df):
+{%- set _prov = spark_provenance_block(steps) %}
+{%- if _prov %}
+{{ _prov }}
+{%- endif %}
+{%- for t in steps %}
+    # {{ t.rationale }}
+    df = {{ render_spark_step_call(t) }}
+{%- endfor %}
+    return df
+{% endfor %}
 
 def apply_feature_selection(df):
 {% if config.gold.feature_selections %}
@@ -884,6 +981,8 @@ class DatabricksCodeRenderer:
         self._schema = schema
         self._env = Environment(loader=_InlineLoader(DATABRICKS_TEMPLATES))
         self._env.globals["render_spark_step_call"] = render_spark_step_call
+        self._env.globals["group_steps"] = group_steps
+        self._env.globals["spark_provenance_block"] = spark_provenance_block
 
     def _render(self, template_key: str, **context) -> str:
         return self._env.get_template(self._TEMPLATE_MAP[template_key]).render(**context)

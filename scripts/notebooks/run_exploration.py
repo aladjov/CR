@@ -570,16 +570,15 @@ def _run_multi_dataset_flow(
         if nb.stem not in SETUP_NOTEBOOKS and nb.stem not in PER_DATASET_STEMS
     ]
 
-    nb_01 = notebooks_dir / "01_data_discovery.ipynb"
-
     for ds_name, ds_path in datasets:
         role = "TARGET" if context.datasets[ds_name].has_target else "source"
         print(f"\n{'=' * 60}")
         print(f"Dataset: {ds_name} ({role})")
         print(f"{'=' * 60}")
 
-        if nb_01.exists() and not dry_run:
-            _set_data_path(nb_01, ds_path)
+        if not dry_run:
+            for nb_path in per_dataset_nbs:
+                _set_data_path(nb_path, ds_path)
 
         skip_set: Set[str] = set()
         skip_reasons: Dict[str, str] = {}

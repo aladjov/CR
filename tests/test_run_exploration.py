@@ -16,6 +16,7 @@ from run_exploration import (
     _execute_one,
     _load_dataset_context,
     _ordered_datasets,
+    _run_multi_dataset_flow,
     _set_data_path,
     run_all,
 )
@@ -600,3 +601,92 @@ class TestMultiDatasetWithSkips:
         text_key = "02a_text_columns_deep_dive:tickets"
         assert text_key in results
         assert results[text_key] == "DRY_RUN"
+
+
+class TestMultiDatasetSetDataPath:
+    def _make_notebook_with_data_path(self, path, default_path="../fixtures/default.csv"):
+        nb = {
+            "nbformat": 4, "nbformat_minor": 5,
+            "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
+            "cells": [{
+                "cell_type": "code", "metadata": {}, "outputs": [], "execution_count": None,
+                "source": [
+                    f'DATA_PATH = "{default_path}"\n',
+                    "# DATA_PATH = '../fixtures/alt.csv'\n",
+                ],
+            }],
+        }
+        path.write_text(json.dumps(nb, indent=1))
+
+    def _read_data_path(self, path):
+        nb = json.loads(path.read_text())
+        for cell in nb["cells"]:
+            for line in cell.get("source", []):
+                stripped = line.lstrip()
+                if stripped.startswith("DATA_PATH") and "=" in stripped and not stripped.startswith("#"):
+                    return stripped.split("=", 1)[1].strip().strip('"').strip("'")
+        return None
+
+    def test_set_data_path_applied_to_all_per_dataset_notebooks(self, tmp_path, multi_context_yaml, monkeypatch):
+        from run_exploration import NOTEBOOKS_ORDER, PER_DATASET_STEMS
+
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        findings_dir = multi_context_yaml.parent
+
+        nb_json = json.dumps({
+            "nbformat": 4, "nbformat_minor": 5,
+            "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
+            "cells": [],
+        })
+        for stem in NOTEBOOKS_ORDER:
+            nb_path = notebooks_dir / f"{stem}.ipynb"
+            if stem in PER_DATASET_STEMS:
+                self._make_notebook_with_data_path(nb_path)
+            else:
+                nb_path.write_text(nb_json)
+
+        monkeypatch.setattr("run_exploration._run_notebook", lambda *a, **kw: (True, None))
+        context = _load_dataset_context(findings_dir)
+        notebooks = [notebooks_dir / f"{s}.ipynb" for s in NOTEBOOKS_ORDER if (notebooks_dir / f"{s}.ipynb").exists()]
+        results, timings = {}, {}
+
+        _run_multi_dataset_flow(
+            notebooks_dir, notebooks, findings_dir, context,
+            results, timings, dry_run=False, timeout=600, kernel="python3",
+        )
+
+        last_dataset = list(context.datasets.values())[-1]
+        for stem in PER_DATASET_STEMS:
+            nb_path = notebooks_dir / f"{stem}.ipynb"
+            assert self._read_data_path(nb_path) == last_dataset.path
+
+    def test_set_data_path_noop_for_notebooks_without_data_path_cell(self, tmp_path, multi_context_yaml, monkeypatch):
+        from run_exploration import NOTEBOOKS_ORDER, PER_DATASET_STEMS
+
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        findings_dir = multi_context_yaml.parent
+
+        nb_json = json.dumps({
+            "nbformat": 4, "nbformat_minor": 5,
+            "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
+            "cells": [{"cell_type": "code", "metadata": {}, "outputs": [], "execution_count": None, "source": ["x = 1\n"]}],
+        })
+        for stem in NOTEBOOKS_ORDER:
+            (notebooks_dir / f"{stem}.ipynb").write_text(nb_json)
+
+        monkeypatch.setattr("run_exploration._run_notebook", lambda *a, **kw: (True, None))
+        context = _load_dataset_context(findings_dir)
+        notebooks = [notebooks_dir / f"{s}.ipynb" for s in NOTEBOOKS_ORDER if (notebooks_dir / f"{s}.ipynb").exists()]
+        results, timings = {}, {}
+
+        _run_multi_dataset_flow(
+            notebooks_dir, notebooks, findings_dir, context,
+            results, timings, dry_run=False, timeout=600, kernel="python3",
+        )
+
+        for stem in PER_DATASET_STEMS:
+            nb = json.loads((notebooks_dir / f"{stem}.ipynb").read_text())
+            source = "".join(nb["cells"][0]["source"])
+            assert "DATA_PATH" not in source

@@ -5,6 +5,7 @@ import pytest
 from customer_retention.generators.pipeline_generator.databricks_renderer import (
     DatabricksCodeRenderer,
     render_spark_step_call,
+    spark_provenance_block,
 )
 from customer_retention.generators.pipeline_generator.models import (
     AggregationWindowConfig,
@@ -567,3 +568,427 @@ class TestDatabricksRenderRunner:
         silver_pos = result.find("silver")
         gold_pos = result.find("gold")
         assert bronze_pos < silver_pos < gold_pos
+
+
+class TestDatabricksConfigSourcePaths:
+    def test_config_uses_raw_source_path_when_available(self, renderer):
+        source = SourceConfig(
+            name="emails", path="emails.parquet",
+            format="parquet", entity_key="customer_id",
+            raw_source_path="/dbfs/data/emails.parquet",
+        )
+        config = PipelineConfig(
+            name="test", target_column="churn", sources=[source],
+            bronze={}, silver=SilverLayerConfig(), gold=GoldLayerConfig(),
+            output_dir=".", composite_name="emai__abc1234",
+        )
+        result = renderer.render_config(config)
+        assert "/dbfs/data/emails.parquet" in result
+        assert '"path": "emails.parquet"' not in result
+
+    def test_config_falls_back_to_path_when_no_raw(self, renderer):
+        source = SourceConfig(
+            name="emails", path="/data/emails.csv",
+            format="csv", entity_key="customer_id",
+        )
+        config = PipelineConfig(
+            name="test", target_column="churn", sources=[source],
+            bronze={}, silver=SilverLayerConfig(), gold=GoldLayerConfig(),
+            output_dir=".", composite_name="emai__abc1234",
+        )
+        result = renderer.render_config(config)
+        assert "/data/emails.csv" in result
+
+
+class TestDatabricksLoadSourceFormat:
+    def test_bronze_event_load_source_uses_dynamic_format(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.parquet",
+            format="parquet", entity_key="customer_id",
+            time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id",
+            time_column="order_date", deduplicate=False,
+            aggregation=AggregationWindowConfig(
+                windows=["30d"], value_columns=["amount"],
+                agg_funcs=["sum", "count"],
+            ),
+        )
+        result = renderer.render_bronze_event("orders", config)
+        assert 'format("delta")' not in result or "format(fmt)" in result
+
+    def test_bronze_load_source_uses_dynamic_format(self, renderer):
+        source = SourceConfig(
+            name="customers", path="/data/customers.parquet",
+            format="parquet", entity_key="customer_id",
+        )
+        config = BronzeLayerConfig(source=source)
+        result = renderer.render_bronze("customers", config)
+        assert 'format("delta")' not in result or "format(fmt)" in result
+
+    def test_bronze_event_load_source_still_handles_csv(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.csv",
+            format="csv", entity_key="customer_id",
+            time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id",
+            time_column="order_date", deduplicate=False,
+        )
+        result = renderer.render_bronze_event("orders", config)
+        assert "inferSchema" in result
+
+
+class TestSparkProvenanceBlock:
+    def test_returns_empty_for_empty_steps(self):
+        assert spark_provenance_block([]) == ""
+
+    def test_returns_section_for_impute_null(self):
+        steps = [
+            TransformationStep(
+                type=PipelineTransformationType.IMPUTE_NULL,
+                column="age", parameters={"value": 0}, rationale="Fill nulls",
+            ),
+        ]
+        result = spark_provenance_block(steps)
+        assert "Quality Assessment" in result
+        assert "Missing Value Analysis" in result
+        assert "Source:" in result
+
+    def test_uses_source_notebook_when_set(self):
+        steps = [
+            TransformationStep(
+                type=PipelineTransformationType.IMPUTE_NULL,
+                column="age", parameters={"value": 0}, rationale="Fill nulls",
+                source_notebook="05_custom_analysis",
+            ),
+        ]
+        result = spark_provenance_block(steps)
+        assert "Custom Analysis" in result
+        assert "Missing Value Analysis" in result
+
+    def test_deduplicates_same_provenance(self):
+        steps = [
+            TransformationStep(
+                type=PipelineTransformationType.IMPUTE_NULL,
+                column="age", parameters={"value": 0}, rationale="Fill age",
+            ),
+            TransformationStep(
+                type=PipelineTransformationType.IMPUTE_NULL,
+                column="income", parameters={"value": 0}, rationale="Fill income",
+            ),
+        ]
+        result = spark_provenance_block(steps)
+        assert result.count("Source:") == 1
+
+    def test_no_html_links(self):
+        steps = [
+            TransformationStep(
+                type=PipelineTransformationType.CAP_OUTLIER,
+                column="revenue", parameters={"lower": 0, "upper": 10000},
+                rationale="Cap outliers",
+            ),
+        ]
+        result = spark_provenance_block(steps)
+        assert "<a " not in result
+        assert "href" not in result
+        assert ".html" not in result
+
+    def test_format_uses_angle_bracket_separator(self):
+        steps = [
+            TransformationStep(
+                type=PipelineTransformationType.LOG_TRANSFORM,
+                column="revenue", parameters={}, rationale="Log transform",
+            ),
+        ]
+        result = spark_provenance_block(steps)
+        assert ">" in result
+        assert "Relationship Analysis > Feature Distributions" in result
+
+
+class TestBronzeStepGrouping:
+    def test_bronze_groups_transformations_into_functions(self, renderer):
+        source = SourceConfig(
+            name="customers", path="/data/customers.csv",
+            format="csv", entity_key="customer_id",
+        )
+        config = BronzeLayerConfig(
+            source=source,
+            transformations=[
+                TransformationStep(
+                    type=PipelineTransformationType.IMPUTE_NULL,
+                    column="age", parameters={"value": 0}, rationale="Fill age",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.IMPUTE_NULL,
+                    column="income", parameters={"value": 0}, rationale="Fill income",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.CAP_OUTLIER,
+                    column="revenue", parameters={"lower": 0, "upper": 10000},
+                    rationale="Cap revenue",
+                ),
+            ],
+        )
+        result = renderer.render_bronze("customers", config)
+        assert "def impute_remaining_nulls(df):" in result
+        assert "def cap_outliers(df):" in result
+        assert "df = impute_remaining_nulls(df)" in result
+        assert "df = cap_outliers(df)" in result
+
+    def test_bronze_grouped_has_provenance_docstring(self, renderer):
+        source = SourceConfig(
+            name="customers", path="/data/customers.csv",
+            format="csv", entity_key="customer_id",
+        )
+        config = BronzeLayerConfig(
+            source=source,
+            transformations=[
+                TransformationStep(
+                    type=PipelineTransformationType.IMPUTE_NULL,
+                    column="age", parameters={"value": 0}, rationale="Fill age",
+                ),
+            ],
+        )
+        result = renderer.render_bronze("customers", config)
+        assert "Source:" in result
+        assert "Quality Assessment > Missing Value Analysis" in result
+
+    def test_bronze_grouped_is_valid_python(self, renderer):
+        source = SourceConfig(
+            name="customers", path="/data/customers.csv",
+            format="csv", entity_key="customer_id",
+        )
+        config = BronzeLayerConfig(
+            source=source,
+            transformations=[
+                TransformationStep(
+                    type=PipelineTransformationType.IMPUTE_NULL,
+                    column="age", parameters={"value": 0}, rationale="Fill age",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.CAP_OUTLIER,
+                    column="revenue", parameters={"lower": 0, "upper": 10000},
+                    rationale="Cap revenue",
+                ),
+            ],
+        )
+        result = renderer.render_bronze("customers", config)
+        ast.parse(result)
+
+    def test_bronze_no_transformations_still_valid(self, renderer):
+        source = SourceConfig(
+            name="customers", path="/data/customers.csv",
+            format="csv", entity_key="customer_id",
+        )
+        config = BronzeLayerConfig(source=source, transformations=[])
+        result = renderer.render_bronze("customers", config)
+        ast.parse(result)
+        assert "def apply_transformations(df):" in result
+
+
+class TestBronzeEventStepGrouping:
+    def test_bronze_event_groups_pre_shaping(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.csv",
+            format="csv", entity_key="customer_id",
+            time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id",
+            time_column="order_date",
+            pre_shaping=[
+                TransformationStep(
+                    type=PipelineTransformationType.CAP_OUTLIER,
+                    column="amount", parameters={"lower": 0, "upper": 10000},
+                    rationale="Cap outliers",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.IMPUTE_NULL,
+                    column="quantity", parameters={"value": 1},
+                    rationale="Fill nulls",
+                ),
+            ],
+        )
+        result = renderer.render_bronze_event("orders", config)
+        assert "def cap_outliers(df):" in result
+        assert "def impute_remaining_nulls(df):" in result
+        assert "df = cap_outliers(df)" in result
+
+    def test_bronze_event_grouped_is_valid_python(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.csv",
+            format="csv", entity_key="customer_id",
+            time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id",
+            time_column="order_date",
+            pre_shaping=[
+                TransformationStep(
+                    type=PipelineTransformationType.CAP_OUTLIER,
+                    column="amount", parameters={"lower": 0, "upper": 10000},
+                    rationale="Cap outliers",
+                ),
+            ],
+            aggregation=AggregationWindowConfig(
+                windows=["30d"], value_columns=["amount"],
+                agg_funcs=["sum", "count"],
+            ),
+        )
+        result = renderer.render_bronze_event("orders", config)
+        ast.parse(result)
+
+    def test_bronze_event_pre_shaping_has_provenance(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.csv",
+            format="csv", entity_key="customer_id",
+            time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id",
+            time_column="order_date",
+            pre_shaping=[
+                TransformationStep(
+                    type=PipelineTransformationType.CAP_OUTLIER,
+                    column="amount", parameters={"lower": 0, "upper": 10000},
+                    rationale="Cap outliers",
+                ),
+            ],
+        )
+        result = renderer.render_bronze_event("orders", config)
+        assert "Source:" in result
+        assert "Global Outlier Detection" in result
+
+
+class TestBronzeEntityStepGrouping:
+    def test_bronze_entity_groups_post_shaping(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.csv",
+            format="csv", entity_key="customer_id",
+            time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id",
+            time_column="order_date",
+            post_shaping=[
+                TransformationStep(
+                    type=PipelineTransformationType.IMPUTE_NULL,
+                    column="total", parameters={"value": 0},
+                    rationale="Fill total",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.LOG_TRANSFORM,
+                    column="total", parameters={},
+                    rationale="Log transform total",
+                ),
+            ],
+        )
+        result = renderer.render_bronze_entity(
+            "orders_aggregated", config, "orders", "orders",
+        )
+        assert "def impute_remaining_nulls(df):" in result
+        assert "def apply_log_transforms(df):" in result
+
+    def test_bronze_entity_grouped_is_valid_python(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.csv",
+            format="csv", entity_key="customer_id",
+            time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id",
+            time_column="order_date",
+            post_shaping=[
+                TransformationStep(
+                    type=PipelineTransformationType.IMPUTE_NULL,
+                    column="total", parameters={"value": 0},
+                    rationale="Fill total",
+                ),
+            ],
+        )
+        result = renderer.render_bronze_entity(
+            "orders_aggregated", config, "orders", "orders",
+        )
+        ast.parse(result)
+
+
+class TestSilverStepGrouping:
+    def test_silver_groups_derived_columns(self, renderer, sample_pipeline_config):
+        result = renderer.render_silver(sample_pipeline_config)
+        assert "def create_ratio_features(df):" in result
+        assert "df = create_ratio_features(df)" in result
+
+    def test_silver_grouped_has_provenance(self, renderer, sample_pipeline_config):
+        result = renderer.render_silver(sample_pipeline_config)
+        assert "Source:" in result
+        assert "Feature Engineering Recommendations" in result
+
+    def test_silver_grouped_is_valid_python(self, renderer, sample_pipeline_config):
+        result = renderer.render_silver(sample_pipeline_config)
+        ast.parse(result)
+
+
+class TestGoldStepGrouping:
+    def test_gold_groups_transformations(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "def apply_log_transforms(df):" in result
+        assert "df = apply_log_transforms(df)" in result
+
+    def test_gold_encodings_have_provenance(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "Categorical Feature Analysis" in result
+
+    def test_gold_scalings_have_provenance(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "Feature-Target Correlations" in result
+
+    def test_gold_transformations_have_provenance(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "Feature Distributions" in result
+
+    def test_gold_grouped_is_valid_python(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        ast.parse(result)
+
+    def test_gold_no_transformations_still_valid(self, renderer):
+        source = SourceConfig(
+            name="customers", path="/data/customers.csv",
+            format="csv", entity_key="customer_id",
+        )
+        config = PipelineConfig(
+            name="test", target_column="churn",
+            sources=[source], bronze={},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(),
+            output_dir=".", composite_name="cust__abc1234",
+        )
+        result = renderer.render_gold(config)
+        ast.parse(result)
+
+    def test_gold_with_source_notebook_override(self, renderer):
+        source = SourceConfig(
+            name="customers", path="/data/customers.csv",
+            format="csv", entity_key="customer_id",
+        )
+        config = PipelineConfig(
+            name="test", target_column="churn",
+            sources=[source], bronze={},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(
+                encodings=[
+                    TransformationStep(
+                        type=PipelineTransformationType.ENCODE,
+                        column="category", parameters={"method": "one_hot"},
+                        rationale="Encode category",
+                        source_notebook="06_custom_report",
+                    ),
+                ],
+            ),
+            output_dir=".", composite_name="cust__abc1234",
+        )
+        result = renderer.render_gold(config)
+        assert "Custom Report" in result
+        assert "Categorical Feature Analysis" in result
