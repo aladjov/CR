@@ -1,4 +1,4 @@
-from jinja2 import BaseLoader, Environment
+from jinja2 import Environment
 
 from .models import (
     BronzeEventConfig,
@@ -10,6 +10,7 @@ from .models import (
 from .renderer import (
     DEFAULT_NOTEBOOK_MAP,
     SECTION_MAP,
+    InlineLoader,
     _notebook_title,
     group_steps,
     provenance_key,
@@ -191,16 +192,6 @@ def spark_provenance_block(steps) -> str:
         return ""
     body = "\n    ".join(f"Source: {e}" for e in entries)
     return f'    """\n    {body}\n    """'
-
-
-class _InlineLoader(BaseLoader):
-    def __init__(self, templates: dict):
-        self._templates = templates
-
-    def get_source(self, environment, template):
-        if template in self._templates:
-            return self._templates[template], template, lambda: True
-        raise Exception(f"Template {template} not found")
 
 
 DATABRICKS_TEMPLATES = {
@@ -962,7 +953,7 @@ class DatabricksCodeRenderer:
     def __init__(self, catalog: str = "main", schema: str = "default"):
         self._catalog = catalog
         self._schema = schema
-        self._env = Environment(loader=_InlineLoader(DATABRICKS_TEMPLATES))
+        self._env = Environment(loader=InlineLoader(DATABRICKS_TEMPLATES))
         self._env.globals["render_spark_step_call"] = render_spark_step_call
         self._env.globals["group_steps"] = group_steps
         self._env.globals["spark_provenance_block"] = spark_provenance_block

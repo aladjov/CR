@@ -2,6 +2,89 @@ import pandas as pd
 import pytest
 import yaml
 
+from customer_retention.generators.pipeline_generator.models import (
+    BronzeLayerConfig,
+    GoldLayerConfig,
+    PipelineTransformationType,
+    SilverLayerConfig,
+    SourceConfig,
+    TransformationStep,
+)
+
+
+@pytest.fixture
+def entity_source():
+    return SourceConfig(
+        name="customers",
+        path="/data/customers.csv",
+        format="csv",
+        entity_key="customer_id",
+    )
+
+
+@pytest.fixture
+def event_source():
+    return SourceConfig(
+        name="orders",
+        path="/data/orders.parquet",
+        format="parquet",
+        entity_key="customer_id",
+        time_column="order_date",
+        is_event_level=True,
+    )
+
+
+@pytest.fixture
+def bronze_with_impute(entity_source):
+    return BronzeLayerConfig(
+        source=entity_source,
+        transformations=[
+            TransformationStep(
+                type=PipelineTransformationType.IMPUTE_NULL,
+                column="age",
+                parameters={"value": 0},
+                rationale="Fill nulls",
+            ),
+        ],
+    )
+
+
+@pytest.fixture
+def silver_with_join():
+    return SilverLayerConfig(
+        joins=[
+            {
+                "left_key": "customer_id",
+                "right_key": "customer_id",
+                "right_source": "orders",
+                "how": "left",
+            }
+        ],
+        aggregations=[],
+    )
+
+
+@pytest.fixture
+def gold_with_encode_scale():
+    return GoldLayerConfig(
+        encodings=[
+            TransformationStep(
+                type=PipelineTransformationType.ENCODE,
+                column="category",
+                parameters={"method": "one_hot"},
+                rationale="Encode",
+            ),
+        ],
+        scalings=[
+            TransformationStep(
+                type=PipelineTransformationType.SCALE,
+                column="amount",
+                parameters={"method": "standard"},
+                rationale="Scale",
+            ),
+        ],
+    )
+
 
 @pytest.fixture
 def experiments_setup(tmp_path):

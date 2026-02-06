@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from customer_retention.core.compat import DataFrame
+from customer_retention.stages.profiling.stats_helpers import calculate_group_retention_stats
 
 
 @dataclass
@@ -117,14 +118,11 @@ class TemporalTargetAnalyzer:
         overall_rate: float
     ) -> pd.DataFrame:
         """Calculate retention stats for a time period."""
-        stats = df.groupby(period_col)[target_col].agg(['sum', 'count', 'mean']).reset_index()
-        stats.columns = ['period', 'retained_count', 'count', 'retention_rate']
-        stats['lift'] = stats['retention_rate'] / overall_rate if overall_rate > 0 else 0
-
-        # Filter small samples
-        stats = stats[stats['count'] >= self.min_samples_per_period]
-
-        return stats.sort_values('period').reset_index(drop=True)
+        stats = calculate_group_retention_stats(
+            df, period_col, target_col, overall_rate,
+            min_samples=self.min_samples_per_period, sort_by="group",
+        )
+        return stats.rename(columns={"group": "period"})
 
     def _calculate_monthly_stats(
         self,
@@ -133,17 +131,15 @@ class TemporalTargetAnalyzer:
         overall_rate: float
     ) -> pd.DataFrame:
         """Calculate monthly retention stats with month names."""
-        stats = df.groupby('_month')[target_col].agg(['sum', 'count', 'mean']).reset_index()
-        stats.columns = ['month', 'retained_count', 'count', 'retention_rate']
-        stats['lift'] = stats['retention_rate'] / overall_rate if overall_rate > 0 else 0
+        stats = calculate_group_retention_stats(
+            df, "_month", target_col, overall_rate,
+            min_samples=self.min_samples_per_period, sort_by="group",
+        )
+        stats = stats.rename(columns={"group": "month"})
         stats['month_name'] = stats['month'].apply(
             lambda x: self.MONTH_NAMES[int(x) - 1] if 1 <= x <= 12 else 'Unknown'
         )
-
-        # Filter small samples
-        stats = stats[stats['count'] >= self.min_samples_per_period]
-
-        return stats.sort_values('month').reset_index(drop=True)
+        return stats
 
     def _calculate_dow_stats(
         self,
@@ -152,14 +148,14 @@ class TemporalTargetAnalyzer:
         overall_rate: float
     ) -> pd.DataFrame:
         """Calculate day-of-week retention stats."""
-        stats = df.groupby('_dow')[target_col].agg(['sum', 'count', 'mean']).reset_index()
-        stats.columns = ['day_of_week', 'retained_count', 'count', 'retention_rate']
-        stats['lift'] = stats['retention_rate'] / overall_rate if overall_rate > 0 else 0
+        stats = calculate_group_retention_stats(
+            df, "_dow", target_col, overall_rate, sort_by="group",
+        )
+        stats = stats.rename(columns={"group": "day_of_week"})
         stats['day_name'] = stats['day_of_week'].apply(
             lambda x: self.DOW_NAMES[int(x)] if 0 <= x <= 6 else 'Unknown'
         )
-
-        return stats.sort_values('day_of_week').reset_index(drop=True)
+        return stats
 
     def _determine_yearly_trend(self, yearly_stats: pd.DataFrame) -> str:
         """Determine if retention is improving, declining, or stable over years."""

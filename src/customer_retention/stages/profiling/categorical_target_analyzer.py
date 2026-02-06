@@ -6,6 +6,7 @@ import pandas as pd
 from scipy.stats import chi2_contingency
 
 from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype
+from customer_retention.stages.profiling.stats_helpers import calculate_group_retention_stats
 
 CARDINALITY_THRESHOLD = 0.5
 MIN_CATEGORIES_FOR_ANALYSIS = 2
@@ -200,13 +201,15 @@ class CategoricalTargetAnalyzer:
         )
 
     def _calculate_category_stats(self, df: pd.DataFrame, categorical_col: str, target_col: str, overall_rate: float) -> pd.DataFrame:
-        stats = df.groupby(categorical_col)[target_col].agg(['sum', 'count', 'mean']).reset_index()
-        stats.columns = ['category', 'retained_count', 'total_count', 'retention_rate']
-        stats['churned_count'] = stats['total_count'] - stats['retained_count']
-        stats['lift'] = stats['retention_rate'] / overall_rate if overall_rate > 0 else 0
-        stats['pct_of_total'] = stats['total_count'] / len(df)
-        stats = stats[stats['total_count'] >= self.min_samples_per_category]
-        return stats.sort_values('retention_rate', ascending=False).reset_index(drop=True)
+        stats = calculate_group_retention_stats(
+            df, categorical_col, target_col, overall_rate,
+            min_samples=self.min_samples_per_category,
+            sort_by="retention_rate", ascending=False,
+        )
+        stats = stats.rename(columns={"group": "category", "count": "total_count"})
+        stats["churned_count"] = stats["total_count"] - stats["retained_count"]
+        stats["pct_of_total"] = stats["total_count"] / len(df)
+        return stats
 
     def _calculate_cramers_v(self, df: pd.DataFrame, categorical_col: str, target_col: str) -> tuple:
         contingency = pd.crosstab(df[categorical_col], df[target_col])

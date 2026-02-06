@@ -5,11 +5,8 @@ import pytest
 
 from customer_retention.generators.pipeline_generator.models import (
     BronzeLayerConfig,
-    GoldLayerConfig,
     PipelineConfig,
     PipelineTransformationType,
-    SilverLayerConfig,
-    SourceConfig,
     TransformationStep,
 )
 from customer_retention.generators.pipeline_generator.renderer import CodeRenderer
@@ -21,31 +18,17 @@ def renderer():
 
 
 @pytest.fixture
-def sample_pipeline_config():
-    source1 = SourceConfig(name="customers", path="/data/customers.csv", format="csv", entity_key="customer_id")
-    source2 = SourceConfig(name="orders", path="/data/orders.parquet", format="parquet",
-                          entity_key="customer_id", time_column="order_date", is_event_level=True)
-    bronze1 = BronzeLayerConfig(source=source1, transformations=[
-        TransformationStep(type=PipelineTransformationType.IMPUTE_NULL, column="age", parameters={"value": 0}, rationale="Fill nulls")
-    ])
-    bronze2 = BronzeLayerConfig(source=source2, transformations=[
+def sample_pipeline_config(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
+    bronze2 = BronzeLayerConfig(source=event_source, transformations=[
         TransformationStep(type=PipelineTransformationType.CAP_OUTLIER, column="amount", parameters={"lower": 0, "upper": 10000}, rationale="Cap outliers")
     ])
-    silver = SilverLayerConfig(
-        joins=[{"left_key": "customer_id", "right_key": "customer_id", "right_source": "orders", "how": "left"}],
-        aggregations=[]
-    )
-    gold = GoldLayerConfig(
-        encodings=[TransformationStep(type=PipelineTransformationType.ENCODE, column="category", parameters={"method": "one_hot"}, rationale="Encode")],
-        scalings=[TransformationStep(type=PipelineTransformationType.SCALE, column="amount", parameters={"method": "standard"}, rationale="Scale")]
-    )
     return PipelineConfig(
         name="test_pipeline",
         target_column="churn",
-        sources=[source1, source2],
-        bronze={"customers": bronze1, "orders": bronze2},
-        silver=silver,
-        gold=gold,
+        sources=[entity_source, event_source],
+        bronze={"customers": bronze_with_impute, "orders": bronze2},
+        silver=silver_with_join,
+        gold=gold_with_encode_scale,
         output_dir="/output/test_pipeline"
     )
 
