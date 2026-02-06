@@ -379,6 +379,36 @@ class TestDatabricksRenderBronzeEvent:
         result = renderer.render_bronze_event("orders", sample_pipeline_config.bronze_event["orders"])
         assert 'format("parquet")' not in result
 
+    def test_render_bronze_event_renames_raw_time_column(self, renderer):
+        source = SourceConfig(
+            name="emails", path="/data/emails.csv", format="csv",
+            entity_key="customer_id", time_column="feature_timestamp", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id",
+            time_column="feature_timestamp", deduplicate=True,
+            raw_time_column="sent_date",
+            aggregation=AggregationWindowConfig(
+                windows=["180d", "365d"], value_columns=["bounced"], agg_funcs=["sum", "count"],
+            ),
+        )
+        result = renderer.render_bronze_event("emails", config)
+        assert 'withColumnRenamed("sent_date", TIME_COLUMN)' in result
+        assert 'TIME_COLUMN = "feature_timestamp"' in result
+        ast.parse(result)
+
+    def test_render_bronze_event_no_rename_when_raw_matches(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id",
+            time_column="order_date", deduplicate=True,
+        )
+        result = renderer.render_bronze_event("orders", config)
+        assert "withColumnRenamed" not in result
+
 
 class TestDatabricksRenderBronzeEntity:
     def test_render_bronze_entity_returns_string(self, renderer, sample_pipeline_config):

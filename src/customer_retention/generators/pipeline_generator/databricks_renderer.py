@@ -445,6 +445,9 @@ def apply_event_aggregation(df):
 
 def run_bronze_event():
     df = load_source()
+{% if config.raw_time_column %}
+    df = df.withColumnRenamed("{{ config.raw_time_column }}", TIME_COLUMN)
+{% endif %}
     df = apply_pre_shaping(df)
 {% if config.deduplicate %}
     df = deduplicate(df)
