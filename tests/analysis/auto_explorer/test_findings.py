@@ -245,6 +245,33 @@ class TestExplorationFindings:
         restored = ExplorationFindings.from_dict(data)
         assert restored.metadata == {"project": "test", "version": 1}
 
+    def test_datetime_derivation_sources_round_trip(self):
+        original = self.create_sample_findings()
+        original.datetime_derivation_sources = ["signup_date", "first_purchase_date"]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "findings.yaml"
+            original.save(str(path))
+            loaded = ExplorationFindings.load(str(path))
+            assert loaded.datetime_derivation_sources == ["signup_date", "first_purchase_date"]
+
+    def test_datetime_derivation_sources_default_empty(self):
+        findings = ExplorationFindings(source_path="test.csv", source_format="csv")
+        assert findings.datetime_derivation_sources == []
+
+    def test_datetime_allow_future_columns_round_trip(self):
+        original = self.create_sample_findings()
+        original.datetime_derivation_sources = ["signup_date", "contract_end"]
+        original.datetime_allow_future_columns = ["contract_end"]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "findings.yaml"
+            original.save(str(path))
+            loaded = ExplorationFindings.load(str(path))
+            assert loaded.datetime_allow_future_columns == ["contract_end"]
+
+    def test_datetime_allow_future_columns_default_empty(self):
+        findings = ExplorationFindings(source_path="test.csv", source_format="csv")
+        assert findings.datetime_allow_future_columns == []
+
     def test_numpy_types_converted_to_native(self):
         findings = ExplorationFindings(
             source_path="test.csv",

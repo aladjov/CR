@@ -1,0 +1,203 @@
+from __future__ import annotations
+
+import os
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+
+@dataclass
+class RunNamespace:
+    root: Path
+    run_id: str
+
+    @property
+    def run_dir(self) -> Path:
+        return self.root / "runs" / self.run_id
+
+    @property
+    def datasets_dir(self) -> Path:
+        return self.run_dir / "datasets"
+
+    @property
+    def data_dir(self) -> Path:
+        return self.run_dir / "data"
+
+    @property
+    def landing_dir(self) -> Path:
+        return self.data_dir / "landing"
+
+    @property
+    def bronze_dir(self) -> Path:
+        return self.data_dir / "bronze"
+
+    @property
+    def silver_dir(self) -> Path:
+        return self.data_dir / "silver"
+
+    @property
+    def gold_dir(self) -> Path:
+        return self.data_dir / "gold"
+
+    def dataset_dir(self, name: str) -> Path:
+        return self.datasets_dir / name
+
+    def landing_table_dir(self, name: str) -> Path:
+        return self.landing_dir / name
+
+    def bronze_table_dir(self, name: str) -> Path:
+        return self.bronze_dir / f"{name}_aggregated"
+
+    def gold_table_dir(self, composite_name: str) -> Path:
+        return self.gold_dir / f"gold_features_{composite_name}"
+
+    def dataset_findings_dir(self, name: str) -> Path:
+        return self.dataset_dir(name) / "findings"
+
+    def dataset_objective_support_path(self, name: str) -> Path:
+        return self.dataset_dir(name) / "objective_support.yaml"
+
+    def dataset_docs_dir(self, name: str) -> Path:
+        return self.dataset_dir(name) / "docs"
+
+    @property
+    def merged_dir(self) -> Path:
+        return self.run_dir / "merged"
+
+    @property
+    def multi_dataset_findings_path(self) -> Path:
+        return self.merged_dir / "multi_dataset_findings.yaml"
+
+    @property
+    def merged_findings_path(self) -> Path:
+        return self.merged_dir / "silver_merged_findings.yaml"
+
+    @property
+    def merged_recommendations_path(self) -> Path:
+        return self.merged_dir / "recommendations.yaml"
+
+    def candidate_dir(self, name: str) -> Path:
+        return self.merged_dir / name
+
+    @property
+    def session_dir(self) -> Path:
+        return self.run_dir / "session" / "users"
+
+    def user_session_path(self, username: str) -> Path:
+        return self.session_dir / f"{username}.json"
+
+    @property
+    def project_context_path(self) -> Path:
+        return self.run_dir / "project_context.yaml"
+
+    @property
+    def snapshot_grid_path(self) -> Path:
+        return self.run_dir / "snapshot_grid.yaml"
+
+    @property
+    def silver_merged_path(self) -> Path:
+        return self.silver_dir / "silver_merged"
+
+    def list_datasets(self) -> list[str]:
+        if not self.datasets_dir.is_dir():
+            return []
+        return sorted(p.name for p in self.datasets_dir.iterdir() if p.is_dir())
+
+    def list_candidates(self) -> list[str]:
+        if not self.merged_dir.is_dir():
+            return []
+        return sorted(p.name for p in self.merged_dir.iterdir() if p.is_dir())
+
+    def discover_all_findings(self, prefer_aggregated: bool = True) -> list[Path]:
+        if not self.datasets_dir.is_dir():
+            return []
+        all_files: list[Path] = []
+        for dataset_dir in sorted(self.datasets_dir.iterdir()):
+            if not dataset_dir.is_dir():
+                continue
+            findings_dir = dataset_dir / "findings"
+            if not findings_dir.is_dir():
+                continue
+            all_files.extend(sorted(findings_dir.glob("*_findings.yaml")))
+        if not prefer_aggregated:
+            return all_files
+        return self._filter_prefer_aggregated(all_files)
+
+    @staticmethod
+    def _filter_prefer_aggregated(files: list[Path]) -> list[Path]:
+        aggregated = {f for f in files if "_aggregated" in f.name}
+        non_aggregated = [f for f in files if "_aggregated" not in f.name]
+        if not aggregated:
+            return files
+        result = list(aggregated)
+        aggregated_bases = set()
+        for f in aggregated:
+            stem = f.stem.replace("_findings", "")
+            if "_aggregated" in stem:
+                stem = stem.rsplit("_aggregated", 1)[0]
+            aggregated_bases.add(stem)
+        for f in non_aggregated:
+            stem = f.stem.replace("_findings", "")
+            if stem not in aggregated_bases:
+                result.append(f)
+        return sorted(result, key=lambda p: p.name)
+
+    def setup(self) -> None:
+        self.datasets_dir.mkdir(parents=True, exist_ok=True)
+        self.merged_dir.mkdir(parents=True, exist_ok=True)
+        self.session_dir.mkdir(parents=True, exist_ok=True)
+        self.landing_dir.mkdir(parents=True, exist_ok=True)
+        self.bronze_dir.mkdir(parents=True, exist_ok=True)
+        self.silver_dir.mkdir(parents=True, exist_ok=True)
+        self.gold_dir.mkdir(parents=True, exist_ok=True)
+
+    @classmethod
+    def create(cls, root: Path, project_name: str) -> RunNamespace:
+        run_id = f"{project_name}-{uuid.uuid4().hex[:8]}"
+        ns = cls(root=root, run_id=run_id)
+        ns.setup()
+        return ns
+
+    @classmethod
+    def from_latest(cls, root: Optional[Path] = None) -> Optional[RunNamespace]:
+        if root is None:
+            from customer_retention.core.config.experiments import get_experiments_dir
+
+            root = get_experiments_dir()
+        runs_dir = root / "runs"
+        if not runs_dir.is_dir():
+            return None
+        best_path: Optional[Path] = None
+        best_mtime = -1.0
+        for candidate in runs_dir.iterdir():
+            if not candidate.is_dir():
+                continue
+            marker_mtime = cls._best_marker_mtime(candidate)
+            if marker_mtime is not None and marker_mtime > best_mtime:
+                best_mtime, best_path = marker_mtime, candidate
+        if best_path is None:
+            return None
+        return cls(root=root, run_id=best_path.name)
+
+    @staticmethod
+    def _best_marker_mtime(run_dir: Path) -> Optional[float]:
+        best: Optional[float] = None
+        for marker_name in ("project_context.yaml", "datasets"):
+            marker = run_dir / marker_name
+            if marker.exists():
+                mtime = marker.stat().st_mtime
+                if best is None or mtime > best:
+                    best = mtime
+        return best
+
+    @classmethod
+    def from_env(cls, root: Optional[Path] = None) -> Optional[RunNamespace]:
+        run_id = os.environ.get("CR_RUN_ID")
+        if not run_id:
+            return None
+        if root is None:
+            from customer_retention.core.config.experiments import get_experiments_dir
+
+            root = get_experiments_dir()
+        return cls(root=root, run_id=run_id)

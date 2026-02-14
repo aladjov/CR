@@ -1,0 +1,138 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+from customer_retention.core.compat import pd
+from customer_retention.core.config.column_config import ColumnType, DatasetGranularity
+from customer_retention.stages.profiling.type_detector import TypeDetector
+
+
+@dataclass
+class DatasetFingerprint:
+    name: str
+    row_count: int
+    column_count: int
+    entity_columns: list[str]
+    time_columns: list[str]
+    target_candidates: list[str]
+    granularity: DatasetGranularity
+    entity_column: Optional[str] = None
+    time_column: Optional[str] = None
+    unique_entities: Optional[int] = None
+    avg_rows_per_entity: Optional[float] = None
+    temporal_span_days: Optional[int] = None
+    data_start: Optional[str] = None
+    data_end: Optional[str] = None
+    sampled: bool = False
+
+
+class DatasetFingerprinter:
+    def __init__(self, nrows: int = 10000):
+        self.nrows = nrows
+        self._type_detector = TypeDetector()
+
+    def fingerprint(self, name: str, data: pd.DataFrame | str | Path) -> DatasetFingerprint:
+        full_row_count = self._count_rows(data)
+        df = self._load(data)
+        sampled = len(df) < full_row_count
+
+        entity_columns = []
+        time_columns = []
+        target_candidates = []
+
+        for col in df.columns:
+            inference = self._type_detector.detect_type(df[col], col)
+            if inference.inferred_type == ColumnType.IDENTIFIER:
+                entity_columns.append(col)
+            elif inference.inferred_type == ColumnType.DATETIME:
+                time_columns.append(col)
+            elif inference.inferred_type in (ColumnType.TARGET, ColumnType.BINARY):
+                if inference.inferred_type == ColumnType.TARGET:
+                    target_candidates.append(col)
+
+        granularity_result = self._type_detector.detect_granularity(df)
+        granularity = granularity_result.granularity
+        best_entity = granularity_result.entity_column or (entity_columns[0] if entity_columns else None)
+        best_time = granularity_result.time_column or (time_columns[0] if time_columns else None)
+
+        unique_entities = None
+        avg_rows = None
+        temporal_span = None
+        data_start = None
+        data_end = None
+
+        if not sampled:
+            if best_entity and best_entity in df.columns:
+                unique_entities = df[best_entity].nunique()
+                if unique_entities > 0:
+                    avg_rows = round(len(df) / unique_entities, 2)
+
+            if best_time and best_time in df.columns:
+                try:
+                    ts = pd.to_datetime(df[best_time], format="mixed", errors="coerce")
+                    ts_min = ts.min()
+                    ts_max = ts.max()
+                    span = ts_max - ts_min
+                    temporal_span = int(span.days) if not pd.isna(span) else None
+                    if not pd.isna(ts_min) and not pd.isna(ts_max):
+                        data_start = str(ts_min.date())
+                        data_end = str(ts_max.date())
+                except Exception:
+                    pass
+
+        return DatasetFingerprint(
+            name=name,
+            row_count=full_row_count,
+            column_count=len(df.columns),
+            entity_columns=entity_columns,
+            time_columns=time_columns,
+            target_candidates=target_candidates,
+            granularity=granularity,
+            entity_column=best_entity,
+            time_column=best_time,
+            unique_entities=unique_entities,
+            avg_rows_per_entity=avg_rows,
+            temporal_span_days=temporal_span,
+            data_start=data_start,
+            data_end=data_end,
+            sampled=sampled,
+        )
+
+    def fingerprint_all(self, datasets: dict[str, pd.DataFrame | str | Path]) -> dict[str, DatasetFingerprint]:
+        return {name: self.fingerprint(name, data) for name, data in datasets.items()}
+
+    @staticmethod
+    def to_summary_dataframe(fingerprints: dict[str, DatasetFingerprint]) -> pd.DataFrame:
+        rows = []
+        for fp in fingerprints.values():
+            row = {
+                "name": fp.name,
+                "rows": fp.row_count,
+                "columns": fp.column_count,
+                "granularity": fp.granularity.value if fp.granularity else None,
+                "entity_column": fp.entity_column,
+                "time_column": fp.time_column,
+                "target_candidates": ", ".join(fp.target_candidates) if fp.target_candidates else "",
+                "sampled": fp.sampled,
+            }
+            rows.append(row)
+        return pd.DataFrame(rows)
+
+    def _count_rows(self, data: pd.DataFrame | str | Path) -> int:
+        if isinstance(data, pd.DataFrame):
+            return len(data)
+        path = Path(data)
+        if path.suffix == ".csv":
+            with open(path) as f:
+                return sum(1 for _ in f) - 1
+        return len(pd.read_parquet(path, columns=[]))
+
+    def _load(self, data: pd.DataFrame | str | Path) -> pd.DataFrame:
+        if isinstance(data, pd.DataFrame):
+            return data.head(self.nrows) if len(data) > self.nrows else data
+        path = Path(data)
+        if path.suffix == ".csv":
+            return pd.read_csv(path, nrows=self.nrows)
+        return pd.read_parquet(path).head(self.nrows)

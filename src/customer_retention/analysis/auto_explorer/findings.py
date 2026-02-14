@@ -165,6 +165,9 @@ class ExplorationFindings:
     timestamp_scenario: Optional[str] = None
     timestamp_strategy: Optional[str] = None
     datetime_ordering: List[str] = field(default_factory=list)
+    datetime_derivation_sources: List[str] = field(default_factory=list)
+    datetime_allow_future_columns: List[str] = field(default_factory=list)
+    excluded_leaking_features: List[str] = field(default_factory=list)
     label_timestamp_column: Optional[str] = None
     observation_window_days: int = 180
 

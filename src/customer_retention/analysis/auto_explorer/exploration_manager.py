@@ -7,6 +7,7 @@ Provides functionality for:
 - Detecting relationships between datasets
 - Planning aggregations for multi-dataset analysis
 """
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 @dataclass
 class DatasetInfo:
     """Information about a discovered dataset."""
+
     name: str
     findings_path: str
     source_path: str
@@ -39,18 +41,28 @@ class DatasetInfo:
 @dataclass
 class DatasetRelationshipInfo:
     """Information about relationship between two datasets."""
+
     left_dataset: str
     right_dataset: str
-    left_column: str
-    right_column: str
+    left_columns: list
+    right_columns: list
     relationship_type: str  # one_to_one, one_to_many, many_to_many
     confidence: float = 1.0
     auto_detected: bool = False
+
+    @property
+    def left_column(self) -> str:
+        return self.left_columns[0] if self.left_columns else ""
+
+    @property
+    def right_column(self) -> str:
+        return self.right_columns[0] if self.right_columns else ""
 
 
 @dataclass
 class AggregationPlanItem:
     """Plan for aggregating one event dataset."""
+
     dataset_name: str
     entity_column: str
     time_column: str
@@ -62,20 +74,26 @@ class AggregationPlanItem:
 @dataclass
 class MultiDatasetFindings:
     """Findings for multiple related datasets."""
+
     datasets: Dict[str, DatasetInfo] = field(default_factory=dict)
     relationships: List[DatasetRelationshipInfo] = field(default_factory=list)
     primary_entity_dataset: Optional[str] = None
     event_datasets: List[str] = field(default_factory=list)
     excluded_datasets: List[str] = field(default_factory=list)
-    aggregation_windows: List[str] = field(default_factory=lambda: ["24h", "7d", "30d", "90d", "180d", "365d", "all_time"])
+    aggregation_windows: List[str] = field(
+        default_factory=lambda: ["24h", "7d", "30d", "90d", "180d", "365d", "all_time"]
+    )
     composite_dataset_name: Optional[str] = None
     notes: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def selected_datasets(self) -> Dict[str, DatasetInfo]:
         """Return only datasets that are not excluded."""
-        return {name: info for name, info in self.datasets.items()
-                if name not in self.excluded_datasets and not info.excluded}
+        return {
+            name: info
+            for name, info in self.datasets.items()
+            if name not in self.excluded_datasets and not info.excluded
+        }
 
     def exclude_dataset(self, name: str) -> None:
         """Exclude a dataset from the pipeline."""
@@ -104,8 +122,8 @@ class MultiDatasetFindings:
         rel = DatasetRelationshipInfo(
             left_dataset=left_dataset,
             right_dataset=right_dataset,
-            left_column=left_column,
-            right_column=right_column,
+            left_columns=[left_column],
+            right_columns=[right_column],
             relationship_type=relationship_type,
             confidence=confidence,
             auto_detected=False,
@@ -152,13 +170,17 @@ class MultiDatasetFindings:
                 registry.init_gold(primary_info.target_column)
 
         for rel in self.relationships:
-            if (rel.left_dataset in self.selected_datasets and
-                rel.right_dataset in self.selected_datasets and
-                registry.silver):
+            if (
+                rel.left_dataset in self.selected_datasets
+                and rel.right_dataset in self.selected_datasets
+                and registry.silver
+            ):
                 registry.add_silver_join(
-                    rel.left_dataset, rel.right_dataset,
-                    [rel.left_column], rel.relationship_type,
-                    f"Join {rel.left_dataset} with {rel.right_dataset}"
+                    rel.left_dataset,
+                    rel.right_dataset,
+                    [rel.left_column],
+                    rel.relationship_type,
+                    f"Join {rel.left_dataset} with {rel.right_dataset}",
                 )
 
         return registry
@@ -185,8 +207,8 @@ class MultiDatasetFindings:
                 {
                     "left_dataset": rel.left_dataset,
                     "right_dataset": rel.right_dataset,
-                    "left_column": rel.left_column,
-                    "right_column": rel.right_column,
+                    "left_columns": rel.left_columns,
+                    "right_columns": rel.right_columns,
                     "relationship_type": rel.relationship_type,
                     "confidence": rel.confidence,
                     "auto_detected": rel.auto_detected,
@@ -229,8 +251,8 @@ class MultiDatasetFindings:
             DatasetRelationshipInfo(
                 left_dataset=rel["left_dataset"],
                 right_dataset=rel["right_dataset"],
-                left_column=rel["left_column"],
-                right_column=rel["right_column"],
+                left_columns=rel.get("left_columns") or [rel["left_column"]],
+                right_columns=rel.get("right_columns") or [rel["right_column"]],
                 relationship_type=rel["relationship_type"],
                 confidence=rel.get("confidence", 1.0),
                 auto_detected=rel.get("auto_detected", False),
@@ -244,7 +266,9 @@ class MultiDatasetFindings:
             primary_entity_dataset=data.get("primary_entity_dataset"),
             event_datasets=data.get("event_datasets", []),
             excluded_datasets=data.get("excluded_datasets", []),
-            aggregation_windows=data.get("aggregation_windows", ["24h", "7d", "30d", "90d", "180d", "365d", "all_time"]),
+            aggregation_windows=data.get(
+                "aggregation_windows", ["24h", "7d", "30d", "90d", "180d", "365d", "all_time"]
+            ),
             composite_dataset_name=data.get("composite_dataset_name"),
             notes=data.get("notes", {}),
         )
@@ -253,8 +277,9 @@ class MultiDatasetFindings:
 class ExplorationManager:
     """Manages multiple exploration findings."""
 
-    def __init__(self, explorations_dir: Path):
+    def __init__(self, explorations_dir: Path, findings_paths: Optional[List[Path]] = None):
         self.explorations_dir = Path(explorations_dir)
+        self._findings_paths = findings_paths
         self._findings_cache: Dict[str, ExplorationFindings] = {}
         self._excluded_datasets: set = set()
 
@@ -267,13 +292,13 @@ class ExplorationManager:
             prefer_aggregated: If True, when both event-level and aggregated findings
                 exist for the same dataset, only return the aggregated one.
         """
+        if self._findings_paths is not None:
+            return self._findings_paths
+
         if not self.explorations_dir.exists():
             return []
 
-        all_files = [
-            f for f in self.explorations_dir.glob("*_findings.yaml")
-            if "multi_dataset" not in f.name
-        ]
+        all_files = [f for f in self.explorations_dir.glob("*_findings.yaml") if "multi_dataset" not in f.name]
 
         if not prefer_aggregated:
             return all_files
@@ -302,30 +327,25 @@ class ExplorationManager:
         return result
 
     def _get_base_name(self, path: Path) -> str:
-        """Extract base dataset name without hash or aggregated suffix."""
+        """Extract base dataset name without aggregated suffix."""
         stem = path.stem.replace("_findings", "")
         if "_aggregated" in stem:
             stem = stem.rsplit("_aggregated", 1)[0]
-        parts = stem.rsplit("_", 1)
-        return parts[0] if len(parts) == 2 and len(parts[1]) == 6 else stem
+        return stem
 
     def get_skipped_event_findings(self) -> List[Path]:
         """Return event-level findings that were skipped in favor of aggregated versions."""
         if not self.explorations_dir.exists():
             return []
 
-        all_files = [
-            f for f in self.explorations_dir.glob("*_findings.yaml")
-            if "multi_dataset" not in f.name
-        ]
+        all_files = [f for f in self.explorations_dir.glob("*_findings.yaml") if "multi_dataset" not in f.name]
 
         aggregated = {f for f in all_files if "_aggregated" in f.name}
         if not aggregated:
             return []
 
         aggregated_base_names = {self._get_base_name(f) for f in aggregated}
-        return [f for f in all_files if "_aggregated" not in f.name
-                and self._get_base_name(f) in aggregated_base_names]
+        return [f for f in all_files if "_aggregated" not in f.name and self._get_base_name(f) in aggregated_base_names]
 
     def load_findings(self, name_pattern: str) -> Optional[ExplorationFindings]:
         """Load findings by name pattern (partial match)."""
@@ -360,23 +380,27 @@ class ExplorationManager:
             if not include_excluded and is_excluded:
                 continue
 
-            datasets.append(DatasetInfo(
-                name=name,
-                findings_path=str(path),
-                source_path=findings.source_path,
-                granularity=granularity,
-                row_count=findings.row_count,
-                column_count=findings.column_count,
-                entity_column=entity_col,
-                time_column=time_col,
-                target_column=findings.target_column,
-                excluded=is_excluded,
-            ))
+            datasets.append(
+                DatasetInfo(
+                    name=name,
+                    findings_path=str(path),
+                    source_path=findings.source_path,
+                    granularity=granularity,
+                    row_count=findings.row_count,
+                    column_count=findings.column_count,
+                    entity_column=entity_col,
+                    time_column=time_col,
+                    target_column=findings.target_column,
+                    excluded=is_excluded,
+                )
+            )
 
         return datasets
 
     def create_multi_dataset_findings(
-        self, dataset_names: Optional[List[str]] = None
+        self,
+        dataset_names: Optional[List[str]] = None,
+        merge_scaffold=None,
     ) -> MultiDatasetFindings:
         """Create a MultiDatasetFindings from discovered datasets.
 
@@ -384,6 +408,8 @@ class ExplorationManager:
             dataset_names: Optional list of dataset names to include.
                           If None, all discovered datasets are included.
                           If provided, only datasets matching these names are included.
+            merge_scaffold: Optional list of MergeScaffoldEntry from ProjectContext.
+                           Converted to relationships for the silver layer.
         """
         datasets_info = self.list_datasets(include_excluded=True)
 
@@ -392,8 +418,7 @@ class ExplorationManager:
             datasets_info = [d for d in datasets_info if d.name in dataset_names]
 
         datasets = {d.name: d for d in datasets_info}
-        event_datasets = [d.name for d in datasets_info
-                        if d.granularity == DatasetGranularity.EVENT_LEVEL]
+        event_datasets = [d.name for d in datasets_info if d.granularity == DatasetGranularity.EVENT_LEVEL]
         excluded = [d.name for d in datasets_info if d.excluded]
 
         # Determine primary entity dataset (one with target, or largest entity-level)
@@ -406,13 +431,32 @@ class ExplorationManager:
                 elif primary is None:
                     primary = d.name
 
+        relationships = self._scaffold_to_relationships(merge_scaffold) if merge_scaffold else []
+
         return MultiDatasetFindings(
             datasets=datasets,
-            relationships=[],
+            relationships=relationships,
             primary_entity_dataset=primary,
             event_datasets=event_datasets,
             excluded_datasets=excluded,
         )
+
+    @staticmethod
+    def _scaffold_to_relationships(scaffold) -> List[DatasetRelationshipInfo]:
+        result = []
+        for entry in scaffold:
+            result.append(
+                DatasetRelationshipInfo(
+                    left_dataset=entry.right_dataset,
+                    right_dataset=entry.left_dataset,
+                    left_columns=list(entry.join_keys),
+                    right_columns=list(entry.join_keys),
+                    relationship_type=entry.relationship,
+                    confidence=1.0,
+                    auto_detected=True,
+                )
+            )
+        return result
 
     def exclude_dataset(self, name_pattern: str) -> None:
         """Exclude a dataset from multi-dataset analysis."""
@@ -448,24 +492,11 @@ class ExplorationManager:
         return findings.time_series_metadata.aggregated_findings_path
 
     def _extract_dataset_name(self, path: Path) -> str:
-        """Extract dataset name from findings path."""
-        # Pattern: {name}_{hash}_findings.yaml or {name}_{hash}_aggregated_findings.yaml
-        stem = path.stem  # e.g., "customers_abc123_findings" or "customers_abc123_aggregated_findings"
+        """Extract dataset name from findings path.
 
-        # Remove _findings suffix
-        stem = stem.replace("_findings", "")
-
-        # Check for _aggregated suffix (describes findings file, not dataset)
+        Pattern: {name}_findings.yaml or {name}_aggregated_findings.yaml
+        """
+        stem = path.stem.replace("_findings", "")
         if "_aggregated" in stem:
-            parts = stem.rsplit("_aggregated", 1)
-            base_name = parts[0]
-            name_parts = base_name.rsplit("_", 1)
-            if len(name_parts) == 2:
-                return name_parts[0]
-            return base_name
-
-        # Regular findings - remove hash
-        parts = stem.rsplit("_", 1)
-        if len(parts) == 2:
-            return parts[0]  # Return name without hash
+            stem = stem.rsplit("_aggregated", 1)[0]
         return stem

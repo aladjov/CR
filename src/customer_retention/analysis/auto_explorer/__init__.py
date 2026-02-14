@@ -1,4 +1,13 @@
-from .dataset_context import DatasetContext, DatasetContextScanner, DatasetEntry, mount_target_column
+from .active_dataset_store import (
+    load_active_dataset,
+    load_merge_dataset,
+    load_silver_merged,
+    save_active_dataset,
+    save_aggregated_dataset,
+)
+from .dataset_context import DatasetContext, DatasetContextScanner, DatasetEntry
+from .dataset_fingerprinter import DatasetFingerprint, DatasetFingerprinter
+from .entity_timestamp_deriver import EntityFeatureTimestampDeriver, EntityTimestampResult
 from .exploration_manager import (
     AggregationPlanItem,
     DatasetInfo,
@@ -8,6 +17,7 @@ from .exploration_manager import (
 )
 from .explorer import DataExplorer
 from .findings import ColumnFinding, ExplorationFindings, TextProcessingMetadata, TimeSeriesMetadata
+from .intent_defaults import IntentDefaultsEngine, IntentSuggestion
 from .layered_recommendations import (
     ALL_AGGREGATIONS,
     CATEGORICAL_AGGREGATIONS,
@@ -17,6 +27,41 @@ from .layered_recommendations import (
     LayeredRecommendation,
     RecommendationRegistry,
     SilverRecommendations,
+)
+from .objective_support_communicator import (
+    ObjectiveSupportCommunicator,
+    ObjectiveSynthesis,
+    SectionRecord,
+    SignalRule,
+    apply_signal_rules,
+    collect_indicators,
+    signal_bar,
+)
+from .prediction_objective_detector import (
+    PredictionObjectiveAssessment,
+    PredictionObjectiveDetector,
+    derive_objective_support,
+)
+from .project_context import (
+    CadenceInterval,
+    DatasetProvenance,
+    DatasetRegistryEntry,
+    DatasetValidation,
+    ExplorationContract,
+    IntentConfig,
+    MergeScaffoldEntry,
+    ObjectiveAssessment,
+    ObjectivePriority,
+    ObjectiveSpec,
+    ObjectiveSupport,
+    ObjectiveSupportEntry,
+    PredictionAnchor,
+    PredictionObjective,
+    ProjectContext,
+    RawTimeColumnRole,
+    SplitStrategy,
+    TemporalPosture,
+    mount_target_column,
 )
 from .recommendation_builder import (
     BronzeBuilder,
@@ -31,6 +76,19 @@ from .recommendations import (
     TargetRecommendation,
     TransformRecommendation,
 )
+from .run_namespace import RunNamespace
+from .session import (
+    SessionState,
+    get_current_username,
+    initialize_run,
+    load_notebook_findings,
+    mark_notebook,
+    resolve_active_dataset,
+    resolve_findings_path,
+    resolve_target_column,
+    set_active_dataset,
+)
+from .snapshot_grid import DatasetGridVote, GridAdjustmentMode, SnapshotGrid
 
 __all__ = [
     "DataExplorer",
@@ -63,5 +121,57 @@ __all__ = [
     "DatasetContext",
     "DatasetContextScanner",
     "DatasetEntry",
+    "ProjectContext",
+    "DatasetRegistryEntry",
+    "DatasetProvenance",
+    "DatasetValidation",
+    "ExplorationContract",
+    "MergeScaffoldEntry",
+    "ObjectiveAssessment",
+    "ObjectivePriority",
+    "ObjectiveSpec",
+    "PredictionAnchor",
+    "PredictionObjective",
+    "RawTimeColumnRole",
+    "TemporalPosture",
     "mount_target_column",
+    "DatasetFingerprint",
+    "DatasetFingerprinter",
+    "PredictionObjectiveDetector",
+    "PredictionObjectiveAssessment",
+    "derive_objective_support",
+    "ObjectiveSupport",
+    "ObjectiveSupportCommunicator",
+    "ObjectiveSupportEntry",
+    "ObjectiveSynthesis",
+    "SectionRecord",
+    "SignalRule",
+    "apply_signal_rules",
+    "collect_indicators",
+    "signal_bar",
+    "CadenceInterval",
+    "SplitStrategy",
+    "IntentConfig",
+    "IntentDefaultsEngine",
+    "IntentSuggestion",
+    "save_active_dataset",
+    "save_aggregated_dataset",
+    "load_active_dataset",
+    "load_merge_dataset",
+    "load_silver_merged",
+    "EntityFeatureTimestampDeriver",
+    "EntityTimestampResult",
+    "RunNamespace",
+    "DatasetGridVote",
+    "GridAdjustmentMode",
+    "SnapshotGrid",
+    "SessionState",
+    "get_current_username",
+    "initialize_run",
+    "mark_notebook",
+    "resolve_active_dataset",
+    "load_notebook_findings",
+    "resolve_findings_path",
+    "resolve_target_column",
+    "set_active_dataset",
 ]

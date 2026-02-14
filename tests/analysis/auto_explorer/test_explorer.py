@@ -109,8 +109,7 @@ class TestDataExplorerExplore:
             )
             findings = explorer.explore(sample_dataframe, name="test_exploration")
 
-            # Implementation adds hash to filename: {name}_{hash}_findings.yaml
-            saved_files = list(Path(tmpdir).glob("test_exploration_*_findings.yaml"))
+            saved_files = list(Path(tmpdir).glob("test_exploration_findings.yaml"))
             assert len(saved_files) == 1
 
 
@@ -290,8 +289,7 @@ class TestDataExplorerSaveFindings:
             )
             explorer.explore(sample_dataframe)
 
-            # Implementation adds hash: exploration_{hash}_findings.yaml
-            saved_files = list(Path(tmpdir).glob("exploration_*_findings.yaml"))
+            saved_files = list(Path(tmpdir).glob("exploration_findings.yaml"))
             assert len(saved_files) == 1
 
     def test_name_from_source_path(self):
@@ -306,8 +304,7 @@ class TestDataExplorerSaveFindings:
             )
             explorer.explore(str(csv_path))
 
-            # Implementation adds hash: my_data_{hash}_findings.yaml
-            saved_files = list(Path(tmpdir).glob("my_data_*_findings.yaml"))
+            saved_files = list(Path(tmpdir).glob("my_data_findings.yaml"))
             assert len(saved_files) == 1
 
 
@@ -566,6 +563,5 @@ class TestDataExplorerSaveFindingsEdgeCases:
                 output_dir=tmpdir
             )
             findings = explorer.explore(df)
-            # When source is <DataFrame> and name is None, should use "exploration"
-            saved_files = list(Path(tmpdir).glob("exploration_*_findings.yaml"))
+            saved_files = list(Path(tmpdir).glob("exploration_findings.yaml"))
             assert len(saved_files) == 1

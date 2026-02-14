@@ -410,6 +410,20 @@ class RecommendationRegistry:
         )
 
     @classmethod
+    def merge(cls, registries: List["RecommendationRegistry"]) -> "RecommendationRegistry":
+        if not registries:
+            return cls()
+        result = cls()
+        primary = next((r for r in registries if r.gold is not None), None)
+        primary = primary or next((r for r in registries if r.silver), None)
+        for reg in registries:
+            result.sources.update(reg.sources)
+            result.fit_artifacts.update(reg.fit_artifacts)
+        if primary:
+            result.silver, result.gold, result.bronze = primary.silver, primary.gold, primary.bronze
+        return result
+
+    @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "RecommendationRegistry":
         registry = cls()
         if "sources" in data:

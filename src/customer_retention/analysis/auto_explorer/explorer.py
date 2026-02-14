@@ -1,4 +1,3 @@
-import hashlib
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -251,8 +250,7 @@ class DataExplorer:
     def _compute_findings_path(self, findings: ExplorationFindings, name: Optional[str]) -> str:
         if name is None:
             name = Path(findings.source_path).stem if findings.source_path != "<DataFrame>" else "exploration"
-        path_hash = hashlib.md5(findings.source_path.encode()).hexdigest()[:6]
-        return str(self.output_dir / f"{name}_{path_hash}_findings.yaml")
+        return str(self.output_dir / f"{name}_findings.yaml")
 
     def _save_findings(self, findings: ExplorationFindings):
         self.output_dir.mkdir(parents=True, exist_ok=True)

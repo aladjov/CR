@@ -34,7 +34,7 @@ def sample_entity_findings(temp_explorations_dir):
         target_column="churned",
         target_type="binary",
     )
-    path = temp_explorations_dir / "customers_abc123_findings.yaml"
+    path = temp_explorations_dir / "customers_findings.yaml"
     findings.save(str(path))
     return path
 
@@ -58,7 +58,7 @@ def sample_event_findings(temp_explorations_dir):
             unique_entities=5000,
         ),
     )
-    path = temp_explorations_dir / "transactions_def456_findings.yaml"
+    path = temp_explorations_dir / "transactions_findings.yaml"
     findings.save(str(path))
     return path
 
@@ -82,7 +82,7 @@ def sample_email_findings(temp_explorations_dir):
             unique_entities=5000,
         ),
     )
-    path = temp_explorations_dir / "emails_ghi789_findings.yaml"
+    path = temp_explorations_dir / "emails_findings.yaml"
     findings.save(str(path))
     return path
 
@@ -370,9 +370,8 @@ class TestAggregatedFindingsDiscovery:
         """Create sample aggregated event findings (output from 01d notebook)."""
         from customer_retention.analysis.auto_explorer.findings import TimeSeriesMetadata
 
-        # Aggregated data path
-        aggregated_data_path = str(temp_explorations_dir / "transactions_def456_aggregated.parquet")
-        aggregated_findings_path = str(temp_explorations_dir / "transactions_def456_aggregated_findings.yaml")
+        aggregated_data_path = str(temp_explorations_dir / "transactions_aggregated.parquet")
+        aggregated_findings_path = str(temp_explorations_dir / "transactions_aggregated_findings.yaml")
 
         # Create aggregated findings (entity-level, output from aggregation)
         aggregated_findings = ExplorationFindings(
@@ -397,7 +396,7 @@ class TestAggregatedFindingsDiscovery:
         findings = ExplorationFindings.load(str(sample_event_findings))
         findings.time_series_metadata.aggregation_executed = True
         findings.time_series_metadata.aggregated_data_path = str(
-            temp_explorations_dir / "transactions_def456_aggregated.parquet"
+            temp_explorations_dir / "transactions_aggregated.parquet"
         )
         findings.time_series_metadata.aggregated_findings_path = str(aggregated_event_findings)
         findings.time_series_metadata.aggregation_windows_used = ["7d", "30d", "all_time"]
@@ -458,13 +457,11 @@ class TestAggregatedFindingsDiscovery:
         """_extract_dataset_name should handle the _aggregated suffix."""
         manager = ExplorationManager(explorations_dir=temp_explorations_dir)
 
-        # Regular findings
-        regular = manager._extract_dataset_name(Path("events_abc123_findings.yaml"))
+        regular = manager._extract_dataset_name(Path("events_findings.yaml"))
         assert regular == "events"
 
-        # Aggregated findings - should include "aggregated" to distinguish
-        agg = manager._extract_dataset_name(Path("events_abc123_aggregated_findings.yaml"))
-        assert "events" in agg
+        agg = manager._extract_dataset_name(Path("events_aggregated_findings.yaml"))
+        assert agg == "events"
 
     def test_discover_findings_prefer_aggregated_default(
         self, temp_explorations_dir, sample_entity_findings, event_findings_with_aggregation, aggregated_event_findings
@@ -475,7 +472,7 @@ class TestAggregatedFindingsDiscovery:
 
         names = [p.name for p in findings_paths]
         assert any("aggregated" in n for n in names)
-        assert not any(n == "transactions_def456_findings.yaml" for n in names)
+        assert not any(n == "transactions_findings.yaml" for n in names)
 
     def test_discover_findings_prefer_aggregated_false(
         self, temp_explorations_dir, sample_entity_findings, event_findings_with_aggregation, aggregated_event_findings
@@ -486,7 +483,7 @@ class TestAggregatedFindingsDiscovery:
 
         names = [p.name for p in findings_paths]
         assert any("aggregated" in n for n in names)
-        assert any(n == "transactions_def456_findings.yaml" for n in names)
+        assert any(n == "transactions_findings.yaml" for n in names)
 
     def test_get_skipped_event_findings(
         self, temp_explorations_dir, sample_entity_findings, event_findings_with_aggregation, aggregated_event_findings
@@ -496,7 +493,7 @@ class TestAggregatedFindingsDiscovery:
         skipped = manager.get_skipped_event_findings()
 
         assert len(skipped) == 1
-        assert skipped[0].name == "transactions_def456_findings.yaml"
+        assert skipped[0].name == "transactions_findings.yaml"
 
     def test_get_skipped_event_findings_empty_when_no_aggregated(
         self, temp_explorations_dir, sample_entity_findings, sample_event_findings
@@ -508,13 +505,44 @@ class TestAggregatedFindingsDiscovery:
         assert skipped == []
 
     def test_get_base_name_extracts_correctly(self, temp_explorations_dir):
-        """_get_base_name should extract base dataset name without hash or aggregated suffix."""
+        """_get_base_name should extract base dataset name without aggregated suffix."""
         manager = ExplorationManager(explorations_dir=temp_explorations_dir)
 
-        assert manager._get_base_name(Path("events_abc123_findings.yaml")) == "events"
-        assert manager._get_base_name(Path("events_abc123_aggregated_findings.yaml")) == "events"
-        assert manager._get_base_name(Path("my_dataset_def456_findings.yaml")) == "my_dataset"
-        assert manager._get_base_name(Path("my_dataset_def456_aggregated_xyz789_findings.yaml")) == "my_dataset"
+        assert manager._get_base_name(Path("events_findings.yaml")) == "events"
+        assert manager._get_base_name(Path("events_aggregated_findings.yaml")) == "events"
+        assert manager._get_base_name(Path("my_dataset_findings.yaml")) == "my_dataset"
+        assert manager._get_base_name(Path("my_dataset_aggregated_findings.yaml")) == "my_dataset"
+
+
+class TestDiscoverFindingsWithPaths:
+    def test_findings_paths_used_directly(self, temp_explorations_dir, sample_entity_findings, sample_event_findings):
+        custom_paths = [sample_entity_findings]
+        manager = ExplorationManager(
+            explorations_dir=temp_explorations_dir,
+            findings_paths=custom_paths,
+        )
+        result = manager.discover_findings()
+        assert result == custom_paths
+
+    def test_findings_paths_skips_globbing(self, tmp_path):
+        fake_dir = tmp_path / "nonexistent"
+        paths = [tmp_path / "a_findings.yaml", tmp_path / "b_findings.yaml"]
+        for p in paths:
+            p.touch()
+        manager = ExplorationManager(
+            explorations_dir=fake_dir,
+            findings_paths=paths,
+        )
+        result = manager.discover_findings()
+        assert result == paths
+
+    def test_findings_paths_none_falls_back_to_glob(self, temp_explorations_dir, sample_entity_findings, sample_event_findings):
+        manager = ExplorationManager(
+            explorations_dir=temp_explorations_dir,
+            findings_paths=None,
+        )
+        result = manager.discover_findings()
+        assert len(result) == 2
 
 
 class TestCompositeDatasetNamePersistence:
@@ -542,3 +570,132 @@ class TestCompositeDatasetNamePersistence:
 
         loaded = MultiDatasetFindings.load(str(save_path))
         assert loaded.composite_dataset_name is None
+
+
+class TestScaffoldToRelationships:
+
+    def test_scaffold_to_relationships_converts_entries(self):
+        from customer_retention.analysis.auto_explorer.project_context import MergeScaffoldEntry
+
+        scaffold = [
+            MergeScaffoldEntry(
+                left_dataset="transactions",
+                right_dataset="profiles",
+                join_keys=["customer_id"],
+                relationship="many_to_one",
+            ),
+        ]
+        rels = ExplorationManager._scaffold_to_relationships(scaffold)
+        assert len(rels) == 1
+        rel = rels[0]
+        assert rel.left_dataset == "profiles"
+        assert rel.right_dataset == "transactions"
+        assert rel.left_columns == ["customer_id"]
+        assert rel.right_columns == ["customer_id"]
+        assert rel.relationship_type == "many_to_one"
+
+    def test_scaffold_to_relationships_composite_keys(self):
+        from customer_retention.analysis.auto_explorer.project_context import MergeScaffoldEntry
+
+        scaffold = [
+            MergeScaffoldEntry(
+                left_dataset="transactions",
+                right_dataset="profiles",
+                join_keys=["customer_id", "as_of_date"],
+                relationship="many_to_one",
+            ),
+        ]
+        rels = ExplorationManager._scaffold_to_relationships(scaffold)
+        assert rels[0].left_columns == ["customer_id", "as_of_date"]
+        assert rels[0].right_columns == ["customer_id", "as_of_date"]
+
+    def test_scaffold_to_relationships_empty(self):
+        rels = ExplorationManager._scaffold_to_relationships([])
+        assert rels == []
+
+    def test_create_multi_dataset_findings_with_scaffold(
+        self, temp_explorations_dir, sample_entity_findings, sample_event_findings
+    ):
+        from customer_retention.analysis.auto_explorer.project_context import MergeScaffoldEntry
+
+        scaffold = [
+            MergeScaffoldEntry(
+                left_dataset="transactions",
+                right_dataset="customers",
+                join_keys=["customer_id"],
+                relationship="many_to_one",
+            ),
+        ]
+        manager = ExplorationManager(explorations_dir=temp_explorations_dir)
+        multi = manager.create_multi_dataset_findings(merge_scaffold=scaffold)
+        assert len(multi.relationships) == 1
+        assert multi.relationships[0].left_dataset == "customers"
+        assert multi.relationships[0].right_dataset == "transactions"
+
+    def test_create_multi_dataset_findings_without_scaffold(
+        self, temp_explorations_dir, sample_entity_findings, sample_event_findings
+    ):
+        manager = ExplorationManager(explorations_dir=temp_explorations_dir)
+        multi = manager.create_multi_dataset_findings()
+        assert multi.relationships == []
+
+
+class TestRelationshipInfoCompositeKeys:
+
+    def test_relationship_info_left_right_columns(self):
+        from customer_retention.analysis.auto_explorer.exploration_manager import DatasetRelationshipInfo
+
+        rel = DatasetRelationshipInfo(
+            left_dataset="a",
+            right_dataset="b",
+            left_columns=["id", "date"],
+            right_columns=["id", "date"],
+            relationship_type="one_to_many",
+        )
+        assert rel.left_columns == ["id", "date"]
+        assert rel.left_column == "id"
+        assert rel.right_column == "id"
+
+    def test_save_load_with_composite_columns(self, temp_explorations_dir, sample_entity_findings, sample_event_findings):
+        from customer_retention.analysis.auto_explorer.exploration_manager import DatasetRelationshipInfo
+
+        manager = ExplorationManager(explorations_dir=temp_explorations_dir)
+        multi = manager.create_multi_dataset_findings()
+        multi.relationships = [
+            DatasetRelationshipInfo(
+                left_dataset="customers",
+                right_dataset="transactions",
+                left_columns=["customer_id", "as_of_date"],
+                right_columns=["customer_id", "as_of_date"],
+                relationship_type="one_to_many",
+            )
+        ]
+        save_path = temp_explorations_dir / "multi_dataset_findings.yaml"
+        multi.save(str(save_path))
+        loaded = MultiDatasetFindings.load(str(save_path))
+        assert loaded.relationships[0].left_columns == ["customer_id", "as_of_date"]
+        assert loaded.relationships[0].right_columns == ["customer_id", "as_of_date"]
+
+    def test_load_legacy_single_column_format(self, temp_explorations_dir):
+        import yaml
+
+        data = {
+            "datasets": {},
+            "relationships": [
+                {
+                    "left_dataset": "a",
+                    "right_dataset": "b",
+                    "left_column": "id",
+                    "right_column": "id",
+                    "relationship_type": "one_to_many",
+                }
+            ],
+            "primary_entity_dataset": None,
+            "event_datasets": [],
+            "excluded_datasets": [],
+        }
+        path = temp_explorations_dir / "multi_dataset_findings.yaml"
+        path.write_text(yaml.dump(data))
+        loaded = MultiDatasetFindings.load(str(path))
+        assert loaded.relationships[0].left_columns == ["id"]
+        assert loaded.relationships[0].right_columns == ["id"]
