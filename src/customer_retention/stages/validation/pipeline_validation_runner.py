@@ -18,7 +18,7 @@ def load_artifact(path: Union[str, Path], version: Optional[int] = None) -> pd.D
     if path.is_dir() and (path / "_delta_log").is_dir():
         from customer_retention.integrations.adapters.factory import get_delta
         return get_delta(force_local=True).read(str(path), version=version)
-    return pd.read_parquet(path)
+    return pd.read_parquet(str(path))
 
 
 @dataclass

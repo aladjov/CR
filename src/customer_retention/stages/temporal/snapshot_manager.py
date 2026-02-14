@@ -169,7 +169,7 @@ class SnapshotManager:
             parquet_path = self.snapshots_dir / f"{snapshot_id}.parquet"
             if not parquet_path.exists():
                 raise FileNotFoundError(f"Snapshot not found: {snapshot_id}")
-            df = pd.read_parquet(parquet_path)
+            df = pd.read_parquet(str(parquet_path))
 
         metadata = self._load_metadata(snapshot_id)
 
@@ -220,7 +220,7 @@ class SnapshotManager:
             self.storage.write(df.reset_index(drop=True), table_path, mode="overwrite", metadata=metadata)
         else:
             parquet_path = Path(table_path).parent / f"{snapshot_id}.parquet"
-            df.to_parquet(parquet_path, index=False)
+            df.to_parquet(str(parquet_path), index=False)
 
     def _next_version(self, table_path: Path, snapshot_name: str) -> int:
         if self.storage and self.storage.exists(str(table_path)):

@@ -281,7 +281,7 @@ class TestCodeRendererBronze:
         bronze_config = BronzeLayerConfig(source=parquet_source, transformations=[])
         result = renderer.render_bronze("events", bronze_config)
 
-        assert "pd.read_parquet(path)" in result
+        assert "pd.read_parquet(str(path))" in result
 
 
 class TestCodeRendererSilver:

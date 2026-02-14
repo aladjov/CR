@@ -125,7 +125,7 @@ class DatasetContextScanner:
             p = Path(p)
             if not p.exists():
                 raise FileNotFoundError(f"Dataset not found: {p}")
-            frames[p.stem] = pd.read_csv(p, nrows=self.nrows)
+            frames[p.stem] = pd.read_csv(str(p), nrows=self.nrows)
 
         target_name, target_col, entity_col = self._find_target_and_entity(frames)
 

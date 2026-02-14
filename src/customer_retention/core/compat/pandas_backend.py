@@ -12,7 +12,7 @@ except ImportError:
 
 
 def read_csv(path: str, **kwargs: Any) -> pd.DataFrame:
-    return pd.read_csv(path, **kwargs)
+    return pd.read_csv(str(path), **kwargs)
 
 
 def read_delta(path: str, version: Optional[int] = None) -> pd.DataFrame:

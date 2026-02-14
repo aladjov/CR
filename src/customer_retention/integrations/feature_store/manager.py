@@ -171,11 +171,11 @@ class FeastBackend(FeatureStoreBackend):
                 self.storage.write(df, str(delta_path))
         else:
             if mode == "merge" and parquet_path.exists():
-                existing = pd.read_parquet(parquet_path)
+                existing = pd.read_parquet(str(parquet_path))
                 if table_name in self._tables:
                     entity_key = self._tables[table_name]["entity_key"]
                     df = pd.concat([existing, df]).drop_duplicates(subset=[entity_key], keep="last")
-            df.to_parquet(parquet_path, index=False)
+            df.to_parquet(str(parquet_path), index=False)
 
         effective_cutoff = cutoff_date or (
             datetime.fromisoformat(self._tables[table_name]["cutoff_date"])
@@ -297,7 +297,7 @@ class FeastBackend(FeatureStoreBackend):
         if self.storage and self.storage.exists(str(delta_path)):
             return self.storage.read(str(delta_path))
         if parquet_path.exists():
-            return pd.read_parquet(parquet_path)
+            return pd.read_parquet(str(parquet_path))
         return None
 
 

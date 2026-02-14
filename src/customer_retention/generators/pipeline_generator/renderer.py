@@ -303,9 +303,9 @@ def load_{{ source }}():
     if not path.exists():
         raise FileNotFoundError(f"Source file not found: {path}")
     if source_config["format"] == "csv":
-        return pd.read_csv(path)
+        return pd.read_csv(str(path))
     if source_config["format"] == "parquet":
-        return pd.read_parquet(path)
+        return pd.read_parquet(str(path))
     from customer_retention.integrations.adapters.factory import get_delta
     return get_delta().read(str(path))
 
@@ -349,9 +349,9 @@ def _load_raw_events():
     if not path.exists():
         raise FileNotFoundError(f"Raw source not found: {path}")
     if source["format"] == "csv":
-        return pd.read_csv(path)
+        return pd.read_csv(str(path))
     if source["format"] == "parquet":
-        return pd.read_parquet(path)
+        return pd.read_parquet(str(path))
     from customer_retention.integrations.adapters.factory import get_delta
     return get_delta().read(str(path))
 
@@ -1396,9 +1396,9 @@ def load_raw_data() -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"Raw source not found: {path}")
     if source["format"] == "csv":
-        return pd.read_csv(path)
+        return pd.read_csv(str(path))
     if source["format"] == "parquet":
-        return pd.read_parquet(path)
+        return pd.read_parquet(str(path))
     from customer_retention.integrations.adapters.factory import get_delta
     return get_delta().read(str(path))
 
@@ -1642,9 +1642,9 @@ def _load_raw_events():
     if not path.exists():
         raise FileNotFoundError(f"Raw source not found: {path}")
     if source["format"] == "csv":
-        return pd.read_csv(path)
+        return pd.read_csv(str(path))
     if source["format"] == "parquet":
-        return pd.read_parquet(path)
+        return pd.read_parquet(str(path))
     from customer_retention.integrations.adapters.factory import get_delta
     return get_delta().read(str(path))
 

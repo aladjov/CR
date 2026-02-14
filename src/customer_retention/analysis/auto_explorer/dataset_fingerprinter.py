@@ -127,12 +127,12 @@ class DatasetFingerprinter:
         if path.suffix == ".csv":
             with open(path) as f:
                 return sum(1 for _ in f) - 1
-        return len(pd.read_parquet(path, columns=[]))
+        return len(pd.read_parquet(str(path), columns=[]))
 
     def _load(self, data: pd.DataFrame | str | Path) -> pd.DataFrame:
         if isinstance(data, pd.DataFrame):
             return data.head(self.nrows) if len(data) > self.nrows else data
         path = Path(data)
         if path.suffix == ".csv":
-            return pd.read_csv(path, nrows=self.nrows)
-        return pd.read_parquet(path).head(self.nrows)
+            return pd.read_csv(str(path), nrows=self.nrows)
+        return pd.read_parquet(str(path)).head(self.nrows)

@@ -94,7 +94,7 @@ class UnifiedDataPreparer:
             self.storage.write(df, str(unified_dir))
         else:
             parquet_path = self.output_path / "unified" / f"{self.dataset_name}.parquet"
-            df.to_parquet(parquet_path, index=False)
+            df.to_parquet(str(parquet_path), index=False)
 
         return df
 

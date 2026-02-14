@@ -140,6 +140,23 @@ class TestFingerprinterFromPath:
         assert fp.row_count > 0
 
 
+class TestFingerprinterPathConversion:
+    def test_fingerprint_all_with_path_objects(self):
+        datasets = {"profiles": TINY_PROFILES, "transactions": TINY_TRANSACTIONS}
+        results = DatasetFingerprinter().fingerprint_all(datasets)
+        assert len(results) == 2
+        assert all(fp.row_count > 0 for fp in results.values())
+
+    def test_count_rows_with_path_object(self):
+        fp = DatasetFingerprinter()
+        assert fp._count_rows(TINY_PROFILES) > 0
+
+    def test_load_with_path_object(self):
+        fp = DatasetFingerprinter()
+        df = fp._load(TINY_PROFILES)
+        assert len(df) > 0
+
+
 class TestFingerprinterMultiDataset:
     def test_fingerprint_all(self):
         datasets = {

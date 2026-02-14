@@ -31,7 +31,7 @@ class FeastAdapter(FeatureStoreAdapter):
         if self.storage:
             self.storage.write(df, str(data_dir / config.name))
         else:
-            df.to_parquet(data_dir / f"{config.name}.parquet", index=False)
+            df.to_parquet(str(data_dir / f"{config.name}.parquet"), index=False)
         return config.name
 
     def get_historical_features(self, entity_df: pd.DataFrame, feature_refs: List[str]) -> pd.DataFrame:
@@ -67,7 +67,7 @@ class FeastAdapter(FeatureStoreAdapter):
             if self.storage and delta_path.is_dir() and self.storage.exists(str(delta_path)):
                 return self.storage.read(str(delta_path), version=version)
             if parquet_path.exists():
-                return pd.read_parquet(parquet_path)
+                return pd.read_parquet(str(parquet_path))
             raise KeyError(f"Feature view {name} not found")
         return self._data_sources[name]
 

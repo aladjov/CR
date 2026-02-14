@@ -183,9 +183,9 @@ class ScoringPipelineValidator:
             from customer_retention.integrations.adapters.factory import get_delta
             return get_delta(force_local=True).read(str(path))
         if path.suffix == ".parquet":
-            return pd.read_parquet(path)
+            return pd.read_parquet(str(path))
         if path.suffix == ".csv":
-            return pd.read_csv(path)
+            return pd.read_csv(str(path))
         raise ValueError(f"Unsupported file format: {path.suffix}")
 
     def _get_comparable_columns(self) -> List[str]:
