@@ -7,8 +7,8 @@
 - [[Architecture]]
 
 ### Core Concepts
-- [[Model Intent and Objective Support]]
-- [[Snapshot Grid and Control Variables]]
+- [[Model Intent and Objective Support|Model-Intent-and-Objective-Support]]
+- [[Snapshot Grid and Control Variables|Snapshot-Grid-and-Control-Variables]]
 - [[Exploration Loop]]
 - [[Transforms & Scoring Validation|Transforms-and-Scoring-Validation]]
 - [[Feature Store]]
