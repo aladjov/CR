@@ -34,11 +34,11 @@ NOTEBOOKS = {
     "01b": ("01b_temporal_quality.ipynb", "Temporal Quality", False),
     "01c": ("01c_temporal_patterns.ipynb", "Temporal Patterns", True),  # slow
     "01d": ("01d_event_aggregation.ipynb", "Event Aggregation", False),
-    "02": ("02_column_deep_dive.ipynb", "Column Deep Dive", False),
-    "02a": ("02a_text_columns_deep_dive.ipynb", "Text Columns Deep Dive", False),
-    "03": ("03_quality_assessment.ipynb", "Quality Assessment", False),
-    "04": ("04_relationship_analysis.ipynb", "Relationship Analysis", False),
-    "05": ("05_multi_dataset.ipynb", "Multi Dataset", False),
+    "02": ("02_source_integrity.ipynb", "Source Integrity", False),
+    "03": ("03_dataset_merge.ipynb", "Dataset Merge", False),
+    "04": ("04_column_deep_dive.ipynb", "Column Deep Dive", False),
+    "04a": ("04a_text_columns_deep_dive.ipynb", "Text Columns Deep Dive", False),
+    "05": ("05_relationship_analysis.ipynb", "Relationship Analysis", False),
     "06": ("06_feature_opportunities.ipynb", "Feature Opportunities", False),
     "07": ("07_modeling_readiness.ipynb", "Modeling Readiness", False),
     "08": ("08_baseline_experiments.ipynb", "Baseline Experiments", True),  # slow

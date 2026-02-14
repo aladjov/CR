@@ -38,7 +38,7 @@ class TestTrackAndExportPrevious:
              patch("customer_retention.analysis.notebook_progress.threading") as mock_threading:
             mock_thread = MagicMock()
             mock_threading.Thread.return_value = mock_thread
-            result = track_and_export_previous("02_column_deep_dive.ipynb")
+            result = track_and_export_previous("04_column_deep_dive.ipynb")
 
         assert result is None
         mock_threading.Thread.assert_called_once()
@@ -51,10 +51,10 @@ class TestTrackAndExportPrevious:
 
         with _patch_experiments_dir(tmp_path), \
              patch("customer_retention.analysis.notebook_progress.threading"):
-            track_and_export_previous("02_column_deep_dive.ipynb")
+            track_and_export_previous("04_column_deep_dive.ipynb")
 
         data = json.loads(progress.read_text())
-        assert data["last_notebook"] == "02_column_deep_dive.ipynb"
+        assert data["last_notebook"] == "04_column_deep_dive.ipynb"
 
     def test_handles_missing_previous_notebook(self, tmp_path):
         """Previous notebook file doesn't exist → export dispatched but result is None."""
@@ -63,11 +63,11 @@ class TestTrackAndExportPrevious:
 
         with _patch_experiments_dir(tmp_path), \
              patch("customer_retention.analysis.notebook_progress.threading"):
-            result = track_and_export_previous("02_column_deep_dive.ipynb")
+            result = track_and_export_previous("04_column_deep_dive.ipynb")
 
         assert result is None
         data = json.loads(progress.read_text())
-        assert data["last_notebook"] == "02_column_deep_dive.ipynb"
+        assert data["last_notebook"] == "04_column_deep_dive.ipynb"
 
     def test_handles_corrupt_progress_file(self, tmp_path):
         """Bad JSON → no export, creates fresh progress."""
@@ -75,11 +75,11 @@ class TestTrackAndExportPrevious:
         progress.write_text("not valid json {{{")
 
         with _patch_experiments_dir(tmp_path):
-            result = track_and_export_previous("02_column_deep_dive.ipynb")
+            result = track_and_export_previous("04_column_deep_dive.ipynb")
 
         assert result is None
         data = json.loads(progress.read_text())
-        assert data["last_notebook"] == "02_column_deep_dive.ipynb"
+        assert data["last_notebook"] == "04_column_deep_dive.ipynb"
 
     def test_handles_oserror_on_mkdir_gracefully(self):
         mock_dir = MagicMock(spec=Path)

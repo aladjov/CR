@@ -1,5 +1,6 @@
 """Tests for scripts/notebooks/run_exploration.py multi-dataset logic."""
 import json
+import os
 
 # Ensure the scripts directory is importable
 import sys
@@ -11,11 +12,16 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "notebooks"))
 
 from run_exploration import (
+    PER_DATASET_STEMS,
     SETUP_NOTEBOOKS,
+    _detect_global_skip_set,
     _detect_skip_set_for_dataset,
     _execute_one,
+    _find_dataset_findings,
+    _has_text_columns_for_dataset,
     _load_dataset_context,
     _ordered_datasets,
+    _resolve_namespace,
     _run_multi_dataset_flow,
     _set_data_path,
     run_all,
@@ -308,7 +314,7 @@ class TestDetectSkipSetForDataset:
 
     def test_entity_level_skips_text(self, findings_dir, entity_findings_yaml):
         skip, reasons = _detect_skip_set_for_dataset(findings_dir, "profiles")
-        assert "02a_text_columns_deep_dive" in skip
+        assert "04a_text_columns_deep_dive" in skip
 
     def test_event_level_keeps_temporal(self, findings_dir, event_findings_yaml):
         skip, reasons = _detect_skip_set_for_dataset(findings_dir, "transactions")
@@ -317,7 +323,7 @@ class TestDetectSkipSetForDataset:
 
     def test_text_columns_keep_text_notebooks(self, findings_dir, text_findings_yaml):
         skip, reasons = _detect_skip_set_for_dataset(findings_dir, "tickets")
-        assert "02a_text_columns_deep_dive" not in skip
+        assert "04a_text_columns_deep_dive" not in skip
         # 01a_a_temporal_text_deep_dive is in BOTH TEMPORAL and TEXT sets;
         # for a non-event dataset with text, temporal skip still applies
         assert "01a_a_temporal_text_deep_dive" in skip
@@ -325,7 +331,7 @@ class TestDetectSkipSetForDataset:
     def test_missing_findings_skips_temporal_and_text(self, findings_dir):
         skip, reasons = _detect_skip_set_for_dataset(findings_dir, "nonexistent")
         assert "01a_temporal_deep_dive" in skip
-        assert "02a_text_columns_deep_dive" in skip
+        assert "04a_text_columns_deep_dive" in skip
 
     def test_context_many_to_one_enables_temporal(
         self, findings_dir, multi_context_yaml,
@@ -400,7 +406,7 @@ class TestExecuteOne:
         assert results["01a_temporal_deep_dive:my_dataset"].startswith("SKIPPED")
 
     def test_dry_run(self, tmp_path):
-        nb_path = tmp_path / "02_column_deep_dive.ipynb"
+        nb_path = tmp_path / "04_column_deep_dive.ipynb"
         nb_path.write_text("{}")
         results = {}
         timings = {}
@@ -410,10 +416,10 @@ class TestExecuteOne:
             set(), {}, True, 600, "python3",
         )
         assert ok is True
-        assert results["02_column_deep_dive:profiles"] == "DRY_RUN"
+        assert results["04_column_deep_dive:profiles"] == "DRY_RUN"
 
     def test_result_key_without_dataset(self, tmp_path):
-        nb_path = tmp_path / "05_multi_dataset.ipynb"
+        nb_path = tmp_path / "03_dataset_merge.ipynb"
         nb_path.write_text("{}")
         results = {}
         timings = {}
@@ -422,7 +428,7 @@ class TestExecuteOne:
             nb_path, None, results, timings,
             set(), {}, True, 600, "python3",
         )
-        assert "05_multi_dataset" in results
+        assert "03_dataset_merge" in results
 
     def test_result_key_with_dataset(self, tmp_path):
         nb_path = tmp_path / "01_data_discovery.ipynb"
@@ -474,7 +480,7 @@ class TestRunAllDispatch:
         assert any("profiles" in k for k in per_ds_keys)
         assert any("transactions" in k for k in per_ds_keys)
         assert any("tickets" in k for k in per_ds_keys)
-        assert "05_multi_dataset" in global_keys
+        assert "03_dataset_merge" in global_keys
 
     def test_single_dataset_no_colon_keys(self, tmp_path, single_context_yaml):
         notebooks_dir = tmp_path / "notebooks"
@@ -598,9 +604,75 @@ class TestMultiDatasetWithSkips:
             dry_run=True,
         )
 
-        text_key = "02a_text_columns_deep_dive:tickets"
+        text_key = "04a_text_columns_deep_dive:tickets"
         assert text_key in results
         assert results[text_key] == "DRY_RUN"
+
+
+class TestSkipDetectionWithoutFlatFindingsDir:
+    def _make_notebooks(self, notebooks_dir):
+        from run_exploration import NOTEBOOKS_ORDER
+
+        nb_json = json.dumps({
+            "nbformat": 4, "nbformat_minor": 5,
+            "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
+            "cells": [],
+        })
+        for stem in NOTEBOOKS_ORDER:
+            (notebooks_dir / f"{stem}.ipynb").write_text(nb_json)
+
+    def test_entity_skips_temporal_without_entity_findings(self, tmp_path):
+        """Entity dataset with context but no findings files still skips temporal.
+
+        Reproduces: findings_dir has context (so multi-dataset triggers)
+        but no individual findings files for the entity dataset.
+        Skip detection must still work via context/raw-data fallback.
+        """
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+
+        ctx_data = {
+            "target_dataset": "profiles",
+            "target_column": "churned",
+            "entity_column": "customer_id",
+            "datasets": {
+                "profiles": {
+                    "path": "../fixtures/profiles.csv",
+                    "has_target": True,
+                    "target_column": "churned",
+                    "entity_column": "customer_id",
+                },
+                "transactions": {
+                    "path": "../fixtures/transactions.csv",
+                    "has_target": False,
+                    "join_key": "customer_id",
+                    "join_to": "profiles",
+                    "relationship": "many_to_one",
+                },
+            },
+        }
+        (findings_dir / "dataset_context.yaml").write_text(yaml.dump(ctx_data))
+
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        self._make_notebooks(notebooks_dir)
+
+        results = run_all(
+            notebooks_dir,
+            findings_dir=findings_dir,
+            dry_run=True,
+        )
+
+        for stem in ("01a_temporal_deep_dive", "01b_temporal_quality",
+                      "01c_temporal_patterns", "01d_event_aggregation"):
+            key = f"{stem}:profiles"
+            assert key in results, f"{key} missing from results"
+            assert results[key].startswith("SKIPPED"), (
+                f"{key} should be SKIPPED for entity dataset but was {results[key]}"
+            )
+
+        key_01a_tx = "01a_temporal_deep_dive:transactions"
+        assert results[key_01a_tx] == "DRY_RUN", "event dataset should run temporal"
 
 
 class TestMultiDatasetSetDataPath:
@@ -690,3 +762,528 @@ class TestMultiDatasetSetDataPath:
             nb = json.loads((notebooks_dir / f"{stem}.ipynb").read_text())
             source = "".join(nb["cells"][0]["source"])
             assert "DATA_PATH" not in source
+
+
+# ---------------------------------------------------------------------------
+# _resolve_namespace
+# ---------------------------------------------------------------------------
+
+
+class TestResolveNamespace:
+    def test_returns_namespace_with_run_id(self, tmp_path):
+        experiments_dir = tmp_path / "experiments"
+        runs_dir = experiments_dir / "runs" / "my-run-123"
+        runs_dir.mkdir(parents=True)
+        findings_dir = experiments_dir / "findings"
+        findings_dir.mkdir(parents=True)
+
+        ns = _resolve_namespace(findings_dir, run_id="my-run-123")
+        assert ns is not None
+        assert ns.run_id == "my-run-123"
+        assert ns.root == experiments_dir
+
+    def test_returns_namespace_from_latest(self, tmp_path):
+        experiments_dir = tmp_path / "experiments"
+        run_dir = experiments_dir / "runs" / "latest-abc"
+        run_dir.mkdir(parents=True)
+        (run_dir / "project_context.yaml").write_text("run_id: latest-abc")
+        findings_dir = experiments_dir / "findings"
+        findings_dir.mkdir(parents=True)
+
+        ns = _resolve_namespace(findings_dir, run_id=None)
+        assert ns is not None
+        assert ns.run_id == "latest-abc"
+
+    def test_returns_none_when_no_runs(self, tmp_path):
+        experiments_dir = tmp_path / "experiments"
+        findings_dir = experiments_dir / "findings"
+        findings_dir.mkdir(parents=True)
+
+        ns = _resolve_namespace(findings_dir, run_id=None)
+        assert ns is None
+
+    def test_derives_experiments_dir_from_findings_parent(self, tmp_path):
+        experiments_dir = tmp_path / "my_experiments"
+        runs_dir = experiments_dir / "runs" / "run-xyz"
+        runs_dir.mkdir(parents=True)
+        findings_dir = experiments_dir / "findings"
+        findings_dir.mkdir(parents=True)
+
+        ns = _resolve_namespace(findings_dir, run_id="run-xyz")
+        assert ns is not None
+        assert ns.root == experiments_dir
+
+    def test_handles_non_findings_dir_name(self, tmp_path):
+        custom_dir = tmp_path / "custom_output"
+        custom_dir.mkdir(parents=True)
+
+        ns = _resolve_namespace(custom_dir, run_id=None)
+        assert ns is None
+
+
+# ---------------------------------------------------------------------------
+# _find_dataset_findings with namespace
+# ---------------------------------------------------------------------------
+
+
+class TestFindDatasetFindingsNamespace:
+    def test_finds_in_namespace_dir(self, tmp_path):
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+
+        experiments_dir = tmp_path / "experiments"
+        ns = RunNamespace(root=experiments_dir, run_id="run-001")
+        ns_findings = ns.dataset_findings_dir("transactions")
+        ns_findings.mkdir(parents=True)
+        expected = ns_findings / "transactions_findings.yaml"
+        expected.write_text("dummy: true")
+
+        flat_dir = experiments_dir / "findings"
+        flat_dir.mkdir(parents=True)
+
+        result = _find_dataset_findings(flat_dir, "transactions", namespace=ns)
+        assert result == expected
+
+    def test_falls_back_to_flat_dir(self, tmp_path):
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+
+        experiments_dir = tmp_path / "experiments"
+        ns = RunNamespace(root=experiments_dir, run_id="run-001")
+
+        flat_dir = experiments_dir / "findings"
+        flat_dir.mkdir(parents=True)
+        flat_file = flat_dir / "transactions_findings.yaml"
+        flat_file.write_text("dummy: true")
+
+        result = _find_dataset_findings(flat_dir, "transactions", namespace=ns)
+        assert result == flat_file
+
+    def test_prefers_namespace_over_flat(self, tmp_path):
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+
+        experiments_dir = tmp_path / "experiments"
+        ns = RunNamespace(root=experiments_dir, run_id="run-001")
+        ns_findings = ns.dataset_findings_dir("transactions")
+        ns_findings.mkdir(parents=True)
+        ns_file = ns_findings / "transactions_findings.yaml"
+        ns_file.write_text("namespace: true")
+
+        flat_dir = experiments_dir / "findings"
+        flat_dir.mkdir(parents=True)
+        flat_file = flat_dir / "transactions_findings.yaml"
+        flat_file.write_text("flat: true")
+
+        result = _find_dataset_findings(flat_dir, "transactions", namespace=ns)
+        assert result == ns_file
+
+    def test_finds_aggregated_in_namespace(self, tmp_path):
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+
+        experiments_dir = tmp_path / "experiments"
+        ns = RunNamespace(root=experiments_dir, run_id="run-001")
+        ns_findings = ns.dataset_findings_dir("transactions")
+        ns_findings.mkdir(parents=True)
+        agg = ns_findings / "transactions_aggregated_findings.yaml"
+        agg.write_text("aggregated: true")
+
+        flat_dir = experiments_dir / "findings"
+        flat_dir.mkdir(parents=True)
+
+        result = _find_dataset_findings(flat_dir, "transactions", namespace=ns)
+        assert result == agg
+
+    def test_no_namespace_uses_flat_dir(self, tmp_path):
+        flat_dir = tmp_path / "findings"
+        flat_dir.mkdir()
+        flat_file = flat_dir / "sales_findings.yaml"
+        flat_file.write_text("data: true")
+
+        result = _find_dataset_findings(flat_dir, "sales", namespace=None)
+        assert result == flat_file
+
+
+# ---------------------------------------------------------------------------
+# TestPerDatasetTextNotebook
+# ---------------------------------------------------------------------------
+
+
+class TestPerDatasetTextNotebook:
+    def test_04a_in_per_dataset_stems(self):
+        assert "04a_text_columns_deep_dive" in PER_DATASET_STEMS
+
+    def test_04a_runs_per_dataset_with_text(self, tmp_path, multi_context_yaml):
+        from run_exploration import NOTEBOOKS_ORDER
+
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        findings_dir = multi_context_yaml.parent
+
+        from customer_retention.core.config.column_config import ColumnType
+
+        text_findings = _make_findings(
+            {"description": ColumnType.TEXT, "status": ColumnType.CATEGORICAL_NOMINAL},
+            row_count=5000, column_count=6,
+        )
+        text_findings.save(str(findings_dir / "tickets_findings.yaml"))
+
+        nb_json = json.dumps({
+            "nbformat": 4, "nbformat_minor": 5,
+            "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
+            "cells": [],
+        })
+        for stem in NOTEBOOKS_ORDER:
+            (notebooks_dir / f"{stem}.ipynb").write_text(nb_json)
+
+        results = run_all(
+            notebooks_dir, findings_dir=findings_dir, dry_run=True,
+        )
+
+        key = "04a_text_columns_deep_dive:tickets"
+        assert key in results
+        assert results[key] == "DRY_RUN"
+
+    def test_04a_skipped_per_dataset_without_text(self, tmp_path, multi_context_yaml):
+        from run_exploration import NOTEBOOKS_ORDER
+
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        findings_dir = multi_context_yaml.parent
+
+        from customer_retention.core.config.column_config import ColumnType
+
+        no_text = _make_findings(
+            {"age": ColumnType.NUMERIC_CONTINUOUS},
+            row_count=1000, column_count=2,
+        )
+        no_text.save(str(findings_dir / "profiles_findings.yaml"))
+
+        nb_json = json.dumps({
+            "nbformat": 4, "nbformat_minor": 5,
+            "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
+            "cells": [],
+        })
+        for stem in NOTEBOOKS_ORDER:
+            (notebooks_dir / f"{stem}.ipynb").write_text(nb_json)
+
+        results = run_all(
+            notebooks_dir, findings_dir=findings_dir, dry_run=True,
+        )
+
+        key = "04a_text_columns_deep_dive:profiles"
+        assert key in results
+        assert results[key].startswith("SKIPPED")
+
+
+# ---------------------------------------------------------------------------
+# TestAutoDropTextSkip
+# ---------------------------------------------------------------------------
+
+
+class TestAutoDropTextSkip:
+    def test_auto_drop_flag_skips_text_notebooks(self, findings_dir):
+        from customer_retention.core.config.column_config import ColumnType
+
+        findings = _make_findings(
+            {"description": ColumnType.TEXT, "status": ColumnType.CATEGORICAL_NOMINAL},
+            row_count=5000, column_count=6,
+        )
+        findings.metadata["auto_drop_text_columns"] = True
+        findings.save(str(findings_dir / "tickets_findings.yaml"))
+
+        assert _has_text_columns_for_dataset(findings_dir, "tickets") is False
+
+    def test_auto_drop_flag_false_allows_text(self, findings_dir):
+        from customer_retention.core.config.column_config import ColumnType
+
+        findings = _make_findings(
+            {"description": ColumnType.TEXT, "status": ColumnType.CATEGORICAL_NOMINAL},
+            row_count=5000, column_count=6,
+        )
+        findings.metadata["auto_drop_text_columns"] = False
+        findings.save(str(findings_dir / "tickets_findings.yaml"))
+
+        assert _has_text_columns_for_dataset(findings_dir, "tickets") is True
+
+    def test_no_auto_drop_flag_backward_compat(self, findings_dir):
+        from customer_retention.core.config.column_config import ColumnType
+
+        findings = _make_findings(
+            {"description": ColumnType.TEXT, "status": ColumnType.CATEGORICAL_NOMINAL},
+            row_count=5000, column_count=6,
+        )
+        findings.save(str(findings_dir / "tickets_findings.yaml"))
+
+        assert _has_text_columns_for_dataset(findings_dir, "tickets") is True
+
+
+# ---------------------------------------------------------------------------
+# _detect_global_skip_set
+# ---------------------------------------------------------------------------
+
+
+class TestGlobalSkipDetection:
+    def test_no_global_text_skip_when_04a_is_per_dataset(self, tmp_path):
+        from customer_retention.core.config.column_config import ColumnType
+
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+
+        f1 = _make_findings(
+            {"age": ColumnType.NUMERIC_CONTINUOUS}, row_count=100, column_count=2,
+        )
+        f1.save(str(findings_dir / "profiles_findings.yaml"))
+
+        f2 = _make_findings(
+            {"amount": ColumnType.NUMERIC_CONTINUOUS}, row_count=100, column_count=2,
+        )
+        f2.save(str(findings_dir / "transactions_findings.yaml"))
+
+        context_data = {
+            "target_dataset": "profiles",
+            "target_column": "churned",
+            "entity_column": "customer_id",
+            "datasets": {
+                "profiles": {
+                    "path": "profiles.csv",
+                    "has_target": True,
+                    "target_column": "churned",
+                    "entity_column": "customer_id",
+                },
+                "transactions": {
+                    "path": "transactions.csv",
+                    "has_target": False,
+                    "join_key": "customer_id",
+                    "join_to": "profiles",
+                },
+            },
+        }
+        (findings_dir / "dataset_context.yaml").write_text(yaml.dump(context_data))
+        context = _load_dataset_context(findings_dir)
+
+        skip, reasons = _detect_global_skip_set(findings_dir, context)
+        assert "04a_text_columns_deep_dive" not in skip
+
+    def test_global_skip_empty_when_no_global_text_notebooks(self, tmp_path):
+        from customer_retention.core.config.column_config import ColumnType
+
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+
+        f1 = _make_findings(
+            {"age": ColumnType.NUMERIC_CONTINUOUS}, row_count=100, column_count=2,
+        )
+        f1.save(str(findings_dir / "profiles_findings.yaml"))
+
+        f2 = _make_findings(
+            {"description": ColumnType.TEXT}, row_count=100, column_count=2,
+        )
+        f2.save(str(findings_dir / "tickets_findings.yaml"))
+
+        context_data = {
+            "target_dataset": "profiles",
+            "target_column": "churned",
+            "entity_column": "customer_id",
+            "datasets": {
+                "profiles": {
+                    "path": "profiles.csv",
+                    "has_target": True,
+                    "target_column": "churned",
+                    "entity_column": "customer_id",
+                },
+                "tickets": {
+                    "path": "tickets.csv",
+                    "has_target": False,
+                    "join_key": "customer_id",
+                    "join_to": "profiles",
+                },
+            },
+        }
+        (findings_dir / "dataset_context.yaml").write_text(yaml.dump(context_data))
+        context = _load_dataset_context(findings_dir)
+
+        skip, reasons = _detect_global_skip_set(findings_dir, context)
+        assert "04a_text_columns_deep_dive" not in skip
+
+
+# ---------------------------------------------------------------------------
+# CR_DATASET_ID env var management
+# ---------------------------------------------------------------------------
+
+
+class TestDatasetIdEnvVar:
+    def _make_notebooks(self, notebooks_dir):
+        from run_exploration import NOTEBOOKS_ORDER
+
+        nb_json = json.dumps({
+            "nbformat": 4, "nbformat_minor": 5,
+            "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
+            "cells": [],
+        })
+        for stem in NOTEBOOKS_ORDER:
+            (notebooks_dir / f"{stem}.ipynb").write_text(nb_json)
+
+    def test_cr_dataset_id_set_during_per_dataset_phase(
+        self, tmp_path, multi_context_yaml, monkeypatch,
+    ):
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        self._make_notebooks(notebooks_dir)
+        findings_dir = multi_context_yaml.parent
+
+        captured_env: dict[str, str | None] = {}
+
+        original_execute = _execute_one
+
+        def spy_execute(nb_path, dataset_name, *args, **kwargs):
+            if dataset_name:
+                captured_env[f"{nb_path.stem}:{dataset_name}"] = os.environ.get("CR_DATASET_ID")
+            return original_execute(nb_path, dataset_name, *args, **kwargs)
+
+        monkeypatch.setattr("run_exploration._execute_one", spy_execute)
+
+        context = _load_dataset_context(findings_dir)
+        from run_exploration import NOTEBOOKS_ORDER
+
+        notebooks = [
+            notebooks_dir / f"{s}.ipynb"
+            for s in NOTEBOOKS_ORDER
+            if (notebooks_dir / f"{s}.ipynb").exists()
+        ]
+        results, timings = {}, {}
+
+        _run_multi_dataset_flow(
+            notebooks_dir, notebooks, findings_dir, context,
+            results, timings, dry_run=True, timeout=600, kernel="python3",
+        )
+
+        for key, env_val in captured_env.items():
+            ds_name = key.split(":")[1]
+            assert env_val == ds_name, f"CR_DATASET_ID should be '{ds_name}' but was '{env_val}' for {key}"
+
+    def test_cr_dataset_id_set_to_target_for_global_phase(
+        self, tmp_path, multi_context_yaml, monkeypatch,
+    ):
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        self._make_notebooks(notebooks_dir)
+        findings_dir = multi_context_yaml.parent
+
+        global_env_vals: list[str | None] = []
+
+        original_execute = _execute_one
+
+        def spy_execute(nb_path, dataset_name, *args, **kwargs):
+            if dataset_name is None and nb_path.stem != "00_start_here":
+                global_env_vals.append(os.environ.get("CR_DATASET_ID"))
+            return original_execute(nb_path, dataset_name, *args, **kwargs)
+
+        monkeypatch.setattr("run_exploration._execute_one", spy_execute)
+
+        context = _load_dataset_context(findings_dir)
+        from run_exploration import NOTEBOOKS_ORDER
+
+        notebooks = [
+            notebooks_dir / f"{s}.ipynb"
+            for s in NOTEBOOKS_ORDER
+            if (notebooks_dir / f"{s}.ipynb").exists()
+        ]
+        results, timings = {}, {}
+
+        _run_multi_dataset_flow(
+            notebooks_dir, notebooks, findings_dir, context,
+            results, timings, dry_run=True, timeout=600, kernel="python3",
+        )
+
+        assert len(global_env_vals) > 0
+        for val in global_env_vals:
+            assert val == "profiles", f"CR_DATASET_ID should be 'profiles' but was '{val}'"
+
+
+# ---------------------------------------------------------------------------
+# Critical global stop
+# ---------------------------------------------------------------------------
+
+
+class TestCriticalGlobalStop:
+    def _make_notebooks(self, notebooks_dir):
+        from run_exploration import NOTEBOOKS_ORDER
+
+        nb_json = json.dumps({
+            "nbformat": 4, "nbformat_minor": 5,
+            "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
+            "cells": [],
+        })
+        for stem in NOTEBOOKS_ORDER:
+            (notebooks_dir / f"{stem}.ipynb").write_text(nb_json)
+
+    @staticmethod
+    def _make_spy(fail_stem):
+        def spy(nb_path, dataset_name, results, timings, *args, **kwargs):
+            stem = nb_path.stem
+            key = f"{stem}:{dataset_name}" if dataset_name else stem
+            if stem == fail_stem and dataset_name is None:
+                results[key] = "FAILED: mocked"
+                return False
+            results[key] = "OK (0s)"
+            return True
+        return spy
+
+    def test_global_loop_stops_on_critical_failure(
+        self, tmp_path, multi_context_yaml, monkeypatch,
+    ):
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        self._make_notebooks(notebooks_dir)
+        findings_dir = multi_context_yaml.parent
+
+        monkeypatch.setattr("run_exploration._execute_one", self._make_spy("03_dataset_merge"))
+
+        context = _load_dataset_context(findings_dir)
+        from run_exploration import NOTEBOOKS_ORDER
+
+        notebooks = [
+            notebooks_dir / f"{s}.ipynb"
+            for s in NOTEBOOKS_ORDER
+            if (notebooks_dir / f"{s}.ipynb").exists()
+        ]
+        results, timings = {}, {}
+
+        _run_multi_dataset_flow(
+            notebooks_dir, notebooks, findings_dir, context,
+            results, timings, dry_run=False, timeout=600, kernel="python3",
+        )
+
+        global_keys = [k for k in results if ":" not in k and k not in SETUP_NOTEBOOKS]
+        assert "03_dataset_merge" in global_keys
+        assert "06_feature_opportunities" not in global_keys
+        assert "07_modeling_readiness" not in global_keys
+        assert "08_baseline_experiments" not in global_keys
+
+    def test_global_loop_continues_on_non_critical_failure(
+        self, tmp_path, multi_context_yaml, monkeypatch,
+    ):
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        self._make_notebooks(notebooks_dir)
+        findings_dir = multi_context_yaml.parent
+
+        monkeypatch.setattr("run_exploration._execute_one", self._make_spy("04_column_deep_dive"))
+
+        context = _load_dataset_context(findings_dir)
+        from run_exploration import NOTEBOOKS_ORDER
+
+        notebooks = [
+            notebooks_dir / f"{s}.ipynb"
+            for s in NOTEBOOKS_ORDER
+            if (notebooks_dir / f"{s}.ipynb").exists()
+        ]
+        results, timings = {}, {}
+
+        _run_multi_dataset_flow(
+            notebooks_dir, notebooks, findings_dir, context,
+            results, timings, dry_run=False, timeout=600, kernel="python3",
+        )
+
+        global_keys = [k for k in results if ":" not in k and k not in SETUP_NOTEBOOKS]
+        assert "06_feature_opportunities" in global_keys
+        assert "07_modeling_readiness" in global_keys
+        assert "08_baseline_experiments" in global_keys

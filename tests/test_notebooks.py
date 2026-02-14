@@ -20,10 +20,10 @@ NOTEBOOKS_DIR = Path(__file__).parent.parent / "templates" / "notebooks" / "expl
 # List of exploration notebooks in order (standard track)
 EXPLORATION_NOTEBOOKS = [
     "01_data_discovery.ipynb",
-    "02_column_deep_dive.ipynb",
-    "03_quality_assessment.ipynb",
-    "04_relationship_analysis.ipynb",
-    "05_multi_dataset.ipynb",
+    "04_column_deep_dive.ipynb",
+    "02_source_integrity.ipynb",
+    "05_relationship_analysis.ipynb",
+    "03_dataset_merge.ipynb",
     "06_feature_opportunities.ipynb",
     "07_modeling_readiness.ipynb",
     "08_baseline_experiments.ipynb",
@@ -245,7 +245,7 @@ class TestNotebook02ColumnDeepDive:
     def test_notebook_executes(self, run_notebook_01, notebook_workspace):
         """Test that notebook 02 runs without errors."""
         workspace, _ = notebook_workspace
-        run_exploration_notebook("02_column_deep_dive.ipynb", workspace, run_notebook_01)
+        run_exploration_notebook("04_column_deep_dive.ipynb", workspace, run_notebook_01)
 
 
 class TestNotebook03QualityAssessment:
@@ -254,7 +254,7 @@ class TestNotebook03QualityAssessment:
     def test_notebook_executes(self, run_notebook_01, notebook_workspace):
         """Test that notebook 03 runs without errors."""
         workspace, _ = notebook_workspace
-        run_exploration_notebook("03_quality_assessment.ipynb", workspace, run_notebook_01)
+        run_exploration_notebook("02_source_integrity.ipynb", workspace, run_notebook_01)
 
 
 class TestNotebook04RelationshipAnalysis:
@@ -263,7 +263,7 @@ class TestNotebook04RelationshipAnalysis:
     def test_notebook_executes(self, run_notebook_01, notebook_workspace):
         """Test that notebook 04 runs without errors."""
         workspace, _ = notebook_workspace
-        run_exploration_notebook("04_relationship_analysis.ipynb", workspace, run_notebook_01)
+        run_exploration_notebook("05_relationship_analysis.ipynb", workspace, run_notebook_01)
 
 
 class TestNotebook06FeatureOpportunities:
@@ -420,8 +420,8 @@ class TestNotebook05MultiDataset:
     def test_notebook_executes(self, run_notebook_01_multi, multi_dataset_workspace):
         """Test that notebook 05 multi-dataset runs without errors."""
         workspace, _ = multi_dataset_workspace
-        notebook_path = NOTEBOOKS_DIR / "05_multi_dataset.ipynb"
-        output_path = workspace / "05_multi_dataset_output.ipynb"
+        notebook_path = NOTEBOOKS_DIR / "03_dataset_merge.ipynb"
+        output_path = workspace / "03_dataset_merge_output.ipynb"
 
         if not notebook_path.exists():
             pytest.skip(f"Notebook not found: {notebook_path}")
@@ -435,7 +435,7 @@ class TestNotebook05MultiDataset:
             )
         except pm.PapermillExecutionError as e:
             pytest.fail(
-                f"Notebook 05_multi_dataset failed at cell {e.cell_index}:\n"
+                f"Notebook 03_dataset_merge failed at cell {e.cell_index}:\n"
                 f"Cell source:\n{e.source}\n\n"
                 f"Error:\n{e.ename}: {e.evalue}"
             )

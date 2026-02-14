@@ -1,28 +1,7 @@
 #!/usr/bin/env python3
-"""Run exploration notebooks sequentially with smart skip logic.
-
-Reads findings from the experiments directory to decide which notebooks
-to skip:
-
-- Temporal notebooks (01a–01d) are skipped when no event-level datasets exist.
-- Text notebooks (01a_a, 02a) are skipped when no TEXT columns are detected.
-
-Multi-dataset mode (auto-detected from dataset_context.yaml):
-- Runs per-dataset notebooks (01–04) for each dataset (target first)
-- Preserves event-level / text-column skip logic per dataset
-- Then runs global notebooks (05–12) once
-
-Cell outputs are preserved after execution so the resulting notebooks
-can be used for documentation/HTML export.
-
-Usage:
-    python scripts/notebooks/run_exploration.py
-    python scripts/notebooks/run_exploration.py --notebooks-dir exploration_notebooks
-    python scripts/notebooks/run_exploration.py --dry-run
-    python scripts/notebooks/run_exploration.py --timeout 900
-"""
 import argparse
 import json
+import os
 import sys
 import time
 import traceback
@@ -37,11 +16,11 @@ NOTEBOOKS_ORDER = [
     "01b_temporal_quality",
     "01c_temporal_patterns",
     "01d_event_aggregation",
-    "02_column_deep_dive",
-    "02a_text_columns_deep_dive",
-    "03_quality_assessment",
-    "04_relationship_analysis",
-    "05_multi_dataset",
+    "02_source_integrity",
+    "03_dataset_merge",
+    "04_column_deep_dive",
+    "04a_text_columns_deep_dive",
+    "05_relationship_analysis",
     "06_feature_opportunities",
     "07_modeling_readiness",
     "08_baseline_experiments",
@@ -61,7 +40,7 @@ TEMPORAL_NOTEBOOKS = {
 
 TEXT_NOTEBOOKS = {
     "01a_a_temporal_text_deep_dive",
-    "02a_text_columns_deep_dive",
+    "04a_text_columns_deep_dive",
 }
 
 SETUP_NOTEBOOKS = {"00_start_here"}
@@ -73,15 +52,38 @@ PER_DATASET_STEMS = {
     "01b_temporal_quality",
     "01c_temporal_patterns",
     "01d_event_aggregation",
-    "02_column_deep_dive",
-    "02a_text_columns_deep_dive",
-    "03_quality_assessment",
-    "04_relationship_analysis",
+    "02_source_integrity",
+    "04a_text_columns_deep_dive",
 }
 
 _DISCOVERY_NOTEBOOK = "01_data_discovery"
 
 _FINDINGS_EXTENSIONS = ("*.yaml", "*.yml", "*.json")
+
+_GLOBAL_TEXT_NOTEBOOKS = set()
+
+CRITICAL_GLOBAL = {"03_dataset_merge"}
+
+
+# ---------------------------------------------------------------------------
+# Namespace resolution
+# ---------------------------------------------------------------------------
+
+
+def _resolve_namespace(findings_dir: Path, run_id: Optional[str]):
+    experiments_dir = (
+        findings_dir.parent if findings_dir.name == "findings" else findings_dir
+    )
+    try:
+        from customer_retention.analysis.auto_explorer.run_namespace import (
+            RunNamespace,
+        )
+
+        if run_id:
+            return RunNamespace(root=experiments_dir, run_id=run_id)
+        return RunNamespace.from_latest(experiments_dir)
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +92,6 @@ _FINDINGS_EXTENSIONS = ("*.yaml", "*.yml", "*.json")
 
 
 def _iter_findings_files(findings_dir: Path):
-    """Yield findings files matching any supported extension."""
     seen: Set[Path] = set()
     for pattern in _FINDINGS_EXTENSIONS:
         for path in sorted(findings_dir.glob(f"*_findings.{pattern.lstrip('*.')}")):
@@ -100,7 +101,6 @@ def _iter_findings_files(findings_dir: Path):
 
 
 def _detect_skip_set(findings_dir: Path) -> Tuple[Set[str], Dict[str, str]]:
-    """Return (notebooks_to_skip, reasons) based on all findings."""
     skip: Set[str] = set()
     reasons: Dict[str, str] = {}
 
@@ -120,16 +120,33 @@ def _detect_skip_set(findings_dir: Path) -> Tuple[Set[str], Dict[str, str]]:
     return skip, reasons
 
 
-def _find_dataset_findings(findings_dir: Path, dataset_name: str) -> Optional[Path]:
-    """Find the most recent findings file for a dataset."""
+def _find_dataset_findings(
+    findings_dir: Path,
+    dataset_name: str,
+    namespace=None,
+) -> Optional[Path]:
+    if namespace is not None:
+        ns_dir = namespace.dataset_findings_dir(dataset_name)
+        if ns_dir.is_dir():
+            exact = ns_dir / f"{dataset_name}_findings.yaml"
+            if exact.exists():
+                return exact
+            aggregated = ns_dir / f"{dataset_name}_aggregated_findings.yaml"
+            if aggregated.exists():
+                return aggregated
+            candidates = sorted(ns_dir.glob(f"{dataset_name}*_findings.yaml"))
+            if candidates:
+                return candidates[0]
+
+    if not findings_dir.is_dir():
+        return None
     exact = findings_dir / f"{dataset_name}_findings.yaml"
     if exact.exists():
         return exact
-    candidates = sorted(
-        findings_dir.glob(f"{dataset_name}*_findings.yaml"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
+    aggregated = findings_dir / f"{dataset_name}_aggregated_findings.yaml"
+    if aggregated.exists():
+        return aggregated
+    candidates = sorted(findings_dir.glob(f"{dataset_name}*_findings.yaml"))
     return candidates[0] if candidates else None
 
 
@@ -138,15 +155,11 @@ def _is_event_level_dataset(
     dataset_name: str,
     context=None,
     dataset_path: Optional[str] = None,
+    namespace=None,
 ) -> bool:
-    """Determine if a dataset is event-level using multiple signals.
-
-    Priority: findings time_series_metadata > context relationship > direct detection.
-    """
     from customer_retention.core.config.column_config import DatasetGranularity
 
-    # Signal 1: findings time_series_metadata
-    findings_path = _find_dataset_findings(findings_dir, dataset_name)
+    findings_path = _find_dataset_findings(findings_dir, dataset_name, namespace=namespace)
     if findings_path:
         try:
             from customer_retention.analysis.auto_explorer.findings import (
@@ -193,12 +206,11 @@ def _has_text_columns_for_dataset(
     findings_dir: Path,
     dataset_name: str,
     dataset_path: Optional[str] = None,
+    namespace=None,
 ) -> bool:
-    """Determine if a dataset has TEXT columns using findings or direct detection."""
     from customer_retention.core.config.column_config import ColumnType
 
-    # Signal 1: findings
-    findings_path = _find_dataset_findings(findings_dir, dataset_name)
+    findings_path = _find_dataset_findings(findings_dir, dataset_name, namespace=namespace)
     if findings_path:
         try:
             from customer_retention.analysis.auto_explorer.findings import (
@@ -206,6 +218,8 @@ def _has_text_columns_for_dataset(
             )
 
             findings = ExplorationFindings.load(str(findings_path))
+            if findings.metadata.get("auto_drop_text_columns"):
+                return False
             if findings.text_processing:
                 return True
             if ColumnType.TEXT in findings.column_types.values():
@@ -242,16 +256,14 @@ def _detect_skip_set_for_dataset(
     dataset_name: str,
     context=None,
     dataset_path: Optional[str] = None,
+    namespace=None,
 ) -> Tuple[Set[str], Dict[str, str]]:
-    """Return (notebooks_to_skip, reasons) scoped to a single dataset.
-
-    Uses multiple signals: findings, dataset context, and direct data inspection.
-    """
     skip: Set[str] = set()
     reasons: Dict[str, str] = {}
 
     is_event = _is_event_level_dataset(
-        findings_dir, dataset_name, context=context, dataset_path=dataset_path,
+        findings_dir, dataset_name, context=context,
+        dataset_path=dataset_path, namespace=namespace,
     )
     if not is_event:
         for nb in TEMPORAL_NOTEBOOKS:
@@ -260,11 +272,38 @@ def _detect_skip_set_for_dataset(
 
     has_text = _has_text_columns_for_dataset(
         findings_dir, dataset_name, dataset_path=dataset_path,
+        namespace=namespace,
     )
     if not has_text:
         for nb in TEXT_NOTEBOOKS:
             skip.add(nb)
             reasons[nb] = f"no TEXT columns ({dataset_name})"
+
+    return skip, reasons
+
+
+def _detect_global_skip_set(
+    findings_dir: Path,
+    context,
+    namespace=None,
+) -> Tuple[Set[str], Dict[str, str]]:
+    skip: Set[str] = set()
+    reasons: Dict[str, str] = {}
+
+    any_text = False
+    for ds_name in context.datasets:
+        ds_entry = context.datasets[ds_name]
+        ds_path = getattr(ds_entry, "path", None)
+        if _has_text_columns_for_dataset(
+            findings_dir, ds_name, dataset_path=ds_path, namespace=namespace,
+        ):
+            any_text = True
+            break
+
+    if not any_text:
+        for nb in _GLOBAL_TEXT_NOTEBOOKS:
+            skip.add(nb)
+            reasons[nb] = "no TEXT columns in any dataset"
 
     return skip, reasons
 
@@ -331,8 +370,40 @@ def _has_text_columns(findings_dir: Path) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _load_dataset_context(findings_dir: Path):
-    """Load DatasetContext from findings, or None if unavailable."""
+def _load_dataset_context(findings_dir: Path, run_id: Optional[str] = None):
+    """Load ProjectContext (preferred) or DatasetContext from findings.
+
+    Also checks run namespace project_context.yaml when run_id is set.
+    """
+    if run_id:
+        try:
+            from customer_retention.analysis.auto_explorer.run_namespace import (
+                RunNamespace,
+            )
+            from customer_retention.core.config.experiments import get_experiments_dir
+
+            ns = RunNamespace(root=get_experiments_dir(), run_id=run_id)
+            ns_path = ns.project_context_path
+            if ns_path.exists():
+                from customer_retention.analysis.auto_explorer import ProjectContext
+
+                ctx = ProjectContext.load(ns_path)
+                if ctx.datasets:
+                    return ctx
+        except Exception:
+            pass
+
+    project_path = findings_dir / "project_context.yaml"
+    if project_path.exists():
+        try:
+            from customer_retention.analysis.auto_explorer import ProjectContext
+
+            ctx = ProjectContext.load(project_path)
+            if ctx.datasets:
+                return ctx
+        except Exception:
+            pass
+
     context_path = findings_dir / "dataset_context.yaml"
     if not context_path.exists():
         return None
@@ -351,7 +422,8 @@ def _ordered_datasets(context) -> List[Tuple[str, str]]:
     """Return (name, path) pairs with the target dataset first."""
     ordered: List[Tuple[str, str]] = []
     for name, entry in context.datasets.items():
-        if entry.has_target:
+        is_target = getattr(entry, "has_target", False) or getattr(entry, "role", None) == "target"
+        if is_target:
             ordered.insert(0, (name, entry.path))
         else:
             ordered.append((name, entry.path))
@@ -555,13 +627,13 @@ def _run_multi_dataset_flow(
     timeout: int,
     kernel: str,
     error_log: Optional[List[str]] = None,
+    namespace=None,
 ) -> None:
-    """Multi-dataset execution: per-dataset 01-04, then global 05-12."""
     datasets = _ordered_datasets(context)
 
     print(f"\nMulti-dataset mode: {len(datasets)} datasets detected")
     for name, path in datasets:
-        role = "TARGET" if context.datasets[name].has_target else "source"
+        role = "TARGET" if getattr(context.datasets[name], "has_target", False) or getattr(context.datasets[name], "role", None) == "target" else "source"
         print(f"  {name} ({role}): {path}")
 
     per_dataset_nbs = [nb for nb in notebooks if nb.stem in PER_DATASET_STEMS]
@@ -571,7 +643,9 @@ def _run_multi_dataset_flow(
     ]
 
     for ds_name, ds_path in datasets:
-        role = "TARGET" if context.datasets[ds_name].has_target else "source"
+        os.environ["CR_DATASET_ID"] = ds_name
+
+        role = "TARGET" if getattr(context.datasets[ds_name], "has_target", False) or getattr(context.datasets[ds_name], "role", None) == "target" else "source"
         print(f"\n{'=' * 60}")
         print(f"Dataset: {ds_name} ({role})")
         print(f"{'=' * 60}")
@@ -589,21 +663,21 @@ def _run_multi_dataset_flow(
 
             if not skip_detected and stem != _DISCOVERY_NOTEBOOK:
                 skip_detected = True
-                if findings_dir.exists():
-                    skip_set, skip_reasons = _detect_skip_set_for_dataset(
-                        findings_dir, ds_name,
-                        context=context,
-                        dataset_path=ds_path,
+                skip_set, skip_reasons = _detect_skip_set_for_dataset(
+                    findings_dir, ds_name,
+                    context=context,
+                    dataset_path=ds_path,
+                    namespace=namespace,
+                )
+                if skip_set:
+                    print(f"\n  Skipping for {ds_name}:")
+                    for nb in sorted(skip_set):
+                        print(f"    - {nb}: {skip_reasons[nb]}")
+                else:
+                    print(
+                        f"\n  All per-dataset notebooks will run for {ds_name}"
                     )
-                    if skip_set:
-                        print(f"\n  Skipping for {ds_name}:")
-                        for nb in sorted(skip_set):
-                            print(f"    - {nb}: {skip_reasons[nb]}")
-                    else:
-                        print(
-                            f"\n  All per-dataset notebooks will run for {ds_name}"
-                        )
-                    print()
+                print()
 
             _execute_one(
                 nb_path, ds_name, results, timings,
@@ -611,28 +685,67 @@ def _run_multi_dataset_flow(
                 error_log=error_log,
             )
 
+    os.environ["CR_DATASET_ID"] = datasets[0][0]
+
     if global_nbs:
         print(f"\n{'=' * 60}")
         print("Global analysis (all datasets processed)")
         print(f"{'=' * 60}")
 
+        global_skip: Set[str] = set()
+        global_reasons: Dict[str, str] = {}
+        global_skip, global_reasons = _detect_global_skip_set(
+            findings_dir, context, namespace=namespace,
+        )
+        if global_skip:
+            print("\n  Global skip:")
+            for nb in sorted(global_skip):
+                print(f"    - {nb}: {global_reasons[nb]}")
+            print()
+
         for nb_path in global_nbs:
-            _execute_one(
+            ok = _execute_one(
                 nb_path, None, results, timings,
-                set(), {}, dry_run, timeout, kernel,
+                global_skip, global_reasons, dry_run, timeout, kernel,
                 error_log=error_log,
             )
+            if not ok and nb_path.stem in CRITICAL_GLOBAL:
+                break
+
+
+def _detect_run_id_from_context(findings_dir: Path) -> Optional[str]:
+    path = findings_dir / "project_context.yaml"
+    if path.exists():
+        try:
+            import yaml
+
+            data = yaml.safe_load(path.read_text())
+            run_id = data.get("run_id")
+            if run_id:
+                return run_id
+        except Exception:
+            pass
+
+    experiments_dir = findings_dir.parent if findings_dir.name == "findings" else findings_dir
+    try:
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+
+        ns = RunNamespace.from_latest(experiments_dir)
+        if ns:
+            return ns.run_id
+    except Exception:
+        pass
+    return None
 
 
 def run_all(
     notebooks_dir: Path,
     findings_dir: Optional[Path] = None,
-    docs_dir: Optional[Path] = None,
     dry_run: bool = False,
     timeout: int = 600,
     kernel: str = "python3",
+    run_id: Optional[str] = None,
 ) -> Dict[str, str]:
-    """Run all notebooks, returning {key: status} for each."""
     if findings_dir is None:
         findings_dir = notebooks_dir.parent / "experiments" / "findings"
 
@@ -655,8 +768,14 @@ def run_all(
             error_log=error_log,
         )
 
-    # Phase 2: Detect multi-dataset from dataset_context.yaml
-    context = _load_dataset_context(findings_dir)
+    if not run_id:
+        run_id = _detect_run_id_from_context(findings_dir)
+    if run_id:
+        os.environ["CR_RUN_ID"] = run_id
+
+    namespace = _resolve_namespace(findings_dir, run_id)
+
+    context = _load_dataset_context(findings_dir, run_id=run_id)
     is_multi = context is not None and len(context.datasets) > 1
 
     if is_multi:
@@ -664,6 +783,7 @@ def run_all(
             notebooks_dir, notebooks, findings_dir, context,
             results, timings, dry_run, timeout, kernel,
             error_log=error_log,
+            namespace=namespace,
         )
     else:
         _run_single_dataset_flow(
@@ -673,11 +793,6 @@ def run_all(
         )
 
     _print_summary(results, timings, time.time() - total_start)
-
-    if not dry_run:
-        if docs_dir is None:
-            docs_dir = notebooks_dir.parent / "docs" / "tutorial" / "customer-emails"
-        _export_html(notebooks_dir, docs_dir)
 
     _write_error_log(notebooks_dir, error_log)
 
@@ -730,33 +845,6 @@ def _write_error_log(notebooks_dir: Path, error_log: List[Dict]) -> None:
     print(f"\nFull error details written to {log_path}")
 
 
-
-def _export_html(notebooks_dir: Path, docs_dir: Path) -> None:
-    """Export executed notebooks to HTML in the docs directory."""
-    try:
-        sys.path.insert(0, str(Path(__file__).parent))
-        from export_tutorial_html import ExportConfig, TutorialExporter
-
-        config = ExportConfig(output_dir=docs_dir)
-        exporter = TutorialExporter(config)
-
-        notebooks = sorted(notebooks_dir.glob("*.ipynb"))
-        if not notebooks:
-            print(f"\nNo notebooks found in {notebooks_dir} for HTML export")
-            return
-
-        print(f"\nExporting {len(notebooks)} notebooks to HTML in {docs_dir} ...")
-        exported = []
-        for nb_path in notebooks:
-            result = exporter.export_notebook(nb_path)
-            if result:
-                exported.append(result)
-
-        if exported:
-            exporter.create_index_page(exported, "Customer Retention Tutorial")
-        print(f"HTML export complete: {len(exported)} notebooks exported")
-    except Exception as e:
-        print(f"\nHTML export failed: {e}")
 
 
 def _format_duration(seconds: float) -> str:
@@ -838,21 +926,20 @@ def main():
         help="Jupyter kernel name (default: python3)",
     )
     parser.add_argument(
-        "--docs-dir",
+        "--run-id",
         default=None,
-        help="Output directory for HTML export (default: docs/tutorial/customer-emails)",
+        help="Run namespace ID for session-based dataset resolution",
     )
     args = parser.parse_args()
     notebooks_dir = Path(args.notebooks_dir).resolve()
     findings_dir = Path(args.findings_dir).resolve() if args.findings_dir else None
-    docs_dir = Path(args.docs_dir).resolve() if args.docs_dir else None
     results = run_all(
         notebooks_dir,
         findings_dir=findings_dir,
-        docs_dir=docs_dir,
         dry_run=args.dry_run,
         timeout=args.timeout,
         kernel=args.kernel,
+        run_id=args.run_id,
     )
     if any(v.startswith("FAILED") for v in results.values()):
         sys.exit(1)

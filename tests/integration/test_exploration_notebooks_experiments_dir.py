@@ -125,8 +125,6 @@ class TestExperimentsConfigModule:
         exp_module.setup_experiments_structure()
 
         expected_dirs = [
-            "findings/snapshots",
-            "findings/unified",
             "data/bronze",
             "data/silver",
             "data/gold",
@@ -290,8 +288,8 @@ class TestSpecificNotebooks:
 
     @pytest.mark.parametrize("notebook_name", [
         "01_data_discovery.ipynb",
-        "02_column_deep_dive.ipynb",
-        "05_multi_dataset.ipynb",
+        "04_column_deep_dive.ipynb",
+        "03_dataset_merge.ipynb",
         "10_spec_generation.ipynb",
     ])
     def test_key_notebooks_have_correct_config(self, notebook_name):
