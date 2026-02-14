@@ -86,6 +86,7 @@ from .session import (
     resolve_active_dataset,
     resolve_findings_path,
     resolve_target_column,
+    sanitize_username,
     set_active_dataset,
 )
 from .snapshot_grid import DatasetGridVote, GridAdjustmentMode, SnapshotGrid
@@ -167,6 +168,7 @@ __all__ = [
     "SnapshotGrid",
     "SessionState",
     "get_current_username",
+    "sanitize_username",
     "initialize_run",
     "mark_notebook",
     "resolve_active_dataset",

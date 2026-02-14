@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 from customer_retention.core.compat.detection import (
     configure_spark_pandas,
     enable_arrow_optimization,
+    get_databricks_username,
     get_dbutils,
     get_display_function,
     get_spark_session,
@@ -308,6 +309,42 @@ class TestEnableArrowOptimization:
             mock_set.assert_called_once_with(
                 "spark.sql.execution.arrow.pyspark.enabled", "true"
             )
+
+
+class TestGetDatabricksUsername:
+    def test_returns_none_when_not_databricks(self):
+        with patch("customer_retention.core.compat.detection.get_dbutils", return_value=None):
+            with patch("customer_retention.core.compat.detection.get_spark_session", return_value=None):
+                assert get_databricks_username() is None
+
+    def test_extracts_from_dbutils_context(self):
+        mock_ctx = MagicMock()
+        mock_ctx.userName.return_value.get.return_value = "alice@company.com"
+        mock_dbutils = MagicMock()
+        mock_dbutils.notebook.entry_point.getDbutils.return_value.notebook.return_value.getContext.return_value = mock_ctx
+        with patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            assert get_databricks_username() == "alice@company.com"
+
+    def test_falls_back_to_spark_sql(self):
+        mock_spark = MagicMock()
+        mock_spark.sql.return_value.first.return_value = ["bob@company.com"]
+        with patch("customer_retention.core.compat.detection.get_dbutils", return_value=None):
+            with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
+                assert get_databricks_username() == "bob@company.com"
+
+    def test_returns_none_when_dbutils_raises(self):
+        mock_dbutils = MagicMock()
+        mock_dbutils.notebook.entry_point.getDbutils.side_effect = Exception("no context")
+        with patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            with patch("customer_retention.core.compat.detection.get_spark_session", return_value=None):
+                assert get_databricks_username() is None
+
+    def test_returns_none_when_spark_sql_raises(self):
+        mock_spark = MagicMock()
+        mock_spark.sql.side_effect = Exception("no spark")
+        with patch("customer_retention.core.compat.detection.get_dbutils", return_value=None):
+            with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
+                assert get_databricks_username() is None
 
 
 class TestConfigureSparkPandas:

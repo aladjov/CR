@@ -1,5 +1,6 @@
 import getpass
 import os
+from unittest.mock import patch
 
 import pytest
 
@@ -13,6 +14,7 @@ from customer_retention.analysis.auto_explorer.session import (
     resolve_active_dataset,
     resolve_findings_path,
     resolve_target_column,
+    sanitize_username,
     set_active_dataset,
 )
 
@@ -73,7 +75,56 @@ class TestGetCurrentUsername:
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "17.3")
         monkeypatch.setenv("DATABRICKS_USERNAME", "bob@company.com")
         username = get_current_username()
-        assert username == "bob@company.com"
+        assert username == "bob_company_com"
+
+
+class TestSanitizeUsername:
+    def test_plain_name_unchanged(self):
+        assert sanitize_username("alice") == "alice"
+
+    def test_email_sanitized(self):
+        assert sanitize_username("alice@company.com") == "alice_company_com"
+
+    def test_preserves_hyphens_underscores(self):
+        assert sanitize_username("alice-bob_charlie") == "alice-bob_charlie"
+
+    def test_strips_whitespace(self):
+        assert sanitize_username("  alice  ") == "alice"
+
+    def test_multiple_dots_and_ats(self):
+        assert sanitize_username("first.last@sub.company.com") == "first_last_sub_company_com"
+
+
+class TestGetCurrentUsernameDatabricksJob:
+    def test_uses_spark_context_when_no_env_vars(self, monkeypatch):
+        monkeypatch.delenv("CR_USERNAME", raising=False)
+        monkeypatch.delenv("DATABRICKS_USERNAME", raising=False)
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        with patch(
+            "customer_retention.core.compat.detection.get_databricks_username",
+            return_value="job_user@corp.com",
+        ):
+            assert get_current_username() == "job_user_corp_com"
+
+    def test_databricks_username_env_still_preferred(self, monkeypatch):
+        monkeypatch.delenv("CR_USERNAME", raising=False)
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.setenv("DATABRICKS_USERNAME", "env_user@corp.com")
+        assert get_current_username() == "env_user_corp_com"
+
+    def test_falls_back_to_getpass_when_no_context(self, monkeypatch):
+        monkeypatch.delenv("CR_USERNAME", raising=False)
+        monkeypatch.delenv("DATABRICKS_USERNAME", raising=False)
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        with patch(
+            "customer_retention.core.compat.detection.get_databricks_username",
+            return_value=None,
+        ):
+            assert get_current_username() == getpass.getuser()
+
+    def test_cr_username_not_sanitized(self, monkeypatch):
+        monkeypatch.setenv("CR_USERNAME", "alice")
+        assert get_current_username() == "alice"
 
 
 class TestResolveActiveDataset:

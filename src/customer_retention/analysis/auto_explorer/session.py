@@ -3,6 +3,7 @@ from __future__ import annotations
 import getpass
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -42,6 +43,10 @@ class SessionState:
             return None
 
 
+def sanitize_username(raw: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_\-]", "_", raw.strip())
+
+
 def get_current_username() -> str:
     cr_username = os.environ.get("CR_USERNAME")
     if cr_username:
@@ -49,7 +54,11 @@ def get_current_username() -> str:
     if os.environ.get("DATABRICKS_RUNTIME_VERSION"):
         db_user = os.environ.get("DATABRICKS_USERNAME")
         if db_user:
-            return db_user
+            return sanitize_username(db_user)
+        from customer_retention.core.compat.detection import get_databricks_username
+        detected = get_databricks_username()
+        if detected:
+            return sanitize_username(detected)
     return getpass.getuser()
 
 

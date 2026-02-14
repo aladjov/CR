@@ -79,6 +79,23 @@ def get_dbutils() -> Optional[Any]:
     return None
 
 
+def get_databricks_username() -> Optional[str]:
+    dbu = get_dbutils()
+    if dbu:
+        try:
+            ctx = dbu.notebook.entry_point.getDbutils().notebook().getContext()
+            return ctx.userName().get()
+        except Exception:
+            pass
+    spark = get_spark_session()
+    if spark:
+        try:
+            return spark.sql("SELECT current_user()").first()[0]
+        except Exception:
+            pass
+    return None
+
+
 def set_spark_config(key: str, value: Any) -> None:
     spark = get_spark_session()
     if spark:
