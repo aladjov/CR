@@ -92,8 +92,7 @@ class TestKaggleScenarioEndToEnd:
             kaggle_style_data, target_column="churn"
         )
 
-        # Should detect as needing synthetic timestamps
-        assert "synthetic" in scenario.lower() or "kaggle" in scenario.lower() or discovery_result.feature_timestamp is None
+        assert scenario in ("derived", "synthetic")
         assert discovery_result.recommendation is not None
 
     def test_unified_preparer_adds_timestamps(self, kaggle_style_data, tmp_path):

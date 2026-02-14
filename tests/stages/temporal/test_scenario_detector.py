@@ -276,6 +276,31 @@ class TestTargetColumnResolution(TestScenarioDetector):
         assert config.observation_window_days == 180
 
 
+class TestDerivedTimestampsProduceDerivedStrategy(TestScenarioDetector):
+    def test_kaggle_both_derived_returns_derived_scenario(self, detector, kaggle_df):
+        scenario, config, result = detector.detect(kaggle_df, "churned")
+
+        assert scenario == "derived"
+        assert config.strategy == TimestampStrategy.DERIVED
+
+    def test_kaggle_derived_config_has_derivation(self, detector, kaggle_df):
+        _, config, _ = detector.detect(kaggle_df, "churned")
+
+        assert config.derivation_config is not None
+        assert "feature_derivation" in config.derivation_config
+
+    def test_kaggle_derived_produces_timestamps(self, detector, kaggle_df):
+        from customer_retention.stages.temporal.timestamp_manager import TimestampManager
+
+        _, config, _ = detector.detect(kaggle_df, "churned")
+        manager = TimestampManager(config)
+        result = manager.ensure_timestamps(kaggle_df)
+
+        assert "feature_timestamp" in result.columns
+        assert "label_timestamp" in result.columns
+        assert "label_available_flag" in result.columns
+
+
 class TestEdgeCases(TestScenarioDetector):
     def test_empty_dataframe(self, detector):
         df = pd.DataFrame(columns=["customer_id", "churned"])

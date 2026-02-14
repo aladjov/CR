@@ -91,6 +91,12 @@ class ScenarioDetector:
         elif has_explicit_feature and label_derived_from_feature:
             return self._configure_partial_scenario(discovery_result, window)
         elif discovery_result.feature_timestamp and discovery_result.label_timestamp:
+            both_derived = (
+                discovery_result.feature_timestamp.is_derived
+                and discovery_result.label_timestamp.is_derived
+            )
+            if both_derived and discovery_result.derivable_options:
+                return self._configure_derivable_scenario(discovery_result)
             return self._configure_production_scenario(discovery_result, window)
         elif discovery_result.feature_timestamp:
             return self._configure_partial_scenario(discovery_result, window)
