@@ -8,6 +8,9 @@ import pytest
 from customer_retention.stages.profiling.time_window_aggregator import (
     AggregationPlan,
     TimeWindowAggregator,
+    derive_entity_datetime_features,
+    derive_extra_datetime_features,
+    detect_milestone_pairs,
 )
 
 
@@ -1054,3 +1057,325 @@ class TestAggregatedDataFrameParquetSerialization:
         parsed = json.loads(attrs_json)
         assert "aggregation_reference_date" in parsed
         assert "aggregation_timestamp" in parsed
+
+
+class TestDeriveExtraDatetimeFeatures:
+
+    def test_derives_delta_hours_and_components(self):
+        df = pd.DataFrame({
+            "entity": ["A", "B"],
+            "created_at": pd.to_datetime(["2024-01-10 08:00", "2024-01-11 14:00"]),
+            "first_response_at": pd.to_datetime(["2024-01-10 10:30", "2024-01-11 15:00"]),
+            "resolved_at": pd.to_datetime(["2024-01-10 20:00", "2024-01-12 02:00"]),
+        })
+        result, new_cols = derive_extra_datetime_features(
+            df, "created_at", ["first_response_at", "resolved_at"],
+        )
+        assert len(new_cols) == 8
+        for prefix in ["first_response_at", "resolved_at"]:
+            assert f"{prefix}_delta_hours" in new_cols
+            assert f"{prefix}_hour" in new_cols
+            assert f"{prefix}_dow" in new_cols
+            assert f"{prefix}_is_weekend" in new_cols
+
+        assert np.isclose(result.iloc[0]["first_response_at_delta_hours"], 2.5)
+        assert np.isclose(result.iloc[0]["resolved_at_delta_hours"], 12.0)
+        assert result.iloc[0]["first_response_at_hour"] == 10
+        assert result.iloc[1]["resolved_at_dow"] == pd.Timestamp("2024-01-12").dayofweek
+
+    def test_skips_time_column_and_entity_column(self):
+        df = pd.DataFrame({
+            "entity": ["A"],
+            "created_at": pd.to_datetime(["2024-01-10 08:00"]),
+            "resolved_at": pd.to_datetime(["2024-01-10 20:00"]),
+        })
+        result, new_cols = derive_extra_datetime_features(
+            df, "created_at", ["resolved_at"],
+        )
+        assert "created_at_delta_hours" not in new_cols
+        assert "entity_delta_hours" not in new_cols
+        assert "resolved_at_delta_hours" in new_cols
+
+    def test_handles_nat_values(self):
+        df = pd.DataFrame({
+            "entity": ["A", "B", "C"],
+            "created_at": pd.to_datetime(["2024-01-10", "2024-01-11", "2024-01-12"]),
+            "resolved_at": pd.to_datetime(["2024-01-10 12:00", pd.NaT, "2024-01-12 06:00"]),
+        })
+        result, new_cols = derive_extra_datetime_features(
+            df, "created_at", ["resolved_at"],
+        )
+        assert len(new_cols) == 4
+        assert pd.isna(result.iloc[1]["resolved_at_delta_hours"])
+        assert pd.isna(result.iloc[1]["resolved_at_hour"])
+        assert not pd.isna(result.iloc[0]["resolved_at_delta_hours"])
+
+    def test_returns_empty_list_when_no_extra_cols(self):
+        df = pd.DataFrame({
+            "entity": ["A"],
+            "created_at": pd.to_datetime(["2024-01-10"]),
+            "amount": [100],
+        })
+        original_cols = list(df.columns)
+        result, new_cols = derive_extra_datetime_features(df, "created_at", [])
+        assert new_cols == []
+        assert list(result.columns) == original_cols
+
+    def test_parses_string_datetime_columns(self):
+        df = pd.DataFrame({
+            "entity": ["A", "B"],
+            "created_at": pd.to_datetime(["2024-01-10 08:00", "2024-01-11 14:00"]),
+            "resolved_at": ["2024-01-10 20:00", "2024-01-12 02:00"],
+        })
+        assert df["resolved_at"].dtype == object
+        result, new_cols = derive_extra_datetime_features(
+            df, "created_at", ["resolved_at"],
+        )
+        assert len(new_cols) == 4
+        assert np.isclose(result.iloc[0]["resolved_at_delta_hours"], 12.0)
+
+
+class TestMaskFutureDatetimeDerivation:
+
+    def test_mask_future_columns_nulls_features_for_listed_column(self):
+        df = pd.DataFrame({
+            "entity": ["A"],
+            "feature_timestamp": pd.to_datetime(["2024-01-10 08:00"]),
+            "next_renewal": pd.to_datetime(["2024-02-15 10:00"]),
+        })
+        result, new_cols = derive_extra_datetime_features(
+            df, "feature_timestamp", ["next_renewal"],
+            mask_future_columns=["next_renewal"],
+        )
+        assert len(new_cols) == 4
+        for col in new_cols:
+            assert pd.isna(result.iloc[0][col])
+
+    def test_mask_future_columns_preserves_past_rows(self):
+        df = pd.DataFrame({
+            "entity": ["A"],
+            "feature_timestamp": pd.to_datetime(["2024-01-10 08:00"]),
+            "signup_date": pd.to_datetime(["2024-01-05 12:00"]),
+        })
+        result, _ = derive_extra_datetime_features(
+            df, "feature_timestamp", ["signup_date"],
+            mask_future_columns=["signup_date"],
+        )
+        assert not pd.isna(result.iloc[0]["signup_date_delta_hours"])
+        assert result.iloc[0]["signup_date_delta_hours"] < 0
+
+    def test_mask_future_columns_mixed_rows(self):
+        df = pd.DataFrame({
+            "entity": ["A", "B", "C"],
+            "feature_timestamp": pd.to_datetime([
+                "2024-01-10", "2024-01-10", "2024-01-10",
+            ]),
+            "some_date": pd.to_datetime([
+                "2024-01-05",  # past
+                "2024-01-15",  # future
+                "2024-01-08",  # past
+            ]),
+        })
+        result, new_cols = derive_extra_datetime_features(
+            df, "feature_timestamp", ["some_date"],
+            mask_future_columns=["some_date"],
+        )
+        assert not pd.isna(result.iloc[0]["some_date_delta_hours"])
+        for col in new_cols:
+            assert pd.isna(result.iloc[1][col])
+        assert not pd.isna(result.iloc[2]["some_date_delta_hours"])
+
+    def test_mask_future_columns_handles_nat(self):
+        df = pd.DataFrame({
+            "entity": ["A", "B"],
+            "feature_timestamp": pd.to_datetime(["2024-01-10", "2024-01-10"]),
+            "some_date": pd.to_datetime(["2024-01-05", pd.NaT]),
+        })
+        result, new_cols = derive_extra_datetime_features(
+            df, "feature_timestamp", ["some_date"],
+            mask_future_columns=["some_date"],
+        )
+        assert not pd.isna(result.iloc[0]["some_date_delta_hours"])
+        assert pd.isna(result.iloc[1]["some_date_delta_hours"])
+
+    def test_no_mask_by_default(self):
+        df = pd.DataFrame({
+            "entity": ["A"],
+            "feature_timestamp": pd.to_datetime(["2024-01-10"]),
+            "future_date": pd.to_datetime(["2024-02-15"]),
+        })
+        result, _ = derive_extra_datetime_features(
+            df, "feature_timestamp", ["future_date"],
+        )
+        assert not pd.isna(result.iloc[0]["future_date_delta_hours"])
+        assert result.iloc[0]["future_date_delta_hours"] > 0
+
+    def test_per_column_masking_only_masks_listed_columns(self):
+        df = pd.DataFrame({
+            "entity": ["A"],
+            "feature_timestamp": pd.to_datetime(["2024-01-10"]),
+            "contract_end": pd.to_datetime(["2024-06-15"]),
+            "last_purchase": pd.to_datetime(["2024-02-01"]),
+        })
+        result, _ = derive_extra_datetime_features(
+            df, "feature_timestamp", ["contract_end", "last_purchase"],
+            mask_future_columns=["last_purchase"],
+        )
+        assert not pd.isna(result.iloc[0]["contract_end_delta_hours"])
+        assert result.iloc[0]["contract_end_delta_hours"] > 0
+        for suffix in ("_delta_hours", "_hour", "_dow", "_is_weekend"):
+            assert pd.isna(result.iloc[0][f"last_purchase{suffix}"])
+
+    def test_empty_mask_future_columns_no_masking(self):
+        df = pd.DataFrame({
+            "entity": ["A"],
+            "feature_timestamp": pd.to_datetime(["2024-01-10"]),
+            "future_date": pd.to_datetime(["2024-06-15"]),
+        })
+        result, _ = derive_extra_datetime_features(
+            df, "feature_timestamp", ["future_date"],
+            mask_future_columns=[],
+        )
+        assert not pd.isna(result.iloc[0]["future_date_delta_hours"])
+        assert result.iloc[0]["future_date_delta_hours"] > 0
+
+
+@pytest.fixture
+def entity_datetime_df():
+    return pd.DataFrame({
+        "entity_id": ["A", "B", "C", "D"],
+        "feature_timestamp": pd.to_datetime([
+            "2024-06-15", "2024-06-15", "2024-06-15", "2024-06-15",
+        ]),
+        "contract_start": pd.to_datetime([
+            "2024-01-01", "2023-06-01", pd.NaT, "2024-03-01",
+        ]),
+        "contract_end": pd.to_datetime([
+            "2024-12-31", "2024-03-01", "2025-01-01", pd.NaT,
+        ]),
+        "signup_date": pd.to_datetime([
+            "2023-01-15", "2022-06-01", "2024-06-20", "2024-01-01",
+        ]),
+    })
+
+
+class TestDetectMilestonePairs:
+
+    def test_empty_columns(self):
+        assert detect_milestone_pairs([]) == []
+
+    def test_no_pairs(self):
+        assert detect_milestone_pairs(["signup_date", "last_login"]) == []
+
+    def test_single_pair(self):
+        result = detect_milestone_pairs(["contract_start", "contract_end"])
+        assert result == [("contract_start", "contract_end")]
+
+    def test_multiple_pairs(self):
+        cols = ["contract_start", "contract_end", "trial_begin", "trial_expire"]
+        result = detect_milestone_pairs(cols)
+        assert len(result) == 2
+        assert ("contract_start", "contract_end") in result
+        assert ("trial_begin", "trial_expire") in result
+
+    def test_partial_match_no_shared_prefix(self):
+        result = detect_milestone_pairs(["start_date", "end_date"])
+        assert result == []
+
+
+class TestDeriveEntityDatetimeFeatures:
+
+    def test_universal_features_created(self, entity_datetime_df):
+        df = entity_datetime_df
+        result, new_cols = derive_entity_datetime_features(
+            df, "feature_timestamp", ["signup_date"],
+        )
+        expected_prefixes = [
+            "days_since_signup_date", "days_until_signup_date",
+            "log1p_days_since_signup_date", "is_missing_signup_date",
+            "is_future_signup_date",
+        ]
+        for prefix in expected_prefixes:
+            assert prefix in new_cols, f"{prefix} not in {new_cols}"
+            assert prefix in result.columns
+
+    def test_milestone_features_created(self, entity_datetime_df):
+        df = entity_datetime_df
+        pairs = [("contract_start", "contract_end")]
+        result, new_cols = derive_entity_datetime_features(
+            df, "feature_timestamp", ["contract_start", "contract_end"],
+            milestone_pairs=pairs,
+        )
+        milestone_names = [
+            "tenure_days_contract_start", "days_to_milestone_contract_end",
+            "within_7d_contract_end", "within_30d_contract_end",
+            "within_90d_contract_end", "milestone_bucket_contract_end",
+            "contract_progress_contract",
+        ]
+        for name in milestone_names:
+            assert name in new_cols, f"{name} not in {new_cols}"
+
+    def test_contract_progress_values(self):
+        df = pd.DataFrame({
+            "entity": ["A"],
+            "feature_timestamp": pd.to_datetime(["2024-07-01"]),
+            "start": pd.to_datetime(["2024-01-01"]),
+            "end": pd.to_datetime(["2025-01-01"]),
+        })
+        result, _ = derive_entity_datetime_features(
+            df, "feature_timestamp", ["start", "end"],
+            milestone_pairs=[("start", "end")],
+        )
+        progress = result.iloc[0]["contract_progress_"]
+        assert np.isclose(progress, 0.5, atol=0.02)
+
+    def test_contract_progress_clipped(self):
+        df = pd.DataFrame({
+            "entity": ["A"],
+            "feature_timestamp": pd.to_datetime(["2026-01-01"]),
+            "start": pd.to_datetime(["2024-01-01"]),
+            "end": pd.to_datetime(["2024-06-01"]),
+        })
+        result, _ = derive_entity_datetime_features(
+            df, "feature_timestamp", ["start", "end"],
+            milestone_pairs=[("start", "end")],
+        )
+        progress = result.iloc[0]["contract_progress_"]
+        assert progress == 2.0
+
+    def test_mask_future_columns(self, entity_datetime_df):
+        df = entity_datetime_df
+        result, _ = derive_entity_datetime_features(
+            df, "feature_timestamp", ["signup_date"],
+            mask_future_columns=["signup_date"],
+        )
+        row_c = result[result["entity_id"] == "C"]
+        assert pd.isna(row_c.iloc[0]["days_since_signup_date"])
+        row_a = result[result["entity_id"] == "A"]
+        assert not pd.isna(row_a.iloc[0]["days_since_signup_date"])
+
+    def test_no_milestone_pairs(self, entity_datetime_df):
+        df = entity_datetime_df
+        _, new_cols = derive_entity_datetime_features(
+            df, "feature_timestamp", ["signup_date"],
+        )
+        assert not any("tenure_days" in c for c in new_cols)
+        assert not any("contract_progress" in c for c in new_cols)
+
+    def test_missing_values_handled(self, entity_datetime_df):
+        df = entity_datetime_df
+        result, _ = derive_entity_datetime_features(
+            df, "feature_timestamp", ["contract_start"],
+        )
+        row_c = result[result["entity_id"] == "C"]
+        assert row_c.iloc[0]["is_missing_contract_start"] == 1
+        assert pd.isna(row_c.iloc[0]["days_since_contract_start"])
+
+    def test_returns_column_names(self, entity_datetime_df):
+        df = entity_datetime_df
+        result, new_cols = derive_entity_datetime_features(
+            df, "feature_timestamp", ["signup_date"],
+        )
+        original_cols = set(entity_datetime_df.columns)
+        actual_new = [c for c in result.columns if c not in original_cols]
+        assert set(new_cols) == set(actual_new)

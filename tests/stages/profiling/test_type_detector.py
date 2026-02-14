@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from customer_retention.core.compat import safe_to_list
-from customer_retention.core.config import ColumnType
+from customer_retention.core.config import ColumnType, DatasetGranularity
 from customer_retention.stages.profiling import TypeConfidence, TypeDetector
 
 
@@ -311,6 +311,53 @@ class TestDatasetGranularityDetection:
 
         result = detector.detect_granularity(df)
         assert result.entity_column == "cust_id"
+
+    def test_entity_column_low_ratio_high_event_dataset(self):
+        import numpy as np
+
+        detector = TypeDetector()
+        n = 5000
+        df = pd.DataFrame({
+            "transaction_id": [f"T{i:06d}" for i in range(n)],
+            "customer_id": [f"C{i % 40:03d}" for i in range(n)],
+            "event_timestamp": pd.date_range("2023-01-01", periods=n, freq="h"),
+            "amount": np.random.rand(n),
+        })
+        assert df["customer_id"].nunique() / len(df) < 0.01
+
+        result = detector.detect_granularity(df)
+        assert result.entity_column == "customer_id"
+        assert result.granularity == DatasetGranularity.EVENT_LEVEL
+
+    def test_entity_name_preferred_over_generic_id(self):
+
+        detector = TypeDetector()
+        df = pd.DataFrame({
+            "record_id": [f"R{i:03d}" for i in range(200)],
+            "user_id": [f"U{i % 20:03d}" for i in range(200)],
+            "error_code": [f"E{i % 3:01d}" for i in range(200)],
+            "ts": pd.date_range("2023-01-01", periods=200, freq="h"),
+        })
+
+        result = detector.detect_granularity(df)
+        assert result.entity_column == "user_id"
+
+    def test_event_level_with_many_events_per_entity(self):
+        import numpy as np
+
+        detector = TypeDetector()
+        n = 10000
+        df = pd.DataFrame({
+            "txn_id": [f"T{i:06d}" for i in range(n)],
+            "account_id": [f"A{i % 50:03d}" for i in range(n)],
+            "event_timestamp": pd.date_range("2023-01-01", periods=n, freq="h"),
+            "value": np.random.rand(n),
+        })
+
+        result = detector.detect_granularity(df)
+        assert result.granularity == DatasetGranularity.EVENT_LEVEL
+        assert result.entity_column == "account_id"
+        assert result.avg_events_per_entity == pytest.approx(200.0, rel=0.1)
 
     def test_detect_time_column(self):
         """Should identify the time column."""

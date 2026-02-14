@@ -55,6 +55,7 @@ from .snapshot_manager import (
     require_consistent_cutoffs,
 )
 from .synthetic_coordinator import SyntheticCoordinationParams, SyntheticTimestampCoordinator
+from .temporal_merger import DatasetMergeInput, MergeConfig, MergeReport, TemporalMerger
 from .timestamp_discovery import (
     DatetimeOrderAnalyzer,
     TimestampCandidate,
@@ -165,4 +166,8 @@ __all__ = [
     "require_consistent_cutoffs",
     "load_data_with_snapshot_preference",
     "TEMPORAL_METADATA_COLS",
+    "TemporalMerger",
+    "MergeConfig",
+    "DatasetMergeInput",
+    "MergeReport",
 ]

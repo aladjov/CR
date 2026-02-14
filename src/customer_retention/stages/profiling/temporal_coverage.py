@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+import numpy as np
 import pandas as pd
 
 from .window_recommendation import WINDOW_DAYS_MAP
@@ -77,12 +78,25 @@ class TemporalCoverageResult:
     new_entities_over_time: pd.Series
 
 
+@dataclass
+class TemporalComparison:
+    entity_ratio: float
+    event_ratio: float
+    events_per_entity_change: float
+    numeric_columns_drifted_pct: float
+    categorical_shift_detected: bool
+    regime_shift_detected: bool
+    regime_shift_severity: str
+    target_rate_delta: Optional[float]
+    representativeness_score: float
+
+
 def analyze_temporal_coverage(
     df: pd.DataFrame, entity_column: str, time_column: str,
     candidate_windows: Optional[List[str]] = None,
     reference_date: Optional[pd.Timestamp] = None,
 ) -> TemporalCoverageResult:
-    times = pd.to_datetime(df[time_column])
+    times = pd.to_datetime(df[time_column], format="mixed", utc=True).dt.tz_localize(None)
     first_event = times.min()
     last_event = times.max()
     time_span_days = max(0, (last_event - first_event).days)
@@ -353,7 +367,7 @@ def _build_recommendations(
 
 
 def analyze_feature_availability(df: pd.DataFrame, time_column: str, exclude_columns: Optional[List[str]] = None, late_start_threshold_pct: float = 10.0, early_end_threshold_pct: float = 10.0) -> FeatureAvailabilityResult:
-    times = pd.to_datetime(df[time_column])
+    times = pd.to_datetime(df[time_column], format="mixed", utc=True).dt.tz_localize(None)
     data_start, data_end = times.min(), times.max()
     time_span_days = max(1, (data_end - data_start).days)
     late_threshold_days = time_span_days * late_start_threshold_pct / 100
@@ -486,3 +500,139 @@ def _build_availability_recommendations(
         })
 
     return recs
+
+
+def compute_temporal_comparison(
+    df: pd.DataFrame,
+    entity_column: str,
+    time_column: str,
+    target_column: Optional[str] = None,
+    recent_days: int = 90,
+    reference_date: Optional[pd.Timestamp] = None,
+) -> TemporalComparison:
+    times = pd.to_datetime(df[time_column], format="mixed", utc=True).dt.tz_localize(None)
+    ref_date = reference_date if reference_date is not None else times.max()
+    cutoff = ref_date - pd.Timedelta(days=recent_days)
+
+    mask_recent = times >= cutoff
+    df_full = df
+    df_recent = df.loc[mask_recent]
+
+    entities_full = df_full[entity_column].nunique()
+    entities_recent = df_recent[entity_column].nunique() if len(df_recent) > 0 else 0
+    entity_ratio = entities_recent / entities_full if entities_full > 0 else 0.0
+
+    events_full = len(df_full)
+    events_recent = len(df_recent)
+    event_ratio = events_recent / events_full if events_full > 0 else 0.0
+
+    density_full = events_full / entities_full if entities_full > 0 else 0.0
+    density_recent = events_recent / entities_recent if entities_recent > 0 else 0.0
+    events_per_entity_change = (
+        (density_recent - density_full) / density_full if density_full > 0 else 0.0
+    )
+
+    numeric_drifted_pct, categorical_shift = _compute_drift_signals(
+        df_full, df_recent, entity_column, time_column,
+    )
+
+    coverage_result = analyze_temporal_coverage(
+        df_full, entity_column, time_column, reference_date=ref_date,
+    )
+    drift_impl = derive_drift_implications(coverage_result)
+    regime_shift_detected = drift_impl.regime_count > 1
+    regime_shift_severity = _drift_risk_to_severity(drift_impl.risk_level)
+
+    target_rate_delta = None
+    if target_column and target_column in df_full.columns and target_column in df_recent.columns:
+        full_series = df_full[target_column].dropna()
+        recent_series = df_recent[target_column].dropna()
+        if len(full_series) > 0 and len(recent_series) > 0:
+            try:
+                target_rate_delta = float(recent_series.mean() - full_series.mean())
+            except (TypeError, ValueError):
+                pass
+
+    population_stability = drift_impl.population_stability
+    representativeness_score = _compute_representativeness_score(
+        entity_ratio, event_ratio, numeric_drifted_pct, population_stability,
+    )
+
+    return TemporalComparison(
+        entity_ratio=round(entity_ratio, 4),
+        event_ratio=round(event_ratio, 4),
+        events_per_entity_change=round(events_per_entity_change, 4),
+        numeric_columns_drifted_pct=round(numeric_drifted_pct, 4),
+        categorical_shift_detected=categorical_shift,
+        regime_shift_detected=regime_shift_detected,
+        regime_shift_severity=regime_shift_severity,
+        target_rate_delta=round(target_rate_delta, 4) if target_rate_delta is not None else None,
+        representativeness_score=round(representativeness_score, 4),
+    )
+
+
+def _compute_drift_signals(
+    df_full: pd.DataFrame,
+    df_recent: pd.DataFrame,
+    entity_column: str,
+    time_column: str,
+) -> tuple:
+    from customer_retention.core.config import ColumnType
+
+    from .drift_detector import BaselineDriftChecker
+
+    exclude = {entity_column, time_column}
+    numeric_cols = [
+        c for c in df_full.select_dtypes(include=[np.number]).columns
+        if c not in exclude
+    ]
+    categorical_cols = [
+        c for c in df_full.select_dtypes(include=["object", "category"]).columns
+        if c not in exclude
+    ]
+
+    if len(df_recent) == 0:
+        return 0.0, False
+
+    numeric_drifted = 0
+    if numeric_cols:
+        checker = BaselineDriftChecker()
+        for col in numeric_cols:
+            checker.set_baseline(col, df_full[col].dropna(), ColumnType.NUMERIC_CONTINUOUS)
+        drift_results = checker.detect_drift_all(df_recent)
+        numeric_drifted = sum(1 for r in drift_results if r.has_drift)
+
+    numeric_drifted_pct = numeric_drifted / len(numeric_cols) if numeric_cols else 0.0
+
+    categorical_shift = False
+    if categorical_cols:
+        checker = BaselineDriftChecker()
+        for col in categorical_cols:
+            checker.set_baseline(col, df_full[col].dropna(), ColumnType.CATEGORICAL_NOMINAL)
+        cat_results = checker.detect_drift_all(df_recent)
+        categorical_shift = any(r.has_drift for r in cat_results)
+
+    return numeric_drifted_pct, categorical_shift
+
+
+def _drift_risk_to_severity(risk_level: str) -> str:
+    if risk_level == "high":
+        return "high"
+    if risk_level == "moderate":
+        return "medium"
+    return "low"
+
+
+def _compute_representativeness_score(
+    entity_ratio: float,
+    event_ratio: float,
+    drift_pct: float,
+    population_stability: float,
+) -> float:
+    score = (
+        entity_ratio * 0.30
+        + event_ratio * 0.25
+        + (1.0 - drift_pct) * 0.25
+        + population_stability * 0.20
+    )
+    return max(0.0, min(1.0, score))

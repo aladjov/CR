@@ -182,7 +182,13 @@ from .time_series_profiler import (
     classify_activity_segments,
     classify_lifecycle_quadrants,
 )
-from .time_window_aggregator import AggregationPlan, AggregationType, TimeWindow, TimeWindowAggregator
+from .time_window_aggregator import (
+    AggregationPlan,
+    AggregationType,
+    TimeWindow,
+    TimeWindowAggregator,
+    derive_extra_datetime_features,
+)
 from .window_recommendation import (
     TemporalHeterogeneityResult,
     WindowRecommendationCollector,
@@ -237,7 +243,7 @@ __all__ = [
     "compute_effect_size", "compute_group_stats", "compute_recency_buckets",
     "detect_inflection_bucket", "classify_distribution_pattern",
     "RelationshipDetector", "DatasetRelationship", "RelationshipType", "JoinSuggestion",
-    "TimeWindowAggregator", "AggregationPlan", "TimeWindow", "AggregationType",
+    "TimeWindowAggregator", "AggregationPlan", "TimeWindow", "AggregationType", "derive_extra_datetime_features",
     "TemporalFeatureAnalyzer", "VelocityResult", "MomentumResult", "CohortVelocityResult",
     "CohortMomentumResult", "VelocityRecommendation", "LagCorrelationResult", "PredictivePowerResult", "FeatureRecommendation", "FeatureType",
     "RelationshipRecommender", "RelationshipRecommendation",

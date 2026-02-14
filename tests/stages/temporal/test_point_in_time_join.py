@@ -155,6 +155,22 @@ class TestValidateTemporalIntegrity(TestPointInTimeJoiner):
         assert report["valid"] is False
         assert any(i["type"] == "feature_after_label" for i in report["issues"])
 
+    def test_string_feature_timestamp_skipped(self):
+        df = pd.DataFrame({
+            "feature_timestamp": ["2024-01-01", "2024-02-01"],
+            "some_date": pd.to_datetime(["2024-03-01", "2024-03-01"]),
+        })
+        report = PointInTimeJoiner.validate_temporal_integrity(df)
+        assert report["valid"] is True
+
+    def test_mixed_type_feature_timestamp_skipped(self):
+        df = pd.DataFrame({
+            "feature_timestamp": ["2024-01-01", None],
+            "label_timestamp": pd.to_datetime(["2024-04-01", "2024-05-01"]),
+        })
+        report = PointInTimeJoiner.validate_temporal_integrity(df)
+        assert report["valid"] is True
+
     def test_detects_future_datetime_columns(self):
         df = pd.DataFrame({
             "feature_timestamp": pd.to_datetime(["2024-03-01", "2024-03-01"]),

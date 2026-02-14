@@ -21,6 +21,10 @@ class TypeDetector:
         "close", "closed", "discontinue", "discontinued", "exit", "exited", "leave", "left",
     ]
     TARGET_PATTERNS_GENERIC = ["target", "label", "outcome", "class", "flag"]
+    ENTITY_NAME_PATTERNS = [
+        "customer", "user", "account", "member", "subscriber",
+        "client", "entity", "tenant", "patient", "employee",
+    ]
     CYCLICAL_DAY_PATTERNS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun", "monday", "tuesday", "wednesday"]
     CYCLICAL_MONTH_PATTERNS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
 
@@ -331,18 +335,25 @@ class TypeDetector:
         )
 
     def _detect_entity_column(self, df: DataFrame) -> Optional[str]:
-        """Find the most likely entity/ID column."""
         candidates = []
 
         for col in df.columns:
             col_lower = col.lower()
 
-            if any(pattern in col_lower for pattern in self.IDENTIFIER_PATTERNS):
-                unique_ratio = df[col].nunique() / len(df)
-                if 0.01 < unique_ratio < 1.0:
-                    candidates.append((col, unique_ratio, "name_match"))
-                elif unique_ratio == 1.0:
-                    candidates.append((col, unique_ratio, "unique_id"))
+            if not any(pattern in col_lower for pattern in self.IDENTIFIER_PATTERNS):
+                continue
+
+            unique_ratio = df[col].nunique() / len(df)
+            has_entity_name = any(
+                pattern in col_lower for pattern in self.ENTITY_NAME_PATTERNS
+            )
+
+            if has_entity_name and 0.0 < unique_ratio < 1.0:
+                candidates.append((col, unique_ratio, "entity_name"))
+            elif 0.01 < unique_ratio < 1.0:
+                candidates.append((col, unique_ratio, "name_match"))
+            elif unique_ratio == 1.0:
+                candidates.append((col, unique_ratio, "unique_id"))
 
         if not candidates:
             for col in df.columns:
@@ -354,12 +365,14 @@ class TypeDetector:
         if not candidates:
             return None
 
-        for col, ratio, match_type in candidates:
-            if match_type == "name_match" and ratio < 1.0:
-                return col
+        priority = ["entity_name", "name_match", "unique_id", "string_repeating"]
+        for match_type in priority:
+            for col, ratio, mt in candidates:
+                if mt == match_type and ratio < 1.0:
+                    return col
 
-        for col, ratio, match_type in candidates:
-            if match_type == "unique_id":
+        for col, ratio, mt in candidates:
+            if mt == "unique_id":
                 return col
 
         return candidates[0][0] if candidates else None

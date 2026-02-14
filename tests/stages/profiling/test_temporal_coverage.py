@@ -5,8 +5,10 @@ import pytest
 from customer_retention.stages.profiling.temporal_coverage import (
     EntityWindowCoverage,
     FeatureAvailabilityResult,
+    TemporalComparison,
     analyze_feature_availability,
     analyze_temporal_coverage,
+    compute_temporal_comparison,
     derive_drift_implications,
 )
 
@@ -406,6 +408,45 @@ class TestFeatureAvailability:
         assert empty_feat.availability_type == "empty"
         assert empty_feat.coverage_pct == 0
 
+    def test_mixed_iso8601_formats(self):
+        df = pd.DataFrame({
+            "event_date": [
+                "2024-07-01T10:00:00.123Z",
+                "2024-07-15T12:30:00Z",
+                "2024-08-01T09:00:00.456789Z",
+                "2024-09-01T14:00:00Z",
+            ],
+            "value": [1.0, 2.0, 3.0, 4.0],
+        })
+        result = analyze_feature_availability(df, "event_date")
+        assert result.time_span_days > 0
+        assert len(result.features) == 1
+
+    def test_mixed_iso8601_with_varying_offsets(self):
+        df = pd.DataFrame({
+            "event_date": [
+                "2024-07-01T10:00:00Z",
+                "2024-07-15T12:30:00+02:00",
+                "2024-08-01T09:00:00.456Z",
+            ],
+            "value": [1.0, 2.0, 3.0],
+        })
+        result = analyze_feature_availability(df, "event_date")
+        assert result.time_span_days > 0
+
+    def test_mixed_iso8601_temporal_coverage(self):
+        df = pd.DataFrame({
+            "entity": ["A", "B", "C", "D"],
+            "event_date": [
+                "2024-07-01T10:00:00.123Z",
+                "2024-07-15T12:30:00Z",
+                "2024-08-01T09:00:00.456789Z",
+                "2024-09-01T14:00:00Z",
+            ],
+        })
+        result = analyze_temporal_coverage(df, "entity", "event_date")
+        assert result.time_span_days > 0
+
     def test_threshold_customization(self, data_with_new_tracking):
         result_strict = analyze_feature_availability(
             data_with_new_tracking, "event_date", late_start_threshold_pct=5.0
@@ -414,3 +455,169 @@ class TestFeatureAvailability:
             data_with_new_tracking, "event_date", late_start_threshold_pct=60.0
         )
         assert len(result_strict.new_tracking) >= len(result_lenient.new_tracking)
+
+
+class TestTemporalComparisonDataclass:
+    def test_all_fields_present(self):
+        tc = TemporalComparison(
+            entity_ratio=0.5,
+            event_ratio=0.3,
+            events_per_entity_change=-0.1,
+            numeric_columns_drifted_pct=0.2,
+            categorical_shift_detected=False,
+            regime_shift_detected=False,
+            regime_shift_severity="low",
+            target_rate_delta=None,
+            representativeness_score=0.75,
+        )
+        assert tc.entity_ratio == 0.5
+        assert tc.event_ratio == 0.3
+        assert tc.events_per_entity_change == -0.1
+        assert tc.numeric_columns_drifted_pct == 0.2
+        assert tc.categorical_shift_detected is False
+        assert tc.regime_shift_detected is False
+        assert tc.regime_shift_severity == "low"
+        assert tc.target_rate_delta is None
+        assert tc.representativeness_score == 0.75
+
+    def test_target_rate_delta_optional(self):
+        tc = TemporalComparison(
+            entity_ratio=0.5, event_ratio=0.3,
+            events_per_entity_change=0.0,
+            numeric_columns_drifted_pct=0.0,
+            categorical_shift_detected=False,
+            regime_shift_detected=False,
+            regime_shift_severity="low",
+            target_rate_delta=0.05,
+            representativeness_score=0.8,
+        )
+        assert tc.target_rate_delta == 0.05
+
+
+class TestComputeTemporalComparison:
+    @pytest.fixture
+    def event_df(self):
+        np.random.seed(42)
+        dates = pd.date_range("2023-01-01", "2023-12-31", freq="D")
+        entities = np.random.choice([f"E{i}" for i in range(100)], size=len(dates) * 3)
+        times = np.random.choice(dates, size=len(entities))
+        values = np.random.randn(len(entities))
+        return pd.DataFrame({
+            "entity": entities,
+            "event_date": times,
+            "amount": values,
+        })
+
+    @pytest.fixture
+    def event_df_with_target(self):
+        np.random.seed(42)
+        dates = pd.date_range("2023-01-01", "2023-12-31", freq="D")
+        entities = np.random.choice([f"E{i}" for i in range(100)], size=len(dates) * 3)
+        times = np.random.choice(dates, size=len(entities))
+        values = np.random.randn(len(entities))
+        targets = np.random.choice([0, 1], size=len(entities), p=[0.7, 0.3])
+        return pd.DataFrame({
+            "entity": entities,
+            "event_date": times,
+            "amount": values,
+            "churned": targets,
+        })
+
+    @pytest.fixture
+    def declining_df(self):
+        np.random.seed(42)
+        rows = []
+        dates = pd.date_range("2022-01-01", "2023-12-31", freq="D")
+        for d in dates:
+            day_idx = (d - dates[0]).days
+            n_events = max(1, int(30 - day_idx * 0.04))
+            for _ in range(n_events):
+                rows.append({
+                    "entity": f"E{np.random.randint(0, 200)}",
+                    "event_date": d,
+                    "amount": np.random.randn(),
+                })
+        return pd.DataFrame(rows)
+
+    def test_returns_temporal_comparison(self, event_df):
+        result = compute_temporal_comparison(event_df, "entity", "event_date")
+        assert isinstance(result, TemporalComparison)
+
+    def test_entity_ratio_between_0_and_1(self, event_df):
+        result = compute_temporal_comparison(event_df, "entity", "event_date")
+        assert 0.0 <= result.entity_ratio <= 1.0
+
+    def test_event_ratio_between_0_and_1(self, event_df):
+        result = compute_temporal_comparison(event_df, "entity", "event_date")
+        assert 0.0 <= result.event_ratio <= 1.0
+
+    def test_representativeness_score_between_0_and_1(self, event_df):
+        result = compute_temporal_comparison(event_df, "entity", "event_date")
+        assert 0.0 <= result.representativeness_score <= 1.0
+
+    def test_numeric_columns_drifted_pct_between_0_and_1(self, event_df):
+        result = compute_temporal_comparison(event_df, "entity", "event_date")
+        assert 0.0 <= result.numeric_columns_drifted_pct <= 1.0
+
+    def test_regime_shift_severity_valid(self, event_df):
+        result = compute_temporal_comparison(event_df, "entity", "event_date")
+        assert result.regime_shift_severity in ("low", "medium", "high")
+
+    def test_target_rate_delta_none_without_target(self, event_df):
+        result = compute_temporal_comparison(event_df, "entity", "event_date")
+        assert result.target_rate_delta is None
+
+    def test_target_rate_delta_computed_with_target(self, event_df_with_target):
+        result = compute_temporal_comparison(
+            event_df_with_target, "entity", "event_date",
+            target_column="churned",
+        )
+        assert result.target_rate_delta is not None
+        assert isinstance(result.target_rate_delta, float)
+
+    def test_custom_recent_days(self, event_df):
+        result_30 = compute_temporal_comparison(
+            event_df, "entity", "event_date", recent_days=30,
+        )
+        result_180 = compute_temporal_comparison(
+            event_df, "entity", "event_date", recent_days=180,
+        )
+        assert result_30.event_ratio < result_180.event_ratio
+
+    def test_custom_reference_date(self, event_df):
+        result = compute_temporal_comparison(
+            event_df, "entity", "event_date",
+            reference_date=pd.Timestamp("2023-06-01"),
+        )
+        assert isinstance(result, TemporalComparison)
+
+    def test_declining_data_has_regime_signals(self, declining_df):
+        result = compute_temporal_comparison(declining_df, "entity", "event_date")
+        assert isinstance(result.regime_shift_detected, bool)
+
+    def test_short_data_no_crash(self):
+        df = pd.DataFrame({
+            "entity": ["A", "B", "C"],
+            "event_date": pd.to_datetime(["2023-01-01", "2023-01-02", "2023-01-03"]),
+            "amount": [1.0, 2.0, 3.0],
+        })
+        result = compute_temporal_comparison(df, "entity", "event_date", recent_days=90)
+        assert isinstance(result, TemporalComparison)
+        assert 0.0 <= result.representativeness_score <= 1.0
+
+    def test_entity_level_data(self):
+        df = pd.DataFrame({
+            "entity": [f"E{i}" for i in range(100)],
+            "event_date": pd.date_range("2023-01-01", periods=100, freq="D"),
+            "amount": np.random.randn(100),
+        })
+        result = compute_temporal_comparison(df, "entity", "event_date", recent_days=30)
+        assert isinstance(result, TemporalComparison)
+
+    def test_events_per_entity_change_is_float(self, event_df):
+        result = compute_temporal_comparison(event_df, "entity", "event_date")
+        assert isinstance(result.events_per_entity_change, float)
+
+    def test_categorical_shift_is_bool(self, event_df):
+        result = compute_temporal_comparison(event_df, "entity", "event_date")
+        assert isinstance(result.categorical_shift_detected, bool)

@@ -181,6 +181,9 @@ class TemporalFeatureEngineer:
         """
         events_df = events_df.copy()
         events_df[time_col] = to_datetime(events_df[time_col])
+        for vc in value_cols:
+            if vc in events_df.columns:
+                events_df[vc] = pd.to_numeric(events_df[vc], errors="coerce").astype("float64")
 
         # Determine reference dates per entity
         ref_dates = self._get_reference_dates(
@@ -402,13 +405,9 @@ class TemporalFeatureEngineer:
                 ) / window_days
                 feature_names.append(velocity_name)
 
-                # Velocity percentage = (Lag0 - Lag1) / Lag1
                 velocity_pct_name = f"{col}_velocity_pct"
-                result[velocity_pct_name] = np.where(
-                    lag_features[lag1_col] != 0,
-                    (lag_features[lag0_col] - lag_features[lag1_col]) / lag_features[lag1_col],
-                    np.nan
-                )
+                lag1_safe = lag_features[lag1_col].replace(0, np.nan)
+                result[velocity_pct_name] = (lag_features[lag0_col] - lag1_safe) / lag1_safe
                 feature_names.append(velocity_pct_name)
 
         group_result = FeatureGroupResult(
@@ -503,12 +502,10 @@ class TemporalFeatureEngineer:
 
             history_days = entity_df["history_days"].iloc[0]
 
-            # Skip if insufficient history
-            if history_days < min_days:
+            if pd.isna(history_days) or history_days < min_days:
                 continue
 
             first_event = entity_df["first_event"].iloc[0]
-            entity_df["last_event"].iloc[0]
 
             # Calculate split boundaries
             split1 = first_event + Timedelta(days=history_days * splits[0])

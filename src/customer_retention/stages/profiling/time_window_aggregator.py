@@ -218,9 +218,10 @@ class TimeWindowAggregator:
 
     def _filter_by_window(self, df: DataFrame, window: TimeWindow, reference_date: Timestamp) -> DataFrame:
         if window.days is None:
-            return df
+            return df[df[self.time_column] <= reference_date]
         cutoff = reference_date - Timedelta(days=window.days)
-        return df[df[self.time_column] >= cutoff]
+        mask = (df[self.time_column] >= cutoff) & (df[self.time_column] <= reference_date)
+        return df[mask]
 
     def _compute_aggregation(
         self,
@@ -317,14 +318,172 @@ class TimeWindowAggregator:
         return result
 
     def _compute_recency(self, df: DataFrame, entities: np.ndarray, reference_date: Timestamp) -> np.ndarray:
-        last_dates = df.groupby(self.entity_column)[self.time_column].max()
+        valid_df = df[df[self.time_column] <= reference_date]
+        last_dates = valid_df.groupby(self.entity_column)[self.time_column].max()
         days_since_last = (reference_date - last_dates).dt.days
         return np.array([days_since_last.get(e, np.nan) for e in entities])
 
     def _compute_tenure(self, df: DataFrame, entities: np.ndarray, reference_date: Timestamp) -> np.ndarray:
-        first_dates = df.groupby(self.entity_column)[self.time_column].min()
+        valid_df = df[df[self.time_column] <= reference_date]
+        first_dates = valid_df.groupby(self.entity_column)[self.time_column].min()
         days_since_first = (reference_date - first_dates).dt.days
         return np.array([days_since_first.get(e, np.nan) for e in entities])
+
+
+def derive_extra_datetime_features(
+    df: DataFrame, time_column: str, datetime_columns: list[str],
+    mask_future_columns: Optional[list[str]] = None,
+) -> tuple[DataFrame, list[str]]:
+    if not datetime_columns:
+        return df, []
+
+    df = df.copy()
+    new_columns: list[str] = []
+    time_series = native_pd.to_datetime(df[time_column], errors="coerce")
+    _mask_set = set(mask_future_columns) if mask_future_columns else set()
+
+    for col in datetime_columns:
+        parsed = native_pd.to_datetime(df[col], errors="coerce")
+
+        delta_hours_name = f"{col}_delta_hours"
+        hour_name = f"{col}_hour"
+        dow_name = f"{col}_dow"
+        is_weekend_name = f"{col}_is_weekend"
+
+        df[delta_hours_name] = (parsed - time_series).dt.total_seconds() / 3600
+        df[hour_name] = parsed.dt.hour.astype("Float64")
+        df[dow_name] = parsed.dt.dayofweek.astype("Float64")
+        df[is_weekend_name] = (parsed.dt.dayofweek >= 5).astype("Float64")
+
+        if col in _mask_set:
+            future_mask = parsed > time_series
+            for name in [delta_hours_name, hour_name, dow_name, is_weekend_name]:
+                df.loc[future_mask, name] = native_pd.NA
+
+        new_columns.extend([delta_hours_name, hour_name, dow_name, is_weekend_name])
+
+    return df, new_columns
+
+
+def detect_milestone_pairs(datetime_columns: list[str]) -> list[tuple[str, str]]:
+    suffix_map = {
+        "_start": "_end", "_begin": "_expire", "_created": "_closed",
+        "_open": "_close", "_from": "_to", "_since": "_until",
+    }
+    col_set = set(datetime_columns)
+    pairs: list[tuple[str, str]] = []
+    for col in datetime_columns:
+        for start_sfx, end_sfx in suffix_map.items():
+            if col.endswith(start_sfx):
+                prefix = col[: -len(start_sfx)]
+                partner = prefix + end_sfx
+                if partner in col_set:
+                    pairs.append((col, partner))
+    return pairs
+
+
+def derive_entity_datetime_features(
+    df: DataFrame, time_column: str, datetime_columns: list[str],
+    milestone_pairs: Optional[list[tuple[str, str]]] = None,
+    mask_future_columns: Optional[list[str]] = None,
+) -> tuple[DataFrame, list[str]]:
+    if not datetime_columns:
+        return df, []
+    df = df.copy()
+    time_series = native_pd.to_datetime(df[time_column], errors="coerce")
+    mask_set = set(mask_future_columns) if mask_future_columns else set()
+    new_columns: list[str] = []
+
+    for col in datetime_columns:
+        parsed = native_pd.to_datetime(df[col], errors="coerce")
+        cols = _derive_universal_features(df, time_series, col, parsed, mask_set)
+        new_columns.extend(cols)
+
+    for start_col, end_col in (milestone_pairs or []):
+        start_parsed = native_pd.to_datetime(df[start_col], errors="coerce")
+        end_parsed = native_pd.to_datetime(df[end_col], errors="coerce")
+        cols = _derive_milestone_features(
+            df, time_series, start_col, end_col, start_parsed, end_parsed, mask_set,
+        )
+        new_columns.extend(cols)
+
+    return df, new_columns
+
+
+def _derive_universal_features(
+    df: DataFrame, time_series, col: str, parsed, mask_set: set,
+) -> list[str]:
+    delta = (time_series - parsed).dt.days
+    names = {
+        "days_since": f"days_since_{col}",
+        "days_until": f"days_until_{col}",
+        "log1p": f"log1p_days_since_{col}",
+        "is_missing": f"is_missing_{col}",
+        "is_future": f"is_future_{col}",
+    }
+    df[names["days_since"]] = delta.astype("Float64")
+    df[names["days_until"]] = (-delta).astype("Float64")
+    df[names["log1p"]] = np.log1p(delta.abs()).astype("Float64")
+    df[names["is_missing"]] = parsed.isna().astype("Float64")
+    df[names["is_future"]] = (parsed > time_series).astype("Float64")
+
+    if col in mask_set:
+        future_mask = parsed > time_series
+        for name in names.values():
+            if name != names["is_missing"]:
+                df.loc[future_mask, name] = native_pd.NA
+
+    col_names = list(names.values())
+    return col_names
+
+
+def _derive_milestone_features(
+    df: DataFrame, time_series, start_col: str, end_col: str,
+    start_parsed, end_parsed, mask_set: set,
+) -> list[str]:
+    prefix = _common_prefix(start_col, end_col)
+
+    tenure_name = f"tenure_days_{start_col}"
+    dtm_name = f"days_to_milestone_{end_col}"
+    w7_name = f"within_7d_{end_col}"
+    w30_name = f"within_30d_{end_col}"
+    w90_name = f"within_90d_{end_col}"
+    bucket_name = f"milestone_bucket_{end_col}"
+    progress_name = f"contract_progress_{prefix}"
+
+    tenure = (time_series - start_parsed).dt.days.astype("Float64")
+    dtm = (end_parsed - time_series).dt.days.astype("Float64")
+    duration = (end_parsed - start_parsed).dt.days.astype("Float64")
+    progress = (tenure / duration).clip(0, 2)
+
+    edges = [-np.inf, -90, -30, -7, 0, 7, 30, 90, np.inf]
+    bucket = native_pd.cut(dtm, bins=edges, labels=False).astype("Float64")
+
+    df[tenure_name] = tenure
+    df[dtm_name] = dtm
+    df[w7_name] = (dtm.abs() <= 7).astype("Float64")
+    df[w30_name] = (dtm.abs() <= 30).astype("Float64")
+    df[w90_name] = (dtm.abs() <= 90).astype("Float64")
+    df[bucket_name] = bucket
+    df[progress_name] = progress
+
+    col_names = [tenure_name, dtm_name, w7_name, w30_name, w90_name, bucket_name, progress_name]
+
+    for col, parsed in [(start_col, start_parsed), (end_col, end_parsed)]:
+        if col in mask_set:
+            future_mask = parsed > time_series
+            for name in col_names:
+                df.loc[future_mask, name] = native_pd.NA
+
+    return col_names
+
+
+def _common_prefix(a: str, b: str) -> str:
+    i = 0
+    while i < len(a) and i < len(b) and a[i] == b[i]:
+        i += 1
+    prefix = a[:i].rstrip("_")
+    return prefix
 
 
 def save_aggregated_parquet(df: DataFrame, path: Union[str, Path]) -> Dict[str, str]:

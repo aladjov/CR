@@ -283,6 +283,35 @@ class TestSegmentCapacityAnalysis:
         assert result.recommended_strategy in ["single_model", "segment_models", "hybrid"]
 
 
+class TestAnalyzeWithAllNaNTarget:
+    @pytest.fixture
+    def analyzer(self):
+        return FeatureCapacityAnalyzer()
+
+    def test_analyze_all_nan_target_returns_inadequate(self, analyzer):
+        df = pd.DataFrame({
+            "feature_1": [1.0, 2.0, 3.0],
+            "feature_2": [4.0, 5.0, 6.0],
+            "target": [np.nan, np.nan, np.nan],
+        })
+        result = analyzer.analyze(df, ["feature_1", "feature_2"], "target")
+        assert result.minority_class_samples == 0
+        assert result.capacity_status == "inadequate"
+
+    def test_segment_capacity_skips_all_nan_segments(self, analyzer):
+        df = pd.DataFrame({
+            "feature_1": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            "feature_2": [7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+            "segment": ["A", "A", "A", "B", "B", "B"],
+            "target": [1.0, 0.0, 0.0, np.nan, np.nan, np.nan],
+        })
+        result = analyzer.analyze_segment_capacity(
+            df, ["feature_1", "feature_2"], "target", "segment"
+        )
+        assert "A" in result.segment_capacities
+        assert "B" not in result.segment_capacities
+
+
 class TestModelComplexityGuidance:
     @pytest.fixture
     def analyzer(self):

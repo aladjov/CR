@@ -151,10 +151,9 @@ class FeatureCapacityAnalyzer:
         n_samples = len(df)
         n_features = len(feature_cols)
 
-        # Calculate minority class
         target = df[target_col]
         class_counts = target.value_counts()
-        minority_samples = int(class_counts.min())
+        minority_samples = int(class_counts.min()) if len(class_counts) > 0 else 0
 
         # Calculate EPV
         epv = minority_samples / n_features if n_features > 0 else 0
@@ -290,6 +289,8 @@ class FeatureCapacityAnalyzer:
 
         for segment_value in safe_to_list(df[segment_col].unique()):
             segment_df = df[df[segment_col] == segment_value]
+            if segment_df[target_col].notna().sum() == 0:
+                continue
             capacity = self.analyze(segment_df, feature_cols, target_col)
             segment_capacities[str(segment_value)] = capacity
 

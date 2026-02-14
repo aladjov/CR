@@ -955,3 +955,79 @@ class TestEdgeCases:
         cust_z = df[df["customer_id"] == "Z"]
         if len(cust_z) > 0:
             assert pd.isna(cust_z.iloc[0]["amount_beginning"])
+
+
+class TestLifecycleNaNHistoryDays:
+    def test_nat_timestamps_do_not_raise(self):
+        events_df = pd.DataFrame({
+            "customer_id": ["A", "A", "B", "B"],
+            "event_date": pd.to_datetime(
+                ["2023-01-01", "2023-03-01", pd.NaT, pd.NaT]
+            ),
+            "amount": [10.0, 20.0, 30.0, 40.0],
+        })
+        config = TemporalAggregationConfig(min_history_days=10)
+        engineer = TemporalFeatureEngineer(config=config)
+        result = engineer.compute(
+            events_df=events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+        )
+        df = result.features_df
+        assert len(df) == 2
+        cust_b = df[df["customer_id"] == "B"].iloc[0]
+        assert pd.isna(cust_b["amount_beginning"])
+
+    def test_all_nat_timestamps_do_not_raise(self):
+        events_df = pd.DataFrame({
+            "customer_id": ["A", "A"],
+            "event_date": pd.to_datetime([pd.NaT, pd.NaT]),
+            "amount": [10.0, 20.0],
+        })
+        engineer = TemporalFeatureEngineer()
+        result = engineer.compute(
+            events_df=events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+        )
+        assert len(result.features_df) == 1
+
+
+class TestVelocityWithNullableNA:
+    def test_velocity_pct_with_nullable_integer_columns(self):
+        events_df = pd.DataFrame({
+            "customer_id": ["A"] * 10 + ["B"] * 10,
+            "event_date": list(pd.date_range("2023-01-01", periods=10, freq="5D")) * 2,
+            "amount": pd.array(
+                [10, 20, 30, pd.NA, 50, 60, pd.NA, 80, 90, 100] * 2,
+                dtype="Int64",
+            ),
+        })
+        engineer = TemporalFeatureEngineer()
+        result = engineer.compute(
+            events_df=events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+        )
+        assert "amount_velocity_pct" in result.features_df.columns
+        assert len(result.features_df) == 2
+
+    def test_velocity_pct_with_all_na_lag_column(self):
+        events_df = pd.DataFrame({
+            "customer_id": ["A"] * 3,
+            "event_date": pd.to_datetime(["2023-01-01", "2023-01-02", "2023-01-03"]),
+            "amount": pd.array([pd.NA, pd.NA, pd.NA], dtype="Int64"),
+        })
+        engineer = TemporalFeatureEngineer()
+        result = engineer.compute(
+            events_df=events_df,
+            entity_col="customer_id",
+            time_col="event_date",
+            value_cols=["amount"],
+        )
+        df = result.features_df
+        if "amount_velocity_pct" in df.columns:
+            assert df["amount_velocity_pct"].isna().all()

@@ -236,7 +236,8 @@ class TimestampDiscoveryEngine:
         r"last_activity", r"last_login", r"last_purchase", r"last_order",
         r"last_seen", r"last_visit", r"last_interaction", r"last_transaction",
         r"snapshot_date", r"observation_date", r"record_date", r"as_of_date",
-        r"updated_at", r"modified_date", r"last_updated", r"last_modified",
+        r"updated_at", r"updated_on", r"modified_date", r"last_updated", r"last_modified",
+        r"changed_at", r"changed_date", r"modify_date",
         r"effective_date", r"data_date", r"reporting_date",
     ]
 
@@ -449,11 +450,12 @@ class TimestampDiscoveryEngine:
     def _classify_candidates(self, candidates: list[TimestampCandidate]) -> list[TimestampCandidate]:
         has_feature_ts = any(c.role == TimestampRole.FEATURE_TIMESTAMP for c in candidates)
         if not has_feature_ts:
-            for c in candidates:
-                if c.role in (TimestampRole.EVENT_TIME, TimestampRole.ENTITY_UPDATED):
-                    c.role = TimestampRole.FEATURE_TIMESTAMP
-                    c.notes += " (promoted to feature_timestamp)"
-                    break
+            for role in (TimestampRole.EVENT_TIME, TimestampRole.ENTITY_UPDATED, TimestampRole.ENTITY_CREATED):
+                for c in candidates:
+                    if c.role == role:
+                        c.role = TimestampRole.FEATURE_TIMESTAMP
+                        c.notes += " (promoted to feature_timestamp)"
+                        return candidates
         return candidates
 
     def _select_best_candidate(

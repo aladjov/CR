@@ -79,12 +79,22 @@ class PointInTimeJoiner:
         return issues
 
     @staticmethod
+    def _normalize_time_col(df: pd.DataFrame, col: str) -> pd.DataFrame:
+        df = df.copy()
+        df[col] = as_tz_naive(pd.to_datetime(df[col])).astype("datetime64[ns]")
+        return df
+
+    @staticmethod
     def asof_join(
         left_df: pd.DataFrame, right_df: pd.DataFrame, entity_key: str,
         left_time_col: str, right_time_col: str, direction: str = "backward"
     ) -> pd.DataFrame:
-        left_sorted = left_df.sort_values(left_time_col).reset_index(drop=True)
-        right_sorted = right_df.sort_values(right_time_col).reset_index(drop=True)
+        left_sorted = PointInTimeJoiner._normalize_time_col(
+            left_df.sort_values(left_time_col).reset_index(drop=True), left_time_col,
+        )
+        right_sorted = PointInTimeJoiner._normalize_time_col(
+            right_df.sort_values(right_time_col).reset_index(drop=True), right_time_col,
+        )
 
         return pd.merge_asof(
             left_sorted, right_sorted, left_on=left_time_col, right_on=right_time_col,
@@ -108,7 +118,10 @@ class PointInTimeJoiner:
     def validate_temporal_integrity(df: pd.DataFrame) -> dict[str, Any]:
         report = {"valid": True, "issues": []}
 
-        if "feature_timestamp" in df.columns and "label_timestamp" in df.columns:
+        ft_ok = "feature_timestamp" in df.columns and is_datetime64_any_dtype(df["feature_timestamp"])
+        lt_ok = "label_timestamp" in df.columns and is_datetime64_any_dtype(df["label_timestamp"])
+
+        if ft_ok and lt_ok:
             violations = df[as_tz_naive(df["feature_timestamp"]) > as_tz_naive(df["label_timestamp"])]
             if len(violations) > 0:
                 report["valid"] = False
@@ -122,7 +135,7 @@ class PointInTimeJoiner:
         for col in datetime_cols:
             if col in ["feature_timestamp", "label_timestamp"]:
                 continue
-            if "feature_timestamp" in df.columns:
+            if ft_ok:
                 future = df[as_tz_naive(df[col]) > as_tz_naive(df["feature_timestamp"])]
                 if len(future) > 0:
                     report["valid"] = False

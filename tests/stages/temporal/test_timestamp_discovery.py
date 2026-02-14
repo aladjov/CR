@@ -375,6 +375,45 @@ class TestEventTimePatterns:
             assert event_cand.confidence > unknown_cand[0].confidence
 
 
+class TestExpandedTimestampPatterns:
+
+    @pytest.fixture
+    def engine(self):
+        return TimestampDiscoveryEngine()
+
+    @pytest.mark.parametrize("col_name", [
+        "updated_on", "changed_at", "changed_date", "modify_date",
+    ])
+    def test_expanded_patterns_classified_as_feature_timestamp(self, engine, col_name):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            col_name: pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+        })
+        result = engine.discover(df)
+        assert result.feature_timestamp is not None
+        assert result.feature_timestamp.column_name == col_name
+
+    def test_created_at_promoted_when_no_feature_timestamp(self, engine):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "created_at": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "amount": [100, 200, 300],
+        })
+        result = engine.discover(df)
+        assert result.feature_timestamp is not None
+        assert result.feature_timestamp.column_name == "created_at"
+
+    def test_entity_updated_promoted_before_entity_created(self, engine):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "updated_at": pd.to_datetime(["2024-06-01", "2024-07-01", "2024-08-01"]),
+            "created_at": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+        })
+        result = engine.discover(df)
+        assert result.feature_timestamp is not None
+        assert result.feature_timestamp.column_name == "updated_at"
+
+
 class TestEdiTransactionsScenario:
     def test_iso_string_event_timestamp_detected(self):
         engine = TimestampDiscoveryEngine()
