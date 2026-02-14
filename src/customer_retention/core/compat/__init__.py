@@ -20,18 +20,22 @@ from .ops import DataOps, ops
 
 _SPARK_PANDAS_AVAILABLE = is_spark_available()
 
+_DATAFRAME_TYPES: tuple[type, ...] = (_pandas.DataFrame,)
+
 if _SPARK_PANDAS_AVAILABLE:
     try:
         import pyspark.pandas as ps
         pd = ps
         DataFrame = Union[ps.DataFrame, _pandas.DataFrame]
         Series = Union[ps.Series, _pandas.Series]
+        _DATAFRAME_TYPES = (_pandas.DataFrame, ps.DataFrame)
     except Exception:
         try:
             import databricks.koalas as ps
             pd = ps
             DataFrame = Union[ps.DataFrame, _pandas.DataFrame]
             Series = Union[ps.Series, _pandas.Series]
+            _DATAFRAME_TYPES = (_pandas.DataFrame, ps.DataFrame)
         except Exception:
             _SPARK_PANDAS_AVAILABLE = False
             pd = _pandas
@@ -41,6 +45,16 @@ else:
     pd = _pandas
     DataFrame = _pandas.DataFrame
     Series = _pandas.Series
+
+try:
+    from pyspark.sql import DataFrame as _SparkDF
+    _DATAFRAME_TYPES = (*_DATAFRAME_TYPES, _SparkDF)
+except ImportError:
+    pass
+
+
+def is_dataframe(obj: Any) -> bool:
+    return isinstance(obj, _DATAFRAME_TYPES)
 
 
 def to_pandas(df: Any) -> _pandas.DataFrame:
@@ -235,6 +249,7 @@ __all__ = [
     "crosstab",
     "notna",
     "isna",
+    "is_dataframe",
     "is_spark_available",
     "is_pandas_api_on_spark",
     "to_pandas",

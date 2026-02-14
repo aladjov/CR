@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from customer_retention.core.compat import is_numeric_dtype
+from customer_retention.core.compat import is_dataframe, is_numeric_dtype
 from customer_retention.core.utils.leakage import get_valid_feature_columns
 
 
@@ -176,16 +176,17 @@ class ScoringPipelineValidator:
         self.config = config or ValidationConfig()
 
     def _load_dataframe(self, data: Union[pd.DataFrame, Path, str]) -> pd.DataFrame:
-        if isinstance(data, pd.DataFrame):
+        if is_dataframe(data):
             return data
-        path = Path(data)
+        path_str = str(data)
+        path = Path(path_str)
         if path.is_dir() and (path / "_delta_log").is_dir():
             from customer_retention.integrations.adapters.factory import get_delta
-            return get_delta(force_local=True).read(str(path))
-        if path.suffix == ".parquet":
-            return pd.read_parquet(str(path))
-        if path.suffix == ".csv":
-            return pd.read_csv(str(path))
+            return get_delta(force_local=True).read(path_str)
+        if path_str.endswith(".parquet"):
+            return pd.read_parquet(path_str)
+        if path_str.endswith(".csv"):
+            return pd.read_csv(path_str)
         raise ValueError(f"Unsupported file format: {path.suffix}")
 
     def _get_comparable_columns(self) -> List[str]:

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from customer_retention.core.compat import pd
+from customer_retention.core.compat import is_dataframe, pd
 from customer_retention.core.config.column_config import ColumnType, DatasetGranularity
 from customer_retention.stages.profiling.type_detector import TypeDetector
 
@@ -120,19 +120,19 @@ class DatasetFingerprinter:
             rows.append(row)
         return pd.DataFrame(rows)
 
-    def _count_rows(self, data: pd.DataFrame | str | Path) -> int:
-        if isinstance(data, pd.DataFrame):
+    def _count_rows(self, data) -> int:
+        if is_dataframe(data):
             return len(data)
-        path = Path(data)
-        if path.suffix == ".csv":
-            with open(path) as f:
+        path_str = str(data)
+        if path_str.endswith(".csv"):
+            with open(path_str) as f:
                 return sum(1 for _ in f) - 1
-        return len(pd.read_parquet(str(path), columns=[]))
+        return len(pd.read_parquet(path_str, columns=[]))
 
-    def _load(self, data: pd.DataFrame | str | Path) -> pd.DataFrame:
-        if isinstance(data, pd.DataFrame):
+    def _load(self, data) -> pd.DataFrame:
+        if is_dataframe(data):
             return data.head(self.nrows) if len(data) > self.nrows else data
-        path = Path(data)
-        if path.suffix == ".csv":
-            return pd.read_csv(str(path), nrows=self.nrows)
-        return pd.read_parquet(str(path)).head(self.nrows)
+        path_str = str(data)
+        if path_str.endswith(".csv"):
+            return pd.read_csv(path_str, nrows=self.nrows)
+        return pd.read_parquet(path_str).head(self.nrows)

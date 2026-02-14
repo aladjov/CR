@@ -130,7 +130,7 @@ class TestFingerprinterEventLevel:
 
 
 class TestFingerprinterFromPath:
-    def test_load_from_csv_path(self):
+    def test_load_from_csv_string(self):
         fp = DatasetFingerprinter().fingerprint("profiles", str(TINY_PROFILES))
         assert fp.row_count > 0
         assert fp.name == "profiles"
@@ -139,8 +139,6 @@ class TestFingerprinterFromPath:
         fp = DatasetFingerprinter().fingerprint("profiles", TINY_PROFILES)
         assert fp.row_count > 0
 
-
-class TestFingerprinterPathConversion:
     def test_fingerprint_all_with_path_objects(self):
         datasets = {"profiles": TINY_PROFILES, "transactions": TINY_TRANSACTIONS}
         results = DatasetFingerprinter().fingerprint_all(datasets)
@@ -148,13 +146,26 @@ class TestFingerprinterPathConversion:
         assert all(fp.row_count > 0 for fp in results.values())
 
     def test_count_rows_with_path_object(self):
-        fp = DatasetFingerprinter()
-        assert fp._count_rows(TINY_PROFILES) > 0
+        assert DatasetFingerprinter()._count_rows(TINY_PROFILES) > 0
 
     def test_load_with_path_object(self):
-        fp = DatasetFingerprinter()
-        df = fp._load(TINY_PROFILES)
-        assert len(df) > 0
+        assert len(DatasetFingerprinter()._load(TINY_PROFILES)) > 0
+
+
+class TestFingerprinterDataFrameDetection:
+    def test_fingerprint_accepts_dataframe_regardless_of_pd_alias(self):
+        df = _entity_level_df()
+        fp = DatasetFingerprinter().fingerprint("test", df)
+        assert fp.row_count == 5
+
+    def test_count_rows_uses_duck_typing(self):
+        df = _entity_level_df()
+        assert DatasetFingerprinter()._count_rows(df) == 5
+
+    def test_load_uses_duck_typing(self):
+        df = _entity_level_df()
+        result = DatasetFingerprinter()._load(df)
+        assert len(result) == 5
 
 
 class TestFingerprinterMultiDataset:

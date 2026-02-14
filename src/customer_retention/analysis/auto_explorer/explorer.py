@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import List, Optional, Union
 
-from customer_retention.core.compat import DataFrame, Series, pd, safe_memory_usage_bytes
+from customer_retention.core.compat import DataFrame, Series, is_dataframe, pd, safe_memory_usage_bytes
 from customer_retention.core.config.column_config import ColumnType
 from customer_retention.stages.profiling import ProfilerFactory, TypeDetector
 from customer_retention.stages.temporal import TEMPORAL_METADATA_COLS
@@ -32,7 +32,7 @@ class DataExplorer:
         return findings
 
     def _load_source(self, source: Union[str, DataFrame]) -> tuple:
-        if hasattr(source, 'columns'):
+        if is_dataframe(source):
             return source, "<DataFrame>", "dataframe"
         path = Path(source)
         if path.is_dir() and (path / "_delta_log").is_dir():
