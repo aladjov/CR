@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Tuple
+from typing import Any, List, Tuple
 
 import pandas as pd
 
 from customer_retention.core.compat.detection import get_spark_session
+from customer_retention.core.config.column_config import select_model_ready_columns
 from customer_retention.integrations.adapters.factory import get_delta
 from customer_retention.stages.scoring.config import ScoringConfig, _load_module_from_path
 from customer_retention.transforms import ArtifactStore, TransformExecutor
@@ -63,16 +64,47 @@ class ScoringDataLoader:
         return gold_module.ENCODINGS, gold_module.SCALINGS
 
     def prepare_features(
-        self, df: pd.DataFrame, transforms: list,
-        executor: TransformExecutor, artifact_store: ArtifactStore,
+        self,
+        df: pd.DataFrame,
+        transforms: list,
+        executor: TransformExecutor,
+        artifact_store: ArtifactStore,
     ) -> pd.DataFrame:
         df = df.copy()
-        drop_cols = [self.config.entity_key, self.config.timestamp_column,
-                     self.config.original_column, self.config.target_column]
+        drop_cols = [
+            self.config.entity_key,
+            self.config.timestamp_column,
+            self.config.original_column,
+            self.config.target_column,
+        ]
         df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
         df = df.drop(columns=[c for c in df.columns if c.startswith("original_")], errors="ignore")
         df = executor.apply_all(df, transforms, fit_mode=False, artifact_store=artifact_store)
-        return df.select_dtypes(include=["int64", "float64", "int32", "float32"]).fillna(0)
+        return select_model_ready_columns(df).select_dtypes(include=["number", "bool"]).fillna(0)
+
+    def align_features_to_model(
+        self,
+        X: pd.DataFrame,
+        model: Any,
+    ) -> Tuple[pd.DataFrame, List[str], List[str]]:
+        expected = self._get_model_feature_names(model)
+        if expected is None:
+            return X, [], []
+        expected_set, current_set = set(expected), set(X.columns)
+        missing = [f for f in expected if f not in current_set]
+        extra = [f for f in X.columns if f not in expected_set]
+        aligned = X.copy()
+        for col in missing:
+            aligned[col] = 0.0
+        return aligned[list(expected)], missing, extra
+
+    @staticmethod
+    def _get_model_feature_names(model: Any) -> list | None:
+        if hasattr(model, "feature_names_in_"):
+            return list(model.feature_names_in_)
+        if hasattr(model, "feature_names"):
+            return list(model.feature_names)
+        return None
 
     def _load_gold_from_spark(self) -> pd.DataFrame:
         spark = get_spark_session()
@@ -93,12 +125,13 @@ class ScoringDataLoader:
     def _load_feast_features(self, scoring_df: pd.DataFrame) -> pd.DataFrame:
         feast_path = Path(self.config.feast_repo_path)
         store = FeatureStore(repo_path=str(feast_path))
-        exclude_cols = {self.config.entity_key, self.config.timestamp_column,
-                        self.config.target_column, self.config.original_column}
-        feature_cols = [
-            c for c in scoring_df.columns
-            if c not in exclude_cols and not c.startswith("original_")
-        ]
+        exclude_cols = {
+            self.config.entity_key,
+            self.config.timestamp_column,
+            self.config.target_column,
+            self.config.original_column,
+        }
+        feature_cols = [c for c in scoring_df.columns if c not in exclude_cols and not c.startswith("original_")]
         feature_refs = [f"{self.config.feast_feature_view}:{col}" for col in feature_cols]
         result_df = store.get_online_features(
             features=feature_refs,

@@ -1,5 +1,5 @@
 from .baseline_trainer import BaselineTrainer, ModelType, TrainedModel, TrainingConfig
-from .cross_validator import CrossValidator, CVResult, CVStrategy
+from .cross_validator import CrossValidator, CVResult, CVStrategy, TemporalEntitySplit
 from .data_splitter import DataSplitter, SplitConfig, SplitResult, SplitStrategy
 from .feature_scaler import FeatureScaler, ScalerType, ScalingResult
 from .hyperparameter_tuner import HyperparameterTuner, SearchStrategy, TuningResult
@@ -22,7 +22,7 @@ __all__ = [
     "ImbalanceRecommender", "ImbalanceRecommendation",
     "BaselineTrainer", "ModelType", "TrainingConfig", "TrainedModel",
     "ModelEvaluator", "EvaluationResult",
-    "CrossValidator", "CVStrategy", "CVResult",
+    "CrossValidator", "CVStrategy", "CVResult", "TemporalEntitySplit",
     "HyperparameterTuner", "SearchStrategy", "TuningResult",
     "ThresholdOptimizer", "OptimizationObjective", "ThresholdResult",
     "ModelComparator", "ComparisonResult", "ModelMetrics",

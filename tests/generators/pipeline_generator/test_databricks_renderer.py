@@ -381,15 +381,23 @@ class TestDatabricksRenderBronzeEvent:
 
     def test_render_bronze_event_renames_raw_time_column(self, renderer):
         source = SourceConfig(
-            name="emails", path="/data/emails.csv", format="csv",
-            entity_key="customer_id", time_column="feature_timestamp", is_event_level=True,
+            name="emails",
+            path="/data/emails.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="feature_timestamp",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id",
-            time_column="feature_timestamp", deduplicate=True,
+            source=source,
+            entity_column="customer_id",
+            time_column="feature_timestamp",
+            deduplicate=True,
             raw_time_column="sent_date",
             aggregation=AggregationWindowConfig(
-                windows=["180d", "365d"], value_columns=["bounced"], agg_funcs=["sum", "count"],
+                windows=["180d", "365d"],
+                value_columns=["bounced"],
+                agg_funcs=["sum", "count"],
             ),
         )
         result = renderer.render_bronze_event("emails", config)
@@ -399,12 +407,18 @@ class TestDatabricksRenderBronzeEvent:
 
     def test_render_bronze_event_no_rename_when_raw_matches(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.csv", format="csv",
-            entity_key="customer_id", time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id",
-            time_column="order_date", deduplicate=True,
+            source=source,
+            entity_column="customer_id",
+            time_column="order_date",
+            deduplicate=True,
         )
         result = renderer.render_bronze_event("orders", config)
         assert "withColumnRenamed" not in result
@@ -711,7 +725,7 @@ class TestSparkProvenanceBlock:
             ),
         ]
         result = spark_provenance_block(steps)
-        assert "Quality Assessment" in result
+        assert "Source Integrity" in result
         assert "Missing Value Analysis" in result
         assert "Source:" in result
 
@@ -832,7 +846,7 @@ class TestBronzeStepGrouping:
         )
         result = renderer.render_bronze("customers", config)
         assert "Source:" in result
-        assert "Quality Assessment > Missing Value Analysis" in result
+        assert "Source Integrity > Missing Value Analysis" in result
 
     def test_bronze_grouped_is_valid_python(self, renderer):
         source = SourceConfig(
@@ -1122,3 +1136,138 @@ class TestGoldStepGrouping:
         result = renderer.render_gold(config)
         assert "Custom Report" in result
         assert "Categorical Feature Analysis" in result
+
+
+class TestBronzeEventCategoricalAggregationSpark:
+    def test_bronze_event_aggregation_has_numeric_type_guard(self, renderer):
+        source = SourceConfig(
+            name="emails",
+            path="/data/emails.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="sent_date",
+            is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source,
+            entity_column="customer_id",
+            time_column="sent_date",
+            aggregation=AggregationWindowConfig(
+                windows=["7d", "30d"],
+                value_columns=["send_hour"],
+                agg_funcs=["sum", "mean"],
+                categorical_columns=["direction", "status"],
+                categorical_agg_funcs=["nunique", "mode"],
+            ),
+        )
+        result = renderer.render_bronze_event("emails", config)
+        assert "NumericType" in result
+        assert "_get_numeric_columns" in result
+
+    def test_bronze_event_aggregation_has_categorical_spark(self, renderer):
+        source = SourceConfig(
+            name="emails",
+            path="/data/emails.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="sent_date",
+            is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source,
+            entity_column="customer_id",
+            time_column="sent_date",
+            aggregation=AggregationWindowConfig(
+                windows=["7d"],
+                value_columns=["send_hour"],
+                agg_funcs=["sum"],
+                categorical_columns=["direction"],
+                categorical_agg_funcs=["nunique", "mode"],
+            ),
+        )
+        result = renderer.render_bronze_event("emails", config)
+        assert "countDistinct" in result
+        assert "CATEGORICAL_COLUMNS" in result
+        assert "'direction'" in result
+
+    def test_bronze_event_aggregation_empty_categorical(self, renderer):
+        source = SourceConfig(
+            name="orders",
+            path="/data/orders.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source,
+            entity_column="customer_id",
+            time_column="order_date",
+            aggregation=AggregationWindowConfig(
+                windows=["30d"],
+                value_columns=["amount"],
+                agg_funcs=["sum", "mean"],
+                categorical_columns=[],
+                categorical_agg_funcs=["nunique", "mode"],
+            ),
+        )
+        result = renderer.render_bronze_event("orders", config)
+        assert "CATEGORICAL_COLUMNS = []" in result
+
+
+class TestDatabricksDatetimeDerivation:
+
+    def test_bronze_event_includes_datetime_derivation(self, renderer):
+        from customer_retention.generators.pipeline_generator.models import DatetimeDerivationConfig
+
+        source = SourceConfig(
+            name="events", path="/data/events.csv", format="csv",
+            entity_key="customer_id", time_column="event_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="event_date",
+            aggregation=AggregationWindowConfig(
+                windows=["30d"], value_columns=["amount"], agg_funcs=["sum"],
+            ),
+            datetime_derivation=DatetimeDerivationConfig(
+                source_columns=["response_at"],
+                reference_column="event_date",
+                mask_future_columns=[],
+            ),
+        )
+        code = renderer.render_bronze_event("events", config)
+        assert "derive_datetime_features" in code
+        assert "DATETIME_DERIVATION_SOURCES" in code
+        assert "response_at" in code
+        assert "_delta_hours" in code
+
+    def test_bronze_event_mask_future_per_column_in_derivation(self, renderer):
+        from customer_retention.generators.pipeline_generator.models import DatetimeDerivationConfig
+
+        source = SourceConfig(
+            name="events", path="/data/events.csv", format="csv",
+            entity_key="customer_id", time_column="event_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="event_date",
+            datetime_derivation=DatetimeDerivationConfig(
+                source_columns=["next_date", "contract_end"],
+                reference_column="feature_timestamp",
+                mask_future_columns=["next_date"],
+            ),
+        )
+        code = renderer.render_bronze_event("events", config)
+        assert "MASK_FUTURE_COLUMNS" in code
+        assert "mask_set" in code
+        assert "if col in mask_set" in code
+
+    def test_bronze_event_omits_derivation_when_none(self, renderer):
+        source = SourceConfig(
+            name="events", path="/data/events.csv", format="csv",
+            entity_key="customer_id", time_column="event_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="event_date",
+        )
+        code = renderer.render_bronze_event("events", config)
+        assert "derive_datetime_features" not in code

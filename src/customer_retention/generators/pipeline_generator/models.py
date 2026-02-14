@@ -93,6 +93,8 @@ class AggregationWindowConfig:
     windows: List[str] = field(default_factory=list)
     value_columns: List[str] = field(default_factory=list)
     agg_funcs: List[str] = field(default_factory=list)
+    categorical_columns: List[str] = field(default_factory=list)
+    categorical_agg_funcs: List[str] = field(default_factory=list)
     reference_date: Optional[str] = None
 
 
@@ -118,6 +120,13 @@ class LabelTimestampConfig:
 
 
 @dataclass
+class DatetimeDerivationConfig:
+    source_columns: List[str]
+    reference_column: str
+    mask_future_columns: List[str] = field(default_factory=list)
+
+
+@dataclass
 class BronzeEventConfig:
     source: SourceConfig
     entity_column: str
@@ -128,6 +137,7 @@ class BronzeEventConfig:
     lifecycle: Optional[LifecycleConfig] = None
     post_shaping: List[TransformationStep] = field(default_factory=list)
     raw_time_column: Optional[str] = None
+    datetime_derivation: Optional[DatetimeDerivationConfig] = None
 
 
 @dataclass
@@ -142,6 +152,7 @@ class LandingLayerConfig:
     raw_time_column: Optional[str] = None
     timestamp_coalesce: Optional[TimestampCoalesceConfig] = None
     label_timestamp: Optional[LabelTimestampConfig] = None
+    datetime_derivation: Optional[DatetimeDerivationConfig] = None
 
 
 @dataclass

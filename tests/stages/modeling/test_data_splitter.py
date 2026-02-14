@@ -95,6 +95,39 @@ class TestRandomStratifiedSplit:
         assert not result1.X_train.equals(result2.X_train)
 
 
+class TestStratifiedSplitRareClassFallback:
+    def test_rare_class_falls_back_to_non_stratified(self):
+        n = 100
+        df = pd.DataFrame({
+            "feature1": np.random.randn(n),
+            "target": [0] * 50 + [1] * 49 + [11],
+        })
+        splitter = DataSplitter(
+            target_column="target",
+            strategy=SplitStrategy.RANDOM_STRATIFIED,
+            test_size=0.2, stratify=True,
+        )
+        result = splitter.split(df)
+        assert len(result.X_train) + len(result.X_test) == n
+
+    def test_rare_class_with_validation_split(self):
+        n = 100
+        df = pd.DataFrame({
+            "feature1": np.random.randn(n),
+            "target": [0] * 50 + [1] * 49 + [11],
+        })
+        splitter = DataSplitter(
+            target_column="target",
+            strategy=SplitStrategy.RANDOM_STRATIFIED,
+            test_size=0.2, stratify=True, include_validation=True,
+        )
+        result = splitter.split(df)
+        total = len(result.X_train) + len(result.X_test)
+        if result.X_val is not None:
+            total += len(result.X_val)
+        assert total == n
+
+
 class TestTemporalSplit:
     def test_temporal_split_respects_time_order_sp004(self, sample_df):
         splitter = DataSplitter(
@@ -239,3 +272,192 @@ class TestFeatureExclusion:
 
         assert "custid" not in result.X_train.columns
         assert "date" not in result.X_train.columns
+
+    def test_auto_excludes_datetime_columns(self, sample_df):
+        splitter = DataSplitter(target_column="target")
+        result = splitter.split(sample_df)
+
+        assert "date" not in result.X_train.columns
+        assert "date" not in result.X_test.columns
+
+    def test_auto_excludes_datetime_preserves_numeric(self):
+        df = pd.DataFrame({
+            "num_feat": np.random.randn(100),
+            "int_feat": np.random.randint(0, 10, 100),
+            "dt_col": pd.date_range("2024-01-01", periods=100, freq="h"),
+            "target": np.random.choice([0, 1], 100),
+        })
+        splitter = DataSplitter(target_column="target", test_size=0.2)
+        result = splitter.split(df)
+
+        assert "dt_col" not in result.X_train.columns
+        assert set(result.X_train.columns) == {"num_feat", "int_feat"}
+
+    def test_auto_excludes_datetime_with_tz(self):
+        dates = pd.date_range("2024-01-01", periods=100, freq="h", tz="UTC")
+        df = pd.DataFrame({
+            "feature": np.random.randn(100),
+            "tz_date": dates,
+            "target": np.random.choice([0, 1], 100),
+        })
+        splitter = DataSplitter(target_column="target", test_size=0.2)
+        result = splitter.split(df)
+
+        assert "tz_date" not in result.X_train.columns
+        assert "feature" in result.X_train.columns
+
+    def test_auto_excludes_timedelta_columns(self):
+        df = pd.DataFrame({
+            "feature": np.random.randn(100),
+            "duration": pd.to_timedelta(np.random.randint(1, 100, 100), unit="D"),
+            "target": np.random.choice([0, 1], 100),
+        })
+        splitter = DataSplitter(target_column="target", test_size=0.2)
+        result = splitter.split(df)
+
+        assert "duration" not in result.X_train.columns
+        assert "feature" in result.X_train.columns
+
+
+class TestTemporalPurgeGap:
+    @pytest.fixture
+    def temporal_df(self):
+        np.random.seed(42)
+        n = 1000
+        return pd.DataFrame({
+            "feature1": np.random.randn(n),
+            "feature2": np.random.randn(n),
+            "target": np.random.choice([0, 1], n, p=[0.3, 0.7]),
+            "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
+        })
+
+    def test_purge_gap_removes_rows_between_train_and_test(self, temporal_df):
+        splitter = DataSplitter(
+            target_column="target",
+            strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date",
+            test_size=0.2,
+            purge_gap_days=30,
+        )
+        result = splitter.split(temporal_df)
+
+        total_kept = len(result.X_train) + len(result.X_test)
+        assert total_kept < len(temporal_df)
+
+    def test_purge_gap_zero_behaves_like_basic_temporal(self, temporal_df):
+        splitter_gap = DataSplitter(
+            target_column="target",
+            strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date",
+            test_size=0.2,
+            purge_gap_days=0,
+        )
+        splitter_basic = DataSplitter(
+            target_column="target",
+            strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date",
+            test_size=0.2,
+        )
+        result_gap = splitter_gap.split(temporal_df)
+        result_basic = splitter_basic.split(temporal_df)
+
+        assert len(result_gap.X_train) == len(result_basic.X_train)
+        assert len(result_gap.X_test) == len(result_basic.X_test)
+
+    def test_purge_gap_none_behaves_like_basic_temporal(self, temporal_df):
+        splitter_gap = DataSplitter(
+            target_column="target",
+            strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date",
+            test_size=0.2,
+            purge_gap_days=None,
+        )
+        splitter_basic = DataSplitter(
+            target_column="target",
+            strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date",
+            test_size=0.2,
+        )
+        result_gap = splitter_gap.split(temporal_df)
+        result_basic = splitter_basic.split(temporal_df)
+
+        assert len(result_gap.X_train) == len(result_basic.X_train)
+        assert len(result_gap.X_test) == len(result_basic.X_test)
+
+    def test_purge_gap_preserves_time_ordering(self, temporal_df):
+        splitter = DataSplitter(
+            target_column="target",
+            strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date",
+            test_size=0.2,
+            purge_gap_days=30,
+            exclude_columns=["as_of_date"],
+        )
+        result = splitter.split(temporal_df)
+
+        train_max = temporal_df.loc[result.X_train.index, "as_of_date"].max()
+        test_min = temporal_df.loc[result.X_test.index, "as_of_date"].min()
+        gap = (test_min - train_max).days
+
+        assert gap >= 30
+
+    def test_purge_gap_train_plus_test_less_than_total(self, temporal_df):
+        splitter = DataSplitter(
+            target_column="target",
+            strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date",
+            test_size=0.2,
+            purge_gap_days=50,
+        )
+        result = splitter.split(temporal_df)
+
+        total_kept = len(result.X_train) + len(result.X_test)
+        assert total_kept < len(temporal_df)
+        purge_rows = result.split_info.get("purge_gap_rows", 0)
+        assert purge_rows > 0
+        assert total_kept + purge_rows == len(temporal_df)
+
+    def test_purge_gap_split_info_reports_gap_metadata(self, temporal_df):
+        splitter = DataSplitter(
+            target_column="target",
+            strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date",
+            test_size=0.2,
+            purge_gap_days=30,
+        )
+        result = splitter.split(temporal_df)
+
+        assert "purge_gap_days" in result.split_info
+        assert result.split_info["purge_gap_days"] == 30
+        assert "purge_gap_rows" in result.split_info
+        assert result.split_info["purge_gap_rows"] > 0
+        assert "cutoff_date" in result.split_info
+
+    def test_purge_gap_with_validation_split(self, temporal_df):
+        splitter = DataSplitter(
+            target_column="target",
+            strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date",
+            test_size=0.2,
+            purge_gap_days=30,
+            include_validation=True,
+            validation_size=0.10,
+        )
+        result = splitter.split(temporal_df)
+
+        assert result.X_val is not None
+        assert len(result.X_val) > 0
+        assert len(result.X_train) + len(result.X_val) + len(result.X_test) < len(temporal_df)
+
+    def test_purge_gap_large_gap_still_has_train_and_test(self, temporal_df):
+        splitter = DataSplitter(
+            target_column="target",
+            strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date",
+            test_size=0.2,
+            purge_gap_days=500,
+        )
+        result = splitter.split(temporal_df)
+
+        assert len(result.X_train) > 0
+        assert len(result.X_test) > 0

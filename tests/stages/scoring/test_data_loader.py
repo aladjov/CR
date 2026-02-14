@@ -50,14 +50,16 @@ def databricks_config():
 def sample_gold_df():
     np.random.seed(42)
     n = 50
-    df = pd.DataFrame({
-        "customer_id": [f"c{i}" for i in range(n)],
-        "event_timestamp": pd.date_range("2024-01-01", periods=n),
-        "feature_a": np.random.randn(n),
-        "feature_b": np.random.randn(n) * 10 + 50,
-        "unsubscribed": np.random.randint(0, 2, n).astype(float),
-        "original_unsubscribed": [np.nan] * n,
-    })
+    df = pd.DataFrame(
+        {
+            "customer_id": [f"c{i}" for i in range(n)],
+            "event_timestamp": pd.date_range("2024-01-01", periods=n),
+            "feature_a": np.random.randn(n),
+            "feature_b": np.random.randn(n) * 10 + 50,
+            "unsubscribed": np.random.randint(0, 2, n).astype(float),
+            "original_unsubscribed": [np.nan] * n,
+        }
+    )
     holdout_idx = list(range(40, 50))
     df.loc[holdout_idx, "original_unsubscribed"] = df.loc[holdout_idx, "unsubscribed"]
     df.loc[holdout_idx, "unsubscribed"] = np.nan
@@ -80,6 +82,7 @@ def mock_mlflow_client():
 class TestLoadGoldFeaturesLocal:
     def test_loads_from_delta_with_cn(self, local_config, sample_gold_df, tmp_path):
         from customer_retention.integrations.adapters.factory import get_delta
+
         cn = local_config.composite_name
         gold_dir = tmp_path / "data" / "gold" / f"gold_features_{cn}"
         gold_dir.parent.mkdir(parents=True)
@@ -235,12 +238,16 @@ class TestLoadTransforms:
         artifacts_dir.mkdir()
         manifest = {"col_a_scaler": {"type": "scaler", "column": "col_a", "path": str(artifacts_dir / "col_a.joblib")}}
         import yaml
+
         (artifacts_dir / "manifest.yaml").write_text(yaml.dump(manifest))
         local_config.artifacts_path = artifacts_dir
         mock_gold_module = MagicMock()
         mock_gold_module.ENCODINGS = [MagicMock()]
         mock_gold_module.SCALINGS = [MagicMock()]
-        with patch("customer_retention.stages.scoring.data_loader.ScoringDataLoader._load_gold_module", return_value=mock_gold_module):
+        with patch(
+            "customer_retention.stages.scoring.data_loader.ScoringDataLoader._load_gold_module",
+            return_value=mock_gold_module,
+        ):
             loader = ScoringDataLoader(local_config)
             encodings, scalings = loader.load_transforms()
         assert len(encodings) == 1
@@ -272,11 +279,13 @@ class TestPrepareFeatures:
 
     def test_selects_numeric_dtypes(self, local_config):
         loader = ScoringDataLoader(local_config)
-        df = pd.DataFrame({
-            "num_col": [1.0, 2.0],
-            "str_col": ["a", "b"],
-            "int_col": [1, 2],
-        })
+        df = pd.DataFrame(
+            {
+                "num_col": [1.0, 2.0],
+                "str_col": ["a", "b"],
+                "int_col": [1, 2],
+            }
+        )
         mock_executor = MagicMock()
         mock_executor.apply_all.side_effect = lambda df, *a, **kw: df
         result = loader.prepare_features(df, [], mock_executor, MagicMock())
@@ -292,20 +301,121 @@ class TestPrepareFeatures:
         result = loader.prepare_features(df, [], mock_executor, MagicMock())
         assert result["val"].isna().sum() == 0
 
+    def test_excludes_datetime_columns(self, local_config):
+        loader = ScoringDataLoader(local_config)
+        df = pd.DataFrame({
+            "num": [1.0, 2.0],
+            "dt": pd.date_range("2024-01-01", periods=2),
+        })
+        mock_executor = MagicMock()
+        mock_executor.apply_all.side_effect = lambda df, *a, **kw: df
+        result = loader.prepare_features(df, [], mock_executor, MagicMock())
+        assert "dt" not in result.columns
+        assert "num" in result.columns
+
+    def test_preserves_bool_columns(self, local_config):
+        loader = ScoringDataLoader(local_config)
+        df = pd.DataFrame({"flag": [True, False], "num": [1.0, 2.0]})
+        mock_executor = MagicMock()
+        mock_executor.apply_all.side_effect = lambda df, *a, **kw: df
+        result = loader.prepare_features(df, [], mock_executor, MagicMock())
+        assert "flag" in result.columns
+        assert "num" in result.columns
+
+    def test_preserves_nullable_int_columns(self, local_config):
+        loader = ScoringDataLoader(local_config)
+        df = pd.DataFrame({"val": pd.array([1, 2, None], dtype="Int64")})
+        mock_executor = MagicMock()
+        mock_executor.apply_all.side_effect = lambda df, *a, **kw: df
+        result = loader.prepare_features(df, [], mock_executor, MagicMock())
+        assert "val" in result.columns
+
+
+class TestAlignFeaturesToModel:
+    def test_returns_aligned_when_features_match(self, local_config):
+        loader = ScoringDataLoader(local_config)
+        X = pd.DataFrame({"a": [1.0], "b": [2.0]})
+        model = MagicMock()
+        model.feature_names_in_ = np.array(["a", "b"])
+        aligned, missing, extra = loader.align_features_to_model(X, model)
+        assert list(aligned.columns) == ["a", "b"]
+        assert missing == []
+        assert extra == []
+
+    def test_adds_missing_columns_as_zero(self, local_config):
+        loader = ScoringDataLoader(local_config)
+        X = pd.DataFrame({"a": [1.0, 2.0]})
+        model = MagicMock()
+        model.feature_names_in_ = np.array(["a", "b", "c"])
+        aligned, missing, extra = loader.align_features_to_model(X, model)
+        assert list(aligned.columns) == ["a", "b", "c"]
+        assert (aligned["b"] == 0.0).all()
+        assert (aligned["c"] == 0.0).all()
+        assert set(missing) == {"b", "c"}
+
+    def test_drops_extra_columns(self, local_config):
+        loader = ScoringDataLoader(local_config)
+        X = pd.DataFrame({"a": [1.0], "b": [2.0], "c": [3.0]})
+        model = MagicMock()
+        model.feature_names_in_ = np.array(["a", "b"])
+        aligned, missing, extra = loader.align_features_to_model(X, model)
+        assert list(aligned.columns) == ["a", "b"]
+        assert extra == ["c"]
+
+    def test_reorders_columns_to_match_model(self, local_config):
+        loader = ScoringDataLoader(local_config)
+        X = pd.DataFrame({"b": [2.0], "a": [1.0]})
+        model = MagicMock()
+        model.feature_names_in_ = np.array(["a", "b"])
+        aligned, _, _ = loader.align_features_to_model(X, model)
+        assert list(aligned.columns) == ["a", "b"]
+
+    def test_handles_xgboost_feature_names(self, local_config):
+        loader = ScoringDataLoader(local_config)
+        X = pd.DataFrame({"a": [1.0], "b": [2.0]})
+        model = MagicMock(spec=[])
+        model.feature_names = ["a", "b"]
+        aligned, missing, extra = loader.align_features_to_model(X, model)
+        assert list(aligned.columns) == ["a", "b"]
+
+    def test_returns_unmodified_when_no_feature_names(self, local_config):
+        loader = ScoringDataLoader(local_config)
+        X = pd.DataFrame({"a": [1.0], "b": [2.0]})
+        model = MagicMock(spec=[])
+        aligned, missing, extra = loader.align_features_to_model(X, model)
+        assert list(aligned.columns) == ["a", "b"]
+        assert missing == []
+        assert extra == []
+
+    def test_combined_missing_and_extra(self, local_config):
+        loader = ScoringDataLoader(local_config)
+        X = pd.DataFrame({"a": [1.0], "new_feat": [5.0]})
+        model = MagicMock()
+        model.feature_names_in_ = np.array(["a", "old_feat"])
+        aligned, missing, extra = loader.align_features_to_model(X, model)
+        assert list(aligned.columns) == ["a", "old_feat"]
+        assert missing == ["old_feat"]
+        assert extra == ["new_feat"]
+        assert (aligned["old_feat"] == 0.0).all()
+
 
 @pytest.fixture
 def local_pipeline_with_gold(tmp_path):
     pipeline_dir = tmp_path / "my_pipeline"
     pipeline_dir.mkdir()
-    (pipeline_dir / "config.py").write_text(textwrap.dedent("""\
+    (pipeline_dir / "config.py").write_text(
+        textwrap.dedent("""\
         ENCODINGS = [{"type": "label", "column": "cat_a"}]
         SCALINGS = [{"type": "standard", "column": "num_b"}]
-    """))
+    """)
+    )
     gold_dir = pipeline_dir / "gold"
     gold_dir.mkdir()
-    (gold_dir / "gold_features.py").write_text(textwrap.dedent("""\
+    (gold_dir / "gold_features.py").write_text(
+        textwrap.dedent("""\
         from config import ENCODINGS, SCALINGS
-    """))
+    """)
+    )
     return pipeline_dir
 
 

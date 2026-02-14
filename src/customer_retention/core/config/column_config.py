@@ -1,6 +1,7 @@
 from enum import Enum
 from typing import Optional
 
+import pandas as pd
 from pydantic import BaseModel, model_validator
 
 
@@ -20,13 +21,20 @@ class ColumnType(str, Enum):
     UNKNOWN = "unknown"
 
 
-# Column types that should NEVER be used as features (leakage risk)
 NON_FEATURE_COLUMN_TYPES = frozenset({
     ColumnType.IDENTIFIER,
     ColumnType.TARGET,
     ColumnType.FEATURE_TIMESTAMP,
     ColumnType.LABEL_TIMESTAMP,
+    ColumnType.DATETIME,
+    ColumnType.TEXT,
 })
+
+NON_FEATURE_DTYPES = frozenset({"datetime64", "datetimetz", "timedelta64"})
+
+
+def select_model_ready_columns(df: pd.DataFrame) -> pd.DataFrame:
+    return df.select_dtypes(exclude=list(NON_FEATURE_DTYPES))
 
 
 class DatasetGranularity(str, Enum):

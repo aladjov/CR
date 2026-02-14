@@ -5,17 +5,21 @@ from customer_retention.core.compat import DataFrame, Series
 
 from ..components.enums import Severity
 
-TEMPORAL_METADATA_COLUMNS: FrozenSet[str] = frozenset({
-    "feature_timestamp",
-    "label_timestamp",
-    "label_available_flag",
-})
+TEMPORAL_METADATA_COLUMNS: FrozenSet[str] = frozenset(
+    {
+        "feature_timestamp",
+        "label_timestamp",
+        "label_available_flag",
+    }
+)
 
 
 SOURCE_TIMESTAMP_COLUMNS: FrozenSet[str] = frozenset({"event_timestamp"})
 
 
-def _build_exclusion_set(entity_column: Optional[str], target_column: Optional[str], additional_exclude: Optional[Set[str]]) -> Set[str]:
+def _build_exclusion_set(
+    entity_column: Optional[str], target_column: Optional[str], additional_exclude: Optional[Set[str]]
+) -> Set[str]:
     exclude = set(TEMPORAL_METADATA_COLUMNS) | set(SOURCE_TIMESTAMP_COLUMNS)
     if entity_column:
         exclude.add(entity_column)
@@ -72,6 +76,74 @@ def classify_separation(overlap_pct: float, thresholds: LeakageThresholds = DEFA
     if overlap_pct < thresholds.separation_medium:
         return Severity.MEDIUM, "high_separation"
     return Severity.INFO, "normal"
+
+
+def _null_correlated_columns(
+    df: "DataFrame",
+    columns: List[str],
+    target_series: "Series",
+    threshold: float,
+) -> List[str]:
+    leaking: List[str] = []
+    for col in columns:
+        null_indicator = df[col].isna().astype(float)
+        if null_indicator.nunique() < 2:
+            continue
+        corr = null_indicator.corr(target_series.astype(float))
+        if abs(corr) >= threshold:
+            leaking.append(col)
+    return leaking
+
+
+def detect_target_leaking_datetime_columns(
+    df: "DataFrame",
+    datetime_columns: List[str],
+    target_column: Optional[str],
+    null_correlation_threshold: float = 0.8,
+) -> List[str]:
+    if not target_column or not datetime_columns:
+        return []
+    return _null_correlated_columns(
+        df,
+        datetime_columns,
+        df[target_column],
+        null_correlation_threshold,
+    )
+
+
+def detect_leaking_features(
+    df: "DataFrame",
+    feature_columns: List[str],
+    target_column: Optional[str],
+    null_correlation_threshold: float = 0.8,
+    value_correlation_threshold: float = 0.95,
+) -> List[str]:
+    if not target_column or not feature_columns:
+        return []
+    if target_column not in df.columns:
+        return []
+    available = [c for c in feature_columns if c in df.columns]
+    if not available:
+        return []
+    target_series = df[target_column].astype(float)
+    null_leakers = set(
+        _null_correlated_columns(df, available, target_series, null_correlation_threshold),
+    )
+    value_leakers: Set[str] = set()
+    for col in available:
+        if col in null_leakers:
+            continue
+        try:
+            col_float = df[col].astype(float)
+        except (ValueError, TypeError):
+            continue
+        if col_float.nunique() < 2:
+            continue
+        corr = col_float.corr(target_series)
+        if abs(corr) >= value_correlation_threshold:
+            value_leakers.add(col)
+    combined = null_leakers | value_leakers
+    return [col for col in feature_columns if col in combined]
 
 
 def calculate_class_overlap(feature: Series, target: Series) -> float:

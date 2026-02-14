@@ -127,8 +127,6 @@ def reload_config() -> None:
 def setup_experiments_structure(experiments_dir: Optional[Path] = None) -> None:
     base = experiments_dir or get_experiments_dir()
     directories = [
-        base / "findings" / "snapshots",
-        base / "findings" / "unified",
         base / "data" / "bronze",
         base / "data" / "silver",
         base / "data" / "gold",
@@ -138,6 +136,17 @@ def setup_experiments_structure(experiments_dir: Optional[Path] = None) -> None:
     ]
     for directory in directories:
         directory.mkdir(parents=True, exist_ok=True)
+
+
+def get_runs_dir(default: Optional[str] = None) -> Path:
+    return get_experiments_dir(default) / "runs"
+
+
+def get_active_run_dir() -> Path | None:
+    run_id = os.environ.get("CR_RUN_ID")
+    if not run_id:
+        return None
+    return get_runs_dir() / run_id
 
 
 def get_notebook_experiments_dir() -> Path:

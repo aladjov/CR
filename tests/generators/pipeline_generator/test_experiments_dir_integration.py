@@ -256,7 +256,7 @@ class TestRunAllSetupFunction:
 
 class TestBronzeLayerPathResolution:
 
-    def test_bronze_source_path_uses_findings_dir(self, experiments_setup):
+    def test_bronze_source_path_uses_raw_source_path(self, experiments_setup):
         customers_findings_path = experiments_setup["findings_dir"] / "customers_findings.yaml"
         customers_findings = yaml.safe_load(customers_findings_path.read_text())
         customers_findings["source_path"] = "customers.parquet"
@@ -271,8 +271,8 @@ class TestBronzeLayerPathResolution:
         generator.generate()
 
         config_content = (experiments_setup["output_dir"] / "config.py").read_text()
-        assert "FINDINGS_DIR" in config_content
-        assert 'str(FINDINGS_DIR / "customers.parquet")' in config_content
+        assert "customers.parquet" in config_content
+        assert 'FINDINGS_DIR / "customers.parquet"' not in config_content
 
     def test_bronze_can_load_source_data(self, experiments_setup):
         customers_findings_path = experiments_setup["findings_dir"] / "customers_findings.yaml"

@@ -93,6 +93,54 @@ class TestSafeToDatetime:
         assert pd.api.types.is_datetime64_any_dtype(result)
         assert pd.isna(result.iloc[1])
 
+    def test_mixed_iso8601_with_and_without_fractional_seconds(self):
+        series = pd.Series([
+            "2024-07-29T15:48:00.123Z",
+            "2024-07-29T15:48:00Z",
+            "2024-08-01T10:00:00.000Z",
+        ])
+        result = safe_to_datetime(series)
+        assert pd.api.types.is_datetime64_any_dtype(result)
+        assert result.iloc[0].year == 2024
+        assert result.iloc[1] == pd.Timestamp("2024-07-29T15:48:00")
+        assert result.dt.tz is None
+
+    def test_mixed_iso8601_without_timezone(self):
+        series = pd.Series([
+            "2024-01-01T00:00:00.500",
+            "2024-01-02T12:00:00",
+        ])
+        result = safe_to_datetime(series)
+        assert pd.api.types.is_datetime64_any_dtype(result)
+        assert len(result) == 2
+        assert result.dt.tz is None
+
+    def test_iso8601_uniform_no_fractional(self):
+        series = pd.Series(["2024-07-29T15:48:00Z", "2024-07-30T10:00:00Z"])
+        result = safe_to_datetime(series)
+        assert pd.api.types.is_datetime64_any_dtype(result)
+        assert result.iloc[0].day == 29
+        assert result.dt.tz is None
+
+    def test_mixed_iso8601_comparable_with_naive_timestamp(self):
+        series = pd.Series([
+            "2024-07-29T15:48:00.123Z",
+            "2024-07-29T15:48:00Z",
+            "2024-08-01T10:00:00.000Z",
+        ])
+        result = safe_to_datetime(series)
+        cutoff = pd.Timestamp("2024-07-30")
+        mask = result < cutoff
+        assert mask.sum() == 2
+
+    def test_already_datetime_tz_aware_stripped(self):
+        series = pd.Series(pd.to_datetime(["2023-01-01", "2023-06-15"]).tz_localize("UTC"))
+        result = safe_to_datetime(series)
+        assert result.dt.tz is None
+        cutoff = pd.Timestamp("2023-03-01")
+        mask = result < cutoff
+        assert mask.sum() == 1
+
 
 class TestEnsureDatetimeColumn:
     def test_converts_string_column(self):
@@ -130,6 +178,16 @@ class TestEnsureDatetimeColumn:
         ensure_datetime_column(df, "ts")
         assert df["val"].iloc[0] == 42
         assert df["name"].iloc[0] == "test"
+
+    def test_mixed_iso8601_with_and_without_fractional_seconds(self):
+        df = pd.DataFrame({"ts": [
+            "2024-07-29T15:48:00.123Z",
+            "2024-07-29T15:48:00Z",
+            "2024-08-01T10:00:00.000Z",
+        ], "val": [1, 2, 3]})
+        ensure_datetime_column(df, "ts")
+        assert pd.api.types.is_datetime64_any_dtype(df["ts"])
+        assert df["ts"].iloc[0].year == 2024
 
 
 class TestAsTzNaive:

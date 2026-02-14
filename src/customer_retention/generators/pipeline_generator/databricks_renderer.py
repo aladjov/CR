@@ -358,6 +358,7 @@ display(result)
 
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
+from pyspark.sql.types import NumericType
 
 # COMMAND ----------
 
@@ -405,6 +406,36 @@ def deduplicate(df):
     return df
 {% endif %}
 
+{% if config.datetime_derivation %}
+DATETIME_DERIVATION_SOURCES = {{ config.datetime_derivation.source_columns }}
+MASK_FUTURE_COLUMNS = {{ config.datetime_derivation.mask_future_columns }}
+
+def derive_datetime_features(df):
+    ref_col = "{{ config.datetime_derivation.reference_column }}"
+    mask_set = set(MASK_FUTURE_COLUMNS)
+    for col in DATETIME_DERIVATION_SOURCES:
+        if col not in [f.name for f in df.schema.fields]:
+            continue
+        ts_col = F.to_timestamp(F.col(col))
+        ref_ts = F.to_timestamp(F.col(ref_col))
+        delta_hours = (F.unix_timestamp(ts_col) - F.unix_timestamp(ref_ts)) / 3600.0
+        hour_val = F.hour(ts_col).cast("double")
+        dow_val = (F.dayofweek(ts_col) - 1).cast("double")
+        is_weekend_val = F.when(F.dayofweek(ts_col).isin(1, 7), 1.0).otherwise(0.0)
+        if col in mask_set:
+            future_mask = ts_col > ref_ts
+            df = df.withColumn(f"{col}_delta_hours", F.when(future_mask, None).otherwise(delta_hours))
+            df = df.withColumn(f"{col}_hour", F.when(future_mask, None).otherwise(hour_val))
+            df = df.withColumn(f"{col}_dow", F.when(future_mask, None).otherwise(dow_val))
+            df = df.withColumn(f"{col}_is_weekend", F.when(future_mask, None).otherwise(is_weekend_val))
+        else:
+            df = df.withColumn(f"{col}_delta_hours", delta_hours)
+            df = df.withColumn(f"{col}_hour", hour_val)
+            df = df.withColumn(f"{col}_dow", dow_val)
+            df = df.withColumn(f"{col}_is_weekend", is_weekend_val)
+    return df
+{% endif %}
+
 {% if config.aggregation %}
 def _window_to_days(window_str):
     if window_str.endswith("d"):
@@ -413,8 +444,18 @@ def _window_to_days(window_str):
         return max(1, int(window_str[:-1]) // 24)
     return int(window_str)
 
+CATEGORICAL_COLUMNS = {{ config.aggregation.categorical_columns }}
+
+def _get_numeric_columns(df, value_columns):
+    numeric_cols = set()
+    for field in df.schema.fields:
+        if isinstance(field.dataType, NumericType):
+            numeric_cols.add(field.name)
+    return [c for c in value_columns if c in numeric_cols]
+
 def apply_event_aggregation(df):
     reference_date = df.agg(F.max(TIME_COLUMN)).collect()[0][0]
+    numeric_columns = _get_numeric_columns(df, {{ config.aggregation.value_columns }})
     results = []
 {% for window in config.aggregation.windows %}
 {% if window == "all_time" %}
@@ -425,13 +466,16 @@ def apply_event_aggregation(df):
     )
 {% endif %}
     agg_exprs = [F.count("*").alias("event_count_{{ window }}")]
-{% for val_col in config.aggregation.value_columns %}
+    for col in numeric_columns:
 {% for agg_func in config.aggregation.agg_funcs %}
 {% if agg_func != "count" %}
-    agg_exprs.append(F.{{ agg_func }}("{{ val_col }}").alias("{{ val_col }}_{{ agg_func }}_{{ window }}"))
+        agg_exprs.append(F.{{ agg_func }}(col).alias(f"{col}_{{ agg_func }}_{{ window }}"))
 {% endif %}
 {% endfor %}
-{% endfor %}
+    for col in CATEGORICAL_COLUMNS:
+        if col in [f.name for f in window_df.schema.fields]:
+            agg_exprs.append(F.countDistinct(col).alias(f"{col}_nunique_{{ window }}"))
+            agg_exprs.append(F.first(col).alias(f"{col}_mode_{{ window }}"))
     window_agg = window_df.groupBy(ENTITY_COLUMN).agg(*agg_exprs)
     results.append(window_agg)
 {% endfor %}
@@ -451,6 +495,9 @@ def run_bronze_event():
     df = apply_pre_shaping(df)
 {% if config.deduplicate %}
     df = deduplicate(df)
+{% endif %}
+{% if config.datetime_derivation %}
+    df = derive_datetime_features(df)
 {% endif %}
 {% if config.aggregation %}
     agg_df, reference_date = apply_event_aggregation(df)
@@ -610,11 +657,20 @@ def merge_sources(bronze_outputs):
     base_source = "{{ config.sources[0].name }}"
     merged = bronze_outputs[base_source]
 {% for join in config.silver.joins %}
+{% if join.left_keys | length == 1 %}
     merged = merged.join(
         bronze_outputs["{{ join.right_source }}"],
-        merged["{{ join.left_key }}"] == bronze_outputs["{{ join.right_source }}"]["{{ join.right_key }}"],
+        merged["{{ join.left_keys[0] }}"] == bronze_outputs["{{ join.right_source }}"]["{{ join.right_keys[0] }}"],
         "{{ join.how }}",
-    ).drop(bronze_outputs["{{ join.right_source }}"]["{{ join.right_key }}"])
+    ).drop(bronze_outputs["{{ join.right_source }}"]["{{ join.right_keys[0] }}"])
+{% else %}
+    _join_cond = {% for i in range(join.left_keys | length) %}{% if not loop.first %} & {% endif %}(merged["{{ join.left_keys[i] }}"] == bronze_outputs["{{ join.right_source }}"]["{{ join.right_keys[i] }}"]){% endfor %}
+
+    _drop_cols = [{% for k in join.right_keys %}bronze_outputs["{{ join.right_source }}"]["{{ k }}"]{{ ", " if not loop.last else "" }}{% endfor %}]
+    _joined = merged.join(bronze_outputs["{{ join.right_source }}"], _join_cond, "{{ join.how }}")
+    merged = _joined{% for k in join.right_keys %}.drop(bronze_outputs["{{ join.right_source }}"]["{{ k }}"]){% endfor %}
+
+{% endif %}
 {% endfor %}
     return merged
 

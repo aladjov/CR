@@ -12,12 +12,14 @@ from customer_retention.core.config.experiments import (
     OUTPUT_DIR,
     _find_project_root,
     _load_persisted_databricks_config,
+    get_active_run_dir,
     get_data_dir,
     get_experiments_dir,
     get_feature_store_dir,
     get_findings_dir,
     get_mlruns_dir,
     get_notebook_experiments_dir,
+    get_runs_dir,
     persist_databricks_config,
     setup_experiments_structure,
 )
@@ -173,8 +175,6 @@ class TestSetupExperimentsStructure:
     def test_creates_all_directories(self, tmp_path):
         setup_experiments_structure(tmp_path)
         expected = [
-            "findings/snapshots",
-            "findings/unified",
             "data/bronze",
             "data/silver",
             "data/gold",
@@ -193,14 +193,14 @@ class TestSetupExperimentsStructure:
 
         importlib.reload(exp_module)
         exp_module.setup_experiments_structure()
-        assert (tmp_path / "auto" / "findings" / "snapshots").exists()
+        assert (tmp_path / "auto" / "data" / "bronze").exists()
         monkeypatch.delenv("CR_EXPERIMENTS_DIR")
         importlib.reload(exp_module)
 
     def test_idempotent_creation(self, tmp_path):
         setup_experiments_structure(tmp_path)
         setup_experiments_structure(tmp_path)
-        assert (tmp_path / "findings" / "snapshots").exists()
+        assert (tmp_path / "data" / "bronze").exists()
 
 
 class TestGetNotebookExperimentsDir:
@@ -413,3 +413,40 @@ class TestGetExperimentsDirWithPersistedConfig:
         monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
         result = get_experiments_dir()
         assert result.name == "experiments"
+
+
+class TestGetRunsDir:
+    def test_returns_runs_subdir_of_experiments(self, monkeypatch):
+        monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
+        result = get_runs_dir()
+        assert result.name == "runs"
+        assert result.parent.name == "experiments"
+
+    def test_uses_default_parameter(self, monkeypatch):
+        monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
+        result = get_runs_dir(default="/custom/exp")
+        assert str(result) == "/custom/exp/runs"
+
+    def test_uses_env_var(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CR_EXPERIMENTS_DIR", str(tmp_path / "exp"))
+        result = get_runs_dir()
+        assert result == tmp_path / "exp" / "runs"
+
+
+class TestGetActiveRunDir:
+    def test_returns_none_without_env_var(self, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        assert get_active_run_dir() is None
+
+    def test_returns_run_dir_with_env_var(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CR_RUN_ID", "my-run-12345678")
+        monkeypatch.setenv("CR_EXPERIMENTS_DIR", str(tmp_path / "exp"))
+        result = get_active_run_dir()
+        assert result == tmp_path / "exp" / "runs" / "my-run-12345678"
+
+    def test_run_id_preserved_in_path(self, monkeypatch):
+        monkeypatch.setenv("CR_RUN_ID", "retention-abcd1234")
+        monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
+        result = get_active_run_dir()
+        assert result.name == "retention-abcd1234"
+        assert result.parent.name == "runs"

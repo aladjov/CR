@@ -15,6 +15,7 @@ from .models import (
     AggregationWindowConfig,
     BronzeEventConfig,
     BronzeLayerConfig,
+    DatetimeDerivationConfig,
     GoldLayerConfig,
     LabelTimestampConfig,
     LandingLayerConfig,
@@ -30,14 +31,16 @@ from .models import (
 
 def _resolve_col_type(col_finding) -> str:
     col_type = col_finding.inferred_type
-    if hasattr(col_type, 'value'):
+    if hasattr(col_type, "value"):
         col_type = col_type.value
     return col_type
 
 
 class FindingsParser:
-    def __init__(self, findings_dir: str):
+    def __init__(self, findings_dir: str, namespace=None, intent=None):
         self._findings_dir = Path(findings_dir)
+        self._namespace = namespace
+        self._intent = intent
         self._source_findings_paths: Dict[str, Path] = {}
 
     def parse(self) -> PipelineConfig:
@@ -46,7 +49,9 @@ class FindingsParser:
         source_findings = self._load_source_findings(selected_sources, self._findings_dir, multi_dataset)
         discovered_events = self._discover_event_sources(source_findings)
         recommendations_registry = self._load_recommendations()
-        recommendations_hash = recommendations_registry.compute_recommendations_hash() if recommendations_registry else None
+        recommendations_hash = (
+            recommendations_registry.compute_recommendations_hash() if recommendations_registry else None
+        )
         config = self._build_pipeline_config(multi_dataset, source_findings, recommendations_hash)
         if recommendations_registry:
             self._apply_recommendations_to_config(config, recommendations_registry, multi_dataset)
@@ -57,10 +62,16 @@ class FindingsParser:
         return config
 
     def _load_recommendations(self) -> Optional[RecommendationRegistry]:
+        if self._namespace is not None:
+            recommendations_path = self._namespace.merged_recommendations_path
+            if recommendations_path.exists():
+                with open(recommendations_path) as f:
+                    return RecommendationRegistry.from_dict(yaml.safe_load(f))
+            return None
         recommendations_path = None
-        pattern_matches = list(self._findings_dir.glob("*_recommendations.yaml"))
+        pattern_matches = sorted(self._findings_dir.glob("*_recommendations.yaml"))
         if pattern_matches:
-            recommendations_path = max(pattern_matches, key=lambda p: p.stat().st_mtime)
+            recommendations_path = pattern_matches[-1]
         elif (self._findings_dir / "recommendations.yaml").exists():
             recommendations_path = self._findings_dir / "recommendations.yaml"
         if recommendations_path and recommendations_path.exists():
@@ -69,7 +80,10 @@ class FindingsParser:
         return None
 
     def _load_multi_dataset_findings(self) -> MultiDatasetFindings:
-        path = self._findings_dir / "multi_dataset_findings.yaml"
+        if self._namespace is not None:
+            path = self._namespace.multi_dataset_findings_path
+        else:
+            path = self._findings_dir / "multi_dataset_findings.yaml"
         if not path.exists():
             return self._synthesize_from_single_source()
         with open(path) as f:
@@ -79,14 +93,15 @@ class FindingsParser:
     def _synthesize_from_single_source(self) -> MultiDatasetFindings:
         from customer_retention.core.config.column_config import DatasetGranularity
 
-        candidates = [
-            p for p in self._findings_dir.glob("*_findings.yaml")
-            if p.name != "multi_dataset_findings.yaml"
-        ]
+        candidates = []
+        if self._namespace is not None:
+            candidates = self._namespace.discover_all_findings(prefer_aggregated=True)
         if not candidates:
-            raise FileNotFoundError(
-                f"No findings files found in {self._findings_dir}"
-            )
+            candidates = [
+                p for p in self._findings_dir.glob("*_findings.yaml") if p.name != "multi_dataset_findings.yaml"
+            ]
+        if not candidates:
+            raise FileNotFoundError(f"No findings files found in {self._findings_dir}")
 
         datasets = {}
         first_name = None
@@ -102,11 +117,7 @@ class FindingsParser:
                 granularity=DatasetGranularity.ENTITY_LEVEL,
                 row_count=findings.row_count,
                 column_count=findings.column_count,
-                entity_column=(
-                    findings.identifier_columns[0]
-                    if findings.identifier_columns
-                    else None
-                ),
+                entity_column=(findings.identifier_columns[0] if findings.identifier_columns else None),
                 target_column=findings.target_column,
             )
 
@@ -122,6 +133,7 @@ class FindingsParser:
 
     def _dict_to_multi_dataset_findings(self, data: Dict) -> MultiDatasetFindings:
         from customer_retention.core.config.column_config import DatasetGranularity
+
         datasets = {}
         for name, info in data.get("datasets", {}).items():
             clean_name = self._strip_aggregated(name)
@@ -137,17 +149,17 @@ class FindingsParser:
                 entity_column=info.get("entity_column"),
                 time_column=info.get("time_column"),
                 target_column=info.get("target_column"),
-                excluded=info.get("excluded", False)
+                excluded=info.get("excluded", False),
             )
         relationships = [
             DatasetRelationshipInfo(
                 left_dataset=r["left_dataset"],
                 right_dataset=r["right_dataset"],
-                left_column=r["left_column"],
-                right_column=r["right_column"],
+                left_columns=r.get("left_columns") or [r["left_column"]],
+                right_columns=r.get("right_columns") or [r["right_column"]],
                 relationship_type=r.get("relationship_type", "one_to_many"),
                 confidence=r.get("confidence", 1.0),
-                auto_detected=r.get("auto_detected", False)
+                auto_detected=r.get("auto_detected", False),
             )
             for r in data.get("relationships", [])
         ]
@@ -157,11 +169,15 @@ class FindingsParser:
             primary_entity_dataset=self._strip_aggregated(data.get("primary_entity_dataset", "") or ""),
             event_datasets=[self._strip_aggregated(e) for e in data.get("event_datasets", [])],
             excluded_datasets=data.get("excluded_datasets", []),
-            aggregation_windows=data.get("aggregation_windows", ["24h", "7d", "30d", "90d", "180d", "365d", "all_time"]),
+            aggregation_windows=data.get(
+                "aggregation_windows", ["24h", "7d", "30d", "90d", "180d", "365d", "all_time"]
+            ),
             notes=data.get("notes", {}),
         )
 
-    def _load_source_findings(self, sources: List[str], findings_dir: Path, multi_dataset: MultiDatasetFindings = None) -> Dict[str, ExplorationFindings]:
+    def _load_source_findings(
+        self, sources: List[str], findings_dir: Path, multi_dataset: MultiDatasetFindings = None
+    ) -> Dict[str, ExplorationFindings]:
         result = {}
         for name in sources:
             path = None
@@ -175,6 +191,13 @@ class FindingsParser:
                         path = (findings_dir / raw_path).resolve()
                         if not path.exists():
                             path = findings_dir / raw_path.name
+            if (path is None or not path.exists()) and self._namespace is not None:
+                ns_dir = self._namespace.dataset_findings_dir(name)
+                candidates = sorted(ns_dir.glob(f"{name}_*_findings.yaml")) if ns_dir.is_dir() else []
+                if candidates:
+                    path = candidates[0]
+                elif (ns_dir / f"{name}_findings.yaml").exists():
+                    path = ns_dir / f"{name}_findings.yaml"
             if path is None or not path.exists():
                 candidates = list(findings_dir.glob(f"{name}_*_findings.yaml"))
                 if candidates:
@@ -186,7 +209,12 @@ class FindingsParser:
                 self._source_findings_paths[name] = path.resolve()
         return result
 
-    def _build_pipeline_config(self, multi: MultiDatasetFindings, sources: Dict[str, ExplorationFindings], recommendations_hash: Optional[str] = None) -> PipelineConfig:
+    def _build_pipeline_config(
+        self,
+        multi: MultiDatasetFindings,
+        sources: Dict[str, ExplorationFindings],
+        recommendations_hash: Optional[str] = None,
+    ) -> PipelineConfig:
         source_configs = self._build_source_configs(multi, sources)
         bronze_configs = self._build_bronze_configs(sources, source_configs)
         return PipelineConfig(
@@ -200,7 +228,9 @@ class FindingsParser:
             recommendations_hash=recommendations_hash,
         )
 
-    def _build_source_configs(self, multi: MultiDatasetFindings, sources: Dict[str, ExplorationFindings]) -> List[SourceConfig]:
+    def _build_source_configs(
+        self, multi: MultiDatasetFindings, sources: Dict[str, ExplorationFindings]
+    ) -> List[SourceConfig]:
         result = []
         for name, findings in sources.items():
             dataset_info = multi.datasets.get(name)
@@ -213,19 +243,23 @@ class FindingsParser:
                 time_col = findings.time_series_metadata.time_column
                 if findings.time_series_metadata.entity_column:
                     entity_key = findings.time_series_metadata.entity_column
-            result.append(SourceConfig(
-                name=name,
-                path=Path(findings.source_path).name,
-                format=findings.source_format,
-                entity_key=entity_key,
-                raw_source_path=raw_source,
-                time_column=time_col,
-                is_event_level=is_event,
-                excluded=is_excluded
-            ))
+            result.append(
+                SourceConfig(
+                    name=name,
+                    path=Path(findings.source_path).name,
+                    format=self._infer_format(raw_source),
+                    entity_key=entity_key,
+                    raw_source_path=raw_source,
+                    time_column=time_col,
+                    is_event_level=is_event,
+                    excluded=is_excluded,
+                )
+            )
         return result
 
-    def _build_bronze_configs(self, sources: Dict[str, ExplorationFindings], source_configs: List[SourceConfig]) -> Dict[str, BronzeLayerConfig]:
+    def _build_bronze_configs(
+        self, sources: Dict[str, ExplorationFindings], source_configs: List[SourceConfig]
+    ) -> Dict[str, BronzeLayerConfig]:
         result = {}
         source_map = {s.name: s for s in source_configs}
         for name, findings in sources.items():
@@ -256,27 +290,43 @@ class FindingsParser:
                 type=PipelineTransformationType.IMPUTE_NULL,
                 column=column,
                 parameters={"value": param if param else 0},
-                rationale=f"Impute nulls in {column}"
+                rationale=f"Impute nulls in {column}",
             )
         if action == "cap_outlier":
             return TransformationStep(
                 type=PipelineTransformationType.CAP_OUTLIER,
                 column=column,
                 parameters={"method": param if param else "iqr"},
-                rationale=f"Cap outliers in {column}"
+                rationale=f"Cap outliers in {column}",
             )
         return None
 
-    def _build_silver_config(self, multi: MultiDatasetFindings, sources: Dict[str, ExplorationFindings]) -> SilverLayerConfig:
+    def _build_silver_config(
+        self, multi: MultiDatasetFindings, sources: Dict[str, ExplorationFindings]
+    ) -> SilverLayerConfig:
         joins = []
+        event_set = set(multi.event_datasets)
         for rel in multi.relationships:
-            joins.append({
-                "left_key": rel.left_column,
-                "right_key": rel.right_column,
-                "right_source": rel.right_dataset,
-                "how": "left"
-            })
+            left_keys = list(rel.left_columns)
+            right_keys = list(rel.right_columns)
+            if rel.right_dataset in event_set:
+                left_keys = self._strip_temporal_join_keys(left_keys)
+                right_keys = self._strip_temporal_join_keys(right_keys)
+            joins.append(
+                {
+                    "left_keys": left_keys,
+                    "right_keys": right_keys,
+                    "right_source": rel.right_dataset,
+                    "how": "left",
+                }
+            )
         return SilverLayerConfig(joins=joins, aggregations=[])
+
+    @staticmethod
+    def _strip_temporal_join_keys(keys: List[str]) -> List[str]:
+        temporal = {"as_of_date", "event_timestamp", "feature_timestamp"}
+        filtered = [k for k in keys if k not in temporal]
+        return filtered or keys
 
     def _build_gold_config(self, sources: Dict[str, ExplorationFindings]) -> GoldLayerConfig:
         encodings = []
@@ -285,19 +335,23 @@ class FindingsParser:
             for col_name, col_finding in findings.columns.items():
                 col_type = _resolve_col_type(col_finding)
                 if col_type == "categorical":
-                    encodings.append(TransformationStep(
-                        type=PipelineTransformationType.ENCODE,
-                        column=col_name,
-                        parameters={"method": "one_hot"},
-                        rationale=f"One-hot encode {col_name}"
-                    ))
+                    encodings.append(
+                        TransformationStep(
+                            type=PipelineTransformationType.ENCODE,
+                            column=col_name,
+                            parameters={"method": "one_hot"},
+                            rationale=f"One-hot encode {col_name}",
+                        )
+                    )
                 elif col_type == "numeric":
-                    scalings.append(TransformationStep(
-                        type=PipelineTransformationType.SCALE,
-                        column=col_name,
-                        parameters={"method": "standard"},
-                        rationale=f"Standardize {col_name}"
-                    ))
+                    scalings.append(
+                        TransformationStep(
+                            type=PipelineTransformationType.SCALE,
+                            column=col_name,
+                            parameters={"method": "standard"},
+                            rationale=f"Standardize {col_name}",
+                        )
+                    )
         return GoldLayerConfig(encodings=encodings, scalings=scalings)
 
     def _find_target_column(self, sources: Dict[str, ExplorationFindings]) -> str:
@@ -306,14 +360,16 @@ class FindingsParser:
                 return findings.target_column
         return "target"
 
-    def _apply_recommendations_to_config(self, config: PipelineConfig, registry: RecommendationRegistry, multi: MultiDatasetFindings) -> None:
+    def _apply_recommendations_to_config(
+        self, config: PipelineConfig, registry: RecommendationRegistry, multi: MultiDatasetFindings
+    ) -> None:
         self._apply_bronze_recommendations(config, registry)
         self._apply_silver_recommendations(config, registry)
         self._apply_gold_recommendations(config, registry)
 
     def _apply_bronze_recommendations(self, config: PipelineConfig, registry: RecommendationRegistry) -> None:
         sources_to_process = dict(registry.sources)
-        if not sources_to_process and hasattr(registry, 'bronze') and registry.bronze is not None:
+        if not sources_to_process and hasattr(registry, "bronze") and registry.bronze is not None:
             sources_to_process = {"_default": registry.bronze}
         for source_name, bronze_recs in sources_to_process.items():
             target_bronze = self._find_bronze_config_for_source(config, source_name, bronze_recs.source_file)
@@ -340,7 +396,9 @@ class FindingsParser:
                 result.append(step)
         return result
 
-    def _find_bronze_config_for_source(self, config: PipelineConfig, source_name: str, source_file: str) -> Optional[BronzeLayerConfig]:
+    def _find_bronze_config_for_source(
+        self, config: PipelineConfig, source_name: str, source_file: str
+    ) -> Optional[BronzeLayerConfig]:
         if source_name in config.bronze:
             return config.bronze[source_name]
         source_path = Path(source_file) if source_file else None
@@ -403,9 +461,9 @@ class FindingsParser:
         )
 
     def _apply_silver_recommendations(self, config: PipelineConfig, registry: RecommendationRegistry) -> None:
-        if not hasattr(registry, 'silver') or registry.silver is None:
+        if not hasattr(registry, "silver") or registry.silver is None:
             return
-        for rec in getattr(registry.silver, 'derived_columns', []):
+        for rec in getattr(registry.silver, "derived_columns", []):
             step = self._map_silver_derived(rec)
             if step:
                 config.silver.derived_columns.append(step)
@@ -424,37 +482,41 @@ class FindingsParser:
         return None
 
     def _apply_gold_recommendations(self, config: PipelineConfig, registry: RecommendationRegistry) -> None:
-        if not hasattr(registry, 'gold') or registry.gold is None:
+        if not hasattr(registry, "gold") or registry.gold is None:
             return
         gold = registry.gold
         seen_encoding_columns: Set[str] = {e.column for e in config.gold.encodings}
-        for rec in getattr(gold, 'encoding', []):
+        for rec in getattr(gold, "encoding", []):
             if rec.target_column in seen_encoding_columns:
                 continue
             seen_encoding_columns.add(rec.target_column)
             method = rec.parameters.get("method", rec.action)
             if method in ("onehot", "one_hot"):
                 method = "one_hot"
-            config.gold.encodings.append(TransformationStep(
-                type=PipelineTransformationType.ENCODE,
-                column=rec.target_column,
-                parameters={"method": method},
-                rationale=rec.rationale,
-                source_notebook=rec.source_notebook,
-            ))
+            config.gold.encodings.append(
+                TransformationStep(
+                    type=PipelineTransformationType.ENCODE,
+                    column=rec.target_column,
+                    parameters={"method": method},
+                    rationale=rec.rationale,
+                    source_notebook=rec.source_notebook,
+                )
+            )
         seen_scaling_columns: Set[str] = {s.column for s in config.gold.scalings}
-        for rec in getattr(gold, 'scaling', []):
+        for rec in getattr(gold, "scaling", []):
             if rec.target_column in seen_scaling_columns:
                 continue
             seen_scaling_columns.add(rec.target_column)
-            config.gold.scalings.append(TransformationStep(
-                type=PipelineTransformationType.SCALE,
-                column=rec.target_column,
-                parameters={"method": rec.parameters.get("method", "standard")},
-                rationale=rec.rationale,
-                source_notebook=rec.source_notebook,
-            ))
-        for rec in getattr(gold, 'transformations', []):
+            config.gold.scalings.append(
+                TransformationStep(
+                    type=PipelineTransformationType.SCALE,
+                    column=rec.target_column,
+                    parameters={"method": rec.parameters.get("method", "standard")},
+                    rationale=rec.rationale,
+                    source_notebook=rec.source_notebook,
+                )
+            )
+        for rec in getattr(gold, "transformations", []):
             step = self._map_gold_transformation(rec)
             if step:
                 config.gold.transformations.append(step)
@@ -486,14 +548,14 @@ class FindingsParser:
 
     def _collect_prioritized_columns(self, gold) -> Set[str]:
         prioritized = set()
-        for rec in getattr(gold, 'feature_selection', []):
+        for rec in getattr(gold, "feature_selection", []):
             if rec.action == "prioritize":
                 prioritized.add(rec.target_column)
         return prioritized
 
     def _collect_feature_selection_drops(self, gold, prioritized: Set[str]) -> Set[str]:
         drops = set()
-        for rec in getattr(gold, 'feature_selection', []):
+        for rec in getattr(gold, "feature_selection", []):
             if rec.action in ("drop_multicollinear", "drop_weak"):
                 if rec.target_column not in prioritized:
                     drops.add(rec.target_column)
@@ -521,15 +583,39 @@ class FindingsParser:
         output_col = findings.time_series_metadata.time_column if findings.time_series_metadata else "feature_timestamp"
         return TimestampCoalesceConfig(datetime_columns_ordered=findings.datetime_ordering, output_column=output_col)
 
+    @staticmethod
+    def _build_datetime_derivation_config(
+        findings: ExplorationFindings,
+        reference_column: str,
+        mask_future: bool,
+    ) -> Optional[DatetimeDerivationConfig]:
+        if not findings.datetime_derivation_sources:
+            return None
+        allow_future = set(getattr(findings, "datetime_allow_future_columns", []))
+        if mask_future:
+            mask_cols = [c for c in findings.datetime_derivation_sources if c not in allow_future]
+        else:
+            mask_cols = []
+        return DatetimeDerivationConfig(
+            source_columns=findings.datetime_derivation_sources,
+            reference_column=reference_column,
+            mask_future_columns=mask_cols,
+        )
+
     def _build_label_timestamp_config(self, findings: ExplorationFindings) -> Optional[LabelTimestampConfig]:
-        if not findings.label_timestamp_column and findings.observation_window_days == 180:
+        observation_days = findings.observation_window_days
+        if self._intent is not None:
+            observation_days = self._intent.observation_window_days
+        if not findings.label_timestamp_column and observation_days == 180:
             return None
         return LabelTimestampConfig(
             label_column=findings.label_timestamp_column,
-            fallback_window_days=findings.observation_window_days,
+            fallback_window_days=observation_days,
         )
 
-    def _build_landing_configs(self, config: PipelineConfig, multi: MultiDatasetFindings, sources: Dict[str, ExplorationFindings]) -> None:
+    def _build_landing_configs(
+        self, config: PipelineConfig, multi: MultiDatasetFindings, sources: Dict[str, ExplorationFindings]
+    ) -> None:
         for event_name in multi.event_datasets:
             dataset_info = multi.datasets.get(event_name)
             if not dataset_info:
@@ -537,12 +623,16 @@ class FindingsParser:
             findings = sources.get(event_name)
             if not findings:
                 continue
-            entity_col = (dataset_info.entity_column
-                         or (findings.time_series_metadata.entity_column if findings.time_series_metadata else None)
-                         or (findings.identifier_columns[0] if findings.identifier_columns else "id"))
-            time_col = (dataset_info.time_column
-                       or (findings.time_series_metadata.time_column if findings.time_series_metadata else None)
-                       or "timestamp")
+            entity_col = (
+                dataset_info.entity_column
+                or (findings.time_series_metadata.entity_column if findings.time_series_metadata else None)
+                or (findings.identifier_columns[0] if findings.identifier_columns else "id")
+            )
+            time_col = (
+                dataset_info.time_column
+                or (findings.time_series_metadata.time_column if findings.time_series_metadata else None)
+                or "timestamp"
+            )
             raw_time_col = self._resolve_raw_time_column(findings)
             raw_source = str(Path(dataset_info.source_path or findings.source_path).resolve())
             source_cfg = next((s for s in config.sources if s.name == event_name), None)
@@ -560,6 +650,11 @@ class FindingsParser:
                 raw_time_column=raw_time_col if raw_time_col and raw_time_col != time_col else None,
                 timestamp_coalesce=self._build_timestamp_coalesce_config(findings),
                 label_timestamp=self._build_label_timestamp_config(findings),
+                datetime_derivation=self._build_datetime_derivation_config(
+                    findings,
+                    "feature_timestamp",
+                    mask_future=True,
+                ),
             )
 
     @staticmethod
@@ -569,26 +664,46 @@ class FindingsParser:
             return original
         return None
 
-    def _build_aggregation_config(self, multi: MultiDatasetFindings, findings: ExplorationFindings) -> Optional[AggregationWindowConfig]:
-        windows = getattr(multi, 'aggregation_windows', None) or []
+    def _build_aggregation_config(
+        self, multi: MultiDatasetFindings, findings: ExplorationFindings
+    ) -> Optional[AggregationWindowConfig]:
+        windows = getattr(multi, "aggregation_windows", None) or []
         if not windows and findings.time_series_metadata:
-            windows = getattr(findings.time_series_metadata, 'suggested_aggregations', []) or []
+            windows = getattr(findings.time_series_metadata, "suggested_aggregations", []) or []
         if not windows:
             return None
+        target = findings.target_column or ""
+        entity_col = (findings.time_series_metadata.entity_column if findings.time_series_metadata else None) or ""
+        time_col = (findings.time_series_metadata.time_column if findings.time_series_metadata else None) or ""
+        exclude = {target, entity_col, time_col}
+        numeric_types = {"numeric_continuous", "numeric_discrete", "numeric"}
+        categorical_types = {"binary", "categorical_nominal", "categorical_ordinal", "categorical_cyclical"}
         value_columns = []
+        categorical_columns = []
         for col_name, col_finding in findings.columns.items():
+            if col_name in exclude:
+                continue
             col_type = _resolve_col_type(col_finding)
-            if col_type in ("numeric_continuous", "numeric_discrete", "numeric", "binary"):
-                if col_name not in (findings.target_column or ""):
-                    value_columns.append(col_name)
+            if col_type in numeric_types:
+                value_columns.append(col_name)
+            elif col_type in categorical_types:
+                categorical_columns.append(col_name)
+        for src in getattr(findings, "datetime_derivation_sources", []):
+            for suffix in ("_delta_hours", "_hour", "_dow", "_is_weekend"):
+                derived = f"{src}{suffix}"
+                if derived not in value_columns:
+                    value_columns.append(derived)
+
         return AggregationWindowConfig(
             windows=windows,
             value_columns=value_columns,
             agg_funcs=["sum", "mean", "max", "count"],
+            categorical_columns=categorical_columns,
+            categorical_agg_funcs=["nunique", "mode"],
         )
 
     def _build_lifecycle_config(self, multi: MultiDatasetFindings) -> Optional[LifecycleConfig]:
-        notes = getattr(multi, 'notes', None)
+        notes = getattr(multi, "notes", None)
         if not notes:
             return None
         temporal_config = notes.get("temporal_config", {}) if isinstance(notes, dict) else {}
@@ -620,12 +735,19 @@ class FindingsParser:
             time_col = (dataset_info.time_column if dataset_info else None) or source_cfg.time_column or "timestamp"
             raw_time_col = self._resolve_raw_time_column(findings)
             config.bronze_event[event_name] = BronzeEventConfig(
-                source=source_cfg, entity_column=entity_col, time_column=time_col,
+                source=source_cfg,
+                entity_column=entity_col,
+                time_column=time_col,
                 deduplicate=True,
                 pre_shaping=self._extract_transformations(findings),
                 aggregation=self._build_aggregation_config(multi, findings),
                 lifecycle=lifecycle_config,
                 raw_time_column=raw_time_col if raw_time_col and raw_time_col != time_col else None,
+                datetime_derivation=self._build_datetime_derivation_config(
+                    findings,
+                    time_col,
+                    mask_future=False,
+                ),
             )
         for agg_name, preagg in (discovered_events or {}).items():
             if agg_name in config.bronze_event:
@@ -638,15 +760,24 @@ class FindingsParser:
             time_col = (ts.time_column if ts else None) or source_cfg.time_column or "timestamp"
             raw_time_col = self._resolve_raw_time_column(preagg)
             config.bronze_event[agg_name] = BronzeEventConfig(
-                source=source_cfg, entity_column=entity_col, time_column=time_col,
+                source=source_cfg,
+                entity_column=entity_col,
+                time_column=time_col,
                 deduplicate=True,
                 pre_shaping=self._extract_transformations(preagg),
                 aggregation=self._build_aggregation_config(multi, preagg),
                 lifecycle=lifecycle_config,
                 raw_time_column=raw_time_col if raw_time_col and raw_time_col != time_col else None,
+                datetime_derivation=self._build_datetime_derivation_config(
+                    preagg,
+                    time_col,
+                    mask_future=False,
+                ),
             )
 
-    def _discover_event_sources(self, source_findings: Dict[str, ExplorationFindings]) -> Dict[str, ExplorationFindings]:
+    def _discover_event_sources(
+        self, source_findings: Dict[str, ExplorationFindings]
+    ) -> Dict[str, ExplorationFindings]:
         index = self._build_aggregated_path_index()
         if not index:
             return {}
@@ -658,7 +789,11 @@ class FindingsParser:
     def _scan_for_preagg_findings(self, index: Dict[Path, str]) -> Dict[str, ExplorationFindings]:
         loaded_paths = set(self._source_findings_paths.values())
         result: Dict[str, ExplorationFindings] = {}
-        for candidate in self._findings_dir.glob("*_findings.yaml"):
+        if self._namespace is not None:
+            candidates = self._namespace.discover_all_findings(prefer_aggregated=False)
+        else:
+            candidates = list(self._findings_dir.glob("*_findings.yaml"))
+        for candidate in candidates:
             resolved = candidate.resolve()
             if resolved in loaded_paths:
                 continue
@@ -714,10 +849,17 @@ class FindingsParser:
                 raw_time_column=raw_time_col if raw_time_col and raw_time_col != time_col else None,
                 timestamp_coalesce=self._build_timestamp_coalesce_config(preagg),
                 label_timestamp=self._build_label_timestamp_config(preagg),
+                datetime_derivation=self._build_datetime_derivation_config(
+                    preagg,
+                    "feature_timestamp",
+                    mask_future=True,
+                ),
             )
 
     @staticmethod
-    def _reconcile_discovered_event_transforms(config: "PipelineConfig", discovered_events: Dict[str, ExplorationFindings]) -> None:
+    def _reconcile_discovered_event_transforms(
+        config: "PipelineConfig", discovered_events: Dict[str, ExplorationFindings]
+    ) -> None:
         if not discovered_events:
             return
         for name in list(discovered_events.keys()):
@@ -730,4 +872,6 @@ class FindingsParser:
         ext = Path(path).suffix.lower()
         if ext == ".csv":
             return "csv"
+        if ext in (".parquet", ".pq"):
+            return "parquet"
         return "delta"

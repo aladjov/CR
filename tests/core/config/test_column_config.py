@@ -1,7 +1,13 @@
+import pandas as pd
 import pytest
 from pydantic import ValidationError
 
 from customer_retention.core.config import ColumnConfig, ColumnType
+from customer_retention.core.config.column_config import (
+    NON_FEATURE_COLUMN_TYPES,
+    NON_FEATURE_DTYPES,
+    select_model_ready_columns,
+)
 
 
 class TestColumnType:
@@ -204,3 +210,100 @@ class TestColumnConfig:
         assert col.max_value == 120
         assert col.allowed_values == ["adult"]
         assert col.regex_pattern == r"\d+"
+
+    def test_should_be_used_as_feature_datetime_false_by_default(self):
+        col = ColumnConfig(name="created_at", column_type=ColumnType.DATETIME)
+        assert col.should_be_used_as_feature() is False
+
+    def test_should_be_used_as_feature_datetime_explicit_override(self):
+        col = ColumnConfig(name="created_at", column_type=ColumnType.DATETIME, is_feature=True)
+        assert col.should_be_used_as_feature() is True
+
+    def test_should_be_used_as_feature_text_false_by_default(self):
+        col = ColumnConfig(name="notes", column_type=ColumnType.TEXT)
+        assert col.should_be_used_as_feature() is False
+
+    def test_should_be_used_as_feature_text_explicit_override(self):
+        col = ColumnConfig(name="notes", column_type=ColumnType.TEXT, is_feature=True)
+        assert col.should_be_used_as_feature() is True
+
+
+class TestNonFeatureColumnTypes:
+    def test_includes_identifier(self):
+        assert ColumnType.IDENTIFIER in NON_FEATURE_COLUMN_TYPES
+
+    def test_includes_target(self):
+        assert ColumnType.TARGET in NON_FEATURE_COLUMN_TYPES
+
+    def test_includes_feature_timestamp(self):
+        assert ColumnType.FEATURE_TIMESTAMP in NON_FEATURE_COLUMN_TYPES
+
+    def test_includes_label_timestamp(self):
+        assert ColumnType.LABEL_TIMESTAMP in NON_FEATURE_COLUMN_TYPES
+
+    def test_includes_datetime(self):
+        assert ColumnType.DATETIME in NON_FEATURE_COLUMN_TYPES
+
+    def test_includes_text(self):
+        assert ColumnType.TEXT in NON_FEATURE_COLUMN_TYPES
+
+    def test_excludes_numeric_continuous(self):
+        assert ColumnType.NUMERIC_CONTINUOUS not in NON_FEATURE_COLUMN_TYPES
+
+    def test_excludes_categorical_nominal(self):
+        assert ColumnType.CATEGORICAL_NOMINAL not in NON_FEATURE_COLUMN_TYPES
+
+    def test_excludes_binary(self):
+        assert ColumnType.BINARY not in NON_FEATURE_COLUMN_TYPES
+
+
+class TestNonFeatureDtypes:
+    def test_includes_datetime64(self):
+        assert "datetime64" in NON_FEATURE_DTYPES
+
+    def test_includes_datetimetz(self):
+        assert "datetimetz" in NON_FEATURE_DTYPES
+
+    def test_includes_timedelta64(self):
+        assert "timedelta64" in NON_FEATURE_DTYPES
+
+    def test_is_frozenset(self):
+        assert isinstance(NON_FEATURE_DTYPES, frozenset)
+
+
+class TestSelectModelReadyColumns:
+    def test_excludes_datetime64(self):
+        df = pd.DataFrame({"dt": pd.date_range("2024-01-01", periods=3), "val": [1.0, 2.0, 3.0]})
+        result = select_model_ready_columns(df)
+        assert "dt" not in result.columns
+        assert "val" in result.columns
+
+    def test_excludes_datetimetz(self):
+        df = pd.DataFrame({"dt": pd.date_range("2024-01-01", periods=3, tz="UTC"), "val": [1, 2, 3]})
+        result = select_model_ready_columns(df)
+        assert "dt" not in result.columns
+        assert "val" in result.columns
+
+    def test_excludes_timedelta(self):
+        df = pd.DataFrame({"td": pd.to_timedelta([1, 2, 3], unit="D"), "val": [1.0, 2.0, 3.0]})
+        result = select_model_ready_columns(df)
+        assert "td" not in result.columns
+        assert "val" in result.columns
+
+    def test_preserves_numeric_bool_object(self):
+        df = pd.DataFrame({
+            "num": [1.0, 2.0], "integer": [1, 2],
+            "flag": [True, False], "cat": ["a", "b"],
+        })
+        result = select_model_ready_columns(df)
+        assert list(result.columns) == ["num", "integer", "flag", "cat"]
+
+    def test_preserves_nullable_int(self):
+        df = pd.DataFrame({"val": pd.array([1, 2, None], dtype="Int64")})
+        result = select_model_ready_columns(df)
+        assert "val" in result.columns
+
+    def test_empty_dataframe(self):
+        df = pd.DataFrame()
+        result = select_model_ready_columns(df)
+        assert len(result.columns) == 0

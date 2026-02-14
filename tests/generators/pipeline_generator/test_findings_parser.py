@@ -11,21 +11,40 @@ def sample_findings_dir(tmp_path):
 
     multi_dataset = {
         "datasets": {
-            "customers": {"name": "customers", "findings_path": str(findings_dir / "customers_findings.yaml"),
-                         "source_path": "/data/customers.csv", "granularity": "entity_level",
-                         "row_count": 1000, "column_count": 5, "excluded": False},
-            "orders": {"name": "orders", "findings_path": str(findings_dir / "orders_findings.yaml"),
-                      "source_path": "/data/orders.parquet", "granularity": "event_level",
-                      "row_count": 5000, "column_count": 4, "excluded": False,
-                      "entity_column": "customer_id", "time_column": "order_date"}
+            "customers": {
+                "name": "customers",
+                "findings_path": str(findings_dir / "customers_findings.yaml"),
+                "source_path": "/data/customers.csv",
+                "granularity": "entity_level",
+                "row_count": 1000,
+                "column_count": 5,
+                "excluded": False,
+            },
+            "orders": {
+                "name": "orders",
+                "findings_path": str(findings_dir / "orders_findings.yaml"),
+                "source_path": "/data/orders.parquet",
+                "granularity": "event_level",
+                "row_count": 5000,
+                "column_count": 4,
+                "excluded": False,
+                "entity_column": "customer_id",
+                "time_column": "order_date",
+            },
         },
         "relationships": [
-            {"left_dataset": "customers", "right_dataset": "orders", "left_column": "customer_id",
-             "right_column": "customer_id", "relationship_type": "one_to_many", "confidence": 1.0}
+            {
+                "left_dataset": "customers",
+                "right_dataset": "orders",
+                "left_column": "customer_id",
+                "right_column": "customer_id",
+                "relationship_type": "one_to_many",
+                "confidence": 1.0,
+            }
         ],
         "primary_entity_dataset": "customers",
         "event_datasets": ["orders"],
-        "excluded_datasets": []
+        "excluded_datasets": [],
     }
     (findings_dir / "multi_dataset_findings.yaml").write_text(yaml.dump(multi_dataset))
 
@@ -35,16 +54,37 @@ def sample_findings_dir(tmp_path):
         "row_count": 1000,
         "column_count": 5,
         "columns": {
-            "customer_id": {"name": "customer_id", "inferred_type": "identifier", "confidence": 0.95,
-                          "evidence": [], "quality_score": 100, "cleaning_needed": False, "cleaning_recommendations": []},
-            "age": {"name": "age", "inferred_type": "numeric_continuous", "confidence": 0.9, "evidence": [],
-                   "quality_score": 85, "cleaning_needed": True,
-                   "cleaning_recommendations": ["impute_null:median"], "type_metrics": {"has_nulls": True}},
-            "churn": {"name": "churn", "inferred_type": "binary", "confidence": 0.99, "evidence": [],
-                     "quality_score": 100, "cleaning_needed": False, "cleaning_recommendations": []}
+            "customer_id": {
+                "name": "customer_id",
+                "inferred_type": "identifier",
+                "confidence": 0.95,
+                "evidence": [],
+                "quality_score": 100,
+                "cleaning_needed": False,
+                "cleaning_recommendations": [],
+            },
+            "age": {
+                "name": "age",
+                "inferred_type": "numeric_continuous",
+                "confidence": 0.9,
+                "evidence": [],
+                "quality_score": 85,
+                "cleaning_needed": True,
+                "cleaning_recommendations": ["impute_null:median"],
+                "type_metrics": {"has_nulls": True},
+            },
+            "churn": {
+                "name": "churn",
+                "inferred_type": "binary",
+                "confidence": 0.99,
+                "evidence": [],
+                "quality_score": 100,
+                "cleaning_needed": False,
+                "cleaning_recommendations": [],
+            },
         },
         "target_column": "churn",
-        "identifier_columns": ["customer_id"]
+        "identifier_columns": ["customer_id"],
     }
     (findings_dir / "customers_findings.yaml").write_text(yaml.dump(customers_findings))
 
@@ -54,19 +94,51 @@ def sample_findings_dir(tmp_path):
         "row_count": 5000,
         "column_count": 4,
         "columns": {
-            "order_id": {"name": "order_id", "inferred_type": "identifier", "confidence": 0.95, "evidence": [],
-                        "quality_score": 100, "cleaning_needed": False, "cleaning_recommendations": []},
-            "customer_id": {"name": "customer_id", "inferred_type": "identifier", "confidence": 0.95, "evidence": [],
-                          "quality_score": 100, "cleaning_needed": False, "cleaning_recommendations": []},
-            "amount": {"name": "amount", "inferred_type": "numeric_continuous", "confidence": 0.9, "evidence": [],
-                      "quality_score": 90, "cleaning_needed": True,
-                      "cleaning_recommendations": ["cap_outlier:iqr"], "type_metrics": {"has_outliers": True}},
-            "order_date": {"name": "order_date", "inferred_type": "datetime", "confidence": 0.95, "evidence": [],
-                          "quality_score": 100, "cleaning_needed": False, "cleaning_recommendations": []}
+            "order_id": {
+                "name": "order_id",
+                "inferred_type": "identifier",
+                "confidence": 0.95,
+                "evidence": [],
+                "quality_score": 100,
+                "cleaning_needed": False,
+                "cleaning_recommendations": [],
+            },
+            "customer_id": {
+                "name": "customer_id",
+                "inferred_type": "identifier",
+                "confidence": 0.95,
+                "evidence": [],
+                "quality_score": 100,
+                "cleaning_needed": False,
+                "cleaning_recommendations": [],
+            },
+            "amount": {
+                "name": "amount",
+                "inferred_type": "numeric_continuous",
+                "confidence": 0.9,
+                "evidence": [],
+                "quality_score": 90,
+                "cleaning_needed": True,
+                "cleaning_recommendations": ["cap_outlier:iqr"],
+                "type_metrics": {"has_outliers": True},
+            },
+            "order_date": {
+                "name": "order_date",
+                "inferred_type": "datetime",
+                "confidence": 0.95,
+                "evidence": [],
+                "quality_score": 100,
+                "cleaning_needed": False,
+                "cleaning_recommendations": [],
+            },
         },
         "identifier_columns": ["order_id"],
         "datetime_columns": ["order_date"],
-        "time_series_metadata": {"granularity": "event_level", "entity_column": "customer_id", "time_column": "order_date"}
+        "time_series_metadata": {
+            "granularity": "event_level",
+            "entity_column": "customer_id",
+            "time_column": "order_date",
+        },
     }
     (findings_dir / "orders_findings.yaml").write_text(yaml.dump(orders_findings))
 
@@ -76,6 +148,7 @@ def sample_findings_dir(tmp_path):
 class TestFindingsParserInit:
     def test_parser_takes_findings_dir(self, tmp_path):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(tmp_path))
         assert parser._findings_dir == Path(tmp_path)
 
@@ -83,6 +156,7 @@ class TestFindingsParserInit:
 class TestFindingsParserLoadMultiDataset:
     def test_load_multi_dataset_findings(self, sample_findings_dir):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(sample_findings_dir))
         multi = parser._load_multi_dataset_findings()
         assert "customers" in multi.datasets
@@ -90,6 +164,7 @@ class TestFindingsParserLoadMultiDataset:
 
     def test_load_multi_dataset_has_relationships(self, sample_findings_dir):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(sample_findings_dir))
         multi = parser._load_multi_dataset_findings()
         assert len(multi.relationships) == 1
@@ -99,6 +174,7 @@ class TestFindingsParserLoadMultiDataset:
 class TestFindingsParserLoadSourceFindings:
     def test_load_source_findings(self, sample_findings_dir):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(sample_findings_dir))
         findings = parser._load_source_findings(["customers", "orders"], sample_findings_dir)
         assert "customers" in findings
@@ -106,6 +182,7 @@ class TestFindingsParserLoadSourceFindings:
 
     def test_load_source_findings_has_columns(self, sample_findings_dir):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(sample_findings_dir))
         findings = parser._load_source_findings(["customers"], sample_findings_dir)
         assert "age" in findings["customers"].columns
@@ -115,12 +192,14 @@ class TestFindingsParserBuildPipelineConfig:
     def test_parse_returns_pipeline_config(self, sample_findings_dir):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
         from customer_retention.generators.pipeline_generator.models import PipelineConfig
+
         parser = FindingsParser(str(sample_findings_dir))
         config = parser.parse()
         assert isinstance(config, PipelineConfig)
 
     def test_parse_extracts_sources(self, sample_findings_dir):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(sample_findings_dir))
         config = parser.parse()
         source_names = [s.name for s in config.sources]
@@ -129,12 +208,14 @@ class TestFindingsParserBuildPipelineConfig:
 
     def test_parse_extracts_target_column(self, sample_findings_dir):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(sample_findings_dir))
         config = parser.parse()
         assert config.target_column == "churn"
 
     def test_parse_extracts_bronze_transformations(self, sample_findings_dir):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(sample_findings_dir))
         config = parser.parse()
         assert "customers" in config.bronze
@@ -143,13 +224,127 @@ class TestFindingsParserBuildPipelineConfig:
 
     def test_parse_extracts_silver_joins(self, sample_findings_dir):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(sample_findings_dir))
         config = parser.parse()
         assert len(config.silver.joins) >= 1
-        assert config.silver.joins[0]["left_key"] == "customer_id"
+        assert config.silver.joins[0]["left_keys"] == ["customer_id"]
+
+    def test_silver_joins_strip_as_of_date_for_event_sources(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+        multi_dataset = {
+            "datasets": {
+                "profiles": {
+                    "name": "profiles",
+                    "findings_path": str(findings_dir / "profiles_findings.yaml"),
+                    "source_path": "/data/profiles.csv",
+                    "granularity": "entity_level",
+                    "row_count": 100,
+                    "column_count": 3,
+                    "excluded": False,
+                },
+                "transactions": {
+                    "name": "transactions",
+                    "findings_path": str(findings_dir / "transactions_findings.yaml"),
+                    "source_path": "/data/transactions.csv",
+                    "granularity": "event_level",
+                    "row_count": 5000,
+                    "column_count": 4,
+                    "excluded": False,
+                    "entity_column": "customer_id",
+                    "time_column": "event_timestamp",
+                },
+            },
+            "relationships": [
+                {
+                    "left_dataset": "profiles",
+                    "right_dataset": "transactions",
+                    "left_columns": ["customer_id", "as_of_date"],
+                    "right_columns": ["customer_id", "as_of_date"],
+                    "relationship_type": "one_to_many",
+                    "confidence": 1.0,
+                }
+            ],
+            "primary_entity_dataset": "profiles",
+            "event_datasets": ["transactions"],
+            "excluded_datasets": [],
+        }
+        (findings_dir / "multi_dataset_findings.yaml").write_text(yaml.dump(multi_dataset))
+        profiles_findings = {
+            "source_path": "/data/profiles.csv",
+            "source_format": "csv",
+            "row_count": 100,
+            "column_count": 3,
+            "columns": {
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "churned": {
+                    "name": "churned",
+                    "inferred_type": "binary",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+            },
+            "identifier_columns": ["customer_id"],
+            "target_column": "churned",
+        }
+        (findings_dir / "profiles_findings.yaml").write_text(yaml.dump(profiles_findings))
+        txn_findings = {
+            "source_path": "/data/transactions.csv",
+            "source_format": "csv",
+            "row_count": 5000,
+            "column_count": 4,
+            "columns": {
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "event_timestamp": {
+                    "name": "event_timestamp",
+                    "inferred_type": "datetime",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+            },
+            "identifier_columns": ["customer_id"],
+            "datetime_columns": ["event_timestamp"],
+            "time_series_metadata": {
+                "granularity": "event_level",
+                "entity_column": "customer_id",
+                "time_column": "event_timestamp",
+            },
+        }
+        (findings_dir / "transactions_findings.yaml").write_text(yaml.dump(txn_findings))
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+        assert len(config.silver.joins) == 1
+        assert config.silver.joins[0]["left_keys"] == ["customer_id"]
+        assert config.silver.joins[0]["right_keys"] == ["customer_id"]
 
     def test_parse_identifies_event_level_sources(self, sample_findings_dir):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(sample_findings_dir))
         config = parser.parse()
         orders_source = next(s for s in config.sources if s.name == "orders")
@@ -218,14 +413,22 @@ def aggregated_event_setup(tmp_path):
         "column_count": 3,
         "columns": {
             "customer_id": {
-                "name": "customer_id", "inferred_type": "identifier",
-                "confidence": 0.95, "evidence": [], "quality_score": 100,
-                "cleaning_needed": False, "cleaning_recommendations": [],
+                "name": "customer_id",
+                "inferred_type": "identifier",
+                "confidence": 0.95,
+                "evidence": [],
+                "quality_score": 100,
+                "cleaning_needed": False,
+                "cleaning_recommendations": [],
             },
             "churn": {
-                "name": "churn", "inferred_type": "binary",
-                "confidence": 0.99, "evidence": [], "quality_score": 100,
-                "cleaning_needed": False, "cleaning_recommendations": [],
+                "name": "churn",
+                "inferred_type": "binary",
+                "confidence": 0.99,
+                "evidence": [],
+                "quality_score": 100,
+                "cleaning_needed": False,
+                "cleaning_recommendations": [],
             },
         },
         "target_column": "churn",
@@ -241,19 +444,31 @@ def aggregated_event_setup(tmp_path):
         "column_count": 6,
         "columns": {
             "customer_id": {
-                "name": "customer_id", "inferred_type": "identifier",
-                "confidence": 0.95, "evidence": [], "quality_score": 100,
-                "cleaning_needed": False, "cleaning_recommendations": [],
+                "name": "customer_id",
+                "inferred_type": "identifier",
+                "confidence": 0.95,
+                "evidence": [],
+                "quality_score": 100,
+                "cleaning_needed": False,
+                "cleaning_recommendations": [],
             },
             "total_amount": {
-                "name": "total_amount", "inferred_type": "numeric_continuous",
-                "confidence": 0.9, "evidence": [], "quality_score": 100,
-                "cleaning_needed": True, "cleaning_recommendations": ["impute_null:0"],
+                "name": "total_amount",
+                "inferred_type": "numeric_continuous",
+                "confidence": 0.9,
+                "evidence": [],
+                "quality_score": 100,
+                "cleaning_needed": True,
+                "cleaning_recommendations": ["impute_null:0"],
             },
             "order_count": {
-                "name": "order_count", "inferred_type": "numeric_discrete",
-                "confidence": 0.9, "evidence": [], "quality_score": 100,
-                "cleaning_needed": False, "cleaning_recommendations": [],
+                "name": "order_count",
+                "inferred_type": "numeric_discrete",
+                "confidence": 0.9,
+                "evidence": [],
+                "quality_score": 100,
+                "cleaning_needed": False,
+                "cleaning_recommendations": [],
             },
         },
         "identifier_columns": ["customer_id"],
@@ -268,24 +483,40 @@ def aggregated_event_setup(tmp_path):
         "column_count": 4,
         "columns": {
             "order_id": {
-                "name": "order_id", "inferred_type": "identifier",
-                "confidence": 0.95, "evidence": [], "quality_score": 100,
-                "cleaning_needed": False, "cleaning_recommendations": [],
+                "name": "order_id",
+                "inferred_type": "identifier",
+                "confidence": 0.95,
+                "evidence": [],
+                "quality_score": 100,
+                "cleaning_needed": False,
+                "cleaning_recommendations": [],
             },
             "customer_id": {
-                "name": "customer_id", "inferred_type": "identifier",
-                "confidence": 0.95, "evidence": [], "quality_score": 100,
-                "cleaning_needed": False, "cleaning_recommendations": [],
+                "name": "customer_id",
+                "inferred_type": "identifier",
+                "confidence": 0.95,
+                "evidence": [],
+                "quality_score": 100,
+                "cleaning_needed": False,
+                "cleaning_recommendations": [],
             },
             "amount": {
-                "name": "amount", "inferred_type": "numeric_continuous",
-                "confidence": 0.9, "evidence": [], "quality_score": 90,
-                "cleaning_needed": True, "cleaning_recommendations": ["cap_outlier:iqr"],
+                "name": "amount",
+                "inferred_type": "numeric_continuous",
+                "confidence": 0.9,
+                "evidence": [],
+                "quality_score": 90,
+                "cleaning_needed": True,
+                "cleaning_recommendations": ["cap_outlier:iqr"],
             },
             "order_date": {
-                "name": "order_date", "inferred_type": "datetime",
-                "confidence": 0.95, "evidence": [], "quality_score": 100,
-                "cleaning_needed": False, "cleaning_recommendations": [],
+                "name": "order_date",
+                "inferred_type": "datetime",
+                "confidence": 0.95,
+                "evidence": [],
+                "quality_score": 100,
+                "cleaning_needed": False,
+                "cleaning_recommendations": [],
             },
         },
         "identifier_columns": ["order_id"],
@@ -307,6 +538,7 @@ def aggregated_event_setup(tmp_path):
 class TestEventSourceDiscovery:
     def test_parse_builds_landing_for_aggregated_event_source(self, aggregated_event_setup):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(aggregated_event_setup))
         config = parser.parse()
 
@@ -323,6 +555,7 @@ class TestEventSourceDiscovery:
 
     def test_parse_marks_source_as_event_level(self, aggregated_event_setup):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(aggregated_event_setup))
         config = parser.parse()
 
@@ -332,6 +565,7 @@ class TestEventSourceDiscovery:
     def test_parse_no_landing_when_no_preagg_exists(self, tmp_path):
         """Entity-level dataset with no pre-aggregation findings file -> no landing."""
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         findings_dir = tmp_path / "findings"
         findings_dir.mkdir()
 
@@ -342,7 +576,9 @@ class TestEventSourceDiscovery:
                     "findings_path": str(findings_dir / "simple_findings.yaml"),
                     "source_path": "/data/simple.parquet",
                     "granularity": "entity_level",
-                    "row_count": 100, "column_count": 2, "excluded": False,
+                    "row_count": 100,
+                    "column_count": 2,
+                    "excluded": False,
                 }
             },
             "relationships": [],
@@ -358,12 +594,24 @@ class TestEventSourceDiscovery:
             "row_count": 100,
             "column_count": 2,
             "columns": {
-                "id": {"name": "id", "inferred_type": "identifier", "confidence": 0.95,
-                       "evidence": [], "quality_score": 100,
-                       "cleaning_needed": False, "cleaning_recommendations": []},
-                "target": {"name": "target", "inferred_type": "binary", "confidence": 0.9,
-                           "evidence": [], "quality_score": 100,
-                           "cleaning_needed": False, "cleaning_recommendations": []},
+                "id": {
+                    "name": "id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "target": {
+                    "name": "target",
+                    "inferred_type": "binary",
+                    "confidence": 0.9,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
             },
             "target_column": "target",
             "identifier_columns": ["id"],
@@ -377,6 +625,7 @@ class TestEventSourceDiscovery:
     def test_parse_explicit_event_datasets_still_work(self, sample_findings_dir):
         """Regression: explicit event_datasets in multi_dataset_findings still produce landing."""
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(sample_findings_dir))
         config = parser.parse()
 
@@ -388,32 +637,37 @@ class TestEventSourceDiscovery:
     def test_bronze_event_has_pre_shaping_transformations(self, aggregated_event_setup):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
         from customer_retention.generators.pipeline_generator.models import PipelineTransformationType
+
         parser = FindingsParser(str(aggregated_event_setup))
         config = parser.parse()
 
         assert "orders_agg" in config.bronze_event
         bronze_event = config.bronze_event["orders_agg"]
         assert len(bronze_event.pre_shaping) >= 1
-        cap_steps = [t for t in bronze_event.pre_shaping
-                     if t.type == PipelineTransformationType.CAP_OUTLIER]
+        cap_steps = [t for t in bronze_event.pre_shaping if t.type == PipelineTransformationType.CAP_OUTLIER]
         assert len(cap_steps) == 1
         assert cap_steps[0].column == "amount"
 
     def test_bronze_has_post_agg_transformations_only(self, aggregated_event_setup):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
         from customer_retention.generators.pipeline_generator.models import PipelineTransformationType
+
         parser = FindingsParser(str(aggregated_event_setup))
         config = parser.parse()
 
         assert "orders_agg" not in config.bronze
         assert "orders_agg" in config.bronze_event
-        impute_steps = [t for t in config.bronze_event["orders_agg"].post_shaping
-                        if t.type == PipelineTransformationType.IMPUTE_NULL]
+        impute_steps = [
+            t
+            for t in config.bronze_event["orders_agg"].post_shaping
+            if t.type == PipelineTransformationType.IMPUTE_NULL
+        ]
         assert len(impute_steps) == 1
         assert impute_steps[0].column == "total_amount"
 
     def test_parse_lifecycle_attached_for_discovered_event(self, aggregated_event_setup):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(aggregated_event_setup))
         config = parser.parse()
 
@@ -425,9 +679,9 @@ class TestEventSourceDiscovery:
         assert bronze_event.entity_column == "customer_id"
         assert bronze_event.time_column == "order_date"
 
-
     def test_discovered_event_removed_from_entity_bronze(self, aggregated_event_setup):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(aggregated_event_setup))
         config = parser.parse()
 
@@ -437,21 +691,21 @@ class TestEventSourceDiscovery:
     def test_entity_transforms_flow_to_post_shaping(self, aggregated_event_setup):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
         from customer_retention.generators.pipeline_generator.models import PipelineTransformationType
+
         parser = FindingsParser(str(aggregated_event_setup))
         config = parser.parse()
 
         bronze_event = config.bronze_event["orders_agg"]
-        impute_steps = [t for t in bronze_event.post_shaping
-                        if t.type == PipelineTransformationType.IMPUTE_NULL]
+        impute_steps = [t for t in bronze_event.post_shaping if t.type == PipelineTransformationType.IMPUTE_NULL]
         assert len(impute_steps) == 1
         assert impute_steps[0].column == "total_amount"
-        cap_steps = [t for t in bronze_event.pre_shaping
-                     if t.type == PipelineTransformationType.CAP_OUTLIER]
+        cap_steps = [t for t in bronze_event.pre_shaping if t.type == PipelineTransformationType.CAP_OUTLIER]
         assert len(cap_steps) == 1
         assert cap_steps[0].column == "amount"
 
     def test_binary_columns_included_in_aggregation_value_columns(self, tmp_path):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         findings_dir = tmp_path / "findings"
         findings_dir.mkdir()
 
@@ -464,7 +718,9 @@ class TestEventSourceDiscovery:
                     "findings_path": str(findings_dir / "emails_agg_findings.yaml"),
                     "source_path": agg_parquet,
                     "granularity": "entity_level",
-                    "row_count": 500, "column_count": 3, "excluded": False,
+                    "row_count": 500,
+                    "column_count": 3,
+                    "excluded": False,
                 }
             },
             "relationships": [],
@@ -478,11 +734,18 @@ class TestEventSourceDiscovery:
         agg_findings = {
             "source_path": agg_parquet,
             "source_format": "parquet",
-            "row_count": 500, "column_count": 3,
+            "row_count": 500,
+            "column_count": 3,
             "columns": {
-                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
-                                "confidence": 0.95, "evidence": [], "quality_score": 100,
-                                "cleaning_needed": False, "cleaning_recommendations": []},
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
             },
             "identifier_columns": ["customer_id"],
             "target_column": "target",
@@ -492,26 +755,63 @@ class TestEventSourceDiscovery:
         preagg_findings = {
             "source_path": "/data/raw/emails.csv",
             "source_format": "csv",
-            "row_count": 10000, "column_count": 7,
+            "row_count": 10000,
+            "column_count": 7,
             "columns": {
-                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
-                                "confidence": 0.95, "evidence": [], "quality_score": 100,
-                                "cleaning_needed": False, "cleaning_recommendations": []},
-                "sent_date": {"name": "sent_date", "inferred_type": "datetime",
-                              "confidence": 0.95, "evidence": [], "quality_score": 100,
-                              "cleaning_needed": False, "cleaning_recommendations": []},
-                "send_hour": {"name": "send_hour", "inferred_type": "numeric_discrete",
-                              "confidence": 0.7, "evidence": [], "quality_score": 100,
-                              "cleaning_needed": False, "cleaning_recommendations": []},
-                "opened": {"name": "opened", "inferred_type": "binary",
-                           "confidence": 0.9, "evidence": [], "quality_score": 100,
-                           "cleaning_needed": False, "cleaning_recommendations": []},
-                "clicked": {"name": "clicked", "inferred_type": "binary",
-                            "confidence": 0.9, "evidence": [], "quality_score": 100,
-                            "cleaning_needed": False, "cleaning_recommendations": []},
-                "bounced": {"name": "bounced", "inferred_type": "binary",
-                            "confidence": 0.9, "evidence": [], "quality_score": 100,
-                            "cleaning_needed": False, "cleaning_recommendations": []},
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "sent_date": {
+                    "name": "sent_date",
+                    "inferred_type": "datetime",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "send_hour": {
+                    "name": "send_hour",
+                    "inferred_type": "numeric_discrete",
+                    "confidence": 0.7,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "opened": {
+                    "name": "opened",
+                    "inferred_type": "binary",
+                    "confidence": 0.9,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "clicked": {
+                    "name": "clicked",
+                    "inferred_type": "binary",
+                    "confidence": 0.9,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "bounced": {
+                    "name": "bounced",
+                    "inferred_type": "binary",
+                    "confidence": 0.9,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
             },
             "identifier_columns": ["customer_id"],
             "datetime_columns": ["sent_date"],
@@ -533,13 +833,13 @@ class TestEventSourceDiscovery:
         agg_config = config.bronze_event["emails_agg"].aggregation
         assert agg_config is not None
         assert "send_hour" in agg_config.value_columns
-        assert "opened" in agg_config.value_columns
-        assert "clicked" in agg_config.value_columns
-        assert "bounced" in agg_config.value_columns
-
+        assert "opened" in agg_config.categorical_columns
+        assert "clicked" in agg_config.categorical_columns
+        assert "bounced" in agg_config.categorical_columns
 
     def test_reconciliation_preserves_non_discovered_bronze(self, aggregated_event_setup):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(aggregated_event_setup))
         config = parser.parse()
 
@@ -558,7 +858,9 @@ class TestEventSourceDiscovery:
                     "findings_path": str(findings_dir / "clean_agg_findings.yaml"),
                     "source_path": agg_parquet,
                     "granularity": "entity_level",
-                    "row_count": 100, "column_count": 2, "excluded": False,
+                    "row_count": 100,
+                    "column_count": 2,
+                    "excluded": False,
                 }
             },
             "relationships": [],
@@ -571,11 +873,18 @@ class TestEventSourceDiscovery:
         agg_findings = {
             "source_path": agg_parquet,
             "source_format": "parquet",
-            "row_count": 100, "column_count": 2,
+            "row_count": 100,
+            "column_count": 2,
             "columns": {
-                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
-                                "confidence": 0.95, "evidence": [], "quality_score": 100,
-                                "cleaning_needed": False, "cleaning_recommendations": []},
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
             },
             "identifier_columns": ["customer_id"],
             "target_column": "target",
@@ -585,14 +894,27 @@ class TestEventSourceDiscovery:
         preagg_findings = {
             "source_path": "/data/raw/clean.csv",
             "source_format": "csv",
-            "row_count": 5000, "column_count": 3,
+            "row_count": 5000,
+            "column_count": 3,
             "columns": {
-                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
-                                "confidence": 0.95, "evidence": [], "quality_score": 100,
-                                "cleaning_needed": False, "cleaning_recommendations": []},
-                "event_date": {"name": "event_date", "inferred_type": "datetime",
-                               "confidence": 0.95, "evidence": [], "quality_score": 100,
-                               "cleaning_needed": False, "cleaning_recommendations": []},
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "event_date": {
+                    "name": "event_date",
+                    "inferred_type": "datetime",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
             },
             "identifier_columns": ["customer_id"],
             "datetime_columns": ["event_date"],
@@ -607,6 +929,7 @@ class TestEventSourceDiscovery:
         (findings_dir / "clean_raw_findings.yaml").write_text(yaml.dump(preagg_findings))
 
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(findings_dir))
         config = parser.parse()
 
@@ -616,6 +939,7 @@ class TestEventSourceDiscovery:
 
     def test_target_column_excluded_from_binary_aggregation(self, tmp_path):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         findings_dir = tmp_path / "findings"
         findings_dir.mkdir()
 
@@ -627,7 +951,9 @@ class TestEventSourceDiscovery:
                     "findings_path": str(findings_dir / "events_agg_findings.yaml"),
                     "source_path": agg_parquet,
                     "granularity": "entity_level",
-                    "row_count": 100, "column_count": 2, "excluded": False,
+                    "row_count": 100,
+                    "column_count": 2,
+                    "excluded": False,
                 }
             },
             "relationships": [],
@@ -641,11 +967,18 @@ class TestEventSourceDiscovery:
         agg_findings = {
             "source_path": agg_parquet,
             "source_format": "parquet",
-            "row_count": 100, "column_count": 2,
+            "row_count": 100,
+            "column_count": 2,
             "columns": {
-                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
-                                "confidence": 0.95, "evidence": [], "quality_score": 100,
-                                "cleaning_needed": False, "cleaning_recommendations": []},
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
             },
             "identifier_columns": ["customer_id"],
             "target_column": "churned",
@@ -655,20 +988,45 @@ class TestEventSourceDiscovery:
         preagg_findings = {
             "source_path": "/data/raw/events.csv",
             "source_format": "csv",
-            "row_count": 5000, "column_count": 4,
+            "row_count": 5000,
+            "column_count": 4,
             "columns": {
-                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
-                                "confidence": 0.95, "evidence": [], "quality_score": 100,
-                                "cleaning_needed": False, "cleaning_recommendations": []},
-                "event_date": {"name": "event_date", "inferred_type": "datetime",
-                               "confidence": 0.95, "evidence": [], "quality_score": 100,
-                               "cleaning_needed": False, "cleaning_recommendations": []},
-                "opened": {"name": "opened", "inferred_type": "binary",
-                           "confidence": 0.9, "evidence": [], "quality_score": 100,
-                           "cleaning_needed": False, "cleaning_recommendations": []},
-                "churned": {"name": "churned", "inferred_type": "binary",
-                            "confidence": 0.9, "evidence": [], "quality_score": 100,
-                            "cleaning_needed": False, "cleaning_recommendations": []},
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "event_date": {
+                    "name": "event_date",
+                    "inferred_type": "datetime",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "opened": {
+                    "name": "opened",
+                    "inferred_type": "binary",
+                    "confidence": 0.9,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "churned": {
+                    "name": "churned",
+                    "inferred_type": "binary",
+                    "confidence": 0.9,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
             },
             "identifier_columns": ["customer_id"],
             "datetime_columns": ["event_date"],
@@ -687,7 +1045,8 @@ class TestEventSourceDiscovery:
         config = parser.parse()
 
         agg_config = config.bronze_event["events_agg"].aggregation
-        assert "opened" in agg_config.value_columns
+        assert "opened" in agg_config.categorical_columns
+        assert "churned" not in agg_config.categorical_columns
         assert "churned" not in agg_config.value_columns
 
 
@@ -695,18 +1054,19 @@ class TestExplicitEventPreAggTransforms:
     def test_explicit_event_pre_shaping_in_bronze_event(self, sample_findings_dir):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
         from customer_retention.generators.pipeline_generator.models import PipelineTransformationType
+
         parser = FindingsParser(str(sample_findings_dir))
         config = parser.parse()
 
         assert "orders" in config.bronze_event
         bronze_event = config.bronze_event["orders"]
-        cap_steps = [t for t in bronze_event.pre_shaping
-                     if t.type == PipelineTransformationType.CAP_OUTLIER]
+        cap_steps = [t for t in bronze_event.pre_shaping if t.type == PipelineTransformationType.CAP_OUTLIER]
         assert len(cap_steps) == 1
         assert cap_steps[0].column == "amount"
 
     def test_explicit_event_not_in_entity_bronze(self, sample_findings_dir):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(sample_findings_dir))
         config = parser.parse()
 
@@ -717,25 +1077,33 @@ class TestExplicitEventPreAggTransforms:
 class TestFindingsParserErrorHandling:
     def test_parse_raises_when_no_findings_at_all(self, tmp_path):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(tmp_path))
         with pytest.raises(FileNotFoundError):
             parser.parse()
 
     def test_handles_missing_optional_fields(self, tmp_path):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         findings_dir = tmp_path / "findings"
         findings_dir.mkdir()
 
         multi_dataset = {
             "datasets": {
-                "test": {"name": "test", "findings_path": str(findings_dir / "test_findings.yaml"),
-                        "source_path": "/test.csv", "granularity": "entity_level",
-                        "row_count": 100, "column_count": 2, "excluded": False}
+                "test": {
+                    "name": "test",
+                    "findings_path": str(findings_dir / "test_findings.yaml"),
+                    "source_path": "/test.csv",
+                    "granularity": "entity_level",
+                    "row_count": 100,
+                    "column_count": 2,
+                    "excluded": False,
+                }
             },
             "relationships": [],
             "primary_entity_dataset": "test",
             "event_datasets": [],
-            "excluded_datasets": []
+            "excluded_datasets": [],
         }
         (findings_dir / "multi_dataset_findings.yaml").write_text(yaml.dump(multi_dataset))
 
@@ -745,13 +1113,27 @@ class TestFindingsParserErrorHandling:
             "row_count": 100,
             "column_count": 2,
             "columns": {
-                "id": {"name": "id", "inferred_type": "identifier", "confidence": 0.95, "evidence": [],
-                      "quality_score": 100, "cleaning_needed": False, "cleaning_recommendations": []},
-                "target": {"name": "target", "inferred_type": "binary", "confidence": 0.9, "evidence": [],
-                          "quality_score": 100, "cleaning_needed": False, "cleaning_recommendations": []}
+                "id": {
+                    "name": "id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "target": {
+                    "name": "target",
+                    "inferred_type": "binary",
+                    "confidence": 0.9,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
             },
             "target_column": "target",
-            "identifier_columns": ["id"]
+            "identifier_columns": ["id"],
         }
         (findings_dir / "test_findings.yaml").write_text(yaml.dump(test_findings))
 
@@ -761,7 +1143,6 @@ class TestFindingsParserErrorHandling:
 
 
 class TestProvenanceFlowThrough:
-
     def test_source_notebook_flows_from_recommendations(self, tmp_path):
         """Steps created from LayeredRecommendations carry source_notebook."""
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
@@ -776,7 +1157,9 @@ class TestProvenanceFlowThrough:
                     "findings_path": str(findings_dir / "customers_findings.yaml"),
                     "source_path": "/data/customers.csv",
                     "granularity": "entity_level",
-                    "row_count": 100, "column_count": 3, "excluded": False,
+                    "row_count": 100,
+                    "column_count": 3,
+                    "excluded": False,
                 }
             },
             "relationships": [],
@@ -789,22 +1172,35 @@ class TestProvenanceFlowThrough:
         customers_findings = {
             "source_path": "/data/customers.csv",
             "source_format": "csv",
-            "row_count": 100, "column_count": 3,
+            "row_count": 100,
+            "column_count": 3,
             "columns": {
                 "customer_id": {
-                    "name": "customer_id", "inferred_type": "identifier",
-                    "confidence": 0.95, "evidence": [], "quality_score": 100,
-                    "cleaning_needed": False, "cleaning_recommendations": [],
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
                 },
                 "age": {
-                    "name": "age", "inferred_type": "numeric_continuous",
-                    "confidence": 0.9, "evidence": [], "quality_score": 85,
-                    "cleaning_needed": False, "cleaning_recommendations": [],
+                    "name": "age",
+                    "inferred_type": "numeric_continuous",
+                    "confidence": 0.9,
+                    "evidence": [],
+                    "quality_score": 85,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
                 },
                 "target": {
-                    "name": "target", "inferred_type": "binary",
-                    "confidence": 0.99, "evidence": [], "quality_score": 100,
-                    "cleaning_needed": False, "cleaning_recommendations": [],
+                    "name": "target",
+                    "inferred_type": "binary",
+                    "confidence": 0.99,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
                 },
             },
             "target_column": "target",
@@ -826,7 +1222,7 @@ class TestProvenanceFlowThrough:
                             "target_column": "age",
                             "parameters": {"strategy": "median"},
                             "rationale": "Fill missing ages",
-                            "source_notebook": "03_quality_assessment",
+                            "source_notebook": "02_source_integrity",
                             "priority": 1,
                             "dependencies": [],
                         }
@@ -840,7 +1236,7 @@ class TestProvenanceFlowThrough:
                             "target_column": "age",
                             "parameters": {"method": "iqr"},
                             "rationale": "Cap age outliers",
-                            "source_notebook": "03_quality_assessment",
+                            "source_notebook": "02_source_integrity",
                             "priority": 1,
                             "dependencies": [],
                         }
@@ -858,7 +1254,7 @@ class TestProvenanceFlowThrough:
         rec_steps = [s for s in bronze.transformations if s.source_notebook is not None]
         assert len(rec_steps) >= 1
         for step in rec_steps:
-            assert step.source_notebook == "03_quality_assessment"
+            assert step.source_notebook == "02_source_integrity"
 
     def test_auto_explorer_steps_have_no_source_notebook(self, sample_findings_dir):
         """Steps from _extract_transformations (bare string recs) have source_notebook=None."""
@@ -887,21 +1283,32 @@ def single_source_findings_dir(tmp_path):
         "column_count": 5,
         "columns": {
             "customer_id": {
-                "name": "customer_id", "inferred_type": "identifier",
-                "confidence": 0.95, "evidence": [], "quality_score": 100,
-                "cleaning_needed": False, "cleaning_recommendations": [],
+                "name": "customer_id",
+                "inferred_type": "identifier",
+                "confidence": 0.95,
+                "evidence": [],
+                "quality_score": 100,
+                "cleaning_needed": False,
+                "cleaning_recommendations": [],
             },
             "age": {
-                "name": "age", "inferred_type": "numeric_continuous",
-                "confidence": 0.9, "evidence": [], "quality_score": 85,
+                "name": "age",
+                "inferred_type": "numeric_continuous",
+                "confidence": 0.9,
+                "evidence": [],
+                "quality_score": 85,
                 "cleaning_needed": True,
                 "cleaning_recommendations": ["impute_null:median"],
                 "type_metrics": {"has_nulls": True},
             },
             "churn": {
-                "name": "churn", "inferred_type": "binary",
-                "confidence": 0.99, "evidence": [], "quality_score": 100,
-                "cleaning_needed": False, "cleaning_recommendations": [],
+                "name": "churn",
+                "inferred_type": "binary",
+                "confidence": 0.99,
+                "evidence": [],
+                "quality_score": 100,
+                "cleaning_needed": False,
+                "cleaning_recommendations": [],
             },
         },
         "target_column": "churn",
@@ -917,6 +1324,7 @@ class TestSingleSourceFallback:
         """No multi_dataset_findings.yaml, one *_findings.yaml -> parse succeeds."""
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
         from customer_retention.generators.pipeline_generator.models import PipelineConfig
+
         parser = FindingsParser(str(single_source_findings_dir))
         config = parser.parse()
         assert isinstance(config, PipelineConfig)
@@ -925,12 +1333,14 @@ class TestSingleSourceFallback:
 
     def test_single_source_config_has_correct_target(self, single_source_findings_dir):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(single_source_findings_dir))
         config = parser.parse()
         assert config.target_column == "churn"
 
     def test_single_source_config_has_bronze_layer(self, single_source_findings_dir):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(single_source_findings_dir))
         config = parser.parse()
         assert "customers" in config.bronze
@@ -938,6 +1348,7 @@ class TestSingleSourceFallback:
 
     def test_single_source_has_no_joins(self, single_source_findings_dir):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         parser = FindingsParser(str(single_source_findings_dir))
         config = parser.parse()
         assert config.silver.joins == []
@@ -958,7 +1369,9 @@ class TestRawSourcePathResolution:
                     "findings_path": str(findings_dir / "data_findings.yaml"),
                     "source_path": "../tests/fixtures/data.csv",
                     "granularity": "entity_level",
-                    "row_count": 100, "column_count": 2, "excluded": False,
+                    "row_count": 100,
+                    "column_count": 2,
+                    "excluded": False,
                 }
             },
             "relationships": [],
@@ -971,14 +1384,27 @@ class TestRawSourcePathResolution:
         data_findings = {
             "source_path": "../tests/fixtures/data.csv",
             "source_format": "csv",
-            "row_count": 100, "column_count": 2,
+            "row_count": 100,
+            "column_count": 2,
             "columns": {
-                "id": {"name": "id", "inferred_type": "identifier", "confidence": 0.95,
-                       "evidence": [], "quality_score": 100,
-                       "cleaning_needed": False, "cleaning_recommendations": []},
-                "target": {"name": "target", "inferred_type": "binary", "confidence": 0.9,
-                           "evidence": [], "quality_score": 100,
-                           "cleaning_needed": False, "cleaning_recommendations": []},
+                "id": {
+                    "name": "id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "target": {
+                    "name": "target",
+                    "inferred_type": "binary",
+                    "confidence": 0.9,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
             },
             "target_column": "target",
             "identifier_columns": ["id"],
@@ -1022,15 +1448,15 @@ class TestSourcePathFilenameOnly:
 
 
 class TestRawSourceFormatInference:
-    def test_landing_raw_source_format_inferred_delta(self, sample_findings_dir):
-        """Landing for orders has non-CSV raw_source_path -> format delta."""
+    def test_landing_raw_source_format_inferred_parquet(self, sample_findings_dir):
+        """Landing for orders has .parquet raw_source_path -> format parquet."""
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
 
         parser = FindingsParser(str(sample_findings_dir))
         config = parser.parse()
         assert "orders" in config.landing
         landing = config.landing["orders"]
-        assert landing.raw_source_format == "delta"
+        assert landing.raw_source_format == "parquet"
 
     def test_landing_raw_source_format_inferred_from_csv(self, aggregated_event_setup):
         """Discovered event landing with raw CSV -> format csv."""
@@ -1061,7 +1487,9 @@ class TestRawTimeColumnResolution:
                     "findings_path": str(findings_dir / "emails_agg_findings.yaml"),
                     "source_path": str(findings_dir / "emails_agg.parquet"),
                     "granularity": "entity_level",
-                    "row_count": 500, "column_count": 3, "excluded": False,
+                    "row_count": 500,
+                    "column_count": 3,
+                    "excluded": False,
                 }
             },
             "relationships": [],
@@ -1078,9 +1506,15 @@ class TestRawTimeColumnResolution:
             "row_count": 500,
             "column_count": 3,
             "columns": {
-                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
-                                "confidence": 0.95, "evidence": [], "quality_score": 100,
-                                "cleaning_needed": False, "cleaning_recommendations": []},
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
             },
             "identifier_columns": ["customer_id"],
             "target_column": "target",
@@ -1095,15 +1529,33 @@ class TestRawTimeColumnResolution:
             "row_count": 10000,
             "column_count": 5,
             "columns": {
-                "email_id": {"name": "email_id", "inferred_type": "identifier",
-                             "confidence": 0.95, "evidence": [], "quality_score": 100,
-                             "cleaning_needed": False, "cleaning_recommendations": []},
-                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
-                                "confidence": 0.95, "evidence": [], "quality_score": 100,
-                                "cleaning_needed": False, "cleaning_recommendations": []},
-                "sent_date": {"name": "sent_date", "inferred_type": "datetime",
-                              "confidence": 0.95, "evidence": [], "quality_score": 100,
-                              "cleaning_needed": False, "cleaning_recommendations": []},
+                "email_id": {
+                    "name": "email_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "sent_date": {
+                    "name": "sent_date",
+                    "inferred_type": "datetime",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
             },
             "identifier_columns": ["email_id"],
             "datetime_columns": ["sent_date"],
@@ -1153,6 +1605,7 @@ class TestRawTimeColumnResolution:
 
         def _col(name):
             return ColumnFinding(name=name, inferred_type="datetime", confidence=0.9, evidence=[])
+
         findings = ExplorationFindings(
             source_path="/data/events.csv",
             source_format="csv",
@@ -1182,6 +1635,7 @@ class TestRawTimeColumnResolution:
 
         def _col(name):
             return ColumnFinding(name=name, inferred_type="datetime", confidence=0.9, evidence=[])
+
         findings = ExplorationFindings(
             source_path="/data/events.csv",
             source_format="csv",
@@ -1202,7 +1656,6 @@ class TestRawTimeColumnResolution:
 
 
 class TestTimestampCoalesceGuard:
-
     def test_no_coalesce_when_datetime_ordering_is_empty(self):
         from customer_retention.analysis.auto_explorer.findings import (
             ColumnFinding,
@@ -1221,7 +1674,8 @@ class TestTimestampCoalesceGuard:
             datetime_columns=["sent_date", "unsub_date"],
             datetime_ordering=[],
             time_series_metadata=TimeSeriesMetadata(
-                granularity="event_level", entity_column="customer_id",
+                granularity="event_level",
+                entity_column="customer_id",
                 time_column="feature_timestamp",
             ),
         )
@@ -1245,7 +1699,8 @@ class TestTimestampCoalesceGuard:
             columns={"order_date": _col("order_date")},
             datetime_columns=["order_date"],
             time_series_metadata=TimeSeriesMetadata(
-                granularity="event_level", entity_column="customer_id",
+                granularity="event_level",
+                entity_column="customer_id",
                 time_column="order_date",
             ),
         )
@@ -1270,7 +1725,8 @@ class TestTimestampCoalesceGuard:
             datetime_columns=["ts1", "ts2"],
             datetime_ordering=["ts1", "ts2"],
             time_series_metadata=TimeSeriesMetadata(
-                granularity="event_level", entity_column="customer_id",
+                granularity="event_level",
+                entity_column="customer_id",
                 time_column="feature_timestamp",
             ),
         )
@@ -1281,6 +1737,7 @@ class TestTimestampCoalesceGuard:
 
     def test_discovered_landing_no_coalesce_with_empty_datetime_ordering(self, tmp_path):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
         findings_dir = tmp_path / "findings"
         findings_dir.mkdir()
 
@@ -1292,7 +1749,9 @@ class TestTimestampCoalesceGuard:
                     "findings_path": str(findings_dir / "emails_agg_findings.yaml"),
                     "source_path": agg_parquet,
                     "granularity": "entity_level",
-                    "row_count": 500, "column_count": 3, "excluded": False,
+                    "row_count": 500,
+                    "column_count": 3,
+                    "excluded": False,
                 }
             },
             "relationships": [],
@@ -1305,11 +1764,18 @@ class TestTimestampCoalesceGuard:
         agg_findings = {
             "source_path": agg_parquet,
             "source_format": "parquet",
-            "row_count": 500, "column_count": 2,
+            "row_count": 500,
+            "column_count": 2,
             "columns": {
-                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
-                                "confidence": 0.95, "evidence": [], "quality_score": 100,
-                                "cleaning_needed": False, "cleaning_recommendations": []},
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
             },
             "identifier_columns": ["customer_id"],
             "target_column": "target",
@@ -1319,17 +1785,36 @@ class TestTimestampCoalesceGuard:
         preagg_findings = {
             "source_path": "/data/raw/emails.csv",
             "source_format": "csv",
-            "row_count": 10000, "column_count": 4,
+            "row_count": 10000,
+            "column_count": 4,
             "columns": {
-                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
-                                "confidence": 0.95, "evidence": [], "quality_score": 100,
-                                "cleaning_needed": False, "cleaning_recommendations": []},
-                "sent_date": {"name": "sent_date", "inferred_type": "datetime",
-                              "confidence": 0.95, "evidence": [], "quality_score": 100,
-                              "cleaning_needed": False, "cleaning_recommendations": []},
-                "unsub_date": {"name": "unsub_date", "inferred_type": "datetime",
-                               "confidence": 0.95, "evidence": [], "quality_score": 100,
-                               "cleaning_needed": False, "cleaning_recommendations": []},
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "sent_date": {
+                    "name": "sent_date",
+                    "inferred_type": "datetime",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "unsub_date": {
+                    "name": "unsub_date",
+                    "inferred_type": "datetime",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
             },
             "identifier_columns": ["customer_id"],
             "datetime_columns": ["sent_date", "unsub_date"],
@@ -1367,7 +1852,9 @@ class TestBronzeEventRawTimeColumnAttachment:
                     "findings_path": str(findings_dir / "emails_agg_findings.yaml"),
                     "source_path": str(findings_dir / "emails_agg.parquet"),
                     "granularity": "entity_level",
-                    "row_count": 500, "column_count": 3, "excluded": False,
+                    "row_count": 500,
+                    "column_count": 3,
+                    "excluded": False,
                 }
             },
             "relationships": [],
@@ -1385,9 +1872,15 @@ class TestBronzeEventRawTimeColumnAttachment:
             "row_count": 500,
             "column_count": 3,
             "columns": {
-                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
-                                "confidence": 0.95, "evidence": [], "quality_score": 100,
-                                "cleaning_needed": False, "cleaning_recommendations": []},
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
             },
             "identifier_columns": ["customer_id"],
             "target_column": "target",
@@ -1400,12 +1893,24 @@ class TestBronzeEventRawTimeColumnAttachment:
             "row_count": 10000,
             "column_count": 5,
             "columns": {
-                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
-                                "confidence": 0.95, "evidence": [], "quality_score": 100,
-                                "cleaning_needed": False, "cleaning_recommendations": []},
-                "sent_date": {"name": "sent_date", "inferred_type": "datetime",
-                              "confidence": 0.95, "evidence": [], "quality_score": 100,
-                              "cleaning_needed": False, "cleaning_recommendations": []},
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "sent_date": {
+                    "name": "sent_date",
+                    "inferred_type": "datetime",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
             },
             "identifier_columns": ["customer_id"],
             "datetime_columns": ["sent_date"],
@@ -1446,14 +1951,268 @@ class TestBronzeEventRawTimeColumnAttachment:
         assert bronze_event.raw_time_column is None
 
 
-class TestResolveOriginalTarget:
+class TestFindingsParserWithNamespace:
+    @pytest.fixture
+    def namespace_setup(self, tmp_path):
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 
+        ns = RunNamespace(root=tmp_path, run_id="test-run-abc")
+        ns.setup()
+
+        cust_fd = ns.dataset_findings_dir("customers")
+        cust_fd.mkdir(parents=True)
+        customers_findings = {
+            "source_path": "/data/customers.csv",
+            "source_format": "csv",
+            "row_count": 1000,
+            "column_count": 3,
+            "columns": {
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "churn": {
+                    "name": "churn",
+                    "inferred_type": "binary",
+                    "confidence": 0.99,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+            },
+            "target_column": "churn",
+            "identifier_columns": ["customer_id"],
+        }
+        (cust_fd / "customers_findings.yaml").write_text(yaml.dump(customers_findings))
+
+        orders_fd = ns.dataset_findings_dir("orders")
+        orders_fd.mkdir(parents=True)
+        orders_findings = {
+            "source_path": "/data/orders.parquet",
+            "source_format": "parquet",
+            "row_count": 5000,
+            "column_count": 4,
+            "columns": {
+                "order_id": {
+                    "name": "order_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "amount": {
+                    "name": "amount",
+                    "inferred_type": "numeric_continuous",
+                    "confidence": 0.9,
+                    "evidence": [],
+                    "quality_score": 90,
+                    "cleaning_needed": True,
+                    "cleaning_recommendations": ["cap_outlier:iqr"],
+                },
+                "order_date": {
+                    "name": "order_date",
+                    "inferred_type": "datetime",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+            },
+            "identifier_columns": ["order_id"],
+            "datetime_columns": ["order_date"],
+            "time_series_metadata": {
+                "granularity": "event_level",
+                "entity_column": "customer_id",
+                "time_column": "order_date",
+            },
+        }
+        (orders_fd / "orders_findings.yaml").write_text(yaml.dump(orders_findings))
+
+        multi_dataset = {
+            "datasets": {
+                "customers": {
+                    "name": "customers",
+                    "findings_path": str(cust_fd / "customers_findings.yaml"),
+                    "source_path": "/data/customers.csv",
+                    "granularity": "entity_level",
+                    "row_count": 1000,
+                    "column_count": 3,
+                    "excluded": False,
+                },
+                "orders": {
+                    "name": "orders",
+                    "findings_path": str(orders_fd / "orders_findings.yaml"),
+                    "source_path": "/data/orders.parquet",
+                    "granularity": "event_level",
+                    "row_count": 5000,
+                    "column_count": 4,
+                    "excluded": False,
+                    "entity_column": "customer_id",
+                    "time_column": "order_date",
+                },
+            },
+            "relationships": [
+                {
+                    "left_dataset": "customers",
+                    "right_dataset": "orders",
+                    "left_column": "customer_id",
+                    "right_column": "customer_id",
+                    "relationship_type": "one_to_many",
+                    "confidence": 1.0,
+                },
+            ],
+            "primary_entity_dataset": "customers",
+            "event_datasets": ["orders"],
+            "excluded_datasets": [],
+        }
+        ns.multi_dataset_findings_path.parent.mkdir(parents=True, exist_ok=True)
+        ns.multi_dataset_findings_path.write_text(yaml.dump(multi_dataset))
+
+        recommendations = {
+            "version": "1.0",
+            "sources": {
+                "customers": {
+                    "source_file": "/data/customers.csv",
+                    "null_handling": [],
+                    "outlier_handling": [],
+                    "type_casts": [],
+                },
+            },
+        }
+        ns.merged_recommendations_path.write_text(yaml.dump(recommendations))
+
+        return ns
+
+    def test_load_multi_dataset_findings_from_namespace(self, namespace_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        ns = namespace_setup
+        parser = FindingsParser(str(ns.merged_dir), namespace=ns)
+        multi = parser._load_multi_dataset_findings()
+        assert "customers" in multi.datasets
+        assert "orders" in multi.datasets
+
+    def test_load_source_findings_from_namespace(self, namespace_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        ns = namespace_setup
+        parser = FindingsParser(str(ns.merged_dir), namespace=ns)
+        multi = parser._load_multi_dataset_findings()
+        findings = parser._load_source_findings(["customers", "orders"], ns.merged_dir, multi)
+        assert "customers" in findings
+        assert "orders" in findings
+
+    def test_load_recommendations_from_namespace(self, namespace_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        ns = namespace_setup
+        parser = FindingsParser(str(ns.merged_dir), namespace=ns)
+        rec = parser._load_recommendations()
+        assert rec is not None
+        assert "customers" in rec.sources
+
+    def test_full_parse_with_namespace(self, namespace_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import PipelineConfig
+
+        ns = namespace_setup
+        parser = FindingsParser(str(ns.merged_dir), namespace=ns)
+        config = parser.parse()
+        assert isinstance(config, PipelineConfig)
+        source_names = [s.name for s in config.sources]
+        assert "customers" in source_names
+        assert "orders" in source_names
+
+    def test_scan_for_preagg_uses_namespace(self, namespace_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        ns = namespace_setup
+        parser = FindingsParser(str(ns.merged_dir), namespace=ns)
+        all_findings = ns.discover_all_findings(prefer_aggregated=False)
+        assert len(all_findings) >= 1
+
+
+class TestSynthesizeFromNamespace:
+    def test_synthesize_uses_namespace_when_flat_dir_empty(self, tmp_path):
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import PipelineConfig
+
+        ns = RunNamespace(root=tmp_path, run_id="synth-run")
+        ns.setup()
+
+        cust_fd = ns.dataset_findings_dir("customers")
+        cust_fd.mkdir(parents=True)
+        customers_findings = {
+            "source_path": "/data/customers.csv",
+            "source_format": "csv",
+            "row_count": 500,
+            "column_count": 3,
+            "columns": {
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                },
+                "churn": {"name": "churn", "inferred_type": "binary", "confidence": 0.99, "evidence": []},
+            },
+            "target_column": "churn",
+            "identifier_columns": ["customer_id"],
+        }
+        (cust_fd / "customers_findings.yaml").write_text(yaml.dump(customers_findings))
+
+        flat_dir = tmp_path / "findings"
+        flat_dir.mkdir()
+
+        parser = FindingsParser(str(flat_dir), namespace=ns)
+        config = parser.parse()
+        assert isinstance(config, PipelineConfig)
+        source_names = [s.name for s in config.sources]
+        assert "customers" in source_names
+
+    def test_synthesize_raises_when_no_findings_anywhere(self, tmp_path):
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        ns = RunNamespace(root=tmp_path, run_id="empty-run")
+        ns.setup()
+
+        flat_dir = tmp_path / "findings"
+        flat_dir.mkdir()
+
+        parser = FindingsParser(str(flat_dir), namespace=ns)
+        with pytest.raises(FileNotFoundError):
+            parser.parse()
+
+
+class TestResolveOriginalTarget:
     def test_returns_original_when_differs_from_target(self):
         from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
 
         findings = ExplorationFindings(
-            source_path="/data/events.csv", source_format="csv", columns={},
+            source_path="/data/events.csv",
+            source_format="csv",
+            columns={},
             metadata={"original_target_column": "unsubscribed"},
         )
         assert FindingsParser._resolve_original_target(findings, "target") == "unsubscribed"
@@ -1463,7 +2222,9 @@ class TestResolveOriginalTarget:
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
 
         findings = ExplorationFindings(
-            source_path="/data/events.csv", source_format="csv", columns={},
+            source_path="/data/events.csv",
+            source_format="csv",
+            columns={},
             metadata={"original_target_column": "target"},
         )
         assert FindingsParser._resolve_original_target(findings, "target") is None
@@ -1473,7 +2234,9 @@ class TestResolveOriginalTarget:
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
 
         findings = ExplorationFindings(
-            source_path="/data/events.csv", source_format="csv", columns={},
+            source_path="/data/events.csv",
+            source_format="csv",
+            columns={},
         )
         assert FindingsParser._resolve_original_target(findings, "target") is None
 
@@ -1482,7 +2245,489 @@ class TestResolveOriginalTarget:
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
 
         findings = ExplorationFindings(
-            source_path="/data/events.csv", source_format="csv", columns={},
+            source_path="/data/events.csv",
+            source_format="csv",
+            columns={},
             metadata={"some_other_key": "value"},
         )
         assert FindingsParser._resolve_original_target(findings, "target") is None
+
+
+class TestLabelTimestampWithIntent:
+    def test_label_timestamp_uses_intent_observation_window(self):
+        from customer_retention.analysis.auto_explorer.findings import (
+            ColumnFinding,
+            ExplorationFindings,
+        )
+        from customer_retention.analysis.auto_explorer.project_context import IntentConfig
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        def _col(name, typ="numeric_continuous"):
+            return ColumnFinding(name=name, inferred_type=typ, confidence=0.9, evidence=[])
+
+        findings = ExplorationFindings(
+            source_path="/data/events.csv",
+            source_format="csv",
+            columns={"age": _col("age")},
+            observation_window_days=180,
+        )
+        intent = IntentConfig(observation_window_days=270)
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._intent = intent
+        result = parser._build_label_timestamp_config(findings)
+        assert result is not None
+        assert result.fallback_window_days == 270
+
+    def test_label_timestamp_falls_back_without_intent(self):
+        from customer_retention.analysis.auto_explorer.findings import (
+            ColumnFinding,
+            ExplorationFindings,
+        )
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        def _col(name, typ="numeric_continuous"):
+            return ColumnFinding(name=name, inferred_type=typ, confidence=0.9, evidence=[])
+
+        findings = ExplorationFindings(
+            source_path="/data/events.csv",
+            source_format="csv",
+            columns={"age": _col("age")},
+            observation_window_days=180,
+        )
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._intent = None
+        result = parser._build_label_timestamp_config(findings)
+        assert result is None
+
+
+class TestAggregationConfigSeparatesNumericAndCategorical:
+    def test_numeric_columns_only_in_value_columns(self, tmp_path):
+        from customer_retention.analysis.auto_explorer.findings import (
+            ColumnFinding,
+            ExplorationFindings,
+            TimeSeriesMetadata,
+        )
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings = ExplorationFindings(
+            source_path="/data/events.csv",
+            source_format="csv",
+            columns={
+                "customer_id": ColumnFinding(
+                    name="customer_id", inferred_type="identifier", confidence=0.95, evidence=[]
+                ),
+                "sent_date": ColumnFinding(name="sent_date", inferred_type="datetime", confidence=0.95, evidence=[]),
+                "amount": ColumnFinding(name="amount", inferred_type="numeric_continuous", confidence=0.9, evidence=[]),
+                "count": ColumnFinding(name="count", inferred_type="numeric_discrete", confidence=0.9, evidence=[]),
+                "direction": ColumnFinding(
+                    name="direction", inferred_type="categorical_nominal", confidence=0.9, evidence=[]
+                ),
+                "status": ColumnFinding(
+                    name="status", inferred_type="categorical_ordinal", confidence=0.9, evidence=[]
+                ),
+                "opened": ColumnFinding(name="opened", inferred_type="binary", confidence=0.9, evidence=[]),
+            },
+            time_series_metadata=TimeSeriesMetadata(
+                granularity="event_level",
+                entity_column="customer_id",
+                time_column="sent_date",
+            ),
+            identifier_columns=["customer_id"],
+            datetime_columns=["sent_date"],
+        )
+
+        class FakeMulti:
+            aggregation_windows = ["7d", "30d"]
+
+        parser = FindingsParser.__new__(FindingsParser)
+        result = parser._build_aggregation_config(FakeMulti(), findings)
+
+        assert result is not None
+        assert "amount" in result.value_columns
+        assert "count" in result.value_columns
+        assert "direction" not in result.value_columns
+        assert "status" not in result.value_columns
+        assert "opened" not in result.value_columns
+
+    def test_categorical_columns_in_categorical_columns(self, tmp_path):
+        from customer_retention.analysis.auto_explorer.findings import (
+            ColumnFinding,
+            ExplorationFindings,
+            TimeSeriesMetadata,
+        )
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings = ExplorationFindings(
+            source_path="/data/events.csv",
+            source_format="csv",
+            columns={
+                "customer_id": ColumnFinding(
+                    name="customer_id", inferred_type="identifier", confidence=0.95, evidence=[]
+                ),
+                "sent_date": ColumnFinding(name="sent_date", inferred_type="datetime", confidence=0.95, evidence=[]),
+                "amount": ColumnFinding(name="amount", inferred_type="numeric_continuous", confidence=0.9, evidence=[]),
+                "direction": ColumnFinding(
+                    name="direction", inferred_type="categorical_nominal", confidence=0.9, evidence=[]
+                ),
+                "status": ColumnFinding(
+                    name="status", inferred_type="categorical_ordinal", confidence=0.9, evidence=[]
+                ),
+                "opened": ColumnFinding(name="opened", inferred_type="binary", confidence=0.9, evidence=[]),
+                "day_of_week": ColumnFinding(
+                    name="day_of_week", inferred_type="categorical_cyclical", confidence=0.9, evidence=[]
+                ),
+            },
+            time_series_metadata=TimeSeriesMetadata(
+                granularity="event_level",
+                entity_column="customer_id",
+                time_column="sent_date",
+            ),
+            identifier_columns=["customer_id"],
+            datetime_columns=["sent_date"],
+        )
+
+        class FakeMulti:
+            aggregation_windows = ["7d"]
+
+        parser = FindingsParser.__new__(FindingsParser)
+        result = parser._build_aggregation_config(FakeMulti(), findings)
+
+        assert "direction" in result.categorical_columns
+        assert "status" in result.categorical_columns
+        assert "opened" in result.categorical_columns
+        assert "day_of_week" in result.categorical_columns
+        assert "amount" not in result.categorical_columns
+        assert result.categorical_agg_funcs == ["nunique", "mode"]
+
+    def test_target_excluded_from_both_lists(self, tmp_path):
+        from customer_retention.analysis.auto_explorer.findings import (
+            ColumnFinding,
+            ExplorationFindings,
+            TimeSeriesMetadata,
+        )
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings = ExplorationFindings(
+            source_path="/data/events.csv",
+            source_format="csv",
+            columns={
+                "customer_id": ColumnFinding(
+                    name="customer_id", inferred_type="identifier", confidence=0.95, evidence=[]
+                ),
+                "event_date": ColumnFinding(name="event_date", inferred_type="datetime", confidence=0.95, evidence=[]),
+                "churned": ColumnFinding(name="churned", inferred_type="binary", confidence=0.9, evidence=[]),
+                "amount": ColumnFinding(name="amount", inferred_type="numeric_continuous", confidence=0.9, evidence=[]),
+            },
+            target_column="churned",
+            time_series_metadata=TimeSeriesMetadata(
+                granularity="event_level",
+                entity_column="customer_id",
+                time_column="event_date",
+            ),
+            identifier_columns=["customer_id"],
+            datetime_columns=["event_date"],
+        )
+
+        class FakeMulti:
+            aggregation_windows = ["7d"]
+
+        parser = FindingsParser.__new__(FindingsParser)
+        result = parser._build_aggregation_config(FakeMulti(), findings)
+
+        assert "churned" not in result.value_columns
+        assert "churned" not in result.categorical_columns
+        assert "amount" in result.value_columns
+
+
+class TestSourceConfigFormatInference:
+    def test_dataframe_format_inferred_as_csv_from_csv_path(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+
+        multi_dataset = {
+            "datasets": {
+                "profiles": {
+                    "name": "profiles",
+                    "findings_path": str(findings_dir / "profiles_findings.yaml"),
+                    "source_path": "/data/raw/customer_profiles.csv",
+                    "granularity": "entity_level",
+                    "row_count": 100,
+                    "column_count": 3,
+                    "excluded": False,
+                }
+            },
+            "relationships": [],
+            "primary_entity_dataset": "profiles",
+            "event_datasets": [],
+            "excluded_datasets": [],
+        }
+        (findings_dir / "multi_dataset_findings.yaml").write_text(yaml.dump(multi_dataset))
+
+        profiles_findings = {
+            "source_path": "/data/raw/customer_profiles.csv",
+            "source_format": "dataframe",
+            "row_count": 100,
+            "column_count": 3,
+            "columns": {
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                },
+                "age": {
+                    "name": "age",
+                    "inferred_type": "numeric_continuous",
+                    "confidence": 0.9,
+                    "evidence": [],
+                },
+            },
+            "target_column": None,
+            "identifier_columns": ["customer_id"],
+        }
+        (findings_dir / "profiles_findings.yaml").write_text(yaml.dump(profiles_findings))
+
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        source = config.sources[0]
+        assert source.format == "csv"
+
+    def test_parquet_source_format_inferred_from_path(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+
+        multi_dataset = {
+            "datasets": {
+                "orders": {
+                    "name": "orders",
+                    "findings_path": str(findings_dir / "orders_findings.yaml"),
+                    "source_path": "/data/raw/orders.parquet",
+                    "granularity": "entity_level",
+                    "row_count": 500,
+                    "column_count": 3,
+                    "excluded": False,
+                }
+            },
+            "relationships": [],
+            "primary_entity_dataset": "orders",
+            "event_datasets": [],
+            "excluded_datasets": [],
+        }
+        (findings_dir / "multi_dataset_findings.yaml").write_text(yaml.dump(multi_dataset))
+
+        orders_findings = {
+            "source_path": "/data/raw/orders.parquet",
+            "source_format": "parquet",
+            "row_count": 500,
+            "column_count": 3,
+            "columns": {
+                "order_id": {
+                    "name": "order_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                },
+            },
+            "target_column": None,
+            "identifier_columns": ["order_id"],
+        }
+        (findings_dir / "orders_findings.yaml").write_text(yaml.dump(orders_findings))
+
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        source = config.sources[0]
+        assert source.format == "parquet"
+
+    def test_infer_format_parquet_extension(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        assert FindingsParser._infer_format("/data/file.parquet") == "parquet"
+        assert FindingsParser._infer_format("/data/file.pq") == "parquet"
+
+    def test_infer_format_csv_extension(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        assert FindingsParser._infer_format("/data/file.csv") == "csv"
+
+    def test_infer_format_unknown_extension_defaults_to_delta(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        assert FindingsParser._infer_format("/data/file.json") == "delta"
+        assert FindingsParser._infer_format("/data/delta_table") == "delta"
+
+
+class TestDatetimeDerivationConfig:
+
+    def _make_findings_dir(self, tmp_path, *, event_derivation_sources=None, entity_derivation_sources=None, entity_allow_future=None):
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+
+        entity_findings = {
+            "source_path": "/data/customers.csv",
+            "source_format": "csv",
+            "row_count": 100,
+            "column_count": 3,
+            "columns": {
+                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
+                                "confidence": 0.95, "evidence": [], "quality_score": 100,
+                                "cleaning_needed": False, "cleaning_recommendations": []},
+                "churn": {"name": "churn", "inferred_type": "binary",
+                          "confidence": 0.99, "evidence": [], "quality_score": 100,
+                          "cleaning_needed": False, "cleaning_recommendations": []},
+            },
+            "target_column": "churn",
+            "identifier_columns": ["customer_id"],
+            "datetime_columns": ["signup_date"],
+        }
+        if entity_derivation_sources is not None:
+            entity_findings["datetime_derivation_sources"] = entity_derivation_sources
+        if entity_allow_future is not None:
+            entity_findings["datetime_allow_future_columns"] = entity_allow_future
+        (findings_dir / "customers_findings.yaml").write_text(yaml.dump(entity_findings))
+
+        event_findings = {
+            "source_path": "/data/events.csv",
+            "source_format": "csv",
+            "row_count": 500,
+            "column_count": 4,
+            "columns": {
+                "event_id": {"name": "event_id", "inferred_type": "identifier",
+                             "confidence": 0.95, "evidence": [], "quality_score": 100,
+                             "cleaning_needed": False, "cleaning_recommendations": []},
+                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
+                                "confidence": 0.95, "evidence": [], "quality_score": 100,
+                                "cleaning_needed": False, "cleaning_recommendations": []},
+                "event_date": {"name": "event_date", "inferred_type": "datetime",
+                               "confidence": 0.95, "evidence": [], "quality_score": 100,
+                               "cleaning_needed": False, "cleaning_recommendations": []},
+                "response_at": {"name": "response_at", "inferred_type": "datetime",
+                                "confidence": 0.9, "evidence": [], "quality_score": 100,
+                                "cleaning_needed": False, "cleaning_recommendations": []},
+                "amount": {"name": "amount", "inferred_type": "numeric_continuous",
+                           "confidence": 0.9, "evidence": [], "quality_score": 90,
+                           "cleaning_needed": False, "cleaning_recommendations": []},
+            },
+            "identifier_columns": ["event_id"],
+            "datetime_columns": ["event_date", "response_at"],
+            "time_series_metadata": {
+                "granularity": "event_level",
+                "entity_column": "customer_id",
+                "time_column": "event_date",
+            },
+        }
+        if event_derivation_sources is not None:
+            event_findings["datetime_derivation_sources"] = event_derivation_sources
+        (findings_dir / "events_findings.yaml").write_text(yaml.dump(event_findings))
+
+        multi_dataset = {
+            "datasets": {
+                "customers": {
+                    "name": "customers",
+                    "findings_path": str(findings_dir / "customers_findings.yaml"),
+                    "source_path": "/data/customers.csv",
+                    "granularity": "entity_level",
+                    "row_count": 100,
+                    "column_count": 3,
+                },
+                "events": {
+                    "name": "events",
+                    "findings_path": str(findings_dir / "events_findings.yaml"),
+                    "source_path": "/data/events.csv",
+                    "granularity": "event_level",
+                    "row_count": 500,
+                    "column_count": 4,
+                    "entity_column": "customer_id",
+                    "time_column": "event_date",
+                },
+            },
+            "relationships": [{
+                "left_dataset": "customers",
+                "right_dataset": "events",
+                "left_column": "customer_id",
+                "right_column": "customer_id",
+                "relationship_type": "one_to_many",
+                "confidence": 1.0,
+            }],
+            "primary_entity_dataset": "customers",
+            "event_datasets": ["events"],
+        }
+        (findings_dir / "multi_dataset_findings.yaml").write_text(yaml.dump(multi_dataset))
+        return findings_dir
+
+    def test_builds_datetime_derivation_config_for_event_source(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings_dir = self._make_findings_dir(tmp_path, event_derivation_sources=["response_at"])
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        assert "events" in config.bronze_event
+        deriv = config.bronze_event["events"].datetime_derivation
+        assert deriv is not None
+        assert deriv.source_columns == ["response_at"]
+        assert deriv.reference_column == "event_date"
+        assert deriv.mask_future_columns == []
+
+    def test_builds_datetime_derivation_config_for_landing(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings_dir = self._make_findings_dir(tmp_path, event_derivation_sources=["response_at"])
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        assert "events" in config.landing
+        landing = config.landing["events"]
+        assert landing.datetime_derivation is not None
+        assert landing.datetime_derivation.source_columns == ["response_at"]
+        assert landing.datetime_derivation.reference_column == "feature_timestamp"
+        assert landing.datetime_derivation.mask_future_columns == ["response_at"]
+
+    def test_no_config_when_no_derivation_sources(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings_dir = self._make_findings_dir(tmp_path)
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        assert "events" in config.bronze_event
+        assert config.bronze_event["events"].datetime_derivation is None
+        if "events" in config.landing:
+            assert config.landing["events"].datetime_derivation is None
+
+    def test_derived_columns_included_in_aggregation_value_columns(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings_dir = self._make_findings_dir(tmp_path, event_derivation_sources=["response_at"])
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        agg = config.bronze_event["events"].aggregation
+        assert agg is not None
+        suffixes = ["_delta_hours", "_hour", "_dow", "_is_weekend"]
+        for suffix in suffixes:
+            assert f"response_at{suffix}" in agg.value_columns
+
+    def test_allow_future_columns_excludes_from_mask(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings_dir = self._make_findings_dir(tmp_path)
+        event_yaml_path = findings_dir / "events_findings.yaml"
+        data = yaml.safe_load(event_yaml_path.read_text())
+        data["datetime_derivation_sources"] = ["response_at", "scheduled_at"]
+        data["datetime_allow_future_columns"] = ["scheduled_at"]
+        event_yaml_path.write_text(yaml.dump(data))
+
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        assert "events" in config.landing
+        deriv = config.landing["events"].datetime_derivation
+        assert deriv is not None
+        assert deriv.source_columns == ["response_at", "scheduled_at"]
+        assert deriv.mask_future_columns == ["response_at"]

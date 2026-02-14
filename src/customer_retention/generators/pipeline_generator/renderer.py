@@ -32,39 +32,39 @@ SECTION_MAP = {
 }
 
 ANCHOR_MAP = {
-    PipelineTransformationType.IMPUTE_NULL: "3.5-Missing-Value-Analysis",
-    PipelineTransformationType.DROP_COLUMN: "3.5-Missing-Value-Analysis",
-    PipelineTransformationType.CAP_OUTLIER: "3.8-Global-Outlier-Detection",
-    PipelineTransformationType.WINSORIZE: "3.8-Global-Outlier-Detection",
-    PipelineTransformationType.SEGMENT_AWARE_CAP: "3.7-Segment-Aware-Outlier-Analysis",
-    PipelineTransformationType.LOG_TRANSFORM: "4.4-Feature-Distributions-by-Retention-Status",
-    PipelineTransformationType.SQRT_TRANSFORM: "4.4-Feature-Distributions-by-Retention-Status",
-    PipelineTransformationType.YEO_JOHNSON: "4.4-Feature-Distributions-by-Retention-Status",
-    PipelineTransformationType.CAP_THEN_LOG: "4.4-Feature-Distributions-by-Retention-Status",
-    PipelineTransformationType.ZERO_INFLATION_HANDLING: "4.4-Feature-Distributions-by-Retention-Status",
-    PipelineTransformationType.ENCODE: "4.6-Categorical-Feature-Analysis",
-    PipelineTransformationType.SCALE: "4.5-Feature-Target-Correlations",
-    PipelineTransformationType.FEATURE_SELECT: "4.9.1-Feature-Selection-Recommendations",
-    PipelineTransformationType.DERIVED_COLUMN: "4.9.4-Feature-Engineering-Recommendations",
-    PipelineTransformationType.TYPE_CAST: "3.11-Data-Consistency-Checks",
+    PipelineTransformationType.IMPUTE_NULL: "2.5-Missing-Value-Analysis",
+    PipelineTransformationType.DROP_COLUMN: "2.5-Missing-Value-Analysis",
+    PipelineTransformationType.CAP_OUTLIER: "2.8-Global-Outlier-Detection",
+    PipelineTransformationType.WINSORIZE: "2.8-Global-Outlier-Detection",
+    PipelineTransformationType.SEGMENT_AWARE_CAP: "2.7-Segment-Aware-Outlier-Analysis",
+    PipelineTransformationType.LOG_TRANSFORM: "5.4-Feature-Distributions-by-Retention-Status",
+    PipelineTransformationType.SQRT_TRANSFORM: "5.4-Feature-Distributions-by-Retention-Status",
+    PipelineTransformationType.YEO_JOHNSON: "5.4-Feature-Distributions-by-Retention-Status",
+    PipelineTransformationType.CAP_THEN_LOG: "5.4-Feature-Distributions-by-Retention-Status",
+    PipelineTransformationType.ZERO_INFLATION_HANDLING: "5.4-Feature-Distributions-by-Retention-Status",
+    PipelineTransformationType.ENCODE: "5.6-Categorical-Feature-Analysis",
+    PipelineTransformationType.SCALE: "5.5-Feature-Target-Correlations",
+    PipelineTransformationType.FEATURE_SELECT: "5.9.1-Feature-Selection-Recommendations",
+    PipelineTransformationType.DERIVED_COLUMN: "5.9.4-Feature-Engineering-Recommendations",
+    PipelineTransformationType.TYPE_CAST: "2.11-Data-Consistency-Checks",
 }
 
 DEFAULT_NOTEBOOK_MAP = {
-    PipelineTransformationType.IMPUTE_NULL: "03_quality_assessment",
-    PipelineTransformationType.DROP_COLUMN: "03_quality_assessment",
-    PipelineTransformationType.CAP_OUTLIER: "03_quality_assessment",
-    PipelineTransformationType.WINSORIZE: "03_quality_assessment",
-    PipelineTransformationType.SEGMENT_AWARE_CAP: "03_quality_assessment",
-    PipelineTransformationType.TYPE_CAST: "03_quality_assessment",
-    PipelineTransformationType.LOG_TRANSFORM: "04_relationship_analysis",
-    PipelineTransformationType.SQRT_TRANSFORM: "04_relationship_analysis",
-    PipelineTransformationType.YEO_JOHNSON: "04_relationship_analysis",
-    PipelineTransformationType.CAP_THEN_LOG: "04_relationship_analysis",
-    PipelineTransformationType.ZERO_INFLATION_HANDLING: "04_relationship_analysis",
-    PipelineTransformationType.ENCODE: "04_relationship_analysis",
-    PipelineTransformationType.SCALE: "04_relationship_analysis",
-    PipelineTransformationType.FEATURE_SELECT: "04_relationship_analysis",
-    PipelineTransformationType.DERIVED_COLUMN: "04_relationship_analysis",
+    PipelineTransformationType.IMPUTE_NULL: "02_source_integrity",
+    PipelineTransformationType.DROP_COLUMN: "02_source_integrity",
+    PipelineTransformationType.CAP_OUTLIER: "02_source_integrity",
+    PipelineTransformationType.WINSORIZE: "02_source_integrity",
+    PipelineTransformationType.SEGMENT_AWARE_CAP: "02_source_integrity",
+    PipelineTransformationType.TYPE_CAST: "02_source_integrity",
+    PipelineTransformationType.LOG_TRANSFORM: "05_relationship_analysis",
+    PipelineTransformationType.SQRT_TRANSFORM: "05_relationship_analysis",
+    PipelineTransformationType.YEO_JOHNSON: "05_relationship_analysis",
+    PipelineTransformationType.CAP_THEN_LOG: "05_relationship_analysis",
+    PipelineTransformationType.ZERO_INFLATION_HANDLING: "05_relationship_analysis",
+    PipelineTransformationType.ENCODE: "05_relationship_analysis",
+    PipelineTransformationType.SCALE: "05_relationship_analysis",
+    PipelineTransformationType.FEATURE_SELECT: "05_relationship_analysis",
+    PipelineTransformationType.DERIVED_COLUMN: "05_relationship_analysis",
 }
 
 
@@ -113,7 +113,6 @@ def provenance_key(step: TransformationStep) -> str:
 
 
 class StepGrouper:
-
     _TYPE_TO_FUNC = {
         PipelineTransformationType.DROP_COLUMN: "drop_unusable_columns",
         PipelineTransformationType.IMPUTE_NULL: "impute_remaining_nulls",
@@ -227,7 +226,7 @@ FINDINGS_DIR = EXPERIMENTS_DIR / "findings"
 SOURCES = {
 {% for source in config.sources %}
     "{{ source.name }}": {
-        "path": str(FINDINGS_DIR / "{{ source.path }}"),
+        "path": "{{ source.raw_source_path }}",
         "format": "{{ source.format }}",
         "entity_key": "{{ source.entity_key }}",
 {% if source.time_column %}
@@ -305,6 +304,8 @@ def load_{{ source }}():
         raise FileNotFoundError(f"Source file not found: {path}")
     if source_config["format"] == "csv":
         return pd.read_csv(path)
+    if source_config["format"] == "parquet":
+        return pd.read_parquet(path)
     from customer_retention.integrations.adapters.factory import get_delta
     return get_delta().read(str(path))
 
@@ -349,6 +350,8 @@ def _load_raw_events():
         raise FileNotFoundError(f"Raw source not found: {path}")
     if source["format"] == "csv":
         return pd.read_csv(path)
+    if source["format"] == "parquet":
+        return pd.read_parquet(path)
     from customer_retention.integrations.adapters.factory import get_delta
     return get_delta().read(str(path))
 
@@ -485,8 +488,8 @@ def merge_sources(bronze_outputs: dict) -> pd.DataFrame:
 {% for join in config.silver.joins %}
     merged = merged.merge(
         bronze_outputs["{{ join.right_source }}"],
-        left_on="{{ join.left_key }}",
-        right_on="{{ join.right_key }}",
+        left_on={{ join.left_keys }},
+        right_on={{ join.right_keys }},
         how="{{ join.how }}"
     )
 {% endfor %}
@@ -582,7 +585,7 @@ def run_silver_merge(create_holdout: bool = True, holdout_fraction: float = 0.1)
 if __name__ == "__main__":
     run_silver_merge()
 ''',
-    "gold.py.j2": '''import pandas as pd
+    "gold.py.j2": """import pandas as pd
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -765,7 +768,7 @@ def run_gold_features():
 
 if __name__ == "__main__":
     run_gold_features()
-''',
+""",
     "training.py.j2": '''import pandas as pd
 import mlflow
 import mlflow.sklearn
@@ -999,7 +1002,7 @@ def run_experiment():
 if __name__ == "__main__":
     run_experiment()
 ''',
-    "runner.py.j2": '''import argparse
+    "runner.py.j2": """import argparse
 import sys
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -1097,7 +1100,7 @@ if __name__ == "__main__":
     parser.add_argument("--validate", action="store_true")
     args = parser.parse_args()
     run_pipeline(validate=args.validate)
-''',
+""",
     "run_all.py.j2": '''"""{{ config.name }} - Pipeline Runner with MLflow UI
 
 All artifacts (data, mlruns, feast) are stored in the experiments directory.
@@ -1344,7 +1347,7 @@ offline_store:
   type: file
 entity_key_serialization_version: 2
 """,
-    "features.py.j2": '''from datetime import timedelta
+    "features.py.j2": """from datetime import timedelta
 from feast import Entity, FeatureView, Field, FileSource
 from feast.types import Float32, Float64, Int64, String
 
@@ -1375,8 +1378,8 @@ from feast.types import Float32, Float64, Int64, String
         "recommendations_hash": "{{ config.recommendations_hash or 'none' }}",
     }
 )
-''',
-    "landing.py.j2": '''import pandas as pd
+""",
+    "landing.py.j2": """import pandas as pd
 import numpy as np
 from pathlib import Path
 from config import RAW_SOURCES, PRODUCTION_DIR
@@ -1394,6 +1397,8 @@ def load_raw_data() -> pd.DataFrame:
         raise FileNotFoundError(f"Raw source not found: {path}")
     if source["format"] == "csv":
         return pd.read_csv(path)
+    if source["format"] == "parquet":
+        return pd.read_parquet(path)
     from customer_retention.integrations.adapters.factory import get_delta
     return get_delta().read(str(path))
 
@@ -1432,11 +1437,29 @@ def derive_label_available_flag(df: pd.DataFrame) -> pd.DataFrame:
     df["label_available_flag"] = df[TARGET_COLUMN].notna() if TARGET_COLUMN in df.columns else False
     return df
 
+{% if config.datetime_derivation %}
+
+def derive_datetime_features(df: pd.DataFrame) -> pd.DataFrame:
+    from customer_retention.stages.profiling import derive_extra_datetime_features
+    source_columns = {{ config.datetime_derivation.source_columns }}
+    mask_future_columns = {{ config.datetime_derivation.mask_future_columns }}
+    existing = [c for c in source_columns if c in df.columns]
+    if existing:
+        df, _ = derive_extra_datetime_features(
+            df, "{{ config.datetime_derivation.reference_column }}", existing,
+            mask_future_columns=[c for c in mask_future_columns if c in existing],
+        )
+    return df
+{% endif %}
+
 
 def derive_temporal_columns(df: pd.DataFrame) -> pd.DataFrame:
     df = derive_feature_timestamp(df)
     df = derive_label_timestamp(df)
     df = derive_label_available_flag(df)
+{% if config.datetime_derivation %}
+    df = derive_datetime_features(df)
+{% endif %}
     return df
 
 
@@ -1466,15 +1489,16 @@ def run_landing_{{ name }}():
 
 if __name__ == "__main__":
     run_landing_{{ name }}()
-''',
-    "bronze_event.py.j2": '''import pandas as pd
+""",
+    "bronze_event.py.j2": """import pandas as pd
 import numpy as np
 from pathlib import Path
 {% set ops, fitted = collect_imports(config.pre_shaping, False) %}
 {% if ops %}
 from customer_retention.transforms import {{ ops | sort | join(', ') }}
 {% endif %}
-from customer_retention.core.compat import ensure_datetime_column, safe_to_datetime
+from customer_retention.core.compat import ensure_datetime_column, safe_to_datetime, as_tz_naive
+from pandas.api.types import is_numeric_dtype
 from config import PRODUCTION_DIR, TARGET_COLUMN
 
 SOURCE_NAME = "{{ source }}"
@@ -1509,6 +1533,17 @@ def {{ func_name }}(df: pd.DataFrame) -> pd.DataFrame:
     return df
 {% endfor %}
 
+{% if config.datetime_derivation %}
+
+def derive_datetime_features(df: pd.DataFrame) -> pd.DataFrame:
+    from customer_retention.stages.profiling import derive_extra_datetime_features
+    source_columns = {{ config.datetime_derivation.source_columns }}
+    existing = [c for c in source_columns if c in df.columns]
+    if existing:
+        df, _ = derive_extra_datetime_features(df, TIME_COLUMN, existing)
+    return df
+{% endif %}
+
 {% if config.aggregation %}
 def _parse_window(window_str):
     if window_str == "all_time":
@@ -1522,16 +1557,26 @@ def _parse_window(window_str):
     return pd.Timedelta(days=int(window_str))
 
 
+def _safe_mode(x):
+    if len(x) == 0:
+        return None
+    return x.value_counts().idxmax()
+
+
 AGGREGATION_WINDOWS = {{ config.aggregation.windows }}
 VALUE_COLUMNS = {{ config.aggregation.value_columns }}
 AGG_FUNCS = {{ config.aggregation.agg_funcs }}
+CATEGORICAL_COLUMNS = {{ config.aggregation.categorical_columns }}
+CATEGORICAL_AGG_FUNCS = {{ config.aggregation.categorical_agg_funcs }}
 {% endif %}
 
 
 def apply_event_aggregation(df: pd.DataFrame) -> pd.DataFrame:
 {% if config.aggregation %}
     ensure_datetime_column(df, TIME_COLUMN)
+    df[TIME_COLUMN] = as_tz_naive(df[TIME_COLUMN])
     reference_date = df[TIME_COLUMN].max()
+    numeric_value_columns = [c for c in VALUE_COLUMNS if is_numeric_dtype(df[c])]
     base = df.groupby(ENTITY_COLUMN).agg("first")[[]]
     parts = []
     if TARGET_COLUMN in df.columns:
@@ -1539,9 +1584,13 @@ def apply_event_aggregation(df: pd.DataFrame) -> pd.DataFrame:
     for window in AGGREGATION_WINDOWS:
         td = _parse_window(window)
         window_df = df if td is None else df[df[TIME_COLUMN] >= (reference_date - td)]
-        for col in VALUE_COLUMNS:
+        for col in numeric_value_columns:
             for func in AGG_FUNCS:
                 parts.append(window_df.groupby(ENTITY_COLUMN)[col].agg(func).rename(f"{col}_{func}_{window}"))
+        for col in CATEGORICAL_COLUMNS:
+            if col in window_df.columns:
+                parts.append(window_df.groupby(ENTITY_COLUMN)[col].nunique().rename(f"{col}_nunique_{window}"))
+                parts.append(window_df.groupby(ENTITY_COLUMN)[col].agg(_safe_mode).rename(f"{col}_mode_{window}"))
         parts.append(window_df.groupby(ENTITY_COLUMN).size().rename(f"event_count_{window}"))
     df = pd.concat([base] + parts, axis=1).reset_index()
     df.attrs["aggregation_reference_date"] = str(reference_date)
@@ -1557,6 +1606,9 @@ def run_bronze_event_{{ source }}():
         raise FileNotFoundError(f"Landing output not found: {landing_path}")
     df = storage.read(landing_path)
     df = apply_pre_shaping(df)
+{% if config.datetime_derivation %}
+    df = derive_datetime_features(df)
+{% endif %}
     df = apply_event_aggregation(df)
     output_name = f"{SOURCE_NAME}_aggregated"
     bronze_dir = PRODUCTION_DIR / "data" / "bronze"
@@ -1567,8 +1619,8 @@ def run_bronze_event_{{ source }}():
 
 if __name__ == "__main__":
     run_bronze_event_{{ source }}()
-''',
-    "bronze_entity.py.j2": '''import pandas as pd
+""",
+    "bronze_entity.py.j2": """import pandas as pd
 import numpy as np
 from pathlib import Path
 {% set ops, fitted = collect_imports(config.post_shaping, False) %}
@@ -1591,6 +1643,8 @@ def _load_raw_events():
         raise FileNotFoundError(f"Raw source not found: {path}")
     if source["format"] == "csv":
         return pd.read_csv(path)
+    if source["format"] == "parquet":
+        return pd.read_parquet(path)
     from customer_retention.integrations.adapters.factory import get_delta
     return get_delta().read(str(path))
 
@@ -1726,8 +1780,8 @@ def run_bronze_entity_{{ source }}():
 
 if __name__ == "__main__":
     run_bronze_entity_{{ source }}()
-''',
-    "validate.py.j2": '''import sys
+""",
+    "validate.py.j2": """import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -1864,7 +1918,7 @@ def run_all_validations(tolerance=1e-5):
     for name, status in results:
         print(f"[{status.split(':')[0]:4s}] {name}")
     return results
-''',
+""",
     "run_validation.py.j2": '''"""{{ config.name }} - Standalone Validation Runner
 
 Compares pipeline outputs against exploration artifacts.
@@ -1937,7 +1991,6 @@ class CodeRenderer:
         "run_all": "run_all.py.j2",
         "feast_config": "feature_store.yaml.j2",
         "feast_features": "features.py.j2",
-
         "landing": "landing.py.j2",
         "bronze_event": "bronze_event.py.j2",
         "validation": "validate.py.j2",
@@ -1994,16 +2047,19 @@ class CodeRenderer:
     def render_feast_features(self, config: PipelineConfig) -> str:
         return self._render("feast_features", config=config)
 
-
     def render_landing(self, name: str, config: LandingLayerConfig) -> str:
         return self._env.get_template("landing.py.j2").render(name=name, config=config)
 
     def render_bronze_event(self, source_name: str, config: BronzeEventConfig) -> str:
         return self._env.get_template("bronze_event.py.j2").render(source=source_name, config=config)
 
-    def render_bronze_entity(self, source_name: str, config: BronzeEventConfig, bronze_input_name: str, raw_source_name: str = "") -> str:
+    def render_bronze_entity(
+        self, source_name: str, config: BronzeEventConfig, bronze_input_name: str, raw_source_name: str = ""
+    ) -> str:
         return self._env.get_template("bronze_entity.py.j2").render(
-            source=source_name, config=config, bronze_input_name=bronze_input_name,
+            source=source_name,
+            config=config,
+            bronze_input_name=bronze_input_name,
             raw_source=raw_source_name or source_name,
         )
 
@@ -2042,47 +2098,51 @@ _STATELESS_REGISTRY = {
     PipelineTransformationType.IMPUTE_NULL: _StepMeta(
         "impute nulls in {col} with {value}",
         "apply_impute_null(df, '{col}', value='{value}')",
-        "apply_impute_null", {"value": 0}),
+        "apply_impute_null",
+        {"value": 0},
+    ),
     PipelineTransformationType.CAP_OUTLIER: _StepMeta(
         "cap outliers in {col} to [{lower}, {upper}]",
         "apply_cap_outlier(df, '{col}', lower={lower}, upper={upper})",
-        "apply_cap_outlier", {"lower": 0, "upper": 1000000}),
+        "apply_cap_outlier",
+        {"lower": 0, "upper": 1000000},
+    ),
     PipelineTransformationType.TYPE_CAST: _StepMeta(
-        "cast {col} to {dtype}",
-        "apply_type_cast(df, '{col}', dtype='{dtype}')",
-        "apply_type_cast", {"dtype": "float"}),
+        "cast {col} to {dtype}", "apply_type_cast(df, '{col}', dtype='{dtype}')", "apply_type_cast", {"dtype": "float"}
+    ),
     PipelineTransformationType.DROP_COLUMN: _StepMeta(
-        "drop column {col}",
-        "apply_drop_column(df, '{col}')",
-        "apply_drop_column", {}),
+        "drop column {col}", "apply_drop_column(df, '{col}')", "apply_drop_column", {}
+    ),
     PipelineTransformationType.WINSORIZE: _StepMeta(
         "winsorize {col} to [{lower_bound}, {upper_bound}]",
         "apply_winsorize(df, '{col}', lower_bound={lower_bound}, upper_bound={upper_bound})",
-        "apply_winsorize", {"lower_bound": 0, "upper_bound": 1000000}),
+        "apply_winsorize",
+        {"lower_bound": 0, "upper_bound": 1000000},
+    ),
     PipelineTransformationType.SEGMENT_AWARE_CAP: _StepMeta(
         "segment-aware outlier cap on {col} ({n_segments} segments)",
         "apply_segment_aware_cap(df, '{col}', n_segments={n_segments})",
-        "apply_segment_aware_cap", {"n_segments": 2}),
+        "apply_segment_aware_cap",
+        {"n_segments": 2},
+    ),
     PipelineTransformationType.LOG_TRANSFORM: _StepMeta(
-        "log-transform {col}",
-        "apply_log_transform(df, '{col}')",
-        "apply_log_transform", {}),
+        "log-transform {col}", "apply_log_transform(df, '{col}')", "apply_log_transform", {}
+    ),
     PipelineTransformationType.SQRT_TRANSFORM: _StepMeta(
-        "sqrt-transform {col}",
-        "apply_sqrt_transform(df, '{col}')",
-        "apply_sqrt_transform", {}),
+        "sqrt-transform {col}", "apply_sqrt_transform(df, '{col}')", "apply_sqrt_transform", {}
+    ),
     PipelineTransformationType.ZERO_INFLATION_HANDLING: _StepMeta(
         "handle zero-inflation in {col}",
         "apply_zero_inflation_handling(df, '{col}')",
-        "apply_zero_inflation_handling", {}),
+        "apply_zero_inflation_handling",
+        {},
+    ),
     PipelineTransformationType.CAP_THEN_LOG: _StepMeta(
-        "cap at p99 then log-transform {col}",
-        "apply_cap_then_log(df, '{col}')",
-        "apply_cap_then_log", {}),
+        "cap at p99 then log-transform {col}", "apply_cap_then_log(df, '{col}')", "apply_cap_then_log", {}
+    ),
     PipelineTransformationType.FEATURE_SELECT: _StepMeta(
-        "drop {col} (feature selection)",
-        "apply_feature_select(df, '{col}')",
-        "apply_feature_select", {}),
+        "drop {col} (feature selection)", "apply_feature_select(df, '{col}')", "apply_feature_select", {}
+    ),
 }
 
 

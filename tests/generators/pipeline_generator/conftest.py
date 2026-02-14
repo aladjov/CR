@@ -54,8 +54,8 @@ def silver_with_join():
     return SilverLayerConfig(
         joins=[
             {
-                "left_key": "customer_id",
-                "right_key": "customer_id",
+                "left_keys": ["customer_id"],
+                "right_keys": ["customer_id"],
                 "right_source": "orders",
                 "how": "left",
             }

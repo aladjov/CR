@@ -17,6 +17,8 @@ class DatabricksPipelineGenerator:
         catalog: str = "main",
         schema: str = "default",
         experiments_dir: str = None,
+        namespace=None,
+        intent=None,
     ):
         self._findings_dir = Path(findings_dir)
         self._output_dir = Path(output_dir)
@@ -24,7 +26,7 @@ class DatabricksPipelineGenerator:
         self._catalog = catalog
         self._schema = schema
         self._experiments_dir = experiments_dir
-        self._parser = FindingsParser(findings_dir)
+        self._parser = FindingsParser(findings_dir, namespace=namespace, intent=intent)
         self._renderer = DatabricksCodeRenderer(catalog=catalog, schema=schema)
 
     def generate(self) -> List[Path]:

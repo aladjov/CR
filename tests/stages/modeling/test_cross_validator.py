@@ -187,6 +187,115 @@ class TestFoldDetails:
             assert "score" in fold
 
 
+class TestTemporalEntityCV:
+    @pytest.fixture
+    def panel_data(self):
+        np.random.seed(42)
+        n_entities = 20
+        dates = pd.date_range("2023-01-01", periods=12, freq="MS")
+        rows = []
+        for eid in range(n_entities):
+            for d in dates:
+                rows.append({
+                    "entity_id": eid,
+                    "as_of_date": d,
+                    "feature1": np.random.randn(),
+                    "feature2": np.random.randn(),
+                    "target": np.random.choice([0, 1], p=[0.3, 0.7]),
+                })
+        df = pd.DataFrame(rows)
+        X = df[["feature1", "feature2"]]
+        y = df["target"]
+        groups = df["entity_id"]
+        temporal = df["as_of_date"]
+        return X, y, groups, temporal
+
+    @pytest.fixture
+    def panel_model(self):
+        return LogisticRegression(max_iter=1000, random_state=42)
+
+    def test_no_entity_overlap_between_train_and_test(self, panel_data, panel_model):
+        X, y, groups, temporal = panel_data
+        from customer_retention.stages.modeling.cross_validator import TemporalEntitySplit
+
+        splitter = TemporalEntitySplit(n_splits=5)
+        for train_idx, test_idx in splitter.split(X, y, groups):
+            train_entities = set(groups.iloc[train_idx].unique())
+            test_entities = set(groups.iloc[test_idx].unique())
+            assert train_entities.isdisjoint(test_entities)
+
+    def test_all_rows_of_entity_in_same_set(self, panel_data, panel_model):
+        X, y, groups, temporal = panel_data
+        from customer_retention.stages.modeling.cross_validator import TemporalEntitySplit
+
+        splitter = TemporalEntitySplit(n_splits=5)
+        for train_idx, test_idx in splitter.split(X, y, groups):
+            train_entities = set(groups.iloc[train_idx].unique())
+            test_entities = set(groups.iloc[test_idx].unique())
+            for eid in train_entities:
+                entity_rows = groups[groups == eid].index
+                assert all(idx in train_idx for idx in entity_rows)
+            for eid in test_entities:
+                entity_rows = groups[groups == eid].index
+                assert all(idx in test_idx for idx in entity_rows)
+
+    def test_correct_number_of_folds(self, panel_data, panel_model):
+        X, y, groups, temporal = panel_data
+        cv = CrossValidator(strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5, scoring="roc_auc")
+        result = cv.run(panel_model, X, y, groups=groups)
+        assert len(result.cv_scores) == 5
+
+    def test_cv_scores_in_valid_range(self, panel_data, panel_model):
+        X, y, groups, temporal = panel_data
+        cv = CrossValidator(strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5, scoring="roc_auc")
+        result = cv.run(panel_model, X, y, groups=groups)
+        assert all(0 <= s <= 1 for s in result.cv_scores)
+
+    def test_fold_details_report_entity_counts(self, panel_data, panel_model):
+        X, y, groups, temporal = panel_data
+        cv = CrossValidator(strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5, scoring="roc_auc")
+        result = cv.run(panel_model, X, y, groups=groups)
+        for fold in result.fold_details:
+            assert "train_entities" in fold
+            assert "test_entities" in fold
+            assert fold["train_entities"] > 0
+            assert fold["test_entities"] > 0
+
+    def test_purge_gap_reduces_train_size_for_sparse_data(self):
+        np.random.seed(42)
+        base = pd.Timestamp("2023-01-01")
+        rows = [
+            {"entity_id": 0, "as_of_date": base, "feature1": 1.0, "target": 0},
+            {"entity_id": 0, "as_of_date": base + pd.Timedelta(days=30), "feature1": 1.1, "target": 0},
+            {"entity_id": 0, "as_of_date": base + pd.Timedelta(days=120), "feature1": 1.2, "target": 1},
+            {"entity_id": 1, "as_of_date": base + pd.Timedelta(days=150), "feature1": 2.0, "target": 1},
+            {"entity_id": 1, "as_of_date": base + pd.Timedelta(days=180), "feature1": 2.1, "target": 0},
+        ]
+        df = pd.DataFrame(rows)
+        X = df[["feature1"]]
+        y = df["target"]
+        groups = df["entity_id"]
+        temporal = df["as_of_date"]
+
+        from customer_retention.stages.modeling.cross_validator import TemporalEntitySplit
+
+        splitter_no_purge = TemporalEntitySplit(n_splits=2)
+        splitter_purge = TemporalEntitySplit(n_splits=2, temporal_values=temporal, purge_gap_days=90)
+
+        sizes_no_purge = [len(tr) for tr, _ in splitter_no_purge.split(X, y, groups)]
+        sizes_purge = [len(tr) for tr, _ in splitter_purge.split(X, y, groups)]
+
+        assert any(sp < snp for sp, snp in zip(sizes_purge, sizes_no_purge))
+
+    def test_purge_gap_skipped_when_would_empty_train(self, panel_data, panel_model):
+        X, y, groups, temporal = panel_data
+        from customer_retention.stages.modeling.cross_validator import TemporalEntitySplit
+
+        splitter = TemporalEntitySplit(n_splits=5, temporal_values=temporal, purge_gap_days=9999)
+        for train_idx, test_idx in splitter.split(X, y, groups):
+            assert len(train_idx) > 0
+
+
 class TestGroupKFold:
     def test_group_kfold_keeps_groups_together(self):
         np.random.seed(42)

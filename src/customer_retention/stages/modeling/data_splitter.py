@@ -1,11 +1,13 @@
 import warnings
 from dataclasses import dataclass, field
+from datetime import timedelta
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
 
 from customer_retention.core.compat import DataFrame, Series
+from customer_retention.core.config.column_config import select_model_ready_columns
 
 if TYPE_CHECKING:
     from customer_retention.analysis.auto_explorer.findings import FeatureAvailabilityMetadata
@@ -51,7 +53,7 @@ class SplitWarning:
 
 
 class DataSplitter:
-    def __init__(self, target_column: str, strategy: SplitStrategy = SplitStrategy.RANDOM_STRATIFIED, test_size: float = 0.11, validation_size: float = 0.10, stratify: bool = True, random_state: int = 42, temporal_column: Optional[str] = None, group_column: Optional[str] = None, exclude_columns: Optional[List[str]] = None, include_validation: bool = False):
+    def __init__(self, target_column: str, strategy: SplitStrategy = SplitStrategy.RANDOM_STRATIFIED, test_size: float = 0.11, validation_size: float = 0.10, stratify: bool = True, random_state: int = 42, temporal_column: Optional[str] = None, group_column: Optional[str] = None, exclude_columns: Optional[List[str]] = None, include_validation: bool = False, purge_gap_days: Optional[int] = None):
         self.target_column = target_column
         self.strategy = strategy
         self.test_size = test_size
@@ -62,6 +64,7 @@ class DataSplitter:
         self.group_column = group_column
         self.exclude_columns = exclude_columns or []
         self.include_validation = include_validation
+        self.purge_gap_days = purge_gap_days
 
     def split(self, df: DataFrame, feature_availability: Optional["FeatureAvailabilityMetadata"] = None) -> SplitResult:
         self._validate_minority_samples(df)
@@ -111,16 +114,23 @@ class DataSplitter:
                 ))
         return warnings_list
 
+    @staticmethod
+    def _safe_stratify_col(y: Series) -> Optional[Series]:
+        counts = y.value_counts()
+        if (counts < 2).any():
+            return None
+        return y
+
     def _stratified_split(self, df: DataFrame) -> SplitResult:
         X, y = self._prepare_features_target(df)
-        stratify_col = y if self.stratify else None
+        stratify_col = self._safe_stratify_col(y) if self.stratify else None
 
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=self.test_size, random_state=self.random_state, stratify=stratify_col)
 
         X_val, y_val = None, None
         if self.include_validation:
             val_ratio = self.validation_size / (1 - self.test_size)
-            stratify_train = y_train if self.stratify else None
+            stratify_train = self._safe_stratify_col(y_train) if self.stratify else None
             X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=val_ratio, random_state=self.random_state, stratify=stratify_train)
 
         return SplitResult(
@@ -131,10 +141,18 @@ class DataSplitter:
 
     def _temporal_split(self, df: DataFrame) -> SplitResult:
         df_sorted = df.sort_values(self.temporal_column).reset_index(drop=True)
-        split_idx = int(len(df_sorted) * (1 - self.test_size))
+        cutoff_idx = int(len(df_sorted) * (1 - self.test_size))
+        cutoff_date = df_sorted[self.temporal_column].iloc[cutoff_idx]
 
-        train_df = df_sorted.iloc[:split_idx]
-        test_df = df_sorted.iloc[split_idx:]
+        purge_gap_rows = 0
+        if self.purge_gap_days and self.purge_gap_days > 0:
+            purge_start = cutoff_date - timedelta(days=self.purge_gap_days)
+            train_df = df_sorted[df_sorted[self.temporal_column] < purge_start]
+            test_df = df_sorted[df_sorted[self.temporal_column] >= cutoff_date]
+            purge_gap_rows = len(df_sorted) - len(train_df) - len(test_df)
+        else:
+            train_df = df_sorted.iloc[:cutoff_idx]
+            test_df = df_sorted.iloc[cutoff_idx:]
 
         X_train, y_train = self._prepare_features_target(train_df)
         X_test, y_test = self._prepare_features_target(test_df)
@@ -145,10 +163,16 @@ class DataSplitter:
             X_val, y_val = X_train.iloc[val_split:], y_train.iloc[val_split:]
             X_train, y_train = X_train.iloc[:val_split], y_train.iloc[:val_split]
 
+        split_info = self._build_split_info(X_train, X_test, X_val)
+        if self.purge_gap_days and self.purge_gap_days > 0:
+            split_info["purge_gap_days"] = self.purge_gap_days
+            split_info["purge_gap_rows"] = purge_gap_rows
+            split_info["cutoff_date"] = str(cutoff_date)
+
         return SplitResult(
             X_train=X_train, X_test=X_test, y_train=y_train, y_test=y_test,
             X_val=X_val, y_val=y_val,
-            split_info=self._build_split_info(X_train, X_test, X_val)
+            split_info=split_info,
         )
 
     def _group_split(self, df: DataFrame) -> SplitResult:
@@ -179,7 +203,7 @@ class DataSplitter:
     def _prepare_features_target(self, df: DataFrame) -> tuple[DataFrame, Series]:
         exclude = [self.target_column] + self.exclude_columns
         feature_cols = [c for c in df.columns if c not in exclude]
-        return df[feature_cols], df[self.target_column]
+        return select_model_ready_columns(df[feature_cols]), df[self.target_column]
 
     def _validate_minority_samples(self, df: DataFrame):
         class_counts = df[self.target_column].value_counts()

@@ -2068,6 +2068,142 @@ class ChartBuilder:
 
         return fig
 
+    def dataset_comparison_at_a_glance(
+        self, df_historic: DataFrame, df_recent: Optional[DataFrame], findings: Any,
+        source_path: str = "", granularity: str = "entity",
+        max_columns: int = 15, columns_per_row: int = 5, recent_days: int = 90,
+    ) -> go.Figure:
+        """Dataset overview comparing historic (full) and recent views side by side.
+
+        Creates paired tile rows: full-color historic on top, lighter recent below.
+        Falls back to standard dataset_at_a_glance when no recent data available.
+        """
+        from dataclasses import replace
+        from pathlib import Path
+
+        from plotly.subplots import make_subplots
+
+        if df_recent is None or len(df_recent) == 0:
+            return self.dataset_at_a_glance(
+                df_historic, findings, source_path=source_path,
+                granularity=granularity, max_columns=max_columns, columns_per_row=columns_per_row,
+            )
+
+        formatter = NumberFormatter()
+        memory_mb = safe_memory_usage_bytes(df_historic) / 1024**2
+        path = Path(source_path) if source_path else Path("data.csv")
+        fmt = path.suffix.lstrip('.').upper() or "CSV"
+
+        temporal_metadata_cols = {"feature_timestamp", "label_timestamp", "label_available_flag"}
+        available_cols = {k: v for k, v in findings.columns.items() if k not in temporal_metadata_cols}
+
+        type_priority = ['target', 'binary', 'numeric_continuous', 'numeric_discrete',
+                         'categorical_nominal', 'categorical_ordinal', 'datetime', 'identifier']
+        sorted_cols = []
+        for col_type in type_priority:
+            for name, col in available_cols.items():
+                if col.inferred_type.value == col_type and name not in sorted_cols:
+                    sorted_cols.append(name)
+        for name in available_cols:
+            if name not in sorted_cols:
+                sorted_cols.append(name)
+        display_cols = sorted_cols[:max_columns]
+
+        n_cols = min(columns_per_row, len(display_cols))
+        n_batches = (len(display_cols) + n_cols - 1) // n_cols
+        total_tile_rows = n_batches * 2
+
+        header_specs = [{"type": "indicator"} for _ in range(n_cols)]
+        tile_specs = [[{"type": "xy"} for _ in range(n_cols)] for _ in range(total_tile_rows)]
+
+        titles = [""] * n_cols
+        for batch in range(n_batches):
+            start = batch * n_cols
+            batch_cols = display_cols[start:start + n_cols]
+            pad = n_cols - len(batch_cols)
+            titles += [f"<b>{c[:18]}</b>" for c in batch_cols] + [""] * pad
+            titles += [f"\u21b3 last {recent_days}d" for _ in batch_cols] + [""] * pad
+
+        tile_h = 0.88 / total_tile_rows
+        fig = make_subplots(
+            rows=1 + total_tile_rows, cols=n_cols,
+            row_heights=[0.12] + [tile_h] * total_tile_rows,
+            specs=[header_specs] + tile_specs,
+            subplot_titles=titles,
+            vertical_spacing=0.04,
+            horizontal_spacing=0.06,
+        )
+
+        structure_label = "Event" if granularity.lower() == "event" else "Entity"
+        memory_str = f"{memory_mb:.1f} MB"
+        h_spacing = 0.06
+        col_width = (1.0 - h_spacing * (n_cols - 1)) / n_cols
+
+        header_items = [
+            ("Rows", f"{findings.row_count:,}"),
+            ("Columns", str(findings.column_count)),
+            ("Structure", structure_label),
+            ("Format", fmt),
+            ("Memory", memory_str),
+        ]
+
+        for i in range(min(n_cols, len(header_items))):
+            fig.add_trace(go.Indicator(
+                mode="number", value=0,
+                number={"font": {"size": 1, "color": "rgba(0,0,0,0)"}}
+            ), row=1, col=i + 1)
+
+        for i, (label, value) in enumerate(header_items[:n_cols]):
+            x_pos = (i) * (col_width + h_spacing) + col_width / 2
+            fig.add_annotation(
+                x=x_pos, y=0.96, xref="paper", yref="paper",
+                text=label, showarrow=False,
+                font={"size": 12, "color": "#666"}, xanchor="center", yanchor="middle",
+            )
+            fig.add_annotation(
+                x=x_pos, y=0.92, xref="paper", yref="paper",
+                text=value, showarrow=False,
+                font={"size": 28, "color": self.colors["primary"]},
+                xanchor="center", yanchor="middle",
+            )
+
+        for i, col_name in enumerate(display_cols):
+            batch_idx = i // n_cols
+            col_in_batch = (i % n_cols) + 1
+            historic_row = 2 + batch_idx * 2
+            recent_row = 3 + batch_idx * 2
+            col_finding = findings.columns.get(col_name)
+            if not col_finding:
+                continue
+            col_type = col_finding.inferred_type.value
+
+            if col_name in df_historic.columns:
+                self._add_column_tile(
+                    fig, df_historic[col_name], col_finding, col_type,
+                    historic_row, col_in_batch, formatter, n_cols,
+                )
+
+            if col_name in df_recent.columns:
+                trace_before = len(fig.data)
+                recent_finding = replace(col_finding, universal_metrics={}, type_metrics={})
+                self._add_column_tile(
+                    fig, df_recent[col_name], recent_finding, col_type,
+                    recent_row, col_in_batch, formatter, n_cols,
+                )
+                for trace in fig.data[trace_before:]:
+                    trace.opacity = 0.45
+
+        for ann in fig.layout.annotations:
+            if hasattr(ann, 'text') and ann.text and ann.text.startswith("\u21b3"):
+                ann.font = {"size": 10, "color": "#999"}
+
+        fig.update_layout(
+            height=120 + 180 * total_tile_rows,
+            template=self.theme, showlegend=False,
+            margin={"t": 30, "b": 20, "l": 40, "r": 20},
+        )
+        return fig
+
     def _add_column_tile(
         self,
         fig: go.Figure,
@@ -2225,7 +2361,8 @@ class ChartBuilder:
             return
 
         # Monthly distribution as area chart for cleaner look
-        counts = dates.dt.to_period('M').value_counts().sort_index()
+        tz_free = dates.dt.tz_localize(None) if dates.dt.tz is not None else dates
+        counts = tz_free.dt.to_period('M').value_counts().sort_index()
         x_labels = [str(p) for p in counts.index]
         fig.add_trace(go.Scatter(
             x=x_labels,

@@ -93,8 +93,8 @@ def sample_silver_config():
         joins=[
             {
                 "right_source": "events",
-                "left_key": "customer_id",
-                "right_key": "customer_id",
+                "left_keys": ["customer_id"],
+                "right_keys": ["customer_id"],
                 "how": "left",
             }
         ],
@@ -171,7 +171,9 @@ def sample_pipeline_config(
                 entity_column="customer_id",
                 time_column="event_date",
                 aggregation=AggregationWindowConfig(
-                    windows=["30d"], value_columns=["amount"], agg_funcs=["sum"],
+                    windows=["30d"],
+                    value_columns=["amount"],
+                    agg_funcs=["sum"],
                 ),
             ),
         },
@@ -200,7 +202,6 @@ def minimal_pipeline_config(sample_source_config):
 
 
 class TestInlineLoader:
-
     def test_inline_loader_get_source_found(self):
         templates = {"test.j2": "Hello {{ name }}"}
         loader = InlineLoader(templates)
@@ -220,7 +221,6 @@ class TestInlineLoader:
 
 
 class TestCodeRendererConfig:
-
     def test_render_config_with_all_options(self, renderer, sample_pipeline_config):
         result = renderer.render_config(sample_pipeline_config)
 
@@ -248,7 +248,6 @@ class TestCodeRendererConfig:
 
 
 class TestCodeRendererBronze:
-
     def test_render_bronze_with_transformations(self, renderer, sample_bronze_config):
         result = renderer.render_bronze("customers", sample_bronze_config)
 
@@ -270,15 +269,28 @@ class TestCodeRendererBronze:
         assert "def apply_transformations" in result
         assert "return df" in result
 
+    def test_render_bronze_parquet_format_uses_read_parquet(self, renderer):
+        parquet_source = SourceConfig(
+            name="events",
+            path="data/events.parquet",
+            format="parquet",
+            entity_key="customer_id",
+            time_column="created_at",
+            is_event_level=False,
+        )
+        bronze_config = BronzeLayerConfig(source=parquet_source, transformations=[])
+        result = renderer.render_bronze("events", bronze_config)
+
+        assert "pd.read_parquet(path)" in result
+
 
 class TestCodeRendererSilver:
-
     def test_render_silver_with_joins(self, renderer, sample_pipeline_config):
         result = renderer.render_silver(sample_pipeline_config)
 
         assert "def merge_sources" in result
         assert "merged.merge" in result
-        assert 'right_on="customer_id"' in result
+        assert "left_on=['customer_id']" in result or 'left_on=["customer_id"]' in result
         assert 'how="left"' in result
 
     def test_render_silver_has_holdout_creation(self, renderer, sample_pipeline_config):
@@ -289,7 +301,6 @@ class TestCodeRendererSilver:
 
 
 class TestCodeRendererGold:
-
     def test_render_gold_with_encodings_and_scalings(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
 
@@ -323,7 +334,6 @@ class TestCodeRendererGold:
 
 
 class TestCodeRendererTraining:
-
     def test_render_training_with_feast(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
 
@@ -347,7 +357,6 @@ class TestCodeRendererTraining:
 
 
 class TestCodeRendererRunner:
-
     def test_render_runner(self, renderer, sample_pipeline_config):
         result = renderer.render_runner(sample_pipeline_config)
 
@@ -359,7 +368,6 @@ class TestCodeRendererRunner:
 
 
 class TestCodeRendererRunAll:
-
     def test_render_run_all(self, renderer, sample_pipeline_config):
         result = renderer.render_run_all(sample_pipeline_config)
 
@@ -370,7 +378,6 @@ class TestCodeRendererRunAll:
 
 
 class TestCodeRendererWorkflow:
-
     def test_render_workflow(self, renderer, sample_pipeline_config):
         result = renderer.render_workflow(sample_pipeline_config)
 
@@ -382,7 +389,6 @@ class TestCodeRendererWorkflow:
 
 
 class TestCodeRendererFeast:
-
     def test_render_feast_config(self, renderer, sample_pipeline_config):
         result = renderer.render_feast_config(sample_pipeline_config)
 
@@ -400,7 +406,6 @@ class TestCodeRendererFeast:
 
 
 class TestTemplatesExist:
-
     def test_all_required_templates_exist(self):
         required_templates = [
             "config.py.j2",
@@ -424,7 +429,6 @@ class TestTemplatesExist:
 
 
 class TestExplicitOpsAndComments:
-
     def test_bronze_template_has_rationale_comments(self, renderer, sample_bronze_config):
         result = renderer.render_bronze("customers", sample_bronze_config)
         assert "# Fill missing ages with 0" in result
@@ -440,15 +444,24 @@ class TestExplicitOpsAndComments:
             GoldLayerConfig,
             SilverLayerConfig,
         )
+
         source = SourceConfig(name="customers", path="data.csv", format="csv", entity_key="id")
         config = PipelineConfig(
-            name="test", target_column="target", sources=[source],
-            bronze={}, output_dir="./out",
-            silver=SilverLayerConfig(derived_columns=[
-                TransformationStep(type=PipelineTransformationType.DERIVED_COLUMN, column="ratio_col",
-                                 parameters={"action": "ratio", "numerator": "a", "denominator": "b"},
-                                 rationale="Revenue efficiency"),
-            ]),
+            name="test",
+            target_column="target",
+            sources=[source],
+            bronze={},
+            output_dir="./out",
+            silver=SilverLayerConfig(
+                derived_columns=[
+                    TransformationStep(
+                        type=PipelineTransformationType.DERIVED_COLUMN,
+                        column="ratio_col",
+                        parameters={"action": "ratio", "numerator": "a", "denominator": "b"},
+                        rationale="Revenue efficiency",
+                    ),
+                ]
+            ),
             gold=GoldLayerConfig(),
         )
         result = renderer.render_silver(config)
@@ -478,7 +491,9 @@ class TestExplicitOpsAndComments:
             assert "_executor.apply_all" not in code
             assert "TransformExecutor" not in code
 
-    def test_no_transformation_step_arrays_in_bronze_silver(self, renderer, sample_pipeline_config, sample_bronze_config):
+    def test_no_transformation_step_arrays_in_bronze_silver(
+        self, renderer, sample_pipeline_config, sample_bronze_config
+    ):
         bronze = renderer.render_bronze("customers", sample_bronze_config)
         silver = renderer.render_silver(sample_pipeline_config)
         for code in [bronze, silver]:
@@ -488,15 +503,23 @@ class TestExplicitOpsAndComments:
 
 
 class TestLifecycleOrdering:
-
     def test_landing_has_no_lifecycle_features(self, renderer):
         from customer_retention.generators.pipeline_generator.models import LandingLayerConfig
-        source = SourceConfig(name="events", path="events.parquet", format="parquet",
-                            entity_key="customer_id", time_column="event_date", is_event_level=True)
+
+        source = SourceConfig(
+            name="events",
+            path="events.parquet",
+            format="parquet",
+            entity_key="customer_id",
+            time_column="event_date",
+            is_event_level=True,
+        )
         landing_config = LandingLayerConfig(
-            source=source, raw_source_path="events.parquet",
+            source=source,
+            raw_source_path="events.parquet",
             raw_source_format="parquet",
-            entity_column="customer_id", time_column="event_date",
+            entity_column="customer_id",
+            time_column="event_date",
             target_column="churn",
         )
         result = renderer.render_landing("events", landing_config)
@@ -508,15 +531,26 @@ class TestLifecycleOrdering:
 
     def test_bronze_event_source_has_lifecycle_enrichment(self, renderer):
         from customer_retention.generators.pipeline_generator.models import LifecycleConfig
-        source = SourceConfig(name="events", path="events.parquet", format="parquet",
-                            entity_key="customer_id", time_column="event_date", is_event_level=True)
+
+        source = SourceConfig(
+            name="events",
+            path="events.parquet",
+            format="parquet",
+            entity_key="customer_id",
+            time_column="event_date",
+            is_event_level=True,
+        )
         bronze_config = BronzeLayerConfig(
-            source=source, transformations=[],
+            source=source,
+            transformations=[],
             lifecycle=LifecycleConfig(
-                include_lifecycle_quadrant=True, include_cyclical_features=True,
-                include_recency_bucket=True, momentum_pairs=[],
+                include_lifecycle_quadrant=True,
+                include_cyclical_features=True,
+                include_recency_bucket=True,
+                momentum_pairs=[],
             ),
-            entity_column="customer_id", time_column="event_date",
+            entity_column="customer_id",
+            time_column="event_date",
         )
         result = renderer.render_bronze("events", bronze_config)
         assert "add_recency_tenure" in result
@@ -530,19 +564,33 @@ class TestLifecycleOrdering:
 
     def test_bronze_lifecycle_runs_after_cleaning(self, renderer):
         from customer_retention.generators.pipeline_generator.models import LifecycleConfig
-        source = SourceConfig(name="events", path="events.parquet", format="parquet",
-                            entity_key="customer_id", time_column="event_date", is_event_level=True)
+
+        source = SourceConfig(
+            name="events",
+            path="events.parquet",
+            format="parquet",
+            entity_key="customer_id",
+            time_column="event_date",
+            is_event_level=True,
+        )
         bronze_config = BronzeLayerConfig(
             source=source,
             transformations=[
-                TransformationStep(type=PipelineTransformationType.IMPUTE_NULL,
-                                 column="amount", parameters={"value": 0}, rationale="Fill nulls"),
+                TransformationStep(
+                    type=PipelineTransformationType.IMPUTE_NULL,
+                    column="amount",
+                    parameters={"value": 0},
+                    rationale="Fill nulls",
+                ),
             ],
             lifecycle=LifecycleConfig(
-                include_lifecycle_quadrant=True, include_cyclical_features=False,
-                include_recency_bucket=True, momentum_pairs=[],
+                include_lifecycle_quadrant=True,
+                include_cyclical_features=False,
+                include_recency_bucket=True,
+                momentum_pairs=[],
             ),
-            entity_column="customer_id", time_column="event_date",
+            entity_column="customer_id",
+            time_column="event_date",
         )
         result = renderer.render_bronze("events", bronze_config)
         transform_pos = result.index("apply_transformations(df)")
@@ -551,15 +599,26 @@ class TestLifecycleOrdering:
 
     def test_bronze_lifecycle_loads_raw_events(self, renderer):
         from customer_retention.generators.pipeline_generator.models import LifecycleConfig
-        source = SourceConfig(name="events", path="events.parquet", format="parquet",
-                            entity_key="customer_id", time_column="event_date", is_event_level=True)
+
+        source = SourceConfig(
+            name="events",
+            path="events.parquet",
+            format="parquet",
+            entity_key="customer_id",
+            time_column="event_date",
+            is_event_level=True,
+        )
         bronze_config = BronzeLayerConfig(
-            source=source, transformations=[],
+            source=source,
+            transformations=[],
             lifecycle=LifecycleConfig(
-                include_lifecycle_quadrant=True, include_cyclical_features=False,
-                include_recency_bucket=True, momentum_pairs=[],
+                include_lifecycle_quadrant=True,
+                include_cyclical_features=False,
+                include_recency_bucket=True,
+                momentum_pairs=[],
             ),
-            entity_column="customer_id", time_column="event_date",
+            entity_column="customer_id",
+            time_column="event_date",
         )
         result = renderer.render_bronze("events", bronze_config)
         assert "RAW_SOURCES" in result
@@ -567,16 +626,24 @@ class TestLifecycleOrdering:
 
 
 class TestBronzeEventPreShapingTransformations:
-
     def test_bronze_event_renders_pre_shaping_transformations(self, renderer):
         from customer_retention.generators.pipeline_generator.models import (
             AggregationWindowConfig,
             BronzeEventConfig,
         )
-        source = SourceConfig(name="events", path="events.parquet", format="parquet",
-                            entity_key="customer_id", time_column="event_date", is_event_level=True)
+
+        source = SourceConfig(
+            name="events",
+            path="events.parquet",
+            format="parquet",
+            entity_key="customer_id",
+            time_column="event_date",
+            is_event_level=True,
+        )
         bronze_event_config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="event_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="event_date",
             deduplicate=True,
             pre_shaping=[
                 TransformationStep(
@@ -600,10 +667,19 @@ class TestBronzeEventPreShapingTransformations:
             AggregationWindowConfig,
             BronzeEventConfig,
         )
-        source = SourceConfig(name="events", path="events.parquet", format="parquet",
-                            entity_key="customer_id", time_column="event_date", is_event_level=True)
+
+        source = SourceConfig(
+            name="events",
+            path="events.parquet",
+            format="parquet",
+            entity_key="customer_id",
+            time_column="event_date",
+            is_event_level=True,
+        )
         bronze_event_config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="event_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="event_date",
             deduplicate=True,
             pre_shaping=[],
             aggregation=AggregationWindowConfig(windows=["7d", "30d"], value_columns=["amount"], agg_funcs=["sum"]),
@@ -619,10 +695,19 @@ class TestBronzeEventPreShapingTransformations:
             AggregationWindowConfig,
             BronzeEventConfig,
         )
-        source = SourceConfig(name="events", path="events.parquet", format="parquet",
-                            entity_key="customer_id", time_column="event_date", is_event_level=True)
+
+        source = SourceConfig(
+            name="events",
+            path="events.parquet",
+            format="parquet",
+            entity_key="customer_id",
+            time_column="event_date",
+            is_event_level=True,
+        )
         bronze_event_config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="event_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="event_date",
             deduplicate=True,
             pre_shaping=[
                 TransformationStep(
@@ -645,7 +730,6 @@ class TestBronzeEventPreShapingTransformations:
 
 
 class TestRendererEdgeCases:
-
     def test_render_config_without_feast(self, renderer, minimal_pipeline_config):
         result = renderer.render_config(minimal_pipeline_config)
 
@@ -664,22 +748,29 @@ def _step(t, col="x", params=None, rationale="test"):
 
 
 class TestActionDescription:
-
     def test_impute_null(self):
-        assert action_description(_step(PipelineTransformationType.IMPUTE_NULL, "age", {"value": 0})) == "impute nulls in age with 0"
+        assert (
+            action_description(_step(PipelineTransformationType.IMPUTE_NULL, "age", {"value": 0}))
+            == "impute nulls in age with 0"
+        )
 
     def test_cap_outlier(self):
         result = action_description(_step(PipelineTransformationType.CAP_OUTLIER, "income", {"lower": 0, "upper": 500}))
         assert result == "cap outliers in income to [0, 500]"
 
     def test_type_cast(self):
-        assert action_description(_step(PipelineTransformationType.TYPE_CAST, "zip", {"dtype": "str"})) == "cast zip to str"
+        assert (
+            action_description(_step(PipelineTransformationType.TYPE_CAST, "zip", {"dtype": "str"}))
+            == "cast zip to str"
+        )
 
     def test_drop_column(self):
         assert action_description(_step(PipelineTransformationType.DROP_COLUMN, "tmp")) == "drop column tmp"
 
     def test_winsorize(self):
-        result = action_description(_step(PipelineTransformationType.WINSORIZE, "v", {"lower_bound": 1, "upper_bound": 99}))
+        result = action_description(
+            _step(PipelineTransformationType.WINSORIZE, "v", {"lower_bound": 1, "upper_bound": 99})
+        )
         assert result == "winsorize v to [1, 99]"
 
     def test_segment_aware_cap(self):
@@ -693,45 +784,74 @@ class TestActionDescription:
         assert action_description(_step(PipelineTransformationType.SQRT_TRANSFORM, "rev")) == "sqrt-transform rev"
 
     def test_zero_inflation(self):
-        assert action_description(_step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "cnt")) == "handle zero-inflation in cnt"
+        assert (
+            action_description(_step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "cnt"))
+            == "handle zero-inflation in cnt"
+        )
 
     def test_cap_then_log(self):
-        assert action_description(_step(PipelineTransformationType.CAP_THEN_LOG, "rev")) == "cap at p99 then log-transform rev"
+        assert (
+            action_description(_step(PipelineTransformationType.CAP_THEN_LOG, "rev"))
+            == "cap at p99 then log-transform rev"
+        )
 
     def test_feature_select(self):
-        assert action_description(_step(PipelineTransformationType.FEATURE_SELECT, "junk")) == "drop junk (feature selection)"
+        assert (
+            action_description(_step(PipelineTransformationType.FEATURE_SELECT, "junk"))
+            == "drop junk (feature selection)"
+        )
 
     def test_yeo_johnson(self):
         assert action_description(_step(PipelineTransformationType.YEO_JOHNSON, "v")) == "yeo-johnson transform v"
 
     def test_encode_one_hot(self):
-        assert action_description(_step(PipelineTransformationType.ENCODE, "region", {"method": "one_hot"})) == "one-hot encode region"
+        assert (
+            action_description(_step(PipelineTransformationType.ENCODE, "region", {"method": "one_hot"}))
+            == "one-hot encode region"
+        )
 
     def test_encode_label(self):
-        assert action_description(_step(PipelineTransformationType.ENCODE, "tier", {"method": "label"})) == "label-encode tier"
+        assert (
+            action_description(_step(PipelineTransformationType.ENCODE, "tier", {"method": "label"}))
+            == "label-encode tier"
+        )
 
     def test_scale_standard(self):
-        assert action_description(_step(PipelineTransformationType.SCALE, "v", {"method": "standard"})) == "standard-scale v"
+        assert (
+            action_description(_step(PipelineTransformationType.SCALE, "v", {"method": "standard"}))
+            == "standard-scale v"
+        )
 
     def test_scale_minmax(self):
-        assert action_description(_step(PipelineTransformationType.SCALE, "v", {"method": "minmax"})) == "min-max scale v"
+        assert (
+            action_description(_step(PipelineTransformationType.SCALE, "v", {"method": "minmax"})) == "min-max scale v"
+        )
 
     def test_derived_ratio(self):
-        result = action_description(_step(PipelineTransformationType.DERIVED_COLUMN, "r", {"action": "ratio", "numerator": "a", "denominator": "b"}))
+        result = action_description(
+            _step(
+                PipelineTransformationType.DERIVED_COLUMN,
+                "r",
+                {"action": "ratio", "numerator": "a", "denominator": "b"},
+            )
+        )
         assert result == "create r = a / b"
 
     def test_derived_interaction(self):
-        result = action_description(_step(PipelineTransformationType.DERIVED_COLUMN, "ab", {"action": "interaction", "features": ["a", "b"]}))
+        result = action_description(
+            _step(PipelineTransformationType.DERIVED_COLUMN, "ab", {"action": "interaction", "features": ["a", "b"]})
+        )
         assert result == "create ab = a * b"
 
     def test_derived_composite_uses_join(self):
-        result = action_description(_step(PipelineTransformationType.DERIVED_COLUMN, "avg", {"action": "composite", "columns": ["a", "b", "c"]}))
+        result = action_description(
+            _step(PipelineTransformationType.DERIVED_COLUMN, "avg", {"action": "composite", "columns": ["a", "b", "c"]})
+        )
         assert result == "create avg = mean(a, b, c)"
         assert "mean(['a'" not in result
 
 
 class TestRenderStepCall:
-
     def test_impute_null(self):
         result = render_step_call(_step(PipelineTransformationType.IMPUTE_NULL, "age", {"value": 0}))
         assert result == "apply_impute_null(df, 'age', value='0')"
@@ -748,7 +868,9 @@ class TestRenderStepCall:
         assert render_step_call(_step(PipelineTransformationType.DROP_COLUMN, "tmp")) == "apply_drop_column(df, 'tmp')"
 
     def test_winsorize(self):
-        result = render_step_call(_step(PipelineTransformationType.WINSORIZE, "v", {"lower_bound": 1, "upper_bound": 99}))
+        result = render_step_call(
+            _step(PipelineTransformationType.WINSORIZE, "v", {"lower_bound": 1, "upper_bound": 99})
+        )
         assert result == "apply_winsorize(df, 'v', lower_bound=1, upper_bound=99)"
 
     def test_segment_aware_cap(self):
@@ -759,16 +881,23 @@ class TestRenderStepCall:
         assert render_step_call(_step(PipelineTransformationType.LOG_TRANSFORM, "v")) == "apply_log_transform(df, 'v')"
 
     def test_sqrt_transform(self):
-        assert render_step_call(_step(PipelineTransformationType.SQRT_TRANSFORM, "v")) == "apply_sqrt_transform(df, 'v')"
+        assert (
+            render_step_call(_step(PipelineTransformationType.SQRT_TRANSFORM, "v")) == "apply_sqrt_transform(df, 'v')"
+        )
 
     def test_zero_inflation(self):
-        assert render_step_call(_step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "v")) == "apply_zero_inflation_handling(df, 'v')"
+        assert (
+            render_step_call(_step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "v"))
+            == "apply_zero_inflation_handling(df, 'v')"
+        )
 
     def test_cap_then_log(self):
         assert render_step_call(_step(PipelineTransformationType.CAP_THEN_LOG, "v")) == "apply_cap_then_log(df, 'v')"
 
     def test_feature_select(self):
-        assert render_step_call(_step(PipelineTransformationType.FEATURE_SELECT, "v")) == "apply_feature_select(df, 'v')"
+        assert (
+            render_step_call(_step(PipelineTransformationType.FEATURE_SELECT, "v")) == "apply_feature_select(df, 'v')"
+        )
 
     def test_yeo_johnson_fit(self):
         result = render_step_call(_step(PipelineTransformationType.YEO_JOHNSON, "v"), fit_mode=True)
@@ -799,17 +928,27 @@ class TestRenderStepCall:
         assert result == "FittedScaler('minmax').transform(df, 'v', _store)"
 
     def test_derived_ratio(self):
-        result = render_step_call(_step(PipelineTransformationType.DERIVED_COLUMN, "r", {"action": "ratio", "numerator": "a", "denominator": "b"}))
+        result = render_step_call(
+            _step(
+                PipelineTransformationType.DERIVED_COLUMN,
+                "r",
+                {"action": "ratio", "numerator": "a", "denominator": "b"},
+            )
+        )
         assert "apply_derived_ratio" in result
         assert "numerator='a'" in result
 
     def test_derived_interaction(self):
-        result = render_step_call(_step(PipelineTransformationType.DERIVED_COLUMN, "ab", {"action": "interaction", "features": ["a", "b"]}))
+        result = render_step_call(
+            _step(PipelineTransformationType.DERIVED_COLUMN, "ab", {"action": "interaction", "features": ["a", "b"]})
+        )
         assert "apply_derived_interaction" in result
         assert "col_a='a'" in result
 
     def test_derived_composite(self):
-        result = render_step_call(_step(PipelineTransformationType.DERIVED_COLUMN, "avg", {"action": "composite", "columns": ["a", "b"]}))
+        result = render_step_call(
+            _step(PipelineTransformationType.DERIVED_COLUMN, "avg", {"action": "composite", "columns": ["a", "b"]})
+        )
         assert "apply_derived_composite" in result
 
     def test_unknown_type_raises_value_error(self):
@@ -819,7 +958,6 @@ class TestRenderStepCall:
 
 
 class TestCollectImports:
-
     def test_stateless_ops(self):
         steps = [
             _step(PipelineTransformationType.IMPUTE_NULL, "a"),
@@ -866,7 +1004,6 @@ class TestCollectImports:
 
 
 class TestGroupSteps:
-
     def test_groups_by_type(self):
         steps = [
             _step(PipelineTransformationType.DROP_COLUMN, "a"),
@@ -891,12 +1028,17 @@ class TestGroupSteps:
 
     def test_derived_column_subgroups_by_action(self):
         steps = [
-            _step(PipelineTransformationType.DERIVED_COLUMN, "r1",
-                  {"action": "ratio", "numerator": "a", "denominator": "b"}),
-            _step(PipelineTransformationType.DERIVED_COLUMN, "i1",
-                  {"action": "interaction", "features": ["a", "b"]}),
-            _step(PipelineTransformationType.DERIVED_COLUMN, "r2",
-                  {"action": "ratio", "numerator": "c", "denominator": "d"}),
+            _step(
+                PipelineTransformationType.DERIVED_COLUMN,
+                "r1",
+                {"action": "ratio", "numerator": "a", "denominator": "b"},
+            ),
+            _step(PipelineTransformationType.DERIVED_COLUMN, "i1", {"action": "interaction", "features": ["a", "b"]}),
+            _step(
+                PipelineTransformationType.DERIVED_COLUMN,
+                "r2",
+                {"action": "ratio", "numerator": "c", "denominator": "d"},
+            ),
         ]
         groups = group_steps(steps)
         names = [name for name, _ in groups]
@@ -920,7 +1062,6 @@ class TestGroupSteps:
 
 
 class TestGroupedTemplateOutput:
-
     @pytest.fixture
     def renderer(self):
         return CodeRenderer()
@@ -928,16 +1069,22 @@ class TestGroupedTemplateOutput:
     @pytest.fixture
     def _source(self):
         return SourceConfig(
-            name="customers", path="data.csv", format="csv", entity_key="id",
+            name="customers",
+            path="data.csv",
+            format="csv",
+            entity_key="id",
         )
 
     def test_bronze_groups_by_operation_type(self, renderer, _source):
-        bronze = BronzeLayerConfig(source=_source, transformations=[
-            _step(PipelineTransformationType.DROP_COLUMN, "junk"),
-            _step(PipelineTransformationType.IMPUTE_NULL, "age", {"value": 0}),
-            _step(PipelineTransformationType.WINSORIZE, "income", {"lower_bound": 0, "upper_bound": 1e6}),
-            _step(PipelineTransformationType.DROP_COLUMN, "tmp"),
-        ])
+        bronze = BronzeLayerConfig(
+            source=_source,
+            transformations=[
+                _step(PipelineTransformationType.DROP_COLUMN, "junk"),
+                _step(PipelineTransformationType.IMPUTE_NULL, "age", {"value": 0}),
+                _step(PipelineTransformationType.WINSORIZE, "income", {"lower_bound": 0, "upper_bound": 1e6}),
+                _step(PipelineTransformationType.DROP_COLUMN, "tmp"),
+            ],
+        )
         result = renderer.render_bronze("customers", bronze)
         assert "def drop_unusable_columns(df: pd.DataFrame)" in result
         assert "def impute_remaining_nulls(df: pd.DataFrame)" in result
@@ -959,15 +1106,22 @@ class TestGroupedTemplateOutput:
         assert any("winsorize_outliers" in c for c in called)
 
     def test_gold_groups_transformations(self, renderer, _source):
-        gold = GoldLayerConfig(transformations=[
-            _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "cnt"),
-            _step(PipelineTransformationType.LOG_TRANSFORM, "rev"),
-            _step(PipelineTransformationType.SQRT_TRANSFORM, "qty"),
-            _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "amt"),
-        ])
+        gold = GoldLayerConfig(
+            transformations=[
+                _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "cnt"),
+                _step(PipelineTransformationType.LOG_TRANSFORM, "rev"),
+                _step(PipelineTransformationType.SQRT_TRANSFORM, "qty"),
+                _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "amt"),
+            ]
+        )
         config = PipelineConfig(
-            name="test", target_column="target", sources=[_source],
-            bronze={}, silver=SilverLayerConfig(), gold=gold, output_dir="./out",
+            name="test",
+            target_column="target",
+            sources=[_source],
+            bronze={},
+            silver=SilverLayerConfig(),
+            gold=gold,
+            output_dir="./out",
         )
         result = renderer.render_gold(config)
         assert "def handle_zero_inflation(df: pd.DataFrame)" in result
@@ -976,15 +1130,26 @@ class TestGroupedTemplateOutput:
         assert "def apply_gold_transformations" in result
 
     def test_silver_groups_derived_columns(self, renderer, _source):
-        silver = SilverLayerConfig(derived_columns=[
-            _step(PipelineTransformationType.DERIVED_COLUMN, "r1",
-                  {"action": "ratio", "numerator": "a", "denominator": "b"}),
-            _step(PipelineTransformationType.DERIVED_COLUMN, "i1",
-                  {"action": "interaction", "features": ["x", "y"]}),
-        ])
+        silver = SilverLayerConfig(
+            derived_columns=[
+                _step(
+                    PipelineTransformationType.DERIVED_COLUMN,
+                    "r1",
+                    {"action": "ratio", "numerator": "a", "denominator": "b"},
+                ),
+                _step(
+                    PipelineTransformationType.DERIVED_COLUMN, "i1", {"action": "interaction", "features": ["x", "y"]}
+                ),
+            ]
+        )
         config = PipelineConfig(
-            name="test", target_column="target", sources=[_source],
-            bronze={}, silver=silver, gold=GoldLayerConfig(), output_dir="./out",
+            name="test",
+            target_column="target",
+            sources=[_source],
+            bronze={},
+            silver=silver,
+            gold=GoldLayerConfig(),
+            output_dir="./out",
         )
         result = renderer.render_silver(config)
         assert "def create_ratio_features(df: pd.DataFrame)" in result
@@ -992,10 +1157,13 @@ class TestGroupedTemplateOutput:
         assert "def create_derived_columns" in result
 
     def test_single_type_still_creates_named_function(self, renderer, _source):
-        bronze = BronzeLayerConfig(source=_source, transformations=[
-            _step(PipelineTransformationType.IMPUTE_NULL, "a", {"value": 0}),
-            _step(PipelineTransformationType.IMPUTE_NULL, "b", {"value": 0}),
-        ])
+        bronze = BronzeLayerConfig(
+            source=_source,
+            transformations=[
+                _step(PipelineTransformationType.IMPUTE_NULL, "a", {"value": 0}),
+                _step(PipelineTransformationType.IMPUTE_NULL, "b", {"value": 0}),
+            ],
+        )
         result = renderer.render_bronze("customers", bronze)
         assert "def impute_remaining_nulls(df: pd.DataFrame)" in result
 
@@ -1008,41 +1176,58 @@ class TestGroupedTemplateOutput:
         assert "def impute_remaining_nulls" not in result
 
     def test_generated_bronze_is_valid_python(self, renderer, _source):
-        bronze = BronzeLayerConfig(source=_source, transformations=[
-            _step(PipelineTransformationType.DROP_COLUMN, "junk"),
-            _step(PipelineTransformationType.IMPUTE_NULL, "age", {"value": 0}),
-            _step(PipelineTransformationType.WINSORIZE, "income", {"lower_bound": 0, "upper_bound": 1e6}),
-            _step(PipelineTransformationType.SEGMENT_AWARE_CAP, "rev", {"n_segments": 3}),
-        ])
+        bronze = BronzeLayerConfig(
+            source=_source,
+            transformations=[
+                _step(PipelineTransformationType.DROP_COLUMN, "junk"),
+                _step(PipelineTransformationType.IMPUTE_NULL, "age", {"value": 0}),
+                _step(PipelineTransformationType.WINSORIZE, "income", {"lower_bound": 0, "upper_bound": 1e6}),
+                _step(PipelineTransformationType.SEGMENT_AWARE_CAP, "rev", {"n_segments": 3}),
+            ],
+        )
         result = renderer.render_bronze("customers", bronze)
         ast.parse(result)
 
     def test_generated_gold_is_valid_python(self, renderer, _source):
-        gold = GoldLayerConfig(transformations=[
-            _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "cnt"),
-            _step(PipelineTransformationType.LOG_TRANSFORM, "rev"),
-            _step(PipelineTransformationType.YEO_JOHNSON, "val"),
-        ])
+        gold = GoldLayerConfig(
+            transformations=[
+                _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "cnt"),
+                _step(PipelineTransformationType.LOG_TRANSFORM, "rev"),
+                _step(PipelineTransformationType.YEO_JOHNSON, "val"),
+            ]
+        )
         config = PipelineConfig(
-            name="test", target_column="target", sources=[_source],
-            bronze={}, silver=SilverLayerConfig(), gold=gold, output_dir="./out",
+            name="test",
+            target_column="target",
+            sources=[_source],
+            bronze={},
+            silver=SilverLayerConfig(),
+            gold=gold,
+            output_dir="./out",
         )
         result = renderer.render_gold(config)
         ast.parse(result)
 
     def test_generated_bronze_with_provenance_is_valid_python(self, renderer, _source):
-        bronze = BronzeLayerConfig(source=_source, transformations=[
-            TransformationStep(
-                type=PipelineTransformationType.CAP_OUTLIER, column="income",
-                parameters={"lower": 0, "upper": 1000000}, rationale="Cap outliers",
-                source_notebook="03_quality_assessment",
-            ),
-            TransformationStep(
-                type=PipelineTransformationType.IMPUTE_NULL, column="age",
-                parameters={"value": 0}, rationale="Fill nulls",
-                source_notebook="03_quality_assessment",
-            ),
-        ])
+        bronze = BronzeLayerConfig(
+            source=_source,
+            transformations=[
+                TransformationStep(
+                    type=PipelineTransformationType.CAP_OUTLIER,
+                    column="income",
+                    parameters={"lower": 0, "upper": 1000000},
+                    rationale="Cap outliers",
+                    source_notebook="02_source_integrity",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.IMPUTE_NULL,
+                    column="age",
+                    parameters={"value": 0},
+                    rationale="Fill nulls",
+                    source_notebook="02_source_integrity",
+                ),
+            ],
+        )
         result = renderer.render_bronze("customers", bronze)
         ast.parse(result)
 
@@ -1050,51 +1235,65 @@ class TestGroupedTemplateOutput:
         gold = GoldLayerConfig(
             transformations=[
                 TransformationStep(
-                    type=PipelineTransformationType.LOG_TRANSFORM, column="rev",
-                    parameters={}, rationale="Log transform revenue",
-                    source_notebook="04_relationship_analysis",
+                    type=PipelineTransformationType.LOG_TRANSFORM,
+                    column="rev",
+                    parameters={},
+                    rationale="Log transform revenue",
+                    source_notebook="05_relationship_analysis",
                 ),
             ],
             encodings=[
                 TransformationStep(
-                    type=PipelineTransformationType.ENCODE, column="region",
-                    parameters={"method": "one_hot"}, rationale="Encode region",
-                    source_notebook="04_relationship_analysis",
+                    type=PipelineTransformationType.ENCODE,
+                    column="region",
+                    parameters={"method": "one_hot"},
+                    rationale="Encode region",
+                    source_notebook="05_relationship_analysis",
                 ),
             ],
             scalings=[
                 TransformationStep(
-                    type=PipelineTransformationType.SCALE, column="income",
-                    parameters={"method": "standard"}, rationale="Scale income",
-                    source_notebook="04_relationship_analysis",
+                    type=PipelineTransformationType.SCALE,
+                    column="income",
+                    parameters={"method": "standard"},
+                    rationale="Scale income",
+                    source_notebook="05_relationship_analysis",
                 ),
             ],
         )
         config = PipelineConfig(
-            name="test", target_column="target", sources=[_source],
-            bronze={}, silver=SilverLayerConfig(), gold=gold, output_dir="./out",
+            name="test",
+            target_column="target",
+            sources=[_source],
+            bronze={},
+            silver=SilverLayerConfig(),
+            gold=gold,
+            output_dir="./out",
         )
         result = renderer.render_gold(config)
         ast.parse(result)
 
 
 class TestProvenanceDocstring:
-
     def test_with_notebook_and_section(self):
         step = TransformationStep(
-            type=PipelineTransformationType.CAP_OUTLIER, column="amount",
-            parameters={}, rationale="Cap outliers",
-            source_notebook="03_quality_assessment",
+            type=PipelineTransformationType.CAP_OUTLIER,
+            column="amount",
+            parameters={},
+            rationale="Cap outliers",
+            source_notebook="02_source_integrity",
         )
         result = provenance_docstring(step)
-        assert "Quality Assessment" in result
+        assert "Source Integrity" in result
         assert "Global Outlier Detection" in result
-        assert "docs/03_quality_assessment.html#3.8-Global-Outlier-Detection" in result
+        assert "docs/02_source_integrity.html#2.8-Global-Outlier-Detection" in result
 
     def test_with_notebook_no_mapped_section(self):
         step = TransformationStep(
-            type=PipelineTransformationType.AGGREGATE, column="x",
-            parameters={}, rationale="test",
+            type=PipelineTransformationType.AGGREGATE,
+            column="x",
+            parameters={},
+            rationale="test",
             source_notebook="05_custom",
         )
         result = provenance_docstring(step)
@@ -1104,18 +1303,22 @@ class TestProvenanceDocstring:
 
     def test_without_notebook_uses_default(self):
         step = TransformationStep(
-            type=PipelineTransformationType.CAP_OUTLIER, column="amount",
-            parameters={}, rationale="Cap outliers",
+            type=PipelineTransformationType.CAP_OUTLIER,
+            column="amount",
+            parameters={},
+            rationale="Cap outliers",
         )
         result = provenance_docstring(step)
-        assert "Quality Assessment" in result
+        assert "Source Integrity" in result
         assert "Global Outlier Detection" in result
-        assert "docs/03_quality_assessment.html#3.8-Global-Outlier-Detection" in result
+        assert "docs/02_source_integrity.html#2.8-Global-Outlier-Detection" in result
 
     def test_no_provenance_for_unmapped_type(self):
         step = TransformationStep(
-            type=PipelineTransformationType.AGGREGATE, column="x",
-            parameters={}, rationale="test",
+            type=PipelineTransformationType.AGGREGATE,
+            column="x",
+            parameters={},
+            rationale="test",
         )
         result = provenance_docstring(step)
         assert result == ""
@@ -1123,23 +1326,29 @@ class TestProvenanceDocstring:
     def test_docstring_block_deduplicates(self):
         steps = [
             TransformationStep(
-                type=PipelineTransformationType.DROP_COLUMN, column="a",
-                parameters={}, rationale="drop a",
+                type=PipelineTransformationType.DROP_COLUMN,
+                column="a",
+                parameters={},
+                rationale="drop a",
             ),
             TransformationStep(
-                type=PipelineTransformationType.DROP_COLUMN, column="b",
-                parameters={}, rationale="drop b",
+                type=PipelineTransformationType.DROP_COLUMN,
+                column="b",
+                parameters={},
+                rationale="drop b",
             ),
         ]
         result = provenance_docstring_block(steps)
         assert '"""' in result
-        assert result.count("Quality Assessment") == 1
+        assert result.count("Source Integrity") == 1
 
     def test_docstring_block_empty_for_unmapped(self):
         steps = [
             TransformationStep(
-                type=PipelineTransformationType.AGGREGATE, column="x",
-                parameters={}, rationale="test",
+                type=PipelineTransformationType.AGGREGATE,
+                column="x",
+                parameters={},
+                rationale="test",
             ),
         ]
         result = provenance_docstring_block(steps)
@@ -1149,28 +1358,31 @@ class TestProvenanceDocstring:
         renderer = CodeRenderer()
         renderer.set_docs_base("/tmp/my_project/experiments")
         step = TransformationStep(
-            type=PipelineTransformationType.CAP_OUTLIER, column="x",
-            parameters={}, rationale="test",
+            type=PipelineTransformationType.CAP_OUTLIER,
+            column="x",
+            parameters={},
+            rationale="test",
         )
         result = provenance_docstring(step)
-        assert result.startswith("Quality Assessment Global Outlier Detection")
+        assert result.startswith("Source Integrity Global Outlier Detection")
         assert "file://" in result
-        assert "/docs/03_quality_assessment.html#3.8-Global-Outlier-Detection" in result
+        assert "/docs/02_source_integrity.html#2.8-Global-Outlier-Detection" in result
         renderer_mod._docs_base = "docs"
 
     def test_set_docs_base_none_uses_relative(self):
         renderer = CodeRenderer()
         renderer.set_docs_base(None)
         step = TransformationStep(
-            type=PipelineTransformationType.CAP_OUTLIER, column="x",
-            parameters={}, rationale="test",
+            type=PipelineTransformationType.CAP_OUTLIER,
+            column="x",
+            parameters={},
+            rationale="test",
         )
         result = provenance_docstring(step)
-        assert "docs/03_quality_assessment.html" in result
+        assert "docs/02_source_integrity.html" in result
 
 
 class TestProvenanceInTemplates:
-
     @pytest.fixture
     def renderer(self):
         return CodeRenderer()
@@ -1178,63 +1390,89 @@ class TestProvenanceInTemplates:
     @pytest.fixture
     def _source(self):
         return SourceConfig(
-            name="customers", path="data.csv", format="csv", entity_key="id",
+            name="customers",
+            path="data.csv",
+            format="csv",
+            entity_key="id",
         )
 
     def test_bronze_template_has_provenance_docstring(self, renderer, _source):
-        bronze = BronzeLayerConfig(source=_source, transformations=[
-            TransformationStep(
-                type=PipelineTransformationType.CAP_OUTLIER, column="income",
-                parameters={"lower": 0, "upper": 1000000}, rationale="Cap outliers",
-                source_notebook="03_quality_assessment",
-            ),
-        ])
+        bronze = BronzeLayerConfig(
+            source=_source,
+            transformations=[
+                TransformationStep(
+                    type=PipelineTransformationType.CAP_OUTLIER,
+                    column="income",
+                    parameters={"lower": 0, "upper": 1000000},
+                    rationale="Cap outliers",
+                    source_notebook="02_source_integrity",
+                ),
+            ],
+        )
         result = renderer.render_bronze("customers", bronze)
         assert '"""' in result
-        assert "Quality Assessment" in result
+        assert "Source Integrity" in result
         assert "Global Outlier Detection" in result
-        assert "docs/03_quality_assessment.html#3.8-Global-Outlier-Detection" in result
+        assert "docs/02_source_integrity.html#2.8-Global-Outlier-Detection" in result
 
     def test_bronze_template_omits_provenance_when_no_info(self, renderer, _source):
-        bronze = BronzeLayerConfig(source=_source, transformations=[
-            TransformationStep(
-                type=PipelineTransformationType.AGGREGATE, column="x",
-                parameters={}, rationale="test",
-            ),
-        ])
+        bronze = BronzeLayerConfig(
+            source=_source,
+            transformations=[
+                TransformationStep(
+                    type=PipelineTransformationType.AGGREGATE,
+                    column="x",
+                    parameters={},
+                    rationale="test",
+                ),
+            ],
+        )
         step = bronze.transformations[0]
         assert provenance_docstring(step) == ""
 
     def test_gold_encodings_have_provenance(self, renderer, _source):
-        gold = GoldLayerConfig(encodings=[
-            TransformationStep(
-                type=PipelineTransformationType.ENCODE, column="region",
-                parameters={"method": "one_hot"}, rationale="Encode region",
-                source_notebook="04_relationship_analysis",
-            ),
-        ])
+        gold = GoldLayerConfig(
+            encodings=[
+                TransformationStep(
+                    type=PipelineTransformationType.ENCODE,
+                    column="region",
+                    parameters={"method": "one_hot"},
+                    rationale="Encode region",
+                    source_notebook="05_relationship_analysis",
+                ),
+            ]
+        )
         config = PipelineConfig(
-            name="test", target_column="target", sources=[_source],
-            bronze={}, silver=SilverLayerConfig(), gold=gold, output_dir="./out",
+            name="test",
+            target_column="target",
+            sources=[_source],
+            bronze={},
+            silver=SilverLayerConfig(),
+            gold=gold,
+            output_dir="./out",
         )
         result = renderer.render_gold(config)
         assert '"""' in result
-        assert "docs/04_relationship_analysis.html" in result
+        assert "docs/05_relationship_analysis.html" in result
 
     def test_default_notebook_provenance_in_bronze(self, renderer, _source):
-        bronze = BronzeLayerConfig(source=_source, transformations=[
-            TransformationStep(
-                type=PipelineTransformationType.IMPUTE_NULL, column="age",
-                parameters={"value": 0}, rationale="Fill nulls",
-            ),
-        ])
+        bronze = BronzeLayerConfig(
+            source=_source,
+            transformations=[
+                TransformationStep(
+                    type=PipelineTransformationType.IMPUTE_NULL,
+                    column="age",
+                    parameters={"value": 0},
+                    rationale="Fill nulls",
+                ),
+            ],
+        )
         result = renderer.render_bronze("customers", bronze)
         assert '"""' in result
-        assert "docs/03_quality_assessment.html" in result
+        assert "docs/02_source_integrity.html" in result
 
 
 class TestProvenanceDedup:
-
     @pytest.fixture
     def renderer(self):
         return CodeRenderer()
@@ -1242,87 +1480,125 @@ class TestProvenanceDedup:
     @pytest.fixture
     def _source(self):
         return SourceConfig(
-            name="customers", path="data.csv", format="csv", entity_key="id",
+            name="customers",
+            path="data.csv",
+            format="csv",
+            entity_key="id",
         )
 
     def test_provenance_key_returns_notebook_section(self):
         step = TransformationStep(
-            type=PipelineTransformationType.DROP_COLUMN, column="x",
-            parameters={}, rationale="test",
+            type=PipelineTransformationType.DROP_COLUMN,
+            column="x",
+            parameters={},
+            rationale="test",
         )
-        assert provenance_key(step) == "03_quality_assessment:Missing Value Analysis"
+        assert provenance_key(step) == "02_source_integrity:Missing Value Analysis"
 
     def test_provenance_key_empty_for_unmapped(self):
         step = TransformationStep(
-            type=PipelineTransformationType.AGGREGATE, column="x",
-            parameters={}, rationale="test",
+            type=PipelineTransformationType.AGGREGATE,
+            column="x",
+            parameters={},
+            rationale="test",
         )
         assert provenance_key(step) == ""
 
     def test_provenance_key_uses_override(self):
         step = TransformationStep(
-            type=PipelineTransformationType.DROP_COLUMN, column="x",
-            parameters={}, rationale="test",
+            type=PipelineTransformationType.DROP_COLUMN,
+            column="x",
+            parameters={},
+            rationale="test",
             source_notebook="99_custom",
         )
         result = provenance_key(step)
         assert result == "99_custom:Missing Value Analysis"
 
     def test_bronze_same_source_appears_once(self, renderer, _source):
-        bronze = BronzeLayerConfig(source=_source, transformations=[
-            TransformationStep(
-                type=PipelineTransformationType.DROP_COLUMN, column="a",
-                parameters={}, rationale="57.7% missing",
-            ),
-            TransformationStep(
-                type=PipelineTransformationType.DROP_COLUMN, column="b",
-                parameters={}, rationale="58.0% missing",
-            ),
-            TransformationStep(
-                type=PipelineTransformationType.DROP_COLUMN, column="c",
-                parameters={}, rationale="60.0% missing",
-            ),
-        ])
+        bronze = BronzeLayerConfig(
+            source=_source,
+            transformations=[
+                TransformationStep(
+                    type=PipelineTransformationType.DROP_COLUMN,
+                    column="a",
+                    parameters={},
+                    rationale="57.7% missing",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.DROP_COLUMN,
+                    column="b",
+                    parameters={},
+                    rationale="58.0% missing",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.DROP_COLUMN,
+                    column="c",
+                    parameters={},
+                    rationale="60.0% missing",
+                ),
+            ],
+        )
         result = renderer.render_bronze("customers", bronze)
         assert result.count('"""') == 2  # one opening, one closing
 
     def test_bronze_different_sources_each_get_header(self, renderer, _source):
-        bronze = BronzeLayerConfig(source=_source, transformations=[
-            TransformationStep(
-                type=PipelineTransformationType.DROP_COLUMN, column="a",
-                parameters={}, rationale="drop junk",
-                source_notebook="03_quality_assessment",
-            ),
-            TransformationStep(
-                type=PipelineTransformationType.DROP_COLUMN, column="b",
-                parameters={}, rationale="drop other",
-                source_notebook="99_custom",
-            ),
-        ])
+        bronze = BronzeLayerConfig(
+            source=_source,
+            transformations=[
+                TransformationStep(
+                    type=PipelineTransformationType.DROP_COLUMN,
+                    column="a",
+                    parameters={},
+                    rationale="drop junk",
+                    source_notebook="02_source_integrity",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.DROP_COLUMN,
+                    column="b",
+                    parameters={},
+                    rationale="drop other",
+                    source_notebook="99_custom",
+                ),
+            ],
+        )
         result = renderer.render_bronze("customers", bronze)
-        assert "Quality Assessment" in result
+        assert "Source Integrity" in result
         assert "Custom" in result
-        assert "docs/03_quality_assessment.html" in result
+        assert "docs/02_source_integrity.html" in result
         assert "docs/99_custom.html" in result
 
     def test_gold_encodings_deduped(self, renderer, _source):
-        gold = GoldLayerConfig(encodings=[
-            TransformationStep(
-                type=PipelineTransformationType.ENCODE, column="region",
-                parameters={"method": "one_hot"}, rationale="Encode region",
-            ),
-            TransformationStep(
-                type=PipelineTransformationType.ENCODE, column="tier",
-                parameters={"method": "one_hot"}, rationale="Encode tier",
-            ),
-            TransformationStep(
-                type=PipelineTransformationType.ENCODE, column="status",
-                parameters={"method": "one_hot"}, rationale="Encode status",
-            ),
-        ])
+        gold = GoldLayerConfig(
+            encodings=[
+                TransformationStep(
+                    type=PipelineTransformationType.ENCODE,
+                    column="region",
+                    parameters={"method": "one_hot"},
+                    rationale="Encode region",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.ENCODE,
+                    column="tier",
+                    parameters={"method": "one_hot"},
+                    rationale="Encode tier",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.ENCODE,
+                    column="status",
+                    parameters={"method": "one_hot"},
+                    rationale="Encode status",
+                ),
+            ]
+        )
         config = PipelineConfig(
-            name="test", target_column="target", sources=[_source],
-            bronze={}, silver=SilverLayerConfig(), gold=gold, output_dir="./out",
+            name="test",
+            target_column="target",
+            sources=[_source],
+            bronze={},
+            silver=SilverLayerConfig(),
+            gold=gold,
+            output_dir="./out",
         )
         result = renderer.render_gold(config)
         encodings_start = result.index("def apply_encodings")
@@ -1332,23 +1608,36 @@ class TestProvenanceDedup:
         assert encodings_block.count('"""') == 2
 
     def test_gold_scalings_deduped(self, renderer, _source):
-        gold = GoldLayerConfig(scalings=[
-            TransformationStep(
-                type=PipelineTransformationType.SCALE, column="income",
-                parameters={"method": "standard"}, rationale="Scale income",
-            ),
-            TransformationStep(
-                type=PipelineTransformationType.SCALE, column="age",
-                parameters={"method": "standard"}, rationale="Scale age",
-            ),
-            TransformationStep(
-                type=PipelineTransformationType.SCALE, column="score",
-                parameters={"method": "standard"}, rationale="Scale score",
-            ),
-        ])
+        gold = GoldLayerConfig(
+            scalings=[
+                TransformationStep(
+                    type=PipelineTransformationType.SCALE,
+                    column="income",
+                    parameters={"method": "standard"},
+                    rationale="Scale income",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.SCALE,
+                    column="age",
+                    parameters={"method": "standard"},
+                    rationale="Scale age",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.SCALE,
+                    column="score",
+                    parameters={"method": "standard"},
+                    rationale="Scale score",
+                ),
+            ]
+        )
         config = PipelineConfig(
-            name="test", target_column="target", sources=[_source],
-            bronze={}, silver=SilverLayerConfig(), gold=gold, output_dir="./out",
+            name="test",
+            target_column="target",
+            sources=[_source],
+            bronze={},
+            silver=SilverLayerConfig(),
+            gold=gold,
+            output_dir="./out",
         )
         result = renderer.render_gold(config)
         scaling_start = result.index("def apply_scaling")
@@ -1357,16 +1646,23 @@ class TestProvenanceDedup:
         assert scaling_block.count('"""') == 2
 
     def test_provenance_header_precedes_rationale(self, renderer, _source):
-        bronze = BronzeLayerConfig(source=_source, transformations=[
-            TransformationStep(
-                type=PipelineTransformationType.DROP_COLUMN, column="a",
-                parameters={}, rationale="57.7% missing",
-            ),
-            TransformationStep(
-                type=PipelineTransformationType.DROP_COLUMN, column="b",
-                parameters={}, rationale="58.0% missing",
-            ),
-        ])
+        bronze = BronzeLayerConfig(
+            source=_source,
+            transformations=[
+                TransformationStep(
+                    type=PipelineTransformationType.DROP_COLUMN,
+                    column="a",
+                    parameters={},
+                    rationale="57.7% missing",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.DROP_COLUMN,
+                    column="b",
+                    parameters={},
+                    rationale="58.0% missing",
+                ),
+            ],
+        )
         result = renderer.render_bronze("customers", bronze)
         lines = result.split("\n")
         docstring_idx = next(i for i, line in enumerate(lines) if '"""' in line)
@@ -1374,64 +1670,91 @@ class TestProvenanceDedup:
         assert docstring_idx < rationale_idx
 
     def test_deduped_output_is_valid_python(self, renderer, _source):
-        bronze = BronzeLayerConfig(source=_source, transformations=[
-            TransformationStep(
-                type=PipelineTransformationType.DROP_COLUMN, column="a",
-                parameters={}, rationale="drop a",
-            ),
-            TransformationStep(
-                type=PipelineTransformationType.DROP_COLUMN, column="b",
-                parameters={}, rationale="drop b",
-            ),
-            TransformationStep(
-                type=PipelineTransformationType.DROP_COLUMN, column="c",
-                parameters={}, rationale="drop c",
-            ),
-        ])
+        bronze = BronzeLayerConfig(
+            source=_source,
+            transformations=[
+                TransformationStep(
+                    type=PipelineTransformationType.DROP_COLUMN,
+                    column="a",
+                    parameters={},
+                    rationale="drop a",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.DROP_COLUMN,
+                    column="b",
+                    parameters={},
+                    rationale="drop b",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.DROP_COLUMN,
+                    column="c",
+                    parameters={},
+                    rationale="drop c",
+                ),
+            ],
+        )
         bronze_result = renderer.render_bronze("customers", bronze)
         ast.parse(bronze_result)
 
         gold = GoldLayerConfig(
             transformations=[
                 TransformationStep(
-                    type=PipelineTransformationType.LOG_TRANSFORM, column="rev",
-                    parameters={}, rationale="Log transform",
+                    type=PipelineTransformationType.LOG_TRANSFORM,
+                    column="rev",
+                    parameters={},
+                    rationale="Log transform",
                 ),
                 TransformationStep(
-                    type=PipelineTransformationType.LOG_TRANSFORM, column="qty",
-                    parameters={}, rationale="Log transform",
+                    type=PipelineTransformationType.LOG_TRANSFORM,
+                    column="qty",
+                    parameters={},
+                    rationale="Log transform",
                 ),
             ],
             encodings=[
                 TransformationStep(
-                    type=PipelineTransformationType.ENCODE, column="region",
-                    parameters={"method": "one_hot"}, rationale="Encode",
+                    type=PipelineTransformationType.ENCODE,
+                    column="region",
+                    parameters={"method": "one_hot"},
+                    rationale="Encode",
                 ),
             ],
             scalings=[
                 TransformationStep(
-                    type=PipelineTransformationType.SCALE, column="income",
-                    parameters={"method": "standard"}, rationale="Scale",
+                    type=PipelineTransformationType.SCALE,
+                    column="income",
+                    parameters={"method": "standard"},
+                    rationale="Scale",
                 ),
             ],
         )
         config = PipelineConfig(
-            name="test", target_column="target", sources=[_source],
-            bronze={}, silver=SilverLayerConfig(), gold=gold, output_dir="./out",
+            name="test",
+            target_column="target",
+            sources=[_source],
+            bronze={},
+            silver=SilverLayerConfig(),
+            gold=gold,
+            output_dir="./out",
         )
         gold_result = renderer.render_gold(config)
         ast.parse(gold_result)
 
     def test_rendered_provenance_has_docstring_link(self, renderer, _source):
-        bronze = BronzeLayerConfig(source=_source, transformations=[
-            TransformationStep(
-                type=PipelineTransformationType.DROP_COLUMN, column="a",
-                parameters={}, rationale="drop a",
-            ),
-        ])
+        bronze = BronzeLayerConfig(
+            source=_source,
+            transformations=[
+                TransformationStep(
+                    type=PipelineTransformationType.DROP_COLUMN,
+                    column="a",
+                    parameters={},
+                    rationale="drop a",
+                ),
+            ],
+        )
         result = renderer.render_bronze("customers", bronze)
         assert '"""' in result
-        assert "docs/03_quality_assessment.html#3.5-Missing-Value-Analysis" in result
+        assert "docs/02_source_integrity.html#2.5-Missing-Value-Analysis" in result
         ast.parse(result)
 
 
@@ -1445,21 +1768,32 @@ class TestConfigRawSourcesFormat:
     @pytest.fixture
     def _source(self):
         return SourceConfig(
-            name="events", path="events.parquet", format="parquet",
-            entity_key="customer_id", time_column="event_date", is_event_level=True,
+            name="events",
+            path="events.parquet",
+            format="parquet",
+            entity_key="customer_id",
+            time_column="event_date",
+            is_event_level=True,
         )
 
     def test_config_raw_sources_uses_raw_source_format(self, renderer, _source):
         from customer_retention.generators.pipeline_generator.models import LandingLayerConfig
+
         landing_config = LandingLayerConfig(
-            source=_source, raw_source_path="/data/raw_events.csv",
+            source=_source,
+            raw_source_path="/data/raw_events.csv",
             raw_source_format="csv",
-            entity_column="customer_id", time_column="event_date",
+            entity_column="customer_id",
+            time_column="event_date",
             target_column="churn",
         )
         config = PipelineConfig(
-            name="test", target_column="churn", sources=[_source],
-            bronze={}, silver=SilverLayerConfig(), gold=GoldLayerConfig(),
+            name="test",
+            target_column="churn",
+            sources=[_source],
+            bronze={},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(),
             output_dir="./out",
             landing={"events": landing_config},
         )
@@ -1475,18 +1809,25 @@ class TestConfigSourcesPath:
     def renderer(self):
         return CodeRenderer()
 
-    def test_config_sources_path_uses_findings_dir(self, renderer):
+    def test_config_sources_path_uses_raw_source_path(self, renderer):
         source = SourceConfig(
-            name="customers", path="customers.parquet", format="parquet",
+            name="customers",
+            path="customers.parquet",
+            format="parquet",
             entity_key="customer_id",
+            raw_source_path="/data/findings/customers.parquet",
         )
         config = PipelineConfig(
-            name="test", target_column="target", sources=[source],
-            bronze={}, silver=SilverLayerConfig(), gold=GoldLayerConfig(),
+            name="test",
+            target_column="target",
+            sources=[source],
+            bronze={},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(),
             output_dir="./out",
         )
         result = renderer.render_config(config)
-        assert 'FINDINGS_DIR / "customers.parquet"' in result
+        assert '"/data/findings/customers.parquet"' in result
 
 
 class TestGoldEncodingsScalingsExports:
@@ -1499,31 +1840,45 @@ class TestGoldEncodingsScalingsExports:
     @pytest.fixture
     def _source(self):
         return SourceConfig(
-            name="customers", path="data.csv", format="csv", entity_key="id",
+            name="customers",
+            path="data.csv",
+            format="csv",
+            entity_key="id",
         )
 
     def test_gold_exports_encodings_and_scalings_lists(self, renderer, _source):
         gold = GoldLayerConfig(
             encodings=[
                 TransformationStep(
-                    type=PipelineTransformationType.ENCODE, column="region",
-                    parameters={"method": "one_hot"}, rationale="One-hot encode region",
+                    type=PipelineTransformationType.ENCODE,
+                    column="region",
+                    parameters={"method": "one_hot"},
+                    rationale="One-hot encode region",
                 ),
                 TransformationStep(
-                    type=PipelineTransformationType.ENCODE, column="tier",
-                    parameters={"method": "label"}, rationale="Label encode tier",
+                    type=PipelineTransformationType.ENCODE,
+                    column="tier",
+                    parameters={"method": "label"},
+                    rationale="Label encode tier",
                 ),
             ],
             scalings=[
                 TransformationStep(
-                    type=PipelineTransformationType.SCALE, column="income",
-                    parameters={"method": "standard"}, rationale="Standardize income",
+                    type=PipelineTransformationType.SCALE,
+                    column="income",
+                    parameters={"method": "standard"},
+                    rationale="Standardize income",
                 ),
             ],
         )
         config = PipelineConfig(
-            name="test", target_column="target", sources=[_source],
-            bronze={}, silver=SilverLayerConfig(), gold=gold, output_dir="./out",
+            name="test",
+            target_column="target",
+            sources=[_source],
+            bronze={},
+            silver=SilverLayerConfig(),
+            gold=gold,
+            output_dir="./out",
         )
         result = renderer.render_gold(config)
         assert "ENCODINGS = [" in result
@@ -1536,8 +1891,13 @@ class TestGoldEncodingsScalingsExports:
     def test_gold_empty_encodings_scalings_still_valid(self, renderer, _source):
         gold = GoldLayerConfig(encodings=[], scalings=[])
         config = PipelineConfig(
-            name="test", target_column="target", sources=[_source],
-            bronze={}, silver=SilverLayerConfig(), gold=gold, output_dir="./out",
+            name="test",
+            target_column="target",
+            sources=[_source],
+            bronze={},
+            silver=SilverLayerConfig(),
+            gold=gold,
+            output_dir="./out",
         )
         result = renderer.render_gold(config)
         assert "ENCODINGS = [" in result
@@ -1548,20 +1908,29 @@ class TestGoldEncodingsScalingsExports:
         gold = GoldLayerConfig(
             encodings=[
                 TransformationStep(
-                    type=PipelineTransformationType.ENCODE, column="status",
-                    parameters={"method": "one_hot"}, rationale="Encode status",
+                    type=PipelineTransformationType.ENCODE,
+                    column="status",
+                    parameters={"method": "one_hot"},
+                    rationale="Encode status",
                 ),
             ],
             scalings=[
                 TransformationStep(
-                    type=PipelineTransformationType.SCALE, column="age",
-                    parameters={"method": "minmax"}, rationale="Scale age",
+                    type=PipelineTransformationType.SCALE,
+                    column="age",
+                    parameters={"method": "minmax"},
+                    rationale="Scale age",
                 ),
             ],
         )
         config = PipelineConfig(
-            name="test", target_column="target", sources=[_source],
-            bronze={}, silver=SilverLayerConfig(), gold=gold, output_dir="./out",
+            name="test",
+            target_column="target",
+            sources=[_source],
+            bronze={},
+            silver=SilverLayerConfig(),
+            gold=gold,
+            output_dir="./out",
         )
         result = renderer.render_gold(config)
         # Check ENCODINGS contains the right column
@@ -1577,15 +1946,21 @@ class TestGoldEncodingsScalingsExports:
 
 
 class TestBronzeEntityRawSourceLookup:
-
     def test_load_raw_events_uses_base_source_name(self):
         import ast
+
         source = SourceConfig(
-            name="orders", path="orders.parquet", format="parquet",
-            entity_key="customer_id", time_column="order_date", is_event_level=True,
+            name="orders",
+            path="orders.parquet",
+            format="parquet",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="order_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="order_date",
             lifecycle=LifecycleConfig(include_recency_bucket=True),
         )
         result = CodeRenderer().render_bronze_entity("orders_aggregated", config, "orders_aggregated", "orders")
@@ -1595,8 +1970,223 @@ class TestBronzeEntityRawSourceLookup:
 
 
 class TestSilverLoadsAggregatedBronze:
-
     def test_silver_loads_aggregated_path_for_event_sources(self, renderer, sample_pipeline_config):
         result = renderer.render_silver(sample_pipeline_config)
-        assert 'get_bronze_path(f"{name}_aggregated")' in result or '_aggregated' in result
-        assert 'is_event_level' in result
+        assert 'get_bronze_path(f"{name}_aggregated")' in result or "_aggregated" in result
+        assert "is_event_level" in result
+
+
+class TestBronzeEventCategoricalAggregation:
+    def _make_bronze_event_config(self, categorical_columns=None, categorical_agg_funcs=None):
+        source = SourceConfig(
+            name="emails",
+            path="data/emails.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="sent_date",
+            is_event_level=True,
+        )
+        return BronzeEventConfig(
+            source=source,
+            entity_column="customer_id",
+            time_column="sent_date",
+            deduplicate=True,
+            aggregation=AggregationWindowConfig(
+                windows=["7d", "30d"],
+                value_columns=["send_hour"],
+                agg_funcs=["sum", "mean"],
+                categorical_columns=categorical_columns or ["direction", "status"],
+                categorical_agg_funcs=categorical_agg_funcs or ["nunique", "mode"],
+            ),
+        )
+
+    def test_bronze_event_aggregation_has_categorical_columns(self, renderer):
+        config = self._make_bronze_event_config()
+        result = renderer.render_bronze_event("emails", config)
+        assert "CATEGORICAL_COLUMNS" in result
+        assert "'direction'" in result
+        assert "'status'" in result
+
+    def test_bronze_event_aggregation_has_safe_mode(self, renderer):
+        config = self._make_bronze_event_config()
+        result = renderer.render_bronze_event("emails", config)
+        assert "_safe_mode" in result
+        assert "value_counts().idxmax()" in result
+
+    def test_bronze_event_aggregation_has_nunique(self, renderer):
+        config = self._make_bronze_event_config()
+        result = renderer.render_bronze_event("emails", config)
+        assert ".nunique()" in result
+        assert "nunique" in result
+
+    def test_bronze_event_aggregation_has_timezone_normalization(self, renderer):
+        config = self._make_bronze_event_config()
+        result = renderer.render_bronze_event("emails", config)
+        assert "as_tz_naive" in result
+
+    def test_bronze_event_aggregation_filters_non_numeric_columns(self, renderer):
+        config = self._make_bronze_event_config()
+        result = renderer.render_bronze_event("emails", config)
+        assert "is_numeric_dtype" in result
+        assert "numeric_value_columns" in result
+
+    def test_bronze_event_aggregation_is_valid_python(self, renderer):
+        config = self._make_bronze_event_config()
+        result = renderer.render_bronze_event("emails", config)
+        ast.parse(result)
+
+    def test_bronze_event_aggregation_runtime_mixed_types(self, renderer):
+        import pandas as pd
+
+        config = self._make_bronze_event_config(
+            categorical_columns=["direction"],
+            categorical_agg_funcs=["nunique", "mode"],
+        )
+        result = renderer.render_bronze_event("emails", config)
+
+        local_ns = {}
+        mock_code = (
+            "import pandas as pd\nimport numpy as np\n"
+            "from pandas.api.types import is_numeric_dtype\n"
+            "from customer_retention.core.compat import ensure_datetime_column, as_tz_naive\n"
+            "TARGET_COLUMN = 'churn'\n"
+            "PRODUCTION_DIR = __import__('pathlib').Path('/tmp/test_prod')\n"
+        )
+        exec(mock_code, local_ns)
+
+        df = pd.DataFrame(
+            {
+                "customer_id": ["A", "A", "B", "B", "B"],
+                "sent_date": pd.date_range("2024-01-01", periods=5, freq="D"),
+                "send_hour": [10, 14, 9, 11, 16],
+                "direction": ["outbound", "inbound", "outbound", "outbound", "inbound"],
+            }
+        )
+
+        lines = result.split("\n")
+        capture = False
+        extracted_lines = []
+        for line in lines:
+            if line.startswith("ENTITY_COLUMN") or line.startswith("TIME_COLUMN"):
+                extracted_lines.append(line)
+            if line.startswith("def _parse_window(") or line.startswith("def _safe_mode("):
+                capture = True
+            if capture:
+                extracted_lines.append(line)
+            if line.startswith("AGGREGATION_WINDOWS"):
+                extracted_lines.append(line)
+                capture = False
+            if line.startswith("VALUE_COLUMNS") or line.startswith("AGG_FUNCS"):
+                extracted_lines.append(line)
+            if line.startswith("CATEGORICAL_COLUMNS") or line.startswith("CATEGORICAL_AGG_FUNCS"):
+                extracted_lines.append(line)
+            if line.startswith("def apply_event_aggregation("):
+                capture = True
+                extracted_lines.append(line)
+            if capture and line.strip() == "return df":
+                extracted_lines.append(line)
+                capture = False
+
+        extracted = "\n".join(extracted_lines)
+        exec(extracted, local_ns)
+        result_df = local_ns["apply_event_aggregation"](df.copy())
+
+        assert "send_hour_sum_7d" in result_df.columns
+        assert "send_hour_mean_7d" in result_df.columns
+        assert "direction_nunique_7d" in result_df.columns
+        assert "direction_mode_7d" in result_df.columns
+        assert "event_count_7d" in result_df.columns
+        assert len(result_df) == 2
+
+
+class TestDatetimeDerivationRendering:
+
+    def test_landing_template_includes_datetime_derivation(self, renderer):
+        from customer_retention.generators.pipeline_generator.models import (
+            DatetimeDerivationConfig,
+            LandingLayerConfig,
+            SourceConfig,
+        )
+
+        source = SourceConfig(
+            name="orders", path="orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = LandingLayerConfig(
+            source=source, raw_source_path="/data/orders.csv",
+            raw_source_format="csv", entity_column="customer_id",
+            time_column="order_date", target_column="churn",
+            datetime_derivation=DatetimeDerivationConfig(
+                source_columns=["signup_date", "last_login"],
+                reference_column="feature_timestamp",
+                mask_future_columns=["last_login"],
+            ),
+        )
+        code = renderer.render_landing("orders", config)
+        assert "derive_datetime_features" in code
+        assert "derive_extra_datetime_features" in code
+        assert "mask_future_columns" in code
+        assert "'last_login'" in code
+        assert "signup_date" in code
+
+    def test_landing_template_omits_derivation_when_none(self, renderer):
+        from customer_retention.generators.pipeline_generator.models import (
+            LandingLayerConfig,
+            SourceConfig,
+        )
+
+        source = SourceConfig(
+            name="orders", path="orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = LandingLayerConfig(
+            source=source, raw_source_path="/data/orders.csv",
+            raw_source_format="csv", entity_column="customer_id",
+            time_column="order_date", target_column="churn",
+        )
+        code = renderer.render_landing("orders", config)
+        assert "derive_datetime_features" not in code
+
+    def test_bronze_event_template_includes_datetime_derivation(self, renderer):
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+            BronzeEventConfig,
+            DatetimeDerivationConfig,
+            SourceConfig,
+        )
+
+        source = SourceConfig(
+            name="events", path="events.csv", format="csv",
+            entity_key="customer_id", time_column="event_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="event_date",
+            aggregation=AggregationWindowConfig(
+                windows=["30d"], value_columns=["amount"], agg_funcs=["sum"],
+            ),
+            datetime_derivation=DatetimeDerivationConfig(
+                source_columns=["response_at"],
+                reference_column="event_date",
+                mask_future_columns=[],
+            ),
+        )
+        code = renderer.render_bronze_event("events", config)
+        assert "derive_datetime_features" in code
+        assert "derive_extra_datetime_features" in code
+        assert "response_at" in code
+
+    def test_bronze_event_template_omits_derivation_when_none(self, renderer):
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeEventConfig,
+            SourceConfig,
+        )
+
+        source = SourceConfig(
+            name="events", path="events.csv", format="csv",
+            entity_key="customer_id", time_column="event_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="event_date",
+        )
+        code = renderer.render_bronze_event("events", config)
+        assert "derive_datetime_features" not in code

@@ -9,13 +9,13 @@ from .renderer import CodeRenderer
 
 
 class PipelineGenerator:
-    def __init__(self, findings_dir: str, output_dir: str, pipeline_name: str, experiments_dir: str = None, production_dir: str = None):
+    def __init__(self, findings_dir: str, output_dir: str, pipeline_name: str, experiments_dir: str = None, production_dir: str = None, namespace=None, intent=None):
         self._findings_dir = Path(findings_dir)
         self._output_dir = Path(output_dir)
         self._pipeline_name = pipeline_name
         self._experiments_dir = experiments_dir
         self._production_dir = production_dir
-        self._parser = FindingsParser(findings_dir)
+        self._parser = FindingsParser(findings_dir, namespace=namespace, intent=intent)
         self._renderer = CodeRenderer()
 
     def generate(self) -> List[Path]:
