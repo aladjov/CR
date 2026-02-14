@@ -11,39 +11,49 @@ The exploration loop is **iterative by design**. Each iteration is versioned, an
 │                                                                              │
 │  ITERATION 1                                                                 │
 │  ──────────                                                                  │
-│  Notebooks 01-04: Explore each dataset                                       │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                        │
-│  │ customers.csv│  │  events.csv  │  │ products.csv │                        │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘                        │
-│         │                 │                 │                                │
-│         ▼                 ▼                 ▼                                │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                        │
-│  │  findings    │  │  findings    │  │  findings    │  ← Versioned YAML      │
-│  │  (YAML)      │  │  (YAML)      │  │  (YAML)      │    with iteration_id   │
-│  └──────────────┘  └──────────────┘  └──────────────┘                        │
-│                                                                              │
-│  Notebook 05: Multi-Dataset Discovery & Selection                            │
+│  Notebook 00: Intent Contract                                                │
 │  ┌───────────────────────────────────────────────────┐                       │
-│  │  • Discover all explored datasets                  │                      │
-│  │  • SELECT which datasets to include               │  ← USER CHOICE        │
-│  │  • Define relationships (join keys)               │                       │
-│  │  • Save multi_dataset_findings.yaml               │                       │
+│  │  • Declare prediction objective + posture + horizon│                      │
+│  │  • Register datasets, fingerprint, detect targets  │                      │
+│  │  • IntentDefaultsEngine derives control variables  │                      │
+│  │  • SnapshotGrid.from_intent() creates temporal grid│                      │
+│  │  • Save project_context.yaml to namespace          │                      │
 │  └───────────────────────────────────────────────────┘                       │
-│                                                                              │
-│  Notebook 06: Capture Recommendations                                        │
+│                          │                                                   │
+│            ┌─────────────┴─────────────┐                                     │
+│            ▼                           ▼                                     │
+│     EVENT DATASETS              ENTITY DATASETS                              │
+│  ┌──────────────────┐      ┌──────────────────┐                              │
+│  │ 01  Discovery     │      │ 01  Discovery     │                             │
+│  │ 01a Temporal Dive │      │ (entity-shape     │                             │
+│  │ 01b Quality       │      │  data passes      │                             │
+│  │ 01c Patterns      │      │  through)          │                            │
+│  │ 01d Aggregation   │      │                    │                            │
+│  │ 02  Integrity     │      │ 02  Integrity      │                            │
+│  └────────┬─────────┘      └────────┬───────────┘                            │
+│            └─────────────┬───────────┘                                       │
+│                          ▼                                                   │
+│  Notebook 03: Dataset Merge                                                  │
 │  ┌───────────────────────────────────────────────────┐                       │
-│  │  • Bronze: null handling, outlier capping         │                       │
-│  │  • Silver: joins, aggregations                    │                       │
-│  │  • Gold: encoding, scaling, transformations       │                       │
-│  │  • Track: applied vs skipped recommendations      │  ← TRACKED            │
+│  │  • TemporalMerger joins on (entity_id, as_of_date)│                      │
+│  │  • Entity datasets broadcast or as-of-join         │                      │
+│  │  • Produces unified feature matrix                 │                      │
 │  └───────────────────────────────────────────────────┘                       │
-│                                                                              │
-│  Notebooks 07-08: Train & Evaluate                                           │
+│                          │                                                   │
+│                          ▼                                                   │
+│  Notebooks 04-05: Post-Merge Analysis                                        │
 │  ┌───────────────────────────────────────────────────┐                       │
-│  │  • Train baseline models                          │                       │
-│  │  • Evaluate metrics (AUC, precision, recall)      │                       │
-│  │  • Collect feature importances                    │  ← FEEDBACK           │
-│  │  • Analyze prediction errors                      │                       │
+│  │  04  Column Deep Dive (types, skewness, encoding)  │                      │
+│  │  04a Text Columns Deep Dive (if text columns)      │                      │
+│  │  05  Relationship Analysis (correlations, redund.) │                      │
+│  └───────────────────────────────────────────────────┘                       │
+│                          │                                                   │
+│                          ▼                                                   │
+│  Notebooks 06-08: Feature Engineering & Training                             │
+│  ┌───────────────────────────────────────────────────┐                       │
+│  │  06  Feature Opportunities (transforms, encoding)  │                      │
+│  │  07  Modeling Readiness (training grid, split)     │                      │
+│  │  08  Baseline Experiments (entity-grouped CV)      │  ← FEEDBACK          │
 │  └───────────────────────────────────────────────────┘                       │
 │         │                                                                    │
 │         ▼                                                                    │
@@ -86,15 +96,13 @@ The heart of this framework is a series of **interactive notebooks** that guide 
 
 ## Early Target Mount
 
-In multi-dataset projects, the target column (e.g., `churned`) typically lives in only one dataset (e.g., customer profiles). Notebooks 01-04 need the target for correlations, effect sizes, and aggregation strategy — but non-target datasets don't have it.
+In multi-dataset projects, the target column (e.g., `churned`) typically lives in only one dataset (e.g., customer profiles). Per-dataset notebooks need the target for correlations, effect sizes, and aggregation strategy — but non-target datasets don't have it.
 
 The **Early Target Mount** mechanism solves this:
 
-1. **Notebook 00** scans all datasets using `DatasetContextScanner`, which detects the target holder, join keys, and relationship types. Results are saved to `dataset_context.yaml`.
-2. **Notebook 01** checks for `dataset_context.yaml` when no target is detected. If found, it calls `mount_target_column()` to left-join the target from the target dataset onto the current DataFrame.
-3. Notebooks 02-04 then have full target-aware analysis available for all datasets.
-
-This is a lightweight early-stage mechanism. Notebook 05 handles the full multi-dataset join and selection workflow for pipeline generation.
+1. **Notebook 00** scans all datasets using `DatasetFingerprinter`, which detects the target holder, join keys, and relationship types. Results are saved to `project_context.yaml`.
+2. **Notebook 01** checks the project context when no target is detected in the current dataset. If found, it calls `mount_target_column()` to left-join the target from the target dataset onto the current DataFrame.
+3. Downstream per-dataset notebooks then have full target-aware analysis available.
 
 ```python
 from customer_retention.analysis.auto_explorer import DatasetContextScanner, mount_target_column
@@ -108,40 +116,17 @@ df_transactions, info = mount_target_column(df, context, "transactions")
 # df_transactions now has "churned" column joined via customer_id
 ```
 
-## Dataset Selection (Notebook 05)
+## Dataset Merge (Notebook 03)
 
-Select which datasets to include in your pipeline. Choices are **persisted** and respected by all exports:
+Notebook 03 uses the `TemporalMerger` to combine all Bronze outputs into a unified feature matrix. Three merge strategies apply automatically based on dataset shape:
 
-```python
-from customer_retention.analysis.auto_explorer import ExplorationManager
+| Dataset Shape | Strategy | Join Keys |
+|---------------|----------|-----------|
+| Event-level (aggregated) | Snapshot join | `entity_id` + `as_of_date` |
+| Entity-level (no timestamp) | Broadcast | `entity_id` only (features repeat across dates) |
+| Entity-level (with timestamp) | As-of join | `entity_id` + backward-looking temporal match |
 
-# Discover all explored datasets
-manager = ExplorationManager(explorations_dir="./experiments/findings")
-datasets = manager.list_datasets()
-# → [customers, events, products, support_tickets]
-
-# Create multi-dataset view
-multi = manager.create_multi_dataset_findings()
-
-# SELECT which datasets to include (persisted!)
-multi.exclude_dataset("support_tickets")  # Remove from pipeline
-multi.select_dataset("support_tickets")   # Re-include if needed
-
-# Define how datasets join
-multi.add_relationship(
-    left_dataset="customers",
-    right_dataset="events",
-    left_column="customer_id",
-    right_column="customer_id",
-    relationship_type="one_to_many"
-)
-
-# Save - selection is persisted!
-multi.save("./experiments/findings/multi_dataset_findings.yaml")
-
-# Later: only selected datasets are included
-print(multi.selected_datasets)  # customers, events, products
-```
+The merge scaffold (join keys and relationship types) is defined in Notebook 00 and stored in `ProjectContext`. Notebook 03 reads it from the run namespace.
 
 ## Capturing Recommendations (Notebook 06)
 
@@ -151,7 +136,7 @@ As you explore, capture cleaning and transformation recommendations using the la
 from customer_retention.analysis.auto_explorer import RecommendationBuilder
 
 # Create builder from your exploration findings
-builder = RecommendationBuilder(findings, notebook="06_modeling_readiness")
+builder = RecommendationBuilder(findings, notebook="06_feature_opportunities")
 
 # Bronze layer: Data cleaning
 builder.bronze() \
@@ -243,7 +228,7 @@ ctx2 = orchestrator.start_child_iteration(IterationTrigger.MANUAL)
 
 ## Closing the Loop: Scoring Validation (Notebook 11)
 
-When exploration is complete and a production pipeline has been generated (notebook 10), notebook 11 validates that the **scoring pipeline reproduces training features identically** for holdout entities. This catches train/serve skew before deployment.
+When exploration is complete and a production pipeline has been generated (Notebook 10), Notebook 11 validates that the **scoring pipeline reproduces training features identically** for holdout entities. This catches train/serve skew before deployment.
 
 The validation process:
 
@@ -257,7 +242,7 @@ Notebook 12 then exports all notebook outputs as browsable HTML documentation.
 
 ## From Recommendations to Transforms
 
-Recommendations captured in notebook 06 (e.g., "impute nulls in age", "scale revenue") become `TransformationStep` objects stored in the pipeline specification. These steps are replayed by `TransformExecutor` — stateless operations run directly via `ops.py`, while stateful ones (scaling, encoding, power transforms) go through `fitted.py` wrappers that persist their parameters to `ArtifactStore`. This ensures the exact same transformation is applied during scoring as during training.
+Recommendations captured in Notebook 06 (e.g., "impute nulls in age", "scale revenue") become `TransformationStep` objects stored in the pipeline specification. These steps are replayed by `TransformExecutor` — stateless operations run directly via `ops.py`, while stateful ones (scaling, encoding, power transforms) go through `fitted.py` wrappers that persist their parameters to `ArtifactStore`. This ensures the exact same transformation is applied during scoring as during training.
 
 See [[Transforms & Scoring Validation|Transforms-and-Scoring-Validation]] for full details.
 
@@ -288,7 +273,7 @@ gold/
 
 ## Next Steps
 
-- [[Temporal Framework]] - Leakage-safe data preparation
+- [[Snapshot Grid and Control Variables]] - Leakage-safe temporal grid and control variables
 - [[Transforms & Scoring Validation|Transforms-and-Scoring-Validation]] - Fit/transform separation and validation gates
 - [[Local Track]] - Generate and run pipelines locally
 - [[Tutorial: Retail Customer Retention|Tutorial-Retail-Churn]] - Complete hands-on example

@@ -656,6 +656,6 @@ Set `DATA_PATH = "tests/fixtures/customer_retention_retail.csv"` in the first no
 ## Next Steps
 
 - [[Architecture]] - Understand the medallion architecture
-- [[Temporal Framework]] - Leakage-safe data preparation
+- [[Snapshot Grid and Control Variables]] - Leakage-safe temporal grid and control variables
 - [[Local Track]] - Generate production pipelines
 - [[Databricks Track]] - Deploy to Databricks

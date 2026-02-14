@@ -19,6 +19,8 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+old_exploration_notebooks/
+_processed/
 
 # Virtual environments
 .venv/
@@ -27,7 +29,7 @@ ENV/
 
 # IDE
 .idea/
-.vscode/xs
+.vscode/
 *.swp
 *.swo
 .DS_Store

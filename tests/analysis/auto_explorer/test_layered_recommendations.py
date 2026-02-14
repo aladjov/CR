@@ -1338,3 +1338,70 @@ class TestRecommendationRegistrySaveLoad:
             save_content = f.read()
 
         assert manual_content == save_content
+
+
+class TestRecommendationRegistryMerge:
+
+    def test_merge_empty_list(self):
+        result = RecommendationRegistry.merge([])
+        assert result.sources == {}
+        assert result.bronze is None
+        assert result.silver is None
+        assert result.gold is None
+
+    def test_merge_single_registry(self):
+        reg = RecommendationRegistry()
+        reg.add_source("customers", "customers.csv")
+        reg.init_silver("customer_id")
+        result = RecommendationRegistry.merge([reg])
+        assert "customers" in result.sources
+        assert result.silver is not None
+
+    def test_merge_combines_sources(self):
+        reg1 = RecommendationRegistry()
+        reg1.add_source("customers", "customers.csv")
+        reg2 = RecommendationRegistry()
+        reg2.add_source("events", "events.csv")
+        result = RecommendationRegistry.merge([reg1, reg2])
+        assert "customers" in result.sources
+        assert "events" in result.sources
+
+    def test_merge_preserves_silver_gold(self):
+        reg1 = RecommendationRegistry()
+        reg1.init_silver("customer_id")
+        reg1.add_silver_derived("tenure", "expr", "recency", "", "")
+        reg2 = RecommendationRegistry()
+        reg2.add_source("events", "events.csv")
+        result = RecommendationRegistry.merge([reg1, reg2])
+        assert result.silver is not None
+        assert len(result.silver.derived_columns) == 1
+        assert result.gold is None
+
+    def test_merge_prefers_registry_with_gold(self):
+        reg1 = RecommendationRegistry()
+        reg1.init_silver("customer_id")
+        reg1.add_silver_derived("t1", "expr", "recency", "", "")
+
+        reg2 = RecommendationRegistry()
+        reg2.init_silver("customer_id")
+        reg2.init_gold("churned")
+        reg2.add_gold_encoding("contract", "one_hot", "", "")
+        reg2.add_silver_derived("t2", "expr", "recency", "", "")
+
+        result = RecommendationRegistry.merge([reg1, reg2])
+        assert result.gold is not None
+        assert result.gold.target_column == "churned"
+        assert len(result.gold.encoding) == 1
+        assert result.silver is not None
+        assert len(result.silver.derived_columns) == 1
+        assert result.silver.derived_columns[0].target_column == "t2"
+
+    def test_merge_combines_fit_artifacts(self):
+        reg1 = RecommendationRegistry()
+        reg1.fit_artifacts["rec_1"] = "artifact_a"
+        reg2 = RecommendationRegistry()
+        reg2.fit_artifacts["rec_2"] = "artifact_b"
+        reg2.fit_artifacts["rec_1"] = "artifact_a_override"
+        result = RecommendationRegistry.merge([reg1, reg2])
+        assert result.fit_artifacts["rec_2"] == "artifact_b"
+        assert result.fit_artifacts["rec_1"] == "artifact_a_override"

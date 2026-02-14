@@ -200,4 +200,4 @@ feature_store.register_feature_view(config, spark_df)
 - [[Transforms & Scoring Validation|Transforms-and-Scoring-Validation]] - Fit/transform separation and validation gates
 - [[Local Track]] - Complete local execution with Feast
 - [[Databricks Track]] - Production execution with Unity Catalog
-- [[Temporal Framework]] - How temporal columns enable PIT joins
+- [[Snapshot Grid and Control Variables]] - How temporal columns enable PIT joins

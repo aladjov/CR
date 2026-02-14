@@ -259,4 +259,4 @@ else:
 
 - [[Local Track]] - Test locally before deploying
 - [[Feature Store]] - Feature management on Databricks
-- [[Temporal Framework]] - Leakage-safe data preparation
+- [[Snapshot Grid and Control Variables]] - Leakage-safe temporal grid and control variables

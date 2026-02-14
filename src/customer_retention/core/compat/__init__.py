@@ -160,7 +160,7 @@ def safe_memory_usage_bytes(obj: Any) -> int:
 
 def safe_to_datetime(series: Any, **kwargs: Any) -> _pandas.Series:
     if _pandas.api.types.is_datetime64_any_dtype(series):
-        return series if isinstance(series, _pandas.Series) else _pandas.Series(series)
+        return as_tz_naive(series if isinstance(series, _pandas.Series) else _pandas.Series(series))
     arr = series.to_numpy() if hasattr(series, 'to_numpy') else _pandas.array(series)
     if _pandas.api.types.is_integer_dtype(arr) or _pandas.api.types.is_integer_dtype(series):
         arr = _pandas.to_numeric(arr, errors='coerce')
@@ -168,7 +168,11 @@ def safe_to_datetime(series: Any, **kwargs: Any) -> _pandas.Series:
         if len(non_null) > 0:
             unit = _infer_epoch_unit(non_null[0])
             return _pandas.Series(_pandas.to_datetime(arr, unit=unit, **kwargs))
-    return _pandas.Series(_pandas.to_datetime(arr, **kwargs))
+    try:
+        result = _pandas.Series(_pandas.to_datetime(arr, **kwargs))
+    except ValueError:
+        result = _pandas.Series(_pandas.to_datetime(arr, format="ISO8601", **kwargs))
+    return as_tz_naive(result)
 
 
 def ensure_datetime_column(df: _pandas.DataFrame, column: str) -> _pandas.DataFrame:

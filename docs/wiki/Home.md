@@ -44,7 +44,8 @@ An **ML governance backbone** for customer retention — designed both as an edu
 - [[Getting Started]] - Installation and quick examples
 - [[Architecture]] - Medallion architecture and system design
 - [[Exploration Loop]] - Interactive notebook workflow
-- [[Temporal Framework]] - Leakage-safe data preparation
+- [[Model Intent and Objective Support]] - How prediction objectives are declared and validated
+- [[Snapshot Grid and Control Variables]] - Leakage-safe temporal grid and control variables
 - [[Transforms & Scoring Validation|Transforms-and-Scoring-Validation]] - Fit/transform separation and validation gates
 - [[Feature Store]] - Feast and Databricks feature management
 - [[Local Track]] - Feast + MLFlow execution path

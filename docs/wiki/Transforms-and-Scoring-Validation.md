@@ -299,4 +299,4 @@ df = load_artifact("./data/gold/features.parquet")
 - [[Architecture]] - System design and medallion layers
 - [[Local Track]] - Generate and run pipelines locally
 - [[Databricks Track]] - Deploy to Databricks
-- [[Temporal Framework]] - Leakage-safe data preparation
+- [[Snapshot Grid and Control Variables]] - Leakage-safe temporal grid and control variables

@@ -1316,7 +1316,7 @@ python generated_pipelines/local/customer_churn/scoring/run_scoring.py
 
 - [[Tutorial-Retail-Churn]] - Compare with the entity-level retail tutorial
 - [[Architecture]] - Understand the medallion architecture (Bronze/Silver/Gold)
-- [[Temporal Framework]] - Deep dive into leakage-safe temporal data preparation
+- [[Snapshot Grid and Control Variables]] - Leakage-safe temporal grid and control variables
 - [[Local Track]] - How generated pipelines work (Feast + MLflow)
 - [[Databricks Track]] - Deploy to Databricks with Unity Catalog
 
