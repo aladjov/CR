@@ -144,7 +144,9 @@ import config
 print(f'PRODUCTION_DIR: {{config.PRODUCTION_DIR}}')
 """],
             capture_output=True, text=True,
-            env={**os.environ, "CR_PRODUCTION_DIR": custom},
+            env={**{k: v for k, v in os.environ.items()
+                    if k not in {"CR_PRODUCTION_DIR", "CR_EXPERIMENTS_DIR", "MLFLOW_TRACKING_URI"}},
+                 "CR_PRODUCTION_DIR": custom},
             cwd=str(experiments_setup["project_root"]),
         )
         assert result.returncode == 0, f"Import failed: {result.stderr}"

@@ -7,6 +7,14 @@ import yaml
 
 from customer_retention.generators.pipeline_generator import PipelineGenerator
 
+_CONFIG_ENV_VARS = {"CR_EXPERIMENTS_DIR", "CR_PRODUCTION_DIR", "CR_DOCS_BASE_URL", "MLFLOW_TRACKING_URI"}
+
+
+def _subprocess_env(**overrides):
+    env = {k: v for k, v in os.environ.items() if k not in _CONFIG_ENV_VARS}
+    env.update(overrides)
+    return env
+
 
 class TestExperimentsDirectoryConfiguration:
 
@@ -188,7 +196,7 @@ print(f'FEAST_REPO_PATH: {{config.FEAST_REPO_PATH}}')
 """],
             capture_output=True,
             text=True,
-            env={**os.environ, "CR_EXPERIMENTS_DIR": custom_path},
+            env=_subprocess_env(CR_EXPERIMENTS_DIR=custom_path),
             cwd=str(experiments_setup["project_root"])
         )
         assert result.returncode == 0, f"Config import failed: {result.stderr}"
@@ -214,7 +222,7 @@ print(f'MLFLOW_TRACKING_URI: {{config.MLFLOW_TRACKING_URI}}')
 """],
             capture_output=True,
             text=True,
-            env={**os.environ, "MLFLOW_TRACKING_URI": custom_mlflow_uri},
+            env=_subprocess_env(MLFLOW_TRACKING_URI=custom_mlflow_uri),
             cwd=str(experiments_setup["project_root"])
         )
         assert result.returncode == 0, f"Config import failed: {result.stderr}"
@@ -339,7 +347,7 @@ print(f'Feast path: {{config.get_feast_data_path()}}')
 """],
             capture_output=True,
             text=True,
-            env={**os.environ, "CR_EXPERIMENTS_DIR": dbfs_path},
+            env=_subprocess_env(CR_EXPERIMENTS_DIR=dbfs_path),
             cwd=str(experiments_setup["project_root"])
         )
         assert result.returncode == 0, f"DBFS path test failed: {result.stderr}"
@@ -366,7 +374,7 @@ print(f'FINDINGS_DIR: {{config.FINDINGS_DIR}}')
 """],
             capture_output=True,
             text=True,
-            env={**os.environ, "CR_EXPERIMENTS_DIR": uc_path},
+            env=_subprocess_env(CR_EXPERIMENTS_DIR=uc_path),
             cwd=str(experiments_setup["project_root"])
         )
         assert result.returncode == 0, f"Unity Catalog path test failed: {result.stderr}"
