@@ -29,7 +29,7 @@ class ProfilingStage(StageGenerator):
             }),
             self.cb.section("Load Bronze Data"),
             self.cb.code('''from customer_retention.integrations.adapters.factory import get_delta
-storage = get_delta(force_local=True)
+storage = get_delta()
 df = storage.read("./experiments/data/bronze/customers")
 print(f"Loaded {len(df)} rows, {len(df.columns)} columns")'''),
             self.cb.section("Type Detection"),

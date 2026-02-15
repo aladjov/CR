@@ -663,7 +663,7 @@ def evaluate_model(model, X_test: pd.DataFrame, y_test: pd.Series) -> Dict[str, 
             load_expr = f'pd.read_csv("{source_path}")'
         else:
             load_expr = (
-                f'get_delta(force_local=True).read("{source_path}") '
+                f'get_delta().read("{source_path}") '
                 f'if Path("{source_path}").is_dir() and (Path("{source_path}") / "_delta_log").is_dir() '
                 f'else pd.read_parquet("{source_path}")'
             )

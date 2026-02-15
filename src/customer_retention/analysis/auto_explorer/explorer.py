@@ -38,7 +38,7 @@ class DataExplorer:
         if path.is_dir() and (path / "_delta_log").is_dir():
             try:
                 from customer_retention.integrations.adapters.factory import get_delta
-                return get_delta(force_local=True).read(str(path)), source, "delta"
+                return get_delta().read(str(path)), source, "delta"
             except ImportError:
                 pass
         if path.suffix.lower() == ".csv":

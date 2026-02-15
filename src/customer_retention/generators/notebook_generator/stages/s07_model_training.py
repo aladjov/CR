@@ -48,7 +48,7 @@ if latest_snapshot:
     print(f"Rows: {snapshot_metadata.row_count}")
 else:
     from customer_retention.integrations.adapters.factory import get_delta
-    storage = get_delta(force_local=True)
+    storage = get_delta()
     df = storage.read("./experiments/data/gold/customers_selected")
     snapshot_metadata = None
     print(f"Warning: No snapshot found, loading from gold layer: {df.shape}")'''),

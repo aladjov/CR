@@ -50,7 +50,7 @@ mlflow_adapter.start_run("{exp_name}", run_name="04_transformation")
 transform_stats = {{}}'''),
             self.cb.section("Load Silver Data"),
             self.cb.code(f'''from customer_retention.integrations.adapters.factory import get_delta
-storage = get_delta(force_local=True)
+storage = get_delta()
 df = storage.read("./experiments/data/silver/{name}_cleaned")
 print(f"Loaded shape: {{df.shape}}")
 mlflow_adapter.log_metric("input_rows", df.shape[0])

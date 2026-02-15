@@ -345,3 +345,57 @@ class TestDatabricksDeltaToSparkDf:
             call_args = storage.spark.createDataFrame.call_args
             passed_df = call_args.args[0] if call_args.args else call_args[0][0]
             assert passed_df["ts"].dt.tz is None
+
+
+class TestDatabricksDeltaPathNormalization:
+    def test_strips_dbfs_prefix(self):
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+        assert DatabricksDelta._normalize_path("/dbfs/mnt/data/table") == "/mnt/data/table"
+
+    def test_strips_dbfs_prefix_nested(self):
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+        assert DatabricksDelta._normalize_path("/dbfs/home/user/data") == "/home/user/data"
+
+    def test_passthrough_relative_path(self):
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+        assert DatabricksDelta._normalize_path("experiments/runs/test") == "experiments/runs/test"
+
+    def test_passthrough_absolute_non_dbfs(self):
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+        assert DatabricksDelta._normalize_path("/home/user/data") == "/home/user/data"
+
+    def test_passthrough_dbfs_scheme(self):
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+        assert DatabricksDelta._normalize_path("dbfs:/mnt/data/table") == "dbfs:/mnt/data/table"
+
+
+class TestDatabricksDeltaReadNormalizesPath:
+    def test_read_normalizes_path(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            storage.read("/dbfs/mnt/data/table")
+            load_call = storage.spark.read.format("delta").load
+            load_call.assert_called_once_with("/mnt/data/table")
+
+
+class TestDatabricksDeltaWriteNormalizesPath:
+    def test_write_normalizes_path(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            df = pd.DataFrame({"val": [1, 2]})
+            with patch.object(storage, "_to_spark_df", return_value=MagicMock()) as mock_to:
+                storage.write(df, "/dbfs/mnt/data/table")
+                writer = mock_to.return_value.write.format("delta").mode("overwrite")
+                writer.option("overwriteSchema", "true").save.assert_called_once_with("/mnt/data/table")

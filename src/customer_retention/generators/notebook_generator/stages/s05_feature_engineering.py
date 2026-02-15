@@ -40,7 +40,7 @@ if latest_snapshot:
     print(f"Rows: {{len(df)}}, Features: {{len(df.columns)}}")
 else:
     from customer_retention.integrations.adapters.factory import get_delta
-    storage = get_delta(force_local=True)
+    storage = get_delta()
     df = storage.read("./experiments/data/silver/{name}_transformed")
     print(f"No snapshot found, loaded transformed data: {{df.shape}}")'''),
             self.cb.section("Point-in-Time Feature Engineering"),
@@ -81,7 +81,7 @@ if len(numeric_cols) >= 2:
     print("Created avg_transaction_value feature")'''),
             self.cb.section("Save to Gold Layer"),
             self.cb.code(f'''from customer_retention.integrations.adapters.factory import get_delta
-storage = get_delta(force_local=True)
+storage = get_delta()
 storage.write(df, "./experiments/data/gold/{name}_features")
 print(f"Gold layer saved: {{df.shape}}")'''),
         ]

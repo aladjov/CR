@@ -14,6 +14,12 @@ class DatabricksDelta(DeltaStorage):
             raise ImportError("PySpark required for DatabricksDelta")
         self._spark = None
 
+    @staticmethod
+    def _normalize_path(path: str) -> str:
+        if path.startswith("/dbfs/"):
+            return path[5:]
+        return path
+
     @property
     def spark(self) -> Any:
         if self._spark is None:
@@ -24,6 +30,7 @@ class DatabricksDelta(DeltaStorage):
         return self._spark
 
     def read(self, path: str, version: Optional[int] = None) -> pd.DataFrame:
+        path = self._normalize_path(path)
         reader = self.spark.read.format("delta")
         if version is not None:
             reader = reader.option("versionAsOf", version)
@@ -38,6 +45,7 @@ class DatabricksDelta(DeltaStorage):
     def write(self, df: pd.DataFrame, path: str, mode: str = "overwrite",
               partition_by: Optional[List[str]] = None,
               metadata: Optional[Dict[str, str]] = None) -> None:
+        path = self._normalize_path(path)
         if metadata:
             self.spark.conf.set(
                 "spark.databricks.delta.commitInfo.userMetadata",
@@ -53,6 +61,7 @@ class DatabricksDelta(DeltaStorage):
 
     def merge(self, df: pd.DataFrame, path: str, condition: str,
               update_cols: Optional[List[str]] = None) -> None:
+        path = self._normalize_path(path)
         from delta.tables import DeltaTable
         spark_df = self._to_spark_df(df)
         target = DeltaTable.forPath(self.spark, path)
@@ -65,17 +74,20 @@ class DatabricksDelta(DeltaStorage):
         merge_builder.whenNotMatchedInsertAll().execute()
 
     def history(self, path: str) -> List[Dict[str, Any]]:
+        path = self._normalize_path(path)
         from delta.tables import DeltaTable
         dt = DeltaTable.forPath(self.spark, path)
         history_df = dt.history()
         return history_df.toPandas().to_dict("records")
 
     def vacuum(self, path: str, retention_hours: int = 168) -> None:
+        path = self._normalize_path(path)
         from delta.tables import DeltaTable
         dt = DeltaTable.forPath(self.spark, path)
         dt.vacuum(retention_hours)
 
     def exists(self, path: str) -> bool:
+        path = self._normalize_path(path)
         from delta.tables import DeltaTable
         try:
             DeltaTable.forPath(self.spark, path)

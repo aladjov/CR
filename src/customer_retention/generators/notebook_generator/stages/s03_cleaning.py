@@ -49,7 +49,7 @@ mlflow_adapter.start_run("{exp_name}", run_name="03_data_cleaning")
 cleaning_stats = {{}}'''),
             self.cb.section("Load Bronze Data"),
             self.cb.code(f'''from customer_retention.integrations.adapters.factory import get_delta
-storage = get_delta(force_local=True)
+storage = get_delta()
 df = storage.read("./experiments/data/bronze/{name}")
 initial_shape = df.shape
 initial_nulls = df.isnull().sum().sum()

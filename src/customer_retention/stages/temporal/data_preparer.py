@@ -171,6 +171,6 @@ class UnifiedDataPreparer:
 def _get_storage():
     try:
         from customer_retention.integrations.adapters.factory import get_delta
-        return get_delta(force_local=True)
+        return get_delta()
     except ImportError:
         return None

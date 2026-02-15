@@ -528,7 +528,7 @@ def save_aggregated_delta(df: DataFrame, path: Union[str, Path]) -> Dict[str, st
 
     try:
         from customer_retention.integrations.adapters.factory import get_delta
-        storage = get_delta(force_local=True)
+        storage = get_delta()
         storage.write(df.copy(), str(path))
     except ImportError:
         df.to_parquet(str(path) + ".parquet", index=False)

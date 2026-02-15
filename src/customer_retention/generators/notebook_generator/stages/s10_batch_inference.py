@@ -110,7 +110,7 @@ print(f"Available tables: {manager.list_tables()}")'''),
 
 # Option 1: Load from a specific file
 from customer_retention.integrations.adapters.factory import get_delta
-storage = get_delta(force_local=True)
+storage = get_delta()
 
 customers_delta = Path("./experiments/data/gold/{name}_to_score")
 customers_parquet = Path("./experiments/data/gold/{name}_to_score.parquet")
