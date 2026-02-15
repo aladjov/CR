@@ -371,7 +371,7 @@ def _has_text_columns(findings_dir: Path) -> bool:
 
 
 def _load_dataset_context(findings_dir: Path, run_id: Optional[str] = None):
-    """Load ProjectContext (preferred) or DatasetContext from findings.
+    """Load ProjectContext from findings.
 
     Also checks run namespace project_context.yaml when run_id is set.
     """
@@ -404,17 +404,6 @@ def _load_dataset_context(findings_dir: Path, run_id: Optional[str] = None):
         except Exception:
             pass
 
-    context_path = findings_dir / "dataset_context.yaml"
-    if not context_path.exists():
-        return None
-    try:
-        from customer_retention.analysis.auto_explorer import DatasetContext
-
-        ctx = DatasetContext.load(context_path)
-        if ctx.datasets:
-            return ctx
-    except Exception:
-        pass
     return None
 
 

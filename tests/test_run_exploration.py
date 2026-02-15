@@ -28,6 +28,29 @@ from run_exploration import (
 )
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_DEFAULT_OBJECTIVE = {
+    "objective": "immediate_risk",
+    "priority": "primary",
+    "anchor": "now",
+}
+
+
+def _project_ctx(*, datasets, target_dataset, target_column="churned", entity_column="customer_id"):
+    return {
+        "project_name": "test",
+        "target_dataset": target_dataset,
+        "target_column": target_column,
+        "entity_column": entity_column,
+        "primary_objective": "immediate_risk",
+        "objectives": [_DEFAULT_OBJECTIVE],
+        "datasets": datasets,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
@@ -41,56 +64,56 @@ def findings_dir(tmp_path):
 
 @pytest.fixture()
 def multi_context_yaml(findings_dir):
-    """Create a dataset_context.yaml with 3 datasets (target first)."""
-    data = {
-        "target_dataset": "profiles",
-        "target_column": "churned",
-        "entity_column": "customer_id",
-        "datasets": {
+    """Create a project_context.yaml with 3 datasets (target first)."""
+    data = _project_ctx(
+        target_dataset="profiles",
+        datasets={
             "profiles": {
+                "name": "profiles",
                 "path": "../fixtures/profiles.csv",
-                "has_target": True,
-                "target_column": "churned",
+                "role": "target",
                 "entity_column": "customer_id",
+                "target_candidates": ["churned"],
             },
             "transactions": {
+                "name": "transactions",
                 "path": "../fixtures/transactions.csv",
-                "has_target": False,
-                "join_key": "customer_id",
+                "role": "feature",
+                "join_keys": ["customer_id"],
                 "join_to": "profiles",
                 "relationship": "many_to_one",
             },
             "tickets": {
+                "name": "tickets",
                 "path": "../fixtures/tickets.csv",
-                "has_target": False,
-                "join_key": "customer_id",
+                "role": "feature",
+                "join_keys": ["customer_id"],
                 "join_to": "profiles",
                 "relationship": "many_to_one",
             },
         },
-    }
-    path = findings_dir / "dataset_context.yaml"
+    )
+    path = findings_dir / "project_context.yaml"
     path.write_text(yaml.dump(data, default_flow_style=False))
     return path
 
 
 @pytest.fixture()
 def single_context_yaml(findings_dir):
-    """Create a dataset_context.yaml with 1 dataset."""
-    data = {
-        "target_dataset": "retail",
-        "target_column": "churned",
-        "entity_column": "customer_id",
-        "datasets": {
+    """Create a project_context.yaml with 1 dataset."""
+    data = _project_ctx(
+        target_dataset="retail",
+        datasets={
             "retail": {
+                "name": "retail",
                 "path": "../fixtures/retail.csv",
-                "has_target": True,
-                "target_column": "churned",
+                "role": "target",
                 "entity_column": "customer_id",
+                "target_candidates": ["churned"],
             },
         },
-    }
-    path = findings_dir / "dataset_context.yaml"
+    )
+    path = findings_dir / "project_context.yaml"
     path.write_text(yaml.dump(data, default_flow_style=False))
     return path
 
@@ -631,27 +654,27 @@ class TestSkipDetectionWithoutFlatFindingsDir:
         findings_dir = tmp_path / "findings"
         findings_dir.mkdir()
 
-        ctx_data = {
-            "target_dataset": "profiles",
-            "target_column": "churned",
-            "entity_column": "customer_id",
-            "datasets": {
+        ctx_data = _project_ctx(
+            target_dataset="profiles",
+            datasets={
                 "profiles": {
+                    "name": "profiles",
                     "path": "../fixtures/profiles.csv",
-                    "has_target": True,
-                    "target_column": "churned",
+                    "role": "target",
                     "entity_column": "customer_id",
+                    "target_candidates": ["churned"],
                 },
                 "transactions": {
+                    "name": "transactions",
                     "path": "../fixtures/transactions.csv",
-                    "has_target": False,
-                    "join_key": "customer_id",
+                    "role": "feature",
+                    "join_keys": ["customer_id"],
                     "join_to": "profiles",
                     "relationship": "many_to_one",
                 },
             },
-        }
-        (findings_dir / "dataset_context.yaml").write_text(yaml.dump(ctx_data))
+        )
+        (findings_dir / "project_context.yaml").write_text(yaml.dump(ctx_data))
 
         notebooks_dir = tmp_path / "notebooks"
         notebooks_dir.mkdir()
@@ -1037,26 +1060,26 @@ class TestGlobalSkipDetection:
         )
         f2.save(str(findings_dir / "transactions_findings.yaml"))
 
-        context_data = {
-            "target_dataset": "profiles",
-            "target_column": "churned",
-            "entity_column": "customer_id",
-            "datasets": {
+        context_data = _project_ctx(
+            target_dataset="profiles",
+            datasets={
                 "profiles": {
+                    "name": "profiles",
                     "path": "profiles.csv",
-                    "has_target": True,
-                    "target_column": "churned",
+                    "role": "target",
                     "entity_column": "customer_id",
+                    "target_candidates": ["churned"],
                 },
                 "transactions": {
+                    "name": "transactions",
                     "path": "transactions.csv",
-                    "has_target": False,
-                    "join_key": "customer_id",
+                    "role": "feature",
+                    "join_keys": ["customer_id"],
                     "join_to": "profiles",
                 },
             },
-        }
-        (findings_dir / "dataset_context.yaml").write_text(yaml.dump(context_data))
+        )
+        (findings_dir / "project_context.yaml").write_text(yaml.dump(context_data))
         context = _load_dataset_context(findings_dir)
 
         skip, reasons = _detect_global_skip_set(findings_dir, context)
@@ -1078,26 +1101,26 @@ class TestGlobalSkipDetection:
         )
         f2.save(str(findings_dir / "tickets_findings.yaml"))
 
-        context_data = {
-            "target_dataset": "profiles",
-            "target_column": "churned",
-            "entity_column": "customer_id",
-            "datasets": {
+        context_data = _project_ctx(
+            target_dataset="profiles",
+            datasets={
                 "profiles": {
+                    "name": "profiles",
                     "path": "profiles.csv",
-                    "has_target": True,
-                    "target_column": "churned",
+                    "role": "target",
                     "entity_column": "customer_id",
+                    "target_candidates": ["churned"],
                 },
                 "tickets": {
+                    "name": "tickets",
                     "path": "tickets.csv",
-                    "has_target": False,
-                    "join_key": "customer_id",
+                    "role": "feature",
+                    "join_keys": ["customer_id"],
                     "join_to": "profiles",
                 },
             },
-        }
-        (findings_dir / "dataset_context.yaml").write_text(yaml.dump(context_data))
+        )
+        (findings_dir / "project_context.yaml").write_text(yaml.dump(context_data))
         context = _load_dataset_context(findings_dir)
 
         skip, reasons = _detect_global_skip_set(findings_dir, context)

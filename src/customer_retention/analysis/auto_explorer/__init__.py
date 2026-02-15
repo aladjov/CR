@@ -5,7 +5,6 @@ from .active_dataset_store import (
     save_active_dataset,
     save_aggregated_dataset,
 )
-from .dataset_context import DatasetContext, DatasetContextScanner, DatasetEntry
 from .dataset_fingerprinter import DatasetFingerprint, DatasetFingerprinter
 from .entity_timestamp_deriver import EntityFeatureTimestampDeriver, EntityTimestampResult
 from .exploration_manager import (
@@ -119,9 +118,6 @@ __all__ = [
     "BronzeBuilder",
     "SilverBuilder",
     "GoldBuilder",
-    "DatasetContext",
-    "DatasetContextScanner",
-    "DatasetEntry",
     "ProjectContext",
     "DatasetRegistryEntry",
     "DatasetProvenance",

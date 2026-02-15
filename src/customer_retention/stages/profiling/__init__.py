@@ -105,11 +105,8 @@ from .temporal_analyzer import (
 from .temporal_coverage import (
     DriftImplication,
     EntityWindowCoverage,
-    FeatureAvailability,
-    FeatureAvailabilityResult,
     TemporalCoverageResult,
     TemporalGap,
-    analyze_feature_availability,
     analyze_temporal_coverage,
     derive_drift_implications,
 )
@@ -258,5 +255,4 @@ __all__ = [
     "WindowRecommendationCollector", "WindowUnionResult", "TemporalHeterogeneityResult",
     "analyze_temporal_coverage", "TemporalCoverageResult", "TemporalGap", "EntityWindowCoverage",
     "derive_drift_implications", "DriftImplication",
-    "analyze_feature_availability", "FeatureAvailability", "FeatureAvailabilityResult",
 ]

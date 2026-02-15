@@ -23,7 +23,6 @@ from .number_formatter import NumberFormatter
 if TYPE_CHECKING:
     from customer_retention.stages.profiling.segment_analyzer import SegmentationResult
     from customer_retention.stages.profiling.temporal_analyzer import TemporalAnalysis
-    from customer_retention.stages.temporal.cutoff_analyzer import CutoffAnalysis
 
 
 class ChartBuilder:
@@ -2466,126 +2465,6 @@ class ChartBuilder:
             marker_color=self.colors["primary"],
             hovertemplate="%{y}: %{x:,}<extra></extra>"
         ), row=row, col=col)
-
-    def cutoff_selection_chart(
-        self, cutoff_analysis: "CutoffAnalysis", suggested_cutoff: Optional[datetime] = None,
-        current_cutoff: Optional[datetime] = None, title: str = "Point-in-Time Cutoff Selection"
-    ) -> go.Figure:
-        df = cutoff_analysis.to_dataframe()
-        if len(df) == 0:
-            return go.Figure().add_annotation(text="No temporal data available", showarrow=False)
-
-        min_date = _as_naive(df["date"].min())
-        max_date = _as_naive(df["date"].max())
-
-        fig = go.Figure()
-
-        # Add 100% baseline first (invisible, for fill reference)
-        fig.add_trace(go.Scatter(
-            x=df["date"], y=[100] * len(df), name="_baseline",
-            mode="lines", line={"color": "rgba(0,0,0,0)", "width": 0},
-            showlegend=False, hoverinfo="skip"
-        ))
-
-        # Score area fills from 100% down to train_pct line
-        fig.add_trace(go.Scatter(
-            x=df["date"], y=df["train_pct"], name="Score Set %",
-            mode="lines", line={"color": self.colors["warning"], "width": 2},
-            fill="tonexty", fillcolor="rgba(255, 193, 7, 0.3)",
-            hovertemplate="Cutoff: %{x|%Y-%m-%d}<br>Score: %{customdata:.1f}%<extra></extra>",
-            customdata=df["score_pct"], showlegend=True
-        ))
-
-        # Train area fills from train_pct down to 0
-        fig.add_trace(go.Scatter(
-            x=df["date"], y=df["train_pct"], name="Training Set %",
-            mode="lines", line={"color": self.colors["success"], "width": 2},
-            fill="tozeroy", fillcolor="rgba(40, 167, 69, 0.3)",
-            hovertemplate="Cutoff: %{x|%Y-%m-%d}<br>Train: %{y:.1f}%<extra></extra>",
-            showlegend=True
-        ))
-
-        milestones = cutoff_analysis.get_percentage_milestones(step=5)
-        if milestones:
-            milestone_dates = [m["date"] for m in milestones]
-            milestone_pcts = [m["train_pct"] for m in milestones]
-            fig.add_trace(go.Scatter(
-                x=milestone_dates, y=milestone_pcts, name="Train % Reference",
-                mode="markers+text", marker={"size": 8, "color": self.colors["success"], "symbol": "circle"},
-                text=[f"{int(p)}%" for p in milestone_pcts], textposition="top center",
-                textfont={"size": 8, "color": self.colors["success"]},
-                hovertemplate="Date: %{x|%Y-%m-%d}<br>Train: %{y:.0f}%<extra></extra>",
-                showlegend=False
-            ))
-
-        # Add cutoff lines - only if within data range
-        if suggested_cutoff:
-            split = cutoff_analysis.get_split_at_date(suggested_cutoff)
-            # Check if suggested cutoff is within data range
-            if min_date <= _as_naive(suggested_cutoff) <= max_date:
-                fig.add_vline(
-                    x=suggested_cutoff, line={"color": self.colors["info"], "dash": "dash", "width": 2}
-                )
-                # Add text annotation label on chart for selected cutoff
-                fig.add_annotation(
-                    x=suggested_cutoff, y=1.02, xref="x", yref="paper",
-                    text=f"Selected: {suggested_cutoff.strftime('%Y-%m-%d')}",
-                    showarrow=False, font={"size": 9, "color": self.colors["info"]},
-                    xanchor="center", yanchor="bottom"
-                )
-            # Add legend entry with visible line sample
-            fig.add_trace(go.Scatter(
-                x=[None], y=[None], mode="lines",
-                line={"color": self.colors["info"], "dash": "dash", "width": 2},
-                name=f"Selected: {suggested_cutoff.strftime('%Y-%m-%d')} ({split['train_pct']:.0f}% train)",
-                showlegend=True
-            ))
-
-        if current_cutoff:
-            split = cutoff_analysis.get_split_at_date(current_cutoff)
-            # Check if registry cutoff is within data range
-            cutoff_in_range = min_date <= _as_naive(current_cutoff) <= max_date
-            # Determine if registry and selected cutoffs are at the same position
-            same_as_selected = suggested_cutoff and _as_naive(current_cutoff) == _as_naive(suggested_cutoff)
-            if cutoff_in_range:
-                fig.add_vline(
-                    x=current_cutoff, line={"color": self.colors["danger"], "dash": "dot", "width": 2}
-                )
-                # Add text annotation label on chart for registry cutoff
-                # Offset vertically if same as selected to avoid overlap
-                annotation_y = 1.08 if same_as_selected else 1.02
-                fig.add_annotation(
-                    x=current_cutoff, y=annotation_y, xref="x", yref="paper",
-                    text=f"Registry: {current_cutoff.strftime('%Y-%m-%d')}",
-                    showarrow=False, font={"size": 9, "color": self.colors["danger"]},
-                    xanchor="center", yanchor="bottom"
-                )
-                legend_label = f"Registry: {current_cutoff.strftime('%Y-%m-%d')} ({split['train_pct']:.0f}% train)"
-            else:
-                # Registry cutoff is outside data range
-                legend_label = f"Registry: {current_cutoff.strftime('%Y-%m-%d')} (outside data range)"
-            # Add legend entry
-            fig.add_trace(go.Scatter(
-                x=[None], y=[None], mode="lines",
-                line={"color": self.colors["danger"], "dash": "dot", "width": 2},
-                name=legend_label,
-                showlegend=True
-            ))
-
-        fig.update_layout(
-            title={"text": "Train/Score Split by Cutoff Date", "x": 0.5, "xanchor": "center"},
-            width=800, height=300, autosize=False, template=self.theme, showlegend=True,
-            legend={
-                "orientation": "h", "yanchor": "top", "y": -0.15,
-                "xanchor": "center", "x": 0.5, "bgcolor": "rgba(255,255,255,0.8)",
-                "font": {"size": 9}
-            },
-            margin={"t": 40, "b": 60, "l": 55, "r": 55},
-            yaxis={"title": "Percentage", "range": [0, 100]},
-            xaxis={"title": ""},
-        )
-
-        return fig
 
     def recency_analysis_panel(
         self, retained_recency: np.ndarray, churned_recency: np.ndarray,

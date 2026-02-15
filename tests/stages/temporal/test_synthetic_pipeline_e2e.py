@@ -8,7 +8,6 @@ import pandas as pd
 import pytest
 
 from customer_retention.stages.temporal import (
-    CutoffAnalyzer,
     ScenarioDetector,
     UnifiedDataPreparer,
 )
@@ -107,105 +106,7 @@ class TestSyntheticPipelinePrepare:
         assert "support_tickets" in result.columns
 
 
-class TestSyntheticPipelineAnalyze:
-    def test_analyze_produces_multiple_bins(self, no_datetime_df, temp_dir):
-        config = TimestampConfig(strategy=TimestampStrategy.SYNTHETIC_INDEX, observation_window_days=90)
-        preparer = UnifiedDataPreparer(temp_dir, config)
-        prepared = preparer.prepare_from_raw(no_datetime_df, "churned", "customer_id")
-        analyzer = CutoffAnalyzer()
-        analysis = analyzer.analyze(prepared, timestamp_column="feature_timestamp")
-        assert len(analysis.bins) > 1
-
-    def test_date_range_spans_dataframe_length(self, no_datetime_df, temp_dir):
-        config = TimestampConfig(
-            strategy=TimestampStrategy.SYNTHETIC_INDEX, observation_window_days=90,
-            synthetic_base_date="2024-01-01",
-        )
-        preparer = UnifiedDataPreparer(temp_dir, config)
-        prepared = preparer.prepare_from_raw(no_datetime_df, "churned", "customer_id")
-        analyzer = CutoffAnalyzer()
-        analysis = analyzer.analyze(prepared, timestamp_column="feature_timestamp")
-        base = pd.to_datetime("2024-01-01")
-        expected_max = base + timedelta(days=len(no_datetime_df) - 1)
-        assert analysis.date_range[0] >= base
-        assert analysis.date_range[1] <= expected_max
-
-    def test_coverage_is_full(self, no_datetime_df, temp_dir):
-        config = TimestampConfig(strategy=TimestampStrategy.SYNTHETIC_INDEX, observation_window_days=90)
-        preparer = UnifiedDataPreparer(temp_dir, config)
-        prepared = preparer.prepare_from_raw(no_datetime_df, "churned", "customer_id")
-        analyzer = CutoffAnalyzer()
-        analysis = analyzer.analyze(prepared, timestamp_column="feature_timestamp")
-        assert analysis.covered_rows == len(no_datetime_df)
-
-    def test_suggest_cutoff_returns_date_within_range(self, no_datetime_df, temp_dir):
-        config = TimestampConfig(strategy=TimestampStrategy.SYNTHETIC_INDEX, observation_window_days=90)
-        preparer = UnifiedDataPreparer(temp_dir, config)
-        prepared = preparer.prepare_from_raw(no_datetime_df, "churned", "customer_id")
-        analyzer = CutoffAnalyzer()
-        analysis = analyzer.analyze(prepared, timestamp_column="feature_timestamp")
-        cutoff = analysis.suggest_cutoff(train_ratio=0.9)
-        assert analysis.date_range[0] <= cutoff <= analysis.date_range[1]
-
-
-class TestSyntheticPipelineSplit:
-    @pytest.fixture
-    def prepared_with_analysis(self, no_datetime_df, temp_dir):
-        config = TimestampConfig(strategy=TimestampStrategy.SYNTHETIC_INDEX, observation_window_days=90)
-        preparer = UnifiedDataPreparer(temp_dir, config)
-        prepared = preparer.prepare_from_raw(no_datetime_df, "churned", "customer_id")
-        analyzer = CutoffAnalyzer()
-        analysis = analyzer.analyze(prepared, timestamp_column="feature_timestamp")
-        return prepared, analysis
-
-    def test_split_produces_no_unresolvable(self, prepared_with_analysis):
-        prepared, analysis = prepared_with_analysis
-        cutoff = analysis.suggest_cutoff(train_ratio=0.9)
-        split = analysis.split_at_cutoff(cutoff)
-        assert split.unresolvable_count == 0
-
-    def test_train_count_approximately_matches_ratio(self, prepared_with_analysis):
-        prepared, analysis = prepared_with_analysis
-        cutoff = analysis.suggest_cutoff(train_ratio=0.9)
-        split = analysis.split_at_cutoff(cutoff)
-        ratio = split.train_count / (split.train_count + split.score_count)
-        assert 0.80 <= ratio <= 0.95
-
-    def test_train_rows_have_ts_le_cutoff(self, prepared_with_analysis):
-        prepared, analysis = prepared_with_analysis
-        cutoff = analysis.suggest_cutoff(train_ratio=0.9)
-        split = analysis.split_at_cutoff(cutoff)
-        assert (split.train_df["feature_timestamp"] <= cutoff).all()
-
-    def test_score_rows_have_ts_gt_cutoff(self, prepared_with_analysis):
-        prepared, analysis = prepared_with_analysis
-        cutoff = analysis.suggest_cutoff(train_ratio=0.9)
-        split = analysis.split_at_cutoff(cutoff)
-        assert (split.score_df["feature_timestamp"] > cutoff).all()
-
-
 class TestSyntheticPipelineSnapshot:
-    def test_snapshot_row_count_matches_split_train_count(self, no_datetime_df, temp_dir):
-        config = TimestampConfig(strategy=TimestampStrategy.SYNTHETIC_INDEX, observation_window_days=90)
-        preparer = UnifiedDataPreparer(temp_dir, config)
-        prepared = preparer.prepare_from_raw(no_datetime_df, "churned", "customer_id")
-        analyzer = CutoffAnalyzer()
-        analysis = analyzer.analyze(prepared, timestamp_column="feature_timestamp")
-        cutoff = analysis.suggest_cutoff(train_ratio=0.9)
-        split = analysis.split_at_cutoff(cutoff)
-        _, meta = preparer.create_training_snapshot(prepared, cutoff)
-        assert meta["row_count"] == split.train_count
-
-    def test_snapshot_metadata_contains_cutoff(self, no_datetime_df, temp_dir):
-        config = TimestampConfig(strategy=TimestampStrategy.SYNTHETIC_INDEX, observation_window_days=90)
-        preparer = UnifiedDataPreparer(temp_dir, config)
-        prepared = preparer.prepare_from_raw(no_datetime_df, "churned", "customer_id")
-        analyzer = CutoffAnalyzer()
-        analysis = analyzer.analyze(prepared, timestamp_column="feature_timestamp")
-        cutoff = analysis.suggest_cutoff(train_ratio=0.9)
-        _, meta = preparer.create_training_snapshot(prepared, cutoff)
-        assert "cutoff_date" in meta
-
     def test_label_available_flag_all_true_for_synthetic(self, no_datetime_df, temp_dir):
         config = TimestampConfig(strategy=TimestampStrategy.SYNTHETIC_INDEX, observation_window_days=90)
         preparer = UnifiedDataPreparer(temp_dir, config)
@@ -214,23 +115,6 @@ class TestSyntheticPipelineSnapshot:
 
 
 class TestSyntheticPipelineFullFlow:
-    def test_full_pipeline_end_to_end(self, no_datetime_df, temp_dir):
-        detector = ScenarioDetector()
-        scenario, config, _ = detector.detect(no_datetime_df, "churned")
-        assert scenario == "synthetic"
-
-        preparer = UnifiedDataPreparer(temp_dir, config)
-        prepared = preparer.prepare_from_raw(no_datetime_df, "churned", "customer_id")
-
-        analyzer = CutoffAnalyzer()
-        analysis = analyzer.analyze(prepared, timestamp_column="feature_timestamp")
-        cutoff = analysis.suggest_cutoff(train_ratio=0.9)
-        split = analysis.split_at_cutoff(cutoff)
-
-        snapshot_df, meta = preparer.create_training_snapshot(prepared, cutoff)
-        assert meta["row_count"] == split.train_count
-        assert 0.80 <= meta["row_count"] / len(prepared) <= 0.95
-
     def test_shuffled_dataframe_produces_same_timestamp_range(self, no_datetime_df, temp_dir):
         config = TimestampConfig(
             strategy=TimestampStrategy.SYNTHETIC_INDEX, observation_window_days=90,

@@ -43,7 +43,6 @@ Timestamp Scenarios:
 from customer_retention.core.utils.leakage import TEMPORAL_METADATA_COLUMNS
 
 from .access_guard import AccessContext, DataAccessGuard
-from .cutoff_analyzer import CutoffAnalysis, CutoffAnalyzer, SplitResult
 from .data_preparer import PreparedData, UnifiedDataPreparer
 from .point_in_time_join import PointInTimeJoiner
 from .point_in_time_registry import ConsistencyReport, DatasetSnapshot, PointInTimeRegistry
@@ -69,74 +68,6 @@ from .timestamp_manager import TimestampConfig, TimestampManager, TimestampStrat
 TEMPORAL_METADATA_COLS = TEMPORAL_METADATA_COLUMNS
 
 
-def _restore_snapshot_columns(df, findings):
-    """Reverse the entity_id/target renames applied by UnifiedDataPreparer."""
-    renames = {}
-    ts_meta = getattr(findings, "time_series_metadata", None)
-    entity_col = ts_meta.entity_column if ts_meta else None
-    target_col = getattr(findings, "target_column", None)
-
-    if entity_col and "entity_id" in df.columns and entity_col not in df.columns:
-        renames["entity_id"] = entity_col
-    if target_col and "target" in df.columns and target_col not in df.columns:
-        renames["target"] = target_col
-
-    return df.rename(columns=renames) if renames else df
-
-
-def load_data_with_snapshot_preference(findings, output_dir: str = "../explorations", dataset_name: str = None):
-    """Load data preferring snapshots over raw source files.
-
-    This function implements the recommended data loading pattern for exploration
-    notebooks. It checks if a training snapshot exists and loads from it if available,
-    otherwise falls back to the original source file.
-
-    Parameters
-    ----------
-    findings : ExplorationFindings
-        The findings object loaded from a previous exploration
-    output_dir : str
-        Directory containing explorations and snapshots
-    dataset_name : str, optional
-        Explicit dataset namespace for snapshot discovery. When provided, used
-        directly (e.g. a composite name from compute_composite_dataset_name).
-        When None, derived from findings.source_path stem.
-
-    Returns
-    -------
-    tuple[pd.DataFrame, str]
-        DataFrame and a string indicating the source ("snapshot" or "source")
-
-    Example
-    -------
-    >>> from customer_retention.stages.temporal import load_data_with_snapshot_preference
-    >>> findings = ExplorationFindings.load(FINDINGS_PATH)
-    >>> df, source = load_data_with_snapshot_preference(findings)
-    >>> print(f"Loaded from: {source}")
-    """
-    from pathlib import Path
-
-    import pandas as pd
-
-    if not dataset_name and not findings.source_path:
-        raise ValueError("findings.source_path is required for snapshot discovery")
-    resolved_name = dataset_name or Path(findings.source_path).stem
-    mgr = SnapshotManager(Path(output_dir), dataset_name=resolved_name)
-    latest = mgr.get_latest_snapshot()
-    if latest:
-        df, _ = mgr.load_snapshot(latest)
-        return _restore_snapshot_columns(df, findings), f"snapshot:{latest}"
-
-    # Fall back to source file
-    source_path = findings.source_path
-    if source_path.endswith('.csv'):
-        df = pd.read_csv(source_path)
-    else:
-        df = pd.read_parquet(source_path)
-
-    return df, "source"
-
-
 __all__ = [
     "DatetimeOrderAnalyzer",
     "TimestampStrategy",
@@ -157,14 +88,10 @@ __all__ = [
     "DatasetSnapshot",
     "ConsistencyReport",
     "PointInTimeRegistry",
-    "CutoffAnalysis",
-    "CutoffAnalyzer",
-    "SplitResult",
     "SyntheticCoordinationParams",
     "SyntheticTimestampCoordinator",
     "compute_composite_dataset_name",
     "require_consistent_cutoffs",
-    "load_data_with_snapshot_preference",
     "TEMPORAL_METADATA_COLS",
     "TemporalMerger",
     "MergeConfig",
