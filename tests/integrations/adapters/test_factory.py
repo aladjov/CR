@@ -81,6 +81,31 @@ class TestFactoryWithForcedEnvironment:
         assert isinstance(adapter, LocalMLflow)
 
 
+class TestFactoryDeltaFallback:
+    @patch("customer_retention.integrations.adapters.storage.databricks.is_spark_available", return_value=True)
+    @patch("customer_retention.integrations.adapters.factory.is_spark_available", return_value=True)
+    @patch("customer_retention.integrations.adapters.storage.local.DELTA_RS_AVAILABLE", False)
+    def test_force_local_falls_back_to_databricks_when_no_deltalake(self, *_):
+        from customer_retention.integrations.adapters import get_delta
+        from customer_retention.integrations.adapters.storage import DatabricksDelta
+        storage = get_delta(force_local=True)
+        assert isinstance(storage, DatabricksDelta)
+
+    @requires_delta
+    def test_force_local_returns_local_when_deltalake_available(self):
+        from customer_retention.integrations.adapters import get_delta
+        from customer_retention.integrations.adapters.storage import LocalDelta
+        storage = get_delta(force_local=True)
+        assert isinstance(storage, LocalDelta)
+
+    @patch("customer_retention.integrations.adapters.factory.is_spark_available", return_value=False)
+    @patch("customer_retention.integrations.adapters.storage.local.DELTA_RS_AVAILABLE", False)
+    def test_raises_when_no_backend_available(self, *_):
+        from customer_retention.integrations.adapters import get_delta
+        with pytest.raises(ImportError):
+            get_delta()
+
+
 @requires_delta
 class TestFactoryWithMockedSparkAvailable:
     @patch("customer_retention.integrations.adapters.storage.databricks.is_spark_available", return_value=True)

@@ -7,9 +7,17 @@ from .storage import DatabricksDelta, DeltaStorage, LocalDelta
 
 
 def get_delta(force_local: bool = False) -> DeltaStorage:
-    if force_local or not is_spark_available():
+    from .storage.local import DELTA_RS_AVAILABLE
+    if force_local and DELTA_RS_AVAILABLE:
         return LocalDelta()
-    return DatabricksDelta()
+    if is_spark_available():
+        return DatabricksDelta()
+    if DELTA_RS_AVAILABLE:
+        return LocalDelta()
+    raise ImportError(
+        "No Delta storage backend available. "
+        "Install deltalake (pip install deltalake) or use PySpark."
+    )
 
 
 def get_feature_store(
