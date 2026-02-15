@@ -78,6 +78,10 @@ pip install -e ".[dev,ml]"
 jupyter lab exploration_notebooks/00_start_here.ipynb
 ```
 
+## [[Acknowledgments]]
+
+Built on [scikit-learn](https://scikit-learn.org/), [XGBoost](https://xgboost.ai/), [SHAP](https://shap.readthedocs.io/), [MLflow](https://mlflow.org/), [Pandas](https://pandas.pydata.org/), [Feast](https://feast.dev/), [Plotly](https://plotly.com/python/), and [many more](Acknowledgments).
+
 ## License
 
 Apache 2.0 - See [LICENSE](https://github.com/aladjov/CR/blob/master/LICENSE) for details.
