@@ -2,6 +2,8 @@
 
 This tutorial demonstrates a complete customer retention ML pipeline using a synthetic retail dataset. Rather than just showing *what* we do, we focus on *why* each step matters and *what decisions* follow from the analysis.
 
+The framework follows an **intent-driven medallion architecture**: you declare what you're trying to predict, the framework propagates that declaration through every downstream notebook, and a deterministic production pipeline is generated at the end.
+
 **[View Interactive Tutorial (HTML)](https://aladjov.github.io/CR/tutorial/retail-churn/)** - Browse all executed notebooks with visualizations
 
 ---
@@ -15,6 +17,7 @@ A retail company wants to predict which customers will churn so they can interve
 2. What features drive customer retention?
 3. How accurately can we predict churn?
 4. What's the right model for production?
+5. Does the model hold up on truly unseen future data?
 
 ---
 
@@ -23,11 +26,12 @@ A retail company wants to predict which customers will churn so they can interve
 | Property | Value |
 |----------|-------|
 | **Source** | `tests/fixtures/customer_retention_retail.csv` |
-| **Customers** | 26,578 (after point-in-time filtering) |
-| **Features** | 18 columns |
+| **Rows** | 30,801 |
+| **Columns** | 15 (raw), expanding to 34 after datetime derivation |
+| **Unique Customers** | 30,769 |
 | **Target** | `retained` (binary: 0=churned, 1=retained) |
-| **Retention Rate** | 79.5% (3.8:1 class imbalance) |
-| **Time Span** | 2008-2018 (10 years) |
+| **Retention Rate** | 79.5% (3.9:1 class imbalance) |
+| **Time Span** | 2008-06-17 to 2018-01-17 (3,501 days) |
 
 ### Column Descriptions
 
@@ -51,47 +55,229 @@ A retail company wants to predict which customers will churn so they can interve
 
 ---
 
-## Stage 1: Data Discovery
+## Pipeline Architecture
 
-**Purpose:** Understand dataset structure, detect temporal patterns, and create a point-in-time snapshot that prevents data leakage.
+The pipeline progresses in three major phases, following the **medallion architecture**:
+
+```
+Phase I  - Bronze:  Intent → Discovery → Temporal Evidence → Source Integrity
+Phase II - Silver:  Merge → Column Deep Dive → Relationship Analysis
+Phase III - Gold:   Feature Engineering → Modeling → Production Pipeline → Scoring Validation
+```
+
+All steps after Bronze operate per objective. For this retail dataset -- entity-level with one row per customer -- the temporal event track (01a-01d) runs but produces simpler output than it would for event-level data with multiple transactions per customer.
+
+---
+
+## Phase 0: Intent Contract
+
+**Purpose:** Before any exploration begins, declare the modeling intent. Every downstream notebook inherits this contract.
+
+[View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/00_start_here.html)
+
+### Why Intent Matters
+
+Without a declared intent, exploration is aimless. The intent contract ensures that temporal evidence, snapshot grids, aggregation logic, and training setup all serve a single coherent modeling goal. You declare *what* you're predicting and *how*, and the framework propagates those choices everywhere.
+
+### What Gets Declared
+
+| Parameter | Value | How It's Derived |
+|-----------|-------|------------------|
+| **Primary Objective** | Immediate risk | Auto-detected from target column `retained` matching churn/cancel pattern |
+| **Secondary Objective** | Disengagement | Temporal span (3,501 days) suggests possible disengagement modeling |
+| **Temporal Posture** | Long memory | Stable customer base with decade-long history |
+| **Prediction Horizons** | 30, 60, 90 days | Derived from H=90: [H/3, 2H/3, H] |
+| **Observation Window** | 270 days | max(180, 3 x H) = 270 |
+| **Purge Gap** | 104 days | H + 14 = 104 (prevents label leakage) |
+| **Label Window** | 90 days | Equals prediction horizon |
+| **Cadence** | Weekly | Standard for immediate risk with H=90 |
+| **Split Strategy** | Temporal | Time-ordered split (never random for production) |
+
+### Dataset Fingerprint
+
+The framework auto-detects dataset structure:
+
+| Property | Detected Value |
+|----------|---------------|
+| Entity Column | `custid` |
+| Time Column | `created` |
+| Target Candidates | `retained` |
+| Granularity | Entity-level (one row per customer) |
+| Structure | Snapshot pattern |
+
+### Snapshot Grid
+
+A deterministic set of **434 weekly `as_of_date` values** spanning 2009-03-14 to 2017-07-01. This grid becomes the backbone of all aggregation and training -- every downstream notebook operates on these exact dates.
+
+For event-level data, each dataset would *vote* on optimal cadence during temporal exploration (01a-01c), and votes would be aggregated into a consensus grid. For our entity-level dataset, the grid is derived directly from the intent parameters.
+
+### Decision Made
+- **Primary objective**: Immediate risk (highest confidence, 100%)
+- **Posture**: Long memory (stable patterns over 10 years of history)
+- **Purge gap**: 104 days to prevent temporal leakage between train and test
+- **Cadence**: Weekly snapshots for adequate temporal coverage
+
+### Alternatives Considered
+- **Disengagement objective**: Detected at 60% confidence, available as secondary objective
+- **Reactive posture**: Would use dense recent snapshots only; not ideal for this stable dataset
+- **Shorter label window** (30 days): More aggressive churn definition, fewer positive examples
+
+---
+
+## Phase I: Bronze
+
+### Stage 1: Data Discovery
+
+**Purpose:** Profile each dataset, detect temporal patterns, derive datetime features, and create the landing Delta table.
 
 [View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/01_data_discovery.html)
 
 ### Why Point-in-Time Matters
 
-The most common mistake in churn modeling is **data leakage** - accidentally using information from the future to predict the past. For example, if we use a customer's behavior from December to predict their January churn status, we're cheating.
+The most common mistake in churn modeling is **data leakage** -- accidentally using information from the future to predict the past. If we use a customer's behavior from December to predict their January churn status, we're cheating.
 
 The framework automatically:
 1. Detects temporal columns (`created`, `firstorder`, `lastorder`)
-2. Identifies the **feature timestamp** (when we observe features) vs **label timestamp** (when we know the outcome)
-3. Creates a versioned snapshot with a specific cutoff date
+2. Identifies the **feature timestamp** (`lastorder` -- when we last observe the customer)
+3. Derives datetime features with **leakage guards** that mask future values
+4. Creates a Delta Lake landing table for downstream consumption
 
 ### Key Findings
 
 | Metric | Value | Implication |
 |--------|-------|-------------|
-| Temporal Scenario | Production | Real timestamps available |
-| Cutoff Date | ~90/10 train/score split | Adequate holdout for validation |
 | Structure | Entity-level | One row per customer (not event-level) |
-| Snapshot ID | training_v38 | Tracked for reproducibility |
+| Feature Timestamp | `lastorder` (auto-detected) | Point-in-time anchor for each customer |
+| Temporal Pattern | Snapshot | Static entity data, not repeated events |
+| Stability Score | 0.85 (Stable) | Patterns consistent between historical and recent windows |
+| Target Shift | 78.5% → 86.6% | Recent cohort has higher retention |
+| Run ID | retail-e7471284 | Tracked for reproducibility |
+
+**Datetime Feature Derivation:**
+The framework derives **18 additional datetime features** from `created` and `firstorder`, expanding the dataset from 15 to 34 columns. Each derived feature includes a leakage guard: future dates for `created` (1.1% of rows) and `firstorder` (0.0%) are masked to NaN.
+
+**Structural Stability:**
+
+| Signal | Value | Meaning |
+|--------|-------|---------|
+| Volume Ratio | 1.56x | Recent window slightly busier |
+| Entity Overlap (Jaccard) | 0.00 | Historical and recent cohorts are disjoint |
+| Null Drift | 0.26% | Negligible missingness change |
+| Distribution Drift | 0/27 columns shifted | No numeric features drifted significantly |
+| Cadence Ratio | 1.63x | Recent cadence faster (13.7/day vs 8.4/day) |
+
+### Temporal Track (01a-01d)
+
+For **event-level data** (multiple rows per customer), the framework runs four additional notebooks:
+- **01a** Temporal Deep Dive: Window feasibility, density, velocity, cadence votes
+- **01b** Temporal Quality: Temporal data quality assessment
+- **01c** Temporal Patterns: Seasonality, trends, regime detection
+- **01d** Event Aggregation: Aggregate events against the consensus snapshot grid
+
+For our entity-level dataset, these notebooks run but produce simpler output since there's one observation per customer. The key output is still the aggregated `(entity_id, as_of_date)` snapshots that feed into Silver.
 
 ### Decision Made
-- **Selected cutoff** that achieves 90/10 split
-- **Label window**: 180 days (standard for retail churn)
-- All downstream notebooks load from this snapshot, ensuring consistency
+- **Feature timestamp**: `lastorder` (auto-detected as most recent activity indicator)
+- **Leakage guards**: `created` and `firstorder` future values masked
+- **Snapshot grid**: 434 weekly dates, ready for aggregation
 
 ### Alternatives Considered
-- **Manual cutoff override**: Useful if business has specific date requirements
-- **Different label windows**: 90 days (aggressive) or 365 days (conservative) depending on business definition of churn
-- **Event-level aggregation**: If data had multiple rows per customer, we'd use the temporal track (notebooks 01a-01d)
+- **Manual timestamp selection**: Override auto-detection if business has specific event definitions
+- **Different recent window**: 270 days is derived from intent; could be overridden for seasonal businesses
+- **Event-level modeling**: If data had transaction-level rows, the temporal track would produce richer aggregation features (recency, velocity, momentum, cohort trends)
 
 ---
 
-## Stage 2: Column Deep Dive
+### Stage 2: Source Integrity
 
-**Purpose:** Analyze each column's distribution, detect issues, and determine appropriate transformations.
+**Purpose:** Validate data quality *per dataset* before merge. Drop unusable columns early to avoid provenance complexity downstream.
 
-[View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/02_column_deep_dive.html)
+[View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/02_source_integrity.html)
+
+### Why Integrity Before Merge?
+
+Garbage in, garbage out. By checking each source independently *before* merging, we:
+- Eliminate broken columns early (no need to trace issues through merged data)
+- Maintain clear data lineage (this column was bad in *this* source)
+- Avoid merge artifacts masking quality issues
+
+### Key Findings
+
+**Target Distribution:**
+
+| Class | Count | Percentage |
+|-------|-------|------------|
+| Retained (1) | 24,453 | 79.5% |
+| Churned (0) | 6,316 | 20.5% |
+
+**Imbalance ratio: 3.9:1** -- Mild to moderate. We'll handle it with class weights.
+
+**Integrity Checks:**
+- **Duplicates**: None detected
+- **Missing values**: Minimal (0.06%) -- negligible impact
+- **Lag2 columns**: 100% missing (expected -- lag windows extend beyond available history)
+- **Outliers**: Cohort comparison features (`*_vs_cohort_mean`, `*_vs_cohort_pct`) have widespread out-of-range values due to entity-level data producing degenerate cohort statistics
+
+**Quality Recommendations:**
+- 405 column-level recommendations generated
+- Severity levels: LOW (null imputation), MEDIUM (clip outliers), HIGH (drop or create indicator)
+- Most issues are LOW severity -- data quality is excellent overall
+
+### Decision Made
+- Keep data mostly as-is -- quality is excellent
+- Use **balanced class weights** in models to handle 3.9:1 imbalance
+- Drop lag2 columns (100% missing -- no data in that time window)
+- Flag cohort comparison features for review in Column Deep Dive
+
+### Alternatives Considered
+- **SMOTE oversampling**: Not needed -- imbalance is mild and we have 6,316 churned examples (plenty to learn from)
+- **Undersampling majority**: Throws away data. Only useful for extreme imbalance (>10:1)
+- **Aggressive column removal**: Could drop more aggressively, but prefer to defer decisions to modeling stage
+
+---
+
+## Phase II: Silver
+
+### Stage 3: Dataset Merge
+
+**Purpose:** Merge all Bronze outputs into a unified feature matrix aligned on `(entity_id, as_of_date)`.
+
+[View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/03_dataset_merge.html)
+
+### Why Temporal Merge Matters
+
+The `TemporalMerger` builds a **spine** from the snapshot grid and all known entities, then joins each dataset using the appropriate strategy:
+
+| Dataset Shape | Strategy | Join Keys |
+|---------------|----------|-----------|
+| Event-level (aggregated) | Snapshot join | `entity_id` + `as_of_date` |
+| Entity-level (no timestamp) | Broadcast | `entity_id` only (features repeat across dates) |
+| Entity-level (with timestamp) | As-of join | `entity_id` + backward-looking temporal match |
+
+### Key Findings
+
+| Metric | Value |
+|--------|-------|
+| Unique Entities | 30,769 |
+| Grid Dates | 434 (weekly cadence) |
+| Grid Range | 2009-03-14 to 2017-07-01 |
+| Spine Rows | **13,354,180** (30,769 entities x 434 dates) |
+| Output Columns | 35 (entity_id + as_of_date + 33 features) |
+
+For a single entity-level dataset, the merge is straightforward -- broadcast join. For multi-dataset scenarios, this is where temporal alignment becomes critical: event-level aggregations snap to the grid dates, and entity features propagate forward until updated.
+
+### Decision Made
+- **Merge strategy**: Broadcast (entity-level, single dataset)
+- **Output**: Silver Delta table at `silver_merged`
+- All downstream notebooks (04-11) operate on this merged table
+
+---
+
+### Stage 4: Column Deep Dive
+
+**Purpose:** Analyze each column's distribution in the merged feature space. Detect issues and determine transformations.
+
+[View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/04_column_deep_dive.html)
 
 ### Why Distribution Analysis Matters
 
@@ -99,33 +285,36 @@ Not all features are created equal. Understanding distributions helps us:
 - Identify **skewed features** that need transformation
 - Detect **zero-inflation** (many zeros requiring special handling)
 - Choose appropriate **encoding strategies** for categoricals
-- Spot **data quality issues** early
+- Spot **data quality issues** before modeling
 
 ### Key Findings
 
-**Numeric Features - Distribution Analysis:**
+**211 numeric columns analyzed** after datetime derivation and aggregation. Selected highlights:
 
-| Feature | Mean | Skewness | Issue | Recommended Transform |
-|---------|------|----------|-------|----------------------|
-| esent | 27.9 | -0.18 | None (symmetric) | Standard scaling |
-| eopenrate | 24.6% | 1.22 | Right-skewed | Log transform |
-| eclickrate | 5.3% | 3.96 | **52% zeros**, highly skewed | Zero-inflation handling |
-| avgorder | 62.5 | 12.42 | Extreme outliers (max 2600) | Cap + log transform |
-| ordfreq | 0.038 | 10.38 | **61% zeros**, highly skewed | Zero-inflation handling |
+| Feature | Skewness | Zeros % | Issue | Recommended Transform |
+|---------|----------|---------|-------|----------------------|
+| esent_sum_all_time | -0.05 | 11.0% | Symmetric | None (standard scaling) |
+| eopenrate_sum_all_time | 1.17 | 24.8% | Right-skewed | Sqrt transform |
+| eclickrate_sum_all_time | 3.89 | **50.2%** | Highly skewed, zero-inflated | Zero-inflation handling |
+| avgorder_sum_all_time | **11.70** | 0.0% | Extreme outliers (kurtosis 548) | Cap + log transform |
+| ordfreq_sum_all_time | **10.47** | **61.7%** | Highly skewed, zero-inflated | Zero-inflation handling |
+| event_count_all_time | **47.72** | 0.0% | Extreme skew (kurtosis 5,125) | Yeo-Johnson |
 
-**Key Insight:** Two features (`eclickrate`, `ordfreq`) have over 50% zeros. This is **zero-inflation** - we can't just log-transform these. Instead, we create a binary "has_value" indicator plus a log-transformed value for non-zeros.
+**Key Insight:** Two features (`eclickrate`, `ordfreq`) have over 50% zeros. This is **zero-inflation** -- we can't just log-transform these. Instead, we create a binary `_is_zero` indicator plus a log-transformed value for non-zeros.
 
 **Categorical Features:**
 
 | Feature | Categories | Encoding Strategy | Why |
 |---------|------------|-------------------|-----|
-| city | 4 (DEL, BOM, MAA, BLR) | One-hot encoding | Low cardinality, no natural order |
-| favday | 7 (days of week) | Cyclical (sin/cos) | Preserves that Sunday ≈ Saturday |
+| city | 4 (DEL, BOM, MAA, BLR) | Target encoding | Low cardinality |
+| favday | 7 (days of week) | Cyclical (sin/cos) | Preserves that Sunday ~ Saturday |
+| cohort_quarter | 41 quarters | Target encoding | High cardinality (imbalance ratio 7,221x) |
 
 ### Decision Made
-- Mark skewed features for log transformation in modeling pipeline
+- Mark skewed features for log transformation in production pipeline
 - Apply cyclical encoding for day-of-week (not ordinal, because Monday isn't "greater than" Sunday)
 - Create zero-inflation indicators for features with >40% zeros
+- Flag `avgorder` for cap + log (kurtosis 548 means extreme outliers)
 
 ### Alternatives Considered
 - **Winsorization** (cap outliers at 99th percentile): Simpler but loses information
@@ -134,70 +323,20 @@ Not all features are created equal. Understanding distributions helps us:
 
 ---
 
-## Stage 3: Quality Assessment
+### Stage 5: Relationship Analysis
 
-**Purpose:** Deep dive into data quality to ensure we're not modeling noise.
+**Purpose:** Identify which features predict retention, detect multicollinearity, and find interaction opportunities.
 
-[View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/03_quality_assessment.html)
-
-### Why Quality Matters
-
-Garbage in, garbage out. Before investing in modeling, we need to verify:
-- No duplicates (double-counting customers)
-- Minimal missing values (or understood patterns)
-- Valid value ranges (no impossible values)
-- Consistent encoding (no "Male" vs "male" vs "M" issues)
-
-### Key Findings
-
-**Overall Quality Score: 99.7/100** - Excellent!
-
-**Missing Values:**
-- Only 20 rows (0.06%) have missing values
-- All 4 columns missing together (same 20 customers)
-- **Decision:** Safe to drop these rows (negligible impact)
-
-**Target Distribution:**
-| Class | Count | Percentage |
-|-------|-------|------------|
-| Retained (1) | 21,041 | 79.5% |
-| Churned (0) | 5,537 | 20.5% |
-
-**Imbalance ratio: 3.8:1** - This is **mild to moderate** imbalance. We'll handle it with class weights rather than oversampling.
-
-**Outlier Analysis:**
-
-| Feature | Outliers | % of Data | Action |
-|---------|----------|-----------|--------|
-| esent | 7 | 0.03% | Minor, ignore |
-| eopenrate | 992 | 3.7% | Moderate, cap at 99th percentile |
-| eclickrate | 2,586 | 9.7% | Significant, log transform |
-| ordfreq | 3,196 | 12.0% | Significant, log transform |
-
-### Decision Made
-- Keep data mostly as-is (quality is excellent)
-- Use **balanced class weights** in models to handle 3.8:1 imbalance
-- Apply log transforms to high-outlier features (already planned from Stage 2)
-
-### Alternatives Considered
-- **SMOTE oversampling**: Creates synthetic minority examples. Not needed here - imbalance is mild and we have 5,537 churned examples (plenty to learn from)
-- **Undersampling majority**: Throws away data. Only useful for extreme imbalance (>10:1)
-- **Drop outliers entirely**: Too aggressive. Better to transform and preserve information
-
----
-
-## Stage 4: Relationship Analysis
-
-**Purpose:** Identify which features predict retention and how strongly.
-
-[View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/04_relationship_analysis.html)
+[View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/05_relationship_analysis.html)
 
 ### Why Relationship Analysis Matters
 
-Before modeling, we should understand:
+Now that all columns are visible in the merged space, we can understand:
 - Which features have **predictive signal**
 - Are there **multicollinearity** issues (redundant features)?
 - What's the **nature of the relationship** (linear? non-linear?)
+
+This analysis only makes sense *after* merge -- interactions and redundancy only exist in the unified feature space.
 
 ### Key Findings
 
@@ -205,38 +344,37 @@ Before modeling, we should understand:
 
 | Feature | Cohen's d | Correlation | Interpretation |
 |---------|-----------|-------------|----------------|
-| **esent** | **+2.551** | **+0.718** | **LARGE** - dominates! |
-| eopenrate | +0.35 | +0.24 | Small |
-| eclickrate | +0.23 | +0.18 | Small |
-| avgorder | +0.01 | +0.004 | Negligible |
-| ordfreq | +0.09 | +0.08 | Negligible |
+| **esent_sum_all_time** | **+2.551** | **+0.718** | **LARGE** - dominates! |
+| esent_vs_cohort_mean | +2.551 | +0.718 | Redundant with esent |
+| lag0_esent_sum | +2.551 | +0.718 | Redundant with esent |
+| esent_beginning | -- | +0.659 | Temporal split of esent |
+| eopenrate_trend_ratio | -- | +0.433 | Moderate signal |
+| avgorder_beginning | -- | -0.413 | Inverse moderate signal |
 
 **Critical Insight:** `esent` (emails sent) has a **massive** effect size (d=2.551). This means retained customers receive, on average, 2.5 standard deviations more emails than churned customers.
 
-**Mean Comparison:**
-| Feature | Retained | Churned | Difference |
-|---------|----------|---------|------------|
-| esent | 34.25 | 4.50 | **+661.7%** |
-| eopenrate | 26.68% | 21.21% | +25.8% |
-| eclickrate | 5.90% | 4.79% | +23.3% |
-| avgorder | $61.96 | $61.55 | +0.7% (no difference!) |
+**Multicollinearity:**
+- **936 feature pairs** with |r| > 0.7
+- Primary redundancy cluster: `esent_sum_all_time`, `esent_mean_all_time`, `esent_max_all_time`, `lag0_esent_sum`, `esent_vs_cohort_*` are all perfectly correlated (r=1.000) -- these are different views of the same underlying `esent` value
+- **591+ HIGH priority recommendations** to drop multicollinear features
 
-**Retention by City:**
-| City | Retention Rate | Lift vs Average |
-|------|----------------|-----------------|
-| BLR (Bangalore) | 87.4% | 1.10x |
-| MAA (Chennai) | 83.2% | 1.05x |
-| BOM (Mumbai) | 79.9% | 1.01x |
-| **DEL (Delhi)** | **73.6%** | **0.93x** - High risk! |
+**Retention by Cohort Quarter:**
+
+| Cohort | Retention Rate | Observation |
+|--------|----------------|-------------|
+| 2018 Q1 | **98.9%** (lift 1.24x) | Newest cohort, highest retention |
+| 2009 Q4 | **48.4%** (lift 0.61x) | Oldest cohort, lowest retention |
+
+Clear cohort effect: newer cohorts have substantially higher retention rates.
 
 ### Decision Made
-- **Prioritize `esent`** - it's the strongest predictor
-- **Keep weak features** - they may help in combination
-- **Start with Logistic Regression** - strong linear signal (d=2.551) suggests linear models viable
-- **Flag Delhi as high-risk segment** - may need targeted intervention
+- **Prioritize `esent`** -- it's the strongest predictor
+- **Drop redundant features** -- 936 multicollinear pairs produce 591+ drop recommendations
+- **Keep weak features** -- may help in combination after redundancy removal
+- **Flag cohort effect** -- newer customers more likely retained, important for temporal splits
 
 ### Alternatives Considered
-- **Drop weak features** (avgorder, ordfreq): Risk losing predictive power in combinations
+- **Drop all weak features** (avgorder, ordfreq): Risk losing predictive power in combinations
 - **Build segment-specific models per city**: Adds complexity, may not be worth it
 - **Use only non-linear models**: Would work, but linear interpretability valuable for business
 
@@ -244,13 +382,15 @@ Before modeling, we should understand:
 `esent` accounts for most predictive power. This creates **concentration risk**:
 - If email data quality degrades, model fails
 - Model may be capturing "customers who receive emails stay" rather than underlying behavior
-- Consider: Is this a **leading indicator** (more emails → retention) or **trailing indicator** (retained customers get more emails because they're active)?
+- Consider: Is this a **leading indicator** (more emails -> retention) or **trailing indicator** (retained customers get more emails because they're active)?
 
 ---
 
-## Stage 5: Feature Opportunities
+## Phase III: Gold
 
-**Purpose:** Determine how many features we can safely add and what derived features would help.
+### Stage 6: Feature Opportunities
+
+**Purpose:** Determine feature capacity, consolidate transformation strategies, and create derived features.
 
 [View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/06_feature_opportunities.html)
 
@@ -267,49 +407,71 @@ Adding more features isn't always better. With limited data, too many features l
 ### Key Findings
 
 **Our Capacity:**
-- **Minority class samples:** 5,751 (churned customers)
-- **Current features:** 5
-- **EPV:** 1,150 (5,751 / 5)
-- **Capacity status:** **ABUNDANT** - we can safely add 570+ features!
 
-**Derived Features Created:**
+| Model Type | Max Features | Current | Status |
+|------------|-------------|---------|--------|
+| Linear (no regularization) | 274,374 | 19 | **ABUNDANT** |
+| Regularized (L1/L2) | 548,749 | 19 | **ABUNDANT** |
+| Tree-based | 445,139 | 19 | **ABUNDANT** |
+
+With 13.3M rows and substantial minority class representation, we have capacity for hundreds of features without overfitting risk.
+
+**47 Features Recommended:**
+- 4 high-priority datetime features (days_since_as_of_date, days_since_created, days_since_firstorder, days_since_lastorder)
+- 5 high-priority log transforms (eopenrate_log, eclickrate_log, avgorder_log, ordfreq_log, created_delta_hours_log)
+- 2 high-priority categoricals (favday_sin_cos, city_encoded)
+- 17 lower-priority binned features
+
+**Key Derived Features:**
 
 | Feature | Formula | Rationale |
 |---------|---------|-----------|
-| tenure_days | now - created | Longer tenure → more likely retained |
-| days_since_last_activity | now - lastorder | Recency is key churn signal |
-| email_engagement_score | 0.6×open + 0.4×click | Composite engagement metric |
-| click_to_open_rate | click / open | Quality of engagement |
-| service_adoption_score | paperless + refill + doorstep | More services → stickier customer |
-
-**Customer Segmentation Analysis:**
-
-| Segment Type | Distribution | Insight |
-|--------------|--------------|---------|
-| Dormant (180+ days) | **98.8%** | Most customers inactive! |
-| Low Engagement | **77.3%** | Majority disengaged |
-| High Value + Frequent | 50% | Evenly split |
-
-**Concerning Finding:** 98.8% of customers haven't ordered in 180+ days. This suggests either:
-1. The data is old (snapshot from past)
-2. Business has long purchase cycles
-3. Retention definition may need revisiting
+| tenure_days | reference_date - created | Longer tenure -> more likely retained |
+| days_since_last_order | reference_date - lastorder | Recency is key churn signal |
+| email_engagement_score | 0.6 x openrate + 0.4 x clickrate | Composite engagement metric |
+| service_adoption_score | paperless + refill + doorstep | More services -> stickier customer |
 
 ### Decision Made
-- Created 8 derived features (from 5 to 13 total)
-- Apply log transforms to skewed features as planned
-- Use one-hot encoding for city, cyclical for favday
+- 47 features selected for modeling (transformations + derived + encoded)
+- Apply log transforms to skewed features
+- Use cyclical encoding for favday, target encoding for city and cohort_quarter
+- Create zero-inflation indicators for eclickrate and ordfreq
 
 ### Alternatives Considered
 - **Aggressive feature engineering** (100+ features): Capacity allows it, but diminishing returns
-- **PCA dimensionality reduction**: Not needed with only 13 features
+- **PCA dimensionality reduction**: Not needed with manageable feature count post-dedup
 - **Automated feature generation** (featuretools): Overkill for this dataset
 
 ---
 
-## Stage 6: Baseline Experiments
+### Stage 7: Modeling Readiness
 
-**Purpose:** Establish performance benchmarks with standard models.
+**Purpose:** Formalize the training setup: verify data quality, check for leakage, and confirm the dataset is ready for modeling.
+
+[View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/07_modeling_readiness.html)
+
+### Key Findings
+
+**Pre-Modeling Checklist (all PASS):**
+
+| Check | Status |
+|-------|--------|
+| Target column identified | Pass |
+| Feature columns available | Pass |
+| No columns with >50% missing | Pass |
+| Quality score >= 70 | Pass |
+| Sufficient sample size (>=100) | Pass |
+
+**Leakage Risk Assessment:**
+- `is_future_created` and `is_future_firstorder`: flagged as **Medium risk** (name suggests post-prediction information). These are the leakage guard columns from datetime derivation -- they're metadata, not features, and are excluded from modeling.
+
+**Result:** **Modeling Readiness Score: 100/100** -- 32 usable features, proceed to training.
+
+---
+
+### Stage 8: Baseline Experiments
+
+**Purpose:** Establish performance benchmarks with standard models using entity-grouped temporal cross-validation.
 
 [View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/08_baseline_experiments.html)
 
@@ -324,194 +486,223 @@ Never start with complex models. Baselines tell us:
 
 **Model Performance Comparison:**
 
-| Model | Test AUC | PR-AUC | Precision | Recall | F1 |
-|-------|----------|--------|-----------|--------|-----|
-| Logistic Regression | 0.9596 | 0.9782 | 76.4% | 90.9% | 0.915 |
-| Random Forest | 0.9783 | 0.9922 | 96.4% | 89.1% | 0.933 |
-| **Gradient Boosting** | **0.9858** | **0.9949** | **96.96%** | **88.3%** | **0.980** |
+| Model | Test AUC | PR-AUC | F1 | Precision | Recall | CV Mean | CV Std |
+|-------|----------|--------|-----|-----------|--------|---------|--------|
+| Logistic Regression | 0.9685 | 0.9886 | 0.944 | 97.9% | 91.1% | 0.9696 | 0.0027 |
+| Random Forest | 0.9818 | 0.9923 | 0.978 | 96.6% | 99.0% | 0.9824 | 0.0027 |
+| **Gradient Boosting** | **0.9825** | **0.9937** | **0.981** | **97.0%** | **99.1%** | **0.9849** | **0.0024** |
 
-**Winner: Gradient Boosting** with AUC 0.9858 - Excellent!
+**Winner: Gradient Boosting** with AUC 0.9825 -- Excellent!
 
 **What These Numbers Mean:**
-- **AUC 0.9858:** Model correctly ranks 98.6% of customer pairs by churn risk
-- **Precision 97%:** When we predict someone will churn, we're right 97% of the time
-- **Recall 88%:** We catch 88% of actual churners (miss 12%)
+- **AUC 0.9825:** Model correctly ranks 98.3% of customer pairs by churn risk
+- **PR-AUC 0.9937:** Near-perfect precision-recall tradeoff despite class imbalance
+- **CV Std 0.0024:** Extremely stable across 5-fold cross-validation
 
-**Feature Importance (What Drives Predictions):**
+**Feature Importance (Random Forest, top features):**
 
-| Rank | Feature | Importance | Cumulative |
-|------|---------|------------|------------|
-| 1 | **esent** | **58.4%** | 58.4% |
-| 2 | eopenrate | 13.5% | 71.9% |
-| 3 | eclickrate | 7.8% | 79.7% |
-| 4 | Others | <5% each | 100% |
+| Rank | Feature | Importance |
+|------|---------|------------|
+| 1 | **esent_mean_all_time** | **0.098** |
+| 2 | esent_vs_cohort_mean | 0.092 |
+| 3 | lag0_esent_sum | 0.086 |
 
-**Critical Insight:** `esent` alone accounts for **58% of predictive power**. This is both good (strong signal) and concerning (concentration risk).
+**Critical Insight:** `esent`-derived features dominate the top 3 positions. The email signal is the primary predictor across all model types.
 
 ### Interpreting the Model
 
 Feature importance tells us *what* matters, but not *how* it matters. For deeper understanding:
 
-**Partial Dependence Analysis (esent):**
-- 0-10 emails: Steep positive effect on retention
-- 10-30 emails: Moderate positive effect
-- 30+ emails: Diminishing returns (plateau)
-
-**Business Implication:** Focus email campaigns on customers receiving <10 emails - that's where marginal impact is highest.
+**Business Implication:** Focus email campaigns on customers receiving <10 emails -- that's where marginal impact is highest. Diminishing returns after ~30 emails.
 
 **Caution on Causality:** High `esent` correlation with retention could mean:
-- (A) More emails → Higher retention (emails cause retention)
-- (B) Active customers → More emails (activity causes both)
+- (A) More emails -> Higher retention (emails cause retention)
+- (B) Active customers -> More emails (activity causes both)
 - (C) Both are caused by a third factor (e.g., customer lifetime value)
 
 Only A/B testing can establish causality. The model predicts, it doesn't explain *why*.
 
 ### Decision Made
-- **Primary model:** Gradient Boosting (best performance)
-- **Fallback model:** Logistic Regression (if interpretability needed)
-- **Class weights:** Balanced (handles 3.8:1 imbalance well)
+- **Primary model:** Gradient Boosting (best AUC and stability)
+- **Fallback model:** Logistic Regression (most interpretable, nearly as good)
+- **Class weights:** Balanced (handles 3.9:1 imbalance well)
 
 ### Alternatives Not Explored (Future Work)
-- **Neural Networks:** Overkill for tabular data with 13 features
-- **SVM with RBF kernel:** Slower, similar performance to tree ensembles
-- **Ensemble of all three models:** Could squeeze extra 0.5% AUC
-- **Hyperparameter tuning:** Current results are with defaults - tuning could improve
+- **Neural Networks:** Overkill for tabular data
+- **Hyperparameter tuning:** Current results are with defaults -- tuning could improve
+- **Ensemble of all three models:** Could squeeze extra AUC
 
 ---
 
-## Stage 7: Production Reality Check
+### Stage 9: Business Alignment
 
-**Purpose:** Test models on truly unseen future data to simulate production conditions.
+**Purpose:** Translate model output into operational decision logic with business-approved thresholds.
 
-[View Scoring Dashboard →](https://aladjov.github.io/CR/tutorial/retail-churn/scoring_dashboard.html)
-
-### Why Validation Isn't Enough
-
-Cross-validation tells us how well our model generalizes to **similar** data. But production data is from the **future** - it may have different patterns due to:
-- Seasonality
-- Business changes
-- Customer behavior shifts
-- Data quality drift
-
-The scoring dashboard tests our models on a **point-in-time holdout** (data after the training cutoff).
+[View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/09_business_alignment.html)
 
 ### Key Findings
 
-**The Surprising Result:**
+**Success Metrics:**
 
-| Model | Validation AUC | Scoring AUC | **Gap** |
-|-------|----------------|-------------|---------|
-| XGBoost | **0.9854** (1st) | 0.9142 (3rd) | **-7.2%** |
-| Random Forest | 0.9830 (2nd) | 0.9073 (2nd) | -7.7% |
-| **Logistic Regression** | 0.9678 (3rd) | **0.9441 (1st)** | **-2.4%** |
+| Metric | Target | Priority |
+|--------|--------|----------|
+| Model AUC | >= 0.80 | High |
+| Precision at 20% | >= 0.60 | High |
+| Churn Rate Reduction | 20% | High |
+| Model Latency | < 100ms | Medium |
 
-**XGBoost was best in validation but WORST in production!**
+**Intervention Strategy:**
 
-### Why Did Complex Models Degrade More?
+| Risk Level | Intervention | Cost | Expected Effectiveness |
+|------------|-------------|------|----------------------|
+| High (>0.8) | Personal call from account manager | $50/customer | 40% retention |
+| Medium (0.5-0.8) | Personalized email + discount offer | $10/customer | 20% retention |
+| Low (<0.5) | Automated engagement email | $0.50/customer | 5% retention |
 
-**Distribution Drift Detected:**
+### Decision Made
+- Three-tier intervention strategy aligned with model confidence
+- No direct PII in features (compliance-safe)
+- Minimum 12 months historical depth required for production deployment
 
-| Feature | Train Mean | Score Mean | Drift |
-|---------|------------|------------|-------|
-| eopenrate | 24.6% | 31.9% | **+29.8%** |
-| eclickrate | 5.3% | 7.7% | **+44.5%** |
-| TARGET (retention) | 78.4% | 86.4% | **+10.3%** |
+---
 
-The scoring population has **significantly higher email engagement** than training data. Complex models (XGBoost, Random Forest) learned intricate patterns specific to the training distribution. When that distribution shifted, they failed.
+## Production
 
-**Logistic Regression's simpler decision boundary generalized better.**
+### Stage 10: Pipeline Generation
+
+**Purpose:** Generate a deterministic production pipeline that faithfully replicates the exploration logic.
+
+[View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/10_spec_generation.html)
+
+### Why Code Generation?
+
+Exploration happens interactively in notebooks. Production requires deterministic, testable code. The framework bridges this gap by auto-generating production pipelines in two tracks:
+
+| Track | Generator | Output |
+|-------|-----------|--------|
+| **Local** | `PipelineGenerator` | Python scripts with Delta Lake + pandas |
+| **Databricks** | `DatabricksPipelineGenerator` | PySpark notebooks with Unity Catalog |
+
+Both tracks read the same findings and recommendations, ensuring exploration and production are mathematically identical.
+
+### Key Findings
+
+**Generated Pipeline:**
+- **17 files** across landing, bronze, silver, gold, training, and validation stages
+- **Composite Name:** `cust_rete_reta_aggr__b6be84a`
+- **Recommendations Hash:** `0575ed11` (version tag: `v1.0.0_0575ed11`)
+- **Pipeline configuration**: 173 transformations, 954 feature selections, 1 encoding
+
+**Recommendations by Layer:**
+
+| Layer | Count | Examples |
+|-------|-------|---------|
+| Bronze | 3 | Datetime derivation, column type overrides |
+| Silver | 7 | Merge strategy, temporal alignment |
+| Gold | 1,128 | Drop multicollinear features, encoding, transformations |
+
+**Generated Structure:**
+```
+generated_pipelines/local/customer_churn/
+  config.py                  # Pipeline configuration (entity key, target, CN)
+  pipeline_runner.py         # Orchestrates all stages
+  landing/                   # Raw CSV -> Delta
+  bronze/                    # Event aggregation, entity processing
+  silver/                    # Feature merge
+  gold/                      # Transformations, encoding, feature selection
+  training/                  # MLflow experiment (LR, RF, XGBoost)
+  feature_repo/              # Feast feature store definitions
+  validation/                # Pipeline validation gates
+```
+
+### Decision Made
+- **Local track**: Generated for development and testing
+- **Feast integration**: Feature store materialized for online serving
+- **MLflow tracking**: All experiments logged with hash-based versioning
+
+---
+
+### Stage 11: Scoring Validation
+
+**Purpose:** Run the generated pipeline end-to-end, train models on production features, and validate on a point-in-time holdout set.
+
+[View Notebook →](https://aladjov.github.io/CR/tutorial/retail-churn/11_scoring_validation.html)
+
+### Why Validation Isn't Enough
+
+Cross-validation tells us how well our model generalizes to **similar** data. But production data is from the **future** -- it may have different patterns due to seasonality, business changes, customer behavior shifts, or data quality drift.
+
+The scoring validation runs the *full generated pipeline* and tests on a **point-in-time holdout** (data after the training cutoff).
+
+### Key Findings
+
+**Holdout Model Performance:**
+
+| Model | ROC-AUC | PR-AUC | F1 | Precision | Recall | Accuracy |
+|-------|---------|--------|-----|-----------|--------|----------|
+| Logistic Regression | 0.9675 | 0.9891 | 0.952 | 90.9% | 99.9% | 91.9% |
+| Random Forest | 0.9653 | 0.9868 | 0.970 | 95.7% | 98.3% | 95.1% |
+| **XGBoost** | **0.9687** | **0.9887** | **0.971** | **94.8%** | **99.5%** | **95.2%** |
+
+**Training vs Holdout Comparison:**
+
+| Model | Training AUC | Holdout AUC | **Gap** |
+|-------|-------------|-------------|---------|
+| Gradient Boosting / XGBoost | 0.9825 | 0.9687 | **-1.4%** |
+| Random Forest | 0.9818 | 0.9653 | **-1.7%** |
+| **Logistic Regression** | 0.9685 | **0.9675** | **-0.1%** |
+
+**XGBoost remains the top performer on holdout** (0.9687), unlike the previous version of this tutorial where complex models dramatically degraded. All three models generalize well. However, Logistic Regression shows the smallest gap (0.1%) -- confirming that simpler models are more *stable* across distribution shifts, even when they don't outperform.
+
+The [[Tutorial: Retail Customer Retention -- Initial Run|initial tutorial run]] showed a dramatic reversal: XGBoost dropped from 0.9854 to 0.9142 (-7.2%) while LR held at 0.9441 (-2.4%). That reversal is **not reproduced** in this run. The key difference: the initial run used **single-snapshot training** with **stratified random validation** (a single train/test split, stratified by target), while the current run uses **entity-grouped temporal cross-validation** with a 104-day purge gap. Combined with the new pipeline's feature engineering (datetime derivation with leakage guards, zero-inflation handling, multicollinearity removal), this produces a more stable feature set that doesn't degrade under distribution shift.
+
+**Key takeaway:** A well-designed feature pipeline can reduce drift sensitivity for all model types, narrowing the robustness gap between simple and complex models.
+
+### SHAP Analysis: What Drives Predictions
+
+**Global Feature Importance (Top 10):**
+
+| Rank | Feature | SHAP Importance |
+|------|---------|-----------------|
+| 1 | **esent_sum_all_time** | **2.141** |
+| 2 | esent_mean_all_time | 1.227 |
+| 3 | city_mode_all_time | 0.327 |
+| 4 | city_mode_30d | 0.290 |
+| 5 | event_count x esent (interaction) | 0.286 |
+| 6 | eclickrate_is_zero | 0.214 |
+| 7 | favday_mode_all_time | 0.181 |
+| 8 | paperless_mode_all_time | 0.130 |
+| 9 | firstorder_delta_hours_is_zero | 0.124 |
+| 10 | city_mode_180d | 0.124 |
+
+**Individual Customer Examples:**
+
+*Customer 1 (retained, esent=45):* `esent_sum_all_time` contributes SHAP +2.369. High email engagement is the dominant retention signal.
+
+*False Positive (predicted retained, actually churned, esent=20):* Moderate email engagement (SHAP +0.918) misled the model, but zero click rate (SHAP -0.430) was a warning sign the model partially captured.
+
+*False Negative (predicted churned, actually retained, esent=10):* Low email count (SHAP -1.841) drove the churn prediction, but the customer retained anyway -- likely through a channel not captured in features.
 
 ### The Key Lesson
 
-**Simpler models can be more robust to distribution drift.**
+**A well-engineered feature pipeline matters more than model choice.** In the [[Tutorial: Retail Customer Retention -- Initial Run|initial run]] (single-snapshot training with stratified random split, no temporal purge gaps or leakage guards), XGBoost degraded by 7.2% on holdout while LR held steady. In this run, with entity-grouped temporal cross-validation and the full intent-driven pipeline, all models degrade minimally (0.1-1.7%). The framework's temporal safeguards -- purge gap, leakage masking, entity-aware splitting -- stabilized the feature space enough that even complex models generalize well.
 
-This is a crucial production insight. In a controlled validation environment, complex models often win. But in production where data drifts over time, simpler models may be more reliable.
+That said, LR's 0.1% gap vs XGBoost's 1.4% gap still shows that simpler models have an inherent stability advantage. In environments with more severe drift, this margin could widen.
 
 ### Recommendations
 
-1. **Consider Logistic Regression for production** - only 2.4% degradation vs 7%+ for tree models
-2. **Monitor drift** - track `eopenrate` and `eclickrate` distributions
-3. **Set drift alerts** - retrain when feature distributions shift >20%
-4. **Recalibrate thresholds** - higher baseline retention requires adjusted decision thresholds
-
-### Improving Robustness to Drift
-
-The drift problem we observed isn't unique to this dataset - it's a fundamental challenge in production ML. Here are techniques to build more drift-resistant models:
-
-**1. Training Strategies**
-
-| Technique | How It Helps | Trade-off |
-|-----------|--------------|-----------|
-| **Stronger Regularization (L1/L2)** | Penalizes complex patterns that may be distribution-specific | May reduce validation performance |
-| **Time-based Cross-Validation** | Use walk-forward validation instead of random splits. Train on months 1-6, validate on 7, then train on 1-7, validate on 8, etc. | Requires more data, slower |
-| **Recency Weighting** | Weight recent samples higher (e.g., exponential decay). Recent patterns matter more for future prediction | Loses historical patterns |
-| **Adversarial Validation** | Train a model to distinguish train from score data. Features it uses most are drift-prone - consider removing them | May remove predictive features |
-| **Domain Adaptation** | Fine-tune model on small sample of target distribution | Requires labeled target data |
-
-**2. Feature Engineering for Stability**
-
-| Approach | Example | Why It Helps |
-|----------|---------|--------------|
-| **Relative features over absolute** | Use `eopenrate / industry_avg` instead of raw `eopenrate` | Normalizes for population-level shifts |
-| **Rank-based features** | Convert to percentiles within time window | Robust to distribution shifts |
-| **Ratio features** | `click_to_open = eclickrate / eopenrate` | Captures behavior quality, not volume |
-| **Remove unstable features** | Drop features with high drift (eopenrate, eclickrate) | Trades accuracy for stability |
-| **Binning continuous features** | Convert numeric to categories | Reduces sensitivity to exact values |
-
-**3. Model Architecture Choices**
-
-| Choice | Drift Robustness | Why |
-|--------|------------------|-----|
-| Linear models | **High** | Simple decision boundaries generalize |
-| Shallow trees (depth ≤ 3) | **High** | Can't memorize complex patterns |
-| Deep ensembles (XGBoost) | **Low** | Learn distribution-specific patterns |
-| Neural networks | **Variable** | Depends on regularization |
-
-**4. Operational Strategies**
-
-- **Continuous retraining**: Retrain weekly/monthly on recent data
-- **Online learning**: Update model incrementally as new data arrives
-- **Model ensembles with diversity**: Combine models trained on different time periods
-- **Prediction intervals**: Output uncertainty, not just point predictions
-- **A/B testing**: Compare model versions on live traffic before full rollout
-
-### Training Differently: What We Could Have Done
-
-Looking back, here's how we could have trained to better handle the drift we observed:
-
-**Walk-Forward Validation (Recommended for Time-Series)**
-```
-Instead of:  Random 80/20 split
-Do this:     Train on 2008-2015, validate on 2016
-             Train on 2008-2016, validate on 2017
-             Train on 2008-2017, validate on 2018
-             Average performance across folds
-```
-This simulates production conditions where we always predict the future.
-
-**Adversarial Feature Selection**
-```
-1. Label training data as 0, scoring data as 1
-2. Train classifier to distinguish them
-3. Features with high importance are drift-prone
-4. Remove or down-weight these features
-```
-In our case, this would have flagged `eopenrate` and `eclickrate` as unstable.
-
-**Ensemble of Time-Period Models**
-```
-Model_2015 trained on 2008-2015
-Model_2016 trained on 2008-2016
-Model_2017 trained on 2008-2017
-Final prediction = weighted average (more weight to recent models)
-```
-This hedges against any single time period's patterns dominating.
+1. **XGBoost for production** -- best holdout AUC (0.9687) with acceptable 1.4% gap
+2. **LR as drift-resilient fallback** -- only 0.1% degradation; switch if drift monitoring triggers
+3. **Monitor `esent` features** -- they dominate SHAP (2.141 + 1.227 = top 2 features)
+4. **Watch `city` encoding drift** -- city appears in 3 of the top 10 SHAP features
+5. **Track eclickrate_is_zero** -- zero-inflation indicators are 6th most important
+6. **Set drift alerts** -- retrain when feature distributions shift >20%
 
 ---
 
 ## Model Interpretability: Beyond SHAP
 
-While SHAP (SHapley Additive exPlanations) is powerful, it's not the only interpretability technique. Different methods answer different questions:
+While SHAP provides both global and local explanations (as demonstrated in Stage 11), it's not the only interpretability technique. Different methods answer different questions:
 
 ### Comparison of Interpretation Methods
 
@@ -521,10 +712,7 @@ While SHAP (SHapley Additive exPlanations) is powerful, it's not the only interp
 | **LIME** | Which features matter for this specific prediction? | Local | Fast, model-agnostic | Unstable, sensitive to parameters |
 | **Permutation Importance** | How much does performance drop if we shuffle this feature? | Global | Simple, reliable | Correlated features problematic |
 | **Partial Dependence (PDP)** | What's the average effect of changing this feature? | Global | Easy to understand | Assumes feature independence |
-| **ICE (Individual Conditional Expectation)** | How does this feature affect each individual prediction? | Local | Shows heterogeneity | Can be noisy |
-| **Accumulated Local Effects (ALE)** | What's the isolated effect of this feature? | Global | Handles correlated features | Harder to interpret |
 | **Counterfactuals** | What minimal change would flip this prediction? | Local | Actionable insights | Multiple valid answers |
-| **Anchors** | What conditions guarantee this prediction? | Local | Human-readable rules | May not exist for all cases |
 
 ### When to Use Each Method
 
@@ -534,56 +722,46 @@ While SHAP (SHapley Additive exPlanations) is powerful, it's not the only interp
 - **Counterfactuals**: "If this customer had received 5 more emails, they would likely have stayed"
 
 **For Model Debugging (need detailed analysis):**
-- **SHAP**: Understand exactly how each feature contributed
-- **ICE plots**: See if effect varies across customer segments
-- **ALE plots**: Handle correlated features correctly
+- **SHAP**: Understand exactly how each feature contributed (see Stage 11 examples)
+- **Error analysis**: Compare SHAP profiles of false positives vs true positives
 
 **For Regulatory/Compliance (need audit trail):**
 - **SHAP with force plots**: Show contribution breakdown for each decision
-- **Anchors**: Provide rule-based explanations ("Customer flagged as high-risk because tenure < 30 days AND email_opens = 0")
 - **Counterfactuals**: Demonstrate what would change the outcome
 
 ### Interpretation Example for Our Model
 
-**Global View (Permutation Importance):**
+**Global View (SHAP from Stage 11):**
 ```
-Feature               Importance (AUC drop if shuffled)
-─────────────────────────────────────────────────────
-esent                 0.312  ████████████████████
-eopenrate             0.089  █████
-eclickrate            0.054  ███
-city                  0.023  █
-avgorder              0.008
-```
-
-**Local View (Counterfactual for a churned customer):**
-```
-Current:    esent=3, eopenrate=5%, prediction=CHURN (82% confidence)
-Flip to:    esent=15 (+12 emails) → prediction=RETAIN (71% confidence)
-
-Actionable insight: Send this customer more emails to retain them.
+Feature                                SHAP Importance
+────────────────────────────────────────────────────────
+esent_sum_all_time                     2.141  ████████████████████████
+esent_mean_all_time                    1.227  █████████████
+city_mode_all_time                     0.327  ███
+eclickrate_is_zero                     0.214  ██
+favday_mode_all_time                   0.181  ██
+paperless_mode_all_time                0.130  █
 ```
 
-**Segment View (PDP showing non-linear effect):**
+**Local View (False Negative -- predicted churned but retained):**
 ```
-esent     Retention Probability
-0-5       ████ 45%
-5-15      ████████ 68%
-15-30     ████████████ 85%
-30+       █████████████ 92%
+Current:    esent=10, prediction=CHURN
+SHAP:       esent_sum_all_time → -1.841 (strong churn push)
+            ordfreq_is_zero=0 → -0.621 (some orders, but not enough to overcome)
 
-Insight: Diminishing returns after 30 emails - focus on customers in 5-15 range.
+Actionable insight: Customers with low email engagement can still retain through
+                    other channels -- consider broader feature set.
 ```
 
 ### Caution: Interpretation Pitfalls
 
-1. **Correlation ≠ Causation**: `esent` predicts retention, but does sending more emails *cause* retention, or do retained customers simply receive more emails because they're active?
+1. **Correlation != Causation**: `esent` predicts retention, but does sending more emails *cause* retention, or do retained customers simply receive more emails because they're active?
 
-2. **Feature Interactions**: SHAP and Permutation Importance assume features act independently. In reality, `esent × eopenrate` interaction may matter more than either alone.
+2. **Feature Interactions**: SHAP captures interactions (ranked #5: `event_count x esent`), but interpreting them requires domain knowledge.
 
-3. **Out-of-Distribution Explanations**: LIME and SHAP explanations can be misleading for unusual customers (e.g., someone with 200 emails sent - far outside training distribution).
+3. **Out-of-Distribution Explanations**: SHAP explanations can be misleading for unusual customers (e.g., someone with 200 emails sent -- far outside training distribution).
 
-4. **Simpson's Paradox**: A feature may have positive effect overall but negative effect within each segment. Always check segment-level patterns.
+4. **Redundant Features**: Multiple `esent`-derived features in the top ranks inflate the apparent importance of email. After deduplication, the picture may be more balanced.
 
 ---
 
@@ -591,49 +769,54 @@ Insight: Diminishing returns after 30 emails - focus on customers in 5-15 range.
 
 ### What We Learned
 
-| Stage | Key Insight |
-|-------|-------------|
-| Data Discovery | Point-in-time snapshots prevent leakage |
-| Column Analysis | 52% zero-inflation in `eclickrate` requires special handling |
-| Quality | 99.7/100 score - minimal cleaning needed |
-| Relationships | `esent` dominates with effect size d=2.551 |
-| Capacity | EPV=1,150 allows abundant feature engineering |
-| Modeling | AUC 0.9858 - excellent baseline performance |
-| **Production** | **Simple models more robust to drift** |
+| Phase | Stage | Key Insight |
+|-------|-------|-------------|
+| Intent | 00 Start Here | Intent contract ensures all downstream steps serve a coherent goal |
+| Bronze | 01 Data Discovery | Auto-detected `lastorder` as feature timestamp; 18 datetime features derived with leakage guards |
+| Bronze | 02 Source Integrity | 3.9:1 class imbalance handled with balanced weights; data quality excellent |
+| Silver | 03 Dataset Merge | 434 weekly grid dates produce 13.3M row spine for temporal modeling |
+| Silver | 04 Column Deep Dive | 50%+ zero-inflation in `eclickrate` and `ordfreq` requires special handling |
+| Silver | 05 Relationships | `esent` dominates with effect size d=2.551; 936 multicollinear pairs flagged |
+| Gold | 06 Feature Opportunities | Feature capacity ABUNDANT; 47 features selected |
+| Gold | 07 Modeling Readiness | Readiness score 100/100; no blocking issues |
+| Gold | 08 Baseline Experiments | Gradient Boosting AUC 0.9825; all models excellent |
+| Gold | 09 Business Alignment | Three-tier intervention strategy aligned with model confidence |
+| Production | 10 Pipeline Generation | 17 files generated; 1,138 recommendations codified |
+| Production | 11 Scoring Validation | **All models generalize well (0.1-1.7% gap) -- proper feature engineering reduces drift sensitivity** |
 
 ### Decisions Made vs. Alternatives
 
 | Decision | Why | Alternative | When Alternative Better |
 |----------|-----|-------------|------------------------|
-| Logistic Regression baseline | Strong linear signal (d=2.551) | Neural network | If non-linear patterns dominate |
-| Balanced class weights | 3.8:1 is mild imbalance | SMOTE oversampling | If imbalance >10:1 |
+| Immediate risk objective | 100% confidence, target matches churn pattern | Disengagement objective | If re-engagement timing more important than risk |
+| Long memory posture | Stable 10-year dataset | Reactive posture | If recent patterns dominate (e.g., seasonal business) |
+| Temporal cross-validation (not random) | Simulates production conditions; [[Tutorial: Retail Customer Retention -- Initial Run|initial run]] showed 7.2% degradation with stratified random split | Random stratified | Only for small datasets without temporal structure |
+| Balanced class weights | 3.9:1 is mild imbalance | SMOTE oversampling | If imbalance >10:1 |
 | Log transform skewed features | Reduces outlier impact | Winsorization | If outliers are meaningful |
 | Keep weak features | May help in combination | Drop features | If interpretability paramount |
-| Cyclical encoding for day | Preserves circular structure | One-hot | If days don't wrap (Monday ≠ Sunday) |
+| Cyclical encoding for day | Preserves circular structure | One-hot | If days don't wrap (Monday != Sunday) |
+| XGBoost for production | Best holdout AUC (0.9687), acceptable 1.4% gap | Logistic Regression | If drift is severe and stability is paramount |
 
 ### What Wasn't Explored (Future Work)
 
 **Model Improvements:**
-1. **Hyperparameter tuning** - Could improve AUC by 1-2%
-2. **Feature selection** - SHAP-based or adversarial selection may reduce overfitting
-3. **Segment-specific models** - Delhi (73.6% retention) may need different model
-4. **Time-series features** - Trend in engagement over time
+1. **Hyperparameter tuning** -- Could improve AUC by 1-2%
+2. **SHAP-based feature selection** -- Remove features with negligible SHAP contribution
+3. **Segment-specific models** -- Cohort effects (48% vs 99% retention by quarter) suggest potential
 
-**Drift Robustness (See Stage 7):**
-5. **Walk-forward cross-validation** - Better simulates production conditions
-6. **Adversarial feature selection** - Remove drift-prone features like `eopenrate`
-7. **Recency-weighted training** - Give more weight to recent samples
-8. **Ensemble of time-period models** - Hedge against temporal patterns
+**Drift Robustness:**
+4. **Walk-forward cross-validation** -- Train on 2008-2015, validate on 2016, etc.
+5. **Adversarial feature selection** -- Remove drift-prone features
+6. **Recency-weighted training** -- Give more weight to recent samples
 
-**Interpretability (See Interpretability Section):**
-9. **LIME for local explanations** - Faster alternative to SHAP
-10. **Counterfactual analysis** - "What would change this prediction?"
-11. **Partial Dependence Plots** - Visualize feature effects for stakeholders
+**Interpretability:**
+7. **Counterfactual analysis** -- "What would change this prediction?"
+8. **Partial Dependence Plots** -- Visualize non-linear feature effects for stakeholders
 
 **Production:**
-12. **A/B testing framework** - Measure actual intervention effectiveness
-13. **Online learning pipeline** - Continuous model updates
-14. **Prediction intervals** - Quantify uncertainty in predictions
+9. **A/B testing framework** -- Measure actual intervention effectiveness
+10. **Online learning pipeline** -- Continuous model updates
+11. **Prediction intervals** -- Quantify uncertainty in predictions
 
 ---
 
@@ -649,13 +832,19 @@ pip install -e ".[dev,ml]"
 jupyter lab exploration_notebooks/00_start_here.ipynb
 ```
 
-Set `DATA_PATH = "tests/fixtures/customer_retention_retail.csv"` in the first notebook.
+Set `DATA_PATH = "tests/fixtures/customer_retention_retail.csv"` in the first notebook and run notebooks 00-11 sequentially. The framework handles dataset registration, intent detection, and all downstream configuration automatically.
+
+Alternatively, run all notebooks non-interactively:
+```bash
+python scripts/notebooks/run_exploration.py --notebooks-dir exploration_notebooks/ --timeout 600
+```
 
 ---
 
 ## Next Steps
 
-- [[Architecture]] - Understand the medallion architecture
-- [[Snapshot Grid and Control Variables]] - Leakage-safe temporal grid and control variables
-- [[Local Track]] - Generate production pipelines
-- [[Databricks Track]] - Deploy to Databricks
+- [[Architecture]] -- Understand the intent-driven medallion architecture
+- [[Snapshot Grid and Control Variables]] -- How the as-of grid is derived from intent
+- [[Model Intent and Objective Support]] -- How prediction objectives are declared and validated
+- [[Local Track]] -- Generate production pipelines with Feast + MLflow
+- [[Databricks Track]] -- Deploy to Databricks with Unity Catalog
