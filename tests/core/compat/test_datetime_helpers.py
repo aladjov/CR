@@ -8,6 +8,7 @@ from customer_retention.core.compat import (
     _infer_epoch_unit,
     as_tz_naive,
     ensure_datetime_column,
+    normalize_timestamp_columns,
     safe_to_datetime,
 )
 
@@ -282,3 +283,207 @@ class TestTimeSeriesProfilerWithEpochIntegers:
         assert "days_since_last_event" in result.columns
         assert "days_since_first_event" in result.columns
         assert len(result) == 2
+
+
+class TestAsTzNaiveDatetimeIndex:
+    def test_naive_index_unchanged(self):
+        idx = pd.DatetimeIndex(["2023-01-01", "2023-06-15"])
+        result = as_tz_naive(idx)
+        pd.testing.assert_index_equal(result, idx)
+
+    def test_aware_index_stripped(self):
+        idx = pd.DatetimeIndex(["2023-01-01", "2023-06-15"]).tz_localize("UTC")
+        result = as_tz_naive(idx)
+        assert result.tz is None
+        assert result[0] == pd.Timestamp("2023-01-01")
+
+    def test_non_utc_timezone_stripped(self):
+        idx = pd.DatetimeIndex(["2023-01-01", "2023-06-15"]).tz_localize("US/Eastern")
+        result = as_tz_naive(idx)
+        assert result.tz is None
+
+
+class TestNormalizeTimestampColumns:
+    def test_naive_passthrough(self):
+        df = pd.DataFrame({
+            "ts": pd.to_datetime(["2023-01-01", "2023-06-15"]),
+            "val": [1, 2],
+        })
+        result = normalize_timestamp_columns(df)
+        pd.testing.assert_frame_equal(result, df)
+
+    def test_tz_aware_stripped(self):
+        df = pd.DataFrame({
+            "ts": pd.to_datetime(["2023-01-01", "2023-06-15"]).tz_localize("UTC"),
+            "val": [1, 2],
+        })
+        result = normalize_timestamp_columns(df)
+        assert result["ts"].dt.tz is None
+        assert result["ts"].iloc[0] == pd.Timestamp("2023-01-01")
+
+    def test_mixed_columns(self):
+        df = pd.DataFrame({
+            "ts1": pd.to_datetime(["2023-01-01"]).tz_localize("UTC"),
+            "ts2": pd.to_datetime(["2023-06-15"]),
+            "val": [42],
+        })
+        result = normalize_timestamp_columns(df)
+        assert result["ts1"].dt.tz is None
+        assert result["ts2"].dt.tz is None
+        assert result["val"].iloc[0] == 42
+
+    def test_non_datetime_untouched(self):
+        df = pd.DataFrame({"name": ["alice"], "age": [30]})
+        result = normalize_timestamp_columns(df)
+        pd.testing.assert_frame_equal(result, df)
+
+    def test_empty_dataframe(self):
+        df = pd.DataFrame()
+        result = normalize_timestamp_columns(df)
+        assert result.empty
+
+    def test_does_not_mutate_original(self):
+        df = pd.DataFrame({
+            "ts": pd.to_datetime(["2023-01-01"]).tz_localize("UTC"),
+        })
+        normalize_timestamp_columns(df)
+        assert df["ts"].dt.tz is not None
+
+
+class TestPandasDtypeToSparkSchema:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_int_columns(self):
+        from pyspark.sql.types import IntegerType, LongType
+
+        from customer_retention.core.compat import pandas_dtype_to_spark_schema
+        df = pd.DataFrame({"a": pd.array([1, 2], dtype="int32"), "b": pd.array([3, 4], dtype="int64")})
+        schema = pandas_dtype_to_spark_schema(df)
+        assert isinstance(schema.fields[0].dataType, IntegerType)
+        assert isinstance(schema.fields[1].dataType, LongType)
+
+    def test_float_columns(self):
+        from pyspark.sql.types import DoubleType, FloatType
+
+        from customer_retention.core.compat import pandas_dtype_to_spark_schema
+        df = pd.DataFrame({"a": pd.array([1.0], dtype="float32"), "b": pd.array([2.0], dtype="float64")})
+        schema = pandas_dtype_to_spark_schema(df)
+        assert isinstance(schema.fields[0].dataType, FloatType)
+        assert isinstance(schema.fields[1].dataType, DoubleType)
+
+    def test_bool_column(self):
+        from pyspark.sql.types import BooleanType
+
+        from customer_retention.core.compat import pandas_dtype_to_spark_schema
+        df = pd.DataFrame({"flag": [True, False]})
+        schema = pandas_dtype_to_spark_schema(df)
+        assert isinstance(schema.fields[0].dataType, BooleanType)
+
+    def test_string_column(self):
+        from pyspark.sql.types import StringType
+
+        from customer_retention.core.compat import pandas_dtype_to_spark_schema
+        df = pd.DataFrame({"name": ["alice", "bob"]})
+        schema = pandas_dtype_to_spark_schema(df)
+        assert isinstance(schema.fields[0].dataType, StringType)
+
+    def test_datetime_column(self):
+        from pyspark.sql.types import TimestampNTZType
+
+        from customer_retention.core.compat import pandas_dtype_to_spark_schema
+        df = pd.DataFrame({"ts": pd.to_datetime(["2023-01-01"])})
+        schema = pandas_dtype_to_spark_schema(df)
+        assert isinstance(schema.fields[0].dataType, TimestampNTZType)
+
+    def test_nullable_int_column(self):
+        from pyspark.sql.types import LongType
+
+        from customer_retention.core.compat import pandas_dtype_to_spark_schema
+        df = pd.DataFrame({"a": pd.array([1, pd.NA, 3], dtype="Int64")})
+        schema = pandas_dtype_to_spark_schema(df)
+        assert isinstance(schema.fields[0].dataType, LongType)
+
+    def test_empty_dataframe(self):
+        from customer_retention.core.compat import pandas_dtype_to_spark_schema
+        df = pd.DataFrame()
+        schema = pandas_dtype_to_spark_schema(df)
+        assert len(schema.fields) == 0
+
+    def test_unknown_dtype_falls_back_to_string(self):
+        from pyspark.sql.types import StringType
+
+        from customer_retention.core.compat import pandas_dtype_to_spark_schema
+        df = pd.DataFrame({"cat": pd.Categorical(["a", "b", "a"])})
+        schema = pandas_dtype_to_spark_schema(df)
+        assert isinstance(schema.fields[0].dataType, StringType)
+
+
+class TestBuildSpineWithTzAwareDates:
+    def test_tz_aware_grid_dates_produce_naive_spine(self):
+        from customer_retention.stages.temporal.temporal_merger import TemporalMerger
+        merger = TemporalMerger()
+        entities = pd.Series(["A", "B"])
+        tz_dates = [
+            pd.Timestamp("2023-01-01", tz="UTC").isoformat(),
+            pd.Timestamp("2023-02-01", tz="UTC").isoformat(),
+        ]
+        spine = merger.build_spine(entities, tz_dates)
+        assert spine[merger.config.as_of_column].dt.tz is None
+
+    def test_naive_grid_dates_still_work(self):
+        from customer_retention.stages.temporal.temporal_merger import TemporalMerger
+        merger = TemporalMerger()
+        entities = pd.Series(["A"])
+        naive_dates = ["2023-01-01", "2023-02-01"]
+        spine = merger.build_spine(entities, naive_dates)
+        assert spine[merger.config.as_of_column].dt.tz is None
+        assert len(spine) == 2
+
+
+class TestDataMaterializerDatetimeConversion:
+    def _make_recommendation(self, target_column, parameters):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import LayeredRecommendation
+        return LayeredRecommendation(
+            id="test_conv_1",
+            action="convert",
+            target_column=target_column,
+            parameters=parameters,
+            layer="bronze",
+            category="type_conversion",
+            rationale="test",
+            source_notebook="test",
+        )
+
+    def _make_registry_with_type_conversion(self, target_column, parameters):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            BronzeRecommendations,
+            RecommendationRegistry,
+        )
+        registry = RecommendationRegistry()
+        registry.bronze = BronzeRecommendations(
+            source_file="test",
+            type_conversions=[self._make_recommendation(target_column, parameters)],
+        )
+        return registry
+
+    def test_type_conversion_uses_safe_to_datetime(self):
+        from customer_retention.generators.orchestration.data_materializer import DataMaterializer
+
+        registry = self._make_registry_with_type_conversion("ts", {"target_type": "datetime"})
+        materializer = DataMaterializer(registry, storage=None)
+        df = pd.DataFrame({"ts": ["2023-01-01", "2023-06-15"], "val": [1, 2]})
+        result = materializer.apply_bronze(df)
+        assert pd.api.types.is_datetime64_any_dtype(result["ts"])
+
+    def test_epoch_seconds_conversion(self):
+        from customer_retention.generators.orchestration.data_materializer import DataMaterializer
+
+        ts_epoch = int(pd.Timestamp("2023-01-01").timestamp())
+        registry = self._make_registry_with_type_conversion("ts", {"target_type": "datetime"})
+        materializer = DataMaterializer(registry, storage=None)
+        df = pd.DataFrame({"ts": [ts_epoch, ts_epoch + 86400], "val": [1, 2]})
+        result = materializer.apply_bronze(df)
+        assert pd.api.types.is_datetime64_any_dtype(result["ts"])
+        assert result["ts"].iloc[0].year == 2023

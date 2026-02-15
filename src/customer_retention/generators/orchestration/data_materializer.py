@@ -9,6 +9,7 @@ from customer_retention.analysis.auto_explorer.layered_recommendations import (
     LayeredRecommendation,
     RecommendationRegistry,
 )
+from customer_retention.core.compat import safe_to_datetime
 
 
 class DataMaterializer:
@@ -100,7 +101,7 @@ class DataMaterializer:
             return df
         target_type = rec.parameters.get("target_type", "str")
         if target_type == "datetime":
-            df[col] = pd.to_datetime(df[col])
+            df[col] = safe_to_datetime(df[col])
         else:
             df[col] = df[col].astype(target_type)
         return df

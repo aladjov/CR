@@ -5,6 +5,7 @@ from typing import Any
 
 import pandas as pd
 
+from customer_retention.core.compat import as_tz_naive
 from customer_retention.core.config.column_config import DatasetGranularity
 from customer_retention.stages.temporal.point_in_time_join import PointInTimeJoiner
 
@@ -46,7 +47,7 @@ class TemporalMerger:
         self, entity_ids: pd.Series, grid_dates: list[str]
     ) -> pd.DataFrame:
         unique_entities = entity_ids.drop_duplicates().reset_index(drop=True)
-        parsed_dates = pd.to_datetime(grid_dates)
+        parsed_dates = as_tz_naive(pd.to_datetime(grid_dates))
 
         if len(unique_entities) == 0 or len(parsed_dates) == 0:
             return pd.DataFrame(

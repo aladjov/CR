@@ -2190,3 +2190,90 @@ class TestDatetimeDerivationRendering:
         )
         code = renderer.render_bronze_event("events", config)
         assert "derive_datetime_features" not in code
+
+
+class TestLandingTemplateSafeToDatetime:
+
+    def test_landing_uses_safe_to_datetime_for_feature_timestamp(self, renderer):
+        from customer_retention.generators.pipeline_generator.models import (
+            LandingLayerConfig,
+            SourceConfig,
+        )
+
+        source = SourceConfig(
+            name="orders", path="orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = LandingLayerConfig(
+            source=source, raw_source_path="/data/orders.csv",
+            raw_source_format="csv", entity_column="customer_id",
+            time_column="order_date", target_column="churn",
+        )
+        code = renderer.render_landing("orders", config)
+        assert "safe_to_datetime" in code
+        assert 'pd.to_datetime(df[TIME_COLUMN]' not in code
+
+    def test_landing_uses_safe_to_datetime_with_coalesce(self, renderer):
+        from customer_retention.generators.pipeline_generator.models import (
+            LandingLayerConfig,
+            SourceConfig,
+            TimestampCoalesceConfig,
+        )
+
+        source = SourceConfig(
+            name="orders", path="orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = LandingLayerConfig(
+            source=source, raw_source_path="/data/orders.csv",
+            raw_source_format="csv", entity_column="customer_id",
+            time_column="order_date", target_column="churn",
+            timestamp_coalesce=TimestampCoalesceConfig(
+                datetime_columns_ordered=["updated_at", "created_at"],
+            ),
+        )
+        code = renderer.render_landing("orders", config)
+        assert "safe_to_datetime" in code
+        assert 'pd.to_datetime(df["updated_at"]' not in code
+        assert 'pd.to_datetime(df["created_at"]' not in code
+
+    def test_landing_uses_safe_to_datetime_for_label_timestamp(self, renderer):
+        from customer_retention.generators.pipeline_generator.models import (
+            LabelTimestampConfig,
+            LandingLayerConfig,
+            SourceConfig,
+        )
+
+        source = SourceConfig(
+            name="orders", path="orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = LandingLayerConfig(
+            source=source, raw_source_path="/data/orders.csv",
+            raw_source_format="csv", entity_column="customer_id",
+            time_column="order_date", target_column="churn",
+            label_timestamp=LabelTimestampConfig(
+                label_column="churn_date", fallback_window_days=180,
+            ),
+        )
+        code = renderer.render_landing("orders", config)
+        assert 'safe_to_datetime(df["churn_date"]' in code
+        assert 'pd.to_datetime(df["churn_date"]' not in code
+
+    def test_landing_imports_safe_to_datetime(self, renderer):
+        from customer_retention.generators.pipeline_generator.models import (
+            LandingLayerConfig,
+            SourceConfig,
+        )
+
+        source = SourceConfig(
+            name="orders", path="orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = LandingLayerConfig(
+            source=source, raw_source_path="/data/orders.csv",
+            raw_source_format="csv", entity_column="customer_id",
+            time_column="order_date", target_column="churn",
+        )
+        code = renderer.render_landing("orders", config)
+        assert "from customer_retention.core.compat import safe_to_datetime" in code

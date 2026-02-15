@@ -128,6 +128,84 @@ class TestDatabricksFeatureStoreMocked:
                 DatabricksFeatureStore()
 
 
+class TestDatabricksFeatureStoreToSparkDf:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_to_spark_df_passes_schema(self):
+        from unittest.mock import MagicMock
+
+        from customer_retention.integrations.adapters.feature_store.databricks import _to_spark_df
+
+        mock_spark = MagicMock()
+        df = pd.DataFrame({"ts": pd.to_datetime(["2023-01-01"]), "val": [1]})
+        _to_spark_df(mock_spark, df)
+        mock_spark.createDataFrame.assert_called_once()
+        call_kwargs = mock_spark.createDataFrame.call_args
+        assert "schema" in call_kwargs.kwargs or len(call_kwargs.args) > 1
+
+    def test_to_spark_df_normalizes_tz(self):
+        from unittest.mock import MagicMock
+
+        from customer_retention.integrations.adapters.feature_store.databricks import _to_spark_df
+
+        mock_spark = MagicMock()
+        df = pd.DataFrame({"ts": pd.to_datetime(["2023-01-01"]).tz_localize("UTC")})
+        _to_spark_df(mock_spark, df)
+        passed_df = mock_spark.createDataFrame.call_args.args[0]
+        assert passed_df["ts"].dt.tz is None
+
+    def test_write_table_uses_to_spark_df(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.feature_store.databricks import (
+            DatabricksFeatureStore,
+            _to_spark_df,
+        )
+
+        with patch.object(DatabricksFeatureStore, "__init__", lambda self, **kw: None):
+            store = DatabricksFeatureStore()
+            store.catalog = "main"
+            store.schema = "default"
+            store._fe_client = MagicMock()
+
+            df = pd.DataFrame({"val": [1]})
+            with patch(
+                "customer_retention.integrations.adapters.feature_store.databricks.get_spark_session"
+            ) as mock_gs, patch(
+                "customer_retention.integrations.adapters.feature_store.databricks._to_spark_df"
+            ) as mock_to:
+                mock_to.return_value = MagicMock()
+                store.write_table("test_table", df)
+                mock_to.assert_called_once()
+
+    def test_register_feature_view_uses_to_spark_df(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.feature_store import FeatureViewConfig
+        from customer_retention.integrations.adapters.feature_store.databricks import (
+            DatabricksFeatureStore,
+        )
+
+        with patch.object(DatabricksFeatureStore, "__init__", lambda self, **kw: None):
+            store = DatabricksFeatureStore()
+            store.catalog = "main"
+            store.schema = "default"
+            store._fe_client = MagicMock()
+
+            config = FeatureViewConfig(name="view", entity_key="id", features=["f1"])
+            df = pd.DataFrame({"id": [1], "f1": [1.0]})
+            with patch(
+                "customer_retention.integrations.adapters.feature_store.databricks.get_spark_session"
+            ), patch(
+                "customer_retention.integrations.adapters.feature_store.databricks._to_spark_df"
+            ) as mock_to:
+                mock_to.return_value = MagicMock()
+                store.register_feature_view(config, df)
+                mock_to.assert_called_once()
+
+
 class TestDatabricksFeatureStoreMergeOnly:
     def test_write_table_with_merge_succeeds(self):
         from customer_retention.integrations.adapters.feature_store.databricks import _validate_write_mode

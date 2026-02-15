@@ -685,12 +685,13 @@ class TestDatabricksBackendMocked:
         backend._client.create_table.assert_called_once()
 
     def test_write_features(self, backend):
-        mock_spark, mock_spark_module, _ = self._make_spark_mocks()
+        mock_spark, mock_spark_module, mock_types = self._make_spark_mocks()
 
         df = pd.DataFrame({"entity_id": ["A"], "val": [1.0]})
         with patch.dict("sys.modules", {
             "pyspark": MagicMock(),
             "pyspark.sql": mock_spark_module,
+            "pyspark.sql.types": mock_types,
         }):
             backend.write_features("tbl", df, mode="merge")
         backend._client.write_table.assert_called_once()
@@ -711,6 +712,7 @@ class TestDatabricksBackendMocked:
         with patch.dict("sys.modules", {
             "pyspark": MagicMock(),
             "pyspark.sql": mock_spark_module,
+            "pyspark.sql.types": MagicMock(),
             "databricks": MagicMock(),
             "databricks.feature_engineering": mock_fe_module,
         }):
@@ -733,6 +735,7 @@ class TestDatabricksBackendMocked:
         with patch.dict("sys.modules", {
             "pyspark": MagicMock(),
             "pyspark.sql": mock_spark_module,
+            "pyspark.sql.types": MagicMock(),
             "databricks": MagicMock(),
             "databricks.feature_engineering": MagicMock(),
         }):
@@ -752,6 +755,7 @@ class TestDatabricksBackendMocked:
         with patch.dict("sys.modules", {
             "pyspark": MagicMock(),
             "pyspark.sql": mock_spark_module,
+            "pyspark.sql.types": MagicMock(),
             "databricks": MagicMock(),
             "databricks.feature_engineering": MagicMock(),
         }):

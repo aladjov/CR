@@ -26,6 +26,13 @@ def _validate_write_mode(mode: str) -> None:
         )
 
 
+def _to_spark_df(spark: Any, df: pd.DataFrame) -> Any:
+    from customer_retention.core.compat import normalize_timestamp_columns, pandas_dtype_to_spark_schema
+    normalized = normalize_timestamp_columns(df)
+    schema = pandas_dtype_to_spark_schema(normalized)
+    return spark.createDataFrame(normalized, schema=schema)
+
+
 class DatabricksFeatureStore(FeatureStoreAdapter):
     def __init__(self, catalog: str = "main", schema: str = "default"):
         if not is_spark_available():
@@ -79,7 +86,7 @@ class DatabricksFeatureStore(FeatureStoreAdapter):
         _validate_write_mode(mode)
         full_name = self._full_name(name)
         spark = get_spark_session()
-        spark_df = spark.createDataFrame(df)
+        spark_df = _to_spark_df(spark, df)
         self.fe_client.write_table(name=full_name, df=spark_df, mode=mode)
         return AdapterResult(success=True)
 
@@ -108,7 +115,7 @@ class DatabricksFeatureStore(FeatureStoreAdapter):
     def register_feature_view(self, config: FeatureViewConfig, df: pd.DataFrame) -> str:
         table_name = self._full_name(config.name)
         spark = get_spark_session()
-        spark_df = spark.createDataFrame(df)
+        spark_df = _to_spark_df(spark, df)
         kwargs: Dict[str, Any] = {"name": table_name, "primary_keys": [config.entity_key], "df": spark_df}
         if hasattr(config, "timeseries_column") and config.timeseries_column:
             kwargs["timeseries_columns"] = [config.timeseries_column]
@@ -123,7 +130,7 @@ class DatabricksFeatureStore(FeatureStoreAdapter):
             FeatureLookup(table_name=ref.split(":")[0], lookup_key=[entity_df.columns[0]]) for ref in feature_refs
         ]
         training_set = self.fe_client.create_training_set(
-            df=spark.createDataFrame(entity_df), feature_lookups=lookups, label=None
+            df=_to_spark_df(spark, entity_df), feature_lookups=lookups, label=None
         )
         return training_set.load_df().toPandas()
 
@@ -138,5 +145,5 @@ class DatabricksFeatureStore(FeatureStoreAdapter):
         lookups = [
             FeatureLookup(table_name=ref.split(":")[0], lookup_key=list(entity_keys.keys())) for ref in feature_refs
         ]
-        result = self.fe_client.score_batch(df=spark.createDataFrame(entity_df), feature_lookups=lookups)
+        result = self.fe_client.score_batch(df=_to_spark_df(spark, entity_df), feature_lookups=lookups)
         return result.toPandas().to_dict()

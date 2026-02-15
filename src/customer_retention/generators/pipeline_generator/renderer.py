@@ -1382,6 +1382,7 @@ from feast.types import Float32, Float64, Int64, String
     "landing.py.j2": """import pandas as pd
 import numpy as np
 from pathlib import Path
+from customer_retention.core.compat import safe_to_datetime
 from config import RAW_SOURCES, PRODUCTION_DIR
 
 SOURCE_NAME = "{{ name }}"
@@ -1406,12 +1407,12 @@ def load_raw_data() -> pd.DataFrame:
 def derive_feature_timestamp(df: pd.DataFrame) -> pd.DataFrame:
 {% if config.timestamp_coalesce %}
 {% set cols = config.timestamp_coalesce.datetime_columns_ordered %}
-    df["feature_timestamp"] = pd.to_datetime(df["{{ cols[-1] }}"], errors="coerce")
+    df["feature_timestamp"] = safe_to_datetime(df["{{ cols[-1] }}"], errors="coerce")
 {% for col in cols[:-1] | reverse %}
-    df["feature_timestamp"] = df["feature_timestamp"].fillna(pd.to_datetime(df["{{ col }}"], errors="coerce"))
+    df["feature_timestamp"] = df["feature_timestamp"].fillna(safe_to_datetime(df["{{ col }}"], errors="coerce"))
 {% endfor %}
 {% else %}
-    df["feature_timestamp"] = pd.to_datetime(df[TIME_COLUMN], errors="coerce")
+    df["feature_timestamp"] = safe_to_datetime(df[TIME_COLUMN], errors="coerce")
 {% endif %}
     return df
 
@@ -1420,7 +1421,7 @@ def derive_label_timestamp(df: pd.DataFrame) -> pd.DataFrame:
 {% if config.label_timestamp %}
 {% set lt = config.label_timestamp %}
 {% if lt.label_column %}
-    df["label_timestamp"] = pd.to_datetime(df["{{ lt.label_column }}"], errors="coerce")
+    df["label_timestamp"] = safe_to_datetime(df["{{ lt.label_column }}"], errors="coerce")
     df["label_timestamp"] = df["label_timestamp"].fillna(
         df["feature_timestamp"] + pd.Timedelta(days={{ lt.fallback_window_days }})
     )

@@ -206,9 +206,55 @@ def as_tz_naive(value: Any) -> Any:
         if hasattr(value.dtype, "tz") and value.dtype.tz is not None:
             return value.dt.tz_localize(None)
         return value
+    if isinstance(value, _pandas.DatetimeIndex):
+        return value.tz_localize(None) if value.tz else value
     if hasattr(value, "tzinfo") and value.tzinfo is not None:
         return value.replace(tzinfo=None)
     return value
+
+
+def normalize_timestamp_columns(df: _pandas.DataFrame) -> _pandas.DataFrame:
+    df = df.copy()
+    for col in df.columns:
+        if _pandas.api.types.is_datetime64_any_dtype(df[col]):
+            df[col] = as_tz_naive(df[col])
+    return df
+
+
+def pandas_dtype_to_spark_schema(df: _pandas.DataFrame) -> "Any":
+    from pyspark.sql.types import (
+        BooleanType,
+        DoubleType,
+        FloatType,
+        IntegerType,
+        LongType,
+        StringType,
+        StructField,
+        StructType,
+        TimestampNTZType,
+    )
+
+    _MAP = {
+        "int8": IntegerType(),
+        "int16": IntegerType(),
+        "int32": IntegerType(),
+        "int64": LongType(),
+        "float32": FloatType(),
+        "float64": DoubleType(),
+        "bool": BooleanType(),
+        "object": StringType(),
+    }
+    fields = []
+    for col in df.columns:
+        dtype = df[col].dtype
+        if _pandas.api.types.is_datetime64_any_dtype(dtype):
+            spark_type = TimestampNTZType()
+        elif hasattr(dtype, "numpy_dtype"):
+            spark_type = _MAP.get(str(dtype.numpy_dtype), StringType())
+        else:
+            spark_type = _MAP.get(str(dtype), StringType())
+        fields.append(StructField(col, spark_type, True))
+    return StructType(fields)
 
 
 def safe_to_list(obj: Any) -> list:
@@ -280,6 +326,8 @@ __all__ = [
     "safe_to_list",
     "safe_to_datetime",
     "ensure_datetime_column",
+    "normalize_timestamp_columns",
+    "pandas_dtype_to_spark_schema",
     "ops",
     "DataOps",
 ]

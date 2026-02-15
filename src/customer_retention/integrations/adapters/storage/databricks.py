@@ -29,6 +29,12 @@ class DatabricksDelta(DeltaStorage):
             reader = reader.option("versionAsOf", version)
         return reader.load(path).toPandas()
 
+    def _to_spark_df(self, df: pd.DataFrame) -> Any:
+        from customer_retention.core.compat import normalize_timestamp_columns, pandas_dtype_to_spark_schema
+        normalized = normalize_timestamp_columns(df)
+        schema = pandas_dtype_to_spark_schema(normalized)
+        return self.spark.createDataFrame(normalized, schema=schema)
+
     def write(self, df: pd.DataFrame, path: str, mode: str = "overwrite",
               partition_by: Optional[List[str]] = None,
               metadata: Optional[Dict[str, str]] = None) -> None:
@@ -37,7 +43,7 @@ class DatabricksDelta(DeltaStorage):
                 "spark.databricks.delta.commitInfo.userMetadata",
                 json.dumps(metadata),
             )
-        spark_df = self.spark.createDataFrame(df)
+        spark_df = self._to_spark_df(df)
         writer = spark_df.write.format("delta").mode(mode)
         if mode == "overwrite":
             writer = writer.option("overwriteSchema", "true")
@@ -48,7 +54,7 @@ class DatabricksDelta(DeltaStorage):
     def merge(self, df: pd.DataFrame, path: str, condition: str,
               update_cols: Optional[List[str]] = None) -> None:
         from delta.tables import DeltaTable
-        spark_df = self.spark.createDataFrame(df)
+        spark_df = self._to_spark_df(df)
         target = DeltaTable.forPath(self.spark, path)
         merge_builder = target.alias("target").merge(spark_df.alias("source"), condition)
         if update_cols:

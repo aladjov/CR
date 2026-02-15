@@ -301,6 +301,13 @@ class FeastBackend(FeatureStoreBackend):
         return None
 
 
+def _to_spark_df(spark: "Any", df: pd.DataFrame) -> "Any":
+    from customer_retention.core.compat import normalize_timestamp_columns, pandas_dtype_to_spark_schema
+    normalized = normalize_timestamp_columns(df)
+    schema = pandas_dtype_to_spark_schema(normalized)
+    return spark.createDataFrame(normalized, schema=schema)
+
+
 class DatabricksBackend(FeatureStoreBackend):
     """Databricks Feature Engineering backend for production."""
 
@@ -374,7 +381,7 @@ class DatabricksBackend(FeatureStoreBackend):
     ) -> None:
         from pyspark.sql import SparkSession
         spark = SparkSession.builder.getOrCreate()
-        spark_df = spark.createDataFrame(df)
+        spark_df = _to_spark_df(spark, df)
 
         full_name = self._full_table_name(table_name)
         self.client.write_table(name=full_name, df=spark_df, mode=mode)
@@ -390,7 +397,7 @@ class DatabricksBackend(FeatureStoreBackend):
         from pyspark.sql import SparkSession
 
         spark = SparkSession.builder.getOrCreate()
-        entity_spark = spark.createDataFrame(entity_df)
+        entity_spark = _to_spark_df(spark, entity_df)
 
         lookups = []
         for ref in feature_refs:
@@ -426,7 +433,7 @@ class DatabricksBackend(FeatureStoreBackend):
 
         spark = SparkSession.builder.getOrCreate()
         entity_df = pd.DataFrame(entity_keys)
-        entity_spark = spark.createDataFrame(entity_df)
+        entity_spark = _to_spark_df(spark, entity_df)
 
         lookups = []
         for ref in feature_refs:

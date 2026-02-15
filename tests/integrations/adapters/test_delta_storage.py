@@ -241,3 +241,107 @@ class TestDatabricksDeltaMocked:
             with pytest.raises(ImportError):
                 storage = DatabricksDelta()
                 storage.read("path")
+
+
+class TestDatabricksDeltaToSparkDf:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_to_spark_df_calls_normalize_and_schema(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            df = pd.DataFrame({
+                "ts": pd.to_datetime(["2023-01-01"]),
+                "val": [1],
+            })
+
+            with patch(
+                "customer_retention.integrations.adapters.storage.databricks.normalize_timestamp_columns",
+                wraps=lambda d: d,
+            ) as mock_norm, patch(
+                "customer_retention.integrations.adapters.storage.databricks.pandas_dtype_to_spark_schema",
+            ) as mock_schema:
+                storage._to_spark_df(df)
+                mock_norm.assert_called_once()
+                mock_schema.assert_called_once()
+                storage.spark.createDataFrame.assert_called_once()
+                call_kwargs = storage.spark.createDataFrame.call_args
+                assert "schema" in call_kwargs.kwargs or len(call_kwargs.args) > 1
+
+    def test_write_uses_to_spark_df(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            df = pd.DataFrame({"val": [1, 2]})
+
+            with patch.object(storage, "_to_spark_df", return_value=MagicMock()) as mock_to:
+                storage.write(df, "/fake/path")
+                mock_to.assert_called_once_with(df)
+
+    def test_merge_uses_to_spark_df(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            df = pd.DataFrame({"id": [1], "val": [10]})
+
+            with patch.object(storage, "_to_spark_df", return_value=MagicMock()) as mock_to, \
+                 patch("customer_retention.integrations.adapters.storage.databricks.DeltaTable", create=True):
+                from unittest.mock import patch as _p
+                with _p("delta.tables.DeltaTable") as mock_dt:
+                    mock_dt.forPath.return_value.alias.return_value.merge.return_value \
+                        .whenMatchedUpdateAll.return_value.whenNotMatchedInsertAll.return_value \
+                        .execute = MagicMock()
+                    try:
+                        storage.merge(df, "/fake/path", "source.id = target.id")
+                    except Exception:
+                        pass
+                    mock_to.assert_called_once_with(df)
+
+    def test_to_spark_df_with_empty_df(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            df = pd.DataFrame()
+            storage._to_spark_df(df)
+            storage.spark.createDataFrame.assert_called_once()
+
+    def test_to_spark_df_with_tz_aware_column(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.core.compat import normalize_timestamp_columns
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            df = pd.DataFrame({
+                "ts": pd.to_datetime(["2023-01-01"]).tz_localize("UTC"),
+                "val": [1],
+            })
+            storage._to_spark_df(df)
+            call_args = storage.spark.createDataFrame.call_args
+            passed_df = call_args.args[0] if call_args.args else call_args[0][0]
+            assert passed_df["ts"].dt.tz is None
