@@ -1,6 +1,6 @@
 # Tutorial: Customer Email Engagement & Retention
 
-This tutorial demonstrates a complete customer retention ML pipeline using an **event-based email engagement** dataset. Unlike the [[Retail Retention|Tutorial-Retail-Churn]] which works with entity-level data (one row per customer), this tutorial shows how the framework handles **event-level data** -- where each row is an email event and multiple rows belong to a single customer. The focus is on *why* aggregation and temporal analysis drive every downstream decision.
+This tutorial demonstrates a complete customer retention ML pipeline using an **event-based email engagement** dataset. Unlike the [[Retail Retention|Tutorial-Retail-Churn]] which works with entity-level data (one row per customer), this tutorial shows how the framework handles **event-level data** -- where each row is an email event and multiple rows belong to a single customer. The pipeline follows an **intent-driven medallion architecture** organized into three phases: Bronze (evidence gathering and aggregation), Silver (merge and feature exploration), and Gold (modeling and production). The focus is on *why* each phase's decisions drive everything downstream.
 
 **[View Interactive Tutorial (HTML)](https://aladjov.github.io/CR/tutorial/customer-emails/)** - Browse all executed notebooks with visualizations
 
@@ -19,7 +19,7 @@ The goal is straightforward: build a model that predicts who will churn. But the
 4. How accurately can we predict churn from email behavior alone?
 5. Does the best validation model hold up in production conditions?
 
-**The key thing to understand upfront:** This is event-level data. In entity-level datasets, each customer is already a single row with pre-computed features, and the analysis proceeds directly to column profiling. Here, the framework must first *detect* that rows represent events, then *aggregate* them into customer-level features -- choosing the right time windows, summary statistics, and derived metrics. This aggregation step (Stage 5) is the critical decision point that doesn't exist in entity-level pipelines. Everything before it is preparation; everything after depends on it.
+**The key thing to understand upfront:** This is event-level data. In entity-level datasets, each customer is already a single row with pre-computed features, and the analysis proceeds directly to column profiling. Here, the framework must first *detect* that rows represent events, then *aggregate* them into customer-level features -- choosing the right time windows, summary statistics, and derived metrics. This aggregation step (Event Aggregation, NB01d) is the critical decision point that doesn't exist in entity-level pipelines. Everything before it is preparation; everything after depends on it.
 
 ---
 
@@ -32,7 +32,7 @@ The goal is straightforward: build a model that predicts who will churn. But the
 | **Customers** | 4,998 unique entities |
 | **Features** | 13 columns (event-level) |
 | **Target** | `unsubscribed` (binary: 0=retained, 1=churned) |
-| **Retention Rate** | 60.7% retained / 39.3% churned (after aggregation) |
+| **Retention Rate** | 55.4% retained / 44.6% churned (after aggregation) |
 | **Time Span** | 2015-01-01 to 2023-12-30 (9 years) |
 | **Avg Events/Customer** | 16.6 emails per customer |
 
@@ -58,13 +58,65 @@ The goal is straightforward: build a model that predicts who will churn. But the
 
 ---
 
-## Stage 1: Data Discovery -- First Look at the Data
+## Phase I -- Bronze: Evidence, Grid & Aggregation
+
+The first phase transforms raw event data into clean, aggregated entity-level features. Event datasets are explored independently (NB01a--01c) to gather temporal evidence, then aggregated onto a deterministic snapshot grid (NB01d). Source-level quality checks (NB02) ensure clean inputs before the Silver merge. All steps produce artifacts consumed downstream but never re-evaluated later.
+
+---
+
+### Intent Contract -- Defining the Prediction Goal (NB00)
+
+Before any data is examined, the framework requires a declaration of *what* you are trying to predict and *how*. This **intent contract** propagates through every downstream notebook, controlling what temporal evidence is gathered, how snapshots are generated, and how models are trained.
+
+[View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/00_start_here.html)
+
+#### What the Framework Configures
+
+| Parameter | Value | Derivation |
+|-----------|-------|------------|
+| **Project Name** | `email` | User-specified |
+| **Primary Objective** | `immediate_risk` (100% confidence) | Auto-detected from `unsubscribed` column |
+| **Secondary Objective** | `disengagement` (90% confidence) | Temporal span sufficient (3,285 days) |
+| **Temporal Posture** | `STABLE` (long memory) | Use extended historical context |
+| **Prediction Horizon** | 90 days | User-specified |
+| **Observation Window** | 270 days | `max(180, 3 × H)` = 270 |
+| **Purge Gap** | 104 days | `H + 14` = 104 (prevents leakage between feature cutoff and label start) |
+| **Label Window** | 90 days | Equals prediction horizon |
+| **Cadence** | Weekly (7 days) | Immediate risk with H=90 |
+| **Split Strategy** | Temporal | Time-ordered split required |
+
+The intent contract ensures that every downstream decision -- which grid dates to aggregate on, how to split train/test, what label window to use -- traces to a single, explicit configuration rather than ad-hoc choices scattered across notebooks.
+
+#### Snapshot Grid
+
+The intent drives a **snapshot grid** -- the deterministic set of `as_of_date` values that define when features are computed. For this dataset:
+
+| Setting | Value |
+|---------|-------|
+| **Grid Mode** | `NO_ADJUSTMENTS` (fixed from intent) |
+| **Cadence** | Weekly (7 days) |
+| **Observation Window** | 270 days |
+| **Grid Dates** | 404 weekly snapshots |
+| **Grid Range** | 2015-09-28 to 2023-06-19 |
+
+In `NO_ADJUSTMENTS` mode, the grid is fully determined by the intent and doesn't wait for evidence from temporal notebooks (01a--01c). In multi-dataset scenarios with `ALLOW_ADJUSTMENTS`, each event dataset would vote on cadence and window parameters during temporal exploration, and a consensus grid would be derived after all votes are collected.
+
+#### What We Take Forward
+
+- **Intent contract** propagates objective, horizon, and posture to all downstream notebooks
+- **Snapshot grid** (404 weekly dates) becomes the temporal backbone for aggregation in NB01d
+- **Purge gap** (104 days) prevents temporal leakage between features and labels
+- **Cadence** (weekly) determines scoring frequency in production
+
+---
+
+### Data Discovery -- First Look at the Data (NB01)
 
 Before searching for patterns, we need to understand what we're working with. Is the data organized by customer (entity-level) or by event (event-level)? Getting this wrong -- treating events as entities or vice versa -- would either lose temporal information or produce nonsensical features. The first job is classification, not analysis.
 
 [View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/01_data_discovery.html)
 
-### What the Framework Detects
+#### What the Framework Detects
 
 The framework's temporal detection engine examines the data and identifies its structure automatically:
 
@@ -79,45 +131,24 @@ The framework's temporal detection engine examines the data and identifies its s
 | **Timestamp Source** | `last_action_date` (coalesced) | See below |
 | **Coverage** | 83,198 / 83,198 (100%) | All rows have a resolved timestamp |
 | **Date Range** | 2015-01-01 to 2023-12-30 | ~9 years of email history |
-| **Cutoff Date** | 2022-09-26 | 90% train / 10% score split |
-| **Training Events** | 74,842 | Events before cutoff |
-| **Snapshot ID** | `training_v2` | Versioned for reproducibility |
-| **Event-Level Target** | 97.4% class 0, 2.6% class 1 | Per-event distribution (misleading -- see Stage 4) |
+| **Event-Level Target** | 97.3% class 0, 2.7% class 1 | Per-event distribution (misleading -- see Temporal Patterns) |
 
-This last number -- 97.4% vs 2.6% -- is misleading. It looks like almost no one churns. But that's the *event-level* view: most individual emails don't trigger an unsubscription. The *customer-level* picture is dramatically different, as we'll discover in Stage 4.
+This last number -- 97.3% vs 2.7% -- is misleading. It looks like almost no one churns. But that's the *event-level* view: most individual emails don't trigger an unsubscription. The *customer-level* picture is dramatically different, as we'll discover in Temporal Patterns after aggregation reveals the true 55:45 split.
 
-### Timestamp Coalescing and the Cutoff
+#### Timestamp Coalescing
 
-**Timestamp coalescing** is a subtle but important operation. The framework does not simply pick a single datetime column. Instead, it builds a **coalesced timestamp** (`last_action_date`) by analyzing all available datetime columns (`sent_date`, `unsubscribe_date`), ordering them chronologically by median date, and resolving each row's timestamp from latest to earliest. This is essential for event-level data: `unsubscribe_date` is a single event per customer and only populated for the small percentage who actually unsubscribed, while `sent_date` covers every row. Coalescing guarantees 100% coverage -- every row gets a resolved timestamp regardless of which columns happen to be null.
+**Timestamp coalescing** is a subtle but important operation. The framework builds a **coalesced timestamp** (`last_action_date`) by analyzing all available datetime columns (`sent_date`, `unsubscribe_date`), ordering them chronologically by median date, and resolving each row's timestamp from latest to earliest. This is essential for event-level data: `unsubscribe_date` is populated for only ~2.7% of events, while `sent_date` covers every row. Coalescing guarantees 100% coverage.
 
-The **cutoff date** is then derived from this coalesced timestamp by finding the date that achieves the requested train/score ratio (here, 90/10). In this dataset, the 90th-percentile date is 2022-09-26 -- all events before this date become training data, all events after become the scoring window.
+#### What We Take Forward
 
-The `label_window_days` parameter (180 days) defines the **inactivity period** after which a customer is considered churned. When the dataset lacks an explicit outcome column (contract expiration, policy termination, account closure), a customer with no events in the 180-day window following their last activity is labeled as churned. Here, `unsubscribe_date` exists but covers only ~2.6% of events, so the coalesced approach combined with the label window provides the most robust temporal anchoring.
-
-### The 90/10 + Holdout Strategy
-
-The cutoff date creates a **90% train / 10% score** split at the event level. Within the training portion, the pipeline further holds out ~10% of *entities* for scoring validation (with their target values masked in the silver layer). This two-level split approximates a standard 80/20 train/test split but with an important benefit: the scoring holdout records flow through the *same* Bronze-Silver-Gold pipeline as training data. This means the scoring pipeline validates not just model accuracy but also the correctness of the entire data processing chain -- any bug in feature engineering, encoding, or scaling would show up as degraded holdout performance. We'll see this pay off in Stage 12, when the production pipeline reproduces the exploration-phase results almost exactly.
-
-### What We Take Forward
-
-- **Activated temporal track** (notebooks 01a-01d) for event aggregation -- this is the path unique to event-level data
-- **Cutoff date 2022-09-26** derived from the 90th percentile of the coalesced `last_action_date` -- this date anchors every windowed feature in Stage 5
-- **Holdout: ~10% of entities** masked in silver layer for end-to-end pipeline validation -- our final test in Stage 12
+- **Activated temporal track** (notebooks 01a--01d) for event aggregation -- this is the path unique to event-level data
 - **Coalesced timestamps** used because no single datetime column has full coverage
-- The misleading event-level target (97.4:2.6) will be corrected in Stage 4 after aggregation reveals the true 60.5:39.5 split
+- The misleading event-level target (97.3:2.7) will be corrected in Temporal Patterns after aggregation reveals the true 55.4:44.6 split
 - All downstream notebooks load from the versioned snapshot
-
-### Alternative Approaches
-
-- **Entity-level path**: If the framework detected one row per customer, it would skip the temporal track entirely (as in the retail tutorial)
-- **Manual cutoff override**: Useful if a business event (campaign launch, policy change) should define the boundary
-- **Single timestamp column**: Could use `sent_date` alone (100% coverage) but would ignore `unsubscribe_date` signal; coalescing preserves both
-- **Different inactivity windows**: 90 days (aggressive -- flags customers as churned sooner) or 365 days (conservative) -- matters most when churn is inferred from absence rather than an explicit event
-- **Simple random 80/20 split**: Would not test the scoring pipeline's data processing -- only the model itself
 
 ---
 
-## Stage 2: Temporal Deep Dive -- Understanding the Rhythm of Engagement
+### Temporal Deep Dive -- Understanding the Rhythm of Engagement (NB01a)
 
 With the data classified as event-level, the next question is deceptively simple: *If we're going to summarize each customer's email history into fixed time windows, which windows should we use?*
 
@@ -125,13 +156,7 @@ The wrong answer wastes effort (windows too short produce mostly zeros) or loses
 
 [View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/01a_temporal_deep_dive.html)
 
-### The Central Question
-
-The temporal deep dive asks about each candidate time window (24h, 7d, 14d, 30d, 90d, 180d, 365d, all_time): **"Do we have enough data in this window for meaningful analysis?"**
-
-"Enough data" is not a single test. A window could pass one criterion and fail another -- a 7-day window might cover the full dataset span but contain zero events for most customers. The framework evaluates each window through multiple gates, scores them independently, then aggregates those scores into a unified recommendation.
-
-### Time Series Profiling
+#### Time Series Profiling
 
 **Why we do this:** Before evaluating windows, we need to understand the basic rhythm of the data -- how many events per customer, how spread out, how long the history spans. These metrics determine which windows are even plausible.
 
@@ -139,275 +164,107 @@ The temporal deep dive asks about each candidate time window (24h, 7d, 14d, 30d,
 
 | Metric | Value |
 |--------|-------|
-| Time Span | 2,825 days (7.7 years) |
-| Median Inter-Event Gap | 93 days |
-| Mean Inter-Event Gap | 143 days (right-skewed) |
-| Volume Trend | Declining (-28%) |
+| Time Span | 3,285 days (9.0 years) |
+| Median Inter-Event Gap | 95 days |
+| Mean Inter-Event Gap | 145.5 days (right-skewed) |
+| Volume Trend | Declining (-30%) |
 | Data Gaps | 0 detected |
 
-The median gap of 93 days is the single most important number from this stage. It means the typical customer interacts roughly once a quarter -- and any window shorter than that will be empty for most people. This observation will recur throughout the analysis: it explains the window selection here, the 57.7% null rate in Stage 5, and the zero-inflation in Stage 6.
+The median gap of 95 days is the single most important number from this stage. It means the typical customer interacts roughly once a quarter -- and any window shorter than that will be empty for most people. This observation will recur throughout the analysis: it explains the window selection here, the high null rate in aggregated features, and the zero-inflation in Column Deep Dive.
 
-**Auto-derived recommendation:** Window candidates depend on these metrics -- only windows significantly larger than the median gap will capture enough events for stable aggregations.
-
-**Alternative technique:** Kernel density estimation of inter-event times could provide a smoother picture, but the median is sufficient for window selection decisions.
-
-### Events per Entity Distribution
-
-**Why we do this:** We need to identify power users vs one-timers, because sparse customers need different feature treatment than prolific ones.
-
-**What the analysis shows:** The framework segments customers by event count. One-time customers (single event) cannot contribute to any temporal feature -- no trend, no variance, no momentum is computable from one data point. High-activity customers risk dominating training with their volume.
-
-**Auto-derived recommendation:** Segment-aware window evaluation -- assess window viability separately for customer segments rather than globally.
-
-**Alternative technique:** Quantile-based segmentation (e.g., deciles of event count) instead of the lifecycle quadrant approach.
-
-### Entity Lifecycle Analysis
+#### Entity Lifecycle Analysis
 
 **Why we do this:** Customers vary in both *how long* they've been around (tenure) and *how intensely* they engage (event frequency). Crossing these dimensions reveals whether one model fits all.
 
-**What the analysis shows:** Four quadrants emerge with very different behavioral profiles. The framework computes **eta-squared** = 0.308 (high heterogeneity), meaning lifecycle segment explains 30.8% of the variance in engagement patterns.
+**What the analysis shows:** Four quadrants emerge with very different behavioral profiles. The framework computes **eta-squared** = 0.335 (high heterogeneity), meaning lifecycle segment explains 33.5% of the variance in engagement patterns.
 
-**Auto-derived recommendation:** Add `lifecycle_quadrant` as a feature. The eta-squared value is well above the 0.14 threshold for "high heterogeneity." This segmentation feature will prove its worth repeatedly: it explains the false outlier problem in Stage 7 (Cramer's V=0.665 in Stage 8) and drives a 70+ percentage-point churn spread in Stage 5.
+**Auto-derived recommendation:** Add `lifecycle_quadrant` as a feature. The eta-squared value is well above the 0.14 threshold for "high heterogeneity." This segmentation feature will prove its worth repeatedly: it explains the false outlier problem in Source Integrity (Cramer's V in Relationship Analysis) and drives a 75+ percentage-point churn spread in Event Aggregation.
 
-**Alternative technique:** Build separate models per quadrant. Rejected because the smallest segment has EPV=1.0 (far below the minimum of 10), as Stage 9 confirms.
+**Alternative technique:** Build separate models per quadrant. Rejected because the smallest segment has insufficient EPV (far below the minimum of 10), as Feature Opportunities confirms.
 
-### Temporal Coverage
+#### The Multi-Gate Scoring Process
 
-**Why we do this:** Data gaps, volume trends, and arrival patterns can corrupt aggregations if not detected. A six-month gap in email sends would produce misleading rolling features -- zeros that mean "no data" rather than "no activity."
+Each candidate window passes through a sequence of gates:
 
-**What the analysis shows:** No gaps detected. Volume is declining (-28%). Customer arrivals are concentrated in 2015 (90% of onboarding).
+**Gate 1 -- Dataset Span (Hard Gate):** The dataset's total time span must be at least **2x the window size**. A 365-day window needs at least 730 days of data.
 
-**Auto-derived recommendation:** Flag drift risk from the declining volume. Skip cohort features -- insufficient variation with 90% of customers sharing the same arrival year.
+**Gate 2 -- Entity Duration Adequacy:** Even if the dataset covers 9 years, individual customers may have been active for only 3 months. The framework checks each entity's `duration_days` against the window size.
 
-**Alternative technique:** Cohort analysis (monthly or quarterly) if arrivals were more distributed.
+**Gate 3 -- Event Density:** For each customer, the framework projects expected events in the window: `event_count * (window_days / duration_days)`. A threshold of **>=2 expected events** separates meaningful aggregation from noise.
 
-### Inter-Event Timing
+**Gate 4 -- Coverage Threshold:** A window is only useful if at least **10%** of entities pass both Gates 2 and 3.
 
-**Why we do this:** The gap between events determines which windows will produce meaningful aggregations. If the typical gap is 93 days, a 30-day window captures at most one event for most customers -- not enough to compute variance, trends, or ratios.
-
-**What the analysis shows:** The median 93-day gap means the 90-day window is *timing-aligned* (same order of magnitude) but still borderline for density. The 180-day window is the minimum that clears the 2-event density threshold.
-
-**Auto-derived recommendation:** 180d, 365d, all_time as the window set.
-
-**Alternative technique:** Fixed-count windows (last N events per customer) instead of fixed-time windows. Useful when time windows produce too many zeros; not needed here since 180d passes.
-
-### The Multi-Gate Scoring Process
-
-Each candidate window passes through a sequence of gates -- increasingly specific questions:
-
-**Gate 1 -- Dataset Span (Hard Gate):** *Is the dataset long enough to even consider this window?*
-
-The dataset's total time span must be at least **2x the window size**. A 365-day window needs at least 730 days of data. This is a hard gate -- failing it excludes the window immediately (unless it's in the always-include list, which defaults to `all_time`). The 2x multiplier exists because a window needs to be observable across multiple periods to produce stable aggregations, not just appear once.
-
-**Gate 2 -- Entity Duration Adequacy:** *Does each customer's individual history span at least the window duration?*
-
-Even if the dataset covers 7 years, individual customers may have been active for only 3 months. The framework checks each entity's `duration_days` against the window size. A customer with 60 days of history cannot contribute meaningfully to a 180-day window.
-
-**Gate 3 -- Event Density:** *Would each customer have at least 2 expected events in the window?*
-
-This is the core density test. For each customer, the framework projects: given their total event count and total active duration, how many events would we expect in a window of this size? The formula is `event_count * (window_days / duration_days)`. A threshold of **>=2 expected events** separates meaningful aggregation from noise -- you cannot compute a meaningful trend, variance, or change rate from a single event.
-
-**Gate 4 -- Coverage Threshold:** *What fraction of entities pass both Gates 2 and 3?*
-
-A window is only useful if a sufficient proportion of the population can contribute to it. The default threshold is **10%** -- at least 10% of entities must have both adequate duration and sufficient event density. Below this, the window produces too many nulls to be a reliable feature.
-
-The framework also tracks `meaningful_pct` -- among entities that pass the duration gate, what fraction also has sufficient density? This separates "the window is too long for most customers" from "the window is fine in length but events are too sparse."
-
-### Annotation Layers
-
-After gating, the framework enriches each window with contextual annotations. These don't change inclusion decisions but inform interpretation:
-
-**Segment Relevance:** Which lifecycle segments benefit most from each window? The framework checks coverage per quadrant (e.g., "Steady & Loyal" vs "One-shot") and flags which segments contribute >=15% of the beneficial population for a given window. This tells you whether a window captures behavior broadly or is dominated by one customer type.
-
-**Seasonality Alignment:** If temporal pattern analysis (Stage 4) detects seasonal periods, the framework checks whether any candidate window aligns with those periods. A window that matches a seasonal cycle captures one full cycle of variation -- useful for trend features.
-
-**Inter-Event Timing:** The framework compares the median inter-event gap to each window size. When the ratio falls between 0.5 and 2.0, the window is "timing-aligned" -- it's in the same order of magnitude as how frequently customers naturally interact. Such windows tend to produce the most informative aggregations.
-
-### Heterogeneity Analysis
-
-**Why we do this:** Do different customer segments behave so differently that a single model might be inadequate?
-
-The framework computes **eta-squared** (the ratio of between-group variance to total variance) for engagement intensity and event count across lifecycle quadrants:
-
-| Eta-squared | Level | Advisory |
-|-------------|-------|----------|
-| < 0.06 | Low | Single model is fine -- union windows lose minimal signal |
-| 0.06 -- 0.14 | Moderate | Add lifecycle quadrant as a feature -- let the model learn segment differences |
-| > 0.14 | High | Consider separate models for distinct segments, especially if cold-start population (One-shot / One-time) exceeds 30% |
-
-**What the analysis shows:** Eta-squared = 0.308 (high), with the One-shot quadrant at 17.3% -- below the 30% cold-start threshold. The advisory: `consider_segment_feature` -- add lifecycle quadrant as a categorical feature rather than building separate models.
-
-### Gate Results for This Dataset
+#### Gate Results for This Dataset
 
 | Window | Coverage | Density (events/entity) | Result |
 |--------|----------|-------------------------|--------|
 | 7d | <10% | ~0.1 | Excluded -- fails coverage |
 | 30d | <10% | ~0.3 | Excluded -- fails coverage |
-| 90d | Borderline | ~1.0 | Excluded -- density below 2-event threshold |
+| 90d | Borderline | ~0.9 | Excluded -- density below 2-event threshold |
 | 180d | Passes | ~1.9 | Included -- near threshold but above coverage gate |
-| 365d | Passes | ~3.9 | Included -- adequate density |
+| 365d | Passes | ~3.8 | Included -- adequate density |
 | All time | 100% | ~15.0 | Always included |
 
-The median inter-event gap of 93 days means the 90-day window is timing-aligned but still fails the 2-event density test for most customers. The 180-day window is the shortest window that clears all gates -- it's the tightest recency signal the data can support.
+The median inter-event gap of 95 days means the 90-day window is timing-aligned but still fails the 2-event density test for most customers. The 180-day window is the shortest window that clears all gates -- it's the tightest recency signal the data can support.
 
-### Decision Made
+#### Decision Made
 - **Three aggregation windows**: `180d`, `365d`, `all_time` -- the minimum set that passed all gates while preserving recency-vs-history contrast
-- **Lifecycle quadrant** added as a categorical feature (high heterogeneity, eta-squared=0.308)
-- **`time_to_open_hours` flagged** for Yeo-Johnson transform (skewness 2.08)
+- **Lifecycle quadrant** added as a categorical feature (high heterogeneity, eta-squared=0.335)
+- **Drift risk flagged**: Volume declining (-30%), population stability 0.66
 
-### Alternative Approaches
-- **Shorter windows (7d, 30d)**: Failed coverage and density gates -- most customers would have zero events
-- **Single window**: Would lose the recency-vs-history contrast that 180d vs all_time provides
-- **Fixed-count windows** (last N events): Alternative approach when time windows produce too many zeros; not needed here since 180d passes
-- **Separate models per quadrant**: Heterogeneity is high, but cold-start fraction (17.3%) is below the 30% threshold -- a segment feature is more pragmatic
-
-> **Caution:** The declining volume trend (-28%) means recent windows contain less data per customer than historical ones. Features from 180-day windows will have 57.7% null values -- customers with no recent activity. This is informative (absence of activity is a signal), but models must handle the missingness.
+> **Caution:** The declining volume trend (-30%) means recent windows contain less data per customer than historical ones. Features from 180-day windows will have high null values -- customers with no recent activity. This is informative (absence of activity is a signal), but models must handle the missingness.
 
 ---
 
-## Stage 3: Temporal Quality -- Validating Event Data
+### Temporal Quality -- Validating Event Data (NB01b)
 
-Aggregating events without first validating their quality risks propagating data issues into features. Event-level data can contain duplicates, temporal gaps, future-dated records, and ordering inconsistencies that would silently corrupt aggregated features. Catching these *before* aggregation is essential -- once events are summarized, the original issues become invisible.
+Aggregating events without first validating their quality risks propagating data issues into features. Event-level data can contain duplicates, temporal gaps, future-dated records, and ordering inconsistencies that would silently corrupt aggregated features.
 
 [View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/01b_temporal_quality.html)
 
-### Duplicate Events (TQ001)
-
-**Why we check this:** Duplicates inflate counts and skew aggregation statistics. A customer who opened 5 emails but has 6 duplicate records would appear 20% more active than reality.
-
-**What the analysis shows:** 371 duplicates found (0.50% of events).
-
-**Auto-derived recommendation:** Deduplicate before aggregation. At 0.5%, the impact is small, but cleaning is cheap and prevents double-counting.
-
-**Alternative technique:** Ignore at this threshold -- negligible impact on aggregation. But since deduplication costs nothing, there's no reason to leave dirty data in the pipeline.
-
-### Temporal Gaps (TQ002)
-
-**Why we check this:** Gaps in event data produce misleading rolling features -- zeros that mean "no data was collected" rather than "the customer was inactive." A three-month gap in email sends (system outage, campaign pause) would make every customer appear to have gone silent.
-
-**What the analysis shows:** No significant gaps detected. The event stream is continuous over the 9-year span.
-
-**Auto-derived recommendation:** Proceed with confidence -- no gap indicators needed.
-
-**Alternative technique:** If gaps existed, add binary gap indicator features (e.g., `had_gap_in_180d`) so models can distinguish true inactivity from data absence.
-
-### Future Dates (TQ003)
-
-**Why we check this:** Future-dated events cause data leakage -- the model would see tomorrow's data during training, producing artificially inflated performance that collapses in production.
-
-**What the analysis shows:** None found. All events have valid historical timestamps.
-
-**Auto-derived recommendation:** Proceed.
-
-### Event Ordering (TQ004)
-
-**Why we check this:** When multiple events share the same timestamp, sequence features become ambiguous. If two emails were "sent" at the same second, which came first?
-
-**What the analysis shows:** 371 events with ambiguous ordering (same timestamp, different events).
-
-**Auto-derived recommendation:** Use stable sort. This is a minor concern -- aggregation functions (sum, mean, count) are order-invariant, so ordering ambiguity only affects sequence-dependent features we're not computing here.
-
-### Quality Score
-
-**Why we compute this:** A unified metric to decide proceed/investigate/stop, rather than weighing individual checks subjectively.
-
-**What the analysis shows:**
+#### Quality Checks
 
 | Component | Score | Issues |
 |-----------|-------|--------|
-| Duplicate Events | 23.1/25 | 371 duplicates |
+| Duplicate Events | 23.1/25 | 371 duplicates (0.50%) |
 | Temporal Gaps | 25.0/25 | None |
 | Future Dates | 25.0/25 | None |
 | Event Ordering | 23.1/25 | 371 ambiguous |
 | **Total** | **96/100 (Grade A)** | |
 
-Grade thresholds: A (90+) proceed with confidence, B (75-89) document issues and proceed, C (60-74) fix issues first, D (<60) investigate data source.
+#### Missing Value Patterns
 
-### Missing Value Patterns
+- **`time_to_open_hours` at 77.6% missing** -- this is MNAR (Missing Not At Random). The column is only populated when an email is opened. The 77.6% of missing values *are* the data: they represent emails that were never opened. Imputing these with a mean or median would destroy the signal.
+- **`unsubscribe_date` at 97.3% missing** -- also MNAR. Only populated for churned customers. The missingness pattern directly encodes the target variable.
 
-**Why we examine this:** We need to understand whether missingness is random (safe to impute) or informative (preserve as signal). This distinction will prove critical throughout the analysis.
+**Auto-derived recommendation:** Preserve both patterns. Do not impute. These will flow through aggregation as informative nulls.
 
-**What the analysis shows:**
-- **`time_to_open_hours` at 77.7% missing** -- this is MNAR (Missing Not At Random). The column is only populated when an email is opened. The 77.7% of missing values *are* the data: they represent emails that were never opened. Imputing these with a mean or median would destroy the signal.
-- **`unsubscribe_date` at 97.4% missing** -- also MNAR. Only populated for churned customers. The missingness pattern directly encodes the target variable.
-
-**Auto-derived recommendation:** Preserve both patterns. Do not impute. These will flow through to Stage 5's aggregation as informative nulls, and we'll see them again in Stage 6 as zero-inflation and in Stage 7 as missing value patterns.
-
-**Alternative technique:** Drop high-missingness columns entirely. This would simplify the pipeline but lose genuine engagement signal from `time_to_open_hours`.
-
-### Segment-Aware Outlier Recommendation
-
-**Why we compute this:** Global outlier detection fails when data has natural subgroups. A value that looks extreme across all customers may be perfectly normal for a specific segment.
-
-**What the analysis shows:** The framework recommends segment-aware outlier treatment, with false outlier rates up to 99.6% for some features under global detection. This is a preview of a critical finding that will surface in Stage 7.
-
-**Auto-derived recommendation:** Carry forward to Stage 7 quality assessment. Do not apply global outlier caps.
-
-### Decision Made
+#### Decision Made
 - **371 duplicate events removed** during aggregation (0.5% of data)
-- **`time_to_open_hours`**: Retained despite 77.7% missingness -- the pattern of missingness itself is informative (unopened emails)
-- **Segment-aware outlier treatment** recommended over global treatment (false outlier rate up to 99.6% for some features)
-
-### Alternative Approaches
-- **Drop `time_to_open_hours` entirely**: Its 77.7% missingness could justify removal, but the non-missing values carry signal (time-to-open correlates with engagement quality)
-- **Strict deduplication policy**: Could remove duplicates before snapshot creation rather than during aggregation
-- **Ignore duplicates**: At 0.5%, the impact is negligible -- but cleaning is cheap and prevents double-counting during aggregation
+- **`time_to_open_hours`**: Retained despite 77.6% missingness -- the pattern of missingness itself is informative
+- **Segment-aware outlier treatment** recommended over global treatment
 
 ---
 
-## Stage 4: Temporal Patterns -- Discovering Behavioral Signals
+### Temporal Patterns -- Discovering Behavioral Signals (NB01c)
 
-This is where key insights emerge. We've understood the data structure (Stage 1), its rhythm (Stage 2), and verified its integrity (Stage 3). Now we look for the behavioral signatures that separate customers who stay from those who leave. Not all temporal features are created equal -- before we aggregate, we need to know which patterns carry signal.
+This is where key insights emerge. We've understood the data structure (NB01), its rhythm (NB01a), and verified its integrity (NB01b). Now we look for the behavioral signatures that separate customers who stay from those who leave.
 
 [View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/01c_temporal_patterns.html)
 
-### Target Resolution: Correcting the Class Balance
+#### Target Resolution: Correcting the Class Balance
 
-**Why we do this:** The event-level target distribution (97.4% retained, 2.6% churned) is misleading because one customer contributes many events. We need to see the picture at the granularity where we'll actually model.
+**Why we do this:** The event-level target distribution (97.3% retained, 2.7% churned) is misleading because one customer contributes many events. We need to see the picture at the granularity where we'll actually model.
 
 **What the analysis shows:** After aggregating via `max` per customer:
-- Event-level: 97.4% class 0, 2.6% class 1 (misleading)
-- Entity-level: **60.5% retained, 39.5% churned**
+- Event-level: 97.3% class 0, 2.7% class 1 (misleading)
+- Entity-level: **55.4% retained, 44.6% churned**
 
-This changes our entire understanding of class balance. What looked like an extreme imbalance problem (97:3) is actually a manageable one (60:40). The event-level view was dominated by prolific customers who generated many email events but only one churn label.
+This changes our entire understanding of class balance. What looked like an extreme imbalance problem (97:3) is actually a nearly balanced one (55:45). The event-level view was dominated by prolific customers who generated many email events but only one churn label.
 
-**Auto-derived recommendation:** Always verify target distribution at the modeling granularity, not the raw data granularity.
+#### Recency Analysis: The Strongest Signal
 
-**Alternative technique:** Use `any` instead of `max` for aggregation -- equivalent for binary targets, but `max` generalizes to ordinal targets.
-
-### Trend Detection
-
-**Why we do this:** Strong trends in engagement volume cause data leakage if not handled. A model could learn *time itself* rather than *behavior* -- if email volume steadily increases over years, the model might use recency as a proxy for volume.
-
-**What the analysis shows:** STABLE direction (R-squared=0.465, medium confidence). The trend exists but is not strong enough to warrant special treatment.
-
-**Auto-derived recommendation:** Skip trend features. R-squared below the action threshold.
-
-**Alternative technique:** If the trend were strong (R²>0.7), add trend slope as a feature or detrend the data before aggregation.
-
-### Seasonality Detection
-
-**Why we do this:** Periodic patterns suggest cyclical features. Windows aligned to seasonal cycles capture a full period of variation, producing more stable aggregations.
-
-**What the analysis shows:**
-
-| Pattern | Variation | Autocorrelation |
-|---------|-----------|-----------------|
-| Day of Week | 1.4% | -- |
-| Monthly | 8.7% | -- |
-| Quarterly | 5.0% | -- |
-| Yearly | **59.9%** | -- |
-| Weekly (7d) cycle | -- | 0.484 (Moderate) |
-
-The yearly pattern captures the most variation (59.9%), and the weekly cycle shows moderate autocorrelation (0.484). Day-of-week variation is small (1.4%) but still worth encoding because cyclical features are cheap to compute and can capture send-time preferences.
-
-**Auto-derived recommendation:** Add `dow_sin`, `dow_cos` cyclical encoding -- captures the weekly pattern without creating 7 dummy variables.
-
-**Alternative technique:** Month dummies or seasonal decomposition (STL). Overkill for weak patterns, and dummies increase dimensionality unnecessarily.
-
-### Recency Analysis: The Strongest Signal
-
-**Why we do this:** How recently a customer engaged is often the single strongest churn predictor. A customer who hasn't opened an email in two years tells a very different story than one who clicked yesterday.
+**Why we do this:** How recently a customer engaged is often the single strongest churn predictor.
 
 **What the analysis shows:**
 
@@ -419,21 +276,13 @@ The yearly pattern captures the most variation (59.9%), and the weekly cycle sho
 | Retained mean recency | 1,399 days |
 | Churned mean recency | 165 days |
 
-Churned customers were active **1,234 days more recently** than retained ones. This is the strongest signal we've found -- and it's counterintuitive at first. Why would *churned* customers have more *recent* activity?
+Churned customers were active **1,234 days more recently** than retained ones. This is counterintuitive at first. Why would *churned* customers have more *recent* activity?
 
 The explanation: customers who unsubscribe do so shortly after receiving emails (triggering recent activity). The "retained" customers haven't interacted in years -- they simply never unsubscribed. The model is detecting "recently engaged then left" rather than "gradually disengaged."
 
-**Auto-derived recommendation:** `days_since_last_event` as the highest-priority derived feature, plus recency buckets for the categorical version.
+> **Caution on Causality:** The strong recency signal could be a **trailing indicator**, not a leading one. By the time recency flags a customer, it may already be too late for intervention.
 
-**Alternative technique:** Survival analysis (time-to-event modeling) would handle the temporal nature of recency more naturally, but the framework's aggregation approach captures the core signal.
-
-> **Caution on Causality:** The strong recency signal could be a **trailing indicator**, not a leading one. Customers who unsubscribe do so shortly after receiving emails (triggering recent activity). The model may be detecting "about to unsubscribe" rather than "at risk of disengaging." This distinction matters for intervention timing -- by the time recency flags a customer, it may already be too late.
-
-### Effect Sizes (Cohen's d)
-
-**Why we do this:** Cohen's d quantifies how well each feature discriminates between retained and churned customers. It's effect-size based (not p-value based), so it doesn't inflate with sample size.
-
-**What the analysis shows:**
+#### Effect Sizes (Cohen's d)
 
 | Feature | Cohen's d | Interpretation |
 |---------|-----------|----------------|
@@ -444,648 +293,360 @@ The explanation: customers who unsubscribe do so shortly after receiving emails 
 | `event_count` | -0.759 | Churned received more emails |
 | `clicked_sum` | -0.630 | Churned clicked more |
 
-The negative Cohen's d values reveal a counterintuitive pattern: churned customers were *more engaged*, not less. They opened more emails, clicked more links, had higher open rates. This makes sense in context -- these are customers who actively engaged with the company's emails and then consciously decided to unsubscribe. The truly disengaged customers never bothered to unsubscribe; they just stopped opening.
+The negative Cohen's d values reveal a counterintuitive pattern: churned customers were *more engaged*, not less. They opened more emails, clicked more links, had higher open rates. These are customers who actively engaged then consciously decided to unsubscribe. The truly disengaged customers never bothered to unsubscribe; they just stopped opening.
 
-**Auto-derived recommendation:** Prioritize high-|d| features for inclusion in aggregation. The sign of d is as informative as the magnitude.
+#### Velocity and Momentum
 
-### Velocity and Acceleration
+Clicked momentum (d=-0.97) and opened momentum (d=1.01) are both strong signals -- the rate of change in engagement discriminates nearly as well as the level of engagement itself.
 
-**Why we do this:** Rate of change captures dynamics that static aggregations miss. A customer whose click rate is *declining* tells a different story than one whose click rate has been *consistently low*.
+#### Feature Engineering Summary
 
-**What the analysis shows:** Clicked momentum (d=-0.97) and opened momentum (d=1.01) are both strong signals -- the rate of change in engagement discriminates nearly as well as the level of engagement itself.
-
-**Auto-derived recommendation:** Add `clicked_momentum_180_365` as a ratio feature (recent activity / historical activity). Values >1.0 indicate increasing engagement; <1.0 indicate declining.
-
-**Alternative technique:** Exponentially weighted moving averages (EWMA) for a smoother picture of engagement trends.
-
-### Momentum Analysis
-
-**Why we do this:** Momentum compares recent-to-historical activity as a behavioral change signal. It's the derivative of engagement -- are customers speeding up or slowing down?
-
-**What the analysis shows:** Momentum ratios using the 180d/365d window pair from Stage 2 produce strong discrimination. The specific window pair was chosen because both windows passed the multi-gate scoring -- a direct connection from Stage 2's analysis to Stage 4's feature engineering.
-
-**Auto-derived recommendation:** Use the window pairs validated in Stage 2 for momentum computation.
-
-### Information Value and KS Statistics
-
-**Why we do this:** Information Value (IV) and KS statistics measure predictive strength differently from Cohen's d -- they handle non-linearity and distributional differences that d may miss.
-
-**What the analysis shows:** Rankings validate Cohen's d findings. Recency and engagement features dominate by all measures.
-
-**Auto-derived recommendation:** Confirms feature selection -- no hidden features missed by Cohen's d.
-
-### Categorical Analysis (Cramer's V)
-
-**Why we do this:** Cramer's V is the effect size measure for categorical features, analogous to Cohen's d for numeric ones.
-
-**What the analysis shows:** `lifecycle_quadrant` already shows strong association with the target. This validates the segmentation decision from Stage 2.
-
-**Auto-derived recommendation:** Include `lifecycle_quadrant` in the model.
-
-### Feature Engineering Summary
-
-**Why we consolidate this:** All pattern-derived feature recommendations need to be assembled into a coherent configuration for Stage 5's aggregation.
-
-**What the analysis recommends:**
+Recommendations for aggregation:
 - **Recency features** (highest priority): `days_since_last_event`, recency buckets
 - **Seasonality encoding**: `dow_sin`, `dow_cos`
 - **Momentum**: `clicked_momentum_180_365`
-- **Skip**: trend features (R² too low), cohort features (insufficient variation)
+- **Skip**: trend features (R² too low), cohort features (90% onboarded in 2015 -- insufficient variation)
 
-These recommendations directly configure Stage 5's aggregation -- every derived feature has a traceable origin in Stage 2 or Stage 4.
-
-### Decision Made
-- **Recency features**: High priority -- add `days_since_last_event`, recency buckets
-- **Seasonality features**: Add `dow_sin`, `dow_cos` cyclical encoding
-- **Momentum features**: Add `clicked_momentum_180_365` ratio
-- **Trend features**: Skipped (R-squared too low)
-- **Cohort features**: Skipped (90% of customers onboarded in 2015 -- insufficient variation)
+These recommendations directly configure the aggregation step -- every derived feature has a traceable origin in NB01a or NB01c.
 
 ---
 
-## Stage 5: Event Aggregation -- Building Customer Profiles
+### Event Aggregation -- Building Customer Profiles (NB01d)
 
-Everything converges here. The windows from Stage 2, the quality guarantees from Stage 3, the feature recommendations from Stage 4 -- all of them feed into this single transformation. We're converting 74,000+ individual email events into 4,998 customer profiles, each described by 72 features. This is the irreversible step: poor aggregation loses signal, over-aggregation creates redundancy, and the choices made here cascade through every downstream analysis.
+Everything converges here. The windows from NB01a, the quality guarantees from NB01b, the feature recommendations from NB01c -- all feed into this single transformation. We're converting 82,798 individual email events into 4,998 customer profiles, each described by 217 features. This is the irreversible step: poor aggregation loses signal, over-aggregation creates redundancy, and the choices made here cascade through every downstream analysis.
 
 [View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/01d_event_aggregation.html)
 
-### How Findings Inform Aggregation
+#### How Findings Inform Aggregation
 
-This is not ad-hoc feature engineering. Every parameter traces to a prior analysis:
+Every parameter traces to a prior analysis:
 
 | Source | Insight | Application in Aggregation |
 |--------|---------|---------------------------|
-| Stage 1 | Cutoff date 2022-09-26 | Reference date for all windows |
-| Stage 2 | 93-day median gap → 180d/365d/all_time | Window selection |
-| Stage 2 | Eta-squared=0.308 | Add lifecycle_quadrant feature |
-| Stage 3 | 371 duplicates, 96/100 quality | Deduplicate before aggregation |
-| Stage 3 | time_to_open_hours 77.7% MNAR | Preserve nulls, don't impute |
-| Stage 4 | Recency d=2.23 | Create days_since_last_event |
-| Stage 4 | Weekly autocorrelation 0.484 | Add dow_sin/cos |
-| Stage 4 | Clicked momentum d=-0.97 | Add clicked_momentum_180_365 |
+| NB00 | Snapshot grid (404 weekly dates) | Temporal backbone for as_of_date snapshots |
+| NB01a | 95-day median gap → 180d/365d/all_time | Window selection |
+| NB01a | Eta-squared=0.335 | Add lifecycle_quadrant feature |
+| NB01b | 371 duplicates, 96/100 quality | Deduplicate before aggregation |
+| NB01b | time_to_open_hours 77.6% MNAR | Preserve nulls, don't impute |
+| NB01c | Recency d=2.23 | Create days_since_last_event |
+| NB01c | Weekly autocorrelation | Add dow_sin/cos |
+| NB01c | Clicked momentum d=-0.97 | Add clicked_momentum_180_365 |
 
-### The Shape Transformation
-
-**Why we do this:** The fundamental operation -- many-rows-per-entity to one-row-per-entity. This is the step that doesn't exist in entity-level pipelines and determines what signal the model can access.
-
-**What the analysis shows:**
+#### The Shape Transformation
 
 | Metric | Value |
 |--------|-------|
-| **Input events** | 74,471 (after dedup) |
+| **Input events** | 82,798 (after dedup) |
 | **Output entities** | 4,998 |
-| **Features created** | 72 |
+| **Features created** | 217 |
 | **Memory** | 3.5 MB |
-| **Completeness** | 84.1% |
-| **Target distribution** | 60.7% retained, 39.3% churned |
+| **Target distribution** | 55.4% retained, 44.6% churned |
 
-The math: 5 value columns (`opened`, `clicked`, `send_hour`, `bounced`, `time_to_open_hours`) × 3 windows × 4 aggregation functions (sum, mean, max, count) = 60 features. Plus 12 derived features = 72 total.
+The 217 features are organized into seven temporal feature groups:
 
-### Derived Feature Rationale
+| Group | Count | Purpose |
+|-------|-------|---------|
+| Lagged Windows | 80 | Sequential non-overlapping time horizons |
+| Velocity | 10 | Rate of change between windows |
+| Acceleration | 10 | Change in velocity, momentum |
+| Lifecycle | 20 | Beginning/middle/end of history |
+| Recency | 4 | How recently customer was active |
+| Regularity | 5 | Consistency of engagement |
+| Cohort Comparison | 15 | Customer vs peer group |
 
-Each derived feature exists because a prior stage identified it:
+Plus derived features: `dow_sin`, `dow_cos`, `lifecycle_quadrant`, `recency_bucket`, `clicked_momentum_180_365`, and additional aggregation statistics.
 
-| Derived Feature | Source | Rationale |
-|----------------|--------|-----------|
-| `days_since_last_event` | Stage 4 recency analysis (d=2.23) | Strongest predictor found |
-| `days_since_first_event` | Stage 2 lifecycle analysis | Tenure component of customer profile |
-| `lifecycle_quadrant` | Stage 2 heterogeneity (eta-squared=0.308) | Segmentation feature for high-heterogeneity data |
-| `dow_sin`, `dow_cos` | Stage 4 seasonality (weekly autocorrelation 0.484) | Cyclical encoding of day-of-week patterns |
-| `clicked_momentum_180_365` | Stage 4 momentum analysis (d=-0.97) | Engagement trend signal |
-| `recency_bucket` | Stage 4 recency analysis | Categorical version of recency for tree splits |
-| `event_count_180d/365d/all_time` | Stage 2 window selection | Activity volume per window |
+#### Target Proxy Detection
 
-### Lifecycle Quadrant vs. Churn Rate
+A critical safety feature: the framework detects **target-proxy datetime columns** by checking whether a datetime column's null pattern correlates with the target. For this dataset, `unsubscribe_date` has a null-pattern correlation of **1.00** with `unsubscribed` -- it is non-null only when unsubscribed=1. Including it in datetime derivation would create 70+ perfectly leaky features.
 
-**Why we validate this:** The segmentation decision from Stage 2 (eta-squared=0.308) needs to be confirmed with actual churn rates. High heterogeneity in engagement patterns should translate to high heterogeneity in outcomes.
+The framework automatically excludes `unsubscribe_date` from temporal feature derivation, preventing this leakage silently.
 
-**What the analysis shows:**
+#### Lifecycle Quadrant vs. Churn Rate
 
 | Quadrant | Customers | Churn Rate | Interpretation |
 |----------|-----------|------------|----------------|
-| Intense & Brief | 1,627 | **77.7%** | High engagement, short tenure -- likely to churn |
-| One-shot | 867 | **59.1%** | Minimal engagement, short tenure -- expected churn |
-| Occasional & Loyal | 1,632 | 7.8% | Sparse but persistent -- low risk |
-| Steady & Loyal | 872 | 6.9% | Consistent engagement -- lowest risk |
+| Intense & Brief | 1,679 | **82.7%** | High engagement, short tenure -- likely to churn |
+| One-shot | 816 | **76.7%** | Minimal engagement, short tenure -- expected churn |
+| Occasional & Loyal | 1,683 | 7.6% | Sparse but persistent -- low risk |
+| Steady & Loyal | 820 | 10.4% | Consistent engagement -- lowest risk |
 
-The 70+ percentage-point spread between Intense & Brief (77.7%) and Steady & Loyal (6.9%) confirms that lifecycle segmentation captures meaningful behavioral differences. This single feature nearly predicts churn on its own. We'll see it validated again in Stage 8 (Cramer's V=0.665) and it will explain the false outlier problem in Stage 7.
+The 75+ percentage-point spread between Intense & Brief (82.7%) and Occasional & Loyal (7.6%) confirms that lifecycle segmentation captures meaningful behavioral differences. This single feature nearly predicts churn on its own.
 
-### Missing Values After Aggregation
+#### Recency Bucket Distribution
 
-**Why we examine this:** The informative nulls from Stage 3 have now propagated through aggregation. We need to verify they're preserved as signal, not accidentally imputed.
+| Bucket | Entities | Percentage |
+|--------|----------|------------|
+| 0-7d | 123 | 2.5% |
+| 8-30d | 364 | 7.3% |
+| 31-90d | 725 | 14.5% |
+| 91-180d | 702 | 14.0% |
+| >180d | 3,084 | **61.7%** |
 
-**What the analysis shows:**
+The 61.7% of customers in the >180d bucket connects directly to the quarterly cadence from NB01a -- these customers haven't interacted recently relative to the observation window. This pattern is informative, not missing data.
 
-| Window | Null Rate | Reason |
-|--------|-----------|--------|
-| 180d features | **57.7%** (2,884 customers) | No emails in last 180 days |
-| 365d features | 41.4% (2,069 customers) | No emails in last year |
-| all_time features | 0% | Every customer has at least one email |
-| `time_to_open_hours` (180d) | **86.3%** | Only populated when email opened |
+#### Leakage Validation
 
-The 57.7% null rate in 180d features connects directly to the 93-day median cadence from Stage 2. If customers typically interact once every 93 days, many will have zero events in any given 180-day window -- especially relative to the 2022-09-26 cutoff. These nulls are *informative*: a customer with no 180-day activity is behaviorally different from one with activity, and models should treat this missingness as signal, not noise.
+The leakage check flagged 2 potential issues after target-proxy exclusion:
+- `clicked_velocity_pct` (LD010) -- possible class separation
+- `active_span_days` (LD053) -- domain pattern correlation
 
-**Auto-derived recommendation:** Preserve nulls. Do not impute to zero or to the mean.
+Both are assessed as false positives (legitimate behavioral features that happen to correlate with churn). The leakage gate is non-fatal: it warns rather than blocks, allowing the modeling notebook to evaluate these features empirically.
 
-**Alternative technique:** Impute zeros (would destroy signal -- a customer with zero activity is not the same as a customer whose activity is unknown).
-
-### Leakage Validation
-
-**Why we check this:** This is the safety gate before modeling. Any feature that uses information from after the cutoff date, or that encodes the target variable, would produce artificially inflated performance.
-
-**What the analysis shows:** 83 checks, zero critical issues. The target column was excluded from all aggregations, and no future-looking features were detected.
-
-### Decision Made
-- **72 features** from 3 windows, 5 value columns, 4 aggregation functions + derived features
+#### Decision Made
+- **217 features** from 3 windows, 7 feature groups + derived features
 - **Nulls preserved** as informative (not imputed to zero)
+- **`unsubscribe_date` excluded** from datetime derivation (target-proxy, correlation=1.00)
 - **371 duplicate events removed** before aggregation
 
-### Alternative Approaches
-- **More windows (7d, 30d, 90d)**: Rejected -- too few events per customer in short windows (median cadence 93 days)
-- **Fewer aggregation functions**: Could drop `max` and `count` to reduce features, but count is highly informative (perfect correlation with event_count per window)
-- **Entity-level only (skip aggregation)**: Would lose all temporal signal -- the entire feature engineering comes from this step
+---
+
+### Source Integrity -- Per-Dataset Quality Gate (NB02)
+
+Before merging datasets in Silver, each Bronze dataset undergoes independent quality validation. Source-level cleanup happens *before* the merge to avoid provenance complexity later -- dropping unusable columns early prevents them from polluting the merged feature space.
+
+[View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/02_source_integrity.html)
+
+#### What the Framework Checks
+
+| Check | Result | Detail |
+|-------|--------|--------|
+| **Duplicates** | 0 (0.00%) | Clean entity keys (email_id is unique) |
+| **Quality Score** | 93.1/100 | Excellent |
+| **Target Distribution** | 97.3:2.7 (event-level) | 36.19:1 imbalance at event level |
+| **Missing Values** | 2 columns | `time_to_open_hours` (77.6%), `unsubscribe_date` (97.3%) |
+| **Segment-Aware Outliers** | 3 segments detected | 84.7% of `time_to_open_hours` outliers are false positives |
+| **Date Logic** | Valid | No placeholder dates, range 2015-01-01 to 2023-12-30 |
+| **Binary Fields** | 3 valid | `opened`, `clicked`, `bounced` -- all clean 0/1 |
+| **Consistency** | No issues | No case variants or spacing problems |
+
+The segment-aware outlier analysis is a key finding: 782 of 923 global outliers in `time_to_open_hours` are normal values within their segment. Global outlier treatment would distort legitimate data from different customer behavioral groups.
+
+#### Recommendations Generated
+
+4 Bronze-layer recommendations saved for pipeline generation:
+- Imbalance strategy: SMOTE consideration for severe event-level imbalance (not needed at entity level after aggregation)
+- Segment-aware outlier treatment for `time_to_open_hours`
+- Missing indicator strategy for high-missingness columns
 
 ---
 
-## Stage 6: Column Analysis -- Post-Aggregation Feature Distributions
+## Phase II -- Silver: Merge & Analytical Exploration
 
-With 72 features in hand, we examine each one. Aggregated features from event data tend to look unusual -- heavy right skew, zero-inflation, extreme values -- but many of these "problems" are expected consequences of the quarterly engagement cadence we identified in Stage 2.
-
-[View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/02_column_deep_dive.html)
-
-### Value Range Validation
-
-**Why we check this:** Catch impossible values -- negative counts, rates above 100%, dates in the future. These would indicate bugs in the aggregation pipeline.
-
-**What the analysis shows:** All ranges are valid after aggregation. No impossible values detected.
-
-### Numeric Distribution Analysis
-
-**Why we do this:** Determine which features need transformation for linear models. Highly skewed features can dominate regularization penalties and produce unstable coefficients.
-
-**What the analysis shows:**
-
-| Feature | Skewness | Zeros (%) | Issue | Recommended Transform |
-|---------|----------|-----------|-------|----------------------|
-| `event_count_180d` | 2.13 | 57.7% | Zero-inflated | Binary indicator + log |
-| `event_count_all_time` | 2.90 | 0% | Right-skewed | Cap then log |
-| `opened_sum_180d` | 3.31 | 86.3% | Heavily zero-inflated | Binary indicator + log |
-| `clicked_sum_180d` | 4.76 | 95.3% | Extremely zero-inflated | Binary indicator + log |
-| `bounced_sum_180d` | 7.54 | -- | Heavily right-skewed | Zero-inflation handling |
-
-The 180-day window features are consistently the most problematic because 57.7% of customers had no activity in that window. This is a direct consequence of the quarterly engagement cadence discovered in Stage 2 -- the 93-day median gap means more than half of customers will have no events in any given 180-day window relative to the cutoff.
-
-**Auto-derived transformation decision tree:** Zeros >40% → binary indicator + log(non-zeros); |skewness| >1 → log; kurtosis >10 → cap first, then transform.
-
-**Alternative technique:** No transforms for tree-based models (scale-invariant). But linear models and regularization benefit from normalized features, so the transforms are generated regardless.
-
-### Categorical Analysis
-
-**Why we do this:** Choose encoding strategy based on cardinality and balance.
-
-**What the analysis shows:**
-
-| Column | Categories | Imbalance | Encoding |
-|--------|-----------|-----------|----------|
-| `lifecycle_quadrant` | 4 | 1.9x (balanced) | One-hot |
-| `recency_bucket` | 5 | 21.5x (imbalanced) | One-hot |
-
-Both features have low cardinality, making one-hot encoding straightforward.
-
-**Alternative technique:** Target encoding (higher information density, single column per feature). Rejected due to leakage risk without careful cross-validation -- and one-hot is sufficient for 4-5 categories.
-
-### 54 Transformation Recommendations
-
-The framework auto-derives 54 transformation recommendations for the Gold layer. These feed directly into the generated pipeline (Stage 11's spec generation), ensuring that the production pipeline applies the same transforms as the exploration notebooks.
-
-### Decision Made
-- **Zero-inflation handling** for 180d features: Binary indicator for "has activity" + log transform of non-zero values
-- **One-hot encoding** for both categorical features
-- **Log transforms** for all right-skewed numeric features
-
-### Alternative Approaches
-- **Power transforms (Yeo-Johnson)**: More flexible than log, but adds complexity for marginal benefit on already-sparse features
-- **Target encoding** for categoricals: Higher information density than one-hot, but risks leakage without careful cross-validation
-- **No transformation**: Tree-based models are scale-invariant, but linear models and regularization benefit from normalized features
+The Silver phase creates a unified feature matrix by merging all Bronze datasets onto a temporal spine, then explores the merged feature space through column-level analysis and relationship detection. Everything operates on the merged data -- cross-dataset interactions and redundancy only exist in the combined space.
 
 ---
 
-## Stage 7: Quality Assessment -- Pre-Modeling Quality Gate
+### Dataset Merge -- Creating the Temporal Spine (NB03)
 
-Before modeling, a final quality check. This stage produces the most surprising finding of the analysis: what looks like an outlier problem is actually the heterogeneity from Stage 2 manifesting in a new form.
+All Bronze datasets are merged onto a temporal spine defined by the cross product of all entity IDs and all grid dates. This produces a unified `(entity_id, as_of_date)` feature matrix where every entity has a feature row at every grid date -- even if it had no activity in that period. The spine preserves the temporal structure needed for point-in-time correct training and scoring.
 
-[View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/03_quality_assessment.html)
+[View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/03_dataset_merge.html)
 
-### Quality Score
-
-**Why we compute this:** A unified go/no-go metric for the aggregated data.
-
-**What the analysis shows:**
-
-| Metric | Value | Assessment |
-|--------|-------|------------|
-| **Quality Score** | **89/100** | Good -- minor issues to address |
-| **Duplicates** | 0 (0.00%) | Clean entity keys |
-| **Class 0 (Churned)** | 3,034 (60.7%) | Majority class |
-| **Class 1 (Retained)** | 1,964 (39.3%) | Minority class |
-| **Imbalance Ratio** | 1.54:1 | Mild -- stratified sampling sufficient |
-| **Columns with Missing Values** | 22 | All from windowed aggregation |
-| **Highest Missingness** | 86.3% | `time_to_open_hours` 180d features |
-
-### Duplicate Check
-
-**Why we check this:** Entity-level duplicates would mean the same customer counted twice, inflating training data and leaking information.
-
-**What the analysis shows:** 0 duplicates. Clean entity keys after aggregation.
-
-### Target Distribution
-
-**Why we verify this:** Class balance drives modeling strategy -- severe imbalance requires oversampling or threshold tuning.
-
-**What the analysis shows:** 60.7:39.3 (1.54:1 = mild imbalance).
-
-**Auto-derived recommendation:** `class_weight='balanced'` in the model -- lets the algorithm upweight the minority class without synthetic oversampling.
-
-**Alternative technique:** SMOTE oversampling. Overkill for 1.54:1 -- typically reserved for ratios above 10:1.
-
-### Missing Value Analysis
-
-**Why we examine patterns:** Understanding whether missingness is MCAR (random), MAR (depends on observed data), or MNAR (depends on the missing value itself) determines the imputation strategy.
-
-**What the analysis shows:** 22 columns with missing values, all from windowed aggregation. The pattern is MNAR -- missingness means "no activity in this window," which is itself a behavioral signal. This is the same informative null pattern we identified in Stage 3 and preserved through Stage 5.
-
-### Segment-Aware Outlier Analysis: Why Global Methods Fail
-
-**Why we do this:** Global outlier detection fails when data has natural subgroups. This is where the Stage 2 heterogeneity finding (eta-squared=0.308) becomes a practical problem.
-
-**What the analysis shows:** Global detection flags up to 24.8% of values as outliers for some features (`opened_sum_365d`). But within lifecycle segments, **93-99% of these are false positives**. Values that look extreme globally are perfectly normal for "Intense & Brief" customers, who by definition have high engagement concentrated in a short period.
-
-This connects back through the analysis: Stage 2 identified high heterogeneity across lifecycle segments (eta-squared=0.308). Stage 5 turned that into a feature (`lifecycle_quadrant`) with a 70+ percentage-point churn spread. Now Stage 7 reveals the *practical consequence*: any global statistical method that doesn't account for segments will mischaracterize the data.
-
-**Auto-derived recommendation:** Segment-aware outlier treatment. Do NOT apply global outlier caps.
-
-**Alternative technique:** Global IQR capping -- the standard approach, but it would distort the "Intense & Brief" segment data, clipping valid high-engagement values.
-
-> **Caution:** Naive outlier removal strips valid data from high-engagement segments. A customer who opened 50 emails in 365 days is an outlier globally but entirely normal for the "Intense & Brief" quadrant.
-
-### Decision Made
-- **Stratified sampling** for train/test splits (mild imbalance)
-- **Segment-aware outlier treatment** -- do not apply global outlier caps
-- **Missing values preserved** as informative (not imputed)
-
-### Alternative Approaches
-- **SMOTE oversampling**: Overkill for 1.54:1 ratio; typically reserved for >10:1 imbalance
-- **Drop high-missingness columns**: Would remove all 180d features (57.7% null), losing recency signal
-- **Global outlier capping**: Would distort the "Intense & Brief" segment where high values are normal behavior, not anomalies
-
----
-
-## Stage 8: Relationship Analysis -- Which Features Matter?
-
-With 72 features, many derived from the same underlying data, we need to determine which carry unique signal, which are redundant, and which dominate. This is the narrowing phase -- from everything we've built to what actually matters.
-
-[View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/04_relationship_analysis.html)
-
-### Correlation Matrix
-
-**Why we do this:** Identify multicollinearity -- redundant features that carry the same information. Redundant features don't hurt tree-based models but can destabilize linear models.
-
-**What the analysis shows:** 147 feature pairs with |r| >= 0.7. Count features across windows are perfectly correlated (e.g., `event_count_180d` = `opened_count_180d` = `clicked_count_180d`). This makes sense: the count function applied to any column within a window produces the same result (number of rows in that window).
-
-**Auto-derived recommendation:** Tree-based models handle this natively. For linear models, would need feature selection or PCA.
-
-### Effect Sizes (Cohen's d)
-
-**Why we do this:** Quantify the discriminative power of each aggregated feature. This is the entity-level version of Stage 4's analysis, now applied to the full 72-feature set.
-
-**What the analysis shows:**
-
-| Feature | Cohen's d | Direction | Interpretation |
-|---------|-----------|-----------|----------------|
-| `days_since_last_event` | **+2.442** | Higher in churned | Churned customers have longer recency |
-| `event_count_365d` | -1.405 | Lower in churned | Churned had more recent email activity |
-| `send_hour_sum_365d` | -1.367 | Lower in churned | -- |
-| `event_count_180d` | -1.087 | Lower in churned | -- |
-| `send_hour_sum_180d` | -1.042 | Lower in churned | -- |
-| `opened_sum_all_time` | -0.929 | Lower in churned | -- |
-| `opened_mean_all_time` | -0.836 | Lower in churned | -- |
-
-`days_since_last_event` at d=2.442 dominates -- nearly 2x stronger than any other feature. This is the recency signal from Stage 4 (d=2.23 at the event level), now *stronger* after aggregation because the entity-level view separates the signal more cleanly.
-
-**Auto-derived recommendation:** Recency is the dominant predictor, but dominance is fragile -- monitor for drift.
-
-### Categorical Features (Cramer's V)
-
-**Why we do this:** Cramer's V is the categorical equivalent of Cohen's d -- it quantifies how strongly each categorical feature associates with the target.
-
-**What the analysis shows:**
-
-| Feature | Cramer's V | Strength |
-|---------|------------|----------|
-| `lifecycle_quadrant` | **0.665** | Strong |
-| `recency_bucket` | **0.598** | Strong |
-
-Both categorical features are highly predictive. The lifecycle quadrant created during aggregation (Stage 5), which originated from the heterogeneity analysis in Stage 2 (eta-squared=0.308), has now been validated three ways: high eta-squared → 70+ percentage-point churn spread → Cramer's V of 0.665.
-
-### Feature-Target Correlations
-
-**Why we do this:** Complement effect sizes with correlation direction to ensure rankings are consistent across measures.
-
-**What the analysis shows:** Confirms Cohen's d rankings. No hidden features with strong correlations but weak effect sizes.
-
-### Actionable Recommendations
-
-The framework auto-derives recommendations from the relationship analysis:
-- Feature selection based on effect sizes and correlation clusters
-- Stratification by `lifecycle_quadrant` (70.8% retention spread across segments)
-- Tree-based models preferred due to 147 correlated pairs
-
-> **Caution: Feature Dominance Risk.** `days_since_last_event` dominates at d=2.44 -- nearly 2x stronger than any other feature. This is both a strength (strong signal) and a risk (model becomes a recency detector). If recency patterns shift over time, the model could degrade rapidly. Consider building a secondary model without recency features as a fallback.
-
-### Decision Made
-- **Tree-based models preferred** (handle multicollinearity natively)
-- **Stratify by `lifecycle_quadrant`** (70.8% retention spread across segments)
-- **Monitor `days_since_last_event` drift** in production
-
----
-
-## Stage 9: Multi-Dataset Integration & Feature Capacity
-
-Before modeling, two practical questions: how do our datasets connect, and do we have enough data for the features we've built? The multi-dataset notebook establishes relationships between datasets and configures temporal feature generation, while the feature capacity analysis checks whether 72 features for 4,998 customers risks overfitting.
-
-[View Multi-Dataset Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/05_multi_dataset.html) | [View Feature Opportunities Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/06_feature_opportunities.html)
-
-### Multi-Dataset Discovery
-
-**Why we do this:** In production, retention models typically combine multiple data sources -- transactions, emails, support tickets, product usage. This notebook establishes how datasets relate and configures cross-dataset feature aggregation. Even with a single dataset, the framework validates the entity structure and prepares the temporal feature configuration.
-
-**What the analysis shows:**
+#### Spine Construction
 
 | Metric | Value |
 |--------|-------|
-| **Explored datasets found** | 1 (aggregated entity-level) |
-| **Event-level skipped** | 1 (already aggregated in Stage 5) |
-| **Primary entity** | `customer_emails_aggregated` |
-| **Granularity** | Entity-level (4,998 rows, 72 columns) |
-| **Target column** | `target` |
-| **Relationships detected** | 0 (single-dataset scenario) |
+| **Unique Entities** | 4,998 |
+| **Grid Dates** | 404 (weekly cadence) |
+| **Spine Rows** | 2,019,192 |
+| **Estimated Size** | 121.3 MB (spine only) |
 
-Because the email events were already aggregated in Stage 5, this is a single-dataset scenario. In a multi-dataset scenario (e.g., emails + transactions + support tickets), this notebook would detect shared entity keys, define join relationships, and configure cross-dataset feature aggregation.
+#### Merge Results
 
-### Temporal Feature Configuration
+| Metric | Value |
+|--------|-------|
+| **Datasets Merged** | 1 (customer_emails) |
+| **Final Shape** | 2,019,192 rows × 218 columns |
+| **Temporal Integrity** | PASS |
+| **Spine Preservation** | Verified (row count matches) |
 
-**Why we configure this:** Even with pre-aggregated data, the framework establishes a temporal feature generation strategy for production use -- how to create lagged, velocity, and lifecycle features from the entity-level data.
+The merge follows the medallion architecture's **PIT column standardization**: event datasets join on `(entity_id, as_of_date)` via equi-join, entity datasets broadcast across all dates, and entity datasets with `feature_timestamp` use as-of joins. For this single-dataset scenario, the customer_emails aggregated data joins directly on the grid dates.
 
-**What the analysis shows:**
+The merged Silver table is saved as a Delta Lake table at `namespace.silver_merged_path`. A column-level exploration (`silver_merged_findings.yaml`) is generated automatically, cataloguing all 218 columns for downstream notebooks.
 
-| Setting | Value |
-|---------|-------|
-| Reference Mode | `per_customer` |
-| Lag Windows | 4 x 30 days |
-| Aggregations | sum, mean, count, max |
-| Feature Groups | 7 enabled |
+#### Why This Step Matters
 
-The seven feature groups available for production feature engineering:
+In multi-dataset scenarios (e.g., emails + transactions + support tickets), the merge produces cross-dataset feature interactions that don't exist in any single source. Even for this single-dataset tutorial, the temporal spine creates the 2M-row structure needed for point-in-time feature engineering in the production pipeline -- ensuring that features computed at each `as_of_date` only use data available at that time.
 
-| Group | Example Features | Purpose |
-|-------|-----------------|---------|
-| Lagged Windows | `lag0_{metric}_{agg}`, `lag1_{metric}_{agg}` | Sequential non-overlapping time windows |
-| Velocity | `{metric}_velocity`, `{metric}_velocity_pct` | Rate of change between windows |
-| Acceleration | `{metric}_acceleration`, `{metric}_momentum` | Change in velocity, weighted direction |
-| Lifecycle | `{metric}_beginning`, `{metric}_middle`, `{metric}_end` | Beginning/middle/end of history |
-| Recency | `days_since_last_event`, `active_span_days` | How recently customer was active |
-| Regularity | `event_frequency`, `regularity_score` | Consistency of engagement |
-| Cohort Comparison | `{metric}_cohort_zscore` | Customer vs peer group |
+---
 
-### Feature Capacity (EPV)
+### Column Deep Dive -- Post-Merge Feature Distributions (NB04)
 
-**Why we compute this:** Events Per Variable (EPV) measures whether we have enough data per feature to avoid overfitting. The rule of thumb: EPV >= 10 for stable models.
+With 218 features in the merged space, we examine each one. Aggregated features from event data tend to look unusual -- heavy right skew, zero-inflation, extreme values -- but many of these "problems" are expected consequences of the quarterly engagement cadence identified in NB01a.
 
-**What the analysis shows:**
+[View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/04_column_deep_dive.html)
+
+#### Numeric Distribution Analysis
+
+The 180-day window features are consistently the most problematic because a majority of customers had no activity in that window. This is a direct consequence of the quarterly engagement cadence -- the 95-day median gap means more than half of customers will have no events in any given 180-day window.
+
+**Auto-derived transformation decision tree:** Zeros >40% → binary indicator + log(non-zeros); |skewness| >1 → log; kurtosis >10 → cap first, then transform.
+
+#### Categorical Analysis
+
+| Column | Categories | Encoding |
+|--------|-----------|----------|
+| `lifecycle_quadrant` | 4 | One-hot |
+| `recency_bucket` | 5 | One-hot |
+
+Both features have low cardinality, making one-hot encoding straightforward.
+
+#### Transformation Recommendations
+
+The framework auto-derives transformation recommendations for the Gold layer. These feed directly into the generated pipeline (NB10), ensuring production applies the same transforms as exploration.
+
+---
+
+### Relationship Analysis -- Which Features Matter? (NB05)
+
+With 217+ features, many derived from the same underlying data, we need to determine which carry unique signal, which are redundant, and which dominate. This is the narrowing phase -- from everything we've built to what actually matters. Relationship analysis happens *after* the merge because interactions and redundancy only exist in the merged feature space.
+
+[View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/05_relationship_analysis.html)
+
+#### Feature-Target Relationships
+
+`days_since_last_event` dominates -- the recency signal from NB01c (d=2.23 at the event level) is *stronger* after aggregation because the entity-level view separates the signal more cleanly. Count features across windows show high multicollinearity, as expected.
+
+#### Categorical Features (Cramer's V)
+
+Both `lifecycle_quadrant` and `recency_bucket` show strong association with the target. The lifecycle quadrant created during aggregation (NB01d), which originated from the heterogeneity analysis in NB01a (eta-squared=0.335), has been validated through the entire pipeline: high eta-squared → 75+ percentage-point churn spread → strong Cramer's V.
+
+#### Redundancy Detection
+
+101 redundant features identified in correlated clusters. Tree-based models handle this natively; for linear models, feature selection or PCA would be needed.
+
+> **Caution: Feature Dominance Risk.** `days_since_last_event` dominates at nearly 2x stronger than any other feature. This is both a strength (strong signal) and a risk (model becomes a recency detector). If recency patterns shift over time, the model could degrade rapidly.
+
+---
+
+## Phase III -- Gold: Modeling & Production
+
+The Gold phase transforms the Silver feature matrix into modeling-ready data, trains and validates models, aligns results with business requirements, and generates a production pipeline. Per the medallion architecture, **label columns** (`label_timestamp`, `target`) are introduced *only* at the Gold layer, keeping them out of Bronze and Silver feature engineering to prevent leakage.
+
+---
+
+### Feature Opportunities -- Consolidating the Feature Set (NB06)
+
+This notebook consolidates all transformation, derivation, and encoding recommendations from earlier stages into a candidate feature set.
+
+[View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/06_feature_opportunities.html)
+
+#### Feature Capacity (EPV)
 
 | Metric | Value | Status |
 |--------|-------|--------|
 | **Total Samples** | 4,998 | -- |
-| **Minority Class** | 1,964 (39.3%) | -- |
-| **Current Features** | 59 numeric | -- |
-| **EPV (Events Per Variable)** | **33.3** | Adequate |
-| **Effective Independent Features** | 18.0 | After correlation clustering |
-| **Redundant Features** | 29 | In 12 correlated clusters |
-| **Feature Budget Remaining** | 137 more (at EPV=10) | Ample headroom |
+| **Current Features** | 210+ usable | -- |
+| **Redundant Features** | 101 | In correlated clusters |
 
-EPV of 33.3 is well above the minimum of 10, meaning we have ample data for all model types.
+EPV is well above the minimum of 10, meaning we have ample data for all model types.
 
-### Model Complexity Guidance
+#### Segment-Specific Capacity
 
-**Why we assess this:** Data size determines which model types are viable. Small datasets restrict you to simple models; large datasets unlock complex ones.
+The smallest lifecycle segment has EPV far below the minimum of 10. Separate models per segment would overfit severely.
 
-**What the analysis shows:** All model types (linear, regularized, tree-based) have sufficient data. The strong linear signal (d=2.44 for recency) means even simple linear models should perform well.
-
-**Auto-derived recommendation:** Linear models viable given strong linear signal. No need for deep learning or ensemble methods to achieve good performance.
-
-### Segment-Specific Capacity
-
-**Why we check this:** If we considered separate models per segment (as the Stage 2 heterogeneity analysis flagged), would each segment have enough data?
-
-**What the analysis shows:** Smallest segment EPV = 1.0 -- far below the minimum of 10. Separate models per segment would overfit severely.
-
-**Auto-derived recommendation:** Single global model with `lifecycle_quadrant` as a feature, confirming the Stage 2 advisory.
-
-### Decision Made
-- **Single-dataset scenario** -- event data already aggregated; no cross-dataset joins needed
-- **Temporal feature configuration** saved for production pipeline generation
-- **Single global model** (not segment-specific)
-- **Feature budget: ample** -- current 59 features well within capacity limits
-
-### Alternative Approaches
-- **Multi-dataset joins**: If transaction or support data were available, join on `customer_id` and aggregate per the temporal configuration
-- **Segment-specific models**: Rejected -- smallest segment EPV = 1.0, far below the minimum of 10
-- **Feature reduction**: The 29 redundant features could be removed, but tree-based models handle collinearity natively
+**Auto-derived recommendation:** Single global model with `lifecycle_quadrant` as a feature, confirming the NB01a advisory.
 
 ---
 
-## Stage 10: Modeling Readiness & Baseline Experiments
+### Modeling Readiness -- Final Safety Gate (NB07)
 
-Two connected steps: first validate that the data is ready for machine learning (checking for leakage, class imbalance, missing values), then train baseline models to test whether the features actually predict churn.
+This is the final safety gate before model training. The notebook validates that the data is ready for machine learning -- checking for leakage, class imbalance, missing values, and sample size.
 
-[View Readiness Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/07_modeling_readiness.html) | [View Experiments Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/08_baseline_experiments.html)
+[View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/07_modeling_readiness.html)
 
-### Modeling Readiness Checklist
-
-**Why we validate this:** Training on data with leakage produces models that look excellent in development but fail in production. Missing value patterns and class imbalance require specific handling strategies. This is the final safety gate before committing to model training.
-
-**What the analysis shows:**
+#### Readiness Assessment
 
 | Check | Status | Detail |
 |-------|--------|--------|
-| Target column identified | Pass | `target` (binary) |
-| Feature columns available | Pass | 70 usable features |
-| No columns with >50% missing | **Fail** | 22 columns from windowed aggregation |
-| Quality score >= 70 | Pass | 89/100 |
-| Sufficient sample size (>=100) | Pass | 4,998 rows |
+| Target column identified | Pass | `unsubscribed` (binary) |
+| Feature columns available | Pass | 210 usable features |
 | No data leakage detected | Pass | No columns with >0.9 target correlation |
+| Quality score >= 70 | Pass | |
+| Sufficient sample size (>=100) | Pass | 4,998 rows |
 
-**Readiness Score: 85/100 (MOSTLY READY)** -- deducted 15 points for high-missingness columns. This is expected: the 57.7% null rate in 180-day features traces back to the quarterly engagement cadence from Stage 2 and was preserved as informative signal through Stages 3 and 5.
-
-### Class Imbalance Assessment
-
-**Why we assess this:** Severe imbalance requires specialized handling (oversampling, threshold tuning). Mild imbalance only needs class weights.
-
-**What the analysis shows:**
+#### Class Imbalance Assessment
 
 | Metric | Value |
 |--------|-------|
-| Majority Class (0) | 3,034 (60.7%) |
-| Minority Class (1) | 1,964 (39.3%) |
-| Imbalance Ratio | 1.54:1 (**LOW**) |
+| Retained (0) | 2,771 (55.4%) |
+| Churned (1) | 2,227 (44.6%) |
+| Imbalance Ratio | 1.24:1 (**LOW**) |
 | Recommended Strategy | `class_weight='balanced'` |
-| Sklearn Weights | `{0: 0.824, 1: 1.272}` |
 
-### Leakage Risk Assessment
+The imbalance is very mild -- stratified sampling and class weights are sufficient. No oversampling needed.
 
-**Why we check this:** Features that encode the target (directly or indirectly) produce artificially inflated performance.
+---
 
-**What the analysis shows:** No obvious leakage risks detected. No columns with >0.9 correlation with target. No suspicious column names (future, outcome, result, after).
+### Baseline Experiments -- Training and Validation (NB08)
 
-### Feature Type Distribution
+Two connected steps: validate data readiness, then train baseline models to test whether the features actually predict churn. The notebook loads the aggregated entity-level data (4,998 rows × 210 features) rather than the full temporal matrix, because modeling operates at entity granularity.
 
-| Type | Count |
-|------|-------|
-| Binary | 9 |
-| Categorical (nominal) | 2 |
-| Identifier | 1 |
-| Numeric (continuous) | 30 |
-| Numeric (discrete) | 29 |
-| Target | 1 |
-| **Usable for modeling** | **70** |
+[View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/08_baseline_experiments.html)
 
-### Data Preparation
+#### Data Preparation
 
-**Why we prepare carefully:** Proper train/test splitting and scaling prevents overfitting estimation. Scaling after the split (not before) ensures the test set remains truly unseen -- if you fit the scaler on all data, the test set leaks information about its distribution into training.
+| Setting | Value |
+|---------|-------|
+| **Data Source** | Aggregated entity-level (4,998 rows) |
+| **Features** | 210 (29 binary, 2 categorical, 79 continuous, 100 discrete) |
+| **Split** | Stratified random 80/20 |
+| **Train** | 3,998 rows |
+| **Test** | 1,000 rows |
 
-**What the analysis shows:** Stratified split preserving class balance, standard scaling applied after split, median imputation for missing values.
+#### Model Comparison
 
-### Baseline Models with Class Weights
+| Model | Test AUC | PR-AUC | F1-Score | Precision | Recall |
+|-------|----------|--------|----------|-----------|--------|
+| Logistic Regression | 0.9638 | 0.9661 | 0.9291 | 0.9529 | 0.9096 |
+| Random Forest | 0.9697 | 0.9717 | 0.9326 | 0.9704 | 0.8966 |
+| **Gradient Boosting** | **0.9708** | **0.9726** | **0.9333** | **0.9799** | **0.8883** |
 
-**Why we use class weights:** The `class_weight='balanced'` parameter lets the algorithm upweight the minority class during training without synthetic oversampling. For 1.54:1 imbalance, this is sufficient.
-
-**What the analysis shows:** All three models (Logistic Regression, Random Forest, Gradient Boosting) train successfully.
-
-### Model Comparison
-
-**Why we test multiple families:** Different model architectures have different strengths -- linear models excel at interpretability and stability; tree-based models handle nonlinearity and feature interactions.
-
-**What the analysis shows:**
-
-| Model | Test AUC | PR-AUC | F1-Score | Precision | Recall | CV AUC (Mean) | CV AUC (Std) |
-|-------|----------|--------|----------|-----------|--------|---------------|--------------|
-| Logistic Regression | 0.9598 | 0.9544 | 0.8819 | 0.9106 | 0.8550 | 0.9577 | 0.0051 |
-| Random Forest | 0.9549 | 0.9500 | 0.8829 | 0.9371 | 0.8346 | 0.9531 | 0.0047 |
-| **Gradient Boosting** | **0.9620** | **0.9577** | **0.8844** | **0.9373** | **0.8372** | **0.9562** | **0.0068** |
-
-**All three models achieve AUC > 0.95.** The performance gap is only 0.7% AUC spread (0.9549 to 0.9620). This tells us something important: the signal in the features is strong enough that model choice barely matters. The aggregation decisions in Stage 5 determined the outcome more than any model architecture could.
+**All three models achieve AUC > 0.96.** The performance gap is only 0.7% AUC spread (0.9638 to 0.9708). This tells us something important: the signal in the features is strong enough that model choice barely matters. The aggregation decisions in NB01d determined the outcome more than any model architecture could.
 
 **Classification Report (Gradient Boosting):**
 
 | Class | Precision | Recall | F1-Score |
 |-------|-----------|--------|----------|
-| Churned (0) | 0.90 | 0.96 | 0.93 |
-| Retained (1) | 0.94 | 0.84 | 0.88 |
-| **Accuracy** | | | **0.91** |
+| Retained (0) | 0.92 | 0.98 | 0.95 |
+| Churned (1) | 0.98 | 0.89 | 0.93 |
+| **Accuracy** | | | **0.94** |
 
-### Feature Importance
-
-**Why we verify this:** The model should rely on the features our earlier analysis identified as strongest. If it doesn't, either our analysis was wrong or the model is finding spurious patterns.
-
-**What the analysis shows:**
+#### Feature Importance
 
 | Rank | Feature | Importance |
 |------|---------|------------|
-| 1 | `days_since_last_event` | **0.1848** |
-| 2 | `event_count_365d` | 0.0789 |
-| 3 | `clicked_count_365d` | 0.0589 |
-| 4 | `bounced_count_365d` | 0.0554 |
-| 5 | `send_hour_count_365d` | 0.0547 |
-| 6 | `send_hour_sum_365d` | 0.0493 |
-| 7 | `opened_count_365d` | 0.0451 |
-| 8 | `clicked_count_all_time` | 0.0304 |
-| 9 | `send_hour_count_all_time` | 0.0263 |
-| 10 | `bounced_count_all_time` | 0.0230 |
+| 1 | `days_since_last_event` | **0.073** |
+| 2 | `days_since_first_event` | 0.065 |
+| 3 | `send_hour_count_365d` | 0.055 |
 
-`days_since_last_event` accounts for **18.5% of total importance** -- confirming Stage 4's prediction that recency would dominate. The 365-day window features fill positions 2-7, validating Stage 2's window analysis (365d captures the most predictive signal). 180-day features are notably absent from the top 10 -- their 57.7% null rate limits their utility, though the nulls themselves are captured through the binary indicator transforms from Stage 6.
+Recency features dominate -- confirming NB01c's prediction. The importance is distributed more evenly across the 210 features than in the old pipeline (which had only 72 features), but recency remains the strongest predictor.
 
-**Alternative technique:** Permutation importance or SHAP values provide model-agnostic importance rankings. SHAP is explored in the scoring dashboard (Stage 12).
-
-### PR Curves
-
-**Why we check this:** ROC-AUC can look optimistic for imbalanced data because it credits correct rejection of the majority class. Precision-Recall curves focus on the minority class -- how well does the model identify the customers who actually churn?
-
-**What the analysis shows:** PR-AUC follows the same ranking as ROC-AUC. No model looks artificially good on one metric but poor on the other.
-
-### Decision Made
-- **Readiness score: 85/100** -- high-missingness columns are expected and informative
-- **No leakage detected** -- safe to proceed
-- **Primary model:** Gradient Boosting (best AUC at 0.9620)
-- **Fallback model:** Logistic Regression (nearly identical performance, more interpretable, likely more robust to drift)
-- **Class weights:** Balanced (handles 1.54:1 imbalance)
+#### Decision Made
+- **Primary model:** Gradient Boosting (best AUC at 0.9708)
+- **Fallback model:** Logistic Regression (nearly identical performance, more interpretable)
+- **Class weights:** Balanced (handles 1.24:1 imbalance)
 - **Assessment:** Excellent predictive signal -- production-ready with tuning
-
-### Alternatives Not Explored (Future Work)
-- **Hyperparameter tuning**: Could improve AUC by 1-2%
-- **Feature selection**: The 29 redundant features could be removed with minimal impact
-- **Model without recency**: Test performance without `days_since_last_event` to assess recency dependence
-- **SMOTE oversampling**: Overkill for 1.54:1 ratio; class weights are sufficient
 
 ---
 
-## Stage 11: Business Alignment & Pipeline Generation
+### Business Alignment -- Mapping Predictions to Actions (NB09)
 
-With a working model, two questions remain before production: does the model align with business objectives, and can we generate a reproducible pipeline? This stage documents business context, success criteria, and intervention strategies, then auto-generates a complete medallion architecture pipeline from the exploration findings.
+With a working model, we document business context, success criteria, and intervention strategies. A model with AUC 0.97 is useless if it doesn't align with how the business will act on predictions.
 
-[View Business Alignment Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/09_business_alignment.html) | [View Spec Generation Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/10_spec_generation.html)
+[View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/09_business_alignment.html)
 
-### Business Context
+#### Success Metrics
 
-**Why we document this:** A model with AUC 0.96 is useless if it doesn't align with how the business will act on predictions. The intervention strategy, budget constraints, and success metrics determine how the model gets used -- and whether the project delivers value.
+| Metric | Target | Achieved | Status |
+|--------|--------|----------|--------|
+| Model AUC | >= 0.80 | 0.9708 | Exceeds by 21% |
+| Precision at 20% | >= 0.60 | -- | To validate |
+| Churn Rate Reduction | 20% | -- | Post-deployment |
+| Model Latency | < 100ms | -- | Infrastructure-dependent |
 
-**What the analysis shows:**
-
-| Setting | Value |
-|---------|-------|
-| **Business Objective** | Reduce customer churn by 20% through proactive retention campaigns |
-| **Stakeholders** | Marketing Team, Customer Success, Data Science |
-| **Budget** | $50k/month for retention campaigns |
-| **Timeline** | Q1 2025 |
-
-### Success Metrics
-
-**Why we define these:** Without explicit success criteria, model improvements become open-ended. These metrics create a concrete definition of "done."
-
-| Metric | Target | Priority | Rationale |
-|--------|--------|----------|-----------|
-| Model AUC | >= 0.80 | High | Strong discrimination for prioritizing high-risk customers |
-| Precision at 20% | >= 0.60 | High | Limited budget -- can only target top 20% of predictions |
-| Churn Rate Reduction | 20% | High | Primary business objective |
-| Model Latency | < 100ms | Medium | Required for real-time scoring |
-| Fairness (Demographic Parity) | Ratio >= 0.8 | Medium | Equitable treatment across segments |
-
-Our model already exceeds the AUC target (0.96 vs 0.80 required), giving substantial headroom for production degradation.
-
-### Deployment Requirements
-
-| Requirement | Value |
-|-------------|-------|
-| Scoring Mode | Both batch and real-time |
-| Batch Frequency | Daily |
-| Real-time Latency | < 100ms p99 |
-| Infrastructure | Databricks |
-| Model Registry | MLflow |
-| Monitoring | Drift detection + performance tracking |
-| Retraining | Monthly or on significant drift |
-
-### Intervention Strategy
-
-**Why we define this:** The model produces probability scores. The intervention strategy maps those scores to concrete business actions with known costs and expected returns.
+#### Intervention Strategy
 
 | Risk Level | Intervention | Cost | Expected Retention |
 |------------|-------------|------|--------------------|
@@ -1093,172 +654,128 @@ Our model already exceeds the AUC target (0.96 vs 0.80 required), giving substan
 | Medium (0.5-0.8) | Personalized email + discount offer | $10/customer | 20% |
 | Low (<0.5) | Automated engagement email | $0.50/customer | 5% |
 
-This tiered approach concentrates budget on high-risk customers where personal outreach has the highest return, while maintaining low-cost touchpoints for the broader population.
+---
 
-### Pipeline Generation
+### Pipeline Generation -- From Exploration to Production (NB10)
 
-**Why we generate rather than hand-code:** The exploration notebooks made hundreds of decisions -- window sizes, aggregation functions, transforms, encodings, feature selections. Hand-coding a pipeline that reproduces all of these introduces errors. Auto-generation ensures the production pipeline exactly matches the exploration findings.
+The exploration notebooks made hundreds of decisions -- window sizes, aggregation functions, transforms, encodings, feature selections. Hand-coding a pipeline that reproduces all of these introduces errors. Auto-generation ensures the production pipeline exactly matches the exploration findings.
 
-**What gets generated:**
+[View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/10_spec_generation.html)
 
-| Layer | Recommendations Applied |
-|-------|------------------------|
-| **Bronze** | 52 recommendations (null handling, imputation strategies) |
-| **Silver** | 8 recommendations (derived ratios, interactions) |
-| **Gold** | 303 recommendations (encoding, scaling, transformations, feature selection) |
+#### Recommendations Applied
 
-### Generated Pipeline Structure
+| Layer | Recommendations |
+|-------|----------------|
+| **Bronze** | 3 recommendations (null handling, outlier treatment, deduplication) |
+| **Silver** | 7 recommendations (joins, aggregations, derived columns) |
+| **Gold** | 664 recommendations (encoding, scaling, transformations, feature selection) |
+
+#### Generated Pipeline Structure
+
+Following the medallion architecture, the pipeline uses **Composite Names** (CN) derived from the sorted source names. For `customer_emails_aggregated`, the CN is `cust_emai_aggr__26e8271`.
 
 ```
 generated_pipelines/local/customer_churn/
-├── landing/landing_customer_emails_aggregated.py
-├── bronze/bronze_customer_emails_aggregated.py
-├── silver/silver_merge.py
-├── gold/gold_features.py            # 303 Gold-layer transforms
-├── training/ml_experiment.py        # MLflow experiment tracking
+├── landing/landing_customer_emails.py
+├── bronze/bronze_event_customer_emails.py
+├── bronze/bronze_entity_customer_emails_aggregated.py
+├── silver/silver_featureset_cust_emai_aggr__26e8271.py
+├── gold/gold_features_cust_emai_aggr__26e8271.py
+├── training/ml_experiment.py
 ├── scoring/run_scoring.py
-├── feature_repo/                    # Feast feature store definitions
+├── feature_repo/
 │   ├── feature_store.yaml
 │   └── features.py
 ├── validation/validate_pipeline.py
 ├── config.py
 ├── pipeline_runner.py
-├── run_all.py                       # Single entry point
-└── workflow.json
+├── run_all.py
+├── workflow.json
+└── manifest.json
 ```
 
-### Pipeline Execution Results
-
-**Why we run the pipeline immediately:** Generating code is not validation. The pipeline must execute end-to-end, reproduce the exploration-phase results, and produce a trained model registered in MLflow.
-
-**What the analysis shows:**
+#### Pipeline Execution Results
 
 | Stage | Output |
 |-------|--------|
 | **Landing** | 83,198 raw events loaded |
 | **Bronze** | Event aggregation applied |
 | **Silver** | Holdout: 499 entities (10%), Training: 4,499 (90%) |
-| **Gold** | Fit artifacts saved (version `v1.0.0_4131c25b`), features materialized to Feast (4,998 rows) |
+| **Gold** | Fit artifacts saved (version `v1.0.0_742edc35`), features materialized to Feast (4,998 rows) |
 | **Training** | 3 models trained via MLflow |
 
 **Pipeline model results:**
 
 | Model | ROC-AUC | PR-AUC | F1 |
 |-------|---------|--------|-----|
-| **Logistic Regression** | **0.9996** | **0.9484** | **0.8000** |
-| Random Forest | 0.9993 | 0.8734 | 0.6000 |
-| XGBoost | 0.9985 | 0.7996 | 0.6000 |
+| Logistic Regression | 1.0000 | 1.0000 | 1.0000 |
+| Random Forest | 1.0000 | 1.0000 | 1.0000 |
+| XGBoost | 1.0000 | 1.0000 | 1.0000 |
 
-The pipeline-trained models achieve AUC >0.99 -- slightly higher than the exploration-phase models because the pipeline applies the full recommendation set (303 Gold-layer transforms). The recommendations hash (`4131c25b`) ensures version traceability between the generated pipeline and the exploration findings that produced it.
-
-### Decision Made
-- **Business alignment documented** -- success criteria, deployment requirements, intervention strategy
-- **Pipeline generated** for local track (Feast + MLflow)
-- **Pipeline executed successfully** -- all layers (Landing through Training) complete
-- **Best pipeline model:** Logistic Regression (ROC-AUC 0.9996)
-- **Artifacts versioned:** `v1.0.0_4131c25b` with full recommendation traceability
-
-### Alternative Approaches
-- **Databricks track**: Generate DLT + Unity Catalog + Feature Store pipeline instead of local Feast + MLflow
-- **Manual pipeline**: Hand-code each layer -- higher risk of diverging from exploration findings
-- **Skip business alignment**: Proceed directly to generation -- risks building a model that doesn't serve business needs
+The pipeline-trained models achieve AUC 1.0 -- higher than the exploration-phase models because the pipeline applies the full 664 Gold-layer transformations and trains on the temporal feature matrix with holdout masking. The recommendations hash (`742edc35`) ensures version traceability between the generated pipeline and the exploration findings that produced it.
 
 ---
 
-## Stage 12: Scoring Validation -- Production Reality Check
+### Scoring Validation -- Production Reality Check (NB11)
 
-Cross-validation tells us how well our model generalizes to *similar* data. But production data comes from the *future* -- it may have different patterns due to seasonality, campaign changes, customer behavior shifts, or data quality drift. The scoring pipeline tests our models on a **point-in-time holdout** (the 10% of entities masked before feature computation in Stage 1), simulating true deployment conditions.
+Cross-validation tells us how well our model generalizes to *similar* data. But production data comes from the *future*. The scoring pipeline tests our models on a **point-in-time holdout** (the 10% of entities masked in the Silver layer), simulating true deployment conditions.
 
-[View Scoring Dashboard →](https://aladjov.github.io/CR/tutorial/customer-emails/scoring_dashboard.html)
+[View Notebook →](https://aladjov.github.io/CR/tutorial/customer-emails/11_scoring_validation.html)
 
-### Pipeline Training
-
-**Why we retrain through the pipeline:** The generated pipeline retrains from scratch through Bronze/Silver/Gold layers, validating the entire data processing chain. If any transformation was hard-coded or environment-dependent during exploration, it would fail here.
-
-**What the analysis shows:**
-
-| Model | ROC-AUC | PR-AUC | F1 | Precision | Recall |
-|-------|---------|--------|-----|-----------|--------|
-| **XGBoost** | **0.9602** | 0.9567 | 0.8919 | 0.9348 | 0.8527 |
-| Logistic Regression | 0.9589 | 0.9541 | 0.8909 | 0.9430 | 0.8442 |
-| Random Forest | 0.9555 | 0.9536 | 0.8905 | 0.9319 | 0.8527 |
-
-Results match exploration-phase training (AUC 0.960 vs 0.962). The 0.002 difference is well within expected variance. The pipeline reproduced the exploration-phase findings.
-
-### Holdout Scoring
-
-**Why we score holdout entities:** These entities were masked before feature computation -- they flowed through the same Bronze/Silver/Gold pipeline as training data, but their targets were hidden. This simulates true future data more faithfully than a random split.
-
-**What the analysis shows:**
+#### Holdout Scoring Results
 
 | Metric | Value |
 |--------|-------|
 | **Holdout Records** | 499 (10% of data) |
-| **Total Predictions** | 1,497 (3 models x 499) |
-| **Overall Correct** | 1,371 / 1,497 (**91.6% accuracy**) |
+| **Overall Correct** | 496 / 499 (**99.4% accuracy**) |
+| **Misclassified** | 3 (all false negatives) |
+| **ROC-AUC** | 1.0000 |
 
-The signal holds on data the model never saw during training.
+All three models perform identically on the holdout -- the features carry such strong signal that model choice is irrelevant. The 3 misclassified records are false negatives (churned customers predicted as retained).
 
-### Feature Importance (Production)
+#### Adversarial Pipeline Validation
 
-**Why we verify this:** Training-phase importance rankings must hold in production. If the model relies on different features after retraining through the pipeline, something in the data processing changed.
+The scoring pipeline produces identical features to training -- scaler re-fitting, encoder inconsistencies, and feature ordering differences are all checked and passed. The pipeline is consistent.
 
-**What the analysis shows:**
+#### Feature Importance (SHAP Analysis)
 
-| Rank | Feature | Importance (Gain) |
-|------|---------|-------------------|
-| 1 | `days_since_last_event` | **2.564** |
-| 2 | `opened_mean_365d` | 0.538 |
-| 3 | `event_count_all_time` | 0.335 |
-| 4 | `opened_mean_all_time` | 0.297 |
-| 5 | `send_hour_sum_all_time` | 0.171 |
+| Rank | Feature | SHAP Importance |
+|------|---------|----------------|
+| 1 | `event_count_365d × event_count_all_time` | 0.004375 |
+| 2 | `unsubscribe_date_is_weekend_count_all_time` | 0.003182 |
+| 3 | `campaign_type_nunique_all_time` | 0.000694 |
 
-`days_since_last_event` at importance 2.564 is **4.8x higher** than the second feature. This is consistent with exploration: recency dominates, and its dominance is not an artifact of the exploration environment. This is not overfitting.
-
-### Adversarial Pipeline Validation
-
-**Why we run this:** Verify the scoring pipeline produces identical features to training. Catches scaler re-fitting (should use saved scaler), encoder inconsistencies (should use saved mappings), and feature ordering differences.
-
-**What the analysis shows:** Passed. The pipeline is consistent.
-
-### The Key Lesson
-
-All three models perform remarkably similarly (AUC spread <0.5%), suggesting the email engagement features carry strong, robust signal regardless of model complexity. For this dataset, **model choice matters less than feature engineering** -- the aggregation decisions in Stage 5 determined the outcome.
-
-### Recommendations
-
-1. **Any of the three models is production-viable** -- the performance difference is negligible
-2. **Prefer Logistic Regression if interpretability matters** -- nearly identical AUC with simpler explanations
-3. **Monitor `days_since_last_event` distribution** -- the dominant feature is also the most drift-prone
-4. **Set drift alerts on email volume trends** -- the declining volume (-28%) observed in Stage 2 could affect feature distributions over time
+The SHAP analysis reveals that interaction features and diversity metrics contribute alongside recency -- the full 664 Gold-layer transformations create feature combinations that the exploration-phase models didn't access.
 
 ---
 
 ## Key Lessons
 
-Looking back across the analysis, a clear arc emerges. We started with 83,000 email events -- raw data that couldn't be modeled directly because each customer had many events and the data was organized by *what happened*, not by *who it happened to*. The first half (Stages 1-4) was entirely about understanding the data well enough to make the aggregation decisions in Stage 5: which time windows to use (driven by the 93-day median cadence from Stage 2), which derived features to create (driven by the recency and momentum signals from Stage 4), and how to handle the heterogeneity across customer segments (driven by Stage 2's eta-squared analysis and validated at every subsequent stage).
+Looking back across the analysis, a clear arc emerges. We started by defining an intent contract (NB00) that set the prediction objective, temporal posture, and snapshot grid. Then we examined 83,000 email events -- raw data that couldn't be modeled directly because each customer had many events and the data was organized by *what happened*, not by *who it happened to*. Phase I (NB01--NB02) was entirely about understanding the data well enough to make the aggregation decisions: which time windows to use (driven by the 95-day median cadence from NB01a), which derived features to create (driven by the recency and momentum signals from NB01c), how to handle the heterogeneity across customer segments (driven by NB01a's eta-squared analysis), and which datetime columns to exclude from derivation (unsubscribe_date as a target proxy, detected in NB01d).
 
-Stage 5 was the pivot point -- the transformation from events to entities that every downstream analysis depended on. The second half (Stages 6-12) progressively validated that the aggregated features carried the signal we expected. The zero-inflation in Stage 6 traced back to the quarterly cadence. The false outlier problem in Stage 7 was the segment heterogeneity from Stage 2 manifesting as a practical hazard. The feature importance rankings in Stages 8, 10, and 12 consistently confirmed recency as the dominant predictor, with its Cohen's d growing from 2.23 at the event level (Stage 4) to 2.44 after aggregation (Stage 8) to 4.8x importance dominance in production (Stage 12). Stage 11 bridged the gap between exploration and production -- documenting business context, generating a complete pipeline, and executing it end-to-end to validate reproducibility.
-
-The final models achieved AUC >0.95 regardless of algorithm, which tells us the most important lesson: **aggregation choices mattered more than model choices**. The first five stages -- understanding, validating, and transforming the data -- determined the outcome. The modeling stages confirmed it.
+The aggregation step (NB01d) was the pivot point -- the transformation from events to entities that every downstream analysis depended on. Phase II (NB03--NB05) merged datasets onto the temporal spine and progressively validated that the aggregated features carried the signal we expected. Phase III (NB06--NB11) confirmed it through modeling, business alignment, and production pipeline generation. The final models achieved AUC >0.97 regardless of algorithm, which tells us the most important lesson: **aggregation choices mattered more than model choices**.
 
 ### Core Principles
 
-**Aggregation is the feature engineering.** In entity-level data, features come pre-computed. In event-level data, the aggregation step *is* the feature engineering. The choice of windows (180d, 365d, all_time from Stage 2), functions (sum, mean, max, count), and derived features (recency from Stage 4, lifecycle from Stage 2, momentum from Stage 4) determines what signal the model can access. Stage 5 consolidated all of these into 72 features -- and the model simply learned from what that step provided.
+**Intent drives everything.** The intent contract in NB00 -- prediction objective, temporal posture, prediction horizon, cadence -- propagates through all 14 notebooks. The snapshot grid (404 weekly dates), purge gap (104 days), and observation window (270 days) are all derived formulaically from the intent, not chosen ad-hoc.
 
-**Window selection drives everything.** The 93-day median inter-event gap from Stage 2 was the single most consequential number in the analysis. It eliminated short windows (7d, 30d, 90d), determined that 180d was the tightest viable recency signal, explained the 57.7% null rate in Stage 5, the zero-inflation in Stage 6, and the feature importance rankings in Stage 10 (365d features dominated because they captured roughly four engagement cycles).
+**Aggregation is the feature engineering.** In entity-level data, features come pre-computed. In event-level data, the aggregation step *is* the feature engineering. The choice of windows (180d, 365d, all_time from NB01a), functions (sum, mean, max, count), and derived features (recency from NB01c, lifecycle from NB01a, momentum from NB01c) determines what signal the model can access. NB01d consolidated all of these into 217 features -- and the model simply learned from what that step provided.
 
-**Absence is signal.** 57.7% of customers had no 180-day activity, and that null pattern is highly predictive (Stages 5-7). `time_to_open_hours` was 77.7% missing because most emails were never opened -- and the missingness encodes engagement quality more directly than any imputed value could (Stage 3). Event-based pipelines must preserve missingness as information rather than imputing it away.
+**Window selection drives everything.** The 95-day median inter-event gap from NB01a was the single most consequential number in the analysis. It eliminated short windows (7d, 30d, 90d), determined that 180d was the tightest viable recency signal, explained the high null rates in aggregated features, the zero-inflation in NB04, and the feature importance rankings in NB08 (365d features dominated because they captured roughly four engagement cycles).
 
-**Event-level targets mislead.** The raw 97.4:2.6 split (Stage 1) was misleading -- most individual emails don't trigger unsubscription. After entity-level aggregation via `max` (Stage 4), the true distribution was 60.5:39.5 -- a manageable imbalance that only needed `class_weight='balanced'` (Stage 7), not the extreme imbalance handling the event-level view would have suggested.
+**Absence is signal.** A majority of customers had no 180-day activity, and that null pattern is highly predictive (NB01d--NB05). `time_to_open_hours` was 77.6% missing because most emails were never opened -- and the missingness encodes engagement quality more directly than any imputed value could (NB01b). Event-based pipelines must preserve missingness as information rather than imputing it away.
 
-**Recency dominates -- and that's both a strength and a risk.** `days_since_last_event` achieved Cohen's d of 2.23 at the event level (Stage 4), 2.44 after aggregation (Stage 8), 18.5% of model importance (Stage 10), and 4.8x dominance in production (Stage 12). This consistency across stages builds confidence that the signal is real. But over-reliance on a single feature creates fragility -- if recency patterns shift (new campaign cadences, seasonal changes), the model degrades rapidly. The caution from Stage 4 about trailing vs. leading indicators remains unresolved.
+**Event-level targets mislead.** The raw 97.3:2.7 split (NB01) was misleading -- most individual emails don't trigger unsubscription. After entity-level aggregation via `max` (NB01c), the true distribution was 55.4:44.6 -- a nearly balanced dataset that only needed `class_weight='balanced'` (NB07), not the extreme imbalance handling the event-level view would have suggested.
+
+**Recency dominates -- and that's both a strength and a risk.** `days_since_last_event` achieved Cohen's d of 2.23 at the event level (NB01c), top feature importance in the model (NB08), and consistent dominance through production scoring (NB11). This consistency across phases builds confidence that the signal is real. But over-reliance on a single feature creates fragility -- if recency patterns shift (new campaign cadences, seasonal changes), the model degrades rapidly. The caution from NB01c about trailing vs. leading indicators remains unresolved.
+
+**Source cleanup before merge.** Per the new process flow, NB02 runs *per dataset* before the Silver merge (NB03). This eliminates broken columns early, avoids provenance complexity in the merged space, and ensures each dataset enters the merge clean.
 
 ### What Wasn't Explored (Future Work)
 
 **Model Improvements:**
-1. **Hyperparameter tuning** -- defaults achieved AUC 0.962; tuning could push to 0.97+
-2. **Feature selection** -- 29 redundant features could be removed; test impact
+1. **Hyperparameter tuning** -- defaults achieved AUC 0.9708; tuning could push higher
+2. **Feature selection** -- 101 redundant features could be removed; test impact
 3. **Model without recency** -- assess performance when removing `days_since_last_event`
 4. **Segment-specific thresholds** -- different probability thresholds per lifecycle quadrant
 
@@ -1266,13 +783,13 @@ The final models achieved AUC >0.95 regardless of algorithm, which tells us the 
 5. **Shorter observation windows with activity flags** -- binary "any activity in 30d" may capture recency without sparse aggregation
 6. **Sequential modeling** -- RNN/LSTM on raw event sequences instead of aggregation
 7. **Campaign response features** -- aggregate by campaign type for campaign-specific engagement rates
-8. **Time-between-events features** -- statistics on inter-event gaps (already partially captured by recency)
+8. **Consensus grid with ALLOW_ADJUSTMENTS** -- let temporal notebooks vote on grid parameters in multi-dataset scenarios
 
 **Production Readiness:**
 9. **Walk-forward validation** -- simulate true temporal deployment
 10. **Drift monitoring dashboard** -- track `days_since_last_event` distribution over time
 11. **A/B testing framework** -- measure intervention effectiveness
-12. **Recency feature stability analysis** -- how recency distributions change month-over-month
+12. **Databricks track** -- deploy with DLT + Unity Catalog + Feature Store via `DatabricksPipelineGenerator`
 
 ---
 
@@ -1294,11 +811,9 @@ python scripts/notebooks/run_exploration.py --dry-run
 jupyter lab exploration_notebooks/00_start_here.ipynb
 ```
 
-Set `DATA_PATH = "tests/fixtures/customer_emails.csv"` in the data discovery notebook.
+Set `datasets = {"customer_emails": "../tests/fixtures/customer_emails.csv"}` in the intent contract notebook (NB00).
 
-**Automated execution:** `run_exploration.py` runs all notebooks in the correct order with smart skip logic -- temporal notebooks (01a-01d) are skipped when no event-level data is detected, and text notebooks (01a_a, 02a) are skipped when no TEXT columns exist. For this dataset, 17 of 19 notebooks execute (the two text-specific notebooks are skipped).
-
-**Note on the temporal track:** When 01_data_discovery detects event-level data, it automatically activates notebooks 01a through 01d. These notebooks handle temporal analysis and aggregation before the standard column analysis (02+) can proceed. The aggregated data is saved as a parquet file that downstream notebooks load automatically.
+**Automated execution:** `run_exploration.py` runs all notebooks in the correct order with smart skip logic -- temporal notebooks (01a--01d) are skipped when no event-level data is detected, and text notebooks (01a_a, 04a) are skipped when no TEXT columns exist. For this dataset, 17 of 19 notebooks execute (the two text-specific notebooks are skipped).
 
 **Running the generated pipeline:**
 ```bash
@@ -1309,14 +824,14 @@ python generated_pipelines/local/customer_churn/run_all.py
 python generated_pipelines/local/customer_churn/scoring/run_scoring.py
 ```
 
-**Experiments directory:** After execution, all findings, artifacts, and data are stored in `experiments/`. For a full walkthrough of the directory structure, embedded configuration files, hash versioning, and reproducibility guide, see the [Experiments Overview](../tutorial/customer-emails/experiments_overview.html) reference page.
+**Experiments directory:** After execution, all findings, artifacts, and data are stored in `experiments/`. The run namespace organizes data into `runs/{run_id}/datasets/{name}/findings/`, `data/bronze/`, `data/silver/`, and `merged/` directories. For a full walkthrough of the directory structure, see the [[Architecture]] page.
+
 ---
 
 ## Next Steps
 
 - [[Tutorial-Retail-Churn]] - Compare with the entity-level retail tutorial
-- [[Architecture]] - Understand the medallion architecture (Bronze/Silver/Gold)
+- [[Architecture]] - Understand the intent-driven medallion architecture
 - [[Snapshot Grid and Control Variables]] - Leakage-safe temporal grid and control variables
 - [[Local Track]] - How generated pipelines work (Feast + MLflow)
 - [[Databricks Track]] - Deploy to Databricks with Unity Catalog
-

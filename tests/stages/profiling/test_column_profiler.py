@@ -113,6 +113,18 @@ class TestTargetProfiler:
         assert metrics.imbalance_ratio == 19.0
         assert metrics.minority_percentage == 5.0
 
+    def test_profile_all_nan_target(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.TARGET)
+        series = pd.Series([float("nan")] * 10)
+        result = profiler.profile(series)
+        assert result["target_metrics"] is None
+
+    def test_profile_empty_target(self):
+        profiler = ProfilerFactory.get_profiler(ColumnType.TARGET)
+        series = pd.Series([], dtype=float)
+        result = profiler.profile(series)
+        assert result["target_metrics"] is None
+
 
 class TestNumericProfiler:
     def test_profile_continuous_numeric(self):

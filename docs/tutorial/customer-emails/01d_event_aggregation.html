@@ -8008,27 +8008,31 @@ Many rows per entity           One row per entity + lifecycle features
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.notebook_progress</span><span class="w"> </span><span class="kn">import</span> <span class="n">track_and_export_previous</span>
+
 <span class="n">track_and_export_previous</span><span class="p">(</span><span class="s2">"01d_event_aggregation.ipynb"</span><span class="p">)</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer</span><span class="w"> </span><span class="kn">import</span> <span class="n">ExplorationFindings</span><span class="p">,</span> <span class="n">DataExplorer</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.visualization</span><span class="w"> </span><span class="kn">import</span> <span class="n">ChartBuilder</span><span class="p">,</span> <span class="n">display_figure</span><span class="p">,</span> <span class="n">display_table</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.core.config.column_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">ColumnType</span><span class="p">,</span> <span class="n">DatasetGranularity</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">datetime</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer</span><span class="w"> </span><span class="kn">import</span> <span class="n">DataExplorer</span><span class="p">,</span> <span class="n">ExplorationFindings</span><span class="p">,</span> <span class="n">load_notebook_findings</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.findings</span><span class="w"> </span><span class="kn">import</span> <span class="n">ColumnFinding</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.visualization</span><span class="w"> </span><span class="kn">import</span> <span class="n">ChartBuilder</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.core.config.column_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">ColumnType</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.core.config.experiments</span><span class="w"> </span><span class="kn">import</span> <span class="n">EXPERIMENTS_DIR</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.stages.profiling</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">AggregationFeatureConfig</span><span class="p">,</span>
-    <span class="n">TimeWindowAggregator</span><span class="p">,</span>
     <span class="n">TimeSeriesProfiler</span><span class="p">,</span>
+    <span class="n">TimeWindowAggregator</span><span class="p">,</span>
     <span class="n">classify_lifecycle_quadrants</span><span class="p">,</span>
-    <span class="n">classify_activity_segments</span><span class="p">,</span>
     <span class="n">create_momentum_ratio_features</span><span class="p">,</span>
     <span class="n">create_recency_bucket_feature</span><span class="p">,</span>
     <span class="n">deduplicate_events</span><span class="p">,</span>
+    <span class="n">derive_extra_datetime_features</span><span class="p">,</span>
     <span class="n">get_duplicate_event_count</span><span class="p">,</span>
 <span class="p">)</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">datetime</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.core.config.experiments</span><span class="w"> </span><span class="kn">import</span> <span class="n">FINDINGS_DIR</span><span class="p">,</span> <span class="n">EXPERIMENTS_DIR</span><span class="p">,</span> <span class="n">OUTPUT_DIR</span><span class="p">,</span> <span class="n">setup_experiments_structure</span>
 </pre></div>
 </div>
 </div>
@@ -8045,19 +8049,13 @@ Many rows per entity           One row per entity + lifecycle features
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="c1"># === CONFIGURATION ===</span>
-<span class="c1"># FINDINGS_DIR imported from customer_retention.core.config.experiments</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="n">DATASET_NAME</span> <span class="o">=</span> <span class="kc">None</span>  <span class="c1"># Set to override auto-resolved dataset, e.g. "3set_support_tickets"</span>
 
-<span class="c1"># Find findings files (exclude multi_dataset and already-aggregated)</span>
-<span class="n">findings_files</span> <span class="o">=</span> <span class="p">[</span>
-    <span class="n">f</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">FINDINGS_DIR</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="s2">"*_findings.yaml"</span><span class="p">)</span> 
-    <span class="k">if</span> <span class="s2">"multi_dataset"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">f</span><span class="o">.</span><span class="n">name</span> <span class="ow">and</span> <span class="s2">"_aggregated"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">f</span><span class="o">.</span><span class="n">name</span>
-<span class="p">]</span>
-<span class="k">if</span> <span class="ow">not</span> <span class="n">findings_files</span><span class="p">:</span>
-    <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"No findings files found in </span><span class="si">{</span><span class="n">FINDINGS_DIR</span><span class="si">}</span><span class="s2">. Run notebook 01 first."</span><span class="p">)</span>
-
-<span class="n">findings_files</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">f</span><span class="p">:</span> <span class="n">f</span><span class="o">.</span><span class="n">stat</span><span class="p">()</span><span class="o">.</span><span class="n">st_mtime</span><span class="p">,</span> <span class="n">reverse</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-<span class="n">FINDINGS_PATH</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">findings_files</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+<span class="n">FINDINGS_PATH</span><span class="p">,</span> <span class="n">_namespace</span><span class="p">,</span> <span class="n">dataset_name</span> <span class="o">=</span> <span class="n">load_notebook_findings</span><span class="p">(</span>
+    <span class="s2">"01d_event_aggregation.ipynb"</span><span class="p">,</span> <span class="n">exclude_aggregated</span><span class="o">=</span><span class="kc">True</span>
+<span class="p">)</span>
+<span class="k">if</span> <span class="n">DATASET_NAME</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">dataset_name</span> <span class="o">=</span> <span class="n">DATASET_NAME</span>
 
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Using: </span><span class="si">{</span><span class="n">FINDINGS_PATH</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="n">findings</span> <span class="o">=</span> <span class="n">ExplorationFindings</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">FINDINGS_PATH</span><span class="p">)</span>
@@ -8075,8 +8073,88 @@ Many rows per entity           One row per entity + lifecycle features
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>Using: /Users/Vital/python/CustomerRetention/experiments/findings/customer_emails_408768_findings.yaml
-Loaded findings for 16 columns from ../tests/fixtures/customer_emails.csv
+<pre>Using: /Users/Vital/python/CustomerRetention/experiments/runs/email-6301db6c/datasets/customer_emails/findings/customer_emails_findings.yaml
+Loaded findings for 13 columns from ../tests/fixtures/customer_emails.csv
+</pre>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=w1868urlmho">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
+</div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
+<h2 id="1d.1b-Snapshot-Grid-Readiness-Check">1d.1b Snapshot Grid Readiness Check<a class="anchor-link" href="#1d.1b-Snapshot-Grid-Readiness-Check">¶</a></h2><p>Verify the snapshot grid is ready for aggregation. In ALLOW_ADJUSTMENTS mode, all event-level datasets must have submitted their votes from notebooks 01a-01c before aggregation can proceed.</p>
+</div>
+</div>
+</div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=451adzkzk4r">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea">
+<div class="jp-InputPrompt jp-InputArea-prompt">In [3]:</div>
+<details class="tutorial-code-input">
+<summary>Show/Hide Code</summary>
+<div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
+<div class="cm-editor cm-s-jupyter">
+<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.project_context</span><span class="w"> </span><span class="kn">import</span> <span class="n">ProjectContext</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.snapshot_grid</span><span class="w"> </span><span class="kn">import</span> <span class="n">SnapshotGrid</span>
+
+<span class="n">_grid_path</span> <span class="o">=</span> <span class="n">_namespace</span><span class="o">.</span><span class="n">snapshot_grid_path</span>
+<span class="k">if</span> <span class="n">_grid_path</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
+    <span class="n">_snap_grid</span> <span class="o">=</span> <span class="n">SnapshotGrid</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">_grid_path</span><span class="p">)</span>
+
+    <span class="n">_ready</span><span class="p">,</span> <span class="n">_missing</span> <span class="o">=</span> <span class="n">_snap_grid</span><span class="o">.</span><span class="n">is_ready_for_aggregation</span><span class="p">()</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">_ready</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">"Snapshot grid not ready for aggregation. "</span>
+            <span class="sa">f</span><span class="s2">"Missing votes from: </span><span class="si">{</span><span class="n">_missing</span><span class="si">}</span><span class="s2">. "</span>
+            <span class="sa">f</span><span class="s2">"Run notebooks 01a-01c for these datasets first."</span>
+        <span class="p">)</span>
+
+    <span class="n">_purge_gap</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">_label_window</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">_ctx_path</span> <span class="o">=</span> <span class="n">_namespace</span><span class="o">.</span><span class="n">project_context_path</span>
+    <span class="k">if</span> <span class="n">_ctx_path</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
+        <span class="n">_ctx</span> <span class="o">=</span> <span class="n">ProjectContext</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">_ctx_path</span><span class="p">)</span>
+        <span class="n">_purge_gap</span> <span class="o">=</span> <span class="n">_ctx</span><span class="o">.</span><span class="n">intent</span><span class="o">.</span><span class="n">purge_gap_days</span>
+        <span class="n">_label_window</span> <span class="o">=</span> <span class="n">_ctx</span><span class="o">.</span><span class="n">intent</span><span class="o">.</span><span class="n">label_window_days</span>
+
+    <span class="n">_snap_grid</span><span class="o">.</span><span class="n">lock</span><span class="p">(</span><span class="n">purge_gap_days</span><span class="o">=</span><span class="n">_purge_gap</span><span class="p">,</span> <span class="n">label_window_days</span><span class="o">=</span><span class="n">_label_window</span><span class="p">)</span>
+    <span class="n">_snap_grid</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">_grid_path</span><span class="p">)</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Snapshot grid: READY (mode=</span><span class="si">{</span><span class="n">_snap_grid</span><span class="o">.</span><span class="n">mode</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Cadence: </span><span class="si">{</span><span class="n">_snap_grid</span><span class="o">.</span><span class="n">cadence_interval</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">_snap_grid</span><span class="o">.</span><span class="n">cadence_to_days</span><span class="p">()</span><span class="si">}</span><span class="s2"> days)"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Observation window: </span><span class="si">{</span><span class="n">_snap_grid</span><span class="o">.</span><span class="n">observation_window_days</span><span class="si">}</span><span class="s2"> days"</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">_snap_grid</span><span class="o">.</span><span class="n">grid_dates</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Grid dates: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">_snap_grid</span><span class="o">.</span><span class="n">grid_dates</span><span class="p">)</span><span class="si">}</span><span class="s2"> snapshots (</span><span class="si">{</span><span class="n">_snap_grid</span><span class="o">.</span><span class="n">grid_dates</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2"> to </span><span class="si">{</span><span class="n">_snap_grid</span><span class="o">.</span><span class="n">grid_dates</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"  Grid dates: not yet computed (grid_start/grid_end not set)"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Votes recorded: </span><span class="si">{</span><span class="nb">sum</span><span class="p">(</span><span class="mi">1</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">v</span><span class="w"> </span><span class="ow">in</span><span class="w"> </span><span class="n">_snap_grid</span><span class="o">.</span><span class="n">dataset_votes</span><span class="o">.</span><span class="n">values</span><span class="p">()</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">v</span><span class="o">.</span><span class="n">voted</span><span class="p">)</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">_snap_grid</span><span class="o">.</span><span class="n">dataset_votes</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"No snapshot grid found — continuing without grid constraints (run notebook 00 to initialize)"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</details>
+</div>
+</div>
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>Snapshot grid: READY (mode=no_adjustments)
+  Cadence: weekly (7 days)
+  Observation window: 270 days
+  Grid dates: 404 snapshots (2015-09-28 to 2023-06-19)
+  Votes recorded: 1/1
 </pre>
 </div>
 </div>
@@ -8087,15 +8165,14 @@ Loaded findings for 16 columns from ../tests/fixtures/customer_emails.csv
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [3]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [4]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="c1"># Verify this is event-level data and display findings summary</span>
-<span class="k">if</span> <span class="ow">not</span> <span class="n">findings</span><span class="o">.</span><span class="n">is_time_series</span><span class="p">:</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="k">if</span> <span class="ow">not</span> <span class="n">findings</span><span class="o">.</span><span class="n">is_time_series</span><span class="p">:</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">"⚠️ This dataset is NOT event-level. Aggregation not needed."</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"   Proceed directly to 02_column_deep_dive.ipynb"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"   Proceed directly to 04_column_deep_dive.ipynb"</span><span class="p">)</span>
     <span class="k">raise</span> <span class="ne">SystemExit</span><span class="p">(</span><span class="s2">"Skipping aggregation - data is already entity-level"</span><span class="p">)</span>
 
 <span class="n">ts_meta</span> <span class="o">=</span> <span class="n">findings</span><span class="o">.</span><span class="n">time_series_metadata</span>
@@ -8106,7 +8183,6 @@ Loaded findings for 16 columns from ../tests/fixtures/customer_emails.csv
 <span class="nb">print</span><span class="p">(</span><span class="s2">"FINDINGS SUMMARY FROM 01a-01c"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">"="</span> <span class="o">*</span> <span class="mi">70</span><span class="p">)</span>
 
-<span class="c1"># === 01a: Time Series Metadata ===</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">📊 FROM 01a (Temporal Profiling):"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Entity column: </span><span class="si">{</span><span class="n">ENTITY_COLUMN</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Time column: </span><span class="si">{</span><span class="n">TIME_COLUMN</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
@@ -8123,7 +8199,7 @@ Loaded findings for 16 columns from ../tests/fixtures/customer_emails.csv
     <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   ⚠️ No window recommendations - will use defaults"</span><span class="p">)</span>
 
 <span class="k">if</span> <span class="n">ts_meta</span><span class="o">.</span><span class="n">temporal_segmentation_recommendation</span><span class="p">:</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   📋 Segmentation recommendation:"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   📋 Segmentation recommendation:"</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      </span><span class="si">{</span><span class="n">ts_meta</span><span class="o">.</span><span class="n">temporal_segmentation_recommendation</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">ts_meta</span><span class="o">.</span><span class="n">heterogeneity_level</span><span class="p">:</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      Heterogeneity: </span><span class="si">{</span><span class="n">ts_meta</span><span class="o">.</span><span class="n">heterogeneity_level</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
@@ -8135,10 +8211,9 @@ Loaded findings for 16 columns from ../tests/fixtures/customer_emails.csv
     <span class="k">if</span> <span class="n">ts_meta</span><span class="o">.</span><span class="n">population_stability</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      Population stability: </span><span class="si">{</span><span class="n">ts_meta</span><span class="o">.</span><span class="n">population_stability</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
-<span class="c1"># === 01b: Temporal Quality ===</span>
 <span class="n">quality_meta</span> <span class="o">=</span> <span class="n">findings</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"temporal_quality"</span><span class="p">,</span> <span class="p">{})</span>
 <span class="k">if</span> <span class="n">quality_meta</span><span class="p">:</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">📋 FROM 01b (Temporal Quality):"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">📋 FROM 01b (Temporal Quality):"</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">quality_meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"temporal_quality_score"</span><span class="p">):</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Quality score: </span><span class="si">{</span><span class="n">quality_meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'temporal_quality_score'</span><span class="p">)</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">quality_meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"temporal_quality_grade"</span><span class="p">):</span>
@@ -8149,15 +8224,14 @@ Loaded findings for 16 columns from ../tests/fixtures/customer_emails.csv
     <span class="k">if</span> <span class="n">issues</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"temporal_gaps"</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   ⚠️ Temporal gaps: </span><span class="si">{</span><span class="n">issues</span><span class="p">[</span><span class="s1">'temporal_gaps'</span><span class="p">]</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
-<span class="c1"># === 01c: Temporal Patterns ===</span>
 <span class="n">pattern_meta</span> <span class="o">=</span> <span class="n">findings</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"temporal_patterns"</span><span class="p">,</span> <span class="p">{})</span>
-<span class="n">SEASONALITY_RECOMMENDATIONS</span> <span class="o">=</span> <span class="p">[]</span>  <span class="c1"># Store for later application</span>
-<span class="n">TEMPORAL_PATTERN_RECOMMENDATIONS</span> <span class="o">=</span> <span class="p">[]</span>  <span class="c1"># Store for later application</span>
-<span class="n">TREND_RECOMMENDATIONS</span> <span class="o">=</span> <span class="p">[]</span>  <span class="c1"># Store for later application</span>
-<span class="n">COHORT_RECOMMENDATIONS</span> <span class="o">=</span> <span class="p">[]</span>  <span class="c1"># Store for later application</span>
+<span class="n">SEASONALITY_RECOMMENDATIONS</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="n">TEMPORAL_PATTERN_RECOMMENDATIONS</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="n">TREND_RECOMMENDATIONS</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="n">COHORT_RECOMMENDATIONS</span> <span class="o">=</span> <span class="p">[]</span>
 
 <span class="k">if</span> <span class="n">pattern_meta</span><span class="p">:</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">📈 FROM 01c (Temporal Patterns):"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">📈 FROM 01c (Temporal Patterns):"</span><span class="p">)</span>
     <span class="n">windows_used</span> <span class="o">=</span> <span class="n">pattern_meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"windows_used"</span><span class="p">,</span> <span class="p">{})</span>
     <span class="k">if</span> <span class="n">windows_used</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">windows_used</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"aggregation_windows"</span><span class="p">):</span>
@@ -8166,18 +8240,17 @@ Loaded findings for 16 columns from ../tests/fixtures/customer_emails.csv
             <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Velocity window: </span><span class="si">{</span><span class="n">windows_used</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'velocity_window'</span><span class="p">)</span><span class="si">}</span><span class="s2"> days"</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">windows_used</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"momentum_pairs"</span><span class="p">):</span>
             <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Momentum pairs: </span><span class="si">{</span><span class="n">windows_used</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'momentum_pairs'</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-    
+
     <span class="n">trend</span> <span class="o">=</span> <span class="n">pattern_meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"trend"</span><span class="p">,</span> <span class="p">{})</span>
     <span class="k">if</span> <span class="n">trend</span> <span class="ow">and</span> <span class="n">trend</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"direction"</span><span class="p">):</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Trend: </span><span class="si">{</span><span class="n">trend</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'direction'</span><span class="p">)</span><span class="si">}</span><span class="s2"> (strength: </span><span class="si">{</span><span class="n">trend</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'strength'</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Trend: </span><span class="si">{</span><span class="n">trend</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'direction'</span><span class="p">)</span><span class="si">}</span><span class="s2"> (strength: </span><span class="si">{</span><span class="p">(</span><span class="n">trend</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'strength'</span><span class="p">)</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
         <span class="n">TREND_RECOMMENDATIONS</span> <span class="o">=</span> <span class="n">trend</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"recommendations"</span><span class="p">,</span> <span class="p">[])</span>
         <span class="n">trend_features</span> <span class="o">=</span> <span class="p">[</span><span class="n">r</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">TREND_RECOMMENDATIONS</span> <span class="k">if</span> <span class="n">r</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"features"</span><span class="p">)]</span>
         <span class="k">if</span> <span class="n">trend_features</span><span class="p">:</span>
-            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   📈 Trend Features to Add:"</span><span class="p">)</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   📈 Trend Features to Add:"</span><span class="p">)</span>
             <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">trend_features</span><span class="p">:</span>
                 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      → </span><span class="si">{</span><span class="s1">', '</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">rec</span><span class="p">[</span><span class="s1">'features'</span><span class="p">])</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">rec</span><span class="p">[</span><span class="s1">'priority'</span><span class="p">]</span><span class="si">}</span><span class="s2"> priority)"</span><span class="p">)</span>
-    
-    <span class="c1"># Handle both old format (list) and new format (dict with patterns and recommendations)</span>
+
     <span class="n">seasonality</span> <span class="o">=</span> <span class="n">pattern_meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"seasonality"</span><span class="p">,</span> <span class="p">{})</span>
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">seasonality</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
         <span class="n">patterns</span> <span class="o">=</span> <span class="n">seasonality</span>
@@ -8185,14 +8258,13 @@ Loaded findings for 16 columns from ../tests/fixtures/customer_emails.csv
     <span class="k">else</span><span class="p">:</span>
         <span class="n">patterns</span> <span class="o">=</span> <span class="n">seasonality</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"patterns"</span><span class="p">,</span> <span class="p">[])</span>
         <span class="n">SEASONALITY_RECOMMENDATIONS</span> <span class="o">=</span> <span class="n">seasonality</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"recommendations"</span><span class="p">,</span> <span class="p">[])</span>
-    
+
     <span class="k">if</span> <span class="n">patterns</span><span class="p">:</span>
         <span class="n">periods</span> <span class="o">=</span> <span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">s</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'name'</span><span class="p">,</span><span class="w"> </span><span class="s1">'period'</span><span class="p">)</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">s</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'period'</span><span class="p">)</span><span class="si">}</span><span class="s2">d)"</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">patterns</span><span class="p">[:</span><span class="mi">3</span><span class="p">]]</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Seasonality: </span><span class="si">{</span><span class="s1">', '</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">periods</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-    
-    <span class="c1"># Display seasonality recommendations</span>
+
     <span class="k">if</span> <span class="n">SEASONALITY_RECOMMENDATIONS</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   📋 Seasonality Recommendations:"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   📋 Seasonality Recommendations:"</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">SEASONALITY_RECOMMENDATIONS</span><span class="p">:</span>
             <span class="n">action</span> <span class="o">=</span> <span class="n">rec</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"action"</span><span class="p">,</span> <span class="s2">""</span><span class="p">)</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">"_"</span><span class="p">,</span> <span class="s2">" "</span><span class="p">)</span>
             <span class="k">if</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">"add cyclical feature"</span><span class="p">:</span>
@@ -8203,24 +8275,22 @@ Loaded findings for 16 columns from ../tests/fixtures/customer_emails.csv
                 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      → Warning: Windows don't align with cycles </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'detected_periods'</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
             <span class="k">elif</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">"consider deseasonalization"</span><span class="p">:</span>
                 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      → Consider deseasonalizing for periods </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'periods'</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-    
+
     <span class="n">recency</span> <span class="o">=</span> <span class="n">pattern_meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"recency"</span><span class="p">,</span> <span class="p">{})</span>
     <span class="k">if</span> <span class="n">recency</span> <span class="ow">and</span> <span class="n">recency</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"median_days"</span><span class="p">):</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Recency: median=</span><span class="si">{</span><span class="n">recency</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'median_days'</span><span class="p">)</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2"> days, "</span>
-              <span class="sa">f</span><span class="s2">"target_corr=</span><span class="si">{</span><span class="n">recency</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'target_correlation'</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-    
-    <span class="c1"># Divergent columns (important for feature prioritization)</span>
+              <span class="sa">f</span><span class="s2">"target_corr=</span><span class="si">{</span><span class="p">(</span><span class="n">recency</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'target_correlation'</span><span class="p">)</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
     <span class="n">velocity</span> <span class="o">=</span> <span class="n">pattern_meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"velocity"</span><span class="p">,</span> <span class="p">{})</span>
     <span class="n">divergent_velocity</span> <span class="o">=</span> <span class="p">[</span><span class="n">k</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">velocity</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="n">v</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"divergent"</span><span class="p">)]</span>
     <span class="k">if</span> <span class="n">divergent_velocity</span><span class="p">:</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   🎯 Divergent velocity columns: </span><span class="si">{</span><span class="n">divergent_velocity</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-    
+
     <span class="n">momentum</span> <span class="o">=</span> <span class="n">pattern_meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"momentum"</span><span class="p">,</span> <span class="p">{})</span>
     <span class="n">divergent_momentum</span> <span class="o">=</span> <span class="n">momentum</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"_divergent_columns"</span><span class="p">,</span> <span class="p">[])</span>
     <span class="k">if</span> <span class="n">divergent_momentum</span><span class="p">:</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   🎯 Divergent momentum columns: </span><span class="si">{</span><span class="n">divergent_momentum</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
-    <span class="c1"># Extract cohort recommendations</span>
     <span class="n">cohort_meta</span> <span class="o">=</span> <span class="n">pattern_meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"cohort"</span><span class="p">,</span> <span class="p">{})</span>
     <span class="k">if</span> <span class="n">cohort_meta</span><span class="p">:</span>
         <span class="n">COHORT_RECOMMENDATIONS</span> <span class="o">=</span> <span class="n">cohort_meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"recommendations"</span><span class="p">,</span> <span class="p">[])</span>
@@ -8231,13 +8301,12 @@ Loaded findings for 16 columns from ../tests/fixtures/customer_emails.csv
         <span class="k">else</span><span class="p">:</span>
             <span class="n">cohort_features</span> <span class="o">=</span> <span class="p">[</span><span class="n">r</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">COHORT_RECOMMENDATIONS</span> <span class="k">if</span> <span class="n">r</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"features"</span><span class="p">)]</span>
             <span class="k">if</span> <span class="n">cohort_features</span><span class="p">:</span>
-                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   👥 Cohort Features to Add:"</span><span class="p">)</span>
+                <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   👥 Cohort Features to Add:"</span><span class="p">)</span>
                 <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">cohort_features</span><span class="p">:</span>
                     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      → </span><span class="si">{</span><span class="s1">', '</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">rec</span><span class="p">[</span><span class="s1">'features'</span><span class="p">])</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">rec</span><span class="p">[</span><span class="s1">'priority'</span><span class="p">]</span><span class="si">}</span><span class="s2"> priority)"</span><span class="p">)</span>
 
 <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">"</span> <span class="o">+</span> <span class="s2">"="</span> <span class="o">*</span> <span class="mi">70</span><span class="p">)</span>
 
-<span class="c1"># Validate that prior notebooks have been run (01a required, 01c recommended)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.stages.profiling</span><span class="w"> </span><span class="kn">import</span> <span class="n">validate_temporal_findings</span>
 
 <span class="n">validation</span> <span class="o">=</span> <span class="n">validate_temporal_findings</span><span class="p">(</span><span class="n">findings</span><span class="p">)</span>
@@ -8271,10 +8340,10 @@ FINDINGS SUMMARY FROM 01a-01c
 
 📊 FROM 01a (Temporal Profiling):
    Entity column: customer_id
-   Time column: feature_timestamp
+   Time column: sent_date
    Unique entities: 4,998
-   Avg events/entity: 15.0
-   Time span: 2,825 days
+   Avg events/entity: 16.6
+   Time span: 3,285 days
 
    ✅ Recommended windows: ['180d', '365d', 'all_time']
 
@@ -8289,19 +8358,20 @@ FINDINGS SUMMARY FROM 01a-01c
 📋 FROM 01b (Temporal Quality):
    Quality score: 96.3
    Quality grade: A
-   ⚠️ Duplicate events: 371
+   ⚠️ Duplicate events: 400
 
 📈 FROM 01c (Temporal Patterns):
    Velocity window: 180 days
    Momentum pairs: [[180, 365]]
 
-   Trend: stable (strength: 0.47)
+   Trend: stable (strength: 0.52)
    Seasonality: weekly (7d), tri-weekly (21d), bi-weekly (14d)
 
    📋 Seasonality Recommendations:
       → Add day_of_week with sin_cos encoding
+      → Consider deseasonalizing for periods [7, 21, 14]
       → Warning: Windows don't align with cycles [7, 21, 14]
-   Recency: median=246 days, target_corr=0.77
+   Recency: median=314 days, target_corr=0.77
 
    👥 Cohort: Skip features - 90% onboarded in 2015 - insufficient variation
 
@@ -8316,20 +8386,20 @@ FINDINGS SUMMARY FROM 01a-01c
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [4]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [5]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.stages.temporal</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_data_with_snapshot_preference</span><span class="p">,</span> <span class="n">TEMPORAL_METADATA_COLS</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.active_dataset_store</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_active_dataset</span><span class="p">,</span> <span class="n">save_aggregated_dataset</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.stages.temporal</span><span class="w"> </span><span class="kn">import</span> <span class="n">TEMPORAL_METADATA_COLS</span>
 
-<span class="c1"># Load source data (prefers snapshots over raw files)</span>
-<span class="n">df</span><span class="p">,</span> <span class="n">data_source</span> <span class="o">=</span> <span class="n">load_data_with_snapshot_preference</span><span class="p">(</span><span class="n">findings</span><span class="p">,</span> <span class="n">output_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">FINDINGS_DIR</span><span class="p">))</span>
+<span class="n">df</span> <span class="o">=</span> <span class="n">load_active_dataset</span><span class="p">(</span><span class="n">_namespace</span><span class="p">,</span> <span class="n">dataset_name</span><span class="p">)</span>
 <span class="n">df</span><span class="p">[</span><span class="n">TIME_COLUMN</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="n">TIME_COLUMN</span><span class="p">])</span>
 <span class="n">charts</span> <span class="o">=</span> <span class="n">ChartBuilder</span><span class="p">()</span>
 
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Loaded </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">df</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> events x </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span><span class="si">}</span><span class="s2"> columns"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Data source: </span><span class="si">{</span><span class="n">data_source</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Data source: </span><span class="si">{</span><span class="n">dataset_name</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Date range: </span><span class="si">{</span><span class="n">df</span><span class="p">[</span><span class="n">TIME_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="si">}</span><span class="s2"> to </span><span class="si">{</span><span class="n">df</span><span class="p">[</span><span class="n">TIME_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -8343,20 +8413,10 @@ FINDINGS SUMMARY FROM 01a-01c
 <div class="jp-OutputArea jp-Cell-outputArea">
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
-<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="application/vnd.jupyter.stderr" tabindex="0">
-<pre>/Users/Vital/python/CustomerRetention/.venv/lib/python3.12/site-packages/tqdm/auto.py:21: TqdmWarning:
-
-IProgress not found. Please update jupyter and ipywidgets. See https://ipywidgets.readthedocs.io/en/stable/user_install.html
-
-</pre>
-</div>
-</div>
-<div class="jp-OutputArea-child">
-<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>Loaded 74,842 events x 16 columns
-Data source: snapshot:training_v1
-Date range: 2015-01-01 00:00:00 to 2022-09-26 00:00:00
+<pre>Loaded 83,198 events x 13 columns
+Data source: customer_emails
+Date range: 2015-01-01 00:00:00 to 2023-12-30 00:00:00
 </pre>
 </div>
 </div>
@@ -8367,7 +8427,7 @@ Date range: 2015-01-01 00:00:00 to 2022-09-26 00:00:00
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [5]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [6]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
@@ -8393,8 +8453,8 @@ Date range: 2015-01-01 00:00:00 to 2022-09-26 00:00:00
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>Deduplication: removed 371 duplicate events (01b flagged 371)
-Events after dedup: 74,471
+<pre>Deduplication: removed 400 duplicate events (01b flagged 400)
+Events after dedup: 82,798
 </pre>
 </div>
 </div>
@@ -8416,7 +8476,7 @@ Events after dedup: 74,471
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [6]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [7]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
@@ -8450,7 +8510,7 @@ Events after dedup: 74,471
 <span class="n">momentum_meta</span> <span class="o">=</span> <span class="n">pattern_meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"momentum"</span><span class="p">,</span> <span class="p">{})</span>
 
 <span class="c1"># Identify divergent columns (these are most predictive for target)</span>
-<span class="n">DIVERGENT_VELOCITY_COLS</span> <span class="o">=</span> <span class="p">[</span><span class="n">k</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">velocity_meta</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> 
+<span class="n">DIVERGENT_VELOCITY_COLS</span> <span class="o">=</span> <span class="p">[</span><span class="n">k</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">velocity_meta</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
                            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="n">v</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"divergent"</span><span class="p">)]</span>
 <span class="n">DIVERGENT_MOMENTUM_COLS</span> <span class="o">=</span> <span class="n">momentum_meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"_divergent_columns"</span><span class="p">,</span> <span class="p">[])</span>
 
@@ -8464,13 +8524,50 @@ Events after dedup: 74,471
 <span class="n">available_numeric</span> <span class="o">=</span> <span class="p">[</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">numeric_cols</span> <span class="k">if</span> <span class="n">c</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">exclude_cols</span><span class="p">]</span>
 
 <span class="c1"># Put divergent columns first (they showed predictive signal in 01c)</span>
-<span class="n">priority_cols</span> <span class="o">=</span> <span class="p">[</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">DIVERGENT_VELOCITY_COLS</span> <span class="o">+</span> <span class="n">DIVERGENT_MOMENTUM_COLS</span> 
+<span class="n">priority_cols</span> <span class="o">=</span> <span class="p">[</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">DIVERGENT_VELOCITY_COLS</span> <span class="o">+</span> <span class="n">DIVERGENT_MOMENTUM_COLS</span>
                  <span class="k">if</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">available_numeric</span><span class="p">]</span>
 <span class="n">other_cols</span> <span class="o">=</span> <span class="p">[</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">available_numeric</span> <span class="k">if</span> <span class="n">c</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">priority_cols</span><span class="p">]</span>
 
 <span class="c1"># Include text PCA columns from findings if text processing was performed</span>
 <span class="n">text_pca_cols</span> <span class="o">=</span> <span class="p">[</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">agg_feature_config</span><span class="o">.</span><span class="n">text_pca_columns</span> <span class="k">if</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">]</span>
 <span class="n">VALUE_COLUMNS</span> <span class="o">=</span> <span class="n">priority_cols</span> <span class="o">+</span> <span class="n">other_cols</span> <span class="o">+</span> <span class="n">text_pca_cols</span>
+
+<span class="c1"># Derive numeric features from extra datetime columns (e.g. first_response_at, resolved_at)</span>
+<span class="n">extra_dt_cols</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">findings</span><span class="o">.</span><span class="n">datetime_columns</span>
+    <span class="k">if</span> <span class="n">c</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">{</span><span class="n">TIME_COLUMN</span><span class="p">}</span> <span class="o">|</span> <span class="nb">set</span><span class="p">(</span><span class="n">TEMPORAL_METADATA_COLS</span><span class="p">)</span>
+<span class="p">]</span>
+
+<span class="c1"># Exclude datetime columns whose null pattern is a target proxy</span>
+<span class="c1"># (e.g. unsubscribe_date is non-null only when unsubscribed=1)</span>
+<span class="k">if</span> <span class="n">extra_dt_cols</span> <span class="ow">and</span> <span class="n">TARGET_COLUMN</span> <span class="ow">and</span> <span class="n">TARGET_COLUMN</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+    <span class="n">_target_series</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">TARGET_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span>
+    <span class="n">_target_proxy_cols</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">_dtc</span> <span class="ow">in</span> <span class="n">extra_dt_cols</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">_dtc</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="n">_not_null</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">_dtc</span><span class="p">]</span><span class="o">.</span><span class="n">notna</span><span class="p">()</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span>
+            <span class="n">_corr</span> <span class="o">=</span> <span class="n">_not_null</span><span class="o">.</span><span class="n">corr</span><span class="p">(</span><span class="n">_target_series</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">abs</span><span class="p">(</span><span class="n">_corr</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mf">0.5</span><span class="p">:</span>
+                <span class="n">_target_proxy_cols</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">_dtc</span><span class="p">,</span> <span class="n">_corr</span><span class="p">))</span>
+    <span class="k">if</span> <span class="n">_target_proxy_cols</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">⚠️ Excluded </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">_target_proxy_cols</span><span class="p">)</span><span class="si">}</span><span class="s2"> target-proxy datetime column(s) from derivation:"</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">_col</span><span class="p">,</span> <span class="n">_corr</span> <span class="ow">in</span> <span class="n">_target_proxy_cols</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   </span><span class="si">{</span><span class="n">_col</span><span class="si">}</span><span class="s2"> (null-pattern correlation with </span><span class="si">{</span><span class="n">TARGET_COLUMN</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">_corr</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
+        <span class="n">extra_dt_cols</span> <span class="o">=</span> <span class="p">[</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">extra_dt_cols</span> <span class="k">if</span> <span class="n">c</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">{</span><span class="n">p</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">_target_proxy_cols</span><span class="p">}]</span>
+
+<span class="k">if</span> <span class="n">extra_dt_cols</span><span class="p">:</span>
+    <span class="n">df</span><span class="p">,</span> <span class="n">derived_dt_cols</span> <span class="o">=</span> <span class="n">derive_extra_datetime_features</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">TIME_COLUMN</span><span class="p">,</span> <span class="n">extra_dt_cols</span><span class="p">)</span>
+    <span class="n">VALUE_COLUMNS</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">derived_dt_cols</span><span class="p">)</span>
+    <span class="n">findings</span><span class="o">.</span><span class="n">datetime_derivation_sources</span> <span class="o">=</span> <span class="n">extra_dt_cols</span>
+
+    <span class="k">for</span> <span class="n">_col_name</span> <span class="ow">in</span> <span class="n">derived_dt_cols</span><span class="p">:</span>
+        <span class="n">_is_binary</span> <span class="o">=</span> <span class="n">_col_name</span><span class="o">.</span><span class="n">startswith</span><span class="p">((</span><span class="s2">"is_"</span><span class="p">,</span> <span class="s2">"within_"</span><span class="p">))</span>
+        <span class="n">findings</span><span class="o">.</span><span class="n">columns</span><span class="p">[</span><span class="n">_col_name</span><span class="p">]</span> <span class="o">=</span> <span class="n">ColumnFinding</span><span class="p">(</span>
+            <span class="n">name</span><span class="o">=</span><span class="n">_col_name</span><span class="p">,</span>
+            <span class="n">inferred_type</span><span class="o">=</span><span class="n">ColumnType</span><span class="o">.</span><span class="n">BINARY</span> <span class="k">if</span> <span class="n">_is_binary</span> <span class="k">else</span> <span class="n">ColumnType</span><span class="o">.</span><span class="n">NUMERIC_CONTINUOUS</span><span class="p">,</span>
+            <span class="n">confidence</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+            <span class="n">evidence</span><span class="o">=</span><span class="p">[</span><span class="s2">"derived:datetime_features"</span><span class="p">],</span>
+        <span class="p">)</span>
 
 <span class="c1"># Aggregation functions</span>
 <span class="n">AGG_FUNCTIONS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"sum"</span><span class="p">,</span> <span class="s2">"mean"</span><span class="p">,</span> <span class="s2">"max"</span><span class="p">,</span> <span class="s2">"count"</span><span class="p">]</span>
@@ -8503,10 +8600,12 @@ Events after dedup: 74,471
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Other: </span><span class="si">{</span><span class="n">other_cols</span><span class="p">[:</span><span class="mi">5</span><span class="p">]</span><span class="si">}{</span><span class="s1">'...'</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="n">other_cols</span><span class="p">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="s1">''</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="k">if</span> <span class="n">text_pca_cols</span><span class="p">:</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Text PCA: </span><span class="si">{</span><span class="n">text_pca_cols</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="k">if</span> <span class="n">extra_dt_cols</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Datetime-derived (</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">extra_dt_cols</span><span class="p">)</span><span class="si">}</span><span class="s2"> source cols): </span><span class="si">{</span><span class="n">extra_dt_cols</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="k">if</span> <span class="n">TARGET_COLUMN</span><span class="p">:</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Excluded from aggregation: </span><span class="si">{</span><span class="n">TARGET_COLUMN</span><span class="si">}</span><span class="s2"> (target - prevents leakage)"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Aggregation functions: </span><span class="si">{</span><span class="n">AGG_FUNCTIONS</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Additional features:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Additional features:"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Include lifecycle_quadrant: </span><span class="si">{</span><span class="n">INCLUDE_LIFECYCLE_QUADRANT</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Include recency: </span><span class="si">{</span><span class="n">INCLUDE_RECENCY</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Include tenure: </span><span class="si">{</span><span class="n">INCLUDE_TENURE</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
@@ -8530,19 +8629,22 @@ Events after dedup: 74,471
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>======================================================================
+<pre>
+⚠️ Excluded 1 target-proxy datetime column(s) from derivation:
+   unsubscribe_date (null-pattern correlation with unsubscribed: 1.00)
+======================================================================
 AGGREGATION CONFIGURATION
 ======================================================================
 
 Windows: ['180d', '365d', 'all_time']
    Source: 01a recommendations
 
-Reference date: 2022-09-26 00:00:00
+Reference date: 2023-12-30 00:00:00
 
 Value columns (5 total):
    Other: ['opened', 'clicked', 'send_hour', 'bounced', 'time_to_open_hours']
 
-   Excluded from aggregation: target (target - prevents leakage)
+   Excluded from aggregation: unsubscribed (target - prevents leakage)
 
 Aggregation functions: ['sum', 'mean', 'max', 'count']
 
@@ -8551,8 +8653,8 @@ Additional features:
    Include recency: True
    Include tenure: True
 
-   Duplicate events to remove: 371
-   Momentum ratio features: 2 recommendation(s)
+   Duplicate events to remove: 400
+   Momentum ratio features: 3 recommendation(s)
 
 RECOMMENDATION APPLICATION SUMMARY
 ==================================================
@@ -8563,14 +8665,14 @@ seasonality                 0
 recency                     2
 cohort                      0
 velocity                    0
-momentum                    2
+momentum                    3
 lag                         0
-sparkline                   7
-effect_size                17
-predictive_power           17
+sparkline                  10
+effect_size                12
+predictive_power           12
 text_pca                    0
 ------------------------------
-Total                      45
+Total                      39
 
 Feature flags: {'include_recency': True, 'include_tenure': True, 'include_lifecycle_quadrant': True, 'include_trend_features': True, 'include_seasonality_features': True, 'include_cohort_features': False}
 Scaling recs: 1
@@ -8595,7 +8697,7 @@ Scaling recs: 1
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [7]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [8]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
@@ -8641,10 +8743,10 @@ Scaling recs: 1
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   ... and </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">plan</span><span class="o">.</span><span class="n">feature_columns</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">15</span><span class="si">}</span><span class="s2"> more"</span><span class="p">)</span>
 
 <span class="k">if</span> <span class="n">additional_features</span><span class="p">:</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Additional features:"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Additional features:"</span><span class="p">)</span>
     <span class="k">for</span> <span class="n">feat</span> <span class="ow">in</span> <span class="n">additional_features</span><span class="p">:</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   - </span><span class="si">{</span><span class="n">feat</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-    
+
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Total expected features: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">plan</span><span class="o">.</span><span class="n">feature_columns</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="n">additional_features</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -8665,7 +8767,7 @@ AGGREGATION PLAN
 ============================================================
 
 Entity column: customer_id
-Time column: feature_timestamp
+Time column: sent_date
 Windows: ['180d', '365d', 'all_time']
 
 Features from aggregation (65):
@@ -8688,7 +8790,7 @@ Features from aggregation (65):
 
 Additional features:
    - lifecycle_quadrant
-   - target (entity target)
+   - unsubscribed (entity target)
 
 Total expected features: 68
 </pre>
@@ -8712,7 +8814,7 @@ Total expected features: 68
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [8]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [9]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
@@ -8738,18 +8840,18 @@ Total expected features: 68
     <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Adding lifecycle_quadrant feature..."</span><span class="p">)</span>
     <span class="n">profiler</span> <span class="o">=</span> <span class="n">TimeSeriesProfiler</span><span class="p">(</span><span class="n">entity_column</span><span class="o">=</span><span class="n">ENTITY_COLUMN</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="n">TIME_COLUMN</span><span class="p">)</span>
     <span class="n">ts_profile</span> <span class="o">=</span> <span class="n">profiler</span><span class="o">.</span><span class="n">profile</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
-    
+
     <span class="c1"># Rename 'entity' column to match our entity column name</span>
     <span class="n">lifecycles</span> <span class="o">=</span> <span class="n">ts_profile</span><span class="o">.</span><span class="n">entity_lifecycles</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
     <span class="n">lifecycles</span> <span class="o">=</span> <span class="n">lifecycles</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">{</span><span class="s2">"entity"</span><span class="p">:</span> <span class="n">ENTITY_COLUMN</span><span class="p">})</span>
-    
+
     <span class="n">quadrant_result</span> <span class="o">=</span> <span class="n">classify_lifecycle_quadrants</span><span class="p">(</span><span class="n">lifecycles</span><span class="p">)</span>
-    
+
     <span class="c1"># Merge lifecycle_quadrant into aggregated data</span>
     <span class="n">quadrant_map</span> <span class="o">=</span> <span class="n">quadrant_result</span><span class="o">.</span><span class="n">lifecycles</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="n">ENTITY_COLUMN</span><span class="p">)[</span><span class="s2">"lifecycle_quadrant"</span><span class="p">]</span>
     <span class="n">df_aggregated</span><span class="p">[</span><span class="s2">"lifecycle_quadrant"</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">ENTITY_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">quadrant_map</span><span class="p">)</span>
-    
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Quadrant distribution:"</span><span class="p">)</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"   Quadrant distribution:"</span><span class="p">)</span>
     <span class="k">for</span> <span class="n">quad</span><span class="p">,</span> <span class="n">count</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="s2">"lifecycle_quadrant"</span><span class="p">]</span><span class="o">.</span><span class="n">value_counts</span><span class="p">()</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
         <span class="n">pct</span> <span class="o">=</span> <span class="n">count</span> <span class="o">/</span> <span class="nb">len</span><span class="p">(</span><span class="n">df_aggregated</span><span class="p">)</span> <span class="o">*</span> <span class="mi">100</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      </span><span class="si">{</span><span class="n">quad</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">count</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">pct</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">%)"</span><span class="p">)</span>
@@ -8761,7 +8863,7 @@ Total expected features: 68
     <span class="c1"># For entity-level target, use max (if any event has target=1, entity has target=1)</span>
     <span class="n">entity_target</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">ENTITY_COLUMN</span><span class="p">)[</span><span class="n">TARGET_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">()</span>
     <span class="n">df_aggregated</span><span class="p">[</span><span class="n">TARGET_COLUMN</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">ENTITY_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">entity_target</span><span class="p">)</span>
-    
+
     <span class="n">target_dist</span> <span class="o">=</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">TARGET_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">value_counts</span><span class="p">()</span>
     <span class="k">for</span> <span class="n">val</span><span class="p">,</span> <span class="n">count</span> <span class="ow">in</span> <span class="n">target_dist</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
         <span class="n">pct</span> <span class="o">=</span> <span class="n">count</span> <span class="o">/</span> <span class="nb">len</span><span class="p">(</span><span class="n">df_aggregated</span><span class="p">)</span> <span class="o">*</span> <span class="mi">100</span>
@@ -8794,9 +8896,9 @@ Total expected features: 68
                 <span class="n">df_aggregated</span><span class="p">[</span><span class="s2">"quarter_sin"</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">ENTITY_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">entity_quarter</span><span class="p">)</span> <span class="o">/</span> <span class="mi">4</span><span class="p">)</span>
                 <span class="n">df_aggregated</span><span class="p">[</span><span class="s2">"quarter_cos"</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cos</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">ENTITY_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">entity_quarter</span><span class="p">)</span> <span class="o">/</span> <span class="mi">4</span><span class="p">)</span>
                 <span class="n">cyclical_added</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"quarter (quarter_sin, quarter_cos)"</span><span class="p">)</span>
-    
+
     <span class="k">if</span> <span class="n">cyclical_added</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Adding cyclical features from seasonality analysis:"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Adding cyclical features from seasonality analysis:"</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">feat</span> <span class="ow">in</span> <span class="n">cyclical_added</span><span class="p">:</span>
             <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      -&gt; </span><span class="si">{</span><span class="n">feat</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
@@ -8806,21 +8908,21 @@ Total expected features: 68
     <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">TEMPORAL_PATTERN_RECOMMENDATIONS</span><span class="p">:</span>
         <span class="n">features</span> <span class="o">=</span> <span class="n">rec</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"features"</span><span class="p">,</span> <span class="p">[])</span>
         <span class="n">pattern</span> <span class="o">=</span> <span class="n">rec</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"pattern"</span><span class="p">,</span> <span class="s2">""</span><span class="p">)</span>
-        
+
         <span class="k">if</span> <span class="n">pattern</span> <span class="o">==</span> <span class="s2">"day_of_week"</span> <span class="ow">and</span> <span class="s2">"dow_sin"</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
             <span class="k">continue</span>
         <span class="k">if</span> <span class="n">pattern</span> <span class="o">==</span> <span class="s2">"month"</span> <span class="ow">and</span> <span class="s2">"month_sin"</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
             <span class="k">continue</span>
         <span class="k">if</span> <span class="n">pattern</span> <span class="o">==</span> <span class="s2">"quarter"</span> <span class="ow">and</span> <span class="s2">"quarter_sin"</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
             <span class="k">continue</span>
-            
+
         <span class="k">if</span> <span class="s2">"dow_sin"</span> <span class="ow">in</span> <span class="n">features</span> <span class="ow">or</span> <span class="s2">"dow_cos"</span> <span class="ow">in</span> <span class="n">features</span><span class="p">:</span>
             <span class="k">if</span> <span class="s2">"dow_sin"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
                 <span class="n">entity_dow</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">ENTITY_COLUMN</span><span class="p">)[</span><span class="n">TIME_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">dayofweek</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span>
                 <span class="n">df_aggregated</span><span class="p">[</span><span class="s2">"dow_sin"</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">ENTITY_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">entity_dow</span><span class="p">)</span> <span class="o">/</span> <span class="mi">7</span><span class="p">)</span>
                 <span class="n">df_aggregated</span><span class="p">[</span><span class="s2">"dow_cos"</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cos</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">ENTITY_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">entity_dow</span><span class="p">)</span> <span class="o">/</span> <span class="mi">7</span><span class="p">)</span>
                 <span class="n">tp_added</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"day_of_week (dow_sin, dow_cos)"</span><span class="p">)</span>
-        
+
         <span class="k">if</span> <span class="s2">"is_weekend"</span> <span class="ow">in</span> <span class="n">features</span><span class="p">:</span>
             <span class="k">if</span> <span class="s2">"is_weekend"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
                 <span class="n">entity_weekend_pct</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">ENTITY_COLUMN</span><span class="p">)[</span><span class="n">TIME_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span>
@@ -8828,28 +8930,28 @@ Total expected features: 68
                 <span class="p">)</span>
                 <span class="n">df_aggregated</span><span class="p">[</span><span class="s2">"is_weekend_pct"</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">ENTITY_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">entity_weekend_pct</span><span class="p">)</span>
                 <span class="n">tp_added</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"is_weekend_pct"</span><span class="p">)</span>
-        
+
         <span class="k">if</span> <span class="s2">"month_sin"</span> <span class="ow">in</span> <span class="n">features</span> <span class="ow">or</span> <span class="s2">"month_cos"</span> <span class="ow">in</span> <span class="n">features</span><span class="p">:</span>
             <span class="k">if</span> <span class="s2">"month_sin"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
                 <span class="n">entity_month</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">ENTITY_COLUMN</span><span class="p">)[</span><span class="n">TIME_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">month</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span>
                 <span class="n">df_aggregated</span><span class="p">[</span><span class="s2">"month_sin"</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">ENTITY_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">entity_month</span><span class="p">)</span> <span class="o">/</span> <span class="mi">12</span><span class="p">)</span>
                 <span class="n">df_aggregated</span><span class="p">[</span><span class="s2">"month_cos"</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cos</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">ENTITY_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">entity_month</span><span class="p">)</span> <span class="o">/</span> <span class="mi">12</span><span class="p">)</span>
                 <span class="n">tp_added</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"month (month_sin, month_cos)"</span><span class="p">)</span>
-        
+
         <span class="k">if</span> <span class="s2">"quarter_sin"</span> <span class="ow">in</span> <span class="n">features</span> <span class="ow">or</span> <span class="s2">"quarter_cos"</span> <span class="ow">in</span> <span class="n">features</span><span class="p">:</span>
             <span class="k">if</span> <span class="s2">"quarter_sin"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
                 <span class="n">entity_quarter</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">ENTITY_COLUMN</span><span class="p">)[</span><span class="n">TIME_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">quarter</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span>
                 <span class="n">df_aggregated</span><span class="p">[</span><span class="s2">"quarter_sin"</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">ENTITY_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">entity_quarter</span><span class="p">)</span> <span class="o">/</span> <span class="mi">4</span><span class="p">)</span>
                 <span class="n">df_aggregated</span><span class="p">[</span><span class="s2">"quarter_cos"</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cos</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">ENTITY_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">entity_quarter</span><span class="p">)</span> <span class="o">/</span> <span class="mi">4</span><span class="p">)</span>
                 <span class="n">tp_added</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"quarter (quarter_sin, quarter_cos)"</span><span class="p">)</span>
-        
+
         <span class="k">if</span> <span class="s2">"year_trend"</span> <span class="ow">in</span> <span class="n">features</span><span class="p">:</span>
             <span class="k">if</span> <span class="s2">"year_trend"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
                 <span class="n">entity_year</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">ENTITY_COLUMN</span><span class="p">)[</span><span class="n">TIME_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">year</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span>
                 <span class="n">min_year</span> <span class="o">=</span> <span class="n">entity_year</span><span class="o">.</span><span class="n">min</span><span class="p">()</span>
                 <span class="n">df_aggregated</span><span class="p">[</span><span class="s2">"year_trend"</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">ENTITY_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">entity_year</span><span class="p">)</span> <span class="o">-</span> <span class="n">min_year</span>
                 <span class="n">tp_added</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"year_trend (normalized from </span><span class="si">{</span><span class="n">min_year</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
-        
+
         <span class="k">if</span> <span class="s2">"year_categorical"</span> <span class="ow">in</span> <span class="n">features</span><span class="p">:</span>
             <span class="k">if</span> <span class="s2">"year_mode"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
                 <span class="n">entity_year_mode</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">ENTITY_COLUMN</span><span class="p">)[</span><span class="n">TIME_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span>
@@ -8857,9 +8959,9 @@ Total expected features: 68
                 <span class="p">)</span>
                 <span class="n">df_aggregated</span><span class="p">[</span><span class="s2">"year_mode"</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">ENTITY_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">entity_year_mode</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
                 <span class="n">tp_added</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"year_mode (categorical - encode before modeling)"</span><span class="p">)</span>
-    
+
     <span class="k">if</span> <span class="n">tp_added</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Adding features from temporal pattern analysis:"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Adding features from temporal pattern analysis:"</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">feat</span> <span class="ow">in</span> <span class="n">tp_added</span><span class="p">:</span>
             <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      -&gt; </span><span class="si">{</span><span class="n">feat</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
@@ -8868,20 +8970,20 @@ Total expected features: 68
     <span class="n">trend_added</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">TREND_RECOMMENDATIONS</span><span class="p">:</span>
         <span class="n">features</span> <span class="o">=</span> <span class="n">rec</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"features"</span><span class="p">,</span> <span class="p">[])</span>
-        
+
         <span class="k">if</span> <span class="s2">"recent_vs_overall_ratio"</span> <span class="ow">in</span> <span class="n">features</span><span class="p">:</span>
             <span class="k">if</span> <span class="s2">"recent_vs_overall_ratio"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
                 <span class="n">time_span</span> <span class="o">=</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="n">TIME_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">-</span> <span class="n">df</span><span class="p">[</span><span class="n">TIME_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">min</span><span class="p">())</span><span class="o">.</span><span class="n">days</span>
                 <span class="n">recent_cutoff</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">TIME_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">-</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">time_span</span> <span class="o">*</span> <span class="mf">0.3</span><span class="p">))</span>
-                
+
                 <span class="n">overall_counts</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">ENTITY_COLUMN</span><span class="p">)</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
                 <span class="n">recent_counts</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">df</span><span class="p">[</span><span class="n">TIME_COLUMN</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="n">recent_cutoff</span><span class="p">]</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">ENTITY_COLUMN</span><span class="p">)</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
-                
+
                 <span class="n">ratio</span> <span class="o">=</span> <span class="n">recent_counts</span> <span class="o">/</span> <span class="n">overall_counts</span>
                 <span class="n">ratio</span> <span class="o">=</span> <span class="n">ratio</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
                 <span class="n">df_aggregated</span><span class="p">[</span><span class="s2">"recent_vs_overall_ratio"</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">ENTITY_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">ratio</span><span class="p">)</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
                 <span class="n">trend_added</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"recent_vs_overall_ratio"</span><span class="p">)</span>
-        
+
         <span class="k">if</span> <span class="s2">"entity_trend_slope"</span> <span class="ow">in</span> <span class="n">features</span><span class="p">:</span>
             <span class="k">if</span> <span class="s2">"entity_trend_slope"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
                 <span class="k">def</span><span class="w"> </span><span class="nf">compute_entity_slope</span><span class="p">(</span><span class="n">group</span><span class="p">):</span>
@@ -8893,13 +8995,13 @@ Total expected features: 68
                         <span class="k">return</span> <span class="mf">0.0</span>
                     <span class="n">slope</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">polyfit</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="mi">1</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
                     <span class="k">return</span> <span class="n">slope</span>
-                
+
                 <span class="n">entity_slopes</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">ENTITY_COLUMN</span><span class="p">)</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">compute_entity_slope</span><span class="p">)</span>
                 <span class="n">df_aggregated</span><span class="p">[</span><span class="s2">"entity_trend_slope"</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">ENTITY_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">entity_slopes</span><span class="p">)</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
                 <span class="n">trend_added</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"entity_trend_slope"</span><span class="p">)</span>
-    
+
     <span class="k">if</span> <span class="n">trend_added</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Adding features from trend analysis:"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Adding features from trend analysis:"</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">feat</span> <span class="ow">in</span> <span class="n">trend_added</span><span class="p">:</span>
             <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      -&gt; </span><span class="si">{</span><span class="n">feat</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
@@ -8909,25 +9011,25 @@ Total expected features: 68
     <span class="k">if</span> <span class="ow">not</span> <span class="n">skip_cohort</span><span class="p">:</span>
         <span class="n">cohort_added</span> <span class="o">=</span> <span class="p">[]</span>
         <span class="n">cohort_features</span> <span class="o">=</span> <span class="p">[</span><span class="n">f</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">COHORT_RECOMMENDATIONS</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">r</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"features"</span><span class="p">,</span> <span class="p">[])]</span>
-        
+
         <span class="k">if</span> <span class="s2">"cohort_year"</span> <span class="ow">in</span> <span class="n">cohort_features</span> <span class="ow">or</span> <span class="s2">"cohort_quarter"</span> <span class="ow">in</span> <span class="n">cohort_features</span><span class="p">:</span>
             <span class="n">entity_first</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="n">ENTITY_COLUMN</span><span class="p">)[</span><span class="n">TIME_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">min</span><span class="p">()</span>
-            
+
             <span class="k">if</span> <span class="s2">"cohort_year"</span> <span class="ow">in</span> <span class="n">cohort_features</span> <span class="ow">and</span> <span class="s2">"cohort_year"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
                 <span class="n">df_aggregated</span><span class="p">[</span><span class="s2">"cohort_year"</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">ENTITY_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">entity_first</span><span class="p">)</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">year</span>
                 <span class="n">cohort_added</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"cohort_year"</span><span class="p">)</span>
-            
+
             <span class="k">if</span> <span class="s2">"cohort_quarter"</span> <span class="ow">in</span> <span class="n">cohort_features</span> <span class="ow">and</span> <span class="s2">"cohort_quarter"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
                 <span class="n">first_dates</span> <span class="o">=</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">ENTITY_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">entity_first</span><span class="p">)</span>
                 <span class="n">df_aggregated</span><span class="p">[</span><span class="s2">"cohort_quarter"</span><span class="p">]</span> <span class="o">=</span> <span class="n">first_dates</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">year</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span> <span class="o">+</span> <span class="s2">"Q"</span> <span class="o">+</span> <span class="n">first_dates</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">quarter</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
                 <span class="n">cohort_added</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"cohort_quarter"</span><span class="p">)</span>
-        
+
         <span class="k">if</span> <span class="n">cohort_added</span><span class="p">:</span>
-            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Adding cohort features:"</span><span class="p">)</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Adding cohort features:"</span><span class="p">)</span>
             <span class="k">for</span> <span class="n">feat</span> <span class="ow">in</span> <span class="n">cohort_added</span><span class="p">:</span>
                 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      -&gt; </span><span class="si">{</span><span class="n">feat</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Skipping cohort features (insufficient variation)"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Skipping cohort features (insufficient variation)"</span><span class="p">)</span>
 
 <span class="c1"># Step 8: Add momentum ratio features from 01c momentum recommendations</span>
 <span class="k">if</span> <span class="n">MOMENTUM_RECOMMENDATIONS</span><span class="p">:</span>
@@ -8935,24 +9037,26 @@ Total expected features: 68
     <span class="n">df_aggregated</span> <span class="o">=</span> <span class="n">create_momentum_ratio_features</span><span class="p">(</span><span class="n">df_aggregated</span><span class="p">,</span> <span class="n">MOMENTUM_RECOMMENDATIONS</span><span class="p">)</span>
     <span class="n">new_momentum_cols</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span> <span class="o">-</span> <span class="n">before_cols</span>
     <span class="k">if</span> <span class="n">new_momentum_cols</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Adding momentum ratio features:"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Adding momentum ratio features:"</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">feat</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">new_momentum_cols</span><span class="p">):</span>
             <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      -&gt; </span><span class="si">{</span><span class="n">feat</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Momentum ratio features: columns not available in aggregated data (skipped)"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Momentum ratio features: columns not available in aggregated data (skipped)"</span><span class="p">)</span>
 
 <span class="c1"># Step 9: Add recency bucket feature</span>
 <span class="k">if</span> <span class="n">INCLUDE_RECENCY</span> <span class="ow">and</span> <span class="s2">"days_since_last_event"</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
     <span class="n">df_aggregated</span> <span class="o">=</span> <span class="n">create_recency_bucket_feature</span><span class="p">(</span><span class="n">df_aggregated</span><span class="p">)</span>
     <span class="k">if</span> <span class="s2">"recency_bucket"</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Adding recency_bucket feature:"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Adding recency_bucket feature:"</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">bucket</span><span class="p">,</span> <span class="n">count</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="s2">"recency_bucket"</span><span class="p">]</span><span class="o">.</span><span class="n">value_counts</span><span class="p">()</span><span class="o">.</span><span class="n">sort_index</span><span class="p">()</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
             <span class="n">pct</span> <span class="o">=</span> <span class="n">count</span> <span class="o">/</span> <span class="nb">len</span><span class="p">(</span><span class="n">df_aggregated</span><span class="p">)</span> <span class="o">*</span> <span class="mi">100</span>
             <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      </span><span class="si">{</span><span class="n">bucket</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">count</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">pct</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">%)"</span><span class="p">)</span>
 
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Aggregation complete!"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Aggregation complete!"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Output: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">df_aggregated</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> entities x </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span><span class="si">}</span><span class="s2"> features"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Memory: </span><span class="si">{</span><span class="n">df_aggregated</span><span class="o">.</span><span class="n">memory_usage</span><span class="p">(</span><span class="n">deep</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">1024</span><span class="o">**</span><span class="mi">2</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> MB"</span><span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.core.compat</span><span class="w"> </span><span class="kn">import</span> <span class="n">safe_memory_usage_bytes</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Memory: </span><span class="si">{</span><span class="n">safe_memory_usage_bytes</span><span class="p">(</span><span class="n">df_aggregated</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">1024</span><span class="o">**</span><span class="mi">2</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> MB"</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -8967,7 +9071,7 @@ Total expected features: 68
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
 <pre>Executing aggregation...
-   Input: 74,471 events
+   Input: 82,798 events
 </pre>
 </div>
 </div>
@@ -8990,14 +9094,14 @@ Total expected features: 68
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
 <pre>   Quadrant distribution:
-      Occasional &amp; Loyal: 1,632 (32.7%)
-      Intense &amp; Brief: 1,627 (32.6%)
-      Steady &amp; Loyal: 872 (17.4%)
-      One-shot: 867 (17.3%)
+      Occasional &amp; Loyal: 1,683 (33.7%)
+      Intense &amp; Brief: 1,679 (33.6%)
+      Steady &amp; Loyal: 820 (16.4%)
+      One-shot: 816 (16.3%)
 
-   Adding entity-level target (target)...
-      target=0: 3,034 (60.7%)
-      target=1: 1,964 (39.3%)
+   Adding entity-level target (unsubscribed)...
+      unsubscribed=0: 2,771 (55.4%)
+      unsubscribed=1: 2,227 (44.6%)
 </pre>
 </div>
 </div>
@@ -9011,18 +9115,185 @@ Total expected features: 68
    Skipping cohort features (insufficient variation)
 
    Adding momentum ratio features:
+      -&gt; bounced_momentum_180_365
       -&gt; clicked_momentum_180_365
 
    Adding recency_bucket feature:
-      0-7d: 134 (2.7%)
-      31-90d: 818 (16.4%)
-      8-30d: 358 (7.2%)
-      91-180d: 804 (16.1%)
-      &gt;180d: 2,884 (57.7%)
+      0-7d: 123 (2.5%)
+      31-90d: 725 (14.5%)
+      8-30d: 364 (7.3%)
+      91-180d: 702 (14.0%)
+      &gt;180d: 3,084 (61.7%)
 
    Aggregation complete!
-   Output: 4,998 entities x 72 features
+   Output: 4,998 entities x 73 features
    Memory: 3.5 MB
+</pre>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=bnzusmgcff">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
+</div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
+<h3 id="Temporal-Feature-Engineering-(Velocity,-Regularity,-Lifecycle)">Temporal Feature Engineering (Velocity, Regularity, Lifecycle)<a class="anchor-link" href="#Temporal-Feature-Engineering-(Velocity,-Regularity,-Lifecycle)">¶</a></h3>
+</div>
+</div>
+</div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=d4xvtq8u47d">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea">
+<div class="jp-InputPrompt jp-InputArea-prompt">In [10]:</div>
+<details class="tutorial-code-input">
+<summary>Show/Hide Code</summary>
+<div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
+<div class="cm-editor cm-s-jupyter">
+<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.stages.profiling.temporal_feature_engineer</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">TemporalAggregationConfig</span><span class="p">,</span>
+    <span class="n">TemporalFeatureEngineer</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">ENABLE_TEMPORAL_FEATURES</span> <span class="o">=</span> <span class="kc">True</span>
+<span class="n">TEMPORAL_LAG_WINDOW_DAYS</span> <span class="o">=</span> <span class="mi">30</span>
+<span class="n">TEMPORAL_NUM_LAGS</span> <span class="o">=</span> <span class="mi">4</span>
+
+<span class="k">if</span> <span class="n">ENABLE_TEMPORAL_FEATURES</span><span class="p">:</span>
+    <span class="n">_tfe_config</span> <span class="o">=</span> <span class="n">TemporalAggregationConfig</span><span class="p">(</span>
+        <span class="n">lag_window_days</span><span class="o">=</span><span class="n">TEMPORAL_LAG_WINDOW_DAYS</span><span class="p">,</span>
+        <span class="n">num_lags</span><span class="o">=</span><span class="n">TEMPORAL_NUM_LAGS</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">_tfe</span> <span class="o">=</span> <span class="n">TemporalFeatureEngineer</span><span class="p">(</span><span class="n">config</span><span class="o">=</span><span class="n">_tfe_config</span><span class="p">)</span>
+    <span class="n">_tfe_value_cols</span> <span class="o">=</span> <span class="p">[</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">VALUE_COLUMNS</span> <span class="k">if</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">select_dtypes</span><span class="p">(</span><span class="n">include</span><span class="o">=</span><span class="s2">"number"</span><span class="p">)</span><span class="o">.</span><span class="n">columns</span><span class="p">]</span>
+
+    <span class="n">_tfe_result</span> <span class="o">=</span> <span class="n">_tfe</span><span class="o">.</span><span class="n">compute</span><span class="p">(</span>
+        <span class="n">events_df</span><span class="o">=</span><span class="n">df</span><span class="p">,</span>
+        <span class="n">entity_col</span><span class="o">=</span><span class="n">ENTITY_COLUMN</span><span class="p">,</span>
+        <span class="n">time_col</span><span class="o">=</span><span class="n">TIME_COLUMN</span><span class="p">,</span>
+        <span class="n">value_cols</span><span class="o">=</span><span class="n">_tfe_value_cols</span><span class="p">[:</span><span class="mi">10</span><span class="p">],</span>
+    <span class="p">)</span>
+
+    <span class="n">_tfe_features</span> <span class="o">=</span> <span class="n">_tfe_result</span><span class="o">.</span><span class="n">features_df</span>
+    <span class="n">_tfe_new_cols</span> <span class="o">=</span> <span class="p">[</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">_tfe_features</span><span class="o">.</span><span class="n">columns</span> <span class="k">if</span> <span class="n">c</span> <span class="o">!=</span> <span class="n">ENTITY_COLUMN</span><span class="p">]</span>
+    <span class="n">df_aggregated</span> <span class="o">=</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span><span class="n">_tfe_features</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="n">ENTITY_COLUMN</span><span class="p">,</span> <span class="n">how</span><span class="o">=</span><span class="s2">"left"</span><span class="p">)</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Temporal Feature Engineering: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">_tfe_new_cols</span><span class="p">)</span><span class="si">}</span><span class="s2"> features added"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">_tfe_result</span><span class="o">.</span><span class="n">get_catalog</span><span class="p">())</span>
+</pre></div>
+</div>
+</div>
+</details>
+</div>
+</div>
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>
+Temporal Feature Engineering: 144 features added
+================================================================================
+TEMPORAL FEATURE CATALOG
+================================================================================
+
+GROUP: LAGGED_WINDOWS (80 features)
+Rationale: Capture behavior at sequential time horizons to enable trend detection
+------------------------------------------------------------
+  - lag0_opened_sum
+  - lag0_opened_mean
+  - lag0_opened_count
+  - lag0_opened_max
+  - lag0_clicked_sum
+  - lag0_clicked_mean
+  - lag0_clicked_count
+  - lag0_clicked_max
+  - lag0_send_hour_sum
+  - lag0_send_hour_mean
+  ... and 70 more
+
+GROUP: VELOCITY (10 features)
+Rationale: Rate of change is the #1 churn predictor - declining engagement signals risk
+------------------------------------------------------------
+  - opened_velocity
+  - opened_velocity_pct
+  - clicked_velocity
+  - clicked_velocity_pct
+  - send_hour_velocity
+  - send_hour_velocity_pct
+  - bounced_velocity
+  - bounced_velocity_pct
+  - time_to_open_hours_velocity
+  - time_to_open_hours_velocity_pct
+
+GROUP: ACCELERATION (10 features)
+Rationale: Is the decline accelerating or stabilizing? Indicates intervention urgency
+------------------------------------------------------------
+  - opened_acceleration
+  - opened_momentum
+  - clicked_acceleration
+  - clicked_momentum
+  - send_hour_acceleration
+  - send_hour_momentum
+  - bounced_acceleration
+  - bounced_momentum
+  - time_to_open_hours_acceleration
+  - time_to_open_hours_momentum
+
+GROUP: LIFECYCLE (20 features)
+Rationale: Customer lifecycle patterns reveal engagement trajectory over full history
+------------------------------------------------------------
+  - opened_beginning
+  - opened_middle
+  - opened_end
+  - opened_trend_ratio
+  - clicked_beginning
+  - clicked_middle
+  - clicked_end
+  - clicked_trend_ratio
+  - send_hour_beginning
+  - send_hour_middle
+  ... and 10 more
+
+GROUP: RECENCY (4 features)
+Rationale: How recently active and tenure are fundamental churn signals
+------------------------------------------------------------
+  - days_since_last_event
+  - days_since_first_event
+  - active_span_days
+  - recency_ratio
+
+GROUP: REGULARITY (5 features)
+Rationale: Consistent patterns indicate habit formation; irregular patterns suggest weak retention
+------------------------------------------------------------
+  - event_frequency
+  - inter_event_gap_mean
+  - inter_event_gap_std
+  - inter_event_gap_max
+  - regularity_score
+
+GROUP: COHORT_COMPARISON (15 features)
+Rationale: Compare customer to peers - is their behavior normal or anomalous?
+------------------------------------------------------------
+  - opened_vs_cohort_mean
+  - opened_vs_cohort_pct
+  - opened_cohort_zscore
+  - clicked_vs_cohort_mean
+  - clicked_vs_cohort_pct
+  - clicked_cohort_zscore
+  - send_hour_vs_cohort_mean
+  - send_hour_vs_cohort_pct
+  - send_hour_cohort_zscore
+  - bounced_vs_cohort_mean
+  ... and 5 more
+
+================================================================================
 </pre>
 </div>
 </div>
@@ -9033,7 +9304,7 @@ Total expected features: 68
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [9]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [11]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
@@ -9091,16 +9362,16 @@ Aggregated Data Preview:
 <th>clicked_sum_180d</th>
 <th>clicked_mean_180d</th>
 <th>...</th>
-<th>time_to_open_hours_max_all_time</th>
-<th>time_to_open_hours_count_all_time</th>
-<th>days_since_last_event</th>
-<th>days_since_first_event</th>
-<th>lifecycle_quadrant</th>
-<th>target</th>
-<th>dow_sin</th>
-<th>dow_cos</th>
-<th>clicked_momentum_180_365</th>
-<th>recency_bucket</th>
+<th>clicked_cohort_zscore</th>
+<th>send_hour_vs_cohort_mean</th>
+<th>send_hour_vs_cohort_pct</th>
+<th>send_hour_cohort_zscore</th>
+<th>bounced_vs_cohort_mean</th>
+<th>bounced_vs_cohort_pct</th>
+<th>bounced_cohort_zscore</th>
+<th>time_to_open_hours_vs_cohort_mean</th>
+<th>time_to_open_hours_vs_cohort_pct</th>
+<th>time_to_open_hours_cohort_zscore</th>
 </tr>
 </thead>
 <tbody>
@@ -9117,23 +9388,23 @@ Aggregated Data Preview:
 <td>0</td>
 <td>NaN</td>
 <td>...</td>
-<td>6.5</td>
-<td>7</td>
-<td>1836</td>
-<td>2825</td>
-<td>Intense &amp; Brief</td>
-<td>1</td>
-<td>5.350932e-01</td>
-<td>-8.447930e-01</td>
-<td>1.0</td>
-<td>&gt;180d</td>
+<td>-0.231425</td>
+<td>9.457383</td>
+<td>1.571698</td>
+<td>0.939981</td>
+<td>-0.023609</td>
+<td>0.000000</td>
+<td>-0.154152</td>
+<td>-0.689096</td>
+<td>0.000000</td>
+<td>-0.29450</td>
 </tr>
 <tr>
 <th>1</th>
 <td>58D29E</td>
 <td>0</td>
-<td>0</td>
-<td>15</td>
+<td>1</td>
+<td>16</td>
 <td>0</td>
 <td>NaN</td>
 <td>NaN</td>
@@ -9141,40 +9412,40 @@ Aggregated Data Preview:
 <td>0</td>
 <td>NaN</td>
 <td>...</td>
-<td>9.1</td>
-<td>6</td>
-<td>477</td>
-<td>2825</td>
-<td>One-shot</td>
-<td>0</td>
-<td>8.963931e-02</td>
-<td>-9.959743e-01</td>
-<td>1.0</td>
-<td>&gt;180d</td>
+<td>-0.231425</td>
+<td>-1.542617</td>
+<td>0.906749</td>
+<td>-0.153323</td>
+<td>-0.023609</td>
+<td>0.000000</td>
+<td>-0.154152</td>
+<td>-0.689096</td>
+<td>0.000000</td>
+<td>-0.29450</td>
 </tr>
 <tr>
 <th>2</th>
 <td>3DA827</td>
+<td>1</td>
+<td>1</td>
+<td>22</td>
 <td>0</td>
-<td>2</td>
-<td>21</td>
+<td>0.0</td>
+<td>0.0</td>
+<td>1</td>
 <td>0</td>
-<td>NaN</td>
-<td>NaN</td>
-<td>0</td>
-<td>0</td>
-<td>NaN</td>
+<td>0.0</td>
 <td>...</td>
-<td>10.0</td>
-<td>5</td>
-<td>235</td>
-<td>2825</td>
-<td>Steady &amp; Loyal</td>
-<td>0</td>
-<td>4.338837e-01</td>
-<td>-9.009689e-01</td>
-<td>1.0</td>
-<td>&gt;180d</td>
+<td>-0.231425</td>
+<td>-9.542617</td>
+<td>0.423149</td>
+<td>-0.948452</td>
+<td>-0.023609</td>
+<td>0.000000</td>
+<td>-0.154152</td>
+<td>-0.689096</td>
+<td>0.000000</td>
+<td>-0.29450</td>
 </tr>
 <tr>
 <th>3</th>
@@ -9189,40 +9460,40 @@ Aggregated Data Preview:
 <td>0</td>
 <td>NaN</td>
 <td>...</td>
-<td>1.4</td>
-<td>1</td>
-<td>2824</td>
-<td>2825</td>
-<td>Intense &amp; Brief</td>
-<td>0</td>
-<td>1.224647e-16</td>
-<td>-1.000000e+00</td>
-<td>1.0</td>
-<td>&gt;180d</td>
+<td>4.036700</td>
+<td>11.457383</td>
+<td>1.692598</td>
+<td>1.138763</td>
+<td>-0.023609</td>
+<td>0.000000</td>
+<td>-0.154152</td>
+<td>0.710904</td>
+<td>2.031648</td>
+<td>0.30382</td>
 </tr>
 <tr>
 <th>4</th>
 <td>ACCAF7</td>
-<td>0</td>
 <td>2</td>
-<td>18</td>
+<td>4</td>
+<td>22</td>
 <td>0</td>
-<td>NaN</td>
-<td>NaN</td>
+<td>0.0</td>
+<td>0.0</td>
+<td>2</td>
 <td>0</td>
-<td>0</td>
-<td>NaN</td>
+<td>0.0</td>
 <td>...</td>
-<td>3.8</td>
-<td>3</td>
-<td>289</td>
-<td>2825</td>
-<td>Steady &amp; Loyal</td>
-<td>0</td>
-<td>9.956785e-02</td>
-<td>-9.950308e-01</td>
-<td>1.0</td>
-<td>&gt;180d</td>
+<td>-0.231425</td>
+<td>5.457383</td>
+<td>1.329898</td>
+<td>0.542416</td>
+<td>-0.023609</td>
+<td>0.000000</td>
+<td>-0.154152</td>
+<td>-0.689096</td>
+<td>0.000000</td>
+<td>-0.29450</td>
 </tr>
 <tr>
 <th>5</th>
@@ -9237,64 +9508,64 @@ Aggregated Data Preview:
 <td>0</td>
 <td>NaN</td>
 <td>...</td>
-<td>NaN</td>
-<td>0</td>
-<td>1557</td>
-<td>2825</td>
-<td>One-shot</td>
-<td>1</td>
-<td>8.865993e-01</td>
-<td>-4.625383e-01</td>
-<td>1.0</td>
-<td>&gt;180d</td>
+<td>-0.231425</td>
+<td>0.457383</td>
+<td>1.027649</td>
+<td>0.045460</td>
+<td>-0.023609</td>
+<td>0.000000</td>
+<td>-0.154152</td>
+<td>-0.689096</td>
+<td>0.000000</td>
+<td>-0.29450</td>
 </tr>
 <tr>
 <th>6</th>
 <td>22507F</td>
-<td>4</td>
-<td>5</td>
-<td>31</td>
 <td>0</td>
-<td>0.0</td>
-<td>0.0</td>
-<td>4</td>
+<td>2</td>
+<td>34</td>
 <td>0</td>
-<td>0.0</td>
+<td>NaN</td>
+<td>NaN</td>
+<td>0</td>
+<td>0</td>
+<td>NaN</td>
 <td>...</td>
-<td>15.1</td>
-<td>5</td>
-<td>42</td>
-<td>2825</td>
-<td>Steady &amp; Loyal</td>
-<td>0</td>
-<td>7.232373e-02</td>
-<td>-9.973812e-01</td>
-<td>1.0</td>
-<td>31-90d</td>
+<td>-0.231425</td>
+<td>19.457383</td>
+<td>2.176197</td>
+<td>1.933893</td>
+<td>-0.023609</td>
+<td>0.000000</td>
+<td>-0.154152</td>
+<td>-0.689096</td>
+<td>0.000000</td>
+<td>-0.29450</td>
 </tr>
 <tr>
 <th>7</th>
 <td>CFBB70</td>
-<td>0</td>
+<td>1</td>
 <td>2</td>
-<td>14</td>
-<td>0</td>
-<td>NaN</td>
-<td>NaN</td>
-<td>0</td>
-<td>0</td>
-<td>NaN</td>
-<td>...</td>
-<td>11.0</td>
-<td>3</td>
-<td>241</td>
-<td>2825</td>
-<td>Occasional &amp; Loyal</td>
-<td>0</td>
-<td>2.536546e-01</td>
-<td>-9.672949e-01</td>
+<td>16</td>
+<td>1</td>
 <td>1.0</td>
-<td>&gt;180d</td>
+<td>1.0</td>
+<td>1</td>
+<td>0</td>
+<td>0.0</td>
+<td>...</td>
+<td>-0.231425</td>
+<td>-0.542617</td>
+<td>0.967199</td>
+<td>-0.053931</td>
+<td>-0.023609</td>
+<td>0.000000</td>
+<td>-0.154152</td>
+<td>0.010904</td>
+<td>1.015824</td>
+<td>0.00466</td>
 </tr>
 <tr>
 <th>8</th>
@@ -9309,16 +9580,16 @@ Aggregated Data Preview:
 <td>0</td>
 <td>NaN</td>
 <td>...</td>
-<td>NaN</td>
-<td>0</td>
-<td>2597</td>
-<td>2825</td>
-<td>Intense &amp; Brief</td>
-<td>1</td>
-<td>1.000000e+00</td>
-<td>6.123234e-17</td>
-<td>1.0</td>
-<td>&gt;180d</td>
+<td>-0.231425</td>
+<td>-4.542617</td>
+<td>0.725399</td>
+<td>-0.451496</td>
+<td>-0.023609</td>
+<td>0.000000</td>
+<td>-0.154152</td>
+<td>-0.689096</td>
+<td>0.000000</td>
+<td>-0.29450</td>
 </tr>
 <tr>
 <th>9</th>
@@ -9333,20 +9604,20 @@ Aggregated Data Preview:
 <td>0</td>
 <td>NaN</td>
 <td>...</td>
-<td>2.1</td>
-<td>2</td>
-<td>2434</td>
-<td>2825</td>
-<td>Intense &amp; Brief</td>
-<td>1</td>
-<td>1.490423e-01</td>
-<td>-9.888308e-01</td>
-<td>1.0</td>
-<td>&gt;180d</td>
+<td>-0.231425</td>
+<td>8.457383</td>
+<td>1.511248</td>
+<td>0.840589</td>
+<td>0.976391</td>
+<td>42.355932</td>
+<td>6.375120</td>
+<td>-0.689096</td>
+<td>0.000000</td>
+<td>-0.29450</td>
 </tr>
 </tbody>
 </table>
-<p>10 rows × 72 columns</p>
+<p>10 rows × 217 columns</p>
 </div>
 </div>
 </div>
@@ -9357,7 +9628,7 @@ Aggregated Data Preview:
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [10]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [12]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
@@ -9418,57 +9689,57 @@ Feature Summary Statistics:
 <tr>
 <th>event_count_180d</th>
 <td>4998.0</td>
-<td>0.704882</td>
-<td>1.036236</td>
-<td>0.0</td>
+<td>6.386555e-01</td>
+<td>1.009204</td>
+<td>0.000000</td>
 <td>0.000000</td>
 <td>0.000000</td>
 <td>1.000000</td>
-<td>12.0</td>
+<td>11.000000</td>
 </tr>
 <tr>
 <th>event_count_365d</th>
 <td>4998.0</td>
-<td>1.475590</td>
-<td>1.722290</td>
-<td>0.0</td>
+<td>1.316126e+00</td>
+<td>1.656185</td>
+<td>0.000000</td>
 <td>0.000000</td>
 <td>1.000000</td>
 <td>2.000000</td>
-<td>25.0</td>
+<td>15.000000</td>
 </tr>
 <tr>
 <th>event_count_all_time</th>
 <td>4998.0</td>
-<td>14.900160</td>
-<td>8.175178</td>
-<td>1.0</td>
-<td>11.000000</td>
-<td>14.000000</td>
-<td>17.000000</td>
-<td>106.0</td>
+<td>1.656623e+01</td>
+<td>9.138864</td>
+<td>1.000000</td>
+<td>12.000000</td>
+<td>16.000000</td>
+<td>19.000000</td>
+<td>112.000000</td>
 </tr>
 <tr>
 <th>opened_sum_180d</th>
 <td>4998.0</td>
-<td>0.157063</td>
-<td>0.426204</td>
-<td>0.0</td>
+<td>1.520608e-01</td>
+<td>0.424022</td>
 <td>0.000000</td>
 <td>0.000000</td>
 <td>0.000000</td>
-<td>6.0</td>
+<td>0.000000</td>
+<td>4.000000</td>
 </tr>
 <tr>
 <th>opened_mean_180d</th>
-<td>2114.0</td>
-<td>0.217306</td>
-<td>0.353255</td>
-<td>0.0</td>
+<td>1914.0</td>
+<td>2.322203e-01</td>
+<td>0.365785</td>
+<td>0.000000</td>
 <td>0.000000</td>
 <td>0.000000</td>
 <td>0.500000</td>
-<td>1.0</td>
+<td>1.000000</td>
 </tr>
 <tr>
 <th>...</th>
@@ -9482,63 +9753,63 @@ Feature Summary Statistics:
 <td>...</td>
 </tr>
 <tr>
-<th>days_since_first_event</th>
+<th>bounced_vs_cohort_pct</th>
 <td>4998.0</td>
-<td>2669.424570</td>
-<td>158.136559</td>
-<td>1498.0</td>
-<td>2603.000000</td>
-<td>2719.000000</td>
-<td>2784.000000</td>
-<td>2825.0</td>
-</tr>
-<tr>
-<th>target</th>
-<td>4998.0</td>
-<td>0.392957</td>
-<td>0.488456</td>
-<td>0.0</td>
+<td>1.000000e+00</td>
+<td>6.487083</td>
 <td>0.000000</td>
 <td>0.000000</td>
-<td>1.000000</td>
-<td>1.0</td>
+<td>0.000000</td>
+<td>0.000000</td>
+<td>84.711864</td>
 </tr>
 <tr>
-<th>dow_sin</th>
+<th>bounced_cohort_zscore</th>
 <td>4998.0</td>
-<td>0.378318</td>
-<td>0.420471</td>
-<td>-1.0</td>
-<td>0.127877</td>
-<td>0.433884</td>
-<td>0.707107</td>
-<td>1.0</td>
+<td>0.000000e+00</td>
+<td>1.000000</td>
+<td>-0.154152</td>
+<td>-0.154152</td>
+<td>-0.154152</td>
+<td>-0.154152</td>
+<td>12.904392</td>
 </tr>
 <tr>
-<th>dow_cos</th>
+<th>time_to_open_hours_vs_cohort_mean</th>
 <td>4998.0</td>
-<td>-0.772429</td>
-<td>0.288939</td>
-<td>-1.0</td>
-<td>-0.967295</td>
-<td>-0.875223</td>
-<td>-0.683392</td>
-<td>1.0</td>
+<td>4.975789e-17</td>
+<td>2.339884</td>
+<td>-0.689096</td>
+<td>-0.689096</td>
+<td>-0.689096</td>
+<td>-0.689096</td>
+<td>28.910904</td>
 </tr>
 <tr>
-<th>clicked_momentum_180_365</th>
+<th>time_to_open_hours_vs_cohort_pct</th>
 <td>4998.0</td>
-<td>0.993549</td>
-<td>0.242794</td>
-<td>0.0</td>
+<td>1.000000e+00</td>
+<td>3.395586</td>
+<td>0.000000</td>
+<td>0.000000</td>
+<td>0.000000</td>
+<td>0.000000</td>
+<td>42.954850</td>
+</tr>
+<tr>
+<th>time_to_open_hours_cohort_zscore</th>
+<td>4998.0</td>
+<td>2.843308e-17</td>
 <td>1.000000</td>
-<td>1.000000</td>
-<td>1.000000</td>
-<td>3.5</td>
+<td>-0.294500</td>
+<td>-0.294500</td>
+<td>-0.294500</td>
+<td>-0.294500</td>
+<td>12.355701</td>
 </tr>
 </tbody>
 </table>
-<p>69 rows × 8 columns</p>
+<p>214 rows × 8 columns</p>
 </div>
 </div>
 </div>
@@ -9560,7 +9831,7 @@ Feature Summary Statistics:
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [11]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [13]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
@@ -9592,12 +9863,12 @@ Feature Summary Statistics:
 <span class="k">if</span> <span class="n">original_entities</span> <span class="o">==</span> <span class="n">aggregated_entities</span><span class="p">:</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">✅ Entity count matches: </span><span class="si">{</span><span class="n">aggregated_entities</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="k">else</span><span class="p">:</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">⚠️ Entity count mismatch!"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">⚠️ Entity count mismatch!"</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Original: </span><span class="si">{</span><span class="n">original_entities</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Aggregated: </span><span class="si">{</span><span class="n">aggregated_entities</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
 <span class="c1"># Check feature statistics</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">📊 Feature Statistics:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">📊 Feature Statistics:"</span><span class="p">)</span>
 <span class="n">numeric_agg_cols</span> <span class="o">=</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">select_dtypes</span><span class="p">(</span><span class="n">include</span><span class="o">=</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">number</span><span class="p">])</span><span class="o">.</span><span class="n">columns</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
 <span class="k">if</span> <span class="n">TARGET_COLUMN</span><span class="p">:</span>
     <span class="n">numeric_agg_cols</span> <span class="o">=</span> <span class="p">[</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">numeric_agg_cols</span> <span class="k">if</span> <span class="n">c</span> <span class="o">!=</span> <span class="n">TARGET_COLUMN</span><span class="p">]</span>
@@ -9613,7 +9884,7 @@ Feature Summary Statistics:
 
 <span class="c1"># If lifecycle_quadrant was added, show its correlation with target</span>
 <span class="k">if</span> <span class="n">INCLUDE_LIFECYCLE_QUADRANT</span> <span class="ow">and</span> <span class="n">TARGET_COLUMN</span> <span class="ow">and</span> <span class="n">TARGET_COLUMN</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">📊 Lifecycle Quadrant vs Target:"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">📊 Lifecycle Quadrant vs Target:"</span><span class="p">)</span>
     <span class="n">cross</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">crosstab</span><span class="p">(</span><span class="n">df_aggregated</span><span class="p">[</span><span class="s2">"lifecycle_quadrant"</span><span class="p">],</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">TARGET_COLUMN</span><span class="p">],</span> <span class="n">normalize</span><span class="o">=</span><span class="s1">'index'</span><span class="p">)</span>
     <span class="k">if</span> <span class="mi">1</span> <span class="ow">in</span> <span class="n">cross</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
         <span class="k">for</span> <span class="n">quad</span> <span class="ow">in</span> <span class="n">cross</span><span class="o">.</span><span class="n">index</span><span class="p">:</span>
@@ -9636,18 +9907,18 @@ Feature Summary Statistics:
 AGGREGATED DATA QUALITY CHECK
 ============================================================
 
-⚠️ Columns with null values (22):
-   opened_mean_180d: 2,884 (57.7%)
-   opened_max_180d: 2,884 (57.7%)
-   clicked_mean_180d: 2,884 (57.7%)
-   clicked_max_180d: 2,884 (57.7%)
-   send_hour_mean_180d: 2,884 (57.7%)
-   send_hour_max_180d: 2,884 (57.7%)
-   bounced_mean_180d: 2,884 (57.7%)
-   bounced_max_180d: 2,884 (57.7%)
-   time_to_open_hours_mean_180d: 4,314 (86.3%)
-   time_to_open_hours_max_180d: 4,314 (86.3%)
-   ... and 12 more
+⚠️ Columns with null values (114):
+   opened_mean_180d: 3,084 (61.7%)
+   opened_max_180d: 3,084 (61.7%)
+   clicked_mean_180d: 3,084 (61.7%)
+   clicked_max_180d: 3,084 (61.7%)
+   send_hour_mean_180d: 3,084 (61.7%)
+   send_hour_max_180d: 3,084 (61.7%)
+   bounced_mean_180d: 3,084 (61.7%)
+   bounced_max_180d: 3,084 (61.7%)
+   time_to_open_hours_mean_180d: 4,350 (87.0%)
+   time_to_open_hours_max_180d: 4,350 (87.0%)
+   ... and 104 more
 
    Note: Nulls in aggregated features typically mean no events in that window.
    Consider filling with 0 for count/sum features.
@@ -9655,14 +9926,17 @@ AGGREGATED DATA QUALITY CHECK
 ✅ Entity count matches: 4,998
 
 📊 Feature Statistics:
-   Total features: 72
-   Numeric features: 68
+   Total features: 217
+   Numeric features: 213
+
+⚠️ Constant columns (zero variance): 2
+   ['days_since_last_event_y', 'recency_ratio']
 
 📊 Lifecycle Quadrant vs Target:
-   Intense &amp; Brief: 77.7% positive
-   Occasional &amp; Loyal: 7.8% positive
-   One-shot: 59.1% positive
-   Steady &amp; Loyal: 6.9% positive
+   Intense &amp; Brief: 82.7% positive
+   Occasional &amp; Loyal: 7.6% positive
+   One-shot: 76.7% positive
+   Steady &amp; Loyal: 10.4% positive
 </pre>
 </div>
 </div>
@@ -9684,21 +9958,17 @@ AGGREGATED DATA QUALITY CHECK
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [12]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [14]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="c1"># Generate output paths</span>
-<span class="n">original_name</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">findings</span><span class="o">.</span><span class="n">source_path</span><span class="p">)</span><span class="o">.</span><span class="n">stem</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="n">original_name</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">findings</span><span class="o">.</span><span class="n">source_path</span><span class="p">)</span><span class="o">.</span><span class="n">stem</span>
 <span class="n">findings_name</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">FINDINGS_PATH</span><span class="p">)</span><span class="o">.</span><span class="n">stem</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">"_findings"</span><span class="p">,</span> <span class="s2">""</span><span class="p">)</span>
 
-<span class="c1"># Save aggregated data as parquet</span>
-<span class="n">AGGREGATED_DATA_PATH</span> <span class="o">=</span> <span class="n">FINDINGS_DIR</span> <span class="o">/</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">findings_name</span><span class="si">}</span><span class="s2">_aggregated.parquet"</span>
-<span class="n">df_aggregated</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span><span class="n">AGGREGATED_DATA_PATH</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="n">AGGREGATED_DATA_PATH</span> <span class="o">=</span> <span class="n">save_aggregated_dataset</span><span class="p">(</span><span class="n">_namespace</span><span class="p">,</span> <span class="n">dataset_name</span><span class="p">,</span> <span class="n">df_aggregated</span><span class="p">)</span>
 
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\u2705</span><span class="s2"> Aggregated data saved to: </span><span class="si">{</span><span class="n">AGGREGATED_DATA_PATH</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Size: </span><span class="si">{</span><span class="n">AGGREGATED_DATA_PATH</span><span class="o">.</span><span class="n">stat</span><span class="p">()</span><span class="o">.</span><span class="n">st_size</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">1024</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> KB"</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -9712,8 +9982,7 @@ AGGREGATED DATA QUALITY CHECK
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>✅ Aggregated data saved to: /Users/Vital/python/CustomerRetention/experiments/findings/customer_emails_408768_aggregated.parquet
-   Size: 321.7 KB
+<pre>✅ Aggregated data saved to: /Users/Vital/python/CustomerRetention/experiments/runs/email-6301db6c/data/bronze/customer_emails_aggregated
 </pre>
 </div>
 </div>
@@ -9724,7 +9993,7 @@ AGGREGATED DATA QUALITY CHECK
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [13]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [15]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
@@ -9732,14 +10001,14 @@ AGGREGATED DATA QUALITY CHECK
 <div class="highlight hl-ipython3"><pre><span></span><span class="c1"># Create new findings for aggregated data using DataExplorer</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Generating findings for aggregated data..."</span><span class="p">)</span>
 
-<span class="n">explorer</span> <span class="o">=</span> <span class="n">DataExplorer</span><span class="p">(</span><span class="n">output_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">FINDINGS_DIR</span><span class="p">))</span>
+<span class="n">explorer</span> <span class="o">=</span> <span class="n">DataExplorer</span><span class="p">(</span><span class="n">output_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="n">FINDINGS_PATH</span><span class="p">)</span><span class="o">.</span><span class="n">parent</span><span class="p">))</span>
 <span class="n">aggregated_findings</span> <span class="o">=</span> <span class="n">explorer</span><span class="o">.</span><span class="n">explore</span><span class="p">(</span>
     <span class="nb">str</span><span class="p">(</span><span class="n">AGGREGATED_DATA_PATH</span><span class="p">),</span>
     <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">findings_name</span><span class="si">}</span><span class="s2">_aggregated"</span>
 <span class="p">)</span>
 
 <span class="n">AGGREGATED_FINDINGS_PATH</span> <span class="o">=</span> <span class="n">explorer</span><span class="o">.</span><span class="n">last_findings_path</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"✅ Aggregated findings saved to: </span><span class="si">{</span><span class="n">AGGREGATED_FINDINGS_PATH</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\u2705</span><span class="s2"> Aggregated findings saved to: </span><span class="si">{</span><span class="n">AGGREGATED_FINDINGS_PATH</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -9762,7 +10031,7 @@ Generating findings for aggregated data...
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedHTMLCommon jp-RenderedHTML jp-OutputArea-output" data-mime-type="text/html" tabindex="0">
 <div style="font-family: sans-serif; padding: 20px; color: #333;">
-<h2 style="color: #222;">Data Exploration: /Users/Vital/python/CustomerRetention/experiments/findings/customer_emails_408768_aggregated.parquet</h2>
+<h2 style="color: #222;">Data Exploration: /Users/Vital/python/CustomerRetention/experiments/runs/email-6301db6c/data/bronze/customer_emails_aggregated</h2>
 <div style="display: flex; gap: 20px; margin-bottom: 20px;">
 <div style="background: #f0f0f0; padding: 15px; border-radius: 8px;">
 <h4 style="margin: 0 0 8px 0; color: #555;">Rows</h4>
@@ -9770,15 +10039,15 @@ Generating findings for aggregated data...
 </div>
 <div style="background: #f0f0f0; padding: 15px; border-radius: 8px;">
 <h4 style="margin: 0 0 8px 0; color: #555;">Columns</h4>
-<span style="font-size: 24px; font-weight: bold; color: #222;">72</span>
+<span style="font-size: 24px; font-weight: bold; color: #222;">217</span>
 </div>
 <div style="background: #f0f0f0; padding: 15px; border-radius: 8px;">
 <h4 style="margin: 0 0 8px 0; color: #555;">Completeness</h4>
-<span style="font-size: 24px; font-weight: bold; color: #ff7f0e;">84.1%</span>
+<span style="font-size: 24px; font-weight: bold; color: #d62728;">67.0%</span>
 </div>
 <div style="background: #f0f0f0; padding: 15px; border-radius: 8px;">
 <h4 style="margin: 0 0 8px 0; color: #555;">Memory</h4>
-<span style="font-size: 24px; font-weight: bold; color: #222;">3.5 MB</span>
+<span style="font-size: 24px; font-weight: bold; color: #222;">9.0 MB</span>
 </div>
 </div>
 </div>
@@ -9787,8 +10056,8 @@ Generating findings for aggregated data...
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>Findings saved to: /Users/Vital/python/CustomerRetention/experiments/findings/customer_emails_408768_aggregated_846212_findings.yaml
-✅ Aggregated findings saved to: /Users/Vital/python/CustomerRetention/experiments/findings/customer_emails_408768_aggregated_846212_findings.yaml
+<pre>Findings saved to: /Users/Vital/python/CustomerRetention/experiments/runs/email-6301db6c/datasets/customer_emails/findings/customer_emails_aggregated_findings.yaml
+✅ Aggregated findings saved to: /Users/Vital/python/CustomerRetention/experiments/runs/email-6301db6c/datasets/customer_emails/findings/customer_emails_aggregated_findings.yaml
 </pre>
 </div>
 </div>
@@ -9799,7 +10068,7 @@ Generating findings for aggregated data...
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [14]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [16]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
@@ -9831,6 +10100,7 @@ Generating findings for aggregated data...
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"✅ Original findings updated with aggregation metadata: </span><span class="si">{</span><span class="n">FINDINGS_PATH</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.notebook_html_exporter</span><span class="w"> </span><span class="kn">import</span> <span class="n">export_notebook_html</span>
+
 <span class="n">export_notebook_html</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="s2">"01d_event_aggregation.ipynb"</span><span class="p">),</span> <span class="n">EXPERIMENTS_DIR</span> <span class="o">/</span> <span class="s2">"docs"</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -9845,12 +10115,12 @@ Generating findings for aggregated data...
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>✅ Original findings updated with aggregation metadata: /Users/Vital/python/CustomerRetention/experiments/findings/customer_emails_408768_findings.yaml
+<pre>✅ Original findings updated with aggregation metadata: /Users/Vital/python/CustomerRetention/experiments/runs/email-6301db6c/datasets/customer_emails/findings/customer_emails_findings.yaml
 </pre>
 </div>
 </div>
 <div class="jp-OutputArea-child jp-OutputArea-executeResult">
-<div class="jp-OutputPrompt jp-OutputArea-prompt">Out[14]:</div>
+<div class="jp-OutputPrompt jp-OutputArea-prompt">Out[16]:</div>
 <div class="jp-RenderedText jp-OutputArea-output jp-OutputArea-executeResult" data-mime-type="text/plain" tabindex="0">
 <pre>PosixPath('/Users/Vital/python/CustomerRetention/experiments/docs/01d_event_aggregation.html')</pre>
 </div>
@@ -9862,7 +10132,7 @@ Generating findings for aggregated data...
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [15]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [17]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
@@ -9872,25 +10142,25 @@ Generating findings for aggregated data...
 <span class="nb">print</span><span class="p">(</span><span class="s2">"AGGREGATION COMPLETE - OUTPUT SUMMARY"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">"="</span><span class="o">*</span><span class="mi">70</span><span class="p">)</span>
 
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">📁 Files created:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">📁 Files created:"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   1. Aggregated data: </span><span class="si">{</span><span class="n">AGGREGATED_DATA_PATH</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   2. Aggregated findings: </span><span class="si">{</span><span class="n">AGGREGATED_FINDINGS_PATH</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   3. Updated original findings: </span><span class="si">{</span><span class="n">FINDINGS_PATH</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">📊 Transformation stats:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">📊 Transformation stats:"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Input events: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">df</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Output entities: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">df_aggregated</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Features created: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">⚙️ Configuration applied:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">⚙️ Configuration applied:"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Windows: </span><span class="si">{</span><span class="n">WINDOWS</span><span class="si">}</span><span class="s2"> (from </span><span class="si">{</span><span class="n">window_source</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Aggregation functions: </span><span class="si">{</span><span class="n">AGG_FUNCTIONS</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="k">if</span> <span class="n">priority_cols</span><span class="p">:</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Priority columns (from 01c divergence): </span><span class="si">{</span><span class="n">priority_cols</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="k">if</span> <span class="n">INCLUDE_LIFECYCLE_QUADRANT</span><span class="p">:</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Lifecycle quadrant: included (from 01a recommendation)"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"   Lifecycle quadrant: included (from 01a recommendation)"</span><span class="p">)</span>
 
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">🎯 Ready for modeling:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">🎯 Ready for modeling:"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Entity column: </span><span class="si">{</span><span class="n">ENTITY_COLUMN</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="k">if</span> <span class="n">TARGET_COLUMN</span><span class="p">:</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Target column: </span><span class="si">{</span><span class="n">TARGET_COLUMN</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
@@ -9900,9 +10170,9 @@ Generating findings for aggregated data...
 
 <span class="c1"># Drift warning if applicable</span>
 <span class="k">if</span> <span class="n">ts_meta</span><span class="o">.</span><span class="n">drift_risk_level</span> <span class="o">==</span> <span class="s2">"high"</span><span class="p">:</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">⚠️ DRIFT WARNING: High drift risk detected in 01a"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">⚠️ DRIFT WARNING: High drift risk detected in 01a"</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Volume drift: </span><span class="si">{</span><span class="n">ts_meta</span><span class="o">.</span><span class="n">volume_drift_risk</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="s1">'unknown'</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Consider: temporal validation splits, monitoring for distribution shift"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"   Consider: temporal validation splits, monitoring for distribution shift"</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -9922,14 +10192,14 @@ AGGREGATION COMPLETE - OUTPUT SUMMARY
 ======================================================================
 
 📁 Files created:
-   1. Aggregated data: /Users/Vital/python/CustomerRetention/experiments/findings/customer_emails_408768_aggregated.parquet
-   2. Aggregated findings: /Users/Vital/python/CustomerRetention/experiments/findings/customer_emails_408768_aggregated_846212_findings.yaml
-   3. Updated original findings: /Users/Vital/python/CustomerRetention/experiments/findings/customer_emails_408768_findings.yaml
+   1. Aggregated data: /Users/Vital/python/CustomerRetention/experiments/runs/email-6301db6c/data/bronze/customer_emails_aggregated
+   2. Aggregated findings: /Users/Vital/python/CustomerRetention/experiments/runs/email-6301db6c/datasets/customer_emails/findings/customer_emails_aggregated_findings.yaml
+   3. Updated original findings: /Users/Vital/python/CustomerRetention/experiments/runs/email-6301db6c/datasets/customer_emails/findings/customer_emails_findings.yaml
 
 📊 Transformation stats:
-   Input events: 74,471
+   Input events: 82,798
    Output entities: 4,998
-   Features created: 72
+   Features created: 217
 
 ⚙️ Configuration applied:
    Windows: ['180d', '365d', 'all_time'] (from 01a recommendations)
@@ -9938,8 +10208,8 @@ AGGREGATION COMPLETE - OUTPUT SUMMARY
 
 🎯 Ready for modeling:
    Entity column: customer_id
-   Target column: target
-   Target positive rate: 39.3%
+   Target column: unsubscribed
+   Target positive rate: 44.6%
 
 ⚠️ DRIFT WARNING: High drift risk detected in 01a
    Volume drift: declining
@@ -9992,41 +10262,41 @@ AGGREGATION COMPLETE - OUTPUT SUMMARY
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [16]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [18]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="c1"># Leakage validation - MUST pass before proceeding to modeling</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="c1"># Leakage validation - check for target leakage in aggregated features</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.diagnostics</span><span class="w"> </span><span class="kn">import</span> <span class="n">LeakageDetector</span>
 
 <span class="k">if</span> <span class="n">TARGET_COLUMN</span> <span class="ow">and</span> <span class="n">TARGET_COLUMN</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
     <span class="n">detector</span> <span class="o">=</span> <span class="n">LeakageDetector</span><span class="p">()</span>
-    
+
     <span class="c1"># Separate features and target</span>
     <span class="n">feature_cols</span> <span class="o">=</span> <span class="p">[</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">df_aggregated</span><span class="o">.</span><span class="n">columns</span> <span class="k">if</span> <span class="n">c</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="n">ENTITY_COLUMN</span><span class="p">,</span> <span class="n">TARGET_COLUMN</span><span class="p">]]</span>
     <span class="n">X</span> <span class="o">=</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">feature_cols</span><span class="p">]</span>
     <span class="n">y</span> <span class="o">=</span> <span class="n">df_aggregated</span><span class="p">[</span><span class="n">TARGET_COLUMN</span><span class="p">]</span>
-    
+
     <span class="c1"># Run leakage checks</span>
     <span class="n">result</span> <span class="o">=</span> <span class="n">detector</span><span class="o">.</span><span class="n">run_all_checks</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">include_pit</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-    
+
     <span class="nb">print</span><span class="p">(</span><span class="s2">"="</span> <span class="o">*</span> <span class="mi">70</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">"LEAKAGE VALIDATION RESULTS"</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">"="</span> <span class="o">*</span> <span class="mi">70</span><span class="p">)</span>
-    
+
     <span class="k">if</span> <span class="n">result</span><span class="o">.</span><span class="n">passed</span><span class="p">:</span>
         <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">✅ PASSED: No critical leakage issues detected"</span><span class="p">)</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Total checks run: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">checks</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
         <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   You may proceed to feature engineering and modeling."</span><span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">❌ FAILED: Critical leakage issues detected!"</span><span class="p">)</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Critical issues: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">critical_issues</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-        <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   DO NOT proceed to modeling until issues are resolved:</span><span class="se">\n</span><span class="s2">"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">⚠️ WARNING: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">critical_issues</span><span class="p">)</span><span class="si">}</span><span class="s2"> potential leakage issue(s) detected"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"   Review these features before modeling:</span><span class="se">\n</span><span class="s2">"</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">issue</span> <span class="ow">in</span> <span class="n">result</span><span class="o">.</span><span class="n">critical_issues</span><span class="p">:</span>
             <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   [</span><span class="si">{</span><span class="n">issue</span><span class="o">.</span><span class="n">check_id</span><span class="si">}</span><span class="s2">] </span><span class="si">{</span><span class="n">issue</span><span class="o">.</span><span class="n">feature</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">issue</span><span class="o">.</span><span class="n">recommendation</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-        <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">"</span> <span class="o">+</span> <span class="s2">"="</span> <span class="o">*</span> <span class="mi">70</span><span class="p">)</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Leakage detected: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">critical_issues</span><span class="p">)</span><span class="si">}</span><span class="s2"> critical issues"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   These features may be legitimately predictive or may indicate leakage."</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"   The modeling notebook will evaluate feature importance to help decide."</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"="</span> <span class="o">*</span> <span class="mi">70</span><span class="p">)</span>
 <span class="k">else</span><span class="p">:</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">"No target column - skipping leakage validation"</span><span class="p">)</span>
 </pre></div>
@@ -10046,10 +10316,15 @@ AGGREGATION COMPLETE - OUTPUT SUMMARY
 LEAKAGE VALIDATION RESULTS
 ======================================================================
 
-✅ PASSED: No critical leakage issues detected
-   Total checks run: 83
+⚠️ WARNING: 2 potential leakage issue(s) detected
+   Review these features before modeling:
 
-   You may proceed to feature engineering and modeling.
+   [LD010] clicked_velocity_pct: REMOVE clicked_velocity_pct: perfect class separation indicates leakage
+   [LD053] active_span_days: REMOVE active_span_days: Domain pattern with high correlation (0.76) confirms likely leakage.
+
+   These features may be legitimately predictive or may indicate leakage.
+   The modeling notebook will evaluate feature importance to help decide.
+======================================================================
 </pre>
 </div>
 </div>
@@ -10120,7 +10395,7 @@ LEAKAGE VALIDATION RESULTS
 <tr>
 <td><code>*_aggregated_findings.yaml</code></td>
 <td>Auto-profiled findings</td>
-<td>Loaded by 02_column_deep_dive</td>
+<td>Loaded by 04_column_deep_dive</td>
 </tr>
 <tr>
 <td>Original findings (updated)</td>
@@ -10132,9 +10407,9 @@ LEAKAGE VALIDATION RESULTS
 <hr/>
 <h2 id="Next-Steps">Next Steps<a class="anchor-link" href="#Next-Steps">¶</a></h2><p><strong>Event Bronze Track complete!</strong> Continue with the <strong>Entity Bronze Track</strong> on the aggregated data:</p>
 <ol>
-<li><strong>02_column_deep_dive.ipynb</strong> - Profile the aggregated feature distributions</li>
-<li><strong>03_quality_assessment.ipynb</strong> - Run quality checks on entity-level data</li>
-<li><strong>04_relationship_analysis.ipynb</strong> - Analyze feature correlations and target relationships</li>
+<li><strong>04_column_deep_dive.ipynb</strong> - Profile the aggregated feature distributions</li>
+<li><strong>02_source_integrity.ipynb</strong> - Run quality checks on entity-level data</li>
+<li><strong>05_relationship_analysis.ipynb</strong> - Analyze feature correlations and target relationships</li>
 </ol>
 <p>The notebooks will auto-discover the aggregated findings file (most recently modified).</p>
 <div class="highlight"><pre><span></span><span class="c1"># The aggregated findings file is now the most recent, so notebooks 02-04</span>

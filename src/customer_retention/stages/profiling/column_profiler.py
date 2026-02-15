@@ -114,6 +114,9 @@ class IdentifierProfiler(ColumnProfiler):
 class TargetProfiler(ColumnProfiler):
     def profile(self, series: pd.Series) -> dict:
         value_counts = series.value_counts()
+        if len(value_counts) == 0:
+            return {"target_metrics": None}
+
         vc_dict = value_counts.to_dict()
         class_distribution = {str(k): int(v) for k, v in vc_dict.items()}
 

@@ -7967,13 +7967,15 @@ a.anchor-link {
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.notebook_progress</span><span class="w"> </span><span class="kn">import</span> <span class="n">track_and_export_previous</span>
+
 <span class="n">track_and_export_previous</span><span class="p">(</span><span class="s2">"09_business_alignment.ipynb"</span><span class="p">)</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer</span><span class="w"> </span><span class="kn">import</span> <span class="n">ExplorationFindings</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.visualization</span><span class="w"> </span><span class="kn">import</span> <span class="n">display_table</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.core.config.experiments</span><span class="w"> </span><span class="kn">import</span> <span class="n">FINDINGS_DIR</span><span class="p">,</span> <span class="n">EXPERIMENTS_DIR</span><span class="p">,</span> <span class="n">OUTPUT_DIR</span><span class="p">,</span> <span class="n">setup_experiments_structure</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.stages.temporal</span><span class="w"> </span><span class="kn">import</span> <span class="n">TEMPORAL_METADATA_COLS</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer</span><span class="w"> </span><span class="kn">import</span> <span class="n">ExplorationFindings</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.core.config.experiments</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">FINDINGS_DIR</span><span class="p">,</span>
+<span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -7990,37 +7992,12 @@ a.anchor-link {
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="c1"># === CONFIGURATION ===</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_notebook_findings</span>
 
-<span class="c1"># FINDINGS_DIR imported from customer_retention.core.config.experiments</span>
-
-<span class="n">findings_files</span> <span class="o">=</span> <span class="p">[</span><span class="n">f</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">FINDINGS_DIR</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="s2">"*_findings.yaml"</span><span class="p">)</span> <span class="k">if</span> <span class="s2">"multi_dataset"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">f</span><span class="o">.</span><span class="n">name</span><span class="p">]</span>
-<span class="k">if</span> <span class="ow">not</span> <span class="n">findings_files</span><span class="p">:</span>
-    <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"No findings files found in </span><span class="si">{</span><span class="n">FINDINGS_DIR</span><span class="si">}</span><span class="s2">. Run notebook 01 first."</span><span class="p">)</span>
-
-<span class="c1"># Prefer aggregated findings (from 01d) over event-level findings</span>
-<span class="c1"># Pattern: *_aggregated* in filename indicates aggregated data</span>
-<span class="n">aggregated_files</span> <span class="o">=</span> <span class="p">[</span><span class="n">f</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">findings_files</span> <span class="k">if</span> <span class="s2">"_aggregated"</span> <span class="ow">in</span> <span class="n">f</span><span class="o">.</span><span class="n">name</span><span class="p">]</span>
-<span class="n">non_aggregated_files</span> <span class="o">=</span> <span class="p">[</span><span class="n">f</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">findings_files</span> <span class="k">if</span> <span class="s2">"_aggregated"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">f</span><span class="o">.</span><span class="n">name</span><span class="p">]</span>
-
-<span class="k">if</span> <span class="n">aggregated_files</span><span class="p">:</span>
-    <span class="c1"># Use most recent aggregated file</span>
-    <span class="n">aggregated_files</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">f</span><span class="p">:</span> <span class="n">f</span><span class="o">.</span><span class="n">stat</span><span class="p">()</span><span class="o">.</span><span class="n">st_mtime</span><span class="p">,</span> <span class="n">reverse</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-    <span class="n">FINDINGS_PATH</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">aggregated_files</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Found </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">aggregated_files</span><span class="p">)</span><span class="si">}</span><span class="s2"> aggregated findings file(s)"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Using: </span><span class="si">{</span><span class="n">FINDINGS_PATH</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">non_aggregated_files</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   (Skipping </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">non_aggregated_files</span><span class="p">)</span><span class="si">}</span><span class="s2"> event-level findings)"</span><span class="p">)</span>
-<span class="k">else</span><span class="p">:</span>
-    <span class="c1"># Fall back to most recent non-aggregated file</span>
-    <span class="n">non_aggregated_files</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">f</span><span class="p">:</span> <span class="n">f</span><span class="o">.</span><span class="n">stat</span><span class="p">()</span><span class="o">.</span><span class="n">st_mtime</span><span class="p">,</span> <span class="n">reverse</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-    <span class="n">FINDINGS_PATH</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">non_aggregated_files</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Found </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">findings_files</span><span class="p">)</span><span class="si">}</span><span class="s2"> findings file(s)"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Using: </span><span class="si">{</span><span class="n">FINDINGS_PATH</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="n">FINDINGS_PATH</span><span class="p">,</span> <span class="n">_namespace</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">load_notebook_findings</span><span class="p">(</span><span class="s2">"09_business_alignment.ipynb"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Using: </span><span class="si">{</span><span class="n">FINDINGS_PATH</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
 <span class="n">findings</span> <span class="o">=</span> <span class="n">ExplorationFindings</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">FINDINGS_PATH</span><span class="p">)</span>
-
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Loaded findings for </span><span class="si">{</span><span class="n">findings</span><span class="o">.</span><span class="n">column_count</span><span class="si">}</span><span class="s2"> columns"</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -8035,9 +8012,7 @@ a.anchor-link {
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>Found 1 aggregated findings file(s)
-Using: /Users/Vital/python/CustomerRetention/experiments/findings/customer_emails_408768_aggregated_846212_findings.yaml
-   (Skipping 1 event-level findings)
+<pre>Using: /Users/Vital/python/CustomerRetention/experiments/runs/email-6301db6c/datasets/customer_emails/findings/customer_emails_aggregated_findings.yaml
 </pre>
 </div>
 </div>
@@ -8045,7 +8020,7 @@ Using: /Users/Vital/python/CustomerRetention/experiments/findings/customer_email
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
 <pre>
-Loaded findings for 72 columns
+Loaded findings for 217 columns
 </pre>
 </div>
 </div>
@@ -8592,7 +8567,7 @@ Loaded findings for 72 columns
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>Business context saved to: /Users/Vital/python/CustomerRetention/experiments/findings/customer_emails_408768_aggregated_846212_findings.yaml
+<pre>Business context saved to: /Users/Vital/python/CustomerRetention/experiments/runs/email-6301db6c/datasets/customer_emails/findings/customer_emails_aggregated_findings.yaml
 </pre>
 </div>
 </div>

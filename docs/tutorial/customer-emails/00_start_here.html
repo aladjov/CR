@@ -7934,32 +7934,37 @@ a.anchor-link {
 </div>
 <div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
 </div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
-<h1 id="Start-Here:-Prerequisites">Start Here: Prerequisites<a class="anchor-link" href="#Start-Here:-Prerequisites">¶</a></h1><blockquote>
-<p><strong>No sample data required!</strong> This framework works directly with your own CSV, Parquet, or Delta files. The datasets below are internal examples for learning - skip to <strong>01_data_discovery.ipynb</strong> if you have your own data.</p>
-</blockquote>
-<p><strong>Purpose:</strong> Set up your environment and optionally download sample datasets for learning.</p>
-<p><strong>What you'll do:</strong></p>
+<h1 id="Project-Bootstrap:-Guided-Setup">Project Bootstrap: Guided Setup<a class="anchor-link" href="#Project-Bootstrap:-Guided-Setup">¶</a></h1><p><strong>Purpose:</strong> Configure your retention-analysis project by registering datasets, selecting a prediction objective, and validating temporal feasibility. The output is a single configuration file consumed by all downstream notebooks and pipeline generation.</p>
+<p><strong>What you'll produce:</strong></p>
 <ul>
-<li>Verify your Python environment</li>
-<li>(Optional) Set up Kaggle API credentials</li>
-<li>(Optional) Download sample churn datasets</li>
+<li>Automatic dataset fingerprinting (entity vs event, target candidates, join keys)</li>
+<li>Prediction objective and anchor selection with evidence</li>
+<li>Merge scaffold for multi-dataset joins</li>
+<li><code>project_context.yaml</code> saved to findings directory</li>
 </ul>
+<p><strong>How to use:</strong> Run cells top-to-bottom. Each section starts with a configuration block — review auto-detected values and override where needed, then run the rest of the cell.</p>
 <hr/>
+<h2 id="How-to-Read-This-Notebook">How to Read This Notebook<a class="anchor-link" href="#How-to-Read-This-Notebook">¶</a></h2><p>Each section includes:</p>
+<ul>
+<li><strong>What it does</strong> — Explanation of the step's purpose</li>
+<li><strong>What you configure</strong> — Variables at the top of each code cell that you can override</li>
+<li><strong>What happens automatically</strong> — Logic below that uses your configuration</li>
+</ul>
 </div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cell-1">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cell-md-1">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
 </div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
-<h2 id="0.1-Verify-Environment">0.1 Verify Environment<a class="anchor-link" href="#0.1-Verify-Environment">¶</a></h2><p>First, let's make sure the customer_retention package is installed.</p>
+<h2 id="0.1-Project-Metadata">0.1 Project Metadata<a class="anchor-link" href="#0.1-Project-Metadata">¶</a></h2><p>Give your project a descriptive name. The storage backend is auto-detected from the runtime environment (Databricks vs local). All experiment artifacts are saved under the findings directory.</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-2">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-1">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7969,23 +7974,37 @@ a.anchor-link {
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.notebook_progress</span><span class="w"> </span><span class="kn">import</span> <span class="n">track_and_export_previous</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="c1"># --- Configuration ---</span>
+<span class="n">PROJECT_NAME</span> <span class="o">=</span> <span class="s2">"email"</span>
+<span class="n">LIGHT_RUN</span> <span class="o">=</span> <span class="kc">False</span>
+<span class="n">SAMPLE_FRACTION</span> <span class="o">=</span> <span class="kc">None</span>  <span class="c1"># e.g. 0.1 to sample 10% of entities</span>
+<span class="c1"># ---------------------</span>
 
-<span class="n">track_and_export_previous</span><span class="p">(</span><span class="s2">"00_start_here.ipynb"</span><span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
 
-<span class="k">try</span><span class="p">:</span>
-    <span class="kn">import</span><span class="w"> </span><span class="nn">customer_retention</span>
-    <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.core.config.experiments</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
-        <span class="n">EXPERIMENTS_DIR</span><span class="p">,</span>
-        <span class="n">FINDINGS_DIR</span><span class="p">,</span>
-        <span class="n">OUTPUT_DIR</span><span class="p">,</span>
-        <span class="n">setup_experiments_structure</span><span class="p">,</span>
-    <span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"customer_retention is installed"</span><span class="p">)</span>
-<span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"customer_retention not found. Install with:"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"  uv sync"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"  # or: pip install -e ."</span><span class="p">)</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">IPython.display</span><span class="w"> </span><span class="kn">import</span> <span class="n">Markdown</span><span class="p">,</span> <span class="n">display</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer</span><span class="w"> </span><span class="kn">import</span> <span class="n">initialize_run</span><span class="p">,</span> <span class="n">mark_notebook</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.core.compat.detection</span><span class="w"> </span><span class="kn">import</span> <span class="n">is_databricks</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.core.config.experiments</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">FINDINGS_DIR</span><span class="p">,</span>
+    <span class="n">get_experiments_dir</span><span class="p">,</span>
+    <span class="n">setup_experiments_structure</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">setup_experiments_structure</span><span class="p">()</span>
+
+<span class="n">_namespace</span> <span class="o">=</span> <span class="n">initialize_run</span><span class="p">(</span><span class="n">root</span><span class="o">=</span><span class="n">get_experiments_dir</span><span class="p">(),</span> <span class="n">project_name</span><span class="o">=</span><span class="n">PROJECT_NAME</span><span class="p">)</span>
+<span class="n">mark_notebook</span><span class="p">(</span><span class="n">_namespace</span><span class="p">,</span> <span class="s2">"00_start_here.ipynb"</span><span class="p">)</span>
+<span class="n">RUN_ID</span> <span class="o">=</span> <span class="n">_namespace</span><span class="o">.</span><span class="n">run_id</span>
+<span class="n">STORAGE_BACKEND</span> <span class="o">=</span> <span class="s2">"databricks"</span> <span class="k">if</span> <span class="n">is_databricks</span><span class="p">()</span> <span class="k">else</span> <span class="s2">"local"</span>
+
+<span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="sa">f</span><span class="s2">"""**Project Setup**</span>
+<span class="s2">- Project: **</span><span class="si">{</span><span class="n">PROJECT_NAME</span><span class="si">}</span><span class="s2">**</span>
+<span class="s2">- Storage: **</span><span class="si">{</span><span class="n">STORAGE_BACKEND</span><span class="si">}</span><span class="s2">**</span>
+<span class="s2">- Findings Dir: </span><span class="si">{</span><span class="n">FINDINGS_DIR</span><span class="si">}</span>
+<span class="s2">"""</span><span class="p">))</span>
 </pre></div>
 </div>
 </div>
@@ -7998,74 +8017,29 @@ a.anchor-link {
 <div class="jp-OutputArea jp-Cell-outputArea">
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
-<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>customer_retention is installed
-</pre>
+<div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-OutputArea-output" data-mime-type="text/markdown" tabindex="0">
+<p><strong>Project Setup</strong></p>
+<ul>
+<li>Project: <strong>email</strong></li>
+<li>Storage: <strong>local</strong></li>
+<li>Findings Dir: /Users/Vital/python/CustomerRetention/experiments/findings</li>
+</ul>
 </div>
 </div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cell-3">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cell-md-2">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
 </div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
-<h2 id="0.2-Available-Datasets">0.2 Available Datasets<a class="anchor-link" href="#0.2-Available-Datasets">¶</a></h2><p>This framework includes several internal datasets for testing and learning. <strong>You do not need any of these to use the framework with your own data.</strong></p>
-<h3 id="Entity-Level-Datasets-(one-row-per-customer)">Entity-Level Datasets (one row per customer)<a class="anchor-link" href="#Entity-Level-Datasets-(one-row-per-customer)">¶</a></h3><p>Use these with the standard exploration flow (notebooks 02, 03, 04).</p>
-<table>
-<thead>
-<tr>
-<th>Dataset</th>
-<th>Status</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>customer_retention_retail.csv</code></td>
-<td>Included</td>
-<td>Retail customer retention (~31K rows)</td>
-</tr>
-<tr>
-<td><code>bank_customer_churn.csv</code></td>
-<td>Download</td>
-<td>Bank customer churn (~10K rows)</td>
-</tr>
-<tr>
-<td><code>netflix_customer_churn.csv</code></td>
-<td>Download</td>
-<td>Netflix subscription churn (~10K rows)</td>
-</tr>
-</tbody>
-</table>
-<h3 id="Event-Level-Datasets-(multiple-rows-per-customer)">Event-Level Datasets (multiple rows per customer)<a class="anchor-link" href="#Event-Level-Datasets-(multiple-rows-per-customer)">¶</a></h3><p>Use these with the Event Bronze Track (notebooks 01a, 01b, 01c, 01d).</p>
-<table>
-<thead>
-<tr>
-<th>Dataset</th>
-<th>Status</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>customer_transactions.csv</code></td>
-<td>Included</td>
-<td>Transaction events (~5K rows)</td>
-</tr>
-<tr>
-<td><code>customer_emails.csv</code></td>
-<td>Included</td>
-<td>Email engagement events (large)</td>
-</tr>
-</tbody>
-</table>
+<h2 id="0.2-Dataset-Registration">0.2 Dataset Registration<a class="anchor-link" href="#0.2-Dataset-Registration">¶</a></h2><p>Register all datasets for this project as a dictionary mapping names to file paths or table names. CSV and Parquet files are supported. On Databricks, you can also use Unity Catalog or DLT table names.</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-4">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-2">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8075,42 +8049,42 @@ a.anchor-link {
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
-
-<span class="n">FIXTURES_DIR</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s2">"../tests/fixtures"</span><span class="p">)</span>
-
-<span class="c1"># Entity-level datasets</span>
-<span class="n">entity_datasets</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="s2">"customer_retention_retail.csv"</span><span class="p">:</span> <span class="s2">"Included"</span><span class="p">,</span>
-    <span class="s2">"bank_customer_churn.csv"</span><span class="p">:</span> <span class="s2">"Download from Kaggle"</span><span class="p">,</span>
-    <span class="s2">"netflix_customer_churn.csv"</span><span class="p">:</span> <span class="s2">"Download from Kaggle"</span><span class="p">,</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="c1"># --- Configuration: dataset names and paths or table names ---</span>
+<span class="n">datasets</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">"customer_emails"</span><span class="p">:</span> <span class="s2">"../tests/fixtures/customer_emails.csv"</span>
 <span class="p">}</span>
+<span class="c1"># datasets = {</span>
+<span class="c1">#     "customer_profiles": "../tests/fixtures/3set_customer_profiles.csv",</span>
+<span class="c1">#     "edi_transactions": "../tests/fixtures/3set_edi_transactions.csv",</span>
+<span class="c1">#     "support_tickets": "../tests/fixtures/3set_support_tickets.csv",</span>
+<span class="c1"># }</span>
+<span class="c1"># On Databricks you can also use Unity Catalog / DLT tables:</span>
+<span class="c1"># datasets = {</span>
+<span class="c1">#     "customer_profiles": "catalog.schema.customer_profiles",</span>
+<span class="c1">#     "edi_transactions": "catalog.schema.edi_transactions",</span>
+<span class="c1"># }</span>
+<span class="c1"># -------------------------------------------------------------</span>
 
-<span class="c1"># Event-level datasets (internal)</span>
-<span class="n">event_datasets</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="s2">"customer_transactions.csv"</span><span class="p">:</span> <span class="s2">"Included"</span><span class="p">,</span>
-    <span class="s2">"customer_emails.csv"</span><span class="p">:</span> <span class="s2">"Included"</span><span class="p">,</span>
-<span class="p">}</span>
 
-<span class="nb">print</span><span class="p">(</span><span class="s2">"Entity-Level Datasets:"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="s2">"-"</span> <span class="o">*</span> <span class="mi">50</span><span class="p">)</span>
-<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">source</span> <span class="ow">in</span> <span class="n">entity_datasets</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-    <span class="n">path</span> <span class="o">=</span> <span class="n">FIXTURES_DIR</span> <span class="o">/</span> <span class="n">name</span>
-    <span class="k">if</span> <span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
-        <span class="n">size_mb</span> <span class="o">=</span> <span class="n">path</span><span class="o">.</span><span class="n">stat</span><span class="p">()</span><span class="o">.</span><span class="n">st_size</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">)</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  [x] </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">size_mb</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> MB)"</span><span class="p">)</span>
-    <span class="k">else</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  [ ] </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2"> - </span><span class="si">{</span><span class="n">source</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_is_table_name</span><span class="p">(</span><span class="n">source</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+    <span class="k">return</span> <span class="s2">"."</span> <span class="ow">in</span> <span class="n">source</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">Path</span><span class="p">(</span><span class="n">source</span><span class="p">)</span><span class="o">.</span><span class="n">suffix</span>
 
-<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Event-Level Datasets:"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="s2">"-"</span> <span class="o">*</span> <span class="mi">50</span><span class="p">)</span>
-<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">source</span> <span class="ow">in</span> <span class="n">event_datasets</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-    <span class="n">path</span> <span class="o">=</span> <span class="n">FIXTURES_DIR</span> <span class="o">/</span> <span class="n">name</span>
-    <span class="k">if</span> <span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
-        <span class="n">size_mb</span> <span class="o">=</span> <span class="n">path</span><span class="o">.</span><span class="n">stat</span><span class="p">()</span><span class="o">.</span><span class="n">st_size</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">)</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  [x] </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">size_mb</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> MB)"</span><span class="p">)</span>
-    <span class="k">else</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  [ ] </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2"> - </span><span class="si">{</span><span class="n">source</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_load_source</span><span class="p">(</span><span class="n">source</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">_is_table_name</span><span class="p">(</span><span class="n">source</span><span class="p">):</span>
+        <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.core.compat.detection</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_spark_session</span>
+
+        <span class="n">spark</span> <span class="o">=</span> <span class="n">get_spark_session</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">spark</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="n">source</span><span class="p">)</span><span class="o">.</span><span class="n">toPandas</span><span class="p">()</span>
+    <span class="n">p</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">source</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">p</span><span class="p">)</span> <span class="k">if</span> <span class="n">p</span><span class="o">.</span><span class="n">suffix</span> <span class="o">==</span> <span class="s2">".csv"</span> <span class="k">else</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
+
+
+<span class="n">lines</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"**Datasets Registered**"</span><span class="p">]</span>
+<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">source</span> <span class="ow">in</span> <span class="n">datasets</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="n">kind</span> <span class="o">=</span> <span class="s2">"table"</span> <span class="k">if</span> <span class="n">_is_table_name</span><span class="p">(</span><span class="n">source</span><span class="p">)</span> <span class="k">else</span> <span class="s2">"file"</span>
+    <span class="n">lines</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"- **</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">**: </span><span class="si">{</span><span class="n">source</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">kind</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
+<span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">"</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">lines</span><span class="p">)))</span>
 </pre></div>
 </div>
 </div>
@@ -8123,40 +8097,28 @@ a.anchor-link {
 <div class="jp-OutputArea jp-Cell-outputArea">
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
-<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>Entity-Level Datasets:
---------------------------------------------------
-  [x] customer_retention_retail.csv (2.4 MB)
-  [x] bank_customer_churn.csv (0.6 MB)
-  [x] netflix_customer_churn.csv (0.5 MB)
-
-Event-Level Datasets:
---------------------------------------------------
-  [x] customer_transactions.csv (4.8 MB)
-  [x] customer_emails.csv (5.6 MB)
-</pre>
+<div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-OutputArea-output" data-mime-type="text/markdown" tabindex="0">
+<p><strong>Datasets Registered</strong></p>
+<ul>
+<li><strong>customer_emails</strong>: ../tests/fixtures/customer_emails.csv (file)</li>
+</ul>
 </div>
 </div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cell-5">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cell-md-3">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
 </div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
-<h2 id="0.3-Kaggle-API-Setup">0.3 Kaggle API Setup<a class="anchor-link" href="#0.3-Kaggle-API-Setup">¶</a></h2><p>To download datasets from Kaggle, you need to set up API credentials:</p>
-<ol>
-<li>Create a Kaggle account at <a href="https://www.kaggle.com">https://www.kaggle.com</a></li>
-<li>Go to <strong>Account Settings</strong> → <strong>API</strong> → <strong>Create New Token</strong></li>
-<li>This downloads <code>kaggle.json</code> - move it to <code>~/.kaggle/kaggle.json</code></li>
-<li>Set permissions: <code>chmod 600 ~/.kaggle/kaggle.json</code></li>
-</ol>
+<h2 id="0.3-Auto-Fingerprinting">0.3 Auto Fingerprinting<a class="anchor-link" href="#0.3-Auto-Fingerprinting">¶</a></h2><p>Automatically profile each dataset to detect column types, granularity (entity-level vs event-level), entity columns, time columns, and target candidates. Basic statistics like row counts and entity cardinality are computed for each dataset.</p>
+<p>Review the summary table — it drives all subsequent auto-detection in this notebook.</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-6">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-3">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8166,18 +8128,18 @@ Event-Level Datasets:
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="c1"># Check if Kaggle credentials exist</span>
-<span class="n">kaggle_config</span> <span class="o">=</span> <span class="n">Path</span><span class="o">.</span><span class="n">home</span><span class="p">()</span> <span class="o">/</span> <span class="s2">".kaggle"</span> <span class="o">/</span> <span class="s2">"kaggle.json"</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer</span><span class="w"> </span><span class="kn">import</span> <span class="n">DatasetFingerprinter</span>
 
-<span class="k">if</span> <span class="n">kaggle_config</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Kaggle credentials found at </span><span class="si">{</span><span class="n">kaggle_config</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-<span class="k">else</span><span class="p">:</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"Kaggle credentials not found."</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">To set up:"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"1. Go to https://www.kaggle.com/settings"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"2. Scroll to 'API' section and click 'Create New Token'"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"3. Move downloaded file to </span><span class="si">{</span><span class="n">kaggle_config</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"4. Run: chmod 600 </span><span class="si">{</span><span class="n">kaggle_config</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="n">fingerprinter</span> <span class="o">=</span> <span class="n">DatasetFingerprinter</span><span class="p">(</span><span class="n">nrows</span><span class="o">=</span><span class="mi">10000</span><span class="p">)</span>
+<span class="n">fingerprints</span> <span class="o">=</span> <span class="n">fingerprinter</span><span class="o">.</span><span class="n">fingerprint_all</span><span class="p">(</span><span class="n">datasets</span><span class="p">)</span>
+<span class="n">summary_df</span> <span class="o">=</span> <span class="n">DatasetFingerprinter</span><span class="o">.</span><span class="n">to_summary_dataframe</span><span class="p">(</span><span class="n">fingerprints</span><span class="p">)</span>
+
+<span class="n">sampled_names</span> <span class="o">=</span> <span class="p">[</span><span class="n">fp</span><span class="o">.</span><span class="n">name</span> <span class="k">for</span> <span class="n">fp</span> <span class="ow">in</span> <span class="n">fingerprints</span><span class="o">.</span><span class="n">values</span><span class="p">()</span> <span class="k">if</span> <span class="n">fp</span><span class="o">.</span><span class="n">sampled</span><span class="p">]</span>
+<span class="n">title</span> <span class="o">=</span> <span class="s2">"**Dataset Fingerprints**"</span>
+<span class="k">if</span> <span class="n">sampled_names</span><span class="p">:</span>
+    <span class="n">title</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">"</span><span class="se">\n\n</span><span class="s2">*Type detection based on first </span><span class="si">{</span><span class="n">fingerprinter</span><span class="o">.</span><span class="n">nrows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows for: </span><span class="si">{</span><span class="s1">', '</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">sampled_names</span><span class="p">)</span><span class="si">}</span><span class="s2">.*"</span>
+<span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="n">title</span><span class="p">))</span>
+<span class="n">display</span><span class="p">(</span><span class="n">summary_df</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -8190,32 +8152,81 @@ Event-Level Datasets:
 <div class="jp-OutputArea jp-Cell-outputArea">
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
-<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>Kaggle credentials not found.
+<div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-OutputArea-output" data-mime-type="text/markdown" tabindex="0">
+<p><strong>Dataset Fingerprints</strong></p>
+<p><em>Type detection based on first 10,000 rows for: customer_emails.</em></p>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedHTMLCommon jp-RenderedHTML jp-OutputArea-output" data-mime-type="text/html" tabindex="0">
+<div>
+<style scoped="">
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
 
-To set up:
-1. Go to https://www.kaggle.com/settings
-2. Scroll to 'API' section and click 'Create New Token'
-3. Move downloaded file to /Users/Vital/.kaggle/kaggle.json
-4. Run: chmod 600 /Users/Vital/.kaggle/kaggle.json
-</pre>
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+<thead>
+<tr style="text-align: right;">
+<th></th>
+<th>name</th>
+<th>rows</th>
+<th>columns</th>
+<th>granularity</th>
+<th>entity_column</th>
+<th>time_column</th>
+<th>target_candidates</th>
+<th>sampled</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<th>0</th>
+<td>customer_emails</td>
+<td>83198</td>
+<td>13</td>
+<td>event_level</td>
+<td>customer_id</td>
+<td>sent_date</td>
+<td>unsubscribed</td>
+<td>True</td>
+</tr>
+</tbody>
+</table>
 </div>
 </div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cell-7">
+</div>
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cell-md-4">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
 </div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
-<h2 id="0.4-Download-Kaggle-Datasets">0.4 Download Kaggle Datasets<a class="anchor-link" href="#0.4-Download-Kaggle-Datasets">¶</a></h2><p>Run the cells below to download each dataset. You only need to do this once.</p>
-<h3 id="Bank-Customer-Churn-Dataset">Bank Customer Churn Dataset<a class="anchor-link" href="#Bank-Customer-Churn-Dataset">¶</a></h3><p>Source: <a href="https://www.kaggle.com/datasets/gauravtopre/bank-customer-churn-dataset">https://www.kaggle.com/datasets/gauravtopre/bank-customer-churn-dataset</a></p>
+<h2 id="0.4-Confirm-Semantics">0.4 Confirm Semantics<a class="anchor-link" href="#0.4-Confirm-Semantics">¶</a></h2><p>Review the auto-detected column roles for each dataset:</p>
+<ul>
+<li><strong>entity_column</strong> — The unique identifier column (e.g., customer_id)</li>
+<li><strong>time_column</strong> — The primary temporal column (e.g., event_date)</li>
+<li><strong>raw_time_column_role</strong> — Whether the time column represents event timestamps (for event streams) or update timestamps (for last-modified records)</li>
+<li><strong>granularity</strong> — Whether the dataset is entity-level (one row per entity) or event-level (multiple rows per entity)</li>
+<li><strong>target_candidates</strong> — Columns detected as potential churn/target indicators</li>
+</ul>
+<p>Override any incorrect detections in the configuration block below.</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-8">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-4">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8225,31 +8236,35 @@ To set up:
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="c1"># Download Bank Customer Churn dataset</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">shutil</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">subprocess</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.project_context</span><span class="w"> </span><span class="kn">import</span> <span class="n">RawTimeColumnRole</span>
 
-<span class="n">FIXTURES_DIR</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-<span class="n">bank_churn_path</span> <span class="o">=</span> <span class="n">FIXTURES_DIR</span> <span class="o">/</span> <span class="s2">"bank_customer_churn.csv"</span>
+<span class="n">semantics</span> <span class="o">=</span> <span class="p">{}</span>
+<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">fp</span> <span class="ow">in</span> <span class="n">fingerprints</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="n">role</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="k">if</span> <span class="n">fp</span><span class="o">.</span><span class="n">time_column</span> <span class="ow">and</span> <span class="n">fp</span><span class="o">.</span><span class="n">granularity</span><span class="o">.</span><span class="n">value</span> <span class="o">==</span> <span class="s2">"event_level"</span><span class="p">:</span>
+        <span class="n">role</span> <span class="o">=</span> <span class="n">RawTimeColumnRole</span><span class="o">.</span><span class="n">EVENT_TIME</span>
+    <span class="k">elif</span> <span class="n">fp</span><span class="o">.</span><span class="n">time_column</span><span class="p">:</span>
+        <span class="n">role</span> <span class="o">=</span> <span class="n">RawTimeColumnRole</span><span class="o">.</span><span class="n">ENTITY_UPDATE_TIME</span>
+    <span class="n">semantics</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">"entity_column"</span><span class="p">:</span> <span class="n">fp</span><span class="o">.</span><span class="n">entity_column</span><span class="p">,</span>
+        <span class="s2">"time_column"</span><span class="p">:</span> <span class="n">fp</span><span class="o">.</span><span class="n">time_column</span><span class="p">,</span>
+        <span class="s2">"raw_time_column_role"</span><span class="p">:</span> <span class="n">role</span><span class="p">,</span>
+        <span class="s2">"granularity"</span><span class="p">:</span> <span class="n">fp</span><span class="o">.</span><span class="n">granularity</span><span class="p">,</span>
+        <span class="s2">"target_candidates"</span><span class="p">:</span> <span class="n">fp</span><span class="o">.</span><span class="n">target_candidates</span><span class="p">,</span>
+    <span class="p">}</span>
 
-<span class="k">if</span> <span class="n">bank_churn_path</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Already exists: </span><span class="si">{</span><span class="n">bank_churn_path</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-<span class="k">else</span><span class="p">:</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"Downloading Bank Customer Churn dataset..."</span><span class="p">)</span>
-    <span class="k">try</span><span class="p">:</span>
-        <span class="n">subprocess</span><span class="o">.</span><span class="n">run</span><span class="p">([</span>
-            <span class="s2">"kaggle"</span><span class="p">,</span> <span class="s2">"datasets"</span><span class="p">,</span> <span class="s2">"download"</span><span class="p">,</span> <span class="s2">"-d"</span><span class="p">,</span> <span class="s2">"gauravtopre/bank-customer-churn-dataset"</span><span class="p">,</span>
-            <span class="s2">"-p"</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">FIXTURES_DIR</span><span class="p">),</span> <span class="s2">"--unzip"</span>
-        <span class="p">],</span> <span class="n">check</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-        <span class="c1"># Rename to consistent name</span>
-        <span class="n">downloaded</span> <span class="o">=</span> <span class="n">FIXTURES_DIR</span> <span class="o">/</span> <span class="s2">"Bank_Churn.csv"</span>
-        <span class="k">if</span> <span class="n">downloaded</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
-            <span class="n">shutil</span><span class="o">.</span><span class="n">move</span><span class="p">(</span><span class="n">downloaded</span><span class="p">,</span> <span class="n">bank_churn_path</span><span class="p">)</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Downloaded to: </span><span class="si">{</span><span class="n">bank_churn_path</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-    <span class="k">except</span> <span class="ne">FileNotFoundError</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="s2">"Error: kaggle CLI not found. Install with: pip install kaggle"</span><span class="p">)</span>
-    <span class="k">except</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">CalledProcessError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Error downloading: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="c1"># --- Overrides: uncomment and modify to correct auto-detection ---</span>
+<span class="c1"># semantics["customer_profiles"]["entity_column"] = "customer_id"</span>
+<span class="c1"># semantics["edi_transactions"]["raw_time_column_role"] = RawTimeColumnRole.EVENT_TIME</span>
+<span class="c1"># -----------------------------------------------------------------</span>
+
+<span class="n">lines</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"**Confirmed Semantics**"</span><span class="p">]</span>
+<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">sem</span> <span class="ow">in</span> <span class="n">semantics</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="n">lines</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">**</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">**"</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">val</span> <span class="ow">in</span> <span class="n">sem</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="n">display_val</span> <span class="o">=</span> <span class="n">val</span><span class="o">.</span><span class="n">value</span> <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">val</span><span class="p">,</span> <span class="s2">"value"</span><span class="p">)</span> <span class="k">else</span> <span class="nb">str</span><span class="p">(</span><span class="n">val</span><span class="p">)</span>
+        <span class="n">lines</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"- </span><span class="si">{</span><span class="n">key</span><span class="si">}</span><span class="s2">: **</span><span class="si">{</span><span class="n">display_val</span><span class="si">}</span><span class="s2">**"</span><span class="p">)</span>
+<span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">"</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">lines</span><span class="p">)))</span>
 </pre></div>
 </div>
 </div>
@@ -8262,25 +8277,33 @@ To set up:
 <div class="jp-OutputArea jp-Cell-outputArea">
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
-<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>Already exists: ../tests/fixtures/bank_customer_churn.csv
-</pre>
+<div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-OutputArea-output" data-mime-type="text/markdown" tabindex="0">
+<p><strong>Confirmed Semantics</strong></p>
+<p><strong>customer_emails</strong></p>
+<ul>
+<li>entity_column: <strong>customer_id</strong></li>
+<li>time_column: <strong>sent_date</strong></li>
+<li>raw_time_column_role: <strong>event_time</strong></li>
+<li>granularity: <strong>event_level</strong></li>
+<li>target_candidates: <strong>['unsubscribed']</strong></li>
+</ul>
 </div>
 </div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cell-9">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cell-md-5">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
 </div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
-<h3 id="Netflix-Customer-Churn-Dataset">Netflix Customer Churn Dataset<a class="anchor-link" href="#Netflix-Customer-Churn-Dataset">¶</a></h3><p>Source: <a href="https://www.kaggle.com/datasets/vasifasad/netflix-customer-churn-prediction">https://www.kaggle.com/datasets/vasifasad/netflix-customer-churn-prediction</a></p>
+<h2 id="0.5-Target-Dataset-Selection">0.5 Target Dataset Selection<a class="anchor-link" href="#0.5-Target-Dataset-Selection">¶</a></h2><p>Identify which dataset contains the prediction target (e.g., a <code>churned</code> column) and which column serves as the entity identifier across all datasets.</p>
+<p>The notebook auto-proposes the first dataset with detected target candidates. Override below if the auto-detection is incorrect or if you want to select a different target.</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-10">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-5">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8290,23 +8313,33 @@ To set up:
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="c1"># Download Netflix Customer Churn dataset</span>
-<span class="n">netflix_churn_path</span> <span class="o">=</span> <span class="n">FIXTURES_DIR</span> <span class="o">/</span> <span class="s2">"netflix_customer_churn.csv"</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="c1"># --- Configuration: override auto-detection if needed ---</span>
+<span class="n">TARGET_DATASET</span> <span class="o">=</span> <span class="kc">None</span>  <span class="c1"># e.g., "customer_profiles"</span>
+<span class="n">TARGET_COLUMN</span> <span class="o">=</span> <span class="kc">None</span>   <span class="c1"># e.g., "churned"</span>
+<span class="n">ENTITY_COLUMN</span> <span class="o">=</span> <span class="kc">None</span>   <span class="c1"># e.g., "customer_id"</span>
+<span class="c1"># --------------------------------------------------------</span>
 
-<span class="k">if</span> <span class="n">netflix_churn_path</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Already exists: </span><span class="si">{</span><span class="n">netflix_churn_path</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-<span class="k">else</span><span class="p">:</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"Downloading Netflix Customer Churn dataset..."</span><span class="p">)</span>
-    <span class="k">try</span><span class="p">:</span>
-        <span class="n">subprocess</span><span class="o">.</span><span class="n">run</span><span class="p">([</span>
-            <span class="s2">"kaggle"</span><span class="p">,</span> <span class="s2">"datasets"</span><span class="p">,</span> <span class="s2">"download"</span><span class="p">,</span> <span class="s2">"-d"</span><span class="p">,</span> <span class="s2">"vasifasad/netflix-customer-churn-prediction"</span><span class="p">,</span>
-            <span class="s2">"-p"</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">FIXTURES_DIR</span><span class="p">),</span> <span class="s2">"--unzip"</span>
-        <span class="p">],</span> <span class="n">check</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Downloaded to: </span><span class="si">{</span><span class="n">netflix_churn_path</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-    <span class="k">except</span> <span class="ne">FileNotFoundError</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="s2">"Error: kaggle CLI not found. Install with: pip install kaggle"</span><span class="p">)</span>
-    <span class="k">except</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">CalledProcessError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Error downloading: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="k">if</span> <span class="n">TARGET_DATASET</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">fp</span> <span class="ow">in</span> <span class="n">fingerprints</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="k">if</span> <span class="n">fp</span><span class="o">.</span><span class="n">target_candidates</span><span class="p">:</span>
+            <span class="n">TARGET_DATASET</span> <span class="o">=</span> <span class="n">name</span>
+            <span class="n">TARGET_COLUMN</span> <span class="o">=</span> <span class="n">TARGET_COLUMN</span> <span class="ow">or</span> <span class="n">fp</span><span class="o">.</span><span class="n">target_candidates</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="n">ENTITY_COLUMN</span> <span class="o">=</span> <span class="n">ENTITY_COLUMN</span> <span class="ow">or</span> <span class="n">fp</span><span class="o">.</span><span class="n">entity_column</span>
+            <span class="k">break</span>
+
+<span class="k">if</span> <span class="n">ENTITY_COLUMN</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">for</span> <span class="n">fp</span> <span class="ow">in</span> <span class="n">fingerprints</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+        <span class="k">if</span> <span class="n">fp</span><span class="o">.</span><span class="n">entity_column</span><span class="p">:</span>
+            <span class="n">ENTITY_COLUMN</span> <span class="o">=</span> <span class="n">fp</span><span class="o">.</span><span class="n">entity_column</span>
+            <span class="k">break</span>
+
+<span class="n">lines</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"**Target Selection**"</span><span class="p">]</span>
+<span class="n">lines</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"- Target Dataset: **</span><span class="si">{</span><span class="n">TARGET_DATASET</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="s1">'NOT SET'</span><span class="si">}</span><span class="s2">**"</span><span class="p">)</span>
+<span class="n">lines</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"- Target Column: **</span><span class="si">{</span><span class="n">TARGET_COLUMN</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="s1">'NOT SET'</span><span class="si">}</span><span class="s2">**"</span><span class="p">)</span>
+<span class="n">lines</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"- Entity Column: **</span><span class="si">{</span><span class="n">ENTITY_COLUMN</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="s1">'NOT SET'</span><span class="si">}</span><span class="s2">**"</span><span class="p">)</span>
+<span class="k">if</span> <span class="ow">not</span> <span class="n">TARGET_DATASET</span><span class="p">:</span>
+    <span class="n">lines</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">&gt; **Warning:** No target dataset detected. Set TARGET_DATASET above."</span><span class="p">)</span>
+<span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">"</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">lines</span><span class="p">)))</span>
 </pre></div>
 </div>
 </div>
@@ -8319,25 +8352,29 @@ To set up:
 <div class="jp-OutputArea jp-Cell-outputArea">
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
-<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>Already exists: ../tests/fixtures/netflix_customer_churn.csv
-</pre>
+<div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-OutputArea-output" data-mime-type="text/markdown" tabindex="0">
+<p><strong>Target Selection</strong></p>
+<ul>
+<li>Target Dataset: <strong>customer_emails</strong></li>
+<li>Target Column: <strong>unsubscribed</strong></li>
+<li>Entity Column: <strong>customer_id</strong></li>
+</ul>
 </div>
 </div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cell-11">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cell-md-6">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
 </div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
-<h2 id="0.5-Verify-Downloads">0.5 Verify Downloads<a class="anchor-link" href="#0.5-Verify-Downloads">¶</a></h2>
+<h2 id="0.6-Prediction-Objective-Detection">0.6 Prediction Objective Detection<a class="anchor-link" href="#0.6-Prediction-Objective-Detection">¶</a></h2><p>Assess which prediction objectives your data can support. Each objective is scored by confidence and ranked automatically. All objectives are tracked — you can adjust priorities in the next section.</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-12">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-6">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8347,23 +8384,77 @@ To set up:
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer</span><span class="w"> </span><span class="kn">import</span> <span class="n">PredictionObjectiveDetector</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.project_context</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">ObjectiveAssessment</span><span class="p">,</span>
+    <span class="n">ObjectivePriority</span><span class="p">,</span>
+    <span class="n">ObjectiveSpec</span><span class="p">,</span>
+<span class="p">)</span>
 
-<span class="n">all_datasets</span> <span class="o">=</span> <span class="p">{</span><span class="o">**</span><span class="n">entity_datasets</span><span class="p">,</span> <span class="o">**</span><span class="n">event_datasets</span><span class="p">}</span>
+<span class="n">detector</span> <span class="o">=</span> <span class="n">PredictionObjectiveDetector</span><span class="p">()</span>
 
-<span class="nb">print</span><span class="p">(</span><span class="s2">"Dataset Summary:"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="s2">"="</span> <span class="o">*</span> <span class="mi">60</span><span class="p">)</span>
-
-<span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">all_datasets</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
-    <span class="n">path</span> <span class="o">=</span> <span class="n">FIXTURES_DIR</span> <span class="o">/</span> <span class="n">name</span>
-    <span class="k">if</span> <span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
-        <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">:"</span><span class="p">)</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Rows: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">df</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Columns: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Columns: </span><span class="si">{</span><span class="s1">', '</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">[:</span><span class="mi">5</span><span class="p">])</span><span class="si">}{</span><span class="s1">'...'</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="s1">''</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="n">target_fp</span> <span class="o">=</span> <span class="n">fingerprints</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">TARGET_DATASET</span><span class="p">)</span>
+<span class="k">if</span> <span class="n">target_fp</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">target_data</span> <span class="o">=</span> <span class="n">datasets</span><span class="p">[</span><span class="n">TARGET_DATASET</span><span class="p">]</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">target_data</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">):</span>
+        <span class="n">target_df</span> <span class="o">=</span> <span class="n">target_data</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: Not downloaded"</span><span class="p">)</span>
+        <span class="n">target_df</span> <span class="o">=</span> <span class="n">_load_source</span><span class="p">(</span><span class="n">target_data</span><span class="p">)</span>
+
+    <span class="n">time_col_for_detect</span> <span class="o">=</span> <span class="n">target_fp</span><span class="o">.</span><span class="n">time_column</span>
+    <span class="n">raw_assessments</span> <span class="o">=</span> <span class="n">detector</span><span class="o">.</span><span class="n">detect_feasible_objectives</span><span class="p">(</span>
+        <span class="n">target_df</span><span class="p">,</span> <span class="n">ENTITY_COLUMN</span> <span class="ow">or</span> <span class="n">target_fp</span><span class="o">.</span><span class="n">entity_column</span><span class="p">,</span> <span class="n">TARGET_COLUMN</span><span class="p">,</span> <span class="n">time_col_for_detect</span><span class="p">,</span>
+    <span class="p">)</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">raw_assessments</span> <span class="o">=</span> <span class="p">[]</span>
+
+<span class="n">feasible_sorted</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span>
+    <span class="p">[</span><span class="n">a</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">raw_assessments</span> <span class="k">if</span> <span class="n">a</span><span class="o">.</span><span class="n">feasible</span><span class="p">],</span>
+    <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">a</span><span class="p">:</span> <span class="n">a</span><span class="o">.</span><span class="n">confidence</span><span class="p">,</span>
+    <span class="n">reverse</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">infeasible</span> <span class="o">=</span> <span class="p">[</span><span class="n">a</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">raw_assessments</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">a</span><span class="o">.</span><span class="n">feasible</span><span class="p">]</span>
+
+<span class="n">_priority_order</span> <span class="o">=</span> <span class="p">[</span><span class="n">ObjectivePriority</span><span class="o">.</span><span class="n">PRIMARY</span><span class="p">,</span> <span class="n">ObjectivePriority</span><span class="o">.</span><span class="n">SECONDARY</span><span class="p">,</span> <span class="n">ObjectivePriority</span><span class="o">.</span><span class="n">EXPLORATORY</span><span class="p">]</span>
+<span class="n">objective_specs</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">idx</span><span class="p">,</span> <span class="n">a</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">feasible_sorted</span><span class="p">):</span>
+    <span class="n">priority</span> <span class="o">=</span> <span class="n">_priority_order</span><span class="p">[</span><span class="nb">min</span><span class="p">(</span><span class="n">idx</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">_priority_order</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)]</span>
+    <span class="n">objective_specs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">ObjectiveSpec</span><span class="p">(</span>
+        <span class="n">objective</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">objective</span><span class="p">,</span>
+        <span class="n">priority</span><span class="o">=</span><span class="n">priority</span><span class="p">,</span>
+        <span class="n">anchor</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">suggested_anchor</span><span class="p">,</span>
+        <span class="n">parameters</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">parameters</span><span class="p">,</span>
+        <span class="n">assessment</span><span class="o">=</span><span class="n">ObjectiveAssessment</span><span class="p">(</span>
+            <span class="n">confidence</span><span class="o">=</span><span class="nb">round</span><span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">confidence</span> <span class="o">*</span> <span class="mi">100</span><span class="p">),</span>
+            <span class="n">suggested_anchor</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">suggested_anchor</span><span class="p">,</span>
+            <span class="n">rationale</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">evidence</span><span class="p">,</span>
+            <span class="n">feasibility</span><span class="o">=</span><span class="n">a</span><span class="o">.</span><span class="n">parameters</span> <span class="ow">or</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="p">),</span>
+    <span class="p">))</span>
+
+<span class="n">rows</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">spec</span> <span class="ow">in</span> <span class="n">objective_specs</span><span class="p">:</span>
+    <span class="n">rows</span><span class="o">.</span><span class="n">append</span><span class="p">({</span>
+        <span class="s2">"objective"</span><span class="p">:</span> <span class="n">spec</span><span class="o">.</span><span class="n">objective</span><span class="o">.</span><span class="n">value</span><span class="p">,</span>
+        <span class="s2">"priority"</span><span class="p">:</span> <span class="n">spec</span><span class="o">.</span><span class="n">priority</span><span class="o">.</span><span class="n">value</span><span class="p">,</span>
+        <span class="s2">"confidence"</span><span class="p">:</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">spec</span><span class="o">.</span><span class="n">assessment</span><span class="o">.</span><span class="n">confidence</span><span class="si">}</span><span class="s2">%"</span><span class="p">,</span>
+        <span class="s2">"anchor"</span><span class="p">:</span> <span class="n">spec</span><span class="o">.</span><span class="n">effective_anchor</span><span class="o">.</span><span class="n">value</span> <span class="k">if</span> <span class="n">spec</span><span class="o">.</span><span class="n">effective_anchor</span> <span class="k">else</span> <span class="s2">"-"</span><span class="p">,</span>
+        <span class="s2">"key_evidence"</span><span class="p">:</span> <span class="n">spec</span><span class="o">.</span><span class="n">assessment</span><span class="o">.</span><span class="n">rationale</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">if</span> <span class="n">spec</span><span class="o">.</span><span class="n">assessment</span><span class="o">.</span><span class="n">rationale</span> <span class="k">else</span> <span class="s2">"-"</span><span class="p">,</span>
+    <span class="p">})</span>
+<span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">infeasible</span><span class="p">:</span>
+    <span class="n">rows</span><span class="o">.</span><span class="n">append</span><span class="p">({</span>
+        <span class="s2">"objective"</span><span class="p">:</span> <span class="n">a</span><span class="o">.</span><span class="n">objective</span><span class="o">.</span><span class="n">value</span><span class="p">,</span>
+        <span class="s2">"priority"</span><span class="p">:</span> <span class="s2">"disabled"</span><span class="p">,</span>
+        <span class="s2">"confidence"</span><span class="p">:</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">a</span><span class="o">.</span><span class="n">confidence</span><span class="si">:</span><span class="s2">.0%</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+        <span class="s2">"anchor"</span><span class="p">:</span> <span class="n">a</span><span class="o">.</span><span class="n">suggested_anchor</span><span class="o">.</span><span class="n">value</span><span class="p">,</span>
+        <span class="s2">"key_evidence"</span><span class="p">:</span> <span class="n">a</span><span class="o">.</span><span class="n">evidence</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">if</span> <span class="n">a</span><span class="o">.</span><span class="n">evidence</span> <span class="k">else</span> <span class="s2">"-"</span><span class="p">,</span>
+    <span class="p">})</span>
+
+<span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="s2">"**Prediction Objective Analysis**"</span><span class="p">))</span>
+<span class="k">if</span> <span class="n">rows</span><span class="p">:</span>
+    <span class="n">display</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">rows</span><span class="p">))</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="s2">"&gt; **Warning:** No objectives detected. Review your data."</span><span class="p">))</span>
 </pre></div>
 </div>
 </div>
@@ -8376,205 +8467,729 @@ To set up:
 <div class="jp-OutputArea jp-Cell-outputArea">
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
-<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>Dataset Summary:
-============================================================
-
-customer_retention_retail.csv:
-  Rows: 30,801
-  Columns: 15
-  Columns: custid, retained, created, firstorder, lastorder...
-
-bank_customer_churn.csv:
-  Rows: 10,000
-  Columns: 13
-  Columns: CustomerId, Surname, CreditScore, Geography, Gender...
-
-netflix_customer_churn.csv:
-  Rows: 5,000
-  Columns: 14
-  Columns: customer_id, age, gender, subscription_type, watch_hours...
-</pre>
+<div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-OutputArea-output" data-mime-type="text/markdown" tabindex="0">
+<p><strong>Prediction Objective Analysis</strong></p>
 </div>
 </div>
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
-<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>
-customer_transactions.csv:
-  Rows: 50,000
-  Columns: 15
-  Columns: transaction_id, customer_id, transaction_date, amount, product_category...
-</pre>
-</div>
-</div>
-<div class="jp-OutputArea-child">
-<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
-<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>
-customer_emails.csv:
-  Rows: 83,198
-  Columns: 13
-  Columns: email_id, customer_id, sent_date, campaign_type, opened...
-</pre>
-</div>
-</div>
-</div>
-</div>
-</div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=597wey6ay6f">
-<div class="jp-Cell-inputWrapper" tabindex="0">
-<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
-</div>
-<div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
-</div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
-<hr/>
-<h2 id="Temporal-Framework-Overview">Temporal Framework Overview<a class="anchor-link" href="#Temporal-Framework-Overview">¶</a></h2><p>This framework includes a <strong>leakage-safe temporal infrastructure</strong> for preventing data leakage in ML pipelines:</p>
-<ul>
-<li><strong>Timestamp Management</strong>: Automatic detection and handling of <code>feature_timestamp</code> and <code>label_timestamp</code></li>
-<li><strong>Versioned Snapshots</strong>: Point-in-time training snapshots with integrity hashing</li>
-<li><strong>Scenario Detection</strong>: Automatic detection of production vs Kaggle-style datasets</li>
-<li><strong>Leakage Detection</strong>: Multi-probe validation (correlation, separation, temporal logic)</li>
-</ul>
-<p>The temporal framework ensures that:</p>
-<ol>
-<li>Features are only computed using data available at prediction time</li>
-<li>Training data is versioned and reproducible</li>
-<li>Temporal leakage is detected before model training</li>
-</ol>
-<hr/>
-<h2 id="0.6-Using-the-Temporal-Framework">0.6 Using the Temporal Framework<a class="anchor-link" href="#0.6-Using-the-Temporal-Framework">¶</a></h2><h3 id="Loading-Data-with-Snapshot-Manager">Loading Data with Snapshot Manager<a class="anchor-link" href="#Loading-Data-with-Snapshot-Manager">¶</a></h3><p>For production use, load data through the snapshot system to ensure reproducibility:</p>
-<div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.stages.temporal</span><span class="w"> </span><span class="kn">import</span> <span class="n">SnapshotManager</span><span class="p">,</span> <span class="n">UnifiedDataPreparer</span><span class="p">,</span> <span class="n">ScenarioDetector</span>
+<div class="jp-RenderedHTMLCommon jp-RenderedHTML jp-OutputArea-output" data-mime-type="text/html" tabindex="0">
+<div>
+<style scoped="">
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
 
-<span class="n">output_path</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s2">"../experiments/findings"</span><span class="p">)</span>
-<span class="n">snapshot_manager</span> <span class="o">=</span> <span class="n">SnapshotManager</span><span class="p">(</span><span class="n">output_path</span><span class="p">)</span>
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
 
-<span class="n">snapshots</span> <span class="o">=</span> <span class="n">snapshot_manager</span><span class="o">.</span><span class="n">list_snapshots</span><span class="p">()</span>
-<span class="k">if</span> <span class="n">snapshots</span><span class="p">:</span>
-    <span class="n">latest</span> <span class="o">=</span> <span class="n">snapshot_manager</span><span class="o">.</span><span class="n">get_latest_snapshot</span><span class="p">()</span>
-    <span class="n">df</span><span class="p">,</span> <span class="n">metadata</span> <span class="o">=</span> <span class="n">snapshot_manager</span><span class="o">.</span><span class="n">load_snapshot</span><span class="p">(</span><span class="n">latest</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Loaded </span><span class="si">{</span><span class="n">latest</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">df</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">, created </span><span class="si">{</span><span class="n">metadata</span><span class="p">[</span><span class="s1">'created_at'</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-</pre></div>
-<h3 id="Auto-Detecting-Dataset-Scenario">Auto-Detecting Dataset Scenario<a class="anchor-link" href="#Auto-Detecting-Dataset-Scenario">¶</a></h3><p>The framework automatically detects whether your data is production (with timestamps) or Kaggle-style:</p>
-<div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.stages.temporal</span><span class="w"> </span><span class="kn">import</span> <span class="n">ScenarioDetector</span>
-
-<span class="n">detector</span> <span class="o">=</span> <span class="n">ScenarioDetector</span><span class="p">()</span>
-<span class="n">scenario</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">discovery_result</span> <span class="o">=</span> <span class="n">detector</span><span class="o">.</span><span class="n">detect</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">target_column</span><span class="o">=</span><span class="s2">"churned"</span><span class="p">)</span>
-
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Scenario: </span><span class="si">{</span><span class="n">scenario</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Feature timestamp: </span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">feature_timestamp_column</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Label timestamp: </span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">label_timestamp_column</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Strategy: </span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">strategy</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-</pre></div>
-<h3 id="Manual-Override-(When-Auto-Detection-Fails)">Manual Override (When Auto-Detection Fails)<a class="anchor-link" href="#Manual-Override-(When-Auto-Detection-Fails)">¶</a></h3><p>If auto-detection picks wrong columns or an unsuitable strategy, bypass it entirely by creating <code>TimestampConfig</code> directly:</p>
-<div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.stages.temporal</span><span class="w"> </span><span class="kn">import</span> <span class="n">TimestampManager</span><span class="p">,</span> <span class="n">TimestampConfig</span><span class="p">,</span> <span class="n">TimestampStrategy</span>
-
-<span class="n">config</span> <span class="o">=</span> <span class="n">TimestampConfig</span><span class="p">(</span>
-    <span class="n">strategy</span><span class="o">=</span><span class="n">TimestampStrategy</span><span class="o">.</span><span class="n">PRODUCTION</span><span class="p">,</span>
-    <span class="n">feature_timestamp_column</span><span class="o">=</span><span class="s2">"my_observation_date"</span><span class="p">,</span>
-    <span class="n">label_timestamp_column</span><span class="o">=</span><span class="s2">"my_outcome_date"</span><span class="p">,</span>
-    <span class="n">observation_window_days</span><span class="o">=</span><span class="mi">90</span><span class="p">,</span>
-<span class="p">)</span>
-<span class="n">manager</span> <span class="o">=</span> <span class="n">TimestampManager</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
-<span class="n">df_with_timestamps</span> <span class="o">=</span> <span class="n">manager</span><span class="o">.</span><span class="n">ensure_timestamps</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
-</pre></div>
-<p><strong>Available strategies:</strong></p>
-<table>
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
 <thead>
-<tr>
-<th>Strategy</th>
-<th>When to Use</th>
+<tr style="text-align: right;">
+<th></th>
+<th>objective</th>
+<th>priority</th>
+<th>confidence</th>
+<th>anchor</th>
+<th>key_evidence</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>PRODUCTION</code></td>
-<td>Data has explicit timestamp columns</td>
+<th>0</th>
+<td>immediate_risk</td>
+<td>primary</td>
+<td>100%</td>
+<td>now</td>
+<td>Target column 'unsubscribed' matches churn/can...</td>
 </tr>
 <tr>
-<td><code>DERIVED</code></td>
-<td>Timestamps can be computed from other columns (e.g., tenure)</td>
+<th>1</th>
+<td>disengagement</td>
+<td>secondary</td>
+<td>90%</td>
+<td>inactivity</td>
+<td>Temporal span: 3285 days</td>
 </tr>
 <tr>
-<td><code>SYNTHETIC_FIXED</code></td>
-<td>No temporal info - use fixed date for all rows</td>
-</tr>
-<tr>
-<td><code>SYNTHETIC_RANDOM</code></td>
-<td>No temporal info - generate random dates within range</td>
-</tr>
-<tr>
-<td><code>SYNTHETIC_INDEX</code></td>
-<td>No temporal info - generate dates based on row order</td>
+<th>2</th>
+<td>renewal_risk</td>
+<td>disabled</td>
+<td>0%</td>
+<td>contract</td>
+<td>No contract/subscription/renewal columns found</td>
 </tr>
 </tbody>
 </table>
-<p><strong>Force synthetic timestamps (Kaggle-style data):</strong></p>
-<div class="highlight"><pre><span></span><span class="n">config</span> <span class="o">=</span> <span class="n">TimestampConfig</span><span class="p">(</span>
-    <span class="n">strategy</span><span class="o">=</span><span class="n">TimestampStrategy</span><span class="o">.</span><span class="n">SYNTHETIC_FIXED</span><span class="p">,</span>
-    <span class="n">synthetic_base_date</span><span class="o">=</span><span class="s2">"2024-01-01"</span><span class="p">,</span>
-    <span class="n">observation_window_days</span><span class="o">=</span><span class="mi">90</span><span class="p">,</span>
-<span class="p">)</span>
-</pre></div>
-<p><strong>Derive timestamps from tenure column:</strong></p>
-<div class="highlight"><pre><span></span><span class="n">config</span> <span class="o">=</span> <span class="n">TimestampConfig</span><span class="p">(</span>
-    <span class="n">strategy</span><span class="o">=</span><span class="n">TimestampStrategy</span><span class="o">.</span><span class="n">DERIVED</span><span class="p">,</span>
-    <span class="n">derivation_config</span><span class="o">=</span><span class="p">{</span>
-        <span class="s2">"feature_derivation"</span><span class="p">:</span> <span class="p">{</span>
-            <span class="s2">"formula"</span><span class="p">:</span> <span class="s2">"reference_date - tenure_months"</span><span class="p">,</span>
-            <span class="s2">"sources"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"tenure_months"</span><span class="p">],</span>
-        <span class="p">}</span>
-    <span class="p">},</span>
-    <span class="n">observation_window_days</span><span class="o">=</span><span class="mi">90</span><span class="p">,</span>
-<span class="p">)</span>
-</pre></div>
-<h3 id="Creating-a-Training-Snapshot-from-Raw-Data">Creating a Training Snapshot from Raw Data<a class="anchor-link" href="#Creating-a-Training-Snapshot-from-Raw-Data">¶</a></h3><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.stages.temporal</span><span class="w"> </span><span class="kn">import</span> <span class="n">UnifiedDataPreparer</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.core.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">TemporalConfig</span>
-
-<span class="n">config</span> <span class="o">=</span> <span class="n">TemporalConfig</span><span class="p">(</span>
-    <span class="n">feature_timestamp_column</span><span class="o">=</span><span class="s2">"feature_timestamp"</span><span class="p">,</span>
-    <span class="n">label_timestamp_column</span><span class="o">=</span><span class="s2">"label_timestamp"</span><span class="p">,</span>
-<span class="p">)</span>
-
-<span class="n">preparer</span> <span class="o">=</span> <span class="n">UnifiedDataPreparer</span><span class="p">(</span><span class="n">output_path</span><span class="o">=</span><span class="n">Path</span><span class="p">(</span><span class="s2">"../experiments/findings"</span><span class="p">),</span> <span class="n">timestamp_config</span><span class="o">=</span><span class="n">config</span><span class="p">)</span>
-
-<span class="n">unified_df</span> <span class="o">=</span> <span class="n">preparer</span><span class="o">.</span><span class="n">prepare_from_raw</span><span class="p">(</span>
-    <span class="n">df</span><span class="o">=</span><span class="n">raw_df</span><span class="p">,</span> <span class="n">target_column</span><span class="o">=</span><span class="s2">"churned"</span><span class="p">,</span> <span class="n">entity_column</span><span class="o">=</span><span class="s2">"customer_id"</span>
-<span class="p">)</span>
-
-<span class="n">snapshot_df</span><span class="p">,</span> <span class="n">metadata</span> <span class="o">=</span> <span class="n">preparer</span><span class="o">.</span><span class="n">create_training_snapshot</span><span class="p">(</span><span class="n">df</span><span class="o">=</span><span class="n">unified_df</span><span class="p">,</span> <span class="n">snapshot_name</span><span class="o">=</span><span class="s2">"training"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Created snapshot: </span><span class="si">{</span><span class="n">metadata</span><span class="p">[</span><span class="s1">'snapshot_id'</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-</pre></div>
-<hr/>
-<h2 id="Next-Steps">Next Steps<a class="anchor-link" href="#Next-Steps">¶</a></h2><p>You're ready to start exploring! Continue to <strong>01_data_discovery.ipynb</strong>.</p>
-<p><strong>Using your own data?</strong> Just set <code>DATA_PATH</code> to your file:</p>
-<div class="highlight"><pre><span></span><span class="n">DATA_PATH</span> <span class="o">=</span> <span class="s2">"/path/to/your/data.csv"</span>
-</pre></div>
-<p><strong>Using sample datasets?</strong> Choose one based on your learning goal:</p>
-<div class="highlight"><pre><span></span><span class="c1"># Entity-level (standard flow)</span>
-<span class="n">DATA_PATH</span> <span class="o">=</span> <span class="s2">"../tests/fixtures/customer_retention_retail.csv"</span>
-<span class="n">DATA_PATH</span> <span class="o">=</span> <span class="s2">"../tests/fixtures/bank_customer_churn.csv"</span>
-<span class="n">DATA_PATH</span> <span class="o">=</span> <span class="s2">"../tests/fixtures/netflix_customer_churn.csv"</span>
-
-<span class="c1"># Event-level (time series flow)</span>
-<span class="n">DATA_PATH</span> <span class="o">=</span> <span class="s2">"../tests/fixtures/customer_transactions.csv"</span>
-<span class="n">DATA_PATH</span> <span class="o">=</span> <span class="s2">"../tests/fixtures/customer_emails.csv"</span>
-</pre></div>
 </div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=ubychqgwi4f">
+</div>
+</div>
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cell-md-7">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
 </div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
-<blockquote>
-<p><strong>Save Reminder:</strong> Save this notebook (Ctrl+S / Cmd+S) before running the next one.
-The next notebook will automatically export this notebook's HTML documentation from the saved file.</p>
-</blockquote>
+<h2 id="0.7-Objective-Priority-Review">0.7 Objective Priority Review<a class="anchor-link" href="#0.7-Objective-Priority-Review">¶</a></h2><p>Review the auto-assigned priorities and override if needed. All feasible objectives are tracked throughout exploration — the primary objective drives downstream notebooks, while secondary and exploratory objectives continue collecting evidence.</p>
+<p>Priority levels:</p>
+<ul>
+<li><strong>PRIMARY</strong> — main focus for label building, cohort definitions, and training</li>
+<li><strong>SECONDARY</strong> — actively explored, ready for activation later</li>
+<li><strong>EXPLORATORY</strong> — evidence collected but not yet validated</li>
+<li><strong>DISABLED</strong> — excluded from analysis</li>
+</ul>
+</div>
+</div>
+</div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-7">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea">
+<div class="jp-InputPrompt jp-InputArea-prompt">In [7]:</div>
+<details class="tutorial-code-input">
+<summary>Show/Hide Code</summary>
+<div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
+<div class="cm-editor cm-s-jupyter">
+<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.project_context</span><span class="w"> </span><span class="kn">import</span> <span class="n">PredictionAnchor</span><span class="p">,</span> <span class="n">PredictionObjective</span>
+
+<span class="c1"># --- Configuration: override priorities or anchors ---</span>
+<span class="c1"># To change priority: find the spec by objective and reassign</span>
+<span class="c1"># objective_specs[0].priority = ObjectivePriority.SECONDARY</span>
+<span class="c1"># To swap primary: set old primary to SECONDARY, new to PRIMARY</span>
+<span class="c1"># To disable: spec.priority = ObjectivePriority.DISABLED</span>
+<span class="c1"># To override anchor: spec.anchor = PredictionAnchor.CONTRACT</span>
+<span class="c1"># To add business parameters:</span>
+<span class="c1"># spec.parameters["prediction_horizon_days"] = 90</span>
+<span class="c1"># -----------------------------------------------------</span>
+
+<span class="n">primary_specs</span> <span class="o">=</span> <span class="p">[</span><span class="n">s</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">objective_specs</span> <span class="k">if</span> <span class="n">s</span><span class="o">.</span><span class="n">priority</span> <span class="o">==</span> <span class="n">ObjectivePriority</span><span class="o">.</span><span class="n">PRIMARY</span><span class="p">]</span>
+<span class="n">PRIMARY_OBJECTIVE</span> <span class="o">=</span> <span class="n">primary_specs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">objective</span> <span class="k">if</span> <span class="n">primary_specs</span> <span class="k">else</span> <span class="n">PredictionObjective</span><span class="o">.</span><span class="n">IMMEDIATE_RISK</span>
+
+<span class="n">lines</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"**Objective Priorities**"</span><span class="p">]</span>
+<span class="k">for</span> <span class="n">spec</span> <span class="ow">in</span> <span class="n">objective_specs</span><span class="p">:</span>
+    <span class="n">marker</span> <span class="o">=</span> <span class="s2">" &lt;-- primary"</span> <span class="k">if</span> <span class="n">spec</span><span class="o">.</span><span class="n">priority</span> <span class="o">==</span> <span class="n">ObjectivePriority</span><span class="o">.</span><span class="n">PRIMARY</span> <span class="k">else</span> <span class="s2">""</span>
+    <span class="n">anchor_display</span> <span class="o">=</span> <span class="n">spec</span><span class="o">.</span><span class="n">effective_anchor</span><span class="o">.</span><span class="n">value</span> <span class="k">if</span> <span class="n">spec</span><span class="o">.</span><span class="n">effective_anchor</span> <span class="k">else</span> <span class="s2">"unset"</span>
+    <span class="n">lines</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"- **</span><span class="si">{</span><span class="n">spec</span><span class="o">.</span><span class="n">objective</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2">**: </span><span class="si">{</span><span class="n">spec</span><span class="o">.</span><span class="n">priority</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2"> (anchor: </span><span class="si">{</span><span class="n">anchor_display</span><span class="si">}</span><span class="s2">)</span><span class="si">{</span><span class="n">marker</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">spec</span><span class="o">.</span><span class="n">parameters</span><span class="p">:</span>
+        <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">spec</span><span class="o">.</span><span class="n">parameters</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">lines</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  - </span><span class="si">{</span><span class="n">k</span><span class="si">}</span><span class="s2">: **</span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">**"</span><span class="p">)</span>
+<span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">"</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">lines</span><span class="p">)))</span>
+</pre></div>
+</div>
+</div>
+</details>
+</div>
+</div>
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-OutputArea-output" data-mime-type="text/markdown" tabindex="0">
+<p><strong>Objective Priorities</strong></p>
+<ul>
+<li><strong>immediate_risk</strong>: primary (anchor: now) &lt;-- primary<ul>
+<li>positive_rate: <strong>0.0269</strong></li>
+</ul>
+</li>
+<li><strong>disengagement</strong>: secondary (anchor: inactivity)<ul>
+<li>span_days: <strong>3285</strong></li>
+<li>avg_events_per_entity: <strong>16.65</strong></li>
+</ul>
+</li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cell-md-9">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
+</div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
+<h2 id="0.8-Join-Scaffold">0.8 Join Scaffold<a class="anchor-link" href="#0.8-Join-Scaffold">¶</a></h2><p>Detect relationships between datasets by comparing column names and value overlaps. For each non-target dataset, the best join key and relationship type (one-to-one, one-to-many, etc.) are identified against the target dataset.</p>
+<p>The resulting merge scaffold defines how datasets will be joined during feature engineering. Review the detected joins — you can manually exclude datasets after this cell runs.</p>
+</div>
+</div>
+</div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-9">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea">
+<div class="jp-InputPrompt jp-InputArea-prompt">In [8]:</div>
+<details class="tutorial-code-input">
+<summary>Show/Hide Code</summary>
+<div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
+<div class="cm-editor cm-s-jupyter">
+<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.project_context</span><span class="w"> </span><span class="kn">import</span> <span class="n">MergeScaffoldEntry</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.stages.profiling.relationship_detector</span><span class="w"> </span><span class="kn">import</span> <span class="n">RelationshipDetector</span>
+
+<span class="c1"># --- Configuration: override or replace auto-detected joins ---</span>
+<span class="c1"># Set to a list of MergeScaffoldEntry to skip auto-detection entirely:</span>
+<span class="c1"># MANUAL_SCAFFOLD = [</span>
+<span class="c1">#     MergeScaffoldEntry(left_dataset="edi_transactions", right_dataset="customer_profiles",</span>
+<span class="c1">#                        join_keys=["customer_id"], relationship="many_to_one"),</span>
+<span class="c1">#     MergeScaffoldEntry(left_dataset="support_tickets", right_dataset="customer_profiles",</span>
+<span class="c1">#                        join_keys=["customer_id"], relationship="many_to_one"),</span>
+<span class="c1"># ]</span>
+<span class="n">MANUAL_SCAFFOLD</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="c1"># To exclude datasets after auto-detection, add names here:</span>
+<span class="n">EXCLUDE_DATASETS</span> <span class="o">=</span> <span class="p">[]</span>  <span class="c1"># e.g., ["support_tickets"]</span>
+<span class="c1"># --------------------------------------------------------------</span>
+
+<span class="n">loaded_frames</span> <span class="o">=</span> <span class="p">{}</span>
+<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">source</span> <span class="ow">in</span> <span class="n">datasets</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">):</span>
+        <span class="n">loaded_frames</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="n">source</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">loaded_frames</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="n">_load_source</span><span class="p">(</span><span class="n">source</span><span class="p">)</span>
+
+<span class="k">if</span> <span class="n">MANUAL_SCAFFOLD</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">merge_scaffold</span> <span class="o">=</span> <span class="n">MANUAL_SCAFFOLD</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">rel_detector</span> <span class="o">=</span> <span class="n">RelationshipDetector</span><span class="p">()</span>
+    <span class="n">merge_scaffold</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">if</span> <span class="n">TARGET_DATASET</span> <span class="ow">and</span> <span class="n">TARGET_DATASET</span> <span class="ow">in</span> <span class="n">loaded_frames</span><span class="p">:</span>
+        <span class="n">target_frame</span> <span class="o">=</span> <span class="n">loaded_frames</span><span class="p">[</span><span class="n">TARGET_DATASET</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">frame</span> <span class="ow">in</span> <span class="n">loaded_frames</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="k">if</span> <span class="n">name</span> <span class="o">==</span> <span class="n">TARGET_DATASET</span> <span class="ow">or</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">EXCLUDE_DATASETS</span><span class="p">:</span>
+                <span class="k">continue</span>
+            <span class="n">rel</span> <span class="o">=</span> <span class="n">rel_detector</span><span class="o">.</span><span class="n">detect</span><span class="p">(</span><span class="n">frame</span><span class="p">,</span> <span class="n">target_frame</span><span class="p">,</span> <span class="n">df1_name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span> <span class="n">df2_name</span><span class="o">=</span><span class="n">TARGET_DATASET</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">rel</span><span class="o">.</span><span class="n">suggested_join</span><span class="p">:</span>
+                <span class="n">merge_scaffold</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">MergeScaffoldEntry</span><span class="p">(</span>
+                    <span class="n">left_dataset</span><span class="o">=</span><span class="n">name</span><span class="p">,</span>
+                    <span class="n">right_dataset</span><span class="o">=</span><span class="n">TARGET_DATASET</span><span class="p">,</span>
+                    <span class="n">join_keys</span><span class="o">=</span><span class="p">[</span><span class="n">rel</span><span class="o">.</span><span class="n">suggested_join</span><span class="o">.</span><span class="n">left_column</span><span class="p">],</span>
+                    <span class="n">relationship</span><span class="o">=</span><span class="n">rel</span><span class="o">.</span><span class="n">relationship_type</span><span class="o">.</span><span class="n">value</span><span class="p">,</span>
+                <span class="p">))</span>
+
+<span class="n">lines</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"**Join Scaffold**"</span><span class="p">]</span>
+<span class="k">if</span> <span class="n">merge_scaffold</span><span class="p">:</span>
+    <span class="k">for</span> <span class="n">entry</span> <span class="ow">in</span> <span class="n">merge_scaffold</span><span class="p">:</span>
+        <span class="n">keys_str</span> <span class="o">=</span> <span class="s2">", "</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="sa">f</span><span class="s2">"`</span><span class="si">{</span><span class="n">k</span><span class="si">}</span><span class="s2">`"</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">entry</span><span class="o">.</span><span class="n">join_keys</span><span class="p">)</span>
+        <span class="n">lines</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"- **</span><span class="si">{</span><span class="n">entry</span><span class="o">.</span><span class="n">left_dataset</span><span class="si">}</span><span class="s2">** -&gt; **</span><span class="si">{</span><span class="n">entry</span><span class="o">.</span><span class="n">right_dataset</span><span class="si">}</span><span class="s2">** on </span><span class="si">{</span><span class="n">keys_str</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">entry</span><span class="o">.</span><span class="n">relationship</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">lines</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"- No join relationships detected (single dataset or no shared keys)"</span><span class="p">)</span>
+<span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">"</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">lines</span><span class="p">)))</span>
+</pre></div>
+</div>
+</div>
+</details>
+</div>
+</div>
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-OutputArea-output" data-mime-type="text/markdown" tabindex="0">
+<p><strong>Join Scaffold</strong></p>
+<ul>
+<li>No join relationships detected (single dataset or no shared keys)</li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cell-md-11">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
+</div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
+<h2 id="0.9-Temporal-Posture">0.9 Temporal Posture<a class="anchor-link" href="#0.9-Temporal-Posture">¶</a></h2><p>Select how much temporal history the model considers:</p>
+<ul>
+<li><strong>LONG_MEMORY</strong> — Use extended historical context for stable, long-range patterns. Best for initial projects or when data changes slowly.</li>
+<li><strong>SHORT_MEMORY</strong> — Focus on recent data for fast-adapting, short-range patterns. Best when data distribution shifts over time.</li>
+</ul>
+</div>
+</div>
+</div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-11">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea">
+<div class="jp-InputPrompt jp-InputArea-prompt">In [9]:</div>
+<details class="tutorial-code-input">
+<summary>Show/Hide Code</summary>
+<div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
+<div class="cm-editor cm-s-jupyter">
+<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.project_context</span><span class="w"> </span><span class="kn">import</span> <span class="n">TemporalPosture</span>
+
+<span class="c1"># --- Configuration: select temporal posture ---</span>
+<span class="n">TEMPORAL_POSTURE</span> <span class="o">=</span> <span class="n">TemporalPosture</span><span class="o">.</span><span class="n">STABLE</span>
+<span class="c1"># ----------------------------------------------</span>
+
+<span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="sa">f</span><span class="s2">"**Temporal Posture:** **</span><span class="si">{</span><span class="n">TEMPORAL_POSTURE</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2">**"</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+</details>
+</div>
+</div>
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-OutputArea-output" data-mime-type="text/markdown" tabindex="0">
+<p><strong>Temporal Posture:</strong> <strong>long_memory</strong></p>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=ic1ggp1e8y">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
+</div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
+<h2 id="0.10-Intent-Configuration">0.10 Intent Configuration<a class="anchor-link" href="#0.10-Intent-Configuration">¶</a></h2><p>Configure the prediction intent for this run. The intent captures temporal parameters that flow through all downstream notebooks:</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Prediction Horizons</strong></td>
+<td>List of horizons (days) to evaluate; primary horizon is the largest</td>
+</tr>
+<tr>
+<td><strong>Recent Window</strong></td>
+<td>How many days of history to use for features</td>
+</tr>
+<tr>
+<td><strong>Observation Window</strong></td>
+<td>Lookback for feature aggregation (equals recent window)</td>
+</tr>
+<tr>
+<td><strong>Purge Gap</strong></td>
+<td>Days between feature cutoff and label start (prevents leakage)</td>
+</tr>
+<tr>
+<td><strong>Label Window</strong></td>
+<td>Days after purge gap in which label is observed</td>
+</tr>
+<tr>
+<td><strong>Temporal Split</strong></td>
+<td>Whether to use time-based train/test splitting</td>
+</tr>
+<tr>
+<td><strong>Cadence Interval</strong></td>
+<td>Retraining / scoring frequency (daily, weekly, biweekly, monthly)</td>
+</tr>
+<tr>
+<td><strong>Split Strategy</strong></td>
+<td>Train/test splitting approach (temporal or cohort-based)</td>
+</tr>
+</tbody>
+</table>
+<p>Defaults are computed from the objective, posture, and prediction horizon using the <code>IntentDefaultsEngine</code>. Override any value in the configuration block below.</p>
+</div>
+</div>
+</div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=sidz4bufnc">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea">
+<div class="jp-InputPrompt jp-InputArea-prompt">In [10]:</div>
+<details class="tutorial-code-input">
+<summary>Show/Hide Code</summary>
+<div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
+<div class="cm-editor cm-s-jupyter">
+<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer</span><span class="w"> </span><span class="kn">import</span> <span class="n">CadenceInterval</span><span class="p">,</span> <span class="n">IntentConfig</span><span class="p">,</span> <span class="n">IntentDefaultsEngine</span><span class="p">,</span> <span class="n">SplitStrategy</span>
+
+<span class="n">engine</span> <span class="o">=</span> <span class="n">IntentDefaultsEngine</span><span class="p">()</span>
+<span class="n">_data_span</span> <span class="o">=</span> <span class="nb">max</span><span class="p">((</span><span class="n">fp</span><span class="o">.</span><span class="n">temporal_span_days</span> <span class="ow">or</span> <span class="mi">0</span><span class="p">)</span> <span class="k">for</span> <span class="n">fp</span> <span class="ow">in</span> <span class="n">fingerprints</span><span class="o">.</span><span class="n">values</span><span class="p">())</span> <span class="ow">or</span> <span class="kc">None</span>
+
+<span class="c1"># --- Configuration: prediction horizon (days) ---</span>
+<span class="n">PREDICTION_HORIZON</span> <span class="o">=</span> <span class="mi">90</span>
+<span class="c1"># -------------------------------------------------</span>
+
+<span class="n">suggested</span> <span class="o">=</span> <span class="n">engine</span><span class="o">.</span><span class="n">suggest</span><span class="p">(</span>
+    <span class="n">objective</span><span class="o">=</span><span class="n">PRIMARY_OBJECTIVE</span><span class="p">,</span>
+    <span class="n">posture</span><span class="o">=</span><span class="n">TEMPORAL_POSTURE</span><span class="p">,</span>
+    <span class="n">prediction_horizon</span><span class="o">=</span><span class="n">PREDICTION_HORIZON</span><span class="p">,</span>
+    <span class="n">data_span_days</span><span class="o">=</span><span class="n">_data_span</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="c1"># --- Configuration: override suggested defaults ---</span>
+<span class="n">PREDICTION_HORIZONS</span> <span class="o">=</span> <span class="n">suggested</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">prediction_horizons</span>
+<span class="n">RECENT_WINDOW_DAYS</span> <span class="o">=</span> <span class="n">suggested</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">recent_window_days</span>
+<span class="n">OBSERVATION_WINDOW_DAYS</span> <span class="o">=</span> <span class="n">suggested</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">observation_window_days</span>
+<span class="n">PURGE_GAP_DAYS</span> <span class="o">=</span> <span class="n">suggested</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">purge_gap_days</span>
+<span class="n">LABEL_WINDOW_DAYS</span> <span class="o">=</span> <span class="n">suggested</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">label_window_days</span>
+<span class="n">TEMPORAL_SPLIT</span> <span class="o">=</span> <span class="n">suggested</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">temporal_split</span>
+<span class="n">CADENCE_INTERVAL</span> <span class="o">=</span> <span class="n">suggested</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">cadence_interval</span>
+<span class="n">SPLIT_STRATEGY</span> <span class="o">=</span> <span class="n">suggested</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">split_strategy</span>
+<span class="c1"># ---------------------------------------------------</span>
+
+<span class="n">intent</span> <span class="o">=</span> <span class="n">IntentConfig</span><span class="p">(</span>
+    <span class="n">prediction_horizons</span><span class="o">=</span><span class="n">PREDICTION_HORIZONS</span><span class="p">,</span>
+    <span class="n">recent_window_days</span><span class="o">=</span><span class="n">RECENT_WINDOW_DAYS</span><span class="p">,</span>
+    <span class="n">observation_window_days</span><span class="o">=</span><span class="n">OBSERVATION_WINDOW_DAYS</span><span class="p">,</span>
+    <span class="n">purge_gap_days</span><span class="o">=</span><span class="n">PURGE_GAP_DAYS</span><span class="p">,</span>
+    <span class="n">label_window_days</span><span class="o">=</span><span class="n">LABEL_WINDOW_DAYS</span><span class="p">,</span>
+    <span class="n">temporal_split</span><span class="o">=</span><span class="n">TEMPORAL_SPLIT</span><span class="p">,</span>
+    <span class="n">cadence_interval</span><span class="o">=</span><span class="n">CADENCE_INTERVAL</span><span class="p">,</span>
+    <span class="n">split_strategy</span><span class="o">=</span><span class="n">SPLIT_STRATEGY</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">rows</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="p">{</span><span class="s2">"Parameter"</span><span class="p">:</span> <span class="s2">"Prediction Horizons"</span><span class="p">,</span> <span class="s2">"Value"</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">intent</span><span class="o">.</span><span class="n">prediction_horizons</span><span class="p">),</span>
+     <span class="s2">"Formula"</span><span class="p">:</span> <span class="n">suggested</span><span class="o">.</span><span class="n">formula_explanations</span><span class="p">[</span><span class="s2">"prediction_horizons"</span><span class="p">]},</span>
+    <span class="p">{</span><span class="s2">"Parameter"</span><span class="p">:</span> <span class="s2">"Recent Window (days)"</span><span class="p">,</span> <span class="s2">"Value"</span><span class="p">:</span> <span class="n">intent</span><span class="o">.</span><span class="n">recent_window_days</span><span class="p">,</span>
+     <span class="s2">"Formula"</span><span class="p">:</span> <span class="n">suggested</span><span class="o">.</span><span class="n">formula_explanations</span><span class="p">[</span><span class="s2">"recent_window_days"</span><span class="p">]},</span>
+    <span class="p">{</span><span class="s2">"Parameter"</span><span class="p">:</span> <span class="s2">"Observation Window (days)"</span><span class="p">,</span> <span class="s2">"Value"</span><span class="p">:</span> <span class="n">intent</span><span class="o">.</span><span class="n">observation_window_days</span><span class="p">,</span>
+     <span class="s2">"Formula"</span><span class="p">:</span> <span class="n">suggested</span><span class="o">.</span><span class="n">formula_explanations</span><span class="p">[</span><span class="s2">"observation_window_days"</span><span class="p">]},</span>
+    <span class="p">{</span><span class="s2">"Parameter"</span><span class="p">:</span> <span class="s2">"Purge Gap (days)"</span><span class="p">,</span> <span class="s2">"Value"</span><span class="p">:</span> <span class="n">intent</span><span class="o">.</span><span class="n">purge_gap_days</span><span class="p">,</span>
+     <span class="s2">"Formula"</span><span class="p">:</span> <span class="n">suggested</span><span class="o">.</span><span class="n">formula_explanations</span><span class="p">[</span><span class="s2">"purge_gap_days"</span><span class="p">]},</span>
+    <span class="p">{</span><span class="s2">"Parameter"</span><span class="p">:</span> <span class="s2">"Label Window (days)"</span><span class="p">,</span> <span class="s2">"Value"</span><span class="p">:</span> <span class="n">intent</span><span class="o">.</span><span class="n">label_window_days</span><span class="p">,</span>
+     <span class="s2">"Formula"</span><span class="p">:</span> <span class="n">suggested</span><span class="o">.</span><span class="n">formula_explanations</span><span class="p">[</span><span class="s2">"label_window_days"</span><span class="p">]},</span>
+    <span class="p">{</span><span class="s2">"Parameter"</span><span class="p">:</span> <span class="s2">"Cadence Interval"</span><span class="p">,</span> <span class="s2">"Value"</span><span class="p">:</span> <span class="n">intent</span><span class="o">.</span><span class="n">cadence_interval</span><span class="o">.</span><span class="n">value</span><span class="p">,</span>
+     <span class="s2">"Formula"</span><span class="p">:</span> <span class="n">suggested</span><span class="o">.</span><span class="n">formula_explanations</span><span class="p">[</span><span class="s2">"cadence_interval"</span><span class="p">]},</span>
+    <span class="p">{</span><span class="s2">"Parameter"</span><span class="p">:</span> <span class="s2">"Split Strategy"</span><span class="p">,</span> <span class="s2">"Value"</span><span class="p">:</span> <span class="n">intent</span><span class="o">.</span><span class="n">split_strategy</span><span class="o">.</span><span class="n">value</span><span class="p">,</span>
+     <span class="s2">"Formula"</span><span class="p">:</span> <span class="n">suggested</span><span class="o">.</span><span class="n">formula_explanations</span><span class="p">[</span><span class="s2">"split_strategy"</span><span class="p">]},</span>
+<span class="p">]</span>
+<span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="s2">"**Intent Configuration**"</span><span class="p">))</span>
+<span class="n">display</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">rows</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+</details>
+</div>
+</div>
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-OutputArea-output" data-mime-type="text/markdown" tabindex="0">
+<p><strong>Intent Configuration</strong></p>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedHTMLCommon jp-RenderedHTML jp-OutputArea-output" data-mime-type="text/html" tabindex="0">
+<div>
+<style scoped="">
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+<thead>
+<tr style="text-align: right;">
+<th></th>
+<th>Parameter</th>
+<th>Value</th>
+<th>Formula</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<th>0</th>
+<td>Prediction Horizons</td>
+<td>[30, 60, 90]</td>
+<td>[H//3, 2H//3, H] = [30, 60, 90]</td>
+</tr>
+<tr>
+<th>1</th>
+<td>Recent Window (days)</td>
+<td>270</td>
+<td>max(180, 3 × H) = max(180, 270) = 270</td>
+</tr>
+<tr>
+<th>2</th>
+<td>Observation Window (days)</td>
+<td>270</td>
+<td>equals recent_window_days = 270</td>
+</tr>
+<tr>
+<th>3</th>
+<td>Purge Gap (days)</td>
+<td>104</td>
+<td>H + 14 = 90 + 14 = 104</td>
+</tr>
+<tr>
+<th>4</th>
+<td>Label Window (days)</td>
+<td>90</td>
+<td>H = 90</td>
+</tr>
+<tr>
+<th>5</th>
+<td>Cadence Interval</td>
+<td>weekly</td>
+<td>weekly (immediate risk, H=90)</td>
+</tr>
+<tr>
+<th>6</th>
+<td>Split Strategy</td>
+<td>temporal</td>
+<td>temporal (time-ordered split required)</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cell-md-12">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
+</div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
+<h2 id="0.11-Save-Project-Context">0.11 Save Project Context<a class="anchor-link" href="#0.11-Save-Project-Context">¶</a></h2><p>Assemble all configuration into a single context file and save it. This file is the single source of truth for all downstream notebooks (data discovery, feature engineering, training, scoring) and pipeline generation.</p>
+<p>The context includes an exploration contract that enforces two governance rules:</p>
+<ol>
+<li><strong>Dual view</strong> — Every exploration notebook must produce both a full-history view and a recent-behavior view</li>
+<li><strong>Insight mapping</strong> — Every analysis insight must be tagged with which prediction objective it serves</li>
+</ol>
+</div>
+</div>
+</div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-12">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea">
+<div class="jp-InputPrompt jp-InputArea-prompt">In [11]:</div>
+<details class="tutorial-code-input">
+<summary>Show/Hide Code</summary>
+<div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
+<div class="cm-editor cm-s-jupyter">
+<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.project_context</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">DatasetRegistryEntry</span><span class="p">,</span>
+    <span class="n">ExplorationContract</span><span class="p">,</span>
+    <span class="n">ProjectContext</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.core.config.column_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">DatasetGranularity</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_detect_storage_format</span><span class="p">(</span><span class="n">source</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">_is_table_name</span><span class="p">(</span><span class="n">source</span><span class="p">):</span>
+        <span class="k">return</span> <span class="s2">"delta"</span>
+    <span class="n">p</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">source</span><span class="p">)</span>
+    <span class="k">return</span> <span class="s2">"parquet"</span> <span class="k">if</span> <span class="n">p</span><span class="o">.</span><span class="n">suffix</span> <span class="o">==</span> <span class="s2">".parquet"</span> <span class="k">else</span> <span class="s2">"csv"</span>
+
+
+<span class="n">registry</span> <span class="o">=</span> <span class="p">{}</span>
+<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">fp</span> <span class="ow">in</span> <span class="n">fingerprints</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="n">sem</span> <span class="o">=</span> <span class="n">semantics</span><span class="p">[</span><span class="n">name</span><span class="p">]</span>
+    <span class="n">is_target</span> <span class="o">=</span> <span class="n">name</span> <span class="o">==</span> <span class="n">TARGET_DATASET</span>
+
+    <span class="n">join_keys</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">join_to</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">relationship</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="k">for</span> <span class="n">ms</span> <span class="ow">in</span> <span class="n">merge_scaffold</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">ms</span><span class="o">.</span><span class="n">left_dataset</span> <span class="o">==</span> <span class="n">name</span><span class="p">:</span>
+            <span class="n">join_keys</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">ms</span><span class="o">.</span><span class="n">join_keys</span><span class="p">)</span>
+            <span class="n">join_to</span> <span class="o">=</span> <span class="n">ms</span><span class="o">.</span><span class="n">right_dataset</span>
+            <span class="n">relationship</span> <span class="o">=</span> <span class="n">ms</span><span class="o">.</span><span class="n">relationship</span>
+            <span class="k">break</span>
+
+    <span class="n">source</span> <span class="o">=</span> <span class="n">datasets</span><span class="p">[</span><span class="n">name</span><span class="p">]</span>
+    <span class="n">registry</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="n">DatasetRegistryEntry</span><span class="p">(</span>
+        <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span>
+        <span class="n">path</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">source</span><span class="p">)</span> <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="k">else</span> <span class="n">name</span><span class="p">,</span>
+        <span class="n">storage_format</span><span class="o">=</span><span class="n">_detect_storage_format</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">source</span><span class="p">))</span> <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="k">else</span> <span class="s2">"dataframe"</span><span class="p">,</span>
+        <span class="n">entity_column</span><span class="o">=</span><span class="n">sem</span><span class="p">[</span><span class="s2">"entity_column"</span><span class="p">],</span>
+        <span class="n">time_column</span><span class="o">=</span><span class="n">sem</span><span class="p">[</span><span class="s2">"time_column"</span><span class="p">],</span>
+        <span class="n">raw_time_column_role</span><span class="o">=</span><span class="n">sem</span><span class="p">[</span><span class="s2">"raw_time_column_role"</span><span class="p">],</span>
+        <span class="n">granularity</span><span class="o">=</span><span class="n">sem</span><span class="p">[</span><span class="s2">"granularity"</span><span class="p">],</span>
+        <span class="n">row_count</span><span class="o">=</span><span class="n">fp</span><span class="o">.</span><span class="n">row_count</span><span class="p">,</span>
+        <span class="n">unique_entities</span><span class="o">=</span><span class="n">fp</span><span class="o">.</span><span class="n">unique_entities</span><span class="p">,</span>
+        <span class="n">avg_rows_per_entity</span><span class="o">=</span><span class="n">fp</span><span class="o">.</span><span class="n">avg_rows_per_entity</span><span class="p">,</span>
+        <span class="n">target_candidates</span><span class="o">=</span><span class="n">fp</span><span class="o">.</span><span class="n">target_candidates</span><span class="p">,</span>
+        <span class="n">role</span><span class="o">=</span><span class="s2">"target"</span> <span class="k">if</span> <span class="n">is_target</span> <span class="k">else</span> <span class="s2">"feature_source"</span> <span class="k">if</span> <span class="n">join_keys</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">join_keys</span><span class="o">=</span><span class="n">join_keys</span><span class="p">,</span>
+        <span class="n">join_to</span><span class="o">=</span><span class="n">join_to</span><span class="p">,</span>
+        <span class="n">relationship</span><span class="o">=</span><span class="n">relationship</span><span class="p">,</span>
+    <span class="p">)</span>
+
+<span class="n">project_context</span> <span class="o">=</span> <span class="n">ProjectContext</span><span class="p">(</span>
+    <span class="n">project_name</span><span class="o">=</span><span class="n">PROJECT_NAME</span><span class="p">,</span>
+    <span class="n">run_id</span><span class="o">=</span><span class="n">RUN_ID</span><span class="p">,</span>
+    <span class="n">storage_backend</span><span class="o">=</span><span class="n">STORAGE_BACKEND</span><span class="p">,</span>
+    <span class="n">datasets</span><span class="o">=</span><span class="n">registry</span><span class="p">,</span>
+    <span class="n">target_dataset</span><span class="o">=</span><span class="n">TARGET_DATASET</span><span class="p">,</span>
+    <span class="n">target_column</span><span class="o">=</span><span class="n">TARGET_COLUMN</span><span class="p">,</span>
+    <span class="n">entity_column</span><span class="o">=</span><span class="n">ENTITY_COLUMN</span><span class="p">,</span>
+    <span class="n">objectives</span><span class="o">=</span><span class="n">objective_specs</span><span class="p">,</span>
+    <span class="n">primary_objective</span><span class="o">=</span><span class="n">PRIMARY_OBJECTIVE</span><span class="p">,</span>
+    <span class="n">temporal_posture</span><span class="o">=</span><span class="n">TEMPORAL_POSTURE</span><span class="p">,</span>
+    <span class="n">merge_scaffold</span><span class="o">=</span><span class="n">merge_scaffold</span><span class="p">,</span>
+    <span class="n">exploration_contract</span><span class="o">=</span><span class="n">ExplorationContract</span><span class="p">(),</span>
+    <span class="n">intent</span><span class="o">=</span><span class="n">intent</span><span class="p">,</span>
+    <span class="n">light_run</span><span class="o">=</span><span class="n">LIGHT_RUN</span><span class="p">,</span>
+    <span class="n">sample_fraction</span><span class="o">=</span><span class="n">SAMPLE_FRACTION</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">context_path</span> <span class="o">=</span> <span class="n">_namespace</span><span class="o">.</span><span class="n">project_context_path</span>
+<span class="n">project_context</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">context_path</span><span class="p">)</span>
+
+<span class="n">target_label</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"**</span><span class="si">{</span><span class="n">TARGET_DATASET</span><span class="si">}</span><span class="s2">**.</span><span class="si">{</span><span class="n">TARGET_COLUMN</span><span class="si">}</span><span class="s2">"</span> <span class="k">if</span> <span class="n">TARGET_DATASET</span> <span class="k">else</span> <span class="s2">"NOT SET"</span>
+<span class="n">active</span> <span class="o">=</span> <span class="n">project_context</span><span class="o">.</span><span class="n">active_objectives</span>
+<span class="n">obj_summary</span> <span class="o">=</span> <span class="s2">", "</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">o</span><span class="o">.</span><span class="n">objective</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">o</span><span class="o">.</span><span class="n">priority</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2">)"</span> <span class="k">for</span> <span class="n">o</span> <span class="ow">in</span> <span class="n">active</span><span class="p">)</span>
+<span class="n">_light_label</span> <span class="o">=</span> <span class="s2">"ON"</span> <span class="k">if</span> <span class="n">LIGHT_RUN</span> <span class="k">else</span> <span class="s2">"OFF"</span>
+<span class="n">_sample_label</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">SAMPLE_FRACTION</span><span class="si">:</span><span class="s2">.0%</span><span class="si">}</span><span class="s2"> of entities"</span> <span class="k">if</span> <span class="n">SAMPLE_FRACTION</span> <span class="k">else</span> <span class="s2">"OFF (full data)"</span>
+<span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="sa">f</span><span class="s2">"""**Project Context Saved**</span>
+<span class="s2">- Path: </span><span class="si">{</span><span class="n">context_path</span><span class="si">}</span>
+<span class="s2">- Datasets: **</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">project_context</span><span class="o">.</span><span class="n">datasets</span><span class="p">)</span><span class="si">}</span><span class="s2">**</span>
+<span class="s2">- Target: </span><span class="si">{</span><span class="n">target_label</span><span class="si">}</span>
+<span class="s2">- Primary Objective: **</span><span class="si">{</span><span class="n">PRIMARY_OBJECTIVE</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2">**</span>
+<span class="s2">- All Objectives: </span><span class="si">{</span><span class="n">obj_summary</span><span class="si">}</span>
+<span class="s2">- Posture: **</span><span class="si">{</span><span class="n">TEMPORAL_POSTURE</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2">**</span>
+<span class="s2">- Intent: recent=</span><span class="si">{</span><span class="n">intent</span><span class="o">.</span><span class="n">recent_window_days</span><span class="si">}</span><span class="s2">d, purge=</span><span class="si">{</span><span class="n">intent</span><span class="o">.</span><span class="n">purge_gap_days</span><span class="si">}</span><span class="s2">d, label=</span><span class="si">{</span><span class="n">intent</span><span class="o">.</span><span class="n">label_window_days</span><span class="si">}</span><span class="s2">d, cadence=</span><span class="si">{</span><span class="n">intent</span><span class="o">.</span><span class="n">cadence_interval</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2">, split=</span><span class="si">{</span><span class="n">intent</span><span class="o">.</span><span class="n">split_strategy</span><span class="o">.</span><span class="n">value</span><span class="si">}</span>
+<span class="s2">- Light Run: **</span><span class="si">{</span><span class="n">_light_label</span><span class="si">}</span><span class="s2">**</span>
+<span class="s2">- Entity Sampling: **</span><span class="si">{</span><span class="n">_sample_label</span><span class="si">}</span><span class="s2">**</span>
+<span class="s2">- Contract: dual-view + insight mapping</span>
+<span class="s2">"""</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+</details>
+</div>
+</div>
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-OutputArea-output" data-mime-type="text/markdown" tabindex="0">
+<p><strong>Project Context Saved</strong></p>
+<ul>
+<li>Path: /Users/Vital/python/CustomerRetention/experiments/runs/email-6301db6c/project_context.yaml</li>
+<li>Datasets: <strong>1</strong></li>
+<li>Target: <strong>customer_emails</strong>.unsubscribed</li>
+<li>Primary Objective: <strong>immediate_risk</strong></li>
+<li>All Objectives: immediate_risk (primary), disengagement (secondary)</li>
+<li>Posture: <strong>long_memory</strong></li>
+<li>Intent: recent=270d, purge=104d, label=90d, cadence=weekly, split=temporal</li>
+<li>Light Run: <strong>OFF</strong></li>
+<li>Entity Sampling: <strong>OFF (full data)</strong></li>
+<li>Contract: dual-view + insight mapping</li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=3y7osemrdf3">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
+</div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
+<h2 id="0.12-Initialize-Snapshot-Grid">0.12 Initialize Snapshot Grid<a class="anchor-link" href="#0.12-Initialize-Snapshot-Grid">¶</a></h2><p>Create the snapshot grid that defines the temporal grid for entity x as_of_date snapshots. The grid is used by notebook 1d to produce time-aware entity-level aggregations.</p>
+<p><strong>Grid Modes:</strong></p>
+<ul>
+<li><strong>NO_ADJUSTMENTS</strong> (default): Grid parameters are fixed from the intent config. Any dataset reaching 1d can be aggregated immediately.</li>
+<li><strong>ALLOW_ADJUSTMENTS</strong>: Grid can be modified by votes from notebooks 01a-01c. Step 1d blocks until all event datasets have voted.</li>
+</ul>
+</div>
+</div>
+</div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=6vilcr3g1hr">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea">
+<div class="jp-InputPrompt jp-InputArea-prompt">In [12]:</div>
+<details class="tutorial-code-input">
+<summary>Show/Hide Code</summary>
+<div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
+<div class="cm-editor cm-s-jupyter">
+<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.snapshot_grid</span><span class="w"> </span><span class="kn">import</span> <span class="n">GridAdjustmentMode</span><span class="p">,</span> <span class="n">SnapshotGrid</span>
+
+<span class="c1"># --- Configuration: grid mode ---</span>
+<span class="n">GRID_MODE</span> <span class="o">=</span> <span class="n">GridAdjustmentMode</span><span class="o">.</span><span class="n">NO_ADJUSTMENTS</span>
+<span class="c1"># ---------------------------------</span>
+
+<span class="n">snapshot_grid</span> <span class="o">=</span> <span class="n">SnapshotGrid</span><span class="o">.</span><span class="n">from_intent</span><span class="p">(</span>
+    <span class="n">intent</span><span class="o">=</span><span class="n">intent</span><span class="p">,</span>
+    <span class="n">datasets</span><span class="o">=</span><span class="n">registry</span><span class="p">,</span>
+    <span class="n">mode</span><span class="o">=</span><span class="n">GRID_MODE</span><span class="p">,</span>
+    <span class="n">fingerprints</span><span class="o">=</span><span class="n">fingerprints</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">snapshot_grid</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">_namespace</span><span class="o">.</span><span class="n">snapshot_grid_path</span><span class="p">)</span>
+
+<span class="n">_event_votes</span> <span class="o">=</span> <span class="p">[</span><span class="n">n</span> <span class="k">for</span> <span class="n">n</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">snapshot_grid</span><span class="o">.</span><span class="n">dataset_votes</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">v</span><span class="o">.</span><span class="n">voted</span><span class="p">]</span>
+<span class="n">_entity_votes</span> <span class="o">=</span> <span class="p">[</span><span class="n">n</span> <span class="k">for</span> <span class="n">n</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">snapshot_grid</span><span class="o">.</span><span class="n">dataset_votes</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">voted</span><span class="p">]</span>
+<span class="n">_boundary_label</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="sa">f</span><span class="s2">"**</span><span class="si">{</span><span class="n">snapshot_grid</span><span class="o">.</span><span class="n">grid_start</span><span class="si">}</span><span class="s2">** to **</span><span class="si">{</span><span class="n">snapshot_grid</span><span class="o">.</span><span class="n">grid_end</span><span class="si">}</span><span class="s2">**"</span>
+    <span class="k">if</span> <span class="n">snapshot_grid</span><span class="o">.</span><span class="n">grid_start</span> <span class="ow">and</span> <span class="n">snapshot_grid</span><span class="o">.</span><span class="n">grid_end</span>
+    <span class="k">else</span> <span class="s2">"not yet computed (will be set in 01d from dataset votes)"</span>
+<span class="p">)</span>
+<span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="sa">f</span><span class="s2">"""**Snapshot Grid Initialized**</span>
+<span class="s2">- Mode: **</span><span class="si">{</span><span class="n">snapshot_grid</span><span class="o">.</span><span class="n">mode</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2">**</span>
+<span class="s2">- Cadence: **</span><span class="si">{</span><span class="n">snapshot_grid</span><span class="o">.</span><span class="n">cadence_interval</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2">** (</span><span class="si">{</span><span class="n">snapshot_grid</span><span class="o">.</span><span class="n">cadence_to_days</span><span class="p">()</span><span class="si">}</span><span class="s2"> days)</span>
+<span class="s2">- Observation Window: **</span><span class="si">{</span><span class="n">snapshot_grid</span><span class="o">.</span><span class="n">observation_window_days</span><span class="si">}</span><span class="s2">** days</span>
+<span class="s2">- Grid Boundaries: </span><span class="si">{</span><span class="n">_boundary_label</span><span class="si">}</span>
+<span class="s2">- Datasets auto-voted (entity-level): </span><span class="si">{</span><span class="n">_entity_votes</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="s1">'none'</span><span class="si">}</span>
+<span class="s2">- Datasets awaiting vote (event-level): </span><span class="si">{</span><span class="n">_event_votes</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="s1">'none'</span><span class="si">}</span>
+<span class="s2">- Saved to: </span><span class="si">{</span><span class="n">_namespace</span><span class="o">.</span><span class="n">snapshot_grid_path</span><span class="si">}</span>
+<span class="s2">"""</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+</details>
+</div>
+</div>
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-OutputArea-output" data-mime-type="text/markdown" tabindex="0">
+<p><strong>Snapshot Grid Initialized</strong></p>
+<ul>
+<li>Mode: <strong>no_adjustments</strong></li>
+<li>Cadence: <strong>weekly</strong> (7 days)</li>
+<li>Observation Window: <strong>270</strong> days</li>
+<li>Grid Boundaries: not yet computed (will be set in 01d from dataset votes)</li>
+<li>Datasets auto-voted (entity-level): none</li>
+<li>Datasets awaiting vote (event-level): ['customer_emails']</li>
+<li>Saved to: /Users/Vital/python/CustomerRetention/experiments/runs/email-6301db6c/snapshot_grid.yaml</li>
+</ul>
+</div>
 </div>
 </div>
 </div>

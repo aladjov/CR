@@ -7928,6 +7928,17 @@ a.anchor-link {
 </style>
 <body class="jp-Notebook" data-jp-theme-light="true" data-jp-theme-name="JupyterLab Light">
 <main>
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=0a3879d7">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
+</div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput celltag_papermill-error-cell-tag" data-mime-type="text/markdown">
+<p><span style="color:red; font-family:Helvetica Neue, Helvetica, Arial, sans-serif; font-size:2em;"></span>An Exception was encountered at '<a href="#papermill-error-cell"></a>In [13]'.</p>
+</div>
+</div>
+</div>
+</div>
 <div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cell-0">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
@@ -8049,7 +8060,7 @@ Aggregate:  customer_id → ticket_text_pc1_mean_30d, ticket_text_pc2_std_7d, ..
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [1]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
@@ -8082,29 +8093,23 @@ Aggregate:  customer_id → ticket_text_pc1_mean_30d, ticket_text_pc2_std_7d, ..
 </details>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=cell-3">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-3">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [2]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="c1"># === CONFIGURATION ===</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_notebook_findings</span>
 
-<span class="c1"># FINDINGS_DIR imported from customer_retention.core.config.experiments</span>
+<span class="n">DATASET_NAME</span> <span class="o">=</span> <span class="kc">None</span>  <span class="c1"># Set to override auto-resolved dataset, e.g. "3set_support_tickets"</span>
 
-<span class="n">findings_files</span> <span class="o">=</span> <span class="p">[</span><span class="n">f</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">FINDINGS_DIR</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="s2">"*_findings.yaml"</span><span class="p">)</span> <span class="k">if</span> <span class="s2">"multi_dataset"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">f</span><span class="o">.</span><span class="n">name</span><span class="p">]</span>
-<span class="k">if</span> <span class="ow">not</span> <span class="n">findings_files</span><span class="p">:</span>
-    <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"No findings files found in </span><span class="si">{</span><span class="n">FINDINGS_DIR</span><span class="si">}</span><span class="s2">. Run notebook 01 first."</span><span class="p">)</span>
-
-<span class="n">findings_files</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">f</span><span class="p">:</span> <span class="n">f</span><span class="o">.</span><span class="n">stat</span><span class="p">()</span><span class="o">.</span><span class="n">st_mtime</span><span class="p">,</span> <span class="n">reverse</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-<span class="n">FINDINGS_PATH</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">findings_files</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
-
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Found </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">findings_files</span><span class="p">)</span><span class="si">}</span><span class="s2"> findings file(s)"</span><span class="p">)</span>
+<span class="n">FINDINGS_PATH</span><span class="p">,</span> <span class="n">_namespace</span><span class="p">,</span> <span class="n">dataset_name</span> <span class="o">=</span> <span class="n">load_notebook_findings</span><span class="p">(</span><span class="s2">"01a_a_temporal_text_deep_dive.ipynb"</span><span class="p">)</span>
+<span class="k">if</span> <span class="n">DATASET_NAME</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">dataset_name</span> <span class="o">=</span> <span class="n">DATASET_NAME</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Using: </span><span class="si">{</span><span class="n">FINDINGS_PATH</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
 <span class="n">findings</span> <span class="o">=</span> <span class="n">ExplorationFindings</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">FINDINGS_PATH</span><span class="p">)</span>
@@ -8115,12 +8120,52 @@ Aggregate:  customer_id → ticket_text_pc1_mean_30d, ticket_text_pc2_std_7d, ..
 </details>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=cell-4">
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>Using: /Users/Vital/python/CustomerRetention/experiments/runs/email-6301db6c/datasets/customer_emails/findings/customer_emails_findings.yaml
+
+Loaded findings for 13 columns from ../tests/fixtures/customer_emails.csv
+</pre>
+</div>
+</div>
+</div>
+</div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=9nrty3vhhai">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [3]:</div>
+<details class="tutorial-code-input">
+<summary>Show/Hide Code</summary>
+<div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
+<div class="cm-editor cm-s-jupyter">
+<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.project_context</span><span class="w"> </span><span class="kn">import</span> <span class="n">ProjectContext</span>
+
+<span class="n">LIGHT_RUN</span> <span class="o">=</span> <span class="kc">False</span>
+<span class="k">if</span> <span class="n">_namespace</span> <span class="ow">and</span> <span class="n">_namespace</span><span class="o">.</span><span class="n">project_context_path</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
+    <span class="n">_project_ctx</span> <span class="o">=</span> <span class="n">ProjectContext</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">_namespace</span><span class="o">.</span><span class="n">project_context_path</span><span class="p">)</span>
+    <span class="n">LIGHT_RUN</span> <span class="o">=</span> <span class="n">_project_ctx</span><span class="o">.</span><span class="n">light_run</span>
+
+<span class="k">if</span> <span class="n">LIGHT_RUN</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"LIGHT_RUN mode: text embedding analysis will be skipped"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</details>
+</div>
+</div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-4">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea">
+<div class="jp-InputPrompt jp-InputArea-prompt">In [4]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
@@ -8136,13 +8181,13 @@ Aggregate:  customer_id → ticket_text_pc1_mean_30d, ticket_text_pc2_std_7d, ..
     <span class="nb">print</span><span class="p">(</span><span class="s2">"This dataset is ENTITY-LEVEL (one row per entity), not event-level."</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">()</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">"For TEXT columns in entity-level data, use:"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"   02a_text_columns_deep_dive.ipynb"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"   04a_text_columns_deep_dive.ipynb"</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">()</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">"This notebook (01a_a) is for TEXT columns in EVENT-LEVEL data where:"</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">"   - Multiple events per entity (e.g., support tickets, transactions)"</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">"   - Text is embedded per-event, then aggregated across time windows"</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">()</span>
-    <span class="k">raise</span> <span class="ne">SystemExit</span><span class="p">(</span><span class="s2">"Please use 02a_text_columns_deep_dive.ipynb for entity-level data."</span><span class="p">)</span>
+    <span class="k">raise</span> <span class="ne">SystemExit</span><span class="p">(</span><span class="s2">"Please use 04a_text_columns_deep_dive.ipynb for entity-level data."</span><span class="p">)</span>
 
 <span class="n">ts_meta</span> <span class="o">=</span> <span class="n">findings</span><span class="o">.</span><span class="n">time_series_metadata</span>
 <span class="n">temporal_pattern</span> <span class="o">=</span> <span class="p">(</span><span class="n">ts_meta</span><span class="o">.</span><span class="n">temporal_pattern</span> <span class="ow">or</span> <span class="s2">"unknown"</span><span class="p">)</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span>
@@ -8157,12 +8202,27 @@ Aggregate:  customer_id → ticket_text_pc1_mean_30d, ticket_text_pc2_std_7d, ..
 </details>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=cell-5">
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>Dataset confirmed as EVENT_LOG (event-level)
+   Entity column: customer_id
+   Time column: sent_date
+</pre>
+</div>
+</div>
+</div>
+</div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-5">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [5]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
@@ -8188,6 +8248,21 @@ Aggregate:  customer_id → ticket_text_pc1_mean_30d, ticket_text_pc2_std_7d, ..
 </details>
 </div>
 </div>
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>⚠️ No TEXT columns detected in this dataset.
+   This notebook is only needed when TEXT columns are present.
+   Continue to notebook 01b_temporal_quality.ipynb
+</pre>
+</div>
+</div>
+</div>
+</div>
 </div>
 <div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cell-6">
 <div class="jp-Cell-inputWrapper" tabindex="0">
@@ -8199,28 +8274,43 @@ Aggregate:  customer_id → ticket_text_pc1_mean_30d, ticket_text_pc2_std_7d, ..
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=cell-7">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-7">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [6]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.stages.temporal</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_data_with_snapshot_preference</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.active_dataset_store</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_active_dataset</span>
 
-<span class="n">df</span><span class="p">,</span> <span class="n">data_source</span> <span class="o">=</span> <span class="n">load_data_with_snapshot_preference</span><span class="p">(</span><span class="n">findings</span><span class="p">,</span> <span class="n">output_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">FINDINGS_DIR</span><span class="p">))</span>
+<span class="n">df</span> <span class="o">=</span> <span class="n">load_active_dataset</span><span class="p">(</span><span class="n">_namespace</span><span class="p">,</span> <span class="n">dataset_name</span><span class="p">)</span>
 <span class="n">charts</span> <span class="o">=</span> <span class="n">ChartBuilder</span><span class="p">()</span>
 
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Loaded </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">df</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> events x </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span><span class="si">}</span><span class="s2"> columns"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Data source: </span><span class="si">{</span><span class="n">data_source</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Data source: </span><span class="si">{</span><span class="n">dataset_name</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Unique entities: </span><span class="si">{</span><span class="n">df</span><span class="p">[</span><span class="n">ENTITY_COLUMN</span><span class="p">]</span><span class="o">.</span><span class="n">nunique</span><span class="p">()</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
 </details>
+</div>
+</div>
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>Loaded 83,198 events x 13 columns
+Data source: customer_emails
+Unique entities: 4,998
+</pre>
+</div>
+</div>
 </div>
 </div>
 </div>
@@ -8234,12 +8324,12 @@ Aggregate:  customer_id → ticket_text_pc1_mean_30d, ticket_text_pc2_std_7d, ..
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=cell-9">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-9">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [7]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
@@ -8264,12 +8354,35 @@ Aggregate:  customer_id → ticket_text_pc1_mean_30d, ticket_text_pc2_std_7d, ..
 </details>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=bc5ekeprioi">
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>Available Embedding Models
+================================================================================
+Preset          Model                               Size       Dim      GPU?
+--------------------------------------------------------------------------------
+minilm          all-MiniLM-L6-v2                    90 MB      384      No
+qwen3-0.6b      Qwen/Qwen3-Embedding-0.6B           1.2 GB     1024     Yes
+qwen3-4b        Qwen/Qwen3-Embedding-4B             8.0 GB     2560     Yes
+qwen3-8b        Qwen/Qwen3-Embedding-8B             16.0 GB    4096     Yes
+
+For event-level data with many rows, MiniLM is recommended for faster processing.
+Qwen3 models produce higher quality embeddings but require GPU for reasonable speed.
+</pre>
+</div>
+</div>
+</div>
+</div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=bc5ekeprioi">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [8]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
@@ -8327,6 +8440,33 @@ Aggregate:  customer_id → ticket_text_pc1_mean_30d, ticket_text_pc2_std_7d, ..
 </details>
 </div>
 </div>
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>Text Processing Configuration
+==================================================
+  Preset: minilm
+  Model: all-MiniLM-L6-v2
+  Model size: 90 MB
+  Embedding dimension: 384
+  GPU recommended: No
+
+  Variance threshold: 95%
+  Max components: 10
+
+Aggregation Configuration
+==================================================
+  Windows: ['7d', '30d', '90d', 'all_time']
+  Functions: ['mean', 'std', 'first', 'last']
+</pre>
+</div>
+</div>
+</div>
+</div>
 </div>
 <div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cell-10">
 <div class="jp-Cell-inputWrapper" tabindex="0">
@@ -8343,7 +8483,7 @@ Aggregate:  customer_id → ticket_text_pc1_mean_30d, ticket_text_pc2_std_7d, ..
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [9]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
@@ -8401,18 +8541,18 @@ Aggregate:  customer_id → ticket_text_pc1_mean_30d, ticket_text_pc2_std_7d, ..
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [10]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="k">if</span> <span class="n">text_columns</span> <span class="ow">and</span> <span class="n">findings</span><span class="o">.</span><span class="n">is_time_series</span><span class="p">:</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="n">results</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">if</span> <span class="n">text_columns</span> <span class="ow">and</span> <span class="n">findings</span><span class="o">.</span><span class="n">is_time_series</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">LIGHT_RUN</span><span class="p">:</span>
     <span class="n">processor</span> <span class="o">=</span> <span class="n">TextColumnProcessor</span><span class="p">(</span><span class="n">text_config</span><span class="p">)</span>
 
     <span class="nb">print</span><span class="p">(</span><span class="s2">"Processing TEXT columns..."</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">"(This may take a moment for large datasets)</span><span class="se">\n</span><span class="s2">"</span><span class="p">)</span>
 
-    <span class="n">results</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="n">df_with_pcs</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
 
     <span class="k">for</span> <span class="n">col_name</span> <span class="ow">in</span> <span class="n">text_columns</span><span class="p">:</span>
@@ -8429,6 +8569,8 @@ Aggregate:  customer_id → ticket_text_pc1_mean_30d, ticket_text_pc2_std_7d, ..
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Features: </span><span class="si">{</span><span class="s1">', '</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">component_columns</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n\n</span><span class="s2">DataFrame now has </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">df_with_pcs</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span><span class="si">}</span><span class="s2"> columns (added </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">df_with_pcs</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span><span class="si">}</span><span class="s2"> PC columns)"</span><span class="p">)</span>
+<span class="k">elif</span> <span class="n">LIGHT_RUN</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"Text embedding analysis skipped (LIGHT_RUN)"</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -8456,7 +8598,7 @@ Aggregate:  customer_id → ticket_text_pc1_mean_30d, ticket_text_pc2_std_7d, ..
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [11]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
@@ -8516,7 +8658,7 @@ Aggregate:  customer_id → ticket_text_pc1_mean_30d, ticket_text_pc2_std_7d, ..
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [12]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
@@ -8576,12 +8718,23 @@ Aggregate:  customer_id → ticket_text_pc1_mean_30d, ticket_text_pc2_std_7d, ..
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=cell-19">
+</div>
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=66eaf74c">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
+</div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput celltag_papermill-error-cell-tag" data-mime-type="text/markdown">
+<p><span id="papermill-error-cell" style="color:red; font-family:Helvetica Neue, Helvetica, Arial, sans-serif; font-size:2em;"></span>Execution using papermill encountered an exception here and stopped:</p>
+</div>
+</div>
+</div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cell-19">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [13]:</div>
 <details class="tutorial-code-input">
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
@@ -8612,6 +8765,26 @@ Aggregate:  customer_id → ticket_text_pc1_mean_30d, ticket_text_pc2_std_7d, ..
 </div>
 </div>
 </details>
+</div>
+</div>
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="application/vnd.jupyter.stderr" tabindex="0">
+<pre>
+<span class="ansi-red-fg">---------------------------------------------------------------------------</span>
+<span class="ansi-red-fg">NameError</span>                                 Traceback (most recent call last)
+<span class="ansi-cyan-fg">Cell</span><span class="ansi-cyan-fg"> </span><span class="ansi-green-fg">In[13]</span><span class="ansi-green-fg">, line 22</span>
+<span class="ansi-green-fg">     18</span>     <span style="color: rgb(0,135,0)">print</span>(<span class="ansi-yellow-fg">f</span><span class="ansi-yellow-fg">"</span><span class="ansi-bold" style="color: rgb(175,95,0)">\n</span><span class="ansi-yellow-fg">Findings saved to: </span><span class="ansi-bold" style="color: rgb(175,95,135)">{</span>FINDINGS_PATH<span class="ansi-bold" style="color: rgb(175,95,135)">}</span><span class="ansi-yellow-fg">"</span>)
+<span class="ansi-green-fg">     20</span> <span class="ansi-bold" style="color: rgb(0,135,0)">from</span><span style="color: rgb(188,188,188)"> </span><span class="ansi-blue-intense-fg ansi-bold">customer_retention</span><span class="ansi-blue-intense-fg ansi-bold">.</span><span class="ansi-blue-intense-fg ansi-bold">analysis</span><span class="ansi-blue-intense-fg ansi-bold">.</span><span class="ansi-blue-intense-fg ansi-bold">notebook_html_exporter</span><span style="color: rgb(188,188,188)"> </span><span class="ansi-bold" style="color: rgb(0,135,0)">import</span> export_notebook_html
+<span class="ansi-green-fg">---&gt; </span><span class="ansi-green-fg">22</span> export_notebook_html(<span class="ansi-yellow-bg">Path</span>(<span class="ansi-yellow-fg">"</span><span class="ansi-yellow-fg">01a_a_temporal_text_deep_dive.ipynb</span><span class="ansi-yellow-fg">"</span>), EXPERIMENTS_DIR / <span class="ansi-yellow-fg">"</span><span class="ansi-yellow-fg">docs</span><span class="ansi-yellow-fg">"</span>)
+
+<span class="ansi-red-fg">NameError</span>: name 'Path' is not defined</pre>
+</div>
+</div>
 </div>
 </div>
 </div>
