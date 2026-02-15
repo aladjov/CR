@@ -206,7 +206,7 @@ class TemporalFeatureEngineer:
             velocity_features, velocity_group = self._compute_velocity(
                 lag_features, value_cols
             )
-            all_features.append(velocity_features.drop(columns=[entity_col]))
+            all_features.append(velocity_features)
             feature_groups.append(velocity_group)
         else:
             feature_groups.append(FeatureGroupResult(
@@ -220,7 +220,7 @@ class TemporalFeatureEngineer:
                 all_features[1] if len(all_features) > 1 else lag_features,
                 lag_features, value_cols, entity_col
             )
-            all_features.append(accel_features.drop(columns=[entity_col], errors='ignore'))
+            all_features.append(accel_features)
             feature_groups.append(accel_group)
         else:
             feature_groups.append(FeatureGroupResult(
@@ -233,7 +233,7 @@ class TemporalFeatureEngineer:
             lifecycle_features, lifecycle_group = self._compute_lifecycle(
                 events_df, entity_col, time_col, value_cols, ref_dates
             )
-            all_features.append(lifecycle_features.drop(columns=[entity_col]))
+            all_features.append(lifecycle_features)
             feature_groups.append(lifecycle_group)
         else:
             feature_groups.append(FeatureGroupResult(
@@ -246,7 +246,7 @@ class TemporalFeatureEngineer:
             recency_features, recency_group = self._compute_recency(
                 events_df, entity_col, time_col, ref_dates
             )
-            all_features.append(recency_features.drop(columns=[entity_col]))
+            all_features.append(recency_features)
             feature_groups.append(recency_group)
         else:
             feature_groups.append(FeatureGroupResult(
@@ -259,7 +259,7 @@ class TemporalFeatureEngineer:
             regularity_features, regularity_group = self._compute_regularity(
                 events_df, entity_col, time_col, ref_dates
             )
-            all_features.append(regularity_features.drop(columns=[entity_col]))
+            all_features.append(regularity_features)
             feature_groups.append(regularity_group)
         else:
             feature_groups.append(FeatureGroupResult(
@@ -272,7 +272,7 @@ class TemporalFeatureEngineer:
             cohort_features, cohort_group = self._compute_cohort_comparison(
                 lag_features, value_cols, entity_col
             )
-            all_features.append(cohort_features.drop(columns=[entity_col]))
+            all_features.append(cohort_features)
             feature_groups.append(cohort_group)
         else:
             feature_groups.append(FeatureGroupResult(
@@ -280,14 +280,9 @@ class TemporalFeatureEngineer:
                 rationale=self.RATIONALES[FeatureGroup.COHORT_COMPARISON], enabled=False
             ))
 
-        # Merge all features
         result_df = all_features[0]
         for df in all_features[1:]:
-            if entity_col in df.columns:
-                result_df = result_df.merge(df, on=entity_col, how="left")
-            else:
-                result_df = pd.concat([result_df.reset_index(drop=True),
-                                       df.reset_index(drop=True)], axis=1)
+            result_df = result_df.merge(df, on=entity_col, how="left")
 
         return TemporalFeatureResult(
             features_df=result_df,
