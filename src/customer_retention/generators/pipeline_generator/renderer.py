@@ -968,7 +968,7 @@ def run_experiment():
                 mlflow.log_metrics({**metrics, "cv_mean": cv.mean(), "cv_std": cv.std()})
                 log_feature_importance(model, feature_names)
                 model_artifact_name = get_model_name_with_hash(f"model_{name}")
-                mlflow.sklearn.log_model(model, name=model_artifact_name)
+                mlflow.sklearn.log_model(model, artifact_path=model_artifact_name)
                 print(f"{name}: ROC-AUC={metrics['roc_auc']:.4f}, PR-AUC={metrics['pr_auc']:.4f}, F1={metrics['f1']:.4f}")
                 if metrics["roc_auc"] > best_auc:
                     best_auc, best_model = metrics["roc_auc"], name
@@ -984,7 +984,7 @@ def run_experiment():
             metrics = compute_metrics(y_test, y_proba, y_pred)
             mlflow.log_metrics(metrics)
             xgb_model_name = get_model_name_with_hash("model_xgboost")
-            mlflow.xgboost.log_model(xgb_model, name=xgb_model_name)
+            mlflow.xgboost.log_model(xgb_model, artifact_path=xgb_model_name)
             importance = xgb_model.get_score(importance_type="gain")
             fi = pd.DataFrame({"feature": importance.keys(), "importance": importance.values()})
             fi = fi.sort_values("importance", ascending=False).reset_index(drop=True)
@@ -1576,7 +1576,7 @@ def apply_event_aggregation(df: pd.DataFrame) -> pd.DataFrame:
     ensure_datetime_column(df, TIME_COLUMN)
     df[TIME_COLUMN] = as_tz_naive(df[TIME_COLUMN])
     reference_date = df[TIME_COLUMN].max()
-    numeric_value_columns = [c for c in VALUE_COLUMNS if is_numeric_dtype(df[c])]
+    numeric_value_columns = [c for c in VALUE_COLUMNS if c in df.columns and is_numeric_dtype(df[c])]
     base = df.groupby(ENTITY_COLUMN).agg("first")[[]]
     parts = []
     if TARGET_COLUMN in df.columns:

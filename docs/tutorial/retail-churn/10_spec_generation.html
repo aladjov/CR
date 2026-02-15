@@ -7332,7 +7332,12 @@ a.anchor-link {
     if (!diagrams.length) {
       return;
     }
-    const mermaid = (await import("https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.7.0/mermaid.esm.min.mjs")).default;
+    const mermaid = (await import("https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.10.0/mermaid.esm.min.mjs")).default;
+    const elkUrl = "https://cdnjs.cloudflare.com/ajax/libs/mermaid-layout-elk/0.1.9/mermaid-layout-elk.esm.min.mjs";
+    if(elkUrl) {
+      const elkLayouts = (await import(elkUrl)).default;
+      mermaid.registerLayoutLoaders(elkLayouts);
+    }
     const parser = new DOMParser();
 
     mermaid.initialize({
@@ -7429,7 +7434,8 @@ a.anchor-link {
      * Post-process to ensure mermaid diagrams contain only valid SVG and XHTML.
      */
     function cleanMermaidSvg(svg) {
-      return svg.replace(RE_VOID_ELEMENT, replaceVoidElement);
+      svg = svg.replace(RE_VOID_ELEMENT, replaceVoidElement);
+      return `${SVG_XML_HEADER}${svg}`;
     }
 
 
@@ -7455,6 +7461,285 @@ a.anchor-link {
       }
       return `<${tag} ${rest}>`;
     }
+
+
+  /**
+   * Named HTML entities with their decimal equivalent codes.
+   *
+   * @see https://www.w3.org/TR/WD-html40-970708/sgml/entities.html
+   * */
+  const HTML_ENTITIES = `<!ENTITY Aacute "&#193;">
+<!ENTITY aacute "&#225;">
+<!ENTITY Acirc "&#194;">
+<!ENTITY acirc "&#226;">
+<!ENTITY acute "&#180;">
+<!ENTITY AElig "&#198;">
+<!ENTITY aelig "&#230;">
+<!ENTITY Agrave "&#192;">
+<!ENTITY agrave "&#224;">
+<!ENTITY alefsym "&#8501;">
+<!ENTITY Alpha "&#913;">
+<!ENTITY alpha "&#945;">
+<!ENTITY amp "&#38;">
+<!ENTITY and "&#8869;">
+<!ENTITY ang "&#8736;">
+<!ENTITY Aring "&#197;">
+<!ENTITY aring "&#229;">
+<!ENTITY asymp "&#8776;">
+<!ENTITY Atilde "&#195;">
+<!ENTITY atilde "&#227;">
+<!ENTITY Auml "&#196;">
+<!ENTITY auml "&#228;">
+<!ENTITY bdquo "&#8222;">
+<!ENTITY Beta "&#914;">
+<!ENTITY beta "&#946;">
+<!ENTITY brvbar "&#166;">
+<!ENTITY bull "&#8226;">
+<!ENTITY cap "&#8745;">
+<!ENTITY Ccedil "&#199;">
+<!ENTITY ccedil "&#231;">
+<!ENTITY cedil "&#184;">
+<!ENTITY cent "&#162;">
+<!ENTITY Chi "&#935;">
+<!ENTITY chi "&#967;">
+<!ENTITY circ "&#710;">
+<!ENTITY clubs "&#9827;">
+<!ENTITY cong "&#8773;">
+<!ENTITY copy "&#169;">
+<!ENTITY crarr "&#8629;">
+<!ENTITY cup "&#8746;">
+<!ENTITY curren "&#164;">
+<!ENTITY dagger "&#8224;">
+<!ENTITY Dagger "&#8225;">
+<!ENTITY darr "&#8595;">
+<!ENTITY dArr "&#8659;">
+<!ENTITY deg "&#176;">
+<!ENTITY Delta "&#916;">
+<!ENTITY delta "&#948;">
+<!ENTITY diams "&#9830;">
+<!ENTITY divide "&#247;">
+<!ENTITY Eacute "&#201;">
+<!ENTITY eacute "&#233;">
+<!ENTITY Ecirc "&#202;">
+<!ENTITY ecirc "&#234;">
+<!ENTITY Egrave "&#200;">
+<!ENTITY egrave "&#232;">
+<!ENTITY empty "&#8709;">
+<!ENTITY emsp "&#8195;">
+<!ENTITY ensp "&#8194;">
+<!ENTITY epsilon "&#949;">
+<!ENTITY Epsilon "&#917;">
+<!ENTITY equiv "&#8801;">
+<!ENTITY Eta "&#919;">
+<!ENTITY eta "&#951;">
+<!ENTITY ETH "&#208;">
+<!ENTITY eth "&#240;">
+<!ENTITY Euml "&#203;">
+<!ENTITY euml "&#235;">
+<!ENTITY exist "&#8707;">
+<!ENTITY fnof "&#402;">
+<!ENTITY forall "&#8704;">
+<!ENTITY frac12 "&#189;">
+<!ENTITY frac14 "&#188;">
+<!ENTITY frac34 "&#190;">
+<!ENTITY frasl "&#8260;">
+<!ENTITY Gamma "&#915;">
+<!ENTITY gamma "&#947;">
+<!ENTITY ge "&#8805;">
+<!ENTITY gt "&#62;">
+<!ENTITY harr "&#8596;">
+<!ENTITY hArr "&#8660;">
+<!ENTITY hearts "&#9829;">
+<!ENTITY hellip "&#8230;">
+<!ENTITY Iacute "&#205;">
+<!ENTITY iacute "&#237;">
+<!ENTITY Icirc "&#206;">
+<!ENTITY icirc "&#238;">
+<!ENTITY iexcl "&#161;">
+<!ENTITY Igrave "&#204;">
+<!ENTITY igrave "&#236;">
+<!ENTITY image "&#8465;">
+<!ENTITY infin "&#8734;">
+<!ENTITY int "&#8747;">
+<!ENTITY Iota "&#921;">
+<!ENTITY iota "&#953;">
+<!ENTITY iquest "&#191;">
+<!ENTITY isin "&#8712;">
+<!ENTITY Iuml "&#207;">
+<!ENTITY iuml "&#239;">
+<!ENTITY Kappa "&#922;">
+<!ENTITY kappa "&#954;">
+<!ENTITY Lambda "&#923;">
+<!ENTITY lambda "&#955;">
+<!ENTITY lang "&#9001;">
+<!ENTITY laquo "&#171;">
+<!ENTITY larr "&#8592;">
+<!ENTITY lArr "&#8656;">
+<!ENTITY lceil "&#8968;">
+<!ENTITY ldquo "&#8220;">
+<!ENTITY le "&#8804;">
+<!ENTITY lfloor "&#8970;">
+<!ENTITY lowast "&#8727;">
+<!ENTITY loz "&#9674;">
+<!ENTITY lrm "&#8206;">
+<!ENTITY lsaquo "&#8249;">
+<!ENTITY lsquo "&#8216;">
+<!ENTITY lt "&#60;">
+<!ENTITY macr "&#175;">
+<!ENTITY mdash "&#8212;">
+<!ENTITY micro "&#181;">
+<!ENTITY middot "&#183;">
+<!ENTITY minus "&#8722;">
+<!ENTITY Mu "&#924;">
+<!ENTITY mu "&#956;">
+<!ENTITY nabla "&#8711;">
+<!ENTITY nbsp "&#160;">
+<!ENTITY ndash "&#8211;">
+<!ENTITY ne "&#8800;">
+<!ENTITY ni "&#8715;">
+<!ENTITY not "&#172;">
+<!ENTITY notin "&#8713;">
+<!ENTITY nsub "&#8836;">
+<!ENTITY Ntilde "&#209;">
+<!ENTITY ntilde "&#241;">
+<!ENTITY Nu "&#925;">
+<!ENTITY nu "&#957;">
+<!ENTITY Oacute "&#211;">
+<!ENTITY oacute "&#243;">
+<!ENTITY Ocirc "&#212;">
+<!ENTITY ocirc "&#244;">
+<!ENTITY OElig "&#338;">
+<!ENTITY oelig "&#339;">
+<!ENTITY Ograve "&#210;">
+<!ENTITY ograve "&#242;">
+<!ENTITY oline "&#8254;">
+<!ENTITY Omega "&#937;">
+<!ENTITY omega "&#969;">
+<!ENTITY Omicron "&#927;">
+<!ENTITY omicron "&#959;">
+<!ENTITY oplus "&#8853;">
+<!ENTITY or "&#8870;">
+<!ENTITY ordf "&#170;">
+<!ENTITY ordm "&#186;">
+<!ENTITY Oslash "&#216;">
+<!ENTITY oslash "&#248;">
+<!ENTITY Otilde "&#213;">
+<!ENTITY otilde "&#245;">
+<!ENTITY otimes "&#8855;">
+<!ENTITY Ouml "&#214;">
+<!ENTITY ouml "&#246;">
+<!ENTITY para "&#182;">
+<!ENTITY part "&#8706;">
+<!ENTITY permil "&#8240;">
+<!ENTITY perp "&#8869;">
+<!ENTITY Phi "&#934;">
+<!ENTITY phi "&#966;">
+<!ENTITY Pi "&#928;">
+<!ENTITY pi "&#960;">
+<!ENTITY piv "&#982;">
+<!ENTITY plusmn "&#177;">
+<!ENTITY pound "&#163;">
+<!ENTITY prime "&#8242;">
+<!ENTITY Prime "&#8243;">
+<!ENTITY prod "&#8719;">
+<!ENTITY prop "&#8733;">
+<!ENTITY Psi "&#936;">
+<!ENTITY psi "&#968;">
+<!ENTITY quot "&#34;">
+<!ENTITY radic "&#8730;">
+<!ENTITY rang "&#9002;">
+<!ENTITY raquo "&#187;">
+<!ENTITY rarr "&#8594;">
+<!ENTITY rArr "&#8658;">
+<!ENTITY rceil "&#8969;">
+<!ENTITY rdquo "&#8221;">
+<!ENTITY real "&#8476;">
+<!ENTITY reg "&#174;">
+<!ENTITY rfloor "&#8971;">
+<!ENTITY Rho "&#929;">
+<!ENTITY rho "&#961;">
+<!ENTITY rlm "&#8207;">
+<!ENTITY rsaquo "&#8250;">
+<!ENTITY rsquo "&#8217;">
+<!ENTITY sbquo "&#8218;">
+<!ENTITY Scaron "&#352;">
+<!ENTITY scaron "&#353;">
+<!ENTITY sdot "&#8901;">
+<!ENTITY sect "&#167;">
+<!ENTITY shy "&#173;">
+<!ENTITY Sigma "&#931;">
+<!ENTITY sigma "&#963;">
+<!ENTITY sigmaf "&#962;">
+<!ENTITY sim "&#8764;">
+<!ENTITY spades "&#9824;">
+<!ENTITY sub "&#8834;">
+<!ENTITY sube "&#8838;">
+<!ENTITY sum "&#8721;">
+<!ENTITY sup "&#8835;">
+<!ENTITY sup1 "&#185;">
+<!ENTITY sup2 "&#178;">
+<!ENTITY sup3 "&#179;">
+<!ENTITY supe "&#8839;">
+<!ENTITY szlig "&#223;">
+<!ENTITY Tau "&#932;">
+<!ENTITY tau "&#964;">
+<!ENTITY there4 "&#8756;">
+<!ENTITY Theta "&#920;">
+<!ENTITY theta "&#952;">
+<!ENTITY thetasym "&#977;">
+<!ENTITY thinsp "&#8201;">
+<!ENTITY THORN "&#222;">
+<!ENTITY thorn "&#254;">
+<!ENTITY tilde "&#732;">
+<!ENTITY times "&#215;">
+<!ENTITY trade "&#8482;">
+<!ENTITY Uacute "&#218;">
+<!ENTITY uacute "&#250;">
+<!ENTITY uarr "&#8593;">
+<!ENTITY uArr "&#8657;">
+<!ENTITY Ucirc "&#219;">
+<!ENTITY ucirc "&#251;">
+<!ENTITY Ugrave "&#217;">
+<!ENTITY ugrave "&#249;">
+<!ENTITY uml "&#168;">
+<!ENTITY upsih "&#978;">
+<!ENTITY Upsilon "&#933;">
+<!ENTITY upsilon "&#965;">
+<!ENTITY Uuml "&#220;">
+<!ENTITY uuml "&#252;">
+<!ENTITY weierp "&#8472;">
+<!ENTITY Xi "&#926;">
+<!ENTITY xi "&#958;">
+<!ENTITY Yacute "&#221;">
+<!ENTITY yacute "&#253;">
+<!ENTITY yen "&#165;">
+<!ENTITY Yuml "&#376;">
+<!ENTITY yuml "&#255;">
+<!ENTITY Zeta "&#918;">
+<!ENTITY zeta "&#950;">
+<!ENTITY zwj "&#8205;">
+<!ENTITY zwnj "&#8204;">`.replace(/\n/g, ' ');
+
+  /**
+   * A reasonably strict xml declaration.
+   */
+  const XML_DECL = '<?xml version="1.0" standalone="no"?>';
+
+  /**
+   * The beginning of the XML doctype declaration.
+   */
+  const DOCTYPE_START = `<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [`;
+
+  /**
+   * The end of the XML docype declaration.
+   */
+  const DOCTYPE_END = ']>';
+
+  /**
+   * A full header for an SVG XML document.
+   */
+  const SVG_XML_HEADER = `${XML_DECL}
+    ${DOCTYPE_START}${HTML_ENTITIES}${DOCTYPE_END}`;
 
     void Promise.all([...diagrams].map(renderOneMarmaid));
   });
@@ -7643,7 +7928,7 @@ a.anchor-link {
 </style>
 <body class="jp-Notebook" data-jp-theme-light="true" data-jp-theme-name="JupyterLab Light">
 <main>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=c3ce8257">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=d428a219">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7666,7 +7951,7 @@ a.anchor-link {
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=522780a6">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=0b596fe5">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7676,7 +7961,7 @@ a.anchor-link {
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=7f06cae1">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=b805976d">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7686,8 +7971,15 @@ a.anchor-link {
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.notebook_progress</span><span class="w"> </span><span class="kn">import</span> <span class="n">track_and_export_previous</span>
+
+<span class="n">track_and_export_previous</span><span class="p">(</span><span class="s2">"10_spec_generation.ipynb"</span><span class="p">)</span>
+
 <span class="kn">from</span><span class="w"> </span><span class="nn">enum</span><span class="w"> </span><span class="kn">import</span> <span class="n">Enum</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.core.compat.detection</span><span class="w"> </span><span class="kn">import</span> <span class="n">is_databricks</span>
+
 
 <span class="k">class</span><span class="w"> </span><span class="nc">GenerationTarget</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
     <span class="n">LOCAL_FEAST_MLFLOW</span> <span class="o">=</span> <span class="s2">"local"</span>
@@ -7698,13 +7990,13 @@ a.anchor-link {
     <span class="n">PYTHON</span> <span class="o">=</span> <span class="s2">"py"</span>
     <span class="n">NOTEBOOK</span> <span class="o">=</span> <span class="s2">"ipynb"</span>
 
-<span class="c1"># === USER CONFIGURATION ===</span>
+<span class="c1"># === USER CONFIGURATION (override GENERATION_TARGET to force a specific target) ===</span>
 <span class="n">PIPELINE_NAME</span> <span class="o">=</span> <span class="s2">"customer_churn"</span>
-<span class="n">GENERATION_TARGET</span> <span class="o">=</span> <span class="n">GenerationTarget</span><span class="o">.</span><span class="n">LOCAL_FEAST_MLFLOW</span>
+<span class="n">GENERATION_TARGET</span> <span class="o">=</span> <span class="n">GenerationTarget</span><span class="o">.</span><span class="n">DATABRICKS</span> <span class="k">if</span> <span class="n">is_databricks</span><span class="p">()</span> <span class="k">else</span> <span class="n">GenerationTarget</span><span class="o">.</span><span class="n">LOCAL_FEAST_MLFLOW</span>
 <span class="n">OUTPUT_FORMAT</span> <span class="o">=</span> <span class="n">OutputFormat</span><span class="o">.</span><span class="n">PYTHON</span>
 
 <span class="c1"># Paths</span>
-<span class="n">FINDINGS_DIR</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s2">"../experiments/findings"</span><span class="p">)</span>
+<span class="c1"># FINDINGS_DIR imported from customer_retention.core.config.experiments</span>
 <span class="n">OUTPUT_BASE_DIR</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s2">"../generated_pipelines"</span><span class="p">)</span>
 
 <span class="c1"># Databricks settings (only used when GENERATION_TARGET == DATABRICKS)</span>
@@ -7712,7 +8004,7 @@ a.anchor-link {
 <span class="n">DATABRICKS_SCHEMA</span> <span class="o">=</span> <span class="s2">"ml_features"</span>
 
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Pipeline: </span><span class="si">{</span><span class="n">PIPELINE_NAME</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Target: </span><span class="si">{</span><span class="n">GENERATION_TARGET</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Target: </span><span class="si">{</span><span class="n">GENERATION_TARGET</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2"> (auto-detected)"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Format: </span><span class="si">{</span><span class="n">OUTPUT_FORMAT</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -7728,7 +8020,7 @@ a.anchor-link {
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
 <pre>Pipeline: customer_churn
-Target: local
+Target: local (auto-detected)
 Format: py
 </pre>
 </div>
@@ -7736,7 +8028,7 @@ Format: py
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=5f4ce4c9">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=2ebe3689">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7746,7 +8038,7 @@ Format: py
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=eb84d0e0">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=1ae682f2">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7757,50 +8049,64 @@ Format: py
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">yaml</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer</span><span class="w"> </span><span class="kn">import</span> <span class="n">ExplorationFindings</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.layered_recommendations</span><span class="w"> </span><span class="kn">import</span> <span class="n">RecommendationRegistry</span>
 
-<span class="k">def</span><span class="w"> </span><span class="nf">load_findings_and_recommendations</span><span class="p">(</span><span class="n">findings_dir</span><span class="p">:</span> <span class="n">Path</span><span class="p">):</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer</span><span class="w"> </span><span class="kn">import</span> <span class="n">ExplorationFindings</span><span class="p">,</span> <span class="n">load_notebook_findings</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.layered_recommendations</span><span class="w"> </span><span class="kn">import</span> <span class="n">RecommendationRegistry</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.core.config.experiments</span><span class="w"> </span><span class="kn">import</span> <span class="n">EXPERIMENTS_DIR</span><span class="p">,</span> <span class="n">FINDINGS_DIR</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">load_findings_and_recommendations</span><span class="p">(</span><span class="n">findings_dir</span><span class="p">):</span>
     <span class="n">findings_files</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span>
-        <span class="p">[</span><span class="n">f</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">findings_dir</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="s2">"*_findings.yaml"</span><span class="p">)</span> <span class="k">if</span> <span class="s2">"multi_dataset"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">f</span><span class="o">.</span><span class="n">name</span><span class="p">],</span>
-        <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">f</span><span class="p">:</span> <span class="n">f</span><span class="o">.</span><span class="n">stat</span><span class="p">()</span><span class="o">.</span><span class="n">st_mtime</span><span class="p">,</span> <span class="n">reverse</span><span class="o">=</span><span class="kc">True</span>
+        <span class="p">[</span><span class="n">f</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">findings_dir</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="s2">"*_findings.yaml"</span><span class="p">)</span> <span class="k">if</span> <span class="s2">"multi_dataset"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">f</span><span class="o">.</span><span class="n">name</span><span class="p">]</span>
     <span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">findings_files</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"No findings in </span><span class="si">{</span><span class="n">findings_dir</span><span class="si">}</span><span class="s2">. Run exploration notebooks first."</span><span class="p">)</span>
-    
+
     <span class="n">findings</span> <span class="o">=</span> <span class="n">ExplorationFindings</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">findings_files</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
-    
-    <span class="c1"># Look for recommendations file matching the findings file pattern</span>
-    <span class="c1"># Step 06 saves as: {name}_recommendations.yaml (matching {name}_findings.yaml)</span>
+
     <span class="n">findings_name</span> <span class="o">=</span> <span class="n">findings_files</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">stem</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">"_findings"</span><span class="p">,</span> <span class="s2">""</span><span class="p">)</span>
     <span class="n">recommendations_path</span> <span class="o">=</span> <span class="n">findings_dir</span> <span class="o">/</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">findings_name</span><span class="si">}</span><span class="s2">_recommendations.yaml"</span>
-    
-    <span class="c1"># Fallback to generic recommendations.yaml if not found</span>
+
     <span class="k">if</span> <span class="ow">not</span> <span class="n">recommendations_path</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
         <span class="n">recommendations_path</span> <span class="o">=</span> <span class="n">findings_dir</span> <span class="o">/</span> <span class="s2">"recommendations.yaml"</span>
-    
-    <span class="c1"># Final fallback: find any *_recommendations.yaml</span>
+
     <span class="k">if</span> <span class="ow">not</span> <span class="n">recommendations_path</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
-        <span class="n">rec_files</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">findings_dir</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="s2">"*_recommendations.yaml"</span><span class="p">),</span> 
-                          <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">f</span><span class="p">:</span> <span class="n">f</span><span class="o">.</span><span class="n">stat</span><span class="p">()</span><span class="o">.</span><span class="n">st_mtime</span><span class="p">,</span> <span class="n">reverse</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">rec_files</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">findings_dir</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="s2">"*_recommendations.yaml"</span><span class="p">))</span>
         <span class="k">if</span> <span class="n">rec_files</span><span class="p">:</span>
             <span class="n">recommendations_path</span> <span class="o">=</span> <span class="n">rec_files</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
-    
+
     <span class="n">registry</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="k">if</span> <span class="n">recommendations_path</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
         <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">recommendations_path</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
             <span class="n">registry</span> <span class="o">=</span> <span class="n">RecommendationRegistry</span><span class="o">.</span><span class="n">from_dict</span><span class="p">(</span><span class="n">yaml</span><span class="o">.</span><span class="n">safe_load</span><span class="p">(</span><span class="n">f</span><span class="p">))</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Loaded recommendations from: </span><span class="si">{</span><span class="n">recommendations_path</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-    
+
     <span class="n">multi_dataset_path</span> <span class="o">=</span> <span class="n">findings_dir</span> <span class="o">/</span> <span class="s2">"multi_dataset_findings.yaml"</span>
     <span class="n">multi_dataset</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="k">if</span> <span class="n">multi_dataset_path</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
         <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">multi_dataset_path</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
             <span class="n">multi_dataset</span> <span class="o">=</span> <span class="n">yaml</span><span class="o">.</span><span class="n">safe_load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
-    
+
     <span class="k">return</span> <span class="n">findings</span><span class="p">,</span> <span class="n">registry</span><span class="p">,</span> <span class="n">multi_dataset</span>
 
-<span class="n">findings</span><span class="p">,</span> <span class="n">registry</span><span class="p">,</span> <span class="n">multi_dataset</span> <span class="o">=</span> <span class="n">load_findings_and_recommendations</span><span class="p">(</span><span class="n">FINDINGS_DIR</span><span class="p">)</span>
+
+<span class="n">FINDINGS_PATH</span><span class="p">,</span> <span class="n">_namespace</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">load_notebook_findings</span><span class="p">(</span><span class="s2">"10_spec_generation.ipynb"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Using: </span><span class="si">{</span><span class="n">FINDINGS_PATH</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="k">if</span> <span class="n">_namespace</span><span class="p">:</span>
+    <span class="n">_dataset_name_10</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.session</span><span class="w"> </span><span class="kn">import</span> <span class="n">resolve_active_dataset</span>
+    <span class="n">_dataset_name_10</span> <span class="o">=</span> <span class="n">resolve_active_dataset</span><span class="p">(</span><span class="n">_namespace</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">_dataset_name_10</span><span class="p">:</span>
+        <span class="n">_findings_dir_10</span> <span class="o">=</span> <span class="n">_namespace</span><span class="o">.</span><span class="n">dataset_findings_dir</span><span class="p">(</span><span class="n">_dataset_name_10</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">_findings_dir_10</span><span class="o">.</span><span class="n">is_dir</span><span class="p">():</span>
+            <span class="n">findings</span><span class="p">,</span> <span class="n">registry</span><span class="p">,</span> <span class="n">multi_dataset</span> <span class="o">=</span> <span class="n">load_findings_and_recommendations</span><span class="p">(</span><span class="n">_findings_dir_10</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">findings</span><span class="p">,</span> <span class="n">registry</span><span class="p">,</span> <span class="n">multi_dataset</span> <span class="o">=</span> <span class="n">load_findings_and_recommendations</span><span class="p">(</span><span class="n">FINDINGS_DIR</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">findings</span><span class="p">,</span> <span class="n">registry</span><span class="p">,</span> <span class="n">multi_dataset</span> <span class="o">=</span> <span class="n">load_findings_and_recommendations</span><span class="p">(</span><span class="n">FINDINGS_DIR</span><span class="p">)</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">findings</span><span class="p">,</span> <span class="n">registry</span><span class="p">,</span> <span class="n">multi_dataset</span> <span class="o">=</span> <span class="n">load_findings_and_recommendations</span><span class="p">(</span><span class="n">FINDINGS_DIR</span><span class="p">)</span>
 
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Loaded: </span><span class="si">{</span><span class="n">findings</span><span class="o">.</span><span class="n">source_path</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Rows: </span><span class="si">{</span><span class="n">findings</span><span class="o">.</span><span class="n">row_count</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> | Columns: </span><span class="si">{</span><span class="n">findings</span><span class="o">.</span><span class="n">column_count</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
@@ -7820,19 +8126,26 @@ Format: py
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>Loaded recommendations from: customer_retention_retail_408768_recommendations.yaml
-Loaded: ../tests/fixtures/customer_retention_retail.csv
-Rows: 26,578 | Columns: 18
-Target: target
+<pre>Using: /Users/Vital/python/CustomerRetention/experiments/runs/retail-e7471284/datasets/customer_retention_retail/findings/customer_retention_retail_aggregated_findings.yaml
+</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>Loaded recommendations from: customer_retention_retail_aggregated_recommendations.yaml
+Loaded: /Users/Vital/python/CustomerRetention/experiments/runs/retail-e7471284/data/bronze/customer_retention_retail_aggregated
+Rows: 30,770 | Columns: 407
+Target: retained
 Recommendations: Loaded
-Multi-dataset: Loaded
+Multi-dataset: Not found
 </pre>
 </div>
 </div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=54239084">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=7ad0f92a">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7847,7 +8160,7 @@ Multi-dataset: Loaded
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=b155cd95">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=2dd7c21d">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7861,7 +8174,7 @@ Multi-dataset: Loaded
     <span class="k">if</span> <span class="ow">not</span> <span class="n">registry</span><span class="p">:</span>
         <span class="nb">print</span><span class="p">(</span><span class="s2">"No recommendations loaded. Run notebooks 02-07 first."</span><span class="p">)</span>
         <span class="k">return</span>
-    
+
     <span class="k">for</span> <span class="n">layer</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">"bronze"</span><span class="p">,</span> <span class="s2">"silver"</span><span class="p">,</span> <span class="s2">"gold"</span><span class="p">]:</span>
         <span class="n">recs</span> <span class="o">=</span> <span class="n">registry</span><span class="o">.</span><span class="n">get_by_layer</span><span class="p">(</span><span class="n">layer</span><span class="p">)</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="si">{</span><span class="n">layer</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">recs</span><span class="p">)</span><span class="si">}</span><span class="s2"> recommendations):"</span><span class="p">)</span>
@@ -7886,39 +8199,36 @@ Multi-dataset: Loaded
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
 <pre>
-BRONZE (9 recommendations):
+BRONZE (3 recommendations):
 --------------------------------------------------
-  [outlier] eopenrate: segment_aware_cap
-  [outlier] eclickrate: segment_aware_cap
-  [outlier] avgorder: winsorize
-  [outlier] ordfreq: log_transform
-  [deduplication] entity_id: keep_first
-  ... and 4 more
+  [filtering] eopenrate_sum_all_time: cap
+  [filtering] eclickrate_end: cap
+  [filtering] avgorder_trend_ratio: cap
 
-SILVER (31 recommendations):
+SILVER (7 recommendations):
 --------------------------------------------------
-  [derived] days_since_created: recency
-  [derived] days_between_created_and_firstorder: duration
-  [derived] days_between_created_and_lastorder: duration
-  [derived] created_month_sin_cos: cyclical
-  [derived] tenure_from_created: tenure
-  ... and 26 more
+  [derived] event_count_all_time_to_event_count_all_time_ratio: ratio
+  [derived] event_count_all_time_x_esent_sum_all_time: interaction
+  [derived] event_count_all_time_x_esent_mean_all_time: interaction
+  [derived] event_count_all_time_x_esent_max_all_time: interaction
+  [derived] esent_sum_all_time_x_esent_mean_all_time: interaction
+  ... and 2 more
 
-GOLD (16 recommendations):
+GOLD (1128 recommendations):
 --------------------------------------------------
-  [encoding] favday: cyclical
-  [encoding] city: one_hot
-  [encoding] city: onehot
-  [scaling] esent: standard
-  [feature_selection] esent: prioritize
-  ... and 11 more
+  [encoding] cohort_quarter: target
+  [feature_selection] event_count_all_time: drop_multicollinear
+  [feature_selection] event_count_all_time: drop_multicollinear
+  [feature_selection] event_count_all_time: drop_multicollinear
+  [feature_selection] event_count_all_time: drop_multicollinear
+  ... and 1123 more
 </pre>
 </div>
 </div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=8dd74bda">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=d2939644">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7929,7 +8239,7 @@ GOLD (16 recommendations):
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=f589fccf">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=2b072a27">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7939,9 +8249,7 @@ GOLD (16 recommendations):
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
-
-<span class="n">output_dir</span> <span class="o">=</span> <span class="n">OUTPUT_BASE_DIR</span> <span class="o">/</span> <span class="n">GENERATION_TARGET</span><span class="o">.</span><span class="n">value</span> <span class="o">/</span> <span class="n">PIPELINE_NAME</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="n">output_dir</span> <span class="o">=</span> <span class="n">OUTPUT_BASE_DIR</span> <span class="o">/</span> <span class="n">GENERATION_TARGET</span><span class="o">.</span><span class="n">value</span> <span class="o">/</span> <span class="n">PIPELINE_NAME</span>
 <span class="n">output_dir</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Output directory: </span><span class="si">{</span><span class="n">output_dir</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
@@ -7965,7 +8273,7 @@ GOLD (16 recommendations):
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=ba8d3355">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=ebf9479d">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7975,7 +8283,7 @@ GOLD (16 recommendations):
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=5a9d29e3">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cdac3474">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -7986,34 +8294,46 @@ GOLD (16 recommendations):
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="k">if</span> <span class="n">GENERATION_TARGET</span> <span class="o">==</span> <span class="n">GenerationTarget</span><span class="o">.</span><span class="n">LOCAL_FEAST_MLFLOW</span><span class="p">:</span>
-    <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.generators.spec_generator</span><span class="w"> </span><span class="kn">import</span> <span class="n">MLflowPipelineGenerator</span><span class="p">,</span> <span class="n">MLflowConfig</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.project_context</span><span class="w"> </span><span class="kn">import</span> <span class="n">ProjectContext</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.run_namespace</span><span class="w"> </span><span class="kn">import</span> <span class="n">RunNamespace</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.session</span><span class="w"> </span><span class="kn">import</span> <span class="n">mark_notebook</span>
     <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.generators.pipeline_generator</span><span class="w"> </span><span class="kn">import</span> <span class="n">PipelineGenerator</span>
-    
+    <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.generators.spec_generator</span><span class="w"> </span><span class="kn">import</span> <span class="n">MLflowConfig</span><span class="p">,</span> <span class="n">MLflowPipelineGenerator</span>
+
+    <span class="n">_namespace</span> <span class="o">=</span> <span class="n">RunNamespace</span><span class="o">.</span><span class="n">from_env</span><span class="p">()</span> <span class="ow">or</span> <span class="n">RunNamespace</span><span class="o">.</span><span class="n">from_latest</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">_namespace</span><span class="p">:</span>
+        <span class="n">mark_notebook</span><span class="p">(</span><span class="n">_namespace</span><span class="p">,</span> <span class="s2">"10_spec_generation.ipynb"</span><span class="p">)</span>
+
+    <span class="n">_pc</span> <span class="o">=</span> <span class="n">ProjectContext</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">_namespace</span><span class="o">.</span><span class="n">project_context_path</span><span class="p">)</span> <span class="k">if</span> <span class="n">_namespace</span> <span class="ow">and</span> <span class="n">_namespace</span><span class="o">.</span><span class="n">project_context_path</span><span class="o">.</span><span class="n">exists</span><span class="p">()</span> <span class="k">else</span> <span class="kc">None</span>
+    <span class="n">_intent</span> <span class="o">=</span> <span class="n">_pc</span><span class="o">.</span><span class="n">intent</span> <span class="k">if</span> <span class="n">_pc</span> <span class="k">else</span> <span class="kc">None</span>
+
     <span class="n">mlflow_config</span> <span class="o">=</span> <span class="n">MLflowConfig</span><span class="p">(</span>
         <span class="n">tracking_uri</span><span class="o">=</span><span class="s2">"./mlruns"</span><span class="p">,</span>
         <span class="n">experiment_name</span><span class="o">=</span><span class="n">PIPELINE_NAME</span><span class="p">,</span>
         <span class="n">log_data_quality</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
         <span class="n">nested_runs</span><span class="o">=</span><span class="kc">True</span>
     <span class="p">)</span>
-    
+
     <span class="n">mlflow_gen</span> <span class="o">=</span> <span class="n">MLflowPipelineGenerator</span><span class="p">(</span><span class="n">mlflow_config</span><span class="o">=</span><span class="n">mlflow_config</span><span class="p">,</span> <span class="n">output_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">output_dir</span><span class="p">))</span>
-    
+
     <span class="k">if</span> <span class="n">OUTPUT_FORMAT</span> <span class="o">==</span> <span class="n">OutputFormat</span><span class="o">.</span><span class="n">PYTHON</span><span class="p">:</span>
         <span class="n">saved</span> <span class="o">=</span> <span class="n">mlflow_gen</span><span class="o">.</span><span class="n">save_all</span><span class="p">(</span><span class="n">findings</span><span class="p">)</span>
         <span class="nb">print</span><span class="p">(</span><span class="s2">"Generated MLflow pipeline files:"</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">saved</span><span class="p">:</span>
             <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  </span><span class="si">{</span><span class="n">f</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-    
-    <span class="k">if</span> <span class="n">multi_dataset</span><span class="p">:</span>
-        <span class="n">pipeline_gen</span> <span class="o">=</span> <span class="n">PipelineGenerator</span><span class="p">(</span>
-            <span class="n">findings_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">FINDINGS_DIR</span><span class="p">),</span>
-            <span class="n">output_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">output_dir</span><span class="p">),</span>
-            <span class="n">pipeline_name</span><span class="o">=</span><span class="n">PIPELINE_NAME</span>
-        <span class="p">)</span>
-        <span class="n">orch_files</span> <span class="o">=</span> <span class="n">pipeline_gen</span><span class="o">.</span><span class="n">generate</span><span class="p">()</span>
-        <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Generated pipeline files (Bronze/Silver/Gold/Training):"</span><span class="p">)</span>
-        <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">orch_files</span><span class="p">:</span>
-            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  </span><span class="si">{</span><span class="n">f</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+    <span class="n">pipeline_gen</span> <span class="o">=</span> <span class="n">PipelineGenerator</span><span class="p">(</span>
+        <span class="n">findings_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">FINDINGS_DIR</span><span class="p">),</span>
+        <span class="n">output_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">output_dir</span><span class="p">),</span>
+        <span class="n">pipeline_name</span><span class="o">=</span><span class="n">PIPELINE_NAME</span><span class="p">,</span>
+        <span class="n">experiments_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">EXPERIMENTS_DIR</span><span class="p">),</span>
+        <span class="n">namespace</span><span class="o">=</span><span class="n">_namespace</span><span class="p">,</span>
+        <span class="n">intent</span><span class="o">=</span><span class="n">_intent</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">orch_files</span> <span class="o">=</span> <span class="n">pipeline_gen</span><span class="o">.</span><span class="n">generate</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Generated pipeline files (Bronze/Silver/Gold/Training):"</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">orch_files</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  </span><span class="si">{</span><span class="n">f</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="k">else</span><span class="p">:</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Skipping Local generation (target is </span><span class="si">{</span><span class="n">GENERATION_TARGET</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
 </pre></div>
@@ -8032,27 +8352,38 @@ GOLD (16 recommendations):
 <pre>Generated MLflow pipeline files:
   pipeline.py
   requirements.txt
-
+</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>
 Generated pipeline files (Bronze/Silver/Gold/Training):
   ../generated_pipelines/local/customer_churn/run_all.py
   ../generated_pipelines/local/customer_churn/config.py
-  ../generated_pipelines/local/customer_churn/bronze/bronze_customer_retention_retail.py
-  ../generated_pipelines/local/customer_churn/silver/silver_merge.py
-  ../generated_pipelines/local/customer_churn/gold/gold_features.py
+  ../generated_pipelines/local/customer_churn/landing/landing_customer_retention_retail.py
+  ../generated_pipelines/local/customer_churn/bronze/bronze_event_customer_retention_retail.py
+  ../generated_pipelines/local/customer_churn/bronze/bronze_entity_customer_retention_retail_aggregated.py
+  ../generated_pipelines/local/customer_churn/silver/silver_featureset_cust_rete_reta_aggr__b6be84a.py
+  ../generated_pipelines/local/customer_churn/gold/gold_features_cust_rete_reta_aggr__b6be84a.py
   ../generated_pipelines/local/customer_churn/training/ml_experiment.py
   ../generated_pipelines/local/customer_churn/pipeline_runner.py
   ../generated_pipelines/local/customer_churn/workflow.json
   ../generated_pipelines/local/customer_churn/feature_repo/feature_store.yaml
   ../generated_pipelines/local/customer_churn/feature_repo/features.py
-  ../generated_pipelines/local/customer_churn/scoring/run_scoring.py
-  ../generated_pipelines/local/customer_churn/scoring/scoring_dashboard.ipynb
+  ../generated_pipelines/local/customer_churn/validation/__init__.py
+  ../generated_pipelines/local/customer_churn/validation/validate_pipeline.py
+  ../generated_pipelines/local/customer_churn/validation/run_validation.py
+  ../generated_pipelines/local/customer_churn/docs/exploration_report.py
+  ../generated_pipelines/local/customer_churn/manifest.json
 </pre>
 </div>
 </div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=c726f460">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=ad9a65a4">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8062,7 +8393,7 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=43201499">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=49d55480">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8073,35 +8404,31 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="k">if</span> <span class="n">GENERATION_TARGET</span> <span class="o">==</span> <span class="n">GenerationTarget</span><span class="o">.</span><span class="n">DATABRICKS</span><span class="p">:</span>
-    <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.generators.spec_generator</span><span class="w"> </span><span class="kn">import</span> <span class="n">DatabricksSpecGenerator</span><span class="p">,</span> <span class="n">PipelineSpec</span><span class="p">,</span> <span class="n">SourceSpec</span>
-    
-    <span class="n">spec</span> <span class="o">=</span> <span class="n">PipelineSpec</span><span class="p">(</span>
-        <span class="n">name</span><span class="o">=</span><span class="n">PIPELINE_NAME</span><span class="p">,</span>
-        <span class="n">version</span><span class="o">=</span><span class="s2">"1.0.0"</span><span class="p">,</span>
-        <span class="n">sources</span><span class="o">=</span><span class="p">[</span><span class="n">SourceSpec</span><span class="p">(</span>
-            <span class="n">name</span><span class="o">=</span><span class="n">findings</span><span class="o">.</span><span class="n">source_path</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">"/"</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">".csv"</span><span class="p">,</span> <span class="s2">""</span><span class="p">),</span>
-            <span class="n">path</span><span class="o">=</span><span class="n">findings</span><span class="o">.</span><span class="n">source_path</span><span class="p">,</span>
-            <span class="nb">format</span><span class="o">=</span><span class="n">findings</span><span class="o">.</span><span class="n">source_format</span>
-        <span class="p">)]</span>
-    <span class="p">)</span>
-    
-    <span class="k">if</span> <span class="n">findings</span><span class="o">.</span><span class="n">target_column</span><span class="p">:</span>
-        <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.generators.spec_generator</span><span class="w"> </span><span class="kn">import</span> <span class="n">ModelSpec</span>
-        <span class="n">spec</span><span class="o">.</span><span class="n">model_config</span> <span class="o">=</span> <span class="n">ModelSpec</span><span class="p">(</span>
-            <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">PIPELINE_NAME</span><span class="si">}</span><span class="s2">_model"</span><span class="p">,</span>
-            <span class="n">model_type</span><span class="o">=</span><span class="s2">"gradient_boosting"</span><span class="p">,</span>
-            <span class="n">target_column</span><span class="o">=</span><span class="n">findings</span><span class="o">.</span><span class="n">target_column</span>
-        <span class="p">)</span>
-    
-    <span class="n">db_gen</span> <span class="o">=</span> <span class="n">DatabricksSpecGenerator</span><span class="p">(</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.project_context</span><span class="w"> </span><span class="kn">import</span> <span class="n">ProjectContext</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.run_namespace</span><span class="w"> </span><span class="kn">import</span> <span class="n">RunNamespace</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer.session</span><span class="w"> </span><span class="kn">import</span> <span class="n">mark_notebook</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.generators.pipeline_generator</span><span class="w"> </span><span class="kn">import</span> <span class="n">DatabricksPipelineGenerator</span>
+
+    <span class="n">_namespace</span> <span class="o">=</span> <span class="n">RunNamespace</span><span class="o">.</span><span class="n">from_env</span><span class="p">()</span> <span class="ow">or</span> <span class="n">RunNamespace</span><span class="o">.</span><span class="n">from_latest</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">_namespace</span><span class="p">:</span>
+        <span class="n">mark_notebook</span><span class="p">(</span><span class="n">_namespace</span><span class="p">,</span> <span class="s2">"10_spec_generation.ipynb"</span><span class="p">)</span>
+
+    <span class="n">_pc</span> <span class="o">=</span> <span class="n">ProjectContext</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">_namespace</span><span class="o">.</span><span class="n">project_context_path</span><span class="p">)</span> <span class="k">if</span> <span class="n">_namespace</span> <span class="ow">and</span> <span class="n">_namespace</span><span class="o">.</span><span class="n">project_context_path</span><span class="o">.</span><span class="n">exists</span><span class="p">()</span> <span class="k">else</span> <span class="kc">None</span>
+    <span class="n">_intent</span> <span class="o">=</span> <span class="n">_pc</span><span class="o">.</span><span class="n">intent</span> <span class="k">if</span> <span class="n">_pc</span> <span class="k">else</span> <span class="kc">None</span>
+
+    <span class="n">pipeline_gen</span> <span class="o">=</span> <span class="n">DatabricksPipelineGenerator</span><span class="p">(</span>
+        <span class="n">findings_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">FINDINGS_DIR</span><span class="p">),</span>
+        <span class="n">output_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">output_dir</span><span class="p">),</span>
+        <span class="n">pipeline_name</span><span class="o">=</span><span class="n">PIPELINE_NAME</span><span class="p">,</span>
         <span class="n">catalog</span><span class="o">=</span><span class="n">DATABRICKS_CATALOG</span><span class="p">,</span>
         <span class="n">schema</span><span class="o">=</span><span class="n">DATABRICKS_SCHEMA</span><span class="p">,</span>
-        <span class="n">output_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">output_dir</span><span class="p">)</span>
+        <span class="n">experiments_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">EXPERIMENTS_DIR</span><span class="p">),</span>
+        <span class="n">namespace</span><span class="o">=</span><span class="n">_namespace</span><span class="p">,</span>
+        <span class="n">intent</span><span class="o">=</span><span class="n">_intent</span><span class="p">,</span>
     <span class="p">)</span>
-    
-    <span class="n">saved</span> <span class="o">=</span> <span class="n">db_gen</span><span class="o">.</span><span class="n">save_all</span><span class="p">(</span><span class="n">spec</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"Generated Databricks artifacts:"</span><span class="p">)</span>
-    <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">saved</span><span class="p">:</span>
+    <span class="n">generated_files</span> <span class="o">=</span> <span class="n">pipeline_gen</span><span class="o">.</span><span class="n">generate</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"Generated Databricks pipeline files (Bronze/Silver/Gold/Training):"</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">generated_files</span><span class="p">:</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  </span><span class="si">{</span><span class="n">f</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="k">else</span><span class="p">:</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Skipping Databricks generation (target is </span><span class="si">{</span><span class="n">GENERATION_TARGET</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
@@ -8125,7 +8452,7 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=9c366994">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=1ed22b7d">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8135,7 +8462,7 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=2d0f6514">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=fffd0b3a">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8147,15 +8474,15 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="k">if</span> <span class="n">GENERATION_TARGET</span> <span class="o">==</span> <span class="n">GenerationTarget</span><span class="o">.</span><span class="n">LLM_DOCS</span><span class="p">:</span>
     <span class="kn">from</span><span class="w"> </span><span class="nn">customer_retention.analysis.auto_explorer</span><span class="w"> </span><span class="kn">import</span> <span class="n">RecommendationEngine</span>
-    
+
     <span class="n">recommender</span> <span class="o">=</span> <span class="n">RecommendationEngine</span><span class="p">()</span>
     <span class="n">target_rec</span> <span class="o">=</span> <span class="n">recommender</span><span class="o">.</span><span class="n">recommend_target</span><span class="p">(</span><span class="n">findings</span><span class="p">)</span>
     <span class="n">feature_recs</span> <span class="o">=</span> <span class="n">recommender</span><span class="o">.</span><span class="n">recommend_features</span><span class="p">(</span><span class="n">findings</span><span class="p">)</span>
     <span class="n">cleaning_recs</span> <span class="o">=</span> <span class="n">recommender</span><span class="o">.</span><span class="n">recommend_cleaning</span><span class="p">(</span><span class="n">findings</span><span class="p">)</span>
-    
+
     <span class="n">docs_dir</span> <span class="o">=</span> <span class="n">output_dir</span> <span class="o">/</span> <span class="s2">"docs"</span>
     <span class="n">docs_dir</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-    
+
     <span class="c1"># 1. Overview</span>
     <span class="n">overview</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"""# </span><span class="si">{</span><span class="n">PIPELINE_NAME</span><span class="si">}</span><span class="s2"> Pipeline Overview</span>
 
@@ -8178,7 +8505,7 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
     <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">col</span> <span class="ow">in</span> <span class="nb">list</span><span class="p">(</span><span class="n">findings</span><span class="o">.</span><span class="n">columns</span><span class="o">.</span><span class="n">items</span><span class="p">())[:</span><span class="mi">20</span><span class="p">]:</span>
         <span class="n">overview</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">"| </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2"> | </span><span class="si">{</span><span class="n">col</span><span class="o">.</span><span class="n">inferred_type</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2"> | </span><span class="si">{</span><span class="n">col</span><span class="o">.</span><span class="n">null_percentage</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">% | </span><span class="si">{</span><span class="n">col</span><span class="o">.</span><span class="n">unique_count</span><span class="si">}</span><span class="s2"> |</span><span class="se">\n</span><span class="s2">"</span>
     <span class="p">(</span><span class="n">docs_dir</span> <span class="o">/</span> <span class="s2">"01_overview.md"</span><span class="p">)</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">overview</span><span class="p">)</span>
-    
+
     <span class="c1"># 2. Bronze layer - separate file per source</span>
     <span class="k">if</span> <span class="n">registry</span> <span class="ow">and</span> <span class="n">registry</span><span class="o">.</span><span class="n">sources</span><span class="p">:</span>
         <span class="k">for</span> <span class="n">source_name</span><span class="p">,</span> <span class="n">bronze_recs</span> <span class="ow">in</span> <span class="n">registry</span><span class="o">.</span><span class="n">sources</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
@@ -8191,38 +8518,38 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 <span class="s2">"""</span>
             <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">bronze_recs</span><span class="o">.</span><span class="n">null_handling</span><span class="p">:</span>
                 <span class="n">bronze_doc</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">"- `</span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">target_column</span><span class="si">}</span><span class="s2">`: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">action</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">parameters</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'strategy'</span><span class="p">,</span><span class="w"> </span><span class="s1">''</span><span class="p">)</span><span class="si">}</span><span class="s2">) - </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">rationale</span><span class="si">}</span><span class="se">\n</span><span class="s2">"</span>
-            
+
             <span class="n">bronze_doc</span> <span class="o">+=</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">## Outlier Handling</span><span class="se">\n</span><span class="s2">"</span>
             <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">bronze_recs</span><span class="o">.</span><span class="n">outlier_handling</span><span class="p">:</span>
                 <span class="n">bronze_doc</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">"- `</span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">target_column</span><span class="si">}</span><span class="s2">`: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">action</span><span class="si">}</span><span class="s2"> - </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">rationale</span><span class="si">}</span><span class="se">\n</span><span class="s2">"</span>
-            
+
             <span class="n">bronze_doc</span> <span class="o">+=</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">## Type Conversions</span><span class="se">\n</span><span class="s2">"</span>
             <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">bronze_recs</span><span class="o">.</span><span class="n">type_conversions</span><span class="p">:</span>
                 <span class="n">bronze_doc</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">"- `</span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">target_column</span><span class="si">}</span><span class="s2">`: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">action</span><span class="si">}</span><span class="s2"> - </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">rationale</span><span class="si">}</span><span class="se">\n</span><span class="s2">"</span>
-            
+
             <span class="n">bronze_doc</span> <span class="o">+=</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">## Deduplication</span><span class="se">\n</span><span class="s2">"</span>
             <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">bronze_recs</span><span class="o">.</span><span class="n">deduplication</span><span class="p">:</span>
                 <span class="n">bronze_doc</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">"- `</span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">target_column</span><span class="si">}</span><span class="s2">`: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">action</span><span class="si">}</span><span class="s2"> - </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">rationale</span><span class="si">}</span><span class="se">\n</span><span class="s2">"</span>
-            
+
             <span class="n">bronze_doc</span> <span class="o">+=</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">## Filtering</span><span class="se">\n</span><span class="s2">"</span>
             <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">bronze_recs</span><span class="o">.</span><span class="n">filtering</span><span class="p">:</span>
                 <span class="n">bronze_doc</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">"- `</span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">target_column</span><span class="si">}</span><span class="s2">`: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">action</span><span class="si">}</span><span class="s2"> - </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">rationale</span><span class="si">}</span><span class="se">\n</span><span class="s2">"</span>
-            
+
             <span class="n">bronze_doc</span> <span class="o">+=</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">## Text Processing</span><span class="se">\n</span><span class="s2">"</span>
             <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">bronze_recs</span><span class="o">.</span><span class="n">text_processing</span><span class="p">:</span>
                 <span class="n">bronze_doc</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">"- `</span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">target_column</span><span class="si">}</span><span class="s2">`: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">action</span><span class="si">}</span><span class="s2"> - </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">rationale</span><span class="si">}</span><span class="se">\n</span><span class="s2">"</span>
-            
+
             <span class="n">safe_name</span> <span class="o">=</span> <span class="n">source_name</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">" "</span><span class="p">,</span> <span class="s2">"_"</span><span class="p">)</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
             <span class="p">(</span><span class="n">docs_dir</span> <span class="o">/</span> <span class="sa">f</span><span class="s2">"02_bronze_cleaning_</span><span class="si">{</span><span class="n">safe_name</span><span class="si">}</span><span class="s2">.md"</span><span class="p">)</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">bronze_doc</span><span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="n">bronze_doc</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"""# Bronze Layer - Data Cleaning</span>
+        <span class="n">bronze_doc</span> <span class="o">=</span> <span class="s2">"""# Bronze Layer - Data Cleaning</span>
 
 <span class="s2">## Cleaning Recommendations</span>
 <span class="s2">"""</span>
         <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">cleaning_recs</span><span class="p">:</span>
             <span class="n">bronze_doc</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">### </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">column_name</span><span class="si">}</span><span class="se">\n</span><span class="s2">- **Strategy**: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">strategy</span><span class="si">}</span><span class="se">\n</span><span class="s2">- **Severity**: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">severity</span><span class="si">}</span><span class="se">\n</span><span class="s2">- **Rationale**: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">rationale</span><span class="si">}</span><span class="se">\n</span><span class="s2">"</span>
         <span class="p">(</span><span class="n">docs_dir</span> <span class="o">/</span> <span class="s2">"02_bronze_cleaning.md"</span><span class="p">)</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">bronze_doc</span><span class="p">)</span>
-    
+
     <span class="c1"># 3. Silver layer</span>
     <span class="n">silver_doc</span> <span class="o">=</span> <span class="s2">"""# Silver Layer - Feature Engineering</span>
 
@@ -8232,18 +8559,18 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
         <span class="n">silver_doc</span> <span class="o">+=</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">### Joins</span><span class="se">\n</span><span class="s2">"</span>
         <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">registry</span><span class="o">.</span><span class="n">silver</span><span class="o">.</span><span class="n">joins</span><span class="p">:</span>
             <span class="n">silver_doc</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">"- </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">parameters</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'left_source'</span><span class="p">,</span><span class="w"> </span><span class="s1">''</span><span class="p">)</span><span class="si">}</span><span class="s2"> ⟷ </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">parameters</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'right_source'</span><span class="p">,</span><span class="w"> </span><span class="s1">''</span><span class="p">)</span><span class="si">}</span><span class="s2"> on `</span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">parameters</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'join_keys'</span><span class="p">,</span><span class="w"> </span><span class="p">[])</span><span class="si">}</span><span class="s2">`</span><span class="se">\n</span><span class="s2">"</span>
-        
+
         <span class="n">silver_doc</span> <span class="o">+=</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">### Aggregations</span><span class="se">\n</span><span class="s2">"</span>
         <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">registry</span><span class="o">.</span><span class="n">silver</span><span class="o">.</span><span class="n">aggregations</span><span class="p">:</span>
             <span class="n">silver_doc</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">"- `</span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">target_column</span><span class="si">}</span><span class="s2">`: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">action</span><span class="si">}</span><span class="s2"> - windows: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">parameters</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'windows'</span><span class="p">,</span><span class="w"> </span><span class="p">[])</span><span class="si">}</span><span class="se">\n</span><span class="s2">"</span>
-        
+
         <span class="n">silver_doc</span> <span class="o">+=</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">### Derived Columns</span><span class="se">\n</span><span class="s2">"</span>
         <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">registry</span><span class="o">.</span><span class="n">silver</span><span class="o">.</span><span class="n">derived_columns</span><span class="p">:</span>
             <span class="n">silver_doc</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">"- `</span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">target_column</span><span class="si">}</span><span class="s2">`: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">parameters</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'expression'</span><span class="p">,</span><span class="w"> </span><span class="n">rec</span><span class="o">.</span><span class="n">action</span><span class="p">)</span><span class="si">}</span><span class="se">\n</span><span class="s2">"</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="n">silver_doc</span> <span class="o">+=</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">No silver-layer recommendations found.</span><span class="se">\n</span><span class="s2">"</span>
     <span class="p">(</span><span class="n">docs_dir</span> <span class="o">/</span> <span class="s2">"03_silver_features.md"</span><span class="p">)</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">silver_doc</span><span class="p">)</span>
-    
+
     <span class="c1"># 4. Gold layer</span>
     <span class="n">gold_doc</span> <span class="o">=</span> <span class="s2">"""# Gold Layer - ML Features</span>
 
@@ -8251,25 +8578,25 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 <span class="s2">"""</span>
     <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">feature_recs</span><span class="p">[:</span><span class="mi">15</span><span class="p">]:</span>
         <span class="n">gold_doc</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">### </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">feature_name</span><span class="si">}</span><span class="se">\n</span><span class="s2">- **Source**: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">source_column</span><span class="si">}</span><span class="se">\n</span><span class="s2">- **Type**: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">feature_type</span><span class="si">}</span><span class="se">\n</span><span class="s2">- **Description**: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">description</span><span class="si">}</span><span class="se">\n</span><span class="s2">"</span>
-    
+
     <span class="k">if</span> <span class="n">registry</span> <span class="ow">and</span> <span class="n">registry</span><span class="o">.</span><span class="n">gold</span><span class="p">:</span>
         <span class="n">gold_doc</span> <span class="o">+=</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">## Encoding</span><span class="se">\n</span><span class="s2">"</span>
         <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">registry</span><span class="o">.</span><span class="n">gold</span><span class="o">.</span><span class="n">encoding</span><span class="p">:</span>
             <span class="n">gold_doc</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">"- `</span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">target_column</span><span class="si">}</span><span class="s2">`: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">parameters</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'method'</span><span class="p">,</span><span class="w"> </span><span class="n">rec</span><span class="o">.</span><span class="n">action</span><span class="p">)</span><span class="si">}</span><span class="se">\n</span><span class="s2">"</span>
-        
+
         <span class="n">gold_doc</span> <span class="o">+=</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">## Scaling</span><span class="se">\n</span><span class="s2">"</span>
         <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">registry</span><span class="o">.</span><span class="n">gold</span><span class="o">.</span><span class="n">scaling</span><span class="p">:</span>
             <span class="n">gold_doc</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">"- `</span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">target_column</span><span class="si">}</span><span class="s2">`: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">parameters</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'method'</span><span class="p">,</span><span class="w"> </span><span class="n">rec</span><span class="o">.</span><span class="n">action</span><span class="p">)</span><span class="si">}</span><span class="se">\n</span><span class="s2">"</span>
-        
+
         <span class="n">gold_doc</span> <span class="o">+=</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">## Feature Selection</span><span class="se">\n</span><span class="s2">"</span>
         <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">registry</span><span class="o">.</span><span class="n">gold</span><span class="o">.</span><span class="n">feature_selection</span><span class="p">:</span>
             <span class="n">gold_doc</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">"- `</span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">target_column</span><span class="si">}</span><span class="s2">`: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">action</span><span class="si">}</span><span class="s2"> - </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">rationale</span><span class="si">}</span><span class="se">\n</span><span class="s2">"</span>
-        
+
         <span class="n">gold_doc</span> <span class="o">+=</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">## Transformations</span><span class="se">\n</span><span class="s2">"</span>
         <span class="k">for</span> <span class="n">rec</span> <span class="ow">in</span> <span class="n">registry</span><span class="o">.</span><span class="n">gold</span><span class="o">.</span><span class="n">transformations</span><span class="p">:</span>
             <span class="n">gold_doc</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">"- `</span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">target_column</span><span class="si">}</span><span class="s2">`: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">action</span><span class="si">}</span><span class="s2"> - </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">parameters</span><span class="si">}</span><span class="se">\n</span><span class="s2">"</span>
     <span class="p">(</span><span class="n">docs_dir</span> <span class="o">/</span> <span class="s2">"04_gold_ml_features.md"</span><span class="p">)</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">gold_doc</span><span class="p">)</span>
-    
+
     <span class="c1"># 5. Training</span>
     <span class="n">training_doc</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"""# Model Training</span>
 
@@ -8288,7 +8615,7 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 <span class="s2">- F1 Score</span>
 <span class="s2">"""</span>
     <span class="p">(</span><span class="n">docs_dir</span> <span class="o">/</span> <span class="s2">"05_training.md"</span><span class="p">)</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">training_doc</span><span class="p">)</span>
-    
+
     <span class="nb">print</span><span class="p">(</span><span class="s2">"Generated LLM documentation:"</span><span class="p">)</span>
     <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">docs_dir</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="s2">"*.md"</span><span class="p">)):</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  </span><span class="si">{</span><span class="n">f</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
@@ -8314,7 +8641,7 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=6166145c">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=09cfe62c">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8325,7 +8652,7 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=acfa5260">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=8a006314">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8337,11 +8664,12 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
 
+
 <span class="k">def</span><span class="w"> </span><span class="nf">py_to_notebook</span><span class="p">(</span><span class="n">py_path</span><span class="p">:</span> <span class="n">Path</span><span class="p">):</span>
     <span class="n">content</span> <span class="o">=</span> <span class="n">py_path</span><span class="o">.</span><span class="n">read_text</span><span class="p">()</span>
     <span class="n">cells</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="n">current_lines</span> <span class="o">=</span> <span class="p">[]</span>
-    
+
     <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">content</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">"</span><span class="p">):</span>
         <span class="k">if</span> <span class="n">line</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">"# </span><span class="si">%%</span><span class="s2"> "</span><span class="p">)</span> <span class="ow">or</span> <span class="n">line</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">"# </span><span class="si">%%</span><span class="se">\n</span><span class="s2">"</span><span class="p">):</span>
             <span class="k">if</span> <span class="n">current_lines</span><span class="p">:</span>
@@ -8352,16 +8680,16 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
                 <span class="n">cells</span><span class="o">.</span><span class="n">append</span><span class="p">({</span><span class="s2">"cell_type"</span><span class="p">:</span> <span class="s2">"markdown"</span><span class="p">,</span> <span class="s2">"metadata"</span><span class="p">:</span> <span class="p">{},</span> <span class="s2">"source"</span><span class="p">:</span> <span class="p">[</span><span class="sa">f</span><span class="s2">"## </span><span class="si">{</span><span class="n">title</span><span class="si">}</span><span class="s2">"</span><span class="p">]})</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="n">current_lines</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">line</span> <span class="o">+</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">"</span><span class="p">)</span>
-    
+
     <span class="k">if</span> <span class="n">current_lines</span><span class="p">:</span>
         <span class="n">cells</span><span class="o">.</span><span class="n">append</span><span class="p">({</span><span class="s2">"cell_type"</span><span class="p">:</span> <span class="s2">"code"</span><span class="p">,</span> <span class="s2">"metadata"</span><span class="p">:</span> <span class="p">{},</span> <span class="s2">"source"</span><span class="p">:</span> <span class="n">current_lines</span><span class="p">,</span> <span class="s2">"outputs"</span><span class="p">:</span> <span class="p">[],</span> <span class="s2">"execution_count"</span><span class="p">:</span> <span class="kc">None</span><span class="p">})</span>
-    
+
     <span class="n">notebook</span> <span class="o">=</span> <span class="p">{</span>
         <span class="s2">"cells"</span><span class="p">:</span> <span class="n">cells</span><span class="p">,</span>
         <span class="s2">"metadata"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"kernelspec"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"display_name"</span><span class="p">:</span> <span class="s2">"Python 3"</span><span class="p">,</span> <span class="s2">"language"</span><span class="p">:</span> <span class="s2">"python"</span><span class="p">,</span> <span class="s2">"name"</span><span class="p">:</span> <span class="s2">"python3"</span><span class="p">}},</span>
         <span class="s2">"nbformat"</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span> <span class="s2">"nbformat_minor"</span><span class="p">:</span> <span class="mi">4</span>
     <span class="p">}</span>
-    
+
     <span class="n">out_path</span> <span class="o">=</span> <span class="n">py_path</span><span class="o">.</span><span class="n">with_suffix</span><span class="p">(</span><span class="s2">".ipynb"</span><span class="p">)</span>
     <span class="n">out_path</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">notebook</span><span class="p">,</span> <span class="n">indent</span><span class="o">=</span><span class="mi">1</span><span class="p">))</span>
     <span class="k">return</span> <span class="n">out_path</span>
@@ -8394,7 +8722,7 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=0f53c210">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=6e53142b">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8405,7 +8733,7 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=dee77a20">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=482c6e06">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8415,32 +8743,28 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 <summary>Show/Hide Code</summary>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="c1"># Uncomment below to run the pipeline after generation</span>
-<span class="c1"># RUN_PIPELINE = True</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="n">RUN_PIPELINE</span> <span class="o">=</span> <span class="kc">True</span>
 
-<span class="n">RUN_PIPELINE</span> <span class="o">=</span> <span class="kc">False</span>
+<span class="k">if</span> <span class="n">RUN_PIPELINE</span> <span class="ow">and</span> <span class="n">GENERATION_TARGET</span> <span class="o">==</span> <span class="n">GenerationTarget</span><span class="o">.</span><span class="n">DATABRICKS</span><span class="p">:</span>
+    <span class="n">runner_notebook</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">output_dir</span> <span class="o">/</span> <span class="s2">"pipeline_runner"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Running: </span><span class="si">{</span><span class="n">runner_notebook</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"Databricks pipeline: Bronze → Silver → Gold → Training..."</span><span class="p">)</span>
+    <span class="n">dbutils</span><span class="o">.</span><span class="n">notebook</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">runner_notebook</span><span class="p">,</span> <span class="mi">3600</span><span class="p">)</span>
 
-<span class="n">run_all_path</span> <span class="o">=</span> <span class="n">output_dir</span> <span class="o">/</span> <span class="s2">"run_all.py"</span>
-
-<span class="k">if</span> <span class="n">RUN_PIPELINE</span> <span class="ow">and</span> <span class="n">GENERATION_TARGET</span> <span class="o">==</span> <span class="n">GenerationTarget</span><span class="o">.</span><span class="n">LOCAL_FEAST_MLFLOW</span><span class="p">:</span>
+<span class="k">elif</span> <span class="n">RUN_PIPELINE</span> <span class="ow">and</span> <span class="n">GENERATION_TARGET</span> <span class="o">==</span> <span class="n">GenerationTarget</span><span class="o">.</span><span class="n">LOCAL_FEAST_MLFLOW</span><span class="p">:</span>
     <span class="kn">import</span><span class="w"> </span><span class="nn">subprocess</span>
-    <span class="k">if</span> <span class="n">run_all_path</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Running: python </span><span class="si">{</span><span class="n">run_all_path</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-        <span class="nb">print</span><span class="p">(</span><span class="s2">"Pipeline will run and MLflow UI will open automatically..."</span><span class="p">)</span>
-        <span class="n">subprocess</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="s2">"python"</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">run_all_path</span><span class="p">)],</span> <span class="n">cwd</span><span class="o">=</span><span class="n">run_all_path</span><span class="o">.</span><span class="n">parent</span><span class="p">)</span>
+    <span class="n">runner_path</span> <span class="o">=</span> <span class="n">output_dir</span> <span class="o">/</span> <span class="s2">"pipeline_runner.py"</span>
+    <span class="k">if</span> <span class="n">runner_path</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Running: python </span><span class="si">{</span><span class="n">runner_path</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"Pipeline: Landing → Bronze → Silver → Gold → Training..."</span><span class="p">)</span>
+        <span class="n">subprocess</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="s2">"python"</span><span class="p">,</span> <span class="s2">"pipeline_runner.py"</span><span class="p">],</span> <span class="n">cwd</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">output_dir</span><span class="o">.</span><span class="n">resolve</span><span class="p">()))</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"run_all.py not found. Generate first by running cells above."</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"pipeline_runner.py not found. Generate first by running cells above."</span><span class="p">)</span>
+
 <span class="k">else</span><span class="p">:</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">"To run the complete pipeline:"</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">  cd </span><span class="si">{</span><span class="n">output_dir</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  python run_all.py"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">This will:"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"  1. Run Bronze layers (parallel)"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"  2. Run Silver merge"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"  3. Run Gold features"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"  4. Train models with MLflow"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"  5. Auto-start MLflow UI and open browser"</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"  6. Press Ctrl+C to stop MLflow UI when done"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"  python pipeline_runner.py"</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -8454,25 +8778,105 @@ Generated pipeline files (Bronze/Silver/Gold/Training):
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>To run the complete pipeline:
+<pre>Running: python pipeline_runner.py
+Pipeline: Landing → Bronze → Silver → Gold → Training...
+</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="application/vnd.jupyter.stderr" tabindex="0">
+<pre>2026/02/15 09:11:06 INFO alembic.runtime.plugins: setup plugin alembic.autogenerate.schemas
+2026/02/15 09:11:06 INFO alembic.runtime.plugins: setup plugin alembic.autogenerate.tables
+2026/02/15 09:11:06 INFO alembic.runtime.plugins: setup plugin alembic.autogenerate.types
+2026/02/15 09:11:06 INFO alembic.runtime.plugins: setup plugin alembic.autogenerate.constraints
+2026/02/15 09:11:06 INFO alembic.runtime.plugins: setup plugin alembic.autogenerate.defaults
+2026/02/15 09:11:06 INFO alembic.runtime.plugins: setup plugin alembic.autogenerate.comments
+2026/02/15 09:11:06 INFO alembic.runtime.migration: Context impl SQLiteImpl.
+2026/02/15 09:11:06 INFO alembic.runtime.migration: Will assume non-transactional DDL.
+</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="application/vnd.jupyter.stderr" tabindex="0">
+<pre>2026/02/15 09:14:15 WARNING mlflow.utils.environment: Failed to resolve installed pip version. ``pip`` will be added to conda.yaml environment spec without a version specifier.
+</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="application/vnd.jupyter.stderr" tabindex="0">
+<pre>2026/02/15 09:14:28 WARNING mlflow.utils.environment: Failed to resolve installed pip version. ``pip`` will be added to conda.yaml environment spec without a version specifier.
+</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="application/vnd.jupyter.stderr" tabindex="0">
+<pre>2026/02/15 09:14:30 WARNING mlflow.models.model: `artifact_path` is deprecated. Please use `name` instead.
+</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="application/vnd.jupyter.stderr" tabindex="0">
+<pre>2026/02/15 09:14:33 WARNING mlflow.utils.environment: Failed to resolve installed pip version. ``pip`` will be added to conda.yaml environment spec without a version specifier.
+</pre>
+</div>
+</div>
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>Starting pipeline: customer_churn
 
-  cd ../generated_pipelines/local/customer_churn
-  python run_all.py
+[1/6] Landing (event sources)...
+Landing: customer_retention_retail
+  Raw records: 30,801
+  Records: 30,801
+  Output: /Users/Vital/python/CustomerRetention/experiments/data/landing/customer_retention_retail
+Landing complete
 
-This will:
-  1. Run Bronze layers (parallel)
-  2. Run Silver merge
-  3. Run Gold features
-  4. Train models with MLflow
-  5. Auto-start MLflow UI and open browser
-  6. Press Ctrl+C to stop MLflow UI when done
+[2/6] Bronze event...
+Bronze event complete
+
+[3/6] Bronze entity (parallel)...
+Bronze entity complete
+
+[4/6] Silver...
+Creating holdout set (10% of data)...
+  Holdout records: 3,076 (10%)
+  Training records: 27,693 (90%)
+Silver complete
+
+[5/6] Gold...
+Fit artifacts saved to: /Users/Vital/python/CustomerRetention/experiments/artifacts/ddd6956b
+Gold features saved with version: v1.0.0_ddd6956b
+  Excluding holdout columns from Feast: ['original_retained']
+Features materialized to Feast: /Users/Vital/python/CustomerRetention/experiments/feature_repo/data/featureset_cust_rete_reta_aggr__b6be84a
+  Entity key: custid
+  Feature view: featureset_cust_rete_reta_aggr__b6be84a
+  Rows: 30,769
+Gold complete
+
+[5/6] Training...
+MLflow tracking: sqlite:////Users/Vital/python/CustomerRetention/experiments/mlruns.db
+Artifacts: /Users/Vital/python/CustomerRetention/experiments/mlruns/artifacts
+
+Loading training data from Feast...
+Feast repo not initialized, falling back to data file
+logistic_regression: ROC-AUC=0.9648, PR-AUC=0.9864, F1=0.9651
+random_forest: ROC-AUC=0.9564, PR-AUC=0.9814, F1=0.9654
+xgboost: ROC-AUC=0.9726, PR-AUC=0.9908, F1=0.9686
+Best: xgboost (ROC-AUC=0.9726)
+Training complete
 </pre>
 </div>
 </div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=57601a06">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=4598ce61">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8483,7 +8887,7 @@ This will:
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=d96b93f6">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=985dd6db">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8536,51 +8940,83 @@ Format: py
 Output: ../generated_pipelines/local/customer_churn
 
 ├── __pycache__/
-│   └── config.cpython-312.pyc (2,405 bytes)
+│   └── config.cpython-312.pyc (4,177 bytes)
 ├── bronze/
 │   ├── __pycache__/
-│   │   └── bronze_customer_retention_retail.cpython-312.pyc (1,741 bytes)
-│   └── bronze_customer_retention_retail.py (764 bytes)
-├── data/
-│   ├── bronze/
-│   │   └── customer_retention_retail.parquet (771,663 bytes)
-│   ├── gold/
-│   │   └── features.parquet (772,082 bytes)
-│   └── silver/
-│       └── merged.parquet (771,663 bytes)
+│   │   ├── bronze_entity_customer_emails_aggregated.cpython-312.pyc (1,736 bytes)
+│   │   ├── bronze_entity_customer_profiles.cpython-312.pyc (2,109 bytes)
+│   │   ├── bronze_entity_customer_retention_retail_aggregated.cpython-312.pyc (1,759 bytes)
+│   │   ├── bronze_entity_edi_transactions_aggregated.cpython-312.pyc (1,745 bytes)
+│   │   ├── bronze_entity_support_tickets_aggregated.cpython-312.pyc (1,737 bytes)
+│   │   ├── bronze_event_customer_emails.cpython-312.pyc (6,548 bytes)
+│   │   ├── bronze_event_customer_retention_retail.cpython-312.pyc (6,961 bytes)
+│   │   ├── bronze_event_edi_transactions.cpython-312.pyc (5,857 bytes)
+│   │   └── bronze_event_support_tickets.cpython-312.pyc (6,723 bytes)
+│   ├── bronze_entity_customer_emails_aggregated.py (1,007 bytes)
+│   ├── bronze_entity_customer_profiles.py (1,209 bytes)
+│   ├── bronze_entity_customer_retention_retail_aggregated.py (1,040 bytes)
+│   ├── bronze_entity_edi_transactions_aggregated.py (1,017 bytes)
+│   ├── bronze_entity_support_tickets_aggregated.py (1,008 bytes)
+│   ├── bronze_event_customer_emails.py (3,916 bytes)
+│   ├── bronze_event_customer_retention_retail.py (4,335 bytes)
+│   ├── bronze_event_edi_transactions.py (3,410 bytes)
+│   └── bronze_event_support_tickets.py (4,102 bytes)
+├── docs/
+│   └── exploration_report.py (911 bytes)
 ├── feature_repo/
 │   ├── data/
-│   │   └── customer_churn_features.parquet (772,763 bytes)
+│   │   └── registry.db (55 bytes)
 │   ├── feature_store.yaml (188 bytes)
-│   └── features.py (1,110 bytes)
+│   └── features.py (757 bytes)
 ├── gold/
 │   ├── __pycache__/
-│   │   └── gold_features.cpython-312.pyc (4,032 bytes)
-│   └── gold_features.py (2,780 bytes)
-├── scoring/
-│   ├── run_scoring.py (6,071 bytes)
-│   └── scoring_dashboard.ipynb (15,645 bytes)
+│   │   ├── gold_features_cust_emai_aggr__26e8271.cpython-312.pyc (36,133 bytes)
+│   │   ├── gold_features_cust_prof_edi_tran_aggr_supp_tick_aggr__8968afb.cpython-312.pyc (62,408 bytes)
+│   │   └── gold_features_cust_rete_reta_aggr__b6be84a.cpython-312.pyc (30,438 bytes)
+│   ├── gold_features_cust_emai_aggr__26e8271.py (80,764 bytes)
+│   ├── gold_features_cust_prof_edi_tran_aggr_supp_tick_aggr__8968afb.py (124,236 bytes)
+│   └── gold_features_cust_rete_reta_aggr__b6be84a.py (59,079 bytes)
+├── landing/
+│   ├── __pycache__/
+│   │   ├── landing_customer_emails.cpython-312.pyc (4,535 bytes)
+│   │   ├── landing_customer_retention_retail.cpython-312.pyc (4,567 bytes)
+│   │   ├── landing_edi_transactions.cpython-312.pyc (3,779 bytes)
+│   │   └── landing_support_tickets.cpython-312.pyc (4,509 bytes)
+│   ├── landing_customer_emails.py (2,610 bytes)
+│   ├── landing_customer_retention_retail.py (2,643 bytes)
+│   ├── landing_edi_transactions.py (2,046 bytes)
+│   └── landing_support_tickets.py (2,628 bytes)
 ├── silver/
 │   ├── __pycache__/
-│   │   └── silver_merge.cpython-312.pyc (1,699 bytes)
-│   └── silver_merge.py (691 bytes)
+│   │   ├── silver_featureset_cust_emai_aggr__26e8271.cpython-312.pyc (7,477 bytes)
+│   │   ├── silver_featureset_cust_prof_edi_tran_aggr_supp_tick_aggr__8968afb.cpython-312.pyc (7,197 bytes)
+│   │   └── silver_featureset_cust_rete_reta_aggr__b6be84a.cpython-312.pyc (7,416 bytes)
+│   ├── silver_featureset_cust_emai_aggr__26e8271.py (7,261 bytes)
+│   ├── silver_featureset_cust_prof_edi_tran_aggr_supp_tick_aggr__8968afb.py (6,857 bytes)
+│   └── silver_featureset_cust_rete_reta_aggr__b6be84a.py (7,785 bytes)
 ├── training/
 │   ├── __pycache__/
-│   │   └── ml_experiment.cpython-312.pyc (14,550 bytes)
-│   └── ml_experiment.py (9,523 bytes)
-├── config.py (1,537 bytes)
-├── pipeline.py (10,153 bytes)
-├── pipeline_runner.py (842 bytes)
+│   │   └── ml_experiment.cpython-312.pyc (13,553 bytes)
+│   └── ml_experiment.py (10,312 bytes)
+├── validation/
+│   ├── __init__.py (0 bytes)
+│   ├── run_validation.py (701 bytes)
+│   └── validate_pipeline.py (5,379 bytes)
+├── config.py (3,770 bytes)
+├── feature_importance.csv (2,702 bytes)
+├── manifest.json (733 bytes)
+├── pipeline.py (9,465 bytes)
+├── pipeline_runner.py (2,880 bytes)
 ├── requirements.txt (111 bytes)
-├── run_all.py (2,486 bytes)
-└── workflow.json (965 bytes)
+├── run_all.py (4,423 bytes)
+└── workflow.json (1,814 bytes)
 </pre>
 </div>
 </div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cb7a6811">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=1dc48b8c">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8591,7 +9027,7 @@ Output: ../generated_pipelines/local/customer_churn
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=ae3ff2e6">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=91b4ade3">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8613,7 +9049,7 @@ Output: ../generated_pipelines/local/customer_churn
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  - Scalings: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">registry</span><span class="o">.</span><span class="n">gold</span><span class="o">.</span><span class="n">scaling</span><span class="p">)</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">registry</span><span class="o">.</span><span class="n">gold</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="mi">0</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  - Transformations: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">registry</span><span class="o">.</span><span class="n">gold</span><span class="o">.</span><span class="n">transformations</span><span class="p">)</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">registry</span><span class="o">.</span><span class="n">gold</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="mi">0</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  - Feature selections: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">registry</span><span class="o">.</span><span class="n">gold</span><span class="o">.</span><span class="n">feature_selection</span><span class="p">)</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">registry</span><span class="o">.</span><span class="n">gold</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="mi">0</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-    
+
     <span class="c1"># Show what's in each layer for debugging</span>
     <span class="nb">print</span><span class="p">()</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">"Recommendations by layer:"</span><span class="p">)</span>
@@ -8625,13 +9061,13 @@ Output: ../generated_pipelines/local/customer_churn
                 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"    - [</span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">category</span><span class="si">}</span><span class="s2">] </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">target_column</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">rec</span><span class="o">.</span><span class="n">action</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
             <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">recs</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">3</span><span class="p">:</span>
                 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"    ... and </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">recs</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">3</span><span class="si">}</span><span class="s2"> more"</span><span class="p">)</span>
-    
+
     <span class="c1"># Check if gold layer exists but is empty</span>
     <span class="k">if</span> <span class="n">registry</span><span class="o">.</span><span class="n">gold</span><span class="p">:</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">✓ Gold layer initialized (target: </span><span class="si">{</span><span class="n">registry</span><span class="o">.</span><span class="n">gold</span><span class="o">.</span><span class="n">target_column</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">⚠ Gold layer not initialized - run step 06 first"</span><span class="p">)</span>
-    
+
     <span class="nb">print</span><span class="p">()</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">"Use this hash to:"</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">"  - Track MLflow experiments (tag: recommendations_hash)"</span><span class="p">)</span>
@@ -8655,25 +9091,25 @@ Output: ../generated_pipelines/local/customer_churn
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
 <pre>Recommendations Hash
 ============================================================
-Hash: 2b70dc33
-Full version tag: v1.0.0_2b70dc33
+Hash: 0575ed11
+Full version tag: v1.0.0_0575ed11
 
 This hash uniquely identifies the gold layer configuration:
-  - Encodings: 3
-  - Scalings: 1
-  - Transformations: 8
-  - Feature selections: 4
+  - Encodings: 1
+  - Scalings: 0
+  - Transformations: 173
+  - Feature selections: 954
 
 Recommendations by layer:
-  BRONZE: 9 recommendations
-  SILVER: 31 recommendations
-  GOLD: 16 recommendations
-    - [encoding] favday: cyclical
-    - [encoding] city: one_hot
-    - [encoding] city: onehot
-    ... and 13 more
+  BRONZE: 3 recommendations
+  SILVER: 7 recommendations
+  GOLD: 1128 recommendations
+    - [encoding] cohort_quarter: target
+    - [feature_selection] event_count_all_time: drop_multicollinear
+    - [feature_selection] event_count_all_time: drop_multicollinear
+    ... and 1125 more
 
-✓ Gold layer initialized (target: target)
+✓ Gold layer initialized (target: retained)
 
 Use this hash to:
   - Track MLflow experiments (tag: recommendations_hash)
@@ -8685,7 +9121,7 @@ Use this hash to:
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=4fae3bdc">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=caef46fa">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8696,8 +9132,128 @@ Use this hash to:
 </div>
 </div>
 </div>
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=cd13afb0">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=db524bef">
+<div class="jp-InputArea jp-Cell-inputArea">
+<div class="jp-InputPrompt jp-InputArea-prompt">In [12]:</div>
+<details class="tutorial-code-input">
+<summary>Show/Hide Code</summary>
+<div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
+<div class="cm-editor cm-s-jupyter">
+<div class="highlight hl-ipython3"><pre><span></span><span class="c1"># Inspect Feast Feature Store contents</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
+
+<span class="n">warnings</span><span class="o">.</span><span class="n">filterwarnings</span><span class="p">(</span><span class="s2">"ignore"</span><span class="p">,</span> <span class="n">category</span><span class="o">=</span><span class="ne">DeprecationWarning</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="s2">"feast"</span><span class="p">)</span>
+
+<span class="n">feast_repo_path</span> <span class="o">=</span> <span class="n">output_dir</span> <span class="o">/</span> <span class="s2">"feature_repo"</span>
+
+<span class="k">if</span> <span class="n">feast_repo_path</span><span class="o">.</span><span class="n">exists</span><span class="p">()</span> <span class="ow">and</span> <span class="p">(</span><span class="n">feast_repo_path</span> <span class="o">/</span> <span class="s2">"feature_store.yaml"</span><span class="p">)</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="kn">from</span><span class="w"> </span><span class="nn">feast</span><span class="w"> </span><span class="kn">import</span> <span class="n">FeatureStore</span>
+        <span class="n">store</span> <span class="o">=</span> <span class="n">FeatureStore</span><span class="p">(</span><span class="n">repo_path</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">feast_repo_path</span><span class="p">))</span>
+
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"Feast Feature Store Contents"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"="</span> <span class="o">*</span> <span class="mi">60</span><span class="p">)</span>
+
+        <span class="c1"># List entities</span>
+        <span class="n">entities</span> <span class="o">=</span> <span class="n">store</span><span class="o">.</span><span class="n">list_entities</span><span class="p">()</span>
+        <span class="n">feature_views</span> <span class="o">=</span> <span class="n">store</span><span class="o">.</span><span class="n">list_feature_views</span><span class="p">()</span>
+        <span class="n">data_sources</span> <span class="o">=</span> <span class="n">store</span><span class="o">.</span><span class="n">list_data_sources</span><span class="p">()</span>
+
+        <span class="c1"># Check if registry is empty (feast apply not run yet)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">entities</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">feature_views</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">⚠️  Feature store registry is empty."</span><span class="p">)</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">"   The feature definitions exist but haven't been applied yet."</span><span class="p">)</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   To register features, run:"</span><span class="p">)</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"     cd </span><span class="si">{</span><span class="n">feast_repo_path</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">"     feast apply"</span><span class="p">)</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Or run the full pipeline:"</span><span class="p">)</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"     cd </span><span class="si">{</span><span class="n">output_dir</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">"     python run_all.py"</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">📦 Entities (</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">entities</span><span class="p">)</span><span class="si">}</span><span class="s2">):"</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">entity</span> <span class="ow">in</span> <span class="n">entities</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   - </span><span class="si">{</span><span class="n">entity</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> (join_key: </span><span class="si">{</span><span class="n">entity</span><span class="o">.</span><span class="n">join_keys</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
+
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">📊 Feature Views (</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">feature_views</span><span class="p">)</span><span class="si">}</span><span class="s2">):"</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">fv</span> <span class="ow">in</span> <span class="n">feature_views</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   - </span><span class="si">{</span><span class="n">fv</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">fv</span><span class="o">.</span><span class="n">features</span><span class="p">)</span><span class="si">}</span><span class="s2"> features"</span><span class="p">)</span>
+                <span class="k">for</span> <span class="n">feat</span> <span class="ow">in</span> <span class="n">fv</span><span class="o">.</span><span class="n">features</span><span class="p">[:</span><span class="mi">5</span><span class="p">]:</span>
+                    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      • </span><span class="si">{</span><span class="n">feat</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">feat</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
+                <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">fv</span><span class="o">.</span><span class="n">features</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">5</span><span class="p">:</span>
+                    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"      ... and </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">fv</span><span class="o">.</span><span class="n">features</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">5</span><span class="si">}</span><span class="s2"> more"</span><span class="p">)</span>
+
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">💾 Data Sources (</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">data_sources</span><span class="p">)</span><span class="si">}</span><span class="s2">):"</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">ds</span> <span class="ow">in</span> <span class="n">data_sources</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   - </span><span class="si">{</span><span class="n">ds</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+        <span class="c1"># Try to show sample data from parquet files</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">📄 Sample Feature Data:"</span><span class="p">)</span>
+        <span class="n">data_dir</span> <span class="o">=</span> <span class="n">feast_repo_path</span> <span class="o">/</span> <span class="s2">"data"</span>
+        <span class="k">if</span> <span class="n">data_dir</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
+            <span class="n">parquet_files</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">data_dir</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="s2">"*.parquet"</span><span class="p">))</span>
+            <span class="k">if</span> <span class="n">parquet_files</span><span class="p">:</span>
+                <span class="n">sample_df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span><span class="n">parquet_files</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Source: </span><span class="si">{</span><span class="n">parquet_files</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"   Shape: </span><span class="si">{</span><span class="n">sample_df</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows x </span><span class="si">{</span><span class="n">sample_df</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2"> columns"</span><span class="p">)</span>
+                <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">   Head (first 5 rows):"</span><span class="p">)</span>
+                <span class="n">display</span><span class="p">(</span><span class="n">sample_df</span><span class="o">.</span><span class="n">head</span><span class="p">())</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="s2">"   No parquet files found yet in data/ directory."</span><span class="p">)</span>
+                <span class="nb">print</span><span class="p">(</span><span class="s2">"   Features will be materialized when you run the pipeline."</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">"   Data directory not created yet."</span><span class="p">)</span>
+
+    <span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"Feast not installed. Install with: pip install feast"</span><span class="p">)</span>
+    <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Could not connect to Feast: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">To manually inspect, run:"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  cd </span><span class="si">{</span><span class="n">feast_repo_path</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"  feast apply"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"  feast feature-views list"</span><span class="p">)</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Feature repo not found at: </span><span class="si">{</span><span class="n">feast_repo_path</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"Generate the pipeline first by running cells above."</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</details>
+</div>
+</div>
+<div class="jp-Cell-outputWrapper">
+<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
+</div>
+<div class="jp-OutputArea jp-Cell-outputArea">
+<div class="jp-OutputArea-child">
+<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
+<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
+<pre>Feast Feature Store Contents
+============================================================
+
+⚠️  Feature store registry is empty.
+   The feature definitions exist but haven't been applied yet.
+
+   To register features, run:
+     cd ../generated_pipelines/local/customer_churn/feature_repo
+     feast apply
+
+   Or run the full pipeline:
+     cd ../generated_pipelines/local/customer_churn
+     python run_all.py
+
+📄 Sample Feature Data:
+   No parquet files found yet in data/ directory.
+   Features will be materialized when you run the pipeline.
+</pre>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=d0ccb535">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8738,6 +9294,20 @@ python<span class="w"> </span>run_all.py
 </ul>
 <hr/>
 <h2 id="Complete!">Complete!<a class="anchor-link" href="#Complete!">¶</a></h2>
+</div>
+</div>
+</div>
+</div>
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=53e908ce">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
+</div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
+<blockquote>
+<p><strong>Save Reminder:</strong> Save this notebook (Ctrl+S / Cmd+S) before running the next one.
+The next notebook will automatically export this notebook's HTML documentation from the saved file.</p>
+</blockquote>
 </div>
 </div>
 </div>

@@ -87,30 +87,28 @@
         <ul class="notebook-list">
         <li><a href="00_start_here.html">00. Start Here</a></li>
         <li><a href="01_data_discovery.html">01. Data Discovery</a></li>
-        <li><a href="02_column_deep_dive.html">02. Column Deep Dive</a></li>
-        <li><a href="03_quality_assessment.html">03. Quality Assessment</a></li>
-        <li><a href="04_relationship_analysis.html">04. Relationship Analysis</a></li>
-        <li><a href="05_multi_dataset.html">05. Multi Dataset</a></li>
+        <li><a href="02_source_integrity.html">02. Source Integrity</a></li>
+        <li><a href="03_dataset_merge.html">03. Dataset Merge</a></li>
+        <li><a href="04_column_deep_dive.html">04. Column Deep Dive</a></li>
+        <li><a href="05_relationship_analysis.html">05. Relationship Analysis</a></li>
         <li><a href="06_feature_opportunities.html">06. Feature Opportunities</a></li>
         <li><a href="07_modeling_readiness.html">07. Modeling Readiness</a></li>
         <li><a href="08_baseline_experiments.html">08. Baseline Experiments</a></li>
         <li><a href="09_business_alignment.html">09. Business Alignment</a></li>
         <li><a href="10_spec_generation.html">10. Spec Generation</a></li>
+        <li><a href="11_scoring_validation.html">11. Scoring Validation</a> <span class="badge">Key Insights</span></li>
         </ul>
     </div>
 
     <div class="section">
-        <h2>Production Validation</h2>
-        <p>Evaluate model performance on point-in-time holdout data and analyze distribution drift.</p>
-        <ul class="notebook-list">
-        <li><a href="scoring_dashboard.html">Scoring Dashboard</a> <span class="badge">Key Insights</span></li>
-        </ul>
+        <h2>Production Validation Highlights</h2>
+        <p>The scoring validation notebook (11) evaluates model performance on a point-in-time holdout set and analyzes distribution drift.</p>
         <p><strong>Key Findings:</strong></p>
         <ul>
-            <li>Best validation model (XGBoost 0.9854) degraded most in scoring (0.9142)</li>
-            <li>Logistic Regression was most robust: 0.9678 → 0.9441 (only 2.4% gap)</li>
-            <li>Significant drift in email engagement features (+30-45%)</li>
-            <li>Target distribution shifted: 78.4% → 86.4% retention</li>
+            <li>XGBoost achieved best validation ROC-AUC (0.9726)</li>
+            <li>Logistic Regression: ROC-AUC 0.9648, most robust to distribution shift</li>
+            <li>SHAP analysis reveals top predictive features</li>
+            <li>Holdout validation confirms model generalization</li>
         </ul>
     </div>
 
@@ -118,17 +116,17 @@
         <h2>About This Tutorial</h2>
         <p>This tutorial demonstrates the Customer Retention ML Framework using a synthetic retail dataset (30,801 customers).
         Each notebook walks through a stage of the ML pipeline, from data exploration to production validation.</p>
-        <p><strong>Features demonstrated:</strong></p>
+        <p><strong>Pipeline stages covered:</strong></p>
         <ul>
             <li>Automatic data profiling and type detection</li>
             <li>Temporal scenario detection and point-in-time splits</li>
-            <li>Data quality assessment (99.7/100 score)</li>
+            <li>Data quality assessment and source integrity checks</li>
             <li>Feature engineering and capacity analysis</li>
             <li>Model training: Logistic Regression, Random Forest, XGBoost</li>
             <li>SHAP interpretability and feature importance</li>
+            <li>Pipeline code generation (local and Databricks)</li>
             <li>Distribution drift analysis and production validation</li>
         </ul>
-        <p><strong>Key Lesson:</strong> Simpler models (Logistic Regression) can be more robust to distribution drift than complex models (XGBoost).</p>
     </div>
 
     <div class="footer">

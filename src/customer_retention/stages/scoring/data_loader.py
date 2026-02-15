@@ -55,9 +55,16 @@ class ScoringDataLoader:
         if self.config.recommendations_hash:
             model_name = f"{model_name}_{self.config.recommendations_hash}"
         model_run = self._find_model_run(client, experiment.experiment_id, parent_run, best_model_tag)
-        model_uri = f"runs:/{model_run.info.run_id}/{model_name}"
         loader_module = mlflow.xgboost if best_model_tag == "xgboost" else mlflow.sklearn
-        return loader_module.load_model(model_uri), model_uri
+        model_uri = f"runs:/{model_run.info.run_id}/{model_name}"
+        try:
+            return loader_module.load_model(model_uri), model_uri
+        except Exception:
+            logged_models = client.search_logged_models(experiment_ids=[experiment.experiment_id])
+            for lm in logged_models:
+                if lm.name == model_name and lm.source_run_id == model_run.info.run_id:
+                    return loader_module.load_model(lm.model_uri), lm.model_uri
+            raise
 
     def load_transforms(self) -> Tuple[list, list]:
         gold_module = self._load_gold_module()
