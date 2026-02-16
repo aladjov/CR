@@ -5,6 +5,7 @@ from .active_dataset_store import (
     save_active_dataset,
     save_aggregated_dataset,
 )
+from .analysis_context import AnalysisContext
 from .dataset_fingerprinter import DatasetFingerprint, DatasetFingerprinter
 from .entity_timestamp_deriver import EntityFeatureTimestampDeriver, EntityTimestampResult
 from .exploration_manager import (
@@ -91,6 +92,7 @@ from .session import (
 from .snapshot_grid import DatasetGridVote, GridAdjustmentMode, SnapshotGrid
 
 __all__ = [
+    "AnalysisContext",
     "DataExplorer",
     "ExplorationFindings",
     "ColumnFinding",
