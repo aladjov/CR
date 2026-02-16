@@ -10,8 +10,14 @@ def calculate_group_retention_stats(
     sort_by: str = "group",
     ascending: bool = True,
 ) -> DataFrame:
-    stats = df.groupby(group_col)[target_col].agg(["sum", "count", "mean"]).reset_index()
-    stats.columns = ["group", "retained_count", "count", "retention_rate"]
+    g = df.groupby(group_col)[target_col]
+    retained = g.sum().reset_index()
+    retained.columns = ["group", "retained_count"]
+    total = g.count().reset_index()
+    total.columns = ["group", "count"]
+    rate = g.mean().reset_index()
+    rate.columns = ["group", "retention_rate"]
+    stats = retained.merge(total, on="group").merge(rate, on="group")
     stats["lift"] = stats["retention_rate"] / overall_rate if overall_rate > 0 else 0
     if min_samples > 0:
         stats = stats[stats["count"] >= min_samples]

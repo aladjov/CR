@@ -245,12 +245,15 @@ class TimeSeriesProfiler:
         return df
 
     def _compute_entity_lifecycles(self, df: DataFrame) -> DataFrame:
-        agg = df.groupby(self.entity_column)[self.time_column].agg(["min", "max", "count"])
-        lifecycles = agg.reset_index()
-        lifecycles.columns = ["entity", "first_event", "last_event", "event_count"]
-        lifecycles["duration_days"] = (
-            (lifecycles["last_event"] - lifecycles["first_event"]).dt.days
-        )
+        g = df.groupby(self.entity_column)[self.time_column]
+        first = g.min().reset_index()
+        first.columns = ["entity", "first_event"]
+        last = g.max().reset_index()
+        last.columns = ["entity", "last_event"]
+        counts = g.count().reset_index()
+        counts.columns = ["entity", "event_count"]
+        lifecycles = first.merge(last, on="entity").merge(counts, on="entity")
+        lifecycles["duration_days"] = (lifecycles["last_event"] - lifecycles["first_event"]).dt.days
         return lifecycles
 
     def _compute_events_distribution(self, lifecycles: DataFrame) -> DistributionStats:

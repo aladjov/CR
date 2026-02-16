@@ -468,10 +468,12 @@ class TemporalFeatureEngineer:
         splits = self.config.lifecycle_splits
 
         # Get history span per entity
-        history_stats = events_df.groupby(entity_col).agg({
-            time_col: ["min", "max"]
-        }).reset_index()
-        history_stats.columns = [entity_col, "first_event", "last_event"]
+        g_lc = events_df.groupby(entity_col)[time_col]
+        first_lc = g_lc.min().reset_index()
+        first_lc.columns = [entity_col, "first_event"]
+        last_lc = g_lc.max().reset_index()
+        last_lc.columns = [entity_col, "last_event"]
+        history_stats = first_lc.merge(last_lc, on=entity_col)
         history_stats["history_days"] = (
             history_stats["last_event"] - history_stats["first_event"]
         ).dt.days
@@ -539,10 +541,14 @@ class TemporalFeatureEngineer:
         result = ref_dates[[entity_col]].copy()
 
         # Get first and last event per entity
-        event_stats = events_df.groupby(entity_col).agg({
-            time_col: ["min", "max", "count"]
-        }).reset_index()
-        event_stats.columns = [entity_col, "first_event", "last_event", "event_count"]
+        g_rec = events_df.groupby(entity_col)[time_col]
+        first_rec = g_rec.min().reset_index()
+        first_rec.columns = [entity_col, "first_event"]
+        last_rec = g_rec.max().reset_index()
+        last_rec.columns = [entity_col, "last_event"]
+        counts_rec = g_rec.count().reset_index()
+        counts_rec.columns = [entity_col, "event_count"]
+        event_stats = first_rec.merge(last_rec, on=entity_col).merge(counts_rec, on=entity_col)
 
         result = result.merge(event_stats, on=entity_col, how="left")
         result = result.merge(ref_dates, on=entity_col)

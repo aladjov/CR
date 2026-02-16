@@ -611,11 +611,15 @@ class TemporalPatternAnalyzer:
         entity_cohorts = df_copy.groupby(entity_column)["_cohort"].first().reset_index()
         entity_cohorts.columns = [entity_column, "_cohort"]
 
-        cohort_stats = entity_cohorts.groupby("_cohort").agg({entity_column: "count"}).reset_index()
+        cohort_stats = entity_cohorts.groupby("_cohort")[entity_column].count().reset_index()
         cohort_stats.columns = ["cohort", "entity_count"]
 
-        cohort_dates = df_copy.groupby("_cohort")[self.time_column].agg(["min", "max"]).reset_index()
-        cohort_dates.columns = ["cohort", "first_event", "last_event"]
+        g = df_copy.groupby("_cohort")[self.time_column]
+        cohort_first = g.min().reset_index()
+        cohort_first.columns = ["cohort", "first_event"]
+        cohort_last = g.max().reset_index()
+        cohort_last.columns = ["cohort", "last_event"]
+        cohort_dates = cohort_first.merge(cohort_last, on="cohort")
         cohort_stats = cohort_stats.merge(cohort_dates, on="cohort", how="left")
 
         if target_column and target_column in df.columns:

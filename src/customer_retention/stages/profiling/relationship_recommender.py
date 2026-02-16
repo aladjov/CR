@@ -266,8 +266,12 @@ class RelationshipRecommender:
                 continue
 
             # Calculate retention rates by category
-            cat_stats = df.groupby(col)[target_col].agg(["mean", "count"]).reset_index()
-            cat_stats.columns = [col, "retention_rate", "count"]
+            g = df.groupby(col)[target_col]
+            means = g.mean().reset_index()
+            means.columns = [col, "retention_rate"]
+            counts = g.count().reset_index()
+            counts.columns = [col, "count"]
+            cat_stats = means.merge(counts, on=col)
             cat_stats["lift"] = cat_stats["retention_rate"] / overall_rate
 
             # Calculate Cramér's V
