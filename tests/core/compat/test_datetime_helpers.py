@@ -493,6 +493,15 @@ class TestTimedeltaToSeconds:
         result = timedelta_to_seconds(dates.diff()).dropna()
         assert list(result) == [3600.0]
 
+    def test_fallback_without_total_seconds(self):
+        from unittest.mock import PropertyMock, patch
+
+        from customer_retention.core.compat import timedelta_to_seconds
+        s = pd.Series([pd.Timedelta(days=1, hours=2), pd.Timedelta(days=0, hours=3)])
+        with patch.object(type(s.dt), "total_seconds", new_callable=PropertyMock, side_effect=AttributeError):
+            result = timedelta_to_seconds(s)
+        assert list(result) == [93600.0, 10800.0]
+
 
 class TestDataMaterializerDatetimeConversion:
     def _make_recommendation(self, target_column, parameters):

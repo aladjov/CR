@@ -269,7 +269,10 @@ def timedelta_to_days(series: Any) -> Any:
 def timedelta_to_seconds(series: Any) -> Any:
     if is_numeric_dtype(series):
         return series.astype(float)
-    return series.dt.total_seconds()
+    try:
+        return series.dt.total_seconds()
+    except AttributeError:
+        return (series.dt.days * _SECONDS_PER_DAY + series.dt.seconds).astype(float)
 
 
 def safe_to_list(obj: Any) -> list:
