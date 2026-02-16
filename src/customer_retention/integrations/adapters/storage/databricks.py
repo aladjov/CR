@@ -29,12 +29,18 @@ class DatabricksDelta(DeltaStorage):
                 self._spark = SparkSession.builder.getOrCreate()
         return self._spark
 
+    @staticmethod
+    def _as_pandas_api(spark_df: Any) -> Any:
+        if hasattr(spark_df, "pandas_api"):
+            return spark_df.pandas_api()
+        return spark_df.to_pandas_on_spark()
+
     def read(self, path: str, version: Optional[int] = None) -> Any:
         path = self._normalize_path(path)
         reader = self.spark.read.format("delta")
         if version is not None:
             reader = reader.option("versionAsOf", version)
-        return reader.load(path).to_pandas_on_spark()
+        return self._as_pandas_api(reader.load(path))
 
     def _to_spark_df(self, df: pd.DataFrame) -> Any:
         from customer_retention.core.compat import normalize_timestamp_columns, pandas_dtype_to_spark_schema

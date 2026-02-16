@@ -22,6 +22,12 @@ def read_csv(path: str, **kwargs: Any) -> Any:
     return ps.read_csv(path, **kwargs)
 
 
+def _as_pandas_api(spark_df: Any) -> Any:
+    if hasattr(spark_df, "pandas_api"):
+        return spark_df.pandas_api()
+    return spark_df.to_pandas_on_spark()
+
+
 def read_delta(path: str, version: Optional[int] = None) -> Any:
     if not SPARK_AVAILABLE:
         raise ImportError("pyspark required")
@@ -29,7 +35,7 @@ def read_delta(path: str, version: Optional[int] = None) -> Any:
     reader = spark.read.format("delta")
     if version is not None:
         reader = reader.option("versionAsOf", version)
-    return reader.load(path).to_pandas_on_spark()
+    return _as_pandas_api(reader.load(path))
 
 
 def write_delta(df: Any, path: str, mode: str = "overwrite",

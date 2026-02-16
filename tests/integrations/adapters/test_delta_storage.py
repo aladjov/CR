@@ -238,7 +238,7 @@ class TestDatabricksDeltaReturnsSparkPandas:
     def _skip_without_pyspark(self):
         pytest.importorskip("pyspark")
 
-    def test_read_uses_to_pandas_on_spark(self):
+    def test_read_uses_pandas_api(self):
         from unittest.mock import MagicMock, patch
 
         from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
@@ -252,8 +252,25 @@ class TestDatabricksDeltaReturnsSparkPandas:
 
             storage.read("/some/path")
 
-            mock_spark_df.to_pandas_on_spark.assert_called_once()
+            mock_spark_df.pandas_api.assert_called_once()
             mock_spark_df.toPandas.assert_not_called()
+
+    def test_read_falls_back_to_to_pandas_on_spark(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            mock_spark_df = MagicMock(spec=[])
+            mock_spark_df.to_pandas_on_spark = MagicMock()
+            storage.spark.read.format("delta").load.return_value = mock_spark_df
+
+            storage.read("/some/path")
+
+            mock_spark_df.to_pandas_on_spark.assert_called_once()
 
     def test_write_detects_pyspark_pandas_input(self):
         from unittest.mock import MagicMock, patch
