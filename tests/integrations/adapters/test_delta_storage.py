@@ -233,6 +233,88 @@ class TestLocalDeltaCommitMetadata:
         assert len(history) >= 2
 
 
+class TestDatabricksDeltaReturnsSparkPandas:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_read_uses_to_pandas_on_spark(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            mock_spark_df = MagicMock()
+            storage.spark.read.format("delta").load.return_value = mock_spark_df
+
+            storage.read("/some/path")
+
+            mock_spark_df.to_pandas_on_spark.assert_called_once()
+            mock_spark_df.toPandas.assert_not_called()
+
+    def test_write_detects_pyspark_pandas_input(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            mock_ps_df = MagicMock()
+            mock_ps_df.to_spark.return_value = MagicMock()
+
+            with patch.object(storage, "_to_spark_df") as mock_to_spark:
+                storage.write(mock_ps_df, "/fake/path")
+                mock_ps_df.to_spark.assert_called_once()
+                mock_to_spark.assert_not_called()
+
+    def test_write_regular_pandas_uses_to_spark_df(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            df = pd.DataFrame({"val": [1, 2]})
+
+            with patch.object(storage, "_to_spark_df", return_value=MagicMock()) as mock_to:
+                storage.write(df, "/fake/path")
+                mock_to.assert_called_once_with(df)
+
+    def test_merge_detects_pyspark_pandas_input(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            mock_ps_df = MagicMock()
+            mock_spark_df = MagicMock()
+            mock_ps_df.to_spark.return_value = mock_spark_df
+
+            with patch.object(storage, "_to_spark_df") as mock_to_spark, \
+                 patch("delta.tables.DeltaTable") as mock_dt:
+                mock_target = MagicMock()
+                mock_dt.forPath.return_value = mock_target
+                mock_target.alias.return_value.merge.return_value \
+                    .whenMatchedUpdateAll.return_value \
+                    .whenNotMatchedInsertAll.return_value \
+                    .execute = MagicMock()
+
+                storage.merge(mock_ps_df, "/fake/path", "source.id = target.id")
+
+                mock_ps_df.to_spark.assert_called_once()
+                mock_to_spark.assert_not_called()
+
+
 class TestDatabricksDeltaMocked:
     def test_databricks_delta_requires_spark(self):
         from customer_retention.core.compat.detection import is_spark_available

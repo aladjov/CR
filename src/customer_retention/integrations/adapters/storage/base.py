@@ -1,22 +1,20 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
-import pandas as pd
-
 
 class DeltaStorage(ABC):
     @abstractmethod
-    def read(self, path: str, version: Optional[int] = None) -> pd.DataFrame:
+    def read(self, path: str, version: Optional[int] = None) -> Any:
         pass
 
     @abstractmethod
-    def write(self, df: pd.DataFrame, path: str, mode: str = "overwrite",
+    def write(self, df: Any, path: str, mode: str = "overwrite",
               partition_by: Optional[List[str]] = None,
               metadata: Optional[Dict[str, str]] = None) -> None:
         pass
 
     @abstractmethod
-    def merge(self, df: pd.DataFrame, path: str, condition: str,
+    def merge(self, df: Any, path: str, condition: str,
               update_cols: Optional[List[str]] = None) -> None:
         pass
 
