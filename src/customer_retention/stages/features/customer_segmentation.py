@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype, isna, to_datetime
+from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype, isna, timedelta_to_days, to_datetime
 
 
 class SegmentationType(Enum):
@@ -440,7 +440,7 @@ class CustomerSegmenter:
         prefix = f"{output_prefix}_" if output_prefix else ""
 
         # Tenure in days
-        df_result[f"{prefix}tenure_days"] = (reference_date - df_result[created_column]).dt.days
+        df_result[f"{prefix}tenure_days"] = timedelta_to_days(reference_date - df_result[created_column])
 
         # Tenure in months
         df_result[f"{prefix}tenure_months"] = df_result[f"{prefix}tenure_days"] / 30.44
@@ -500,6 +500,6 @@ class CustomerSegmenter:
         else:
             reference_date = to_datetime(reference_date)
 
-        df_result[output_column] = (reference_date - df_result[last_activity_column]).dt.days
+        df_result[output_column] = timedelta_to_days(reference_date - df_result[last_activity_column])
 
         return df_result

@@ -10,7 +10,15 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Union
 
-from customer_retention.core.compat import DataFrame, Series, Timedelta, Timestamp, pd, safe_to_datetime
+from customer_retention.core.compat import (
+    DataFrame,
+    Series,
+    Timedelta,
+    Timestamp,
+    pd,
+    safe_to_datetime,
+    timedelta_to_days,
+)
 
 
 class ReferenceDateSource(Enum):
@@ -240,4 +248,4 @@ class TemporalFeatureGenerator:
         diff = later - earlier
         if isinstance(diff, Timedelta):
             return pd.Series([diff.days])
-        return diff.dt.days
+        return timedelta_to_days(diff)
