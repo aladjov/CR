@@ -13,6 +13,8 @@ from customer_retention.core.compat import (
     native_pd,
     pd,
     safe_to_datetime,
+    timedelta_to_days,
+    timedelta_to_seconds,
 )
 from customer_retention.core.utils import compute_effect_size
 
@@ -244,7 +246,7 @@ def compute_recency_buckets(
     edges = bucket_edges or DEFAULT_BUCKET_EDGES
     labels = _generate_bucket_labels(edges)
     entity_last = df.groupby(entity_column)[time_column].max().reset_index()
-    entity_last["recency_days"] = (reference_date - entity_last[time_column]).dt.days
+    entity_last["recency_days"] = timedelta_to_days(reference_date - entity_last[time_column])
     entity_target = df.groupby(entity_column)[target_column].first().reset_index()
     entity_data = entity_last.merge(entity_target, on=entity_column)
     entity_data["bucket"] = cut(entity_data["recency_days"], bins=edges, labels=labels, include_lowest=True)
@@ -312,7 +314,7 @@ def _diagnose_anomaly_pattern(
     target_1_is_minority = target_1_pct < 50
     entity_first = df.groupby(entity_column)[time_column].min()
     entity_last = df.groupby(entity_column)[time_column].max()
-    tenure = (entity_last - entity_first).dt.days
+    tenure = timedelta_to_days(entity_last - entity_first)
     tenure_by_target = pd.DataFrame({"target": entity_target, "tenure": tenure})
     retained_tenure = tenure_by_target[tenure_by_target["target"] == 1]["tenure"]
     churned_tenure = tenure_by_target[tenure_by_target["target"] == 0]["tenure"]
@@ -447,7 +449,7 @@ def compare_recency_by_target(
     ensure_datetime_column(df, time_column)
     ref_date = reference_date or df[time_column].max()
     entity_last = df.groupby(entity_column)[time_column].max().reset_index()
-    entity_last["recency_days"] = (ref_date - entity_last[time_column]).dt.days
+    entity_last["recency_days"] = timedelta_to_days(ref_date - entity_last[time_column])
     entity_target = df.groupby(entity_column)[target_column].first().reset_index()
     entity_recency = entity_last.merge(entity_target, on=entity_column)
     cap = entity_recency["recency_days"].quantile(cap_percentile)
@@ -512,7 +514,7 @@ class TemporalPatternAnalyzer:
             return self._unknown_trend()
 
         time_col = safe_to_datetime(df_clean[self.time_column])
-        x = (time_col - time_col.min()).dt.total_seconds() / 86400
+        x = timedelta_to_seconds(time_col - time_col.min()) / 86400
         y = df_clean[value_column].to_numpy()
 
         slope, intercept, r_value, p_value, std_err = stats.linregress(x.to_numpy(), y)
@@ -639,7 +641,7 @@ class TemporalPatternAnalyzer:
         ref_date = reference_date or Timestamp.now()
 
         entity_last = df.groupby(entity_column)[self.time_column].max()
-        recency_days = (ref_date - entity_last).dt.days
+        recency_days = timedelta_to_days(ref_date - entity_last)
 
         target_correlation = None
         if target_column and target_column in df.columns:

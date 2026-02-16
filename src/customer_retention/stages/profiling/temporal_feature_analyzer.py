@@ -5,7 +5,15 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from scipy import stats
 
-from customer_retention.core.compat import DataFrame, ensure_datetime_column, native_pd, pd, qcut, safe_to_list
+from customer_retention.core.compat import (
+    DataFrame,
+    ensure_datetime_column,
+    native_pd,
+    pd,
+    qcut,
+    safe_to_list,
+    timedelta_to_days,
+)
 from customer_retention.core.utils import compute_effect_size
 
 
@@ -295,7 +303,7 @@ class TemporalFeatureAnalyzer:
         entity_momentum = []
         for entity_id in safe_to_list(df[self.entity_column].unique()):
             entity_data = df[df[self.entity_column] == entity_id].copy()
-            entity_data["days_ago"] = (reference_date - entity_data[self.time_column]).dt.days
+            entity_data["days_ago"] = timedelta_to_days(reference_date - entity_data[self.time_column])
             short_mean = entity_data[entity_data["days_ago"] <= short_window][col].mean()
             long_mean = entity_data[entity_data["days_ago"] <= long_window][col].mean()
             if long_mean > 0 and not np.isnan(short_mean):
@@ -361,7 +369,7 @@ class TemporalFeatureAnalyzer:
             return []
         reference_date = df[self.time_column].max()
         df_calc = df[[self.entity_column, self.time_column, col]].copy()
-        df_calc["_days_ago"] = (reference_date - df_calc[self.time_column]).dt.days
+        df_calc["_days_ago"] = timedelta_to_days(reference_date - df_calc[self.time_column])
         short_means = df_calc[df_calc["_days_ago"] <= short_w].groupby(self.entity_column)[col].mean()
         long_means = df_calc[df_calc["_days_ago"] <= long_w].groupby(self.entity_column)[col].mean()
         valid = (long_means > 0) & short_means.notna() & long_means.notna()

@@ -442,6 +442,58 @@ class TestBuildSpineWithTzAwareDates:
         assert len(spine) == 2
 
 
+class TestTimedeltaToDays:
+    def test_timedelta_series(self):
+        from customer_retention.core.compat import timedelta_to_days
+        s = pd.Series(pd.to_datetime(["2023-01-10", "2023-01-05"])) - pd.Timestamp("2023-01-01")
+        result = timedelta_to_days(s)
+        assert list(result) == [9, 4]
+
+    def test_integer_seconds_series(self):
+        from customer_retention.core.compat import timedelta_to_days
+        s = pd.Series([86400 * 3, 86400 * 7, 0])
+        result = timedelta_to_days(s)
+        assert list(result) == [3, 7, 0]
+
+    def test_negative_timedelta(self):
+        from customer_retention.core.compat import timedelta_to_days
+        s = pd.Series([pd.Timedelta(days=-2), pd.Timedelta(days=5)])
+        result = timedelta_to_days(s)
+        assert list(result) == [-2, 5]
+
+    def test_negative_integer_seconds(self):
+        from customer_retention.core.compat import timedelta_to_days
+        s = pd.Series([-86400 * 2, 86400 * 5])
+        result = timedelta_to_days(s)
+        assert list(result) == [-2, 5]
+
+    def test_diff_on_datetime_column(self):
+        from customer_retention.core.compat import timedelta_to_days
+        dates = pd.Series(pd.to_datetime(["2023-01-01", "2023-01-04", "2023-01-10"]))
+        result = timedelta_to_days(dates.diff()).dropna()
+        assert list(result) == [3, 6]
+
+
+class TestTimedeltaToSeconds:
+    def test_timedelta_series(self):
+        from customer_retention.core.compat import timedelta_to_seconds
+        s = pd.Series([pd.Timedelta(hours=1), pd.Timedelta(minutes=30)])
+        result = timedelta_to_seconds(s)
+        assert list(result) == [3600.0, 1800.0]
+
+    def test_integer_seconds_series(self):
+        from customer_retention.core.compat import timedelta_to_seconds
+        s = pd.Series([3600, 1800, 0])
+        result = timedelta_to_seconds(s)
+        assert list(result) == [3600.0, 1800.0, 0.0]
+
+    def test_diff_on_datetime_column(self):
+        from customer_retention.core.compat import timedelta_to_seconds
+        dates = pd.Series(pd.to_datetime(["2023-01-01T00:00:00", "2023-01-01T01:00:00"]))
+        result = timedelta_to_seconds(dates.diff()).dropna()
+        assert list(result) == [3600.0]
+
+
 class TestDataMaterializerDatetimeConversion:
     def _make_recommendation(self, target_column, parameters):
         from customer_retention.analysis.auto_explorer.layered_recommendations import LayeredRecommendation

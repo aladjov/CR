@@ -257,6 +257,21 @@ def pandas_dtype_to_spark_schema(df: _pandas.DataFrame) -> "Any":
     return StructType(fields)
 
 
+_SECONDS_PER_DAY = 86400
+
+
+def timedelta_to_days(series: Any) -> Any:
+    if is_numeric_dtype(series):
+        return series // _SECONDS_PER_DAY
+    return series.dt.days
+
+
+def timedelta_to_seconds(series: Any) -> Any:
+    if is_numeric_dtype(series):
+        return series.astype(float)
+    return series.dt.total_seconds()
+
+
 def safe_to_list(obj: Any) -> list:
     if isinstance(obj, (_pandas.Series, _pandas.Index)):
         return obj.to_list()
@@ -324,6 +339,8 @@ __all__ = [
     "safe_memory_usage_bytes",
     "as_tz_naive",
     "safe_to_list",
+    "timedelta_to_days",
+    "timedelta_to_seconds",
     "safe_to_datetime",
     "ensure_datetime_column",
     "normalize_timestamp_columns",

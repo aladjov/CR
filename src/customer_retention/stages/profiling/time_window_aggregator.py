@@ -14,6 +14,8 @@ from customer_retention.core.compat import (
     ensure_datetime_column,
     is_numeric_dtype,
     native_pd,
+    timedelta_to_days,
+    timedelta_to_seconds,
     to_pandas,
 )
 
@@ -320,13 +322,13 @@ class TimeWindowAggregator:
     def _compute_recency(self, df: DataFrame, entities: np.ndarray, reference_date: Timestamp) -> np.ndarray:
         valid_df = df[df[self.time_column] <= reference_date]
         last_dates = valid_df.groupby(self.entity_column)[self.time_column].max()
-        days_since_last = (reference_date - last_dates).dt.days
+        days_since_last = timedelta_to_days(reference_date - last_dates)
         return np.array([days_since_last.get(e, np.nan) for e in entities])
 
     def _compute_tenure(self, df: DataFrame, entities: np.ndarray, reference_date: Timestamp) -> np.ndarray:
         valid_df = df[df[self.time_column] <= reference_date]
         first_dates = valid_df.groupby(self.entity_column)[self.time_column].min()
-        days_since_first = (reference_date - first_dates).dt.days
+        days_since_first = timedelta_to_days(reference_date - first_dates)
         return np.array([days_since_first.get(e, np.nan) for e in entities])
 
 
@@ -350,7 +352,7 @@ def derive_extra_datetime_features(
         dow_name = f"{col}_dow"
         is_weekend_name = f"{col}_is_weekend"
 
-        df[delta_hours_name] = (parsed - time_series).dt.total_seconds() / 3600
+        df[delta_hours_name] = timedelta_to_seconds(parsed - time_series) / 3600
         df[hour_name] = parsed.dt.hour.astype("Float64")
         df[dow_name] = parsed.dt.dayofweek.astype("Float64")
         df[is_weekend_name] = (parsed.dt.dayofweek >= 5).astype("Float64")
@@ -413,7 +415,7 @@ def derive_entity_datetime_features(
 def _derive_universal_features(
     df: DataFrame, time_series, col: str, parsed, mask_set: set,
 ) -> list[str]:
-    delta = (time_series - parsed).dt.days
+    delta = timedelta_to_days(time_series - parsed)
     names = {
         "days_since": f"days_since_{col}",
         "days_until": f"days_until_{col}",
@@ -451,9 +453,9 @@ def _derive_milestone_features(
     bucket_name = f"milestone_bucket_{end_col}"
     progress_name = f"contract_progress_{prefix}"
 
-    tenure = (time_series - start_parsed).dt.days.astype("Float64")
-    dtm = (end_parsed - time_series).dt.days.astype("Float64")
-    duration = (end_parsed - start_parsed).dt.days.astype("Float64")
+    tenure = timedelta_to_days(time_series - start_parsed).astype("Float64")
+    dtm = timedelta_to_days(end_parsed - time_series).astype("Float64")
+    duration = timedelta_to_days(end_parsed - start_parsed).astype("Float64")
     progress = (tenure / duration).clip(0, 2)
 
     edges = [-np.inf, -90, -30, -7, 0, 7, 30, 90, np.inf]

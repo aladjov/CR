@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import Timedelta, native_pd, pd, safe_to_list, to_datetime
+from customer_retention.core.compat import Timedelta, native_pd, pd, safe_to_list, timedelta_to_days, to_datetime
 
 
 class ReferenceMode(Enum):
@@ -337,7 +337,7 @@ class TemporalFeatureEngineer:
         df = events_df.merge(ref_dates, on=entity_col)
 
         # Calculate days before reference for each event
-        df["days_before_ref"] = (df["reference_date"] - df[time_col]).dt.days
+        df["days_before_ref"] = timedelta_to_days(df["reference_date"] - df[time_col])
 
         # Initialize result with entities
         result = ref_dates[[entity_col]].copy()
@@ -474,9 +474,9 @@ class TemporalFeatureEngineer:
         last_lc = g_lc.max().reset_index()
         last_lc.columns = [entity_col, "last_event"]
         history_stats = first_lc.merge(last_lc, on=entity_col)
-        history_stats["history_days"] = (
+        history_stats["history_days"] = timedelta_to_days(
             history_stats["last_event"] - history_stats["first_event"]
-        ).dt.days
+        )
 
         df = events_df.merge(history_stats, on=entity_col)
 
@@ -554,19 +554,19 @@ class TemporalFeatureEngineer:
         result = result.merge(ref_dates, on=entity_col)
 
         # Days since last event (from reference date)
-        result["days_since_last_event"] = (
+        result["days_since_last_event"] = timedelta_to_days(
             result["reference_date"] - result["last_event"]
-        ).dt.days
+        )
 
         # Days since first event (tenure)
-        result["days_since_first_event"] = (
+        result["days_since_first_event"] = timedelta_to_days(
             result["reference_date"] - result["first_event"]
-        ).dt.days
+        )
 
         # Active span (first to last event)
-        result["active_span_days"] = (
+        result["active_span_days"] = timedelta_to_days(
             result["last_event"] - result["first_event"]
-        ).dt.days
+        )
 
         # Recency ratio: days_since_last / active_span (0 = just active, 1 = dormant)
         result["recency_ratio"] = np.where(
@@ -609,7 +609,7 @@ class TemporalFeatureEngineer:
                 continue
 
             # Inter-event gaps
-            gaps = entity_events[time_col].diff().dt.days.dropna()
+            gaps = timedelta_to_days(entity_events[time_col].diff()).dropna()
 
             if len(gaps) > 0:
                 gap_mean = gaps.mean()

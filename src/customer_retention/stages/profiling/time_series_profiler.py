@@ -12,6 +12,8 @@ from customer_retention.core.compat import (
     native_pd,
     pd,
     safe_to_list,
+    timedelta_to_days,
+    timedelta_to_seconds,
 )
 
 
@@ -253,7 +255,7 @@ class TimeSeriesProfiler:
         counts = g.count().reset_index()
         counts.columns = ["entity", "event_count"]
         lifecycles = first.merge(last, on="entity").merge(counts, on="entity")
-        lifecycles["duration_days"] = (lifecycles["last_event"] - lifecycles["first_event"]).dt.days
+        lifecycles["duration_days"] = timedelta_to_days(lifecycles["last_event"] - lifecycles["first_event"])
         return lifecycles
 
     def _compute_events_distribution(self, lifecycles: DataFrame) -> DistributionStats:
@@ -288,7 +290,7 @@ class TimeSeriesProfiler:
             [self.entity_column, self.time_column]
         )
         same_entity = sorted_df[self.entity_column] == sorted_df[self.entity_column].shift(1)
-        time_diffs = sorted_df[self.time_column].diff().dt.total_seconds() / self.SECONDS_PER_DAY
+        time_diffs = timedelta_to_seconds(sorted_df[self.time_column].diff()) / self.SECONDS_PER_DAY
         valid = time_diffs[same_entity].dropna()
         if len(valid) == 0:
             return None
