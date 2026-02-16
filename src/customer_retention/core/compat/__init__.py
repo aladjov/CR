@@ -278,6 +278,13 @@ def timedelta_to_seconds(series: Any) -> Any:
         return series.astype("long").astype(float) / 1_000_000
 
 
+def timestamp_diffs_seconds(series: Any) -> Any:
+    if hasattr(series, 'to_spark'):
+        epoch = (series - series.min()).astype(float)
+        return epoch - epoch.shift(1)
+    return timedelta_to_seconds(series - series.shift(1))
+
+
 def groupby_multi_agg(df: Any, group_col: str, agg_col: str, agg_funcs: list) -> Any:
     if hasattr(df, 'to_spark'):
         import pyspark.sql.functions as F  # noqa: N812
@@ -356,6 +363,7 @@ __all__ = [
     "safe_memory_usage_bytes",
     "as_tz_naive",
     "groupby_multi_agg",
+    "timestamp_diffs_seconds",
     "safe_to_list",
     "timedelta_to_days",
     "timedelta_to_seconds",

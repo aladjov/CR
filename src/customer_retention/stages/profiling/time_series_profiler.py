@@ -14,7 +14,7 @@ from customer_retention.core.compat import (
     pd,
     safe_to_list,
     timedelta_to_days,
-    timedelta_to_seconds,
+    timestamp_diffs_seconds,
 )
 
 
@@ -286,7 +286,7 @@ class TimeSeriesProfiler:
         )
         same_entity = sorted_df[self.entity_column] == sorted_df[self.entity_column].shift(1)
         tc = sorted_df[self.time_column]
-        time_diffs = timedelta_to_seconds(tc - tc.shift(1)) / self.SECONDS_PER_DAY
+        time_diffs = timestamp_diffs_seconds(tc) / self.SECONDS_PER_DAY
         valid = time_diffs[same_entity].dropna()
         if len(valid) == 0:
             return None

@@ -11,6 +11,7 @@ from customer_retention.core.compat import (
     groupby_multi_agg,
     normalize_timestamp_columns,
     safe_to_datetime,
+    timestamp_diffs_seconds,
 )
 
 
@@ -56,6 +57,38 @@ class TestGroupbyMultiAgg:
         result = groupby_multi_agg(df, "g", "v", ["sum", "count"])
         assert len(result) == 0
         assert list(result.columns) == ["g", "sum", "count"]
+
+
+class TestTimestampDiffsSeconds:
+    def test_consecutive_diffs(self):
+        ts = pd.Series(pd.to_datetime(["2023-01-01", "2023-01-02", "2023-01-04"]))
+        result = timestamp_diffs_seconds(ts)
+        assert pd.isna(result.iloc[0])
+        assert result.iloc[1] == 86400.0
+        assert result.iloc[2] == 172800.0
+
+    def test_first_element_is_nan(self):
+        ts = pd.Series(pd.to_datetime(["2023-01-01", "2023-01-02"]))
+        result = timestamp_diffs_seconds(ts)
+        assert pd.isna(result.iloc[0])
+        assert not pd.isna(result.iloc[1])
+
+    def test_single_element(self):
+        ts = pd.Series(pd.to_datetime(["2023-01-01"]))
+        result = timestamp_diffs_seconds(ts)
+        assert len(result) == 1
+        assert pd.isna(result.iloc[0])
+
+    def test_uniform_intervals(self):
+        ts = pd.Series(pd.to_datetime([f"2023-01-{d:02d}" for d in range(1, 6)]))
+        result = timestamp_diffs_seconds(ts).dropna()
+        assert (result == 86400.0).all()
+        assert len(result) == 4
+
+    def test_sub_day_precision(self):
+        ts = pd.Series(pd.to_datetime(["2023-01-01 00:00:00", "2023-01-01 01:30:00"]))
+        result = timestamp_diffs_seconds(ts)
+        assert result.iloc[1] == 5400.0
 
 
 class TestInferEpochUnit:

@@ -16,7 +16,7 @@ from customer_retention.core.compat import (
     is_datetime64_any_dtype,
     pd,
     safe_to_list,
-    timedelta_to_seconds,
+    timestamp_diffs_seconds,
     to_datetime,
 )
 
@@ -404,7 +404,7 @@ class TimeSeriesDetector:
             if len(ts) < 2:
                 continue
 
-            diff_seconds = timedelta_to_seconds(ts - ts.shift(1)).dropna()
+            diff_seconds = timestamp_diffs_seconds(ts).dropna()
             intervals.extend(safe_to_list(diff_seconds / 3600))
 
         if not intervals:
@@ -703,7 +703,7 @@ class TimeSeriesValidator:
             if len(entity_data) < 2:
                 continue
 
-            diffs_sec = timedelta_to_seconds(entity_data - entity_data.shift(1)).dropna()
+            diffs_sec = timestamp_diffs_seconds(entity_data).dropna()
             interval_sec = expected_interval.total_seconds()
             threshold_sec = interval_sec * max_allowed_gap_periods
             large_gaps = diffs_sec[diffs_sec > threshold_sec]
@@ -766,7 +766,7 @@ class TimeSeriesValidator:
             if len(entity_data) < 2:
                 continue
 
-            diffs_sec = timedelta_to_seconds(entity_data - entity_data.shift(1)).dropna()
+            diffs_sec = timestamp_diffs_seconds(entity_data).dropna()
             intervals.extend(safe_to_list(diffs_sec))
 
         if not intervals:

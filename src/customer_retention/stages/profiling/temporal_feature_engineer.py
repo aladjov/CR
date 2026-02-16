@@ -32,6 +32,7 @@ from customer_retention.core.compat import (
     pd,
     safe_to_list,
     timedelta_to_days,
+    timestamp_diffs_seconds,
     to_datetime,
 )
 
@@ -608,7 +609,7 @@ class TemporalFeatureEngineer:
 
             # Inter-event gaps
             tc = entity_events[time_col]
-            gaps = timedelta_to_days(tc - tc.shift(1)).dropna()
+            gaps = (timestamp_diffs_seconds(tc) // 86400).dropna()
 
             if len(gaps) > 0:
                 gap_mean = gaps.mean()

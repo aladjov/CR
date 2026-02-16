@@ -8,7 +8,7 @@ from customer_retention.core.compat import (
     ensure_datetime_column,
     safe_to_datetime,
     safe_to_list,
-    timedelta_to_seconds,
+    timestamp_diffs_seconds,
     to_pandas,
 )
 from customer_retention.core.components.enums import Severity
@@ -84,7 +84,7 @@ class TemporalGapCheck(TemporalQualityCheck):
 
         ensure_datetime_column(df, self.time_column)
         time_col = df.sort_values(self.time_column)[self.time_column]
-        diffs_days = timedelta_to_seconds((time_col - time_col.shift(1)).dropna()) / 86400
+        diffs_days = timestamp_diffs_seconds(time_col).dropna() / 86400
         expected_days = self.FREQ_TO_DAYS.get(self.expected_frequency, 1)
         threshold_days = expected_days * self.max_gap_multiple
 
