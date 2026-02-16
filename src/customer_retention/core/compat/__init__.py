@@ -284,7 +284,8 @@ def _is_spark_pandas(obj: Any) -> bool:
 
 def timestamp_diffs_seconds(series: Any) -> Any:
     if _is_spark_pandas(series):
-        epoch = (series - series.min()).astype(float)
+        import pyspark.sql.functions as F  # noqa: N812
+        epoch = series.spark.transform(lambda c: F.unix_timestamp(c.cast("timestamp")).cast("double"))
         return epoch - epoch.shift(1)
     return timedelta_to_seconds(series - series.shift(1))
 
