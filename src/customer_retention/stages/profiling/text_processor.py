@@ -74,7 +74,7 @@ class TextColumnProcessor:
     def process_all_text_columns(self, df: DataFrame,
                                   text_columns: List[str]) -> Tuple[DataFrame, List[TextColumnResult]]:
         results = []
-        output_df = df.copy()
+        output_df = df
         for column in text_columns:
             output_df, result = self.process_column(output_df, column)
             results.append(result)

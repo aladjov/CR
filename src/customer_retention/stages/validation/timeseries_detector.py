@@ -385,7 +385,7 @@ class TimeSeriesDetector:
 
         intervals = []
         for entity in sample_entities:
-            entity_data = df[df[entity_column] == entity].copy()
+            entity_data = df[df[entity_column] == entity]
             if len(entity_data) < 2:
                 continue
 

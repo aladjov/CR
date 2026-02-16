@@ -225,7 +225,7 @@ def _choose_freq(time_span_days: int) -> tuple:
 def _detect_gaps(events_over_time: pd.Series, freq: str) -> List[TemporalGap]:
     if len(events_over_time) < 3:
         return []
-    series = events_over_time.copy()
+    series = events_over_time
     median_volume = series[series > 0].median() if (series > 0).any() else 0
     if median_volume == 0:
         return []

@@ -182,8 +182,7 @@ class SegmentAnalyzer:
         if len(feature_cols) == 0:
             return self._empty_result(df, method)
 
-        features_df = df[feature_cols].copy()
-        features_df = features_df.dropna()
+        features_df = df[feature_cols].dropna()
         valid_indices = features_df.index
 
         if len(features_df) < 10:
@@ -493,7 +492,7 @@ class SegmentAnalyzer:
         y = np.full(len(df), np.nan)
 
         # Get valid rows (non-NaN features)
-        features_df = df[feature_cols].copy()
+        features_df = df[feature_cols]
         valid_mask = ~features_df.isna().any(axis=1)
         valid_indices = features_df[valid_mask].index
 

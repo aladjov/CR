@@ -135,7 +135,7 @@ class SnapshotManager:
         naive_cutoff = _as_naive(cutoff_date)
         snapshot_df = df[
             (df["label_available_flag"] == True) & (ts <= naive_cutoff)
-        ].copy()
+        ]
 
         table_path = self.snapshots_dir / snapshot_name
         version = self._next_version(table_path, snapshot_name)
