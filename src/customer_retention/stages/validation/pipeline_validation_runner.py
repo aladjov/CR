@@ -73,8 +73,8 @@ class PipelineValidationRunner:
     ) -> tuple:
         if holdout_column and holdout_column in gold_features.columns:
             is_holdout = gold_features[holdout_column].notna()
-            holdout_df = gold_features[is_holdout].copy()
-            training_df = gold_features[~is_holdout].copy()
+            holdout_df = gold_features[is_holdout]
+            training_df = gold_features[~is_holdout]
         else:
             from sklearn.model_selection import train_test_split
             training_df, holdout_df = train_test_split(
@@ -168,7 +168,7 @@ def _split_training_validation(
         return train_test_split(gold_df, test_size=0.1, random_state=42)
 
     is_holdout = gold_df[target_column].isna() & gold_df[original_col].notna()
-    validation_df, training_df = gold_df[is_holdout].copy(), gold_df[~is_holdout].copy()
+    validation_df, training_df = gold_df[is_holdout], gold_df[~is_holdout]
     _log(verbose, f"Training records: {len(training_df):,}")
     _log(verbose, f"Validation (holdout) records: {len(validation_df):,}")
     return training_df, validation_df
@@ -181,9 +181,9 @@ def _prepare_features(
     if not prepare_fn:
         return training_df, validation_df
     _log(verbose, "\nApplying feature preparation (training mode)...")
-    training_prepared = prepare_fn(training_df.copy())
+    training_prepared = prepare_fn(training_df)
     _log(verbose, "Applying feature preparation (scoring mode)...")
-    scoring_prepared = prepare_fn(validation_df.copy())
+    scoring_prepared = prepare_fn(validation_df)
     return training_prepared, scoring_prepared
 
 
@@ -221,8 +221,8 @@ def validate_feature_transformation(
     entity_column: str = "customer_id", verbose: bool = True,
 ) -> ValidationReport:
     _log(verbose, "Validating transformation consistency...")
-    training_transformed = transform_fn(training_df.copy())
-    scoring_transformed = transform_fn(scoring_df.copy())
+    training_transformed = transform_fn(training_df)
+    scoring_transformed = transform_fn(scoring_df)
     validator = ScoringPipelineValidator(
         training_features=training_transformed, scoring_features=scoring_transformed,
         entity_column=entity_column)

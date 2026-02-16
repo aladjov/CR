@@ -209,8 +209,8 @@ class ScoringPipelineValidator:
             common = train_entities & score_entities
             missing = train_entities - score_entities
             extra = score_entities - train_entities
-            train_aligned = self.training_features[self.training_features[self.entity_column].isin(common)].copy()
-            score_aligned = self.scoring_features[self.scoring_features[self.entity_column].isin(common)].copy()
+            train_aligned = self.training_features[self.training_features[self.entity_column].isin(common)]
+            score_aligned = self.scoring_features[self.scoring_features[self.entity_column].isin(common)]
             train_aligned = train_aligned.sort_values(self.entity_column).reset_index(drop=True)
             score_aligned = score_aligned.sort_values(self.entity_column).reset_index(drop=True)
             return train_aligned, score_aligned, len(missing), len(extra)

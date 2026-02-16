@@ -101,15 +101,15 @@ class ReportGenerator:
     def generate_campaign_list(self, customer_data: DataFrame,
                                risk_segments: List[str]) -> CampaignList:
         filtered = customer_data[customer_data["risk_segment"].isin(risk_segments)]
-        customers = []
-        for _, row in filtered.iterrows():
-            customers.append({
-                "customer_id": row.get("customer_id", ""),
-                "risk_segment": row["risk_segment"],
-                "churn_probability": row["churn_probability"],
-                "ltv": row.get("ltv", 500),
-                "recommended_intervention": self._get_intervention(row["risk_segment"])
-            })
+        cid = filtered["customer_id"] if "customer_id" in filtered.columns else pd.Series("", index=filtered.index)
+        ltv = filtered["ltv"] if "ltv" in filtered.columns else pd.Series(500, index=filtered.index)
+        interventions = filtered["risk_segment"].map(self._get_intervention)
+        customers = [
+            {"customer_id": c, "risk_segment": s, "churn_probability": p,
+             "ltv": lv, "recommended_intervention": iv}
+            for c, s, p, lv, iv in zip(cid, filtered["risk_segment"],
+                                        filtered["churn_probability"], ltv, interventions)
+        ]
         segment_breakdown = filtered["risk_segment"].value_counts().to_dict()
         return CampaignList(
             customers=customers,

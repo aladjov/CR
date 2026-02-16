@@ -57,15 +57,16 @@ class PDPGenerator:
     def _calculate_ice(self, X: DataFrame, feature: str,
                        grid_values: np.ndarray, n_samples: int) -> List[np.ndarray]:
         sample_indices = np.random.choice(len(X), min(n_samples, len(X)), replace=False)
+        feature_idx = list(X.columns).index(feature)
+        X_sample = X.iloc[sample_indices].values
         ice_lines = []
-        for idx in sample_indices:
-            X_temp = X.iloc[[idx]].copy()
-            predictions = []
-            for val in grid_values:
-                X_temp[feature] = val
-                pred = self.model.predict_proba(X_temp)[0, 1]
-                predictions.append(pred)
-            ice_lines.append(np.array(predictions))
+        for row_vals in X_sample:
+            row = row_vals.copy().reshape(1, -1)
+            predictions = np.empty(len(grid_values))
+            for j, val in enumerate(grid_values):
+                row[0, feature_idx] = val
+                predictions[j] = self.model.predict_proba(row)[0, 1]
+            ice_lines.append(predictions)
         return ice_lines
 
     def generate_multiple(self, X: DataFrame, features: List[str],
@@ -74,14 +75,16 @@ class PDPGenerator:
 
     def generate_top_features(self, X: DataFrame, n_features: int = 5,
                               grid_resolution: int = 50) -> List[PDPResult]:
+        X_vals = X.values.copy()
+        original_pred = self.model.predict_proba(X_vals)[:, 1].mean()
         importances = {}
-        for feature in X.columns:
-            X_shuffled = X.copy()
-            X_shuffled[feature] = np.random.permutation(X_shuffled[feature].values)
-            original_pred = self.model.predict_proba(X)[:, 1].mean()
-            shuffled_pred = self.model.predict_proba(X_shuffled)[:, 1].mean()
+        for i, feature in enumerate(X.columns):
+            saved_col = X_vals[:, i].copy()
+            X_vals[:, i] = np.random.permutation(saved_col)
+            shuffled_pred = self.model.predict_proba(X_vals)[:, 1].mean()
+            X_vals[:, i] = saved_col
             importances[feature] = abs(original_pred - shuffled_pred)
-        top_features = sorted(importances.keys(), key=lambda f: importances[f], reverse=True)[:n_features]
+        top_features = sorted(importances, key=importances.get, reverse=True)[:n_features]
         return self.generate_multiple(X, top_features, grid_resolution)
 
     def generate_interaction(self, X: DataFrame, feature1: str, feature2: str,

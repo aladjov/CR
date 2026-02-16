@@ -128,7 +128,7 @@ class AdversarialScoringValidator:
         holdout_ids = self.get_holdout_entity_ids()
         if not holdout_ids:
             return AdversarialValidationResult(passed=True, entities_validated=0)
-        holdout_silver = silver_data[silver_data[self.entity_column].isin(holdout_ids)].copy()
+        holdout_silver = silver_data[silver_data[self.entity_column].isin(holdout_ids)]
         if holdout_silver.empty:
             return AdversarialValidationResult(passed=True, entities_validated=0, missing_entities=len(holdout_ids))
         recomputed = transform_fn(holdout_silver)
@@ -141,7 +141,7 @@ class AdversarialScoringValidator:
             self.gold_features[self.target_column].isna() &
             self.gold_features[self._holdout_column].notna()
         )
-        return self.gold_features[is_holdout].copy()
+        return self.gold_features[is_holdout]
 
     def _get_feature_columns(self, df: pd.DataFrame) -> List[str]:
         return get_valid_feature_columns(

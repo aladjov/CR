@@ -116,29 +116,36 @@ class ABTestDesigner:
                              stratify_by: Optional[str] = None) -> DataFrame:
         total_needed = sample_size_per_group * len(groups)
         if len(customer_pool) < total_needed:
-            sample = customer_pool.copy()
+            sample = customer_pool
         else:
             sample = customer_pool.sample(n=total_needed, random_state=42)
         if stratify_by and stratify_by in sample.columns:
-            assignments = []
-            for stratum in safe_to_list(sample[stratify_by].unique()):
-                stratum_data = sample[sample[stratify_by] == stratum]
-                n_per_group = len(stratum_data) // len(groups)
-                shuffled = stratum_data.sample(frac=1, random_state=42)
-                for i, group in enumerate(groups):
-                    start = i * n_per_group
-                    end = start + n_per_group if i < len(groups) - 1 else len(shuffled)
-                    group_data = shuffled.iloc[start:end].copy()
-                    group_data["group"] = group
-                    assignments.append(group_data)
-            return concat(assignments, ignore_index=True)
-        else:
-            shuffled = sample.sample(frac=1, random_state=42).reset_index(drop=True)
-            assignments = []
+            return self._stratified_assignment(sample, groups, stratify_by)
+        return self._random_assignment(sample, groups, sample_size_per_group)
+
+    def _stratified_assignment(self, sample: DataFrame, groups: List[str],
+                               stratify_by: str) -> DataFrame:
+        assignments = []
+        for stratum in safe_to_list(sample[stratify_by].unique()):
+            stratum_data = sample[sample[stratify_by] == stratum]
+            n_per_group = len(stratum_data) // len(groups)
+            shuffled = stratum_data.sample(frac=1, random_state=42)
             for i, group in enumerate(groups):
-                start = i * sample_size_per_group
-                end = start + sample_size_per_group
-                group_data = shuffled.iloc[start:end].copy()
-                group_data["group"] = group
-                assignments.append(group_data)
-            return concat(assignments, ignore_index=True)
+                start = i * n_per_group
+                end = start + n_per_group if i < len(groups) - 1 else len(shuffled)
+                assignments.append(shuffled.iloc[start:end].assign(group=group))
+        return concat(assignments, ignore_index=True)
+
+    def _random_assignment(self, sample: DataFrame, groups: List[str],
+                           sample_size_per_group: int) -> DataFrame:
+        shuffled = sample.sample(frac=1, random_state=42).reset_index(drop=True)
+        n_available = len(shuffled)
+        total = min(sample_size_per_group * len(groups), n_available)
+        per_group = total // len(groups)
+        result = shuffled.iloc[:total].copy()
+        labels = np.repeat(groups, per_group)
+        remainder = total - len(labels)
+        if remainder > 0:
+            labels = np.concatenate([labels, np.array(groups[:remainder])])
+        result["group"] = labels[:total]
+        return result

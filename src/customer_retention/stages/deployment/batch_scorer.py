@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, List, Optional
 
+import numpy as np
+
 from customer_retention.core.compat import DataFrame, pd
 from customer_retention.core.components.enums import RiskSegment
 
@@ -51,7 +53,7 @@ class BatchScorer:
         missing_cols = [col for col in feature_columns if col not in data.columns]
         if missing_cols:
             raise ValueError(f"Missing feature columns: {missing_cols}")
-        features = data[feature_columns].copy()
+        features = data[feature_columns]
         if features.isnull().any().any():
             if self.handle_nulls == "raise":
                 raise ValueError("Null values found in features")
@@ -78,7 +80,7 @@ class BatchScorer:
             batch_df = pd.DataFrame({
                 "customer_id": batch_ids.values,
                 "churn_probability": probabilities,
-                "risk_segment": [self._assign_risk_segment(p) for p in probabilities],
+                "risk_segment": self._vectorized_risk_segments(probabilities),
                 "predicted_churn": (probabilities >= self.threshold).astype(int),
                 "score_timestamp": datetime.now()
             })
@@ -104,3 +106,12 @@ class BatchScorer:
             return RiskSegment.MEDIUM.value
         else:
             return RiskSegment.LOW.value
+
+    def _vectorized_risk_segments(self, probabilities: np.ndarray) -> np.ndarray:
+        conditions = [
+            probabilities >= self._segment_thresholds[RiskSegment.CRITICAL],
+            probabilities >= self._segment_thresholds[RiskSegment.HIGH],
+            probabilities >= self._segment_thresholds[RiskSegment.MEDIUM],
+        ]
+        choices = [RiskSegment.CRITICAL.value, RiskSegment.HIGH.value, RiskSegment.MEDIUM.value]
+        return np.select(conditions, choices, default=RiskSegment.LOW.value)

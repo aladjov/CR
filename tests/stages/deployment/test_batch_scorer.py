@@ -204,3 +204,20 @@ class TestThresholdApplication:
     def test_default_threshold_is_half(self, sample_features, trained_model):
         scorer = BatchScorer(model=trained_model)
         assert scorer.threshold == 0.5
+
+
+class TestVectorizedRiskSegments:
+    def test_vectorized_segments_match_scalar(self, trained_model):
+        scorer = BatchScorer(model=trained_model)
+        probabilities = np.array([0.0, 0.15, 0.30, 0.55, 0.80, 0.99])
+        expected = [scorer._assign_risk_segment(p) for p in probabilities]
+        vectorized = scorer._vectorized_risk_segments(probabilities)
+        assert list(vectorized) == expected
+
+    def test_vectorized_segments_boundary_values(self, trained_model):
+        scorer = BatchScorer(model=trained_model)
+        probabilities = np.array([0.25, 0.50, 0.75])
+        segments = scorer._vectorized_risk_segments(probabilities)
+        assert segments[0] == RiskSegment.MEDIUM.value
+        assert segments[1] == RiskSegment.HIGH.value
+        assert segments[2] == RiskSegment.CRITICAL.value

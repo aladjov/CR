@@ -274,16 +274,13 @@ class RelationshipRecommender:
             cramers_v = self._calculate_cramers_v(df, col, target_col)
             associations.append({"feature": col, "cramers_v": cramers_v})
 
-            # Identify high-risk segments
-            for _, row in cat_stats.iterrows():
-                if row["count"] >= self.MIN_CATEGORY_SIZE and row["lift"] < self.HIGH_RISK_LIFT_THRESHOLD:
-                    high_risk_segments.append({
-                        "feature": col,
-                        "segment": row[col],
-                        "retention_rate": float(row["retention_rate"]),
-                        "lift": float(row["lift"]),
-                        "count": int(row["count"]),
-                    })
+            high_risk_mask = (cat_stats["count"] >= self.MIN_CATEGORY_SIZE) & (cat_stats["lift"] < self.HIGH_RISK_LIFT_THRESHOLD)
+            for record in cat_stats[high_risk_mask].to_dict("records"):
+                high_risk_segments.append({
+                    "feature": col, "segment": record[col],
+                    "retention_rate": float(record["retention_rate"]),
+                    "lift": float(record["lift"]), "count": int(record["count"]),
+                })
 
             # Check if category sizes are imbalanced
             size_ratio = cat_stats["count"].max() / cat_stats["count"].min() if cat_stats["count"].min() > 0 else float("inf")

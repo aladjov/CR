@@ -115,3 +115,28 @@ class TestPDPMetadata:
         result = generator.generate(X, feature="recency")
         assert result.average_prediction is not None
         assert 0 <= result.average_prediction <= 1
+
+
+class TestMemoryEfficiency:
+    def test_generate_top_features_does_not_mutate_input(self, trained_model, sample_data):
+        X, _ = sample_data
+        original_values = X.values.copy()
+        generator = PDPGenerator(trained_model)
+        generator.generate_top_features(X, n_features=3)
+        np.testing.assert_array_equal(X.values, original_values)
+
+    def test_ice_lines_match_grid_values_count(self, trained_model, sample_data):
+        X, _ = sample_data
+        generator = PDPGenerator(trained_model)
+        grid = np.linspace(X["recency"].min(), X["recency"].max(), 30)
+        ice = generator._calculate_ice(X, "recency", grid, n_samples=5)
+        assert len(ice) == 5
+        for line in ice:
+            assert len(line) == 30
+
+    def test_ice_predictions_within_probability_range(self, trained_model, sample_data):
+        X, _ = sample_data
+        generator = PDPGenerator(trained_model)
+        result = generator.generate(X, feature="recency", include_ice=True, ice_lines=20)
+        for line in result.ice_values:
+            assert all(0 <= v <= 1 for v in line)

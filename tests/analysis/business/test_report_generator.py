@@ -219,3 +219,26 @@ class TestReportActionability:
             model_metrics=model_metrics
         )
         assert len(dashboard.top_actions) > 0
+
+
+class TestCampaignListEdgeCases:
+    def test_campaign_list_without_customer_id_column(self):
+        df = pd.DataFrame({
+            "risk_segment": ["Critical", "High", "Low"],
+            "churn_probability": [0.9, 0.7, 0.2],
+        })
+        generator = ReportGenerator()
+        campaign = generator.generate_campaign_list(df, risk_segments=["Critical", "High"])
+        assert len(campaign.customers) == 2
+        for c in campaign.customers:
+            assert "customer_id" in c
+
+    def test_campaign_list_without_ltv_column(self):
+        df = pd.DataFrame({
+            "customer_id": ["A", "B"],
+            "risk_segment": ["Critical", "High"],
+            "churn_probability": [0.9, 0.7],
+        })
+        generator = ReportGenerator()
+        campaign = generator.generate_campaign_list(df, risk_segments=["Critical", "High"])
+        assert all(c["ltv"] == 500 for c in campaign.customers)
