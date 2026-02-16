@@ -278,8 +278,12 @@ def timedelta_to_seconds(series: Any) -> Any:
         return series.astype("long").astype(float) / 1_000_000
 
 
+def _is_spark_pandas(obj: Any) -> bool:
+    return hasattr(obj, 'spark') or hasattr(obj, 'to_spark')
+
+
 def timestamp_diffs_seconds(series: Any) -> Any:
-    if hasattr(series, 'to_spark'):
+    if _is_spark_pandas(series):
         epoch = (series - series.min()).astype(float)
         return epoch - epoch.shift(1)
     return timedelta_to_seconds(series - series.shift(1))
