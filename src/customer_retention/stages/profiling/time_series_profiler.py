@@ -6,8 +6,12 @@ import numpy as np
 from customer_retention.core.compat import (
     DataFrame,
     Timestamp,
-    ensure_datetime_column,
+    _infer_epoch_unit,
+    is_datetime64_any_dtype,
+    is_numeric_dtype,
     native_pd,
+    pd,
+    safe_to_list,
 )
 
 
@@ -71,14 +75,14 @@ def classify_lifecycle_quadrants(entity_lifecycles: DataFrame) -> LifecycleQuadr
     intensity_threshold = float(lc["intensity"].median())
 
     lc["lifecycle_quadrant"] = _assign_lifecycle_quadrant(
-        lc["duration_days"].values, lc["intensity"].values,
+        lc["duration_days"].to_numpy(), lc["intensity"].to_numpy(),
         tenure_threshold, intensity_threshold
     )
 
     counts = lc["lifecycle_quadrant"].value_counts()
     total = len(lc)
     rows = []
-    for quadrant in counts.index:
+    for quadrant in safe_to_list(counts.index):
         n = counts[quadrant]
         rec = _QUADRANT_RECOMMENDATIONS[quadrant]
         rows.append({
@@ -137,12 +141,12 @@ def classify_activity_segments(entity_lifecycles: DataFrame) -> ActivitySegmentR
     q25 = float(lc["event_count"].quantile(0.25))
     q75 = float(lc["event_count"].quantile(0.75))
 
-    lc["activity_segment"] = _assign_activity_segment(lc["event_count"].values, q25, q75)
+    lc["activity_segment"] = _assign_activity_segment(lc["event_count"].to_numpy(), q25, q75)
 
     counts = lc["activity_segment"].value_counts()
     total = len(lc)
     rows = []
-    for segment in counts.index:
+    for segment in safe_to_list(counts.index):
         n = counts[segment]
         subset = lc[lc["activity_segment"] == segment]
         rec = _SEGMENT_RECOMMENDATIONS[segment]
@@ -230,23 +234,23 @@ class TimeSeriesProfiler:
 
     def _prepare_dataframe(self, df: DataFrame) -> DataFrame:
         df = df.copy()
-        ensure_datetime_column(df, self.time_column)
+        if not is_datetime64_any_dtype(df[self.time_column]):
+            col = df[self.time_column]
+            if is_numeric_dtype(col):
+                sample_val = float(col.dropna().iloc[0])
+                unit = _infer_epoch_unit(sample_val)
+                df[self.time_column] = pd.to_datetime(col, unit=unit)
+            else:
+                df[self.time_column] = pd.to_datetime(col)
         return df
 
     def _compute_entity_lifecycles(self, df: DataFrame) -> DataFrame:
-        grouped = df.groupby(self.entity_column)[self.time_column]
-
-        lifecycles = native_pd.DataFrame({
-            "entity": grouped.first().index.tolist(),
-            "first_event": grouped.min().values,
-            "last_event": grouped.max().values,
-            "event_count": grouped.count().values,
-        })
-
+        agg = df.groupby(self.entity_column)[self.time_column].agg(["min", "max", "count"])
+        lifecycles = agg.reset_index()
+        lifecycles.columns = ["entity", "first_event", "last_event", "event_count"]
         lifecycles["duration_days"] = (
             (lifecycles["last_event"] - lifecycles["first_event"]).dt.days
         )
-
         return lifecycles
 
     def _compute_events_distribution(self, lifecycles: DataFrame) -> DistributionStats:
@@ -277,19 +281,15 @@ class TimeSeriesProfiler:
     def _compute_avg_inter_event_time(self, df: DataFrame) -> Optional[float]:
         if len(df) < 2:
             return None
-
-        inter_event_days = []
-        for _, group in df.groupby(self.entity_column):
-            if len(group) < 2:
-                continue
-            sorted_dates = group[self.time_column].sort_values()
-            diffs = sorted_dates.diff().dropna()
-            inter_event_days.extend(diffs.dt.total_seconds() / self.SECONDS_PER_DAY)
-
-        if not inter_event_days:
+        sorted_df = df[[self.entity_column, self.time_column]].sort_values(
+            [self.entity_column, self.time_column]
+        )
+        same_entity = sorted_df[self.entity_column] == sorted_df[self.entity_column].shift(1)
+        time_diffs = sorted_df[self.time_column].diff().dt.total_seconds() / self.SECONDS_PER_DAY
+        valid = time_diffs[same_entity].dropna()
+        if len(valid) == 0:
             return None
-
-        return float(sum(inter_event_days) / len(inter_event_days))
+        return float(valid.mean())
 
     def _empty_profile(self) -> TimeSeriesProfile:
         return TimeSeriesProfile(

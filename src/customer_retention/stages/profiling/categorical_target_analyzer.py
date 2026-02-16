@@ -2,10 +2,9 @@ from dataclasses import dataclass, field
 from typing import Dict, List
 
 import numpy as np
-import pandas as pd
 from scipy.stats import chi2_contingency
 
-from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype
+from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype, native_pd, pd, safe_to_list
 from customer_retention.stages.profiling.stats_helpers import calculate_group_retention_stats
 
 CARDINALITY_THRESHOLD = 0.5
@@ -23,7 +22,7 @@ class CategoricalFeatureInsight:
     high_risk_categories: List[str]
     low_risk_categories: List[str]
     interpretation: str
-    category_stats: pd.DataFrame
+    category_stats: DataFrame
 
 
 @dataclass
@@ -154,7 +153,7 @@ class CategoricalTargetResult:
     chi2_statistic: float
     p_value: float
     effect_strength: str
-    category_stats: pd.DataFrame
+    category_stats: DataFrame
     high_risk_categories: List[str]
     low_risk_categories: List[str]
     overall_rate: float
@@ -183,8 +182,8 @@ class CategoricalTargetAnalyzer:
         category_stats = self._calculate_category_stats(clean_df, categorical_col, target_col, overall_rate)
         cramers_v, chi2_stat, p_value = self._calculate_cramers_v(clean_df, categorical_col, target_col)
         effect_strength = self._determine_effect_strength(cramers_v)
-        high_risk = category_stats[category_stats['lift'] < self.HIGH_RISK_LIFT_THRESHOLD]['category'].tolist()
-        low_risk = category_stats[category_stats['lift'] > self.LOW_RISK_LIFT_THRESHOLD]['category'].tolist()
+        high_risk = safe_to_list(category_stats[category_stats['lift'] < self.HIGH_RISK_LIFT_THRESHOLD]['category'])
+        low_risk = safe_to_list(category_stats[category_stats['lift'] > self.LOW_RISK_LIFT_THRESHOLD]['category'])
 
         return CategoricalTargetResult(
             categorical_col=categorical_col,
@@ -200,7 +199,7 @@ class CategoricalTargetAnalyzer:
             overall_rate=overall_rate
         )
 
-    def _calculate_category_stats(self, df: pd.DataFrame, categorical_col: str, target_col: str, overall_rate: float) -> pd.DataFrame:
+    def _calculate_category_stats(self, df: DataFrame, categorical_col: str, target_col: str, overall_rate: float) -> DataFrame:
         stats = calculate_group_retention_stats(
             df, categorical_col, target_col, overall_rate,
             min_samples=self.min_samples_per_category,
@@ -211,7 +210,7 @@ class CategoricalTargetAnalyzer:
         stats["pct_of_total"] = stats["total_count"] / len(df)
         return stats
 
-    def _calculate_cramers_v(self, df: pd.DataFrame, categorical_col: str, target_col: str) -> tuple:
+    def _calculate_cramers_v(self, df: DataFrame, categorical_col: str, target_col: str) -> tuple:
         contingency = pd.crosstab(df[categorical_col], df[target_col])
 
         if contingency.shape[0] < 2 or contingency.shape[1] < 2:
@@ -249,7 +248,7 @@ class CategoricalTargetAnalyzer:
             chi2_statistic=0.0,
             p_value=1.0,
             effect_strength='negligible',
-            category_stats=pd.DataFrame(columns=[
+            category_stats=native_pd.DataFrame(columns=[
                 'category', 'retained_count', 'total_count', 'retention_rate',
                 'churned_count', 'lift', 'pct_of_total'
             ]),
@@ -258,7 +257,7 @@ class CategoricalTargetAnalyzer:
             overall_rate=0.0
         )
 
-    def analyze_multiple(self, df: DataFrame, categorical_cols: List[str], target_col: str) -> pd.DataFrame:
+    def analyze_multiple(self, df: DataFrame, categorical_cols: List[str], target_col: str) -> native_pd.DataFrame:
         results = []
         for col in categorical_cols:
             result = self.analyze(df, col, target_col)
@@ -272,4 +271,4 @@ class CategoricalTargetAnalyzer:
                 'low_risk_count': len(result.low_risk_categories)
             })
 
-        return pd.DataFrame(results).sort_values('cramers_v', ascending=False).reset_index(drop=True)
+        return native_pd.DataFrame(results).sort_values('cramers_v', ascending=False).reset_index(drop=True)

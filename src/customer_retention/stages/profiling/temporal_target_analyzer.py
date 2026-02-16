@@ -1,50 +1,35 @@
-"""Temporal feature analysis with respect to a binary target."""
 from dataclasses import dataclass
 from typing import List, Optional
 
 import numpy as np
-import pandas as pd
 
-from customer_retention.core.compat import DataFrame
+from customer_retention.core.compat import DataFrame, Timestamp, native_pd, to_datetime
 from customer_retention.stages.profiling.stats_helpers import calculate_group_retention_stats
 
 
 @dataclass
 class TemporalTargetResult:
-    """Results from temporal-target analysis."""
     datetime_col: str
     target_col: str
-    min_date: pd.Timestamp
-    max_date: pd.Timestamp
+    min_date: Timestamp
+    max_date: Timestamp
     n_valid_dates: int
     overall_rate: float
 
-    # Yearly analysis
-    yearly_stats: pd.DataFrame  # year, count, retention_rate, lift
-    yearly_trend: str  # 'improving', 'declining', 'stable'
+    yearly_stats: DataFrame
+    yearly_trend: str
 
-    # Monthly analysis (seasonality)
-    monthly_stats: pd.DataFrame  # month, month_name, count, retention_rate, lift
+    monthly_stats: DataFrame
     best_month: Optional[str]
     worst_month: Optional[str]
-    seasonal_spread: float  # difference between best and worst
+    seasonal_spread: float
 
-    # Day of week analysis
-    dow_stats: pd.DataFrame  # day_of_week, day_name, count, retention_rate, lift
+    dow_stats: DataFrame
 
-    # Quarterly analysis
-    quarterly_stats: pd.DataFrame
+    quarterly_stats: DataFrame
 
 
 class TemporalTargetAnalyzer:
-    """Analyzes relationship between datetime features and binary target.
-
-    Computes retention rates by:
-    - Year (cohort analysis)
-    - Month (seasonality)
-    - Day of week (weekly patterns)
-    - Quarter
-    """
 
     MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -59,14 +44,11 @@ class TemporalTargetAnalyzer:
         datetime_col: str,
         target_col: str
     ) -> TemporalTargetResult:
-        """Analyze relationship between datetime feature and binary target."""
-
         if len(df) == 0 or datetime_col not in df.columns or target_col not in df.columns:
             return self._empty_result(datetime_col, target_col)
 
-        # Parse dates and prepare data
         df_clean = df[[datetime_col, target_col]].copy()
-        df_clean[datetime_col] = pd.to_datetime(df_clean[datetime_col], errors='coerce')
+        df_clean[datetime_col] = to_datetime(df_clean[datetime_col], errors='coerce')
         df_clean = df_clean.dropna()
 
         if len(df_clean) == 0:
@@ -112,12 +94,11 @@ class TemporalTargetAnalyzer:
 
     def _calculate_period_stats(
         self,
-        df: pd.DataFrame,
+        df: DataFrame,
         period_col: str,
         target_col: str,
         overall_rate: float
-    ) -> pd.DataFrame:
-        """Calculate retention stats for a time period."""
+    ) -> DataFrame:
         stats = calculate_group_retention_stats(
             df, period_col, target_col, overall_rate,
             min_samples=self.min_samples_per_period, sort_by="group",
@@ -126,11 +107,10 @@ class TemporalTargetAnalyzer:
 
     def _calculate_monthly_stats(
         self,
-        df: pd.DataFrame,
+        df: DataFrame,
         target_col: str,
         overall_rate: float
-    ) -> pd.DataFrame:
-        """Calculate monthly retention stats with month names."""
+    ) -> DataFrame:
         stats = calculate_group_retention_stats(
             df, "_month", target_col, overall_rate,
             min_samples=self.min_samples_per_period, sort_by="group",
@@ -143,11 +123,10 @@ class TemporalTargetAnalyzer:
 
     def _calculate_dow_stats(
         self,
-        df: pd.DataFrame,
+        df: DataFrame,
         target_col: str,
         overall_rate: float
-    ) -> pd.DataFrame:
-        """Calculate day-of-week retention stats."""
+    ) -> DataFrame:
         stats = calculate_group_retention_stats(
             df, "_dow", target_col, overall_rate, sort_by="group",
         )
@@ -157,15 +136,12 @@ class TemporalTargetAnalyzer:
         )
         return stats
 
-    def _determine_yearly_trend(self, yearly_stats: pd.DataFrame) -> str:
-        """Determine if retention is improving, declining, or stable over years."""
+    def _determine_yearly_trend(self, yearly_stats: DataFrame) -> str:
         if len(yearly_stats) < 2:
             return 'stable'
 
-        rates = yearly_stats['retention_rate'].values
-        yearly_stats['period'].values
+        rates = yearly_stats['retention_rate'].to_numpy()
 
-        # Simple linear regression
         if len(rates) >= 2:
             slope = np.polyfit(range(len(rates)), rates, 1)[0]
 
@@ -178,9 +154,8 @@ class TemporalTargetAnalyzer:
 
     def _find_seasonal_extremes(
         self,
-        monthly_stats: pd.DataFrame
+        monthly_stats: DataFrame
     ) -> tuple:
-        """Find best and worst months for retention."""
         if len(monthly_stats) == 0:
             return None, None, 0.0
 
@@ -194,14 +169,13 @@ class TemporalTargetAnalyzer:
         return best_month, worst_month, float(spread)
 
     def _empty_result(self, datetime_col: str, target_col: str) -> TemporalTargetResult:
-        """Return empty result for edge cases."""
-        empty_df = pd.DataFrame()
+        empty_df = native_pd.DataFrame()
 
         return TemporalTargetResult(
             datetime_col=datetime_col,
             target_col=target_col,
-            min_date=pd.NaT,
-            max_date=pd.NaT,
+            min_date=native_pd.NaT,
+            max_date=native_pd.NaT,
             n_valid_dates=0,
             overall_rate=0.0,
             yearly_stats=empty_df,
@@ -219,8 +193,7 @@ class TemporalTargetAnalyzer:
         df: DataFrame,
         datetime_cols: List[str],
         target_col: str
-    ) -> pd.DataFrame:
-        """Analyze multiple datetime columns and return summary."""
+    ) -> native_pd.DataFrame:
         results = []
         for col in datetime_cols:
             result = self.analyze(df, col, target_col)
@@ -233,4 +206,4 @@ class TemporalTargetAnalyzer:
                 'seasonal_spread': result.seasonal_spread
             })
 
-        return pd.DataFrame(results)
+        return native_pd.DataFrame(results)

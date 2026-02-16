@@ -552,7 +552,7 @@ class TemporalPatternAnalyzer:
             return []
 
         df_sorted = df_clean.sort_values(self.time_column)
-        values = df_sorted[value_column].values
+        values = df_sorted[value_column].to_numpy()
 
         results = []
         period_names = {7: "weekly", 14: "bi-weekly", 21: "tri-weekly", 30: "monthly", 90: "quarterly", 180: "semi-annual", 365: "yearly"}
@@ -599,7 +599,14 @@ class TemporalPatternAnalyzer:
         ensure_datetime_column(df_copy, cohort_column)
         entity_first_event = df_copy.groupby(entity_column)[cohort_column].min()
         df_copy["_cohort"] = df_copy[entity_column].map(entity_first_event)
-        df_copy["_cohort"] = df_copy["_cohort"].dt.to_period(period)
+        if period == "M":
+            df_copy["_cohort"] = df_copy["_cohort"].dt.strftime("%Y-%m")
+        elif period == "Q":
+            df_copy["_cohort"] = df_copy["_cohort"].dt.year.astype(str) + "-Q" + df_copy["_cohort"].dt.quarter.astype(str)
+        elif period == "Y":
+            df_copy["_cohort"] = df_copy["_cohort"].dt.year.astype(str)
+        else:
+            df_copy["_cohort"] = df_copy["_cohort"].dt.strftime("%Y-%m")
 
         entity_cohorts = df_copy.groupby(entity_column)["_cohort"].first().reset_index()
         entity_cohorts.columns = [entity_column, "_cohort"]

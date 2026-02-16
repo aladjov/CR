@@ -3,9 +3,8 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-import pandas as pd
 
-from customer_retention.core.compat import Series
+from customer_retention.core.compat import Series, Timestamp, native_pd, safe_to_list, to_datetime
 
 
 class TemporalGranularity(Enum):
@@ -22,8 +21,8 @@ class SeasonalityResult:
     dominant_period: Optional[str] = None  # 'weekly', 'monthly', 'yearly'
     peak_periods: List[str] = field(default_factory=list)
     trough_periods: List[str] = field(default_factory=list)
-    monthly_pattern: Optional[pd.DataFrame] = None  # year x month heatmap data
-    weekly_pattern: Optional[pd.Series] = None  # day of week counts
+    monthly_pattern: Optional[native_pd.DataFrame] = None
+    weekly_pattern: Optional[native_pd.Series] = None
     confidence: float = 0.0
     seasonal_strength: float = 0.0
 
@@ -66,12 +65,12 @@ class TemporalRecommendation:
 @dataclass
 class TemporalAnalysis:
     granularity: TemporalGranularity
-    min_date: pd.Timestamp
-    max_date: pd.Timestamp
+    min_date: Timestamp
+    max_date: Timestamp
     span_days: int
     total_count: int
     null_count: int
-    period_counts: pd.DataFrame
+    period_counts: native_pd.DataFrame
 
     @property
     def null_percentage(self) -> float:
@@ -88,7 +87,7 @@ class TemporalAnalyzer:
 
     def detect_granularity(self, dates: Series) -> TemporalGranularity:
 
-        clean_dates = pd.to_datetime(dates, errors="coerce").dropna()
+        clean_dates = to_datetime(dates, errors="coerce").dropna()
         if len(clean_dates) == 0:
             return TemporalGranularity.MONTH
 
@@ -100,11 +99,11 @@ class TemporalAnalyzer:
 
     def aggregate_by_granularity(
         self, dates: Series, granularity: TemporalGranularity
-    ) -> pd.DataFrame:
+    ) -> native_pd.DataFrame:
 
-        clean_dates = pd.to_datetime(dates, errors="coerce").dropna()
+        clean_dates = to_datetime(dates, errors="coerce").dropna()
         if len(clean_dates) == 0:
-            return pd.DataFrame({"period": [], "count": []})
+            return native_pd.DataFrame({"period": [], "count": []})
 
         period_series = self._extract_period(clean_dates, granularity)
         counts = period_series.value_counts().sort_index().reset_index()
@@ -112,16 +111,17 @@ class TemporalAnalyzer:
         return counts
 
     def _extract_period(
-        self, dates: pd.Series, granularity: TemporalGranularity
-    ) -> pd.Series:
+        self, dates: Series, granularity: TemporalGranularity
+    ) -> Series:
         if granularity == TemporalGranularity.DAY:
             return dates.dt.strftime("%Y-%m-%d")
         elif granularity == TemporalGranularity.WEEK:
-            return dates.dt.to_period("W").astype(str)
+            week_num = ((dates.dt.dayofyear - 1) // 7 + 1).astype(str).str.zfill(2)
+            return dates.dt.year.astype(str) + "-W" + week_num
         elif granularity == TemporalGranularity.MONTH:
-            return dates.dt.to_period("M").astype(str)
+            return dates.dt.strftime("%Y-%m")
         elif granularity == TemporalGranularity.QUARTER:
-            return dates.dt.to_period("Q").astype(str)
+            return dates.dt.year.astype(str) + "-Q" + dates.dt.quarter.astype(str)
         else:  # YEAR
             return dates.dt.year
 
@@ -132,19 +132,19 @@ class TemporalAnalyzer:
     ) -> TemporalAnalysis:
 
         total_count = len(dates)
-        parsed_dates = pd.to_datetime(dates, errors="coerce")
+        parsed_dates = to_datetime(dates, errors="coerce")
         null_count = parsed_dates.isna().sum()
         clean_dates = parsed_dates.dropna()
 
         if len(clean_dates) == 0:
             return TemporalAnalysis(
                 granularity=granularity or TemporalGranularity.MONTH,
-                min_date=pd.NaT,
-                max_date=pd.NaT,
+                min_date=native_pd.NaT,
+                max_date=native_pd.NaT,
                 span_days=0,
                 total_count=total_count,
                 null_count=null_count,
-                period_counts=pd.DataFrame({"period": [], "count": []}),
+                period_counts=native_pd.DataFrame({"period": [], "count": []}),
             )
 
         detected_granularity = granularity or self.detect_granularity(clean_dates)
@@ -161,9 +161,8 @@ class TemporalAnalyzer:
         )
 
     def analyze_seasonality(self, dates: Series) -> SeasonalityResult:
-        """Analyze seasonality patterns in datetime data."""
 
-        parsed = pd.to_datetime(dates, errors="coerce").dropna()
+        parsed = to_datetime(dates, errors="coerce").dropna()
 
         if len(parsed) < 30:
             return SeasonalityResult(has_seasonality=False, confidence=0.0)
@@ -171,7 +170,7 @@ class TemporalAnalyzer:
         # Weekly pattern (day of week)
         dow_counts = parsed.dt.dayofweek.value_counts().sort_index()
         dow_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        weekly_pattern = pd.Series(
+        weekly_pattern = native_pd.Series(
             [dow_counts.get(i, 0) for i in range(7)], index=dow_names
         )
 
@@ -194,8 +193,8 @@ class TemporalAnalyzer:
                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
         if len(monthly_totals) >= 3:
-            peak_months = monthly_totals.nlargest(3).index.tolist()
-            trough_months = monthly_totals.nsmallest(3).index.tolist()
+            peak_months = safe_to_list(monthly_totals.nlargest(3).index)
+            trough_months = safe_to_list(monthly_totals.nsmallest(3).index)
             peak_periods = [month_names[m - 1] for m in peak_months if m <= 12]
             trough_periods = [month_names[m - 1] for m in trough_months if m <= 12]
         else:
@@ -217,13 +216,12 @@ class TemporalAnalyzer:
             seasonal_strength=float(weekly_cv),
         )
 
-    def year_over_year_comparison(self, dates: Series) -> pd.DataFrame:
-        """Compare record counts year-over-year by month."""
+    def year_over_year_comparison(self, dates: Series) -> native_pd.DataFrame:
 
-        parsed = pd.to_datetime(dates, errors="coerce").dropna()
+        parsed = to_datetime(dates, errors="coerce").dropna()
 
         if len(parsed) == 0:
-            return pd.DataFrame()
+            return native_pd.DataFrame()
 
         df = parsed.to_frame(name="date")
         df["year"] = parsed.dt.year
@@ -240,31 +238,25 @@ class TemporalAnalyzer:
     def calculate_growth_rate(self, dates: Series) -> Dict[str, Any]:
         """Calculate growth metrics over time."""
 
-        parsed = pd.to_datetime(dates, errors="coerce").dropna()
+        parsed = to_datetime(dates, errors="coerce").dropna()
 
         if len(parsed) < 2:
             return {"has_data": False}
 
-        # Monthly counts
-        monthly = parsed.dt.to_period("M").value_counts().sort_index()
+        monthly = parsed.dt.strftime("%Y-%m").value_counts().sort_index()
 
         if len(monthly) < 2:
             return {"has_data": False}
 
-        # Calculate month-over-month growth
         mom_growth = monthly.pct_change().dropna()
-
-        # Calculate cumulative
         cumulative = monthly.cumsum()
 
-        # Linear trend
         x = np.arange(len(monthly))
-        y = monthly.values
+        y = monthly.to_numpy()
         slope, intercept = np.polyfit(x, y, 1)
         trend_direction = "growing" if slope > 0 else "declining"
 
-        # Overall growth rate
-        overall_growth = ((monthly.iloc[-1] - monthly.iloc[0]) / monthly.iloc[0] * 100) if monthly.iloc[0] > 0 else 0
+        overall_growth = ((y[-1] - y[0]) / y[0] * 100) if y[0] > 0 else 0
 
         return {
             "has_data": True,
@@ -280,7 +272,7 @@ class TemporalAnalyzer:
         self, dates: Series, column_name: str, other_date_columns: Optional[List[str]] = None
     ) -> List[TemporalRecommendation]:
 
-        parsed = pd.to_datetime(dates, errors="coerce")
+        parsed = to_datetime(dates, errors="coerce")
         valid_dates = parsed.dropna()
         recommendations = []
 

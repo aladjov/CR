@@ -234,6 +234,31 @@ class TestInterEventTiming:
         assert result.avg_inter_event_days == pytest.approx(7.0, rel=0.1)
 
 
+    def test_multi_entity_inter_event_time(self):
+        df = pd.DataFrame({
+            "entity": ["A", "A", "A", "B", "B"],
+            "date": pd.to_datetime([
+                "2023-01-01", "2023-01-08", "2023-01-15",
+                "2023-02-01", "2023-02-11",
+            ]),
+            "val": range(5),
+        })
+        profiler = TimeSeriesProfiler(entity_column="entity", time_column="date")
+        result = profiler.profile(df)
+        expected = (7.0 + 7.0 + 10.0) / 3
+        assert result.avg_inter_event_days == pytest.approx(expected, rel=0.01)
+
+    def test_inter_event_ignores_cross_entity_diffs(self):
+        df = pd.DataFrame({
+            "entity": ["A", "B"],
+            "date": pd.to_datetime(["2023-01-01", "2023-06-01"]),
+            "val": [1, 2],
+        })
+        profiler = TimeSeriesProfiler(entity_column="entity", time_column="date")
+        result = profiler.profile(df)
+        assert result.avg_inter_event_days is None
+
+
 class TestDistributionStats:
     """Tests for DistributionStats dataclass."""
 

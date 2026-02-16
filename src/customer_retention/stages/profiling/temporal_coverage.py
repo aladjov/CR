@@ -2,7 +2,15 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 import numpy as np
-import pandas as pd
+
+from customer_retention.core.compat import (
+    Timedelta,
+    Timestamp,
+    is_datetime64_any_dtype,
+    native_pd,
+    safe_to_list,
+    to_datetime,
+)
 
 from .window_recommendation import WINDOW_DAYS_MAP
 
@@ -14,8 +22,8 @@ VOLUME_CHANGE_DECLINING = -0.25
 
 @dataclass
 class TemporalGap:
-    start: pd.Timestamp
-    end: pd.Timestamp
+    start: Timestamp
+    end: Timestamp
     duration_days: float
     severity: str
 
@@ -34,23 +42,23 @@ class DriftImplication:
     volume_drift_risk: str
     population_stability: float
     regime_count: int
-    regime_boundaries: List[pd.Timestamp]
-    recommended_training_start: Optional[pd.Timestamp]
+    regime_boundaries: List[Timestamp]
+    recommended_training_start: Optional[Timestamp]
     rationale: List[str]
 
 
 @dataclass
 class TemporalCoverageResult:
     time_span_days: int
-    first_event: pd.Timestamp
-    last_event: pd.Timestamp
+    first_event: Timestamp
+    last_event: Timestamp
     gaps: List[TemporalGap]
     entity_window_coverage: List[EntityWindowCoverage]
     volume_trend: str
     volume_change_pct: float
     recommendations: List[str]
-    events_over_time: pd.Series
-    new_entities_over_time: pd.Series
+    events_over_time: native_pd.Series
+    new_entities_over_time: native_pd.Series
 
 
 @dataclass
@@ -66,33 +74,39 @@ class TemporalComparison:
     representativeness_score: float
 
 
+def _to_native_series(series, name: str = "") -> native_pd.Series:
+    if isinstance(series, native_pd.Series):
+        result = series
+    elif hasattr(series, "to_pandas"):
+        result = series.to_pandas()
+    else:
+        result = native_pd.Series(series)
+    if name:
+        result.name = name
+    return result
+
+
 def analyze_temporal_coverage(
-    df: pd.DataFrame, entity_column: str, time_column: str,
+    df, entity_column: str, time_column: str,
     candidate_windows: Optional[List[str]] = None,
-    reference_date: Optional[pd.Timestamp] = None,
+    reference_date: Optional[Timestamp] = None,
 ) -> TemporalCoverageResult:
-    times = pd.to_datetime(df[time_column], format="mixed", utc=True).dt.tz_localize(None)
-    first_event = times.min()
-    last_event = times.max()
+    if not is_datetime64_any_dtype(df[time_column]):
+        df = df.copy()
+        df[time_column] = to_datetime(df[time_column])
+
+    first_event = df[time_column].min()
+    last_event = df[time_column].max()
     time_span_days = max(0, (last_event - first_event).days)
     ref_date = reference_date if reference_date is not None else last_event
     windows = candidate_windows if candidate_windows is not None else DEFAULT_CANDIDATE_WINDOWS
 
     grouper_freq, range_freq = _choose_freq(time_span_days)
-    df_indexed = pd.DataFrame({"_t": times, "_e": df[entity_column].values})
-    df_indexed = df_indexed.set_index("_t").sort_index()
-
-    events_over_time = df_indexed.resample(grouper_freq).size()
-    events_over_time.name = "event_count"
-
-    first_per_entity = df.assign(_t=times).groupby(entity_column)["_t"].min()
-    fpe_indexed = pd.DataFrame({"_count": 1}, index=first_per_entity.values)
-    fpe_indexed.index.name = "_t"
-    new_entities = fpe_indexed.resample(grouper_freq)["_count"].sum().fillna(0).astype(int)
-    new_entities.name = "new_entities"
+    events_over_time = _resample_event_counts(df, time_column, grouper_freq)
+    new_entities = _resample_new_entities(df, entity_column, time_column, grouper_freq)
 
     gaps = _detect_gaps(events_over_time, range_freq)
-    coverage = _compute_entity_window_coverage(df, entity_column, times, ref_date, windows)
+    coverage = _compute_entity_window_coverage(df, entity_column, time_column, ref_date, windows)
     volume_trend, volume_change = _assess_volume_trend(events_over_time)
     recommendations = _build_recommendations(gaps, volume_trend, volume_change, time_span_days, coverage)
 
@@ -103,6 +117,23 @@ def analyze_temporal_coverage(
         recommendations=recommendations,
         events_over_time=events_over_time, new_entities_over_time=new_entities,
     )
+
+
+def _resample_event_counts(df, time_column: str, freq: str) -> native_pd.Series:
+    indexed = df[[time_column]].copy()
+    indexed["_n"] = 1
+    indexed = indexed.set_index(time_column).sort_index()
+    raw = indexed.resample(freq)["_n"].sum().fillna(0).astype(int)
+    return _to_native_series(raw, "event_count")
+
+
+def _resample_new_entities(df, entity_column: str, time_column: str, freq: str) -> native_pd.Series:
+    first_events = df.groupby(entity_column)[time_column].min()
+    fpe = first_events.to_frame(name="_t")
+    fpe["_count"] = 1
+    fpe = fpe.set_index("_t").sort_index()
+    raw = fpe.resample(freq)["_count"].sum().fillna(0).astype(int)
+    return _to_native_series(raw, "new_entities")
 
 
 def derive_drift_implications(result: TemporalCoverageResult) -> DriftImplication:
@@ -135,7 +166,7 @@ def _volume_to_drift_risk(volume_trend: str) -> str:
     return "none"
 
 
-def _compute_population_stability(new_entities: pd.Series) -> float:
+def _compute_population_stability(new_entities: native_pd.Series) -> float:
     if len(new_entities) < 4:
         return 0.5
     total_new = new_entities.sum()
@@ -222,7 +253,7 @@ def _choose_freq(time_span_days: int) -> tuple:
     return "ME", "ME"
 
 
-def _detect_gaps(events_over_time: pd.Series, freq: str) -> List[TemporalGap]:
+def _detect_gaps(events_over_time: native_pd.Series, freq: str) -> List[TemporalGap]:
     if len(events_over_time) < 3:
         return []
     series = events_over_time
@@ -233,7 +264,7 @@ def _detect_gaps(events_over_time: pd.Series, freq: str) -> List[TemporalGap]:
 
     gaps: List[TemporalGap] = []
     gap_start = None
-    for ts, vol in series.to_dict().items():
+    for ts, vol in series.items():
         if vol < threshold:
             if gap_start is None:
                 gap_start = ts
@@ -248,7 +279,8 @@ def _detect_gaps(events_over_time: pd.Series, freq: str) -> List[TemporalGap]:
                     ))
                 gap_start = None
     if gap_start is not None:
-        end = series.index[-1]
+        idx_list = safe_to_list(series.index)
+        end = idx_list[-1]
         duration = (end - gap_start).days
         if duration >= 3:
             gaps.append(TemporalGap(
@@ -268,8 +300,7 @@ def _classify_gap_severity(duration_days: float) -> str:
 
 
 def _compute_entity_window_coverage(
-    df: pd.DataFrame, entity_column: str, times: pd.Series,
-    reference_date: pd.Timestamp, windows: List[str],
+    df, entity_column: str, time_column: str, reference_date, windows: List[str],
 ) -> List[EntityWindowCoverage]:
     total_entities = df[entity_column].nunique()
     results = []
@@ -281,8 +312,8 @@ def _compute_entity_window_coverage(
                 active_entities=total_entities, coverage_pct=1.0,
             ))
             continue
-        cutoff = reference_date - pd.Timedelta(days=window_days)
-        mask = (times >= cutoff) & (times <= reference_date)
+        cutoff = reference_date - Timedelta(days=window_days)
+        mask = (df[time_column] >= cutoff) & (df[time_column] <= reference_date)
         active = df.loc[mask, entity_column].nunique()
         results.append(EntityWindowCoverage(
             window=window, window_days=window_days,
@@ -291,7 +322,7 @@ def _compute_entity_window_coverage(
     return results
 
 
-def _assess_volume_trend(events_over_time: pd.Series) -> tuple:
+def _assess_volume_trend(events_over_time: native_pd.Series) -> tuple:
     if len(events_over_time) < 4:
         return "stable", 0.0
     mid = len(events_over_time) // 2
@@ -342,18 +373,20 @@ def _build_recommendations(
 
 
 def compute_temporal_comparison(
-    df: pd.DataFrame,
+    df,
     entity_column: str,
     time_column: str,
     target_column: Optional[str] = None,
     recent_days: int = 90,
-    reference_date: Optional[pd.Timestamp] = None,
+    reference_date: Optional[Timestamp] = None,
 ) -> TemporalComparison:
-    times = pd.to_datetime(df[time_column], format="mixed", utc=True).dt.tz_localize(None)
-    ref_date = reference_date if reference_date is not None else times.max()
-    cutoff = ref_date - pd.Timedelta(days=recent_days)
+    if not is_datetime64_any_dtype(df[time_column]):
+        df = df.copy()
+        df[time_column] = to_datetime(df[time_column])
+    ref_date = reference_date if reference_date is not None else df[time_column].max()
+    cutoff = ref_date - Timedelta(days=recent_days)
 
-    mask_recent = times >= cutoff
+    mask_recent = df[time_column] >= cutoff
     df_full = df
     df_recent = df.loc[mask_recent]
 
@@ -411,10 +444,7 @@ def compute_temporal_comparison(
 
 
 def _compute_drift_signals(
-    df_full: pd.DataFrame,
-    df_recent: pd.DataFrame,
-    entity_column: str,
-    time_column: str,
+    df_full, df_recent, entity_column: str, time_column: str,
 ) -> tuple:
     from customer_retention.core.config import ColumnType
 

@@ -103,7 +103,7 @@ class SegmentAwareOutlierAnalyzer:
     def _use_explicit_segments(self, df: DataFrame, segment_col: str) -> tuple:
         unique_segments = df[segment_col].dropna().unique()
         label_map = {v: i for i, v in enumerate(unique_segments)}
-        labels = df[segment_col].map(label_map).fillna(-1).astype(int).values
+        labels = df[segment_col].map(label_map).fillna(-1).astype(int).to_numpy()
         return labels, len(unique_segments)
 
     def _detect_segments(
@@ -185,7 +185,7 @@ class SegmentAwareOutlierAnalyzer:
 
                 if len(local_idx) > 0:
                     local_pos = local_idx[0]
-                    seg_outlier_mask = seg_result.outlier_mask.values
+                    seg_outlier_mask = seg_result.outlier_mask.to_numpy()
                     if local_pos < len(seg_outlier_mask) and not seg_outlier_mask[local_pos]:
                         false_count += 1
 

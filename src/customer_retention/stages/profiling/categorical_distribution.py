@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import Series, pd
+from customer_retention.core.compat import Series, pd, safe_to_list
 
 
 class EncodingType(Enum):
@@ -103,14 +103,16 @@ class CategoricalDistributionAnalyzer:
         if category_count == 0:
             return self._empty_analysis(column_name)
 
-        imbalance_ratio = float(value_counts.iloc[0] / value_counts.iloc[-1]) if value_counts.iloc[-1] > 0 else float('inf')
+        max_count = value_counts.max()
+        min_count = value_counts.min()
+        imbalance_ratio = float(max_count / min_count) if min_count > 0 else float('inf')
         entropy, normalized_entropy = self._calculate_entropy(value_counts, total_count, category_count)
-        top1_concentration = float(value_counts.iloc[0] / total_count * 100)
+        top1_concentration = float(max_count / total_count * 100)
         top3_concentration = float(value_counts.head(3).sum() / total_count * 100)
         rare_threshold = total_count * self.RARE_CATEGORY_THRESHOLD
         rare_mask = value_counts < rare_threshold
         rare_category_count = int(rare_mask.sum())
-        rare_category_names = value_counts[rare_mask].index.tolist()
+        rare_category_names = safe_to_list(value_counts[rare_mask].index)
 
         return CategoricalDistributionAnalysis(
             column_name=column_name,

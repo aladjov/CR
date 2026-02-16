@@ -1,15 +1,15 @@
-import pandas as pd
+from customer_retention.core.compat import DataFrame
 
 
 def calculate_group_retention_stats(
-    df: pd.DataFrame,
+    df: DataFrame,
     group_col: str,
     target_col: str,
     overall_rate: float,
     min_samples: int = 0,
     sort_by: str = "group",
     ascending: bool = True,
-) -> pd.DataFrame:
+) -> DataFrame:
     stats = df.groupby(group_col)[target_col].agg(["sum", "count", "mean"]).reset_index()
     stats.columns = ["group", "retained_count", "count", "retention_rate"]
     stats["lift"] = stats["retention_rate"] / overall_rate if overall_rate > 0 else 0

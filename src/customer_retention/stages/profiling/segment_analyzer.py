@@ -3,7 +3,6 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-import pandas as pd
 from sklearn.cluster import DBSCAN, AgglomerativeClustering, KMeans
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
@@ -183,7 +182,7 @@ class SegmentAnalyzer:
             return self._empty_result(df, method)
 
         features_df = df[feature_cols].dropna()
-        valid_indices = features_df.index
+        valid_indices = features_df.index.to_numpy()
 
         if len(features_df) < 10:
             return self._single_segment_result(df, method, target_col)
@@ -296,7 +295,7 @@ class SegmentAnalyzer:
 
     def _select_features(
         self,
-        df: pd.DataFrame,
+        df: DataFrame,
         feature_cols: Optional[List[str]],
         target_col: Optional[str],
     ) -> List[str]:
@@ -337,7 +336,7 @@ class SegmentAnalyzer:
 
     def _calculate_target_variance(
         self,
-        df: pd.DataFrame,
+        df: DataFrame,
         labels: np.ndarray,
         target_col: Optional[str],
     ) -> Optional[float]:
@@ -418,7 +417,7 @@ class SegmentAnalyzer:
 
         return recommendation, confidence, rationale
 
-    def _empty_result(self, df: pd.DataFrame, method: SegmentationMethod) -> SegmentationResult:
+    def _empty_result(self, df: DataFrame, method: SegmentationMethod) -> SegmentationResult:
         return SegmentationResult(
             n_segments=1,
             method=method,
@@ -439,7 +438,7 @@ class SegmentAnalyzer:
 
     def _single_segment_result(
         self,
-        df: pd.DataFrame,
+        df: DataFrame,
         method: SegmentationMethod,
         target_col: Optional[str],
     ) -> SegmentationResult:
@@ -494,7 +493,7 @@ class SegmentAnalyzer:
         # Get valid rows (non-NaN features)
         features_df = df[feature_cols]
         valid_mask = ~features_df.isna().any(axis=1)
-        valid_indices = features_df[valid_mask].index
+        valid_indices = features_df[valid_mask].index.to_numpy()
 
         if len(valid_indices) < 2:
             return ClusterVisualizationResult(
