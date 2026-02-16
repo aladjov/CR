@@ -263,7 +263,10 @@ _SECONDS_PER_DAY = 86400
 def timedelta_to_days(series: Any) -> Any:
     if is_numeric_dtype(series):
         return series // _SECONDS_PER_DAY
-    return series.dt.days
+    try:
+        return series.dt.days
+    except AttributeError:
+        return series.astype("long") // (_SECONDS_PER_DAY * 1_000_000)
 
 
 def timedelta_to_seconds(series: Any) -> Any:
@@ -272,7 +275,18 @@ def timedelta_to_seconds(series: Any) -> Any:
     try:
         return series.dt.total_seconds()
     except AttributeError:
-        return (series.dt.days * _SECONDS_PER_DAY + series.dt.seconds).astype(float)
+        return series.astype("long").astype(float) / 1_000_000
+
+
+def groupby_multi_agg(df: Any, group_col: str, agg_col: str, agg_funcs: list) -> Any:
+    if hasattr(df, 'to_spark'):
+        import pyspark.sql.functions as F  # noqa: N812
+        spark_df = df.to_spark()
+        exprs = [getattr(F, fn)(agg_col).alias(fn) for fn in agg_funcs]
+        result = spark_df.groupBy(group_col).agg(*exprs)
+        from .spark_backend import _as_pandas_api
+        return _as_pandas_api(result)
+    return df.groupby(group_col)[agg_col].agg(agg_funcs).reset_index()
 
 
 def safe_to_list(obj: Any) -> list:
@@ -341,6 +355,7 @@ __all__ = [
     "get_dbutils",
     "safe_memory_usage_bytes",
     "as_tz_naive",
+    "groupby_multi_agg",
     "safe_to_list",
     "timedelta_to_days",
     "timedelta_to_seconds",

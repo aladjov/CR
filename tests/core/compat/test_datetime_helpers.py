@@ -8,9 +8,54 @@ from customer_retention.core.compat import (
     _infer_epoch_unit,
     as_tz_naive,
     ensure_datetime_column,
+    groupby_multi_agg,
     normalize_timestamp_columns,
     safe_to_datetime,
 )
+
+
+class TestGroupbyMultiAgg:
+    def test_min_max_count(self):
+        df = pd.DataFrame({
+            "entity": ["A", "A", "A", "B", "B"],
+            "value": [10, 20, 30, 40, 50],
+        })
+        result = groupby_multi_agg(df, "entity", "value", ["min", "max", "count"])
+        result.columns = ["entity", "min", "max", "count"]
+        a = result[result["entity"] == "A"].iloc[0]
+        b = result[result["entity"] == "B"].iloc[0]
+        assert a["min"] == 10
+        assert a["max"] == 30
+        assert a["count"] == 3
+        assert b["min"] == 40
+        assert b["max"] == 50
+        assert b["count"] == 2
+
+    def test_sum_count_mean(self):
+        df = pd.DataFrame({
+            "group": ["X", "X", "Y", "Y", "Y"],
+            "val": [10.0, 20.0, 30.0, 60.0, 90.0],
+        })
+        result = groupby_multi_agg(df, "group", "val", ["sum", "count", "mean"])
+        result.columns = ["group", "sum", "count", "mean"]
+        x = result[result["group"] == "X"].iloc[0]
+        y = result[result["group"] == "Y"].iloc[0]
+        assert x["sum"] == 30.0
+        assert x["count"] == 2
+        assert x["mean"] == 15.0
+        assert y["sum"] == 180.0
+        assert y["mean"] == 60.0
+
+    def test_result_columns(self):
+        df = pd.DataFrame({"g": ["a", "b"], "v": [1, 2]})
+        result = groupby_multi_agg(df, "g", "v", ["min", "max"])
+        assert list(result.columns) == ["g", "min", "max"]
+
+    def test_empty_dataframe(self):
+        df = pd.DataFrame({"g": pd.Series([], dtype=str), "v": pd.Series([], dtype=float)})
+        result = groupby_multi_agg(df, "g", "v", ["sum", "count"])
+        assert len(result) == 0
+        assert list(result.columns) == ["g", "sum", "count"]
 
 
 class TestInferEpochUnit:
@@ -493,13 +538,24 @@ class TestTimedeltaToSeconds:
         result = timedelta_to_seconds(dates.diff()).dropna()
         assert list(result) == [3600.0]
 
-    def test_fallback_without_total_seconds(self):
-        from unittest.mock import PropertyMock, patch
-
+    def test_fallback_microsecond_integer_series(self):
         from customer_retention.core.compat import timedelta_to_seconds
-        s = pd.Series([pd.Timedelta(days=1, hours=2), pd.Timedelta(days=0, hours=3)])
-        with patch.object(type(s.dt), "total_seconds", new_callable=PropertyMock, side_effect=AttributeError):
-            result = timedelta_to_seconds(s)
+
+        microseconds = pd.Series([93600 * 1_000_000, 10800 * 1_000_000])
+
+        class FakeSeries:
+            def __init__(self, data):
+                self._data = data
+
+            def astype(self, dtype):
+                return self._data.astype(dtype)
+
+            @property
+            def dt(self):
+                raise AttributeError
+
+        fake = FakeSeries(microseconds)
+        result = timedelta_to_seconds(fake)
         assert list(result) == [93600.0, 10800.0]
 
 

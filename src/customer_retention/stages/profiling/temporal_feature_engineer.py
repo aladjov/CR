@@ -25,7 +25,15 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import Timedelta, native_pd, pd, safe_to_list, timedelta_to_days, to_datetime
+from customer_retention.core.compat import (
+    Timedelta,
+    groupby_multi_agg,
+    native_pd,
+    pd,
+    safe_to_list,
+    timedelta_to_days,
+    to_datetime,
+)
 
 
 class ReferenceMode(Enum):
@@ -468,12 +476,8 @@ class TemporalFeatureEngineer:
         splits = self.config.lifecycle_splits
 
         # Get history span per entity
-        g_lc = events_df.groupby(entity_col)[time_col]
-        first_lc = g_lc.min().reset_index()
-        first_lc.columns = [entity_col, "first_event"]
-        last_lc = g_lc.max().reset_index()
-        last_lc.columns = [entity_col, "last_event"]
-        history_stats = first_lc.merge(last_lc, on=entity_col)
+        history_stats = groupby_multi_agg(events_df, entity_col, time_col, ["min", "max"])
+        history_stats.columns = [entity_col, "first_event", "last_event"]
         history_stats["history_days"] = timedelta_to_days(
             history_stats["last_event"] - history_stats["first_event"]
         )
@@ -541,14 +545,8 @@ class TemporalFeatureEngineer:
         result = ref_dates[[entity_col]].copy()
 
         # Get first and last event per entity
-        g_rec = events_df.groupby(entity_col)[time_col]
-        first_rec = g_rec.min().reset_index()
-        first_rec.columns = [entity_col, "first_event"]
-        last_rec = g_rec.max().reset_index()
-        last_rec.columns = [entity_col, "last_event"]
-        counts_rec = g_rec.count().reset_index()
-        counts_rec.columns = [entity_col, "event_count"]
-        event_stats = first_rec.merge(last_rec, on=entity_col).merge(counts_rec, on=entity_col)
+        event_stats = groupby_multi_agg(events_df, entity_col, time_col, ["min", "max", "count"])
+        event_stats.columns = [entity_col, "first_event", "last_event", "event_count"]
 
         result = result.merge(event_stats, on=entity_col, how="left")
         result = result.merge(ref_dates, on=entity_col)
@@ -609,7 +607,8 @@ class TemporalFeatureEngineer:
                 continue
 
             # Inter-event gaps
-            gaps = timedelta_to_days(entity_events[time_col].diff()).dropna()
+            tc = entity_events[time_col]
+            gaps = timedelta_to_days(tc - tc.shift(1)).dropna()
 
             if len(gaps) > 0:
                 gap_mean = gaps.mean()

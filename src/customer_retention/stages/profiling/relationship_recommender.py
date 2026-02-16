@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import crosstab, pd
+from customer_retention.core.compat import crosstab, groupby_multi_agg, pd
 
 
 class RecommendationCategory(Enum):
@@ -266,12 +266,8 @@ class RelationshipRecommender:
                 continue
 
             # Calculate retention rates by category
-            g = df.groupby(col)[target_col]
-            means = g.mean().reset_index()
-            means.columns = [col, "retention_rate"]
-            counts = g.count().reset_index()
-            counts.columns = [col, "count"]
-            cat_stats = means.merge(counts, on=col)
+            cat_stats = groupby_multi_agg(df, col, target_col, ["mean", "count"])
+            cat_stats.columns = [col, "retention_rate", "count"]
             cat_stats["lift"] = cat_stats["retention_rate"] / overall_rate
 
             # Calculate Cramér's V
@@ -279,11 +275,13 @@ class RelationshipRecommender:
             associations.append({"feature": col, "cramers_v": cramers_v})
 
             high_risk_mask = (cat_stats["count"] >= self.MIN_CATEGORY_SIZE) & (cat_stats["lift"] < self.HIGH_RISK_LIFT_THRESHOLD)
-            for record in cat_stats[high_risk_mask].to_dict("records"):
+            high_risk = cat_stats[high_risk_mask]
+            for i in range(len(high_risk)):
+                row = high_risk.iloc[i]
                 high_risk_segments.append({
-                    "feature": col, "segment": record[col],
-                    "retention_rate": float(record["retention_rate"]),
-                    "lift": float(record["lift"]), "count": int(record["count"]),
+                    "feature": col, "segment": row[col],
+                    "retention_rate": float(row["retention_rate"]),
+                    "lift": float(row["lift"]), "count": int(row["count"]),
                 })
 
             # Check if category sizes are imbalanced

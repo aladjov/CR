@@ -10,6 +10,7 @@ from customer_retention.core.compat import (
     Timestamp,
     cut,
     ensure_datetime_column,
+    groupby_multi_agg,
     native_pd,
     pd,
     safe_to_datetime,
@@ -616,12 +617,8 @@ class TemporalPatternAnalyzer:
         cohort_stats = entity_cohorts.groupby("_cohort")[entity_column].count().reset_index()
         cohort_stats.columns = ["cohort", "entity_count"]
 
-        g = df_copy.groupby("_cohort")[self.time_column]
-        cohort_first = g.min().reset_index()
-        cohort_first.columns = ["cohort", "first_event"]
-        cohort_last = g.max().reset_index()
-        cohort_last.columns = ["cohort", "last_event"]
-        cohort_dates = cohort_first.merge(cohort_last, on="cohort")
+        cohort_dates = groupby_multi_agg(df_copy, "_cohort", self.time_column, ["min", "max"])
+        cohort_dates.columns = ["cohort", "first_event", "last_event"]
         cohort_stats = cohort_stats.merge(cohort_dates, on="cohort", how="left")
 
         if target_column and target_column in df.columns:

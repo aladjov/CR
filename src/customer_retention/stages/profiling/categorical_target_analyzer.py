@@ -4,7 +4,7 @@ from typing import Dict, List
 import numpy as np
 from scipy.stats import chi2_contingency
 
-from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype, native_pd, pd, safe_to_list
+from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype, native_pd, safe_to_list
 from customer_retention.stages.profiling.stats_helpers import calculate_group_retention_stats
 
 CARDINALITY_THRESHOLD = 0.5
@@ -211,14 +211,15 @@ class CategoricalTargetAnalyzer:
         return stats
 
     def _calculate_cramers_v(self, df: DataFrame, categorical_col: str, target_col: str) -> tuple:
-        contingency = pd.crosstab(df[categorical_col], df[target_col])
+        counts = df.groupby([categorical_col, target_col]).size().reset_index(name="_n")
+        contingency = counts.pivot(index=categorical_col, columns=target_col, values="_n").fillna(0)
 
         if contingency.shape[0] < 2 or contingency.shape[1] < 2:
             return 0.0, 0.0, 1.0
 
         try:
-            chi2, p_value, dof, expected = chi2_contingency(contingency)
-            n = contingency.sum().sum()
+            chi2, p_value, dof, expected = chi2_contingency(contingency.to_numpy())
+            n = int(contingency.to_numpy().sum())
             min_dim = min(contingency.shape) - 1
 
             if min_dim == 0 or n == 0:

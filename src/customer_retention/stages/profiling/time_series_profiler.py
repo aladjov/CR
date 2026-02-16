@@ -7,6 +7,7 @@ from customer_retention.core.compat import (
     DataFrame,
     Timestamp,
     _infer_epoch_unit,
+    groupby_multi_agg,
     is_datetime64_any_dtype,
     is_numeric_dtype,
     native_pd,
@@ -247,14 +248,8 @@ class TimeSeriesProfiler:
         return df
 
     def _compute_entity_lifecycles(self, df: DataFrame) -> DataFrame:
-        g = df.groupby(self.entity_column)[self.time_column]
-        first = g.min().reset_index()
-        first.columns = ["entity", "first_event"]
-        last = g.max().reset_index()
-        last.columns = ["entity", "last_event"]
-        counts = g.count().reset_index()
-        counts.columns = ["entity", "event_count"]
-        lifecycles = first.merge(last, on="entity").merge(counts, on="entity")
+        lifecycles = groupby_multi_agg(df, self.entity_column, self.time_column, ["min", "max", "count"])
+        lifecycles.columns = ["entity", "first_event", "last_event", "event_count"]
         lifecycles["duration_days"] = timedelta_to_days(lifecycles["last_event"] - lifecycles["first_event"])
         return lifecycles
 
@@ -290,7 +285,8 @@ class TimeSeriesProfiler:
             [self.entity_column, self.time_column]
         )
         same_entity = sorted_df[self.entity_column] == sorted_df[self.entity_column].shift(1)
-        time_diffs = timedelta_to_seconds(sorted_df[self.time_column].diff()) / self.SECONDS_PER_DAY
+        tc = sorted_df[self.time_column]
+        time_diffs = timedelta_to_seconds(tc - tc.shift(1)) / self.SECONDS_PER_DAY
         valid = time_diffs[same_entity].dropna()
         if len(valid) == 0:
             return None

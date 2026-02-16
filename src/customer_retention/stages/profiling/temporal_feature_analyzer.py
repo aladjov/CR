@@ -8,6 +8,7 @@ from scipy import stats
 from customer_retention.core.compat import (
     DataFrame,
     ensure_datetime_column,
+    groupby_multi_agg,
     native_pd,
     pd,
     qcut,
@@ -231,11 +232,22 @@ class TemporalFeatureAnalyzer:
         if df.empty or col not in df.columns:
             return [], []
         period_code = self._window_to_period(window)
-        period_col = df[self.time_column].dt.to_period(period_code).dt.start_time
-        period_means = df.groupby(period_col)[col].mean()
+        dates = df[self.time_column]
+        if period_code in ("W", "2W"):
+            divisor = 7 if period_code == "W" else 14
+            num = ((dates.dt.dayofyear - 1) // divisor + 1).astype(str).str.zfill(2)
+            period_key = dates.dt.year.astype(str) + "-" + period_code + num
+        elif period_code == "M":
+            period_key = dates.dt.strftime("%Y-%m")
+        elif period_code in ("Q", "2Q"):
+            q = dates.dt.quarter if period_code == "Q" else (dates.dt.quarter - 1) // 2 + 1
+            period_key = dates.dt.year.astype(str) + "-Q" + q.astype(str)
+        else:
+            period_key = dates.dt.year.astype(str)
+        period_means = df.groupby(period_key)[col].mean()
         velocity = period_means.diff().dropna()
         accel = velocity.diff().dropna()
-        return velocity.tolist(), accel.tolist()
+        return safe_to_list(velocity), safe_to_list(accel)
 
     def generate_velocity_recommendations(
         self, results: Dict[str, List[CohortVelocityResult]]
@@ -658,7 +670,9 @@ class TemporalFeatureAnalyzer:
         except ValueError:
             return 0.0
 
-        grouped = df_iv.groupby("bin", observed=False)["target"].agg(["sum", "count"])
+        grouped = groupby_multi_agg(df_iv, "bin", "target", ["sum", "count"])
+        grouped.columns = ["bin", "sum", "count"]
+        grouped = grouped.set_index("bin")
         grouped["non_events"] = grouped["count"] - grouped["sum"]
         grouped["events"] = grouped["sum"]
         total_events, total_non_events = grouped["events"].sum(), grouped["non_events"].sum()

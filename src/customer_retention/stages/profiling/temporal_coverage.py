@@ -120,19 +120,19 @@ def analyze_temporal_coverage(
 
 
 def _resample_event_counts(df, time_column: str, freq: str) -> native_pd.Series:
-    indexed = df[[time_column]].copy()
-    indexed["_n"] = 1
-    indexed = indexed.set_index(time_column).sort_index()
-    raw = indexed.resample(freq)["_n"].sum().fillna(0).astype(int)
+    daily_counts = df.groupby(df[time_column].dt.date).size()
+    daily = _to_native_series(daily_counts).sort_index()
+    daily.index = native_pd.DatetimeIndex(daily.index)
+    raw = daily.resample(freq).sum().fillna(0).astype(int)
     return _to_native_series(raw, "event_count")
 
 
 def _resample_new_entities(df, entity_column: str, time_column: str, freq: str) -> native_pd.Series:
-    first_events = df.groupby(entity_column)[time_column].min()
-    fpe = first_events.to_frame(name="_t")
-    fpe["_count"] = 1
-    fpe = fpe.set_index("_t").sort_index()
-    raw = fpe.resample(freq)["_count"].sum().fillna(0).astype(int)
+    first_date = df.groupby(entity_column)[time_column].min().dt.date
+    daily_counts = first_date.value_counts().sort_index()
+    daily = _to_native_series(daily_counts).sort_index()
+    daily.index = native_pd.DatetimeIndex(daily.index)
+    raw = daily.resample(freq).sum().fillna(0).astype(int)
     return _to_native_series(raw, "new_entities")
 
 

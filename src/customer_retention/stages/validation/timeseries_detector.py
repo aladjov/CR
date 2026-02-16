@@ -11,7 +11,14 @@ from datetime import timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
-from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype, pd, to_datetime
+from customer_retention.core.compat import (
+    DataFrame,
+    is_datetime64_any_dtype,
+    pd,
+    safe_to_list,
+    timedelta_to_seconds,
+    to_datetime,
+)
 
 
 class DatasetType(Enum):
@@ -397,8 +404,8 @@ class TimeSeriesDetector:
             if len(ts) < 2:
                 continue
 
-            diffs = ts.diff().dropna()
-            intervals.extend([d.total_seconds() / 3600 for d in diffs])  # Hours
+            diff_seconds = timedelta_to_seconds(ts - ts.shift(1)).dropna()
+            intervals.extend(safe_to_list(diff_seconds / 3600))
 
         if not intervals:
             return TimeSeriesFrequency.UNKNOWN, 0.0
@@ -696,24 +703,23 @@ class TimeSeriesValidator:
             if len(entity_data) < 2:
                 continue
 
-            diffs = entity_data.diff().dropna()
-
-            # Find gaps larger than allowed
-            threshold = expected_interval * max_allowed_gap_periods
-            large_gaps = diffs[diffs > threshold]
+            diffs_sec = timedelta_to_seconds(entity_data - entity_data.shift(1)).dropna()
+            interval_sec = expected_interval.total_seconds()
+            threshold_sec = interval_sec * max_allowed_gap_periods
+            large_gaps = diffs_sec[diffs_sec > threshold_sec]
 
             if len(large_gaps) > 0:
                 entities_with_gaps.append(entity)
                 total_gaps += len(large_gaps)
 
-                gap_periods = int((large_gaps.max() / expected_interval))
+                gap_periods = int(large_gaps.max() / interval_sec)
                 max_gap = max(max_gap, gap_periods)
 
                 if len(gap_examples) < 3:
                     gap_examples.append({
                         'entity': entity,
-                        'gap_size': str(large_gaps.max()),
-                        'gap_periods': gap_periods
+                        'gap_size': f"{large_gaps.max() / 86400:.1f} days",
+                        'gap_periods': gap_periods,
                     })
 
         # Calculate coverage
@@ -760,10 +766,10 @@ class TimeSeriesValidator:
             if len(entity_data) < 2:
                 continue
 
-            diffs = entity_data.diff().dropna()
-            intervals.extend(diffs.tolist())
+            diffs_sec = timedelta_to_seconds(entity_data - entity_data.shift(1)).dropna()
+            intervals.extend(safe_to_list(diffs_sec))
 
         if not intervals:
             return None
 
-        return pd.Series(intervals).median()
+        return timedelta(seconds=float(pd.Series(intervals).median()))
