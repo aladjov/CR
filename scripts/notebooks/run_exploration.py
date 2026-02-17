@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -501,6 +503,34 @@ def _run_notebook(
         return False, traceback.format_exc()
 
 
+_CONNECTION_ERROR_PATTERNS = [
+    "SparkConnectGrpcException",
+    "UNAVAILABLE",
+    "connection",
+    "timed out",
+    "timeout",
+    "BrokenPipeError",
+    "ConnectionResetError",
+    "EOFError",
+]
+
+
+def _is_connection_error(error_text: str) -> bool:
+    lower = error_text.lower()
+    return any(pat.lower() in lower for pat in _CONNECTION_ERROR_PATTERNS)
+
+
+def _restart_spark_session() -> bool:
+    try:
+        from customer_retention.core.compat.detection import connect_remote_spark
+        connect_remote_spark()
+        print("    Spark session restarted successfully")
+        return True
+    except Exception as exc:
+        print(f"    Failed to restart Spark session: {exc}")
+        return False
+
+
 def _execute_one(
     nb_path: Path,
     dataset_name: Optional[str],
@@ -511,7 +541,7 @@ def _execute_one(
     dry_run: bool,
     timeout: int,
     kernel: str,
-    error_log: Optional[List[str]] = None,
+    error_log: Optional[ProgressiveErrorLog] = None,
 ) -> bool:
     """Execute a single notebook, updating results and timings.
 
@@ -531,29 +561,46 @@ def _execute_one(
         print(f"  [{label}] would run")
         return True
 
-    print(f"  [{label}] running ...", end="", flush=True)
-    start = time.time()
-    ok, error = _run_notebook(nb_path, timeout=timeout, kernel=kernel)
-    elapsed = time.time() - start
-    timings[result_key] = elapsed
+    spark_remote = os.environ.get("CR_SPARK_REMOTE") == "1"
+    max_attempts = 2 if spark_remote else 1
 
-    if ok:
-        results[result_key] = f"OK ({elapsed:.0f}s)"
-        print(f"\n  [{label}] OK ({elapsed:.0f}s)")
-    else:
+    for attempt in range(1, max_attempts + 1):
+        print(f"  [{label}] running ...", end="", flush=True)
+        start = time.time()
+        ok, error = _run_notebook(nb_path, timeout=timeout, kernel=kernel)
+        elapsed = time.time() - start
+        timings[result_key] = elapsed
+
+        if ok:
+            results[result_key] = f"OK ({elapsed:.0f}s)"
+            print(f"\n  [{label}] OK ({elapsed:.0f}s)")
+            if error_log is not None:
+                error_log.append_success(stem, dataset_name, elapsed)
+            return True
+
         first_line = (error or "unknown error").split("\n")[-2][:200]
-        results[result_key] = f"FAILED: {first_line}"
-        print(f"\n  [{label}] FAILED ({elapsed:.0f}s)")
-        print(f"    Error: {first_line}")
-        if error_log is not None:
-            error_log.append({
-                "notebook": stem,
-                "dataset": dataset_name,
-                "elapsed": elapsed,
-                "traceback": error or "unknown error",
-            })
 
-    return ok
+        if attempt < max_attempts and _is_connection_error(error or ""):
+            print(f"\n  [{label}] connection error ({elapsed:.0f}s), restarting Spark...")
+            if _restart_spark_session():
+                print(f"  [{label}] retrying after Spark restart...")
+                continue
+            print("    Retry aborted — could not restart Spark session")
+
+        break
+
+    results[result_key] = f"FAILED: {first_line}"
+    print(f"\n  [{label}] FAILED ({elapsed:.0f}s)")
+    print(f"    Error: {first_line}")
+    if error_log is not None:
+        error_log.append_error({
+            "notebook": stem,
+            "dataset": dataset_name,
+            "elapsed": elapsed,
+            "traceback": error or "unknown error",
+        })
+
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -569,7 +616,7 @@ def _run_single_dataset_flow(
     dry_run: bool,
     timeout: int,
     kernel: str,
-    error_log: Optional[List[str]] = None,
+    error_log: Optional[ProgressiveErrorLog] = None,
 ) -> None:
     """Original single-dataset sequential execution."""
     skip_set: Set[str] = set()
@@ -615,7 +662,7 @@ def _run_multi_dataset_flow(
     dry_run: bool,
     timeout: int,
     kernel: str,
-    error_log: Optional[List[str]] = None,
+    error_log: Optional[ProgressiveErrorLog] = None,
     namespace=None,
 ) -> None:
     datasets = _ordered_datasets(context)
@@ -746,7 +793,7 @@ def run_all(
     total_start = time.time()
     results: Dict[str, str] = {}
     timings: Dict[str, float] = {}
-    error_log: List[str] = []
+    error_log = ProgressiveErrorLog(notebooks_dir)
 
     # Phase 1: Setup (00_start_here)
     setup_nbs = [nb for nb in notebooks if nb.stem in SETUP_NOTEBOOKS]
@@ -783,7 +830,7 @@ def run_all(
 
     _print_summary(results, timings, time.time() - total_start)
 
-    _write_error_log(notebooks_dir, error_log)
+    error_log.finalize()
 
     return results
 
@@ -793,45 +840,44 @@ def run_all(
 # ---------------------------------------------------------------------------
 
 
-def _write_error_log(notebooks_dir: Path, error_log: List[Dict]) -> None:
-    """Write full exception tracebacks to run_exploration.log, grouped by file and notebook."""
-    log_path = notebooks_dir / "run_exploration.log"
-    if not error_log:
-        if log_path.exists():
-            log_path.unlink()
-        return
+class ProgressiveErrorLog:
+    """Writes errors to run_exploration.log as they occur."""
 
-    from collections import OrderedDict
+    def __init__(self, notebooks_dir: Path):
+        self.log_path = notebooks_dir / "run_exploration.log"
+        self.error_count = 0
+        self.log_path.write_text(
+            f"run_exploration — {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n",
+            encoding="utf-8",
+        )
 
-    grouped: OrderedDict[str, List[Dict]] = OrderedDict()
-    for entry in error_log:
-        key = entry["dataset"] or "(single dataset)"
-        grouped.setdefault(key, []).append(entry)
-
-    lines = [
-        f"run_exploration — {time.strftime('%Y-%m-%d %H:%M:%S')}",
-        f"{len(error_log)} error(s) across {len(grouped)} dataset(s)",
-        "",
-    ]
-
-    for dataset, entries in grouped.items():
-        lines.append("=" * 70)
-        lines.append(f"  Dataset: {dataset}")
-        lines.append(f"  Errors:  {len(entries)}")
-        lines.append("=" * 70)
+    def append_error(self, entry: Dict) -> None:
+        self.error_count += 1
+        nb = entry["notebook"]
+        elapsed = entry["elapsed"]
+        dataset = entry["dataset"] or "(single dataset)"
+        lines = [
+            f"  --- Notebook: {nb} | Dataset: {dataset}  ({elapsed:.0f}s) ---",
+            "",
+        ]
+        for tb_line in entry["traceback"].rstrip().splitlines():
+            lines.append(f"    {tb_line}")
         lines.append("")
+        with self.log_path.open("a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
 
-        for entry in entries:
-            nb = entry["notebook"]
-            elapsed = entry["elapsed"]
-            lines.append(f"  --- Notebook: {nb}  ({elapsed:.0f}s) ---")
-            lines.append("")
-            for tb_line in entry["traceback"].rstrip().splitlines():
-                lines.append(f"    {tb_line}")
-            lines.append("")
+    def append_success(self, stem: str, dataset: Optional[str], elapsed: float) -> None:
+        label = f"{stem} | {dataset}" if dataset else stem
+        with self.log_path.open("a", encoding="utf-8") as f:
+            f.write(f"  [{label}] OK ({elapsed:.0f}s)\n")
 
-    log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"\nFull error details written to {log_path}")
+    def finalize(self) -> None:
+        with self.log_path.open("a", encoding="utf-8") as f:
+            f.write(f"\nTotal errors: {self.error_count}\n")
+        if self.error_count:
+            print(f"\nFull error details written to {self.log_path}")
+        else:
+            print(f"\nAll notebooks succeeded. Log at {self.log_path}")
 
 
 
