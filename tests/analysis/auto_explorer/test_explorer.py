@@ -13,16 +13,18 @@ from customer_retention.core.config.column_config import ColumnType
 @pytest.fixture
 def sample_dataframe():
     np.random.seed(42)
-    return pd.DataFrame({
-        "customer_id": [f"C{i:05d}" for i in range(100)],
-        "age": np.random.randint(18, 80, 100),
-        "monthly_charges": np.random.uniform(20, 100, 100),
-        "tenure": np.random.randint(0, 72, 100),
-        "gender": np.random.choice(["Male", "Female"], 100),
-        "contract": np.random.choice(["Month-to-month", "One year", "Two year"], 100),
-        "churned": np.random.choice([0, 1], 100),
-        "signup_date": pd.date_range("2020-01-01", periods=100, freq="D")
-    })
+    return pd.DataFrame(
+        {
+            "customer_id": [f"C{i:05d}" for i in range(100)],
+            "age": np.random.randint(18, 80, 100),
+            "monthly_charges": np.random.uniform(20, 100, 100),
+            "tenure": np.random.randint(0, 72, 100),
+            "gender": np.random.choice(["Male", "Female"], 100),
+            "contract": np.random.choice(["Month-to-month", "One year", "Two year"], 100),
+            "churned": np.random.choice([0, 1], 100),
+            "signup_date": pd.date_range("2020-01-01", periods=100, freq="D"),
+        }
+    )
 
 
 @pytest.fixture
@@ -41,11 +43,7 @@ class TestDataExplorerInit:
         assert explorer.output_dir == Path("../explorations")
 
     def test_custom_init(self):
-        explorer = DataExplorer(
-            visualize=False,
-            save_findings=False,
-            output_dir="/custom/path"
-        )
+        explorer = DataExplorer(visualize=False, save_findings=False, output_dir="/custom/path")
         assert not explorer.visualize
         assert not explorer.save_findings
         assert explorer.output_dir == Path("/custom/path")
@@ -102,11 +100,7 @@ class TestDataExplorerExplore:
 
     def test_findings_saved_to_disk(self, sample_dataframe):
         with tempfile.TemporaryDirectory() as tmpdir:
-            explorer = DataExplorer(
-                visualize=False,
-                save_findings=True,
-                output_dir=tmpdir
-            )
+            explorer = DataExplorer(visualize=False, save_findings=True, output_dir=tmpdir)
             findings = explorer.explore(sample_dataframe, name="test_exploration")
 
             saved_files = list(Path(tmpdir).glob("test_exploration_findings.yaml"))
@@ -144,10 +138,9 @@ class TestDataExplorerColumnExploration:
 
 class TestDataExplorerQualityAnalysis:
     def test_quality_issues_detected_for_nulls(self):
-        df = pd.DataFrame({
-            "col_with_nulls": [1, 2, None, None, None, None, 7, 8, 9, 10],
-            "target": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1]
-        })
+        df = pd.DataFrame(
+            {"col_with_nulls": [1, 2, None, None, None, None, 7, 8, 9, 10], "target": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1]}
+        )
         explorer = DataExplorer(visualize=False, save_findings=False)
         findings = explorer.explore(df, target_hint="target")
 
@@ -155,10 +148,9 @@ class TestDataExplorerQualityAnalysis:
         assert any("missing" in issue.lower() for issue in col_finding.quality_issues)
 
     def test_cleaning_recommendations_generated(self):
-        df = pd.DataFrame({
-            "col_with_nulls": [1, 2, None, None, None, None, 7, 8, 9, 10],
-            "target": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1]
-        })
+        df = pd.DataFrame(
+            {"col_with_nulls": [1, 2, None, None, None, None, 7, 8, 9, 10], "target": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1]}
+        )
         explorer = DataExplorer(visualize=False, save_findings=False)
         findings = explorer.explore(df, target_hint="target")
 
@@ -175,10 +167,7 @@ class TestDataExplorerModelingReadiness:
         assert findings.target_column is not None
 
     def test_not_ready_without_target(self):
-        df = pd.DataFrame({
-            "a": [1, 2, 3],
-            "b": ["x", "y", "z"]
-        })
+        df = pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]})
         explorer = DataExplorer(visualize=False, save_findings=False)
         findings = explorer.explore(df)
 
@@ -192,10 +181,7 @@ class TestDataExplorerModelingReadiness:
         assert findings.target_type == "binary"
 
     def test_target_type_multiclass(self):
-        df = pd.DataFrame({
-            "features": [1, 2, 3, 4, 5],
-            "target_class": ["A", "B", "C", "A", "B"]
-        })
+        df = pd.DataFrame({"features": [1, 2, 3, 4, 5], "target_class": ["A", "B", "C", "A", "B"]})
         explorer = DataExplorer(visualize=False, save_findings=False)
         findings = explorer.explore(df, target_hint="target_class")
 
@@ -217,10 +203,7 @@ class TestDataExplorerParquetLoading:
 
 class TestDataExplorerQualityIssues:
     def test_high_cardinality_detection(self):
-        df = pd.DataFrame({
-            "high_card_col": [f"cat_{i % 150}" for i in range(300)],
-            "target": [0, 1] * 150
-        })
+        df = pd.DataFrame({"high_card_col": [f"cat_{i % 150}" for i in range(300)], "target": [0, 1] * 150})
         explorer = DataExplorer(visualize=False, save_findings=False)
         findings = explorer.explore(df, target_hint="target")
 
@@ -229,10 +212,7 @@ class TestDataExplorerQualityIssues:
         assert col_type in [ColumnType.TEXT, ColumnType.CATEGORICAL_NOMINAL]
 
     def test_critical_nulls_detection(self):
-        df = pd.DataFrame({
-            "mostly_null": [None] * 60 + [1] * 40,
-            "target": [0, 1] * 50
-        })
+        df = pd.DataFrame({"mostly_null": [None] * 60 + [1] * 40, "target": [0, 1] * 50})
         explorer = DataExplorer(visualize=False, save_findings=False)
         findings = explorer.explore(df, target_hint="target")
 
@@ -241,10 +221,7 @@ class TestDataExplorerQualityIssues:
         assert any("dropping" in rec.lower() for rec in col_finding.cleaning_recommendations)
 
     def test_warning_nulls_detection(self):
-        df = pd.DataFrame({
-            "some_nulls": [None] * 25 + [1] * 75,
-            "target": [0, 1] * 50
-        })
+        df = pd.DataFrame({"some_nulls": [None] * 25 + [1] * 75, "target": [0, 1] * 50})
         explorer = DataExplorer(visualize=False, save_findings=False)
         findings = explorer.explore(df, target_hint="target")
 
@@ -252,10 +229,7 @@ class TestDataExplorerQualityIssues:
         assert any("WARNING" in issue for issue in col_finding.quality_issues)
 
     def test_modeling_ready_with_critical_issues(self):
-        df = pd.DataFrame({
-            "mostly_null": [None] * 60 + [1] * 40,
-            "target": [0, 1] * 50
-        })
+        df = pd.DataFrame({"mostly_null": [None] * 60 + [1] * 40, "target": [0, 1] * 50})
         explorer = DataExplorer(visualize=False, save_findings=False)
         findings = explorer.explore(df, target_hint="target")
 
@@ -282,11 +256,7 @@ class TestDataExplorerTransformationRecommendations:
 class TestDataExplorerSaveFindings:
     def test_auto_generated_name(self, sample_dataframe):
         with tempfile.TemporaryDirectory() as tmpdir:
-            explorer = DataExplorer(
-                visualize=False,
-                save_findings=True,
-                output_dir=tmpdir
-            )
+            explorer = DataExplorer(visualize=False, save_findings=True, output_dir=tmpdir)
             explorer.explore(sample_dataframe)
 
             saved_files = list(Path(tmpdir).glob("exploration_findings.yaml"))
@@ -297,11 +267,7 @@ class TestDataExplorerSaveFindings:
             csv_path = Path(tmpdir) / "my_data.csv"
             pd.DataFrame({"a": [1, 2], "b": [3, 4]}).to_csv(csv_path, index=False)
 
-            explorer = DataExplorer(
-                visualize=False,
-                save_findings=True,
-                output_dir=tmpdir
-            )
+            explorer = DataExplorer(visualize=False, save_findings=True, output_dir=tmpdir)
             explorer.explore(str(csv_path))
 
             saved_files = list(Path(tmpdir).glob("my_data_findings.yaml"))
@@ -319,10 +285,7 @@ class TestDataExplorerVisualization:
         assert "Column Types Detected" in captured.out
 
     def test_print_text_summary_with_blocking_issues(self, capsys):
-        df = pd.DataFrame({
-            "a": [1, 2, 3],
-            "b": ["x", "y", "z"]
-        })
+        df = pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]})
         explorer = DataExplorer(visualize=False, save_findings=False)
         findings = explorer.explore(df)
 
@@ -343,12 +306,14 @@ class TestDataExplorerVisualization:
 
 class TestDataExplorerTemporalMetadataCols:
     def test_temporal_metadata_cols_skipped(self):
-        df = pd.DataFrame({
-            "feature_timestamp": pd.date_range("2020-01-01", periods=50),
-            "label_timestamp": pd.date_range("2020-02-01", periods=50),
-            "amount": np.random.uniform(10, 100, 50),
-            "target": np.random.choice([0, 1], 50),
-        })
+        df = pd.DataFrame(
+            {
+                "feature_timestamp": pd.date_range("2020-01-01", periods=50),
+                "label_timestamp": pd.date_range("2020-02-01", periods=50),
+                "amount": np.random.uniform(10, 100, 50),
+                "target": np.random.choice([0, 1], 50),
+            }
+        )
         explorer = DataExplorer(visualize=False, save_findings=False)
         findings = explorer.explore(df, target_hint="target")
         # Temporal metadata columns should be skipped
@@ -391,20 +356,16 @@ class TestDataExplorerEmptyColumns:
 
 class TestDataExplorerQualityIssuesExtended:
     def test_outlier_detection_warning(self):
-        df = pd.DataFrame({
-            "normal": np.random.normal(50, 1, 100).tolist(),
-            "target": np.random.choice([0, 1], 100).tolist()
-        })
+        df = pd.DataFrame(
+            {"normal": np.random.normal(50, 1, 100).tolist(), "target": np.random.choice([0, 1], 100).tolist()}
+        )
         explorer = DataExplorer(visualize=False, save_findings=False)
         findings = explorer.explore(df, target_hint="target")
         # Just checking it runs - outlier issues depend on the profiler output
         assert "normal" in findings.columns
 
     def test_info_level_nulls(self):
-        df = pd.DataFrame({
-            "low_nulls": [None] * 8 + list(range(92)),
-            "target": [0, 1] * 50
-        })
+        df = pd.DataFrame({"low_nulls": [None] * 8 + list(range(92)), "target": [0, 1] * 50})
         explorer = DataExplorer(visualize=False, save_findings=False)
         findings = explorer.explore(df, target_hint="target")
         col_finding = findings.columns["low_nulls"]
@@ -412,20 +373,14 @@ class TestDataExplorerQualityIssuesExtended:
 
     def test_future_dates_issue(self):
         future = pd.Timestamp.now() + pd.Timedelta(days=365)
-        df = pd.DataFrame({
-            "date_col": [pd.Timestamp("2023-01-01")] * 95 + [future] * 5,
-            "target": [0, 1] * 50
-        })
+        df = pd.DataFrame({"date_col": [pd.Timestamp("2023-01-01")] * 95 + [future] * 5, "target": [0, 1] * 50})
         explorer = DataExplorer(visualize=False, save_findings=False)
         findings = explorer.explore(df, target_hint="target")
         # Just checking it runs
         assert "date_col" in findings.columns
 
     def test_case_variations_issue(self):
-        df = pd.DataFrame({
-            "names": ["New York", "new york", "NEW YORK", "Boston"] * 25,
-            "target": [0, 1] * 50
-        })
+        df = pd.DataFrame({"names": ["New York", "new york", "NEW YORK", "Boston"] * 25, "target": [0, 1] * 50})
         explorer = DataExplorer(visualize=False, save_findings=False)
         findings = explorer.explore(df, target_hint="target")
         names_finding = findings.columns["names"]
@@ -436,10 +391,7 @@ class TestDataExplorerQualityIssuesExtended:
 class TestDataExplorerTransformationsExtended:
     def test_numeric_with_high_skewness(self):
         np.random.seed(42)
-        df = pd.DataFrame({
-            "skewed": np.random.exponential(2, 200),
-            "target": np.random.choice([0, 1], 200)
-        })
+        df = pd.DataFrame({"skewed": np.random.exponential(2, 200), "target": np.random.choice([0, 1], 200)})
         explorer = DataExplorer(visualize=False, save_findings=False)
         findings = explorer.explore(df, target_hint="target")
         col_finding = findings.columns["skewed"]
@@ -451,19 +403,18 @@ class TestDataExplorerTransformationsExtended:
         np.random.seed(42)
         data = np.random.normal(50, 1, 200).tolist()
         data[0:15] = [200] * 15  # 7.5% outliers
-        df = pd.DataFrame({
-            "outlier_col": data,
-            "target": np.random.choice([0, 1], 200).tolist()
-        })
+        df = pd.DataFrame({"outlier_col": data, "target": np.random.choice([0, 1], 200).tolist()})
         explorer = DataExplorer(visualize=False, save_findings=False)
         findings = explorer.explore(df, target_hint="target")
         assert "outlier_col" in findings.columns
 
     def test_cyclical_encoding_recommendation(self):
-        df = pd.DataFrame({
-            "day_of_week": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] * 30,
-            "target": np.random.choice([0, 1], 210).tolist()
-        })
+        df = pd.DataFrame(
+            {
+                "day_of_week": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] * 30,
+                "target": np.random.choice([0, 1], 210).tolist(),
+            }
+        )
         explorer = DataExplorer(visualize=False, save_findings=False)
         findings = explorer.explore(df, target_hint="target")
         assert "day_of_week" in findings.columns
@@ -473,10 +424,7 @@ class TestDataExplorerTransformationsExtended:
         values = ["common"] * 300
         for i in range(20):
             values.append(f"rare_{i}")
-        df = pd.DataFrame({
-            "cat_col": values,
-            "target": np.random.choice([0, 1], len(values)).tolist()
-        })
+        df = pd.DataFrame({"cat_col": values, "target": np.random.choice([0, 1], len(values)).tolist()})
         explorer = DataExplorer(visualize=False, save_findings=False)
         findings = explorer.explore(df, target_hint="target")
         assert "cat_col" in findings.columns
@@ -486,22 +434,28 @@ class TestDataExplorerConfidenceMapping:
     def test_confidence_high(self):
         explorer = DataExplorer(visualize=False, save_findings=False)
         from enum import Enum
+
         class MockConf(Enum):
             HIGH = "HIGH"
+
         assert explorer._confidence_to_float(MockConf.HIGH) == 0.9
 
     def test_confidence_medium(self):
         explorer = DataExplorer(visualize=False, save_findings=False)
         from enum import Enum
+
         class MockConf(Enum):
             MEDIUM = "MEDIUM"
+
         assert explorer._confidence_to_float(MockConf.MEDIUM) == 0.7
 
     def test_confidence_low(self):
         explorer = DataExplorer(visualize=False, save_findings=False)
         from enum import Enum
+
         class MockConf(Enum):
             LOW = "LOW"
+
         assert explorer._confidence_to_float(MockConf.LOW) == 0.4
 
     def test_confidence_unknown(self):
@@ -557,11 +511,160 @@ class TestDataExplorerSaveFindingsEdgeCases:
     def test_save_findings_dataframe_name(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
-            explorer = DataExplorer(
-                visualize=False,
-                save_findings=True,
-                output_dir=tmpdir
-            )
+            explorer = DataExplorer(visualize=False, save_findings=True, output_dir=tmpdir)
             findings = explorer.explore(df)
             saved_files = list(Path(tmpdir).glob("exploration_findings.yaml"))
             assert len(saved_files) == 1
+
+
+class TestDataExplorerBulkStats:
+    def test_bulk_stats_called_once(self, sample_dataframe):
+        from unittest.mock import patch
+
+        from customer_retention.core.compat.bulk_profiling import compute_bulk_stats as _real
+
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        with patch(
+            "customer_retention.analysis.auto_explorer.explorer.compute_bulk_stats",
+            wraps=_real,
+        ) as mock_bulk:
+            findings = explorer.explore(sample_dataframe)
+            mock_bulk.assert_called_once()
+            assert findings.row_count == 100
+
+    def test_bulk_universal_metrics_match(self, sample_dataframe):
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(sample_dataframe)
+
+        age_metrics = findings.columns["age"].universal_metrics
+        assert age_metrics["total_count"] == 100
+        assert age_metrics["null_count"] == 0
+        assert age_metrics["null_percentage"] == 0
+        assert age_metrics["distinct_count"] > 0
+        assert age_metrics["most_common_value"] is not None
+        assert age_metrics["most_common_frequency"] is not None
+
+    def test_bulk_numeric_metrics_present(self, sample_dataframe):
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(sample_dataframe)
+
+        charges_finding = findings.columns["monthly_charges"]
+        assert charges_finding.inferred_type == ColumnType.NUMERIC_CONTINUOUS
+        tm = charges_finding.type_metrics
+        assert "mean" in tm
+        assert "std" in tm
+        assert "min_value" in tm
+        assert "max_value" in tm
+        assert "q1" in tm
+        assert "q3" in tm
+        assert "histogram_bins" in tm
+        assert len(tm["histogram_bins"]) == 10
+
+    def test_bulk_numeric_outlier_fields(self):
+        np.random.seed(42)
+        data = np.random.normal(50, 1, 200).tolist()
+        data.extend([200, -100])
+        df = pd.DataFrame(
+            {
+                "val": data,
+                "target": np.random.choice([0, 1], len(data)).tolist(),
+            }
+        )
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df, target_hint="target")
+
+        tm = findings.columns["val"].type_metrics
+        assert "outlier_count_iqr" in tm
+        assert "outlier_count_zscore" in tm
+        assert "outlier_percentage" in tm
+        assert tm["outlier_count_iqr"] > 0
+        assert tm["outlier_count_zscore"] > 0
+
+    def test_bulk_non_numeric_falls_back_to_profiler(self, sample_dataframe):
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(sample_dataframe)
+
+        contract_finding = findings.columns["contract"]
+        assert contract_finding.inferred_type in [
+            ColumnType.CATEGORICAL_NOMINAL,
+            ColumnType.CATEGORICAL_ORDINAL,
+        ]
+        tm = contract_finding.type_metrics
+        assert "cardinality" in tm or "value_counts" in tm
+
+    def test_bulk_null_percentage_consistency(self):
+        df = pd.DataFrame(
+            {
+                "col_with_nulls": [1, 2, None, None, None, None, 7, 8, 9, 10],
+                "target": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
+            }
+        )
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df, target_hint="target")
+
+        um = findings.columns["col_with_nulls"].universal_metrics
+        assert um["null_count"] == 4
+        assert um["null_percentage"] == 40.0
+
+    def test_bulk_distinct_passed_to_type_detector(self):
+        from unittest.mock import patch
+
+        df = pd.DataFrame(
+            {
+                "val": np.random.normal(50, 10, 100),
+                "target": np.random.choice([0, 1], 100),
+            }
+        )
+        explorer = DataExplorer(visualize=False, save_findings=False)
+
+        with patch.object(
+            explorer.type_detector, "detect_type", wraps=explorer.type_detector.detect_type
+        ) as mock_detect:
+            explorer.explore(df, target_hint="target")
+            for call in mock_detect.call_args_list:
+                assert "distinct_count" in call.kwargs
+                assert isinstance(call.kwargs["distinct_count"], int)
+
+    def test_bulk_zero_count_field(self):
+        df = pd.DataFrame({"val": [0, 0, 0, 1, 2, 3, 4, 5, 6, 7]})
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df)
+        tm = findings.columns["val"].type_metrics
+        assert tm["zero_count"] == 3
+
+    def test_bulk_negative_count_field(self):
+        df = pd.DataFrame({"val": [-5, -3, 0, 1, 2, 3, 4, 5, 6, 7]})
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df)
+        tm = findings.columns["val"].type_metrics
+        assert tm["negative_count"] == 2
+
+    def test_bulk_inf_count_field(self):
+        df = pd.DataFrame({"val": [1.0, 2.0, float("inf"), 4.0, float("-inf")]})
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df)
+        tm = findings.columns["val"].type_metrics
+        assert tm["inf_count"] == 2
+
+    def test_bulk_empty_numeric_column(self):
+        df = pd.DataFrame(
+            {
+                "empty_num": pd.array([None, None, None], dtype="Float64"),
+                "target": [0, 1, 0],
+            }
+        )
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df, target_hint="target")
+        assert "empty_num" in findings.columns
+
+    def test_explore_results_identical_structure(self, sample_dataframe):
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(sample_dataframe)
+
+        for col_name, col_finding in findings.columns.items():
+            um = col_finding.universal_metrics
+            assert "total_count" in um
+            assert "null_count" in um
+            assert "null_percentage" in um
+            assert "distinct_count" in um
+            assert "distinct_percentage" in um

@@ -17,13 +17,33 @@ class TypeDetector:
     IDENTIFIER_PATTERNS = ["id", "key", "code", "uuid", "guid"]
     TARGET_PATTERNS_PRIMARY = ["churned", "retained", "churn", "retention", "attrition"]
     TARGET_PATTERNS_SECONDARY = [
-        "unsubscribe", "unsubscribed", "terminate", "terminated", "cancel", "cancelled",
-        "close", "closed", "discontinue", "discontinued", "exit", "exited", "leave", "left",
+        "unsubscribe",
+        "unsubscribed",
+        "terminate",
+        "terminated",
+        "cancel",
+        "cancelled",
+        "close",
+        "closed",
+        "discontinue",
+        "discontinued",
+        "exit",
+        "exited",
+        "leave",
+        "left",
     ]
     TARGET_PATTERNS_GENERIC = ["target", "label", "outcome", "class", "flag"]
     ENTITY_NAME_PATTERNS = [
-        "customer", "user", "account", "member", "subscriber",
-        "client", "entity", "tenant", "patient", "employee",
+        "customer",
+        "user",
+        "account",
+        "member",
+        "subscriber",
+        "client",
+        "entity",
+        "tenant",
+        "patient",
+        "employee",
     ]
     CYCLICAL_DAY_PATTERNS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun", "monday", "tuesday", "wednesday"]
     CYCLICAL_MONTH_PATTERNS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
@@ -31,37 +51,30 @@ class TypeDetector:
     def __init__(self):
         self.evidence = []
 
-    def detect_type(self, series: pd.Series, column_name: str) -> TypeInference:
+    def detect_type(self, series: pd.Series, column_name: str, distinct_count: Optional[int] = None) -> TypeInference:
         self.evidence = []
 
-        distinct_count = series.nunique() if len(series) > 0 else 0
+        if distinct_count is None:
+            distinct_count = series.nunique() if len(series) > 0 else 0
 
         if self.is_identifier(series, column_name, distinct_count):
             return TypeInference(
-                inferred_type=ColumnType.IDENTIFIER,
-                confidence=TypeConfidence.HIGH,
-                evidence=self.evidence.copy()
+                inferred_type=ColumnType.IDENTIFIER, confidence=TypeConfidence.HIGH, evidence=self.evidence.copy()
             )
 
         if self.is_target(column_name, distinct_count):
             return TypeInference(
-                inferred_type=ColumnType.TARGET,
-                confidence=TypeConfidence.HIGH,
-                evidence=self.evidence.copy()
+                inferred_type=ColumnType.TARGET, confidence=TypeConfidence.HIGH, evidence=self.evidence.copy()
             )
 
         if self.is_binary(series, distinct_count):
             return TypeInference(
-                inferred_type=ColumnType.BINARY,
-                confidence=TypeConfidence.HIGH,
-                evidence=self.evidence.copy()
+                inferred_type=ColumnType.BINARY, confidence=TypeConfidence.HIGH, evidence=self.evidence.copy()
             )
 
         if self.is_datetime(series):
             return TypeInference(
-                inferred_type=ColumnType.DATETIME,
-                confidence=TypeConfidence.HIGH,
-                evidence=self.evidence.copy()
+                inferred_type=ColumnType.DATETIME, confidence=TypeConfidence.HIGH, evidence=self.evidence.copy()
             )
 
         if is_numeric_dtype(series):
@@ -71,9 +84,7 @@ class TypeDetector:
             return self.detect_categorical_type(series, distinct_count)
 
         return TypeInference(
-            inferred_type=ColumnType.UNKNOWN,
-            confidence=TypeConfidence.LOW,
-            evidence=["Could not determine type"]
+            inferred_type=ColumnType.UNKNOWN, confidence=TypeConfidence.LOW, evidence=["Could not determine type"]
         )
 
     def is_identifier(self, series: pd.Series, column_name: str, distinct_count: int) -> bool:
@@ -100,7 +111,7 @@ class TypeDetector:
                     parseable_count = 0
                     for value in safe_to_list(sample):
                         try:
-                            pd.to_datetime(value, format='mixed')
+                            pd.to_datetime(value, format="mixed")
                             parseable_count += 1
                         except (ValueError, TypeError):
                             pass
@@ -120,17 +131,23 @@ class TypeDetector:
 
         for pattern in self.TARGET_PATTERNS_PRIMARY:
             if pattern in column_lower:
-                self.evidence.append(f"Column name contains primary target pattern '{pattern}' with {distinct_count} classes")
+                self.evidence.append(
+                    f"Column name contains primary target pattern '{pattern}' with {distinct_count} classes"
+                )
                 return True
 
         for pattern in self.TARGET_PATTERNS_SECONDARY:
             if pattern in column_lower:
-                self.evidence.append(f"Column name contains secondary target pattern '{pattern}' with {distinct_count} classes")
+                self.evidence.append(
+                    f"Column name contains secondary target pattern '{pattern}' with {distinct_count} classes"
+                )
                 return True
 
         for pattern in self.TARGET_PATTERNS_GENERIC:
             if pattern in column_lower:
-                self.evidence.append(f"Column name contains generic target pattern '{pattern}' with {distinct_count} classes")
+                self.evidence.append(
+                    f"Column name contains generic target pattern '{pattern}' with {distinct_count} classes"
+                )
                 return True
 
         return False
@@ -142,12 +159,18 @@ class TypeDetector:
         unique_values = set(safe_to_list(series.dropna().unique()))
 
         binary_sets = [
-            {0, 1}, {0.0, 1.0},
+            {0, 1},
+            {0.0, 1.0},
             {True, False},
             {"0", "1"},
-            {"yes", "no"}, {"Yes", "No"}, {"YES", "NO"},
-            {"true", "false"}, {"True", "False"}, {"TRUE", "FALSE"},
-            {"y", "n"}, {"Y", "N"}
+            {"yes", "no"},
+            {"Yes", "No"},
+            {"YES", "NO"},
+            {"true", "false"},
+            {"True", "False"},
+            {"TRUE", "FALSE"},
+            {"y", "n"},
+            {"Y", "N"},
         ]
 
         for binary_set in binary_sets:
@@ -174,7 +197,7 @@ class TypeDetector:
             parseable_count = 0
             for value in safe_to_list(sample):
                 try:
-                    pd.to_datetime(value, format='mixed')
+                    pd.to_datetime(value, format="mixed")
                     parseable_count += 1
                 except (ValueError, TypeError):
                     pass
@@ -192,29 +215,25 @@ class TypeDetector:
                 inferred_type=ColumnType.NUMERIC_DISCRETE,
                 confidence=TypeConfidence.MEDIUM,
                 evidence=self.evidence.copy(),
-                alternatives=[ColumnType.NUMERIC_CONTINUOUS]
+                alternatives=[ColumnType.NUMERIC_CONTINUOUS],
             )
 
         self.evidence.append(f"Numeric with {distinct_count} unique values (>20)")
         return TypeInference(
-            inferred_type=ColumnType.NUMERIC_CONTINUOUS,
-            confidence=TypeConfidence.HIGH,
-            evidence=self.evidence.copy()
+            inferred_type=ColumnType.NUMERIC_CONTINUOUS, confidence=TypeConfidence.HIGH, evidence=self.evidence.copy()
         )
 
     def detect_categorical_type(self, series: pd.Series, distinct_count: int) -> TypeInference:
         if len(series) == 0 or series.dropna().empty:
             return TypeInference(
-                inferred_type=ColumnType.UNKNOWN,
-                confidence=TypeConfidence.LOW,
-                evidence=["Empty or all-null series"]
+                inferred_type=ColumnType.UNKNOWN, confidence=TypeConfidence.LOW, evidence=["Empty or all-null series"]
             )
 
         if self.is_cyclical_pattern(series):
             return TypeInference(
                 inferred_type=ColumnType.CATEGORICAL_CYCLICAL,
                 confidence=TypeConfidence.MEDIUM,
-                evidence=self.evidence.copy()
+                evidence=self.evidence.copy(),
             )
 
         if distinct_count <= 10:
@@ -222,7 +241,7 @@ class TypeDetector:
             return TypeInference(
                 inferred_type=ColumnType.CATEGORICAL_NOMINAL,
                 confidence=TypeConfidence.HIGH,
-                evidence=self.evidence.copy()
+                evidence=self.evidence.copy(),
             )
 
         if distinct_count <= 100:
@@ -230,7 +249,7 @@ class TypeDetector:
             return TypeInference(
                 inferred_type=ColumnType.CATEGORICAL_NOMINAL,
                 confidence=TypeConfidence.MEDIUM,
-                evidence=self.evidence.copy()
+                evidence=self.evidence.copy(),
             )
 
         self.evidence.append(f"String with {distinct_count} unique values (>100)")
@@ -238,7 +257,7 @@ class TypeDetector:
             inferred_type=ColumnType.TEXT,
             confidence=TypeConfidence.MEDIUM,
             evidence=self.evidence.copy(),
-            alternatives=[ColumnType.CATEGORICAL_NOMINAL]
+            alternatives=[ColumnType.CATEGORICAL_NOMINAL],
         )
 
     MAX_CYCLICAL_VALUE_LENGTH = 15
@@ -270,20 +289,14 @@ class TypeDetector:
         evidence = []
 
         if df is None or len(df) == 0 or len(df.columns) == 0:
-            return GranularityResult(
-                granularity=DatasetGranularity.UNKNOWN,
-                evidence=["Empty or invalid DataFrame"]
-            )
+            return GranularityResult(granularity=DatasetGranularity.UNKNOWN, evidence=["Empty or invalid DataFrame"])
 
         entity_column = self._detect_entity_column(df)
         time_column = self._detect_time_column(df)
 
         if entity_column is None:
             evidence.append("No clear entity/ID column detected")
-            return GranularityResult(
-                granularity=DatasetGranularity.UNKNOWN,
-                evidence=evidence
-            )
+            return GranularityResult(granularity=DatasetGranularity.UNKNOWN, evidence=evidence)
 
         unique_entities = df[entity_column].nunique()
         total_rows = len(df)
@@ -298,7 +311,7 @@ class TypeDetector:
                 unique_entities=unique_entities,
                 total_rows=total_rows,
                 avg_events_per_entity=1.0,
-                evidence=evidence
+                evidence=evidence,
             )
 
         if avg_events > 1.5 and time_column is not None:
@@ -311,7 +324,7 @@ class TypeDetector:
                 unique_entities=unique_entities,
                 total_rows=total_rows,
                 avg_events_per_entity=round(avg_events, 2),
-                evidence=evidence
+                evidence=evidence,
             )
 
         if avg_events > 1.5:
@@ -323,7 +336,7 @@ class TypeDetector:
                 unique_entities=unique_entities,
                 total_rows=total_rows,
                 avg_events_per_entity=round(avg_events, 2),
-                evidence=evidence
+                evidence=evidence,
             )
 
         evidence.append("Could not determine granularity with confidence")
@@ -331,7 +344,7 @@ class TypeDetector:
             granularity=DatasetGranularity.UNKNOWN,
             entity_column=entity_column,
             time_column=time_column,
-            evidence=evidence
+            evidence=evidence,
         )
 
     def _detect_entity_column(self, df: DataFrame) -> Optional[str]:
@@ -344,9 +357,7 @@ class TypeDetector:
                 continue
 
             unique_ratio = df[col].nunique() / len(df)
-            has_entity_name = any(
-                pattern in col_lower for pattern in self.ENTITY_NAME_PATTERNS
-            )
+            has_entity_name = any(pattern in col_lower for pattern in self.ENTITY_NAME_PATTERNS)
 
             if has_entity_name and 0.0 < unique_ratio < 1.0:
                 candidates.append((col, unique_ratio, "entity_name"))
@@ -393,7 +404,7 @@ class TypeDetector:
                         parseable = 0
                         for val in safe_to_list(sample):
                             try:
-                                pd.to_datetime(val, format='mixed')
+                                pd.to_datetime(val, format="mixed")
                                 parseable += 1
                             except (ValueError, TypeError):
                                 pass
