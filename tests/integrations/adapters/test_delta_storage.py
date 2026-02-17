@@ -362,10 +362,10 @@ class TestDatabricksDeltaToSparkDf:
             })
 
             with patch(
-                "customer_retention.integrations.adapters.storage.databricks.normalize_timestamp_columns",
+                "customer_retention.core.compat.normalize_timestamp_columns",
                 wraps=lambda d: d,
             ) as mock_norm, patch(
-                "customer_retention.integrations.adapters.storage.databricks.pandas_dtype_to_spark_schema",
+                "customer_retention.core.compat.pandas_dtype_to_spark_schema",
             ) as mock_schema:
                 storage._to_spark_df(df)
                 mock_norm.assert_called_once()

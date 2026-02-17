@@ -6,19 +6,32 @@ from typing import Any, Callable, Optional
 _SPARK_PANDAS_AVAILABLE = False
 _PANDAS_API_ON_SPARK = False
 
+_PYSPARK_IMPORTABLE = False
 try:
-    import pyspark.pandas as ps
-    _SPARK_PANDAS_AVAILABLE = True
-    _PANDAS_API_ON_SPARK = True
+    import pyspark.pandas as ps  # noqa: F401
+    _PYSPARK_IMPORTABLE = True
 except Exception:
     pass
 
-if not _SPARK_PANDAS_AVAILABLE:
+if not _PYSPARK_IMPORTABLE:
     try:
-        import databricks.koalas as ps
-        _SPARK_PANDAS_AVAILABLE = True
+        import databricks.koalas as ps  # noqa: F401
+        _PYSPARK_IMPORTABLE = True
     except Exception:
         pass
+
+if _PYSPARK_IMPORTABLE:
+    _on_databricks = bool(os.environ.get("DATABRICKS_RUNTIME_VERSION"))
+    _has_active_session = False
+    if not _on_databricks:
+        try:
+            from pyspark.sql import SparkSession
+            _has_active_session = SparkSession.getActiveSession() is not None
+        except Exception:
+            pass
+    if _on_databricks or _has_active_session:
+        _SPARK_PANDAS_AVAILABLE = True
+        _PANDAS_API_ON_SPARK = True
 
 
 def is_spark_available() -> bool:
