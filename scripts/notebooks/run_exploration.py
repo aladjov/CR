@@ -919,7 +919,15 @@ def main():
         default=None,
         help="Run namespace ID for session-based dataset resolution",
     )
+    parser.add_argument(
+        "--spark-remote",
+        action="store_true",
+        default=False,
+        help="Execute via Databricks Connect (sets CR_SPARK_REMOTE=1)",
+    )
     args = parser.parse_args()
+    if args.spark_remote:
+        os.environ["CR_SPARK_REMOTE"] = "1"
     notebooks_dir = Path(args.notebooks_dir).resolve()
     findings_dir = Path(args.findings_dir).resolve() if args.findings_dir else None
     results = run_all(

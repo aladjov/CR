@@ -1,0 +1,23 @@
+bundle:
+  name: churnkit
+
+variables:
+  catalog:
+    description: Unity Catalog name
+    default: churnkit
+  schema:
+    description: Schema name
+    default: analysis
+  experiments_dir:
+    description: Experiments volume path
+    default: /Volumes/churnkit/analysis/experiments
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://adb-7405617913002664.4.azuredatabricks.net
+    variables:
+      catalog: churnkit
+      schema: ${workspace.current_user.short_name}

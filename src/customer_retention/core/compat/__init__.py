@@ -6,6 +6,7 @@ import pandas as _pandas
 
 from .detection import (
     configure_spark_pandas,
+    connect_remote_spark,
     enable_arrow_optimization,
     get_dbutils,
     get_display_function,
@@ -13,6 +14,7 @@ from .detection import (
     is_databricks,
     is_notebook,
     is_pandas_api_on_spark,
+    is_remote_spark,
     is_spark_available,
     set_spark_config,
 )
@@ -51,6 +53,29 @@ try:
     _DATAFRAME_TYPES = (*_DATAFRAME_TYPES, _SparkDF)
 except ImportError:
     pass
+
+
+def _activate_spark_pandas() -> None:
+    global pd, DataFrame, Series, _SPARK_PANDAS_AVAILABLE, _DATAFRAME_TYPES
+    import sys
+    try:
+        import pyspark.pandas as _ps
+        pd = _ps
+        DataFrame = Union[_ps.DataFrame, _pandas.DataFrame]
+        Series = Union[_ps.Series, _pandas.Series]
+        _DATAFRAME_TYPES = (_pandas.DataFrame, _ps.DataFrame)
+        _SPARK_PANDAS_AVAILABLE = True
+    except Exception:
+        return
+    try:
+        from pyspark.sql import DataFrame as _SparkDF
+        _DATAFRAME_TYPES = (*_DATAFRAME_TYPES, _SparkDF)
+    except ImportError:
+        pass
+    this = sys.modules[__name__]
+    this.pd = pd
+    this.DataFrame = DataFrame
+    this.Series = Series
 
 
 def is_dataframe(obj: Any) -> bool:
@@ -356,6 +381,8 @@ __all__ = [
     "is_dataframe",
     "is_spark_available",
     "is_pandas_api_on_spark",
+    "is_remote_spark",
+    "connect_remote_spark",
     "to_pandas",
     "safe_isinf",
     "safe_isfinite",

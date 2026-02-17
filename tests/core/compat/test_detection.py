@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 
 from customer_retention.core.compat.detection import (
     configure_spark_pandas,
+    connect_remote_spark,
     enable_arrow_optimization,
     get_databricks_username,
     get_dbutils,
@@ -11,6 +12,7 @@ from customer_retention.core.compat.detection import (
     is_databricks,
     is_notebook,
     is_pandas_api_on_spark,
+    is_remote_spark,
     is_spark_available,
     set_spark_config,
 )
@@ -46,6 +48,99 @@ class TestSparkAvailability:
 
     def test_is_pandas_api_on_spark_returns_bool(self):
         assert isinstance(is_pandas_api_on_spark(), bool)
+
+    def test_is_spark_available_false_locally(self):
+        assert is_spark_available() is False
+
+    def test_is_remote_spark_false_locally(self):
+        assert is_remote_spark() is False
+
+
+class TestConnectRemoteSpark:
+    def test_returns_existing_session_when_already_available(self):
+        mock_session = MagicMock()
+        with patch(
+            "customer_retention.core.compat.detection._SPARK_PANDAS_AVAILABLE", True,
+        ):
+            with patch(
+                "customer_retention.core.compat.detection.get_spark_session",
+                return_value=mock_session,
+            ):
+                result = connect_remote_spark()
+                assert result is mock_session
+
+    def test_raises_when_pyspark_not_importable(self):
+        import pytest
+        with patch(
+            "customer_retention.core.compat.detection._SPARK_PANDAS_AVAILABLE", False,
+        ):
+            with patch(
+                "customer_retention.core.compat.detection._PYSPARK_IMPORTABLE", False,
+            ):
+                with pytest.raises(ImportError, match="pyspark is not installed"):
+                    connect_remote_spark()
+
+    def test_creates_databricks_session_and_activates(self):
+        mock_session = MagicMock()
+        mock_dbs = MagicMock()
+        mock_dbs.DatabricksSession.builder.getOrCreate.return_value = mock_session
+
+        with patch(
+            "customer_retention.core.compat.detection._SPARK_PANDAS_AVAILABLE", False,
+        ):
+            with patch(
+                "customer_retention.core.compat.detection._PYSPARK_IMPORTABLE", True,
+            ):
+                with patch.dict("sys.modules", {"databricks.connect": mock_dbs, "databricks": MagicMock()}):
+                    with patch(
+                        "customer_retention.core.compat._activate_spark_pandas",
+                    ) as mock_activate:
+                        result = connect_remote_spark()
+                        assert result is mock_session
+                        mock_activate.assert_called_once()
+
+
+class TestCrSparkRemoteEnvVar:
+    def test_env_var_triggers_databricks_session(self):
+        import importlib
+
+        import customer_retention.core.compat.detection as det
+
+        mock_session = MagicMock()
+        mock_builder = MagicMock()
+        mock_builder.getOrCreate.return_value = mock_session
+        mock_dbs_module = MagicMock()
+        mock_dbs_module.DatabricksSession.builder = mock_builder
+
+        orig_spark = det._SPARK_PANDAS_AVAILABLE
+        try:
+            with patch.dict(os.environ, {"CR_SPARK_REMOTE": "1"}):
+                with patch.dict("sys.modules", {"databricks.connect": mock_dbs_module}):
+                    importlib.reload(det)
+                    mock_builder.getOrCreate.assert_called_once()
+        finally:
+            importlib.reload(det)
+
+    def test_env_var_warns_on_session_failure(self):
+        import importlib
+        import warnings
+
+        import customer_retention.core.compat.detection as det
+
+        mock_dbs_module = MagicMock()
+        mock_dbs_module.DatabricksSession.builder.getOrCreate.side_effect = RuntimeError("no cluster")
+
+        try:
+            with patch.dict(os.environ, {"CR_SPARK_REMOTE": "1"}):
+                with patch.dict("sys.modules", {"databricks.connect": mock_dbs_module}):
+                    with warnings.catch_warnings(record=True) as w:
+                        warnings.simplefilter("always")
+                        importlib.reload(det)
+                        matching = [x for x in w if "CR_SPARK_REMOTE" in str(x.message)]
+                        assert len(matching) == 1
+                        assert "no cluster" in str(matching[0].message)
+        finally:
+            importlib.reload(det)
 
 
 class TestNotebookDetection:

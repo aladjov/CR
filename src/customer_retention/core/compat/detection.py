@@ -20,9 +20,59 @@ if not _PYSPARK_IMPORTABLE:
     except Exception:
         pass
 
+_BUNDLE_VAR_TO_ENV = {
+    "catalog": "CR_CATALOG",
+    "schema": "CR_SCHEMA",
+    "experiments_dir": "CR_EXPERIMENTS_DIR",
+}
+
+
+def _load_bundle_variables() -> None:
+    import yaml  # noqa: PLC0415 — deferred import, only used for CR_SPARK_REMOTE
+
+    _bundle_file = os.path.join(os.getcwd(), "databricks.yml")
+    if not os.path.isfile(_bundle_file):
+        return
+    try:
+        with open(_bundle_file) as f:
+            bundle = yaml.safe_load(f)
+    except Exception:
+        return
+    variables = bundle.get("variables", {})
+    target_name = os.environ.get("DATABRICKS_BUNDLE_TARGET", "dev")
+    target_vars = bundle.get("targets", {}).get(target_name, {}).get("variables", {})
+    for var_name, env_name in _BUNDLE_VAR_TO_ENV.items():
+        value = target_vars.get(var_name)
+        if not value or "${" in str(value):
+            value = variables.get(var_name, {}).get("default")
+        if value:
+            os.environ.setdefault(env_name, str(value))
+
+
 if _PYSPARK_IMPORTABLE:
     _on_databricks = bool(os.environ.get("DATABRICKS_RUNTIME_VERSION"))
     _has_active_session = False
+
+    if not _on_databricks and os.environ.get("CR_SPARK_REMOTE"):
+        try:
+            _env_file = os.path.join(os.getcwd(), ".databricks", ".databricks.env")
+            if os.path.isfile(_env_file):
+                with open(_env_file) as _f:
+                    for _line in _f:
+                        _line = _line.strip()
+                        if _line and not _line.startswith("#") and "=" in _line:
+                            _k, _, _v = _line.partition("=")
+                            os.environ.setdefault(_k.strip(), _v.strip())
+            _load_bundle_variables()
+            from databricks.connect import DatabricksSession
+            DatabricksSession.builder.getOrCreate()
+        except Exception as _exc:
+            import warnings
+            warnings.warn(
+                f"CR_SPARK_REMOTE is set but DatabricksSession failed: {_exc}",
+                stacklevel=1,
+            )
+
     if not _on_databricks:
         try:
             from pyspark.sql import SparkSession
@@ -40,6 +90,25 @@ def is_spark_available() -> bool:
 
 def is_pandas_api_on_spark() -> bool:
     return _PANDAS_API_ON_SPARK
+
+
+def is_remote_spark() -> bool:
+    return _SPARK_PANDAS_AVAILABLE and not bool(os.environ.get("DATABRICKS_RUNTIME_VERSION"))
+
+
+def connect_remote_spark() -> Any:
+    global _SPARK_PANDAS_AVAILABLE, _PANDAS_API_ON_SPARK
+    if _SPARK_PANDAS_AVAILABLE:
+        return get_spark_session()
+    if not _PYSPARK_IMPORTABLE:
+        raise ImportError("pyspark is not installed")
+    from databricks.connect import DatabricksSession
+    spark = DatabricksSession.builder.getOrCreate()
+    _SPARK_PANDAS_AVAILABLE = True
+    _PANDAS_API_ON_SPARK = True
+    from customer_retention.core.compat import _activate_spark_pandas
+    _activate_spark_pandas()
+    return spark
 
 
 def is_databricks() -> bool:
