@@ -116,12 +116,7 @@ class DataExplorer:
             bulk_total=bulk_total,
             col_stats=col_stats,
         )
-        type_metrics = self._compute_type_metrics(
-            series,
-            type_inference.inferred_type,
-            numeric_stats=numeric_stats,
-            bulk_total=bulk_total,
-        )
+        type_metrics = self._compute_type_metrics(series, type_inference.inferred_type, numeric_stats=numeric_stats)
         quality_issues = self._identify_quality_issues(universal_metrics, type_metrics)
         quality_score = self._calculate_column_quality(universal_metrics, quality_issues)
         cleaning_recommendations = self._generate_cleaning_recommendations(universal_metrics, quality_issues)
@@ -193,14 +188,10 @@ class DataExplorer:
         }
 
     def _compute_type_metrics(
-        self,
-        series: Series,
-        col_type: ColumnType,
-        numeric_stats: Optional[NumericColumnStats] = None,
-        bulk_total: Optional[int] = None,
+        self, series: Series, col_type: ColumnType, numeric_stats: Optional[NumericColumnStats] = None
     ) -> dict:
         if numeric_stats is not None and col_type in (ColumnType.NUMERIC_CONTINUOUS, ColumnType.NUMERIC_DISCRETE):
-            return self._numeric_metrics_from_bulk(series, numeric_stats, bulk_total)
+            return self._numeric_metrics_from_bulk(series, numeric_stats)
 
         profiler = ProfilerFactory.get_profiler(col_type)
         if not profiler:
@@ -212,11 +203,7 @@ class DataExplorer:
         return {}
 
     @staticmethod
-    def _numeric_metrics_from_bulk(
-        series: Series,
-        ns: NumericColumnStats,
-        bulk_total: Optional[int],
-    ) -> dict:
+    def _numeric_metrics_from_bulk(series: Series, ns: NumericColumnStats) -> dict:
         if ns.mean is None:
             return {}
 

@@ -252,6 +252,13 @@ class RemotePath:
             if not missing_ok:
                 raise
 
+    def rmdir(self) -> None:
+        dbu = _get_dbutils()
+        try:
+            dbu.fs.rm(str(self._pure), recurse=False)
+        except Exception:
+            raise OSError(f"Cannot remove directory: {self._pure}") from None
+
     def stat(self) -> _RemoteStat:
         dbu = _get_dbutils()
         parent_str = str(self._pure.parent)
@@ -291,8 +298,10 @@ def make_path(path: Union[str, Path, RemotePath], force_remote: Optional[bool] =
         return path
     from customer_retention.core.compat.detection import is_databricks, is_remote_spark
 
-    remote = force_remote if force_remote is not None else (
-        is_remote_spark() or is_databricks() or bool(os.environ.get("CR_SPARK_REMOTE"))
+    remote = (
+        force_remote
+        if force_remote is not None
+        else (is_remote_spark() or is_databricks() or bool(os.environ.get("CR_SPARK_REMOTE")))
     )
     if remote:
         return RemotePath(str(path))

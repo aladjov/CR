@@ -89,6 +89,7 @@ class TestRemotePathProperties:
 
     def test_fspath(self):
         import os
+
         p = RemotePath("/Volumes/catalog/schema")
         assert os.fspath(p) == "/Volumes/catalog/schema"
 
@@ -338,6 +339,19 @@ class TestRemotePathUnlink:
             p.unlink(missing_ok=False)
 
 
+class TestRemotePathRmdir:
+    def test_rmdir(self, mock_dbutils):
+        p = RemotePath("/data/empty_dir")
+        p.rmdir()
+        mock_dbutils.fs.rm.assert_called_once_with("/data/empty_dir", recurse=False)
+
+    def test_rmdir_raises_on_failure(self, mock_dbutils):
+        mock_dbutils.fs.rm.side_effect = Exception("not empty")
+        p = RemotePath("/data/nonempty_dir")
+        with pytest.raises(OSError):
+            p.rmdir()
+
+
 class TestRemoteTextReader:
     def test_read(self):
         reader = _RemoteTextReader("hello\nworld\n")
@@ -374,22 +388,28 @@ class TestRemoteTextWriter:
 
 class TestMakePath:
     def test_local_mode(self):
-        with patch("customer_retention.core.compat.detection.is_remote_spark", return_value=False), \
-             patch("customer_retention.core.compat.detection.is_databricks", return_value=False):
+        with (
+            patch("customer_retention.core.compat.detection.is_remote_spark", return_value=False),
+            patch("customer_retention.core.compat.detection.is_databricks", return_value=False),
+        ):
             result = make_path("/some/local/path")
             assert isinstance(result, Path)
             assert str(result) == "/some/local/path"
 
     def test_remote_mode(self):
-        with patch("customer_retention.core.compat.detection.is_remote_spark", return_value=True), \
-             patch("customer_retention.core.compat.detection.is_databricks", return_value=False):
+        with (
+            patch("customer_retention.core.compat.detection.is_remote_spark", return_value=True),
+            patch("customer_retention.core.compat.detection.is_databricks", return_value=False),
+        ):
             result = make_path("/Volumes/catalog/schema/experiments")
             assert isinstance(result, RemotePath)
             assert str(result) == "/Volumes/catalog/schema/experiments"
 
     def test_databricks_mode(self):
-        with patch("customer_retention.core.compat.detection.is_remote_spark", return_value=False), \
-             patch("customer_retention.core.compat.detection.is_databricks", return_value=True):
+        with (
+            patch("customer_retention.core.compat.detection.is_remote_spark", return_value=False),
+            patch("customer_retention.core.compat.detection.is_databricks", return_value=True),
+        ):
             result = make_path("/Volumes/catalog/schema/experiments")
             assert isinstance(result, RemotePath)
 
@@ -399,8 +419,10 @@ class TestMakePath:
         assert result is rp
 
     def test_already_path_local_mode(self):
-        with patch("customer_retention.core.compat.detection.is_remote_spark", return_value=False), \
-             patch("customer_retention.core.compat.detection.is_databricks", return_value=False):
+        with (
+            patch("customer_retention.core.compat.detection.is_remote_spark", return_value=False),
+            patch("customer_retention.core.compat.detection.is_databricks", return_value=False),
+        ):
             p = Path("/some/path")
             result = make_path(p)
             assert result is p
@@ -496,18 +518,24 @@ class TestRemotePathWithRunNamespace:
 
 class TestExperimentsIntegration:
     def test_get_experiments_dir_remote(self):
-        with patch.dict("os.environ", {"CR_EXPERIMENTS_DIR": "/Volumes/cat/sch/experiments"}), \
-             patch("customer_retention.core.compat.detection.is_remote_spark", return_value=True), \
-             patch("customer_retention.core.compat.detection.is_databricks", return_value=False):
+        with (
+            patch.dict("os.environ", {"CR_EXPERIMENTS_DIR": "/Volumes/cat/sch/experiments"}),
+            patch("customer_retention.core.compat.detection.is_remote_spark", return_value=True),
+            patch("customer_retention.core.compat.detection.is_databricks", return_value=False),
+        ):
             from customer_retention.core.config.experiments import get_experiments_dir
+
             result = get_experiments_dir()
             assert isinstance(result, RemotePath)
             assert str(result) == "/Volumes/cat/sch/experiments"
 
     def test_get_experiments_dir_local(self):
-        with patch.dict("os.environ", {"CR_EXPERIMENTS_DIR": "/local/experiments"}, clear=False), \
-             patch("customer_retention.core.compat.detection.is_remote_spark", return_value=False), \
-             patch("customer_retention.core.compat.detection.is_databricks", return_value=False):
+        with (
+            patch.dict("os.environ", {"CR_EXPERIMENTS_DIR": "/local/experiments"}, clear=False),
+            patch("customer_retention.core.compat.detection.is_remote_spark", return_value=False),
+            patch("customer_retention.core.compat.detection.is_databricks", return_value=False),
+        ):
             from customer_retention.core.config.experiments import get_experiments_dir
+
             result = get_experiments_dir()
             assert isinstance(result, Path)
