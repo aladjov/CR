@@ -31,7 +31,8 @@ class ArtifactStore:
         }
 
     def save_manifest(self) -> None:
-        with open(self._dir / "manifest.yaml", "w") as f:
+        manifest_path = self._dir / "manifest.yaml"
+        with manifest_path.open("w") as f:
             yaml.dump(self._manifest, f)
 
     def load(self, artifact_id: str):
@@ -43,8 +44,10 @@ class ArtifactStore:
         return artifact_id in self._manifest
 
     @classmethod
-    def from_manifest(cls, manifest_path: str | Path) -> ArtifactStore:
-        store = cls(str(Path(manifest_path).parent))
-        with open(manifest_path) as f:
+    def from_manifest(cls, manifest_path) -> ArtifactStore:
+        from pathlib import Path as _Path
+        p = manifest_path if hasattr(manifest_path, "open") else _Path(str(manifest_path))
+        store = cls(str(p.parent))
+        with p.open("r") as f:
             store._manifest = yaml.safe_load(f) or {}
         return store

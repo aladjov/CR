@@ -118,7 +118,7 @@ class SnapshotManager:
     """
 
     def __init__(self, base_path: Path, storage=None, dataset_name=None):
-        self.base_path = Path(base_path)
+        self.base_path = Path(base_path) if not isinstance(base_path, Path) else base_path
         base = self.base_path / "snapshots"
         self.snapshots_dir = base / dataset_name if dataset_name else base
         self.snapshots_dir.mkdir(parents=True, exist_ok=True)
@@ -266,12 +266,12 @@ class SnapshotManager:
             "target_column": metadata.target_column,
             "timestamp_config": metadata.timestamp_config,
         }
-        with open(metadata_path, "w") as f:
+        with metadata_path.open("w") as f:
             json.dump(metadata_dict, f, indent=2)
 
     def _load_metadata(self, snapshot_id: str) -> SnapshotMetadata:
         metadata_path = self.snapshots_dir / f"{snapshot_id}_metadata.json"
-        with open(metadata_path) as f:
+        with metadata_path.open("r") as f:
             data = json.load(f)
 
         return SnapshotMetadata(

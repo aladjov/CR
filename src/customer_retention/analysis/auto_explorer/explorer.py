@@ -34,18 +34,27 @@ class DataExplorer:
     def _load_source(self, source: Union[str, DataFrame]) -> tuple:
         if is_dataframe(source):
             return source, "<DataFrame>", "dataframe"
-        path = Path(source)
+        path = Path(source) if isinstance(source, str) else source
         if path.is_dir() and (path / "_delta_log").is_dir():
             try:
                 from customer_retention.integrations.adapters.factory import get_delta
-                return get_delta().read(str(path)), source, "delta"
+                return get_delta(force_local=True).read(str(path)), str(source), "delta"
             except ImportError:
                 pass
+        source_str = str(source)
         if path.suffix.lower() == ".csv":
-            return pd.read_csv(source), source, "csv"
+            return pd.read_csv(source_str), source_str, "csv"
         if path.suffix.lower() in [".parquet", ".pq"]:
-            return pd.read_parquet(source), source, "parquet"
-        return pd.read_csv(source), source, "csv"
+            return pd.read_parquet(source_str), source_str, "parquet"
+        return pd.read_csv(source_str), source_str, "csv"
+
+    @staticmethod
+    def _detect_format(path_str: str) -> str:
+        if path_str.endswith(".csv"):
+            return "csv"
+        if path_str.endswith((".parquet", ".pq")):
+            return "parquet"
+        return "csv"
 
     def _create_findings(self, df: DataFrame, source_path: str, source_format: str) -> ExplorationFindings:
         return ExplorationFindings(

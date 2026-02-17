@@ -65,7 +65,7 @@ class FindingsParser:
         if self._namespace is not None:
             recommendations_path = self._namespace.merged_recommendations_path
             if recommendations_path.exists():
-                with open(recommendations_path) as f:
+                with recommendations_path.open("r") as f:
                     return RecommendationRegistry.from_dict(yaml.safe_load(f))
             return None
         recommendations_path = None
@@ -75,7 +75,7 @@ class FindingsParser:
         elif (self._findings_dir / "recommendations.yaml").exists():
             recommendations_path = self._findings_dir / "recommendations.yaml"
         if recommendations_path and recommendations_path.exists():
-            with open(recommendations_path) as f:
+            with recommendations_path.open("r") as f:
                 return RecommendationRegistry.from_dict(yaml.safe_load(f))
         return None
 
@@ -86,7 +86,7 @@ class FindingsParser:
             path = self._findings_dir / "multi_dataset_findings.yaml"
         if not path.exists():
             return self._synthesize_from_single_source()
-        with open(path) as f:
+        with path.open("r") as f:
             data = yaml.safe_load(f)
         return self._dict_to_multi_dataset_findings(data)
 

@@ -175,15 +175,15 @@ class SnapshotGrid(BaseModel):
     def estimated_grid_size(self, n_entities: int) -> int:
         return n_entities * len(self.grid_dates)
 
-    def save(self, path: str | Path) -> None:
-        p = Path(path)
+    def save(self, path) -> None:
+        p = path if isinstance(path, Path) else Path(str(path))
         p.parent.mkdir(parents=True, exist_ok=True)
         data = self.model_dump(mode="json")
         p.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
 
     @classmethod
-    def load(cls, path: str | Path) -> SnapshotGrid:
-        p = Path(path)
+    def load(cls, path) -> SnapshotGrid:
+        p = path if isinstance(path, Path) else Path(str(path))
         if not p.exists():
             raise FileNotFoundError(f"Snapshot grid file not found: {p}")
         data = yaml.safe_load(p.read_text())

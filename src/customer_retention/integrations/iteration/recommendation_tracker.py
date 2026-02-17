@@ -327,13 +327,13 @@ class RecommendationTracker:
         data = {
             "recommendations": [r.to_dict() for r in self.recommendations.values()]
         }
-        with open(self.storage_path, "w") as f:
+        with self.storage_path.open("w") as f:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
     def load(self) -> None:
         if not self.storage_path.exists():
             return
-        with open(self.storage_path, "r") as f:
+        with self.storage_path.open("r") as f:
             data = yaml.safe_load(f)
         if data and "recommendations" in data:
             for rec_data in data["recommendations"]:

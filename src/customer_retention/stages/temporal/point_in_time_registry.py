@@ -48,14 +48,14 @@ class PointInTimeRegistry:
     REGISTRY_FILENAME = "point_in_time_registry.json"
 
     def __init__(self, output_dir: Path):
-        self.output_dir = Path(output_dir)
+        self.output_dir = Path(output_dir) if not isinstance(output_dir, Path) else output_dir
         self.registry_path = self.output_dir / self.REGISTRY_FILENAME
         self.snapshots: dict[str, DatasetSnapshot] = {}
         self._load()
 
     def _load(self) -> None:
         if self.registry_path.exists():
-            with open(self.registry_path) as f:
+            with self.registry_path.open("r") as f:
                 data = json.load(f)
                 self.snapshots = {
                     name: DatasetSnapshot.from_dict(snap) for name, snap in data.get("snapshots", {}).items()
@@ -64,7 +64,7 @@ class PointInTimeRegistry:
     def _save(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         data = {"snapshots": {name: snap.to_dict() for name, snap in self.snapshots.items()}}
-        with open(self.registry_path, "w") as f:
+        with self.registry_path.open("w") as f:
             json.dump(data, f, indent=2)
 
     def get_reference_cutoff(self) -> Optional[datetime]:

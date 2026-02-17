@@ -254,15 +254,15 @@ class ProjectContext(BaseModel):
                 return name
         return None
 
-    def save(self, path: str | Path) -> None:
-        p = Path(path)
+    def save(self, path) -> None:
+        p = path if isinstance(path, Path) else Path(str(path))
         p.parent.mkdir(parents=True, exist_ok=True)
         data = self.model_dump(mode="json")
         p.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
 
     @classmethod
-    def load(cls, path: str | Path) -> ProjectContext:
-        p = Path(path)
+    def load(cls, path) -> ProjectContext:
+        p = path if isinstance(path, Path) else Path(str(path))
         if not p.exists():
             raise FileNotFoundError(f"Project context file not found: {p}")
         data = yaml.safe_load(p.read_text())

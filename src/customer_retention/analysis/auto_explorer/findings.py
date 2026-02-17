@@ -1,6 +1,7 @@
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
@@ -237,9 +238,12 @@ class ExplorationFindings:
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2)
 
-    def save(self, path: str):
-        content = self.to_yaml() if path.endswith((".yaml", ".yml")) else self.to_json()
-        with open(path, "w") as f:
+    def save(self, path):
+        path_str = str(path)
+        content = self.to_yaml() if path_str.endswith((".yaml", ".yml")) else self.to_json()
+        p = path if isinstance(path, Path) else Path(path_str)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("w") as f:
             f.write(content)
 
     @classmethod
@@ -288,7 +292,8 @@ class ExplorationFindings:
         return cls.from_dict(json.loads(json_str))
 
     @classmethod
-    def load(cls, path: str) -> "ExplorationFindings":
-        with open(path, "r") as f:
-            content = f.read()
-        return cls.from_yaml(content) if path.endswith((".yaml", ".yml")) else cls.from_json(content)
+    def load(cls, path) -> "ExplorationFindings":
+        p = path if isinstance(path, Path) else Path(str(path))
+        content = p.read_text()
+        path_str = str(path)
+        return cls.from_yaml(content) if path_str.endswith((".yaml", ".yml")) else cls.from_json(content)

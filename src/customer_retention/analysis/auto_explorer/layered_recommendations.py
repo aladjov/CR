@@ -1,6 +1,7 @@
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -91,13 +92,16 @@ class RecommendationRegistry:
         self.fit_artifacts: Dict[str, str] = {}
         self._id_counter = 0
 
-    def save(self, path: str) -> None:
-        with open(path, "w") as f:
+    def save(self, path) -> None:
+        p = path if isinstance(path, Path) else Path(str(path))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("w") as f:
             yaml.dump(self.to_dict(), f, default_flow_style=False, sort_keys=False)
 
     @classmethod
-    def load(cls, path: str) -> "RecommendationRegistry":
-        with open(path) as f:
+    def load(cls, path) -> "RecommendationRegistry":
+        p = path if isinstance(path, Path) else Path(str(path))
+        with p.open("r") as f:
             return cls.from_dict(yaml.safe_load(f))
 
     def link_fit_artifact(self, recommendation_id: str, artifact_id: str) -> None:

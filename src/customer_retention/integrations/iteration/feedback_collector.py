@@ -173,12 +173,14 @@ class ModelFeedbackCollector:
             if score < self.drop_threshold
         ]
 
-    def save_feedback(self, feedback: ModelFeedback, path: str) -> None:
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as f:
+    def save_feedback(self, feedback: ModelFeedback, path) -> None:
+        p = path if isinstance(path, Path) else Path(str(path))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("w") as f:
             yaml.dump(feedback.to_dict(), f, default_flow_style=False, sort_keys=False)
 
-    def load_feedback(self, path: str) -> ModelFeedback:
-        with open(path, "r") as f:
+    def load_feedback(self, path) -> ModelFeedback:
+        p = path if isinstance(path, Path) else Path(str(path))
+        with p.open("r") as f:
             data = yaml.safe_load(f)
         return ModelFeedback.from_dict(data)

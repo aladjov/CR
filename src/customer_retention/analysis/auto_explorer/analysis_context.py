@@ -44,7 +44,7 @@ class AnalysisContext:
     def _load_or_create_registry(self) -> RecommendationRegistry:
         path = Path(self.recommendations_path)
         if path.exists():
-            with open(path) as f:
+            with path.open("r") as f:
                 return RecommendationRegistry.from_dict(yaml.safe_load(f))
         reg = RecommendationRegistry()
         reg.init_bronze(self.findings.source_path)
@@ -57,7 +57,8 @@ class AnalysisContext:
     def _load_dataframe(self) -> pd.DataFrame:
         if self.dataset_name is None and self.namespace:
             self.data_source = "silver_merged"
-            return get_delta().read(str(self.namespace.silver_merged_path))
+            df = get_delta(force_local=True).read(str(self.namespace.silver_merged_path))
+            return df.to_pandas() if hasattr(df, "to_pandas") else df
         if "_aggregated" in self.findings_path:
             return self._load_aggregated()
         if self.namespace and self.dataset_name:
@@ -71,7 +72,8 @@ class AnalysisContext:
             source_path = Path("..") / source_path
         self.data_source = f"aggregated:{source_path.name}"
         if source_path.is_dir():
-            return get_delta().read(str(source_path))
+            df = get_delta(force_local=True).read(str(source_path))
+            return df.to_pandas() if hasattr(df, "to_pandas") else df
         if source_path.is_file():
             return pd.read_parquet(source_path)
         if self.namespace and self.dataset_name:

@@ -185,7 +185,7 @@ class MultiDatasetFindings:
 
         return registry
 
-    def save(self, path: str) -> None:
+    def save(self, path) -> None:
         """Save multi-dataset findings to YAML."""
         data = {
             "datasets": {
@@ -223,13 +223,16 @@ class MultiDatasetFindings:
             "notes": self.notes,
         }
 
-        with open(path, "w") as f:
+        p = path if isinstance(path, Path) else Path(str(path))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("w") as f:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
     @classmethod
-    def load(cls, path: str) -> "MultiDatasetFindings":
+    def load(cls, path) -> "MultiDatasetFindings":
         """Load multi-dataset findings from YAML."""
-        with open(path, "r") as f:
+        p = path if isinstance(path, Path) else Path(str(path))
+        with p.open("r") as f:
             data = yaml.safe_load(f)
 
         datasets = {}
@@ -277,8 +280,8 @@ class MultiDatasetFindings:
 class ExplorationManager:
     """Manages multiple exploration findings."""
 
-    def __init__(self, explorations_dir: Path, findings_paths: Optional[List[Path]] = None):
-        self.explorations_dir = Path(explorations_dir)
+    def __init__(self, explorations_dir, findings_paths: Optional[List[Path]] = None):
+        self.explorations_dir = explorations_dir if hasattr(explorations_dir, "glob") else Path(explorations_dir)
         self._findings_paths = findings_paths
         self._findings_cache: Dict[str, ExplorationFindings] = {}
         self._excluded_datasets: set = set()

@@ -131,14 +131,16 @@ class IterationContext:
             completed_at=datetime.fromisoformat(data["completed_at"]) if data.get("completed_at") else None
         )
 
-    def save(self, path: str) -> None:
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as f:
+    def save(self, path) -> None:
+        p = path if isinstance(path, Path) else Path(str(path))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("w") as f:
             yaml.dump(self.to_dict(), f, default_flow_style=False, sort_keys=False)
 
     @classmethod
-    def load(cls, path: str) -> "IterationContext":
-        with open(path, "r") as f:
+    def load(cls, path) -> "IterationContext":
+        p = path if isinstance(path, Path) else Path(str(path))
+        with p.open("r") as f:
             data = yaml.safe_load(f)
         return cls.from_dict(data)
 
@@ -175,7 +177,7 @@ class IterationContextManager:
     def get_current(self) -> Optional[IterationContext]:
         if not self._current_path.exists():
             return None
-        with open(self._current_path, "r") as f:
+        with self._current_path.open("r") as f:
             data = yaml.safe_load(f)
         current_id = data.get("current_iteration_id")
         if current_id:
@@ -183,7 +185,7 @@ class IterationContextManager:
         return None
 
     def set_current(self, iteration_id: str) -> None:
-        with open(self._current_path, "w") as f:
+        with self._current_path.open("w") as f:
             yaml.dump({"current_iteration_id": iteration_id}, f)
 
     def get_by_id(self, iteration_id: str) -> Optional[IterationContext]:
