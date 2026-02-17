@@ -51,7 +51,9 @@ class DuplicateEventCheck(TemporalQualityCheck):
             return self._pass_result("No data to check")
 
         duplicates = df.duplicated(subset=[self.entity_column, self.time_column], keep=False)
-        duplicate_count = duplicates.sum() - df[duplicates].groupby([self.entity_column, self.time_column]).ngroups
+        dup_rows = int(duplicates.sum())
+        unique_groups = len(df[duplicates].drop_duplicates(subset=[self.entity_column, self.time_column]))
+        duplicate_count = dup_rows - unique_groups
 
         if duplicate_count > 0:
             examples = to_pandas(df[duplicates].head(10)[[self.entity_column, self.time_column]]).to_dict('records')

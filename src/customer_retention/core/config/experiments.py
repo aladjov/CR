@@ -1,7 +1,9 @@
 import json
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
+
+from customer_retention.core.compat.remote_path import RemotePath, make_path
 
 _DATABRICKS_CONFIG_FILENAME = ".churnkit_config.json"
 
@@ -54,14 +56,14 @@ def _find_project_root() -> Path:
     return Path.cwd()
 
 
-def get_experiments_dir(default: Optional[str] = None) -> Path:
+def get_experiments_dir(default: Optional[str] = None) -> Union[Path, RemotePath]:
     if "CR_EXPERIMENTS_DIR" in os.environ:
-        return Path(os.environ["CR_EXPERIMENTS_DIR"])
+        return make_path(os.environ["CR_EXPERIMENTS_DIR"])
     if default:
-        return Path(default)
+        return make_path(default)
     persisted = _load_persisted_databricks_config()
     if persisted and "experiments_dir" in persisted:
-        return Path(persisted["experiments_dir"])
+        return make_path(persisted["experiments_dir"])
     return _find_project_root() / "experiments"
 
 
@@ -149,9 +151,9 @@ def get_active_run_dir() -> Path | None:
     return get_runs_dir() / run_id
 
 
-def get_notebook_experiments_dir() -> Path:
+def get_notebook_experiments_dir() -> Union[Path, RemotePath]:
     if "CR_EXPERIMENTS_DIR" in os.environ:
-        return Path(os.environ["CR_EXPERIMENTS_DIR"])
+        return make_path(os.environ["CR_EXPERIMENTS_DIR"])
     cwd = Path.cwd()
     if (cwd.parent / "experiments").exists():
         return cwd.parent / "experiments"

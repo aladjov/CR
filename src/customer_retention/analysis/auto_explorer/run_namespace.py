@@ -4,12 +4,14 @@ import os
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
+
+from customer_retention.core.compat.remote_path import RemotePath
 
 
 @dataclass
 class RunNamespace:
-    root: Path
+    root: Union[Path, RemotePath]
     run_id: str
 
     @property

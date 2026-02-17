@@ -4,7 +4,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from customer_retention.core.compat import is_databricks
+from customer_retention.core.compat import is_databricks, is_remote_spark
 from customer_retention.core.config.experiments import get_notebook_experiments_dir, reload_config
 
 
@@ -29,15 +29,15 @@ def track_and_export_previous(current_notebook: str) -> None:
     experiments_dir = get_notebook_experiments_dir()
     try:
         experiments_dir.mkdir(parents=True, exist_ok=True)
-    except OSError:
+    except Exception:
         return
     progress_file = experiments_dir / "notebook_progress.json"
-    docs_dir = experiments_dir / "docs"
 
     previous = _read_last_notebook(progress_file)
     _write_current_notebook(progress_file, current_notebook)
 
-    if previous and not is_databricks():
+    if previous and not is_databricks() and not is_remote_spark():
+        docs_dir = experiments_dir / "docs"
         _export_in_background(previous, docs_dir)
 
 

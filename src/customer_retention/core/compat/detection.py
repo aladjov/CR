@@ -23,7 +23,6 @@ if not _PYSPARK_IMPORTABLE:
 _BUNDLE_VAR_TO_ENV = {
     "catalog": "CR_CATALOG",
     "schema": "CR_SCHEMA",
-    "experiments_dir": "CR_EXPERIMENTS_DIR",
 }
 
 
@@ -146,7 +145,7 @@ def get_display_function() -> Callable[[str], None]:
 
 
 def get_dbutils() -> Optional[Any]:
-    if not is_databricks():
+    if not (is_databricks() or is_remote_spark() or bool(os.environ.get("CR_SPARK_REMOTE"))):
         return None
     try:
         return dbutils  # type: ignore[name-defined]

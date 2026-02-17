@@ -109,12 +109,12 @@ class FeastBackend(FeatureStoreBackend):
     def _load_table_metadata(self) -> None:
         metadata_path = self.repo_path / "feature_tables_metadata.json"
         if metadata_path.exists():
-            with open(metadata_path) as f:
+            with metadata_path.open("r") as f:
                 self._tables = json.load(f)
 
     def _save_table_metadata(self) -> None:
         metadata_path = self.repo_path / "feature_tables_metadata.json"
-        with open(metadata_path, "w") as f:
+        with metadata_path.open("w") as f:
             json.dump(self._tables, f, indent=2)
 
     def _compute_feature_hash(self, df: pd.DataFrame, cutoff_date: Optional[datetime] = None) -> str:

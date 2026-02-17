@@ -128,15 +128,16 @@ class FitArtifactRegistry:
             "artifacts": {aid: a.to_dict() for aid, a in self._artifacts.items()},
         }
         manifest_path = self.artifacts_dir / "manifest.yaml"
-        with open(manifest_path, "w") as f:
+        with manifest_path.open("w") as f:
             yaml.dump(manifest_data, f, default_flow_style=False, sort_keys=False)
 
     @classmethod
-    def load_manifest(cls, manifest_path: Path) -> "FitArtifactRegistry":
-        manifest_path = Path(manifest_path)
+    def load_manifest(cls, manifest_path) -> "FitArtifactRegistry":
+        from pathlib import Path as _Path
+        manifest_path = manifest_path if hasattr(manifest_path, "open") else _Path(str(manifest_path))
         if not manifest_path.exists():
             raise FileNotFoundError(f"Manifest not found: {manifest_path}")
-        with open(manifest_path) as f:
+        with manifest_path.open("r") as f:
             data = yaml.safe_load(f)
         artifacts_dir = manifest_path.parent
         registry = cls(artifacts_dir=artifacts_dir)

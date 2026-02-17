@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -124,15 +125,53 @@ class DatasetFingerprinter:
         if is_dataframe(data):
             return len(data)
         path_str = str(data)
+        from customer_retention.core.compat.remote_path import RemotePath
+        if isinstance(data, RemotePath) or self._is_remote():
+            return self._count_rows_remote(data, path_str)
         if path_str.endswith(".csv"):
-            with open(path_str) as f:
+            with Path(path_str).open("r") as f:
                 return sum(1 for _ in f) - 1
         return len(pd.read_parquet(path_str, columns=[]))
+
+    def _count_rows_remote(self, path, path_str: str) -> int:
+        spark = self._ensure_spark()
+        if spark and path_str.endswith(".csv"):
+            return spark.read.option("header", "true").csv(path_str).count()
+        if spark:
+            return spark.read.parquet(path_str).count()
+        return 0
 
     def _load(self, data) -> pd.DataFrame:
         if is_dataframe(data):
             return data.head(self.nrows) if len(data) > self.nrows else data
         path_str = str(data)
+        from customer_retention.core.compat.remote_path import RemotePath
+        if isinstance(data, RemotePath) or self._is_remote():
+            return self._load_remote(path_str)
         if path_str.endswith(".csv"):
             return pd.read_csv(path_str, nrows=self.nrows)
         return pd.read_parquet(path_str).head(self.nrows)
+
+    @staticmethod
+    def _is_remote() -> bool:
+        from customer_retention.core.compat.detection import is_remote_spark
+        return is_remote_spark() or bool(os.environ.get("CR_SPARK_REMOTE"))
+
+    @staticmethod
+    def _ensure_spark():
+        from customer_retention.core.compat.detection import get_spark_session
+        spark = get_spark_session()
+        if not spark and os.environ.get("CR_SPARK_REMOTE"):
+            from customer_retention.core.compat.detection import connect_remote_spark
+            spark = connect_remote_spark()
+        return spark
+
+    def _load_remote(self, path_str: str) -> pd.DataFrame:
+        spark = self._ensure_spark()
+        if not spark:
+            raise RuntimeError("No active Spark session for remote data loading")
+        if path_str.endswith(".csv"):
+            sdf = spark.read.option("header", "true").option("inferSchema", "true").csv(path_str)
+        else:
+            sdf = spark.read.parquet(path_str)
+        return sdf.limit(self.nrows).toPandas()

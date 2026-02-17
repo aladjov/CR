@@ -19,6 +19,7 @@ from .detection import (
     set_spark_config,
 )
 from .ops import DataOps, ops
+from .remote_path import RemotePath, make_path
 
 _SPARK_PANDAS_AVAILABLE = is_spark_available()
 
@@ -215,15 +216,20 @@ def safe_to_datetime(series: Any, **kwargs: Any) -> _pandas.Series:
 
 
 def ensure_datetime_column(df: _pandas.DataFrame, column: str) -> _pandas.DataFrame:
-    """Ensure *column* in a **pandas** DataFrame is ``datetime64``.
-
-    Call this after ``to_pandas()`` to safely convert columns that may have
-    arrived as int64 epoch values from Spark.  Returns the DataFrame
-    (modified in-place).
-    """
     if not _pandas.api.types.is_datetime64_any_dtype(df[column]):
         df[column] = safe_to_datetime(df[column])
     return df
+
+
+def ensure_timestamp(df: Any, column: str) -> Any:
+    if _is_spark_pandas(df):
+        import pyspark.sql.functions as F  # noqa: N812
+        dtype_str = str(df[column].dtype).lower()
+        if "timestamp" in dtype_str or "datetime" in dtype_str:
+            return df
+        df[column] = df[column].spark.transform(lambda c: F.to_timestamp(c))
+        return df
+    return ensure_datetime_column(df, column)
 
 
 def as_tz_naive(value: Any) -> Any:
@@ -239,10 +245,18 @@ def as_tz_naive(value: Any) -> Any:
 
 
 def normalize_timestamp_columns(df: _pandas.DataFrame) -> _pandas.DataFrame:
+    import datetime as _dt
+
     df = df.copy()
     for col in df.columns:
         if _pandas.api.types.is_datetime64_any_dtype(df[col]):
             df[col] = as_tz_naive(df[col])
+        elif df[col].dtype == "object":
+            non_null = df[col].dropna()
+            if len(non_null) > 0:
+                sample = non_null.iloc[:10]
+                if all(isinstance(v, _dt.date) for v in sample):
+                    df[col] = _pandas.to_datetime(df[col])
     return df
 
 
@@ -417,8 +431,11 @@ __all__ = [
     "period_start_time",
     "safe_to_datetime",
     "ensure_datetime_column",
+    "ensure_timestamp",
     "normalize_timestamp_columns",
     "pandas_dtype_to_spark_schema",
     "ops",
     "DataOps",
+    "RemotePath",
+    "make_path",
 ]

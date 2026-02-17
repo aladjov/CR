@@ -294,15 +294,18 @@ class BaselineDriftChecker:
 
             self.baseline[column_name] = baseline_data
 
-    def save_baseline(self, filepath: str):
+    def save_baseline(self, filepath):
         """Save baseline to JSON file."""
         if self.baseline is None:
             raise ValueError("No baseline to save")
-
-        with open(filepath, 'w') as f:
+        from pathlib import Path as _Path
+        p = filepath if hasattr(filepath, "open") else _Path(str(filepath))
+        with p.open("w") as f:
             json.dump(self.baseline, f, indent=2)
 
-    def load_baseline(self, filepath: str):
+    def load_baseline(self, filepath):
         """Load baseline from JSON file."""
-        with open(filepath, 'r') as f:
+        from pathlib import Path as _Path
+        p = filepath if hasattr(filepath, "open") else _Path(str(filepath))
+        with p.open("r") as f:
             self.baseline = json.load(f)

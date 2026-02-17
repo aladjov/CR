@@ -114,7 +114,7 @@ def _setup_experiment_directories() -> None:
 
     try:
         setup_experiments_structure()
-    except OSError:
+    except (OSError, RuntimeError):
         pass
 
 

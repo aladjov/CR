@@ -17,8 +17,9 @@ class SessionState:
     active_run_id: str
     last_notebook: Optional[str] = None
 
-    def save(self, path: Path) -> None:
-        path = Path(path)
+    def save(self, path) -> None:
+        if not hasattr(path, "mkdir"):
+            path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "active_dataset": self.active_dataset,
@@ -28,8 +29,9 @@ class SessionState:
         path.write_text(json.dumps(data, indent=2))
 
     @classmethod
-    def load(cls, path: Path) -> Optional[SessionState]:
-        path = Path(path)
+    def load(cls, path) -> Optional[SessionState]:
+        if not hasattr(path, "exists"):
+            path = Path(path)
         if not path.exists():
             return None
         try:

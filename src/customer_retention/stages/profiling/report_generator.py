@@ -24,11 +24,12 @@ class ReportGenerator:
 
         return json.dumps(report_dict, indent=indent, default=str)
 
-    def save_json(self, filepath: str):
+    def save_json(self, filepath):
         """Save JSON report to file."""
         json_report = self.to_json()
-
-        with open(filepath, 'w') as f:
+        from pathlib import Path as _Path
+        p = filepath if hasattr(filepath, "open") else _Path(str(filepath))
+        with p.open("w") as f:
             f.write(json_report)
 
     def to_html(self) -> str:
@@ -42,11 +43,12 @@ class ReportGenerator:
 
         return html
 
-    def save_html(self, filepath: str):
+    def save_html(self, filepath):
         """Save HTML report to file."""
         html_report = self.to_html()
-
-        with open(filepath, 'w') as f:
+        from pathlib import Path as _Path
+        p = filepath if hasattr(filepath, "open") else _Path(str(filepath))
+        with p.open("w") as f:
             f.write(html_report)
 
     def to_markdown(self) -> str:
@@ -60,11 +62,12 @@ class ReportGenerator:
 
         return md
 
-    def save_markdown(self, filepath: str):
+    def save_markdown(self, filepath):
         """Save Markdown report to file."""
         md_report = self.to_markdown()
-
-        with open(filepath, 'w') as f:
+        from pathlib import Path as _Path
+        p = filepath if hasattr(filepath, "open") else _Path(str(filepath))
+        with p.open("w") as f:
             f.write(md_report)
 
     def save_all_formats(self, directory: str, base_filename: str):

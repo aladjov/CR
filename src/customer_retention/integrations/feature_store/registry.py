@@ -232,9 +232,10 @@ class FeatureRegistry:
             "features": {name: f.to_dict() for name, f in self._features.items()},
             "groups": {name: g.to_dict() for name, g in self._groups.items()},
         }
-        path = Path(path)
+        from pathlib import Path as _Path
+        path = path if hasattr(path, "open") else _Path(str(path))
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as f:
+        with path.open("w") as f:
             json.dump(data, f, indent=2)
 
     @classmethod
@@ -247,7 +248,9 @@ class FeatureRegistry:
         Returns:
             Loaded FeatureRegistry
         """
-        with open(path) as f:
+        from pathlib import Path as _Path
+        p = path if hasattr(path, "open") else _Path(str(path))
+        with p.open("r") as f:
             data = json.load(f)
 
         registry = cls()

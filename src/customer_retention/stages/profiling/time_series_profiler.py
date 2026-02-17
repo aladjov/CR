@@ -134,10 +134,18 @@ _SEGMENT_RECOMMENDATIONS = {
 }
 
 
-def _assign_activity_segment(event_count: np.ndarray, q25: float, q75: float) -> np.ndarray:
+def _assign_activity_segment_numpy(event_count: np.ndarray, q25: float, q75: float) -> np.ndarray:
     return np.where(event_count <= 1, "One-time",
            np.where(event_count <= q25, "Low Activity",
            np.where(event_count <= q75, "Medium Activity", "High Activity")))
+
+
+def _assign_activity_segment_spark(event_count_col, q25: float, q75: float):
+    import pyspark.sql.functions as F  # noqa: N812
+    return (F.when(event_count_col <= 1, "One-time")
+             .when(event_count_col <= F.lit(q25), "Low Activity")
+             .when(event_count_col <= F.lit(q75), "Medium Activity")
+             .otherwise("High Activity"))
 
 
 def classify_activity_segments(entity_lifecycles: DataFrame) -> ActivitySegmentResult:
@@ -145,7 +153,11 @@ def classify_activity_segments(entity_lifecycles: DataFrame) -> ActivitySegmentR
     q25 = float(lc["event_count"].quantile(0.25))
     q75 = float(lc["event_count"].quantile(0.75))
 
-    lc["activity_segment"] = _assign_activity_segment(lc["event_count"].to_numpy(), q25, q75)
+    if _is_spark_pandas(lc):
+        lc["activity_segment"] = lc["event_count"].spark.transform(
+            lambda c: _assign_activity_segment_spark(c, q25, q75))
+    else:
+        lc["activity_segment"] = _assign_activity_segment_numpy(lc["event_count"].to_numpy(), q25, q75)
 
     counts = lc["activity_segment"].value_counts()
     total = len(lc)
