@@ -254,7 +254,7 @@ class FeatureCapacityAnalyzer:
 
         # Estimate effective features using eigenvalue analysis
         try:
-            eigenvalues = np.linalg.eigvalsh(corr_matrix.values)
+            eigenvalues = np.linalg.eigvalsh(corr_matrix.to_numpy())
             eigenvalues = np.sort(eigenvalues)[::-1]
             # Effective dimensionality: count eigenvalues > 1 (Kaiser criterion)
             # or use cumulative variance explained

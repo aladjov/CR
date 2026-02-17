@@ -2,9 +2,13 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-import pandas as pd
 
-from customer_retention.core.compat import DataFrame, ensure_datetime_column
+from customer_retention.core.compat import (
+    DataFrame,
+    cut,
+    ensure_datetime_column,
+    period_start_time,
+)
 
 
 @dataclass
@@ -221,7 +225,7 @@ class SparklineDataBuilder:
             validate_not_event_level(df, self.entity_column, self.target_column)
         df_work = self._prepare_working_df(df, has_target)
         ensure_datetime_column(df_work, self.time_column)
-        df_work['_period'] = df_work[self.time_column].dt.to_period(self.freq).dt.start_time
+        df_work['_period'] = period_start_time(df_work[self.time_column], self.freq)
         results = [self._build_sparkline_for_column(df_work, col, has_target)
                    for col in columns if col in df_work.columns]
         return results, has_target
@@ -490,7 +494,7 @@ def create_recency_bucket_feature(df: DataFrame, recency_column: str = "days_sin
     edges = [0, 7, 30, 90, 180, float("inf")]
     labels = ["0-7d", "8-30d", "31-90d", "91-180d", ">180d"]
     df = df.copy()
-    df["recency_bucket"] = pd.cut(df[recency_column], bins=edges, labels=labels, include_lowest=True).astype("object")
+    df["recency_bucket"] = cut(df[recency_column], bins=edges, labels=labels, include_lowest=True).astype("object")
     df.loc[df[recency_column].isna(), "recency_bucket"] = np.nan
     return df
 

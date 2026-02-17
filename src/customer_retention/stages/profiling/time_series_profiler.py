@@ -7,6 +7,7 @@ from customer_retention.core.compat import (
     DataFrame,
     Timestamp,
     _infer_epoch_unit,
+    _is_spark_pandas,
     groupby_multi_agg,
     is_datetime64_any_dtype,
     is_numeric_dtype,
@@ -281,6 +282,8 @@ class TimeSeriesProfiler:
     def _compute_avg_inter_event_time(self, df: DataFrame) -> Optional[float]:
         if len(df) < 2:
             return None
+        if _is_spark_pandas(df):
+            return self._spark_avg_inter_event_time(df)
         sorted_df = df[[self.entity_column, self.time_column]].sort_values(
             [self.entity_column, self.time_column]
         )
@@ -291,6 +294,20 @@ class TimeSeriesProfiler:
         if len(valid) == 0:
             return None
         return float(valid.mean())
+
+    def _spark_avg_inter_event_time(self, df: DataFrame) -> Optional[float]:
+        import pyspark.sql.functions as F  # noqa: N812
+        from pyspark.sql.window import Window
+        w = Window.partitionBy(self.entity_column).orderBy(self.time_column)
+        tc, prev = F.col(self.time_column).cast("timestamp"), F.lag(self.time_column).over(w).cast("timestamp")
+        result = (
+            df[[self.entity_column, self.time_column]].to_spark()
+            .withColumn("_diff", (F.unix_timestamp(tc) - F.unix_timestamp(prev)) / self.SECONDS_PER_DAY)
+            .filter(F.col("_diff").isNotNull())
+            .agg(F.mean("_diff"))
+            .collect()[0][0]
+        )
+        return float(result) if result is not None else None
 
     def _empty_profile(self) -> TimeSeriesProfile:
         return TimeSeriesProfile(

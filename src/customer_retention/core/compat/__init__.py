@@ -290,6 +290,20 @@ def timestamp_diffs_seconds(series: Any) -> Any:
     return timedelta_to_seconds(series - series.shift(1))
 
 
+_FREQ_TO_SPARK: dict[str, str] = {
+    "D": "day", "W": "week", "M": "month", "ME": "month",
+    "MS": "month", "Q": "quarter", "QS": "quarter", "Y": "year", "YS": "year",
+}
+
+
+def period_start_time(series: Any, freq: str) -> Any:
+    if _is_spark_pandas(series):
+        import pyspark.sql.functions as F  # noqa: N812
+        spark_freq = _FREQ_TO_SPARK.get(freq, freq.lower())
+        return series.spark.transform(lambda c: F.date_trunc(spark_freq, c))
+    return series.dt.to_period(freq).dt.start_time
+
+
 def groupby_multi_agg(df: Any, group_col: str, agg_col: str, agg_funcs: list) -> Any:
     if hasattr(df, 'to_spark'):
         import pyspark.sql.functions as F  # noqa: N812
@@ -372,6 +386,8 @@ __all__ = [
     "safe_to_list",
     "timedelta_to_days",
     "timedelta_to_seconds",
+    "_is_spark_pandas",
+    "period_start_time",
     "safe_to_datetime",
     "ensure_datetime_column",
     "normalize_timestamp_columns",

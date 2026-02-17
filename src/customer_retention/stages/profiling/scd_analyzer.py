@@ -1,7 +1,7 @@
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional
 
-from customer_retention.core.compat import pd
+from customer_retention.core.compat import native_pd, pd
 from customer_retention.core.config import DataSourceConfig
 
 
@@ -148,4 +148,4 @@ class SCDAnalyzer:
             row.update(metrics)
             rows.append(row)
 
-        return pd.DataFrame(rows)
+        return native_pd.DataFrame(rows)

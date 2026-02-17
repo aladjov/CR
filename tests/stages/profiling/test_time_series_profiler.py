@@ -1,5 +1,6 @@
 """Tests for TimeSeriesProfiler - TDD approach."""
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -257,6 +258,45 @@ class TestInterEventTiming:
         profiler = TimeSeriesProfiler(entity_column="entity", time_column="date")
         result = profiler.profile(df)
         assert result.avg_inter_event_days is None
+
+    def test_avg_inter_event_with_hex_entity_ids(self):
+        df = pd.DataFrame({
+            "entity": ["000C95", "000C95", "000C95", "AB12FF", "AB12FF"],
+            "date": pd.to_datetime([
+                "2023-01-01", "2023-01-08", "2023-01-15",
+                "2023-02-01", "2023-02-11",
+            ]),
+        })
+        profiler = TimeSeriesProfiler(entity_column="entity", time_column="date")
+        result = profiler._compute_avg_inter_event_time(df)
+        expected = (7.0 + 7.0 + 10.0) / 3
+        assert result == pytest.approx(expected, rel=0.01)
+
+
+class TestSparkPandasRouting:
+    def test_routes_to_spark_implementation_when_spark_pandas(self):
+        df = pd.DataFrame({
+            "entity": ["A", "A", "B", "B"],
+            "date": pd.to_datetime(["2023-01-01", "2023-01-08", "2023-02-01", "2023-02-11"]),
+        })
+        profiler = TimeSeriesProfiler(entity_column="entity", time_column="date")
+        with patch.object(profiler, '_spark_avg_inter_event_time', return_value=8.5) as mock_spark:
+            with patch('customer_retention.stages.profiling.time_series_profiler._is_spark_pandas', return_value=True):
+                result = profiler._compute_avg_inter_event_time(df)
+                mock_spark.assert_called_once_with(df)
+                assert result == 8.5
+
+    def test_uses_pandas_path_when_not_spark_pandas(self):
+        df = pd.DataFrame({
+            "entity": ["A", "A", "B", "B"],
+            "date": pd.to_datetime(["2023-01-01", "2023-01-08", "2023-02-01", "2023-02-11"]),
+        })
+        profiler = TimeSeriesProfiler(entity_column="entity", time_column="date")
+        with patch.object(profiler, '_spark_avg_inter_event_time') as mock_spark:
+            result = profiler._compute_avg_inter_event_time(df)
+            mock_spark.assert_not_called()
+            expected = (7.0 + 10.0) / 2
+            assert result == pytest.approx(expected, rel=0.01)
 
 
 class TestDistributionStats:
