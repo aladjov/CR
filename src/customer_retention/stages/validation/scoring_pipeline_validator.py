@@ -182,7 +182,7 @@ class ScoringPipelineValidator:
         path = Path(path_str)
         if path.is_dir() and (path / "_delta_log").is_dir():
             from customer_retention.integrations.adapters.factory import get_delta
-            return get_delta().read(path_str)
+            return get_delta(force_local=True).read(path_str)
         if path_str.endswith(".parquet"):
             return pd.read_parquet(path_str)
         if path_str.endswith(".csv"):

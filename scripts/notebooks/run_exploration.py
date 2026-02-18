@@ -974,6 +974,14 @@ def main():
     args = parser.parse_args()
     if args.spark_remote:
         os.environ["CR_SPARK_REMOTE"] = "1"
+    else:
+        _spark_connect_vars = [
+            "SPARK_CONNECT_USER_AGENT",
+            "DATABRICKS_METADATA_SERVICE_URL",
+            "SPARK_REMOTE",
+        ]
+        for _var in _spark_connect_vars:
+            os.environ.pop(_var, None)
     notebooks_dir = Path(args.notebooks_dir).resolve()
     findings_dir = Path(args.findings_dir).resolve() if args.findings_dir else None
     results = run_all(

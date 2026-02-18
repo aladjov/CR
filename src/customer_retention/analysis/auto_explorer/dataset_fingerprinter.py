@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from customer_retention.core.compat import is_dataframe, pd
+from customer_retention.core.compat import is_dataframe, native_pd, pd
 from customer_retention.core.config.column_config import ColumnType, DatasetGranularity
 from customer_retention.stages.profiling.type_detector import TypeDetector
 
@@ -72,12 +72,12 @@ class DatasetFingerprinter:
 
             if best_time and best_time in df.columns:
                 try:
-                    ts = pd.to_datetime(df[best_time], format="mixed", errors="coerce")
+                    ts = native_pd.to_datetime(df[best_time], format="mixed", errors="coerce")
                     ts_min = ts.min()
                     ts_max = ts.max()
                     span = ts_max - ts_min
-                    temporal_span = int(span.days) if not pd.isna(span) else None
-                    if not pd.isna(ts_min) and not pd.isna(ts_max):
+                    temporal_span = int(span.days) if not native_pd.isna(span) else None
+                    if not native_pd.isna(ts_min) and not native_pd.isna(ts_max):
                         data_start = str(ts_min.date())
                         data_end = str(ts_max.date())
                 except Exception:
@@ -105,7 +105,7 @@ class DatasetFingerprinter:
         return {name: self.fingerprint(name, data) for name, data in datasets.items()}
 
     @staticmethod
-    def to_summary_dataframe(fingerprints: dict[str, DatasetFingerprint]) -> pd.DataFrame:
+    def to_summary_dataframe(fingerprints: dict[str, DatasetFingerprint]) -> native_pd.DataFrame:
         rows = []
         for fp in fingerprints.values():
             row = {
@@ -119,19 +119,27 @@ class DatasetFingerprinter:
                 "sampled": fp.sampled,
             }
             rows.append(row)
-        return pd.DataFrame(rows)
+        return native_pd.DataFrame(rows)
 
     def _count_rows(self, data) -> int:
         if is_dataframe(data):
             return len(data)
         path_str = str(data)
         from customer_retention.core.compat.remote_path import RemotePath
-        if isinstance(data, RemotePath) or self._is_remote():
+        if isinstance(data, RemotePath):
             return self._count_rows_remote(data, path_str)
+        if Path(path_str).exists():
+            return self._count_rows_local(path_str)
+        if self._is_remote():
+            return self._count_rows_remote(data, path_str)
+        return self._count_rows_local(path_str)
+
+    @staticmethod
+    def _count_rows_local(path_str: str) -> int:
         if path_str.endswith(".csv"):
             with Path(path_str).open("r") as f:
                 return sum(1 for _ in f) - 1
-        return len(pd.read_parquet(path_str, columns=[]))
+        return len(native_pd.read_parquet(path_str, columns=[]))
 
     def _count_rows_remote(self, path, path_str: str) -> int:
         spark = self._ensure_spark()
@@ -146,11 +154,18 @@ class DatasetFingerprinter:
             return data.head(self.nrows) if len(data) > self.nrows else data
         path_str = str(data)
         from customer_retention.core.compat.remote_path import RemotePath
-        if isinstance(data, RemotePath) or self._is_remote():
+        if isinstance(data, RemotePath):
             return self._load_remote(path_str)
+        if Path(path_str).exists():
+            return self._load_local(path_str)
+        if self._is_remote():
+            return self._load_remote(path_str)
+        return self._load_local(path_str)
+
+    def _load_local(self, path_str: str) -> pd.DataFrame:
         if path_str.endswith(".csv"):
-            return pd.read_csv(path_str, nrows=self.nrows)
-        return pd.read_parquet(path_str).head(self.nrows)
+            return native_pd.read_csv(path_str, nrows=self.nrows)
+        return native_pd.read_parquet(path_str).head(self.nrows)
 
     @staticmethod
     def _is_remote() -> bool:

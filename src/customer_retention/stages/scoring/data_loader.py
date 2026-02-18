@@ -124,7 +124,7 @@ class ScoringDataLoader:
     def _load_gold_from_delta(self) -> pd.DataFrame:
         cn = self.config.composite_name
         gold_path = self.config.production_dir / "data" / "gold" / f"gold_features_{cn}"
-        storage = get_delta()
+        storage = get_delta(force_local=True)
         if not storage.exists(str(gold_path)):
             raise FileNotFoundError(f"Gold features not found at {gold_path}")
         return storage.read(str(gold_path))

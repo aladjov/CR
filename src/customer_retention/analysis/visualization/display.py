@@ -113,6 +113,9 @@ def display_figure(fig: Any, title: Optional[str] = None, width: Optional[int] =
 
 def display_table(df: Any, max_rows: int = 50, title: Optional[str] = None):
     """Display a pandas DataFrame in the appropriate format for the current environment."""
+    from pandas.io.formats.style import Styler
+    if isinstance(df, Styler):
+        return _display_styler(df, title)
     env = detect_environment()
     if env in ["databricks", "jupyter", "ipython"]:
         try:
@@ -134,6 +137,23 @@ def display_table(df: Any, max_rows: int = 50, title: Optional[str] = None):
             print(df.head(max_rows).to_string())
         else:
             print(df)
+
+
+def _display_styler(styler: Any, title: Optional[str] = None):
+    env = detect_environment()
+    if env in ["databricks", "jupyter", "ipython"]:
+        try:
+            from IPython.display import HTML, display
+            if title:
+                display(HTML(f"<h4>{title}</h4>"))
+            display(styler)
+        except ImportError:
+            print(styler.data.to_string())
+    else:
+        if title:
+            print(f"\n{title}")
+            print("-" * len(title))
+        print(styler.data.to_string())
 
 
 def display_summary(findings: Any, charts: Any):
