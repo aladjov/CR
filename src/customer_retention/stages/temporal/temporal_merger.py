@@ -3,9 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-import pandas as pd
-
-from customer_retention.core.compat import as_tz_naive
+from customer_retention.core.compat import Timedelta, as_tz_naive, native_pd, to_datetime
 from customer_retention.core.config.column_config import DatasetGranularity
 from customer_retention.stages.temporal.point_in_time_join import PointInTimeJoiner
 
@@ -22,7 +20,7 @@ class MergeConfig:
 @dataclass
 class DatasetMergeInput:
     name: str
-    df: pd.DataFrame
+    df: Any
     granularity: DatasetGranularity
     feature_timestamp_column: str | None = None
 
@@ -44,17 +42,17 @@ class TemporalMerger:
         self.config = config or MergeConfig()
 
     def build_spine(
-        self, entity_ids: pd.Series, grid_dates: list[str]
-    ) -> pd.DataFrame:
+        self, entity_ids: Any, grid_dates: list[str]
+    ) -> Any:
         unique_entities = entity_ids.drop_duplicates().reset_index(drop=True)
-        parsed_dates = as_tz_naive(pd.to_datetime(grid_dates))
+        parsed_dates = as_tz_naive(to_datetime(grid_dates))
 
         if len(unique_entities) == 0 or len(parsed_dates) == 0:
-            return pd.DataFrame(
+            return native_pd.DataFrame(
                 columns=[self.config.entity_key, self.config.as_of_column]
             ).astype({self.config.as_of_column: "datetime64[ns]"})
 
-        idx = pd.MultiIndex.from_product(
+        idx = native_pd.MultiIndex.from_product(
             [unique_entities, parsed_dates],
             names=[self.config.entity_key, self.config.as_of_column],
         )
@@ -62,9 +60,9 @@ class TemporalMerger:
 
     def merge_all(
         self,
-        spine: pd.DataFrame,
+        spine: Any,
         datasets: list[DatasetMergeInput],
-    ) -> tuple[pd.DataFrame, MergeReport]:
+    ) -> tuple[Any, MergeReport]:
         report = MergeReport(
             spine_rows=len(spine),
             spine_entities=spine[self.config.entity_key].nunique() if len(spine) else 0,
@@ -104,10 +102,10 @@ class TemporalMerger:
 
     def _merge_event_snapshot(
         self,
-        spine: pd.DataFrame,
+        spine: Any,
         dataset: DatasetMergeInput,
         existing_cols: set[str],
-    ) -> pd.DataFrame:
+    ) -> Any:
         right_df = dataset.df.copy()
 
         if self.config.as_of_column not in right_df.columns:
@@ -135,10 +133,10 @@ class TemporalMerger:
 
     def _merge_entity_broadcast(
         self,
-        spine: pd.DataFrame,
+        spine: Any,
         dataset: DatasetMergeInput,
         existing_cols: set[str],
-    ) -> pd.DataFrame:
+    ) -> Any:
         join_keys = {self.config.entity_key}
         right_df = dataset.df.drop_duplicates(subset=[self.config.entity_key], keep="last")
 
@@ -154,10 +152,10 @@ class TemporalMerger:
 
     def _merge_entity_asof(
         self,
-        spine: pd.DataFrame,
+        spine: Any,
         dataset: DatasetMergeInput,
         existing_cols: set[str],
-    ) -> pd.DataFrame:
+    ) -> Any:
         join_keys = {self.config.entity_key, self.config.as_of_column}
         ft_col = dataset.feature_timestamp_column
         right_df = dataset.df.copy()
@@ -205,25 +203,25 @@ class TemporalMerger:
 
     @staticmethod
     def _apply_tolerance(
-        df: pd.DataFrame,
+        df: Any,
         ft_col: str,
         as_of_col: str,
         days: int | None,
         feature_cols: list[str] | None = None,
-    ) -> tuple[pd.DataFrame, int]:
+    ) -> tuple[Any, int]:
         if days is None:
             return df, 0
 
         result = df.copy()
         stale_mask = (
             result[as_of_col] - result[ft_col]
-        ) > pd.Timedelta(days=days)
+        ) > Timedelta(days=days)
 
         null_count = int(stale_mask.sum())
 
         if null_count > 0 and feature_cols:
             for col in feature_cols:
                 if col in result.columns:
-                    result.loc[stale_mask, col] = pd.NA
+                    result.loc[stale_mask, col] = native_pd.NA
 
         return result, null_count

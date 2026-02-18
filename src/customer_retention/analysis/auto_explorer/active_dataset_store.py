@@ -50,6 +50,22 @@ def load_merge_dataset(
     return load_active_dataset(namespace, dataset_name)
 
 
+def load_merge_dataset_distributed(
+    namespace: RunNamespace,
+    dataset_name: str,
+    granularity: DatasetGranularity,
+) -> Any:
+    delta = get_delta()
+    if granularity == DatasetGranularity.EVENT_LEVEL:
+        dlt_path = namespace.bronze_table_dir(dataset_name)
+        if dlt_path.is_dir():
+            return delta.read(str(dlt_path))
+    dlt_path = namespace.landing_table_dir(dataset_name)
+    if not dlt_path.is_dir():
+        raise FileNotFoundError(f"Dataset not found: {dlt_path}")
+    return delta.read(str(dlt_path))
+
+
 def load_silver_merged(
     namespace: RunNamespace,
     dataset_name: str,

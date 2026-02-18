@@ -53,6 +53,7 @@ from .snapshot_manager import (
     compute_composite_dataset_name,
     require_consistent_cutoffs,
 )
+from .spark_temporal_merger import SparkTemporalMerger
 from .synthetic_coordinator import SyntheticCoordinationParams, SyntheticTimestampCoordinator
 from .temporal_merger import DatasetMergeInput, MergeConfig, MergeReport, TemporalMerger
 from .timestamp_discovery import (
@@ -94,6 +95,7 @@ __all__ = [
     "require_consistent_cutoffs",
     "TEMPORAL_METADATA_COLS",
     "TemporalMerger",
+    "SparkTemporalMerger",
     "MergeConfig",
     "DatasetMergeInput",
     "MergeReport",

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, List, Optional
 
-import pandas as pd
+from customer_retention.core.compat import Timestamp, to_datetime
 
 from ..base import DatetimeRecommendation, RecommendationResult
 
@@ -18,23 +18,23 @@ class ExtractMonthRecommendation(DatetimeRecommendation):
     def recommendation_type(self) -> str:
         return "extract_month"
 
-    def _fit_impl(self, df: pd.DataFrame) -> None:
+    def _fit_impl(self, df: Any) -> None:
         self._fit_params["columns"] = self.columns
 
-    def _transform_local(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_local(self, df: Any) -> RecommendationResult:
         df = df.copy()
         new_cols = []
         for col in self.columns:
             if col in df.columns:
                 new_col = f"{col}_month"
-                df[new_col] = pd.to_datetime(df[col]).dt.month
+                df[new_col] = to_datetime(df[col]).dt.month
                 new_cols.append(new_col)
         return RecommendationResult(
             data=df, columns_affected=self.columns + new_cols,
             rows_before=len(df), rows_after=len(df), metadata={"new_columns": new_cols}
         )
 
-    def _transform_databricks(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_databricks(self, df: Any) -> RecommendationResult:
         from customer_retention.core.compat import is_spark_available
         if not is_spark_available():
             return self._transform_local(df)
@@ -65,23 +65,23 @@ class ExtractDayOfWeekRecommendation(DatetimeRecommendation):
     def recommendation_type(self) -> str:
         return "extract_dayofweek"
 
-    def _fit_impl(self, df: pd.DataFrame) -> None:
+    def _fit_impl(self, df: Any) -> None:
         self._fit_params["columns"] = self.columns
 
-    def _transform_local(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_local(self, df: Any) -> RecommendationResult:
         df = df.copy()
         new_cols = []
         for col in self.columns:
             if col in df.columns:
                 new_col = f"{col}_dayofweek"
-                df[new_col] = pd.to_datetime(df[col]).dt.dayofweek
+                df[new_col] = to_datetime(df[col]).dt.dayofweek
                 new_cols.append(new_col)
         return RecommendationResult(
             data=df, columns_affected=self.columns + new_cols,
             rows_before=len(df), rows_after=len(df), metadata={"new_columns": new_cols}
         )
 
-    def _transform_databricks(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_databricks(self, df: Any) -> RecommendationResult:
         from customer_retention.core.compat import is_spark_available
         if not is_spark_available():
             return self._transform_local(df)
@@ -113,23 +113,23 @@ class DaysSinceRecommendation(DatetimeRecommendation):
     def recommendation_type(self) -> str:
         return "days_since"
 
-    def _fit_impl(self, df: pd.DataFrame) -> None:
+    def _fit_impl(self, df: Any) -> None:
         self._fit_params["reference_date"] = str(self.reference_date)
 
-    def _transform_local(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_local(self, df: Any) -> RecommendationResult:
         df = df.copy()
         new_cols = []
         for col in self.columns:
             if col in df.columns:
                 new_col = f"{col}_days_since"
-                df[new_col] = (pd.Timestamp(self.reference_date) - pd.to_datetime(df[col])).dt.days
+                df[new_col] = (Timestamp(self.reference_date) - to_datetime(df[col])).dt.days
                 new_cols.append(new_col)
         return RecommendationResult(
             data=df, columns_affected=self.columns + new_cols,
             rows_before=len(df), rows_after=len(df), metadata={"reference_date": str(self.reference_date), "new_columns": new_cols}
         )
 
-    def _transform_databricks(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_databricks(self, df: Any) -> RecommendationResult:
         from customer_retention.core.compat import is_spark_available
         if not is_spark_available():
             return self._transform_local(df)
