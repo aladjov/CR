@@ -297,3 +297,90 @@ class ExplorationFindings:
         content = p.read_text()
         path_str = str(path)
         return cls.from_yaml(content) if path_str.endswith((".yaml", ".yml")) else cls.from_json(content)
+
+    TEMPORAL_METADATA_SKIP = frozenset({
+        "feature_timestamp", "label_timestamp", "label_available_flag",
+    })
+
+    @classmethod
+    def merge_from_datasets(
+        cls,
+        dataset_findings: list["ExplorationFindings"],
+        row_count: int,
+        column_count: int,
+        source_path: str,
+        renamed_columns: dict[str, str] | None = None,
+        entity_key: str = "entity_id",
+        as_of_column: str = "as_of_date",
+    ) -> "ExplorationFindings":
+        renamed_columns = renamed_columns or {}
+
+        merged_cols: Dict[str, ColumnFinding] = {}
+        target_column: Optional[str] = None
+        target_type: Optional[str] = None
+        all_identifier_cols: List[str] = []
+        all_datetime_cols: List[str] = []
+
+        for findings in dataset_findings:
+            if target_column is None and findings.target_column:
+                target_column = renamed_columns.get(findings.target_column, findings.target_column)
+                target_type = findings.target_type
+            all_identifier_cols.extend(findings.identifier_columns)
+            all_datetime_cols.extend(findings.datetime_columns)
+
+            for col_name, col_finding in findings.columns.items():
+                if col_name in cls.TEMPORAL_METADATA_SKIP:
+                    continue
+                dest_name = renamed_columns.get(col_name, col_name)
+                merged_cols[dest_name] = ColumnFinding(
+                    name=dest_name,
+                    inferred_type=col_finding.inferred_type,
+                    confidence=col_finding.confidence,
+                    evidence=list(col_finding.evidence),
+                    alternatives=list(col_finding.alternatives),
+                    universal_metrics=dict(col_finding.universal_metrics),
+                    type_metrics=dict(col_finding.type_metrics),
+                    quality_issues=list(col_finding.quality_issues),
+                    quality_score=col_finding.quality_score,
+                    cleaning_needed=col_finding.cleaning_needed,
+                    cleaning_recommendations=list(col_finding.cleaning_recommendations),
+                    transformation_recommendations=list(col_finding.transformation_recommendations),
+                )
+
+        merged_cols[entity_key] = ColumnFinding(
+            name=entity_key,
+            inferred_type=ColumnType.IDENTIFIER,
+            confidence=1.0,
+            evidence=["Spine column"],
+        )
+        merged_cols[as_of_column] = ColumnFinding(
+            name=as_of_column,
+            inferred_type=ColumnType.DATETIME,
+            confidence=1.0,
+            evidence=["Spine column"],
+        )
+
+        all_identifier_cols = [renamed_columns.get(c, c) for c in all_identifier_cols]
+        all_datetime_cols = [renamed_columns.get(c, c) for c in all_datetime_cols]
+        if entity_key not in all_identifier_cols:
+            all_identifier_cols.append(entity_key)
+        if as_of_column not in all_datetime_cols:
+            all_datetime_cols.append(as_of_column)
+
+        scores = [c.quality_score for c in merged_cols.values()]
+        overall_quality = sum(scores) / len(scores) if scores else 100.0
+
+        return cls(
+            source_path=source_path,
+            source_format="delta",
+            row_count=row_count,
+            column_count=column_count,
+            columns=merged_cols,
+            target_column=target_column,
+            target_type=target_type,
+            identifier_columns=sorted(set(all_identifier_cols)),
+            datetime_columns=sorted(set(all_datetime_cols)),
+            overall_quality_score=overall_quality,
+            modeling_ready=True,
+            blocking_issues=[],
+        )

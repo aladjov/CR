@@ -555,3 +555,193 @@ class TestTimeSeriesMetadata:
         assert restored.time_series_metadata.population_stability == 0.72
         assert restored.time_series_metadata.regime_count == 2
         assert restored.time_series_metadata.recommended_training_start == "2020-10-01T00:00:00"
+
+
+class TestMergeFromDatasets:
+
+    @staticmethod
+    def _make_findings(
+        name: str,
+        columns: dict[str, ColumnFinding],
+        target_column: str | None = None,
+        target_type: str | None = None,
+        identifier_columns: list[str] | None = None,
+        datetime_columns: list[str] | None = None,
+    ) -> ExplorationFindings:
+        return ExplorationFindings(
+            source_path=f"{name}.csv",
+            source_format="csv",
+            row_count=100,
+            column_count=len(columns),
+            columns=columns,
+            target_column=target_column,
+            target_type=target_type,
+            identifier_columns=identifier_columns or [],
+            datetime_columns=datetime_columns or [],
+        )
+
+    @staticmethod
+    def _col(name: str, col_type: ColumnType, quality_score: float = 100.0) -> ColumnFinding:
+        return ColumnFinding(
+            name=name,
+            inferred_type=col_type,
+            confidence=0.9,
+            evidence=["test"],
+            quality_score=quality_score,
+        )
+
+    def test_merge_combines_columns_from_multiple_findings(self):
+        f1 = self._make_findings("ds1", {
+            "age": self._col("age", ColumnType.NUMERIC_CONTINUOUS),
+        })
+        f2 = self._make_findings("ds2", {
+            "plan_type": self._col("plan_type", ColumnType.CATEGORICAL_NOMINAL),
+        })
+        merged = ExplorationFindings.merge_from_datasets(
+            [f1, f2], row_count=500, column_count=4, source_path="/silver"
+        )
+        assert "age" in merged.columns
+        assert "plan_type" in merged.columns
+        assert "entity_id" in merged.columns
+        assert "as_of_date" in merged.columns
+        assert len(merged.columns) == 4
+
+    def test_merge_handles_renamed_columns(self):
+        f1 = self._make_findings("ds1", {
+            "status": self._col("status", ColumnType.CATEGORICAL_NOMINAL),
+        })
+        merged = ExplorationFindings.merge_from_datasets(
+            [f1],
+            row_count=100,
+            column_count=3,
+            source_path="/silver",
+            renamed_columns={"status": "ds1_status"},
+        )
+        assert "ds1_status" in merged.columns
+        assert "status" not in merged.columns
+        assert merged.columns["ds1_status"].inferred_type == ColumnType.CATEGORICAL_NOMINAL
+
+    def test_merge_adds_spine_columns(self):
+        merged = ExplorationFindings.merge_from_datasets(
+            [], row_count=0, column_count=2, source_path="/silver"
+        )
+        assert "entity_id" in merged.columns
+        assert merged.columns["entity_id"].inferred_type == ColumnType.IDENTIFIER
+        assert merged.columns["entity_id"].confidence == 1.0
+        assert "as_of_date" in merged.columns
+        assert merged.columns["as_of_date"].inferred_type == ColumnType.DATETIME
+        assert merged.columns["as_of_date"].confidence == 1.0
+
+    def test_merge_preserves_target_from_source(self):
+        f1 = self._make_findings("ds1", {
+            "age": self._col("age", ColumnType.NUMERIC_CONTINUOUS),
+        })
+        f2 = self._make_findings("ds2", {
+            "churned": self._col("churned", ColumnType.TARGET),
+        }, target_column="churned", target_type="binary")
+        merged = ExplorationFindings.merge_from_datasets(
+            [f1, f2], row_count=500, column_count=4, source_path="/silver"
+        )
+        assert merged.target_column == "churned"
+        assert merged.target_type == "binary"
+
+    def test_merge_sets_row_and_column_counts(self):
+        merged = ExplorationFindings.merge_from_datasets(
+            [], row_count=2000, column_count=50, source_path="/silver"
+        )
+        assert merged.row_count == 2000
+        assert merged.column_count == 50
+
+    def test_merge_computes_overall_quality_score(self):
+        f1 = self._make_findings("ds1", {
+            "a": self._col("a", ColumnType.NUMERIC_CONTINUOUS, quality_score=80.0),
+        })
+        f2 = self._make_findings("ds2", {
+            "b": self._col("b", ColumnType.NUMERIC_CONTINUOUS, quality_score=60.0),
+        })
+        merged = ExplorationFindings.merge_from_datasets(
+            [f1, f2], row_count=100, column_count=4, source_path="/silver"
+        )
+        scores = [c.quality_score for c in merged.columns.values()]
+        expected = sum(scores) / len(scores)
+        assert abs(merged.overall_quality_score - expected) < 0.01
+
+    def test_merge_sets_identifier_and_datetime_columns(self):
+        f1 = self._make_findings("ds1", {
+            "cust_id": self._col("cust_id", ColumnType.IDENTIFIER),
+        }, identifier_columns=["cust_id"])
+        f2 = self._make_findings("ds2", {
+            "signup_date": self._col("signup_date", ColumnType.DATETIME),
+        }, datetime_columns=["signup_date"])
+        merged = ExplorationFindings.merge_from_datasets(
+            [f1, f2], row_count=100, column_count=5, source_path="/silver"
+        )
+        assert "cust_id" in merged.identifier_columns
+        assert "entity_id" in merged.identifier_columns
+        assert "signup_date" in merged.datetime_columns
+        assert "as_of_date" in merged.datetime_columns
+
+    def test_merge_skips_temporal_metadata_cols(self):
+        f1 = self._make_findings("ds1", {
+            "age": self._col("age", ColumnType.NUMERIC_CONTINUOUS),
+            "feature_timestamp": self._col("feature_timestamp", ColumnType.FEATURE_TIMESTAMP),
+            "label_timestamp": self._col("label_timestamp", ColumnType.LABEL_TIMESTAMP),
+            "label_available_flag": self._col("label_available_flag", ColumnType.BINARY),
+        })
+        merged = ExplorationFindings.merge_from_datasets(
+            [f1], row_count=100, column_count=3, source_path="/silver"
+        )
+        assert "age" in merged.columns
+        assert "feature_timestamp" not in merged.columns
+        assert "label_timestamp" not in merged.columns
+        assert "label_available_flag" not in merged.columns
+
+    def test_merge_serialization_roundtrip(self):
+        f1 = self._make_findings("ds1", {
+            "age": self._col("age", ColumnType.NUMERIC_CONTINUOUS, quality_score=90.0),
+        })
+        f2 = self._make_findings("ds2", {
+            "churned": self._col("churned", ColumnType.TARGET),
+        }, target_column="churned", target_type="binary")
+        merged = ExplorationFindings.merge_from_datasets(
+            [f1, f2], row_count=500, column_count=4, source_path="/silver"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "merged_findings.yaml"
+            merged.save(str(path))
+            loaded = ExplorationFindings.load(str(path))
+            assert loaded.row_count == 500
+            assert loaded.target_column == "churned"
+            assert set(loaded.columns.keys()) == set(merged.columns.keys())
+            for col_name in merged.columns:
+                assert loaded.columns[col_name].inferred_type == merged.columns[col_name].inferred_type
+
+    def test_merge_empty_findings_list(self):
+        merged = ExplorationFindings.merge_from_datasets(
+            [], row_count=0, column_count=2, source_path="/silver"
+        )
+        assert "entity_id" in merged.columns
+        assert "as_of_date" in merged.columns
+        assert len(merged.columns) == 2
+        assert merged.target_column is None
+
+    def test_merge_overlapping_columns(self):
+        f1 = self._make_findings("ds1", {
+            "score": self._col("score", ColumnType.NUMERIC_CONTINUOUS, quality_score=80.0),
+        })
+        f2 = self._make_findings("ds2", {
+            "score": self._col("score", ColumnType.NUMERIC_DISCRETE, quality_score=90.0),
+        })
+        merged = ExplorationFindings.merge_from_datasets(
+            [f1, f2], row_count=100, column_count=3, source_path="/silver"
+        )
+        assert merged.columns["score"].inferred_type == ColumnType.NUMERIC_DISCRETE
+
+    def test_merge_custom_entity_key(self):
+        merged = ExplorationFindings.merge_from_datasets(
+            [], row_count=0, column_count=2, source_path="/silver",
+            entity_key="customer_id",
+        )
+        assert "customer_id" in merged.columns
+        assert "entity_id" not in merged.columns
+        assert merged.columns["customer_id"].inferred_type == ColumnType.IDENTIFIER
