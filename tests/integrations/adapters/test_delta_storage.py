@@ -233,6 +233,39 @@ class TestLocalDeltaCommitMetadata:
         assert len(history) >= 2
 
 
+@requires_delta
+class TestLocalDeltaDistributedGuard:
+    def test_write_delegates_to_databricks_for_spark_pandas(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage import LocalDelta
+
+        storage = LocalDelta()
+        mock_ps_df = MagicMock()
+        mock_ps_df.to_spark = MagicMock(return_value=MagicMock())
+
+        mock_instance = MagicMock()
+        mock_cls = MagicMock(return_value=mock_instance)
+        with patch.dict(
+            "sys.modules",
+            {"customer_retention.integrations.adapters.storage.databricks": MagicMock(DatabricksDelta=mock_cls)},
+        ):
+            storage.write(mock_ps_df, str(tmp_path / "out"), mode="overwrite")
+            mock_instance.write.assert_called_once_with(
+                mock_ps_df, str(tmp_path / "out"), "overwrite", None, None
+            )
+
+    def test_write_pandas_df_does_not_delegate(self, tmp_path):
+        from customer_retention.integrations.adapters.storage import LocalDelta
+
+        storage = LocalDelta()
+        df = pd.DataFrame({"a": [1, 2, 3]})
+        delta_path = str(tmp_path / "test_table")
+        storage.write(df, delta_path)
+        result = storage.read(delta_path)
+        assert len(result) == 3
+
+
 class TestDatabricksDeltaReturnsSparkPandas:
     @pytest.fixture(autouse=True)
     def _skip_without_pyspark(self):

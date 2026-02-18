@@ -7,6 +7,7 @@ from .base import DeltaStorage
 try:
     import deltalake
     from deltalake import DeltaTable, write_deltalake
+
     DELTA_RS_AVAILABLE = True
 except ImportError:
     DELTA_RS_AVAILABLE = False
@@ -24,21 +25,31 @@ class LocalDelta(DeltaStorage):
             dt = DeltaTable(path)
         return dt.to_pandas()
 
-    def write(self, df: pd.DataFrame, path: str, mode: str = "overwrite",
-              partition_by: Optional[List[str]] = None,
-              metadata: Optional[Dict[str, str]] = None) -> None:
-        kwargs = {"mode": mode}
+    def write(
+        self,
+        df: Any,
+        path: str,
+        mode: str = "overwrite",
+        partition_by: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, str]] = None,
+    ) -> None:
+        if hasattr(df, "to_spark"):
+            from .databricks import DatabricksDelta
+
+            DatabricksDelta().write(df, path, mode, partition_by, metadata)
+            return
+        kwargs: Dict[str, Any] = {"mode": mode}
         if mode == "overwrite":
             kwargs["schema_mode"] = "overwrite"
         if partition_by:
             kwargs["partition_by"] = partition_by
         if metadata:
             from deltalake import CommitProperties
+
             kwargs["commit_properties"] = CommitProperties(custom_metadata=metadata)
         write_deltalake(path, df, **kwargs)
 
-    def merge(self, df: pd.DataFrame, path: str, condition: str,
-              update_cols: Optional[List[str]] = None) -> None:
+    def merge(self, df: pd.DataFrame, path: str, condition: str, update_cols: Optional[List[str]] = None) -> None:
         dt = DeltaTable(path)
         merge_builder = dt.merge(df, predicate=condition, source_alias="source", target_alias="target")
         if update_cols:
@@ -58,4 +69,5 @@ class LocalDelta(DeltaStorage):
 
     def exists(self, path: str) -> bool:
         from pathlib import Path
+
         return Path(path).joinpath("_delta_log").is_dir()

@@ -1,7 +1,10 @@
+import logging
 from pathlib import Path
 from typing import List, Optional, Union
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 from customer_retention.core.compat import DataFrame, Series, is_dataframe, pd, safe_isfinite, safe_memory_usage_bytes
 from customer_retention.core.compat.bulk_profiling import (
@@ -78,8 +81,13 @@ class DataExplorer:
         if len(df.columns) == 0:
             return
 
+        total_cols = len(df.columns)
+        logger.info("Computing bulk statistics for %d columns", total_cols)
         bulk = compute_bulk_stats(df)
+        logger.info("Bulk statistics complete (%d numeric columns)", len(bulk.numeric))
 
+        processed = 0
+        log_interval = max(1, total_cols // 5)
         for column_name in df.columns:
             if column_name in TEMPORAL_METADATA_COLS:
                 continue
@@ -95,6 +103,9 @@ class DataExplorer:
             )
             findings.columns[column_name] = column_finding
             self._track_special_columns(findings, column_finding, df[column_name])
+            processed += 1
+            if processed % log_interval == 0:
+                logger.info("Profiled %d/%d columns", processed, total_cols)
 
     def _explore_column(
         self,
