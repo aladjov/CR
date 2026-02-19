@@ -137,8 +137,8 @@ class CategoricalDistributionAnalyzer:
         )
 
     def _calculate_entropy(self, value_counts: Series, total: int, n_categories: int) -> tuple:
-        probabilities = value_counts / total
-        entropy = float(-np.sum(probabilities * np.log2(probabilities + 1e-10)))
+        probs = (value_counts / total).to_numpy()
+        entropy = float(-np.sum(probs * np.log2(probs + 1e-10)))
         max_entropy = np.log2(n_categories) if n_categories > 1 else 1.0
         normalized = entropy / max_entropy if max_entropy > 0 else 0.0
         return entropy, normalized

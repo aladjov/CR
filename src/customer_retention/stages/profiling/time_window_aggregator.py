@@ -296,7 +296,7 @@ class TimeWindowAggregator:
         def calc_entropy(x):
             if len(x) == 0:
                 return np.nan
-            probs = x.value_counts(normalize=True)
+            probs = x.value_counts(normalize=True).to_numpy()
             if len(probs) == 1:
                 return 0.0
             return -np.sum(probs * np.log2(probs))
