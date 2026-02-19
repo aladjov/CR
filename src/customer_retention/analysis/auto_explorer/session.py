@@ -41,7 +41,7 @@ class SessionState:
                 active_run_id=data["active_run_id"],
                 last_notebook=data.get("last_notebook"),
             )
-        except (json.JSONDecodeError, KeyError):
+        except Exception:
             return None
 
 

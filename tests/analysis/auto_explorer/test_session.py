@@ -57,6 +57,12 @@ class TestSessionStateSaveLoad:
         path.write_text("not valid json{{{")
         assert SessionState.load(path) is None
 
+    def test_load_handles_unexpected_exception(self, tmp_path):
+        path = tmp_path / "session.json"
+        path.write_text('{"active_run_id": "run-1"}')
+        with patch("json.loads", side_effect=RuntimeError("unexpected")):
+            assert SessionState.load(path) is None
+
 
 class TestGetCurrentUsername:
     def test_local_returns_system_user(self, monkeypatch):

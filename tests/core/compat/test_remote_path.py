@@ -13,6 +13,7 @@ from customer_retention.core.compat.remote_path import (
     _RemoteStat,
     _RemoteTextReader,
     _RemoteTextWriter,
+    _translate_remote_error,
     make_path,
 )
 
@@ -539,3 +540,65 @@ class TestExperimentsIntegration:
 
             result = get_experiments_dir()
             assert isinstance(result, Path)
+
+
+class TestTranslateRemoteError:
+    def test_file_not_found_exception(self):
+        exc = Exception("java.io.FileNotFoundException: /data/missing.txt")
+        with pytest.raises(FileNotFoundError, match="No such file"):
+            _translate_remote_error(exc, "/data/missing.txt")
+
+    def test_generic_exception_becomes_os_error(self):
+        exc = Exception("Some Py4J gateway error")
+        with pytest.raises(OSError, match="Remote filesystem error"):
+            _translate_remote_error(exc, "/data/file.txt")
+
+    def test_preserves_original_as_cause(self):
+        original = Exception("java.io.FileNotFoundException: gone")
+        with pytest.raises(FileNotFoundError) as exc_info:
+            _translate_remote_error(original, "/gone")
+        assert exc_info.value.__cause__ is original
+
+
+class TestRemotePathExceptionTranslation:
+    def test_read_text_file_not_found_raises_file_not_found_error(self, mock_dbutils):
+        mock_dbutils.fs.head.side_effect = Exception(
+            "java.io.FileNotFoundException: /data/missing.txt"
+        )
+        p = RemotePath("/data/missing.txt")
+        with pytest.raises(FileNotFoundError):
+            p.read_text()
+
+    def test_read_text_generic_error_raises_os_error(self, mock_dbutils):
+        mock_dbutils.fs.head.side_effect = Exception("Py4J gateway error")
+        p = RemotePath("/data/file.txt")
+        with pytest.raises(OSError):
+            p.read_text()
+
+    def test_write_text_error_raises_os_error(self, mock_dbutils):
+        mock_dbutils.fs.put.side_effect = Exception("Permission denied")
+        p = RemotePath("/data/file.txt")
+        with pytest.raises(OSError):
+            p.write_text("content")
+
+    def test_write_text_file_not_found_raises_file_not_found_error(self, mock_dbutils):
+        mock_dbutils.fs.put.side_effect = Exception(
+            "java.io.FileNotFoundException: /readonly/file.txt"
+        )
+        p = RemotePath("/readonly/file.txt")
+        with pytest.raises(FileNotFoundError):
+            p.write_text("content")
+
+    def test_stat_parent_not_found_raises_file_not_found_error(self, mock_dbutils):
+        mock_dbutils.fs.ls.side_effect = Exception(
+            "java.io.FileNotFoundException: /nonexistent/"
+        )
+        p = RemotePath("/nonexistent/file.txt")
+        with pytest.raises(FileNotFoundError):
+            p.stat()
+
+    def test_stat_generic_error_raises_os_error(self, mock_dbutils):
+        mock_dbutils.fs.ls.side_effect = Exception("Py4J connection lost")
+        p = RemotePath("/data/file.txt")
+        with pytest.raises(OSError):
+            p.stat()

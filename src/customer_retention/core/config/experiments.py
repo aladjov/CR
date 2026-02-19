@@ -15,7 +15,7 @@ def _workspace_config_path(workspace_path: str) -> Path:
 def _read_config_file(path: Path) -> dict | None:
     try:
         return json.loads(path.read_text()) if path.exists() else None
-    except (json.JSONDecodeError, OSError):
+    except Exception:
         return None
 
 
@@ -43,7 +43,7 @@ def persist_databricks_config(experiments_dir: str, catalog: str, schema: str, w
         _workspace_config_path(workspace_path).write_text(json.dumps({
             "experiments_dir": experiments_dir, "catalog": catalog, "schema": schema,
         }))
-    except OSError:
+    except Exception:
         pass
 
 

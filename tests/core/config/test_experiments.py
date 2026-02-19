@@ -336,6 +336,21 @@ class TestPersistedDatabricksConfig:
         persist_databricks_config("/Volumes/c/s/experiments", "c", "s", "")
         assert not config_file.exists()
 
+    def test_persist_handles_non_standard_exception(self, monkeypatch):
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: Path("/nonexistent_dir/subdir/deep/config.json"),
+        )
+        with patch("json.dumps", side_effect=RuntimeError("Py4J error")):
+            persist_databricks_config("/Volumes/c/s/experiments", "c", "s", "Users/me")
+
+    def test_read_config_handles_non_standard_exception(self, tmp_path):
+        config_file = tmp_path / "config.json"
+        config_file.write_text('{"key": "value"}')
+        from customer_retention.core.config.experiments import _read_config_file
+        with patch("json.loads", side_effect=RuntimeError("unexpected")):
+            assert _read_config_file(config_file) is None
+
     def test_load_returns_none_when_config_missing_experiments_dir_key(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "17.3")
         monkeypatch.setenv("CR_WORKSPACE_PATH", "Users/me")

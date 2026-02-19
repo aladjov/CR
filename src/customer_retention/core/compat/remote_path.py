@@ -68,6 +68,13 @@ def _get_dbutils() -> Any:
     return dbu
 
 
+def _translate_remote_error(exc: Exception, path_str: str) -> None:
+    msg = str(exc)
+    if "FileNotFoundException" in msg or "java.io.FileNotFoundException" in msg:
+        raise FileNotFoundError(f"No such file: {path_str}") from exc
+    raise OSError(f"Remote filesystem error for {path_str}: {msg}") from exc
+
+
 class RemotePath:
     __slots__ = ("_pure",)
 
@@ -166,11 +173,17 @@ class RemotePath:
 
     def read_text(self, encoding: str = "utf-8") -> str:
         dbu = _get_dbutils()
-        return dbu.fs.head(str(self._pure), 1_048_576)
+        try:
+            return dbu.fs.head(str(self._pure), 1_048_576)
+        except Exception as exc:
+            _translate_remote_error(exc, str(self._pure))
 
     def write_text(self, content: str, encoding: str = "utf-8") -> None:
         dbu = _get_dbutils()
-        dbu.fs.put(str(self._pure), content, overwrite=True)
+        try:
+            dbu.fs.put(str(self._pure), content, overwrite=True)
+        except Exception as exc:
+            _translate_remote_error(exc, str(self._pure))
 
     def open(self, mode: str = "r", encoding: str = "utf-8") -> Union[_RemoteTextReader, _RemoteTextWriter]:
         if "w" in mode:
@@ -262,7 +275,10 @@ class RemotePath:
     def stat(self) -> _RemoteStat:
         dbu = _get_dbutils()
         parent_str = str(self._pure.parent)
-        entries = dbu.fs.ls(parent_str)
+        try:
+            entries = dbu.fs.ls(parent_str)
+        except Exception as exc:
+            _translate_remote_error(exc, str(self._pure))
         target = self.name
         for entry in entries:
             entry_name = entry.name.rstrip("/")

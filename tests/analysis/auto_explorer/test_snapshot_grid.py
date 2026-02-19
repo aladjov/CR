@@ -13,6 +13,7 @@ from customer_retention.analysis.auto_explorer.snapshot_grid import (
     DatasetGridVote,
     GridAdjustmentMode,
     SnapshotGrid,
+    _cap_grid_dates,
     compute_boundaries,
 )
 from customer_retention.core.config.column_config import DatasetGranularity
@@ -671,3 +672,65 @@ class TestLockWithBoundaryFallback:
         grid.lock(purge_gap_days=104, label_window_days=90)
         assert grid.locked is True
         assert grid.grid_dates == []
+
+
+class TestCapGridDates:
+    def test_no_env_var_returns_unchanged(self, monkeypatch):
+        monkeypatch.delenv("CR_GRID_MAX_DATES", raising=False)
+        dates = [f"2024-01-{d:02d}" for d in range(1, 32)]
+        assert _cap_grid_dates(dates) == dates
+
+    def test_caps_to_n_dates(self, monkeypatch):
+        monkeypatch.setenv("CR_GRID_MAX_DATES", "5")
+        dates = [f"2024-01-{d:02d}" for d in range(1, 32)]
+        result = _cap_grid_dates(dates)
+        assert len(result) == 5
+
+    def test_preserves_first_and_last(self, monkeypatch):
+        monkeypatch.setenv("CR_GRID_MAX_DATES", "4")
+        dates = [f"2024-01-{d:02d}" for d in range(1, 32)]
+        result = _cap_grid_dates(dates)
+        assert result[0] == dates[0]
+        assert result[-1] == dates[-1]
+
+    def test_no_cap_when_dates_within_limit(self, monkeypatch):
+        monkeypatch.setenv("CR_GRID_MAX_DATES", "10")
+        dates = ["2024-01-01", "2024-01-08", "2024-01-15"]
+        assert _cap_grid_dates(dates) == dates
+
+    def test_max_dates_one_returns_all(self, monkeypatch):
+        monkeypatch.setenv("CR_GRID_MAX_DATES", "1")
+        dates = ["2024-01-01", "2024-01-08", "2024-01-15"]
+        assert _cap_grid_dates(dates) == dates
+
+    def test_evenly_spaced_selection(self, monkeypatch):
+        monkeypatch.setenv("CR_GRID_MAX_DATES", "3")
+        dates = ["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"]
+        result = _cap_grid_dates(dates)
+        assert len(result) == 3
+        assert result[0] == "2024-01-01"
+        assert result[-1] == "2024-01-05"
+
+
+class TestGenerateGridDatesWithCap:
+    def test_env_var_caps_generated_dates(self, monkeypatch):
+        monkeypatch.setenv("CR_GRID_MAX_DATES", "5")
+        grid = _minimal_grid(
+            cadence_interval=CadenceInterval.DAILY,
+            grid_start="2024-01-01",
+            grid_end="2024-01-31",
+        )
+        grid.generate_grid_dates()
+        assert len(grid.grid_dates) == 5
+        assert grid.grid_dates[0] == "2024-01-01"
+        assert grid.grid_dates[-1] == "2024-01-31"
+
+    def test_env_var_unset_generates_full_dates(self, monkeypatch):
+        monkeypatch.delenv("CR_GRID_MAX_DATES", raising=False)
+        grid = _minimal_grid(
+            cadence_interval=CadenceInterval.DAILY,
+            grid_start="2024-01-01",
+            grid_end="2024-01-31",
+        )
+        grid.generate_grid_dates()
+        assert len(grid.grid_dates) == 31
