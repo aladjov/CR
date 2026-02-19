@@ -994,6 +994,200 @@ run_notebook("gold/gold_features_{{ config.composite_name or config.name }}")
 
 run_notebook("training/ml_experiment")
 """,
+    "databricks_exploration_runner.py.j2": """# Databricks notebook source
+# MAGIC %md
+# MAGIC # Exploration Runner: {{ project_name }}
+# MAGIC
+# MAGIC Automated orchestration of exploration notebooks across all registered datasets.
+# MAGIC Mirrors the local `run_exploration.py` but uses `dbutils.notebook.run()`.
+
+# COMMAND ----------
+
+import os
+import time
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Configuration
+
+# COMMAND ----------
+
+NOTEBOOKS_BASE_PATH = "{{ notebooks_base_path }}"
+FINDINGS_BASE_PATH = "{{ findings_base_path }}"
+
+DATASETS = {
+{% for ds in datasets %}
+    "{{ ds.name }}": {
+        "path": "{{ ds.path }}",
+        "role": "{{ ds.role }}",
+    },
+{% endfor %}
+}
+
+TARGET_DATASET = "{{ target_dataset }}"
+
+PER_DATASET_NOTEBOOKS = [
+    "01_data_discovery",
+    "01a_temporal_deep_dive",
+    "01a_a_temporal_text_deep_dive",
+    "01b_temporal_quality",
+    "01c_temporal_patterns",
+    "01d_event_aggregation",
+    "02_source_integrity",
+    "04a_text_columns_deep_dive",
+]
+
+GLOBAL_NOTEBOOKS = [
+    "03_dataset_merge",
+    "04_column_deep_dive",
+    "05_relationship_analysis",
+    "06_feature_opportunities",
+    "07_modeling_readiness",
+    "08_baseline_experiments",
+    "09_business_alignment",
+    "10_spec_generation",
+]
+
+NOTEBOOK_TIMEOUT = 1800
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Helpers
+
+# COMMAND ----------
+
+def run_notebook(name, timeout=NOTEBOOK_TIMEOUT, params=None):
+    path = f"{NOTEBOOKS_BASE_PATH}/{name}"
+    print(f"Running: {path}")
+    start = time.time()
+    try:
+        dbutils.notebook.run(path, timeout, params or {})
+        elapsed = time.time() - start
+        print(f"  OK ({elapsed:.0f}s)")
+        return True, elapsed
+    except Exception as exc:
+        elapsed = time.time() - start
+        print(f"  FAILED ({elapsed:.0f}s): {exc}")
+        return False, elapsed
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Skip Logic
+
+# COMMAND ----------
+
+from customer_retention.analysis.auto_explorer.skip_logic import (
+    detect_skip_set_for_dataset,
+    detect_global_skip_set,
+)
+from pathlib import Path
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Setup
+
+# COMMAND ----------
+
+run_notebook("00_start_here")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Per-Dataset Processing
+
+# COMMAND ----------
+
+results = {}
+findings_dir = Path(FINDINGS_BASE_PATH)
+
+dataset_order = sorted(DATASETS.keys(), key=lambda n: (0 if n == TARGET_DATASET else 1, n))
+
+for ds_name in dataset_order:
+    ds_info = DATASETS[ds_name]
+    os.environ["CR_DATASET_ID"] = ds_name
+
+    print(f"\\n{'=' * 60}")
+    print(f"Dataset: {ds_name} ({ds_info['role']})")
+    print(f"{'=' * 60}")
+
+    ok, elapsed = run_notebook(
+        "01_data_discovery",
+        params={"data_path": ds_info["path"], "dataset_name": ds_name},
+    )
+    results[f"01_data_discovery:{ds_name}"] = ("OK" if ok else "FAILED", elapsed)
+
+    if not ok:
+        print(f"  Skipping remaining per-dataset notebooks for {ds_name}")
+        continue
+
+    skip_set, skip_reasons = detect_skip_set_for_dataset(findings_dir, ds_name)
+
+    for nb in PER_DATASET_NOTEBOOKS[1:]:
+        if nb in skip_set:
+            print(f"  [{nb}] SKIPPED - {skip_reasons[nb]}")
+            results[f"{nb}:{ds_name}"] = ("SKIPPED", 0)
+            continue
+        ok, elapsed = run_notebook(nb)
+        results[f"{nb}:{ds_name}"] = ("OK" if ok else "FAILED", elapsed)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Global Analysis
+
+# COMMAND ----------
+
+os.environ["CR_DATASET_ID"] = TARGET_DATASET
+
+print(f"\\n{'=' * 60}")
+print("Global analysis (all datasets processed)")
+print(f"{'=' * 60}")
+
+try:
+    from customer_retention.analysis.auto_explorer import ProjectContext
+    _ctx = ProjectContext.load(str(findings_dir / "project_context.yaml"))
+    global_skip, global_reasons = detect_global_skip_set(findings_dir, _ctx)
+except Exception:
+    global_skip, global_reasons = set(), {}
+
+for nb in GLOBAL_NOTEBOOKS:
+    if nb in global_skip:
+        print(f"  [{nb}] SKIPPED - {global_reasons[nb]}")
+        results[nb] = ("SKIPPED", 0)
+        continue
+    ok, elapsed = run_notebook(nb)
+    results[nb] = ("OK" if ok else "FAILED", elapsed)
+    if not ok and nb == "03_dataset_merge":
+        print("  Critical notebook failed, stopping global phase")
+        break
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Summary
+
+# COMMAND ----------
+
+ok_count = sum(1 for s, _ in results.values() if s == "OK")
+fail_count = sum(1 for s, _ in results.values() if s == "FAILED")
+skip_count = sum(1 for s, _ in results.values() if s == "SKIPPED")
+total_time = sum(e for _, e in results.values())
+
+print(f"\\n{'=' * 60}")
+print(f"Results: {ok_count} OK, {fail_count} FAILED, {skip_count} SKIPPED")
+print(f"Total time: {total_time:.0f}s")
+print(f"{'=' * 60}")
+
+if fail_count:
+    print("\\nFailed notebooks:")
+    for key, (status, elapsed) in results.items():
+        if status == "FAILED":
+            print(f"  - {key} ({elapsed:.0f}s)")
+""",
 }
 
 
@@ -1007,6 +1201,7 @@ class DatabricksCodeRenderer:
         "gold": "databricks_gold.py.j2",
         "training": "databricks_training.py.j2",
         "runner": "databricks_runner.py.j2",
+        "exploration_runner": "databricks_exploration_runner.py.j2",
     }
 
     def __init__(self, catalog: str = "main", schema: str = "default"):
@@ -1051,3 +1246,24 @@ class DatabricksCodeRenderer:
 
     def render_runner(self, config: PipelineConfig) -> str:
         return self._render("runner", config=config)
+
+    def render_exploration_runner(
+        self, project_name: str, datasets, notebooks_base_path: str, findings_base_path: str
+    ) -> str:
+        ds_list = []
+        target_dataset = ""
+        for name, entry in datasets.items():
+            role = "target" if getattr(entry, "has_target", False) or getattr(entry, "role", None) == "target" else "feature"
+            ds_list.append({"name": name, "path": entry.path, "role": role})
+            if role == "target":
+                target_dataset = name
+        if not target_dataset and ds_list:
+            target_dataset = ds_list[0]["name"]
+        return self._render(
+            "exploration_runner",
+            project_name=project_name,
+            datasets=ds_list,
+            target_dataset=target_dataset,
+            notebooks_base_path=notebooks_base_path,
+            findings_base_path=findings_base_path,
+        )
