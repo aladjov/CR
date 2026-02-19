@@ -46,7 +46,7 @@ def _read_last_notebook(progress_file: Path) -> Optional[str]:
     try:
         data = json.loads(progress_file.read_text(encoding="utf-8"))
         return data.get("last_notebook")
-    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+    except Exception:
         return None
 
 
@@ -85,7 +85,10 @@ def publish_skip_flags(findings) -> None:
 
 def _write_current_notebook(progress_file: Path, current_notebook: str) -> None:
     """Write the current notebook name to the progress file."""
-    progress_file.write_text(
-        json.dumps({"last_notebook": current_notebook}),
-        encoding="utf-8",
-    )
+    try:
+        progress_file.write_text(
+            json.dumps({"last_notebook": current_notebook}),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass

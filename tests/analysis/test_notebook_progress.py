@@ -91,6 +91,26 @@ class TestTrackAndExportPrevious:
             result = track_and_export_previous("01.ipynb")
         assert result is None
 
+    def test_handles_databricks_execution_error_on_read(self, tmp_path):
+        """On Databricks Volumes, read_text raises ExecutionError, not FileNotFoundError."""
+        progress = tmp_path / "notebook_progress.json"
+
+        with _patch_experiments_dir(tmp_path), \
+             patch.object(type(progress), "read_text", side_effect=RuntimeError("Py4J ExecutionError")):
+            result = track_and_export_previous("01.ipynb")
+
+        assert result is None
+
+    def test_handles_databricks_execution_error_on_write(self, tmp_path):
+        """On Databricks Volumes, write_text may also raise non-standard errors."""
+        progress = tmp_path / "notebook_progress.json"
+
+        with _patch_experiments_dir(tmp_path), \
+             patch.object(type(progress), "write_text", side_effect=RuntimeError("Py4J ExecutionError")):
+            result = track_and_export_previous("01.ipynb")
+
+        assert result is None
+
     def test_creates_experiments_dir_if_missing(self, tmp_path):
         """Experiments dir doesn't exist → created."""
         experiments_dir = tmp_path / "nested" / "experiments"
