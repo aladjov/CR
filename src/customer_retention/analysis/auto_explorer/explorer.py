@@ -2,11 +2,9 @@ import logging
 from pathlib import Path
 from typing import List, Optional, Union
 
-import numpy as np
-
 logger = logging.getLogger(__name__)
 
-from customer_retention.core.compat import DataFrame, Series, is_dataframe, pd, safe_isfinite, safe_memory_usage_bytes
+from customer_retention.core.compat import DataFrame, Series, is_dataframe, pd, safe_memory_usage_bytes
 from customer_retention.core.compat.bulk_profiling import (
     NumericColumnStats,
     PerColumnStats,
@@ -102,7 +100,7 @@ class DataExplorer:
                 numeric_stats=numeric_stats,
             )
             findings.columns[column_name] = column_finding
-            self._track_special_columns(findings, column_finding, df[column_name])
+            self._track_special_columns(findings, column_finding, df[column_name], col_stats=col_stats)
             processed += 1
             if processed % log_interval == 0:
                 logger.info("Profiled %d/%d columns", processed, total_cols)
@@ -167,22 +165,14 @@ class DataExplorer:
             distinct_count = col_stats.distinct_count
             distinct_percentage = round((distinct_count / total_count * 100), 2) if total_count > 0 else 0
 
-            value_counts = series.value_counts()
-            if len(value_counts) > 0:
-                most_common_value = value_counts.idxmax()
-                most_common_frequency = int(value_counts.iloc[0])
-            else:
-                most_common_value = None
-                most_common_frequency = None
-
             return {
                 "total_count": total_count,
                 "null_count": null_count,
                 "null_percentage": null_percentage,
                 "distinct_count": distinct_count,
                 "distinct_percentage": distinct_percentage,
-                "most_common_value": str(most_common_value) if most_common_value is not None else None,
-                "most_common_frequency": most_common_frequency,
+                "most_common_value": col_stats.most_common_value,
+                "most_common_frequency": col_stats.most_common_frequency,
                 "memory_size_bytes": safe_memory_usage_bytes(series),
             }
 
@@ -225,24 +215,14 @@ class DataExplorer:
         max_val = ns.max_val if ns.max_val is not None else 0.0
         range_val = max_val - min_val
 
-        clean_series = series.dropna()
-        non_null_count = len(clean_series) if len(clean_series) > 0 else 1
+        non_null_count = max(ns.non_null_count, 1)
 
         zero_pct = round((ns.zero_count / non_null_count * 100), 2)
         neg_pct = round((ns.negative_count / non_null_count * 100), 2)
         inf_pct = round((ns.inf_count / non_null_count * 100), 2)
         outlier_pct = round((ns.outlier_count_iqr / non_null_count * 100), 2)
 
-        finite_series = clean_series[safe_isfinite(clean_series)]
-        if len(finite_series) > 0:
-            arr = finite_series.to_numpy() if hasattr(finite_series, "to_numpy") else np.asarray(finite_series)
-            histogram, bin_edges = np.histogram(arr, bins=10)
-            histogram_bins = [
-                (round(float(bin_edges[i]), 4), round(float(bin_edges[i + 1]), 4), int(histogram[i]))
-                for i in range(len(histogram))
-            ]
-        else:
-            histogram_bins = []
+        histogram_bins = ns.histogram_bins if ns.histogram_bins else []
 
         return {
             "mean": round(ns.mean, 4),
@@ -268,10 +248,14 @@ class DataExplorer:
             "histogram_bins": histogram_bins,
         }
 
-    def _track_special_columns(self, findings: ExplorationFindings, column_finding: ColumnFinding, series: Series):
+    def _track_special_columns(
+        self, findings: ExplorationFindings, column_finding: ColumnFinding,
+        series: Series, col_stats: Optional[PerColumnStats] = None,
+    ):
         if column_finding.inferred_type == ColumnType.TARGET:
             findings.target_column = column_finding.name
-            findings.target_type = "binary" if series.nunique() == 2 else "multiclass"
+            distinct = col_stats.distinct_count if col_stats else series.nunique()
+            findings.target_type = "binary" if distinct == 2 else "multiclass"
         elif column_finding.inferred_type == ColumnType.IDENTIFIER:
             findings.identifier_columns.append(column_finding.name)
         elif column_finding.inferred_type == ColumnType.DATETIME:

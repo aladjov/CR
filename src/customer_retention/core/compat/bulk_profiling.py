@@ -11,6 +11,8 @@ import pandas as _pandas
 class PerColumnStats:
     null_count: int
     distinct_count: int
+    most_common_value: Optional[str] = None
+    most_common_frequency: Optional[int] = None
 
 
 @dataclass
@@ -29,6 +31,8 @@ class NumericColumnStats:
     inf_count: int = 0
     outlier_count_iqr: int = 0
     outlier_count_zscore: int = 0
+    non_null_count: int = 0
+    histogram_bins: list = field(default_factory=list)
 
 
 @dataclass
@@ -44,16 +48,45 @@ def compute_bulk_stats(df: Any) -> BulkStats:
     return _pandas_bulk_stats(df)
 
 
+def _compute_mode(series: _pandas.Series) -> tuple[Optional[str], Optional[int]]:
+    vc = series.value_counts()
+    if len(vc) == 0:
+        return None, None
+    return str(vc.index[0]), int(vc.iloc[0])
+
+
+def _compute_histogram(series: _pandas.Series) -> list:
+    finite = series.dropna()
+    finite = finite[np.isfinite(finite)]
+    if len(finite) == 0:
+        return []
+    arr = finite.to_numpy()
+    lo, hi = float(arr.min()), float(arr.max())
+    if lo >= hi:
+        return []
+    histogram, bin_edges = np.histogram(arr, bins=10, range=(lo, hi))
+    return [
+        (round(float(bin_edges[i]), 4), round(float(bin_edges[i + 1]), 4), int(histogram[i]))
+        for i in range(len(histogram))
+    ]
+
+
 def _pandas_bulk_stats(df: _pandas.DataFrame) -> BulkStats:
     total_count = len(df)
+    if total_count == 0 or len(df.columns) == 0:
+        return BulkStats(total_count=total_count)
+
     null_counts = df.isnull().sum()
     distinct_counts = df.nunique()
 
     columns: dict[str, PerColumnStats] = {}
     for col in df.columns:
+        mode_val, mode_freq = _compute_mode(df[col])
         columns[col] = PerColumnStats(
             null_count=int(null_counts[col]),
             distinct_count=int(distinct_counts[col]),
+            most_common_value=mode_val,
+            most_common_frequency=mode_freq,
         )
 
     numeric_cols = df.select_dtypes(include="number").columns.tolist()
@@ -74,6 +107,8 @@ def _pandas_bulk_stats(df: _pandas.DataFrame) -> BulkStats:
             kurt_vals = _pandas.Series(dtype=float)
 
         for col in numeric_cols:
+            null_count = int(null_counts[col])
+            non_null_count = total_count - null_count
             clean = numeric_df[col].dropna()
             if len(clean) == 0:
                 numeric[col] = NumericColumnStats()
@@ -103,6 +138,8 @@ def _pandas_bulk_stats(df: _pandas.DataFrame) -> BulkStats:
             else:
                 outlier_zscore = 0
 
+            histogram_bins = _compute_histogram(clean)
+
             numeric[col] = NumericColumnStats(
                 mean=mean_val,
                 std=std_val,
@@ -118,6 +155,8 @@ def _pandas_bulk_stats(df: _pandas.DataFrame) -> BulkStats:
                 inf_count=inf_count,
                 outlier_count_iqr=outlier_iqr,
                 outlier_count_zscore=outlier_zscore,
+                non_null_count=non_null_count,
+                histogram_bins=histogram_bins,
             )
 
     return BulkStats(total_count=total_count, columns=columns, numeric=numeric)
@@ -139,11 +178,31 @@ def _spark_bulk_stats(df: Any) -> BulkStats:
     row1 = spark_df.agg(*exprs).collect()[0]
     total_count = int(row1["__total_count__"])
 
+    # --- Batch 1b: mode values for all columns ---
+    mode_exprs: list[Any] = [F.mode(F.col(c)).alias(f"__mode__{c}") for c in all_cols]
+    mode_row = spark_df.agg(*mode_exprs).collect()[0]
+
+    # --- Batch 1c: mode counts ---
+    count_exprs: list[Any] = []
+    for col in all_cols:
+        mode_val = mode_row[f"__mode__{col}"]
+        if mode_val is not None:
+            count_exprs.append(
+                F.sum(F.when(F.col(col) == F.lit(mode_val), 1).otherwise(0)).alias(f"__mcount__{col}")
+            )
+        else:
+            count_exprs.append(F.lit(0).alias(f"__mcount__{col}"))
+    mode_count_row = spark_df.agg(*count_exprs).collect()[0]
+
     columns: dict[str, PerColumnStats] = {}
     for col in all_cols:
+        mode_val = mode_row[f"__mode__{col}"]
+        mode_freq = _safe_int(mode_count_row[f"__mcount__{col}"]) if mode_val is not None else None
         columns[col] = PerColumnStats(
             null_count=int(row1[f"__null__{col}"]),
             distinct_count=int(row1[f"__dist__{col}"]),
+            most_common_value=str(mode_val) if mode_val is not None else None,
+            most_common_frequency=mode_freq,
         )
 
     # --- Identify numeric columns from schema ---
@@ -217,8 +276,44 @@ def _spark_bulk_stats(df: Any) -> BulkStats:
 
     row3 = spark_df.agg(*exprs3).collect()[0]
 
+    # --- Batch 4: histogram bin counts for all numeric columns ---
+    hist_exprs: list[Any] = []
+    hist_cols: list[str] = []
     for col in numeric_cols:
         b2 = batch2_results[col]
+        min_v, max_v = b2["min_val"], b2["max_val"]
+        if min_v is None or max_v is None or min_v >= max_v:
+            continue
+        hist_cols.append(col)
+        c = F.col(col)
+        finite = c.isNotNull() & (c != float("inf")) & (c != float("-inf"))
+        bin_width = (max_v - min_v) / 10
+        for i in range(10):
+            lo = min_v + i * bin_width
+            hi = min_v + (i + 1) * bin_width if i < 9 else max_v
+            cond = finite & (c >= lo) & (c <= hi if i == 9 else c < hi)
+            hist_exprs.append(F.sum(cond.cast("int")).alias(f"__hist_{i}__{col}"))
+
+    hist_row = None
+    if hist_exprs:
+        hist_row = spark_df.agg(*hist_exprs).collect()[0]
+
+    for col in numeric_cols:
+        b2 = batch2_results[col]
+        null_count = columns[col].null_count
+        non_null_count = total_count - null_count
+
+        histogram_bins: list = []
+        if col in hist_cols and hist_row is not None:
+            min_v, max_v = b2["min_val"], b2["max_val"]
+            bin_width = (max_v - min_v) / 10
+            histogram_bins = []
+            for i in range(10):
+                lo = min_v + i * bin_width
+                hi = min_v + (i + 1) * bin_width if i < 9 else max_v
+                count = _safe_int(hist_row[f"__hist_{i}__{col}"])
+                histogram_bins.append((round(lo, 4), round(hi, 4), count))
+
         numeric[col] = NumericColumnStats(
             mean=b2["mean"],
             std=b2["std"],
@@ -234,6 +329,8 @@ def _spark_bulk_stats(df: Any) -> BulkStats:
             inf_count=_safe_int(row3[f"__inf__{col}"]),
             outlier_count_iqr=_safe_int(row3[f"__oiqr__{col}"]),
             outlier_count_zscore=_safe_int(row3[f"__ozscore__{col}"]),
+            non_null_count=non_null_count,
+            histogram_bins=histogram_bins,
         )
 
     return BulkStats(total_count=total_count, columns=columns, numeric=numeric)

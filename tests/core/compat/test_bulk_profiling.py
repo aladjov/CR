@@ -21,6 +21,19 @@ class TestPerColumnStats:
         assert s.null_count == 5
         assert s.distinct_count == 10
 
+    def test_mode_defaults(self):
+        s = PerColumnStats(null_count=0, distinct_count=1)
+        assert s.most_common_value is None
+        assert s.most_common_frequency is None
+
+    def test_mode_fields(self):
+        s = PerColumnStats(
+            null_count=0, distinct_count=3,
+            most_common_value="apple", most_common_frequency=42,
+        )
+        assert s.most_common_value == "apple"
+        assert s.most_common_frequency == 42
+
 
 class TestNumericColumnStats:
     def test_defaults(self):
@@ -29,6 +42,8 @@ class TestNumericColumnStats:
         assert s.std is None
         assert s.zero_count == 0
         assert s.outlier_count_iqr == 0
+        assert s.non_null_count == 0
+        assert s.histogram_bins == []
 
     def test_all_fields(self):
         s = NumericColumnStats(
@@ -46,10 +61,14 @@ class TestNumericColumnStats:
             inf_count=0,
             outlier_count_iqr=1,
             outlier_count_zscore=0,
+            non_null_count=100,
+            histogram_bins=[(0.0, 0.3, 5), (0.3, 0.6, 10)],
         )
         assert s.mean == 1.5
         assert s.q3 == 2.0
         assert s.outlier_count_iqr == 1
+        assert s.non_null_count == 100
+        assert len(s.histogram_bins) == 2
 
 
 class TestBulkStats:
@@ -302,3 +321,86 @@ class TestPandasBulkStatsEdgeCases:
         df = pd.DataFrame({"flag": [True, False, True, True, False]})
         result = _pandas_bulk_stats(df)
         assert result.columns["flag"].distinct_count == 2
+
+
+class TestPandasBulkStatsModeValues:
+    def test_most_common_value_numeric(self):
+        df = pd.DataFrame({"a": [1, 2, 2, 3, 2]})
+        result = _pandas_bulk_stats(df)
+        assert result.columns["a"].most_common_value == "2"
+        assert result.columns["a"].most_common_frequency == 3
+
+    def test_most_common_value_string(self):
+        df = pd.DataFrame({"cat": ["a", "b", "b", "c", "b"]})
+        result = _pandas_bulk_stats(df)
+        assert result.columns["cat"].most_common_value == "b"
+        assert result.columns["cat"].most_common_frequency == 3
+
+    def test_most_common_value_all_unique(self):
+        df = pd.DataFrame({"a": [1, 2, 3, 4, 5]})
+        result = _pandas_bulk_stats(df)
+        assert result.columns["a"].most_common_value is not None
+        assert result.columns["a"].most_common_frequency == 1
+
+    def test_most_common_value_all_null(self):
+        df = pd.DataFrame({"a": [None, None, None]})
+        result = _pandas_bulk_stats(df)
+        assert result.columns["a"].most_common_value is None
+        assert result.columns["a"].most_common_frequency is None
+
+    def test_most_common_value_mixed_types(self):
+        df = pd.DataFrame({
+            "num": [1, 2, 2, 3],
+            "cat": ["x", "x", "y", "z"],
+        })
+        result = _pandas_bulk_stats(df)
+        assert result.columns["num"].most_common_value == "2"
+        assert result.columns["cat"].most_common_value == "x"
+
+
+class TestPandasBulkStatsHistogram:
+    def test_histogram_bins_count(self):
+        df = pd.DataFrame({"val": range(100)})
+        result = _pandas_bulk_stats(df)
+        assert len(result.numeric["val"].histogram_bins) == 10
+
+    def test_histogram_bins_cover_range(self):
+        df = pd.DataFrame({"val": list(range(100))})
+        result = _pandas_bulk_stats(df)
+        bins = result.numeric["val"].histogram_bins
+        assert bins[0][0] <= 0.0
+        assert bins[-1][1] >= 99.0
+
+    def test_histogram_bins_sum_to_total(self):
+        df = pd.DataFrame({"val": np.random.normal(50, 10, 200)})
+        result = _pandas_bulk_stats(df)
+        bins = result.numeric["val"].histogram_bins
+        total = sum(b[2] for b in bins)
+        assert total == 200
+
+    def test_histogram_constant_column(self):
+        df = pd.DataFrame({"val": [5, 5, 5, 5, 5]})
+        result = _pandas_bulk_stats(df)
+        assert result.numeric["val"].histogram_bins == []
+
+    def test_histogram_with_inf(self):
+        df = pd.DataFrame({"val": [1.0, 2.0, float("inf"), 4.0, float("-inf")]})
+        result = _pandas_bulk_stats(df)
+        bins = result.numeric["val"].histogram_bins
+        total = sum(b[2] for b in bins)
+        assert total == 3  # only finite values
+
+    def test_histogram_all_null(self):
+        df = pd.DataFrame({"val": pd.array([None, None, None], dtype="Float64")})
+        result = _pandas_bulk_stats(df)
+        assert result.numeric["val"].histogram_bins == []
+
+    def test_non_null_count(self):
+        df = pd.DataFrame({"val": [1, 2, None, 4, None]})
+        result = _pandas_bulk_stats(df)
+        assert result.numeric["val"].non_null_count == 3
+
+    def test_non_null_count_no_nulls(self):
+        df = pd.DataFrame({"val": [1, 2, 3, 4, 5]})
+        result = _pandas_bulk_stats(df)
+        assert result.numeric["val"].non_null_count == 5
