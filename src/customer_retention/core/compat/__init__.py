@@ -83,16 +83,11 @@ def is_dataframe(obj: Any) -> bool:
     return isinstance(obj, _DATAFRAME_TYPES)
 
 
-def to_pandas(df: Any) -> _pandas.DataFrame:
-    if isinstance(df, _pandas.DataFrame):
+def to_pandas(df: Any) -> Any:
+    if isinstance(df, (_pandas.DataFrame, _pandas.Series)):
         return df
-    if _SPARK_PANDAS_AVAILABLE:
-        try:
-            import pyspark.pandas as ps
-            if isinstance(df, ps.DataFrame):
-                return df.to_pandas()
-        except Exception:
-            pass
+    if hasattr(df, "to_pandas"):
+        return df.to_pandas()
     try:
         from pyspark.sql import DataFrame as NativeSparkDF
         if isinstance(df, NativeSparkDF):
@@ -105,6 +100,8 @@ def to_pandas(df: Any) -> _pandas.DataFrame:
 def concat(objs: list, axis: int = 0, ignore_index: bool = False, **kwargs: Any) -> Any:
     if not objs:
         return pd.DataFrame()
+    if _SPARK_PANDAS_AVAILABLE and isinstance(objs[0], (_pandas.DataFrame, _pandas.Series)):
+        return _pandas.concat(objs, axis=axis, ignore_index=ignore_index, **kwargs)
     return pd.concat(objs, axis=axis, ignore_index=ignore_index, **kwargs)
 
 
@@ -121,16 +118,44 @@ CategoricalDtype = _pandas.CategoricalDtype
 NA = _pandas.NA
 NaT = _pandas.NaT
 
-# Utility functions (always use real pandas, never pyspark.pandas)
-to_datetime = _pandas.to_datetime
+# Utility functions — dispatch to pyspark.pandas when input is distributed
 to_timedelta = _pandas.to_timedelta
-to_numeric = _pandas.to_numeric
-cut = _pandas.cut
-qcut = _pandas.qcut
 get_dummies = _pandas.get_dummies
 crosstab = _pandas.crosstab
 notna = _pandas.notna
 isna = _pandas.isna
+
+
+def _is_native_pandas(obj: Any) -> bool:
+    return isinstance(obj, (_pandas.DataFrame, _pandas.Series))
+
+
+def _collect(obj: Any) -> Any:
+    return obj.to_pandas() if hasattr(obj, "to_pandas") else obj
+
+
+def to_datetime(arg: Any, **kwargs: Any) -> Any:
+    if _SPARK_PANDAS_AVAILABLE and not _is_native_pandas(arg):
+        return pd.to_datetime(arg, **kwargs)
+    return _pandas.to_datetime(arg, **kwargs)
+
+
+def to_numeric(arg: Any, **kwargs: Any) -> Any:
+    if _SPARK_PANDAS_AVAILABLE and not _is_native_pandas(arg):
+        return pd.to_numeric(arg, **kwargs)
+    return _pandas.to_numeric(arg, **kwargs)
+
+
+def cut(x: Any, bins: Any, **kwargs: Any) -> Any:
+    if _SPARK_PANDAS_AVAILABLE and not _is_native_pandas(x):
+        return _pandas.cut(_collect(x), bins, **kwargs)
+    return _pandas.cut(x, bins, **kwargs)
+
+
+def qcut(x: Any, q: Any, **kwargs: Any) -> Any:
+    if _SPARK_PANDAS_AVAILABLE and not _is_native_pandas(x):
+        return _pandas.qcut(_collect(x), q, **kwargs)
+    return _pandas.qcut(x, q, **kwargs)
 
 api_types = _pandas.api.types
 

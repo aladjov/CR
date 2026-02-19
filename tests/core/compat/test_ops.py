@@ -167,6 +167,75 @@ class TestDataOpsConcat:
         assert len(result.columns) == 2
 
 
+@requires_delta
+class TestSparkBackendDeltaFallback:
+    def test_write_delta_native_pandas_delegates_to_pandas_backend(self, tmp_path):
+        from unittest.mock import patch
+
+        from customer_retention.core.compat import spark_backend
+
+        delta_path = str(tmp_path / "test_delta")
+        df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+        with patch.object(spark_backend, "SPARK_AVAILABLE", True):
+            spark_backend.write_delta(df, delta_path)
+        assert Path(delta_path).exists()
+        result = pd.read_parquet(delta_path)
+        assert len(result) == 2
+
+    def test_read_delta_fallback_on_spark_failure(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.core.compat import spark_backend
+
+        delta_path = str(tmp_path / "test_delta")
+        df = pd.DataFrame({"a": [1, 2]})
+        from deltalake import write_deltalake
+        write_deltalake(delta_path, df)
+
+        mock_spark = MagicMock()
+        mock_spark.read.format.return_value.load.side_effect = Exception("no delta jar")
+        with patch.object(spark_backend, "SPARK_AVAILABLE", True), \
+             patch.object(spark_backend, "_get_spark", return_value=mock_spark):
+            result = spark_backend.read_delta(delta_path)
+        assert isinstance(result, pd.DataFrame)
+        assert len(result) == 2
+
+
+class TestCompatConcatNativePandas:
+    def test_concat_native_pandas_series_when_pd_is_pyspark(self, monkeypatch):
+        import pyspark.pandas as ps
+
+        import customer_retention.core.compat as compat
+
+        monkeypatch.setattr(compat, "pd", ps)
+        monkeypatch.setattr(compat, "_SPARK_PANDAS_AVAILABLE", True)
+        s1 = pd.Series(["a", "b"], dtype=str)
+        s2 = pd.Series(["c", "d"], dtype=str)
+        result = compat.concat([s1, s2], ignore_index=True)
+        assert list(result) == ["a", "b", "c", "d"]
+        assert isinstance(result, pd.Series)
+
+    def test_concat_native_pandas_dataframes_when_pd_is_pyspark(self, monkeypatch):
+        import pyspark.pandas as ps
+
+        import customer_retention.core.compat as compat
+
+        monkeypatch.setattr(compat, "pd", ps)
+        monkeypatch.setattr(compat, "_SPARK_PANDAS_AVAILABLE", True)
+        df1 = pd.DataFrame({"a": [1, 2]})
+        df2 = pd.DataFrame({"a": [3, 4]})
+        result = compat.concat([df1, df2], ignore_index=True)
+        assert len(result) == 4
+        assert isinstance(result, pd.DataFrame)
+
+    def test_concat_empty_returns_dataframe(self):
+        from customer_retention.core.compat import concat
+
+        result = concat([])
+        assert isinstance(result, pd.DataFrame)
+        assert len(result) == 0
+
+
 class TestBackwardCompatibility:
     def test_pd_import_works(self):
         from customer_retention.core.compat import pd

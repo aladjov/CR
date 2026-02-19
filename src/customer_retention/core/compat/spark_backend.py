@@ -32,17 +32,28 @@ def read_delta(path: str, version: Optional[int] = None) -> Any:
     if not SPARK_AVAILABLE:
         raise ImportError("pyspark required")
     spark = _get_spark()
-    reader = spark.read.format("delta")
-    if version is not None:
-        reader = reader.option("versionAsOf", version)
-    return _as_pandas_api(reader.load(path))
+    try:
+        reader = spark.read.format("delta")
+        if version is not None:
+            reader = reader.option("versionAsOf", version)
+        return _as_pandas_api(reader.load(path))
+    except Exception:
+        from . import pandas_backend
+        return pandas_backend.read_delta(path, version=version)
 
 
 def write_delta(df: Any, path: str, mode: str = "overwrite",
                 partition_by: Optional[List[str]] = None) -> None:
     if not SPARK_AVAILABLE:
         raise ImportError("pyspark required")
-    spark_df = df.to_spark() if hasattr(df, "to_spark") else df
+    if hasattr(df, "to_spark"):
+        spark_df = df.to_spark()
+    elif hasattr(df, "rdd"):
+        spark_df = df
+    else:
+        from . import pandas_backend
+        pandas_backend.write_delta(df, path, mode=mode, partition_by=partition_by)
+        return
     writer = spark_df.write.format("delta").mode(mode)
     if partition_by:
         writer = writer.partitionBy(*partition_by)
