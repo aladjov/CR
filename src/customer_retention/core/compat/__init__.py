@@ -397,6 +397,16 @@ def safe_isfinite(series: Any) -> Any:
     return series.notna() & ~safe_isinf(series)
 
 
+def safe_describe(df: Any) -> Any:
+    try:
+        return df.describe()
+    except Exception:
+        numeric = df.select_dtypes(include="number")
+        if len(numeric.columns) == 0:
+            return _pandas.DataFrame()
+        return numeric.describe()
+
+
 __all__ = [
     "pd",
     "native_pd",
@@ -463,4 +473,5 @@ __all__ = [
     "DataOps",
     "RemotePath",
     "make_path",
+    "safe_describe",
 ]
