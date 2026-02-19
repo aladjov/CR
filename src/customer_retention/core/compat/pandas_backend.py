@@ -4,11 +4,13 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-try:
-    import deltalake
-    DELTA_RS_AVAILABLE = True
-except ImportError:
-    DELTA_RS_AVAILABLE = False
+
+def _import_deltalake() -> Any:
+    try:
+        import deltalake
+        return deltalake
+    except ImportError:
+        raise ImportError("deltalake package required: pip install deltalake") from None
 
 
 def read_csv(path: str, **kwargs: Any) -> pd.DataFrame:
@@ -16,21 +18,18 @@ def read_csv(path: str, **kwargs: Any) -> pd.DataFrame:
 
 
 def read_delta(path: str, version: Optional[int] = None) -> pd.DataFrame:
-    if not DELTA_RS_AVAILABLE:
-        raise ImportError("deltalake package required: pip install deltalake")
+    dl = _import_deltalake()
     if version is not None:
-        dt = deltalake.DeltaTable(path, version=version)
+        dt = dl.DeltaTable(path, version=version)
     else:
-        dt = deltalake.DeltaTable(path)
+        dt = dl.DeltaTable(path)
     return dt.to_pandas()
 
 
 def write_delta(df: pd.DataFrame, path: str, mode: str = "overwrite",
                 partition_by: Optional[List[str]] = None) -> None:
-    if not DELTA_RS_AVAILABLE:
-        raise ImportError("deltalake package required: pip install deltalake")
-    from deltalake import write_deltalake
-    write_deltalake(path, df, mode=mode, partition_by=partition_by)
+    dl = _import_deltalake()
+    dl.write_deltalake(path, df, mode=mode, partition_by=partition_by)
 
 
 def get_missing_stats(df: pd.DataFrame) -> Dict[str, float]:

@@ -7,12 +7,12 @@ from .storage import DatabricksDelta, DeltaStorage, LocalDelta
 
 
 def get_delta(force_local: bool = False) -> DeltaStorage:
-    from .storage.local import DELTA_RS_AVAILABLE
-    if force_local and DELTA_RS_AVAILABLE:
+    from .storage.local import deltalake_available
+    if force_local and deltalake_available():
         return LocalDelta()
     if is_spark_available():
         return DatabricksDelta()
-    if DELTA_RS_AVAILABLE:
+    if deltalake_available():
         return LocalDelta()
     raise ImportError(
         "No Delta storage backend available. "

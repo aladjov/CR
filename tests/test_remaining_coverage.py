@@ -43,17 +43,15 @@ class TestPandasBackend:
     """Tests for uncovered lines in pandas_backend module."""
 
     def test_read_delta_raises_import_error_when_unavailable(self):
-        """Line 19-20: read_delta raises ImportError when deltalake not installed."""
-        with patch(
-            "customer_retention.core.compat.pandas_backend.DELTA_RS_AVAILABLE", False
-        ):
+        """read_delta raises ImportError when deltalake not installed."""
+        import customer_retention.core.compat.pandas_backend as pb
+
+        with patch.object(pb, "_import_deltalake", side_effect=ImportError("deltalake package required")):
             with pytest.raises(ImportError, match="deltalake package required"):
                 read_delta("/some/path")
 
     def test_read_delta_with_version(self):
-        """Lines 21-22: read_delta passes version to DeltaTable."""
-        import sys
-
+        """read_delta passes version to DeltaTable."""
         mock_dt = MagicMock()
         mock_dt.to_pandas.return_value = pd.DataFrame({"a": [1, 2]})
         mock_deltalake = MagicMock()
@@ -61,22 +59,13 @@ class TestPandasBackend:
 
         import customer_retention.core.compat.pandas_backend as pb
 
-        with patch.object(pb, "DELTA_RS_AVAILABLE", True), patch.dict(
-            sys.modules, {"deltalake": mock_deltalake}
-        ):
-            pb.deltalake = mock_deltalake
-            try:
-                result = read_delta("/some/path", version=3)
-                mock_deltalake.DeltaTable.assert_called_once_with("/some/path", version=3)
-                assert list(result.columns) == ["a"]
-            finally:
-                if hasattr(pb, "deltalake"):
-                    del pb.deltalake
+        with patch.object(pb, "_import_deltalake", return_value=mock_deltalake):
+            result = read_delta("/some/path", version=3)
+            mock_deltalake.DeltaTable.assert_called_once_with("/some/path", version=3)
+            assert list(result.columns) == ["a"]
 
     def test_read_delta_without_version(self):
-        """Lines 23-25: read_delta without version uses default DeltaTable."""
-        import sys
-
+        """read_delta without version uses default DeltaTable."""
         mock_dt = MagicMock()
         mock_dt.to_pandas.return_value = pd.DataFrame({"x": [10]})
         mock_deltalake = MagicMock()
@@ -84,31 +73,22 @@ class TestPandasBackend:
 
         import customer_retention.core.compat.pandas_backend as pb
 
-        with patch.object(pb, "DELTA_RS_AVAILABLE", True), patch.dict(
-            sys.modules, {"deltalake": mock_deltalake}
-        ):
-            pb.deltalake = mock_deltalake
-            try:
-                result = read_delta("/some/path")
-                mock_deltalake.DeltaTable.assert_called_once_with("/some/path")
-                assert list(result.columns) == ["x"]
-            finally:
-                if hasattr(pb, "deltalake"):
-                    del pb.deltalake
+        with patch.object(pb, "_import_deltalake", return_value=mock_deltalake):
+            result = read_delta("/some/path")
+            mock_deltalake.DeltaTable.assert_called_once_with("/some/path")
+            assert list(result.columns) == ["x"]
 
     def test_write_delta_raises_import_error_when_unavailable(self):
-        """Lines 30-31: write_delta raises ImportError when deltalake not installed."""
+        """write_delta raises ImportError when deltalake not installed."""
+        import customer_retention.core.compat.pandas_backend as pb
+
         df = pd.DataFrame({"a": [1, 2]})
-        with patch(
-            "customer_retention.core.compat.pandas_backend.DELTA_RS_AVAILABLE", False
-        ):
+        with patch.object(pb, "_import_deltalake", side_effect=ImportError("deltalake package required")):
             with pytest.raises(ImportError, match="deltalake package required"):
                 write_delta(df, "/some/path")
 
     def test_write_delta_calls_write_deltalake(self):
-        """Lines 32-33: write_delta calls write_deltalake with correct arguments."""
-        import sys
-
+        """write_delta calls write_deltalake with correct arguments."""
         df = pd.DataFrame({"a": [1, 2]})
         mock_deltalake = MagicMock()
         mock_write = MagicMock()
@@ -116,9 +96,7 @@ class TestPandasBackend:
 
         import customer_retention.core.compat.pandas_backend as pb
 
-        with patch.object(pb, "DELTA_RS_AVAILABLE", True), patch.dict(
-            sys.modules, {"deltalake": mock_deltalake}
-        ):
+        with patch.object(pb, "_import_deltalake", return_value=mock_deltalake):
             write_delta(df, "/output/path", mode="append", partition_by=["a"])
             mock_write.assert_called_once_with(
                 "/output/path", df, mode="append", partition_by=["a"]
