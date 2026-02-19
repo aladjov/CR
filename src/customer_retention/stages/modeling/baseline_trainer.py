@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import DataFrame, Series
+from customer_retention.core.compat import DataFrame, Series, to_pandas
 from customer_retention.core.components.enums import ModelType
 
 
@@ -76,6 +76,9 @@ class BaselineTrainer:
         X_val: Optional[DataFrame] = None,
         y_val: Optional[Series] = None,
     ) -> TrainedModel:
+        X, y = to_pandas(X), to_pandas(y)
+        if X_val is not None:
+            X_val, y_val = to_pandas(X_val), to_pandas(y_val)
         start_time = time.time()
         params = self._build_params()
         model = self._create_model(params)

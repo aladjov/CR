@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from sklearn.model_selection import GroupKFold, RepeatedStratifiedKFold, StratifiedKFold, cross_val_score
 
-from customer_retention.core.compat import DataFrame, Series
+from customer_retention.core.compat import DataFrame, Series, to_pandas
 
 
 class CVStrategy(Enum):
@@ -83,6 +83,11 @@ class CrossValidator:
         groups: Optional[Series] = None,
         temporal_values: Optional[Series] = None,
     ) -> CVResult:
+        X, y = to_pandas(X), to_pandas(y)
+        if groups is not None:
+            groups = to_pandas(groups)
+        if temporal_values is not None:
+            temporal_values = to_pandas(temporal_values)
         cv_splitter = self._create_cv_splitter(groups, temporal_values)
         fold_details = []
 

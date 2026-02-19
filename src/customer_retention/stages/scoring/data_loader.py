@@ -33,6 +33,11 @@ class ScoringDataLoader:
             return self._load_gold_from_spark()
         return self._load_gold_from_delta()
 
+    def load_gold_features_distributed(self) -> Any:
+        if self.config.is_databricks:
+            return self._load_gold_from_spark_distributed()
+        return self._load_gold_from_delta()
+
     def load_scoring_features(self, scoring_df: Any) -> Any:
         if self.config.is_databricks or not self.config.feast_repo_path:
             return scoring_df
@@ -118,6 +123,17 @@ class ScoringDataLoader:
         cn = self.config.composite_name
         table_name = f"{self.config.catalog}.{self.config.schema}.gold_features_{cn}"
         return spark.table(table_name).toPandas()
+
+    def _load_gold_from_spark_distributed(self) -> Any:
+        spark = get_spark_session()
+        if not spark:
+            raise RuntimeError("Spark session unavailable on Databricks")
+        cn = self.config.composite_name
+        table_name = f"{self.config.catalog}.{self.config.schema}.gold_features_{cn}"
+        spark_df = spark.table(table_name)
+        if hasattr(spark_df, "pandas_api"):
+            return spark_df.pandas_api()
+        return spark_df.to_pandas_on_spark()
 
     def _load_gold_from_delta(self) -> Any:
         cn = self.config.composite_name

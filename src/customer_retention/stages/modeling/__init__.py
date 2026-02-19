@@ -14,6 +14,7 @@ from .imbalance_handler import (
 from .mlflow_logger import ExperimentConfig, MLflowLogger
 from .model_comparator import ComparisonResult, ModelComparator, ModelMetrics
 from .model_evaluator import EvaluationResult, ModelEvaluator
+from .spark_feature_scaler import SparkFeatureScaler
 from .threshold_optimizer import OptimizationObjective, ThresholdOptimizer, ThresholdResult
 
 __all__ = [
@@ -27,5 +28,6 @@ __all__ = [
     "ThresholdOptimizer", "OptimizationObjective", "ThresholdResult",
     "ModelComparator", "ComparisonResult", "ModelMetrics",
     "FeatureScaler", "ScalerType", "ScalingResult",
+    "SparkFeatureScaler",
     "MLflowLogger", "ExperimentConfig",
 ]

@@ -120,6 +120,68 @@ class TestLoadGoldFeaturesDatabricks:
                 loader.load_gold_features()
 
 
+class TestLoadGoldFeaturesDistributedLocal:
+    def test_loads_from_delta_same_as_local(self, local_config, sample_gold_df, tmp_path):
+        from customer_retention.integrations.adapters.factory import get_delta
+
+        cn = local_config.composite_name
+        gold_dir = tmp_path / "data" / "gold" / f"gold_features_{cn}"
+        gold_dir.parent.mkdir(parents=True)
+        storage = get_delta(force_local=True)
+        storage.write(sample_gold_df, str(gold_dir))
+        local_config.production_dir = tmp_path
+        loader = ScoringDataLoader(local_config)
+        result = loader.load_gold_features_distributed()
+        assert len(result) == len(sample_gold_df)
+        assert "feature_a" in result.columns
+
+    def test_missing_gold_raises(self, local_config, tmp_path):
+        local_config.production_dir = tmp_path
+        loader = ScoringDataLoader(local_config)
+        with pytest.raises(FileNotFoundError):
+            loader.load_gold_features_distributed()
+
+
+class TestLoadGoldFeaturesDistributedDatabricks:
+    def test_returns_distributed_dataframe(self, databricks_config):
+        mock_spark = MagicMock()
+        mock_psdf = MagicMock()
+        mock_spark.table.return_value.pandas_api.return_value = mock_psdf
+        cn = databricks_config.composite_name
+        with patch("customer_retention.stages.scoring.data_loader.get_spark_session", return_value=mock_spark):
+            loader = ScoringDataLoader(databricks_config)
+            result = loader.load_gold_features_distributed()
+        mock_spark.table.assert_called_once_with(f"analytics.churn.gold_features_{cn}")
+        mock_spark.table.return_value.toPandas.assert_not_called()
+        assert result is mock_psdf
+
+    def test_falls_back_to_to_pandas_on_spark(self, databricks_config):
+        mock_spark = MagicMock()
+        mock_spark_df = MagicMock(spec=[])
+        mock_psdf = MagicMock()
+        mock_spark_df.to_pandas_on_spark = MagicMock(return_value=mock_psdf)
+        mock_spark.table.return_value = mock_spark_df
+        with patch("customer_retention.stages.scoring.data_loader.get_spark_session", return_value=mock_spark):
+            loader = ScoringDataLoader(databricks_config)
+            result = loader.load_gold_features_distributed()
+        mock_spark_df.to_pandas_on_spark.assert_called_once()
+        assert result is mock_psdf
+
+    def test_spark_unavailable_raises(self, databricks_config):
+        with patch("customer_retention.stages.scoring.data_loader.get_spark_session", return_value=None):
+            loader = ScoringDataLoader(databricks_config)
+            with pytest.raises(RuntimeError, match="Spark"):
+                loader.load_gold_features_distributed()
+
+    def test_does_not_call_to_pandas(self, databricks_config):
+        mock_spark = MagicMock()
+        mock_spark.table.return_value.pandas_api.return_value = MagicMock()
+        with patch("customer_retention.stages.scoring.data_loader.get_spark_session", return_value=mock_spark):
+            loader = ScoringDataLoader(databricks_config)
+            loader.load_gold_features_distributed()
+        mock_spark.table.return_value.toPandas.assert_not_called()
+
+
 class TestLoadModel:
     def test_loads_sklearn_model(self, local_config, mock_mlflow_client):
         mock_model = MagicMock()

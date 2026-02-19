@@ -755,7 +755,23 @@ def main():
         default=False,
         help="Execute via Databricks Connect (sets CR_SPARK_REMOTE=1)",
     )
+    parser.add_argument(
+        "--sample-entities",
+        type=int,
+        default=None,
+        help="Limit to N entity_ids across all datasets (sets CR_SAMPLE_ENTITY_COUNT)",
+    )
+    parser.add_argument(
+        "--max-grid-dates",
+        type=int,
+        default=None,
+        help="Cap snapshot grid to N dates (sets CR_GRID_MAX_DATES)",
+    )
     args = parser.parse_args()
+    if args.sample_entities:
+        os.environ["CR_SAMPLE_ENTITY_COUNT"] = str(args.sample_entities)
+    if args.max_grid_dates:
+        os.environ["CR_GRID_MAX_DATES"] = str(args.max_grid_dates)
     if args.spark_remote:
         os.environ["CR_SPARK_REMOTE"] = "1"
     else:

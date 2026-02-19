@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
 
-from customer_retention.core.compat import DataFrame, Series
+from customer_retention.core.compat import DataFrame, Series, to_pandas
 from customer_retention.core.config.column_config import select_model_ready_columns
 
 if TYPE_CHECKING:
@@ -67,6 +67,7 @@ class DataSplitter:
         self.purge_gap_days = purge_gap_days
 
     def split(self, df: DataFrame, feature_availability: Optional["FeatureAvailabilityMetadata"] = None) -> SplitResult:
+        df = to_pandas(df)
         self._validate_minority_samples(df)
         availability_warnings = self.validate_feature_availability(df, feature_availability)
 

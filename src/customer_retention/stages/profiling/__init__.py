@@ -86,6 +86,10 @@ from .segment_analyzer import (
     SegmentProfile,
 )
 from .segment_aware_outlier import SegmentAwareOutlierAnalyzer, SegmentAwareOutlierResult
+from .spark_segment_analyzer import SparkSegmentAnalyzer
+from .spark_temporal_feature_analyzer import SparkTemporalFeatureAnalyzer
+from .spark_temporal_feature_engineer import SparkTemporalFeatureEngineer
+from .spark_time_window_aggregator import SparkTimeWindowAggregator
 from .target_level_analyzer import (
     AggregationMethod,
     TargetColumnDetector,
@@ -240,6 +244,10 @@ __all__ = [
     "compute_effect_size", "compute_group_stats", "compute_recency_buckets",
     "detect_inflection_bucket", "classify_distribution_pattern",
     "RelationshipDetector", "DatasetRelationship", "RelationshipType", "JoinSuggestion",
+    "SparkSegmentAnalyzer",
+    "SparkTemporalFeatureAnalyzer",
+    "SparkTemporalFeatureEngineer",
+    "SparkTimeWindowAggregator",
     "TimeWindowAggregator", "AggregationPlan", "TimeWindow", "AggregationType", "derive_extra_datetime_features",
     "TemporalFeatureAnalyzer", "VelocityResult", "MomentumResult", "CohortVelocityResult",
     "CohortMomentumResult", "VelocityRecommendation", "LagCorrelationResult", "PredictivePowerResult", "FeatureRecommendation", "FeatureType",

@@ -17,12 +17,13 @@ from customer_retention.analysis.auto_explorer.project_context import (
 from customer_retention.core.config.column_config import DatasetGranularity
 
 
-def _cap_grid_dates(dates: list[str]) -> list[str]:
-    raw = os.environ.get("CR_GRID_MAX_DATES")
-    if not raw:
-        return dates
-    max_dates = int(raw)
-    if max_dates < 2 or len(dates) <= max_dates:
+def _cap_grid_dates(dates: list[str], max_dates_override: Optional[int] = None) -> list[str]:
+    max_dates: Optional[int] = max_dates_override
+    if max_dates is None:
+        raw = os.environ.get("CR_GRID_MAX_DATES")
+        if raw:
+            max_dates = int(raw)
+    if max_dates is None or max_dates < 2 or len(dates) <= max_dates:
         return dates
     step = (len(dates) - 1) / (max_dates - 1)
     indices = [round(i * step) for i in range(max_dates)]
@@ -78,6 +79,7 @@ class SnapshotGrid(BaseModel):
     grid_dates: list[str] = Field(default_factory=list)
     dataset_votes: dict[str, DatasetGridVote] = Field(default_factory=dict)
     locked: bool = False
+    max_grid_dates: Optional[int] = None
 
     @classmethod
     def from_intent(
@@ -141,7 +143,7 @@ class SnapshotGrid(BaseModel):
         while current <= end:
             dates.append(current.isoformat())
             current += step
-        self.grid_dates = _cap_grid_dates(dates)
+        self.grid_dates = _cap_grid_dates(dates, max_dates_override=self.max_grid_dates)
 
     def record_vote(self, name: str, vote: DatasetGridVote) -> None:
         if self.locked:

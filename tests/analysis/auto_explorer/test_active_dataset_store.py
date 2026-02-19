@@ -3,10 +3,13 @@ import pytest
 
 from customer_retention.analysis.auto_explorer.active_dataset_store import (
     load_active_dataset,
+    load_active_dataset_distributed,
     load_gold_features,
+    load_gold_features_distributed,
     load_merge_dataset,
     load_merge_dataset_distributed,
     load_silver_merged,
+    load_silver_merged_distributed,
     save_active_dataset,
     save_aggregated_dataset,
     save_gold_features,
@@ -154,3 +157,56 @@ class TestLoadMergeDatasetDistributed:
             load_merge_dataset_distributed(
                 namespace, "nonexistent", DatasetGranularity.ENTITY_LEVEL,
             )
+
+
+class TestLoadActiveDatasetDistributed:
+    def test_reads_without_conversion(self, namespace, sample_df):
+        save_active_dataset(namespace, "customers", sample_df)
+        result = load_active_dataset_distributed(namespace, "customers")
+        pd.testing.assert_frame_equal(result, sample_df)
+
+    def test_missing_raises_file_not_found(self, namespace):
+        with pytest.raises(FileNotFoundError):
+            load_active_dataset_distributed(namespace, "nonexistent")
+
+
+class TestLoadSilverMergedDistributed:
+    def test_returns_silver_when_exists(self, namespace):
+        merged_df = pd.DataFrame({
+            "customer_id": [1, 2],
+            "churned": [0, 1],
+            "feature_a": [10, 20],
+        })
+        delta = get_delta(force_local=True)
+        delta.write(merged_df, str(namespace.silver_merged_path), mode="overwrite")
+        result = load_silver_merged_distributed(
+            namespace, "events", DatasetGranularity.EVENT_LEVEL,
+        )
+        pd.testing.assert_frame_equal(result, merged_df)
+
+    def test_falls_back_to_bronze_when_no_silver(self, namespace, sample_df):
+        agg_df = pd.DataFrame({"customer_id": [1, 2], "count": [10, 20]})
+        save_active_dataset(namespace, "events", sample_df)
+        save_aggregated_dataset(namespace, "events", agg_df)
+        result = load_silver_merged_distributed(
+            namespace, "events", DatasetGranularity.EVENT_LEVEL,
+        )
+        pd.testing.assert_frame_equal(result, agg_df)
+
+    def test_falls_back_to_landing_when_nothing(self, namespace, sample_df):
+        save_active_dataset(namespace, "events", sample_df)
+        result = load_silver_merged_distributed(
+            namespace, "events", DatasetGranularity.EVENT_LEVEL,
+        )
+        pd.testing.assert_frame_equal(result, sample_df)
+
+
+class TestLoadGoldFeaturesDistributed:
+    def test_round_trip(self, namespace, sample_df):
+        save_gold_features(namespace, "cust_emai__abc1234", sample_df)
+        result = load_gold_features_distributed(namespace, "cust_emai__abc1234")
+        pd.testing.assert_frame_equal(result, sample_df)
+
+    def test_missing_raises(self, namespace):
+        with pytest.raises(FileNotFoundError):
+            load_gold_features_distributed(namespace, "nonexistent__0000000")

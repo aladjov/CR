@@ -98,6 +98,10 @@ class RunNamespace:
         return self.run_dir / "snapshot_grid.yaml"
 
     @property
+    def sample_entity_ids_path(self) -> Path:
+        return self.run_dir / "sample_entity_ids.json"
+
+    @property
     def silver_merged_path(self) -> Path:
         return self.silver_dir / "silver_merged"
 

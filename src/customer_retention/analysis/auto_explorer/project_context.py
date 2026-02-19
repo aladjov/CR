@@ -198,6 +198,14 @@ class ProjectContext(BaseModel):
     intent: Optional[IntentConfig] = None
     light_run: bool = False
     sample_fraction: Optional[float] = None
+    sample_entity_count: Optional[int] = None
+
+    @field_validator("sample_entity_count")
+    @classmethod
+    def _validate_sample_entity_count(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v < 1:
+            raise ValueError("sample_entity_count must be >= 1")
+        return v
 
     @field_validator("sample_fraction")
     @classmethod

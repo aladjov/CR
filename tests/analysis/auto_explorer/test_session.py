@@ -12,6 +12,7 @@ from customer_retention.analysis.auto_explorer.session import (
     load_notebook_findings,
     mark_notebook,
     resolve_active_dataset,
+    resolve_data_path,
     resolve_findings_path,
     resolve_target_column,
     sanitize_username,
@@ -483,3 +484,117 @@ class TestLoadNotebookFindings:
             "07_modeling_readiness.ipynb", prefer_merged=True, root=tmp_path
         )
         assert ds_name is None
+
+
+class TestResolveDataPath:
+    @staticmethod
+    def _make_project_ctx(tmp_path, datasets=None):
+        from customer_retention.analysis.auto_explorer.project_context import (
+            DatasetRegistryEntry,
+            ObjectiveAssessment,
+            ObjectivePriority,
+            ObjectiveSpec,
+            PredictionAnchor,
+            PredictionObjective,
+            ProjectContext,
+        )
+
+        if datasets is None:
+            datasets = {
+                "customers": DatasetRegistryEntry(
+                    name="customers",
+                    path=str(tmp_path / "customers.csv"),
+                ),
+            }
+        return ProjectContext(
+            project_name="test",
+            objectives=[
+                ObjectiveSpec(
+                    objective=PredictionObjective.IMMEDIATE_RISK,
+                    priority=ObjectivePriority.PRIMARY,
+                    anchor=PredictionAnchor.NOW,
+                    assessment=ObjectiveAssessment(
+                        confidence=90,
+                        suggested_anchor=PredictionAnchor.NOW,
+                        rationale=["test"],
+                    ),
+                ),
+            ],
+            datasets=datasets,
+        )
+
+    def test_explicit_path_returns_path_and_stem(self, tmp_path):
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        path, name = resolve_data_path("data/orders.csv", ns)
+        assert path == "data/orders.csv"
+        assert name == "orders"
+
+    def test_explicit_path_resolves_name_from_context(self, tmp_path):
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        ctx = self._make_project_ctx(tmp_path)
+        csv_path = str(tmp_path / "customers.csv")
+        path, name = resolve_data_path(csv_path, ns, project_ctx=ctx)
+        assert path == csv_path
+        assert name == "customers"
+
+    def test_none_resolves_from_session(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        monkeypatch.setenv("CR_USERNAME", "testuser")
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        ctx = self._make_project_ctx(tmp_path)
+        set_active_dataset(ns, "customers", username="testuser")
+        path, name = resolve_data_path(None, ns, project_ctx=ctx)
+        assert name == "customers"
+        assert path == str(tmp_path / "customers.csv")
+
+    def test_none_falls_back_to_first_dataset(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        monkeypatch.setenv("CR_USERNAME", "testuser")
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        ctx = self._make_project_ctx(tmp_path)
+        path, name = resolve_data_path(None, ns, project_ctx=ctx)
+        assert name == "customers"
+        assert path == str(tmp_path / "customers.csv")
+
+    def test_none_without_context_raises(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        monkeypatch.setenv("CR_USERNAME", "testuser")
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        with pytest.raises(ValueError, match="DATA_PATH is None"):
+            resolve_data_path(None, ns)
+
+    def test_none_with_empty_context_raises(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        monkeypatch.setenv("CR_USERNAME", "testuser")
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        ctx = self._make_project_ctx(tmp_path, datasets={})
+        with pytest.raises(ValueError, match="DATA_PATH is None"):
+            resolve_data_path(None, ns, project_ctx=ctx)
+
+    def test_none_prefers_session_dataset_over_first(self, tmp_path, monkeypatch):
+        from customer_retention.analysis.auto_explorer.project_context import DatasetRegistryEntry
+
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        monkeypatch.setenv("CR_USERNAME", "testuser")
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        ctx = self._make_project_ctx(
+            tmp_path,
+            datasets={
+                "alpha": DatasetRegistryEntry(name="alpha", path="alpha.csv"),
+                "beta": DatasetRegistryEntry(name="beta", path="beta.csv"),
+            },
+        )
+        set_active_dataset(ns, "beta", username="testuser")
+        path, name = resolve_data_path(None, ns, project_ctx=ctx)
+        assert name == "beta"
+        assert path == "beta.csv"
+
+    def test_none_session_name_not_in_context_falls_back(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        monkeypatch.setenv("CR_USERNAME", "testuser")
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        ctx = self._make_project_ctx(tmp_path)
+        set_active_dataset(ns, "unknown_dataset", username="testuser")
+        path, name = resolve_data_path(None, ns, project_ctx=ctx)
+        assert name == "customers"
+        assert path == str(tmp_path / "customers.csv")

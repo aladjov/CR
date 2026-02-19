@@ -88,3 +88,28 @@ def load_gold_features(namespace: RunNamespace, composite_name: str) -> Any:
     if not dlt_path.is_dir():
         raise FileNotFoundError(f"Gold features not found: {dlt_path}")
     return _to_native_pandas(_local_delta().read(str(dlt_path)))
+
+
+def load_active_dataset_distributed(namespace: RunNamespace, dataset_name: str) -> Any:
+    dlt_path = namespace.landing_table_dir(dataset_name)
+    if not dlt_path.is_dir():
+        raise FileNotFoundError(f"Active dataset not found: {dlt_path}")
+    return get_delta().read(str(dlt_path))
+
+
+def load_silver_merged_distributed(
+    namespace: RunNamespace,
+    dataset_name: str,
+    granularity: DatasetGranularity,
+) -> Any:
+    silver = namespace.silver_merged_path
+    if silver.is_dir():
+        return get_delta().read(str(silver))
+    return load_merge_dataset_distributed(namespace, dataset_name, granularity)
+
+
+def load_gold_features_distributed(namespace: RunNamespace, composite_name: str) -> Any:
+    dlt_path = namespace.gold_table_dir(composite_name)
+    if not dlt_path.is_dir():
+        raise FileNotFoundError(f"Gold features not found: {dlt_path}")
+    return get_delta().read(str(dlt_path))

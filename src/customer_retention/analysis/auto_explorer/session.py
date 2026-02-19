@@ -6,7 +6,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from .run_namespace import RunNamespace
 
@@ -126,6 +126,32 @@ def mark_notebook(
             last_notebook=notebook_name,
         )
     state.save(session_path)
+
+
+def resolve_data_path(
+    data_path: Optional[str],
+    namespace: RunNamespace,
+    project_ctx: Optional[Any] = None,
+) -> tuple[str, str]:
+    if data_path is not None:
+        name = (
+            (project_ctx.resolve_dataset_name(data_path) if project_ctx else None)
+            or Path(data_path).stem
+        )
+        return data_path, name
+
+    auto_name = resolve_active_dataset(namespace)
+    if auto_name and project_ctx and auto_name in project_ctx.datasets:
+        return project_ctx.datasets[auto_name].path, auto_name
+
+    if project_ctx and project_ctx.datasets:
+        first_name = next(iter(project_ctx.datasets))
+        return project_ctx.datasets[first_name].path, first_name
+
+    raise ValueError(
+        "DATA_PATH is None but no project context found for autodetection. "
+        "Set DATA_PATH explicitly or run notebook 00 first."
+    )
 
 
 def resolve_findings_path(
