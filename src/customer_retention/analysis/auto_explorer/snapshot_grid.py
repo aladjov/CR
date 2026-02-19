@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import os
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -14,6 +15,18 @@ from customer_retention.analysis.auto_explorer.project_context import (
     IntentConfig,
 )
 from customer_retention.core.config.column_config import DatasetGranularity
+
+
+def _cap_grid_dates(dates: list[str]) -> list[str]:
+    raw = os.environ.get("CR_GRID_MAX_DATES")
+    if not raw:
+        return dates
+    max_dates = int(raw)
+    if max_dates < 2 or len(dates) <= max_dates:
+        return dates
+    step = (len(dates) - 1) / (max_dates - 1)
+    indices = [round(i * step) for i in range(max_dates)]
+    return [dates[i] for i in indices]
 
 
 class GridAdjustmentMode(str, Enum):
@@ -128,7 +141,7 @@ class SnapshotGrid(BaseModel):
         while current <= end:
             dates.append(current.isoformat())
             current += step
-        self.grid_dates = dates
+        self.grid_dates = _cap_grid_dates(dates)
 
     def record_vote(self, name: str, vote: DatasetGridVote) -> None:
         if self.locked:
