@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-import pandas as pd
+from customer_retention.core.compat import native_pd
 
 from ..base import EncodingRecommendation, RecommendationResult
 
@@ -19,28 +19,28 @@ class OneHotEncodeRecommendation(EncodingRecommendation):
     def recommendation_type(self) -> str:
         return "onehot_encode"
 
-    def _fit_impl(self, df: pd.DataFrame) -> None:
+    def _fit_impl(self, df: Any) -> None:
         for col in self.columns:
             if col in df.columns:
                 self._categories[col] = list(df[col].dropna().unique())
         self._fit_params["categories"] = self._categories
 
-    def _transform_local(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_local(self, df: Any) -> RecommendationResult:
         df = df.copy()
         rows_before = len(df)
         new_cols = []
         for col in self.columns:
             if col in df.columns:
-                dummies = pd.get_dummies(df[col], prefix=col, drop_first=self.drop_first)
+                dummies = native_pd.get_dummies(df[col], prefix=col, drop_first=self.drop_first)
                 new_cols.extend(dummies.columns.tolist())
-                df = pd.concat([df, dummies], axis=1)
+                df = native_pd.concat([df, dummies], axis=1)
                 df = df.drop(columns=[col])
         return RecommendationResult(
             data=df, columns_affected=self.columns + new_cols, rows_before=rows_before,
             rows_after=len(df), metadata={"categories": self._categories, "new_columns": new_cols}
         )
 
-    def _transform_databricks(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_databricks(self, df: Any) -> RecommendationResult:
         from customer_retention.core.compat import is_spark_available
         if not is_spark_available():
             return self._transform_local(df)
@@ -49,7 +49,7 @@ class OneHotEncodeRecommendation(EncodingRecommendation):
     def _generate_local_code(self) -> str:
         lines = [f"# Encode: {self.rationale}"]
         for col in self.columns:
-            lines.append(f"df = pd.concat([df, pd.get_dummies(df['{col}'], prefix='{col}')], axis=1).drop(columns=['{col}'])")
+            lines.append(f"df = native_pd.concat([df, native_pd.get_dummies(df['{col}'], prefix='{col}')], axis=1).drop(columns=['{col}'])")
         return "\n".join(lines)
 
     def _generate_databricks_code(self) -> str:
@@ -74,14 +74,14 @@ class LabelEncodeRecommendation(EncodingRecommendation):
     def recommendation_type(self) -> str:
         return "label_encode"
 
-    def _fit_impl(self, df: pd.DataFrame) -> None:
+    def _fit_impl(self, df: Any) -> None:
         for col in self.columns:
             if col in df.columns:
                 categories = sorted(df[col].dropna().unique())
                 self._mappings[col] = {cat: idx for idx, cat in enumerate(categories)}
         self._fit_params["mappings"] = self._mappings
 
-    def _transform_local(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_local(self, df: Any) -> RecommendationResult:
         df = df.copy()
         rows_before = len(df)
         for col in self.columns:
@@ -92,7 +92,7 @@ class LabelEncodeRecommendation(EncodingRecommendation):
             rows_after=len(df), metadata={"mappings": self._mappings}
         )
 
-    def _transform_databricks(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_databricks(self, df: Any) -> RecommendationResult:
         from customer_retention.core.compat import is_spark_available
         if not is_spark_available():
             return self._transform_local(df)

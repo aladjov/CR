@@ -1,7 +1,5 @@
 from typing import Any, Dict, List, Optional
 
-import pandas as pd
-
 from ..base import CleaningRecommendation, RecommendationResult
 
 
@@ -21,7 +19,7 @@ class ImputeRecommendation(CleaningRecommendation):
     def recommendation_type(self) -> str:
         return f"impute_{self.strategy}"
 
-    def _fit_impl(self, df: pd.DataFrame) -> None:
+    def _fit_impl(self, df: Any) -> None:
         for col in self.columns:
             if col not in df.columns:
                 continue
@@ -37,7 +35,7 @@ class ImputeRecommendation(CleaningRecommendation):
                 self._impute_values[col] = self.fill_value
         self._fit_params["impute_values"] = self._impute_values
 
-    def _transform_local(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_local(self, df: Any) -> RecommendationResult:
         df = df.copy()
         rows_before = len(df)
         nulls_imputed = {}
@@ -51,7 +49,7 @@ class ImputeRecommendation(CleaningRecommendation):
             rows_after=len(df), metadata={"nulls_imputed": nulls_imputed}
         )
 
-    def _transform_databricks(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_databricks(self, df: Any) -> RecommendationResult:
         from customer_retention.core.compat import is_spark_available
         if not is_spark_available():
             return self._transform_local(df)

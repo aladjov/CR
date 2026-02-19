@@ -2048,7 +2048,7 @@ class TestBronzeEventCategoricalAggregation:
         mock_code = (
             "import pandas as pd\nimport numpy as np\n"
             "from pandas.api.types import is_numeric_dtype\n"
-            "from customer_retention.core.compat import ensure_datetime_column, as_tz_naive\n"
+            "from customer_retention.core.compat import ensure_timestamp, as_tz_naive\n"
             "TARGET_COLUMN = 'churn'\n"
             "PRODUCTION_DIR = __import__('pathlib').Path('/tmp/test_prod')\n"
         )

@@ -1,7 +1,5 @@
 from typing import Any, List, Optional
 
-import pandas as pd
-
 from ..base import BaseRecommendation, RecommendationResult
 
 
@@ -23,10 +21,10 @@ class DropColumnRecommendation(BaseRecommendation):
     def recommendation_type(self) -> str:
         return f"drop_{self.reason}"
 
-    def _fit_impl(self, df: pd.DataFrame) -> None:
+    def _fit_impl(self, df: Any) -> None:
         self._columns_to_drop = [c for c in self.columns if c in df.columns]
 
-    def _transform_local(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_local(self, df: Any) -> RecommendationResult:
         df = df.copy()
         rows_before = len(df)
         cols_to_drop = [c for c in self._columns_to_drop if c in df.columns]
@@ -37,7 +35,7 @@ class DropColumnRecommendation(BaseRecommendation):
             rows_after=len(df), metadata={"dropped_columns": cols_to_drop}
         )
 
-    def _transform_databricks(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_databricks(self, df: Any) -> RecommendationResult:
         from customer_retention.core.compat import is_spark_available
         if not is_spark_available():
             return self._transform_local(df)

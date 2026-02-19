@@ -186,14 +186,13 @@ def _is_event_level_dataset(
     # Signal 3: direct data inspection
     if dataset_path:
         try:
-            import pandas as pd
-
+            from customer_retention.core.compat import native_pd
             from customer_retention.stages.profiling import TypeDetector
 
             raw = (
-                pd.read_csv(dataset_path)
+                native_pd.read_csv(dataset_path)
                 if str(dataset_path).endswith(".csv")
-                else pd.read_parquet(dataset_path)
+                else native_pd.read_parquet(dataset_path)
             )
             detector = TypeDetector()
             result = detector.detect_granularity(raw)
@@ -233,14 +232,13 @@ def _has_text_columns_for_dataset(
     # Signal 2: direct data inspection
     if dataset_path:
         try:
-            import pandas as pd
-
+            from customer_retention.core.compat import native_pd
             from customer_retention.stages.profiling import TypeDetector
 
             raw = (
-                pd.read_csv(dataset_path)
+                native_pd.read_csv(dataset_path)
                 if str(dataset_path).endswith(".csv")
-                else pd.read_parquet(dataset_path)
+                else native_pd.read_parquet(dataset_path)
             )
             detector = TypeDetector()
             for col in raw.select_dtypes(include=["object"]).columns:

@@ -1,7 +1,5 @@
 from typing import Any, List, Optional
 
-import pandas as pd
-
 from customer_retention.core.compat import safe_to_list
 
 from ..base import CleaningRecommendation, RecommendationResult
@@ -23,7 +21,7 @@ class DeduplicateRecommendation(CleaningRecommendation):
     def recommendation_type(self) -> str:
         return f"deduplicate_{self.strategy}"
 
-    def _fit_impl(self, df: pd.DataFrame) -> None:
+    def _fit_impl(self, df: Any) -> None:
         existing_keys = [k for k in self.key_columns if k in df.columns]
         if not existing_keys:
             self._fit_params["duplicate_count"] = 0
@@ -36,7 +34,7 @@ class DeduplicateRecommendation(CleaningRecommendation):
         first_key = existing_keys[0]
         self._fit_params["duplicate_keys"] = safe_to_list(duplicated_df[first_key].unique())
 
-    def _transform_local(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_local(self, df: Any) -> RecommendationResult:
         df = df.copy()
         rows_before = len(df)
         existing_keys = [k for k in self.key_columns if k in df.columns]
@@ -61,7 +59,7 @@ class DeduplicateRecommendation(CleaningRecommendation):
             rows_after=rows_after, metadata={"duplicates_removed": rows_before - rows_after}
         )
 
-    def _transform_databricks(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_databricks(self, df: Any) -> RecommendationResult:
         from customer_retention.core.compat import is_spark_available
         if not is_spark_available():
             return self._transform_local(df)

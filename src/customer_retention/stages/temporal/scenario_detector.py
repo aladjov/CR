@@ -21,9 +21,7 @@ Example:
 """
 
 from datetime import datetime
-from typing import Optional
-
-import pandas as pd
+from typing import Any, Optional
 
 from .timestamp_discovery import TimestampDiscoveryEngine, TimestampDiscoveryResult
 from .timestamp_manager import TimestampConfig, TimestampStrategy
@@ -54,7 +52,7 @@ class ScenarioDetector:
         "target", "label", "outcome",
     )
 
-    def _resolve_target_column(self, df: pd.DataFrame, target_column: Optional[str]) -> Optional[str]:
+    def _resolve_target_column(self, df: Any, target_column: Optional[str]) -> Optional[str]:
         if target_column and target_column in df.columns:
             return target_column
         if target_column is not None:
@@ -65,14 +63,14 @@ class ScenarioDetector:
                     return col
         return None
 
-    def _effective_window(self, df: pd.DataFrame, target_column: Optional[str]) -> int:
+    def _effective_window(self, df: Any, target_column: Optional[str]) -> int:
         resolved = self._resolve_target_column(df, target_column)
         if resolved and resolved in df.columns and len(df) > 0 and df[resolved].notna().all():
             return 0
         return self.label_window_days
 
     def detect(
-        self, df: pd.DataFrame, target_column: str
+        self, df: Any, target_column: str
     ) -> tuple[str, TimestampConfig, TimestampDiscoveryResult]:
         discovery_result = self.discovery_engine.discover(df, target_column)
         window = self._effective_window(df, target_column)
@@ -187,7 +185,7 @@ class ScenarioDetector:
         }
 
 
-def auto_detect_and_configure(df: pd.DataFrame, target_column: str) -> tuple[str, TimestampConfig]:
+def auto_detect_and_configure(df: Any, target_column: str) -> tuple[str, TimestampConfig]:
     detector = ScenarioDetector()
     scenario, config, _ = detector.detect(df, target_column)
     return scenario, config

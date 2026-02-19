@@ -1,7 +1,5 @@
 from typing import Any, Dict, List, Optional
 
-import pandas as pd
-
 from ..base import CleaningRecommendation, RecommendationResult
 
 
@@ -19,7 +17,7 @@ class OutlierCapRecommendation(CleaningRecommendation):
     def recommendation_type(self) -> str:
         return f"cap_outliers_{self.percentile}"
 
-    def _fit_impl(self, df: pd.DataFrame) -> None:
+    def _fit_impl(self, df: Any) -> None:
         lower_pct = (100 - self.percentile) / 100
         upper_pct = self.percentile / 100
         for col in self.columns:
@@ -32,7 +30,7 @@ class OutlierCapRecommendation(CleaningRecommendation):
             }
         self._fit_params["bounds"] = self._bounds
 
-    def _transform_local(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_local(self, df: Any) -> RecommendationResult:
         df = df.copy()
         rows_before = len(df)
         outliers_capped = {}
@@ -47,7 +45,7 @@ class OutlierCapRecommendation(CleaningRecommendation):
             rows_after=len(df), metadata={"outliers_capped": outliers_capped, "bounds": self._bounds}
         )
 
-    def _transform_databricks(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_databricks(self, df: Any) -> RecommendationResult:
         from customer_retention.core.compat import is_spark_available
         if not is_spark_available():
             return self._transform_local(df)

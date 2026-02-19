@@ -11,8 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-import pandas as pd
-
+from customer_retention.core.compat import native_pd
 from customer_retention.stages.temporal import PointInTimeRegistry, SnapshotManager
 
 from .registry import FeatureRegistry
@@ -36,7 +35,7 @@ class FeatureStoreBackend(ABC):
     def write_features(
         self,
         table_name: str,
-        df: pd.DataFrame,
+        df: Any,
         mode: str = "merge",
         cutoff_date: Optional[datetime] = None,
     ) -> None:
@@ -45,10 +44,10 @@ class FeatureStoreBackend(ABC):
     @abstractmethod
     def get_historical_features(
         self,
-        entity_df: pd.DataFrame,
+        entity_df: Any,
         feature_refs: list[str],
         timestamp_column: str = "event_timestamp",
-    ) -> pd.DataFrame:
+    ) -> Any:
         """Get point-in-time correct historical features."""
         pass
 
@@ -117,12 +116,12 @@ class FeastBackend(FeatureStoreBackend):
         with metadata_path.open("w") as f:
             json.dump(self._tables, f, indent=2)
 
-    def _compute_feature_hash(self, df: pd.DataFrame, cutoff_date: Optional[datetime] = None) -> str:
+    def _compute_feature_hash(self, df: Any, cutoff_date: Optional[datetime] = None) -> str:
         df_stable = df.reset_index(drop=True).copy()
         for col in df_stable.select_dtypes(include=["datetime64", "datetime64[ns]"]).columns:
             df_stable[col] = df_stable[col].astype(str)
         df_stable = df_stable[sorted(df_stable.columns)]
-        data_bytes = pd.util.hash_pandas_object(df_stable).values.tobytes()
+        data_bytes = native_pd.util.hash_pandas_object(df_stable).to_numpy().tobytes()
         if cutoff_date:
             data_bytes += cutoff_date.isoformat().encode("utf-8")
         return hashlib.sha256(data_bytes).hexdigest()[:16]
@@ -153,7 +152,7 @@ class FeastBackend(FeatureStoreBackend):
     def write_features(
         self,
         table_name: str,
-        df: pd.DataFrame,
+        df: Any,
         mode: str = "merge",
         cutoff_date: Optional[datetime] = None,
     ) -> None:
@@ -171,10 +170,10 @@ class FeastBackend(FeatureStoreBackend):
                 self.storage.write(df, str(delta_path))
         else:
             if mode == "merge" and parquet_path.exists():
-                existing = pd.read_parquet(str(parquet_path))
+                existing = native_pd.read_parquet(str(parquet_path))
                 if table_name in self._tables:
                     entity_key = self._tables[table_name]["entity_key"]
-                    df = pd.concat([existing, df]).drop_duplicates(subset=[entity_key], keep="last")
+                    df = native_pd.concat([existing, df]).drop_duplicates(subset=[entity_key], keep="last")
             df.to_parquet(str(parquet_path), index=False)
 
         effective_cutoff = cutoff_date or (
@@ -191,10 +190,10 @@ class FeastBackend(FeatureStoreBackend):
 
     def get_historical_features(
         self,
-        entity_df: pd.DataFrame,
+        entity_df: Any,
         feature_refs: list[str],
         timestamp_column: str = "event_timestamp",
-    ) -> pd.DataFrame:
+    ) -> Any:
         """Get point-in-time correct historical features using Feast."""
         try:
             return self.store.get_historical_features(
@@ -207,10 +206,10 @@ class FeastBackend(FeatureStoreBackend):
 
     def _manual_pit_join(
         self,
-        entity_df: pd.DataFrame,
+        entity_df: Any,
         feature_refs: list[str],
         timestamp_column: str,
-    ) -> pd.DataFrame:
+    ) -> Any:
         """Manual point-in-time join when Feast is not configured."""
         result = entity_df.copy()
 
@@ -273,7 +272,7 @@ class FeastBackend(FeatureStoreBackend):
             ).to_dict()
         except Exception:
             # Fallback: read latest from parquet
-            entity_df = pd.DataFrame(entity_keys)
+            entity_df = native_pd.DataFrame(entity_keys)
             result = self.get_historical_features(
                 entity_df, feature_refs, "event_timestamp"
             )
@@ -291,17 +290,17 @@ class FeastBackend(FeatureStoreBackend):
                     tables.append(subdir.name)
         return tables
 
-    def _read_table_data(self, table_name: str) -> Optional[pd.DataFrame]:
+    def _read_table_data(self, table_name: str) -> Optional[Any]:
         delta_path = self.repo_path / "data" / table_name
         parquet_path = self.repo_path / "data" / f"{table_name}.parquet"
         if self.storage and self.storage.exists(str(delta_path)):
             return self.storage.read(str(delta_path))
         if parquet_path.exists():
-            return pd.read_parquet(str(parquet_path))
+            return native_pd.read_parquet(str(parquet_path))
         return None
 
 
-def _to_spark_df(spark: "Any", df: pd.DataFrame) -> "Any":
+def _to_spark_df(spark: "Any", df: Any) -> "Any":
     from customer_retention.core.compat import normalize_timestamp_columns, pandas_dtype_to_spark_schema
     normalized = normalize_timestamp_columns(df)
     schema = pandas_dtype_to_spark_schema(normalized)
@@ -375,7 +374,7 @@ class DatabricksBackend(FeatureStoreBackend):
     def write_features(
         self,
         table_name: str,
-        df: pd.DataFrame,
+        df: Any,
         mode: str = "merge",
         cutoff_date: Optional[datetime] = None,
     ) -> None:
@@ -388,10 +387,10 @@ class DatabricksBackend(FeatureStoreBackend):
 
     def get_historical_features(
         self,
-        entity_df: pd.DataFrame,
+        entity_df: Any,
         feature_refs: list[str],
         timestamp_column: str = "event_timestamp",
-    ) -> pd.DataFrame:
+    ) -> Any:
         """Get point-in-time correct historical features."""
         from databricks.feature_engineering import FeatureLookup
         from pyspark.sql import SparkSession
@@ -432,7 +431,7 @@ class DatabricksBackend(FeatureStoreBackend):
         from pyspark.sql import SparkSession
 
         spark = SparkSession.builder.getOrCreate()
-        entity_df = pd.DataFrame(entity_keys)
+        entity_df = native_pd.DataFrame(entity_keys)
         entity_spark = _to_spark_df(spark, entity_df)
 
         lookups = []
@@ -521,7 +520,7 @@ class FeatureStoreManager:
 
     def publish_features(
         self,
-        df: pd.DataFrame,
+        df: Any,
         registry: FeatureRegistry,
         table_name: str,
         entity_key: str = "entity_id",
@@ -565,12 +564,12 @@ class FeatureStoreManager:
 
     def get_training_features(
         self,
-        entity_df: pd.DataFrame,
+        entity_df: Any,
         registry: FeatureRegistry,
         feature_names: Optional[list[str]] = None,
         table_name: str = "customer_features",
         timestamp_column: str = "event_timestamp",
-    ) -> pd.DataFrame:
+    ) -> Any:
         """Get point-in-time correct features for training.
 
         Args:
@@ -596,12 +595,12 @@ class FeatureStoreManager:
 
     def get_inference_features(
         self,
-        entity_df: pd.DataFrame,
+        entity_df: Any,
         registry: FeatureRegistry,
         feature_names: Optional[list[str]] = None,
         table_name: str = "customer_features",
         timestamp_column: str = "event_timestamp",
-    ) -> pd.DataFrame:
+    ) -> Any:
         """Get point-in-time correct features for batch inference.
 
         This is the recommended method for batch inference as it ensures
@@ -680,7 +679,7 @@ class FeatureStoreManager:
         snapshot_id: str,
         registry: FeatureRegistry,
         target_column: str = "target",
-    ) -> tuple[pd.DataFrame, pd.Series]:
+    ) -> tuple[Any, Any]:
         """Create a training set from a snapshot.
 
         This loads a versioned snapshot and prepares it for training,

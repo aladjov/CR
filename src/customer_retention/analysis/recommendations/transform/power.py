@@ -1,7 +1,6 @@
 from typing import Any, List, Optional
 
 import numpy as np
-import pandas as pd
 
 from ..base import RecommendationResult, TransformRecommendation
 
@@ -18,10 +17,10 @@ class LogTransformRecommendation(TransformRecommendation):
     def recommendation_type(self) -> str:
         return "log_transform"
 
-    def _fit_impl(self, df: pd.DataFrame) -> None:
+    def _fit_impl(self, df: Any) -> None:
         self._fit_params["columns"] = self.columns
 
-    def _transform_local(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_local(self, df: Any) -> RecommendationResult:
         df = df.copy()
         for col in self.columns:
             if col in df.columns:
@@ -31,7 +30,7 @@ class LogTransformRecommendation(TransformRecommendation):
             rows_after=len(df), metadata={"transform": "log1p"}
         )
 
-    def _transform_databricks(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_databricks(self, df: Any) -> RecommendationResult:
         from customer_retention.core.compat import is_spark_available
         if not is_spark_available():
             return self._transform_local(df)
@@ -62,10 +61,10 @@ class SqrtTransformRecommendation(TransformRecommendation):
     def recommendation_type(self) -> str:
         return "sqrt_transform"
 
-    def _fit_impl(self, df: pd.DataFrame) -> None:
+    def _fit_impl(self, df: Any) -> None:
         self._fit_params["columns"] = self.columns
 
-    def _transform_local(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_local(self, df: Any) -> RecommendationResult:
         df = df.copy()
         for col in self.columns:
             if col in df.columns:
@@ -75,7 +74,7 @@ class SqrtTransformRecommendation(TransformRecommendation):
             rows_after=len(df), metadata={"transform": "sqrt"}
         )
 
-    def _transform_databricks(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_databricks(self, df: Any) -> RecommendationResult:
         from customer_retention.core.compat import is_spark_available
         if not is_spark_available():
             return self._transform_local(df)

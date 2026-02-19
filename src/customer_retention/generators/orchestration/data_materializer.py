@@ -1,15 +1,14 @@
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import numpy as np
-import pandas as pd
 from sklearn.preprocessing import RobustScaler, StandardScaler
 
 from customer_retention.analysis.auto_explorer.layered_recommendations import (
     LayeredRecommendation,
     RecommendationRegistry,
 )
-from customer_retention.core.compat import safe_to_datetime
+from customer_retention.core.compat import native_pd, safe_to_datetime
 
 
 class DataMaterializer:
@@ -20,18 +19,18 @@ class DataMaterializer:
         self.storage = storage or _get_storage()
         self.context = context
 
-    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
+    def transform(self, df: Any) -> native_pd.DataFrame:
         df = self.apply_bronze(df)
         df = self.apply_silver(df)
         df = self.apply_gold(df)
         return df
 
-    def materialize(self, df: pd.DataFrame, output_name: str) -> Tuple[pd.DataFrame, str]:
+    def materialize(self, df: native_pd.DataFrame, output_name: str) -> Tuple[native_pd.DataFrame, str]:
         result_df = self.transform(df)
         output_path = self._save(result_df, output_name)
         return result_df, output_path
 
-    def apply_bronze(self, df: pd.DataFrame) -> pd.DataFrame:
+    def apply_bronze(self, df: Any) -> native_pd.DataFrame:
         if not self.registry.bronze:
             return df
         df = df.copy()
@@ -45,7 +44,7 @@ class DataMaterializer:
             df = self._apply_filtering(df, rec)
         return df
 
-    def apply_silver(self, df: pd.DataFrame) -> pd.DataFrame:
+    def apply_silver(self, df: Any) -> native_pd.DataFrame:
         if not self.registry.silver:
             return df
         df = df.copy()
@@ -55,7 +54,7 @@ class DataMaterializer:
             df = self._apply_derived(df, rec)
         return df
 
-    def apply_gold(self, df: pd.DataFrame) -> pd.DataFrame:
+    def apply_gold(self, df: Any) -> native_pd.DataFrame:
         if not self.registry.gold:
             return df
         df = df.copy()
@@ -67,7 +66,7 @@ class DataMaterializer:
             df = self._apply_scaling(df, rec)
         return df
 
-    def _apply_null_handling(self, df: pd.DataFrame, rec: LayeredRecommendation) -> pd.DataFrame:
+    def _apply_null_handling(self, df: native_pd.DataFrame, rec: LayeredRecommendation) -> native_pd.DataFrame:
         col = rec.target_column
         if col not in df.columns:
             return df
@@ -82,7 +81,7 @@ class DataMaterializer:
             df[col] = df[col].fillna(0)
         return df
 
-    def _apply_outlier_handling(self, df: pd.DataFrame, rec: LayeredRecommendation) -> pd.DataFrame:
+    def _apply_outlier_handling(self, df: native_pd.DataFrame, rec: LayeredRecommendation) -> native_pd.DataFrame:
         col = rec.target_column
         if col not in df.columns:
             return df
@@ -95,7 +94,7 @@ class DataMaterializer:
             df[col] = df[col].clip(lower, upper)
         return df
 
-    def _apply_type_conversion(self, df: pd.DataFrame, rec: LayeredRecommendation) -> pd.DataFrame:
+    def _apply_type_conversion(self, df: native_pd.DataFrame, rec: LayeredRecommendation) -> native_pd.DataFrame:
         col = rec.target_column
         if col not in df.columns:
             return df
@@ -106,13 +105,13 @@ class DataMaterializer:
             df[col] = df[col].astype(target_type)
         return df
 
-    def _apply_filtering(self, df: pd.DataFrame, rec: LayeredRecommendation) -> pd.DataFrame:
+    def _apply_filtering(self, df: native_pd.DataFrame, rec: LayeredRecommendation) -> native_pd.DataFrame:
         col = rec.target_column
         if rec.action == "drop" and col in df.columns:
             df = df.drop(columns=[col])
         return df
 
-    def _apply_aggregation(self, df: pd.DataFrame, rec: LayeredRecommendation) -> pd.DataFrame:
+    def _apply_aggregation(self, df: native_pd.DataFrame, rec: LayeredRecommendation) -> native_pd.DataFrame:
         col = rec.target_column
         if col not in df.columns or not self.registry.silver:
             return df
@@ -122,10 +121,10 @@ class DataMaterializer:
         df[feature_name] = df.groupby(entity_col)[col].transform(agg_func)
         return df
 
-    def _apply_derived(self, df: pd.DataFrame, rec: LayeredRecommendation) -> pd.DataFrame:
+    def _apply_derived(self, df: native_pd.DataFrame, rec: LayeredRecommendation) -> native_pd.DataFrame:
         return df
 
-    def _apply_transformation(self, df: pd.DataFrame, rec: LayeredRecommendation) -> pd.DataFrame:
+    def _apply_transformation(self, df: native_pd.DataFrame, rec: LayeredRecommendation) -> native_pd.DataFrame:
         col = rec.target_column
         if col not in df.columns:
             return df
@@ -136,17 +135,17 @@ class DataMaterializer:
             df[col] = np.sqrt(df[col])
         return df
 
-    def _apply_encoding(self, df: pd.DataFrame, rec: LayeredRecommendation) -> pd.DataFrame:
+    def _apply_encoding(self, df: native_pd.DataFrame, rec: LayeredRecommendation) -> native_pd.DataFrame:
         col = rec.target_column
         if col not in df.columns:
             return df
         method = rec.parameters.get("method", "one_hot")
         if method == "one_hot":
-            dummies = pd.get_dummies(df[col], prefix=col, drop_first=False)
-            df = pd.concat([df.drop(columns=[col]), dummies], axis=1)
+            dummies = native_pd.get_dummies(df[col], prefix=col, drop_first=False)
+            df = native_pd.concat([df.drop(columns=[col]), dummies], axis=1)
         return df
 
-    def _apply_scaling(self, df: pd.DataFrame, rec: LayeredRecommendation) -> pd.DataFrame:
+    def _apply_scaling(self, df: native_pd.DataFrame, rec: LayeredRecommendation) -> native_pd.DataFrame:
         col = rec.target_column
         if col not in df.columns:
             return df
@@ -155,7 +154,7 @@ class DataMaterializer:
         df[col] = scaler.fit_transform(df[[col]])
         return df
 
-    def _save(self, df: pd.DataFrame, output_name: str) -> str:
+    def _save(self, df: native_pd.DataFrame, output_name: str) -> str:
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
         output_path = f"{self.output_dir}/{output_name}"
         if self.storage:
@@ -169,12 +168,12 @@ class DataMaterializer:
             df.to_parquet(output_path, index=False)
         return output_path
 
-    def compare_runs(self, path: str, version_a: int, version_b: int) -> pd.DataFrame:
+    def compare_runs(self, path: str, version_a: int, version_b: int) -> native_pd.DataFrame:
         if not self.storage:
             raise RuntimeError("DeltaStorage required for version comparison")
         df_a = self.storage.read(path, version=version_a)
         df_b = self.storage.read(path, version=version_b)
-        return pd.DataFrame({
+        return native_pd.DataFrame({
             "metric": ["row_count", "column_count"],
             "version_a": [len(df_a), len(df_a.columns)],
             "version_b": [len(df_b), len(df_b.columns)],

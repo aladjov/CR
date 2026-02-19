@@ -1,8 +1,6 @@
 import re
 from typing import Any, Dict, List, Optional
 
-import pandas as pd
-
 from ..base import CleaningRecommendation, RecommendationResult
 
 
@@ -20,7 +18,7 @@ class ConsistencyNormalizeRecommendation(CleaningRecommendation):
     def recommendation_type(self) -> str:
         return f"normalize_{self.normalization}"
 
-    def _fit_impl(self, df: pd.DataFrame) -> None:
+    def _fit_impl(self, df: Any) -> None:
         variants = {}
         unique_before = {}
         for col in self.columns:
@@ -33,7 +31,7 @@ class ConsistencyNormalizeRecommendation(CleaningRecommendation):
         self._fit_params["unique_before"] = unique_before
         self._unique_before = unique_before
 
-    def _normalize_series(self, series: pd.Series) -> pd.Series:
+    def _normalize_series(self, series: Any) -> Any:
         if series.dtype != object:
             return series
         if self.normalization == "lowercase":
@@ -48,7 +46,7 @@ class ConsistencyNormalizeRecommendation(CleaningRecommendation):
             return series.apply(lambda x: re.sub(r'\s+', ' ', x) if isinstance(x, str) else x)
         return series
 
-    def _transform_local(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_local(self, df: Any) -> RecommendationResult:
         df = df.copy()
         rows_before = len(df)
         values_changed = {}
@@ -69,7 +67,7 @@ class ConsistencyNormalizeRecommendation(CleaningRecommendation):
             }
         )
 
-    def _transform_databricks(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_databricks(self, df: Any) -> RecommendationResult:
         from customer_retention.core.compat import is_spark_available
         if not is_spark_available():
             return self._transform_local(df)

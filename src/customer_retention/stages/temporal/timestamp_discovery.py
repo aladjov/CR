@@ -24,9 +24,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Optional
 
-import pandas as pd
-
-from customer_retention.core.compat import is_datetime64_any_dtype, is_numeric_dtype
+from customer_retention.core.compat import is_datetime64_any_dtype, is_numeric_dtype, to_datetime
 
 
 class TimestampRole(Enum):
@@ -117,7 +115,7 @@ class TimestampDiscoveryResult:
         ]
 
 
-def _looks_like_datetime_strings(sample: pd.Series) -> bool:
+def _looks_like_datetime_strings(sample: Any) -> bool:
     if len(sample) == 0:
         return False
     str_sample = sample.astype(str)
@@ -135,7 +133,7 @@ class DatetimeOrderAnalyzer:
         r"lastorder", r"lastlogin", r"lastpurchase", r"lastvisit",
     ]
 
-    def analyze_datetime_ordering(self, df: pd.DataFrame) -> list[str]:
+    def analyze_datetime_ordering(self, df: Any) -> list[str]:
         datetime_cols = [c for c in self._get_datetime_columns(df) if not self._has_future_dates(df, c)]
         if not datetime_cols:
             return []
@@ -143,11 +141,11 @@ class DatetimeOrderAnalyzer:
         for col in datetime_cols:
             series = df[col].dropna()
             if not is_datetime64_any_dtype(series):
-                series = pd.to_datetime(series, format="mixed", errors="coerce")
+                series = to_datetime(series, format="mixed", errors="coerce")
             median_dates[col] = series.dropna().median()
         return sorted(datetime_cols, key=lambda c: median_dates[c])
 
-    def find_latest_activity_column(self, df: pd.DataFrame) -> Optional[str]:
+    def find_latest_activity_column(self, df: Any) -> Optional[str]:
         datetime_cols = self._get_datetime_columns(df)
         if not datetime_cols:
             return None
@@ -156,11 +154,11 @@ class DatetimeOrderAnalyzer:
             return self._select_chronologically_latest(df, activity_cols)
         return self._select_chronologically_latest(df, datetime_cols)
 
-    def find_earliest_column(self, df: pd.DataFrame) -> Optional[str]:
+    def find_earliest_column(self, df: Any) -> Optional[str]:
         ordering = self.analyze_datetime_ordering(df)
         return ordering[0] if ordering else None
 
-    def derive_last_action_date(self, df: pd.DataFrame) -> Optional[pd.Series]:
+    def derive_last_action_date(self, df: Any) -> Optional[Any]:
         ordering = self.analyze_datetime_ordering(df)
         if not ordering:
             return None
@@ -168,18 +166,18 @@ class DatetimeOrderAnalyzer:
         coalesced.name = "last_action_date"
         return coalesced
 
-    def _coalesce_datetime_columns(self, df: pd.DataFrame, columns: list[str]) -> pd.Series:
+    def _coalesce_datetime_columns(self, df: Any, columns: list[str]) -> Any:
         result = self._ensure_datetime_column(df, columns[0])
         for col in columns[1:]:
             result = result.fillna(self._ensure_datetime_column(df, col))
         return result
 
-    def _ensure_datetime_column(self, df: pd.DataFrame, col: str) -> pd.Series:
+    def _ensure_datetime_column(self, df: Any, col: str) -> Any:
         if is_datetime64_any_dtype(df[col]):
             return df[col]
-        return pd.to_datetime(df[col], format="mixed", errors="coerce")
+        return to_datetime(df[col], format="mixed", errors="coerce")
 
-    def _get_datetime_columns(self, df: pd.DataFrame) -> list[str]:
+    def _get_datetime_columns(self, df: Any) -> list[str]:
         result = []
         for col in df.columns:
             if is_datetime64_any_dtype(df[col]):
@@ -187,7 +185,7 @@ class DatetimeOrderAnalyzer:
             elif df[col].dtype == object:
                 sample = df[col].dropna().head(100)
                 if _looks_like_datetime_strings(sample):
-                    parsed = pd.to_datetime(sample, format="mixed", errors="coerce")
+                    parsed = to_datetime(sample, format="mixed", errors="coerce")
                     if parsed.notna().mean() > 0.8:
                         result.append(col)
         return result
@@ -196,10 +194,10 @@ class DatetimeOrderAnalyzer:
         col_lower = col_name.lower()
         return any(re.search(p, col_lower) for p in self.ACTIVITY_PATTERNS)
 
-    def _has_future_dates(self, df: pd.DataFrame, col: str) -> bool:
+    def _has_future_dates(self, df: Any, col: str) -> bool:
         series = df[col].dropna()
         if not is_datetime64_any_dtype(series):
-            series = pd.to_datetime(series, format="mixed", errors="coerce")
+            series = to_datetime(series, format="mixed", errors="coerce")
         series = series.dropna()
         if series.empty:
             return False
@@ -207,12 +205,12 @@ class DatetimeOrderAnalyzer:
             series = series.dt.tz_localize(None)
         return series.median() > datetime.now()
 
-    def _select_chronologically_latest(self, df: pd.DataFrame, cols: list[str]) -> str:
+    def _select_chronologically_latest(self, df: Any, cols: list[str]) -> str:
         max_dates = {}
         for col in cols:
             series = df[col].dropna()
             if not is_datetime64_any_dtype(series):
-                series = pd.to_datetime(series, format="mixed", errors="coerce")
+                series = to_datetime(series, format="mixed", errors="coerce")
             max_dates[col] = series.dropna().max()
         return max(cols, key=lambda c: max_dates[c])
 
@@ -274,7 +272,7 @@ class TimestampDiscoveryEngine:
         self.label_window_days = label_window_days
         self.order_analyzer = DatetimeOrderAnalyzer()
 
-    def discover(self, df: pd.DataFrame, target_column: Optional[str] = None) -> TimestampDiscoveryResult:
+    def discover(self, df: Any, target_column: Optional[str] = None) -> TimestampDiscoveryResult:
         datetime_candidates = self._discover_datetime_columns(df)
         derivable_candidates = self._discover_derivable_timestamps(df)
         all_candidates = datetime_candidates + derivable_candidates
@@ -304,21 +302,21 @@ class TimestampDiscoveryEngine:
             discovery_report=discovery_report,
         )
 
-    def _discover_datetime_columns(self, df: pd.DataFrame) -> list[TimestampCandidate]:
+    def _discover_datetime_columns(self, df: Any) -> list[TimestampCandidate]:
         return [
             c for col in df.columns
             if (c := self._analyze_column_for_datetime(df, col))
             and not self.order_analyzer._has_future_dates(df, col)
         ]
 
-    def _analyze_column_for_datetime(self, df: pd.DataFrame, col: str) -> Optional[TimestampCandidate]:
+    def _analyze_column_for_datetime(self, df: Any, col: str) -> Optional[TimestampCandidate]:
         if is_datetime64_any_dtype(df[col]):
             return self._create_datetime_candidate(df, col)
 
         if df[col].dtype == object:
             sample = df[col].dropna().head(100)
             if _looks_like_datetime_strings(sample):
-                parsed = pd.to_datetime(sample, format="mixed", errors="coerce")
+                parsed = to_datetime(sample, format="mixed", errors="coerce")
                 if parsed.notna().mean() > 0.8:
                     return self._create_datetime_candidate(df, col, needs_parsing=True)
 
@@ -327,7 +325,7 @@ class TimestampDiscoveryEngine:
 
         return None
 
-    def _looks_like_unix_timestamp(self, series: pd.Series) -> bool:
+    def _looks_like_unix_timestamp(self, series: Any) -> bool:
         sample = series.dropna().head(100)
         if len(sample) == 0:
             return False
@@ -341,15 +339,15 @@ class TimestampDiscoveryEngine:
         return is_seconds or is_milliseconds
 
     def _create_datetime_candidate(
-        self, df: pd.DataFrame, col: str, needs_parsing: bool = False, is_unix: bool = False
+        self, df: Any, col: str, needs_parsing: bool = False, is_unix: bool = False
     ) -> TimestampCandidate:
         if is_unix:
             try:
-                dt_series = pd.to_datetime(df[col], unit="s", errors="coerce")
+                dt_series = to_datetime(df[col], unit="s", errors="coerce")
             except Exception:
-                dt_series = pd.to_datetime(df[col], unit="ms", errors="coerce")
+                dt_series = to_datetime(df[col], unit="ms", errors="coerce")
         elif needs_parsing:
-            dt_series = pd.to_datetime(df[col], format="mixed", errors="coerce")
+            dt_series = to_datetime(df[col], format="mixed", errors="coerce")
         else:
             dt_series = df[col]
 
@@ -365,7 +363,7 @@ class TimestampDiscoveryEngine:
             notes=f"{'Unix timestamp' if is_unix else 'Datetime column'}",
         )
 
-    def _discover_derivable_timestamps(self, df: pd.DataFrame) -> list[TimestampCandidate]:
+    def _discover_derivable_timestamps(self, df: Any) -> list[TimestampCandidate]:
         derivable = []
         for col in df.columns:
             col_lower = col.lower()
@@ -379,7 +377,7 @@ class TimestampDiscoveryEngine:
                         derivable.append(self._create_contract_derived_candidate(df, col, start_col))
         return derivable
 
-    def _create_tenure_derived_candidate(self, df: pd.DataFrame, tenure_col: str) -> TimestampCandidate:
+    def _create_tenure_derived_candidate(self, df: Any, tenure_col: str) -> TimestampCandidate:
         sample_tenure = df[tenure_col].dropna().head(100)
         avg_tenure = sample_tenure.mean() if len(sample_tenure) > 0 else 0
 
@@ -397,7 +395,7 @@ class TimestampDiscoveryEngine:
         )
 
     def _create_contract_derived_candidate(
-        self, df: pd.DataFrame, length_col: str, start_col: str
+        self, df: Any, length_col: str, start_col: str
     ) -> TimestampCandidate:
         return TimestampCandidate(
             column_name=f"derived_contract_end_from_{length_col}",
@@ -409,13 +407,13 @@ class TimestampDiscoveryEngine:
             notes=f"Derived contract end from {start_col} + {length_col}",
         )
 
-    def _find_related_start_date(self, df: pd.DataFrame, length_col: str) -> Optional[str]:
+    def _find_related_start_date(self, df: Any, length_col: str) -> Optional[str]:
         for col in df.columns:
             if any(p in col.lower() for p in ["start", "begin", "signup", "created"]):
                 if is_datetime64_any_dtype(df[col]):
                     return col
                 try:
-                    pd.to_datetime(df[col].dropna().head(10), format="mixed")
+                    to_datetime(df[col].dropna().head(10), format="mixed")
                     return col
                 except Exception:
                     pass
@@ -468,7 +466,7 @@ class TimestampDiscoveryEngine:
         return matching[0]
 
     def _promote_latest_to_feature(
-        self, df: pd.DataFrame, candidates: list[TimestampCandidate]
+        self, df: Any, candidates: list[TimestampCandidate]
     ) -> Optional[TimestampCandidate]:
         latest_col = self.order_analyzer.find_latest_activity_column(df)
         if not latest_col:
@@ -538,7 +536,7 @@ class TimestampDiscoveryEngine:
         )
 
     def _build_report(
-        self, df: pd.DataFrame, datetime_candidates: list[TimestampCandidate],
+        self, df: Any, datetime_candidates: list[TimestampCandidate],
         derivable_candidates: list[TimestampCandidate], classified: list[TimestampCandidate]
     ) -> dict[str, Any]:
         return {

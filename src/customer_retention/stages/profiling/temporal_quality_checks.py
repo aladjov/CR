@@ -5,7 +5,7 @@ from customer_retention.core.compat import (
     DataFrame,
     Timestamp,
     as_tz_naive,
-    ensure_datetime_column,
+    ensure_timestamp,
     safe_to_datetime,
     safe_to_list,
     timestamp_diffs_seconds,
@@ -84,7 +84,7 @@ class TemporalGapCheck(TemporalQualityCheck):
         if len(df) < 2:
             return self._pass_result("Insufficient data to check gaps")
 
-        ensure_datetime_column(df, self.time_column)
+        ensure_timestamp(df, self.time_column)
         time_col = df.sort_values(self.time_column)[self.time_column]
         diffs_days = timestamp_diffs_seconds(time_col).dropna() / 86400
         expected_days = self.FREQ_TO_DAYS.get(self.expected_frequency, 1)

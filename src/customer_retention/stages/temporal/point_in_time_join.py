@@ -22,9 +22,7 @@ Example:
 
 from typing import Any
 
-import pandas as pd
-
-from customer_retention.core.compat import as_tz_naive, is_datetime64_any_dtype
+from customer_retention.core.compat import as_tz_naive, is_datetime64_any_dtype, native_pd, to_datetime
 
 
 class PointInTimeJoiner:
@@ -41,9 +39,9 @@ class PointInTimeJoiner:
     """
     @staticmethod
     def join_features(
-        base_df: pd.DataFrame, feature_df: pd.DataFrame, entity_key: str,
+        base_df: Any, feature_df: Any, entity_key: str,
         base_timestamp_col: str = "feature_timestamp", feature_timestamp_col: str = "feature_timestamp"
-    ) -> pd.DataFrame:
+    ) -> Any:
         if base_timestamp_col not in base_df.columns:
             raise ValueError(f"Base df missing timestamp column: {base_timestamp_col}")
         if feature_timestamp_col not in feature_df.columns:
@@ -65,7 +63,7 @@ class PointInTimeJoiner:
 
     @staticmethod
     def validate_no_future_data(
-        df: pd.DataFrame, reference_timestamp_col: str, check_columns: list[str]
+        df: Any, reference_timestamp_col: str, check_columns: list[str]
     ) -> dict[str, Any]:
         issues: dict[str, Any] = {}
         for col in check_columns:
@@ -79,16 +77,16 @@ class PointInTimeJoiner:
         return issues
 
     @staticmethod
-    def _normalize_time_col(df: pd.DataFrame, col: str) -> pd.DataFrame:
+    def _normalize_time_col(df: Any, col: str) -> Any:
         df = df.copy()
-        df[col] = as_tz_naive(pd.to_datetime(df[col])).astype("datetime64[ns]")
+        df[col] = as_tz_naive(to_datetime(df[col])).astype("datetime64[ns]")
         return df
 
     @staticmethod
     def asof_join(
-        left_df: pd.DataFrame, right_df: pd.DataFrame, entity_key: str,
+        left_df: Any, right_df: Any, entity_key: str,
         left_time_col: str, right_time_col: str, direction: str = "backward"
-    ) -> pd.DataFrame:
+    ) -> Any:
         left_sorted = PointInTimeJoiner._normalize_time_col(
             left_df.sort_values(left_time_col).reset_index(drop=True), left_time_col,
         )
@@ -96,15 +94,15 @@ class PointInTimeJoiner:
             right_df.sort_values(right_time_col).reset_index(drop=True), right_time_col,
         )
 
-        return pd.merge_asof(
+        return native_pd.merge_asof(
             left_sorted, right_sorted, left_on=left_time_col, right_on=right_time_col,
             by=entity_key, direction=direction
         )
 
     @staticmethod
     def create_training_labels(
-        df: pd.DataFrame, label_column: str, entity_key: str = "entity_id"
-    ) -> pd.DataFrame:
+        df: Any, label_column: str, entity_key: str = "entity_id"
+    ) -> Any:
         if "label_available_flag" not in df.columns:
             raise ValueError("DataFrame must have label_available_flag column")
 
@@ -115,7 +113,7 @@ class PointInTimeJoiner:
         return training_df[[entity_key, "feature_timestamp", "label_timestamp", label_column]]
 
     @staticmethod
-    def validate_temporal_integrity(df: pd.DataFrame) -> dict[str, Any]:
+    def validate_temporal_integrity(df: Any) -> dict[str, Any]:
         report = {"valid": True, "issues": []}
 
         ft_ok = "feature_timestamp" in df.columns and is_datetime64_any_dtype(df["feature_timestamp"])

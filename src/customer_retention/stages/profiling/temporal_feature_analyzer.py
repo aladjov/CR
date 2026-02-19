@@ -7,7 +7,7 @@ from scipy import stats
 
 from customer_retention.core.compat import (
     DataFrame,
-    ensure_datetime_column,
+    ensure_timestamp,
     groupby_multi_agg,
     native_pd,
     pd,
@@ -647,7 +647,7 @@ class TemporalFeatureAnalyzer:
 
     def _prepare_dataframe(self, df: DataFrame) -> DataFrame:
         df = df.copy()
-        ensure_datetime_column(df, self.time_column)
+        ensure_timestamp(df, self.time_column)
         return df
 
     def _validate_event_level_target_usage(self, df: DataFrame, target_column: Optional[str]) -> None:

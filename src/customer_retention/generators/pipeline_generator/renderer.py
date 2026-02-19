@@ -291,7 +291,7 @@ from pathlib import Path
 {% if ops %}
 from customer_retention.transforms import {{ ops | sort | join(', ') }}
 {% endif %}
-from customer_retention.core.compat import ensure_datetime_column, safe_to_datetime
+from customer_retention.core.compat import ensure_timestamp, safe_to_datetime
 from config import SOURCES, get_bronze_path{{ ', RAW_SOURCES' if config.lifecycle else '' }}
 
 SOURCE_NAME = "{{ source }}"
@@ -307,7 +307,7 @@ def load_{{ source }}():
     if source_config["format"] == "parquet":
         return pd.read_parquet(str(path))
     from customer_retention.integrations.adapters.factory import get_delta
-    return get_delta().read(str(path))
+    return get_delta(force_local=True).read(str(path))
 
 
 {% set groups = group_steps(config.transformations) %}
@@ -353,12 +353,12 @@ def _load_raw_events():
     if source["format"] == "parquet":
         return pd.read_parquet(str(path))
     from customer_retention.integrations.adapters.factory import get_delta
-    return get_delta().read(str(path))
+    return get_delta(force_local=True).read(str(path))
 
 {% if config.lifecycle.include_recency_bucket %}
 
 def add_recency_tenure(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
-    ensure_datetime_column(raw_df, TIME_COLUMN)
+    ensure_timestamp(raw_df, TIME_COLUMN)
     reference_date = raw_df[TIME_COLUMN].max()
     entity_stats = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].agg(["min", "max"])
     entity_stats["days_since_last"] = (reference_date - entity_stats["max"]).dt.days
@@ -400,7 +400,7 @@ def add_lifecycle_quadrant(df: pd.DataFrame) -> pd.DataFrame:
 {% if config.lifecycle.include_cyclical_features %}
 
 def add_cyclical_features(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
-    ensure_datetime_column(raw_df, TIME_COLUMN)
+    ensure_timestamp(raw_df, TIME_COLUMN)
     mean_dow = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].apply(lambda x: x.dt.dayofweek.mean())
     df = df.merge(mean_dow.rename("mean_dow"), left_on=ENTITY_COLUMN, right_index=True, how="left")
     df["dow_sin"] = np.sin(2 * np.pi * df["mean_dow"] / 7)
@@ -453,7 +453,7 @@ def run_bronze_entity_{{ source }}():
     output_path = get_bronze_path(SOURCE_NAME)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     from customer_retention.integrations.adapters.factory import get_delta
-    get_delta().write(df, str(output_path))
+    get_delta(force_local=True).write(df, str(output_path))
     return df
 
 
@@ -470,7 +470,7 @@ from config import SOURCES, get_bronze_path, get_silver_path, TARGET_COLUMN
 
 def _load_artifact(path):
     from customer_retention.integrations.adapters.factory import get_delta
-    return get_delta().read(str(path))
+    return get_delta(force_local=True).read(str(path))
 
 
 def _bronze_output_name(name: str) -> str:
@@ -578,7 +578,7 @@ def run_silver_merge(create_holdout: bool = True, holdout_fraction: float = 0.1)
     output_path = get_silver_path()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     from customer_retention.integrations.adapters.factory import get_delta
-    get_delta().write(silver, str(output_path))
+    get_delta(force_local=True).write(silver, str(output_path))
     return silver
 
 
@@ -627,12 +627,12 @@ SCALINGS = [
 
 def load_silver() -> pd.DataFrame:
     from customer_retention.integrations.adapters.factory import get_delta
-    return get_delta().read(str(get_silver_path()))
+    return get_delta(force_local=True).read(str(get_silver_path()))
 
 
 def load_gold() -> pd.DataFrame:
     from customer_retention.integrations.adapters.factory import get_delta
-    return get_delta().read(str(get_gold_path()))
+    return get_delta(force_local=True).read(str(get_gold_path()))
 
 
 {% set transform_groups = group_steps(config.gold.transformations) %}
@@ -738,7 +738,7 @@ def materialize_to_feast(df: pd.DataFrame) -> None:
         print(f"  Excluding holdout columns from Feast: {original_cols}")
         df_feast = df_feast.drop(columns=original_cols, errors="ignore")
     from customer_retention.integrations.adapters.factory import get_delta
-    get_delta().write(df_feast, str(feast_path))
+    get_delta(force_local=True).write(df_feast, str(feast_path))
     print(f"Features materialized to Feast: {feast_path}")
     print(f"  Entity key: {FEAST_ENTITY_KEY}")
     print(f"  Feature view: {FEAST_FEATURE_VIEW}")
@@ -760,7 +760,7 @@ def run_gold_features():
     gold.attrs["recommendations_hash"] = RECOMMENDATIONS_HASH
     gold.attrs["feature_version"] = get_feature_version_tag()
     from customer_retention.integrations.adapters.factory import get_delta
-    get_delta().write(gold, str(output_path))
+    get_delta(force_local=True).write(gold, str(output_path))
     print(f"Gold features saved with version: {get_feature_version_tag()}")
     materialize_to_feast(gold)
     return gold
@@ -792,7 +792,7 @@ mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
 def _load_feast_data():
     from customer_retention.integrations.adapters.factory import get_delta
-    return get_delta().read(str(get_feast_data_path()))
+    return get_delta(force_local=True).read(str(get_feast_data_path()))
 
 
 def get_training_data_from_feast() -> pd.DataFrame:
@@ -1401,7 +1401,7 @@ def load_raw_data() -> pd.DataFrame:
     if source["format"] == "parquet":
         return pd.read_parquet(str(path))
     from customer_retention.integrations.adapters.factory import get_delta
-    return get_delta().read(str(path))
+    return get_delta(force_local=True).read(str(path))
 
 
 def derive_feature_timestamp(df: pd.DataFrame) -> pd.DataFrame:
@@ -1482,7 +1482,7 @@ def run_landing_{{ name }}():
     output_path = get_landing_output_path()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     from customer_retention.integrations.adapters.factory import get_delta
-    get_delta().write(df, str(output_path))
+    get_delta(force_local=True).write(df, str(output_path))
     print(f"  Records: {len(df):,}")
     print(f"  Output: {output_path}")
     return df
@@ -1498,7 +1498,7 @@ from pathlib import Path
 {% if ops %}
 from customer_retention.transforms import {{ ops | sort | join(', ') }}
 {% endif %}
-from customer_retention.core.compat import ensure_datetime_column, safe_to_datetime, as_tz_naive
+from customer_retention.core.compat import ensure_timestamp, safe_to_datetime, as_tz_naive
 from pandas.api.types import is_numeric_dtype
 from config import PRODUCTION_DIR, TARGET_COLUMN
 
@@ -1574,7 +1574,7 @@ CATEGORICAL_AGG_FUNCS = {{ config.aggregation.categorical_agg_funcs }}
 
 def apply_event_aggregation(df: pd.DataFrame) -> pd.DataFrame:
 {% if config.aggregation %}
-    ensure_datetime_column(df, TIME_COLUMN)
+    ensure_timestamp(df, TIME_COLUMN)
     df[TIME_COLUMN] = as_tz_naive(df[TIME_COLUMN])
     reference_date = df[TIME_COLUMN].max()
     numeric_value_columns = [c for c in VALUE_COLUMNS if c in df.columns and is_numeric_dtype(df[c])]
@@ -1601,7 +1601,7 @@ def apply_event_aggregation(df: pd.DataFrame) -> pd.DataFrame:
 
 def run_bronze_event_{{ source }}():
     from customer_retention.integrations.adapters.factory import get_delta
-    storage = get_delta()
+    storage = get_delta(force_local=True)
     landing_path = str(PRODUCTION_DIR / "data" / "landing" / SOURCE_NAME)
     if not storage.exists(landing_path):
         raise FileNotFoundError(f"Landing output not found: {landing_path}")
@@ -1628,7 +1628,7 @@ from pathlib import Path
 {% if ops %}
 from customer_retention.transforms import {{ ops | sort | join(', ') }}
 {% endif %}
-from customer_retention.core.compat import ensure_datetime_column, safe_to_datetime
+from customer_retention.core.compat import ensure_timestamp, safe_to_datetime
 from config import PRODUCTION_DIR, RAW_SOURCES, get_bronze_path
 
 SOURCE_NAME = "{{ source }}"
@@ -1647,12 +1647,12 @@ def _load_raw_events():
     if source["format"] == "parquet":
         return pd.read_parquet(str(path))
     from customer_retention.integrations.adapters.factory import get_delta
-    return get_delta().read(str(path))
+    return get_delta(force_local=True).read(str(path))
 
 {% if config.lifecycle.include_recency_bucket %}
 
 def add_recency_tenure(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
-    ensure_datetime_column(raw_df, TIME_COLUMN)
+    ensure_timestamp(raw_df, TIME_COLUMN)
     reference_date = raw_df[TIME_COLUMN].max()
     entity_stats = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].agg(["min", "max"])
     entity_stats["days_since_last"] = (reference_date - entity_stats["max"]).dt.days
@@ -1694,7 +1694,7 @@ def add_lifecycle_quadrant(df: pd.DataFrame) -> pd.DataFrame:
 {% if config.lifecycle.include_cyclical_features %}
 
 def add_cyclical_features(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
-    ensure_datetime_column(raw_df, TIME_COLUMN)
+    ensure_timestamp(raw_df, TIME_COLUMN)
     mean_dow = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].apply(lambda x: x.dt.dayofweek.mean())
     df = df.merge(mean_dow.rename("mean_dow"), left_on=ENTITY_COLUMN, right_index=True, how="left")
     df["dow_sin"] = np.sin(2 * np.pi * df["mean_dow"] / 7)
@@ -1768,7 +1768,7 @@ def {{ func_name }}(df: pd.DataFrame) -> pd.DataFrame:
 
 def run_bronze_entity_{{ source }}():
     from customer_retention.integrations.adapters.factory import get_delta
-    storage = get_delta()
+    storage = get_delta(force_local=True)
     bronze_path = get_bronze_path("{{ bronze_input_name }}")
     if not storage.exists(str(bronze_path)):
         raise FileNotFoundError(f"Bronze input not found: {bronze_path}")
@@ -1795,12 +1795,12 @@ from config import (SOURCES, EXPLORATION_ARTIFACTS, EXPERIMENTS_DIR, PRODUCTION_
 
 def _load_artifact(path):
     from customer_retention.integrations.adapters.factory import get_delta
-    return get_delta().read(str(path))
+    return get_delta(force_local=True).read(str(path))
 
 
 def _compare_dataframes(stage, production_path, exploration_path, entity_key=None, tolerance=1e-5):
     from customer_retention.integrations.adapters.factory import get_delta
-    storage = get_delta()
+    storage = get_delta(force_local=True)
     if not storage.exists(str(production_path)):
         raise FileNotFoundError(f"[{stage}] Production output not found: {production_path}")
     if not storage.exists(str(exploration_path)):
@@ -1850,7 +1850,7 @@ def validate_landing(tolerance=1e-5):
         print("[Landing] SKIP - no landing directory")
         return True
     from customer_retention.integrations.adapters.factory import get_delta
-    storage = get_delta()
+    storage = get_delta(force_local=True)
     for path in landing_dir.iterdir():
         if storage.exists(str(path)):
             name = path.name

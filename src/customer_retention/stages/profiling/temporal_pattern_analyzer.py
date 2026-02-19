@@ -9,7 +9,7 @@ from customer_retention.core.compat import (
     DataFrame,
     Timestamp,
     cut,
-    ensure_datetime_column,
+    ensure_timestamp,
     groupby_multi_agg,
     native_pd,
     pd,
@@ -188,7 +188,7 @@ def generate_trend_recommendations(trend: TrendResult, mean_value: float = 1.0) 
 
 
 def analyze_cohort_distribution(first_events: DataFrame, time_column: str) -> CohortDistribution:
-    ensure_datetime_column(first_events, time_column)
+    ensure_timestamp(first_events, time_column)
     years = first_events[time_column].dt.year
     year_counts = years.value_counts().sort_index().to_dict()
     total = len(first_events)
@@ -243,7 +243,7 @@ def compute_recency_buckets(
     df: DataFrame, entity_column: str, time_column: str, target_column: str,
     reference_date: Timestamp, bucket_edges: Optional[List[float]] = None
 ) -> List[RecencyBucketStats]:
-    ensure_datetime_column(df, time_column)
+    ensure_timestamp(df, time_column)
     edges = bucket_edges or DEFAULT_BUCKET_EDGES
     labels = _generate_bucket_labels(edges)
     entity_last = df.groupby(entity_column)[time_column].max().reset_index()
@@ -309,7 +309,7 @@ def classify_distribution_pattern(buckets: List[RecencyBucketStats]) -> str:
 def _diagnose_anomaly_pattern(
     df: DataFrame, entity_column: str, time_column: str, target_column: str
 ) -> AnomalyDiagnostics:
-    ensure_datetime_column(df, time_column)
+    ensure_timestamp(df, time_column)
     entity_target = df.groupby(entity_column)[target_column].first()
     target_1_pct = float(entity_target.mean() * 100)
     target_1_is_minority = target_1_pct < 50
@@ -447,7 +447,7 @@ def compare_recency_by_target(
 ) -> Optional[RecencyComparisonResult]:
     if target_column not in df.columns:
         return None
-    ensure_datetime_column(df, time_column)
+    ensure_timestamp(df, time_column)
     ref_date = reference_date or df[time_column].max()
     entity_last = df.groupby(entity_column)[time_column].max().reset_index()
     entity_last["recency_days"] = timedelta_to_days(ref_date - entity_last[time_column])
@@ -599,7 +599,7 @@ class TemporalPatternAnalyzer:
             return native_pd.DataFrame()
 
         df_copy = df.copy()
-        ensure_datetime_column(df_copy, cohort_column)
+        ensure_timestamp(df_copy, cohort_column)
         entity_first_event = df_copy.groupby(entity_column)[cohort_column].min()
         df_copy["_cohort"] = df_copy[entity_column].map(entity_first_event)
         if period == "M":
@@ -634,7 +634,7 @@ class TemporalPatternAnalyzer:
         if len(df) == 0:
             return RecencyResult(avg_recency_days=0, median_recency_days=0, min_recency_days=0, max_recency_days=0)
 
-        ensure_datetime_column(df, self.time_column)
+        ensure_timestamp(df, self.time_column)
         ref_date = reference_date or Timestamp.now()
 
         entity_last = df.groupby(entity_column)[self.time_column].max()

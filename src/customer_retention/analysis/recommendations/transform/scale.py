@@ -1,7 +1,5 @@
 from typing import Any, Dict, List, Optional, Tuple
 
-import pandas as pd
-
 from ..base import RecommendationResult, TransformRecommendation
 
 
@@ -19,14 +17,14 @@ class StandardScaleRecommendation(TransformRecommendation):
     def recommendation_type(self) -> str:
         return "standard_scale"
 
-    def _fit_impl(self, df: pd.DataFrame) -> None:
+    def _fit_impl(self, df: Any) -> None:
         for col in self.columns:
             if col in df.columns:
                 self._means[col] = float(df[col].mean())
                 self._stds[col] = float(df[col].std(ddof=0))
         self._fit_params = {"means": self._means, "stds": self._stds}
 
-    def _transform_local(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_local(self, df: Any) -> RecommendationResult:
         df = df.copy()
         for col in self.columns:
             if col in df.columns and col in self._means:
@@ -37,7 +35,7 @@ class StandardScaleRecommendation(TransformRecommendation):
             rows_after=len(df), metadata={"means": self._means, "stds": self._stds}
         )
 
-    def _transform_databricks(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_databricks(self, df: Any) -> RecommendationResult:
         from customer_retention.core.compat import is_spark_available
         if not is_spark_available():
             return self._transform_local(df)
@@ -72,14 +70,14 @@ class MinMaxScaleRecommendation(TransformRecommendation):
     def recommendation_type(self) -> str:
         return "minmax_scale"
 
-    def _fit_impl(self, df: pd.DataFrame) -> None:
+    def _fit_impl(self, df: Any) -> None:
         for col in self.columns:
             if col in df.columns:
                 self._mins[col] = float(df[col].min())
                 self._maxs[col] = float(df[col].max())
         self._fit_params = {"mins": self._mins, "maxs": self._maxs, "feature_range": self.feature_range}
 
-    def _transform_local(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_local(self, df: Any) -> RecommendationResult:
         df = df.copy()
         min_val, max_val = self.feature_range
         for col in self.columns:
@@ -92,7 +90,7 @@ class MinMaxScaleRecommendation(TransformRecommendation):
             rows_after=len(df), metadata={"mins": self._mins, "maxs": self._maxs}
         )
 
-    def _transform_databricks(self, df: pd.DataFrame) -> RecommendationResult:
+    def _transform_databricks(self, df: Any) -> RecommendationResult:
         from customer_retention.core.compat import is_spark_available
         if not is_spark_available():
             return self._transform_local(df)

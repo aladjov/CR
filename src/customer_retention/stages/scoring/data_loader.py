@@ -3,8 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, List, Tuple
 
-import pandas as pd
-
 from customer_retention.core.compat.detection import get_spark_session
 from customer_retention.core.config.column_config import select_model_ready_columns
 from customer_retention.integrations.adapters.factory import get_delta
@@ -30,12 +28,12 @@ class ScoringDataLoader:
     def __init__(self, config: ScoringConfig):
         self.config = config
 
-    def load_gold_features(self) -> pd.DataFrame:
+    def load_gold_features(self) -> Any:
         if self.config.is_databricks:
             return self._load_gold_from_spark()
         return self._load_gold_from_delta()
 
-    def load_scoring_features(self, scoring_df: pd.DataFrame) -> pd.DataFrame:
+    def load_scoring_features(self, scoring_df: Any) -> Any:
         if self.config.is_databricks or not self.config.feast_repo_path:
             return scoring_df
         feast_path = Path(self.config.feast_repo_path)
@@ -72,11 +70,11 @@ class ScoringDataLoader:
 
     def prepare_features(
         self,
-        df: pd.DataFrame,
+        df: Any,
         transforms: list,
         executor: TransformExecutor,
         artifact_store: ArtifactStore,
-    ) -> pd.DataFrame:
+    ) -> Any:
         df = df.copy()
         drop_cols = [
             self.config.entity_key,
@@ -91,9 +89,9 @@ class ScoringDataLoader:
 
     def align_features_to_model(
         self,
-        X: pd.DataFrame,
+        X: Any,
         model: Any,
-    ) -> Tuple[pd.DataFrame, List[str], List[str]]:
+    ) -> Tuple[Any, List[str], List[str]]:
         expected = self._get_model_feature_names(model)
         if expected is None:
             return X, [], []
@@ -113,7 +111,7 @@ class ScoringDataLoader:
             return list(model.feature_names)
         return None
 
-    def _load_gold_from_spark(self) -> pd.DataFrame:
+    def _load_gold_from_spark(self) -> Any:
         spark = get_spark_session()
         if not spark:
             raise RuntimeError("Spark session unavailable on Databricks")
@@ -121,7 +119,7 @@ class ScoringDataLoader:
         table_name = f"{self.config.catalog}.{self.config.schema}.gold_features_{cn}"
         return spark.table(table_name).toPandas()
 
-    def _load_gold_from_delta(self) -> pd.DataFrame:
+    def _load_gold_from_delta(self) -> Any:
         cn = self.config.composite_name
         gold_path = self.config.production_dir / "data" / "gold" / f"gold_features_{cn}"
         storage = get_delta(force_local=True)
@@ -129,7 +127,7 @@ class ScoringDataLoader:
             raise FileNotFoundError(f"Gold features not found at {gold_path}")
         return storage.read(str(gold_path))
 
-    def _load_feast_features(self, scoring_df: pd.DataFrame) -> pd.DataFrame:
+    def _load_feast_features(self, scoring_df: Any) -> Any:
         feast_path = Path(self.config.feast_repo_path)
         store = FeatureStore(repo_path=str(feast_path))
         exclude_cols = {
@@ -144,8 +142,8 @@ class ScoringDataLoader:
             features=feature_refs,
             entity_rows=[{self.config.entity_key: eid} for eid in scoring_df[self.config.entity_key]],
         ).to_df()
-        result_df[self.config.original_column] = scoring_df[self.config.original_column].values
-        result_df[self.config.entity_key] = scoring_df[self.config.entity_key].values
+        result_df[self.config.original_column] = scoring_df[self.config.original_column].to_numpy()
+        result_df[self.config.entity_key] = scoring_df[self.config.entity_key].to_numpy()
         return result_df
 
     def _find_best_parent_run(self, client, experiment_id: str):

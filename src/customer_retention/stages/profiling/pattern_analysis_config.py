@@ -6,7 +6,7 @@ import numpy as np
 from customer_retention.core.compat import (
     DataFrame,
     cut,
-    ensure_datetime_column,
+    ensure_timestamp,
     period_start_time,
 )
 
@@ -224,7 +224,7 @@ class SparklineDataBuilder:
         if has_target:
             validate_not_event_level(df, self.entity_column, self.target_column)
         df_work = self._prepare_working_df(df, has_target)
-        ensure_datetime_column(df_work, self.time_column)
+        ensure_timestamp(df_work, self.time_column)
         df_work['_period'] = period_start_time(df_work[self.time_column], self.freq)
         results = [self._build_sparkline_for_column(df_work, col, has_target)
                    for col in columns if col in df_work.columns]

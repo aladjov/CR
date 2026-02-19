@@ -5,11 +5,11 @@ for the same holdout entities, catching transformation inconsistencies.
 """
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional
 
 import numpy as np
-import pandas as pd
 
+from customer_retention.core.compat import native_pd
 from customer_retention.core.utils.leakage import get_valid_feature_columns
 
 
@@ -51,10 +51,10 @@ class AdversarialValidationResult:
             lines.append(f"Missing entities: {self.missing_entities}")
         return "\n".join(lines)
 
-    def to_dataframe(self) -> pd.DataFrame:
+    def to_dataframe(self) -> Any:
         if not self.feature_drifts:
-            return pd.DataFrame(columns=["feature_name", "severity", "max_diff", "mean_diff", "affected"])
-        return pd.DataFrame([
+            return native_pd.DataFrame(columns=["feature_name", "severity", "max_diff", "mean_diff", "affected"])
+        return native_pd.DataFrame([
             {
                 "feature_name": d.feature_name,
                 "severity": d.severity.name,
@@ -69,7 +69,7 @@ class AdversarialValidationResult:
 class AdversarialScoringValidator:
     def __init__(
         self,
-        gold_features: pd.DataFrame,
+        gold_features: Any,
         entity_column: str = "customer_id",
         target_column: str = "target",
         tolerance: float = 1e-6,
@@ -89,7 +89,7 @@ class AdversarialScoringValidator:
         )
         return self.gold_features.loc[is_holdout, self.entity_column].tolist()
 
-    def validate_features(self, recomputed_features: pd.DataFrame) -> AdversarialValidationResult:
+    def validate_features(self, recomputed_features: Any) -> AdversarialValidationResult:
         gold_holdout = self._get_holdout_features()
         if gold_holdout.empty:
             return AdversarialValidationResult(passed=True, entities_validated=0)
@@ -122,8 +122,8 @@ class AdversarialScoringValidator:
 
     def validate_with_transform(
         self,
-        silver_data: pd.DataFrame,
-        transform_fn: Callable[[pd.DataFrame], pd.DataFrame],
+        silver_data: Any,
+        transform_fn: Callable[[Any], Any],
     ) -> AdversarialValidationResult:
         holdout_ids = self.get_holdout_entity_ids()
         if not holdout_ids:
@@ -134,16 +134,16 @@ class AdversarialScoringValidator:
         recomputed = transform_fn(holdout_silver)
         return self.validate_features(recomputed)
 
-    def _get_holdout_features(self) -> pd.DataFrame:
+    def _get_holdout_features(self) -> Any:
         if self._holdout_column not in self.gold_features.columns:
-            return pd.DataFrame()
+            return native_pd.DataFrame()
         is_holdout = (
             self.gold_features[self.target_column].isna() &
             self.gold_features[self._holdout_column].notna()
         )
         return self.gold_features[is_holdout]
 
-    def _get_feature_columns(self, df: pd.DataFrame) -> List[str]:
+    def _get_feature_columns(self, df: Any) -> List[str]:
         return get_valid_feature_columns(
             df,
             entity_column=self.entity_column,
@@ -152,17 +152,17 @@ class AdversarialScoringValidator:
         )
 
     def _check_column_drift(
-        self, gold_col: pd.Series, recomputed_col: pd.Series, col_name: str
+        self, gold_col: Any, recomputed_col: Any, col_name: str
     ) -> Optional[FeatureDrift]:
         if gold_col.dtype in ("object", "category") or recomputed_col.dtype in ("object", "category"):
             return self._check_categorical_drift(gold_col, recomputed_col, col_name)
         return self._check_numeric_drift(gold_col, recomputed_col, col_name)
 
     def _check_numeric_drift(
-        self, gold_col: pd.Series, recomputed_col: pd.Series, col_name: str
+        self, gold_col: Any, recomputed_col: Any, col_name: str
     ) -> Optional[FeatureDrift]:
-        gold_vals = gold_col.fillna(0).values.astype(float)
-        recomputed_vals = recomputed_col.fillna(0).values.astype(float)
+        gold_vals = gold_col.fillna(0).to_numpy().astype(float)
+        recomputed_vals = recomputed_col.fillna(0).to_numpy().astype(float)
         diff = np.abs(gold_vals - recomputed_vals)
         affected = np.sum(diff > self.tolerance)
         if affected == 0:
@@ -179,7 +179,7 @@ class AdversarialScoringValidator:
         )
 
     def _check_categorical_drift(
-        self, gold_col: pd.Series, recomputed_col: pd.Series, col_name: str
+        self, gold_col: Any, recomputed_col: Any, col_name: str
     ) -> Optional[FeatureDrift]:
         mismatched = gold_col.astype(str) != recomputed_col.astype(str)
         affected = mismatched.sum()

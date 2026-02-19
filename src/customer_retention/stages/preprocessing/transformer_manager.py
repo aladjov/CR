@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Optional, Union
 
 import joblib
 import numpy as np
-import pandas as pd
 from sklearn.preprocessing import LabelEncoder, MinMaxScaler, RobustScaler, StandardScaler
 
 
@@ -86,10 +85,10 @@ class TransformerManager:
     def manifest(self) -> TransformerManifest:
         return self._bundle.manifest
 
-    def fit_transform(self, df: pd.DataFrame,
+    def fit_transform(self, df: Any,
                       numeric_columns: Optional[List[str]] = None,
                       categorical_columns: Optional[List[str]] = None,
-                      exclude_columns: Optional[List[str]] = None) -> pd.DataFrame:
+                      exclude_columns: Optional[List[str]] = None) -> Any:
         """Fit transformers on training data and transform it.
 
         Args:
@@ -116,24 +115,24 @@ class TransformerManager:
 
         return df
 
-    def _resolve_numeric_columns(self, df: pd.DataFrame, columns: Optional[List[str]], exclude: set) -> List[str]:
+    def _resolve_numeric_columns(self, df: Any, columns: Optional[List[str]], exclude: set) -> List[str]:
         if columns is None:
             columns = [c for c in df.select_dtypes(include=["int64", "float64", "int32", "float32"]).columns
                        if c not in exclude]
         return [c for c in columns if c in df.columns and c not in exclude]
 
-    def _resolve_categorical_columns(self, df: pd.DataFrame, columns: Optional[List[str]], exclude: set) -> List[str]:
+    def _resolve_categorical_columns(self, df: Any, columns: Optional[List[str]], exclude: set) -> List[str]:
         if columns is None:
             columns = [c for c in df.select_dtypes(include=["object", "category"]).columns if c not in exclude]
         return [c for c in columns if c in df.columns and c not in exclude]
 
-    def _fit_numeric_scaler(self, df: pd.DataFrame, numeric_columns: List[str]) -> None:
+    def _fit_numeric_scaler(self, df: Any, numeric_columns: List[str]) -> None:
         if numeric_columns:
             scaler = self._create_scaler()
             df[numeric_columns] = scaler.fit_transform(df[numeric_columns].fillna(0))
             self._bundle.scaler = scaler
 
-    def _fit_categorical_encoders(self, df: pd.DataFrame, categorical_columns: List[str]) -> None:
+    def _fit_categorical_encoders(self, df: Any, categorical_columns: List[str]) -> None:
         encoders = {}
         for col in categorical_columns:
             le = LabelEncoder()
@@ -141,7 +140,7 @@ class TransformerManager:
             encoders[col] = le
         self._bundle.encoders = encoders
 
-    def _build_manifest(self, df: pd.DataFrame, numeric_columns: List[str],
+    def _build_manifest(self, df: Any, numeric_columns: List[str],
                         categorical_columns: List[str], exclude: set, created_at: str) -> None:
         feature_order = [c for c in df.columns if c not in exclude]
         self._bundle.manifest = TransformerManifest(
@@ -149,8 +148,8 @@ class TransformerManager:
             scaler_type=self._scaler_type, encoder_type="label",
             feature_order=feature_order, created_at=created_at)
 
-    def transform(self, df: pd.DataFrame,
-                  exclude_columns: Optional[List[str]] = None) -> pd.DataFrame:
+    def transform(self, df: Any,
+                  exclude_columns: Optional[List[str]] = None) -> Any:
         """Apply fitted transformers to new data (for scoring).
 
         Args:
@@ -173,7 +172,7 @@ class TransformerManager:
         feature_cols = [c for c in manifest.feature_order if c not in exclude and c in df.columns]
         return df[feature_cols]
 
-    def _apply_numeric_scaling(self, df: pd.DataFrame, manifest: TransformerManifest) -> None:
+    def _apply_numeric_scaling(self, df: Any, manifest: TransformerManifest) -> None:
         if self._bundle.scaler is None or not manifest.numeric_columns:
             return
         present_cols = [c for c in manifest.numeric_columns if c in df.columns]
@@ -183,7 +182,7 @@ class TransformerManager:
             col_indices = {col: i for i, col in enumerate(manifest.numeric_columns)}
             temp_arr = np.zeros((len(df), len(manifest.numeric_columns)))
             for col in present_cols:
-                temp_arr[:, col_indices[col]] = df[col].fillna(0).values
+                temp_arr[:, col_indices[col]] = df[col].fillna(0).to_numpy()
             transformed = self._bundle.scaler.transform(temp_arr)
             for col in present_cols:
                 df[col] = transformed[:, col_indices[col]]
@@ -191,7 +190,7 @@ class TransformerManager:
         for col in missing_cols:
             df[col] = 0.0
 
-    def _apply_categorical_encoding(self, df: pd.DataFrame, manifest: TransformerManifest) -> None:
+    def _apply_categorical_encoding(self, df: Any, manifest: TransformerManifest) -> None:
         for col, encoder in self._bundle.encoders.items():
             if col in df.columns:
                 df[col] = df[col].astype(str).apply(lambda x, enc=encoder: self._safe_encode(enc, x))

@@ -2,8 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Union
 
-import pandas as pd
-
+from customer_retention.core.compat import native_pd
 from customer_retention.core.utils.leakage import get_valid_feature_columns
 
 from .scoring_pipeline_validator import (
@@ -13,12 +12,12 @@ from .scoring_pipeline_validator import (
 )
 
 
-def load_artifact(path: Union[str, Path], version: Optional[int] = None) -> pd.DataFrame:
+def load_artifact(path: Union[str, Path], version: Optional[int] = None) -> Any:
     path = Path(path)
     if path.is_dir() and (path / "_delta_log").is_dir():
         from customer_retention.integrations.adapters.factory import get_delta
         return get_delta(force_local=True).read(str(path), version=version)
-    return pd.read_parquet(str(path))
+    return native_pd.read_parquet(str(path))
 
 
 @dataclass
@@ -37,9 +36,9 @@ class PipelineValidationConfig:
 class PipelineValidationRunner:
     def __init__(self, config: Optional[PipelineValidationConfig] = None):
         self.config = config or PipelineValidationConfig()
-        self._training_features: Optional[pd.DataFrame] = None
-        self._scoring_features: Optional[pd.DataFrame] = None
-        self._training_predictions: Optional[pd.DataFrame] = None
+        self._training_features: Optional[Any] = None
+        self._scoring_features: Optional[Any] = None
+        self._training_predictions: Optional[Any] = None
         self._model: Optional[Any] = None
 
     def load_training_artifacts(
@@ -68,7 +67,7 @@ class PipelineValidationRunner:
 
     def extract_validation_set(
         self,
-        gold_features: pd.DataFrame,
+        gold_features: Any,
         holdout_column: Optional[str] = None,
     ) -> tuple:
         if holdout_column and holdout_column in gold_features.columns:
@@ -118,7 +117,7 @@ class PipelineValidationRunner:
 def run_pipeline_validation(
     gold_features_path: Union[str, Path], entity_column: str = "customer_id",
     target_column: str = "target", holdout_column: Optional[str] = None,
-    prepare_features_fn: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None,
+    prepare_features_fn: Optional[Callable[[Any], Any]] = None,
     model: Optional[Any] = None, feature_columns: Optional[List[str]] = None, verbose: bool = True,
 ) -> ValidationReport:
     _print_header(verbose)
@@ -158,7 +157,7 @@ def _log(verbose: bool, message: str) -> None:
 
 
 def _split_training_validation(
-    gold_df: pd.DataFrame, target_column: str, holdout_column: Optional[str], verbose: bool,
+    gold_df: Any, target_column: str, holdout_column: Optional[str], verbose: bool,
 ) -> tuple:
     original_col = holdout_column or f"original_{target_column}"
     if original_col not in gold_df.columns:
@@ -175,7 +174,7 @@ def _split_training_validation(
 
 
 def _prepare_features(
-    training_df: pd.DataFrame, validation_df: pd.DataFrame,
+    training_df: Any, validation_df: Any,
     prepare_fn: Optional[Callable], verbose: bool,
 ) -> tuple:
     if not prepare_fn:
@@ -188,7 +187,7 @@ def _prepare_features(
 
 
 def _generate_predictions(
-    training_df: pd.DataFrame, scoring_df: pd.DataFrame,
+    training_df: Any, scoring_df: Any,
     model: Optional[Any], feature_columns: Optional[List[str]],
     entity_column: str, verbose: bool,
 ) -> tuple:
@@ -196,7 +195,7 @@ def _generate_predictions(
         return None, None
 
     _log(verbose, "\nGenerating model predictions...")
-    train_X, score_X = training_df[feature_columns].values, scoring_df[feature_columns].values
+    train_X, score_X = training_df[feature_columns].to_numpy(), scoring_df[feature_columns].to_numpy()
     train_pred, score_pred = model.predict(train_X), model.predict(score_X)
 
     if hasattr(model, "predict_proba"):
@@ -210,14 +209,14 @@ def _generate_predictions(
     )
 
 
-def _build_predictions_df(df: pd.DataFrame, entity_column: str, y_pred, y_proba) -> pd.DataFrame:
+def _build_predictions_df(df: Any, entity_column: str, y_pred, y_proba) -> Any:
     entity_values = df[entity_column] if entity_column in df.columns else range(len(df))
-    return pd.DataFrame({entity_column: entity_values, "y_pred": y_pred, "y_proba": y_proba})
+    return native_pd.DataFrame({entity_column: entity_values, "y_pred": y_pred, "y_proba": y_proba})
 
 
 def validate_feature_transformation(
-    training_df: pd.DataFrame, scoring_df: pd.DataFrame,
-    transform_fn: Callable[[pd.DataFrame], pd.DataFrame],
+    training_df: Any, scoring_df: Any,
+    transform_fn: Callable[[Any], Any],
     entity_column: str = "customer_id", verbose: bool = True,
 ) -> ValidationReport:
     _log(verbose, "Validating transformation consistency...")

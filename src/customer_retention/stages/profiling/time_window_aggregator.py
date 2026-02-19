@@ -11,7 +11,7 @@ from customer_retention.core.compat import (
     Timedelta,
     Timestamp,
     as_tz_naive,
-    ensure_datetime_column,
+    ensure_timestamp,
     is_numeric_dtype,
     native_pd,
     timedelta_to_days,
@@ -91,7 +91,7 @@ class TimeWindowAggregator:
             return native_pd.DataFrame()
 
         df = df.copy()
-        ensure_datetime_column(df, self.time_column)
+        ensure_timestamp(df, self.time_column)
         df[self.time_column] = as_tz_naive(df[self.time_column])
         reference_date = self._validate_reference_date(df, reference_date)
         parsed_windows = [TimeWindow.from_string(w) for w in (windows or ["30d"])]

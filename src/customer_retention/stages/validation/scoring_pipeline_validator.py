@@ -4,10 +4,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
-import pandas as pd
 import yaml
 
-from customer_retention.core.compat import is_dataframe, is_numeric_dtype
+from customer_retention.core.compat import is_dataframe, is_numeric_dtype, native_pd
 from customer_retention.core.utils.leakage import get_valid_feature_columns
 
 
@@ -144,10 +143,10 @@ class ValidationReport:
                 lines.append(f"  ... and {len(self.prediction_mismatches) - 10} more")
         return "\n".join(lines)
 
-    def to_dataframe(self) -> pd.DataFrame:
+    def to_dataframe(self) -> native_pd.DataFrame:
         if not self.feature_mismatches:
-            return pd.DataFrame(columns=["feature_name", "severity", "training_mean", "scoring_mean", "max_absolute_diff", "mismatch_percentage"])
-        return pd.DataFrame([m.to_dict() for m in self.feature_mismatches])
+            return native_pd.DataFrame(columns=["feature_name", "severity", "training_mean", "scoring_mean", "max_absolute_diff", "mismatch_percentage"])
+        return native_pd.DataFrame([m.to_dict() for m in self.feature_mismatches])
 
     def save(self, path: Union[str, Path]) -> None:
         path = Path(path)
@@ -157,10 +156,10 @@ class ValidationReport:
 
 class ScoringPipelineValidator:
     def __init__(
-        self, training_features: Union[pd.DataFrame, Path, str],
-        scoring_features: Union[pd.DataFrame, Path, str],
-        training_predictions: Optional[Union[pd.DataFrame, Path, str]] = None,
-        scoring_predictions: Optional[Union[pd.DataFrame, Path, str]] = None,
+        self, training_features: Union[native_pd.DataFrame, Path, str],
+        scoring_features: Union[native_pd.DataFrame, Path, str],
+        training_predictions: Optional[Union[native_pd.DataFrame, Path, str]] = None,
+        scoring_predictions: Optional[Union[native_pd.DataFrame, Path, str]] = None,
         model: Optional[Any] = None, feature_columns: Optional[List[str]] = None,
         entity_column: Optional[str] = None, target_column: Optional[str] = None,
         config: Optional[ValidationConfig] = None,
@@ -175,7 +174,7 @@ class ScoringPipelineValidator:
         self.target_column = target_column
         self.config = config or ValidationConfig()
 
-    def _load_dataframe(self, data: Union[pd.DataFrame, Path, str]) -> pd.DataFrame:
+    def _load_dataframe(self, data: Union[native_pd.DataFrame, Path, str]) -> native_pd.DataFrame:
         if is_dataframe(data):
             return data
         path_str = str(data)
@@ -184,9 +183,9 @@ class ScoringPipelineValidator:
             from customer_retention.integrations.adapters.factory import get_delta
             return get_delta(force_local=True).read(path_str)
         if path_str.endswith(".parquet"):
-            return pd.read_parquet(path_str)
+            return native_pd.read_parquet(path_str)
         if path_str.endswith(".csv"):
-            return pd.read_csv(path_str)
+            return native_pd.read_csv(path_str)
         raise ValueError(f"Unsupported file format: {path.suffix}")
 
     def _get_comparable_columns(self) -> List[str]:
@@ -227,8 +226,8 @@ class ScoringPipelineValidator:
             return MismatchSeverity.MEDIUM
         return MismatchSeverity.LOW
 
-    def _compare_numeric_column(self, train_col: pd.Series, score_col: pd.Series, col_name: str) -> Optional[FeatureMismatch]:
-        train_vals, score_vals = train_col.values.astype(float), score_col.values.astype(float)
+    def _compare_numeric_column(self, train_col: native_pd.Series, score_col: native_pd.Series, col_name: str) -> Optional[FeatureMismatch]:
+        train_vals, score_vals = train_col.to_numpy().astype(float), score_col.to_numpy().astype(float)
 
         if len(train_vals) != len(score_vals):
             return self._compare_numeric_statistical(col_name, train_vals, score_vals)
@@ -278,8 +277,8 @@ class ScoringPipelineValidator:
             scoring_std=score_std if len(score_vals) > 1 else None)
 
     def _compare_categorical_statistical(self, col_name: str, train_vals, score_vals) -> Optional[FeatureMismatch]:
-        train_dist = pd.Series(train_vals).value_counts(normalize=True)
-        score_dist = pd.Series(score_vals).value_counts(normalize=True)
+        train_dist = native_pd.Series(train_vals).value_counts(normalize=True)
+        score_dist = native_pd.Series(score_vals).value_counts(normalize=True)
         all_values = set(train_dist.index) | set(score_dist.index)
         max_diff = max(abs(train_dist.get(v, 0) - score_dist.get(v, 0)) for v in all_values)
         if max_diff <= 0.15:
@@ -304,9 +303,9 @@ class ScoringPipelineValidator:
         train_max = np.max(np.abs(train_valid)) if len(train_valid) > 0 else 1.0
         return train_max > 0 and max_diff / train_max <= self.config.relative_tolerance
 
-    def _compare_categorical_column(self, train_col: pd.Series, score_col: pd.Series, col_name: str) -> Optional[FeatureMismatch]:
-        train_vals = train_col.astype(str).values
-        score_vals = score_col.astype(str).values
+    def _compare_categorical_column(self, train_col: native_pd.Series, score_col: native_pd.Series, col_name: str) -> Optional[FeatureMismatch]:
+        train_vals = train_col.astype(str).to_numpy()
+        score_vals = score_col.astype(str).to_numpy()
         if len(train_vals) != len(score_vals):
             return self._compare_categorical_statistical(col_name, train_vals, score_vals)
         mismatches = train_vals != score_vals
@@ -373,21 +372,21 @@ class ScoringPipelineValidator:
             prediction_mismatches=prediction_mismatches, predictions_validated=True,
             total_entities_compared=len(train_preds))
 
-    def _sort_predictions_by_entity(self, train_preds: pd.DataFrame, score_preds: pd.DataFrame) -> tuple:
+    def _sort_predictions_by_entity(self, train_preds: native_pd.DataFrame, score_preds: native_pd.DataFrame) -> tuple:
         if self.entity_column and self.entity_column in train_preds.columns:
             train_preds = train_preds.sort_values(self.entity_column).reset_index(drop=True)
             score_preds = score_preds.sort_values(self.entity_column).reset_index(drop=True)
         return train_preds, score_preds
 
     def _collect_prediction_mismatches(
-        self, train_df: pd.DataFrame, score_df: pd.DataFrame, pred_col: str, proba_col: str,
+        self, train_df: native_pd.DataFrame, score_df: native_pd.DataFrame, pred_col: str, proba_col: str,
         train_preds: Optional[np.ndarray] = None, score_preds: Optional[np.ndarray] = None,
         train_proba: Optional[np.ndarray] = None, score_proba: Optional[np.ndarray] = None,
     ) -> List[PredictionMismatch]:
         if train_preds is None:
-            train_preds = train_df[pred_col].values
+            train_preds = train_df[pred_col].to_numpy()
         if score_preds is None:
-            score_preds = score_df[pred_col].values
+            score_preds = score_df[pred_col].to_numpy()
 
         mismatches = []
         for idx in np.where(train_preds != score_preds)[0]:
@@ -428,7 +427,7 @@ class ScoringPipelineValidator:
         if len(train_aligned) == 0:
             return feature_report
 
-        X_train, X_score = train_aligned[self.feature_columns].values, score_aligned[self.feature_columns].values
+        X_train, X_score = train_aligned[self.feature_columns].to_numpy(), score_aligned[self.feature_columns].to_numpy()
         train_preds, score_preds = self.model.predict(X_train), self.model.predict(X_score)
         train_proba = self.model.predict_proba(X_train)[:, 1] if hasattr(self.model, "predict_proba") else None
         score_proba = self.model.predict_proba(X_score)[:, 1] if hasattr(self.model, "predict_proba") else None

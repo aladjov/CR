@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
-
-import pandas as pd
+from typing import Any, Optional
 
 from customer_retention.stages.temporal.timestamp_discovery import (
     DatetimeOrderAnalyzer,
@@ -23,7 +21,7 @@ class EntityFeatureTimestampDeriver:
         self._engine = TimestampDiscoveryEngine()
         self._order_analyzer = DatetimeOrderAnalyzer()
 
-    def derive(self, df: pd.DataFrame, target_column: Optional[str] = None) -> EntityTimestampResult:
+    def derive(self, df: Any, target_column: Optional[str] = None) -> EntityTimestampResult:
         discovery = self._engine.discover(df, target_column=target_column)
         if discovery.feature_timestamp is not None:
             candidate = discovery.feature_timestamp
@@ -42,7 +40,7 @@ class EntityFeatureTimestampDeriver:
             )
         return EntityTimestampResult(column_name=None, source_columns=[], method="none")
 
-    def apply(self, df: pd.DataFrame, result: EntityTimestampResult) -> pd.DataFrame:
+    def apply(self, df: Any, result: EntityTimestampResult) -> Any:
         out = df.copy()
         if result.method == "none":
             return out
@@ -51,5 +49,5 @@ class EntityFeatureTimestampDeriver:
         elif result.method == "coalesced":
             coalesced = self._order_analyzer.derive_last_action_date(df)
             if coalesced is not None:
-                out["feature_timestamp"] = coalesced.values
+                out["feature_timestamp"] = coalesced.to_numpy()
         return out

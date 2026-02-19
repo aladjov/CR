@@ -31,12 +31,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-import pandas as pd
-
-from customer_retention.core.compat import is_datetime64_any_dtype, is_extension_array_dtype
+from customer_retention.core.compat import is_datetime64_any_dtype, is_extension_array_dtype, native_pd
 
 
-def _strip_tz_series(s: pd.Series) -> pd.Series:
+def _strip_tz_series(s: Any) -> Any:
     if hasattr(s.dtype, "tz") and s.dtype.tz is not None:
         return s.dt.tz_localize(None)
     return s
@@ -125,8 +123,8 @@ class SnapshotManager:
         self.storage = storage or _get_storage()
 
     def create_snapshot(
-        self, df: pd.DataFrame, cutoff_date: datetime, target_column: str,
-        snapshot_name: str = "training", timestamp_series: Optional[pd.Series] = None,
+        self, df: Any, cutoff_date: datetime, target_column: str,
+        snapshot_name: str = "training", timestamp_series: Optional[Any] = None,
     ) -> SnapshotMetadata:
         if timestamp_series is not None:
             ts = _strip_tz_series(timestamp_series)
@@ -158,7 +156,7 @@ class SnapshotManager:
         self._save_metadata(metadata, snapshot_id)
         return metadata
 
-    def load_snapshot(self, snapshot_id: str) -> tuple[pd.DataFrame, SnapshotMetadata]:
+    def load_snapshot(self, snapshot_id: str) -> tuple[Any, SnapshotMetadata]:
         snapshot_name, version = self._parse_snapshot_id(snapshot_id)
         table_path = self.snapshots_dir / snapshot_name
 
@@ -169,7 +167,7 @@ class SnapshotManager:
             parquet_path = self.snapshots_dir / f"{snapshot_id}.parquet"
             if not parquet_path.exists():
                 raise FileNotFoundError(f"Snapshot not found: {snapshot_id}")
-            df = pd.read_parquet(str(parquet_path))
+            df = native_pd.read_parquet(str(parquet_path))
 
         metadata = self._load_metadata(snapshot_id)
 
@@ -214,7 +212,7 @@ class SnapshotManager:
             "removed_features": set(meta1.feature_columns) - set(meta2.feature_columns),
         }
 
-    def _write_snapshot(self, df: pd.DataFrame, table_path: str, snapshot_id: str) -> None:
+    def _write_snapshot(self, df: Any, table_path: str, snapshot_id: str) -> None:
         if self.storage and len(df) > 0:
             metadata = {"snapshot_id": snapshot_id, "created_at": datetime.now().isoformat()}
             self.storage.write(df.reset_index(drop=True), table_path, mode="overwrite", metadata=metadata)
@@ -234,7 +232,7 @@ class SnapshotManager:
         parts = snapshot_id.rsplit("_v", 1)
         return parts[0], int(parts[1])
 
-    def _compute_hash(self, df: pd.DataFrame, cutoff_date: Optional[datetime] = None) -> str:
+    def _compute_hash(self, df: Any, cutoff_date: Optional[datetime] = None) -> str:
         df_stable = df.reset_index(drop=True).copy()
         for col in df_stable.columns:
             if is_datetime64_any_dtype(df_stable[col]):
@@ -244,7 +242,7 @@ class SnapshotManager:
                 df_stable[col] = df_stable[col].astype(object)
         df_stable = df_stable[sorted(df_stable.columns)]
 
-        data_bytes = pd.util.hash_pandas_object(df_stable).values.tobytes()
+        data_bytes = native_pd.util.hash_pandas_object(df_stable).values.tobytes()
         if cutoff_date:
             normalized = datetime.fromisoformat(cutoff_date.isoformat())
             data_bytes += normalized.isoformat().encode("utf-8")

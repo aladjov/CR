@@ -2312,7 +2312,7 @@ class ChartBuilder:
             return
 
         labels = [str(v) for v in value_counts.index]
-        values = value_counts.values.tolist()
+        values = value_counts.to_numpy().tolist()
         total = sum(values)
         percentages = [v/total*100 for v in values]
 
@@ -2352,20 +2352,20 @@ class ChartBuilder:
         """Add datetime column tile with date range visualization."""
         import warnings
 
-        import pandas as pd
+        from customer_retention.core.compat import native_pd
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            dates = safe_to_datetime(pd.Series(series), errors='coerce').dropna()
+            dates = safe_to_datetime(native_pd.Series(series), errors='coerce').dropna()
         if len(dates) == 0:
             return
 
         # Monthly distribution as area chart for cleaner look
         tz_free = dates.dt.tz_localize(None) if dates.dt.tz is not None else dates
-        counts = tz_free.dt.to_period('M').value_counts().sort_index()
+        counts = tz_free.dt.strftime('%Y-%m').value_counts().sort_index()
         x_labels = [str(p) for p in counts.index]
         fig.add_trace(go.Scatter(
             x=x_labels,
-            y=counts.values,
+            y=counts.to_numpy(),
             mode='lines',
             fill='tozeroy',
             line={"color": self.colors["info"]},

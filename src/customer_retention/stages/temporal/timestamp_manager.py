@@ -26,18 +26,17 @@ from enum import Enum
 from typing import Any, Optional
 
 import numpy as np
-import pandas as pd
 
-from customer_retention.core.compat import as_tz_naive, is_datetime64_any_dtype
-
-
-def _safe_index_timedeltas(row_count: int) -> pd.TimedeltaIndex:
-    if row_count <= pd.Timedelta.max.days:
-        return pd.to_timedelta(range(row_count), unit="D")
-    return pd.to_timedelta(np.arange(row_count), unit="s")
+from customer_retention.core.compat import Timedelta, as_tz_naive, is_datetime64_any_dtype, native_pd, to_datetime
 
 
-def _strip_tz(series: pd.Series) -> pd.Series:
+def _safe_index_timedeltas(row_count: int) -> Any:
+    if row_count <= Timedelta.max.days:
+        return native_pd.to_timedelta(range(row_count), unit="D")
+    return native_pd.to_timedelta(np.arange(row_count), unit="s")
+
+
+def _strip_tz(series: Any) -> Any:
     return as_tz_naive(series)
 
 
@@ -107,7 +106,7 @@ class TimestampManager:
         """
         self.config = config
 
-    def ensure_timestamps(self, df: pd.DataFrame) -> pd.DataFrame:
+    def ensure_timestamps(self, df: Any) -> Any:
         """Add or validate timestamp columns based on the configured strategy.
 
         This is the main entry point for timestamp handling. It adds feature_timestamp,
@@ -128,7 +127,7 @@ class TimestampManager:
             return self._derive_timestamps(df)
         return self._add_synthetic_timestamps(df)
 
-    def _validate_production_timestamps(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _validate_production_timestamps(self, df: Any) -> Any:
         required = [self.config.feature_timestamp_column, self.config.label_timestamp_column]
         missing = [col for col in required if col and col not in df.columns]
         if missing:
@@ -152,22 +151,22 @@ class TimestampManager:
         has_event = label_naive.notna() & (label_naive <= now)
         observation_complete = (
             feature_naive.notna()
-            & (feature_naive + pd.Timedelta(days=self.config.observation_window_days) <= now)
+            & (feature_naive + Timedelta(days=self.config.observation_window_days) <= now)
         )
         df["label_available_flag"] = has_event | observation_complete
         return df
 
-    def _parse_datetime_column(self, series: pd.Series, col_name: str) -> pd.Series:
+    def _parse_datetime_column(self, series: Any, col_name: str) -> Any:
         if is_datetime64_any_dtype(series):
             return series
-        parsed = pd.to_datetime(series, format="mixed", errors="coerce")
+        parsed = to_datetime(series, format="mixed", errors="coerce")
         invalid_count = parsed.isna().sum() - series.isna().sum()
         if invalid_count > 0:
             import warnings
             warnings.warn(f"Column '{col_name}': {invalid_count} invalid dates coerced to NaT")
         return parsed
 
-    def _derive_timestamps(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _derive_timestamps(self, df: Any) -> Any:
         if not self.config.derivation_config:
             raise ValueError("derivation_config required for DERIVED strategy")
 
@@ -185,7 +184,7 @@ class TimestampManager:
         df["label_available_flag"] = True
         return df
 
-    def _apply_derivation(self, df: pd.DataFrame, derivation: dict, target_col: str) -> pd.DataFrame:
+    def _apply_derivation(self, df: Any, derivation: dict, target_col: str) -> Any:
         sources = derivation.get("sources", [])
         formula = derivation.get("formula", "")
 
@@ -196,12 +195,12 @@ class TimestampManager:
             tenure_col = sources[0]
             if tenure_col in df.columns:
                 reference_date = datetime.now()
-                df[target_col] = reference_date - pd.to_timedelta(df[tenure_col] * 30, unit="D")
+                df[target_col] = reference_date - native_pd.to_timedelta(df[tenure_col] * 30, unit="D")
         return df
 
-    def _add_synthetic_timestamps(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _add_synthetic_timestamps(self, df: Any) -> Any:
         df = df.copy()
-        base = pd.to_datetime(self.config.synthetic_base_date)
+        base = to_datetime(self.config.synthetic_base_date)
         window = timedelta(days=self.config.observation_window_days)
 
         if self.config.strategy == TimestampStrategy.SYNTHETIC_FIXED:
@@ -213,13 +212,13 @@ class TimestampManager:
         elif self.config.strategy == TimestampStrategy.SYNTHETIC_RANDOM:
             np.random.seed(42)
             days = np.random.randint(0, self.config.synthetic_range_days, len(df))
-            df["feature_timestamp"] = base + pd.to_timedelta(days, unit="D")
+            df["feature_timestamp"] = base + native_pd.to_timedelta(days, unit="D")
             df["label_timestamp"] = df["feature_timestamp"] + window
 
         df["label_available_flag"] = True
         return df
 
-    def validate_point_in_time(self, df: pd.DataFrame) -> bool:
+    def validate_point_in_time(self, df: Any) -> bool:
         """Validate that timestamps maintain point-in-time correctness.
 
         Ensures that feature_timestamp is always <= label_timestamp for all rows,
@@ -245,7 +244,7 @@ class TimestampManager:
             )
         return True
 
-    def get_timestamp_summary(self, df: pd.DataFrame) -> dict[str, Any]:
+    def get_timestamp_summary(self, df: Any) -> dict[str, Any]:
         """Generate a summary of timestamp column statistics.
 
         Args:

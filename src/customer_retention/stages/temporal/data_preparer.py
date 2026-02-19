@@ -30,8 +30,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-import pandas as pd
-
 from .point_in_time_join import PointInTimeJoiner
 from .snapshot_manager import SnapshotManager
 from .timestamp_manager import TimestampConfig, TimestampManager
@@ -47,7 +45,7 @@ class PreparedData:
         timestamp_strategy: Strategy used for timestamp handling
         validation_report: Report from temporal integrity validation
     """
-    unified_df: pd.DataFrame
+    unified_df: Any
     snapshot_metadata: dict[str, Any]
     timestamp_strategy: str
     validation_report: dict[str, Any]
@@ -78,8 +76,8 @@ class UnifiedDataPreparer:
         self.storage = storage or _get_storage()
 
     def prepare_from_raw(
-        self, df: pd.DataFrame, target_column: str, entity_column: str
-    ) -> pd.DataFrame:
+        self, df: Any, target_column: str, entity_column: str
+    ) -> Any:
         df = self.timestamp_manager.ensure_timestamps(df)
         self.timestamp_manager.validate_point_in_time(df)
 
@@ -99,9 +97,9 @@ class UnifiedDataPreparer:
         return df
 
     def create_training_snapshot(
-        self, df: pd.DataFrame, cutoff_date: datetime, snapshot_name: str = "training",
-        timestamp_series: Optional[pd.Series] = None,
-    ) -> tuple[pd.DataFrame, dict[str, Any]]:
+        self, df: Any, cutoff_date: datetime, snapshot_name: str = "training",
+        timestamp_series: Optional[Any] = None,
+    ) -> tuple[Any, dict[str, Any]]:
         metadata = self.snapshot_manager.create_snapshot(
             df=df, cutoff_date=cutoff_date, target_column="target",
             snapshot_name=snapshot_name, timestamp_series=timestamp_series,
@@ -109,7 +107,7 @@ class UnifiedDataPreparer:
         snapshot_df, _ = self.snapshot_manager.load_snapshot(metadata.snapshot_id)
         return snapshot_df, self._metadata_to_dict(metadata)
 
-    def load_for_eda(self, snapshot_id: str) -> pd.DataFrame:
+    def load_for_eda(self, snapshot_id: str) -> Any:
         df, metadata = self.snapshot_manager.load_snapshot(snapshot_id)
         print(f"Loaded snapshot: {snapshot_id}")
         print(f"  Rows: {metadata.row_count:,}")
@@ -117,7 +115,7 @@ class UnifiedDataPreparer:
         print(f"  Hash: {metadata.data_hash}")
         return df
 
-    def load_for_inference(self, df: pd.DataFrame, as_of_date: Optional[datetime] = None) -> pd.DataFrame:
+    def load_for_inference(self, df: Any, as_of_date: Optional[datetime] = None) -> Any:
         as_of_date = as_of_date or datetime.now()
         df = self.timestamp_manager.ensure_timestamps(df)
         df = df[df["feature_timestamp"] <= as_of_date].copy()
@@ -126,7 +124,7 @@ class UnifiedDataPreparer:
         return df
 
     def prepare_with_validation(
-        self, df: pd.DataFrame, target_column: str, entity_column: str, cutoff_date: datetime
+        self, df: Any, target_column: str, entity_column: str, cutoff_date: datetime
     ) -> PreparedData:
         unified_df = self.prepare_from_raw(df, target_column, entity_column)
         validation_report = self.pit_joiner.validate_temporal_integrity(unified_df)
