@@ -177,6 +177,7 @@ class SnapshotGrid(BaseModel):
             (v.data_span_start, v.data_span_end)
             for v in self.dataset_votes.values()
             if v.data_span_start and v.data_span_end
+            and str(v.data_span_start) != "NaT" and str(v.data_span_end) != "NaT"
         ]
         return compute_boundaries(
             spans,

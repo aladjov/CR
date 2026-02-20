@@ -127,6 +127,30 @@ class TestLocalDeltaWrite:
         storage.write(df, delta_path, partition_by=["part"])
         assert Path(delta_path).exists()
 
+    def test_write_handles_null_dtype_columns(self, tmp_path):
+        from customer_retention.integrations.adapters.storage import LocalDelta
+        storage = LocalDelta()
+        delta_path = str(tmp_path / "null_table")
+        df = pd.DataFrame({"a": [1, 2, 3], "empty": [None, None, None]})
+        storage.write(df, delta_path)
+        result = storage.read(delta_path)
+        assert len(result) == 3
+        assert "empty" in result.columns
+
+    def test_write_preserves_non_null_columns_with_nulls(self, tmp_path):
+        from customer_retention.integrations.adapters.storage import LocalDelta
+        storage = LocalDelta()
+        delta_path = str(tmp_path / "mixed_table")
+        df = pd.DataFrame({
+            "ok": [1, 2, 3],
+            "partial": [None, "hello", None],
+            "all_null": pd.array([None, None, None], dtype=pd.StringDtype()),
+        })
+        storage.write(df, delta_path)
+        result = storage.read(delta_path)
+        assert len(result) == 3
+        assert result["partial"].iloc[1] == "hello"
+
 
 @requires_delta
 class TestLocalDeltaMerge:

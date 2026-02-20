@@ -196,11 +196,11 @@ class SegmentAnalyzer:
         if len(features_df) < 10:
             return self._single_segment_result(df, method, target_col)
 
+        scaled_features = self._scaler.fit_transform(features_df.to_numpy())
         n_segments = self.find_optimal_segments(
-            df.loc[valid_indices], feature_cols, max_k=max_segments
+            df, feature_cols, max_k=max_segments, _prescaled=scaled_features
         )
 
-        scaled_features = self._scaler.fit_transform(features_df.to_numpy())
         labels = self._fit_clusters(scaled_features, n_segments, method)
 
         full_labels = np.full(len(df), -1)
@@ -225,36 +225,49 @@ class SegmentAnalyzer:
             labels=full_labels,
         )
 
+    _SILHOUETTE_SAMPLE_SIZE = 1000
+
     def find_optimal_segments(
         self,
         df: DataFrame,
         feature_cols: List[str],
         max_k: int = 10,
+        _prescaled: Optional[np.ndarray] = None,
     ) -> int:
-        features_df = df[feature_cols].dropna()
+        if _prescaled is not None:
+            scaled = _prescaled
+        else:
+            features_df = df[feature_cols].dropna()
+            if len(features_df) < 10:
+                return 1
+            scaled = self._scaler.fit_transform(features_df.to_numpy())
 
-        if len(features_df) < 10:
+        n_rows = len(scaled)
+        if n_rows < 10:
             return 1
 
-        max_k = min(max_k, len(features_df) // 3, 10)
+        max_k = min(max_k, n_rows // 3, 10)
         if max_k < 2:
             return 1
 
-        scaled = self._scaler.fit_transform(features_df.to_numpy())
-
+        sil_kwargs = self._silhouette_kwargs(n_rows)
         silhouette_scores = []
         for k in range(2, max_k + 1):
-            kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+            kmeans = KMeans(n_clusters=k, random_state=42, n_init=3)
             labels = kmeans.fit_predict(scaled)
             if len(set(labels)) > 1:
-                score = silhouette_score(scaled, labels)
+                score = silhouette_score(scaled, labels, **sil_kwargs)
                 silhouette_scores.append((k, score))
 
         if not silhouette_scores:
             return 1
 
-        best_k = max(silhouette_scores, key=lambda x: x[1])[0]
-        return best_k
+        return max(silhouette_scores, key=lambda x: x[1])[0]
+
+    def _silhouette_kwargs(self, n_rows: int) -> Dict[str, Any]:
+        if n_rows > self._SILHOUETTE_SAMPLE_SIZE:
+            return {"sample_size": self._SILHOUETTE_SAMPLE_SIZE, "random_state": 42}
+        return {}
 
     def profile_segments(
         self,
@@ -338,7 +351,8 @@ class SegmentAnalyzer:
         if len(unique_labels) < 2:
             return 0.0
         try:
-            score = silhouette_score(scaled_features, labels)
+            sil_kwargs = self._silhouette_kwargs(len(scaled_features))
+            score = silhouette_score(scaled_features, labels, **sil_kwargs)
             return float(max(0, (score + 1) / 2))
         except Exception:
             return 0.0

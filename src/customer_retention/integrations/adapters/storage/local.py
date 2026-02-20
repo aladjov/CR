@@ -21,6 +21,18 @@ def _import_deltalake() -> Any:
         raise ImportError("deltalake package required: pip install deltalake") from None
 
 
+def _coerce_null_columns(df: pd.DataFrame) -> pd.DataFrame:
+    import pyarrow as pa
+
+    null_cols = [c for c in df.columns if pa.array(df[c]).type == pa.null()]
+    if not null_cols:
+        return df
+    df = df.copy()
+    for col in null_cols:
+        df[col] = df[col].astype(pd.StringDtype())
+    return df
+
+
 class LocalDelta(DeltaStorage):
     def __init__(self):
         if not deltalake_available():
@@ -47,6 +59,7 @@ class LocalDelta(DeltaStorage):
 
             DatabricksDelta().write(df, path, mode, partition_by, metadata)
             return
+        df = _coerce_null_columns(df)
         dl = _import_deltalake()
         kwargs: Dict[str, Any] = {"mode": mode}
         if mode == "overwrite":

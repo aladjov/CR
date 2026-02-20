@@ -155,43 +155,45 @@ class SegmentAwareOutlierAnalyzer:
         feature_cols: List[str],
         global_analysis: Dict[str, OutlierResult],
         segment_analysis: Dict[Any, Dict[str, OutlierResult]],
-        segment_labels: np.ndarray
+        segment_labels: np.ndarray,
     ) -> Dict[str, int]:
-        """Identify global outliers that are normal within their segment."""
+        segment_normal = self._build_segment_normal_masks(
+            feature_cols, segment_analysis, segment_labels,
+        )
         false_outliers = {}
-
         for col in feature_cols:
             global_result = global_analysis[col]
             if global_result.outlier_mask is None:
                 false_outliers[col] = 0
                 continue
+            global_mask = np.asarray(global_result.outlier_mask, dtype=bool)
+            false_outliers[col] = int(np.sum(global_mask & segment_normal.get(col, np.zeros(len(segment_labels), dtype=bool))))
+        return false_outliers
 
-            global_outlier_indices = np.where(global_result.outlier_mask)[0]
-            false_count = 0
+    @staticmethod
+    def _build_segment_normal_masks(
+        feature_cols: List[str],
+        segment_analysis: Dict[Any, Dict[str, OutlierResult]],
+        segment_labels: np.ndarray,
+    ) -> Dict[str, np.ndarray]:
+        n = len(segment_labels)
+        seg_index_map: Dict[Any, np.ndarray] = {}
+        for seg_id in segment_analysis:
+            seg_index_map[seg_id] = np.where(segment_labels == seg_id)[0]
 
-            for idx in global_outlier_indices:
-                seg_id = segment_labels[idx]
-                if seg_id < 0 or seg_id not in segment_analysis:
-                    continue
-
-                seg_result = segment_analysis[seg_id].get(col)
+        result: Dict[str, np.ndarray] = {}
+        for col in feature_cols:
+            normal_mask = np.zeros(n, dtype=bool)
+            for seg_id, seg_cols in segment_analysis.items():
+                seg_result = seg_cols.get(col)
                 if seg_result is None or seg_result.outlier_mask is None:
                     continue
-
-                # Get the local index within segment
-                seg_mask = segment_labels == seg_id
-                seg_indices = np.where(seg_mask)[0]
-                local_idx = np.where(seg_indices == idx)[0]
-
-                if len(local_idx) > 0:
-                    local_pos = local_idx[0]
-                    seg_outlier_mask = seg_result.outlier_mask.to_numpy()
-                    if local_pos < len(seg_outlier_mask) and not seg_outlier_mask[local_pos]:
-                        false_count += 1
-
-            false_outliers[col] = false_count
-
-        return false_outliers
+                seg_indices = seg_index_map[seg_id]
+                seg_outlier_arr = np.asarray(seg_result.outlier_mask, dtype=bool)
+                count = min(len(seg_indices), len(seg_outlier_arr))
+                normal_mask[seg_indices[:count]] = ~seg_outlier_arr[:count]
+            result[col] = normal_mask
+        return result
 
     def _make_recommendations(
         self,

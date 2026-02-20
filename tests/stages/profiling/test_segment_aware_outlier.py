@@ -290,3 +290,36 @@ class TestEdgeCases:
         analyzer = SegmentAwareOutlierAnalyzer()
         result = analyzer.analyze(df, feature_cols=['value'], target_col='target')
         assert result.n_segments >= 1
+
+
+class TestVectorizedFalseOutlierIdentification:
+    def test_false_outliers_bounded_by_global_count(self):
+        np.random.seed(42)
+        retail = pd.DataFrame({
+            'order_value': np.random.normal(50, 10, 100),
+            'order_count': np.random.poisson(5, 100),
+        })
+        enterprise = pd.DataFrame({
+            'order_value': np.random.normal(5000, 500, 10),
+            'order_count': np.random.poisson(50, 10),
+        })
+        df = pd.concat([retail, enterprise], ignore_index=True)
+
+        analyzer = SegmentAwareOutlierAnalyzer()
+        result = analyzer.analyze(df, feature_cols=['order_value', 'order_count'])
+
+        for col in ['order_value', 'order_count']:
+            assert result.false_outliers[col] <= result.global_analysis[col].outliers_detected
+
+    def test_all_outliers_in_skipped_segments_yields_zero(self):
+        np.random.seed(42)
+        df = pd.DataFrame({
+            'segment': ['big'] * 50 + ['tiny'] * 3,
+            'value': np.concatenate([
+                np.random.normal(50, 5, 50),
+                np.array([5000, 6000, 7000]),
+            ]),
+        })
+        analyzer = SegmentAwareOutlierAnalyzer()
+        result = analyzer.analyze(df, feature_cols=['value'], segment_col='segment')
+        assert result.false_outliers['value'] == 0

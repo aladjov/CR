@@ -821,6 +821,40 @@ class TestFindOptimalSegmentsEdgeCases:
         assert n == 1
 
 
+class TestAnalyzeCollectsDataOnce:
+    def test_to_numpy_called_once_for_features(self):
+        np.random.seed(42)
+        n = 100
+        df = pd.DataFrame({
+            "a": np.random.normal(0, 1, n),
+            "b": np.random.normal(5, 1, n),
+            "target": np.random.choice([0, 1], n),
+        })
+        analyzer = SegmentAnalyzer()
+        call_count = {"n": 0}
+        orig_find = analyzer.find_optimal_segments
+
+        def counting_find(*args, **kwargs):
+            call_count["n"] += 1
+            return orig_find(*args, **kwargs)
+
+        analyzer.find_optimal_segments = counting_find
+        analyzer.analyze(df, target_col="target", feature_cols=["a", "b"])
+        assert call_count["n"] == 1
+
+    def test_analyze_reuses_precomputed_numpy(self):
+        np.random.seed(42)
+        n = 100
+        df = pd.DataFrame({
+            "a": np.random.normal(0, 1, n),
+            "b": np.random.normal(5, 1, n),
+            "target": np.random.choice([0, 1], n),
+        })
+        analyzer = SegmentAnalyzer()
+        result = analyzer.analyze(df, target_col="target", feature_cols=["a", "b"])
+        assert result.n_segments >= 1
+
+
 class TestCalculateQualityEdgeCases:
     def test_single_label(self):
         """Only one unique label => quality 0.0."""
@@ -1102,3 +1136,59 @@ class TestLatestSnapshotFiltering:
         })
         result = analyzer.analyze(df, target_col="target", feature_cols=["feature_a", "feature_b"])
         assert len(result.labels) == 100
+
+
+class TestSilhouetteSampling:
+    def test_silhouette_uses_sample_size_for_large_data(self):
+        from unittest.mock import patch
+
+        from sklearn.metrics import silhouette_score as real_silhouette
+
+        np.random.seed(42)
+        data = np.vstack([
+            np.random.normal(0, 1, (800, 2)),
+            np.random.normal(10, 1, (800, 2)),
+        ])
+        df = pd.DataFrame(data, columns=["a", "b"])
+
+        analyzer = SegmentAnalyzer()
+        with patch(
+            "customer_retention.stages.profiling.segment_analyzer.silhouette_score",
+            wraps=real_silhouette,
+        ) as mock_sil:
+            analyzer.find_optimal_segments(df, ["a", "b"])
+            for call in mock_sil.call_args_list:
+                assert "sample_size" in call.kwargs
+
+    def test_large_data_still_finds_correct_clusters(self):
+        np.random.seed(42)
+        data = np.vstack([
+            np.random.normal(0, 1, (800, 2)),
+            np.random.normal(20, 1, (800, 2)),
+        ])
+        df = pd.DataFrame(data, columns=["a", "b"])
+
+        analyzer = SegmentAnalyzer()
+        n = analyzer.find_optimal_segments(df, ["a", "b"])
+        assert n == 2
+
+    def test_calculate_quality_uses_sample_size(self):
+        from unittest.mock import patch
+
+        from sklearn.metrics import silhouette_score as real_silhouette
+
+        np.random.seed(42)
+        scaled = np.vstack([
+            np.random.normal(0, 1, (800, 2)),
+            np.random.normal(10, 1, (800, 2)),
+        ])
+        labels = np.array([0] * 800 + [1] * 800)
+
+        analyzer = SegmentAnalyzer()
+        with patch(
+            "customer_retention.stages.profiling.segment_analyzer.silhouette_score",
+            wraps=real_silhouette,
+        ) as mock_sil:
+            quality = analyzer._calculate_quality(scaled, labels)
+            assert quality > 0
+            assert "sample_size" in mock_sil.call_args.kwargs

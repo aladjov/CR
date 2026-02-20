@@ -282,33 +282,28 @@ class FeatureCapacityAnalyzer:
         target_col: str,
         segment_col: str,
     ) -> SegmentCapacityResult:
-        """Analyze feature capacity for each segment to guide segmented modeling."""
+        eff_result = self.calculate_effective_features(df, feature_cols)
+        segment_stats = self._bulk_segment_stats(df, target_col, segment_col)
+        n_features = len(feature_cols)
+
         segment_capacities = {}
         viable_segments = []
         insufficient_segments = []
 
-        for segment_value in safe_to_list(df[segment_col].unique()):
-            segment_df = df[df[segment_col] == segment_value]
-            if segment_df[target_col].notna().sum() == 0:
-                continue
-            capacity = self.analyze(segment_df, feature_cols, target_col)
-            segment_capacities[str(segment_value)] = capacity
+        for seg_name, (n_samples, minority_samples) in segment_stats.items():
+            capacity = self._build_segment_result(
+                n_samples, minority_samples, n_features, eff_result
+            )
+            segment_capacities[seg_name] = capacity
+            (viable_segments if capacity.capacity_status == "adequate"
+             else insufficient_segments).append(seg_name)
 
-            if capacity.capacity_status == "adequate":
-                viable_segments.append(str(segment_value))
-            else:
-                insufficient_segments.append(str(segment_value))
-
-        # Determine recommended strategy
         strategy, reason = self._determine_segment_strategy(
             segment_capacities, viable_segments, insufficient_segments
         )
-
-        # Generate recommendations
         recommendations = self._generate_segment_recommendations(
             segment_capacities, viable_segments, insufficient_segments, strategy
         )
-
         return SegmentCapacityResult(
             segment_capacities=segment_capacities,
             recommended_strategy=strategy,
@@ -316,6 +311,48 @@ class FeatureCapacityAnalyzer:
             viable_segments=viable_segments,
             insufficient_segments=insufficient_segments,
             recommendations=recommendations,
+        )
+
+    def _bulk_segment_stats(
+        self, df: pd.DataFrame, target_col: str, segment_col: str
+    ) -> Dict[str, Tuple[int, int]]:
+        sizes = df.groupby(segment_col).size()
+        non_null_counts = df.groupby(segment_col)[target_col].count()
+        class_counts = df.groupby([segment_col, target_col]).size().reset_index(name="n")
+        min_per_segment = class_counts.groupby(segment_col)["n"].min()
+
+        result = {}
+        for seg in safe_to_list(sizes.index):
+            if int(non_null_counts.get(seg, 0)) == 0:
+                continue
+            minority = int(min_per_segment.loc[seg]) if seg in min_per_segment.index else 0
+            result[str(seg)] = (int(sizes.loc[seg]), minority)
+        return result
+
+    def _build_segment_result(
+        self, n_samples: int, minority_samples: int,
+        n_features: int, eff_result: EffectiveFeaturesResult
+    ) -> FeatureCapacityResult:
+        epv = minority_samples / n_features if n_features > 0 else 0
+        samples_per_feature = n_samples / n_features if n_features > 0 else 0
+        capacity_status = self._determine_capacity_status(epv, n_features, eff_result.effective_count)
+        recommendations = self._generate_recommendations(
+            epv, n_features, eff_result.effective_count, minority_samples, capacity_status
+        )
+        return FeatureCapacityResult(
+            total_samples=n_samples,
+            minority_class_samples=minority_samples,
+            total_features=n_features,
+            effective_features=eff_result.effective_count,
+            recommended_features_conservative=int(minority_samples / self.EPV_CONSERVATIVE),
+            recommended_features_moderate=int(minority_samples / self.EPV_MODERATE),
+            recommended_features_aggressive=int(minority_samples / self.EPV_AGGRESSIVE),
+            events_per_variable=epv,
+            samples_per_feature=samples_per_feature,
+            capacity_status=capacity_status,
+            recommendations=recommendations,
+            effective_features_result=eff_result,
+            complexity_guidance=self.get_complexity_guidance(n_samples, minority_samples, n_features),
         )
 
     def get_complexity_guidance(

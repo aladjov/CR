@@ -312,6 +312,84 @@ class TestAnalyzeWithAllNaNTarget:
         assert "B" not in result.segment_capacities
 
 
+class TestBulkSegmentCapacity:
+    """Tests that segment capacity uses bulk groupby instead of per-segment loops."""
+
+    @pytest.fixture
+    def analyzer(self):
+        return FeatureCapacityAnalyzer()
+
+    @pytest.fixture
+    def many_segments_df(self):
+        np.random.seed(42)
+        segments = [f"seg_{i}" for i in range(20)]
+        rows = []
+        for seg in segments:
+            n = np.random.randint(30, 200)
+            for _ in range(n):
+                rows.append({
+                    "f1": np.random.normal(), "f2": np.random.normal(),
+                    "f3": np.random.normal(), "segment": seg,
+                    "target": np.random.binomial(1, 0.3),
+                })
+        return pd.DataFrame(rows)
+
+    def test_bulk_segment_matches_per_segment_results(self, analyzer, many_segments_df):
+        result = analyzer.analyze_segment_capacity(
+            many_segments_df, ["f1", "f2", "f3"], "target", "segment"
+        )
+        for seg_name, cap in result.segment_capacities.items():
+            seg_df = many_segments_df[many_segments_df["segment"] == seg_name]
+            assert cap.total_samples == len(seg_df)
+            expected_minority = int(seg_df["target"].value_counts().min())
+            assert cap.minority_class_samples == expected_minority
+
+    def test_bulk_segment_shares_effective_features(self, analyzer, many_segments_df):
+        result = analyzer.analyze_segment_capacity(
+            many_segments_df, ["f1", "f2", "f3"], "target", "segment"
+        )
+        effective_counts = {cap.effective_features for cap in result.segment_capacities.values()}
+        assert len(effective_counts) == 1
+
+    def test_bulk_segment_epv_uses_segment_minority(self, analyzer):
+        df = pd.DataFrame({
+            "f1": np.random.normal(0, 1, 600),
+            "f2": np.random.normal(0, 1, 600),
+            "segment": ["big"] * 500 + ["small"] * 100,
+            "target": [1] * 250 + [0] * 250 + [1] * 10 + [0] * 90,
+        })
+        result = analyzer.analyze_segment_capacity(df, ["f1", "f2"], "target", "segment")
+        assert result.segment_capacities["big"].minority_class_samples == 250
+        assert result.segment_capacities["small"].minority_class_samples == 10
+        assert result.segment_capacities["big"].events_per_variable == 125.0
+        assert result.segment_capacities["small"].events_per_variable == 5.0
+
+    def test_bulk_segment_single_class_segment_skipped(self, analyzer):
+        df = pd.DataFrame({
+            "f1": [1.0] * 10 + [2.0] * 10,
+            "f2": [3.0] * 10 + [4.0] * 10,
+            "segment": ["has_both"] * 10 + ["only_zeros"] * 10,
+            "target": [1, 0, 1, 0, 1, 0, 1, 0, 1, 0] + [0] * 10,
+        })
+        result = analyzer.analyze_segment_capacity(df, ["f1", "f2"], "target", "segment")
+        assert "has_both" in result.segment_capacities
+        assert result.segment_capacities["has_both"].minority_class_samples == 5
+
+    def test_bulk_segment_correlation_computed_once(self, analyzer, many_segments_df, monkeypatch):
+        call_count = {"n": 0}
+        original = analyzer.calculate_effective_features
+
+        def counting_wrapper(*args, **kwargs):
+            call_count["n"] += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(analyzer, "calculate_effective_features", counting_wrapper)
+        analyzer.analyze_segment_capacity(
+            many_segments_df, ["f1", "f2", "f3"], "target", "segment"
+        )
+        assert call_count["n"] == 1
+
+
 class TestModelComplexityGuidance:
     @pytest.fixture
     def analyzer(self):
