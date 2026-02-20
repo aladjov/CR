@@ -413,11 +413,15 @@ def batched_corr_matrix(df: Any, columns: list[str]) -> _pandas.DataFrame:
         return _pandas.DataFrame(index=valid_cols, columns=valid_cols)
     if not _is_spark_pandas(df):
         return df[valid_cols].corr()
-    spark_df = df[valid_cols].to_spark().na.drop(subset=valid_cols)
+    import numpy as _np
     from pyspark.ml.feature import VectorAssembler
     from pyspark.ml.stat import Correlation as SparkCorrelation
+    spark_df = df[valid_cols].to_spark()
     assembler = VectorAssembler(inputCols=valid_cols, outputCol="_features", handleInvalid="skip")
-    corr_row = SparkCorrelation.corr(assembler.transform(spark_df), "_features").head()
+    assembled = assembler.transform(spark_df).select("_features")
+    if assembled.head() is None:
+        return _pandas.DataFrame(_np.nan, index=valid_cols, columns=valid_cols)
+    corr_row = SparkCorrelation.corr(assembled, "_features").head()
     matrix = corr_row[0].toArray()
     return _pandas.DataFrame(matrix, columns=valid_cols, index=valid_cols)
 

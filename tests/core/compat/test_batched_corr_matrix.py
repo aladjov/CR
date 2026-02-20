@@ -59,3 +59,15 @@ class TestBatchedCorrMatrix:
         df = pd.DataFrame({"p": rng.standard_normal(80), "q": rng.standard_normal(80)})
         result = batched_corr_matrix(df, ["p", "q"])
         assert result.loc["p", "q"] == pytest.approx(result.loc["q", "p"])
+
+    def test_all_nulls_returns_nan_matrix(self):
+        df = pd.DataFrame({"a": [np.nan, np.nan, np.nan], "b": [np.nan, np.nan, np.nan]})
+        result = batched_corr_matrix(df, ["a", "b"])
+        assert list(result.columns) == ["a", "b"]
+        assert list(result.index) == ["a", "b"]
+        assert result.isna().all().all()
+
+    def test_partial_nulls_still_computes(self):
+        df = pd.DataFrame({"a": [1.0, 2, np.nan, 4], "b": [4.0, np.nan, 2, 1]})
+        result = batched_corr_matrix(df, ["a", "b"])
+        assert not result.isna().all().all()
