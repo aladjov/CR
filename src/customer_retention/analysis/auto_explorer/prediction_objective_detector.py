@@ -10,7 +10,7 @@ from customer_retention.analysis.auto_explorer.project_context import (
     PredictionAnchor,
     PredictionObjective,
 )
-from customer_retention.core.compat import pd
+from customer_retention.core.compat import is_datetime64_any_dtype, native_pd, pd
 from customer_retention.stages.profiling.temporal_coverage import TemporalComparison
 
 _IMMEDIATE_RISK_PATTERNS = [
@@ -353,7 +353,7 @@ def _assess_strength(
 
 
 def _looks_like_date_column(df: pd.DataFrame, col: str) -> bool:
-    if pd.api.types.is_datetime64_any_dtype(df[col]):
+    if is_datetime64_any_dtype(df[col]):
         return True
     sample = df[col].dropna().head(20)
     if len(sample) == 0:
@@ -361,7 +361,7 @@ def _looks_like_date_column(df: pd.DataFrame, col: str) -> bool:
     parseable = 0
     for val in sample.tolist():
         try:
-            pd.to_datetime(val, format="mixed")
+            native_pd.to_datetime(val, format="mixed")
             parseable += 1
         except (ValueError, TypeError):
             pass
