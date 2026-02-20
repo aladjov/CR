@@ -96,6 +96,27 @@ class TestBatchedCorrMatrix:
         expected = df[["feat_a", "feat_b", "noise", "target"]].corr()
         pd.testing.assert_frame_equal(result, expected, atol=1e-10)
 
+    def test_zero_variance_column_produces_nan(self):
+        df = pd.DataFrame({"a": [1.0, 2, 3, 4, 5], "const": [7.0, 7, 7, 7, 7], "b": [5.0, 4, 3, 2, 1]})
+        result = batched_corr_matrix(df, ["a", "const", "b"])
+        expected = df[["a", "const", "b"]].corr()
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_all_zero_variance_columns(self):
+        df = pd.DataFrame({"x": [3.0] * 10, "y": [5.0] * 10})
+        result = batched_corr_matrix(df, ["x", "y"])
+        assert result.isna().all().all()
+
+    def test_zero_variance_mixed_with_nulls(self):
+        df = pd.DataFrame({
+            "a": [1.0, 2, 3, np.nan, 5],
+            "const": [4.0, 4, 4, 4, 4],
+            "b": [np.nan, 2, 3, 4, 5],
+        })
+        result = batched_corr_matrix(df, ["a", "const", "b"])
+        expected = df[["a", "const", "b"]].corr()
+        pd.testing.assert_frame_equal(result, expected)
+
     def test_target_correlation_with_scattered_nulls(self):
         """Feature-target correlations must be correct even when different
         features have nulls in different rows (the VectorAssembler bug)."""

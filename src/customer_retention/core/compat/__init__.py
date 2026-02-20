@@ -435,10 +435,19 @@ def _spark_pairwise_corr(df: Any, cols: list[str]) -> _pandas.DataFrame:
 
     spark_df = df[cols].to_spark()
     n = len(cols)
-    matrix = _np.eye(n)
+    matrix = _np.full((n, n), _np.nan)
 
+    stddev_exprs = [F.stddev(c).alias(f"s_{i}") for i, c in enumerate(cols)]
+    stddev_row = spark_df.select(*stddev_exprs).head()
+    has_variance = set()
+    for i in range(n):
+        val = stddev_row[f"s_{i}"]
+        if val is not None and float(val) > 0:
+            has_variance.add(i)
+            matrix[i, i] = 1.0
+
+    pairs = [(i, j) for i in has_variance for j in has_variance if i < j]
     _BATCH = 500
-    pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
     for start in range(0, len(pairs), _BATCH):
         batch = pairs[start:start + _BATCH]
         exprs = [F.corr(cols[i], cols[j]).alias(f"c_{i}_{j}") for i, j in batch]
