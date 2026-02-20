@@ -102,6 +102,17 @@ class TestBatchedCorrMatrix:
         expected = df[["a", "const", "b"]].corr()
         pd.testing.assert_frame_equal(result, expected)
 
+    def test_pairwise_zero_variance_in_overlap(self):
+        """Columns have global variance but zero variance in their non-null
+        overlap — must return NaN, not raise DIVIDE_BY_ZERO."""
+        df = pd.DataFrame({
+            "a": [1.0, 1.0, 2.0, 3.0],
+            "b": [5.0, 6.0, np.nan, np.nan],
+        })
+        result = batched_corr_matrix(df, ["a", "b"])
+        expected = df[["a", "b"]].corr()
+        pd.testing.assert_frame_equal(result, expected)
+
     def test_all_zero_variance_columns(self):
         df = pd.DataFrame({"x": [3.0] * 10, "y": [5.0] * 10})
         result = batched_corr_matrix(df, ["x", "y"])

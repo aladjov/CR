@@ -433,6 +433,10 @@ def _spark_pairwise_corr(df: Any, cols: list[str]) -> _pandas.DataFrame:
     import numpy as _np
     import pyspark.sql.functions as F  # noqa: N812
 
+    def _safe_corr(col_a: str, col_b: str) -> Any:
+        denom = F.stddev_samp(col_a) * F.stddev_samp(col_b)
+        return F.when(denom > 0, F.covar_samp(col_a, col_b) / denom)
+
     spark_df = df[cols].to_spark()
     n = len(cols)
     matrix = _np.full((n, n), _np.nan)
@@ -450,7 +454,7 @@ def _spark_pairwise_corr(df: Any, cols: list[str]) -> _pandas.DataFrame:
     _BATCH = 500
     for start in range(0, len(pairs), _BATCH):
         batch = pairs[start:start + _BATCH]
-        exprs = [F.corr(cols[i], cols[j]).alias(f"c_{i}_{j}") for i, j in batch]
+        exprs = [_safe_corr(cols[i], cols[j]).alias(f"c_{i}_{j}") for i, j in batch]
         row = spark_df.select(*exprs).head()
         for i, j in batch:
             val = row[f"c_{i}_{j}"]
