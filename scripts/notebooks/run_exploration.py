@@ -272,6 +272,7 @@ def _run_notebook(
     """Execute a notebook in-place using papermill, preserving outputs."""
     import papermill as pm
 
+    stem = notebook_path.stem
     try:
         pm.execute_notebook(
             str(notebook_path),
@@ -279,6 +280,7 @@ def _run_notebook(
             kernel_name=kernel,
             request_save_on_cell_execute=True,
             cwd=str(notebook_path.parent),
+            progress_bar={"desc": f"  Executing ({stem.split('_', 1)[0]})"},
         )
         return True, None
     except pm.PapermillExecutionError:
@@ -349,7 +351,6 @@ def _execute_one(
     max_attempts = 2 if spark_remote else 1
 
     for attempt in range(1, max_attempts + 1):
-        print(f"  [{label}] running ...", end="", flush=True)
         start = time.time()
         ok, error = _run_notebook(nb_path, timeout=timeout, kernel=kernel)
         elapsed = time.time() - start
@@ -357,7 +358,7 @@ def _execute_one(
 
         if ok:
             results[result_key] = f"OK ({elapsed:.0f}s)"
-            print(f"\n  [{label}] OK ({elapsed:.0f}s)")
+            print(f"  [{label}] OK ({elapsed:.0f}s)")
             if error_log is not None:
                 error_log.append_success(stem, dataset_name, elapsed)
             return True
@@ -365,7 +366,7 @@ def _execute_one(
         first_line = (error or "unknown error").split("\n")[-2][:200]
 
         if attempt < max_attempts and _is_connection_error(error or ""):
-            print(f"\n  [{label}] connection error ({elapsed:.0f}s), restarting Spark...")
+            print(f"  [{label}] connection error ({elapsed:.0f}s), restarting Spark...")
             if _restart_spark_session():
                 print(f"  [{label}] retrying after Spark restart...")
                 continue
@@ -374,7 +375,7 @@ def _execute_one(
         break
 
     results[result_key] = f"FAILED: {first_line}"
-    print(f"\n  [{label}] FAILED ({elapsed:.0f}s)")
+    print(f"  [{label}] FAILED ({elapsed:.0f}s)")
     print(f"    Error: {first_line}")
     if error_log is not None:
         error_log.append_error({
