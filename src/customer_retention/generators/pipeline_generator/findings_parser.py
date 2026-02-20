@@ -17,6 +17,7 @@ from .models import (
     BronzeLayerConfig,
     DatetimeDerivationConfig,
     GoldLayerConfig,
+    HistoryWindowConfig,
     LabelTimestampConfig,
     LandingLayerConfig,
     LifecycleConfig,
@@ -613,6 +614,20 @@ class FindingsParser:
             fallback_window_days=observation_days,
         )
 
+    def _build_history_window_config(self, time_column: str) -> Optional[HistoryWindowConfig]:
+        if self._intent is None:
+            return None
+        if self._intent.history_upper_limit is None and self._intent.lookback_periods is None:
+            return None
+        from customer_retention.analysis.auto_explorer.snapshot_grid import CADENCE_DAYS
+
+        return HistoryWindowConfig(
+            time_column=time_column,
+            upper_limit=self._intent.history_upper_limit,
+            lookback_periods=self._intent.lookback_periods,
+            cadence_days=CADENCE_DAYS[self._intent.cadence_interval],
+        )
+
     def _build_landing_configs(
         self, config: PipelineConfig, multi: MultiDatasetFindings, sources: Dict[str, ExplorationFindings]
     ) -> None:
@@ -655,6 +670,7 @@ class FindingsParser:
                     "feature_timestamp",
                     mask_future=True,
                 ),
+                history_window=self._build_history_window_config(time_col),
             )
 
     @staticmethod
@@ -854,6 +870,7 @@ class FindingsParser:
                     "feature_timestamp",
                     mask_future=True,
                 ),
+                history_window=self._build_history_window_config(time_col),
             )
 
     @staticmethod

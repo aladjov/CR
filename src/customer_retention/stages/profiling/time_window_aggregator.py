@@ -341,11 +341,11 @@ def derive_extra_datetime_features(
 
     df = df.copy()
     new_columns: list[str] = []
-    time_series = native_pd.to_datetime(df[time_column], errors="coerce")
+    time_series = as_tz_naive(native_pd.to_datetime(df[time_column], errors="coerce"))
     _mask_set = set(mask_future_columns) if mask_future_columns else set()
 
     for col in datetime_columns:
-        parsed = native_pd.to_datetime(df[col], errors="coerce")
+        parsed = as_tz_naive(native_pd.to_datetime(df[col], errors="coerce"))
 
         delta_hours_name = f"{col}_delta_hours"
         hour_name = f"{col}_hour"
@@ -392,18 +392,18 @@ def derive_entity_datetime_features(
     if not datetime_columns:
         return df, []
     df = df.copy()
-    time_series = native_pd.to_datetime(df[time_column], errors="coerce")
+    time_series = as_tz_naive(native_pd.to_datetime(df[time_column], errors="coerce"))
     mask_set = set(mask_future_columns) if mask_future_columns else set()
     new_columns: list[str] = []
 
     for col in datetime_columns:
-        parsed = native_pd.to_datetime(df[col], errors="coerce")
+        parsed = as_tz_naive(native_pd.to_datetime(df[col], errors="coerce"))
         cols = _derive_universal_features(df, time_series, col, parsed, mask_set)
         new_columns.extend(cols)
 
     for start_col, end_col in (milestone_pairs or []):
-        start_parsed = native_pd.to_datetime(df[start_col], errors="coerce")
-        end_parsed = native_pd.to_datetime(df[end_col], errors="coerce")
+        start_parsed = as_tz_naive(native_pd.to_datetime(df[start_col], errors="coerce"))
+        end_parsed = as_tz_naive(native_pd.to_datetime(df[end_col], errors="coerce"))
         cols = _derive_milestone_features(
             df, time_series, start_col, end_col, start_parsed, end_parsed, mask_set,
         )

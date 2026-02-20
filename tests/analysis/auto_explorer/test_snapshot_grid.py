@@ -734,3 +734,62 @@ class TestGenerateGridDatesWithCap:
         )
         grid.generate_grid_dates()
         assert len(grid.grid_dates) == 31
+
+
+class TestFromIntentHistoryWindow:
+    def _datasets(self):
+        return {"events": _minimal_entry("events", DatasetGranularity.EVENT_LEVEL)}
+
+    def _fps(self):
+        return {"events": _fp("events", data_start="2020-01-01", data_end="2024-12-31")}
+
+    def _intent(self, **kw):
+        defaults = dict(
+            observation_window_days=270, purge_gap_days=104, label_window_days=90,
+        )
+        defaults.update(kw)
+        return _minimal_intent(**defaults)
+
+    def test_no_window_preserves_boundaries(self):
+        grid = SnapshotGrid.from_intent(self._intent(), self._datasets(), fingerprints=self._fps())
+        assert grid.grid_start is not None
+        assert grid.grid_end is not None
+
+    def test_upper_limit_narrows_grid_end(self):
+        intent = self._intent(history_upper_limit="2023-06-30")
+        grid = SnapshotGrid.from_intent(intent, self._datasets(), fingerprints=self._fps())
+        assert grid.grid_end <= "2023-06-30"
+
+    def test_upper_limit_does_not_extend_grid_end(self):
+        intent = self._intent(history_upper_limit="2030-01-01")
+        grid_no_limit = SnapshotGrid.from_intent(self._intent(), self._datasets(), fingerprints=self._fps())
+        grid = SnapshotGrid.from_intent(intent, self._datasets(), fingerprints=self._fps())
+        assert grid.grid_end == grid_no_limit.grid_end
+
+    def test_lookback_narrows_grid_start(self):
+        intent = self._intent(lookback_periods=10)
+        grid = SnapshotGrid.from_intent(intent, self._datasets(), fingerprints=self._fps())
+        grid_no_limit = SnapshotGrid.from_intent(self._intent(), self._datasets(), fingerprints=self._fps())
+        assert grid.grid_start >= grid_no_limit.grid_start
+
+    def test_both_upper_and_lookback(self):
+        intent = self._intent(history_upper_limit="2023-12-31", lookback_periods=26)
+        grid = SnapshotGrid.from_intent(intent, self._datasets(), fingerprints=self._fps())
+        assert grid.grid_end <= "2023-12-31"
+        assert grid.grid_start is not None
+
+    def test_lookback_without_fingerprints_no_crash(self):
+        intent = self._intent(lookback_periods=10)
+        grid = SnapshotGrid.from_intent(intent, self._datasets())
+        assert grid.grid_start is None
+        assert grid.grid_end is None
+
+
+class TestCadenceDaysPublicConstant:
+    def test_cadence_days_accessible(self):
+        from customer_retention.analysis.auto_explorer.snapshot_grid import CADENCE_DAYS
+
+        assert CADENCE_DAYS[CadenceInterval.DAILY] == 1
+        assert CADENCE_DAYS[CadenceInterval.WEEKLY] == 7
+        assert CADENCE_DAYS[CadenceInterval.BIWEEKLY] == 14
+        assert CADENCE_DAYS[CadenceInterval.MONTHLY] == 30

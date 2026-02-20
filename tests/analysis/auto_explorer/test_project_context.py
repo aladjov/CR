@@ -1285,6 +1285,48 @@ class TestIntentConfig:
         assert loaded.intent.cadence_interval == CadenceInterval.BIWEEKLY
         assert loaded.intent.split_strategy == SplitStrategy.COHORT_BASED
 
+    def test_history_upper_limit_default_none(self):
+        ic = IntentConfig()
+        assert ic.history_upper_limit is None
+
+    def test_lookback_periods_default_none(self):
+        ic = IntentConfig()
+        assert ic.lookback_periods is None
+
+    def test_history_upper_limit_set(self):
+        ic = IntentConfig(history_upper_limit="2024-12-31")
+        assert ic.history_upper_limit == "2024-12-31"
+
+    def test_lookback_periods_set(self):
+        ic = IntentConfig(lookback_periods=52)
+        assert ic.lookback_periods == 52
+
+    def test_lookback_periods_rejects_zero(self):
+        with pytest.raises(ValueError):
+            IntentConfig(lookback_periods=0)
+
+    def test_lookback_periods_rejects_negative(self):
+        with pytest.raises(ValueError):
+            IntentConfig(lookback_periods=-5)
+
+    def test_history_window_yaml_round_trip(self, tmp_path):
+        intent = IntentConfig(history_upper_limit="2024-06-30", lookback_periods=26)
+        ctx = _minimal_context(intent=intent)
+        out = tmp_path / "ctx.yaml"
+        ctx.save(out)
+        loaded = ProjectContext.load(out)
+        assert loaded.intent.history_upper_limit == "2024-06-30"
+        assert loaded.intent.lookback_periods == 26
+
+    def test_history_window_none_yaml_round_trip(self, tmp_path):
+        intent = IntentConfig()
+        ctx = _minimal_context(intent=intent)
+        out = tmp_path / "ctx.yaml"
+        ctx.save(out)
+        loaded = ProjectContext.load(out)
+        assert loaded.intent.history_upper_limit is None
+        assert loaded.intent.lookback_periods is None
+
 
 class TestLightRunAndSampleFraction:
     def test_light_run_default_false(self):

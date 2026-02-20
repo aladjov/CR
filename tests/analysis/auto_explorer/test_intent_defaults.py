@@ -3,6 +3,7 @@ from __future__ import annotations
 from customer_retention.analysis.auto_explorer.intent_defaults import (
     IntentDefaultsEngine,
     IntentSuggestion,
+    format_dataset_preview,
 )
 from customer_retention.analysis.auto_explorer.project_context import (
     CadenceInterval,
@@ -277,3 +278,31 @@ class TestCadenceBoundaryValues:
     def test_renewal_cycle_boundary_93(self):
         s = _engine().suggest(PredictionObjective.RENEWAL_RISK, TemporalPosture.REACTIVE, renewal_cycle_days=93)
         assert s.config.cadence_interval == CadenceInterval.MONTHLY
+
+
+class TestFormatDatasetPreview:
+    def test_weekly_cadence(self):
+        result = format_dataset_preview(364, CadenceInterval.WEEKLY, 1200, 4.2)
+        assert "52 weekly periods" in result
+        assert "1,200 unique entities" in result
+        assert "4.2 events" in result
+        assert "5,040 rows" in result
+
+    def test_monthly_cadence(self):
+        result = format_dataset_preview(365, CadenceInterval.MONTHLY, 500, 10.0)
+        assert "12 monthly periods" in result
+        assert "500 unique entities" in result
+        assert "5,000 rows" in result
+
+    def test_daily_cadence(self):
+        result = format_dataset_preview(30, CadenceInterval.DAILY, 100, 1.0)
+        assert "30 daily periods" in result
+        assert "100 unique entities" in result
+
+    def test_zero_avg_rows(self):
+        result = format_dataset_preview(365, CadenceInterval.WEEKLY, 1000, 0.0)
+        assert "0 rows" in result
+
+    def test_returns_bold_prefix(self):
+        result = format_dataset_preview(365, CadenceInterval.WEEKLY, 100, 1.0)
+        assert result.startswith("**Dataset preview:**")

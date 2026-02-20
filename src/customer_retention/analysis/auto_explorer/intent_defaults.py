@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .project_context import CadenceInterval, IntentConfig, PredictionObjective, SplitStrategy, TemporalPosture
+from .snapshot_grid import CADENCE_DAYS
 
 
 @dataclass
@@ -167,3 +168,20 @@ class IntentDefaultsEngine:
             "mixed": (CadenceInterval.MONTHLY, "monthly (renewal stable, mixed/unknown cycle)"),
         }
         return mapping[tier]
+
+
+def format_dataset_preview(
+    temporal_span_days: int,
+    cadence_interval: CadenceInterval,
+    unique_entities: int,
+    avg_rows_per_entity: float,
+) -> str:
+    cadence_days = CADENCE_DAYS[cadence_interval]
+    span_periods = temporal_span_days // cadence_days
+    unit = cadence_interval.value
+    total_rows = int(unique_entities * avg_rows_per_entity)
+    return (
+        f"**Dataset preview:** ~{span_periods:,} {unit} periods of history, "
+        f"~{unique_entities:,} unique entities with ~{avg_rows_per_entity:.1f} "
+        f"events each, yielding ~{total_rows:,} rows before train/gap/test splitting."
+    )

@@ -2277,3 +2277,100 @@ class TestLandingTemplateSafeToDatetime:
         )
         code = renderer.render_landing("orders", config)
         assert "from customer_retention.core.compat import safe_to_datetime" in code
+
+
+class TestLandingHistoryWindow:
+    def test_landing_renders_history_window_with_both(self, renderer):
+        from customer_retention.generators.pipeline_generator.models import (
+            HistoryWindowConfig,
+            LandingLayerConfig,
+            SourceConfig,
+        )
+
+        source = SourceConfig(
+            name="orders", path="orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = LandingLayerConfig(
+            source=source, raw_source_path="/data/orders.csv",
+            raw_source_format="csv", entity_column="customer_id",
+            time_column="order_date", target_column="churn",
+            history_window=HistoryWindowConfig(
+                time_column="order_date", upper_limit="2024-06-30",
+                lookback_periods=26, cadence_days=7,
+            ),
+        )
+        code = renderer.render_landing("orders", config)
+        assert "apply_history_window" in code
+        assert "2024-06-30" in code
+        assert "26 * 7" in code
+        compile(code, "landing_orders.py", "exec")
+
+    def test_landing_renders_history_window_upper_only(self, renderer):
+        from customer_retention.generators.pipeline_generator.models import (
+            HistoryWindowConfig,
+            LandingLayerConfig,
+            SourceConfig,
+        )
+
+        source = SourceConfig(
+            name="orders", path="orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = LandingLayerConfig(
+            source=source, raw_source_path="/data/orders.csv",
+            raw_source_format="csv", entity_column="customer_id",
+            time_column="order_date", target_column="churn",
+            history_window=HistoryWindowConfig(
+                time_column="order_date", upper_limit="2024-12-31",
+            ),
+        )
+        code = renderer.render_landing("orders", config)
+        assert "apply_history_window" in code
+        assert "2024-12-31" in code
+        assert "lookback_days" not in code
+        compile(code, "landing_orders.py", "exec")
+
+    def test_landing_renders_history_window_lookback_only(self, renderer):
+        from customer_retention.generators.pipeline_generator.models import (
+            HistoryWindowConfig,
+            LandingLayerConfig,
+            SourceConfig,
+        )
+
+        source = SourceConfig(
+            name="orders", path="orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = LandingLayerConfig(
+            source=source, raw_source_path="/data/orders.csv",
+            raw_source_format="csv", entity_column="customer_id",
+            time_column="order_date", target_column="churn",
+            history_window=HistoryWindowConfig(
+                time_column="order_date", lookback_periods=52, cadence_days=7,
+            ),
+        )
+        code = renderer.render_landing("orders", config)
+        assert "apply_history_window" in code
+        assert "52 * 7" in code
+        assert "upper = df[time_col].max()" in code
+        compile(code, "landing_orders.py", "exec")
+
+    def test_landing_omits_history_window_when_none(self, renderer):
+        from customer_retention.generators.pipeline_generator.models import (
+            LandingLayerConfig,
+            SourceConfig,
+        )
+
+        source = SourceConfig(
+            name="orders", path="orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = LandingLayerConfig(
+            source=source, raw_source_path="/data/orders.csv",
+            raw_source_format="csv", entity_column="customer_id",
+            time_column="order_date", target_column="churn",
+        )
+        code = renderer.render_landing("orders", config)
+        assert "apply_history_window" not in code
+        compile(code, "landing_orders.py", "exec")

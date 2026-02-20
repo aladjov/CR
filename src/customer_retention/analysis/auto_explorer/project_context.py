@@ -171,6 +171,15 @@ class IntentConfig(BaseModel):
     temporal_split: bool = True
     cadence_interval: CadenceInterval = CadenceInterval.WEEKLY
     split_strategy: SplitStrategy = SplitStrategy.TEMPORAL
+    history_upper_limit: Optional[str] = None
+    lookback_periods: Optional[int] = None
+
+    @field_validator("lookback_periods")
+    @classmethod
+    def _validate_lookback_periods(cls, v):
+        if v is not None and v < 1:
+            raise ValueError("lookback_periods must be >= 1")
+        return v
 
 
 class ExplorationContract(BaseModel):

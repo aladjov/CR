@@ -1134,6 +1134,42 @@ class TestDeriveExtraDatetimeFeatures:
         assert len(new_cols) == 4
         assert np.isclose(result.iloc[0]["resolved_at_delta_hours"], 12.0)
 
+    def test_tz_aware_time_column_with_naive_extra(self):
+        df = pd.DataFrame({
+            "entity": ["A"],
+            "created_at": pd.to_datetime(["2024-01-10 08:00"]).tz_localize("UTC"),
+            "resolved_at": pd.to_datetime(["2024-01-10 20:00"]),
+        })
+        result, new_cols = derive_extra_datetime_features(
+            df, "created_at", ["resolved_at"],
+        )
+        assert len(new_cols) == 4
+        assert np.isclose(result.iloc[0]["resolved_at_delta_hours"], 12.0)
+
+    def test_naive_time_column_with_tz_aware_extra(self):
+        df = pd.DataFrame({
+            "entity": ["A"],
+            "created_at": pd.to_datetime(["2024-01-10 08:00"]),
+            "resolved_at": pd.to_datetime(["2024-01-10 20:00"]).tz_localize("US/Eastern"),
+        })
+        result, new_cols = derive_extra_datetime_features(
+            df, "created_at", ["resolved_at"],
+        )
+        assert len(new_cols) == 4
+        assert not pd.isna(result.iloc[0]["resolved_at_delta_hours"])
+
+    def test_both_tz_aware_different_zones(self):
+        df = pd.DataFrame({
+            "entity": ["A"],
+            "created_at": pd.to_datetime(["2024-01-10 08:00"]).tz_localize("UTC"),
+            "resolved_at": pd.to_datetime(["2024-01-10 20:00"]).tz_localize("US/Eastern"),
+        })
+        result, new_cols = derive_extra_datetime_features(
+            df, "created_at", ["resolved_at"],
+        )
+        assert len(new_cols) == 4
+        assert not pd.isna(result.iloc[0]["resolved_at_delta_hours"])
+
 
 class TestMaskFutureDatetimeDerivation:
 
@@ -1238,6 +1274,19 @@ class TestMaskFutureDatetimeDerivation:
         )
         assert not pd.isna(result.iloc[0]["future_date_delta_hours"])
         assert result.iloc[0]["future_date_delta_hours"] > 0
+
+    def test_mask_future_with_tz_aware_columns(self):
+        df = pd.DataFrame({
+            "entity": ["A"],
+            "feature_timestamp": pd.to_datetime(["2024-01-10"]),
+            "future_date": pd.to_datetime(["2024-06-15"]).tz_localize("UTC"),
+        })
+        result, _ = derive_extra_datetime_features(
+            df, "feature_timestamp", ["future_date"],
+            mask_future_columns=["future_date"],
+        )
+        for suffix in ("_delta_hours", "_hour", "_dow", "_is_weekend"):
+            assert pd.isna(result.iloc[0][f"future_date{suffix}"])
 
 
 @pytest.fixture

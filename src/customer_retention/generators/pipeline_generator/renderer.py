@@ -1464,6 +1464,28 @@ def derive_temporal_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+{% if config.history_window %}
+
+def apply_history_window(df: pd.DataFrame) -> pd.DataFrame:
+    time_col = "feature_timestamp"
+{% if config.history_window.upper_limit %}
+    upper = safe_to_datetime("{{ config.history_window.upper_limit }}")
+{% else %}
+    upper = df[time_col].max()
+{% endif %}
+{% if config.history_window.lookback_periods %}
+    lookback_days = {{ config.history_window.lookback_periods }} * {{ config.history_window.cadence_days }}
+    lower = upper - pd.Timedelta(days=lookback_days)
+    df = df[df[time_col].isna() | (df[time_col] >= lower)]
+{% endif %}
+{% if config.history_window.upper_limit %}
+    df = df[df[time_col].isna() | (df[time_col] <= upper)]
+{% endif %}
+    print(f"  History window: {len(df):,} records after filtering")
+    return df
+{% endif %}
+
+
 def get_landing_output_path() -> Path:
     return PRODUCTION_DIR / "data" / "landing" / SOURCE_NAME
 
@@ -1479,6 +1501,9 @@ def run_landing_{{ name }}():
     df = df.rename(columns={"{{ config.original_target_column }}": TARGET_COLUMN})
 {% endif %}
     df = derive_temporal_columns(df)
+{% if config.history_window %}
+    df = apply_history_window(df)
+{% endif %}
     output_path = get_landing_output_path()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     from customer_retention.integrations.adapters.factory import get_delta

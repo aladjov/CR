@@ -141,6 +141,14 @@ class BronzeEventConfig:
 
 
 @dataclass
+class HistoryWindowConfig:
+    time_column: str
+    upper_limit: Optional[str] = None
+    lookback_periods: Optional[int] = None
+    cadence_days: int = 7
+
+
+@dataclass
 class LandingLayerConfig:
     source: SourceConfig
     raw_source_path: str
@@ -153,6 +161,7 @@ class LandingLayerConfig:
     timestamp_coalesce: Optional[TimestampCoalesceConfig] = None
     label_timestamp: Optional[LabelTimestampConfig] = None
     datetime_derivation: Optional[DatetimeDerivationConfig] = None
+    history_window: Optional[HistoryWindowConfig] = None
 
 
 @dataclass

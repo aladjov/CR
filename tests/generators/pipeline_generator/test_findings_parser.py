@@ -2731,3 +2731,59 @@ class TestDatetimeDerivationConfig:
         assert deriv is not None
         assert deriv.source_columns == ["response_at", "scheduled_at"]
         assert deriv.mask_future_columns == ["response_at"]
+
+
+class TestBuildHistoryWindowConfig:
+    def test_returns_none_without_intent(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._intent = None
+        assert parser._build_history_window_config("event_date") is None
+
+    def test_returns_none_when_no_window_params(self):
+        from customer_retention.analysis.auto_explorer.project_context import IntentConfig
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._intent = IntentConfig()
+        assert parser._build_history_window_config("event_date") is None
+
+    def test_returns_config_with_upper_limit(self):
+        from customer_retention.analysis.auto_explorer.project_context import IntentConfig
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._intent = IntentConfig(history_upper_limit="2024-06-30")
+        result = parser._build_history_window_config("event_date")
+        assert result is not None
+        assert result.upper_limit == "2024-06-30"
+        assert result.lookback_periods is None
+        assert result.time_column == "event_date"
+
+    def test_returns_config_with_lookback(self):
+        from customer_retention.analysis.auto_explorer.project_context import CadenceInterval, IntentConfig
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._intent = IntentConfig(lookback_periods=52, cadence_interval=CadenceInterval.WEEKLY)
+        result = parser._build_history_window_config("ts")
+        assert result is not None
+        assert result.lookback_periods == 52
+        assert result.cadence_days == 7
+        assert result.upper_limit is None
+
+    def test_returns_config_with_both(self):
+        from customer_retention.analysis.auto_explorer.project_context import CadenceInterval, IntentConfig
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._intent = IntentConfig(
+            history_upper_limit="2024-12-31",
+            lookback_periods=12,
+            cadence_interval=CadenceInterval.MONTHLY,
+        )
+        result = parser._build_history_window_config("order_date")
+        assert result.upper_limit == "2024-12-31"
+        assert result.lookback_periods == 12
+        assert result.cadence_days == 30

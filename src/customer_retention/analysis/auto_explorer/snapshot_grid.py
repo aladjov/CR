@@ -35,7 +35,7 @@ class GridAdjustmentMode(str, Enum):
     ALLOW_ADJUSTMENTS = "allow_adjustments"
 
 
-_CADENCE_DAYS = {
+CADENCE_DAYS = {
     CadenceInterval.DAILY: 1,
     CadenceInterval.WEEKLY: 7,
     CadenceInterval.BIWEEKLY: 14,
@@ -116,6 +116,14 @@ class SnapshotGrid(BaseModel):
                     label_window_days=intent.label_window_days,
                 )
 
+        if intent.history_upper_limit is not None and grid_end is not None:
+            grid_end = min(grid_end, intent.history_upper_limit)
+
+        if intent.lookback_periods is not None and grid_end is not None:
+            lookback_total = intent.lookback_periods * CADENCE_DAYS[intent.cadence_interval]
+            earliest = (_dt.date.fromisoformat(grid_end) - _dt.timedelta(days=lookback_total)).isoformat()
+            grid_start = max(grid_start, earliest) if grid_start is not None else earliest
+
         return cls(
             mode=mode,
             cadence_interval=intent.cadence_interval,
@@ -126,7 +134,7 @@ class SnapshotGrid(BaseModel):
         )
 
     def cadence_to_days(self) -> int:
-        return _CADENCE_DAYS[self.cadence_interval]
+        return CADENCE_DAYS[self.cadence_interval]
 
     def generate_grid_dates(self) -> None:
         if self.grid_start is None or self.grid_end is None:
