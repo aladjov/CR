@@ -71,3 +71,48 @@ class TestBatchedCorrMatrix:
         df = pd.DataFrame({"a": [1.0, 2, np.nan, 4], "b": [4.0, np.nan, 2, 1]})
         result = batched_corr_matrix(df, ["a", "b"])
         assert not result.isna().all().all()
+
+    def test_scattered_nulls_pairwise_correlation(self):
+        """When nulls are scattered across many columns, pairwise correlation
+        must still produce correct values — each pair uses rows where BOTH
+        columns are non-null, not only rows where ALL columns are non-null."""
+        rng = np.random.default_rng(42)
+        n = 100
+        target = rng.integers(0, 2, size=n).astype(float)
+        feature_a = target * 3 + rng.standard_normal(n) * 0.5
+        feature_b = -target * 2 + rng.standard_normal(n) * 0.5
+        noise = rng.standard_normal(n)
+        df = pd.DataFrame({
+            "target": target,
+            "feat_a": feature_a,
+            "feat_b": feature_b,
+            "noise": noise,
+        })
+        df.loc[0:20, "feat_a"] = np.nan
+        df.loc[30:50, "feat_b"] = np.nan
+        df.loc[60:70, "noise"] = np.nan
+
+        result = batched_corr_matrix(df, ["feat_a", "feat_b", "noise", "target"])
+        expected = df[["feat_a", "feat_b", "noise", "target"]].corr()
+        pd.testing.assert_frame_equal(result, expected, atol=1e-10)
+
+    def test_target_correlation_with_scattered_nulls(self):
+        """Feature-target correlations must be correct even when different
+        features have nulls in different rows (the VectorAssembler bug)."""
+        rng = np.random.default_rng(99)
+        n = 200
+        target = rng.integers(0, 2, size=n).astype(float)
+        strong_feature = target * 5 + rng.standard_normal(n)
+        df = pd.DataFrame({
+            "target": target,
+            "strong": strong_feature,
+            **{f"col_{i}": rng.standard_normal(n) for i in range(10)},
+        })
+        for i in range(10):
+            nulls = rng.choice(n, size=20, replace=False)
+            df.loc[nulls, f"col_{i}"] = np.nan
+
+        result = batched_corr_matrix(
+            df, ["strong"] + [f"col_{i}" for i in range(10)] + ["target"],
+        )
+        assert result.loc["strong", "target"] > 0.8

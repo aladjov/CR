@@ -426,17 +426,30 @@ def batched_corr_matrix(df: Any, columns: list[str]) -> _pandas.DataFrame:
         return _pandas.DataFrame(index=valid_cols, columns=valid_cols)
     if not _is_spark_pandas(df):
         return df[valid_cols].corr()
+    return _spark_pairwise_corr(df, valid_cols)
+
+
+def _spark_pairwise_corr(df: Any, cols: list[str]) -> _pandas.DataFrame:
     import numpy as _np
-    from pyspark.ml.feature import VectorAssembler
-    from pyspark.ml.stat import Correlation as SparkCorrelation
-    spark_df = df[valid_cols].to_spark()
-    assembler = VectorAssembler(inputCols=valid_cols, outputCol="_features", handleInvalid="skip")
-    assembled = assembler.transform(spark_df).select("_features")
-    if assembled.head() is None:
-        return _pandas.DataFrame(_np.nan, index=valid_cols, columns=valid_cols)
-    corr_row = SparkCorrelation.corr(assembled, "_features").head()
-    matrix = corr_row[0].toArray()
-    return _pandas.DataFrame(matrix, columns=valid_cols, index=valid_cols)
+    import pyspark.sql.functions as F  # noqa: N812
+
+    spark_df = df[cols].to_spark()
+    n = len(cols)
+    matrix = _np.eye(n)
+
+    _BATCH = 500
+    pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
+    for start in range(0, len(pairs), _BATCH):
+        batch = pairs[start:start + _BATCH]
+        exprs = [F.corr(cols[i], cols[j]).alias(f"c_{i}_{j}") for i, j in batch]
+        row = spark_df.select(*exprs).head()
+        for i, j in batch:
+            val = row[f"c_{i}_{j}"]
+            val = float(val) if val is not None else _np.nan
+            matrix[i, j] = val
+            matrix[j, i] = val
+
+    return _pandas.DataFrame(matrix, columns=cols, index=cols)
 
 
 __all__ = [
