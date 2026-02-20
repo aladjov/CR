@@ -108,6 +108,7 @@ class SparkSegmentAnalyzer(SegmentAnalyzer):
         method: Optional[SegmentationMethod] = None,
         max_sample_size: Optional[int] = None,
     ) -> SegmentationResult:
+        df = self._to_latest_snapshot(df)
         df = to_pandas(df)
         effective_max = max_sample_size if max_sample_size is not None else self.max_sample_size
 

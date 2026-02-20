@@ -1017,3 +1017,88 @@ class TestRunFullAnalysisSingleSegment:
         })
         result = analyzer.run_full_analysis(df, feature_cols=["a", "b"])
         assert result.visualization is None
+
+
+class TestLatestSnapshotFiltering:
+
+    def test_no_snapshot_column_returns_unchanged(self):
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({"feature_a": [1, 2, 3], "feature_b": [4, 5, 6]})
+        result = analyzer._to_latest_snapshot(df)
+        assert len(result) == 3
+
+    def test_as_of_date_filters_to_latest(self):
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({
+            "feature_a": [1, 2, 3, 4],
+            "as_of_date": pd.to_datetime(["2024-01-01", "2024-01-01", "2024-02-01", "2024-02-01"]),
+        })
+        result = analyzer._to_latest_snapshot(df)
+        assert len(result) == 2
+        assert (result["as_of_date"] == pd.Timestamp("2024-02-01")).all()
+
+    def test_feature_timestamp_filters_to_latest(self):
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({
+            "feature_a": [1, 2, 3, 4],
+            "feature_timestamp": pd.to_datetime(["2024-01-01", "2024-01-01", "2024-02-01", "2024-02-01"]),
+        })
+        result = analyzer._to_latest_snapshot(df)
+        assert len(result) == 2
+
+    def test_as_of_date_preferred_over_feature_timestamp(self):
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({
+            "feature_a": [1, 2, 3, 4],
+            "as_of_date": pd.to_datetime(["2024-01-01", "2024-01-01", "2024-02-01", "2024-02-01"]),
+            "feature_timestamp": pd.to_datetime(["2024-03-01", "2024-03-01", "2024-04-01", "2024-04-01"]),
+        })
+        result = analyzer._to_latest_snapshot(df)
+        assert len(result) == 2
+        assert (result["as_of_date"] == pd.Timestamp("2024-02-01")).all()
+
+    def test_resets_index_after_filtering(self):
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({
+            "feature_a": [1, 2, 3, 4, 5, 6],
+            "as_of_date": pd.to_datetime(["2024-01-01"] * 3 + ["2024-02-01"] * 3),
+        })
+        result = analyzer._to_latest_snapshot(df)
+        assert list(result.index) == [0, 1, 2]
+
+    def test_single_snapshot_returns_all(self):
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({
+            "feature_a": [1, 2, 3],
+            "as_of_date": pd.to_datetime(["2024-01-01"] * 3),
+        })
+        result = analyzer._to_latest_snapshot(df)
+        assert len(result) == 3
+
+    def test_analyze_uses_latest_snapshot_only(self):
+        np.random.seed(42)
+        analyzer = SegmentAnalyzer()
+        n = 50
+        dates = pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"])
+        dfs = []
+        for date in dates:
+            dfs.append(pd.DataFrame({
+                "feature_a": np.random.normal(10, 1, n),
+                "feature_b": np.random.normal(100, 10, n),
+                "as_of_date": date,
+                "target": np.random.choice([0, 1], n),
+            }))
+        df = pd.concat(dfs, ignore_index=True)
+        result = analyzer.analyze(df, target_col="target", feature_cols=["feature_a", "feature_b"])
+        assert len(result.labels) == n
+
+    def test_analyze_without_snapshot_column_uses_all_rows(self):
+        np.random.seed(42)
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({
+            "feature_a": np.random.normal(10, 1, 100),
+            "feature_b": np.random.normal(100, 10, 100),
+            "target": np.random.choice([0, 1], 100),
+        })
+        result = analyzer.analyze(df, target_col="target", feature_cols=["feature_a", "feature_b"])
+        assert len(result.labels) == 100

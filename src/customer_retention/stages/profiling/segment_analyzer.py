@@ -163,9 +163,17 @@ class FullSegmentationResult:
 
 
 class SegmentAnalyzer:
+    SNAPSHOT_COLUMNS = ("as_of_date", "feature_timestamp")
+
     def __init__(self, default_method: SegmentationMethod = SegmentationMethod.KMEANS):
         self.default_method = default_method
         self._scaler = StandardScaler()
+
+    def _to_latest_snapshot(self, df: DataFrame) -> DataFrame:
+        for col in self.SNAPSHOT_COLUMNS:
+            if col in df.columns:
+                return df[df[col] == df[col].max()].reset_index(drop=True)
+        return df
 
     def analyze(
         self,
@@ -175,6 +183,7 @@ class SegmentAnalyzer:
         max_segments: int = 5,
         method: Optional[SegmentationMethod] = None,
     ) -> SegmentationResult:
+        df = self._to_latest_snapshot(df)
         method = method or self.default_method
 
         feature_cols = self._select_features(df, feature_cols, target_col)

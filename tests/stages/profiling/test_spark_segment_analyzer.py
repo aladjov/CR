@@ -419,3 +419,51 @@ class TestInit:
         )
         assert analyzer.default_method == SegmentationMethod.HIERARCHICAL
         assert analyzer.max_sample_size == 1000
+
+
+class TestLatestSnapshotBeforeMaxCheck:
+
+    def test_filters_snapshot_before_max_check(self):
+        np.random.seed(42)
+        n_entities = 30
+        dates = pd.date_range("2024-01-01", periods=10, freq="MS")
+        dfs = []
+        for date in dates:
+            dfs.append(pd.DataFrame({
+                "feature_a": np.random.normal(10, 1, n_entities),
+                "feature_b": np.random.normal(100, 10, n_entities),
+                "as_of_date": date,
+                "target": np.random.choice([0, 1], n_entities),
+            }))
+        df = pd.concat(dfs, ignore_index=True)
+        assert len(df) == 300
+        analyzer = SparkSegmentAnalyzer(max_sample_size=50)
+        result = analyzer.analyze(df, target_col="target", feature_cols=["feature_a", "feature_b"])
+        assert len(result.labels) == n_entities
+
+    def test_no_snapshot_column_behaves_normally(self, large_clustered_data):
+        analyzer = SparkSegmentAnalyzer(max_sample_size=100)
+        result = analyzer.analyze(
+            large_clustered_data, target_col="target", feature_cols=FEATURE_COLS,
+        )
+        assert len(result.labels) == len(large_clustered_data)
+
+    def test_full_analysis_with_snapshot_data(self):
+        np.random.seed(42)
+        n_entities = 40
+        dates = pd.date_range("2024-01-01", periods=5, freq="MS")
+        dfs = []
+        for date in dates:
+            dfs.append(pd.DataFrame({
+                "feature_a": np.random.normal(10, 1, n_entities),
+                "feature_b": np.random.normal(100, 10, n_entities),
+                "as_of_date": date,
+                "target": np.random.choice([0, 1], n_entities),
+            }))
+        df = pd.concat(dfs, ignore_index=True)
+        analyzer = SparkSegmentAnalyzer(max_sample_size=50)
+        result = analyzer.run_full_analysis(
+            df, target_col="target", feature_cols=["feature_a", "feature_b"],
+        )
+        assert isinstance(result, FullSegmentationResult)
+        assert result.size_distribution["total"] == n_entities
