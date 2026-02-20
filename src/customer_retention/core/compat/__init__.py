@@ -407,6 +407,21 @@ def safe_describe(df: Any) -> Any:
         return numeric.describe()
 
 
+def batched_corr_matrix(df: Any, columns: list[str]) -> _pandas.DataFrame:
+    valid_cols = [c for c in columns if c in df.columns]
+    if len(valid_cols) < 2:
+        return _pandas.DataFrame(index=valid_cols, columns=valid_cols)
+    if not _is_spark_pandas(df):
+        return df[valid_cols].corr()
+    spark_df = df[valid_cols].to_spark().na.drop(subset=valid_cols)
+    from pyspark.ml.feature import VectorAssembler
+    from pyspark.ml.stat import Correlation as SparkCorrelation
+    assembler = VectorAssembler(inputCols=valid_cols, outputCol="_features", handleInvalid="skip")
+    corr_row = SparkCorrelation.corr(assembler.transform(spark_df), "_features").head()
+    matrix = corr_row[0].toArray()
+    return _pandas.DataFrame(matrix, columns=valid_cols, index=valid_cols)
+
+
 __all__ = [
     "pd",
     "native_pd",
@@ -474,4 +489,5 @@ __all__ = [
     "RemotePath",
     "make_path",
     "safe_describe",
+    "batched_corr_matrix",
 ]

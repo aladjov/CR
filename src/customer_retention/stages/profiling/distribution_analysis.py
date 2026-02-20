@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import Series, pd
+from customer_retention.core.compat import Series, native_pd, pd, to_pandas
 
 
 class DistributionTransformationType(Enum):
@@ -362,34 +362,70 @@ class DistributionAnalyzer:
         )
 
     def analyze_dataframe(
-        self,
-        df: pd.DataFrame,
-        numeric_columns: Optional[List[str]] = None
+        self, df: pd.DataFrame, numeric_columns: Optional[List[str]] = None
     ) -> Dict[str, DistributionAnalysis]:
-        """
-        Analyze distributions for all numeric columns in a DataFrame.
-
-        Parameters
-        ----------
-        df : DataFrame
-            Data to analyze
-        numeric_columns : List[str], optional
-            Columns to analyze. If None, analyzes all numeric columns.
-
-        Returns
-        -------
-        Dict[str, DistributionAnalysis]
-            Analysis results keyed by column name
-        """
         if numeric_columns is None:
             numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
+        valid_cols = [c for c in numeric_columns if c in df.columns]
+        if not valid_cols:
+            return {}
+
+        numeric_df = df[valid_cols]
+        desc = to_pandas(numeric_df.describe())
+        extra_q = to_pandas(numeric_df.quantile([0.01, 0.05, 0.10, 0.90, 0.95, 0.99]))
+        try:
+            skew_vals = to_pandas(numeric_df.skew())
+        except Exception:
+            skew_vals = native_pd.Series(0.0, index=valid_cols)
+        try:
+            kurt_vals = to_pandas(numeric_df.kurtosis())
+        except Exception:
+            kurt_vals = native_pd.Series(0.0, index=valid_cols)
+        zero_counts = to_pandas((numeric_df == 0).sum())
+        neg_counts = to_pandas((numeric_df < 0).sum())
 
         results = {}
-        for col in numeric_columns:
-            if col in df.columns:
-                results[col] = self.analyze_distribution(df[col], col)
+        for col in valid_cols:
+            count = int(desc.loc['count', col])
+            if count == 0:
+                results[col] = self._empty_distribution(col)
+                continue
 
+            q1 = float(desc.loc['25%', col])
+            q3 = float(desc.loc['75%', col])
+            iqr = q3 - q1
+            zero_c = int(zero_counts[col])
+            neg_c = int(neg_counts[col])
+            lower = q1 - 1.5 * iqr
+            upper = q3 + 1.5 * iqr
+            outlier_c = int(((numeric_df[col] < lower) | (numeric_df[col] > upper)).sum())
+
+            results[col] = DistributionAnalysis(
+                column_name=col, count=count,
+                mean=float(desc.loc['mean', col]), std=float(desc.loc['std', col]),
+                min_value=float(desc.loc['min', col]), max_value=float(desc.loc['max', col]),
+                median=float(desc.loc['50%', col]), q1=q1, q3=q3, iqr=iqr,
+                skewness=float(skew_vals[col]), kurtosis=float(kurt_vals[col]),
+                zero_count=zero_c, zero_percentage=zero_c / count * 100,
+                negative_count=neg_c, negative_percentage=neg_c / count * 100,
+                outlier_count_iqr=outlier_c, outlier_percentage=outlier_c / count * 100,
+                percentiles={
+                    "p1": float(extra_q.loc[0.01, col]), "p5": float(extra_q.loc[0.05, col]),
+                    "p10": float(extra_q.loc[0.10, col]), "p25": q1, "p50": float(desc.loc['50%', col]),
+                    "p75": q3, "p90": float(extra_q.loc[0.90, col]),
+                    "p95": float(extra_q.loc[0.95, col]), "p99": float(extra_q.loc[0.99, col]),
+                },
+            )
         return results
+
+    def _empty_distribution(self, column_name: str) -> DistributionAnalysis:
+        return DistributionAnalysis(
+            column_name=column_name, count=0, mean=0.0, std=0.0,
+            min_value=0.0, max_value=0.0, median=0.0, q1=0.0, q3=0.0, iqr=0.0,
+            skewness=0.0, kurtosis=0.0, zero_count=0, zero_percentage=0.0,
+            negative_count=0, negative_percentage=0.0,
+            outlier_count_iqr=0, outlier_percentage=0.0,
+        )
 
     def get_all_recommendations(
         self,

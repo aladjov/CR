@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import crosstab, groupby_multi_agg, pd
+from customer_retention.core.compat import batched_corr_matrix, crosstab, groupby_multi_agg, pd
 
 
 class RecommendationCategory(Enum):
@@ -139,7 +139,7 @@ class RelationshipRecommender:
                 "recommendations": [],
             }
 
-        correlation_matrix = df[cols_to_analyze].corr()
+        correlation_matrix = batched_corr_matrix(df, cols_to_analyze)
 
         # Find multicollinear pairs
         for i, col1 in enumerate(cols_to_analyze):
@@ -183,13 +183,14 @@ class RelationshipRecommender:
         if target_col not in df.columns:
             return {"strong": [], "weak": [], "recommendations": []}
 
-        df[target_col]
+        feature_cols = [c for c in numeric_cols if c != target_col and c in df.columns]
+        if not feature_cols:
+            return {"strong": [], "weak": [], "recommendations": []}
 
-        for col in numeric_cols:
-            if col == target_col or col not in df.columns:
-                continue
+        corr_with_target = batched_corr_matrix(df, feature_cols + [target_col])
 
-            corr = df[[col, target_col]].corr().iloc[0, 1]
+        for col in feature_cols:
+            corr = corr_with_target.loc[col, target_col]
             effect_size = self._calculate_effect_size(df, col, target_col)
 
             predictor_info = {
@@ -417,7 +418,7 @@ class RelationshipRecommender:
         cols_in_df = [c for c in numeric_cols if c in df.columns and c != target_col]
         if len(cols_in_df) >= 2:
             # Check for potential ratio/interaction features
-            corr_matrix = df[cols_in_df].corr()
+            corr_matrix = batched_corr_matrix(df, cols_in_df)
             moderate_pairs = []
 
             for i, col1 in enumerate(cols_in_df):
