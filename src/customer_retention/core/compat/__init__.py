@@ -397,6 +397,19 @@ def safe_isfinite(series: Any) -> Any:
     return series.notna() & ~safe_isinf(series)
 
 
+def safe_sample(df: Any, n: int, random_state: int = 42) -> Any:
+    if n <= 0:
+        return df.head(0)
+    n = min(n, len(df))
+    if n == 0:
+        return df.head(0)
+    if _is_spark_pandas(df):
+        frac = min(1.0, n / max(1, len(df)))
+        result = df.sample(frac=frac, random_state=random_state)
+        return result.head(n) if len(result) > n else result
+    return df.sample(n=n, random_state=random_state)
+
+
 def safe_describe(df: Any) -> Any:
     try:
         return df.describe()
@@ -492,6 +505,7 @@ __all__ = [
     "DataOps",
     "RemotePath",
     "make_path",
+    "safe_sample",
     "safe_describe",
     "batched_corr_matrix",
 ]

@@ -20,7 +20,7 @@ PROFILING_DIR = (
     / "profiling"
 )
 
-ALLOWLISTED_FILES = {"window_recommendation.py"}
+ALLOWLISTED_FILES = {"window_recommendation.py", "spark_segment_analyzer.py"}
 
 _STRING_LITERAL = re.compile(r'''("""[\s\S]*?"""|'''  r"""'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')""")
 
@@ -49,6 +49,11 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
         re.compile(r"\.agg\(\["),
         ".agg([list]) is not supported in pyspark.pandas",
         "Use groupby_multi_agg() from core.compat",
+    ),
+    (
+        re.compile(r"\.sample\(n="),
+        ".sample(n=) is not supported in pyspark.pandas",
+        "Use safe_sample() from core.compat",
     ),
 ]
 
