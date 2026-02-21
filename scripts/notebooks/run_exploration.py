@@ -15,8 +15,6 @@ from customer_retention.analysis.auto_explorer.skip_logic import (
     NOTEBOOKS_ORDER,
     PER_DATASET_STEMS,
     SETUP_NOTEBOOKS,
-    TEMPORAL_NOTEBOOKS,
-    TEXT_NOTEBOOKS,
 )
 from customer_retention.analysis.auto_explorer.skip_logic import (
     detect_global_skip_set as _detect_global_skip_set,
@@ -35,8 +33,6 @@ from customer_retention.analysis.auto_explorer.skip_logic import (
 )
 
 _DISCOVERY_NOTEBOOK = "01_data_discovery"
-
-_FINDINGS_EXTENSIONS = ("*.yaml", "*.yml", "*.json")
 
 
 # ---------------------------------------------------------------------------
@@ -65,90 +61,7 @@ def _resolve_namespace(findings_dir: Path, run_id: Optional[str]):
 # ---------------------------------------------------------------------------
 
 
-def _iter_findings_files(findings_dir: Path):
-    seen: Set[Path] = set()
-    for pattern in _FINDINGS_EXTENSIONS:
-        for path in sorted(findings_dir.glob(f"*_findings.{pattern.lstrip('*.')}")):
-            if path not in seen:
-                seen.add(path)
-                yield path
 
-
-def _detect_skip_set(findings_dir: Path) -> Tuple[Set[str], Dict[str, str]]:
-    skip: Set[str] = set()
-    reasons: Dict[str, str] = {}
-
-    has_event_data = _has_event_level_data(findings_dir)
-    has_text_columns = _has_text_columns(findings_dir)
-
-    if not has_event_data:
-        for nb in TEMPORAL_NOTEBOOKS:
-            skip.add(nb)
-            reasons[nb] = "no event-level datasets"
-
-    if not has_text_columns:
-        for nb in TEXT_NOTEBOOKS:
-            skip.add(nb)
-            reasons[nb] = "no TEXT columns detected"
-
-    return skip, reasons
-
-
-def _has_event_level_data(findings_dir: Path) -> bool:
-    multi_path = findings_dir / "multi_dataset_findings.yaml"
-    if multi_path.exists():
-        try:
-            from customer_retention.analysis.auto_explorer.exploration_manager import (
-                MultiDatasetFindings,
-            )
-
-            multi = MultiDatasetFindings.load(str(multi_path))
-            if multi.event_datasets:
-                return True
-        except Exception:
-            pass
-
-    from customer_retention.core.config.column_config import DatasetGranularity
-
-    for path in _iter_findings_files(findings_dir):
-        if "multi_dataset" in path.name:
-            continue
-        try:
-            from customer_retention.analysis.auto_explorer.findings import (
-                ExplorationFindings,
-            )
-
-            findings = ExplorationFindings.load(str(path))
-            if (
-                findings.time_series_metadata
-                and findings.time_series_metadata.granularity
-                == DatasetGranularity.EVENT_LEVEL
-            ):
-                return True
-        except Exception:
-            continue
-    return False
-
-
-def _has_text_columns(findings_dir: Path) -> bool:
-    from customer_retention.core.config.column_config import ColumnType
-
-    for path in _iter_findings_files(findings_dir):
-        if "multi_dataset" in path.name:
-            continue
-        try:
-            from customer_retention.analysis.auto_explorer.findings import (
-                ExplorationFindings,
-            )
-
-            findings = ExplorationFindings.load(str(path))
-            if findings.text_processing:
-                return True
-            if ColumnType.TEXT in findings.column_types.values():
-                return True
-        except Exception:
-            continue
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -402,6 +315,8 @@ def _run_single_dataset_flow(
     timeout: int,
     kernel: str,
     error_log: Optional[ProgressiveErrorLog] = None,
+    namespace=None,
+    context=None,
 ) -> None:
     """Original single-dataset sequential execution."""
     skip_set: Set[str] = set()
@@ -417,18 +332,37 @@ def _run_single_dataset_flow(
 
         if not skip_detected and stem != _DISCOVERY_NOTEBOOK:
             skip_detected = True
-            if findings_dir.exists():
-                skip_set, skip_reasons = _detect_skip_set(findings_dir)
-                if skip_set:
-                    print(f"\nSkipping {len(skip_set)} notebooks based on findings:")
-                    for nb in sorted(skip_set):
-                        print(f"  - {nb}: {skip_reasons[nb]}")
-                else:
-                    print(
-                        "\nAll remaining notebooks will run "
-                        "(no skip conditions detected)"
-                    )
-                print()
+            dataset_name = None
+            dataset_path = None
+            if context and context.datasets:
+                ds_name = next(iter(context.datasets))
+                dataset_name = ds_name
+                entry = context.datasets[ds_name]
+                dataset_path = getattr(entry, "path", None)
+
+            if dataset_name:
+                skip_set, skip_reasons = _detect_skip_set_for_dataset(
+                    findings_dir, dataset_name,
+                    context=context,
+                    dataset_path=dataset_path,
+                    namespace=namespace,
+                )
+            else:
+                skip_set, skip_reasons = _detect_skip_set_for_dataset(
+                    findings_dir, "",
+                    namespace=namespace,
+                )
+
+            if skip_set:
+                print(f"\nSkipping {len(skip_set)} notebooks based on findings:")
+                for nb in sorted(skip_set):
+                    print(f"  - {nb}: {skip_reasons[nb]}")
+            else:
+                print(
+                    "\nAll remaining notebooks will run "
+                    "(no skip conditions detected)"
+                )
+            print()
 
         _execute_one(
             nb_path, None, results, timings,
@@ -611,6 +545,8 @@ def run_all(
             notebooks, findings_dir, results, timings,
             dry_run, timeout, kernel,
             error_log=error_log,
+            namespace=namespace,
+            context=context,
         )
 
     _print_summary(results, timings, time.time() - total_start)

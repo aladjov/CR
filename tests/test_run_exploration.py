@@ -698,6 +698,133 @@ class TestSkipDetectionWithoutFlatFindingsDir:
         assert results[key_01a_tx] == "DRY_RUN", "event dataset should run temporal"
 
 
+class TestSingleDatasetSkipDetection:
+    def _make_notebooks(self, notebooks_dir):
+        from run_exploration import NOTEBOOKS_ORDER
+
+        nb_json = json.dumps({
+            "nbformat": 4, "nbformat_minor": 5,
+            "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
+            "cells": [],
+        })
+        for stem in NOTEBOOKS_ORDER:
+            (notebooks_dir / f"{stem}.ipynb").write_text(nb_json)
+
+    def test_text_notebooks_skipped_when_no_text_columns(self, tmp_path, single_context_yaml):
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        self._make_notebooks(notebooks_dir)
+        findings_dir = single_context_yaml.parent
+
+        from customer_retention.core.config.column_config import ColumnType
+
+        findings = _make_findings(
+            {"age": ColumnType.NUMERIC_CONTINUOUS, "name": ColumnType.CATEGORICAL_NOMINAL},
+            row_count=1000, column_count=2,
+        )
+        findings.save(str(findings_dir / "retail_findings.yaml"))
+
+        results = run_all(
+            notebooks_dir, findings_dir=findings_dir, dry_run=True,
+        )
+
+        assert results["01a_a_temporal_text_deep_dive"].startswith("SKIPPED")
+        assert results["04a_text_columns_deep_dive"].startswith("SKIPPED")
+
+    def test_text_notebooks_skipped_with_auto_drop(self, tmp_path, single_context_yaml):
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        self._make_notebooks(notebooks_dir)
+        findings_dir = single_context_yaml.parent
+
+        from customer_retention.core.config.column_config import ColumnType
+
+        findings = _make_findings(
+            {"description": ColumnType.TEXT, "status": ColumnType.CATEGORICAL_NOMINAL},
+            row_count=5000, column_count=6,
+        )
+        findings.metadata["auto_drop_text_columns"] = True
+        findings.save(str(findings_dir / "retail_findings.yaml"))
+
+        results = run_all(
+            notebooks_dir, findings_dir=findings_dir, dry_run=True,
+        )
+
+        assert results["01a_a_temporal_text_deep_dive"].startswith("SKIPPED")
+        assert results["04a_text_columns_deep_dive"].startswith("SKIPPED")
+
+    def test_text_notebooks_run_when_text_columns_present(self, tmp_path, single_context_yaml):
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        self._make_notebooks(notebooks_dir)
+        findings_dir = single_context_yaml.parent
+
+        from customer_retention.core.config.column_config import ColumnType
+
+        findings = _make_findings(
+            {"description": ColumnType.TEXT, "status": ColumnType.CATEGORICAL_NOMINAL},
+            row_count=5000, column_count=6,
+        )
+        findings.save(str(findings_dir / "retail_findings.yaml"))
+
+        results = run_all(
+            notebooks_dir, findings_dir=findings_dir, dry_run=True,
+        )
+
+        assert results["04a_text_columns_deep_dive"] == "DRY_RUN"
+
+    def test_skip_detection_uses_namespace(self, tmp_path):
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+
+        experiments_dir = tmp_path / "experiments"
+        findings_dir = experiments_dir / "findings"
+        findings_dir.mkdir(parents=True)
+
+        ns = RunNamespace(root=experiments_dir, run_id="run-001")
+        ns_findings = ns.dataset_findings_dir("retail")
+        ns_findings.mkdir(parents=True)
+
+        from customer_retention.core.config.column_config import ColumnType
+
+        findings = _make_findings(
+            {"age": ColumnType.NUMERIC_CONTINUOUS},
+            row_count=1000, column_count=2,
+        )
+        findings.save(str(ns_findings / "retail_findings.yaml"))
+
+        ctx_data = _project_ctx(
+            target_dataset="retail",
+            datasets={
+                "retail": {
+                    "name": "retail",
+                    "path": "../fixtures/retail.csv",
+                    "role": "target",
+                    "entity_column": "customer_id",
+                    "target_candidates": ["churned"],
+                },
+            },
+        )
+
+        ns_ctx = ns.project_context_path
+        ns_ctx.parent.mkdir(parents=True, exist_ok=True)
+        ns_ctx.write_text(yaml.dump(ctx_data))
+
+        (ns.root / "runs" / "run-001").mkdir(parents=True, exist_ok=True)
+
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        self._make_notebooks(notebooks_dir)
+
+        results = run_all(
+            notebooks_dir,
+            findings_dir=findings_dir,
+            dry_run=True,
+            run_id="run-001",
+        )
+
+        assert results["04a_text_columns_deep_dive"].startswith("SKIPPED")
+
+
 class TestMultiDatasetSetDataPath:
     def _make_notebook_with_data_path(self, path, default_path="../fixtures/default.csv"):
         nb = {

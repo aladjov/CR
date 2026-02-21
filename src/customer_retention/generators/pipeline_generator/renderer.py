@@ -461,6 +461,7 @@ if __name__ == "__main__":
     run_bronze_entity_{{ source }}()
 """,
     "silver.py.j2": '''import pandas as pd
+from pathlib import Path
 {% set ops, fitted = collect_imports(config.silver.derived_columns, False) %}
 {% if ops %}
 from customer_retention.transforms import {{ ops | sort | join(', ') }}
@@ -470,7 +471,11 @@ from config import SOURCES, get_bronze_path, get_silver_path, TARGET_COLUMN
 
 def _load_artifact(path):
     from customer_retention.integrations.adapters.factory import get_delta
-    return get_delta(force_local=True).read(str(path))
+    df = get_delta(force_local=True).read(str(path))
+    ref_path = Path(str(path) + ".reference_date")
+    if ref_path.exists():
+        df.attrs["aggregation_reference_date"] = ref_path.read_text().strip()
+    return df
 
 
 def _bronze_output_name(name: str) -> str:
@@ -569,16 +574,26 @@ def {{ func_name }}(df: pd.DataFrame) -> pd.DataFrame:
 
 def run_silver_merge(create_holdout: bool = True, holdout_fraction: float = 0.1):
     bronze_outputs = load_bronze_outputs()
+    ref_date = next(
+        (v.attrs["aggregation_reference_date"] for v in bronze_outputs.values()
+         if "aggregation_reference_date" in v.attrs),
+        None,
+    )
     silver = merge_sources(bronze_outputs)
     silver = create_derived_columns(silver)
 
     if create_holdout:
         silver = create_holdout_mask(silver, holdout_fraction=holdout_fraction)
 
+    if ref_date:
+        silver.attrs["aggregation_reference_date"] = ref_date
+
     output_path = get_silver_path()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     from customer_retention.integrations.adapters.factory import get_delta
     get_delta(force_local=True).write(silver, str(output_path))
+    if ref_date:
+        Path(str(output_path) + ".reference_date").write_text(ref_date)
     return silver
 
 
@@ -627,7 +642,12 @@ SCALINGS = [
 
 def load_silver() -> pd.DataFrame:
     from customer_retention.integrations.adapters.factory import get_delta
-    return get_delta(force_local=True).read(str(get_silver_path()))
+    path = get_silver_path()
+    df = get_delta(force_local=True).read(str(path))
+    ref_path = Path(str(path) + ".reference_date")
+    if ref_path.exists():
+        df.attrs["aggregation_reference_date"] = ref_path.read_text().strip()
+    return df
 
 
 def load_gold() -> pd.DataFrame:
@@ -968,7 +988,7 @@ def run_experiment():
                 mlflow.log_metrics({**metrics, "cv_mean": cv.mean(), "cv_std": cv.std()})
                 log_feature_importance(model, feature_names)
                 model_artifact_name = get_model_name_with_hash(f"model_{name}")
-                mlflow.sklearn.log_model(model, artifact_path=model_artifact_name)
+                mlflow.sklearn.log_model(model, model_artifact_name)
                 print(f"{name}: ROC-AUC={metrics['roc_auc']:.4f}, PR-AUC={metrics['pr_auc']:.4f}, F1={metrics['f1']:.4f}")
                 if metrics["roc_auc"] > best_auc:
                     best_auc, best_model = metrics["roc_auc"], name
@@ -984,7 +1004,7 @@ def run_experiment():
             metrics = compute_metrics(y_test, y_proba, y_pred)
             mlflow.log_metrics(metrics)
             xgb_model_name = get_model_name_with_hash("model_xgboost")
-            mlflow.xgboost.log_model(xgb_model, artifact_path=xgb_model_name)
+            mlflow.xgboost.log_model(xgb_model, xgb_model_name)
             importance = xgb_model.get_score(importance_type="gain")
             fi = pd.DataFrame({"feature": importance.keys(), "importance": importance.values()})
             fi = fi.sort_values("importance", ascending=False).reset_index(drop=True)
@@ -1640,6 +1660,8 @@ def run_bronze_event_{{ source }}():
     bronze_dir = PRODUCTION_DIR / "data" / "bronze"
     bronze_dir.mkdir(parents=True, exist_ok=True)
     storage.write(df, str(bronze_dir / output_name))
+    if "aggregation_reference_date" in df.attrs:
+        (bronze_dir / f"{output_name}.reference_date").write_text(df.attrs["aggregation_reference_date"])
     return df
 
 
