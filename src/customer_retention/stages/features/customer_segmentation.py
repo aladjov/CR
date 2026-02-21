@@ -9,7 +9,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype, isna, timedelta_to_days, to_datetime
+import numpy as np
+
+from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype, timedelta_to_days, to_datetime
 
 
 class SegmentationType(Enum):
@@ -114,20 +116,11 @@ class CustomerSegmenter:
         if frequency_threshold is None:
             frequency_threshold = df[frequency_column].median()
 
-        def assign_segment(row):
-            high_value = row[value_column] >= value_threshold
-            high_freq = row[frequency_column] >= frequency_threshold
-
-            if high_value and high_freq:
-                return "High_Value_Frequent"
-            elif high_value and not high_freq:
-                return "High_Value_Infrequent"
-            elif not high_value and high_freq:
-                return "Low_Value_Frequent"
-            else:
-                return "Low_Value_Infrequent"
-
-        df_result[output_column] = df_result.apply(assign_segment, axis=1)
+        high_val = df_result[value_column] >= value_threshold
+        high_freq = df_result[frequency_column] >= frequency_threshold
+        conditions = [high_val & high_freq, high_val & ~high_freq, ~high_val & high_freq]
+        labels = ["High_Value_Frequent", "High_Value_Infrequent", "Low_Value_Frequent"]
+        df_result[output_column] = np.select(conditions, labels, default="Low_Value_Infrequent")
 
         # Build result
         distribution = df_result[output_column].value_counts().to_dict()
@@ -219,20 +212,10 @@ class CustomerSegmenter:
         recent_days = thresholds.get("recent", 90)
         lapsing_days = thresholds.get("lapsing", 180)
 
-        def assign_recency_bucket(days):
-            if isna(days):
-                return "Unknown"
-            days = int(days)
-            if days <= active_days:
-                return f"Active_{active_days}d"
-            elif days <= recent_days:
-                return f"Recent_{recent_days}d"
-            elif days <= lapsing_days:
-                return f"Lapsing_{lapsing_days}d"
-            else:
-                return f"Dormant_{lapsing_days}d+"
-
-        df_result[output_column] = df_result[days_since_column].apply(assign_recency_bucket)
+        days = df_result[days_since_column]
+        conditions = [days.isna(), days <= active_days, days <= recent_days, days <= lapsing_days]
+        labels = ["Unknown", f"Active_{active_days}d", f"Recent_{recent_days}d", f"Lapsing_{lapsing_days}d"]
+        df_result[output_column] = np.select(conditions, labels, default=f"Dormant_{lapsing_days}d+")
 
         # Build result
         distribution = df_result[output_column].value_counts().to_dict()
@@ -299,17 +282,10 @@ class CustomerSegmenter:
         """
         df_result = df.copy()
 
-        def assign_engagement(score):
-            if isna(score):
-                return "Unknown"
-            if score >= high_threshold:
-                return "High_Engagement"
-            elif score >= low_threshold:
-                return "Medium_Engagement"
-            else:
-                return "Low_Engagement"
-
-        df_result[output_column] = df_result[engagement_column].apply(assign_engagement)
+        score = df_result[engagement_column]
+        conditions = [score.isna(), score >= high_threshold, score >= low_threshold]
+        labels = ["Unknown", "High_Engagement", "Medium_Engagement"]
+        df_result[output_column] = np.select(conditions, labels, default="Low_Engagement")
 
         # Build result
         distribution = df_result[output_column].value_counts().to_dict()
@@ -446,19 +422,10 @@ class CustomerSegmenter:
         df_result[f"{prefix}tenure_months"] = df_result[f"{prefix}tenure_days"] / 30.44
 
         # Tenure bucket
-        def tenure_bucket(days):
-            if isna(days) or days < 0:
-                return "Unknown"
-            if days <= 90:
-                return "New_0_3m"
-            elif days <= 180:
-                return "Growing_3_6m"
-            elif days <= 365:
-                return "Established_6_12m"
-            else:
-                return "Mature_12m+"
-
-        df_result[f"{prefix}tenure_bucket"] = df_result[f"{prefix}tenure_days"].apply(tenure_bucket)
+        days = df_result[f"{prefix}tenure_days"]
+        conditions = [days.isna() | (days < 0), days <= 90, days <= 180, days <= 365]
+        labels = ["Unknown", "New_0_3m", "Growing_3_6m", "Established_6_12m"]
+        df_result[f"{prefix}tenure_bucket"] = np.select(conditions, labels, default="Mature_12m+")
 
         return df_result
 

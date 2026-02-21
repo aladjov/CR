@@ -435,3 +435,55 @@ class TestEdgeCases(TestCustomerSegmenter):
         # With all same values, all should be in one segment
         non_zero_segments = [s for s in result.segments if s.count > 0]
         assert len(non_zero_segments) >= 1
+
+
+class TestVectorizedSegmentation:
+
+    @pytest.fixture
+    def segmenter(self):
+        return CustomerSegmenter()
+
+    def test_value_freq_matches_expected_labels(self, segmenter):
+        df = pd.DataFrame({
+            "value": [100, 200, 50, 300],
+            "freq": [1, 10, 8, 2],
+        })
+        df_result, result = segmenter.segment_by_value_frequency(
+            df, value_column="value", frequency_column="freq",
+            value_threshold=150, frequency_threshold=5,
+        )
+        labels = df_result["customer_segment"].tolist()
+        assert labels == [
+            "Low_Value_Infrequent",
+            "High_Value_Frequent",
+            "Low_Value_Frequent",
+            "High_Value_Infrequent",
+        ]
+
+    def test_recency_handles_nan(self, segmenter):
+        df = pd.DataFrame({"days": [10, None, 50, 200, None]})
+        df_result, _ = segmenter.segment_by_recency(df, days_since_column="days")
+        labels = df_result["recency_segment"].tolist()
+        assert labels[1] == "Unknown"
+        assert labels[4] == "Unknown"
+        assert labels[0] == "Active_30d"
+
+    def test_engagement_handles_nan(self, segmenter):
+        df = pd.DataFrame({"score": [0.9, None, 0.1, 0.5, None]})
+        df_result, _ = segmenter.segment_by_engagement(df, engagement_column="score")
+        labels = df_result["engagement_segment"].tolist()
+        assert labels[1] == "Unknown"
+        assert labels[4] == "Unknown"
+        assert labels[0] == "High_Engagement"
+        assert labels[2] == "Low_Engagement"
+
+    def test_tenure_bucket_negative_days(self, segmenter):
+        df = pd.DataFrame({
+            "created": pd.to_datetime(["2024-06-01", "2025-01-01", "2022-06-01"]),
+        })
+        ref = pd.to_datetime("2024-01-01")
+        df_result = segmenter.create_tenure_features(df, created_column="created", reference_date=ref)
+        buckets = df_result["tenure_bucket"].tolist()
+        assert buckets[0] == "Unknown"
+        assert buckets[1] == "Unknown"
+        assert buckets[2] == "Mature_12m+"

@@ -269,6 +269,76 @@ class TestEdgeCases:
         assert result.df is not None
 
 
+class TestBatchedCorrelationSelection:
+    def test_correlation_selection_uses_batched_corr(self, monkeypatch):
+        np.random.seed(42)
+        base = np.random.randn(100)
+        df = pd.DataFrame({
+            "feature1": base,
+            "feature2": base + np.random.randn(100) * 0.01,
+            "feature3": np.random.randn(100),
+            "target": np.random.choice([0, 1], 100),
+        })
+
+        calls = []
+        original_batched = None
+
+        import customer_retention.stages.features.feature_selector as fs_mod
+        original_batched = fs_mod.batched_corr_matrix
+
+        def tracking_batched(*args, **kwargs):
+            calls.append(1)
+            return original_batched(*args, **kwargs)
+
+        monkeypatch.setattr(fs_mod, "batched_corr_matrix", tracking_batched)
+
+        selector = FeatureSelector(
+            method=SelectionMethod.CORRELATION,
+            correlation_threshold=0.95,
+            target_column="target",
+        )
+        selector.fit_transform(df)
+        assert len(calls) >= 1
+
+    def test_correlation_selection_drops_same_features(self):
+        np.random.seed(42)
+        base = np.random.randn(100)
+        df = pd.DataFrame({
+            "feature1": base,
+            "feature2": base + np.random.randn(100) * 0.01,
+            "feature3": np.random.randn(100),
+            "target": np.random.choice([0, 1], 100),
+        })
+        selector = FeatureSelector(
+            method=SelectionMethod.CORRELATION,
+            correlation_threshold=0.95,
+            target_column="target",
+        )
+        result = selector.fit_transform(df)
+        correlated_pair = {"feature1", "feature2"}
+        assert len(correlated_pair - set(result.selected_features)) >= 1
+
+
+class TestBatchedVarianceSelection:
+    def test_variance_selection_batched(self):
+        np.random.seed(42)
+        df = pd.DataFrame({
+            "constant": [1.0] * 100,
+            "low_var": [1.0] * 99 + [1.001],
+            "normal": np.random.randn(100),
+            "target": np.random.choice([0, 1], 100),
+        })
+        selector = FeatureSelector(
+            method=SelectionMethod.VARIANCE,
+            variance_threshold=0.01,
+            target_column="target",
+        )
+        result = selector.fit_transform(df)
+        assert "constant" not in result.selected_features
+        assert "low_var" not in result.selected_features
+        assert "normal" in result.selected_features
+
+
 class TestCombinedSelection:
     def test_variance_then_correlation(self):
         np.random.seed(42)

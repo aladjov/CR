@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, is_numeric_dtype, isna
+from customer_retention.core.compat import DataFrame, batched_corr_matrix, is_numeric_dtype, isna
 
 if TYPE_CHECKING:
     from customer_retention.analysis.auto_explorer.findings import FeatureAvailabilityMetadata
@@ -117,15 +117,16 @@ class FeatureSelector:
         return self.transform(df)
 
     def _apply_variance_selection(self, df: DataFrame, features: List[str]) -> None:
-        for feature in features:
-            if feature in self.preserve_features:
-                continue
+        numeric_features = [
+            f for f in features
+            if f not in self.preserve_features and is_numeric_dtype(df[f])
+        ]
+        if not numeric_features:
+            return
 
-            series = df[feature]
-            if not is_numeric_dtype(series):
-                continue
-
-            variance = series.var()
+        variances = df[numeric_features].var()
+        for feature in numeric_features:
+            variance = variances[feature]
             if isna(variance) or variance < self.variance_threshold:
                 if feature in self.selected_features:
                     self.selected_features.remove(feature)
@@ -138,7 +139,7 @@ class FeatureSelector:
         if len(numeric_features) < 2:
             return
 
-        corr_matrix = df[numeric_features].corr().abs()
+        corr_matrix = batched_corr_matrix(df, numeric_features).abs()
 
         upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
 
