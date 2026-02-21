@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from customer_retention.core.compat import pd, safe_to_list
+from customer_retention.core.compat import batched_corr_matrix, pd, safe_to_list
 
 
 @dataclass
@@ -216,7 +216,7 @@ class FeatureCapacityAnalyzer:
             )
 
         # Calculate correlation matrix
-        corr_matrix = df[valid_cols].corr()
+        corr_matrix = batched_corr_matrix(df, valid_cols)
 
         # Find redundant features (highly correlated pairs)
         redundant = set()
@@ -254,13 +254,14 @@ class FeatureCapacityAnalyzer:
 
         # Estimate effective features using eigenvalue analysis
         try:
-            eigenvalues = np.linalg.eigvalsh(corr_matrix.to_numpy())
-            eigenvalues = np.sort(eigenvalues)[::-1]
-            # Effective dimensionality: count eigenvalues > 1 (Kaiser criterion)
-            # or use cumulative variance explained
+            corr_array = corr_matrix.to_numpy()
+            np.fill_diagonal(corr_array, 1.0)
+            corr_array = np.nan_to_num(corr_array, nan=0.0)
+            eigenvalues = np.sort(np.linalg.eigvalsh(corr_array))[::-1]
             total_var = eigenvalues.sum()
+            if total_var <= 0:
+                raise ValueError("zero total variance")
             cumsum = np.cumsum(eigenvalues)
-            # Count eigenvalues needed for 95% variance
             effective_count = float(np.searchsorted(cumsum, 0.95 * total_var) + 1)
             effective_count = min(effective_count, len(valid_cols))
         except Exception:

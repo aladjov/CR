@@ -390,6 +390,60 @@ class TestBulkSegmentCapacity:
         assert call_count["n"] == 1
 
 
+class TestEffectiveFeaturesUsesBatchedCorr:
+    @pytest.fixture
+    def analyzer(self):
+        return FeatureCapacityAnalyzer()
+
+    def test_calculate_effective_features_uses_batched_corr(self, analyzer, monkeypatch):
+        np.random.seed(42)
+        n = 200
+        df = pd.DataFrame({
+            "f1": np.random.normal(0, 1, n),
+            "f2": np.random.normal(0, 1, n),
+            "f3": np.random.normal(0, 1, n),
+        })
+        calls = []
+        original = None
+
+        import customer_retention.stages.profiling.feature_capacity as mod
+        from customer_retention.core.compat import batched_corr_matrix as _orig
+
+        def tracking_batched(df_arg, cols):
+            calls.append(cols)
+            return _orig(df_arg, cols)
+
+        monkeypatch.setattr(mod, "batched_corr_matrix", tracking_batched)
+        result = analyzer.calculate_effective_features(df, ["f1", "f2", "f3"])
+        assert len(calls) == 1
+        assert set(calls[0]) == {"f1", "f2", "f3"}
+        assert result.total_count == 3
+
+    def test_effective_features_result_unchanged_after_batched_corr(self, analyzer):
+        np.random.seed(42)
+        n = 500
+        x1 = np.random.normal(0, 1, n)
+        x2 = x1 * 0.95 + np.random.normal(0, 0.1, n)
+        x3 = np.random.normal(0, 1, n)
+        df = pd.DataFrame({"a": x1, "b": x2, "c": x3})
+        result = analyzer.calculate_effective_features(df, ["a", "b", "c"])
+        assert result.effective_count < 3
+        assert len(result.redundant_features) >= 1
+        assert "b" in result.redundant_features
+
+    def test_effective_features_handles_zero_variance_column(self, analyzer):
+        np.random.seed(42)
+        n = 100
+        df = pd.DataFrame({
+            "constant": [5.0] * n,
+            "varying": np.random.normal(0, 1, n),
+            "another": np.random.normal(0, 1, n),
+        })
+        result = analyzer.calculate_effective_features(df, ["constant", "varying", "another"])
+        assert result.total_count == 3
+        assert result.effective_count >= 1
+
+
 class TestModelComplexityGuidance:
     @pytest.fixture
     def analyzer(self):
