@@ -392,7 +392,7 @@ def add_lifecycle_quadrant(df: pd.DataFrame) -> pd.DataFrame:
         (tenure < tenure_med) & (intensity >= intensity_med),
         (tenure < tenure_med) & (intensity < intensity_med),
     ]
-    labels = ["loyal", "at_risk", "new_active", "new_inactive"]
+    labels = ["steady_loyal_lifecycle", "occasional_loyal_lifecycle", "intense_brief_lifecycle", "one_shot_lifecycle"]
     df["lifecycle_quadrant"] = np.select(conditions, labels, default="unknown")
     return df
 
@@ -1733,7 +1733,7 @@ def add_lifecycle_quadrant(df: pd.DataFrame) -> pd.DataFrame:
         (tenure < tenure_med) & (intensity >= intensity_med),
         (tenure < tenure_med) & (intensity < intensity_med),
     ]
-    labels = ["loyal", "at_risk", "new_active", "new_inactive"]
+    labels = ["steady_loyal_lifecycle", "occasional_loyal_lifecycle", "intense_brief_lifecycle", "one_shot_lifecycle"]
     df["lifecycle_quadrant"] = np.select(conditions, labels, default="unknown")
     return df
 

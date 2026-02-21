@@ -38,23 +38,30 @@ class LifecycleQuadrantResult:
     recommendations: DataFrame
 
 
+LIFECYCLE_LABELS = {
+    "high_high": "steady_loyal_lifecycle",
+    "high_low": "occasional_loyal_lifecycle",
+    "low_high": "intense_brief_lifecycle",
+    "low_low": "one_shot_lifecycle",
+}
+
 _QUADRANT_RECOMMENDATIONS = {
-    "Steady & Loyal": {
+    LIFECYCLE_LABELS["high_high"]: {
         "Windows": "All available windows",
         "Feature Strategy": "Trend/seasonality features, engagement decay",
         "Risk": "Low churn risk; monitor for engagement decline",
     },
-    "Occasional & Loyal": {
+    LIFECYCLE_LABELS["high_low"]: {
         "Windows": "Wider windows (capture sparse events)",
         "Feature Strategy": "Long-window aggregations, recency gap",
         "Risk": "May churn silently; long gaps are normal",
     },
-    "Intense & Brief": {
+    LIFECYCLE_LABELS["low_high"]: {
         "Windows": "Narrower windows (capture recency)",
         "Feature Strategy": "Recency features, burst detection",
         "Risk": "High churn risk; may be early churners",
     },
-    "One-shot": {
+    LIFECYCLE_LABELS["low_low"]: {
         "Windows": "N/A (insufficient history)",
         "Feature Strategy": "Cold-start fallback, population-level stats",
         "Risk": "Cannot build temporal features; consider separate handling",
@@ -66,9 +73,9 @@ def _assign_lifecycle_quadrant(duration_days: np.ndarray, intensity: np.ndarray,
                                tenure_threshold: float, intensity_threshold: float) -> np.ndarray:
     long = duration_days >= tenure_threshold
     high = intensity >= intensity_threshold
-    result = np.where(long & high, "Steady & Loyal",
-             np.where(long, "Occasional & Loyal",
-             np.where(high, "Intense & Brief", "One-shot")))
+    result = np.where(long & high, LIFECYCLE_LABELS["high_high"],
+             np.where(long, LIFECYCLE_LABELS["high_low"],
+             np.where(high, LIFECYCLE_LABELS["low_high"], LIFECYCLE_LABELS["low_low"])))
     return result
 
 

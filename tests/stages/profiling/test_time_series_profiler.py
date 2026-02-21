@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from customer_retention.stages.profiling.time_series_profiler import (
+    LIFECYCLE_LABELS,
     ActivitySegmentResult,
     DistributionStats,
     LifecycleQuadrantResult,
@@ -433,8 +434,7 @@ class TestClassifyLifecycleQuadrants:
         result = classify_lifecycle_quadrants(entity_lifecycles)
         quadrants = set(result.lifecycles["lifecycle_quadrant"].unique())
 
-        # All quadrants should be from the known set
-        valid_quadrants = {"Steady & Loyal", "Occasional & Loyal", "Intense & Brief", "One-shot"}
+        valid_quadrants = set(LIFECYCLE_LABELS.values())
         assert quadrants.issubset(valid_quadrants)
 
     def test_recommendations_structure(self, entity_lifecycles):
@@ -452,6 +452,30 @@ class TestClassifyLifecycleQuadrants:
 
         assert result.tenure_threshold > 0
         assert result.intensity_threshold > 0
+
+
+class TestLifecycleLabelParity:
+    def test_renderer_labels_match_profiler(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeEventConfig,
+            LifecycleConfig,
+            SourceConfig,
+        )
+        from customer_retention.generators.pipeline_generator.renderer import CodeRenderer
+        source = SourceConfig(
+            name="test", path="/tmp/test.csv", format="csv",
+            entity_key="cust", time_column="ts", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="cust", time_column="ts",
+            lifecycle=LifecycleConfig(include_lifecycle_quadrant=True),
+            post_shaping=[],
+        )
+        renderer = CodeRenderer()
+        code = renderer.render_bronze_entity("test_agg", config, "test_agg", "test")
+        canonical = set(LIFECYCLE_LABELS.values())
+        for label in canonical:
+            assert label in code, f"Canonical label '{label}' missing from rendered code"
 
 
 class TestClassifyActivitySegments:

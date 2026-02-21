@@ -174,6 +174,7 @@ from .text_embedder import EMBEDDING_MODELS, TextEmbedder, get_model_info, list_
 from .text_processor import TextColumnProcessor, TextColumnResult, TextProcessingConfig
 from .text_reducer import ReductionResult, TextDimensionalityReducer
 from .time_series_profiler import (
+    LIFECYCLE_LABELS,
     ActivitySegmentResult,
     DistributionStats,
     EntityLifecycle,
@@ -231,7 +232,7 @@ __all__ = [
     "get_duplicate_event_count", "deduplicate_events",
     "create_recency_bucket_feature", "create_momentum_ratio_features",
     "TimeSeriesProfiler", "TimeSeriesProfile", "DistributionStats", "EntityLifecycle",
-    "LifecycleQuadrantResult", "classify_lifecycle_quadrants",
+    "LifecycleQuadrantResult", "LIFECYCLE_LABELS", "classify_lifecycle_quadrants",
     "ActivitySegmentResult", "classify_activity_segments",
     "TemporalQualityCheck", "TemporalQualityReporter", "TemporalQualityResult", "TemporalQualityScore",
     "DuplicateEventCheck", "TemporalGapCheck", "FutureDateCheck", "EventOrderCheck",

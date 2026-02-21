@@ -316,10 +316,10 @@ def add_lifecycle_quadrant(df):
     tenure_med = df.approxQuantile("days_since_first", [0.5], 0.01)[0]
     intensity_med = df.approxQuantile(intensity_cols[0], [0.5], 0.01)[0]
     df = df.withColumn("lifecycle_quadrant",
-        F.when((F.col("days_since_first") >= tenure_med) & (F.col(intensity_cols[0]) >= intensity_med), "loyal")
-        .when((F.col("days_since_first") >= tenure_med) & (F.col(intensity_cols[0]) < intensity_med), "at_risk")
-        .when((F.col("days_since_first") < tenure_med) & (F.col(intensity_cols[0]) >= intensity_med), "new_active")
-        .otherwise("new_inactive"))
+        F.when((F.col("days_since_first") >= tenure_med) & (F.col(intensity_cols[0]) >= intensity_med), "steady_loyal_lifecycle")
+        .when((F.col("days_since_first") >= tenure_med) & (F.col(intensity_cols[0]) < intensity_med), "occasional_loyal_lifecycle")
+        .when((F.col("days_since_first") < tenure_med) & (F.col(intensity_cols[0]) >= intensity_med), "intense_brief_lifecycle")
+        .otherwise("one_shot_lifecycle"))
     return df
 {% endif %}
 def enrich_lifecycle(df):
@@ -592,10 +592,10 @@ def add_lifecycle_quadrant(df):
     tenure_med = df.approxQuantile("days_since_first", [0.5], 0.01)[0]
     intensity_med = df.approxQuantile(intensity_cols[0], [0.5], 0.01)[0]
     df = df.withColumn("lifecycle_quadrant",
-        F.when((F.col("days_since_first") >= tenure_med) & (F.col(intensity_cols[0]) >= intensity_med), "loyal")
-        .when((F.col("days_since_first") >= tenure_med) & (F.col(intensity_cols[0]) < intensity_med), "at_risk")
-        .when((F.col("days_since_first") < tenure_med) & (F.col(intensity_cols[0]) >= intensity_med), "new_active")
-        .otherwise("new_inactive"))
+        F.when((F.col("days_since_first") >= tenure_med) & (F.col(intensity_cols[0]) >= intensity_med), "steady_loyal_lifecycle")
+        .when((F.col("days_since_first") >= tenure_med) & (F.col(intensity_cols[0]) < intensity_med), "occasional_loyal_lifecycle")
+        .when((F.col("days_since_first") < tenure_med) & (F.col(intensity_cols[0]) >= intensity_med), "intense_brief_lifecycle")
+        .otherwise("one_shot_lifecycle"))
     return df
 {% endif %}
 def enrich_lifecycle(df):

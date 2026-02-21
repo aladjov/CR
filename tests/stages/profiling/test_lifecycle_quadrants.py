@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from customer_retention.stages.profiling.time_series_profiler import (
+    LIFECYCLE_LABELS,
     LifecycleQuadrantResult,
     classify_lifecycle_quadrants,
 )
@@ -51,7 +52,7 @@ class TestClassifyLifecycleQuadrants:
 
     def test_four_quadrant_names(self, balanced_lifecycles):
         result = classify_lifecycle_quadrants(balanced_lifecycles)
-        expected = {"Steady & Loyal", "Occasional & Loyal", "Intense & Brief", "One-shot"}
+        expected = set(LIFECYCLE_LABELS.values())
         assert set(result.lifecycles["lifecycle_quadrant"].unique()).issubset(expected)
 
     def test_thresholds_are_medians(self, balanced_lifecycles):
@@ -61,10 +62,10 @@ class TestClassifyLifecycleQuadrants:
     def test_extreme_entities_classified_correctly(self, extreme_lifecycles):
         result = classify_lifecycle_quadrants(extreme_lifecycles)
         lc = result.lifecycles.set_index("entity")
-        assert lc.loc["long_intense", "lifecycle_quadrant"] == "Steady & Loyal"
-        assert lc.loc["long_sparse", "lifecycle_quadrant"] == "Occasional & Loyal"
-        assert lc.loc["short_intense", "lifecycle_quadrant"] == "Intense & Brief"
-        assert lc.loc["short_sparse", "lifecycle_quadrant"] == "One-shot"
+        assert lc.loc["long_intense", "lifecycle_quadrant"] == LIFECYCLE_LABELS["high_high"]
+        assert lc.loc["long_sparse", "lifecycle_quadrant"] == LIFECYCLE_LABELS["high_low"]
+        assert lc.loc["short_intense", "lifecycle_quadrant"] == LIFECYCLE_LABELS["low_high"]
+        assert lc.loc["short_sparse", "lifecycle_quadrant"] == LIFECYCLE_LABELS["low_low"]
 
     def test_zero_duration_uses_clip(self):
         lc = pd.DataFrame({
