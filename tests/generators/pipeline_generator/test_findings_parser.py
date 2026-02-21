@@ -1951,6 +1951,272 @@ class TestBronzeEventRawTimeColumnAttachment:
         assert bronze_event.raw_time_column is None
 
 
+class TestLifecycleMetadataFallback:
+
+    def _make_findings_dir(self, tmp_path, *, multi_notes=None, event_metadata=None):
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+
+        multi_dataset = {
+            "datasets": {
+                "customers": {
+                    "name": "customers",
+                    "findings_path": str(findings_dir / "customers_findings.yaml"),
+                    "source_path": "/data/customers.csv",
+                    "granularity": "entity_level",
+                    "row_count": 1000,
+                    "column_count": 2,
+                    "excluded": False,
+                },
+                "events_agg": {
+                    "name": "events_agg",
+                    "findings_path": str(findings_dir / "events_agg_findings.yaml"),
+                    "source_path": str(findings_dir / "events_agg.parquet"),
+                    "granularity": "entity_level",
+                    "row_count": 500,
+                    "column_count": 3,
+                    "excluded": False,
+                },
+            },
+            "relationships": [
+                {
+                    "left_dataset": "customers",
+                    "right_dataset": "events_agg",
+                    "left_column": "customer_id",
+                    "right_column": "customer_id",
+                    "relationship_type": "one_to_one",
+                    "confidence": 1.0,
+                },
+            ],
+            "primary_entity_dataset": "customers",
+            "event_datasets": [],
+            "excluded_datasets": [],
+            "aggregation_windows": ["7d", "30d", "90d", "365d"],
+        }
+        if multi_notes is not None:
+            multi_dataset["notes"] = multi_notes
+        (findings_dir / "multi_dataset_findings.yaml").write_text(yaml.dump(multi_dataset))
+
+        customers_findings = {
+            "source_path": "/data/customers.csv",
+            "source_format": "csv",
+            "row_count": 1000,
+            "column_count": 2,
+            "columns": {
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "churn": {
+                    "name": "churn",
+                    "inferred_type": "binary",
+                    "confidence": 0.99,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+            },
+            "target_column": "churn",
+            "identifier_columns": ["customer_id"],
+        }
+        (findings_dir / "customers_findings.yaml").write_text(yaml.dump(customers_findings))
+
+        agg_findings = {
+            "source_path": str(findings_dir / "events_agg.parquet"),
+            "source_format": "parquet",
+            "row_count": 500,
+            "column_count": 3,
+            "columns": {
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+            },
+            "identifier_columns": ["customer_id"],
+            "target_column": "churn",
+        }
+        (findings_dir / "events_agg_findings.yaml").write_text(yaml.dump(agg_findings))
+
+        preagg_findings = {
+            "source_path": "/data/raw/events.csv",
+            "source_format": "csv",
+            "row_count": 10000,
+            "column_count": 4,
+            "columns": {
+                "customer_id": {
+                    "name": "customer_id",
+                    "inferred_type": "identifier",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+                "event_date": {
+                    "name": "event_date",
+                    "inferred_type": "datetime",
+                    "confidence": 0.95,
+                    "evidence": [],
+                    "quality_score": 100,
+                    "cleaning_needed": False,
+                    "cleaning_recommendations": [],
+                },
+            },
+            "identifier_columns": ["customer_id"],
+            "datetime_columns": ["event_date"],
+            "time_series_metadata": {
+                "granularity": "event_level",
+                "entity_column": "customer_id",
+                "time_column": "event_date",
+                "aggregation_executed": True,
+                "aggregated_findings_path": str(findings_dir / "events_agg_findings.yaml"),
+            },
+        }
+        if event_metadata is not None:
+            preagg_findings["metadata"] = event_metadata
+        (findings_dir / "events_raw_findings.yaml").write_text(yaml.dump(preagg_findings))
+
+        return findings_dir
+
+    def test_lifecycle_from_metadata_when_notes_empty(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings_dir = self._make_findings_dir(
+            tmp_path,
+            multi_notes={},
+            event_metadata={
+                "aggregation": {
+                    "include_lifecycle_quadrant": True,
+                    "include_recency": True,
+                    "include_tenure": True,
+                },
+            },
+        )
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        assert "events_agg" in config.bronze_event
+        bronze_event = config.bronze_event["events_agg"]
+        assert bronze_event.lifecycle is not None
+        assert bronze_event.lifecycle.include_lifecycle_quadrant is True
+        assert bronze_event.lifecycle.include_recency_bucket is True
+
+    def test_lifecycle_notes_priority_over_metadata(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings_dir = self._make_findings_dir(
+            tmp_path,
+            multi_notes={"temporal_config": {"feature_groups": ["recency"]}},
+            event_metadata={
+                "aggregation": {
+                    "include_lifecycle_quadrant": True,
+                    "include_recency": True,
+                },
+            },
+        )
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        assert "events_agg" in config.bronze_event
+        bronze_event = config.bronze_event["events_agg"]
+        assert bronze_event.lifecycle is not None
+        assert bronze_event.lifecycle.include_recency_bucket is True
+        assert bronze_event.lifecycle.include_lifecycle_quadrant is False
+
+    def test_no_lifecycle_when_both_empty(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings_dir = self._make_findings_dir(
+            tmp_path,
+            multi_notes={},
+            event_metadata={},
+        )
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        assert "events_agg" in config.bronze_event
+        bronze_event = config.bronze_event["events_agg"]
+        assert bronze_event.lifecycle is None
+
+    def test_lifecycle_from_feature_flags(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings_dir = self._make_findings_dir(
+            tmp_path,
+            multi_notes={},
+            event_metadata={
+                "temporal_patterns": {
+                    "feature_flags": {
+                        "include_lifecycle_quadrant": True,
+                        "include_recency": True,
+                        "include_seasonality_features": True,
+                    },
+                },
+            },
+        )
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        assert "events_agg" in config.bronze_event
+        bronze_event = config.bronze_event["events_agg"]
+        assert bronze_event.lifecycle is not None
+        assert bronze_event.lifecycle.include_lifecycle_quadrant is True
+        assert bronze_event.lifecycle.include_recency_bucket is True
+        assert bronze_event.lifecycle.include_cyclical_features is True
+
+    def test_momentum_pairs_from_aggregation_windows(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings_dir = self._make_findings_dir(
+            tmp_path,
+            multi_notes={},
+            event_metadata={
+                "aggregation": {"include_recency": True},
+            },
+        )
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        bronze_event = config.bronze_event["events_agg"]
+        assert bronze_event.lifecycle is not None
+        pairs = bronze_event.lifecycle.momentum_pairs
+        assert len(pairs) > 0
+        assert pairs[0]["short_window"] == "7d"
+        assert pairs[0]["long_window"] == "30d"
+
+    def test_momentum_pairs_empty_without_day_windows(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings_dir = self._make_findings_dir(tmp_path, multi_notes={}, event_metadata={})
+        multi_path = findings_dir / "multi_dataset_findings.yaml"
+        multi = yaml.safe_load(multi_path.read_text())
+        multi["aggregation_windows"] = ["all_time"]
+        multi_path.write_text(yaml.dump(multi))
+
+        preagg_path = findings_dir / "events_raw_findings.yaml"
+        preagg = yaml.safe_load(preagg_path.read_text())
+        preagg["metadata"] = {"aggregation": {"include_recency": True}}
+        preagg_path.write_text(yaml.dump(preagg))
+
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        bronze_event = config.bronze_event["events_agg"]
+        assert bronze_event.lifecycle is not None
+        assert bronze_event.lifecycle.momentum_pairs == []
+
+
 class TestFindingsParserWithNamespace:
     @pytest.fixture
     def namespace_setup(self, tmp_path):

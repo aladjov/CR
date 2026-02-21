@@ -718,18 +718,64 @@ class FindingsParser:
             categorical_agg_funcs=["nunique", "mode"],
         )
 
-    def _build_lifecycle_config(self, multi: MultiDatasetFindings) -> Optional[LifecycleConfig]:
+    def _build_lifecycle_config(
+        self,
+        multi: MultiDatasetFindings,
+        findings: Optional[ExplorationFindings] = None,
+    ) -> Optional[LifecycleConfig]:
         notes = getattr(multi, "notes", None)
-        if not notes:
-            return None
-        temporal_config = notes.get("temporal_config", {}) if isinstance(notes, dict) else {}
+        temporal_config = notes.get("temporal_config", {}) if isinstance(notes, dict) and notes else {}
         feature_groups = temporal_config.get("feature_groups", [])
-        return LifecycleConfig(
-            include_lifecycle_quadrant="lifecycle" in feature_groups,
-            include_cyclical_features="regularity" in feature_groups,
-            include_recency_bucket="recency" in feature_groups,
-            momentum_pairs=[],
-        )
+        if feature_groups:
+            return LifecycleConfig(
+                include_lifecycle_quadrant="lifecycle" in feature_groups,
+                include_cyclical_features="regularity" in feature_groups,
+                include_recency_bucket="recency" in feature_groups,
+                momentum_pairs=self._build_momentum_pairs(multi),
+            )
+        if findings is not None:
+            meta = getattr(findings, "metadata", None) or {}
+            agg = meta.get("aggregation", {})
+            ff = meta.get("temporal_patterns", {}).get("feature_flags", {})
+            has_lifecycle = agg.get("include_lifecycle_quadrant", ff.get("include_lifecycle_quadrant", False))
+            has_recency = agg.get("include_recency", ff.get("include_recency", False))
+            has_cyclical = ff.get("include_seasonality_features", False)
+            if has_lifecycle or has_recency or has_cyclical:
+                return LifecycleConfig(
+                    include_lifecycle_quadrant=bool(has_lifecycle),
+                    include_cyclical_features=bool(has_cyclical),
+                    include_recency_bucket=bool(has_recency),
+                    momentum_pairs=self._build_momentum_pairs(multi),
+                )
+        return None
+
+    def _build_momentum_pairs(self, multi: MultiDatasetFindings) -> List[Dict[str, str]]:
+        windows = getattr(multi, "aggregation_windows", [])
+        day_values = []
+        for w in windows:
+            w_lower = str(w).lower().strip()
+            if w_lower == "all_time":
+                continue
+            if w_lower.endswith("d"):
+                try:
+                    day_values.append((int(w_lower[:-1]), w))
+                except ValueError:
+                    continue
+            elif w_lower.endswith("h"):
+                try:
+                    hours = int(w_lower[:-1])
+                    if hours >= 24:
+                        day_values.append((hours // 24, w))
+                except ValueError:
+                    continue
+        day_values.sort(key=lambda x: x[0])
+        pairs: List[Dict[str, str]] = []
+        for i, (short_days, short_label) in enumerate(day_values):
+            for long_days, long_label in day_values[i + 1:]:
+                if long_days >= 3 * short_days:
+                    pairs.append({"short_window": short_label, "long_window": long_label})
+                    break
+        return pairs
 
     def _build_bronze_event_configs(
         self,
@@ -738,7 +784,6 @@ class FindingsParser:
         source_findings: Dict[str, ExplorationFindings],
         discovered_events: Optional[Dict[str, ExplorationFindings]] = None,
     ) -> None:
-        lifecycle_config = self._build_lifecycle_config(multi)
         for event_name in multi.event_datasets:
             findings = source_findings.get(event_name)
             if not findings:
@@ -757,7 +802,7 @@ class FindingsParser:
                 deduplicate=True,
                 pre_shaping=self._extract_transformations(findings),
                 aggregation=self._build_aggregation_config(multi, findings),
-                lifecycle=lifecycle_config,
+                lifecycle=self._build_lifecycle_config(multi, findings),
                 raw_time_column=raw_time_col if raw_time_col and raw_time_col != time_col else None,
                 datetime_derivation=self._build_datetime_derivation_config(
                     findings,
@@ -782,7 +827,7 @@ class FindingsParser:
                 deduplicate=True,
                 pre_shaping=self._extract_transformations(preagg),
                 aggregation=self._build_aggregation_config(multi, preagg),
-                lifecycle=lifecycle_config,
+                lifecycle=self._build_lifecycle_config(multi, preagg),
                 raw_time_column=raw_time_col if raw_time_col and raw_time_col != time_col else None,
                 datetime_derivation=self._build_datetime_derivation_config(
                     preagg,
