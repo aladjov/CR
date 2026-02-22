@@ -25,9 +25,20 @@ from .models import (
     PipelineTransformationType,
     SilverLayerConfig,
     SourceConfig,
+    TemporalFeatureConfig,
+    TextFeatureConfig,
     TimestampCoalesceConfig,
+    TrainingConfig,
     TransformationStep,
 )
+
+
+def _edges_to_labels(edges: List[float]) -> List[str]:
+    labels = []
+    for i in range(len(edges) - 1):
+        labels.append(f"{int(edges[i])}-{int(edges[i + 1])}d")
+    labels.append(f"{int(edges[-1])}d+")
+    return labels
 
 
 def _resolve_col_type(col_finding) -> str:
@@ -54,6 +65,7 @@ class FindingsParser:
             recommendations_registry.compute_recommendations_hash() if recommendations_registry else None
         )
         config = self._build_pipeline_config(multi_dataset, source_findings, recommendations_hash)
+        config.training = self._build_training_config(multi_dataset, source_findings)
         if recommendations_registry:
             self._apply_recommendations_to_config(config, recommendations_registry, multi_dataset)
         self._build_landing_configs(config, multi_dataset, source_findings)
@@ -726,12 +738,19 @@ class FindingsParser:
         notes = getattr(multi, "notes", None)
         temporal_config = notes.get("temporal_config", {}) if isinstance(notes, dict) and notes else {}
         feature_groups = temporal_config.get("feature_groups", [])
+        recency_edges = self._extract_recency_edges(temporal_config, findings)
         if feature_groups:
+            has_regularity = "regularity" in feature_groups
             return LifecycleConfig(
                 include_lifecycle_quadrant="lifecycle" in feature_groups,
-                include_cyclical_features="regularity" in feature_groups,
+                include_cyclical_features=has_regularity,
                 include_recency_bucket="recency" in feature_groups,
                 momentum_pairs=self._build_momentum_pairs(multi),
+                include_trend_features="trend" in feature_groups,
+                include_cohort_features="cohort" in feature_groups,
+                include_month_cyclical=has_regularity,
+                include_quarter_cyclical=has_regularity,
+                **recency_edges,
             )
         if findings is not None:
             meta = getattr(findings, "metadata", None) or {}
@@ -740,14 +759,32 @@ class FindingsParser:
             has_lifecycle = agg.get("include_lifecycle_quadrant", ff.get("include_lifecycle_quadrant", False))
             has_recency = agg.get("include_recency", ff.get("include_recency", False))
             has_cyclical = ff.get("include_seasonality_features", False)
-            if has_lifecycle or has_recency or has_cyclical:
+            has_trend = ff.get("include_trend_features", False)
+            has_cohort = ff.get("include_cohort_features", False)
+            if has_lifecycle or has_recency or has_cyclical or has_trend or has_cohort:
                 return LifecycleConfig(
                     include_lifecycle_quadrant=bool(has_lifecycle),
                     include_cyclical_features=bool(has_cyclical),
                     include_recency_bucket=bool(has_recency),
                     momentum_pairs=self._build_momentum_pairs(multi),
+                    include_trend_features=bool(has_trend),
+                    include_cohort_features=bool(has_cohort),
+                    include_month_cyclical=bool(has_cyclical),
+                    include_quarter_cyclical=bool(has_cyclical),
+                    **recency_edges,
                 )
         return None
+
+    @staticmethod
+    def _extract_recency_edges(temporal_config: Dict, findings: Optional[ExplorationFindings] = None) -> Dict:
+        edges = temporal_config.get("recency_bucket_edges")
+        if not edges and findings is not None:
+            meta = getattr(findings, "metadata", None) or {}
+            edges = meta.get("temporal_patterns", {}).get("recency_analysis", {}).get("bucket_boundaries")
+        if not edges:
+            return {}
+        labels = _edges_to_labels(edges)
+        return {"recency_bucket_edges": edges, "recency_bucket_labels": labels}
 
     def _build_momentum_pairs(self, multi: MultiDatasetFindings) -> List[Dict[str, str]]:
         windows = getattr(multi, "aggregation_windows", [])
@@ -771,11 +808,120 @@ class FindingsParser:
         day_values.sort(key=lambda x: x[0])
         pairs: List[Dict[str, str]] = []
         for i, (short_days, short_label) in enumerate(day_values):
-            for long_days, long_label in day_values[i + 1:]:
+            for long_days, long_label in day_values[i + 1 :]:
                 if long_days >= 3 * short_days:
                     pairs.append({"short_window": short_label, "long_window": long_label})
                     break
         return pairs
+
+    def _build_temporal_feature_config(
+        self,
+        multi: MultiDatasetFindings,
+        findings: Optional[ExplorationFindings] = None,
+    ) -> Optional[TemporalFeatureConfig]:
+        notes = getattr(multi, "notes", None)
+        temporal_config = notes.get("temporal_config", {}) if isinstance(notes, dict) and notes else {}
+        lag_windows = temporal_config.get("lag_windows")
+        if lag_windows:
+            return TemporalFeatureConfig(
+                lag_window_days=temporal_config.get("lag_window_days", 30),
+                num_lags=temporal_config.get("num_lags", len(lag_windows)),
+                lag_columns=temporal_config.get("columns", []),
+                lag_agg_funcs=temporal_config.get("lag_agg_funcs", ["sum", "mean", "count", "max"]),
+                feature_groups=temporal_config.get("temporal_feature_groups", ["lagged_windows", "velocity"]),
+            )
+        if findings is not None:
+            meta = getattr(findings, "metadata", None) or {}
+            tp = meta.get("temporal_patterns", {})
+            if tp.get("lag_features_computed"):
+                return TemporalFeatureConfig(
+                    lag_window_days=tp.get("lag_window_days", 30),
+                    num_lags=tp.get("num_lags", 4),
+                    lag_columns=tp.get("lag_columns", []),
+                )
+        return None
+
+    @staticmethod
+    def _build_text_feature_configs(
+        findings: Optional[ExplorationFindings],
+    ) -> List[TextFeatureConfig]:
+        if findings is None:
+            return []
+        text_processing = getattr(findings, "text_processing", None)
+        if not text_processing:
+            return []
+        configs = []
+        for col_name, meta in text_processing.items():
+            model = (
+                getattr(meta, "model", "all-MiniLM-L6-v2")
+                if hasattr(meta, "model")
+                else meta.get("model", "all-MiniLM-L6-v2")
+            )
+            n_comp = getattr(meta, "n_components", 5) if hasattr(meta, "n_components") else meta.get("n_components", 5)
+            comp_cols = (
+                getattr(meta, "component_columns", [])
+                if hasattr(meta, "component_columns")
+                else meta.get("component_columns", [])
+            )
+            configs.append(
+                TextFeatureConfig(
+                    column=col_name,
+                    embedding_model=model,
+                    n_components=n_comp,
+                    component_columns=list(comp_cols),
+                )
+            )
+        return configs
+
+    def _build_training_config(
+        self,
+        multi: MultiDatasetFindings,
+        source_findings: Dict[str, ExplorationFindings],
+    ) -> Optional[TrainingConfig]:
+        split_strategy = "random_stratified"
+        temporal_column = None
+        purge_gap_days = None
+        recommended_start = None
+        filter_future = False
+        imbalance_strategy = "class_weight"
+
+        if self._intent is not None:
+            from customer_retention.analysis.auto_explorer.intent import SplitStrategy
+
+            if self._intent.split_strategy == SplitStrategy.TEMPORAL:
+                split_strategy = "temporal"
+            elif self._intent.split_strategy == SplitStrategy.COHORT_BASED:
+                split_strategy = "cohort_based"
+            purge_gap_days = getattr(self._intent, "purge_gap_days", None)
+
+        for event_name in multi.event_datasets:
+            findings = source_findings.get(event_name)
+            if findings and findings.time_series_metadata:
+                temporal_column = findings.time_series_metadata.time_column
+                ts_meta = getattr(findings, "metadata", None) or {}
+                start = ts_meta.get("time_series", {}).get("recommended_training_start")
+                if start:
+                    recommended_start = start
+                tq = ts_meta.get("temporal_quality", {})
+                checks = tq.get("checks", [])
+                for check in checks:
+                    code = check.get("code", "") if isinstance(check, dict) else getattr(check, "code", "")
+                    status = check.get("status", "") if isinstance(check, dict) else getattr(check, "status", "")
+                    if code == "TQ003" and status in ("fail", "warning"):
+                        filter_future = True
+                break
+
+        if split_strategy == "random_stratified" and not filter_future and not recommended_start:
+            return None
+
+        return TrainingConfig(
+            split_strategy=split_strategy,
+            temporal_column=temporal_column,
+            purge_gap_days=purge_gap_days,
+            recommended_training_start=recommended_start,
+            filter_future_dates=filter_future,
+            imbalance_strategy=imbalance_strategy,
+        )
 
     def _build_bronze_event_configs(
         self,
@@ -809,6 +955,8 @@ class FindingsParser:
                     time_col,
                     mask_future=False,
                 ),
+                temporal_features=self._build_temporal_feature_config(multi, findings),
+                text_features=self._build_text_feature_configs(findings),
             )
         for agg_name, preagg in (discovered_events or {}).items():
             if agg_name in config.bronze_event:
@@ -834,6 +982,8 @@ class FindingsParser:
                     time_col,
                     mask_future=False,
                 ),
+                temporal_features=self._build_temporal_feature_config(multi, preagg),
+                text_features=self._build_text_feature_configs(preagg),
             )
 
     def _discover_event_sources(

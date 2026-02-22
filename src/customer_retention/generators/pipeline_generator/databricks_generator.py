@@ -35,8 +35,7 @@ class DatabricksPipelineGenerator:
         config.output_dir = "."
         config.experiments_dir = self._experiments_dir
         source_names = [
-            f"{s.name}_aggregated" if s.is_event_level else s.name
-            for s in config.sources if not s.excluded
+            f"{s.name}_aggregated" if s.is_event_level else s.name for s in config.sources if not s.excluded
         ]
         config.composite_name = composite_name(source_names)
         generated_files = [

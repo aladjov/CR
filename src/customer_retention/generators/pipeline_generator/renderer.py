@@ -369,8 +369,8 @@ def add_recency_tenure(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
 
 def add_recency_buckets(df: pd.DataFrame) -> pd.DataFrame:
     if "days_since_last" in df.columns:
-        df["recency_bucket"] = pd.cut(df["days_since_last"], bins=[0, 7, 30, 90, 180, 365, float("inf")],
-                                       labels=["0-7d", "7-30d", "30-90d", "90-180d", "180-365d", "365d+"])
+        df["recency_bucket"] = pd.cut(df["days_since_last"], bins={{ config.lifecycle.recency_bucket_edges }} + [float("inf")],
+                                       labels={{ config.lifecycle.recency_bucket_labels }})
     return df
 
 {% endif %}
@@ -409,6 +409,53 @@ def add_cyclical_features(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFram
     return df
 
 {% endif %}
+{% if config.lifecycle.include_month_cyclical %}
+
+def add_month_quarter_cyclical(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
+    ensure_timestamp(raw_df, TIME_COLUMN)
+    mean_month = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].apply(lambda x: x.dt.month.mean())
+    df = df.merge(mean_month.rename("mean_month"), left_on=ENTITY_COLUMN, right_index=True, how="left")
+    df["month_sin"] = np.sin(2 * np.pi * df["mean_month"] / 12)
+    df["month_cos"] = np.cos(2 * np.pi * df["mean_month"] / 12)
+{% if config.lifecycle.include_quarter_cyclical %}
+    mean_quarter = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].apply(lambda x: ((x.dt.month - 1) // 3).mean())
+    df = df.merge(mean_quarter.rename("mean_quarter"), left_on=ENTITY_COLUMN, right_index=True, how="left")
+    df["quarter_sin"] = np.sin(2 * np.pi * df["mean_quarter"] / 4)
+    df["quarter_cos"] = np.cos(2 * np.pi * df["mean_quarter"] / 4)
+    df = df.drop(columns=["mean_month", "mean_quarter"], errors="ignore")
+{% else %}
+    df = df.drop(columns=["mean_month"], errors="ignore")
+{% endif %}
+    return df
+
+{% endif %}
+{% if config.lifecycle.include_trend_features %}
+
+def add_trend_features(df: pd.DataFrame) -> pd.DataFrame:
+    window_cols = sorted([c for c in df.columns if c.startswith("event_count_") and c != "event_count_all_time"])
+    all_time_col = "event_count_all_time" if "event_count_all_time" in df.columns else None
+    if window_cols and all_time_col:
+        df["recent_vs_overall_ratio"] = df[window_cols[0]] / df[all_time_col].replace(0, float("nan"))
+    if len(window_cols) >= 2:
+        window_values = df[window_cols].values
+        x = np.arange(len(window_cols), dtype=float)
+        slopes = np.array([np.polyfit(x, row, 1)[0] if not np.any(np.isnan(row)) else 0.0 for row in window_values])
+        df["entity_trend_slope"] = slopes
+    return df
+
+{% endif %}
+{% if config.lifecycle.include_cohort_features %}
+
+def add_cohort_features(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
+    ensure_timestamp(raw_df, TIME_COLUMN)
+    first_event = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].min()
+    cohort_data = pd.DataFrame({"first_event": first_event})
+    cohort_data["cohort_year"] = cohort_data["first_event"].dt.year
+    cohort_data["cohort_quarter"] = ((cohort_data["first_event"].dt.month - 1) // 3 + 1)
+    df = df.merge(cohort_data[["cohort_year", "cohort_quarter"]], left_on=ENTITY_COLUMN, right_index=True, how="left")
+    return df
+
+{% endif %}
 {% if config.lifecycle.momentum_pairs %}
 
 def add_momentum_ratios(df: pd.DataFrame) -> pd.DataFrame:
@@ -437,9 +484,30 @@ def enrich_lifecycle(df: pd.DataFrame) -> pd.DataFrame:
 {% if config.lifecycle.include_cyclical_features %}
     df = add_cyclical_features(df, raw_df)
 {% endif %}
+{% if config.lifecycle.include_month_cyclical %}
+    df = add_month_quarter_cyclical(df, raw_df)
+{% endif %}
+{% if config.lifecycle.include_trend_features %}
+    df = add_trend_features(df)
+{% endif %}
+{% if config.lifecycle.include_cohort_features %}
+    df = add_cohort_features(df, raw_df)
+{% endif %}
 {% if config.lifecycle.momentum_pairs %}
     df = add_momentum_ratios(df)
 {% endif %}
+    return df
+{% endif %}
+
+{% if config.text_features %}
+
+def compute_text_features_entity(df):
+    from customer_retention.stages.profiling.text_processor import TextColumnProcessor, TextProcessingConfig
+{% for tf in config.text_features %}
+    if "{{ tf.column }}" in df.columns:
+        processor = TextColumnProcessor(TextProcessingConfig(embedding_model="{{ tf.embedding_model }}"), registry=None)
+        df, result = processor.process_column(df, "{{ tf.column }}", fit=True)
+{% endfor %}
     return df
 {% endif %}
 
@@ -449,6 +517,9 @@ def run_bronze_entity_{{ source }}():
     df = apply_transformations(df)
 {% if config.lifecycle %}
     df = enrich_lifecycle(df)
+{% endif %}
+{% if config.text_features %}
+    df = compute_text_features_entity(df)
 {% endif %}
     output_path = get_bronze_path(SOURCE_NAME)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -802,6 +873,12 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score,
                              precision_score, recall_score, accuracy_score)
+{% if config.training and config.training.split_strategy == "temporal" %}
+from customer_retention.stages.modeling.data_splitter import DataSplitter, SplitStrategy
+{% endif %}
+{% if config.training and config.training.imbalance_strategy == "smote" %}
+from customer_retention.stages.modeling.imbalance_handler import ImbalanceHandler
+{% endif %}
 from config import (TARGET_COLUMN, PIPELINE_NAME, COMPOSITE_NAME, RECOMMENDATIONS_HASH, MLFLOW_TRACKING_URI,
                     MLFLOW_ARTIFACT_ROOT, FEAST_REPO_PATH, FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY,
                     FEAST_TIMESTAMP_COL, get_feast_data_path)
@@ -958,11 +1035,44 @@ def run_experiment():
     feature_names = list(X.columns)
     train_mask = y.notna()
     X, y = X.loc[train_mask], y.loc[train_mask]
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+{% if config.training and config.training.recommended_training_start %}
+    if "{{ config.training.temporal_column or 'feature_timestamp' }}" in training_data.columns:
+        time_mask = training_data.loc[train_mask, "{{ config.training.temporal_column or 'feature_timestamp' }}"] >= pd.Timestamp("{{ config.training.recommended_training_start }}")
+        X, y = X.loc[time_mask], y.loc[time_mask]
+{% endif %}
+{% if config.training and config.training.filter_future_dates %}
+    if "{{ config.training.temporal_column or 'feature_timestamp' }}" in training_data.columns:
+        future_mask = training_data.loc[X.index, "{{ config.training.temporal_column or 'feature_timestamp' }}"] <= pd.Timestamp.now()
+        X, y = X.loc[future_mask], y.loc[future_mask]
+{% endif %}
+{% if config.training and config.training.split_strategy == "temporal" %}
+    splitter = DataSplitter(
+        strategy=SplitStrategy.TEMPORAL,
+        temporal_column="{{ config.training.temporal_column or 'feature_timestamp' }}",
+{% if config.training.purge_gap_days %}
+        purge_gap_days={{ config.training.purge_gap_days }},
+{% endif %}
+        test_size={{ config.training.test_size }},
+    )
+    split_df = training_data.loc[X.index].copy()
+    split_df[TARGET_COLUMN] = y
+    for col in X.columns:
+        split_df[col] = X[col]
+    splits = splitter.split(split_df, TARGET_COLUMN)
+    X_train, X_test = splits["X_train"][feature_names], splits["X_test"][feature_names]
+    y_train, y_test = splits["y_train"], splits["y_test"]
+{% else %}
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size={{ config.training.test_size if config.training else 0.2 }}, random_state={{ config.training.random_state if config.training else 42 }}, stratify=y)
+{% endif %}
+{% if config.training and config.training.imbalance_strategy == "smote" %}
+    handler = ImbalanceHandler()
+    X_train, y_train = handler.fit(X_train, y_train)
+{% endif %}
 
+{% set class_weight_param = ', class_weight="balanced"' if config.training and config.training.imbalance_strategy == "class_weight" else '' %}
     sklearn_models = {
-        "logistic_regression": LogisticRegression(max_iter=5000, random_state=42),
-        "random_forest": RandomForestClassifier(n_estimators=100, random_state=42),
+        "logistic_regression": LogisticRegression(max_iter=5000, random_state=42{{ class_weight_param }}),
+        "random_forest": RandomForestClassifier(n_estimators=100, random_state=42{{ class_weight_param }}),
     }
 
     run_name = get_model_name_with_hash("pipeline_run")
@@ -1545,7 +1655,11 @@ from customer_retention.transforms import {{ ops | sort | join(', ') }}
 {% endif %}
 from customer_retention.core.compat import ensure_timestamp, safe_to_datetime, as_tz_naive
 from pandas.api.types import is_numeric_dtype
+{% if config.text_features %}
+from config import PRODUCTION_DIR, TARGET_COLUMN, FIT_MODE
+{% else %}
 from config import PRODUCTION_DIR, TARGET_COLUMN
+{% endif %}
 
 SOURCE_NAME = "{{ source }}"
 ENTITY_COLUMN = "{{ config.entity_column }}"
@@ -1644,18 +1758,68 @@ def apply_event_aggregation(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+{% if config.temporal_features %}
+
+def compute_temporal_features(agg_df, raw_df):
+    from customer_retention.stages.profiling.temporal_feature_engineer import (
+        TemporalAggregationConfig, TemporalFeatureEngineer,
+    )
+    from customer_retention.core.compat import ensure_timestamp
+    ensure_timestamp(raw_df, TIME_COLUMN)
+    value_cols = {{ config.temporal_features.lag_columns or config.aggregation.value_columns if config.aggregation else [] }}
+    numeric_vals = [c for c in value_cols if c in raw_df.columns]
+    eng_config = TemporalAggregationConfig(
+        lag_window_days={{ config.temporal_features.lag_window_days }},
+        num_lags={{ config.temporal_features.num_lags }},
+        lag_aggregations={{ config.temporal_features.lag_agg_funcs }},
+    )
+    engineer = TemporalFeatureEngineer(eng_config)
+    result = engineer.compute(raw_df, ENTITY_COLUMN, TIME_COLUMN, numeric_vals)
+    temporal_df = result.features_df
+    merge_cols = [c for c in temporal_df.columns if c != ENTITY_COLUMN]
+    agg_df = agg_df.merge(temporal_df[[ENTITY_COLUMN] + merge_cols], on=ENTITY_COLUMN, how="left")
+    return agg_df
+{% endif %}
+
+{% if config.text_features %}
+
+def compute_text_features(df, raw_df):
+    from customer_retention.stages.profiling.text_processor import TextColumnProcessor, TextProcessingConfig
+    from customer_retention.transforms import ArtifactStore
+    from pathlib import Path
+    store = ArtifactStore(Path(PRODUCTION_DIR / "artifacts" / "text"))
+{% for tf in config.text_features %}
+    if "{{ tf.column }}" in raw_df.columns:
+        processor = TextColumnProcessor(TextProcessingConfig(embedding_model="{{ tf.embedding_model }}"), registry=None)
+        text_data = raw_df.groupby(ENTITY_COLUMN)["{{ tf.column }}"].first().reset_index()
+        if FIT_MODE:
+            text_data, result = processor.process_column(text_data, "{{ tf.column }}", fit=True)
+        else:
+            text_data, result = processor.process_column(text_data, "{{ tf.column }}", fit=False)
+        component_cols = result.component_columns
+        df = df.merge(text_data[[ENTITY_COLUMN] + component_cols], on=ENTITY_COLUMN, how="left")
+{% endfor %}
+    return df
+{% endif %}
+
 def run_bronze_event_{{ source }}():
     from customer_retention.integrations.adapters.factory import get_delta
     storage = get_delta(force_local=True)
     landing_path = str(PRODUCTION_DIR / "data" / "landing" / SOURCE_NAME)
     if not storage.exists(landing_path):
         raise FileNotFoundError(f"Landing output not found: {landing_path}")
-    df = storage.read(landing_path)
-    df = apply_pre_shaping(df)
+    raw_df = storage.read(landing_path)
+    df = apply_pre_shaping(raw_df.copy())
 {% if config.datetime_derivation %}
     df = derive_datetime_features(df)
 {% endif %}
     df = apply_event_aggregation(df)
+{% if config.temporal_features %}
+    df = compute_temporal_features(df, raw_df)
+{% endif %}
+{% if config.text_features %}
+    df = compute_text_features(df, raw_df)
+{% endif %}
     output_name = f"{SOURCE_NAME}_aggregated"
     bronze_dir = PRODUCTION_DIR / "data" / "bronze"
     bronze_dir.mkdir(parents=True, exist_ok=True)
@@ -1710,8 +1874,8 @@ def add_recency_tenure(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
 
 def add_recency_buckets(df: pd.DataFrame) -> pd.DataFrame:
     if "days_since_last" in df.columns:
-        df["recency_bucket"] = pd.cut(df["days_since_last"], bins=[0, 7, 30, 90, 180, 365, float("inf")],
-                                       labels=["0-7d", "7-30d", "30-90d", "90-180d", "180-365d", "365d+"])
+        df["recency_bucket"] = pd.cut(df["days_since_last"], bins={{ config.lifecycle.recency_bucket_edges }} + [float("inf")],
+                                       labels={{ config.lifecycle.recency_bucket_labels }})
     return df
 
 {% endif %}
@@ -1750,6 +1914,53 @@ def add_cyclical_features(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFram
     return df
 
 {% endif %}
+{% if config.lifecycle.include_month_cyclical %}
+
+def add_month_quarter_cyclical(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
+    ensure_timestamp(raw_df, TIME_COLUMN)
+    mean_month = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].apply(lambda x: x.dt.month.mean())
+    df = df.merge(mean_month.rename("mean_month"), left_on=ENTITY_COLUMN, right_index=True, how="left")
+    df["month_sin"] = np.sin(2 * np.pi * df["mean_month"] / 12)
+    df["month_cos"] = np.cos(2 * np.pi * df["mean_month"] / 12)
+{% if config.lifecycle.include_quarter_cyclical %}
+    mean_quarter = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].apply(lambda x: ((x.dt.month - 1) // 3).mean())
+    df = df.merge(mean_quarter.rename("mean_quarter"), left_on=ENTITY_COLUMN, right_index=True, how="left")
+    df["quarter_sin"] = np.sin(2 * np.pi * df["mean_quarter"] / 4)
+    df["quarter_cos"] = np.cos(2 * np.pi * df["mean_quarter"] / 4)
+    df = df.drop(columns=["mean_month", "mean_quarter"], errors="ignore")
+{% else %}
+    df = df.drop(columns=["mean_month"], errors="ignore")
+{% endif %}
+    return df
+
+{% endif %}
+{% if config.lifecycle.include_trend_features %}
+
+def add_trend_features(df: pd.DataFrame) -> pd.DataFrame:
+    window_cols = sorted([c for c in df.columns if c.startswith("event_count_") and c != "event_count_all_time"])
+    all_time_col = "event_count_all_time" if "event_count_all_time" in df.columns else None
+    if window_cols and all_time_col:
+        df["recent_vs_overall_ratio"] = df[window_cols[0]] / df[all_time_col].replace(0, float("nan"))
+    if len(window_cols) >= 2:
+        window_values = df[window_cols].values
+        x = np.arange(len(window_cols), dtype=float)
+        slopes = np.array([np.polyfit(x, row, 1)[0] if not np.any(np.isnan(row)) else 0.0 for row in window_values])
+        df["entity_trend_slope"] = slopes
+    return df
+
+{% endif %}
+{% if config.lifecycle.include_cohort_features %}
+
+def add_cohort_features(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
+    ensure_timestamp(raw_df, TIME_COLUMN)
+    first_event = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].min()
+    cohort_data = pd.DataFrame({"first_event": first_event})
+    cohort_data["cohort_year"] = cohort_data["first_event"].dt.year
+    cohort_data["cohort_quarter"] = ((cohort_data["first_event"].dt.month - 1) // 3 + 1)
+    df = df.merge(cohort_data[["cohort_year", "cohort_quarter"]], left_on=ENTITY_COLUMN, right_index=True, how="left")
+    return df
+
+{% endif %}
 {% if config.lifecycle.momentum_pairs %}
 
 def add_momentum_ratios(df: pd.DataFrame) -> pd.DataFrame:
@@ -1777,6 +1988,15 @@ def enrich_lifecycle(df: pd.DataFrame) -> pd.DataFrame:
 {% endif %}
 {% if config.lifecycle.include_cyclical_features %}
     df = add_cyclical_features(df, raw_df)
+{% endif %}
+{% if config.lifecycle.include_month_cyclical %}
+    df = add_month_quarter_cyclical(df, raw_df)
+{% endif %}
+{% if config.lifecycle.include_trend_features %}
+    df = add_trend_features(df)
+{% endif %}
+{% if config.lifecycle.include_cohort_features %}
+    df = add_cohort_features(df, raw_df)
 {% endif %}
 {% if config.lifecycle.momentum_pairs %}
     df = add_momentum_ratios(df)
@@ -1845,6 +2065,26 @@ def _load_artifact(path):
     return get_delta(force_local=True).read(str(path))
 
 
+def _categorize_missing(columns):
+    categories = {}
+    for col in columns:
+        if any(col.startswith(p) for p in ["pca_", "text_pca_"]) or col.endswith("_pca"):
+            categories.setdefault("text_embedding_pca", set()).add(col)
+        elif any(k in col for k in ["_lag", "velocity", "acceleration"]):
+            categories.setdefault("lag_velocity", set()).add(col)
+        elif col in ("month_sin", "month_cos", "quarter_sin", "quarter_cos"):
+            categories.setdefault("cyclical_month_quarter", set()).add(col)
+        elif col in ("cohort_year", "cohort_quarter"):
+            categories.setdefault("cohort", set()).add(col)
+        elif col in ("recent_vs_overall_ratio", "entity_trend_slope"):
+            categories.setdefault("trend", set()).add(col)
+        elif col in ("dow_sin", "dow_cos"):
+            categories.setdefault("cyclical_dow", set()).add(col)
+        else:
+            categories.setdefault("other", set()).add(col)
+    return categories
+
+
 def _compare_dataframes(stage, production_path, exploration_path, entity_key=None, tolerance=1e-5):
     from customer_retention.integrations.adapters.factory import get_delta
     storage = get_delta(force_local=True)
@@ -1869,7 +2109,9 @@ def _compare_dataframes(stage, production_path, exploration_path, entity_key=Non
     missing = expl_cols - prod_cols
     extra = prod_cols - expl_cols
     if missing:
-        print(f"[{stage}] WARNING: missing columns: {missing}")
+        categories = _categorize_missing(missing)
+        for category, cols in categories.items():
+            print(f"[{stage}] MISSING ({category}): {sorted(cols)}")
     if extra:
         print(f"[{stage}] INFO: extra columns: {extra}")
 
@@ -1932,6 +2174,11 @@ def validate_gold(tolerance=1e-5):
 
 
 def validate_training():
+{% if config.training and config.training.split_strategy == "temporal" %}
+    print("[Training] Split strategy: temporal (with DataSplitter)")
+{% else %}
+    print("[Training] Split strategy: random_stratified (sklearn train_test_split)")
+{% endif %}
     print("[Training] PASS - training validation requires MLflow comparison (not yet implemented)")
     return True
 

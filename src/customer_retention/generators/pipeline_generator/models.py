@@ -52,6 +52,7 @@ class BronzeLayerConfig:
     entity_column: Optional[str] = None
     time_column: Optional[str] = None
     raw_time_column: Optional[str] = None
+    text_features: List["TextFeatureConfig"] = field(default_factory=list)
 
 
 @dataclass
@@ -104,6 +105,44 @@ class LifecycleConfig:
     include_cyclical_features: bool = False
     include_recency_bucket: bool = False
     momentum_pairs: List[Dict[str, Any]] = field(default_factory=list)
+    include_trend_features: bool = False
+    include_cohort_features: bool = False
+    include_month_cyclical: bool = False
+    include_quarter_cyclical: bool = False
+    recency_bucket_edges: List[float] = field(default_factory=lambda: [0, 7, 30, 90, 180, 365])
+    recency_bucket_labels: List[str] = field(
+        default_factory=lambda: ["0-7d", "7-30d", "30-90d", "90-180d", "180-365d", "365d+"]
+    )
+
+
+@dataclass
+class TemporalFeatureConfig:
+    lag_window_days: int = 30
+    num_lags: int = 4
+    lag_columns: List[str] = field(default_factory=list)
+    lag_agg_funcs: List[str] = field(default_factory=lambda: ["sum", "mean", "count", "max"])
+    feature_groups: List[str] = field(default_factory=lambda: ["lagged_windows", "velocity"])
+
+
+@dataclass
+class TextFeatureConfig:
+    column: str
+    embedding_model: str = "all-MiniLM-L6-v2"
+    n_components: int = 5
+    component_columns: List[str] = field(default_factory=list)
+
+
+@dataclass
+class TrainingConfig:
+    split_strategy: str = "random_stratified"
+    test_size: float = 0.2
+    random_state: int = 42
+    temporal_column: Optional[str] = None
+    purge_gap_days: Optional[int] = None
+    recommended_training_start: Optional[str] = None
+    filter_future_dates: bool = False
+    imbalance_strategy: str = "class_weight"
+    imbalance_ratio: Optional[float] = None
 
 
 @dataclass
@@ -138,6 +177,8 @@ class BronzeEventConfig:
     post_shaping: List[TransformationStep] = field(default_factory=list)
     raw_time_column: Optional[str] = None
     datetime_derivation: Optional[DatetimeDerivationConfig] = None
+    temporal_features: Optional[TemporalFeatureConfig] = None
+    text_features: List[TextFeatureConfig] = field(default_factory=list)
 
 
 @dataclass
@@ -183,5 +224,6 @@ class PipelineConfig:
     production_dir: Optional[str] = None
     fit_mode: bool = True
     artifacts_path: Optional[str] = None
+    training: Optional[TrainingConfig] = None
     landing: Dict[str, LandingLayerConfig] = field(default_factory=dict)
     bronze_event: Dict[str, BronzeEventConfig] = field(default_factory=dict)

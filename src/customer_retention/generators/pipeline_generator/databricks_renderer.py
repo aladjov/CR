@@ -298,12 +298,13 @@ def add_recency_tenure(df, raw_df):
     return df
 
 def add_recency_buckets(df):
-    df = df.withColumn("recency_bucket", F.when(F.col("days_since_last") <= 7, "0-7d")
-        .when(F.col("days_since_last") <= 30, "7-30d")
-        .when(F.col("days_since_last") <= 90, "30-90d")
-        .when(F.col("days_since_last") <= 180, "90-180d")
-        .when(F.col("days_since_last") <= 365, "180-365d")
-        .otherwise("365d+"))
+{% set edges = config.lifecycle.recency_bucket_edges %}
+{% set labels = config.lifecycle.recency_bucket_labels %}
+    df = df.withColumn("recency_bucket", F.when(F.col("days_since_last") <= {{ edges[1] }}, "{{ labels[0] }}")
+{% for i in range(2, edges | length) %}
+        .when(F.col("days_since_last") <= {{ edges[i] }}, "{{ labels[i - 1] }}")
+{% endfor %}
+        .otherwise("{{ labels[-1] }}"))
     return df
 {% endif %}
 {% if config.lifecycle.include_lifecycle_quadrant %}
@@ -322,6 +323,68 @@ def add_lifecycle_quadrant(df):
         .otherwise("one_shot_lifecycle"))
     return df
 {% endif %}
+{% if config.lifecycle.include_cyclical_features %}
+def add_cyclical_features(df, raw_df):
+    entity_col = "{{ config.entity_column or config.source.entity_key }}"
+    time_col = "{{ config.time_column or config.source.time_column }}"
+    mean_dow = raw_df.groupBy(entity_col).agg(
+        F.mean(F.dayofweek(F.col(time_col)).cast("double")).alias("mean_dow")
+    )
+    df = df.join(mean_dow, on=entity_col, how="left")
+    df = df.withColumn("dow_sin", F.sin(2 * 3.141592653589793 * F.col("mean_dow") / 7))
+    df = df.withColumn("dow_cos", F.cos(2 * 3.141592653589793 * F.col("mean_dow") / 7))
+    df = df.drop("mean_dow")
+    return df
+{% endif %}
+{% if config.lifecycle.include_month_cyclical %}
+def add_month_quarter_cyclical(df, raw_df):
+    entity_col = "{{ config.entity_column or config.source.entity_key }}"
+    time_col = "{{ config.time_column or config.source.time_column }}"
+    mean_month = raw_df.groupBy(entity_col).agg(
+        F.mean(F.month(F.col(time_col)).cast("double")).alias("mean_month")
+    )
+    df = df.join(mean_month, on=entity_col, how="left")
+    df = df.withColumn("month_sin", F.sin(2 * 3.141592653589793 * F.col("mean_month") / 12))
+    df = df.withColumn("month_cos", F.cos(2 * 3.141592653589793 * F.col("mean_month") / 12))
+{% if config.lifecycle.include_quarter_cyclical %}
+    mean_quarter = raw_df.groupBy(entity_col).agg(
+        F.mean(F.quarter(F.col(time_col)).cast("double")).alias("mean_quarter")
+    )
+    df = df.join(mean_quarter, on=entity_col, how="left")
+    df = df.withColumn("quarter_sin", F.sin(2 * 3.141592653589793 * F.col("mean_quarter") / 4))
+    df = df.withColumn("quarter_cos", F.cos(2 * 3.141592653589793 * F.col("mean_quarter") / 4))
+    df = df.drop("mean_month", "mean_quarter")
+{% else %}
+    df = df.drop("mean_month")
+{% endif %}
+    return df
+{% endif %}
+{% if config.lifecycle.include_trend_features %}
+def add_trend_features(df):
+    import numpy as np
+    pdf = df.toPandas()
+    window_cols = sorted([c for c in pdf.columns if c.startswith("event_count_") and c != "event_count_all_time"])
+    all_time_col = "event_count_all_time" if "event_count_all_time" in pdf.columns else None
+    if window_cols and all_time_col:
+        pdf["recent_vs_overall_ratio"] = pdf[window_cols[0]] / pdf[all_time_col].replace(0, float("nan"))
+    if len(window_cols) >= 2:
+        x = np.arange(len(window_cols), dtype=float)
+        window_values = pdf[window_cols].values
+        slopes = np.array([np.polyfit(x, row, 1)[0] if not np.any(np.isnan(row)) else 0.0 for row in window_values])
+        pdf["entity_trend_slope"] = slopes
+    df = spark.createDataFrame(pdf)
+    return df
+{% endif %}
+{% if config.lifecycle.include_cohort_features %}
+def add_cohort_features(df, raw_df):
+    entity_col = "{{ config.entity_column or config.source.entity_key }}"
+    time_col = "{{ config.time_column or config.source.time_column }}"
+    first_event = raw_df.groupBy(entity_col).agg(F.min(time_col).alias("first_event"))
+    first_event = first_event.withColumn("cohort_year", F.year("first_event"))
+    first_event = first_event.withColumn("cohort_quarter", F.quarter("first_event"))
+    df = df.join(first_event.select(entity_col, "cohort_year", "cohort_quarter"), on=entity_col, how="left")
+    return df
+{% endif %}
 def enrich_lifecycle(df):
     raw_table = bronze_table("{{ source }}")
     raw_df = spark.table(raw_table)
@@ -332,7 +395,31 @@ def enrich_lifecycle(df):
 {% if config.lifecycle.include_lifecycle_quadrant %}
     df = add_lifecycle_quadrant(df)
 {% endif %}
+{% if config.lifecycle.include_cyclical_features %}
+    df = add_cyclical_features(df, raw_df)
+{% endif %}
+{% if config.lifecycle.include_month_cyclical %}
+    df = add_month_quarter_cyclical(df, raw_df)
+{% endif %}
+{% if config.lifecycle.include_trend_features %}
+    df = add_trend_features(df)
+{% endif %}
+{% if config.lifecycle.include_cohort_features %}
+    df = add_cohort_features(df, raw_df)
+{% endif %}
     return df
+{% endif %}
+
+{% if config.text_features %}
+def compute_text_features_entity(df):
+    from customer_retention.stages.profiling.text_processor import TextColumnProcessor, TextProcessingConfig
+    pdf = df.toPandas()
+{% for tf in config.text_features %}
+    if "{{ tf.column }}" in pdf.columns:
+        processor = TextColumnProcessor(TextProcessingConfig(embedding_model="{{ tf.embedding_model }}"), registry=None)
+        pdf, result = processor.process_column(pdf, "{{ tf.column }}", fit=True)
+{% endfor %}
+    return spark.createDataFrame(pdf)
 {% endif %}
 
 # COMMAND ----------
@@ -342,6 +429,9 @@ def run_bronze():
     df = apply_transformations(df)
 {% if config.lifecycle %}
     df = enrich_lifecycle(df)
+{% endif %}
+{% if config.text_features %}
+    df = compute_text_features_entity(df)
 {% endif %}
     output_table = bronze_table(SOURCE_NAME)
     df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
@@ -485,14 +575,49 @@ def apply_event_aggregation(df):
     return merged, reference_date
 {% endif %}
 
+{% if config.temporal_features %}
+def compute_temporal_features(agg_df, raw_df):
+    from customer_retention.stages.profiling.spark_temporal_feature_engineer import SparkTemporalFeatureEngineer
+    from customer_retention.stages.profiling.temporal_feature_engineer import TemporalAggregationConfig
+    value_cols = {{ config.temporal_features.lag_columns or (config.aggregation.value_columns if config.aggregation else []) }}
+    eng_config = TemporalAggregationConfig(
+        lag_window_days={{ config.temporal_features.lag_window_days }},
+        num_lags={{ config.temporal_features.num_lags }},
+        lag_aggregations={{ config.temporal_features.lag_agg_funcs }},
+    )
+    engineer = SparkTemporalFeatureEngineer(eng_config)
+    result = engineer.compute(raw_df, ENTITY_COLUMN, TIME_COLUMN, value_cols)
+    temporal_df = result.features_df
+    merge_cols = [c for c in temporal_df.columns if c != ENTITY_COLUMN]
+    agg_pdf = agg_df.toPandas() if hasattr(agg_df, "toPandas") else agg_df
+    merged = agg_pdf.merge(temporal_df[[ENTITY_COLUMN] + merge_cols], on=ENTITY_COLUMN, how="left")
+    return spark.createDataFrame(merged)
+{% endif %}
+
+{% if config.text_features %}
+def compute_text_features(agg_df, raw_df):
+    from customer_retention.stages.profiling.text_processor import TextColumnProcessor, TextProcessingConfig
+    agg_pdf = agg_df.toPandas() if hasattr(agg_df, "toPandas") else agg_df
+    raw_pdf = raw_df.toPandas() if hasattr(raw_df, "toPandas") else raw_df
+{% for tf in config.text_features %}
+    if "{{ tf.column }}" in raw_pdf.columns:
+        processor = TextColumnProcessor(TextProcessingConfig(embedding_model="{{ tf.embedding_model }}"), registry=None)
+        text_data = raw_pdf.groupby(ENTITY_COLUMN)["{{ tf.column }}"].first().reset_index()
+        text_data, result = processor.process_column(text_data, "{{ tf.column }}", fit=True)
+        component_cols = result.component_columns
+        agg_pdf = agg_pdf.merge(text_data[[ENTITY_COLUMN] + component_cols], on=ENTITY_COLUMN, how="left")
+{% endfor %}
+    return spark.createDataFrame(agg_pdf)
+{% endif %}
+
 # COMMAND ----------
 
 def run_bronze_event():
-    df = load_source()
+    raw_df = load_source()
 {% if config.raw_time_column %}
-    df = df.withColumnRenamed("{{ config.raw_time_column }}", TIME_COLUMN)
+    raw_df = raw_df.withColumnRenamed("{{ config.raw_time_column }}", TIME_COLUMN)
 {% endif %}
-    df = apply_pre_shaping(df)
+    df = apply_pre_shaping(raw_df)
 {% if config.deduplicate %}
     df = deduplicate(df)
 {% endif %}
@@ -501,6 +626,12 @@ def run_bronze_event():
 {% endif %}
 {% if config.aggregation %}
     agg_df, reference_date = apply_event_aggregation(df)
+{% if config.temporal_features %}
+    agg_df = compute_temporal_features(agg_df, raw_df)
+{% endif %}
+{% if config.text_features %}
+    agg_df = compute_text_features(agg_df, raw_df)
+{% endif %}
     output_table = bronze_table("{{ source }}_events")
     agg_df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
     return agg_df
@@ -574,12 +705,13 @@ def add_recency_tenure(df):
     return df
 
 def add_recency_buckets(df):
-    df = df.withColumn("recency_bucket", F.when(F.col("days_since_last") <= 7, "0-7d")
-        .when(F.col("days_since_last") <= 30, "7-30d")
-        .when(F.col("days_since_last") <= 90, "30-90d")
-        .when(F.col("days_since_last") <= 180, "90-180d")
-        .when(F.col("days_since_last") <= 365, "180-365d")
-        .otherwise("365d+"))
+{% set edges = config.lifecycle.recency_bucket_edges %}
+{% set labels = config.lifecycle.recency_bucket_labels %}
+    df = df.withColumn("recency_bucket", F.when(F.col("days_since_last") <= {{ edges[1] }}, "{{ labels[0] }}")
+{% for i in range(2, edges | length) %}
+        .when(F.col("days_since_last") <= {{ edges[i] }}, "{{ labels[i - 1] }}")
+{% endfor %}
+        .otherwise("{{ labels[-1] }}"))
     return df
 {% endif %}
 {% if config.lifecycle.include_lifecycle_quadrant %}
@@ -598,6 +730,55 @@ def add_lifecycle_quadrant(df):
         .otherwise("one_shot_lifecycle"))
     return df
 {% endif %}
+{% if config.lifecycle.include_month_cyclical %}
+def add_month_quarter_cyclical(df):
+    raw_df = spark.table(bronze_table("{{ raw_source }}_events"))
+    time_col = "{{ config.time_column }}"
+    mean_month = raw_df.groupBy(ENTITY_COLUMN).agg(
+        F.mean(F.month(F.col(time_col)).cast("double")).alias("mean_month")
+    )
+    df = df.join(mean_month, on=ENTITY_COLUMN, how="left")
+    df = df.withColumn("month_sin", F.sin(2 * 3.141592653589793 * F.col("mean_month") / 12))
+    df = df.withColumn("month_cos", F.cos(2 * 3.141592653589793 * F.col("mean_month") / 12))
+{% if config.lifecycle.include_quarter_cyclical %}
+    mean_quarter = raw_df.groupBy(ENTITY_COLUMN).agg(
+        F.mean(F.quarter(F.col(time_col)).cast("double")).alias("mean_quarter")
+    )
+    df = df.join(mean_quarter, on=ENTITY_COLUMN, how="left")
+    df = df.withColumn("quarter_sin", F.sin(2 * 3.141592653589793 * F.col("mean_quarter") / 4))
+    df = df.withColumn("quarter_cos", F.cos(2 * 3.141592653589793 * F.col("mean_quarter") / 4))
+    df = df.drop("mean_month", "mean_quarter")
+{% else %}
+    df = df.drop("mean_month")
+{% endif %}
+    return df
+{% endif %}
+{% if config.lifecycle.include_trend_features %}
+def add_trend_features(df):
+    import numpy as np
+    pdf = df.toPandas()
+    window_cols = sorted([c for c in pdf.columns if c.startswith("event_count_") and c != "event_count_all_time"])
+    all_time_col = "event_count_all_time" if "event_count_all_time" in pdf.columns else None
+    if window_cols and all_time_col:
+        pdf["recent_vs_overall_ratio"] = pdf[window_cols[0]] / pdf[all_time_col].replace(0, float("nan"))
+    if len(window_cols) >= 2:
+        x = np.arange(len(window_cols), dtype=float)
+        window_values = pdf[window_cols].values
+        slopes = np.array([np.polyfit(x, row, 1)[0] if not np.any(np.isnan(row)) else 0.0 for row in window_values])
+        pdf["entity_trend_slope"] = slopes
+    df = spark.createDataFrame(pdf)
+    return df
+{% endif %}
+{% if config.lifecycle.include_cohort_features %}
+def add_cohort_features(df):
+    raw_df = spark.table(bronze_table("{{ raw_source }}_events"))
+    time_col = "{{ config.time_column }}"
+    first_event = raw_df.groupBy(ENTITY_COLUMN).agg(F.min(time_col).alias("first_event"))
+    first_event = first_event.withColumn("cohort_year", F.year("first_event"))
+    first_event = first_event.withColumn("cohort_quarter", F.quarter("first_event"))
+    df = df.join(first_event.select(ENTITY_COLUMN, "cohort_year", "cohort_quarter"), on=ENTITY_COLUMN, how="left")
+    return df
+{% endif %}
 def enrich_lifecycle(df):
 {% if config.lifecycle.include_recency_bucket %}
     df = add_recency_tenure(df)
@@ -605,6 +786,15 @@ def enrich_lifecycle(df):
 {% endif %}
 {% if config.lifecycle.include_lifecycle_quadrant %}
     df = add_lifecycle_quadrant(df)
+{% endif %}
+{% if config.lifecycle.include_month_cyclical %}
+    df = add_month_quarter_cyclical(df)
+{% endif %}
+{% if config.lifecycle.include_trend_features %}
+    df = add_trend_features(df)
+{% endif %}
+{% if config.lifecycle.include_cohort_features %}
+    df = add_cohort_features(df)
 {% endif %}
     return df
 {% endif %}
@@ -854,6 +1044,9 @@ from pyspark.ml.classification import LogisticRegression, RandomForestClassifier
 from pyspark.ml.feature import VectorAssembler
 from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
 from pyspark.sql import functions as F
+{% if config.training and config.training.split_strategy == "temporal" %}
+from customer_retention.stages.modeling.data_splitter import DataSplitter, SplitStrategy
+{% endif %}
 
 # COMMAND ----------
 
@@ -879,8 +1072,34 @@ def prepare_features(df):
 
 def train_and_evaluate():
     df = load_training_data()
+{% if config.training and config.training.recommended_training_start %}
+    time_col = "{{ config.training.temporal_column or 'feature_timestamp' }}"
+    if time_col in df.columns:
+        df = df.filter(F.col(time_col) >= F.lit("{{ config.training.recommended_training_start }}"))
+{% endif %}
+{% if config.training and config.training.filter_future_dates %}
+    time_col = "{{ config.training.temporal_column or 'feature_timestamp' }}"
+    if time_col in df.columns:
+        df = df.filter(F.col(time_col) <= F.current_timestamp())
+{% endif %}
     assembled, feature_cols = prepare_features(df)
-    train_df, test_df = assembled.randomSplit([0.8, 0.2], seed=42)
+{% if config.training and config.training.split_strategy == "temporal" %}
+    pdf = assembled.toPandas()
+    splitter = DataSplitter(
+        strategy=SplitStrategy.TEMPORAL,
+        temporal_column="{{ config.training.temporal_column or 'feature_timestamp' }}",
+{% if config.training.purge_gap_days %}
+        purge_gap_days={{ config.training.purge_gap_days }},
+{% endif %}
+        test_size={{ config.training.test_size }},
+    )
+    splits = splitter.split(pdf, "label")
+    train_pdf, test_pdf = splits["X_train"], splits["X_test"]
+    train_df = spark.createDataFrame(train_pdf)
+    test_df = spark.createDataFrame(test_pdf)
+{% else %}
+    train_df, test_df = assembled.randomSplit([{{ 1.0 - (config.training.test_size if config.training else 0.2) }}, {{ config.training.test_size if config.training else 0.2 }}], seed={{ config.training.random_state if config.training else 42 }})
+{% endif %}
 
     mlflow.set_experiment(f"/Shared/{PIPELINE_NAME}")
     mlflow.set_tag("composite_name", COMPOSITE_NAME)
@@ -1253,7 +1472,11 @@ class DatabricksCodeRenderer:
         ds_list = []
         target_dataset = ""
         for name, entry in datasets.items():
-            role = "target" if getattr(entry, "has_target", False) or getattr(entry, "role", None) == "target" else "feature"
+            role = (
+                "target"
+                if getattr(entry, "has_target", False) or getattr(entry, "role", None) == "target"
+                else "feature"
+            )
             ds_list.append({"name": name, "path": entry.path, "role": role})
             if role == "target":
                 target_dataset = name

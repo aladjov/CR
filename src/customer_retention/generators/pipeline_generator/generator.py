@@ -9,7 +9,16 @@ from .renderer import CodeRenderer
 
 
 class PipelineGenerator:
-    def __init__(self, findings_dir: str, output_dir: str, pipeline_name: str, experiments_dir: str = None, production_dir: str = None, namespace=None, intent=None):
+    def __init__(
+        self,
+        findings_dir: str,
+        output_dir: str,
+        pipeline_name: str,
+        experiments_dir: str = None,
+        production_dir: str = None,
+        namespace=None,
+        intent=None,
+    ):
         self._findings_dir = Path(findings_dir)
         self._output_dir = Path(output_dir)
         self._pipeline_name = pipeline_name
@@ -25,8 +34,7 @@ class PipelineGenerator:
         config.experiments_dir = self._experiments_dir
         config.production_dir = self._production_dir
         source_names = [
-            f"{s.name}_aggregated" if s.is_event_level else s.name
-            for s in config.sources if not s.excluded
+            f"{s.name}_aggregated" if s.is_event_level else s.name for s in config.sources if not s.excluded
         ]
         config.composite_name = composite_name(source_names)
         self._renderer.set_docs_base(self._experiments_dir)
