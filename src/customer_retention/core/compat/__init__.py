@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any, Union
 
 import pandas as _pandas
@@ -546,6 +547,119 @@ def _spark_bulk_class_overlap(df: Any, columns: list[str], target: Any) -> dict[
     return result
 
 
+@dataclass
+class BulkEffectSizeResult:
+    effect_sizes: dict[str, float] = field(default_factory=dict)
+    class_stats: dict[str, dict] = field(default_factory=dict)
+
+
+def bulk_effect_sizes(df: Any, columns: list[str], target_column: str) -> BulkEffectSizeResult:
+    if target_column not in df.columns:
+        return BulkEffectSizeResult()
+    valid = [c for c in columns if c in df.columns and c != target_column]
+    if not valid:
+        return BulkEffectSizeResult()
+    if _is_spark_pandas(df):
+        return _spark_bulk_effect_sizes(df, valid, target_column)
+    return _pandas_bulk_effect_sizes(df, valid, target_column)
+
+
+def _pandas_bulk_effect_sizes(
+    df: Any, columns: list[str], target_column: str,
+) -> BulkEffectSizeResult:
+    import numpy as _np
+
+    mask0 = df[target_column] == 0
+    mask1 = df[target_column] == 1
+    effect_sizes: dict[str, float] = {}
+    class_stats: dict[str, dict] = {}
+
+    for col in columns:
+        g0 = df.loc[mask0, col].dropna()
+        g1 = df.loc[mask1, col].dropna()
+        n0, n1 = len(g0), len(g1)
+        stats: dict[str, Any] = {
+            "mean_0": float(g0.mean()) if n0 > 0 else 0.0,
+            "std_0": float(g0.std()) if n0 > 1 else 0.0,
+            "count_0": n0,
+            "median_0": float(g0.median()) if n0 > 0 else 0.0,
+            "mean_1": float(g1.mean()) if n1 > 0 else 0.0,
+            "std_1": float(g1.std()) if n1 > 1 else 0.0,
+            "count_1": n1,
+            "median_1": float(g1.median()) if n1 > 0 else 0.0,
+        }
+        class_stats[col] = stats
+
+        if n0 < 2 or n1 < 2:
+            effect_sizes[col] = 0.0
+            continue
+        pooled_std = _np.sqrt(
+            ((n0 - 1) * stats["std_0"] ** 2 + (n1 - 1) * stats["std_1"] ** 2)
+            / (n0 + n1 - 2)
+        )
+        if pooled_std == 0:
+            effect_sizes[col] = 0.0
+        else:
+            effect_sizes[col] = (stats["mean_1"] - stats["mean_0"]) / pooled_std
+
+    return BulkEffectSizeResult(effect_sizes=effect_sizes, class_stats=class_stats)
+
+
+def _spark_bulk_effect_sizes(
+    df: Any, columns: list[str], target_column: str,
+) -> BulkEffectSizeResult:
+    import numpy as _np
+    import pyspark.sql.functions as F  # noqa: N812
+
+    spark_df = df[columns + [target_column]].to_spark()
+    _BATCH = 200
+    effect_sizes: dict[str, float] = {}
+    class_stats: dict[str, dict] = {}
+
+    for start in range(0, len(columns), _BATCH):
+        batch = columns[start:start + _BATCH]
+        exprs: list[Any] = []
+        for c in batch:
+            for cls in (0, 1):
+                cond = F.col(target_column) == cls
+                filtered = F.when(cond, F.col(c))
+                exprs.extend([
+                    F.mean(filtered).alias(f"{c}__mean_{cls}"),
+                    F.stddev(filtered).alias(f"{c}__std_{cls}"),
+                    F.count(filtered).alias(f"{c}__count_{cls}"),
+                    F.percentile_approx(filtered, 0.5).alias(f"{c}__median_{cls}"),
+                ])
+        row = spark_df.agg(*exprs).collect()[0]
+
+        for c in batch:
+            stats: dict[str, Any] = {}
+            for cls in (0, 1):
+                mean_val = row[f"{c}__mean_{cls}"]
+                std_val = row[f"{c}__std_{cls}"]
+                count_val = row[f"{c}__count_{cls}"]
+                median_val = row[f"{c}__median_{cls}"]
+                stats[f"mean_{cls}"] = float(mean_val) if mean_val is not None else 0.0
+                stats[f"std_{cls}"] = float(std_val) if std_val is not None else 0.0
+                stats[f"count_{cls}"] = int(count_val) if count_val is not None else 0
+                stats[f"median_{cls}"] = float(median_val) if median_val is not None else 0.0
+            class_stats[c] = stats
+
+            n0, n1 = stats["count_0"], stats["count_1"]
+            if n0 < 2 or n1 < 2:
+                effect_sizes[c] = 0.0
+                continue
+            pooled_std = _np.sqrt(
+                ((n0 - 1) * stats["std_0"] ** 2 + (n1 - 1) * stats["std_1"] ** 2)
+                / (n0 + n1 - 2)
+            )
+            if pooled_std == 0:
+                effect_sizes[c] = 0.0
+            else:
+                effect_sizes[c] = (stats["mean_1"] - stats["mean_0"]) / pooled_std
+
+    return BulkEffectSizeResult(effect_sizes=effect_sizes, class_stats=class_stats)
+
+
 __all__ = [
     "pd",
     "native_pd",
@@ -617,4 +731,6 @@ __all__ = [
     "batched_corr_matrix",
     "bulk_corr_with_target",
     "bulk_class_overlap",
+    "bulk_effect_sizes",
+    "BulkEffectSizeResult",
 ]

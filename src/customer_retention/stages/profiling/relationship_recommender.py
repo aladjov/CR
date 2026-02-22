@@ -73,12 +73,14 @@ class RelationshipRecommender:
         numeric_cols: Optional[List[str]] = None,
         categorical_cols: Optional[List[str]] = None,
         target_col: Optional[str] = None,
+        correlation_matrix: Optional[pd.DataFrame] = None,
+        effect_sizes: Optional[Dict[str, float]] = None,
     ) -> RelationshipAnalysisSummary:
         numeric_cols = numeric_cols or []
         categorical_cols = categorical_cols or []
         recommendations = []
 
-        correlation_matrix = None
+        result_correlation_matrix = None
         strong_predictors = []
         weak_predictors = []
         multicollinear_pairs = []
@@ -87,13 +89,19 @@ class RelationshipRecommender:
 
         # Analyze numeric features
         if numeric_cols:
-            corr_results = self._analyze_numeric_correlations(df, numeric_cols, target_col)
-            correlation_matrix = corr_results["correlation_matrix"]
+            corr_results = self._analyze_numeric_correlations(
+                df, numeric_cols, target_col, correlation_matrix=correlation_matrix,
+            )
+            result_correlation_matrix = corr_results["correlation_matrix"]
             multicollinear_pairs = corr_results["multicollinear_pairs"]
             recommendations.extend(corr_results["recommendations"])
 
             if target_col:
-                predictor_results = self._analyze_predictive_power(df, numeric_cols, target_col)
+                predictor_results = self._analyze_predictive_power(
+                    df, numeric_cols, target_col,
+                    correlation_matrix=correlation_matrix,
+                    effect_sizes=effect_sizes,
+                )
                 strong_predictors = predictor_results["strong"]
                 weak_predictors = predictor_results["weak"]
                 recommendations.extend(predictor_results["recommendations"])
@@ -112,12 +120,14 @@ class RelationshipRecommender:
         recommendations.extend(model_recs)
 
         # Feature engineering recommendations
-        eng_recs = self._generate_engineering_recommendations(df, numeric_cols, target_col)
+        eng_recs = self._generate_engineering_recommendations(
+            df, numeric_cols, target_col, correlation_matrix=correlation_matrix,
+        )
         recommendations.extend(eng_recs)
 
         return RelationshipAnalysisSummary(
             recommendations=recommendations,
-            correlation_matrix=correlation_matrix,
+            correlation_matrix=result_correlation_matrix,
             strong_predictors=strong_predictors,
             weak_predictors=weak_predictors,
             multicollinear_pairs=multicollinear_pairs,
@@ -126,7 +136,11 @@ class RelationshipRecommender:
         )
 
     def _analyze_numeric_correlations(
-        self, df: pd.DataFrame, numeric_cols: List[str], target_col: Optional[str]
+        self,
+        df: pd.DataFrame,
+        numeric_cols: List[str],
+        target_col: Optional[str],
+        correlation_matrix: Optional[pd.DataFrame] = None,
     ) -> Dict[str, Any]:
         recommendations = []
         multicollinear_pairs = []
@@ -139,7 +153,15 @@ class RelationshipRecommender:
                 "recommendations": [],
             }
 
-        correlation_matrix = batched_corr_matrix(df, cols_to_analyze)
+        if correlation_matrix is not None:
+            available = [c for c in cols_to_analyze if c in correlation_matrix.index]
+            missing = [c for c in cols_to_analyze if c not in correlation_matrix.index]
+            if missing:
+                correlation_matrix = batched_corr_matrix(df, cols_to_analyze)
+            else:
+                correlation_matrix = correlation_matrix.loc[available, available]
+        else:
+            correlation_matrix = batched_corr_matrix(df, cols_to_analyze)
 
         # Find multicollinear pairs
         for i, col1 in enumerate(cols_to_analyze):
@@ -174,7 +196,12 @@ class RelationshipRecommender:
         }
 
     def _analyze_predictive_power(
-        self, df: pd.DataFrame, numeric_cols: List[str], target_col: str
+        self,
+        df: pd.DataFrame,
+        numeric_cols: List[str],
+        target_col: str,
+        correlation_matrix: Optional[pd.DataFrame] = None,
+        effect_sizes: Optional[Dict[str, float]] = None,
     ) -> Dict[str, Any]:
         recommendations = []
         strong = []
@@ -187,11 +214,21 @@ class RelationshipRecommender:
         if not feature_cols:
             return {"strong": [], "weak": [], "recommendations": []}
 
-        corr_with_target = batched_corr_matrix(df, feature_cols + [target_col])
+        if (
+            correlation_matrix is not None
+            and target_col in correlation_matrix.index
+            and all(c in correlation_matrix.index for c in feature_cols)
+        ):
+            corr_with_target = correlation_matrix
+        else:
+            corr_with_target = batched_corr_matrix(df, feature_cols + [target_col])
 
         for col in feature_cols:
             corr = corr_with_target.loc[col, target_col]
-            effect_size = self._calculate_effect_size(df, col, target_col)
+            if effect_sizes is not None and col in effect_sizes:
+                effect_size = effect_sizes[col]
+            else:
+                effect_size = self._calculate_effect_size(df, col, target_col)
 
             predictor_info = {
                 "feature": col,
@@ -408,6 +445,7 @@ class RelationshipRecommender:
         df: pd.DataFrame,
         numeric_cols: List[str],
         target_col: Optional[str],
+        correlation_matrix: Optional[pd.DataFrame] = None,
     ) -> List[RelationshipRecommendation]:
         recommendations = []
 
@@ -417,8 +455,13 @@ class RelationshipRecommender:
         # Suggest ratio features for correlated pairs
         cols_in_df = [c for c in numeric_cols if c in df.columns and c != target_col]
         if len(cols_in_df) >= 2:
-            # Check for potential ratio/interaction features
-            corr_matrix = batched_corr_matrix(df, cols_in_df)
+            if (
+                correlation_matrix is not None
+                and all(c in correlation_matrix.index for c in cols_in_df)
+            ):
+                corr_matrix = correlation_matrix.loc[cols_in_df, cols_in_df]
+            else:
+                corr_matrix = batched_corr_matrix(df, cols_in_df)
             moderate_pairs = []
 
             for i, col1 in enumerate(cols_in_df):

@@ -211,6 +211,95 @@ class TestFeatureEngineeringRecommendations:
         assert isinstance(eng_recs, list)
 
 
+class TestPrecomputedInputs:
+    @pytest.fixture
+    def recommender(self):
+        return RelationshipRecommender()
+
+    @pytest.fixture
+    def sample_df(self):
+        np.random.seed(42)
+        n = 1000
+        x1 = np.random.normal(0, 1, n)
+        x2 = x1 * 0.9 + np.random.normal(0, 0.1, n)
+        x3 = np.random.normal(0, 1, n)
+        target = (x1 > 0).astype(int) * 0.7 + (x3 > 0.5).astype(int) * 0.3
+        target = (target > 0.5).astype(int)
+        return pd.DataFrame({
+            "feature_a": x1, "feature_b": x2, "feature_c": x3, "retained": target,
+        })
+
+    def test_analyze_reuses_precomputed_correlation_matrix(self, recommender, sample_df):
+        from customer_retention.core.compat import batched_corr_matrix
+
+        cols = ["feature_a", "feature_b", "feature_c", "retained"]
+        precomputed = batched_corr_matrix(sample_df, cols)
+
+        summary_with = recommender.analyze(
+            sample_df,
+            numeric_cols=["feature_a", "feature_b", "feature_c"],
+            target_col="retained",
+            correlation_matrix=precomputed,
+        )
+        summary_without = recommender.analyze(
+            sample_df,
+            numeric_cols=["feature_a", "feature_b", "feature_c"],
+            target_col="retained",
+        )
+        assert len(summary_with.strong_predictors) == len(summary_without.strong_predictors)
+        assert len(summary_with.multicollinear_pairs) == len(summary_without.multicollinear_pairs)
+
+    def test_analyze_reuses_precomputed_effect_sizes(self, recommender, sample_df):
+        from customer_retention.core.compat import bulk_effect_sizes
+
+        result = bulk_effect_sizes(
+            sample_df, ["feature_a", "feature_b", "feature_c"], "retained",
+        )
+
+        summary = recommender.analyze(
+            sample_df,
+            numeric_cols=["feature_a", "feature_b", "feature_c"],
+            target_col="retained",
+            effect_sizes=result.effect_sizes,
+        )
+        assert isinstance(summary, RelationshipAnalysisSummary)
+        assert len(summary.strong_predictors) > 0
+
+    def test_precomputed_effect_sizes_match_internal(self, recommender, sample_df):
+        from customer_retention.core.compat import bulk_effect_sizes
+
+        result = bulk_effect_sizes(
+            sample_df, ["feature_a", "feature_b", "feature_c"], "retained",
+        )
+
+        summary_pre = recommender.analyze(
+            sample_df,
+            numeric_cols=["feature_a", "feature_b", "feature_c"],
+            target_col="retained",
+            effect_sizes=result.effect_sizes,
+        )
+        summary_int = recommender.analyze(
+            sample_df,
+            numeric_cols=["feature_a", "feature_b", "feature_c"],
+            target_col="retained",
+        )
+        pre_effects = {p["feature"]: p["effect_size"] for p in summary_pre.strong_predictors}
+        int_effects = {p["feature"]: p["effect_size"] for p in summary_int.strong_predictors}
+        for feat in pre_effects:
+            assert pre_effects[feat] == pytest.approx(int_effects[feat], abs=1e-10)
+
+    def test_partial_correlation_matrix_triggers_recompute(self, recommender, sample_df):
+        partial_corr = sample_df[["feature_a", "feature_b"]].corr()
+        summary = recommender.analyze(
+            sample_df,
+            numeric_cols=["feature_a", "feature_b", "feature_c"],
+            target_col="retained",
+            correlation_matrix=partial_corr,
+        )
+        assert isinstance(summary, RelationshipAnalysisSummary)
+        assert summary.correlation_matrix is not None
+
+
 class TestHighRiskSegmentRecommendations:
     @pytest.fixture
     def recommender(self):
