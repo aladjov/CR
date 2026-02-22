@@ -272,7 +272,7 @@ class TestAucChecks:
         feature = pd.Series([np.nan] * 10)
         y = pd.Series([0, 1] * 5)
 
-        auc = detector._compute_single_feature_auc(feature, y)
+        auc = detector._compute_single_feature_auc_numpy(feature.to_numpy().astype(float), y.to_numpy().astype(float))
         assert auc == 0.5
 
     def test_compute_single_feature_auc_single_class(self):
@@ -281,7 +281,7 @@ class TestAucChecks:
         feature = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0])
         y = pd.Series([1, 1, 1, 1, 1])
 
-        auc = detector._compute_single_feature_auc(feature, y)
+        auc = detector._compute_single_feature_auc_numpy(feature.to_numpy().astype(float), y.to_numpy().astype(float))
         assert auc == 0.5
 
     def test_cv_auc_detects_truly_leaky_feature(self):
@@ -290,7 +290,7 @@ class TestAucChecks:
         n = 500
         y = pd.Series(np.array([0] * 250 + [1] * 250))
         feature = pd.Series(y.values + np.random.randn(n) * 0.01)
-        auc = detector._compute_single_feature_auc(feature, y)
+        auc = detector._compute_single_feature_auc_numpy(feature.to_numpy().astype(float), y.to_numpy().astype(float))
         assert auc > 0.95
 
     def test_cv_auc_near_chance_for_random_feature(self):
@@ -299,14 +299,14 @@ class TestAucChecks:
         n = 500
         y = pd.Series(np.random.choice([0, 1], n))
         feature = pd.Series(np.random.randn(n))
-        auc = detector._compute_single_feature_auc(feature, y)
+        auc = detector._compute_single_feature_auc_numpy(feature.to_numpy().astype(float), y.to_numpy().astype(float))
         assert 0.35 < auc < 0.65
 
     def test_cv_auc_returns_half_when_minority_class_too_small(self):
         detector = LeakageDetector()
         y = pd.Series([0] * 9 + [1])
         feature = pd.Series(np.random.randn(10))
-        auc = detector._compute_single_feature_auc(feature, y)
+        auc = detector._compute_single_feature_auc_numpy(feature.to_numpy().astype(float), y.to_numpy().astype(float))
         assert auc == 0.5
 
     def test_cv_auc_handles_many_nans(self):
@@ -316,7 +316,7 @@ class TestAucChecks:
         y = pd.Series(np.random.choice([0, 1], n))
         values = [np.nan] * 80 + list(np.random.randn(20))
         feature = pd.Series(values)
-        auc = detector._compute_single_feature_auc(feature, y)
+        auc = detector._compute_single_feature_auc_numpy(feature.to_numpy().astype(float), y.to_numpy().astype(float))
         assert 0.0 <= auc <= 1.0
 
 

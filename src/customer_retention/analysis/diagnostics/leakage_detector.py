@@ -9,9 +9,9 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
 
-from customer_retention.core.compat import DataFrame, Series, bulk_corr_with_target, pd
+from customer_retention.core.compat import DataFrame, Series, bulk_class_overlap, bulk_corr_with_target, pd
 from customer_retention.core.components.enums import Severity
-from customer_retention.core.utils.leakage import TEMPORAL_METADATA_COLUMNS, calculate_class_overlap
+from customer_retention.core.utils.leakage import TEMPORAL_METADATA_COLUMNS
 
 
 @dataclass
@@ -103,9 +103,10 @@ class LeakageDetector:
         return f"MONITOR {feature}: elevated correlation {corr:.2f}"
 
     def check_separation(self, X: DataFrame, y: Series) -> LeakageResult:
-        checks = []
-        for col in self._get_numeric_columns(X):
-            overlap_pct = calculate_class_overlap(X[col], y)
+        checks: List[LeakageCheck] = []
+        numeric_cols = self._get_numeric_columns(X)
+        overlaps = bulk_class_overlap(X, numeric_cols, y) if numeric_cols else {}
+        for col, overlap_pct in overlaps.items():
             severity, check_id = self._classify_separation(overlap_pct)
             checks.append(LeakageCheck(
                 check_id=check_id, feature=col, severity=severity,
@@ -150,9 +151,14 @@ class LeakageDetector:
         return self._build_result(checks)
 
     def check_single_feature_auc(self, X: DataFrame, y: Series) -> LeakageResult:
-        checks = []
-        for col in self._get_numeric_columns(X):
-            auc = self._compute_single_feature_auc(X[col], y)
+        checks: List[LeakageCheck] = []
+        numeric_cols = self._get_numeric_columns(X)
+        if not numeric_cols:
+            return self._build_result(checks)
+        X_np = X[numeric_cols].to_numpy().astype(float)
+        y_np = y.to_numpy().astype(float)
+        for i, col in enumerate(numeric_cols):
+            auc = self._compute_single_feature_auc_numpy(X_np[:, i], y_np)
             is_temporal = bool(self.TEMPORAL_PATTERNS.search(col))
             severity, check_id = self._classify_auc(auc, is_temporal=is_temporal)
             if severity != Severity.INFO:
@@ -162,11 +168,11 @@ class LeakageDetector:
                 ))
         return self._build_result(checks)
 
-    def _compute_single_feature_auc(self, feature: Series, y: Series) -> float:
+    def _compute_single_feature_auc_numpy(self, feature_np: np.ndarray, y_np: np.ndarray) -> float:
         try:
-            X_single = feature.values.reshape(-1, 1)
-            mask = ~np.isnan(X_single.flatten())
-            X_clean, y_clean = X_single[mask], y.values[mask]
+            mask = ~np.isnan(feature_np)
+            X_clean = feature_np[mask].reshape(-1, 1)
+            y_clean = y_np[mask]
             if len(np.unique(y_clean)) < 2 or min(np.bincount(y_clean.astype(int))) < self.CV_FOLDS:
                 return 0.5
             model = LogisticRegression(max_iter=200, solver="lbfgs", random_state=42)

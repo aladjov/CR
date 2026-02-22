@@ -501,6 +501,51 @@ def _spark_bulk_corr_with_target(df: Any, columns: list[str], target_column: str
     return result
 
 
+def bulk_class_overlap(df: Any, columns: list[str], target: Any) -> dict[str, float]:
+    valid = [c for c in columns if c in df.columns]
+    if not valid:
+        return {}
+    if not _is_spark_pandas(df):
+        from customer_retention.core.utils.leakage import calculate_class_overlap
+        return {c: calculate_class_overlap(df[c], target) for c in valid}
+    return _spark_bulk_class_overlap(df, valid, target)
+
+
+def _spark_bulk_class_overlap(df: Any, columns: list[str], target: Any) -> dict[str, float]:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    _TARGET = "__overlap_target__"
+    combined = df[columns].copy()
+    combined[_TARGET] = target
+    spark_df = combined.to_spark()
+    _BATCH = 200
+    result: dict[str, float] = {}
+    for start in range(0, len(columns), _BATCH):
+        batch = columns[start:start + _BATCH]
+        exprs: list[Any] = []
+        for c in batch:
+            exprs.extend([
+                F.min(F.when(F.col(_TARGET) == 0, F.col(c))).alias(f"{c}__min0"),
+                F.max(F.when(F.col(_TARGET) == 0, F.col(c))).alias(f"{c}__max0"),
+                F.min(F.when(F.col(_TARGET) == 1, F.col(c))).alias(f"{c}__min1"),
+                F.max(F.when(F.col(_TARGET) == 1, F.col(c))).alias(f"{c}__max1"),
+            ])
+        row = spark_df.agg(*exprs).collect()[0]
+        for c in batch:
+            vals = [row[f"{c}__{k}"] for k in ("min0", "max0", "min1", "max1")]
+            if any(v is None for v in vals):
+                result[c] = 100.0
+                continue
+            min0, max0, min1, max1 = (float(v) for v in vals)
+            total_range = max(max0, max1) - min(min0, min1)
+            if total_range == 0:
+                result[c] = 100.0
+                continue
+            overlap = max(0, min(max0, max1) - max(min0, min1))
+            result[c] = (overlap / total_range) * 100
+    return result
+
+
 __all__ = [
     "pd",
     "native_pd",
@@ -571,4 +616,5 @@ __all__ = [
     "safe_describe",
     "batched_corr_matrix",
     "bulk_corr_with_target",
+    "bulk_class_overlap",
 ]

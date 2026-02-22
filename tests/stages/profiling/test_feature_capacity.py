@@ -389,6 +389,25 @@ class TestBulkSegmentCapacity:
         )
         assert call_count["n"] == 1
 
+    def test_cached_effective_features_skips_recomputation(self, analyzer, many_segments_df, monkeypatch):
+        cached = analyzer.calculate_effective_features(many_segments_df, ["f1", "f2", "f3"])
+        call_count = {"n": 0}
+        original = analyzer.calculate_effective_features
+
+        def counting_wrapper(*args, **kwargs):
+            call_count["n"] += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(analyzer, "calculate_effective_features", counting_wrapper)
+        result = analyzer.analyze_segment_capacity(
+            many_segments_df, ["f1", "f2", "f3"], "target", "segment",
+            effective_features_result=cached,
+        )
+        assert call_count["n"] == 0
+        effective_counts = {cap.effective_features for cap in result.segment_capacities.values()}
+        assert len(effective_counts) == 1
+        assert cached.effective_count in effective_counts
+
 
 class TestEffectiveFeaturesUsesBatchedCorr:
     @pytest.fixture

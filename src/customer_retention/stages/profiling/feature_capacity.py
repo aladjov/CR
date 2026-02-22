@@ -282,8 +282,9 @@ class FeatureCapacityAnalyzer:
         feature_cols: List[str],
         target_col: str,
         segment_col: str,
+        effective_features_result: Optional[EffectiveFeaturesResult] = None,
     ) -> SegmentCapacityResult:
-        eff_result = self.calculate_effective_features(df, feature_cols)
+        eff_result = effective_features_result or self.calculate_effective_features(df, feature_cols)
         segment_stats = self._bulk_segment_stats(df, target_col, segment_col)
         n_features = len(feature_cols)
 
