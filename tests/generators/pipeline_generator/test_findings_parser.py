@@ -3053,3 +3053,530 @@ class TestBuildHistoryWindowConfig:
         assert result.upper_limit == "2024-12-31"
         assert result.lookback_periods == 12
         assert result.cadence_days == 30
+
+
+class TestImbalanceStrategyFromRegistry:
+    def _make_findings_and_recs(self, tmp_path, strategy="class_weight", imbalance_ratio=5.0):
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+        customers_findings = {
+            "source_path": "/data/customers.csv",
+            "source_format": "csv",
+            "row_count": 100,
+            "column_count": 3,
+            "columns": {
+                "customer_id": {
+                    "name": "customer_id", "inferred_type": "identifier",
+                    "confidence": 0.9, "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": [],
+                },
+                "revenue": {
+                    "name": "revenue", "inferred_type": "numeric_continuous",
+                    "confidence": 0.9, "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": [],
+                },
+                "target": {
+                    "name": "target", "inferred_type": "binary",
+                    "confidence": 0.9, "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": [],
+                },
+            },
+            "target_column": "target",
+            "identifier_columns": ["customer_id"],
+        }
+        (findings_dir / "customers_findings.yaml").write_text(yaml.dump(customers_findings))
+        multi_dataset = {
+            "datasets": {
+                "customers": {
+                    "name": "customers",
+                    "findings_path": "customers_findings.yaml",
+                    "source_path": "/data/customers.csv",
+                    "granularity": "entity_level",
+                    "row_count": 100,
+                    "column_count": 3,
+                },
+            },
+            "relationships": [],
+            "primary_entity_dataset": "customers",
+            "event_datasets": [],
+        }
+        (findings_dir / "multi_dataset_findings.yaml").write_text(yaml.dump(multi_dataset))
+        recs = {
+            "sources": {
+                "customers": {
+                    "source_file": "/data/customers.csv",
+                    "null_handling": [],
+                    "outlier_handling": [],
+                    "type_conversions": [],
+                    "deduplication": [],
+                    "filtering": [],
+                    "text_processing": [],
+                    "modeling_strategy": [
+                        {
+                            "id": "rec_001",
+                            "layer": "bronze",
+                            "category": "imbalance",
+                            "action": strategy,
+                            "target_column": "target",
+                            "parameters": {
+                                "imbalance_ratio": imbalance_ratio,
+                                "minority_class": 1,
+                            },
+                            "rationale": "Handle class imbalance",
+                            "source_notebook": "02_source_integrity",
+                            "priority": 1,
+                        },
+                    ],
+                },
+            },
+        }
+        (findings_dir / "recommendations.yaml").write_text(yaml.dump(recs))
+        return findings_dir
+
+    def test_reads_class_weight_from_registry(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings_dir = self._make_findings_and_recs(tmp_path, strategy="class_weight", imbalance_ratio=5.0)
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        assert config.training is not None
+        assert config.training.imbalance_strategy == "class_weight"
+        assert config.training.imbalance_ratio == 5.0
+
+    def test_reads_smote_from_registry(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings_dir = self._make_findings_and_recs(tmp_path, strategy="smote", imbalance_ratio=3.0)
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        assert config.training is not None
+        assert config.training.imbalance_strategy == "smote"
+        assert config.training.imbalance_ratio == 3.0
+
+    def test_defaults_to_class_weight_without_registry(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+        customers_findings = {
+            "source_path": "/data/customers.csv",
+            "source_format": "csv",
+            "row_count": 100,
+            "column_count": 3,
+            "columns": {
+                "customer_id": {
+                    "name": "customer_id", "inferred_type": "identifier",
+                    "confidence": 0.9, "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": [],
+                },
+                "target": {
+                    "name": "target", "inferred_type": "binary",
+                    "confidence": 0.9, "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": [],
+                },
+            },
+            "target_column": "target",
+            "identifier_columns": ["customer_id"],
+        }
+        (findings_dir / "customers_findings.yaml").write_text(yaml.dump(customers_findings))
+        multi_dataset = {
+            "datasets": {
+                "customers": {
+                    "name": "customers",
+                    "findings_path": "customers_findings.yaml",
+                    "source_path": "/data/customers.csv",
+                    "granularity": "entity_level",
+                    "row_count": 100,
+                    "column_count": 3,
+                },
+            },
+            "relationships": [],
+            "primary_entity_dataset": "customers",
+            "event_datasets": [],
+        }
+        (findings_dir / "multi_dataset_findings.yaml").write_text(yaml.dump(multi_dataset))
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        if config.training is not None:
+            assert config.training.imbalance_strategy == "class_weight"
+
+
+class TestDeduplicationFromRegistry:
+    def _make_event_findings_with_recs(self, tmp_path, dedup_strategy="keep_first", conflict_columns=None):
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+        events_findings = {
+            "source_path": "/data/events.csv",
+            "source_format": "csv",
+            "row_count": 500,
+            "column_count": 5,
+            "columns": {
+                "customer_id": {
+                    "name": "customer_id", "inferred_type": "identifier",
+                    "confidence": 0.9, "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": [],
+                },
+                "event_date": {
+                    "name": "event_date", "inferred_type": "datetime",
+                    "confidence": 0.9, "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": [],
+                },
+                "amount": {
+                    "name": "amount", "inferred_type": "numeric_continuous",
+                    "confidence": 0.9, "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": [],
+                },
+                "target": {
+                    "name": "target", "inferred_type": "binary",
+                    "confidence": 0.9, "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": [],
+                },
+            },
+            "target_column": "target",
+            "identifier_columns": ["customer_id"],
+            "time_series_metadata": {
+                "time_column": "event_date",
+                "entity_column": "customer_id",
+            },
+        }
+        (findings_dir / "events_findings.yaml").write_text(yaml.dump(events_findings))
+        multi_dataset = {
+            "datasets": {
+                "events": {
+                    "name": "events",
+                    "findings_path": "events_findings.yaml",
+                    "source_path": "/data/events.csv",
+                    "granularity": "event_level",
+                    "row_count": 500,
+                    "column_count": 5,
+                    "entity_column": "customer_id",
+                    "time_column": "event_date",
+                },
+            },
+            "relationships": [],
+            "primary_entity_dataset": "events",
+            "event_datasets": ["events"],
+            "aggregation_windows": ["7d", "30d"],
+        }
+        (findings_dir / "multi_dataset_findings.yaml").write_text(yaml.dump(multi_dataset))
+        dedup_params = {"strategy": dedup_strategy}
+        if conflict_columns:
+            dedup_params["conflict_columns"] = conflict_columns
+        recs = {
+            "sources": {
+                "events": {
+                    "source_file": "/data/events.csv",
+                    "null_handling": [],
+                    "outlier_handling": [],
+                    "type_conversions": [],
+                    "deduplication": [
+                        {
+                            "id": "rec_dedup_001",
+                            "layer": "bronze",
+                            "category": "deduplication",
+                            "action": dedup_strategy,
+                            "target_column": "customer_id",
+                            "parameters": dedup_params,
+                            "rationale": f"Deduplicate events using {dedup_strategy}",
+                            "source_notebook": "02_source_integrity",
+                            "priority": 1,
+                        },
+                    ],
+                    "filtering": [],
+                    "text_processing": [],
+                    "modeling_strategy": [],
+                },
+            },
+        }
+        (findings_dir / "recommendations.yaml").write_text(yaml.dump(recs))
+        return findings_dir
+
+    def test_reads_keep_first_from_registry(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import DeduplicationConfig
+
+        findings_dir = self._make_event_findings_with_recs(tmp_path, "keep_first")
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        assert "events" in config.bronze_event
+        dedup = config.bronze_event["events"].deduplicate
+        assert isinstance(dedup, DeduplicationConfig)
+        assert dedup.strategy == "keep_first"
+
+    def test_reads_keep_most_complete_from_registry(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import DeduplicationConfig
+
+        findings_dir = self._make_event_findings_with_recs(tmp_path, "keep_most_complete")
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        dedup = config.bronze_event["events"].deduplicate
+        assert isinstance(dedup, DeduplicationConfig)
+        assert dedup.strategy == "keep_most_complete"
+
+    def test_reads_conflict_columns_from_registry(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import DeduplicationConfig
+
+        findings_dir = self._make_event_findings_with_recs(
+            tmp_path, "keep_first", conflict_columns=["customer_id", "event_date", "amount"],
+        )
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        dedup = config.bronze_event["events"].deduplicate
+        assert isinstance(dedup, DeduplicationConfig)
+        assert dedup.conflict_columns == ["customer_id", "event_date", "amount"]
+
+    def test_defaults_to_basic_dedup_without_registry(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+        events_findings = {
+            "source_path": "/data/events.csv",
+            "source_format": "csv",
+            "row_count": 500,
+            "column_count": 3,
+            "columns": {
+                "customer_id": {
+                    "name": "customer_id", "inferred_type": "identifier",
+                    "confidence": 0.9, "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": [],
+                },
+                "event_date": {
+                    "name": "event_date", "inferred_type": "datetime",
+                    "confidence": 0.9, "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": [],
+                },
+                "target": {
+                    "name": "target", "inferred_type": "binary",
+                    "confidence": 0.9, "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": [],
+                },
+            },
+            "target_column": "target",
+            "identifier_columns": ["customer_id"],
+            "time_series_metadata": {
+                "time_column": "event_date",
+                "entity_column": "customer_id",
+            },
+        }
+        (findings_dir / "events_findings.yaml").write_text(yaml.dump(events_findings))
+        multi_dataset = {
+            "datasets": {
+                "events": {
+                    "name": "events",
+                    "findings_path": "events_findings.yaml",
+                    "source_path": "/data/events.csv",
+                    "granularity": "event_level",
+                    "row_count": 500,
+                    "column_count": 3,
+                    "entity_column": "customer_id",
+                    "time_column": "event_date",
+                },
+            },
+            "relationships": [],
+            "primary_entity_dataset": "events",
+            "event_datasets": ["events"],
+            "aggregation_windows": ["7d", "30d"],
+        }
+        (findings_dir / "multi_dataset_findings.yaml").write_text(yaml.dump(multi_dataset))
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        assert config.bronze_event["events"].deduplicate is True
+
+
+class TestFilteringFromRegistry:
+    def _make_event_findings_with_filters(self, tmp_path, filters):
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+        events_findings = {
+            "source_path": "/data/events.csv",
+            "source_format": "csv",
+            "row_count": 500,
+            "column_count": 5,
+            "columns": {
+                "customer_id": {
+                    "name": "customer_id", "inferred_type": "identifier",
+                    "confidence": 0.9, "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": [],
+                },
+                "event_date": {
+                    "name": "event_date", "inferred_type": "datetime",
+                    "confidence": 0.9, "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": [],
+                },
+                "amount": {
+                    "name": "amount", "inferred_type": "numeric_continuous",
+                    "confidence": 0.9, "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": [],
+                },
+                "target": {
+                    "name": "target", "inferred_type": "binary",
+                    "confidence": 0.9, "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": [],
+                },
+            },
+            "target_column": "target",
+            "identifier_columns": ["customer_id"],
+            "time_series_metadata": {
+                "time_column": "event_date",
+                "entity_column": "customer_id",
+            },
+        }
+        (findings_dir / "events_findings.yaml").write_text(yaml.dump(events_findings))
+        multi_dataset = {
+            "datasets": {
+                "events": {
+                    "name": "events",
+                    "findings_path": "events_findings.yaml",
+                    "source_path": "/data/events.csv",
+                    "granularity": "event_level",
+                    "row_count": 500,
+                    "column_count": 5,
+                    "entity_column": "customer_id",
+                    "time_column": "event_date",
+                },
+            },
+            "relationships": [],
+            "primary_entity_dataset": "events",
+            "event_datasets": ["events"],
+            "aggregation_windows": ["7d", "30d"],
+        }
+        (findings_dir / "multi_dataset_findings.yaml").write_text(yaml.dump(multi_dataset))
+        recs = {
+            "sources": {
+                "events": {
+                    "source_file": "/data/events.csv",
+                    "null_handling": [],
+                    "outlier_handling": [],
+                    "type_conversions": [],
+                    "deduplication": [],
+                    "filtering": filters,
+                    "text_processing": [],
+                    "modeling_strategy": [],
+                },
+            },
+        }
+        (findings_dir / "recommendations.yaml").write_text(yaml.dump(recs))
+        return findings_dir
+
+    def test_reads_non_negative_filter(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import PipelineTransformationType
+
+        filters = [{
+            "id": "rec_filter_001",
+            "layer": "bronze",
+            "category": "filtering",
+            "action": "non_negative",
+            "target_column": "amount",
+            "parameters": {"condition": "non_negative"},
+            "rationale": "Filter negative amounts",
+            "source_notebook": "04_column_deep_dive",
+            "priority": 1,
+        }]
+        findings_dir = self._make_event_findings_with_filters(tmp_path, filters)
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        assert "events" in config.bronze_event
+        filter_steps = [s for s in config.bronze_event["events"].pre_shaping
+                        if s.type == PipelineTransformationType.FILTER]
+        assert len(filter_steps) == 1
+        assert filter_steps[0].column == "amount"
+        assert filter_steps[0].parameters["condition"] == "non_negative"
+
+    def test_reads_range_filter(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import PipelineTransformationType
+
+        filters = [{
+            "id": "rec_filter_002",
+            "layer": "bronze",
+            "category": "filtering",
+            "action": "range",
+            "target_column": "amount",
+            "parameters": {"condition": "range", "min_value": 0, "max_value": 10000},
+            "rationale": "Cap amount range",
+            "source_notebook": "04_column_deep_dive",
+            "priority": 1,
+        }]
+        findings_dir = self._make_event_findings_with_filters(tmp_path, filters)
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        filter_steps = [s for s in config.bronze_event["events"].pre_shaping
+                        if s.type == PipelineTransformationType.FILTER]
+        assert len(filter_steps) == 1
+        assert filter_steps[0].parameters["min_value"] == 0
+        assert filter_steps[0].parameters["max_value"] == 10000
+
+    def test_no_filter_steps_without_registry(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import PipelineTransformationType
+
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+        events_findings = {
+            "source_path": "/data/events.csv",
+            "source_format": "csv",
+            "row_count": 500,
+            "column_count": 3,
+            "columns": {
+                "customer_id": {
+                    "name": "customer_id", "inferred_type": "identifier",
+                    "confidence": 0.9, "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": [],
+                },
+                "event_date": {
+                    "name": "event_date", "inferred_type": "datetime",
+                    "confidence": 0.9, "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": [],
+                },
+                "target": {
+                    "name": "target", "inferred_type": "binary",
+                    "confidence": 0.9, "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": [],
+                },
+            },
+            "target_column": "target",
+            "identifier_columns": ["customer_id"],
+            "time_series_metadata": {
+                "time_column": "event_date",
+                "entity_column": "customer_id",
+            },
+        }
+        (findings_dir / "events_findings.yaml").write_text(yaml.dump(events_findings))
+        multi_dataset = {
+            "datasets": {
+                "events": {
+                    "name": "events",
+                    "findings_path": "events_findings.yaml",
+                    "source_path": "/data/events.csv",
+                    "granularity": "event_level",
+                    "row_count": 500,
+                    "column_count": 3,
+                    "entity_column": "customer_id",
+                    "time_column": "event_date",
+                },
+            },
+            "relationships": [],
+            "primary_entity_dataset": "events",
+            "event_datasets": ["events"],
+            "aggregation_windows": ["7d", "30d"],
+        }
+        (findings_dir / "multi_dataset_findings.yaml").write_text(yaml.dump(multi_dataset))
+        parser = FindingsParser(str(findings_dir))
+        config = parser.parse()
+
+        filter_steps = [s for s in config.bronze_event["events"].pre_shaping
+                        if s.type == PipelineTransformationType.FILTER]
+        assert len(filter_steps) == 0

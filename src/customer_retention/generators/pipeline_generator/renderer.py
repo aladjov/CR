@@ -29,6 +29,7 @@ SECTION_MAP = {
     PipelineTransformationType.FEATURE_SELECT: "Feature Selection Recommendations",
     PipelineTransformationType.DERIVED_COLUMN: "Feature Engineering Recommendations",
     PipelineTransformationType.TYPE_CAST: "Data Consistency Checks",
+    PipelineTransformationType.FILTER: "Data Quality Filters",
 }
 
 ANCHOR_MAP = {
@@ -65,6 +66,7 @@ DEFAULT_NOTEBOOK_MAP = {
     PipelineTransformationType.SCALE: "05_relationship_analysis",
     PipelineTransformationType.FEATURE_SELECT: "05_relationship_analysis",
     PipelineTransformationType.DERIVED_COLUMN: "05_relationship_analysis",
+    PipelineTransformationType.FILTER: "04_column_deep_dive",
 }
 
 
@@ -126,6 +128,7 @@ class StepGrouper:
         PipelineTransformationType.CAP_THEN_LOG: "apply_cap_then_log_transforms",
         PipelineTransformationType.YEO_JOHNSON: "apply_power_transforms",
         PipelineTransformationType.FEATURE_SELECT: "apply_feature_selection",
+        PipelineTransformationType.FILTER: "apply_filters",
     }
 
     _DERIVED_ACTION_TO_FUNC = {
@@ -1669,7 +1672,19 @@ TIME_COLUMN = "{{ config.time_column }}"
 
 def apply_pre_shaping(df: pd.DataFrame) -> pd.DataFrame:
 {% if config.deduplicate %}
+{% if config.deduplicate is not true and config.deduplicate.strategy is defined and config.deduplicate.strategy == "keep_most_complete" %}
+{% if config.deduplicate.conflict_columns %}
+    _subset = {{ config.deduplicate.conflict_columns }}
+{% else %}
+    _subset = [ENTITY_COLUMN, TIME_COLUMN]
+{% endif %}
+    _null_counts = df[df.columns.difference(_subset)].isnull().sum(axis=1)
+    df = df.assign(_null_count=_null_counts).sort_values("_null_count").drop_duplicates(subset=_subset, keep="first").drop(columns=["_null_count"])
+{% elif config.deduplicate is not true and config.deduplicate.conflict_columns is defined and config.deduplicate.conflict_columns %}
+    df = df.drop_duplicates(subset={{ config.deduplicate.conflict_columns }}, keep="first")
+{% else %}
     df = df.drop_duplicates(subset=[ENTITY_COLUMN, TIME_COLUMN], keep="first")
+{% endif %}
 {% endif %}
 {%- if pre_groups %}
 {%- for func_name, steps in pre_groups %}
@@ -2505,6 +2520,18 @@ def render_step_call(step: TransformationStep, fit_mode: bool = True) -> str:
             return f"apply_derived_interaction(df, '{col}', col_a='{col_a}', col_b='{col_b}')"
         if action == "composite":
             return f"apply_derived_composite(df, '{col}', columns={p.get('columns', [])})"
+    if t == PipelineTransformationType.FILTER:
+        condition = p.get("condition", "non_negative")
+        if condition == "non_negative":
+            return f"df[df['{col}'] >= 0]"
+        if condition == "range":
+            min_val = p.get("min_value", 0)
+            max_val = p.get("max_value", 1000000)
+            return f"df[(df['{col}'] >= {min_val}) & (df['{col}'] <= {max_val})]"
+        if condition == "valid_values":
+            valid = p.get("valid_values", [])
+            return f"df[df['{col}'].isin({valid})]"
+        return f"df[df['{col}'].notna()]"
     raise ValueError(f"Unknown transformation type: {step.type}")
 
 

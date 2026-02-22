@@ -16,6 +16,7 @@ from .models import (
     BronzeEventConfig,
     BronzeLayerConfig,
     DatetimeDerivationConfig,
+    DeduplicationConfig,
     GoldLayerConfig,
     HistoryWindowConfig,
     LabelTimestampConfig,
@@ -71,6 +72,8 @@ class FindingsParser:
         self._build_landing_configs(config, multi_dataset, source_findings)
         self._build_discovered_landing_configs(config, discovered_events, multi_dataset)
         self._build_bronze_event_configs(config, multi_dataset, source_findings, discovered_events)
+        if recommendations_registry:
+            self._apply_event_recommendations(config, recommendations_registry)
         self._reconcile_discovered_event_transforms(config, discovered_events)
         return config
 
@@ -377,8 +380,15 @@ class FindingsParser:
         self, config: PipelineConfig, registry: RecommendationRegistry, multi: MultiDatasetFindings
     ) -> None:
         self._apply_bronze_recommendations(config, registry)
+        self._apply_imbalance_recommendations(config, registry)
         self._apply_silver_recommendations(config, registry)
         self._apply_gold_recommendations(config, registry)
+
+    def _apply_event_recommendations(
+        self, config: PipelineConfig, registry: RecommendationRegistry
+    ) -> None:
+        self._apply_dedup_recommendations(config, registry)
+        self._apply_filter_recommendations(config, registry)
 
     def _apply_bronze_recommendations(self, config: PipelineConfig, registry: RecommendationRegistry) -> None:
         sources_to_process = dict(registry.sources)
@@ -397,6 +407,76 @@ class FindingsParser:
                 if step:
                     target_bronze.transformations.append(step)
             target_bronze.transformations = self._deduplicate_steps(target_bronze.transformations)
+
+    def _apply_imbalance_recommendations(self, config: PipelineConfig, registry: RecommendationRegistry) -> None:
+        all_sources = dict(registry.sources)
+        if not all_sources and hasattr(registry, "bronze") and registry.bronze is not None:
+            all_sources = {"_default": registry.bronze}
+        for _source_name, bronze_recs in all_sources.items():
+            for rec in bronze_recs.modeling_strategy:
+                if rec.category == "imbalance":
+                    if config.training is None:
+                        config.training = TrainingConfig()
+                    config.training.imbalance_strategy = rec.action
+                    ratio = rec.parameters.get("imbalance_ratio")
+                    if ratio is not None:
+                        config.training.imbalance_ratio = float(ratio)
+                    return
+
+    def _apply_dedup_recommendations(self, config: PipelineConfig, registry: RecommendationRegistry) -> None:
+        all_sources = dict(registry.sources)
+        if not all_sources and hasattr(registry, "bronze") and registry.bronze is not None:
+            all_sources = {"_default": registry.bronze}
+        for source_name, bronze_recs in all_sources.items():
+            if not bronze_recs.deduplication:
+                continue
+            rec = bronze_recs.deduplication[0]
+            dedup_config = DeduplicationConfig(
+                strategy=rec.action,
+                conflict_columns=rec.parameters.get("conflict_columns", []),
+            )
+            target_event = self._find_event_config_for_source(config, source_name, bronze_recs.source_file)
+            if target_event is not None:
+                target_event.deduplicate = dedup_config
+
+    def _find_event_config_for_source(
+        self, config: PipelineConfig, source_name: str, source_file: str
+    ) -> Optional[BronzeEventConfig]:
+        if source_name in config.bronze_event:
+            return config.bronze_event[source_name]
+        source_path = Path(source_file) if source_file else None
+        for _name, event_cfg in config.bronze_event.items():
+            if source_path and Path(event_cfg.source.path).name == source_path.name:
+                return event_cfg
+            if source_path and Path(event_cfg.source.raw_source_path).name == source_path.name:
+                return event_cfg
+        if len(config.bronze_event) == 1:
+            return next(iter(config.bronze_event.values()))
+        return None
+
+    def _apply_filter_recommendations(self, config: PipelineConfig, registry: RecommendationRegistry) -> None:
+        all_sources = dict(registry.sources)
+        if not all_sources and hasattr(registry, "bronze") and registry.bronze is not None:
+            all_sources = {"_default": registry.bronze}
+        for source_name, bronze_recs in all_sources.items():
+            for rec in bronze_recs.filtering:
+                step = self._map_bronze_filter(rec)
+                if step:
+                    target_bronze = self._find_bronze_config_for_source(config, source_name, bronze_recs.source_file)
+                    if target_bronze is not None:
+                        target_bronze.transformations.append(step)
+                    target_event = self._find_event_config_for_source(config, source_name, bronze_recs.source_file)
+                    if target_event is not None:
+                        target_event.pre_shaping.append(step)
+
+    def _map_bronze_filter(self, rec) -> Optional[TransformationStep]:
+        return TransformationStep(
+            type=PipelineTransformationType.FILTER,
+            column=rec.target_column,
+            parameters=dict(rec.parameters),
+            rationale=rec.rationale,
+            source_notebook=rec.source_notebook,
+        )
 
     @staticmethod
     def _deduplicate_steps(steps: List[TransformationStep]) -> List[TransformationStep]:

@@ -21,6 +21,7 @@ class PipelineTransformationType(Enum):
     CAP_THEN_LOG = "cap_then_log"
     FEATURE_SELECT = "feature_select"
     DERIVED_COLUMN = "derived_column"
+    FILTER = "filter"
 
 
 @dataclass
@@ -166,11 +167,18 @@ class DatetimeDerivationConfig:
 
 
 @dataclass
+class DeduplicationConfig:
+    strategy: str = "keep_first"
+    key_columns: List[str] = field(default_factory=list)
+    conflict_columns: List[str] = field(default_factory=list)
+
+
+@dataclass
 class BronzeEventConfig:
     source: SourceConfig
     entity_column: str
     time_column: str
-    deduplicate: bool = False
+    deduplicate: Any = False
     pre_shaping: List[TransformationStep] = field(default_factory=list)
     aggregation: Optional[AggregationWindowConfig] = None
     lifecycle: Optional[LifecycleConfig] = None

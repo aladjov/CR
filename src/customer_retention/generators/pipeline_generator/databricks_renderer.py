@@ -141,6 +141,20 @@ def _dispatch_scale(col, p):
     return _scale_standard(col, p)
 
 
+def _filter_step(col, p):
+    condition = p.get("condition", "non_negative")
+    if condition == "non_negative":
+        return f'df.filter(F.col("{col}") >= 0)'
+    if condition == "range":
+        min_val = p.get("min_value", 0)
+        max_val = p.get("max_value", 1000000)
+        return f'df.filter(F.col("{col}").between({min_val}, {max_val}))'
+    if condition == "valid_values":
+        valid = p.get("valid_values", [])
+        return f'df.filter(F.col("{col}").isin({valid}))'
+    return f'df.filter(F.col("{col}").isNotNull())'
+
+
 def _dispatch_derived(col, p):
     action = p.get("action", "ratio")
     if action == "ratio":
@@ -168,6 +182,7 @@ _SPARK_REGISTRY = {
     PipelineTransformationType.SCALE: _dispatch_scale,
     PipelineTransformationType.FEATURE_SELECT: _feature_select,
     PipelineTransformationType.DERIVED_COLUMN: _dispatch_derived,
+    PipelineTransformationType.FILTER: _filter_step,
 }
 
 
@@ -385,6 +400,16 @@ def add_cohort_features(df, raw_df):
     df = df.join(first_event.select(entity_col, "cohort_year", "cohort_quarter"), on=entity_col, how="left")
     return df
 {% endif %}
+{% if config.lifecycle.momentum_pairs %}
+def add_momentum_ratios(df):
+{% for pair in config.lifecycle.momentum_pairs %}
+    short_col = "event_count_{{ pair.short_window }}"
+    long_col = "event_count_{{ pair.long_window }}"
+    if short_col in df.columns and long_col in df.columns:
+        df = df.withColumn("momentum_{{ pair.short_window }}_{{ pair.long_window }}", F.col(short_col) / F.when(F.col(long_col) != 0, F.col(long_col)).otherwise(F.lit(None)))
+{% endfor %}
+    return df
+{% endif %}
 def enrich_lifecycle(df):
     raw_table = bronze_table("{{ source }}")
     raw_df = spark.table(raw_table)
@@ -406,6 +431,9 @@ def enrich_lifecycle(df):
 {% endif %}
 {% if config.lifecycle.include_cohort_features %}
     df = add_cohort_features(df, raw_df)
+{% endif %}
+{% if config.lifecycle.momentum_pairs %}
+    df = add_momentum_ratios(df)
 {% endif %}
     return df
 {% endif %}
@@ -490,9 +518,27 @@ def {{ func_name }}(df):
 
 {% if config.deduplicate %}
 def deduplicate(df):
+{% if config.deduplicate is not true and config.deduplicate.strategy is defined and config.deduplicate.strategy == "keep_most_complete" %}
+    _all_cols = [f.name for f in df.schema.fields if f.name not in (ENTITY_COLUMN, TIME_COLUMN)]
+    _null_expr = sum(F.when(F.col(c).isNull(), 1).otherwise(0) for c in _all_cols) if _all_cols else F.lit(0)
+    df = df.withColumn("_null_count", _null_expr)
+{% if config.deduplicate.conflict_columns %}
+    _partition_cols = {{ config.deduplicate.conflict_columns }}
+{% else %}
+    _partition_cols = [ENTITY_COLUMN, TIME_COLUMN]
+{% endif %}
+    window = Window.partitionBy(*_partition_cols).orderBy(F.col("_null_count").asc(), F.monotonically_increasing_id())
+    df = df.withColumn("_row_num", F.row_number().over(window))
+    df = df.filter(F.col("_row_num") == 1).drop("_row_num", "_null_count")
+{% elif config.deduplicate is not true and config.deduplicate.conflict_columns is defined and config.deduplicate.conflict_columns %}
+    window = Window.partitionBy(*{{ config.deduplicate.conflict_columns }}).orderBy(F.monotonically_increasing_id())
+    df = df.withColumn("_row_num", F.row_number().over(window))
+    df = df.filter(F.col("_row_num") == 1).drop("_row_num")
+{% else %}
     window = Window.partitionBy(ENTITY_COLUMN, TIME_COLUMN).orderBy(F.monotonically_increasing_id())
     df = df.withColumn("_row_num", F.row_number().over(window))
     df = df.filter(F.col("_row_num") == 1).drop("_row_num")
+{% endif %}
     return df
 {% endif %}
 
@@ -779,6 +825,16 @@ def add_cohort_features(df):
     df = df.join(first_event.select(ENTITY_COLUMN, "cohort_year", "cohort_quarter"), on=ENTITY_COLUMN, how="left")
     return df
 {% endif %}
+{% if config.lifecycle.momentum_pairs %}
+def add_momentum_ratios(df):
+{% for pair in config.lifecycle.momentum_pairs %}
+    short_col = "event_count_{{ pair.short_window }}"
+    long_col = "event_count_{{ pair.long_window }}"
+    if short_col in df.columns and long_col in df.columns:
+        df = df.withColumn("momentum_{{ pair.short_window }}_{{ pair.long_window }}", F.col(short_col) / F.when(F.col(long_col) != 0, F.col(long_col)).otherwise(F.lit(None)))
+{% endfor %}
+    return df
+{% endif %}
 def enrich_lifecycle(df):
 {% if config.lifecycle.include_recency_bucket %}
     df = add_recency_tenure(df)
@@ -795,6 +851,9 @@ def enrich_lifecycle(df):
 {% endif %}
 {% if config.lifecycle.include_cohort_features %}
     df = add_cohort_features(df)
+{% endif %}
+{% if config.lifecycle.momentum_pairs %}
+    df = add_momentum_ratios(df)
 {% endif %}
     return df
 {% endif %}
@@ -1047,6 +1106,9 @@ from pyspark.sql import functions as F
 {% if config.training and config.training.split_strategy == "temporal" %}
 from customer_retention.stages.modeling.data_splitter import DataSplitter, SplitStrategy
 {% endif %}
+{% if config.training and config.training.imbalance_strategy == "smote" %}
+from imblearn.over_sampling import SMOTE
+{% endif %}
 
 # COMMAND ----------
 
@@ -1104,10 +1166,34 @@ def train_and_evaluate():
     mlflow.set_experiment(f"/Shared/{PIPELINE_NAME}")
     mlflow.set_tag("composite_name", COMPOSITE_NAME)
 
+{% if config.training and config.training.imbalance_strategy == "class_weight" %}
+    label_counts = train_df.groupBy("label").count().collect()
+    total = sum(row["count"] for row in label_counts)
+    n_classes = len(label_counts)
+    weight_map = {row["label"]: total / (n_classes * row["count"]) for row in label_counts}
+    from pyspark.sql.functions import udf
+    from pyspark.sql.types import DoubleType
+    weight_udf = udf(lambda label: float(weight_map.get(label, 1.0)), DoubleType())
+    train_df = train_df.withColumn("class_weight", weight_udf(F.col("label")))
+{% endif %}
+{% if config.training and config.training.imbalance_strategy == "smote" %}
+    train_pdf = train_df.toPandas()
+    smote = SMOTE(random_state=42)
+    X_resampled, y_resampled = smote.fit_resample(
+        train_pdf["features"].apply(lambda v: v.toArray()).tolist(),
+        train_pdf["label"],
+    )
+    import pandas as pd
+    from pyspark.ml.linalg import Vectors
+    resampled_pdf = pd.DataFrame({"features": [Vectors.dense(x) for x in X_resampled], "label": y_resampled})
+    train_df = spark.createDataFrame(resampled_pdf)
+{% endif %}
+
+{% set weight_param = ', weightCol="class_weight"' if config.training and config.training.imbalance_strategy == "class_weight" else '' %}
     models = {
-        "LogisticRegression": LogisticRegression(maxIter=100, featuresCol="features", labelCol="label"),
-        "RandomForest": RandomForestClassifier(numTrees=100, featuresCol="features", labelCol="label"),
-        "GBTClassifier": GBTClassifier(maxIter=50, featuresCol="features", labelCol="label"),
+        "LogisticRegression": LogisticRegression(maxIter=100, featuresCol="features", labelCol="label"{{ weight_param }}),
+        "RandomForest": RandomForestClassifier(numTrees=100, featuresCol="features", labelCol="label"{{ weight_param }}),
+        "GBTClassifier": GBTClassifier(maxIter=50, featuresCol="features", labelCol="label"{{ weight_param }}),
     }
 
     best_model_name = None

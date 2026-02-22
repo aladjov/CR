@@ -347,3 +347,43 @@ class TestPipelineConfigBronzeEvent:
         )
         assert "events" in cfg.bronze_event
         assert cfg.bronze_event["events"].entity_column == "cid"
+
+
+class TestDeduplicationConfig:
+    def test_defaults(self):
+        from customer_retention.generators.pipeline_generator.models import DeduplicationConfig
+        cfg = DeduplicationConfig()
+        assert cfg.strategy == "keep_first"
+        assert cfg.key_columns == []
+        assert cfg.conflict_columns == []
+
+    def test_custom_values(self):
+        from customer_retention.generators.pipeline_generator.models import DeduplicationConfig
+        cfg = DeduplicationConfig(
+            strategy="keep_most_complete",
+            key_columns=["customer_id", "event_date"],
+            conflict_columns=["amount"],
+        )
+        assert cfg.strategy == "keep_most_complete"
+        assert cfg.key_columns == ["customer_id", "event_date"]
+        assert cfg.conflict_columns == ["amount"]
+
+    def test_bronze_event_config_accepts_dedup_config(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeEventConfig,
+            DeduplicationConfig,
+            SourceConfig,
+        )
+        src = SourceConfig(name="e", path="e.csv", format="csv", entity_key="cid")
+        dedup = DeduplicationConfig(strategy="keep_most_complete")
+        be = BronzeEventConfig(source=src, entity_column="cid", time_column="ts", deduplicate=dedup)
+        assert be.deduplicate.strategy == "keep_most_complete"
+
+    def test_bronze_event_config_backward_compat_bool(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeEventConfig,
+            SourceConfig,
+        )
+        src = SourceConfig(name="e", path="e.csv", format="csv", entity_key="cid")
+        be = BronzeEventConfig(source=src, entity_column="cid", time_column="ts", deduplicate=True)
+        assert be.deduplicate is True

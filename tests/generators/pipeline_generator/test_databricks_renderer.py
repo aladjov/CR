@@ -575,6 +575,51 @@ class TestDatabricksRenderTraining:
         assert "Classifier" in result or "model" in result.lower()
 
 
+class TestDatabricksRenderTrainingImbalance:
+    def _make_config_with_imbalance(self, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale, strategy):
+        from customer_retention.generators.pipeline_generator.models import TrainingConfig
+        silver = SilverLayerConfig(joins=silver_with_join.joins, aggregations=[])
+        gold = GoldLayerConfig(
+            encodings=gold_with_encode_scale.encodings,
+            scalings=gold_with_encode_scale.scalings,
+        )
+        config = PipelineConfig(
+            name="test_pipeline",
+            target_column="churn",
+            sources=[entity_source, event_source],
+            bronze={"customers": bronze_with_impute},
+            bronze_event={},
+            silver=silver,
+            gold=gold,
+            output_dir="/output",
+            composite_name="test__abc1234",
+            training=TrainingConfig(imbalance_strategy=strategy, imbalance_ratio=5.0),
+        )
+        return config
+
+    def test_training_class_weight_adds_weight_col(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
+        config = self._make_config_with_imbalance(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale, "class_weight")
+        result = renderer.render_training(config)
+        assert "weightCol" in result or "weight" in result.lower()
+        assert "class_weight" in result.lower() or "balanced" in result.lower() or "weight_col" in result
+
+    def test_training_smote_adds_resampling(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
+        config = self._make_config_with_imbalance(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale, "smote")
+        result = renderer.render_training(config)
+        assert "SMOTE" in result or "smote" in result.lower()
+
+    def test_training_imbalance_is_valid_python(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
+        for strategy in ("class_weight", "smote"):
+            config = self._make_config_with_imbalance(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale, strategy)
+            result = renderer.render_training(config)
+            ast.parse(result)
+
+    def test_training_no_imbalance_when_no_config(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "weightCol" not in result
+        assert "SMOTE" not in result
+
+
 class TestDatabricksRenderRunner:
     def test_render_runner_returns_string(self, renderer, sample_pipeline_config):
         result = renderer.render_runner(sample_pipeline_config)
@@ -1271,3 +1316,240 @@ class TestDatabricksDatetimeDerivation:
         )
         code = renderer.render_bronze_event("events", config)
         assert "derive_datetime_features" not in code
+
+
+class TestDatabricksFilterStep:
+    def test_filter_non_negative(self, renderer):
+        from customer_retention.generators.pipeline_generator.databricks_renderer import render_spark_step_call
+        step = TransformationStep(
+            type=PipelineTransformationType.FILTER,
+            column="amount",
+            parameters={"condition": "non_negative"},
+            rationale="Filter negative amounts",
+        )
+        result = render_spark_step_call(step)
+        assert "amount" in result
+        assert ">= 0" in result
+
+    def test_filter_range(self, renderer):
+        from customer_retention.generators.pipeline_generator.databricks_renderer import render_spark_step_call
+        step = TransformationStep(
+            type=PipelineTransformationType.FILTER,
+            column="age",
+            parameters={"condition": "range", "min_value": 0, "max_value": 120},
+            rationale="Filter out-of-range ages",
+        )
+        result = render_spark_step_call(step)
+        assert "age" in result
+        assert "0" in result
+        assert "120" in result
+
+    def test_filter_valid_values(self, renderer):
+        from customer_retention.generators.pipeline_generator.databricks_renderer import render_spark_step_call
+        step = TransformationStep(
+            type=PipelineTransformationType.FILTER,
+            column="status",
+            parameters={"condition": "valid_values", "valid_values": [0, 1]},
+            rationale="Validate binary column",
+        )
+        result = render_spark_step_call(step)
+        assert "status" in result
+        assert "isin" in result.lower() or "when" in result.lower()
+
+    def test_filter_in_bronze_event_template(self, renderer):
+        source = SourceConfig(
+            name="events", path="/data/events.csv", format="csv",
+            entity_key="customer_id", time_column="event_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="event_date",
+            pre_shaping=[
+                TransformationStep(
+                    type=PipelineTransformationType.FILTER,
+                    column="amount",
+                    parameters={"condition": "non_negative"},
+                    rationale="Filter negative amounts",
+                ),
+            ],
+        )
+        code = renderer.render_bronze_event("events", config)
+        assert "amount" in code
+        assert ">= 0" in code
+        ast.parse(code)
+
+
+class TestDatabricksDeduplication:
+    def test_basic_dedup_with_bool_true(self, renderer):
+        source = SourceConfig(
+            name="events", path="/data/events.csv", format="csv",
+            entity_key="customer_id", time_column="event_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="event_date",
+            deduplicate=True,
+        )
+        code = renderer.render_bronze_event("events", config)
+        assert "deduplicate" in code
+        assert "row_number" in code
+
+    def test_dedup_keep_first(self, renderer):
+        from customer_retention.generators.pipeline_generator.models import DeduplicationConfig
+        source = SourceConfig(
+            name="events", path="/data/events.csv", format="csv",
+            entity_key="customer_id", time_column="event_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="event_date",
+            deduplicate=DeduplicationConfig(strategy="keep_first"),
+        )
+        code = renderer.render_bronze_event("events", config)
+        assert "deduplicate" in code
+        assert "row_number" in code
+        ast.parse(code)
+
+    def test_dedup_keep_most_complete(self, renderer):
+        from customer_retention.generators.pipeline_generator.models import DeduplicationConfig
+        source = SourceConfig(
+            name="events", path="/data/events.csv", format="csv",
+            entity_key="customer_id", time_column="event_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="event_date",
+            deduplicate=DeduplicationConfig(strategy="keep_most_complete"),
+        )
+        code = renderer.render_bronze_event("events", config)
+        assert "deduplicate" in code
+        assert "null_count" in code or "isNull" in code.lower() or "isnull" in code.lower()
+        ast.parse(code)
+
+    def test_dedup_with_conflict_columns(self, renderer):
+        from customer_retention.generators.pipeline_generator.models import DeduplicationConfig
+        source = SourceConfig(
+            name="events", path="/data/events.csv", format="csv",
+            entity_key="customer_id", time_column="event_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="event_date",
+            deduplicate=DeduplicationConfig(
+                strategy="keep_first",
+                conflict_columns=["customer_id", "event_date", "amount"],
+            ),
+        )
+        code = renderer.render_bronze_event("events", config)
+        assert "deduplicate" in code
+        assert "amount" in code
+        ast.parse(code)
+
+    def test_no_dedup_when_false(self, renderer):
+        source = SourceConfig(
+            name="events", path="/data/events.csv", format="csv",
+            entity_key="customer_id", time_column="event_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="event_date",
+            deduplicate=False,
+        )
+        code = renderer.render_bronze_event("events", config)
+        assert "deduplicate" not in code
+
+
+class TestDatabricksMomentumRatios:
+    def test_bronze_entity_includes_momentum_ratios(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="order_date",
+            lifecycle=LifecycleConfig(
+                include_recency_bucket=True,
+                momentum_pairs=[
+                    {"short_window": "7d", "long_window": "30d"},
+                    {"short_window": "30d", "long_window": "90d"},
+                ],
+            ),
+            post_shaping=[],
+        )
+        result = renderer.render_bronze_entity(
+            "orders_aggregated", config, "orders", "orders",
+        )
+        assert "add_momentum_ratios" in result
+        assert "momentum_7d_30d" in result
+        assert "momentum_30d_90d" in result
+        assert "event_count_7d" in result
+        assert "event_count_30d" in result
+
+    def test_bronze_entity_momentum_uses_safe_division(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="order_date",
+            lifecycle=LifecycleConfig(
+                momentum_pairs=[{"short_window": "7d", "long_window": "30d"}],
+            ),
+            post_shaping=[],
+        )
+        result = renderer.render_bronze_entity(
+            "orders_aggregated", config, "orders", "orders",
+        )
+        assert "F.when" in result
+        assert "!= 0" in result
+
+    def test_bronze_entity_no_momentum_without_pairs(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="order_date",
+            lifecycle=LifecycleConfig(include_recency_bucket=True),
+            post_shaping=[],
+        )
+        result = renderer.render_bronze_entity(
+            "orders_aggregated", config, "orders", "orders",
+        )
+        assert "add_momentum_ratios" not in result
+
+    def test_bronze_standalone_entity_momentum(self, renderer):
+        source = SourceConfig(
+            name="customers", path="/data/customers.csv", format="csv",
+            entity_key="customer_id",
+        )
+        config = BronzeLayerConfig(
+            source=source,
+            transformations=[],
+            lifecycle=LifecycleConfig(
+                include_recency_bucket=True,
+                momentum_pairs=[
+                    {"short_window": "7d", "long_window": "30d"},
+                ],
+            ),
+            entity_column="customer_id",
+            time_column="order_date",
+        )
+        result = renderer.render_bronze("customers", config)
+        assert "add_momentum_ratios" in result
+        assert "momentum_7d_30d" in result
+
+    def test_bronze_entity_momentum_is_valid_python(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="order_date",
+            lifecycle=LifecycleConfig(
+                include_recency_bucket=True,
+                momentum_pairs=[
+                    {"short_window": "7d", "long_window": "30d"},
+                    {"short_window": "30d", "long_window": "90d"},
+                ],
+            ),
+            post_shaping=[],
+        )
+        result = renderer.render_bronze_entity(
+            "orders_aggregated", config, "orders", "orders",
+        )
+        ast.parse(result)
