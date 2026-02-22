@@ -13,7 +13,9 @@ precision = 2
 show_missing = True
 skip_covered = False
 skip_empty = True
-fail_under = 90
+; fail_under is controlled by CLI flags:
+;   pytest.ini  -> --cov-fail-under=90  (local development)
+;   ci.yaml     -> --cov-fail-under=75  (GitHub Actions)
 
 exclude_lines =
     pragma: no cover
