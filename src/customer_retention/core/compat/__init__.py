@@ -465,6 +465,43 @@ def _spark_pairwise_corr(df: Any, cols: list[str]) -> _pandas.DataFrame:
     return _pandas.DataFrame(matrix, columns=cols, index=cols)
 
 
+def bulk_corr_with_target(df: Any, columns: list[str], target_column: str) -> dict[str, float]:
+    import math
+    if target_column not in df.columns:
+        return {}
+    valid = [c for c in columns if c in df.columns and c != target_column]
+    if not valid:
+        return {}
+    if not _is_spark_pandas(df):
+        target_float = df[target_column].astype(float)
+        result: dict[str, float] = {}
+        for c in valid:
+            try:
+                result[c] = df[c].astype(float).corr(target_float)
+            except (ValueError, TypeError):
+                result[c] = math.nan
+        return result
+    return _spark_bulk_corr_with_target(df, valid, target_column)
+
+
+def _spark_bulk_corr_with_target(df: Any, columns: list[str], target_column: str) -> dict[str, float]:
+    import math
+
+    import pyspark.sql.functions as F  # noqa: N812
+    spark_df = df[columns + [target_column]].to_spark()
+    _BATCH = 500
+    result: dict[str, float] = {}
+    for start in range(0, len(columns), _BATCH):
+        batch = columns[start:start + _BATCH]
+        exprs = [F.corr(F.col(c).cast("double"), F.col(target_column).cast("double")).alias(f"c_{i}")
+                 for i, c in enumerate(batch)]
+        row = spark_df.select(*exprs).head()
+        for i, c in enumerate(batch):
+            val = row[f"c_{i}"]
+            result[c] = float(val) if val is not None else math.nan
+    return result
+
+
 __all__ = [
     "pd",
     "native_pd",
@@ -534,4 +571,5 @@ __all__ = [
     "safe_sample",
     "safe_describe",
     "batched_corr_matrix",
+    "bulk_corr_with_target",
 ]

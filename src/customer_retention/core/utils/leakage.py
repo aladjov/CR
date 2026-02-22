@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import FrozenSet, List, Optional, Set, Tuple
 
-from customer_retention.core.compat import DataFrame, Series
+from customer_retention.core.compat import DataFrame, Series, bulk_corr_with_target
 
 from ..components.enums import Severity
 
@@ -81,18 +81,17 @@ def classify_separation(overlap_pct: float, thresholds: LeakageThresholds = DEFA
 def _null_correlated_columns(
     df: "DataFrame",
     columns: List[str],
-    target_series: "Series",
+    target_column: str,
     threshold: float,
 ) -> List[str]:
-    leaking: List[str] = []
-    for col in columns:
-        null_indicator = df[col].isna().astype(float)
-        if null_indicator.nunique() < 2:
-            continue
-        corr = null_indicator.corr(target_series.astype(float))
-        if abs(corr) >= threshold:
-            leaking.append(col)
-    return leaking
+    if not columns:
+        return []
+    alias_map = {f"__null_{col}": col for col in columns}
+    null_df = df[[target_column]].copy()
+    for alias, col in alias_map.items():
+        null_df[alias] = df[col].isna().astype(float)
+    corrs = bulk_corr_with_target(null_df, list(alias_map.keys()), target_column)
+    return [alias_map[a] for a in alias_map if abs(corrs.get(a, 0.0)) >= threshold]
 
 
 def detect_target_leaking_datetime_columns(
@@ -103,12 +102,7 @@ def detect_target_leaking_datetime_columns(
 ) -> List[str]:
     if not target_column or not datetime_columns:
         return []
-    return _null_correlated_columns(
-        df,
-        datetime_columns,
-        df[target_column],
-        null_correlation_threshold,
-    )
+    return _null_correlated_columns(df, datetime_columns, target_column, null_correlation_threshold)
 
 
 def detect_leaking_features(
@@ -125,23 +119,14 @@ def detect_leaking_features(
     available = [c for c in feature_columns if c in df.columns]
     if not available:
         return []
-    target_series = df[target_column].astype(float)
     null_leakers = set(
-        _null_correlated_columns(df, available, target_series, null_correlation_threshold),
+        _null_correlated_columns(df, available, target_column, null_correlation_threshold),
     )
-    value_leakers: Set[str] = set()
-    for col in available:
-        if col in null_leakers:
-            continue
-        try:
-            col_float = df[col].astype(float)
-        except (ValueError, TypeError):
-            continue
-        if col_float.nunique() < 2:
-            continue
-        corr = col_float.corr(target_series)
-        if abs(corr) >= value_correlation_threshold:
-            value_leakers.add(col)
+    value_candidates = [c for c in available if c not in null_leakers]
+    if not value_candidates:
+        return [col for col in feature_columns if col in null_leakers]
+    corrs = bulk_corr_with_target(df, value_candidates, target_column)
+    value_leakers = {col for col, val in corrs.items() if abs(val) >= value_correlation_threshold}
     combined = null_leakers | value_leakers
     return [col for col in feature_columns if col in combined]
 
