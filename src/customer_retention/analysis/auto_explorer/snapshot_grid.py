@@ -40,6 +40,7 @@ CADENCE_DAYS = {
     CadenceInterval.WEEKLY: 7,
     CadenceInterval.BIWEEKLY: 14,
     CadenceInterval.MONTHLY: 30,
+    CadenceInterval.BIMONTHLY: 60,
 }
 
 

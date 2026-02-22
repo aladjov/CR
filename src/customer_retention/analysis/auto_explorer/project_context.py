@@ -42,6 +42,7 @@ class CadenceInterval(str, Enum):
     WEEKLY = "weekly"
     BIWEEKLY = "biweekly"
     MONTHLY = "monthly"
+    BIMONTHLY = "bimonthly"
 
 
 class SplitStrategy(str, Enum):

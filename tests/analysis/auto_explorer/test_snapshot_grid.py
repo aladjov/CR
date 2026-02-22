@@ -190,7 +190,7 @@ class TestCadenceToDays:
         assert grid.cadence_to_days() == 30
 
     def test_loop_invariant_all_values(self):
-        expected = {"daily": 1, "weekly": 7, "biweekly": 14, "monthly": 30}
+        expected = {"daily": 1, "weekly": 7, "biweekly": 14, "monthly": 30, "bimonthly": 60}
         for cadence in CadenceInterval:
             grid = _minimal_grid(cadence_interval=cadence)
             assert grid.cadence_to_days() == expected[cadence.value]
@@ -793,3 +793,4 @@ class TestCadenceDaysPublicConstant:
         assert CADENCE_DAYS[CadenceInterval.WEEKLY] == 7
         assert CADENCE_DAYS[CadenceInterval.BIWEEKLY] == 14
         assert CADENCE_DAYS[CadenceInterval.MONTHLY] == 30
+        assert CADENCE_DAYS[CadenceInterval.BIMONTHLY] == 60

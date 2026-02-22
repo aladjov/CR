@@ -46,7 +46,7 @@ Notebook 00 sets six control variables that drive all downstream temporal behavi
 | `observation_window_days` | 270 | Same as `recent_window_days` (kept in sync). |
 | `purge_gap_days` | 104 | Days between the last feature date and the start of the label window. Prevents time leakage from delayed data. |
 | `label_window_days` | 90 | How many days after the purge gap to observe the outcome. |
-| `cadence_interval` | weekly | How often to take snapshots: daily, weekly, biweekly, or monthly. |
+| `cadence_interval` | weekly | How often to take snapshots: daily, weekly, biweekly, monthly, or bimonthly. |
 | `temporal_split` | true | Whether to use time-ordered train/test splits (vs random). |
 | `split_strategy` | temporal | `temporal` for time-ordered splits, `cohort_based` for renewal-contract cohorts. |
 
