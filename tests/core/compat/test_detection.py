@@ -112,10 +112,15 @@ class TestCrSparkRemoteEnvVar:
         mock_dbs_module = MagicMock()
         mock_dbs_module.DatabricksSession.builder = mock_builder
 
-        orig_spark = det._SPARK_PANDAS_AVAILABLE
         try:
             with patch.dict(os.environ, {"CR_SPARK_REMOTE": "1"}):
-                with patch.dict("sys.modules", {"databricks.connect": mock_dbs_module}):
+                with patch.dict("sys.modules", {
+                    "pyspark": MagicMock(),
+                    "pyspark.pandas": MagicMock(),
+                    "pyspark.sql": MagicMock(),
+                    "databricks": MagicMock(),
+                    "databricks.connect": mock_dbs_module,
+                }):
                     importlib.reload(det)
                     mock_builder.getOrCreate.assert_called_once()
         finally:
@@ -132,7 +137,13 @@ class TestCrSparkRemoteEnvVar:
 
         try:
             with patch.dict(os.environ, {"CR_SPARK_REMOTE": "1"}):
-                with patch.dict("sys.modules", {"databricks.connect": mock_dbs_module}):
+                with patch.dict("sys.modules", {
+                    "pyspark": MagicMock(),
+                    "pyspark.pandas": MagicMock(),
+                    "pyspark.sql": MagicMock(),
+                    "databricks": MagicMock(),
+                    "databricks.connect": mock_dbs_module,
+                }):
                     with warnings.catch_warnings(record=True) as w:
                         warnings.simplefilter("always")
                         importlib.reload(det)

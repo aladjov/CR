@@ -203,7 +203,7 @@ class TestSparkBackendDeltaFallback:
 
 class TestCompatConcatNativePandas:
     def test_concat_native_pandas_series_when_pd_is_pyspark(self, monkeypatch):
-        import pyspark.pandas as ps
+        ps = pytest.importorskip("pyspark.pandas")
 
         import customer_retention.core.compat as compat
 
@@ -216,7 +216,7 @@ class TestCompatConcatNativePandas:
         assert isinstance(result, pd.Series)
 
     def test_concat_native_pandas_dataframes_when_pd_is_pyspark(self, monkeypatch):
-        import pyspark.pandas as ps
+        ps = pytest.importorskip("pyspark.pandas")
 
         import customer_retention.core.compat as compat
 

@@ -190,6 +190,7 @@ class TestDistributedScoringPipelineDatabricks:
         mock_spark.table.return_value.toPandas.assert_not_called()
 
     def test_export_to_delta_uses_normalize(self, databricks_scoring_config, gold_features_df):
+        pytest.importorskip("pyspark")
         from customer_retention.core.compat import normalize_timestamp_columns, pandas_dtype_to_spark_schema
 
         predictions_df = pd.DataFrame({
