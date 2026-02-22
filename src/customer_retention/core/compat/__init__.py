@@ -415,11 +415,11 @@ def safe_select(conditions: list, choices: list, default: Any = "") -> Any:
     import numpy as np
     if not conditions or not any(_is_spark_pandas(c) for c in conditions):
         return np.select(conditions, choices, default=default)
-    all_false = conditions[0] & ~conditions[0]
-    result = conditions[0].where(all_false, default)
+    from pyspark.sql import functions as F  # noqa: N812
+    expr = F.lit(default)
     for cond, label in reversed(list(zip(conditions, choices))):
-        result = result.mask(cond, label)
-    return result
+        expr = F.when(cond.spark.column, F.lit(label)).otherwise(expr)
+    return conditions[0].spark.transform(lambda _: expr)
 
 
 def safe_describe(df: Any) -> Any:

@@ -79,6 +79,58 @@ class TestSafeSelect:
         assert list(result) == ["null", "null", "null"]
 
 
+@pytest.mark.databricks
+class TestSafeSelectSparkPandas:
+
+    def _to_spark_series(self, s):
+        import pyspark.pandas as ps
+        return ps.from_pandas(s)
+
+    def test_spark_nan_conditions_string_labels(self):
+        from customer_retention.core.compat import safe_select
+        s = self._to_spark_series(pd.Series([0.9, None, 0.1, 0.5, None]))
+        conditions = [s.isna(), s >= 0.7, s >= 0.3]
+        choices = ["Unknown", "High", "Medium"]
+        result = safe_select(conditions, choices, default="Low")
+        assert list(result.to_pandas()) == ["High", "Unknown", "Low", "Medium", "Unknown"]
+
+    def test_spark_engagement_segmentation(self):
+        from customer_retention.core.compat import safe_select
+        score = self._to_spark_series(pd.Series([0.8, None, 0.2, 0.5]))
+        conditions = [score.isna(), score >= 0.7, score >= 0.3]
+        choices = ["Unknown", "High_Engagement", "Medium_Engagement"]
+        result = safe_select(conditions, choices, default="Low_Engagement")
+        expected = ["High_Engagement", "Unknown", "Low_Engagement", "Medium_Engagement"]
+        assert list(result.to_pandas()) == expected
+
+    def test_spark_boolean_and_or_conditions(self):
+        import pyspark.pandas as ps
+
+        from customer_retention.core.compat import safe_select
+        df = ps.from_pandas(pd.DataFrame({"val": [100, 200, 50, 300], "freq": [1, 10, 8, 2]}))
+        high_val = df["val"] >= 150
+        high_freq = df["freq"] >= 5
+        conditions = [high_val & high_freq, high_val & ~high_freq, ~high_val & high_freq]
+        choices = ["HV_HF", "HV_LF", "LV_HF"]
+        result = safe_select(conditions, choices, default="LV_LF")
+        assert list(result.to_pandas()) == ["LV_LF", "HV_HF", "LV_HF", "HV_LF"]
+
+    def test_spark_all_default(self):
+        from customer_retention.core.compat import safe_select
+        s = self._to_spark_series(pd.Series([1, 2, 3]))
+        conditions = [s > 10]
+        result = safe_select(conditions, ["match"], default="no_match")
+        assert list(result.to_pandas()) == ["no_match", "no_match", "no_match"]
+
+    def test_spark_first_condition_wins(self):
+        from customer_retention.core.compat import safe_select
+        s = self._to_spark_series(pd.Series([1, 2, 3]))
+        conditions = [s > 0, s > 1]
+        choices = ["first", "second"]
+        result = safe_select(conditions, choices, default="none")
+        assert list(result.to_pandas()) == ["first", "first", "first"]
+
+
 class TestSafeSelectInAllExports:
 
     def test_safe_select_in_compat_all(self):
