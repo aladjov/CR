@@ -339,3 +339,17 @@ class TestDetectLeakingFeatures:
         df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
         result = detect_leaking_features(df, ["a"], "missing_target")
         assert result == []
+
+    def test_no_nulls_columns_do_not_crash(self):
+        df = pd.DataFrame({
+            "complete_a": [1.0, 2, 3, 4, 5, 6],
+            "complete_b": [10.0, 20, 30, 40, 50, 60],
+            "partial": [np.nan, np.nan, np.nan, 1.0, 2.0, 3.0],
+            "churned": [0, 0, 0, 1, 1, 1],
+        })
+        result = detect_leaking_features(
+            df, ["complete_a", "complete_b", "partial"], "churned",
+        )
+        assert "partial" in result
+        assert "complete_a" not in result
+        assert "complete_b" not in result

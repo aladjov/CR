@@ -12,6 +12,7 @@ import plotly.graph_objects as go
 from customer_retention.core.compat import (
     DataFrame,
     Series,
+    batched_corr_matrix,
     safe_memory_usage_bytes,
     safe_to_datetime,
     safe_to_list,
@@ -161,7 +162,8 @@ class ChartBuilder:
         return fig
 
     def correlation_heatmap(self, df: DataFrame, method: str = "pearson") -> go.Figure:
-        corr = df.corr(method=method)
+        numeric_cols = list(df.select_dtypes(include=["number"]).columns)
+        corr = batched_corr_matrix(df, numeric_cols)
         fig = go.Figure(go.Heatmap(z=corr.to_numpy(), x=list(corr.columns), y=list(corr.columns), colorscale="RdBu", zmid=0))
         fig.update_layout(
             title=f"Correlation Matrix ({method})",

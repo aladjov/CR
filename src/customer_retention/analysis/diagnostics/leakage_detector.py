@@ -9,7 +9,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
 
-from customer_retention.core.compat import DataFrame, Series, pd
+from customer_retention.core.compat import DataFrame, Series, bulk_corr_with_target, pd
 from customer_retention.core.components.enums import Severity
 from customer_retention.core.utils.leakage import TEMPORAL_METADATA_COLUMNS, calculate_class_overlap
 
@@ -62,9 +62,12 @@ class LeakageDetector:
     def _get_numeric_columns(self, X: DataFrame) -> List[str]:
         return [c for c in self._get_analyzable_columns(X) if X[c].dtype in self.NUMERIC_DTYPES]
 
-    def _safe_correlation(self, X: DataFrame, col: str, y: Series) -> float:
-        corr = abs(X[col].corr(y))
-        return 0.0 if np.isnan(corr) else corr
+    def _batch_correlations(self, X: DataFrame, columns: List[str], y: Series) -> dict:
+        _TARGET = "__ld_target__"
+        combined = X[columns].copy()
+        combined[_TARGET] = y
+        return {k: abs(v) if not np.isnan(v) else 0.0
+                for k, v in bulk_corr_with_target(combined, columns, _TARGET).items()}
 
     def _build_result(self, checks: List[LeakageCheck]) -> LeakageResult:
         critical = [c for c in checks if c.severity == Severity.CRITICAL]
@@ -72,8 +75,9 @@ class LeakageDetector:
 
     def check_correlations(self, X: DataFrame, y: Series) -> LeakageResult:
         checks = []
-        for col in self._get_numeric_columns(X):
-            corr = self._safe_correlation(X, col, y)
+        numeric_cols = self._get_numeric_columns(X)
+        corrs = self._batch_correlations(X, numeric_cols, y) if numeric_cols else {}
+        for col, corr in corrs.items():
             severity, check_id = self._classify_correlation(corr)
             if severity != Severity.INFO:
                 checks.append(LeakageCheck(
@@ -129,10 +133,9 @@ class LeakageDetector:
 
     def check_temporal_logic(self, X: DataFrame, y: Series) -> LeakageResult:
         checks = []
-        for col in self._get_numeric_columns(X):
-            if not self.TEMPORAL_PATTERNS.search(col):
-                continue
-            corr = self._safe_correlation(X, col, y)
+        temporal_cols = [c for c in self._get_numeric_columns(X) if self.TEMPORAL_PATTERNS.search(c)]
+        corrs = self._batch_correlations(X, temporal_cols, y) if temporal_cols else {}
+        for col, corr in corrs.items():
             if corr > self.CORRELATION_HIGH:
                 checks.append(LeakageCheck(
                     check_id="LD022", feature=col, severity=Severity.HIGH,
@@ -298,26 +301,21 @@ class LeakageDetector:
 
     def _check_perfect_correlation(self, X: DataFrame, y: Series, target_name: str, checks: List[LeakageCheck]) -> None:
         already_flagged = {target_name} | {c.feature for c in checks}
-        for col in self._get_numeric_columns(X):
-            if col in already_flagged:
-                continue
-            try:
-                corr = abs(X[col].corr(y))
-                if not np.isnan(corr) and corr > 0.99:
-                    checks.append(LeakageCheck(
-                        check_id="LD052", feature=col, severity=Severity.CRITICAL,
-                        recommendation=f"REMOVE {col}: Perfect correlation ({corr:.4f}) indicates leakage.",
-                        correlation=corr,
-                    ))
-            except Exception:
-                pass
+        candidates = [c for c in self._get_numeric_columns(X) if c not in already_flagged]
+        corrs = self._batch_correlations(X, candidates, y) if candidates else {}
+        for col, corr in corrs.items():
+            if corr > 0.99:
+                checks.append(LeakageCheck(
+                    check_id="LD052", feature=col, severity=Severity.CRITICAL,
+                    recommendation=f"REMOVE {col}: Perfect correlation ({corr:.4f}) indicates leakage.",
+                    correlation=corr,
+                ))
 
     def check_cross_entity_leakage(self, X: DataFrame, y: Series, entity_column: str, timestamp_column: str) -> LeakageResult:
         checks = []
-        for col in self._get_numeric_columns(X):
-            if not self.CROSS_ENTITY_PATTERNS.search(col):
-                continue
-            corr = self._safe_correlation(X, col, y)
+        cross_cols = [c for c in self._get_numeric_columns(X) if self.CROSS_ENTITY_PATTERNS.search(c)]
+        corrs = self._batch_correlations(X, cross_cols, y) if cross_cols else {}
+        for col, corr in corrs.items():
             severity = Severity.HIGH if corr > self.CORRELATION_MEDIUM else Severity.MEDIUM
             checks.append(LeakageCheck(
                 check_id="LD060", feature=col, severity=severity,
@@ -354,10 +352,9 @@ class LeakageDetector:
 
     def check_domain_target_patterns(self, X: DataFrame, y: Series) -> LeakageResult:
         checks = []
-        for col in self._get_numeric_columns(X):
-            if not self.DOMAIN_TARGET_PATTERNS.search(col):
-                continue
-            corr = self._safe_correlation(X, col, y)
+        domain_cols = [c for c in self._get_numeric_columns(X) if self.DOMAIN_TARGET_PATTERNS.search(c)]
+        corrs = self._batch_correlations(X, domain_cols, y) if domain_cols else {}
+        for col, corr in corrs.items():
             severity, recommendation = self._classify_domain_pattern(col, corr)
             checks.append(LeakageCheck(
                 check_id="LD053", feature=col, severity=severity,

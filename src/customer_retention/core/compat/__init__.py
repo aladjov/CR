@@ -429,13 +429,15 @@ def batched_corr_matrix(df: Any, columns: list[str]) -> _pandas.DataFrame:
     return _spark_pairwise_corr(df, valid_cols)
 
 
+def _safe_corr_expr(col_a: str, col_b: str) -> Any:
+    import pyspark.sql.functions as F  # noqa: N812
+    denom = F.stddev_samp(col_a) * F.stddev_samp(col_b)
+    return F.when(denom > 0, F.covar_samp(col_a, col_b) / denom)
+
+
 def _spark_pairwise_corr(df: Any, cols: list[str]) -> _pandas.DataFrame:
     import numpy as _np
     import pyspark.sql.functions as F  # noqa: N812
-
-    def _safe_corr(col_a: str, col_b: str) -> Any:
-        denom = F.stddev_samp(col_a) * F.stddev_samp(col_b)
-        return F.when(denom > 0, F.covar_samp(col_a, col_b) / denom)
 
     spark_df = df[cols].to_spark()
     n = len(cols)
@@ -454,7 +456,7 @@ def _spark_pairwise_corr(df: Any, cols: list[str]) -> _pandas.DataFrame:
     _BATCH = 500
     for start in range(0, len(pairs), _BATCH):
         batch = pairs[start:start + _BATCH]
-        exprs = [_safe_corr(cols[i], cols[j]).alias(f"c_{i}_{j}") for i, j in batch]
+        exprs = [_safe_corr_expr(cols[i], cols[j]).alias(f"c_{i}_{j}") for i, j in batch]
         row = spark_df.select(*exprs).head()
         for i, j in batch:
             val = row[f"c_{i}_{j}"]
@@ -486,15 +488,12 @@ def bulk_corr_with_target(df: Any, columns: list[str], target_column: str) -> di
 
 def _spark_bulk_corr_with_target(df: Any, columns: list[str], target_column: str) -> dict[str, float]:
     import math
-
-    import pyspark.sql.functions as F  # noqa: N812
     spark_df = df[columns + [target_column]].to_spark()
     _BATCH = 500
     result: dict[str, float] = {}
     for start in range(0, len(columns), _BATCH):
         batch = columns[start:start + _BATCH]
-        exprs = [F.corr(F.col(c).cast("double"), F.col(target_column).cast("double")).alias(f"c_{i}")
-                 for i, c in enumerate(batch)]
+        exprs = [_safe_corr_expr(c, target_column).alias(f"c_{i}") for i, c in enumerate(batch)]
         row = spark_df.select(*exprs).head()
         for i, c in enumerate(batch):
             val = row[f"c_{i}"]

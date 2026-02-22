@@ -101,3 +101,24 @@ class TestBulkCorrWithTarget:
         result = bulk_corr_with_target(df, ["a", "t"], "t")
         assert "t" not in result
         assert "a" in result
+
+    def test_all_constant_columns_returns_all_nan(self):
+        df = pd.DataFrame({
+            "c1": [0.0, 0, 0, 0],
+            "c2": [1.0, 1, 1, 1],
+            "c3": [7.0, 7, 7, 7],
+            "t": [0.0, 1, 0, 1],
+        })
+        result = bulk_corr_with_target(df, ["c1", "c2", "c3"], "t")
+        for col in ["c1", "c2", "c3"]:
+            assert math.isnan(result[col])
+
+    def test_null_indicators_all_zero_returns_nan(self):
+        df = pd.DataFrame({
+            "no_nulls_indicator": [0.0, 0, 0, 0, 0, 0],
+            "has_nulls_indicator": [0.0, 0, 1, 1, 0, 0],
+            "t": [0.0, 1, 0, 1, 0, 1],
+        })
+        result = bulk_corr_with_target(df, ["no_nulls_indicator", "has_nulls_indicator"], "t")
+        assert math.isnan(result["no_nulls_indicator"])
+        assert not math.isnan(result["has_nulls_indicator"])

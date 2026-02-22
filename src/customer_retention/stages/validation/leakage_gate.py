@@ -1,7 +1,16 @@
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from customer_retention.core.compat import DataFrame, Timestamp, as_tz_naive, is_numeric_dtype, notna, to_datetime
+from customer_retention.core.compat import (
+    DataFrame,
+    Timestamp,
+    as_tz_naive,
+    bulk_corr_with_target,
+    is_numeric_dtype,
+    notna,
+    to_datetime,
+)
 from customer_retention.core.components.enums import Severity
 
 if TYPE_CHECKING:
@@ -120,15 +129,8 @@ class LeakageGate:
         numeric_features = [c for c in feature_cols if is_numeric_dtype(df[c])]
         if not numeric_features or self.target_column not in df.columns:
             return {}
-        correlations = {}
-        for feature in numeric_features:
-            try:
-                corr = df[feature].corr(df[self.target_column])
-                if notna(corr):
-                    correlations[feature] = corr
-            except Exception:
-                continue
-        return correlations
+        raw = bulk_corr_with_target(df, numeric_features, self.target_column)
+        return {k: v for k, v in raw.items() if not math.isnan(v)}
 
     def _create_correlation_issues(self, correlations: Dict[str, float]) -> List[LeakageIssue]:
         issues = []

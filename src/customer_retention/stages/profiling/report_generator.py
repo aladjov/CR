@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from customer_retention.core.compat import pd
+from customer_retention.core.compat import batched_corr_matrix, pd
 from customer_retention.core.config import ColumnType
 
 from .profile_result import ProfileResult
@@ -189,8 +189,7 @@ class ReportGenerator:
         if len(numeric_cols_in_df) < 2:
             return None
 
-        # Calculate correlations
-        corr_matrix = df[numeric_cols_in_df].corr()
+        corr_matrix = batched_corr_matrix(df, numeric_cols_in_df)
 
         # Convert to dictionary
         correlations = {
