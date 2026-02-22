@@ -9,9 +9,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-import numpy as np
-
-from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype, timedelta_to_days, to_datetime
+from customer_retention.core.compat import (
+    DataFrame,
+    is_datetime64_any_dtype,
+    safe_select,
+    timedelta_to_days,
+    to_datetime,
+)
 
 
 class SegmentationType(Enum):
@@ -120,7 +124,7 @@ class CustomerSegmenter:
         high_freq = df_result[frequency_column] >= frequency_threshold
         conditions = [high_val & high_freq, high_val & ~high_freq, ~high_val & high_freq]
         labels = ["High_Value_Frequent", "High_Value_Infrequent", "Low_Value_Frequent"]
-        df_result[output_column] = np.select(conditions, labels, default="Low_Value_Infrequent")
+        df_result[output_column] = safe_select(conditions, labels, default="Low_Value_Infrequent")
 
         # Build result
         distribution = df_result[output_column].value_counts().to_dict()
@@ -215,7 +219,7 @@ class CustomerSegmenter:
         days = df_result[days_since_column]
         conditions = [days.isna(), days <= active_days, days <= recent_days, days <= lapsing_days]
         labels = ["Unknown", f"Active_{active_days}d", f"Recent_{recent_days}d", f"Lapsing_{lapsing_days}d"]
-        df_result[output_column] = np.select(conditions, labels, default=f"Dormant_{lapsing_days}d+")
+        df_result[output_column] = safe_select(conditions, labels, default=f"Dormant_{lapsing_days}d+")
 
         # Build result
         distribution = df_result[output_column].value_counts().to_dict()
@@ -285,7 +289,7 @@ class CustomerSegmenter:
         score = df_result[engagement_column]
         conditions = [score.isna(), score >= high_threshold, score >= low_threshold]
         labels = ["Unknown", "High_Engagement", "Medium_Engagement"]
-        df_result[output_column] = np.select(conditions, labels, default="Low_Engagement")
+        df_result[output_column] = safe_select(conditions, labels, default="Low_Engagement")
 
         # Build result
         distribution = df_result[output_column].value_counts().to_dict()
@@ -425,7 +429,7 @@ class CustomerSegmenter:
         days = df_result[f"{prefix}tenure_days"]
         conditions = [days.isna() | (days < 0), days <= 90, days <= 180, days <= 365]
         labels = ["Unknown", "New_0_3m", "Growing_3_6m", "Established_6_12m"]
-        df_result[f"{prefix}tenure_bucket"] = np.select(conditions, labels, default="Mature_12m+")
+        df_result[f"{prefix}tenure_bucket"] = safe_select(conditions, labels, default="Mature_12m+")
 
         return df_result
 

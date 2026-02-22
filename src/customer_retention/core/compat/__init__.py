@@ -411,6 +411,17 @@ def safe_sample(df: Any, n: int, random_state: int = 42) -> Any:
     return df.sample(n=n, random_state=random_state)
 
 
+def safe_select(conditions: list, choices: list, default: Any = "") -> Any:
+    import numpy as np
+    if not conditions or not any(_is_spark_pandas(c) for c in conditions):
+        return np.select(conditions, choices, default=default)
+    all_false = conditions[0] & ~conditions[0]
+    result = conditions[0].where(all_false, default)
+    for cond, label in reversed(list(zip(conditions, choices))):
+        result = result.mask(cond, label)
+    return result
+
+
 def safe_describe(df: Any) -> Any:
     try:
         return df.describe()
@@ -727,6 +738,7 @@ __all__ = [
     "RemotePath",
     "make_path",
     "safe_sample",
+    "safe_select",
     "safe_describe",
     "batched_corr_matrix",
     "bulk_corr_with_target",

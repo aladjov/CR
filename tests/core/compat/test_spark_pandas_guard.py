@@ -12,15 +12,17 @@ from pathlib import Path
 
 import pytest
 
-PROFILING_DIR = (
+_STAGES_ROOT = (
     Path(__file__).resolve().parents[3]
     / "src"
     / "customer_retention"
     / "stages"
-    / "profiling"
 )
 
-ALLOWLISTED_FILES = {"window_recommendation.py", "spark_segment_analyzer.py"}
+PROFILING_DIR = _STAGES_ROOT / "profiling"
+FEATURES_DIR = _STAGES_ROOT / "features"
+
+ALLOWLISTED_FILES = {"window_recommendation.py", "spark_segment_analyzer.py", "feature_manifest.py"}
 
 _STRING_LITERAL = re.compile(r'''("""[\s\S]*?"""|'''  r"""'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')""")
 
@@ -55,6 +57,11 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
         ".sample(n=) is not supported in pyspark.pandas",
         "Use safe_sample() from core.compat",
     ),
+    (
+        re.compile(r"np\.select\("),
+        "np.select() calls __iter__() on pyspark.pandas Series",
+        "Use safe_select() from core.compat",
+    ),
 ]
 
 
@@ -69,8 +76,14 @@ def _collect_profiling_files() -> list[Path]:
     )
 
 
-@pytest.mark.parametrize("source_file", _collect_profiling_files(), ids=lambda p: p.name)
-def test_no_dangerous_spark_pandas_patterns(source_file: Path):
+def _collect_features_files() -> list[Path]:
+    return sorted(
+        p for p in FEATURES_DIR.glob("*.py")
+        if p.name not in ALLOWLISTED_FILES and not p.name.startswith("__")
+    )
+
+
+def _check_file(source_file: Path) -> None:
     raw = source_file.read_text()
     cleaned = _strip_strings(raw)
 
@@ -85,3 +98,13 @@ def test_no_dangerous_spark_pandas_patterns(source_file: Path):
         f"\n{source_file.name} has pyspark.pandas-incompatible patterns:\n"
         + "\n".join(violations)
     )
+
+
+@pytest.mark.parametrize("source_file", _collect_profiling_files(), ids=lambda p: p.name)
+def test_no_dangerous_spark_pandas_patterns(source_file: Path):
+    _check_file(source_file)
+
+
+@pytest.mark.parametrize("source_file", _collect_features_files(), ids=lambda p: p.name)
+def test_no_dangerous_spark_pandas_patterns_features(source_file: Path):
+    _check_file(source_file)
