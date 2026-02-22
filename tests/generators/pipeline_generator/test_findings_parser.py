@@ -2566,6 +2566,138 @@ class TestLabelTimestampWithIntent:
         assert result is None
 
 
+class TestFilterRecommendationsSkipDerivedColumns:
+    def test_pre_shaping_skips_columns_not_in_raw_source(self):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            LayeredRecommendation,
+            RecommendationRegistry,
+        )
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeEventConfig,
+            PipelineConfig,
+            SourceConfig,
+        )
+
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {"events": {"customer_id", "sent_date", "opened"}}
+        parser._source_findings_paths = {}
+
+        source = SourceConfig(name="events", path="events.csv", format="csv", entity_key="customer_id", raw_source_path="/data/events.csv")
+        config = PipelineConfig(name="test", target_column="churn", sources=[source], bronze={}, silver=None, gold=None, output_dir=".")
+        config.bronze_event["events"] = BronzeEventConfig(source=source, entity_column="customer_id", time_column="sent_date")
+
+        registry = RecommendationRegistry()
+        registry.add_source("events", "events.csv")
+        registry.sources["events"].filtering = [
+            LayeredRecommendation(id="f1", layer="bronze", category="filter", action="notna", target_column="opened", parameters={"condition": "notna"}, rationale="nulls", source_notebook="04"),
+            LayeredRecommendation(id="f2", layer="bronze", category="filter", action="notna", target_column="opened_velocity_pct", parameters={"condition": "notna"}, rationale="nulls", source_notebook="04"),
+        ]
+        parser._apply_filter_recommendations(config, registry)
+        pre_cols = [s.column for s in config.bronze_event["events"].pre_shaping]
+        assert "opened" in pre_cols
+        assert "opened_velocity_pct" not in pre_cols
+
+    def test_pre_shaping_allows_all_when_no_raw_index(self):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            LayeredRecommendation,
+            RecommendationRegistry,
+        )
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeEventConfig,
+            PipelineConfig,
+            SourceConfig,
+        )
+
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {}
+        parser._source_findings_paths = {}
+
+        source = SourceConfig(name="events", path="events.csv", format="csv", entity_key="customer_id", raw_source_path="/data/events.csv")
+        config = PipelineConfig(name="test", target_column="churn", sources=[source], bronze={}, silver=None, gold=None, output_dir=".")
+        config.bronze_event["events"] = BronzeEventConfig(source=source, entity_column="customer_id", time_column="sent_date")
+
+        registry = RecommendationRegistry()
+        registry.add_source("events", "events.csv")
+        registry.sources["events"].filtering = [
+            LayeredRecommendation(id="f1", layer="bronze", category="filter", action="notna", target_column="velocity_pct", parameters={"condition": "notna"}, rationale="nulls", source_notebook="04"),
+        ]
+        parser._apply_filter_recommendations(config, registry)
+        pre_cols = [s.column for s in config.bronze_event["events"].pre_shaping]
+        assert "velocity_pct" in pre_cols
+
+    def test_default_source_resolves_to_event_name(self):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            BronzeRecommendations,
+            LayeredRecommendation,
+            RecommendationRegistry,
+        )
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeEventConfig,
+            BronzeLayerConfig,
+            PipelineConfig,
+            SourceConfig,
+        )
+
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {"events": {"customer_id", "sent_date", "opened"}}
+        parser._source_findings_paths = {}
+
+        source = SourceConfig(name="events", path="events.csv", format="csv", entity_key="customer_id", raw_source_path="/data/events.csv")
+        config = PipelineConfig(name="test", target_column="churn", sources=[source], bronze={}, silver=None, gold=None, output_dir=".")
+        config.bronze_event["events"] = BronzeEventConfig(source=source, entity_column="customer_id", time_column="sent_date")
+        config.bronze["events"] = BronzeLayerConfig(source=source)
+
+        registry = RecommendationRegistry()
+        registry.bronze = BronzeRecommendations(source_file="events.csv")
+        registry.bronze.filtering = [
+            LayeredRecommendation(id="f1", layer="bronze", category="filter", action="notna", target_column="opened", parameters={"condition": "notna"}, rationale="nulls", source_notebook="04"),
+            LayeredRecommendation(id="f2", layer="bronze", category="filter", action="notna", target_column="opened_velocity_pct", parameters={"condition": "notna"}, rationale="nulls", source_notebook="04"),
+        ]
+        parser._apply_filter_recommendations(config, registry)
+        pre_cols = [s.column for s in config.bronze_event["events"].pre_shaping]
+        assert "opened" in pre_cols
+        assert "opened_velocity_pct" not in pre_cols
+        bronze_cols = [s.column for s in config.bronze["events"].transformations]
+        assert "opened" in bronze_cols
+        assert "opened_velocity_pct" not in bronze_cols
+
+
+class TestBuildTrainingConfigWithIntent:
+    def _make_parser_with_intent(self, intent):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._intent = intent
+        return parser
+
+    def _empty_multi(self):
+        from customer_retention.analysis.auto_explorer.exploration_manager import MultiDatasetFindings
+        return MultiDatasetFindings()
+
+    def test_temporal_split_strategy(self):
+        from customer_retention.analysis.auto_explorer.project_context import IntentConfig, SplitStrategy
+        intent = IntentConfig(split_strategy=SplitStrategy.TEMPORAL)
+        parser = self._make_parser_with_intent(intent)
+        result = parser._build_training_config(self._empty_multi(), {})
+        assert result is not None
+        assert result.split_strategy == "temporal"
+
+    def test_cohort_based_split_strategy(self):
+        from customer_retention.analysis.auto_explorer.project_context import IntentConfig, SplitStrategy
+        intent = IntentConfig(split_strategy=SplitStrategy.COHORT_BASED)
+        parser = self._make_parser_with_intent(intent)
+        result = parser._build_training_config(self._empty_multi(), {})
+        assert result is not None
+        assert result.split_strategy == "cohort_based"
+
+    def test_default_split_without_intent_returns_none(self):
+        parser = self._make_parser_with_intent(None)
+        result = parser._build_training_config(self._empty_multi(), {})
+        assert result is None
+
+
 class TestAggregationConfigSeparatesNumericAndCategorical:
     def test_numeric_columns_only_in_value_columns(self, tmp_path):
         from customer_retention.analysis.auto_explorer.findings import (

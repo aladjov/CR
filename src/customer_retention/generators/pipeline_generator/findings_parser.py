@@ -55,12 +55,14 @@ class FindingsParser:
         self._namespace = namespace
         self._intent = intent
         self._source_findings_paths: Dict[str, Path] = {}
+        self._raw_source_columns: Dict[str, Set[str]] = {}
 
     def parse(self) -> PipelineConfig:
         multi_dataset = self._load_multi_dataset_findings()
         selected_sources = list(multi_dataset.datasets.keys())
         source_findings = self._load_source_findings(selected_sources, self._findings_dir, multi_dataset)
         discovered_events = self._discover_event_sources(source_findings)
+        self._index_raw_source_columns(discovered_events)
         recommendations_registry = self._load_recommendations()
         recommendations_hash = (
             recommendations_registry.compute_recommendations_hash() if recommendations_registry else None
@@ -76,6 +78,10 @@ class FindingsParser:
             self._apply_event_recommendations(config, recommendations_registry)
         self._reconcile_discovered_event_transforms(config, discovered_events)
         return config
+
+    def _index_raw_source_columns(self, discovered_events: Dict[str, ExplorationFindings]) -> None:
+        for name, findings in discovered_events.items():
+            self._raw_source_columns[name] = set(findings.columns.keys())
 
     def _load_recommendations(self) -> Optional[RecommendationRegistry]:
         if self._namespace is not None:
@@ -461,13 +467,27 @@ class FindingsParser:
         for source_name, bronze_recs in all_sources.items():
             for rec in bronze_recs.filtering:
                 step = self._map_bronze_filter(rec)
-                if step:
-                    target_bronze = self._find_bronze_config_for_source(config, source_name, bronze_recs.source_file)
-                    if target_bronze is not None:
-                        target_bronze.transformations.append(step)
-                    target_event = self._find_event_config_for_source(config, source_name, bronze_recs.source_file)
-                    if target_event is not None:
-                        target_event.pre_shaping.append(step)
+                if not step:
+                    continue
+                target_event = self._find_event_config_for_source(config, source_name, bronze_recs.source_file)
+                resolved = self._resolve_event_source_name(config, target_event) if target_event else source_name
+                if not self._column_in_raw_source(resolved, step.column):
+                    continue
+                target_bronze = self._find_bronze_config_for_source(config, source_name, bronze_recs.source_file)
+                if target_bronze is not None:
+                    target_bronze.transformations.append(step)
+                if target_event is not None:
+                    target_event.pre_shaping.append(step)
+
+    def _resolve_event_source_name(self, config: PipelineConfig, event_cfg: BronzeEventConfig) -> str:
+        for name, cfg in config.bronze_event.items():
+            if cfg is event_cfg:
+                return name
+        return event_cfg.source.name
+
+    def _column_in_raw_source(self, source_name: str, column: str) -> bool:
+        raw_cols = self._raw_source_columns.get(source_name)
+        return raw_cols is None or column in raw_cols
 
     def _map_bronze_filter(self, rec) -> Optional[TransformationStep]:
         return TransformationStep(
@@ -966,7 +986,7 @@ class FindingsParser:
         imbalance_strategy = "class_weight"
 
         if self._intent is not None:
-            from customer_retention.analysis.auto_explorer.intent import SplitStrategy
+            from customer_retention.analysis.auto_explorer.project_context import SplitStrategy
 
             if self._intent.split_strategy == SplitStrategy.TEMPORAL:
                 split_strategy = "temporal"

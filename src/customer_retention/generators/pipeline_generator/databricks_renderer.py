@@ -1135,27 +1135,26 @@ def prepare_features(df):
 def train_and_evaluate():
     df = load_training_data()
 {% if config.training and config.training.recommended_training_start %}
-    time_col = "{{ config.training.temporal_column or 'feature_timestamp' }}"
-    if time_col in df.columns:
-        df = df.filter(F.col(time_col) >= F.lit("{{ config.training.recommended_training_start }}"))
+    if TIMESTAMP_COLUMN in df.columns:
+        df = df.filter(F.col(TIMESTAMP_COLUMN) >= F.lit("{{ config.training.recommended_training_start }}"))
 {% endif %}
 {% if config.training and config.training.filter_future_dates %}
-    time_col = "{{ config.training.temporal_column or 'feature_timestamp' }}"
-    if time_col in df.columns:
-        df = df.filter(F.col(time_col) <= F.current_timestamp())
+    if TIMESTAMP_COLUMN in df.columns:
+        df = df.filter(F.col(TIMESTAMP_COLUMN) <= F.current_timestamp())
 {% endif %}
     assembled, feature_cols = prepare_features(df)
 {% if config.training and config.training.split_strategy == "temporal" %}
     pdf = assembled.toPandas()
     splitter = DataSplitter(
+        target_column=TARGET_COLUMN,
         strategy=SplitStrategy.TEMPORAL,
-        temporal_column="{{ config.training.temporal_column or 'feature_timestamp' }}",
+        temporal_column=TIMESTAMP_COLUMN,
 {% if config.training.purge_gap_days %}
         purge_gap_days={{ config.training.purge_gap_days }},
 {% endif %}
         test_size={{ config.training.test_size }},
     )
-    splits = splitter.split(pdf, "label")
+    splits = splitter.split(pdf)
     train_pdf, test_pdf = splits["X_train"], splits["X_test"]
     train_df = spark.createDataFrame(train_pdf)
     test_df = spark.createDataFrame(test_pdf)

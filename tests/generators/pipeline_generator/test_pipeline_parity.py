@@ -876,6 +876,16 @@ class TestTrainingTemplateLocal:
         result = renderer.render_training(pipeline_config_minimal)
         ast.parse(result)
 
+    def test_temporal_split_passes_target_column(self, renderer, pipeline_config_minimal):
+        pipeline_config_minimal.training = TrainingConfig(
+            split_strategy="temporal",
+            temporal_column="order_date",
+            test_size=0.2,
+        )
+        result = renderer.render_training(pipeline_config_minimal)
+        assert "target_column=TARGET_COLUMN" in result
+        assert "splitter.split(split_df)" in result
+
     def test_recommended_start_filter(self, renderer, pipeline_config_minimal):
         pipeline_config_minimal.training = TrainingConfig(
             recommended_training_start="2023-06-01",
@@ -910,6 +920,45 @@ class TestTrainingTemplateLocal:
         assert 'class_weight="balanced"' in result
         ast.parse(result)
 
+    def test_temporal_split_uses_feast_timestamp_col(self, renderer, pipeline_config_minimal):
+        pipeline_config_minimal.training = TrainingConfig(
+            split_strategy="temporal",
+            temporal_column="order_date",
+            test_size=0.2,
+        )
+        result = renderer.render_training(pipeline_config_minimal)
+        assert "temporal_column=FEAST_TIMESTAMP_COL" in result
+        assert 'temporal_column="order_date"' not in result
+        assert 'temporal_column="feature_timestamp"' not in result
+
+    def test_temporal_split_fallback_uses_feast_timestamp_col(self, renderer, pipeline_config_minimal):
+        pipeline_config_minimal.training = TrainingConfig(
+            split_strategy="temporal",
+            temporal_column=None,
+            test_size=0.2,
+        )
+        result = renderer.render_training(pipeline_config_minimal)
+        assert "temporal_column=FEAST_TIMESTAMP_COL" in result
+        assert "feature_timestamp" not in result
+
+    def test_recommended_start_uses_feast_timestamp_col(self, renderer, pipeline_config_minimal):
+        pipeline_config_minimal.training = TrainingConfig(
+            recommended_training_start="2023-06-01",
+            temporal_column="order_date",
+        )
+        result = renderer.render_training(pipeline_config_minimal)
+        assert "FEAST_TIMESTAMP_COL" in result
+        assert '"order_date"' not in result
+
+    def test_future_filter_uses_feast_timestamp_col(self, renderer, pipeline_config_minimal):
+        pipeline_config_minimal.training = TrainingConfig(
+            filter_future_dates=True,
+            temporal_column="order_date",
+        )
+        result = renderer.render_training(pipeline_config_minimal)
+        assert "FEAST_TIMESTAMP_COL" in result
+        assert '"order_date"' not in result
+
     def test_default_split_no_data_splitter(self, renderer, pipeline_config_minimal):
         result = renderer.render_training(pipeline_config_minimal)
         assert "DataSplitter" not in result
@@ -932,6 +981,15 @@ class TestTrainingTemplateDatabricks:
         assert "DataSplitter" in result
         assert "SplitStrategy" in result
         ast.parse(result)
+
+    def test_databricks_temporal_split_passes_target_column(self, databricks_renderer, pipeline_config_minimal):
+        pipeline_config_minimal.training = TrainingConfig(
+            split_strategy="temporal",
+            temporal_column="order_date",
+            test_size=0.2,
+        )
+        result = databricks_renderer.render_training(pipeline_config_minimal)
+        assert "target_column=TARGET_COLUMN" in result
 
     def test_databricks_temporal_split_has_purge_gap(self, databricks_renderer, pipeline_config_minimal):
         pipeline_config_minimal.training = TrainingConfig(
@@ -960,6 +1018,45 @@ class TestTrainingTemplateDatabricks:
         result = databricks_renderer.render_training(pipeline_config_minimal)
         assert "current_timestamp" in result
         ast.parse(result)
+
+    def test_databricks_temporal_split_uses_timestamp_column(self, databricks_renderer, pipeline_config_minimal):
+        pipeline_config_minimal.training = TrainingConfig(
+            split_strategy="temporal",
+            temporal_column="order_date",
+            test_size=0.2,
+        )
+        result = databricks_renderer.render_training(pipeline_config_minimal)
+        assert "temporal_column=TIMESTAMP_COLUMN" in result
+        assert 'temporal_column="order_date"' not in result
+        assert 'temporal_column="feature_timestamp"' not in result
+
+    def test_databricks_temporal_split_fallback_uses_timestamp_column(self, databricks_renderer, pipeline_config_minimal):
+        pipeline_config_minimal.training = TrainingConfig(
+            split_strategy="temporal",
+            temporal_column=None,
+            test_size=0.2,
+        )
+        result = databricks_renderer.render_training(pipeline_config_minimal)
+        assert "temporal_column=TIMESTAMP_COLUMN" in result
+        assert "feature_timestamp" not in result
+
+    def test_databricks_recommended_start_uses_timestamp_column(self, databricks_renderer, pipeline_config_minimal):
+        pipeline_config_minimal.training = TrainingConfig(
+            recommended_training_start="2023-06-01",
+            temporal_column="order_date",
+        )
+        result = databricks_renderer.render_training(pipeline_config_minimal)
+        assert "TIMESTAMP_COLUMN" in result
+        assert '"order_date"' not in result
+
+    def test_databricks_future_filter_uses_timestamp_column(self, databricks_renderer, pipeline_config_minimal):
+        pipeline_config_minimal.training = TrainingConfig(
+            filter_future_dates=True,
+            temporal_column="order_date",
+        )
+        result = databricks_renderer.render_training(pipeline_config_minimal)
+        assert "TIMESTAMP_COLUMN" in result
+        assert '"order_date"' not in result
 
     def test_databricks_default_random_split(self, databricks_renderer, pipeline_config_minimal):
         result = databricks_renderer.render_training(pipeline_config_minimal)

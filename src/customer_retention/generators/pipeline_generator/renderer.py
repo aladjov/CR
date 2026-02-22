@@ -1039,19 +1039,20 @@ def run_experiment():
     train_mask = y.notna()
     X, y = X.loc[train_mask], y.loc[train_mask]
 {% if config.training and config.training.recommended_training_start %}
-    if "{{ config.training.temporal_column or 'feature_timestamp' }}" in training_data.columns:
-        time_mask = training_data.loc[train_mask, "{{ config.training.temporal_column or 'feature_timestamp' }}"] >= pd.Timestamp("{{ config.training.recommended_training_start }}")
+    if FEAST_TIMESTAMP_COL in training_data.columns:
+        time_mask = training_data.loc[train_mask, FEAST_TIMESTAMP_COL] >= pd.Timestamp("{{ config.training.recommended_training_start }}")
         X, y = X.loc[time_mask], y.loc[time_mask]
 {% endif %}
 {% if config.training and config.training.filter_future_dates %}
-    if "{{ config.training.temporal_column or 'feature_timestamp' }}" in training_data.columns:
-        future_mask = training_data.loc[X.index, "{{ config.training.temporal_column or 'feature_timestamp' }}"] <= pd.Timestamp.now()
+    if FEAST_TIMESTAMP_COL in training_data.columns:
+        future_mask = training_data.loc[X.index, FEAST_TIMESTAMP_COL] <= pd.Timestamp.now()
         X, y = X.loc[future_mask], y.loc[future_mask]
 {% endif %}
 {% if config.training and config.training.split_strategy == "temporal" %}
     splitter = DataSplitter(
+        target_column=TARGET_COLUMN,
         strategy=SplitStrategy.TEMPORAL,
-        temporal_column="{{ config.training.temporal_column or 'feature_timestamp' }}",
+        temporal_column=FEAST_TIMESTAMP_COL,
 {% if config.training.purge_gap_days %}
         purge_gap_days={{ config.training.purge_gap_days }},
 {% endif %}
@@ -1061,7 +1062,7 @@ def run_experiment():
     split_df[TARGET_COLUMN] = y
     for col in X.columns:
         split_df[col] = X[col]
-    splits = splitter.split(split_df, TARGET_COLUMN)
+    splits = splitter.split(split_df)
     X_train, X_test = splits["X_train"][feature_names], splits["X_test"][feature_names]
     y_train, y_test = splits["y_train"], splits["y_test"]
 {% else %}
