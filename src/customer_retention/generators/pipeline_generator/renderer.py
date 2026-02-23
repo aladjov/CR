@@ -866,7 +866,8 @@ def run_gold_features():
 if __name__ == "__main__":
     run_gold_features()
 """,
-    "training.py.j2": '''import pandas as pd
+    "training.py.j2": '''import numpy as np
+import pandas as pd
 import mlflow
 import mlflow.sklearn
 import mlflow.xgboost
@@ -977,12 +978,13 @@ def prepare_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def compute_metrics(y_true, y_proba, y_pred) -> dict:
+    both_classes = len(np.unique(y_true)) > 1
     return {
-        "roc_auc": roc_auc_score(y_true, y_proba),
-        "pr_auc": average_precision_score(y_true, y_proba),
-        "f1": f1_score(y_true, y_pred),
-        "precision": precision_score(y_true, y_pred),
-        "recall": recall_score(y_true, y_pred),
+        "roc_auc": roc_auc_score(y_true, y_proba) if both_classes else 0.0,
+        "pr_auc": average_precision_score(y_true, y_proba) if both_classes else 0.0,
+        "f1": f1_score(y_true, y_pred, zero_division=0),
+        "precision": precision_score(y_true, y_pred, zero_division=0),
+        "recall": recall_score(y_true, y_pred, zero_division=0),
         "accuracy": accuracy_score(y_true, y_pred),
     }
 
@@ -1007,7 +1009,7 @@ def log_feature_importance(model, feature_names):
 
 
 def train_xgboost(X_train, y_train, X_test, y_test, feature_names):
-    mlflow.xgboost.autolog(log_datasets=False, log_models=False)
+    mlflow.xgboost.autolog(disable=True)
     dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=feature_names)
     dtest = xgb.DMatrix(X_test, label=y_test, feature_names=feature_names)
     params = {"objective": "binary:logistic", "eval_metric": ["auc", "logloss"],
@@ -1090,7 +1092,7 @@ def run_experiment():
         mlflow.set_tag("composite_name", COMPOSITE_NAME)
         if RECOMMENDATIONS_HASH:
             mlflow.set_tag("recommendations_hash", RECOMMENDATIONS_HASH)
-        best_model, best_auc = None, 0
+        best_model, best_auc = None, -1
 
         for name, model in sklearn_models.items():
             with mlflow.start_run(run_name=name, nested=True):
@@ -1101,11 +1103,11 @@ def run_experiment():
                 y_proba = model.predict_proba(X_test)[:, 1]
                 y_pred = model.predict(X_test)
                 metrics = compute_metrics(y_test, y_proba, y_pred)
+                model_artifact_name = get_model_name_with_hash(f"model_{name}")
+                mlflow.sklearn.log_model(model, model_artifact_name)
                 cv = cross_val_score(model, X_train, y_train, cv=5, scoring="roc_auc")
                 mlflow.log_metrics({**metrics, "cv_mean": cv.mean(), "cv_std": cv.std()})
                 log_feature_importance(model, feature_names)
-                model_artifact_name = get_model_name_with_hash(f"model_{name}")
-                mlflow.sklearn.log_model(model, model_artifact_name)
                 print(f"{name}: ROC-AUC={metrics['roc_auc']:.4f}, PR-AUC={metrics['pr_auc']:.4f}, F1={metrics['f1']:.4f}")
                 if metrics["roc_auc"] > best_auc:
                     best_auc, best_model = metrics["roc_auc"], name
@@ -1119,9 +1121,9 @@ def run_experiment():
             y_proba = xgb_model.predict(dtest)
             y_pred = (y_proba > 0.5).astype(int)
             metrics = compute_metrics(y_test, y_proba, y_pred)
-            mlflow.log_metrics(metrics)
             xgb_model_name = get_model_name_with_hash("model_xgboost")
             mlflow.xgboost.log_model(xgb_model, xgb_model_name)
+            mlflow.log_metrics(metrics)
             importance = xgb_model.get_score(importance_type="gain")
             fi = pd.DataFrame({"feature": importance.keys(), "importance": importance.values()})
             fi = fi.sort_values("importance", ascending=False).reset_index(drop=True)
@@ -1224,7 +1226,7 @@ def run_pipeline(validate=False):
         from validation.validate_pipeline import validate_gold
         validate_gold()
 
-    print("\\n[{{ '5/6' if config.landing else '4/4' }}] Training...")
+    print("\\n[{{ '6/6' if config.landing else '4/4' }}] Training...")
     run_experiment()
     print("Training complete")
     if validate:

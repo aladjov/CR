@@ -1199,7 +1199,7 @@ def train_and_evaluate():
     }
 
     best_model_name = None
-    best_auc = 0.0
+    best_auc = -1.0
     best_model = None
     binary_eval = BinaryClassificationEvaluator(labelCol="label", metricName="areaUnderROC")
     multi_eval = MulticlassClassificationEvaluator(labelCol="label", metricName="f1")
@@ -1210,11 +1210,11 @@ def train_and_evaluate():
             predictions = fitted.transform(test_df)
             auc = binary_eval.evaluate(predictions)
             f1 = multi_eval.evaluate(predictions)
-            mlflow.log_metric("auc", auc)
-            mlflow.log_metric("f1", f1)
             mlflow.log_param("model_type", name)
             mlflow.log_param("num_features", len(feature_cols))
             mlflow.spark.log_model(fitted, f"model_{name}")
+            mlflow.log_metric("auc", auc)
+            mlflow.log_metric("f1", f1)
             if auc > best_auc:
                 best_auc = auc
                 best_model_name = name

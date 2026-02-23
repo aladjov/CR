@@ -579,6 +579,18 @@ class TestDatabricksRenderTraining:
         result = renderer.render_training(sample_pipeline_config)
         assert "Classifier" in result or "model" in result.lower()
 
+    def test_log_model_before_log_metric(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        log_model_pos = result.find("mlflow.spark.log_model")
+        log_metric_pos = result.find('mlflow.log_metric("auc"')
+        assert log_model_pos > 0
+        assert log_metric_pos > 0
+        assert log_model_pos < log_metric_pos
+
+    def test_best_auc_initialized_below_zero(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "best_auc = -1" in result
+
 
 class TestDatabricksRenderTrainingImbalance:
     def _make_config_with_imbalance(self, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale, strategy):

@@ -302,6 +302,9 @@ class RemotePath:
             result = result / str(arg)
         return RemotePath(result)
 
+    def resolve(self, strict: bool = False) -> RemotePath:
+        return self
+
     def is_absolute(self) -> bool:
         return self._pure.is_absolute()
 

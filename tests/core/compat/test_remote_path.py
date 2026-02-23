@@ -155,6 +155,36 @@ class TestRemotePathOperators:
         assert p.as_posix() == "/a/b/c"
 
 
+class TestRemotePathResolve:
+    def test_resolve_returns_self(self):
+        p = RemotePath("/Volumes/catalog/schema/data")
+        resolved = p.resolve()
+        assert resolved is p
+
+    def test_resolve_returns_remote_path(self):
+        p = RemotePath("/data/findings/file.yaml")
+        resolved = p.resolve()
+        assert isinstance(resolved, RemotePath)
+        assert str(resolved) == "/data/findings/file.yaml"
+
+    def test_resolve_in_set_membership(self):
+        p1 = RemotePath("/a/b")
+        p2 = RemotePath("/a/b")
+        loaded = {p1.resolve()}
+        assert p2.resolve() in loaded
+
+    def test_resolve_after_glob(self, mock_dbutils):
+        mock_dbutils.fs.ls.side_effect = None
+        mock_dbutils.fs.ls.return_value = [
+            _FileInfo("ds_findings.yaml"),
+        ]
+        p = RemotePath("/findings")
+        candidates = p.glob("*_findings.yaml")
+        resolved = candidates[0].resolve()
+        assert isinstance(resolved, RemotePath)
+        assert str(resolved) == "/findings/ds_findings.yaml"
+
+
 class TestRemotePathFromRemotePath:
     def test_construct_from_remote_path(self):
         p1 = RemotePath("/a/b")

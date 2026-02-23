@@ -355,6 +355,41 @@ class TestCodeRendererTraining:
         assert "RandomForestClassifier" in result
         assert "compute_metrics" in result
 
+    def test_compute_metrics_guards_single_class(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "np.unique" in result or "unique" in result
+        assert "zero_division" in result
+
+    def test_log_model_before_log_metrics_sklearn(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        sklearn_log_model_pos = result.find("mlflow.sklearn.log_model")
+        log_metrics_pos = result.find("mlflow.log_metrics")
+        assert sklearn_log_model_pos > 0
+        assert log_metrics_pos > 0
+        assert sklearn_log_model_pos < log_metrics_pos
+
+    def test_log_model_before_log_metrics_xgboost(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        xgb_section_start = result.find('run_name="xgboost"')
+        xgb_section = result[xgb_section_start:]
+        xgb_log_model_pos = xgb_section.find("mlflow.xgboost.log_model")
+        xgb_log_metrics_pos = xgb_section.find("mlflow.log_metrics")
+        assert xgb_log_model_pos > 0
+        assert xgb_log_metrics_pos > 0
+        assert xgb_log_model_pos < xgb_log_metrics_pos
+
+    def test_training_imports_numpy(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "import numpy as np" in result
+
+    def test_xgboost_autolog_disabled(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "autolog(disable=True)" in result
+
+    def test_best_auc_initialized_below_zero(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "best_auc = None, -1" in result or "best_auc = -1" in result
+
 
 class TestCodeRendererRunner:
     def test_render_runner(self, renderer, sample_pipeline_config):
@@ -365,6 +400,11 @@ class TestCodeRendererRunner:
         assert "run_bronze_event_events" in result
         assert "run_silver_merge" in result
         assert "run_gold_features" in result
+
+    def test_runner_training_step_number(self, renderer, sample_pipeline_config):
+        result = renderer.render_runner(sample_pipeline_config)
+        assert "[6/6] Training" in result or "4/4] Training" in result
+        assert "[5/6] Training" not in result
 
 
 class TestCodeRendererRunAll:
