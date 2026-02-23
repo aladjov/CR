@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "notebooks"))
 from run_exploration import (
     PER_DATASET_STEMS,
     SETUP_NOTEBOOKS,
+    ProgressiveErrorLog,
     _detect_global_skip_set,
     _detect_skip_set_for_dataset,
     _execute_one,
@@ -1437,3 +1438,100 @@ class TestCriticalGlobalStop:
         assert "06_feature_opportunities" in global_keys
         assert "07_modeling_readiness" in global_keys
         assert "08_baseline_experiments" in global_keys
+
+
+# ---------------------------------------------------------------------------
+# ProgressiveErrorLog header with run parameters
+# ---------------------------------------------------------------------------
+
+
+class TestProgressiveErrorLogHeader:
+    def test_log_header_includes_run_params(self, tmp_path):
+        params = {
+            "notebooks_dir": "/path/to/notebooks",
+            "findings_dir": "/path/to/findings",
+            "timeout": 600,
+            "kernel": "python3",
+            "dry_run": False,
+            "run_id": "run-123",
+            "spark_remote": True,
+            "sample_entities": 500,
+            "max_grid_dates": 10,
+        }
+        log = ProgressiveErrorLog(tmp_path, run_params=params)
+        content = log.log_path.read_text()
+        assert "run_exploration" in content
+        assert "timeout:" in content and "600" in content
+        assert "kernel:" in content and "python3" in content
+        assert "run_id:" in content and "run-123" in content
+        assert "spark_remote:" in content and "yes" in content
+        assert "sample_entities: 500" in content
+        assert "max_grid_dates:" in content and "10" in content
+
+    def test_log_header_omits_none_and_default_params(self, tmp_path):
+        params = {
+            "notebooks_dir": "/path/to/notebooks",
+            "findings_dir": "/path/to/findings",
+            "timeout": 600,
+            "kernel": "python3",
+            "dry_run": False,
+            "run_id": None,
+            "spark_remote": False,
+            "sample_entities": None,
+            "max_grid_dates": None,
+        }
+        log = ProgressiveErrorLog(tmp_path, run_params=params)
+        content = log.log_path.read_text()
+        assert "run_id" not in content
+        assert "sample_entities" not in content
+        assert "max_grid_dates" not in content
+        assert "spark_remote" not in content
+
+    def test_log_header_backward_compatible_without_params(self, tmp_path):
+        log = ProgressiveErrorLog(tmp_path)
+        content = log.log_path.read_text()
+        assert "run_exploration" in content
+        assert content.count("\n") >= 1
+
+    def test_log_header_shows_dry_run(self, tmp_path):
+        params = {
+            "notebooks_dir": "/nb",
+            "findings_dir": "/f",
+            "timeout": 300,
+            "kernel": "python3",
+            "dry_run": True,
+            "run_id": None,
+            "spark_remote": False,
+            "sample_entities": None,
+            "max_grid_dates": None,
+        }
+        log = ProgressiveErrorLog(tmp_path, run_params=params)
+        content = log.log_path.read_text()
+        assert "dry_run:" in content and "yes" in content
+
+    def test_run_all_writes_params_to_log(self, tmp_path, single_context_yaml):
+        from run_exploration import NOTEBOOKS_ORDER
+
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        nb_json = json.dumps({
+            "nbformat": 4, "nbformat_minor": 5,
+            "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
+            "cells": [],
+        })
+        for stem in NOTEBOOKS_ORDER:
+            (notebooks_dir / f"{stem}.ipynb").write_text(nb_json)
+
+        run_all(
+            notebooks_dir,
+            findings_dir=single_context_yaml.parent,
+            dry_run=True,
+            timeout=300,
+            kernel="python3",
+            run_id="test-run",
+        )
+
+        log_content = (notebooks_dir / "run_exploration.log").read_text()
+        assert "timeout:" in log_content and "300" in log_content
+        assert "run_id:" in log_content and "test-run" in log_content
+        assert "dry_run:" in log_content and "yes" in log_content

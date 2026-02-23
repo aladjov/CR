@@ -512,7 +512,18 @@ def run_all(
     total_start = time.time()
     results: Dict[str, str] = {}
     timings: Dict[str, float] = {}
-    error_log = ProgressiveErrorLog(notebooks_dir)
+    run_params = {
+        "notebooks_dir": str(notebooks_dir),
+        "findings_dir": str(findings_dir),
+        "timeout": timeout,
+        "kernel": kernel,
+        "dry_run": dry_run,
+        "run_id": run_id,
+        "spark_remote": os.environ.get("CR_SPARK_REMOTE") == "1",
+        "sample_entities": os.environ.get("CR_SAMPLE_ENTITY_COUNT"),
+        "max_grid_dates": os.environ.get("CR_GRID_MAX_DATES"),
+    }
+    error_log = ProgressiveErrorLog(notebooks_dir, run_params=run_params)
 
     # Phase 1: Setup (00_start_here)
     setup_nbs = [nb for nb in notebooks if nb.stem in SETUP_NOTEBOOKS]
@@ -562,15 +573,35 @@ def run_all(
 
 
 class ProgressiveErrorLog:
-    """Writes errors to run_exploration.log as they occur."""
 
-    def __init__(self, notebooks_dir: Path):
+    def __init__(self, notebooks_dir: Path, run_params: Optional[Dict] = None):
         self.log_path = notebooks_dir / "run_exploration.log"
         self.error_count = 0
-        self.log_path.write_text(
-            f"run_exploration — {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n",
-            encoding="utf-8",
-        )
+        header = f"run_exploration — {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        if run_params:
+            header += self._format_run_params(run_params)
+        header += "\n"
+        self.log_path.write_text(header, encoding="utf-8")
+
+    @staticmethod
+    def _format_run_params(params: Dict) -> str:
+        lines: List[str] = []
+        _add = lines.append
+        _add(f"  notebooks_dir: {params.get('notebooks_dir', '')}")
+        _add(f"  findings_dir:  {params.get('findings_dir', '')}")
+        _add(f"  timeout:       {params.get('timeout', 600)}")
+        _add(f"  kernel:        {params.get('kernel', 'python3')}")
+        if params.get("dry_run"):
+            _add("  dry_run:       yes")
+        if params.get("run_id"):
+            _add(f"  run_id:        {params['run_id']}")
+        if params.get("spark_remote"):
+            _add("  spark_remote:  yes")
+        if params.get("sample_entities"):
+            _add(f"  sample_entities: {params['sample_entities']}")
+        if params.get("max_grid_dates"):
+            _add(f"  max_grid_dates:  {params['max_grid_dates']}")
+        return "\n" + "\n".join(lines) + "\n"
 
     def append_error(self, entry: Dict) -> None:
         self.error_count += 1
