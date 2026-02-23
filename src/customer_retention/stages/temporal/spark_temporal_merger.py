@@ -8,6 +8,7 @@ from customer_retention.core.compat import (
     native_pd,
     normalize_timestamp_columns,
     pandas_dtype_to_spark_schema,
+    safe_drop_duplicates,
     to_datetime,
 )
 from customer_retention.core.compat.detection import get_spark_session
@@ -94,8 +95,8 @@ class SparkTemporalMerger(TemporalMerger):
             ascending=[True, True, False],
         )
 
-        joined = joined.drop_duplicates(
-            subset=[entity_key, left_time_col], keep="first"
+        joined = safe_drop_duplicates(
+            joined, subset=[entity_key, left_time_col], keep="first"
         )
 
         keep_cols = [entity_key, left_time_col] + feature_cols

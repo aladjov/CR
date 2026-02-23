@@ -398,6 +398,12 @@ def safe_isfinite(series: Any) -> Any:
     return series.notna() & ~safe_isinf(series)
 
 
+def safe_drop_duplicates(df: Any, subset: list[str], keep: str = "last") -> Any:
+    if _is_spark_pandas(df):
+        return df.drop_duplicates(subset=subset)
+    return df.drop_duplicates(subset=subset, keep=keep)
+
+
 def safe_sample(df: Any, n: int, random_state: int = 42) -> Any:
     if n <= 0:
         return df.head(0)
@@ -737,6 +743,7 @@ __all__ = [
     "DataOps",
     "RemotePath",
     "make_path",
+    "safe_drop_duplicates",
     "safe_sample",
     "safe_select",
     "safe_describe",

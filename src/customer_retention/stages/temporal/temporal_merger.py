@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from customer_retention.core.compat import Timedelta, as_tz_naive, native_pd, to_datetime
+from customer_retention.core.compat import Timedelta, as_tz_naive, native_pd, safe_drop_duplicates, to_datetime
 from customer_retention.core.config.column_config import DatasetGranularity
 from customer_retention.stages.temporal.point_in_time_join import PointInTimeJoiner
 
@@ -109,7 +109,7 @@ class TemporalMerger:
         right_df = dataset.df.copy()
 
         if self.config.as_of_column not in right_df.columns:
-            right_df = right_df.drop_duplicates(subset=[self.config.entity_key], keep="last")
+            right_df = safe_drop_duplicates(right_df, subset=[self.config.entity_key], keep="last")
             return self._merge_entity_broadcast(
                 spine, DatasetMergeInput(
                     name=dataset.name, df=right_df,
@@ -119,7 +119,7 @@ class TemporalMerger:
             )
 
         join_cols = [self.config.entity_key, self.config.as_of_column]
-        right_df = right_df.drop_duplicates(subset=join_cols, keep="last")
+        right_df = safe_drop_duplicates(right_df, subset=join_cols, keep="last")
 
         right_feature_cols = set(right_df.columns) - set(join_cols)
         rename_map = self._resolve_conflicts(
@@ -138,7 +138,7 @@ class TemporalMerger:
         existing_cols: set[str],
     ) -> Any:
         join_keys = {self.config.entity_key}
-        right_df = dataset.df.drop_duplicates(subset=[self.config.entity_key], keep="last")
+        right_df = safe_drop_duplicates(dataset.df, subset=[self.config.entity_key], keep="last")
 
         right_feature_cols = set(right_df.columns) - join_keys
         rename_map = self._resolve_conflicts(

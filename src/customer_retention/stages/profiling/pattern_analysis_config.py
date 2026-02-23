@@ -8,6 +8,7 @@ from customer_retention.core.compat import (
     cut,
     ensure_timestamp,
     period_start_time,
+    safe_drop_duplicates,
 )
 
 
@@ -484,7 +485,7 @@ def deduplicate_events(df: DataFrame, entity_column: str, time_column: str, dupl
     if duplicate_count <= 0:
         return df, 0
     before = len(df)
-    df = df.drop_duplicates(subset=[entity_column, time_column], keep="first")
+    df = safe_drop_duplicates(df, subset=[entity_column, time_column], keep="first")
     return df, before - len(df)
 
 
