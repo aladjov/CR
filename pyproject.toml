@@ -159,6 +159,8 @@ include = [
 [tool.ruff]
 line-length = 120
 target-version = "py310"
+extend-exclude = ["databriicks-generated"]
+force-exclude = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]

@@ -35,6 +35,7 @@ class DatasetInfo:
     entity_column: Optional[str] = None
     time_column: Optional[str] = None
     target_column: Optional[str] = None
+    raw_source_path: Optional[str] = None
     excluded: bool = False
 
 
@@ -199,6 +200,7 @@ class MultiDatasetFindings:
                     "entity_column": info.entity_column,
                     "time_column": info.time_column,
                     "target_column": info.target_column,
+                    "raw_source_path": info.raw_source_path,
                     "excluded": info.excluded,
                 }
                 for name, info in self.datasets.items()
@@ -247,6 +249,7 @@ class MultiDatasetFindings:
                 entity_column=info.get("entity_column"),
                 time_column=info.get("time_column"),
                 target_column=info.get("target_column"),
+                raw_source_path=info.get("raw_source_path"),
                 excluded=info.get("excluded", False),
             )
 

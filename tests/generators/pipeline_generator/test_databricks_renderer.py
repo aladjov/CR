@@ -1606,9 +1606,9 @@ class TestDatabricksLandingTemplate:
         result = renderer.render_landing("orders", landing_config)
         assert "derive_label_available_flag" in result
 
-    def test_landing_reads_from_sources_dict(self, renderer, landing_config):
+    def test_landing_reads_from_raw_sources_dict(self, renderer, landing_config):
         result = renderer.render_landing("orders", landing_config)
-        assert "SOURCES[SOURCE_NAME]" in result
+        assert "RAW_SOURCES[SOURCE_NAME]" in result
 
     def test_landing_writes_to_landing_table(self, renderer, landing_config):
         result = renderer.render_landing("orders", landing_config)
@@ -1881,3 +1881,94 @@ class TestDatabricksTrainingDropAsOfDate:
     def test_training_excludes_as_of_date(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
         assert "as_of_date" in result
+
+
+class TestDatabricksConfigRawSources:
+    def test_config_includes_raw_sources(self, renderer, sample_pipeline_config):
+        source = sample_pipeline_config.sources[1]
+        sample_pipeline_config.landing = {
+            "orders": LandingLayerConfig(
+                source=source,
+                raw_source_path="/data/orders.parquet",
+                raw_source_format="parquet",
+                entity_column="customer_id",
+                time_column="order_date",
+                target_column="churn",
+            ),
+        }
+        result = renderer.render_config(sample_pipeline_config)
+        assert "RAW_SOURCES" in result
+        assert '"/data/orders.parquet"' in result
+        assert '"parquet"' in result
+        ast.parse(result)
+
+    def test_config_raw_sources_empty_when_no_landing(self, renderer, sample_pipeline_config):
+        sample_pipeline_config.landing = {}
+        result = renderer.render_config(sample_pipeline_config)
+        assert "RAW_SOURCES" in result
+        ast.parse(result)
+
+
+class TestDatabricksBronzeEntityLifecycleReadsFromLanding:
+    def test_recency_tenure_reads_from_landing_table(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="order_date",
+            lifecycle=LifecycleConfig(include_recency_bucket=True),
+            post_shaping=[],
+        )
+        result = renderer.render_bronze_entity(
+            "orders_aggregated", config, "orders", "orders",
+        )
+        assert 'landing_table("orders")' in result
+        assert "add_recency_tenure" in result
+        recency_fn = result[result.index("def add_recency_tenure"):]
+        recency_fn = recency_fn[:recency_fn.index("\ndef ")]
+        assert "landing_table" in recency_fn
+        assert "bronze_table" not in recency_fn
+        ast.parse(result)
+
+    def test_month_cyclical_reads_from_landing_table(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="order_date",
+            lifecycle=LifecycleConfig(include_month_cyclical=True),
+            post_shaping=[],
+        )
+        result = renderer.render_bronze_entity(
+            "orders_aggregated", config, "orders", "orders",
+        )
+        assert 'landing_table("orders")' in result
+        assert "add_month_quarter_cyclical" in result
+        cyclical_fn = result[result.index("def add_month_quarter_cyclical"):]
+        cyclical_fn = cyclical_fn[:cyclical_fn.index("\ndef ")]
+        assert "landing_table" in cyclical_fn
+        assert "bronze_table" not in cyclical_fn
+        ast.parse(result)
+
+    def test_cohort_features_reads_from_landing_table(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="order_date",
+            lifecycle=LifecycleConfig(include_cohort_features=True),
+            post_shaping=[],
+        )
+        result = renderer.render_bronze_entity(
+            "orders_aggregated", config, "orders", "orders",
+        )
+        assert 'landing_table("orders")' in result
+        assert "add_cohort_features" in result
+        cohort_fn = result[result.index("def add_cohort_features"):]
+        cohort_fn = cohort_fn[:cohort_fn.index("\ndef ")]
+        assert "landing_table" in cohort_fn
+        assert "bronze_table" not in cohort_fn
+        ast.parse(result)

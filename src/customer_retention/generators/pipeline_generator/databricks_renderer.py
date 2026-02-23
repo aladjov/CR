@@ -252,6 +252,17 @@ SOURCES = {
     },
 {% endfor %}
 }
+
+RAW_SOURCES = {
+{% for name, landing in config.landing.items() %}
+    "{{ name }}": {
+        "path": "{{ landing.raw_source_path }}",
+        "format": "{{ landing.raw_source_format }}",
+        "entity_key": "{{ landing.entity_column }}",
+        "time_column": "{{ landing.time_column }}",
+    },
+{% endfor %}
+}
 """,
     "databricks_bronze.py.j2": """# Databricks notebook source
 # MAGIC %md
@@ -733,7 +744,7 @@ def {{ func_name }}(df):
 {% if config.lifecycle %}
 {% if config.lifecycle.include_recency_bucket %}
 def add_recency_tenure(df):
-    raw_df = spark.table(bronze_table("{{ raw_source }}_events"))
+    raw_df = spark.table(landing_table("{{ raw_source }}"))
     time_col = "{{ config.time_column }}"
     reference_date = raw_df.agg(F.max(time_col)).collect()[0][0]
     entity_stats = raw_df.groupBy(ENTITY_COLUMN).agg(
@@ -776,7 +787,7 @@ def add_lifecycle_quadrant(df):
 {% endif %}
 {% if config.lifecycle.include_month_cyclical %}
 def add_month_quarter_cyclical(df):
-    raw_df = spark.table(bronze_table("{{ raw_source }}_events"))
+    raw_df = spark.table(landing_table("{{ raw_source }}"))
     time_col = "{{ config.time_column }}"
     mean_month = raw_df.groupBy(ENTITY_COLUMN).agg(
         F.mean(F.month(F.col(time_col)).cast("double")).alias("mean_month")
@@ -815,7 +826,7 @@ def add_trend_features(df):
 {% endif %}
 {% if config.lifecycle.include_cohort_features %}
 def add_cohort_features(df):
-    raw_df = spark.table(bronze_table("{{ raw_source }}_events"))
+    raw_df = spark.table(landing_table("{{ raw_source }}"))
     time_col = "{{ config.time_column }}"
     first_event = raw_df.groupBy(ENTITY_COLUMN).agg(F.min(time_col).alias("first_event"))
     first_event = first_event.withColumn("cohort_year", F.year("first_event"))
@@ -1289,7 +1300,7 @@ ENTITY_COLUMN = "{{ config.entity_column }}"
 TIME_COLUMN = "{{ config.time_column }}"
 
 def load_source():
-    source_config = SOURCES[SOURCE_NAME]
+    source_config = RAW_SOURCES[SOURCE_NAME]
     path = source_config["path"]
     fmt = source_config["format"]
     if fmt == "csv":

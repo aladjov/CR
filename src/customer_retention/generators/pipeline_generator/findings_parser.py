@@ -259,7 +259,10 @@ class FindingsParser:
             dataset_info = multi.datasets.get(name)
             is_event = name in multi.event_datasets
             is_excluded = name in multi.excluded_datasets or (dataset_info and dataset_info.excluded)
-            raw_source = str(Path(dataset_info.source_path if dataset_info else findings.source_path).resolve())
+            raw_source = str(Path(
+                dataset_info.raw_source_path or dataset_info.source_path
+                if dataset_info else findings.source_path
+            ).resolve())
             time_col = None
             entity_key = findings.identifier_columns[0] if findings.identifier_columns else "id"
             if is_event and findings.time_series_metadata:
@@ -819,7 +822,9 @@ class FindingsParser:
                 or "timestamp"
             )
             raw_time_col = self._resolve_raw_time_column(findings)
-            raw_source = str(Path(dataset_info.source_path or findings.source_path).resolve())
+            raw_source = str(Path(
+                dataset_info.raw_source_path or dataset_info.source_path or findings.source_path
+            ).resolve())
             source_cfg = next((s for s in config.sources if s.name == event_name), None)
             if not source_cfg:
                 continue
