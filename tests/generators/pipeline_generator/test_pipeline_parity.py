@@ -886,6 +886,19 @@ class TestTrainingTemplateLocal:
         assert "target_column=TARGET_COLUMN" in result
         assert "splitter.split(split_df)" in result
 
+    def test_split_result_uses_attribute_access(self, renderer, pipeline_config_minimal):
+        pipeline_config_minimal.training = TrainingConfig(
+            split_strategy="temporal",
+            temporal_column="order_date",
+            test_size=0.2,
+        )
+        result = renderer.render_training(pipeline_config_minimal)
+        assert "splits.X_train" in result
+        assert "splits.X_test" in result
+        assert "splits.y_train" in result
+        assert "splits.y_test" in result
+        assert 'splits["X_train"]' not in result
+
     def test_recommended_start_filter(self, renderer, pipeline_config_minimal):
         pipeline_config_minimal.training = TrainingConfig(
             recommended_training_start="2023-06-01",
@@ -990,6 +1003,17 @@ class TestTrainingTemplateDatabricks:
         )
         result = databricks_renderer.render_training(pipeline_config_minimal)
         assert "target_column=TARGET_COLUMN" in result
+
+    def test_databricks_split_result_uses_attribute_access(self, databricks_renderer, pipeline_config_minimal):
+        pipeline_config_minimal.training = TrainingConfig(
+            split_strategy="temporal",
+            temporal_column="order_date",
+            test_size=0.2,
+        )
+        result = databricks_renderer.render_training(pipeline_config_minimal)
+        assert "splits.X_train" in result
+        assert "splits.X_test" in result
+        assert 'splits["X_train"]' not in result
 
     def test_databricks_temporal_split_has_purge_gap(self, databricks_renderer, pipeline_config_minimal):
         pipeline_config_minimal.training = TrainingConfig(
@@ -1363,4 +1387,34 @@ class TestAllTemplatesValidPython:
         result = renderer.render_bronze("customers", config)
         assert "TextColumnProcessor" in result
         assert "entity_trend_slope" in result
+        ast.parse(result)
+
+
+class TestFeatureTimestampPreservation:
+    def test_bronze_event_aggregation_preserves_feature_timestamp(self, renderer, event_source):
+        config = BronzeEventConfig(
+            source=event_source,
+            entity_column="customer_id",
+            time_column="order_date",
+            aggregation=AggregationWindowConfig(
+                windows=["7d", "30d"],
+                value_columns=["amount"],
+                agg_funcs=["sum", "mean"],
+            ),
+        )
+        result = renderer.render_bronze_event("orders", config)
+        assert '"feature_timestamp" in df.columns' in result
+        assert 'groupby(ENTITY_COLUMN)["feature_timestamp"].max()' in result
+        ast.parse(result)
+
+    def test_gold_add_feast_timestamp_renames_feature_timestamp(self, renderer, pipeline_config_minimal):
+        result = renderer.render_gold(pipeline_config_minimal)
+        assert '"feature_timestamp" in df.columns' in result
+        assert 'rename(columns={"feature_timestamp": FEAST_TIMESTAMP_COL})' in result
+        ast.parse(result)
+
+    def test_gold_add_feast_timestamp_scalar_fallback(self, renderer, pipeline_config_minimal):
+        result = renderer.render_gold(pipeline_config_minimal)
+        assert "aggregation_reference_date" in result
+        assert "datetime.now()" in result
         ast.parse(result)

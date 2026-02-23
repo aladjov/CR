@@ -40,6 +40,7 @@ class DatabricksPipelineGenerator:
         config.composite_name = composite_name(source_names)
         generated_files = [
             self._write_config(config),
+            *self._write_landing(config),
             *self._write_bronze_files(config),
             self._write_silver(config),
             self._write_gold(config),
@@ -53,6 +54,18 @@ class DatabricksPipelineGenerator:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self._renderer.render_config(config))
         return path
+
+    def _write_landing(self, config: PipelineConfig) -> List[Path]:
+        if not config.landing:
+            return []
+        landing_dir = self._output_dir / "landing"
+        landing_dir.mkdir(parents=True, exist_ok=True)
+        paths = []
+        for name, landing_config in config.landing.items():
+            path = landing_dir / f"landing_{name}.py"
+            path.write_text(self._renderer.render_landing(name, landing_config))
+            paths.append(path)
+        return paths
 
     def _write_bronze_files(self, config: PipelineConfig) -> List[Path]:
         bronze_dir = self._output_dir / "bronze"

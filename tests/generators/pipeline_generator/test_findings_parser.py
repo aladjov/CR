@@ -2692,6 +2692,24 @@ class TestBuildTrainingConfigWithIntent:
         assert result is not None
         assert result.split_strategy == "cohort_based"
 
+    def test_temporal_split_kept_when_event_datasets_exist(self):
+        from customer_retention.analysis.auto_explorer.exploration_manager import MultiDatasetFindings
+        from customer_retention.analysis.auto_explorer.project_context import IntentConfig, SplitStrategy
+        intent = IntentConfig(split_strategy=SplitStrategy.TEMPORAL)
+        parser = self._make_parser_with_intent(intent)
+        multi = MultiDatasetFindings(event_datasets=["orders"])
+        result = parser._build_training_config(multi, {})
+        assert result is not None
+        assert result.split_strategy == "temporal"
+
+    def test_temporal_split_kept_when_no_event_datasets(self):
+        from customer_retention.analysis.auto_explorer.project_context import IntentConfig, SplitStrategy
+        intent = IntentConfig(split_strategy=SplitStrategy.TEMPORAL)
+        parser = self._make_parser_with_intent(intent)
+        result = parser._build_training_config(self._empty_multi(), {})
+        assert result is not None
+        assert result.split_strategy == "temporal"
+
     def test_default_split_without_intent_returns_none(self):
         parser = self._make_parser_with_intent(None)
         result = parser._build_training_config(self._empty_multi(), {})

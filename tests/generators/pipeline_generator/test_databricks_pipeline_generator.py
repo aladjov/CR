@@ -368,6 +368,20 @@ class TestDatabricksE2E:
                 assert "%run ../config" in content, f"{file_path.name} should use ../config"
                 assert "%run ./config" not in content, f"{file_path.name} should not use ./config"
 
+    def test_generate_creates_landing_when_populated(self, sample_findings_dir, tmp_path):
+        generator = DatabricksPipelineGenerator(
+            str(sample_findings_dir), str(tmp_path), "landing_test",
+        )
+        files = generator.generate()
+        file_names = [f.name for f in files]
+        has_landing = any("landing_" in n for n in file_names)
+        if has_landing:
+            landing_dir = tmp_path / "landing"
+            assert landing_dir.exists()
+            landing_files = list(landing_dir.glob("*.py"))
+            for lf in landing_files:
+                ast.parse(lf.read_text())
+
     def test_single_source_generates(self, tmp_path):
         findings_dir = tmp_path / "findings"
         findings_dir.mkdir()

@@ -236,6 +236,9 @@ def silver_table() -> str:
 def gold_table() -> str:
     return table_name(f"gold_features_{COMPOSITE_NAME}")
 
+def landing_table(source_name: str) -> str:
+    return table_name(f"landing_{source_name}")
+
 SOURCES = {
 {% for source in config.sources %}
     "{{ source.name }}": {
@@ -489,12 +492,7 @@ ENTITY_COLUMN = "{{ config.entity_column }}"
 TIME_COLUMN = "{{ config.time_column }}"
 
 def load_source():
-    source_config = SOURCES[SOURCE_NAME]
-    path = source_config["path"]
-    fmt = source_config["format"]
-    if fmt == "csv":
-        return spark.read.option("header", "true").option("inferSchema", "true").csv(path)
-    return spark.read.format(fmt).load(path)
+    return spark.table(landing_table(SOURCE_NAME))
 
 {% set pre_groups = group_steps(config.pre_shaping) %}
 def apply_pre_shaping(df):
@@ -618,6 +616,9 @@ def apply_event_aggregation(df):
     merged = results[0]
     for r in results[1:]:
         merged = merged.join(r, on=ENTITY_COLUMN, how="outer")
+    if "feature_timestamp" in [f.name for f in df.schema.fields]:
+        ts_agg = df.groupBy(ENTITY_COLUMN).agg(F.max("feature_timestamp").alias("feature_timestamp"))
+        merged = merged.join(ts_agg, on=ENTITY_COLUMN, how="left")
     return merged, reference_date
 {% endif %}
 
@@ -1084,6 +1085,8 @@ def run_gold():
     df = apply_encodings(df)
     df = apply_scalings(df)
     df = apply_feature_selection(df)
+    if "feature_timestamp" in [c for c in df.columns]:
+        df = df.withColumnRenamed("feature_timestamp", TIMESTAMP_COLUMN)
     output_table = gold_table()
     df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
     return df
@@ -1155,7 +1158,7 @@ def train_and_evaluate():
         test_size={{ config.training.test_size }},
     )
     splits = splitter.split(pdf)
-    train_pdf, test_pdf = splits["X_train"], splits["X_test"]
+    train_pdf, test_pdf = splits.X_train, splits.X_test
     train_df = spark.createDataFrame(train_pdf)
     test_df = spark.createDataFrame(test_pdf)
 {% else %}
@@ -1229,6 +1232,141 @@ def train_and_evaluate():
 best_name, best_auc = train_and_evaluate()
 print(f"Best model: {best_name} with AUC: {best_auc:.4f}")
 """,
+    "databricks_landing.py.j2": """# Databricks notebook source
+# MAGIC %md
+# MAGIC # Landing: {{ name }}
+
+# COMMAND ----------
+
+from pyspark.sql import functions as F
+
+# COMMAND ----------
+
+# MAGIC %run ../config
+
+# COMMAND ----------
+
+SOURCE_NAME = "{{ name }}"
+ENTITY_COLUMN = "{{ config.entity_column }}"
+TIME_COLUMN = "{{ config.time_column }}"
+
+def load_source():
+    source_config = SOURCES[SOURCE_NAME]
+    path = source_config["path"]
+    fmt = source_config["format"]
+    if fmt == "csv":
+        return spark.read.option("header", "true").option("inferSchema", "true").csv(path)
+    return spark.read.format(fmt).load(path)
+
+def derive_feature_timestamp(df):
+{% if config.timestamp_coalesce %}
+{% set cols = config.timestamp_coalesce.datetime_columns_ordered %}
+    df = df.withColumn("feature_timestamp", F.coalesce(
+{% for col in cols %}
+        F.to_timestamp(F.col("{{ col }}")){{ "," if not loop.last else "" }}
+{% endfor %}
+    ))
+{% else %}
+    df = df.withColumn("feature_timestamp", F.to_timestamp(F.col(TIME_COLUMN)))
+{% endif %}
+    return df
+
+def derive_label_timestamp(df):
+{% if config.label_timestamp %}
+{% set lt = config.label_timestamp %}
+{% if lt.label_column %}
+    label_ts = F.to_timestamp(F.col("{{ lt.label_column }}"))
+    fallback_ts = F.expr(f"feature_timestamp + INTERVAL {{ lt.fallback_window_days }} DAYS")
+    df = df.withColumn("label_timestamp", F.coalesce(label_ts, fallback_ts))
+{% else %}
+    df = df.withColumn("label_timestamp", F.expr(f"feature_timestamp + INTERVAL {{ lt.fallback_window_days }} DAYS"))
+{% endif %}
+{% else %}
+    df = df.withColumn("label_timestamp", F.expr("feature_timestamp + INTERVAL 180 DAYS"))
+{% endif %}
+    return df
+
+def derive_label_available_flag(df):
+    if TARGET_COLUMN in [f.name for f in df.schema.fields]:
+        df = df.withColumn("label_available_flag", F.col(TARGET_COLUMN).isNotNull())
+    else:
+        df = df.withColumn("label_available_flag", F.lit(False))
+    return df
+
+{% if config.datetime_derivation %}
+DATETIME_DERIVATION_SOURCES = {{ config.datetime_derivation.source_columns }}
+MASK_FUTURE_COLUMNS = {{ config.datetime_derivation.mask_future_columns }}
+
+def derive_datetime_features(df):
+    ref_col = "{{ config.datetime_derivation.reference_column }}"
+    mask_set = set(MASK_FUTURE_COLUMNS)
+    for col in DATETIME_DERIVATION_SOURCES:
+        if col not in [f.name for f in df.schema.fields]:
+            continue
+        ts_col = F.to_timestamp(F.col(col))
+        ref_ts = F.to_timestamp(F.col(ref_col))
+        delta_hours = (F.unix_timestamp(ts_col) - F.unix_timestamp(ref_ts)) / 3600.0
+        hour_val = F.hour(ts_col).cast("double")
+        dow_val = (F.dayofweek(ts_col) - 1).cast("double")
+        is_weekend_val = F.when(F.dayofweek(ts_col).isin(1, 7), 1.0).otherwise(0.0)
+        if col in mask_set:
+            future_mask = ts_col > ref_ts
+            df = df.withColumn(f"{col}_delta_hours", F.when(future_mask, None).otherwise(delta_hours))
+            df = df.withColumn(f"{col}_hour", F.when(future_mask, None).otherwise(hour_val))
+            df = df.withColumn(f"{col}_dow", F.when(future_mask, None).otherwise(dow_val))
+            df = df.withColumn(f"{col}_is_weekend", F.when(future_mask, None).otherwise(is_weekend_val))
+        else:
+            df = df.withColumn(f"{col}_delta_hours", delta_hours)
+            df = df.withColumn(f"{col}_hour", hour_val)
+            df = df.withColumn(f"{col}_dow", dow_val)
+            df = df.withColumn(f"{col}_is_weekend", is_weekend_val)
+    return df
+{% endif %}
+
+{% if config.history_window %}
+def apply_history_window(df):
+{% if config.history_window.upper_limit %}
+    upper = F.lit("{{ config.history_window.upper_limit }}").cast("timestamp")
+{% else %}
+    upper = df.agg(F.max("feature_timestamp")).collect()[0][0]
+{% endif %}
+{% if config.history_window.lookback_periods %}
+    lookback_days = {{ config.history_window.lookback_periods }} * {{ config.history_window.cadence_days }}
+    lower = F.date_sub(F.lit(upper), lookback_days)
+    df = df.filter(F.col("feature_timestamp").isNull() | (F.col("feature_timestamp") >= lower))
+{% endif %}
+{% if config.history_window.upper_limit %}
+    df = df.filter(F.col("feature_timestamp").isNull() | (F.col("feature_timestamp") <= upper))
+{% endif %}
+    return df
+{% endif %}
+
+# COMMAND ----------
+
+def run_landing():
+    df = load_source()
+{% if config.raw_time_column %}
+    df = df.withColumnRenamed("{{ config.raw_time_column }}", TIME_COLUMN)
+{% endif %}
+{% if config.original_target_column %}
+    df = df.withColumnRenamed("{{ config.original_target_column }}", TARGET_COLUMN)
+{% endif %}
+    df = derive_feature_timestamp(df)
+    df = derive_label_timestamp(df)
+    df = derive_label_available_flag(df)
+{% if config.datetime_derivation %}
+    df = derive_datetime_features(df)
+{% endif %}
+{% if config.history_window %}
+    df = apply_history_window(df)
+{% endif %}
+    output_table = landing_table(SOURCE_NAME)
+    df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
+    return df
+
+result = run_landing()
+display(result)
+""",
     "databricks_runner.py.j2": """# Databricks notebook source
 # MAGIC %md
 # MAGIC # Pipeline Runner: {{ config.name }}
@@ -1257,6 +1395,19 @@ def run_notebook(path, timeout=3600):
     return result
 
 # COMMAND ----------
+{% if config.landing %}
+
+# MAGIC %md
+# MAGIC ## Landing Layer
+
+# COMMAND ----------
+
+{% for name in config.landing %}
+run_notebook("landing/landing_{{ name }}")
+{% endfor %}
+
+# COMMAND ----------
+{% endif %}
 
 # MAGIC %md
 # MAGIC ## Bronze Layer
@@ -1498,6 +1649,7 @@ if fail_count:
 class DatabricksCodeRenderer:
     _TEMPLATE_MAP = {
         "config": "databricks_config.py.j2",
+        "landing": "databricks_landing.py.j2",
         "bronze": "databricks_bronze.py.j2",
         "bronze_event": "databricks_bronze_event.py.j2",
         "bronze_entity": "databricks_bronze_entity.py.j2",
@@ -1521,6 +1673,9 @@ class DatabricksCodeRenderer:
 
     def render_config(self, config: PipelineConfig) -> str:
         return self._render("config", config=config, catalog=self._catalog, schema=self._schema)
+
+    def render_landing(self, name: str, config) -> str:
+        return self._render("landing", name=name, config=config)
 
     def render_bronze(self, source_name: str, bronze_config: BronzeLayerConfig) -> str:
         return self._render("bronze", source=source_name, config=bronze_config)

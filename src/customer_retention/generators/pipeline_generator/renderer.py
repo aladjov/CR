@@ -804,7 +804,9 @@ def get_feature_version_tag() -> str:
 
 def add_feast_timestamp(df: pd.DataFrame, reference_date=None) -> pd.DataFrame:
     if FEAST_TIMESTAMP_COL not in df.columns:
-        if "aggregation_reference_date" in df.attrs:
+        if "feature_timestamp" in df.columns:
+            df = df.rename(columns={"feature_timestamp": FEAST_TIMESTAMP_COL})
+        elif "aggregation_reference_date" in df.attrs:
             timestamp = pd.Timestamp(df.attrs["aggregation_reference_date"])
             print(f"  Using aggregation reference_date for Feast timestamp: {timestamp}")
         elif reference_date is not None:
@@ -1063,8 +1065,8 @@ def run_experiment():
     for col in X.columns:
         split_df[col] = X[col]
     splits = splitter.split(split_df)
-    X_train, X_test = splits["X_train"][feature_names], splits["X_test"][feature_names]
-    y_train, y_test = splits["y_train"], splits["y_test"]
+    X_train, X_test = splits.X_train[feature_names], splits.X_test[feature_names]
+    y_train, y_test = splits.y_train, splits.y_test
 {% else %}
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size={{ config.training.test_size if config.training else 0.2 }}, random_state={{ config.training.random_state if config.training else 42 }}, stratify=y)
 {% endif %}
@@ -1768,6 +1770,8 @@ def apply_event_aggregation(df: pd.DataFrame) -> pd.DataFrame:
                 parts.append(window_df.groupby(ENTITY_COLUMN)[col].nunique().rename(f"{col}_nunique_{window}"))
                 parts.append(window_df.groupby(ENTITY_COLUMN)[col].agg(_safe_mode).rename(f"{col}_mode_{window}"))
         parts.append(window_df.groupby(ENTITY_COLUMN).size().rename(f"event_count_{window}"))
+    if "feature_timestamp" in df.columns:
+        parts.append(df.groupby(ENTITY_COLUMN)["feature_timestamp"].max().rename("feature_timestamp"))
     df = pd.concat([base] + parts, axis=1).reset_index()
     df.attrs["aggregation_reference_date"] = str(reference_date)
 {% endif %}

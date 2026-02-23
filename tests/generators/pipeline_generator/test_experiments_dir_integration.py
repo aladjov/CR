@@ -298,7 +298,7 @@ class TestBronzeLayerPathResolution:
 
         result = subprocess.run(
             [sys.executable, "-c", f"""
-import sys
+import sys, os
 sys.path.insert(0, '{experiments_setup["output_dir"]}')
 from config import SOURCES, FINDINGS_DIR
 import pandas as pd
@@ -311,6 +311,8 @@ for name, src in SOURCES.items():
     if path.exists():
         df = pd.read_parquet(path)
         print(f'  Rows: {{len(df)}}')
+sys.stdout.flush()
+os._exit(0)
 """],
             capture_output=True,
             text=True,

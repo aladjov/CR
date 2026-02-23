@@ -11,12 +11,17 @@ from customer_retention.generators.pipeline_generator.models import (
     AggregationWindowConfig,
     BronzeEventConfig,
     BronzeLayerConfig,
+    DatetimeDerivationConfig,
     GoldLayerConfig,
+    HistoryWindowConfig,
+    LabelTimestampConfig,
+    LandingLayerConfig,
     LifecycleConfig,
     PipelineConfig,
     PipelineTransformationType,
     SilverLayerConfig,
     SourceConfig,
+    TimestampCoalesceConfig,
     TransformationStep,
 )
 
@@ -703,7 +708,7 @@ class TestDatabricksConfigSourcePaths:
 
 
 class TestDatabricksLoadSourceFormat:
-    def test_bronze_event_load_source_uses_dynamic_format(self, renderer):
+    def test_bronze_event_load_source_reads_from_landing(self, renderer):
         source = SourceConfig(
             name="orders",
             path="/data/orders.parquet",
@@ -724,7 +729,7 @@ class TestDatabricksLoadSourceFormat:
             ),
         )
         result = renderer.render_bronze_event("orders", config)
-        assert 'format("delta")' not in result or "format(fmt)" in result
+        assert "landing_table(SOURCE_NAME)" in result
 
     def test_bronze_load_source_uses_dynamic_format(self, renderer):
         source = SourceConfig(
@@ -737,7 +742,7 @@ class TestDatabricksLoadSourceFormat:
         result = renderer.render_bronze("customers", config)
         assert 'format("delta")' not in result or "format(fmt)" in result
 
-    def test_bronze_event_load_source_still_handles_csv(self, renderer):
+    def test_bronze_event_load_source_no_raw_file_read(self, renderer):
         source = SourceConfig(
             name="orders",
             path="/data/orders.csv",
@@ -753,7 +758,8 @@ class TestDatabricksLoadSourceFormat:
             deduplicate=False,
         )
         result = renderer.render_bronze_event("orders", config)
-        assert "inferSchema" in result
+        assert "landing_table(SOURCE_NAME)" in result
+        assert "inferSchema" not in result
 
 
 class TestSparkProvenanceBlock:
@@ -1552,4 +1558,171 @@ class TestDatabricksMomentumRatios:
         result = renderer.render_bronze_entity(
             "orders_aggregated", config, "orders", "orders",
         )
+        ast.parse(result)
+
+
+class TestDatabricksLandingTemplate:
+    @pytest.fixture
+    def landing_config(self):
+        source = SourceConfig(
+            name="orders", path="/data/orders.parquet", format="parquet",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        return LandingLayerConfig(
+            source=source,
+            raw_source_path="/data/orders.parquet",
+            raw_source_format="parquet",
+            entity_column="customer_id",
+            time_column="order_date",
+            target_column="churn",
+        )
+
+    def test_landing_generates_valid_notebook(self, renderer, landing_config):
+        result = renderer.render_landing("orders", landing_config)
+        assert "# Databricks notebook source" in result
+        ast.parse(result)
+
+    def test_landing_includes_derive_feature_timestamp(self, renderer, landing_config):
+        result = renderer.render_landing("orders", landing_config)
+        assert "derive_feature_timestamp" in result
+
+    def test_landing_includes_derive_label_timestamp(self, renderer, landing_config):
+        result = renderer.render_landing("orders", landing_config)
+        assert "derive_label_timestamp" in result
+
+    def test_landing_includes_derive_label_available_flag(self, renderer, landing_config):
+        result = renderer.render_landing("orders", landing_config)
+        assert "derive_label_available_flag" in result
+
+    def test_landing_reads_from_sources_dict(self, renderer, landing_config):
+        result = renderer.render_landing("orders", landing_config)
+        assert "SOURCES[SOURCE_NAME]" in result
+
+    def test_landing_writes_to_landing_table(self, renderer, landing_config):
+        result = renderer.render_landing("orders", landing_config)
+        assert "landing_table(SOURCE_NAME)" in result
+
+    def test_landing_with_timestamp_coalesce(self, renderer, landing_config):
+        landing_config.timestamp_coalesce = TimestampCoalesceConfig(
+            datetime_columns_ordered=["created_at", "updated_at"],
+        )
+        result = renderer.render_landing("orders", landing_config)
+        assert "created_at" in result
+        assert "updated_at" in result
+        assert "F.coalesce" in result
+        ast.parse(result)
+
+    def test_landing_with_datetime_derivation(self, renderer, landing_config):
+        landing_config.datetime_derivation = DatetimeDerivationConfig(
+            source_columns=["signup_date"],
+            reference_column="order_date",
+            mask_future_columns=[],
+        )
+        result = renderer.render_landing("orders", landing_config)
+        assert "derive_datetime_features" in result
+        ast.parse(result)
+
+    def test_landing_with_history_window(self, renderer, landing_config):
+        landing_config.history_window = HistoryWindowConfig(
+            time_column="order_date",
+            lookback_periods=52,
+            cadence_days=7,
+        )
+        result = renderer.render_landing("orders", landing_config)
+        assert "apply_history_window" in result
+        ast.parse(result)
+
+    def test_landing_with_label_timestamp(self, renderer, landing_config):
+        landing_config.label_timestamp = LabelTimestampConfig(
+            label_column="cancel_date",
+            fallback_window_days=90,
+        )
+        result = renderer.render_landing("orders", landing_config)
+        assert "cancel_date" in result
+        ast.parse(result)
+
+
+class TestDatabricksConfigLandingTable:
+    def test_config_includes_landing_table_function(self, renderer, sample_pipeline_config):
+        sample_pipeline_config.landing = {
+            "orders": LandingLayerConfig(
+                source=sample_pipeline_config.sources[1],
+                raw_source_path="/data/orders.parquet",
+                raw_source_format="parquet",
+                entity_column="customer_id",
+                time_column="order_date",
+                target_column="churn",
+            ),
+        }
+        result = renderer.render_config(sample_pipeline_config)
+        assert "landing_table" in result
+        ast.parse(result)
+
+
+class TestDatabricksBronzeEventReadsFromLanding:
+    def test_bronze_event_reads_from_landing_table(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.parquet", format="parquet",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="order_date",
+            aggregation=AggregationWindowConfig(
+                windows=["7d", "30d"],
+                value_columns=["amount"],
+                agg_funcs=["sum", "mean"],
+            ),
+        )
+        result = renderer.render_bronze_event("orders", config)
+        assert "landing_table(SOURCE_NAME)" in result
+        ast.parse(result)
+
+    def test_bronze_event_aggregation_preserves_feature_timestamp(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.parquet", format="parquet",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="order_date",
+            aggregation=AggregationWindowConfig(
+                windows=["7d", "30d"],
+                value_columns=["amount"],
+                agg_funcs=["sum", "mean"],
+            ),
+        )
+        result = renderer.render_bronze_event("orders", config)
+        assert "feature_timestamp" in result
+        assert "F.max" in result
+        ast.parse(result)
+
+
+class TestDatabricksGoldFeatureTimestamp:
+    def test_gold_renames_feature_timestamp(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "feature_timestamp" in result
+        assert "TIMESTAMP_COLUMN" in result
+        ast.parse(result)
+
+
+class TestDatabricksRunnerLandingStep:
+    def test_runner_includes_landing_when_present(self, renderer, sample_pipeline_config):
+        sample_pipeline_config.landing = {
+            "orders": LandingLayerConfig(
+                source=sample_pipeline_config.sources[1],
+                raw_source_path="/data/orders.parquet",
+                raw_source_format="parquet",
+                entity_column="customer_id",
+                time_column="order_date",
+                target_column="churn",
+            ),
+        }
+        result = renderer.render_runner(sample_pipeline_config)
+        assert "landing/landing_orders" in result
+        assert result.index("landing") < result.index("bronze")
+        ast.parse(result)
+
+    def test_runner_omits_landing_when_empty(self, renderer, sample_pipeline_config):
+        sample_pipeline_config.landing = {}
+        result = renderer.render_runner(sample_pipeline_config)
+        assert "landing/landing_" not in result
         ast.parse(result)
