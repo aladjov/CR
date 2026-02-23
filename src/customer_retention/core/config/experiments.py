@@ -84,11 +84,21 @@ def get_feature_store_dir(default: Optional[str] = None) -> Path:
 
 
 def get_catalog(default: str = "main") -> str:
-    return os.environ.get("CR_CATALOG", default)
+    if "CR_CATALOG" in os.environ:
+        return os.environ["CR_CATALOG"]
+    persisted = _load_persisted_databricks_config()
+    if persisted and "catalog" in persisted:
+        return persisted["catalog"]
+    return default
 
 
 def get_schema(default: str = "default") -> str:
-    return os.environ.get("CR_SCHEMA", default)
+    if "CR_SCHEMA" in os.environ:
+        return os.environ["CR_SCHEMA"]
+    persisted = _load_persisted_databricks_config()
+    if persisted and "schema" in persisted:
+        return persisted["schema"]
+    return default
 
 
 def get_workspace_path(default: str | None = None) -> str | None:
