@@ -3730,3 +3730,260 @@ class TestFilteringFromRegistry:
         filter_steps = [s for s in config.bronze_event["events"].pre_shaping
                         if s.type == PipelineTransformationType.FILTER]
         assert len(filter_steps) == 0
+
+
+class TestTemporalMergeMetadata:
+    def _make_namespace_with_grid(self, tmp_path, grid_dates, entity_column="customer_id"):
+        from customer_retention.analysis.auto_explorer.project_context import (
+            ObjectivePriority,
+            ObjectiveSpec,
+            PredictionObjective,
+            ProjectContext,
+        )
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        from customer_retention.analysis.auto_explorer.snapshot_grid import SnapshotGrid
+
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        grid = SnapshotGrid(
+            cadence_interval="weekly",
+            observation_window_days=90,
+            grid_dates=grid_dates,
+        )
+        grid.save(ns.snapshot_grid_path)
+        ctx = ProjectContext(
+            entity_column=entity_column,
+            objectives=[ObjectiveSpec(
+                objective=PredictionObjective.IMMEDIATE_RISK,
+                priority=ObjectivePriority.PRIMARY,
+            )],
+        )
+        ctx.save(ns.project_context_path)
+        return ns
+
+    def _write_findings(self, findings_dir, ns):
+        multi_dataset = {
+            "datasets": {
+                "customers": {
+                    "name": "customers",
+                    "findings_path": str(findings_dir / "customers_findings.yaml"),
+                    "source_path": "/data/customers.csv",
+                    "granularity": "entity_level",
+                    "row_count": 1000,
+                    "column_count": 3,
+                    "entity_column": "customer_id",
+                },
+                "orders": {
+                    "name": "orders",
+                    "findings_path": str(findings_dir / "orders_findings.yaml"),
+                    "source_path": "/data/orders.parquet",
+                    "granularity": "event_level",
+                    "row_count": 5000,
+                    "column_count": 4,
+                    "entity_column": "customer_id",
+                    "time_column": "order_date",
+                },
+            },
+            "relationships": [
+                {
+                    "left_dataset": "customers",
+                    "right_dataset": "orders",
+                    "left_column": "customer_id",
+                    "right_column": "customer_id",
+                    "relationship_type": "one_to_many",
+                    "confidence": 1.0,
+                }
+            ],
+            "primary_entity_dataset": "customers",
+            "event_datasets": ["orders"],
+        }
+        ns.multi_dataset_findings_path.parent.mkdir(parents=True, exist_ok=True)
+        ns.multi_dataset_findings_path.write_text(yaml.dump(multi_dataset))
+
+        customers_findings = {
+            "source_path": "/data/customers.csv",
+            "source_format": "csv",
+            "row_count": 1000,
+            "column_count": 3,
+            "columns": {
+                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
+                                "confidence": 0.95, "evidence": [], "quality_score": 100,
+                                "cleaning_needed": False, "cleaning_recommendations": []},
+                "age": {"name": "age", "inferred_type": "numeric_continuous",
+                        "confidence": 0.9, "evidence": [], "quality_score": 100,
+                        "cleaning_needed": False, "cleaning_recommendations": []},
+                "churn": {"name": "churn", "inferred_type": "binary",
+                          "confidence": 0.99, "evidence": [], "quality_score": 100,
+                          "cleaning_needed": False, "cleaning_recommendations": []},
+            },
+            "target_column": "churn",
+            "identifier_columns": ["customer_id"],
+        }
+        findings_dir.mkdir(parents=True, exist_ok=True)
+        (findings_dir / "customers_findings.yaml").write_text(yaml.dump(customers_findings))
+
+        orders_findings = {
+            "source_path": "/data/orders.parquet",
+            "source_format": "parquet",
+            "row_count": 5000,
+            "column_count": 4,
+            "columns": {
+                "order_id": {"name": "order_id", "inferred_type": "identifier",
+                             "confidence": 0.95, "evidence": [], "quality_score": 100,
+                             "cleaning_needed": False, "cleaning_recommendations": []},
+                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
+                                "confidence": 0.95, "evidence": [], "quality_score": 100,
+                                "cleaning_needed": False, "cleaning_recommendations": []},
+                "amount": {"name": "amount", "inferred_type": "numeric_continuous",
+                           "confidence": 0.9, "evidence": [], "quality_score": 90,
+                           "cleaning_needed": False, "cleaning_recommendations": []},
+                "order_date": {"name": "order_date", "inferred_type": "datetime",
+                               "confidence": 0.95, "evidence": [], "quality_score": 100,
+                               "cleaning_needed": False, "cleaning_recommendations": []},
+            },
+            "identifier_columns": ["order_id"],
+            "datetime_columns": ["order_date"],
+            "time_series_metadata": {
+                "granularity": "event_level",
+                "entity_column": "customer_id",
+                "time_column": "order_date",
+            },
+        }
+        (findings_dir / "orders_findings.yaml").write_text(yaml.dump(orders_findings))
+
+    def test_grid_dates_populated_from_namespace(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        grid_dates = ["2024-01-01", "2024-01-08", "2024-01-15"]
+        ns = self._make_namespace_with_grid(tmp_path, grid_dates)
+        findings_dir = ns.multi_dataset_findings_path.parent
+        self._write_findings(findings_dir, ns)
+
+        parser = FindingsParser(str(findings_dir), namespace=ns)
+        config = parser.parse()
+
+        assert config.silver.grid_dates == grid_dates
+
+    def test_entity_key_from_project_context(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        ns = self._make_namespace_with_grid(tmp_path, ["2024-01-01"], entity_column="user_id")
+        findings_dir = ns.multi_dataset_findings_path.parent
+        self._write_findings(findings_dir, ns)
+
+        parser = FindingsParser(str(findings_dir), namespace=ns)
+        config = parser.parse()
+
+        assert config.silver.entity_key == "user_id"
+
+    def test_merge_sources_populated(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        ns = self._make_namespace_with_grid(tmp_path, ["2024-01-01"])
+        findings_dir = ns.multi_dataset_findings_path.parent
+        self._write_findings(findings_dir, ns)
+
+        parser = FindingsParser(str(findings_dir), namespace=ns)
+        config = parser.parse()
+
+        source_names = {s.name for s in config.silver.merge_sources}
+        assert "customers" in source_names
+        assert "orders" in source_names
+
+    def test_event_source_has_timestamp_column(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        ns = self._make_namespace_with_grid(tmp_path, ["2024-01-01"])
+        findings_dir = ns.multi_dataset_findings_path.parent
+        self._write_findings(findings_dir, ns)
+
+        parser = FindingsParser(str(findings_dir), namespace=ns)
+        config = parser.parse()
+
+        orders_src = next(s for s in config.silver.merge_sources if s.name == "orders")
+        assert orders_src.feature_timestamp_column == "order_date"
+        assert orders_src.granularity == "event_level"
+
+    def test_entity_source_no_timestamp(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        ns = self._make_namespace_with_grid(tmp_path, ["2024-01-01"])
+        findings_dir = ns.multi_dataset_findings_path.parent
+        self._write_findings(findings_dir, ns)
+
+        parser = FindingsParser(str(findings_dir), namespace=ns)
+        config = parser.parse()
+
+        cust_src = next(s for s in config.silver.merge_sources if s.name == "customers")
+        assert cust_src.feature_timestamp_column is None
+        assert cust_src.granularity == "entity_level"
+
+    def test_no_namespace_leaves_grid_empty(self, sample_findings_dir):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        parser = FindingsParser(str(sample_findings_dir))
+        config = parser.parse()
+
+        assert config.silver.grid_dates == []
+        assert config.silver.merge_sources == []
+
+    def test_no_snapshot_grid_file_leaves_grid_empty(self, tmp_path):
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        findings_dir = ns.multi_dataset_findings_path.parent
+        self._write_findings(findings_dir, ns)
+
+        parser = FindingsParser(str(findings_dir), namespace=ns)
+        config = parser.parse()
+
+        assert config.silver.grid_dates == []
+
+    def test_excluded_datasets_skipped(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        ns = self._make_namespace_with_grid(tmp_path, ["2024-01-01"])
+        findings_dir = ns.multi_dataset_findings_path.parent
+        multi_dataset = {
+            "datasets": {
+                "customers": {
+                    "name": "customers",
+                    "findings_path": str(findings_dir / "customers_findings.yaml"),
+                    "source_path": "/data/customers.csv",
+                    "granularity": "entity_level",
+                    "row_count": 1000,
+                    "column_count": 3,
+                    "entity_column": "customer_id",
+                    "excluded": True,
+                },
+            },
+            "relationships": [],
+            "primary_entity_dataset": "customers",
+            "event_datasets": [],
+            "excluded_datasets": ["customers"],
+        }
+        findings_dir.mkdir(parents=True, exist_ok=True)
+        ns.multi_dataset_findings_path.write_text(yaml.dump(multi_dataset))
+        customers_findings = {
+            "source_path": "/data/customers.csv",
+            "source_format": "csv",
+            "row_count": 1000,
+            "column_count": 3,
+            "columns": {
+                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
+                                "confidence": 0.95, "evidence": [], "quality_score": 100,
+                                "cleaning_needed": False, "cleaning_recommendations": []},
+                "churn": {"name": "churn", "inferred_type": "binary",
+                          "confidence": 0.99, "evidence": [], "quality_score": 100,
+                          "cleaning_needed": False, "cleaning_recommendations": []},
+            },
+            "target_column": "churn",
+            "identifier_columns": ["customer_id"],
+        }
+        (findings_dir / "customers_findings.yaml").write_text(yaml.dump(customers_findings))
+
+        parser = FindingsParser(str(findings_dir), namespace=ns)
+        config = parser.parse()
+
+        excluded_names = {s.name for s in config.silver.merge_sources}
+        assert "customers" not in excluded_names

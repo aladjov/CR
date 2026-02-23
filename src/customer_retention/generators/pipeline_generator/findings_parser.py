@@ -27,6 +27,7 @@ from .models import (
     SilverLayerConfig,
     SourceConfig,
     TemporalFeatureConfig,
+    TemporalMergeSourceConfig,
     TextFeatureConfig,
     TimestampCoalesceConfig,
     TrainingConfig,
@@ -342,7 +343,64 @@ class FindingsParser:
                     "how": "left",
                 }
             )
-        return SilverLayerConfig(joins=joins, aggregations=[])
+        grid_dates, entity_key, merge_sources = self._build_temporal_merge_metadata(multi, sources)
+        return SilverLayerConfig(
+            joins=joins,
+            aggregations=[],
+            grid_dates=grid_dates,
+            entity_key=entity_key,
+            merge_sources=merge_sources,
+        )
+
+    def _build_temporal_merge_metadata(
+        self,
+        multi: MultiDatasetFindings,
+        sources: Dict[str, ExplorationFindings],
+    ) -> Tuple[List[str], Optional[str], List[TemporalMergeSourceConfig]]:
+        if self._namespace is None:
+            return [], None, []
+        grid_path = self._namespace.snapshot_grid_path
+        if not grid_path.exists():
+            return [], None, []
+
+        from customer_retention.analysis.auto_explorer.snapshot_grid import SnapshotGrid
+
+        grid = SnapshotGrid.load(grid_path)
+        grid_dates = list(grid.grid_dates) if grid.grid_dates else []
+        if not grid_dates:
+            return [], None, []
+
+        entity_key = None
+        ctx_path = self._namespace.project_context_path
+        if ctx_path.exists():
+            from customer_retention.analysis.auto_explorer.project_context import ProjectContext
+
+            ctx = ProjectContext.load(ctx_path)
+            entity_key = ctx.entity_column
+
+        from customer_retention.core.config.column_config import DatasetGranularity
+
+        event_set = set(multi.event_datasets)
+        excluded_set = set(multi.excluded_datasets)
+        merge_srcs: List[TemporalMergeSourceConfig] = []
+        for name, dataset_info in multi.datasets.items():
+            if name in excluded_set or dataset_info.excluded:
+                continue
+            is_event = name in event_set
+            granularity = DatasetGranularity.EVENT_LEVEL.value if is_event else DatasetGranularity.ENTITY_LEVEL.value
+            ts_col = None
+            if is_event:
+                ts_col = dataset_info.time_column
+                if not ts_col:
+                    findings = sources.get(name)
+                    if findings and findings.time_series_metadata:
+                        ts_col = findings.time_series_metadata.time_column
+            merge_srcs.append(TemporalMergeSourceConfig(
+                name=name,
+                granularity=granularity,
+                feature_timestamp_column=ts_col,
+            ))
+        return grid_dates, entity_key, merge_srcs
 
     @staticmethod
     def _strip_temporal_join_keys(keys: List[str]) -> List[str]:

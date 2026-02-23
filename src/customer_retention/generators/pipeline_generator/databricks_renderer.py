@@ -661,9 +661,6 @@ def compute_text_features(agg_df, raw_df):
 
 def run_bronze_event():
     raw_df = load_source()
-{% if config.raw_time_column %}
-    raw_df = raw_df.withColumnRenamed("{{ config.raw_time_column }}", TIME_COLUMN)
-{% endif %}
     df = apply_pre_shaping(raw_df)
 {% if config.deduplicate %}
     df = deduplicate(df)
@@ -883,12 +880,27 @@ display(result)
 # COMMAND ----------
 
 from pyspark.sql import functions as F
+{% if config.silver.grid_dates %}
+from customer_retention.stages.temporal.spark_temporal_merger import SparkTemporalMerger
+from customer_retention.stages.temporal.temporal_merger import MergeConfig, DatasetMergeInput
+from customer_retention.core.config.column_config import DatasetGranularity
+{% endif %}
 
 # COMMAND ----------
 
 # MAGIC %run ../config
 
 # COMMAND ----------
+
+{% if config.silver.grid_dates %}
+GRID_DATES = {{ config.silver.grid_dates }}
+
+MERGE_SOURCE_META = [
+{% for src in config.silver.merge_sources %}
+    {"name": "{{ src.name }}", "granularity": "{{ src.granularity }}"{{ ', "feature_timestamp_column": "' + src.feature_timestamp_column + '"' if src.feature_timestamp_column else '' }}},
+{% endfor %}
+]
+{% endif %}
 
 def _bronze_output_name(name):
     source = SOURCES[name]
@@ -903,6 +915,28 @@ def load_bronze_outputs():
         outputs[name] = spark.table(tbl)
     return outputs
 
+{% if config.silver.grid_dates %}
+def merge_sources(bronze_outputs):
+    entity_key = "{{ config.silver.entity_key or config.sources[0].entity_key }}"
+    base_source = "{{ config.sources[0].name }}"
+    entity_ids = bronze_outputs[base_source].select(entity_key).distinct().toPandas()[entity_key]
+    merger = SparkTemporalMerger(MergeConfig(entity_key=entity_key))
+    spine = merger.build_spine(entity_ids, GRID_DATES)
+    inputs = []
+    for meta in MERGE_SOURCE_META:
+        name = meta["name"]
+        if name not in bronze_outputs:
+            continue
+        granularity = DatasetGranularity(meta["granularity"])
+        inputs.append(DatasetMergeInput(
+            name=name,
+            df=bronze_outputs[name],
+            granularity=granularity,
+            feature_timestamp_column=meta.get("feature_timestamp_column"),
+        ))
+    merged, _report = merger.merge_all(spine, inputs)
+    return merged
+{% else %}
 def merge_sources(bronze_outputs):
     base_source = "{{ config.sources[0].name }}"
     merged = bronze_outputs[base_source]
@@ -923,6 +957,7 @@ def merge_sources(bronze_outputs):
 {% endif %}
 {% endfor %}
     return merged
+{% endif %}
 
 {% set derived_groups = group_steps(config.silver.derived_columns) %}
 {% if config.silver.derived_columns %}
@@ -1085,7 +1120,9 @@ def run_gold():
     df = apply_encodings(df)
     df = apply_scalings(df)
     df = apply_feature_selection(df)
-    if "feature_timestamp" in [c for c in df.columns]:
+    if "as_of_date" in [c for c in df.columns]:
+        df = df.withColumnRenamed("as_of_date", TIMESTAMP_COLUMN)
+    elif "feature_timestamp" in [c for c in df.columns]:
         df = df.withColumnRenamed("feature_timestamp", TIMESTAMP_COLUMN)
     output_table = gold_table()
     df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
@@ -1126,9 +1163,10 @@ def load_training_data():
 
 def prepare_features(df):
     exclude_prefixes = ["original_"]
+    exclude_cols = {TARGET, "as_of_date"}
     feature_cols = [
         c for c in df.columns
-        if c != TARGET and not any(c.startswith(p) for p in exclude_prefixes)
+        if c not in exclude_cols and not any(c.startswith(p) for p in exclude_prefixes)
         and df.schema[c].dataType.typeName() in ("double", "float", "integer", "long", "short")
     ]
     assembler = VectorAssembler(inputCols=feature_cols, outputCol="features", handleInvalid="skip")
@@ -1267,7 +1305,10 @@ def derive_feature_timestamp(df):
 {% endfor %}
     ))
 {% else %}
-    df = df.withColumn("feature_timestamp", F.to_timestamp(F.col(TIME_COLUMN)))
+    if TIME_COLUMN in [f.name for f in df.schema.fields]:
+        df = df.withColumn("feature_timestamp", F.to_timestamp(F.col(TIME_COLUMN)))
+    elif "feature_timestamp" not in [f.name for f in df.schema.fields]:
+        raise ValueError(f"Time column '{TIME_COLUMN}' not found. Available: {df.columns}")
 {% endif %}
     return df
 

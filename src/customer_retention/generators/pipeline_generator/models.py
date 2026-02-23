@@ -57,10 +57,20 @@ class BronzeLayerConfig:
 
 
 @dataclass
+class TemporalMergeSourceConfig:
+    name: str
+    granularity: str
+    feature_timestamp_column: Optional[str] = None
+
+
+@dataclass
 class SilverLayerConfig:
     joins: List[Dict[str, str]] = field(default_factory=list)
     aggregations: List[Dict[str, Any]] = field(default_factory=list)
     derived_columns: List[TransformationStep] = field(default_factory=list)
+    grid_dates: List[str] = field(default_factory=list)
+    entity_key: Optional[str] = None
+    merge_sources: List[TemporalMergeSourceConfig] = field(default_factory=list)
 
 
 @dataclass

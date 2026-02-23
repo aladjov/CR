@@ -540,7 +540,21 @@ from pathlib import Path
 {% if ops %}
 from customer_retention.transforms import {{ ops | sort | join(', ') }}
 {% endif %}
+{% if config.silver.grid_dates %}
+from customer_retention.stages.temporal.temporal_merger import TemporalMerger, MergeConfig, DatasetMergeInput
+from customer_retention.core.config.column_config import DatasetGranularity
+{% endif %}
 from config import SOURCES, get_bronze_path, get_silver_path, TARGET_COLUMN
+
+{% if config.silver.grid_dates %}
+GRID_DATES = {{ config.silver.grid_dates }}
+
+MERGE_SOURCE_META = [
+{% for src in config.silver.merge_sources %}
+    {"name": "{{ src.name }}", "granularity": "{{ src.granularity }}"{{ ', "feature_timestamp_column": "' + src.feature_timestamp_column + '"' if src.feature_timestamp_column else '' }}},
+{% endfor %}
+]
+{% endif %}
 
 
 def _load_artifact(path):
@@ -561,6 +575,28 @@ def load_bronze_outputs() -> dict:
             for name in SOURCES if not SOURCES[name].get("excluded")}
 
 
+{% if config.silver.grid_dates %}
+def merge_sources(bronze_outputs: dict) -> pd.DataFrame:
+    entity_key = "{{ config.silver.entity_key or config.sources[0].entity_key }}"
+    base_source = "{{ config.sources[0].name }}"
+    entity_ids = bronze_outputs[base_source][entity_key].unique()
+    merger = TemporalMerger(MergeConfig(entity_key=entity_key))
+    spine = merger.build_spine(entity_ids, GRID_DATES)
+    inputs = []
+    for meta in MERGE_SOURCE_META:
+        name = meta["name"]
+        if name not in bronze_outputs:
+            continue
+        granularity = DatasetGranularity(meta["granularity"])
+        inputs.append(DatasetMergeInput(
+            name=name,
+            df=bronze_outputs[name],
+            granularity=granularity,
+            feature_timestamp_column=meta.get("feature_timestamp_column"),
+        ))
+    merged, _report = merger.merge_all(spine, inputs)
+    return merged
+{% else %}
 def merge_sources(bronze_outputs: dict) -> pd.DataFrame:
     base_source = "{{ config.sources[0].name }}"
     merged = bronze_outputs[base_source]
@@ -573,6 +609,7 @@ def merge_sources(bronze_outputs: dict) -> pd.DataFrame:
     )
 {% endfor %}
     return merged
+{% endif %}
 
 
 def create_holdout_mask(df: pd.DataFrame, holdout_fraction: float = 0.1, random_state: int = 42) -> pd.DataFrame:
@@ -805,6 +842,8 @@ def get_feature_version_tag() -> str:
 def add_feast_timestamp(df: pd.DataFrame, reference_date=None) -> pd.DataFrame:
     if FEAST_TIMESTAMP_COL in df.columns:
         return df
+    if "as_of_date" in df.columns:
+        return df.rename(columns={"as_of_date": FEAST_TIMESTAMP_COL})
     if "feature_timestamp" in df.columns:
         return df.rename(columns={"feature_timestamp": FEAST_TIMESTAMP_COL})
     if "aggregation_reference_date" in df.attrs:
@@ -962,8 +1001,8 @@ def prepare_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
 
-    # Drop Feast metadata columns
-    drop_cols = [FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL]
+    # Drop Feast metadata columns and temporal spine columns
+    drop_cols = [FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL, "as_of_date"]
     df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
 
     # Exclude original_* columns (holdout ground truth - prevents data leakage)
@@ -1551,7 +1590,10 @@ def derive_feature_timestamp(df: pd.DataFrame) -> pd.DataFrame:
     df["feature_timestamp"] = df["feature_timestamp"].fillna(safe_to_datetime(df["{{ col }}"], errors="coerce"))
 {% endfor %}
 {% else %}
-    df["feature_timestamp"] = safe_to_datetime(df[TIME_COLUMN], errors="coerce")
+    if TIME_COLUMN in df.columns:
+        df["feature_timestamp"] = safe_to_datetime(df[TIME_COLUMN], errors="coerce")
+    elif "feature_timestamp" not in df.columns:
+        raise KeyError(f"Time column '{TIME_COLUMN}' not found in columns: {list(df.columns)}")
 {% endif %}
     return df
 

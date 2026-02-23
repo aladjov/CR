@@ -101,6 +101,29 @@ class TestBuildSpine:
         assert "observation_date" in spine.columns
         assert len(spine) == 2
 
+    def test_numpy_array_entity_ids(self):
+        import numpy as np
+        merger = TemporalMerger()
+        entities = np.array(["A", "B", "C"])
+        dates = ["2024-01-01", "2024-02-01"]
+        spine = merger.build_spine(entities, dates)
+        assert len(spine) == 6
+        assert set(spine["entity_id"]) == {"A", "B", "C"}
+
+    def test_numpy_array_with_duplicates(self):
+        import numpy as np
+        merger = TemporalMerger()
+        entities = np.array(["A", "A", "B"])
+        dates = ["2024-01-01"]
+        spine = merger.build_spine(entities, dates)
+        assert len(spine) == 2
+
+    def test_list_entity_ids(self):
+        merger = TemporalMerger()
+        spine = merger.build_spine(["A", "B"], ["2024-01-01"])
+        assert len(spine) == 2
+        assert set(spine["entity_id"]) == {"A", "B"}
+
 
 class TestResolveColumnConflicts:
     def test_no_conflicts_returns_empty(self):

@@ -44,7 +44,7 @@ class TemporalMerger:
     def build_spine(
         self, entity_ids: Any, grid_dates: list[str]
     ) -> Any:
-        unique_entities = entity_ids.drop_duplicates().reset_index(drop=True)
+        unique_entities = native_pd.Series(entity_ids).drop_duplicates().reset_index(drop=True)
         parsed_dates = as_tz_naive(to_datetime(grid_dates))
 
         if len(unique_entities) == 0 or len(parsed_dates) == 0:

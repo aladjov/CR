@@ -5,8 +5,11 @@ import pytest
 
 from customer_retention.generators.pipeline_generator.models import (
     BronzeLayerConfig,
+    LandingLayerConfig,
     PipelineConfig,
     PipelineTransformationType,
+    SourceConfig,
+    TimestampCoalesceConfig,
     TransformationStep,
 )
 from customer_retention.generators.pipeline_generator.renderer import CodeRenderer
@@ -156,3 +159,124 @@ class TestRenderWorkflow:
         silver_task = next((t for t in parsed["tasks"] if "silver" in t["task_key"]), None)
         assert silver_task is not None
         assert "depends_on" in silver_task
+
+
+class TestLocalLandingFeatureTimestampGuard:
+    @pytest.fixture
+    def landing_config(self):
+        source = SourceConfig(
+            name="emails", path="/data/emails.csv", format="csv",
+            entity_key="customer_id", time_column="sent_date", is_event_level=True,
+        )
+        return LandingLayerConfig(
+            source=source,
+            raw_source_path="/data/emails.csv",
+            raw_source_format="csv",
+            entity_column="customer_id",
+            time_column="sent_date",
+            target_column="churn",
+        )
+
+    def test_derive_feature_timestamp_checks_column_existence(self, renderer, landing_config):
+        result = renderer.render_landing("emails", landing_config)
+        assert "if TIME_COLUMN in" in result
+        ast.parse(result)
+
+    def test_derive_feature_timestamp_preserves_existing(self, renderer, landing_config):
+        result = renderer.render_landing("emails", landing_config)
+        assert '"feature_timestamp" not in' in result or "feature_timestamp" in result
+        ast.parse(result)
+
+    def test_coalesce_path_unaffected(self, renderer, landing_config):
+        landing_config.timestamp_coalesce = TimestampCoalesceConfig(
+            datetime_columns_ordered=["created_at", "updated_at"],
+        )
+        result = renderer.render_landing("emails", landing_config)
+        assert "fillna" in result
+        assert "if TIME_COLUMN in" not in result
+        ast.parse(result)
+
+
+class TestRenderSilverTemporalMerge:
+    @pytest.fixture
+    def temporal_config(self, entity_source, event_source, bronze_with_impute, gold_with_encode_scale):
+        from customer_retention.generators.pipeline_generator.models import (
+            SilverLayerConfig,
+            TemporalMergeSourceConfig,
+        )
+
+        silver = SilverLayerConfig(
+            joins=[{
+                "left_keys": ["customer_id"],
+                "right_keys": ["customer_id"],
+                "right_source": "orders",
+                "how": "left",
+            }],
+            grid_dates=["2024-01-01", "2024-01-08", "2024-01-15"],
+            entity_key="customer_id",
+            merge_sources=[
+                TemporalMergeSourceConfig(name="customers", granularity="entity_level"),
+                TemporalMergeSourceConfig(name="orders", granularity="event_level",
+                                          feature_timestamp_column="order_date"),
+            ],
+        )
+        return PipelineConfig(
+            name="test_pipeline",
+            target_column="churn",
+            sources=[entity_source, event_source],
+            bronze={"customers": bronze_with_impute},
+            silver=silver,
+            gold=gold_with_encode_scale,
+            output_dir="/output/test_pipeline",
+        )
+
+    def test_silver_contains_temporal_merger(self, renderer, temporal_config):
+        result = renderer.render_silver(temporal_config)
+        assert "TemporalMerger" in result
+
+    def test_silver_contains_build_spine(self, renderer, temporal_config):
+        result = renderer.render_silver(temporal_config)
+        assert "build_spine" in result
+
+    def test_silver_contains_grid_dates(self, renderer, temporal_config):
+        result = renderer.render_silver(temporal_config)
+        assert "2024-01-01" in result
+
+    def test_silver_contains_merge_all(self, renderer, temporal_config):
+        result = renderer.render_silver(temporal_config)
+        assert "merge_all" in result
+
+    def test_silver_is_valid_python(self, renderer, temporal_config):
+        result = renderer.render_silver(temporal_config)
+        ast.parse(result)
+
+    def test_silver_falls_back_without_grid_dates(self, renderer, sample_pipeline_config):
+        result = renderer.render_silver(sample_pipeline_config)
+        assert "TemporalMerger" not in result
+        assert "merge" in result
+
+
+class TestRenderGoldAsOfDate:
+    def test_gold_checks_as_of_date(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "as_of_date" in result
+
+    def test_gold_as_of_date_before_feature_timestamp(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        as_of_pos = result.index("as_of_date")
+        feature_ts_pos = result.index("feature_timestamp")
+        assert as_of_pos < feature_ts_pos
+
+    def test_gold_is_valid_python(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        ast.parse(result)
+
+
+class TestRenderTrainingDropAsOfDate:
+    def test_training_drops_as_of_date(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "as_of_date" in result
+
+    def test_training_is_valid_python(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        ast.parse(result)

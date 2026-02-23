@@ -384,7 +384,7 @@ class TestDatabricksRenderBronzeEvent:
         result = renderer.render_bronze_event("orders", sample_pipeline_config.bronze_event["orders"])
         assert 'format("parquet")' not in result
 
-    def test_render_bronze_event_renames_raw_time_column(self, renderer):
+    def test_render_bronze_event_uses_time_column_without_redundant_rename(self, renderer):
         source = SourceConfig(
             name="emails",
             path="/data/emails.csv",
@@ -406,7 +406,7 @@ class TestDatabricksRenderBronzeEvent:
             ),
         )
         result = renderer.render_bronze_event("emails", config)
-        assert 'withColumnRenamed("sent_date", TIME_COLUMN)' in result
+        assert 'withColumnRenamed("sent_date"' not in result
         assert 'TIME_COLUMN = "feature_timestamp"' in result
         ast.parse(result)
 
@@ -1738,3 +1738,146 @@ class TestDatabricksRunnerLandingStep:
         result = renderer.render_runner(sample_pipeline_config)
         assert "landing/landing_" not in result
         ast.parse(result)
+
+
+class TestDatabricksLandingFeatureTimestampGuard:
+    @pytest.fixture
+    def landing_config(self):
+        source = SourceConfig(
+            name="emails", path="/data/emails.csv", format="csv",
+            entity_key="customer_id", time_column="sent_date", is_event_level=True,
+        )
+        return LandingLayerConfig(
+            source=source,
+            raw_source_path="/data/emails.csv",
+            raw_source_format="csv",
+            entity_column="customer_id",
+            time_column="sent_date",
+            target_column="churn",
+        )
+
+    def test_derive_feature_timestamp_checks_column_existence(self, renderer, landing_config):
+        result = renderer.render_landing("emails", landing_config)
+        assert "if TIME_COLUMN in" in result
+        ast.parse(result)
+
+    def test_derive_feature_timestamp_preserves_existing(self, renderer, landing_config):
+        result = renderer.render_landing("emails", landing_config)
+        assert '"feature_timestamp" not in' in result or "feature_timestamp" in result
+        ast.parse(result)
+
+    def test_coalesce_path_unaffected(self, renderer, landing_config):
+        landing_config.timestamp_coalesce = TimestampCoalesceConfig(
+            datetime_columns_ordered=["created_at", "updated_at"],
+        )
+        result = renderer.render_landing("emails", landing_config)
+        assert "F.coalesce" in result
+        assert "if TIME_COLUMN in" not in result
+        ast.parse(result)
+
+
+class TestDatabricksBronzeEventNoRedundantRename:
+    def test_bronze_event_no_raw_time_column_rename(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.parquet", format="parquet",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="order_date",
+            raw_time_column="sent_date",
+            aggregation=AggregationWindowConfig(
+                windows=["7d", "30d"],
+                value_columns=["amount"],
+                agg_funcs=["sum", "mean"],
+            ),
+        )
+        result = renderer.render_bronze_event("orders", config)
+        assert 'withColumnRenamed("sent_date"' not in result
+        ast.parse(result)
+
+
+class TestDatabricksSilverTemporalMerge:
+    @pytest.fixture
+    def temporal_config(self, entity_source, event_source, bronze_with_impute, gold_with_encode_scale):
+        from customer_retention.generators.pipeline_generator.models import TemporalMergeSourceConfig
+
+        silver = SilverLayerConfig(
+            joins=[{
+                "left_keys": ["customer_id"],
+                "right_keys": ["customer_id"],
+                "right_source": "orders",
+                "how": "left",
+            }],
+            grid_dates=["2024-01-01", "2024-01-08", "2024-01-15"],
+            entity_key="customer_id",
+            merge_sources=[
+                TemporalMergeSourceConfig(name="customers", granularity="entity_level"),
+                TemporalMergeSourceConfig(name="orders", granularity="event_level",
+                                          feature_timestamp_column="order_date"),
+            ],
+        )
+        return PipelineConfig(
+            name="test_pipeline",
+            target_column="churn",
+            sources=[entity_source, event_source],
+            bronze={"customers": bronze_with_impute},
+            bronze_event={
+                "orders": BronzeEventConfig(
+                    source=event_source,
+                    entity_column="customer_id",
+                    time_column="order_date",
+                    aggregation=AggregationWindowConfig(
+                        windows=["7d", "30d"],
+                        value_columns=["amount"],
+                        agg_funcs=["sum", "mean"],
+                    ),
+                ),
+            },
+            silver=silver,
+            gold=gold_with_encode_scale,
+            output_dir="/output/test_pipeline",
+            composite_name="cust_orde__abc1234",
+        )
+
+    def test_silver_contains_spark_temporal_merger(self, renderer, temporal_config):
+        result = renderer.render_silver(temporal_config)
+        assert "SparkTemporalMerger" in result
+
+    def test_silver_contains_build_spine(self, renderer, temporal_config):
+        result = renderer.render_silver(temporal_config)
+        assert "build_spine" in result
+
+    def test_silver_contains_grid_dates(self, renderer, temporal_config):
+        result = renderer.render_silver(temporal_config)
+        assert "2024-01-01" in result
+
+    def test_silver_contains_merge_all(self, renderer, temporal_config):
+        result = renderer.render_silver(temporal_config)
+        assert "merge_all" in result
+
+    def test_silver_no_parquet(self, renderer, temporal_config):
+        result = renderer.render_silver(temporal_config)
+        assert 'format("parquet")' not in result
+
+    def test_silver_falls_back_without_grid_dates(self, renderer, sample_pipeline_config):
+        result = renderer.render_silver(sample_pipeline_config)
+        assert "SparkTemporalMerger" not in result
+        assert "merge_sources" in result or "join" in result.lower()
+
+
+class TestDatabricksGoldAsOfDate:
+    def test_gold_checks_as_of_date(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "as_of_date" in result
+
+    def test_gold_as_of_date_before_feature_timestamp(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        as_of_pos = result.index("as_of_date")
+        feature_ts_pos = result.index("feature_timestamp")
+        assert as_of_pos < feature_ts_pos
+
+
+class TestDatabricksTrainingDropAsOfDate:
+    def test_training_excludes_as_of_date(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "as_of_date" in result
