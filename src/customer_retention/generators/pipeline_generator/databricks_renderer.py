@@ -928,10 +928,14 @@ def load_bronze_outputs():
 
 {% if config.silver.grid_dates %}
 def merge_sources(bronze_outputs):
-    entity_key = "{{ config.silver.entity_key or config.sources[0].entity_key }}"
+    raw_entity_key = "{{ config.silver.entity_key or config.sources[0].entity_key }}"
     base_source = "{{ config.sources[0].name }}"
-    entity_ids = bronze_outputs[base_source].select(entity_key).distinct().toPandas()[entity_key]
-    merger = SparkTemporalMerger(MergeConfig(entity_key=entity_key))
+    entity_ids = bronze_outputs[base_source].select(raw_entity_key).distinct().toPandas()[raw_entity_key]
+    if raw_entity_key != "entity_id":
+        for name, df in bronze_outputs.items():
+            if raw_entity_key in df.columns:
+                bronze_outputs[name] = df.withColumnRenamed(raw_entity_key, "entity_id")
+    merger = SparkTemporalMerger(MergeConfig(entity_key="entity_id"))
     spine = merger.build_spine(entity_ids, GRID_DATES)
     inputs = []
     for meta in MERGE_SOURCE_META:
@@ -1154,9 +1158,7 @@ from pyspark.ml.classification import LogisticRegression, RandomForestClassifier
 from pyspark.ml.feature import VectorAssembler
 from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
 from pyspark.sql import functions as F
-{% if config.training and config.training.split_strategy == "temporal" %}
 from customer_retention.stages.modeling.data_splitter import DataSplitter, SplitStrategy
-{% endif %}
 {% if config.training and config.training.imbalance_strategy == "smote" %}
 from imblearn.over_sampling import SMOTE
 {% endif %}
@@ -1195,24 +1197,20 @@ def train_and_evaluate():
         df = df.filter(F.col(TIMESTAMP_COLUMN) <= F.current_timestamp())
 {% endif %}
     assembled, feature_cols = prepare_features(df)
-{% if config.training and config.training.split_strategy == "temporal" %}
     pdf = assembled.toPandas()
     splitter = DataSplitter(
         target_column=TARGET_COLUMN,
         strategy=SplitStrategy.TEMPORAL,
         temporal_column=TIMESTAMP_COLUMN,
-{% if config.training.purge_gap_days %}
+{% if config.training and config.training.purge_gap_days %}
         purge_gap_days={{ config.training.purge_gap_days }},
 {% endif %}
-        test_size={{ config.training.test_size }},
+        test_size={{ config.training.test_size if config.training else 0.2 }},
     )
     splits = splitter.split(pdf)
     train_pdf, test_pdf = splits.X_train, splits.X_test
     train_df = spark.createDataFrame(train_pdf)
     test_df = spark.createDataFrame(test_pdf)
-{% else %}
-    train_df, test_df = assembled.randomSplit([{{ 1.0 - (config.training.test_size if config.training else 0.2) }}, {{ config.training.test_size if config.training else 0.2 }}], seed={{ config.training.random_state if config.training else 42 }})
-{% endif %}
 
     mlflow.set_experiment(f"/Shared/{PIPELINE_NAME}")
     mlflow.set_tag("composite_name", COMPOSITE_NAME)

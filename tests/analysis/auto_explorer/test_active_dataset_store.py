@@ -10,6 +10,8 @@ from customer_retention.analysis.auto_explorer.active_dataset_store import (
     load_merge_dataset_distributed,
     load_silver_merged,
     load_silver_merged_distributed,
+    require_silver_merged,
+    require_silver_merged_distributed,
     save_active_dataset,
     save_aggregated_dataset,
     save_gold_features,
@@ -199,6 +201,42 @@ class TestLoadSilverMergedDistributed:
             namespace, "events", DatasetGranularity.EVENT_LEVEL,
         )
         pd.testing.assert_frame_equal(result, sample_df)
+
+
+class TestRequireSilverMerged:
+    def test_returns_data_when_silver_merged_exists(self, namespace):
+        merged_df = pd.DataFrame({"customer_id": [1, 2], "churned": [0, 1], "feature_a": [10, 20]})
+        delta = get_delta(force_local=True)
+        delta.write(merged_df, str(namespace.silver_merged_path), mode="overwrite")
+        result = require_silver_merged(namespace)
+        pd.testing.assert_frame_equal(result, merged_df)
+
+    def test_raises_when_silver_merged_missing(self, namespace):
+        with pytest.raises(FileNotFoundError, match="Silver merged dataset not found"):
+            require_silver_merged(namespace)
+
+    def test_does_not_fall_back_to_landing(self, namespace, sample_df):
+        save_active_dataset(namespace, "customers", sample_df)
+        with pytest.raises(FileNotFoundError, match="Silver merged dataset not found"):
+            require_silver_merged(namespace)
+
+
+class TestRequireSilverMergedDistributed:
+    def test_returns_data_when_silver_merged_exists(self, namespace):
+        merged_df = pd.DataFrame({"customer_id": [1, 2], "churned": [0, 1], "feature_a": [10, 20]})
+        delta = get_delta(force_local=True)
+        delta.write(merged_df, str(namespace.silver_merged_path), mode="overwrite")
+        result = require_silver_merged_distributed(namespace)
+        pd.testing.assert_frame_equal(result, merged_df)
+
+    def test_raises_when_silver_merged_missing(self, namespace):
+        with pytest.raises(FileNotFoundError, match="Silver merged dataset not found"):
+            require_silver_merged_distributed(namespace)
+
+    def test_does_not_fall_back_to_landing(self, namespace, sample_df):
+        save_active_dataset(namespace, "customers", sample_df)
+        with pytest.raises(FileNotFoundError, match="Silver merged dataset not found"):
+            require_silver_merged_distributed(namespace)
 
 
 class TestLoadGoldFeaturesDistributed:

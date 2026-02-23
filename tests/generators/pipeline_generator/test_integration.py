@@ -193,4 +193,5 @@ class TestTrainingGeneration:
         training_content = (generated_output / "training" / "ml_experiment.py").read_text()
         assert "RandomForestClassifier" in training_content
         assert "roc_auc_score" in training_content
-        assert "train_test_split" in training_content
+        assert "DataSplitter" in training_content
+        assert "SplitStrategy.TEMPORAL" in training_content

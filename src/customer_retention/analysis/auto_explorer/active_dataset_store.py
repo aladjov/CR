@@ -66,6 +66,24 @@ def load_merge_dataset_distributed(
     return delta.read(str(dlt_path))
 
 
+def require_silver_merged(namespace: RunNamespace) -> Any:
+    silver = namespace.silver_merged_path
+    if not silver.is_dir():
+        raise FileNotFoundError(
+            f"Silver merged dataset not found: {silver}. Run notebook 03 (dataset_merge) first."
+        )
+    return _to_native_pandas(_local_delta().read(str(silver)))
+
+
+def require_silver_merged_distributed(namespace: RunNamespace) -> Any:
+    silver = namespace.silver_merged_path
+    if not silver.is_dir():
+        raise FileNotFoundError(
+            f"Silver merged dataset not found: {silver}. Run notebook 03 (dataset_merge) first."
+        )
+    return get_delta().read(str(silver))
+
+
 def load_silver_merged(
     namespace: RunNamespace,
     dataset_name: str,

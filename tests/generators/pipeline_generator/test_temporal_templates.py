@@ -301,3 +301,76 @@ class TestBronzeTimestampRename:
     def test_bronze_no_rename_when_raw_time_column_is_none(self):
         result = self._render_bronze_with_lifecycle(raw_time_column=None)
         assert "raw_df.rename" not in result
+
+
+class TestTrainingTemporalSplitEnforcement:
+
+    def test_training_template_always_imports_data_splitter(self):
+        from customer_retention.generators.pipeline_generator.renderer import TEMPLATES
+
+        training_template = TEMPLATES["training.py.j2"]
+        assert "from customer_retention.stages.modeling.data_splitter import DataSplitter, SplitStrategy" in training_template
+
+    def test_training_template_never_uses_train_test_split_for_splitting(self):
+        from customer_retention.generators.pipeline_generator.renderer import TEMPLATES
+
+        training_template = TEMPLATES["training.py.j2"]
+        assert "train_test_split(X, y" not in training_template
+
+    def test_training_template_always_uses_temporal_strategy(self):
+        from customer_retention.generators.pipeline_generator.renderer import TEMPLATES
+
+        training_template = TEMPLATES["training.py.j2"]
+        assert "SplitStrategy.TEMPORAL" in training_template
+
+    def test_training_config_defaults_to_temporal(self):
+        from customer_retention.generators.pipeline_generator.models import TrainingConfig
+
+        config = TrainingConfig()
+        assert config.split_strategy == "temporal"
+
+    def test_validation_template_always_reports_temporal(self):
+        from customer_retention.generators.pipeline_generator.renderer import TEMPLATES
+
+        for key, template in TEMPLATES.items():
+            if "validate_training" in template:
+                assert "random_stratified" not in template, f"Template {key} still references random_stratified"
+
+    def test_databricks_training_always_imports_data_splitter(self):
+        from customer_retention.generators.pipeline_generator.databricks_renderer import DATABRICKS_TEMPLATES
+
+        training_template = DATABRICKS_TEMPLATES["databricks_training.py.j2"]
+        assert "from customer_retention.stages.modeling.data_splitter import DataSplitter, SplitStrategy" in training_template
+
+    def test_databricks_training_never_uses_random_split(self):
+        from customer_retention.generators.pipeline_generator.databricks_renderer import DATABRICKS_TEMPLATES
+
+        training_template = DATABRICKS_TEMPLATES["databricks_training.py.j2"]
+        assert "randomSplit" not in training_template
+
+    def test_databricks_training_always_uses_temporal_strategy(self):
+        from customer_retention.generators.pipeline_generator.databricks_renderer import DATABRICKS_TEMPLATES
+
+        training_template = DATABRICKS_TEMPLATES["databricks_training.py.j2"]
+        assert "SplitStrategy.TEMPORAL" in training_template
+
+
+class TestEntityIdStandardization:
+
+    def test_local_silver_merge_standardizes_to_entity_id(self):
+        from customer_retention.generators.pipeline_generator.renderer import TEMPLATES
+
+        silver_template = TEMPLATES["silver.py.j2"]
+        assert 'MergeConfig(entity_key="entity_id")' in silver_template
+
+    def test_databricks_silver_merge_standardizes_to_entity_id(self):
+        from customer_retention.generators.pipeline_generator.databricks_renderer import DATABRICKS_TEMPLATES
+
+        silver_template = DATABRICKS_TEMPLATES["databricks_silver.py.j2"]
+        assert 'MergeConfig(entity_key="entity_id")' in silver_template
+
+    def test_feast_entity_key_defaults_to_entity_id(self):
+        from customer_retention.generators.pipeline_generator.renderer import TEMPLATES
+
+        config_template = TEMPLATES["config.py.j2"]
+        assert "'entity_id'" in config_template or "entity_id" in config_template

@@ -219,7 +219,7 @@ MLFLOW_ARTIFACT_ROOT = str(EXPERIMENTS_DIR / "mlruns" / "artifacts")
 FEAST_REPO_PATH = str(PRODUCTION_DIR / "feature_repo")
 FEAST_FEATURE_VIEW = "{{ config.feast.feature_view_name if config.feast else 'featureset_' + (config.composite_name or config.name) }}"
 FEAST_ENTITY_NAME = "{{ config.feast.entity_name if config.feast else 'customer' }}"
-FEAST_ENTITY_KEY = "{{ config.feast.entity_key if config.feast else config.sources[0].entity_key }}"
+FEAST_ENTITY_KEY = "{{ config.feast.entity_key if config.feast else 'entity_id' }}"
 FEAST_TIMESTAMP_COL = "{{ config.feast.timestamp_column if config.feast else 'event_timestamp' }}"
 FEAST_TTL_DAYS = {{ config.feast.ttl_days if config.feast else 365 }}
 
@@ -577,10 +577,13 @@ def load_bronze_outputs() -> dict:
 
 {% if config.silver.grid_dates %}
 def merge_sources(bronze_outputs: dict) -> pd.DataFrame:
-    entity_key = "{{ config.silver.entity_key or config.sources[0].entity_key }}"
+    raw_entity_key = "{{ config.silver.entity_key or config.sources[0].entity_key }}"
     base_source = "{{ config.sources[0].name }}"
-    entity_ids = bronze_outputs[base_source][entity_key].unique()
-    merger = TemporalMerger(MergeConfig(entity_key=entity_key))
+    entity_ids = bronze_outputs[base_source][raw_entity_key].unique()
+    for name, df in bronze_outputs.items():
+        if raw_entity_key in df.columns and raw_entity_key != "entity_id":
+            bronze_outputs[name] = df.rename(columns={raw_entity_key: "entity_id"})
+    merger = TemporalMerger(MergeConfig(entity_key="entity_id"))
     spine = merger.build_spine(entity_ids, GRID_DATES)
     inputs = []
     for meta in MERGE_SOURCE_META:
@@ -913,15 +916,13 @@ import mlflow.xgboost
 import xgboost as xgb
 from pathlib import Path
 from feast import FeatureStore
-from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.model_selection import cross_val_score
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score,
                              precision_score, recall_score, accuracy_score)
-{% if config.training and config.training.split_strategy == "temporal" %}
 from customer_retention.stages.modeling.data_splitter import DataSplitter, SplitStrategy
-{% endif %}
 {% if config.training and config.training.imbalance_strategy == "smote" %}
 from customer_retention.stages.modeling.imbalance_handler import ImbalanceHandler
 {% endif %}
@@ -1092,15 +1093,14 @@ def run_experiment():
         future_mask = training_data.loc[X.index, FEAST_TIMESTAMP_COL] <= pd.Timestamp.now()
         X, y = X.loc[future_mask], y.loc[future_mask]
 {% endif %}
-{% if config.training and config.training.split_strategy == "temporal" %}
     splitter = DataSplitter(
         target_column=TARGET_COLUMN,
         strategy=SplitStrategy.TEMPORAL,
         temporal_column=FEAST_TIMESTAMP_COL,
-{% if config.training.purge_gap_days %}
+{% if config.training and config.training.purge_gap_days %}
         purge_gap_days={{ config.training.purge_gap_days }},
 {% endif %}
-        test_size={{ config.training.test_size }},
+        test_size={{ config.training.test_size if config.training else 0.2 }},
     )
     split_df = training_data.loc[X.index].copy()
     split_df[TARGET_COLUMN] = y
@@ -1109,9 +1109,6 @@ def run_experiment():
     splits = splitter.split(split_df)
     X_train, X_test = splits.X_train[feature_names], splits.X_test[feature_names]
     y_train, y_test = splits.y_train, splits.y_test
-{% else %}
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size={{ config.training.test_size if config.training else 0.2 }}, random_state={{ config.training.random_state if config.training else 42 }}, stratify=y)
-{% endif %}
 {% if config.training and config.training.imbalance_strategy == "smote" %}
     handler = ImbalanceHandler()
     X_train, y_train = handler.fit(X_train, y_train)
@@ -2239,11 +2236,7 @@ def validate_gold(tolerance=1e-5):
 
 
 def validate_training():
-{% if config.training and config.training.split_strategy == "temporal" %}
     print("[Training] Split strategy: temporal (with DataSplitter)")
-{% else %}
-    print("[Training] Split strategy: random_stratified (sklearn train_test_split)")
-{% endif %}
     print("[Training] PASS - training validation requires MLflow comparison (not yet implemented)")
     return True
 

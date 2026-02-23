@@ -1041,7 +1041,7 @@ class FindingsParser:
         multi: MultiDatasetFindings,
         source_findings: Dict[str, ExplorationFindings],
     ) -> Optional[TrainingConfig]:
-        split_strategy = "random_stratified"
+        split_strategy = "temporal"
         temporal_column = None
         purge_gap_days = None
         recommended_start = None
@@ -1074,7 +1074,7 @@ class FindingsParser:
                         filter_future = True
                 break
 
-        if split_strategy == "random_stratified" and not filter_future and not recommended_start:
+        if not temporal_column and not filter_future and not recommended_start and self._intent is None:
             return None
 
         return TrainingConfig(

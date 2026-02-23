@@ -6,6 +6,8 @@ from .active_dataset_store import (
     load_merge_dataset_distributed,
     load_silver_merged,
     load_silver_merged_distributed,
+    require_silver_merged,
+    require_silver_merged_distributed,
     save_active_dataset,
     save_aggregated_dataset,
 )
@@ -179,6 +181,8 @@ __all__ = [
     "load_active_dataset_distributed",
     "load_merge_dataset_distributed",
     "load_silver_merged_distributed",
+    "require_silver_merged",
+    "require_silver_merged_distributed",
     "load_gold_features_distributed",
     "EntityFeatureTimestampDeriver",
     "EntityTimestampResult",

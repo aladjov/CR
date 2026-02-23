@@ -276,6 +276,7 @@ class TestMultiDatasetGeneration:
             "from customer_retention.generators.pipeline_generator.models",
             "from customer_retention.integrations.adapters.factory",
             "from customer_retention.core.compat",
+            "from customer_retention.stages.modeling.data_splitter",
         }
         for f in generated_output.rglob("*.py"):
             if f.stat().st_size > 0:

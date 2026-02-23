@@ -369,3 +369,58 @@ class TestScoringValidationNotebook:
         with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
             content = f.read()
         assert 'validate_feature_transformation' in content
+
+
+class TestNotebook03Architecture:
+
+    NOTEBOOK_PATH = NOTEBOOKS_DIR / "03_dataset_merge.ipynb"
+
+    def _all_code(self):
+        return "\n".join(src for _, src in _read_notebook_cells(self.NOTEBOOK_PATH))
+
+    def test_nb03_standardizes_entity_column(self):
+        code = self._all_code()
+        assert 'MergeConfig(entity_key="entity_id")' in code, \
+            "NB03 must always use MergeConfig(entity_key='entity_id')"
+
+    def test_nb03_renames_entity_column(self):
+        code = self._all_code()
+        assert "entity_id" in code
+        assert "rename" in code, "NB03 must rename original entity column to entity_id"
+
+
+class TestNotebook08Architecture:
+
+    NOTEBOOK_PATH = NOTEBOOKS_DIR / "08_baseline_experiments.ipynb"
+
+    def _read_content(self):
+        with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
+            return f.read()
+
+    def test_nb08_uses_prefer_merged(self):
+        content = self._read_content()
+        assert "prefer_merged=True" in content, "NB08 must use prefer_merged=True for load_notebook_findings"
+        assert "prefer_aggregated=True" not in content, "NB08 must not use prefer_aggregated=True"
+
+    def test_nb08_uses_require_silver_merged(self):
+        content = self._read_content()
+        assert "require_silver_merged" in content, "NB08 must use require_silver_merged"
+        assert "load_active_dataset(" not in content, "NB08 must not fall back to load_active_dataset"
+
+    def test_nb08_uses_temporal_split_always(self):
+        content = self._read_content()
+        assert "SplitStrategy.TEMPORAL" in content, "NB08 must use SplitStrategy.TEMPORAL"
+        assert "RANDOM_STRATIFIED" not in content, "NB08 must not use RANDOM_STRATIFIED"
+
+    def test_nb08_uses_temporal_cv_always(self):
+        content = self._read_content()
+        assert "CVStrategy.TEMPORAL_ENTITY" in content, "NB08 must use temporal entity CV"
+        assert "cross_val_score" not in content, "NB08 must not use sklearn cross_val_score"
+
+    def test_nb08_validates_as_of_date_column(self):
+        content = self._read_content()
+        assert "as_of_date" in content and "missing" in content.lower(), "NB08 must validate as_of_date column"
+
+    def test_nb08_validates_entity_id_column(self):
+        content = self._read_content()
+        assert "entity_id" in content and "missing" in content.lower(), "NB08 must validate entity_id column"

@@ -145,7 +145,7 @@ class TextFeatureConfig:
 
 @dataclass
 class TrainingConfig:
-    split_strategy: str = "random_stratified"
+    split_strategy: str = "temporal"
     test_size: float = 0.2
     random_state: int = 42
     temporal_column: Optional[str] = None

@@ -748,7 +748,7 @@ class TestTextFeatureConfig:
 class TestTrainingConfig:
     def test_default_values(self):
         config = TrainingConfig()
-        assert config.split_strategy == "random_stratified"
+        assert config.split_strategy == "temporal"
         assert config.test_size == 0.2
         assert config.random_state == 42
         assert config.temporal_column is None
@@ -981,10 +981,10 @@ class TestTrainingTemplateLocal:
         assert "FEAST_TIMESTAMP_COL" in result
         assert '"order_date"' not in result
 
-    def test_default_split_no_data_splitter(self, renderer, pipeline_config_minimal):
+    def test_default_split_uses_data_splitter(self, renderer, pipeline_config_minimal):
         result = renderer.render_training(pipeline_config_minimal)
-        assert "DataSplitter" not in result
-        assert "train_test_split" in result
+        assert "DataSplitter" in result
+        assert "SplitStrategy.TEMPORAL" in result
 
 
 class TestTrainingTemplateDatabricks:
@@ -1091,10 +1091,10 @@ class TestTrainingTemplateDatabricks:
         assert "TIMESTAMP_COLUMN" in result
         assert '"order_date"' not in result
 
-    def test_databricks_default_random_split(self, databricks_renderer, pipeline_config_minimal):
+    def test_databricks_default_temporal_split(self, databricks_renderer, pipeline_config_minimal):
         result = databricks_renderer.render_training(pipeline_config_minimal)
-        assert "randomSplit" in result
-        assert "DataSplitter" not in result
+        assert "DataSplitter" in result
+        assert "SplitStrategy.TEMPORAL" in result
 
     def test_databricks_training_all_features(self, databricks_renderer, pipeline_config_minimal):
         pipeline_config_minimal.training = TrainingConfig(
@@ -1290,7 +1290,7 @@ class TestValidationTemplate:
 
     def test_validation_default_split_info(self, renderer, pipeline_config_minimal):
         result = renderer.render_validation(pipeline_config_minimal)
-        assert "random_stratified" in result
+        assert "temporal" in result
         ast.parse(result)
 
 
