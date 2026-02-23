@@ -1,8 +1,12 @@
 import ast
+import re
 
 import pytest
 import yaml
 
+from customer_retention.generators.pipeline_generator.databricks_generator import (
+    DatabricksPipelineGenerator,
+)
 from customer_retention.generators.pipeline_generator.databricks_renderer import (
     DatabricksCodeRenderer,
 )
@@ -10,6 +14,7 @@ from customer_retention.generators.pipeline_generator.findings_parser import (
     FindingsParser,
     _edges_to_labels,
 )
+from customer_retention.generators.pipeline_generator.generator import PipelineGenerator
 from customer_retention.generators.pipeline_generator.models import (
     AggregationWindowConfig,
     BronzeEventConfig,
@@ -22,6 +27,10 @@ from customer_retention.generators.pipeline_generator.models import (
     TemporalFeatureConfig,
     TextFeatureConfig,
     TrainingConfig,
+)
+from customer_retention.generators.pipeline_generator.protocols import (
+    CodeRendererProtocol,
+    PipelineGeneratorBase,
 )
 from customer_retention.generators.pipeline_generator.renderer import CodeRenderer
 
@@ -1418,3 +1427,211 @@ class TestFeatureTimestampPreservation:
         assert "aggregation_reference_date" in result
         assert "datetime.now()" in result
         ast.parse(result)
+
+    @staticmethod
+    def _extract_and_exec_feast_timestamp(gold_code):
+        import warnings
+        from datetime import datetime
+
+        import pandas as pd
+        tree = ast.parse(gold_code)
+        func_src = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "add_feast_timestamp":
+                func_src = ast.get_source_segment(gold_code, node)
+                break
+        assert func_src is not None, "add_feast_timestamp not found in gold template"
+        feast_col = "event_timestamp"
+        ns = {"pd": pd, "warnings": warnings, "datetime": datetime, "FEAST_TIMESTAMP_COL": feast_col}
+        exec(compile(func_src, "<feast_ts>", "exec"), ns)
+        return ns["add_feast_timestamp"], feast_col
+
+    def test_gold_add_feast_timestamp_rename_does_not_use_undefined_timestamp(self, renderer, pipeline_config_minimal):
+        import pandas as pd
+        result = renderer.render_gold(pipeline_config_minimal)
+        fn, feast_col = self._extract_and_exec_feast_timestamp(result)
+        df = pd.DataFrame({"customer_id": [1], "feature_timestamp": [pd.Timestamp("2024-01-01")]})
+        out = fn(df)
+        assert feast_col in out.columns
+        assert out[feast_col].iloc[0] == pd.Timestamp("2024-01-01")
+
+    def test_gold_add_feast_timestamp_uses_attrs_reference_date(self, renderer, pipeline_config_minimal):
+        import pandas as pd
+        result = renderer.render_gold(pipeline_config_minimal)
+        fn, feast_col = self._extract_and_exec_feast_timestamp(result)
+        df = pd.DataFrame({"customer_id": [1], "value": [42]})
+        df.attrs["aggregation_reference_date"] = "2024-06-15"
+        out = fn(df)
+        assert out[feast_col].iloc[0] == pd.Timestamp("2024-06-15")
+
+    def test_gold_add_feast_timestamp_noop_when_already_present(self, renderer, pipeline_config_minimal):
+        import pandas as pd
+        result = renderer.render_gold(pipeline_config_minimal)
+        fn, feast_col = self._extract_and_exec_feast_timestamp(result)
+        df = pd.DataFrame({"customer_id": [1], feast_col: [pd.Timestamp("2024-03-01")]})
+        out = fn(df)
+        assert out[feast_col].iloc[0] == pd.Timestamp("2024-03-01")
+
+
+# ======================================================================
+# Protocol Conformance Tests
+# ======================================================================
+
+
+def _extract_function_names(code: str) -> set:
+    tree = ast.parse(code)
+    return {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+
+
+class TestProtocolConformance:
+    def test_local_renderer_satisfies_protocol(self):
+        assert isinstance(CodeRenderer(), CodeRendererProtocol)
+
+    def test_databricks_renderer_satisfies_protocol(self):
+        assert isinstance(DatabricksCodeRenderer(catalog="c", schema="s"), CodeRendererProtocol)
+
+    def test_local_generator_is_pipeline_generator_base(self, tmp_path):
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+        gen = PipelineGenerator(str(findings_dir), str(tmp_path / "out"), "test")
+        assert isinstance(gen, PipelineGeneratorBase)
+
+    def test_databricks_generator_is_pipeline_generator_base(self, tmp_path):
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+        gen = DatabricksPipelineGenerator(str(findings_dir), str(tmp_path / "out"), "test")
+        assert isinstance(gen, PipelineGeneratorBase)
+
+
+# ======================================================================
+# Structural Gold Parity Tests
+# ======================================================================
+
+
+class TestGoldTemplateParity:
+    def test_gold_templates_share_core_functions(self, pipeline_config_minimal):
+        local_code = CodeRenderer().render_gold(pipeline_config_minimal)
+        db_code = DatabricksCodeRenderer(catalog="c", schema="s").render_gold(pipeline_config_minimal)
+        local_funcs = _extract_function_names(local_code)
+        db_funcs = _extract_function_names(db_code)
+        core = {"apply_encodings", "apply_feature_selection"}
+        assert core <= local_funcs, f"Local gold missing: {core - local_funcs}"
+        assert core <= db_funcs, f"Databricks gold missing: {core - db_funcs}"
+
+
+# ======================================================================
+# Training Template Parity Tests
+# ======================================================================
+
+
+class TestTrainingTemplateParity:
+    def test_both_renderers_produce_valid_python(self, pipeline_config_minimal):
+        local_code = CodeRenderer().render_training(pipeline_config_minimal)
+        db_code = DatabricksCodeRenderer(catalog="c", schema="s").render_training(pipeline_config_minimal)
+        ast.parse(local_code)
+        ast.parse(db_code)
+
+    def test_both_renderers_share_model_types(self, pipeline_config_minimal):
+        local_code = CodeRenderer().render_training(pipeline_config_minimal)
+        db_code = DatabricksCodeRenderer(catalog="c", schema="s").render_training(pipeline_config_minimal)
+        model_pattern = re.compile(r"(LogisticRegression|RandomForestClassifier|GradientBoosting)")
+        local_models = set(model_pattern.findall(local_code))
+        db_models = set(model_pattern.findall(db_code))
+        assert local_models, "Local training should reference at least one model"
+        assert local_models == db_models, f"Model mismatch: local={local_models}, db={db_models}"
+
+
+# ======================================================================
+# Generator Base Tests — shared core stages
+# ======================================================================
+
+
+def _make_minimal_findings(findings_dir):
+    findings_dir.mkdir(parents=True, exist_ok=True)
+    multi = {
+        "datasets": {
+            "customers": {
+                "name": "customers",
+                "findings_path": str(findings_dir / "customers_findings.yaml"),
+                "source_path": "/data/customers.csv",
+                "granularity": "entity_level",
+                "row_count": 100,
+                "column_count": 3,
+            }
+        },
+        "relationships": [],
+        "primary_entity_dataset": "customers",
+        "event_datasets": [],
+    }
+    (findings_dir / "multi_dataset_findings.yaml").write_text(yaml.dump(multi))
+    customers = {
+        "source_path": "/data/customers.csv",
+        "source_format": "csv",
+        "row_count": 100,
+        "column_count": 3,
+        "columns": {
+            "customer_id": {
+                "name": "customer_id",
+                "inferred_type": "identifier",
+                "confidence": 0.9,
+                "evidence": [],
+                "quality_score": 100,
+                "cleaning_needed": False,
+                "cleaning_recommendations": [],
+            },
+            "churn": {
+                "name": "churn",
+                "inferred_type": "binary",
+                "confidence": 0.99,
+                "evidence": [],
+                "quality_score": 100,
+                "cleaning_needed": False,
+                "cleaning_recommendations": [],
+            },
+        },
+        "target_column": "churn",
+        "identifier_columns": ["customer_id"],
+    }
+    (findings_dir / "customers_findings.yaml").write_text(yaml.dump(customers))
+
+
+CORE_STAGE_PATTERNS = ["config.py", "bronze", "silver", "gold", "training", "pipeline_runner.py"]
+
+
+class TestGeneratorBaseSharedStages:
+    def test_local_generator_produces_core_stages(self, tmp_path):
+        findings_dir = tmp_path / "findings"
+        _make_minimal_findings(findings_dir)
+        output_dir = tmp_path / "local_out"
+        output_dir.mkdir()
+        gen = PipelineGenerator(str(findings_dir), str(output_dir), "test_pipeline")
+        files = gen.generate()
+        file_strs = [str(f) for f in files]
+        for pattern in CORE_STAGE_PATTERNS:
+            assert any(pattern in s for s in file_strs), f"Local generator missing core stage: {pattern}"
+
+    def test_databricks_generator_produces_core_stages(self, tmp_path):
+        findings_dir = tmp_path / "findings"
+        _make_minimal_findings(findings_dir)
+        output_dir = tmp_path / "db_out"
+        output_dir.mkdir()
+        gen = DatabricksPipelineGenerator(str(findings_dir), str(output_dir), "test_pipeline")
+        files = gen.generate()
+        file_strs = [str(f) for f in files]
+        for pattern in CORE_STAGE_PATTERNS:
+            assert any(pattern in s for s in file_strs), f"Databricks generator missing core stage: {pattern}"
+
+    def test_both_generators_produce_same_core_file_names(self, tmp_path):
+        findings_dir = tmp_path / "findings"
+        _make_minimal_findings(findings_dir)
+        local_dir = tmp_path / "local_out"
+        local_dir.mkdir()
+        db_dir = tmp_path / "db_out"
+        db_dir.mkdir()
+        local_gen = PipelineGenerator(str(findings_dir), str(local_dir), "test_pipeline")
+        db_gen = DatabricksPipelineGenerator(str(findings_dir), str(db_dir), "test_pipeline")
+        local_files = {f.relative_to(local_dir) for f in local_gen.generate()}
+        db_files = {f.relative_to(db_dir) for f in db_gen.generate()}
+        core_local = {f for f in local_files if any(p in str(f) for p in CORE_STAGE_PATTERNS)}
+        core_db = {f for f in db_files if any(p in str(f) for p in CORE_STAGE_PATTERNS)}
+        assert core_local == core_db, f"Core file name mismatch:\nLocal-only: {core_local - core_db}\nDB-only: {core_db - core_local}"

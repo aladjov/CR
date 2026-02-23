@@ -803,24 +803,25 @@ def get_feature_version_tag() -> str:
 
 
 def add_feast_timestamp(df: pd.DataFrame, reference_date=None) -> pd.DataFrame:
-    if FEAST_TIMESTAMP_COL not in df.columns:
-        if "feature_timestamp" in df.columns:
-            df = df.rename(columns={"feature_timestamp": FEAST_TIMESTAMP_COL})
-        elif "aggregation_reference_date" in df.attrs:
-            timestamp = pd.Timestamp(df.attrs["aggregation_reference_date"])
-            print(f"  Using aggregation reference_date for Feast timestamp: {timestamp}")
-        elif reference_date is not None:
-            timestamp = reference_date
-            print(f"  Using provided reference_date for Feast timestamp: {timestamp}")
-        else:
-            timestamp = datetime.now()
-            warnings.warn(
-                f"No reference_date available for Feast timestamp. Using datetime.now() ({timestamp}). "
-                "This may cause temporal leakage - features should use actual aggregation dates. "
-                "Set aggregation_reference_date in DataFrame.attrs during aggregation.",
-                UserWarning
-            )
-        df[FEAST_TIMESTAMP_COL] = timestamp
+    if FEAST_TIMESTAMP_COL in df.columns:
+        return df
+    if "feature_timestamp" in df.columns:
+        return df.rename(columns={"feature_timestamp": FEAST_TIMESTAMP_COL})
+    if "aggregation_reference_date" in df.attrs:
+        timestamp = pd.Timestamp(df.attrs["aggregation_reference_date"])
+        print(f"  Using aggregation reference_date for Feast timestamp: {timestamp}")
+    elif reference_date is not None:
+        timestamp = reference_date
+        print(f"  Using provided reference_date for Feast timestamp: {timestamp}")
+    else:
+        timestamp = datetime.now()
+        warnings.warn(
+            f"No reference_date available for Feast timestamp. Using datetime.now() ({timestamp}). "
+            "This may cause temporal leakage - features should use actual aggregation dates. "
+            "Set aggregation_reference_date in DataFrame.attrs during aggregation.",
+            UserWarning
+        )
+    df[FEAST_TIMESTAMP_COL] = timestamp
     return df
 
 

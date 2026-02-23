@@ -18,6 +18,7 @@ from .models import (
     TimestampCoalesceConfig,
     TransformationStep,
 )
+from .protocols import CodeRendererProtocol, PipelineGeneratorBase
 from .renderer import CodeRenderer
 
 __all__ = [
@@ -40,4 +41,6 @@ __all__ = [
     "LandingLayerConfig",
     "TimestampCoalesceConfig",
     "LabelTimestampConfig",
+    "CodeRendererProtocol",
+    "PipelineGeneratorBase",
 ]
