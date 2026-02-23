@@ -1716,6 +1716,25 @@ class TestDatabricksGoldFeatureTimestamp:
         ast.parse(result)
 
 
+class TestDatabricksRunnerSchemaCreation:
+    def test_runner_creates_schema_before_notebooks(self, renderer, sample_pipeline_config):
+        result = renderer.render_runner(sample_pipeline_config)
+        assert "CREATE SCHEMA IF NOT EXISTS" in result
+        schema_pos = result.index("CREATE SCHEMA IF NOT EXISTS")
+        notebook_pos = result.index("run_notebook")
+        assert schema_pos < notebook_pos
+
+    def test_runner_schema_uses_catalog_and_schema(self, renderer, sample_pipeline_config):
+        result = renderer.render_runner(sample_pipeline_config)
+        assert "{CATALOG}.{SCHEMA}" in result
+
+    def test_runner_runs_config_before_schema(self, renderer, sample_pipeline_config):
+        result = renderer.render_runner(sample_pipeline_config)
+        config_pos = result.index("%run ./config")
+        schema_pos = result.index("CREATE SCHEMA IF NOT EXISTS")
+        assert config_pos < schema_pos
+
+
 class TestDatabricksRunnerLandingStep:
     def test_runner_includes_landing_when_present(self, renderer, sample_pipeline_config):
         sample_pipeline_config.landing = {

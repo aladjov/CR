@@ -1438,6 +1438,14 @@ import time
 
 # COMMAND ----------
 
+# MAGIC %run ./config
+
+# COMMAND ----------
+
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {CATALOG}.{SCHEMA}")
+
+# COMMAND ----------
+
 def run_notebook(path, timeout=3600):
     print(f"Running: {path}")
     start = time.time()
