@@ -83,6 +83,9 @@ class CrossValidator:
         groups: Optional[Series] = None,
         temporal_values: Optional[Series] = None,
     ) -> CVResult:
+        if hasattr(model, "clone") and self.strategy == CVStrategy.TEMPORAL_ENTITY:
+            return self._run_distributed(model, X, y, groups=groups, temporal_values=temporal_values)
+
         X, y = to_pandas(X), to_pandas(y)
         if groups is not None:
             groups = to_pandas(groups)
@@ -112,6 +115,74 @@ class CrossValidator:
             fold_details=fold_details,
             scoring=self.scoring,
             is_stable=is_stable,
+        )
+
+    def _run_distributed(
+        self,
+        model,
+        X: DataFrame,
+        y: Series,
+        groups: Optional[Series] = None,
+        temporal_values: Optional[Series] = None,
+    ) -> CVResult:
+        from sklearn.metrics import average_precision_score, roc_auc_score
+
+        X_pd = to_pandas(X)
+        y_pd = to_pandas(y)
+        groups_pd = to_pandas(groups) if groups is not None else None
+        temporal_pd = to_pandas(temporal_values) if temporal_values is not None else None
+
+        splitter = TemporalEntitySplit(
+            n_splits=self.n_splits,
+            temporal_values=temporal_pd,
+            purge_gap_days=self.purge_gap_days,
+        )
+
+        scores = []
+        fold_details = []
+
+        for fold_idx, (train_idx, test_idx) in enumerate(splitter.split(X_pd, y_pd, groups_pd)):
+            fold_model = model.clone()
+            X_fold_train = X_pd.iloc[train_idx]
+            y_fold_train = y_pd.iloc[train_idx]
+            X_fold_test = X_pd.iloc[test_idx]
+            y_fold_test = y_pd.iloc[test_idx]
+
+            fold_model.fit(X_fold_train, y_fold_train)
+            y_proba = fold_model.predict_proba(X_fold_test)
+
+            if self.scoring == "roc_auc":
+                score = roc_auc_score(y_fold_test, y_proba[:, 1])
+            elif self.scoring in ("average_precision", "pr_auc"):
+                score = average_precision_score(y_fold_test, y_proba[:, 1])
+            else:
+                score = roc_auc_score(y_fold_test, y_proba[:, 1])
+
+            scores.append(score)
+
+            detail: Dict[str, Any] = {
+                "fold": fold_idx + 1,
+                "train_size": len(train_idx),
+                "test_size": len(test_idx),
+                "train_class_ratio": float(y_fold_train.mean()),
+                "score": score,
+            }
+            if groups_pd is not None:
+                detail["train_entities"] = int(groups_pd.iloc[train_idx].nunique())
+                detail["test_entities"] = int(groups_pd.iloc[test_idx].nunique())
+            fold_details.append(detail)
+
+        cv_scores = np.array(scores)
+        cv_mean = float(np.mean(cv_scores))
+        cv_std = float(np.std(cv_scores))
+
+        return CVResult(
+            cv_scores=cv_scores,
+            cv_mean=cv_mean,
+            cv_std=cv_std,
+            fold_details=fold_details,
+            scoring=self.scoring,
+            is_stable=bool(cv_std <= self.stability_threshold),
         )
 
     def _create_cv_splitter(self, groups: Optional[Series] = None, temporal_values: Optional[Series] = None):

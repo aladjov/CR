@@ -1,0 +1,168 @@
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+import pandas as pd
+
+from customer_retention.core.compat import _is_spark_pandas, enable_arrow_optimization
+
+_MODEL_REGISTRY: Dict[str, str] = {
+    "LogisticRegression": "pyspark.ml.classification.LogisticRegression",
+    "RandomForestClassifier": "pyspark.ml.classification.RandomForestClassifier",
+    "GBTClassifier": "pyspark.ml.classification.GBTClassifier",
+}
+
+_WEIGHT_COL = "__weight__"
+_LABEL_COL = "__label__"
+_FEATURES_COL = "__features__"
+
+
+def _import_class(fully_qualified: str) -> type:
+    module_path, cls_name = fully_qualified.rsplit(".", 1)
+    import importlib
+    mod = importlib.import_module(module_path)
+    return getattr(mod, cls_name)
+
+
+def _get_spark_session() -> Any:
+    from pyspark.sql import SparkSession
+    return SparkSession.getActiveSession() or SparkSession.builder.getOrCreate()
+
+
+def _make_assembler(input_cols: List[str]) -> Any:
+    from pyspark.ml.feature import VectorAssembler
+    return VectorAssembler(
+        inputCols=input_cols,
+        outputCol=_FEATURES_COL,
+        handleInvalid="keep",
+    )
+
+
+class SparkClassifierWrapper:
+
+    def __init__(
+        self,
+        spark_model_class: str,
+        spark_model_params: Dict[str, Any],
+        feature_names: List[str],
+        class_weight: Optional[str] = None,
+    ):
+        self.spark_model_class = spark_model_class
+        self.spark_model_params = dict(spark_model_params)
+        self.feature_names = list(feature_names)
+        self.class_weight = class_weight
+        self._fitted_model: Any = None
+        self._classes: Optional[np.ndarray] = None
+
+    def fit(self, X: Any, y: Any) -> SparkClassifierWrapper:
+        spark_df = self._to_spark_df(X, y)
+        spark_model = self._create_spark_model()
+        self._fitted_model = spark_model.fit(spark_df)
+        self._classes = np.array([0, 1])
+        return self
+
+    def predict(self, X: Any) -> np.ndarray:
+        assembled = self._assemble_features(X)
+        predictions = self._fitted_model.transform(assembled)
+        enable_arrow_optimization()
+        pdf = predictions.select("prediction").toPandas()
+        return pdf["prediction"].to_numpy().astype(float)
+
+    def predict_proba(self, X: Any) -> np.ndarray:
+        assembled = self._assemble_features(X)
+        predictions = self._fitted_model.transform(assembled)
+        enable_arrow_optimization()
+        pdf = predictions.select("probability").toPandas()
+        return np.array([row.toArray() for row in pdf["probability"]])
+
+    def clone(self) -> SparkClassifierWrapper:
+        return SparkClassifierWrapper(
+            spark_model_class=self.spark_model_class,
+            spark_model_params=self.spark_model_params,
+            feature_names=self.feature_names,
+            class_weight=self.class_weight,
+        )
+
+    @property
+    def feature_importances_(self) -> np.ndarray:
+        model = self._fitted_model
+        if hasattr(model, "featureImportances"):
+            return model.featureImportances.toArray()
+        if hasattr(model, "coefficients"):
+            return np.abs(model.coefficients.toArray())
+        return np.zeros(len(self.feature_names))
+
+    @property
+    def classes_(self) -> np.ndarray:
+        if self._classes is not None:
+            return self._classes
+        return np.array([0, 1])
+
+    def _compute_balanced_weights(self, y: Any) -> Dict[int, float]:
+        y_np = y.to_numpy() if hasattr(y, "to_numpy") else np.asarray(y)
+        classes = np.unique(y_np)
+        n_total = len(y_np)
+        n_classes = len(classes)
+        return {int(cls): n_total / (n_classes * np.sum(y_np == cls)) for cls in classes}
+
+    def _to_spark_df(self, X: Any, y: Any) -> Any:
+        spark = _get_spark_session()
+
+        if _is_spark_pandas(X):
+            import pyspark.pandas as ps
+            combined = ps.concat([X[self.feature_names], y.rename(_LABEL_COL)], axis=1)
+            spark_df = combined.to_spark()
+        else:
+            combined = pd.concat(
+                [X[self.feature_names].reset_index(drop=True), y.reset_index(drop=True).rename(_LABEL_COL)],
+                axis=1,
+            )
+            spark_df = spark.createDataFrame(combined)
+
+        spark_df = spark_df.withColumn(_LABEL_COL, spark_df[_LABEL_COL].cast("double"))
+
+        if self.class_weight == "balanced":
+            spark_df = self._add_weight_column(spark_df)
+
+        return _make_assembler(self.feature_names).transform(spark_df)
+
+    def _add_weight_column(self, spark_df: Any) -> Any:
+        import pyspark.sql.functions as F  # noqa: N812
+
+        counts = spark_df.groupBy(_LABEL_COL).count().collect()
+        class_counts = {int(row[_LABEL_COL]): row["count"] for row in counts}
+        n_total = sum(class_counts.values())
+        n_classes = len(class_counts)
+
+        weight_expr = F.lit(1.0)
+        for cls, cnt in class_counts.items():
+            w = n_total / (n_classes * cnt)
+            weight_expr = F.when(F.col(_LABEL_COL) == float(cls), F.lit(w)).otherwise(weight_expr)
+
+        return spark_df.withColumn(_WEIGHT_COL, weight_expr)
+
+    def _assemble_features(self, X: Any) -> Any:
+        spark = _get_spark_session()
+
+        if _is_spark_pandas(X):
+            spark_df = X[self.feature_names].to_spark()
+        else:
+            spark_df = spark.createDataFrame(X[self.feature_names])
+
+        return _make_assembler(self.feature_names).transform(spark_df)
+
+    def _create_spark_model(self) -> Any:
+        fqn = _MODEL_REGISTRY.get(self.spark_model_class)
+        if fqn is None:
+            raise ValueError(f"Unknown spark model class: {self.spark_model_class}")
+
+        model_cls = _import_class(fqn)
+        params = dict(self.spark_model_params)
+        params["featuresCol"] = _FEATURES_COL
+        params["labelCol"] = _LABEL_COL
+
+        if self.class_weight == "balanced" and self.spark_model_class != "GBTClassifier":
+            params["weightCol"] = _WEIGHT_COL
+
+        return model_cls(**params)
