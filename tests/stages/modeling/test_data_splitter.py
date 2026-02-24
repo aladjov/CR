@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from customer_retention.core.compat import to_pandas
 from customer_retention.stages.modeling import DataSplitter, SplitConfig, SplitStrategy
 
 
@@ -317,6 +318,95 @@ class TestFeatureExclusion:
 
         assert "duration" not in result.X_train.columns
         assert "feature" in result.X_train.columns
+
+
+class TestTemporalSplitDistributed:
+    def test_temporal_split_skips_to_pandas(self):
+        from unittest.mock import patch
+
+        np.random.seed(42)
+        n = 200
+        df = pd.DataFrame({
+            "feature1": np.random.randn(n),
+            "target": np.random.choice([0, 1], n),
+            "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
+        })
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", test_size=0.2,
+        )
+        with patch("customer_retention.stages.modeling.data_splitter.to_pandas") as mock_tp:
+            result = splitter.split(df)
+            mock_tp.assert_not_called()
+        assert len(result.X_train) > 0
+        assert len(result.X_test) > 0
+
+    def test_temporal_split_with_purge_skips_to_pandas(self):
+        from unittest.mock import patch
+
+        np.random.seed(42)
+        n = 200
+        df = pd.DataFrame({
+            "feature1": np.random.randn(n),
+            "target": np.random.choice([0, 1], n),
+            "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
+        })
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", test_size=0.2, purge_gap_days=30,
+        )
+        with patch("customer_retention.stages.modeling.data_splitter.to_pandas") as mock_tp:
+            result = splitter.split(df)
+            mock_tp.assert_not_called()
+        assert len(result.X_train) + len(result.X_test) < n
+
+    def test_temporal_split_train_metadata_alignment(self):
+        """Train entities/dates reconstructed via cutoff must align with X_train indices."""
+        from datetime import timedelta
+
+        np.random.seed(42)
+        n = 500
+        purge_gap_days = 30
+        df = pd.DataFrame({
+            "feature1": np.random.randn(n),
+            "target": np.random.choice([0, 1], n),
+            "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
+            "entity_id": np.random.choice(["a", "b", "c", "d"], n),
+        })
+        df = df.sort_values("as_of_date").reset_index(drop=True)
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", test_size=0.2,
+            purge_gap_days=purge_gap_days, exclude_columns=["as_of_date", "entity_id"],
+        )
+        result = splitter.split(df)
+
+        cutoff = pd.Timestamp(result.split_info["cutoff_date"])
+        purge_start = cutoff - timedelta(days=purge_gap_days)
+        train_mask = df["as_of_date"] < purge_start
+        reconstructed_entities = df.loc[train_mask, "entity_id"]
+        reconstructed_dates = df.loc[train_mask, "as_of_date"]
+
+        assert list(result.X_train.index) == list(reconstructed_entities.index)
+        assert list(result.X_train.index) == list(reconstructed_dates.index)
+        assert len(reconstructed_entities) == len(result.X_train)
+
+    def test_stratified_split_still_calls_to_pandas(self):
+        from unittest.mock import patch
+
+        np.random.seed(42)
+        n = 200
+        df = pd.DataFrame({
+            "feature1": np.random.randn(n),
+            "target": np.random.choice([0, 1], n),
+        })
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.RANDOM_STRATIFIED,
+            test_size=0.2,
+        )
+        with patch("customer_retention.stages.modeling.data_splitter.to_pandas", wraps=to_pandas) as mock_tp:
+            splitter.split(df)
+            mock_tp.assert_called_once()
 
 
 class TestTemporalPurgeGap:

@@ -67,16 +67,15 @@ class DataSplitter:
         self.purge_gap_days = purge_gap_days
 
     def split(self, df: DataFrame, feature_availability: Optional["FeatureAvailabilityMetadata"] = None) -> SplitResult:
-        df = to_pandas(df)
         self._validate_minority_samples(df)
         availability_warnings = self.validate_feature_availability(df, feature_availability)
 
         if self.strategy == SplitStrategy.TEMPORAL:
             result = self._temporal_split(df)
         elif self.strategy == SplitStrategy.GROUP:
-            result = self._group_split(df)
+            result = self._group_split(to_pandas(df))
         else:
-            result = self._stratified_split(df)
+            result = self._stratified_split(to_pandas(df))
 
         if availability_warnings:
             result.split_info["availability_warnings"] = [w.to_dict() for w in availability_warnings]
