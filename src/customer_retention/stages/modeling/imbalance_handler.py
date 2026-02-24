@@ -157,7 +157,7 @@ class ImbalanceHandler:
             sampler = ADASYN(sampling_strategy=self.sampling_strategy, random_state=self.random_state)
             return sampler.fit_resample(X, y)
 
-        return X.values, y.values
+        return X.to_numpy(), y.to_numpy()
 
 
 @dataclass

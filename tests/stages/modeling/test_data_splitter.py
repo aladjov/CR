@@ -409,6 +409,52 @@ class TestTemporalSplitDistributed:
             mock_tp.assert_called_once()
 
 
+class TestTemporalSplitNoIloc:
+    def test_no_sort_or_iloc_in_temporal_split_source(self):
+        import inspect
+
+        from customer_retention.stages.modeling.data_splitter import DataSplitter
+        source = inspect.getsource(DataSplitter._temporal_split)
+        assert ".iloc[" not in source, "_temporal_split must not use .iloc (banned on pyspark.pandas)"
+        assert ".iloc[:" not in source
+        assert "sort_values" not in source, "_temporal_split must not sort (expensive on distributed data)"
+        assert "reset_index" not in source
+
+    def test_cutoff_date_always_in_split_info(self):
+        n = 200
+        df = pd.DataFrame({
+            "feature1": np.random.randn(n),
+            "target": np.random.choice([0, 1], n),
+            "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
+        })
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", test_size=0.2,
+        )
+        result = splitter.split(df)
+        assert "cutoff_date" in result.split_info
+
+    def test_unsorted_input_produces_correct_split(self):
+        np.random.seed(42)
+        n = 500
+        dates = pd.date_range("2023-01-01", periods=n, freq="D")
+        df = pd.DataFrame({
+            "feature1": np.random.randn(n),
+            "target": np.random.choice([0, 1], n),
+            "as_of_date": dates,
+        })
+        shuffled = df.sample(frac=1, random_state=42).reset_index(drop=True)
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", test_size=0.2, purge_gap_days=30,
+            exclude_columns=["as_of_date"],
+        )
+        result = splitter.split(shuffled)
+        train_dates = shuffled.loc[result.X_train.index, "as_of_date"]
+        test_dates = shuffled.loc[result.X_test.index, "as_of_date"]
+        assert train_dates.max() < test_dates.min()
+
+
 class TestTemporalPurgeGap:
     @pytest.fixture
     def temporal_df(self):

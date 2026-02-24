@@ -38,7 +38,7 @@ class TemporalEntitySplit:
                 purge_cutoff = test_min - pd.Timedelta(days=self.purge_gap_days)
                 train_dates = self.temporal_values.iloc[train_idx]
                 keep_mask = train_dates < purge_cutoff
-                purged_train = train_idx[keep_mask.values]
+                purged_train = train_idx[keep_mask.to_numpy()]
                 if len(purged_train) > len(train_idx) * 0.1:
                     train_idx = purged_train
             yield train_idx, test_idx

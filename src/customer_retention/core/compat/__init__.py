@@ -438,6 +438,24 @@ def safe_describe(df: Any) -> Any:
         return numeric.describe()
 
 
+def temporal_quantile(series: Any, q: float) -> _pandas.Timestamp:
+    if _is_spark_pandas(series):
+        return _spark_temporal_quantile(series, q)
+    return series.quantile(q)
+
+
+def _spark_temporal_quantile(series: Any, q: float) -> _pandas.Timestamp:
+    from pyspark.sql import functions as F  # noqa: N812
+
+    spark_df = series.to_frame().to_spark()
+    col_name = spark_df.columns[0]
+    epoch = F.unix_timestamp(F.col(col_name).cast("timestamp"))
+    row = spark_df.select(F.percentile_approx(epoch, float(q)).alias("v")).head()
+    if row["v"] is None:
+        return _pandas.NaT
+    return _pandas.Timestamp(row["v"], unit="s")
+
+
 def batched_corr_matrix(df: Any, columns: list[str]) -> _pandas.DataFrame:
     valid_cols = [c for c in columns if c in df.columns]
     if len(valid_cols) < 2:
@@ -752,4 +770,5 @@ __all__ = [
     "bulk_class_overlap",
     "bulk_effect_sizes",
     "BulkEffectSizeResult",
+    "temporal_quantile",
 ]

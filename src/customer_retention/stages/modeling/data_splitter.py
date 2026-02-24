@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
 
-from customer_retention.core.compat import DataFrame, Series, to_pandas
+from customer_retention.core.compat import DataFrame, Series, temporal_quantile, to_pandas
 from customer_retention.core.config.column_config import select_model_ready_columns
 
 if TYPE_CHECKING:
@@ -140,34 +140,35 @@ class DataSplitter:
         )
 
     def _temporal_split(self, df: DataFrame) -> SplitResult:
-        df_sorted = df.sort_values(self.temporal_column).reset_index(drop=True)
-        cutoff_idx = int(len(df_sorted) * (1 - self.test_size))
-        cutoff_date = df_sorted[self.temporal_column].iloc[cutoff_idx]
+        col = self.temporal_column
+        cutoff_date = temporal_quantile(df[col], 1 - self.test_size)
 
         purge_gap_rows = 0
         if self.purge_gap_days and self.purge_gap_days > 0:
             purge_start = cutoff_date - timedelta(days=self.purge_gap_days)
-            train_df = df_sorted[df_sorted[self.temporal_column] < purge_start]
-            test_df = df_sorted[df_sorted[self.temporal_column] >= cutoff_date]
-            purge_gap_rows = len(df_sorted) - len(train_df) - len(test_df)
+            train_df = df[df[col] < purge_start]
+            test_df = df[df[col] >= cutoff_date]
+            purge_gap_rows = len(df) - len(train_df) - len(test_df)
         else:
-            train_df = df_sorted.iloc[:cutoff_idx]
-            test_df = df_sorted.iloc[cutoff_idx:]
+            train_df = df[df[col] < cutoff_date]
+            test_df = df[df[col] >= cutoff_date]
+
+        X_val, y_val = None, None
+        if self.include_validation:
+            val_frac = self.validation_size / (1 - self.test_size)
+            val_cutoff = temporal_quantile(train_df[col], 1 - val_frac)
+            val_df = train_df[train_df[col] >= val_cutoff]
+            train_df = train_df[train_df[col] < val_cutoff]
+            X_val, y_val = self._prepare_features_target(val_df)
 
         X_train, y_train = self._prepare_features_target(train_df)
         X_test, y_test = self._prepare_features_target(test_df)
 
-        X_val, y_val = None, None
-        if self.include_validation:
-            val_split = int(len(X_train) * (1 - self.validation_size / (1 - self.test_size)))
-            X_val, y_val = X_train.iloc[val_split:], y_train.iloc[val_split:]
-            X_train, y_train = X_train.iloc[:val_split], y_train.iloc[:val_split]
-
         split_info = self._build_split_info(X_train, X_test, X_val)
+        split_info["cutoff_date"] = str(cutoff_date)
         if self.purge_gap_days and self.purge_gap_days > 0:
             split_info["purge_gap_days"] = self.purge_gap_days
             split_info["purge_gap_rows"] = purge_gap_rows
-            split_info["cutoff_date"] = str(cutoff_date)
 
         return SplitResult(
             X_train=X_train, X_test=X_test, y_train=y_train, y_test=y_test,
