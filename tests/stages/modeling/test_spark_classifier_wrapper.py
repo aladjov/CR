@@ -38,22 +38,6 @@ def imbalanced_data():
     return X, y
 
 
-def _mock_spark_env():
-    mock_spark = MagicMock()
-    mock_spark_df = MagicMock()
-    mock_spark.createDataFrame.return_value = mock_spark_df
-
-    mock_spark_df.withColumn.return_value = mock_spark_df
-    mock_spark_df.groupBy.return_value.count.return_value.collect.return_value = [
-        MagicMock(**{_LABEL_COL: 0.0, "count": 150, "__getitem__": lambda s, k: 0.0 if k == _LABEL_COL else 150}),
-        MagicMock(**{_LABEL_COL: 1.0, "count": 50, "__getitem__": lambda s, k: 1.0 if k == _LABEL_COL else 50}),
-    ]
-
-    mock_assembler_result = MagicMock()
-    mock_spark_df.transform = MagicMock(return_value=mock_assembler_result)
-
-    return mock_spark, mock_spark_df
-
 
 class TestSparkClassifierWrapperInit:
     def test_stores_feature_names(self):

@@ -3,9 +3,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-import pandas as pd
 
-from customer_retention.core.compat import _is_spark_pandas, enable_arrow_optimization
+from customer_retention.core.compat import _is_spark_pandas, enable_arrow_optimization, native_pd
 
 _MODEL_REGISTRY: Dict[str, str] = {
     "LogisticRegression": "pyspark.ml.classification.LogisticRegression",
@@ -114,7 +113,7 @@ class SparkClassifierWrapper:
             combined = ps.concat([X[self.feature_names], y.rename(_LABEL_COL)], axis=1)
             spark_df = combined.to_spark()
         else:
-            combined = pd.concat(
+            combined = native_pd.concat(
                 [X[self.feature_names].reset_index(drop=True), y.reset_index(drop=True).rename(_LABEL_COL)],
                 axis=1,
             )
