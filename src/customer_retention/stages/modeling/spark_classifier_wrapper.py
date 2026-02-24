@@ -110,7 +110,9 @@ class SparkClassifierWrapper:
 
         if _is_spark_pandas(X):
             import pyspark.pandas as ps
-            combined = ps.concat([X[self.feature_names], y.rename(_LABEL_COL)], axis=1)
+            X_sel = X[self.feature_names].reset_index(drop=True)
+            y_sel = y.rename(_LABEL_COL).reset_index(drop=True)
+            combined = ps.concat([X_sel, y_sel], axis=1)
             spark_df = combined.to_spark()
         else:
             combined = native_pd.concat(

@@ -462,3 +462,99 @@ class TestPredictIntegration:
         assert isinstance(proba, np.ndarray)
         assert proba.shape == (len(X), 2)
         mock_transformed.select.assert_called_once_with("probability")
+
+
+class TestToSparkDfAlignment:
+    @patch(f"{_MOD}._make_assembler")
+    @patch(f"{_MOD}._get_spark_session")
+    def test_misaligned_pandas_indexes_produce_no_nans(self, mock_get_spark, mock_make_asm):
+        X = pd.DataFrame({"f1": [1.0, 2.0, 3.0], "f2": [4.0, 5.0, 6.0]}, index=[10, 20, 30])
+        y = pd.Series([0, 1, 0], index=[100, 200, 300], name="target")
+        captured = {}
+
+        def capture(df):
+            captured["df"] = df.copy()
+            mock_df = MagicMock()
+            mock_df.withColumn.return_value = mock_df
+            return mock_df
+
+        mock_spark = MagicMock()
+        mock_get_spark.return_value = mock_spark
+        mock_spark.createDataFrame.side_effect = capture
+        mock_make_asm.return_value.transform.return_value = MagicMock()
+
+        wrapper = SparkClassifierWrapper(
+            spark_model_class="LogisticRegression",
+            spark_model_params={},
+            feature_names=["f1", "f2"],
+        )
+        wrapper._to_spark_df(X, y)
+
+        combined = captured["df"]
+        assert not combined.isna().any().any()
+        assert len(combined) == 3
+        np.testing.assert_array_equal(combined[_LABEL_COL].to_numpy(), [0, 1, 0])
+
+    @patch(f"{_MOD}._make_assembler")
+    @patch(f"{_MOD}._get_spark_session")
+    def test_aligned_pandas_indexes_preserve_values(self, mock_get_spark, mock_make_asm):
+        X = pd.DataFrame({"f1": [10.0, 20.0], "f2": [30.0, 40.0]})
+        y = pd.Series([1, 0], name="target")
+        captured = {}
+
+        def capture(df):
+            captured["df"] = df.copy()
+            mock_df = MagicMock()
+            mock_df.withColumn.return_value = mock_df
+            return mock_df
+
+        mock_spark = MagicMock()
+        mock_get_spark.return_value = mock_spark
+        mock_spark.createDataFrame.side_effect = capture
+        mock_make_asm.return_value.transform.return_value = MagicMock()
+
+        wrapper = SparkClassifierWrapper(
+            spark_model_class="LogisticRegression",
+            spark_model_params={},
+            feature_names=["f1", "f2"],
+        )
+        wrapper._to_spark_df(X, y)
+
+        combined = captured["df"]
+        assert list(combined.columns) == ["f1", "f2", _LABEL_COL]
+        np.testing.assert_array_equal(combined["f1"].to_numpy(), [10.0, 20.0])
+        np.testing.assert_array_equal(combined[_LABEL_COL].to_numpy(), [1, 0])
+
+    @patch(f"{_MOD}._make_assembler")
+    @patch(f"{_MOD}._get_spark_session")
+    def test_pyspark_pandas_path_resets_indexes(self, mock_get_spark, mock_make_asm):
+        mock_X = MagicMock()
+        mock_X.__contains__ = MagicMock(return_value=True)
+        mock_X_sel = MagicMock()
+        mock_X.__getitem__ = MagicMock(return_value=mock_X_sel)
+        mock_X_reset = MagicMock()
+        mock_X_sel.reset_index = MagicMock(return_value=mock_X_reset)
+
+        mock_y = MagicMock()
+        mock_y.rename = MagicMock()
+        mock_y_renamed = mock_y.rename.return_value
+        mock_y_reset = MagicMock()
+        mock_y_renamed.reset_index = MagicMock(return_value=mock_y_reset)
+
+        mock_combined = MagicMock()
+        mock_spark_df = MagicMock()
+        mock_combined.to_spark.return_value = mock_spark_df
+        mock_spark_df.withColumn.return_value = mock_spark_df
+        mock_make_asm.return_value.transform.return_value = MagicMock()
+
+        with patch(f"{_MOD}._is_spark_pandas", return_value=True), \
+             patch("pyspark.pandas.concat", return_value=mock_combined):
+            wrapper = SparkClassifierWrapper(
+                spark_model_class="LogisticRegression",
+                spark_model_params={},
+                feature_names=["f1", "f2"],
+            )
+            wrapper._to_spark_df(mock_X, mock_y)
+
+        mock_X_sel.reset_index.assert_called_once_with(drop=True)
+        mock_y_renamed.reset_index.assert_called_once_with(drop=True)
