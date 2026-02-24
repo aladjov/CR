@@ -695,6 +695,126 @@ def _spark_bulk_effect_sizes(
     return BulkEffectSizeResult(effect_sizes=effect_sizes, class_stats=class_stats)
 
 
+def spark_checkpoint(df: Any) -> Any:
+    if _is_spark_pandas(df):
+        spark_df = df.to_spark().localCheckpoint(eager=True)
+        from .spark_backend import _as_pandas_api
+        return _as_pandas_api(spark_df)
+    return df
+
+
+def bulk_label_encode(df: Any, columns: list[str]) -> Any:
+    valid = [c for c in columns if c in df.columns]
+    if not valid:
+        return df
+    if _is_spark_pandas(df):
+        return _spark_bulk_label_encode(df, valid)
+    return _pandas_bulk_label_encode(df, valid)
+
+
+def _pandas_bulk_label_encode(df: Any, columns: list[str]) -> Any:
+    df = df.copy()
+    for col in columns:
+        codes, _ = df[col].astype(str).factorize(sort=True)
+        df[col] = codes
+    return df
+
+
+def _spark_bulk_label_encode(df: Any, columns: list[str]) -> Any:
+    import pyspark.sql.functions as F  # noqa: N812
+    from pyspark.ml import Pipeline
+    from pyspark.ml.feature import StringIndexer
+
+    spark_df = df.to_spark()
+    indexed_names = [f"__idx_{c}__" for c in columns]
+    indexers = [
+        StringIndexer(
+            inputCol=c, outputCol=idx,
+            handleInvalid="keep", stringOrderType="alphabetAsc",
+        )
+        for c, idx in zip(columns, indexed_names)
+    ]
+    pipeline = Pipeline(stages=indexers)
+    fitted = pipeline.fit(spark_df)
+    result = fitted.transform(spark_df)
+    for c, idx in zip(columns, indexed_names):
+        result = result.drop(c).withColumnRenamed(idx, c)
+        result = result.withColumn(c, F.col(c).cast("int"))
+    from .spark_backend import _as_pandas_api
+    return _as_pandas_api(result)
+
+
+def bulk_median_impute(df: Any, columns: list[str] | None = None) -> Any:
+    if _is_spark_pandas(df):
+        return _spark_bulk_median_impute(df, columns)
+    return _pandas_bulk_median_impute(df, columns)
+
+
+def _pandas_bulk_median_impute(df: Any, columns: list[str] | None = None) -> Any:
+    if columns is not None:
+        num_cols = [c for c in columns if is_numeric_dtype(df[c])]
+    else:
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+    if not num_cols:
+        return df
+    medians = df[num_cols].median()
+    fill_dict = {c: (float(v) if _pandas.notna(v) else 0) for c, v in medians.items()}
+    return df.fillna(fill_dict)
+
+
+def _spark_bulk_median_impute(df: Any, columns: list[str] | None = None) -> Any:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    spark_df = df.to_spark()
+    if columns is not None:
+        num_cols = [c for c in columns if is_numeric_dtype(df[c])]
+    else:
+        num_cols = [
+            c for c in df.columns
+            if is_numeric_dtype(df[c])
+        ]
+    if not num_cols:
+        return df
+    exprs = [F.percentile_approx(F.col(c), 0.5).alias(c) for c in num_cols]
+    row = spark_df.agg(*exprs).head()
+    fill_dict = {c: (float(row[c]) if row[c] is not None else 0) for c in num_cols}
+    result = spark_df.fillna(fill_dict)
+    from .spark_backend import _as_pandas_api
+    return _as_pandas_api(result)
+
+
+def bulk_zero_variance_cols(df: Any) -> list[str]:
+    if _is_spark_pandas(df):
+        return _spark_bulk_zero_variance_cols(df)
+    num = df.select_dtypes(include="number")
+    if num.empty:
+        return []
+    stds = num.std()
+    return stds[(stds == 0) | stds.isna()].index.tolist()
+
+
+def _spark_bulk_zero_variance_cols(df: Any) -> list[str]:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    num_cols = [c for c in df.columns if is_numeric_dtype(df[c])]
+    if not num_cols:
+        return []
+    spark_df = df[num_cols].to_spark()
+    exprs = [F.stddev(F.col(c)).alias(c) for c in num_cols]
+    row = spark_df.agg(*exprs).head()
+    return [c for c in num_cols if row[c] is None or float(row[c]) == 0]
+
+
+def collect_for_sklearn(obj: Any) -> Any:
+    if isinstance(obj, (_pandas.DataFrame, _pandas.Series)):
+        return obj
+    if _is_spark_pandas(obj):
+        enable_arrow_optimization()
+        spark_df = obj.to_spark() if hasattr(obj, "to_spark") else obj.to_frame().to_spark()
+        return spark_df.toPandas()
+    return obj
+
+
 __all__ = [
     "pd",
     "native_pd",
@@ -771,4 +891,9 @@ __all__ = [
     "bulk_effect_sizes",
     "BulkEffectSizeResult",
     "temporal_quantile",
+    "spark_checkpoint",
+    "bulk_label_encode",
+    "bulk_median_impute",
+    "bulk_zero_variance_cols",
+    "collect_for_sklearn",
 ]
