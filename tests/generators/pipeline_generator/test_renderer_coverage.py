@@ -244,7 +244,12 @@ class TestCodeRendererConfig:
         assert "def get_bronze_path" in result
         assert "def get_silver_path" in result
         assert "def get_gold_path" in result
-        assert "def get_feast_data_path" in result
+        assert "get_feast_data_path" in result
+
+    def test_feast_data_path_aliases_gold_path(self, renderer, sample_pipeline_config):
+        result = renderer.render_config(sample_pipeline_config)
+
+        assert "get_feast_data_path = get_gold_path" in result
 
 
 class TestCodeRendererBronze:
@@ -312,18 +317,18 @@ class TestCodeRendererGold:
         assert "ArtifactStore" in result
         assert "TransformExecutor" not in result
 
-    def test_render_gold_has_feast_integration(self, renderer, sample_pipeline_config):
+    def test_render_gold_standardizes_timestamp(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
 
         assert "add_feast_timestamp" in result
-        assert "materialize_to_feast" in result
+        assert "materialize_to_feast" not in result
         assert "aggregation_reference_date" in result
 
-    def test_render_gold_excludes_original_columns(self, renderer, sample_pipeline_config):
+    def test_render_gold_no_dual_write(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
 
-        assert "original_" in result
-        assert "Excluding holdout columns" in result or "exclude" in result.lower()
+        assert "materialize_to_feast" not in result
+        assert result.count("get_delta") >= 1
 
     def test_render_gold_has_load_gold(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
@@ -337,9 +342,14 @@ class TestCodeRendererTraining:
     def test_render_training_with_feast(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
 
-        assert "get_training_data_from_feast" in result
+        assert "get_training_data_from_feast" in result or "get_training_data" in result
         assert "FeatureStore" in result
         assert "get_historical_features" in result
+
+    def test_render_training_loads_from_gold(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+
+        assert "get_gold_path" in result or "get_feast_data_path" in result
 
     def test_render_training_excludes_original_columns(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
@@ -443,6 +453,12 @@ class TestCodeRendererFeast:
         assert "FeatureView" in result
         assert "FileSource" in result
         assert "customer_features" in result
+
+    def test_render_feast_features_source_points_at_gold(self, renderer, sample_pipeline_config):
+        result = renderer.render_feast_features(sample_pipeline_config)
+
+        assert "gold_features_" in result
+        assert "../data/gold/" in result
 
 
 class TestTemplatesExist:

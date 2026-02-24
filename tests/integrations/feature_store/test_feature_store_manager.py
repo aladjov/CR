@@ -228,6 +228,40 @@ class TestFeastBackend:
     def test_read_table_data_not_found(self, backend):
         assert backend._read_table_data("nonexistent") is None
 
+    # --- data_root ---
+    def test_default_data_root_is_repo_data(self, tmp_path):
+        backend = FeastBackend(repo_path=str(tmp_path / "feast"))
+        assert backend.data_root == tmp_path / "feast" / "data"
+
+    def test_custom_data_root(self, tmp_path, sample_df):
+        gold_dir = tmp_path / "gold"
+        gold_dir.mkdir()
+        backend = FeastBackend(repo_path=str(tmp_path / "feast"), data_root=str(gold_dir))
+        assert backend.data_root == gold_dir
+        backend.create_feature_table(
+            name="tbl", entity_key="entity_id", timestamp_column="ts",
+            schema={"entity_id": "string"}, cutoff_date=datetime(2024, 6, 1),
+        )
+        backend.write_features("tbl", sample_df, mode="overwrite")
+        tbl_exists = (gold_dir / "tbl").is_dir() or (gold_dir / "tbl.parquet").exists()
+        assert tbl_exists
+        feast_data = tmp_path / "feast" / "data"
+        assert not (feast_data / "tbl.parquet").exists()
+        assert not (feast_data / "tbl").is_dir()
+
+    def test_custom_data_root_read(self, tmp_path, sample_df):
+        gold_dir = tmp_path / "gold"
+        gold_dir.mkdir()
+        backend = FeastBackend(repo_path=str(tmp_path / "feast"), data_root=str(gold_dir))
+        backend.create_feature_table(
+            name="tbl", entity_key="entity_id", timestamp_column="ts",
+            schema={"entity_id": "string"},
+        )
+        backend.write_features("tbl", sample_df, mode="overwrite")
+        result = backend._read_table_data("tbl")
+        assert result is not None
+        assert len(result) == 3
+
     # --- get_historical_features (fallback to manual PIT join) ---
     def test_get_historical_features_fallback(self, backend, sample_df):
         """Test that get_historical_features falls back to manual PIT join."""

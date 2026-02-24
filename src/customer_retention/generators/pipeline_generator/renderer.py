@@ -253,8 +253,7 @@ def get_gold_path() -> Path:
     return PRODUCTION_DIR / "data" / "gold" / f"gold_features_{COMPOSITE_NAME}"
 
 
-def get_feast_data_path() -> Path:
-    return Path(FEAST_REPO_PATH) / "data" / FEAST_FEATURE_VIEW
+get_feast_data_path = get_gold_path
 
 
 # Fit mode configuration for training vs scoring separation
@@ -867,29 +866,13 @@ def add_feast_timestamp(df: pd.DataFrame, reference_date=None) -> pd.DataFrame:
     return df
 
 
-def materialize_to_feast(df: pd.DataFrame) -> None:
-    feast_path = get_feast_data_path()
-    feast_path.parent.mkdir(parents=True, exist_ok=True)
-    df_feast = df.copy()
-    df_feast = add_feast_timestamp(df_feast)
-    original_cols = [c for c in df_feast.columns if c.startswith("original_")]
-    if original_cols:
-        print(f"  Excluding holdout columns from Feast: {original_cols}")
-        df_feast = df_feast.drop(columns=original_cols, errors="ignore")
-    from customer_retention.integrations.adapters.factory import get_delta
-    get_delta(force_local=True).write(df_feast, str(feast_path))
-    print(f"Features materialized to Feast: {feast_path}")
-    print(f"  Entity key: {FEAST_ENTITY_KEY}")
-    print(f"  Feature view: {FEAST_FEATURE_VIEW}")
-    print(f"  Rows: {len(df_feast):,}")
-
-
 def run_gold_features():
     silver = load_silver()
     gold = apply_gold_transformations(silver)
     gold = apply_encodings(gold)
     gold = apply_scaling(gold)
     gold = apply_feature_selection(gold)
+    gold = add_feast_timestamp(gold)
 {% if config.fit_mode %}
     _store.save_manifest()
     print(f"Fit artifacts saved to: {ARTIFACTS_PATH}")
@@ -901,7 +884,6 @@ def run_gold_features():
     from customer_retention.integrations.adapters.factory import get_delta
     get_delta(force_local=True).write(gold, str(output_path))
     print(f"Gold features saved with version: {get_feature_version_tag()}")
-    materialize_to_feast(gold)
     return gold
 
 
@@ -1538,7 +1520,7 @@ from feast.types import Float32, Float64, Int64, String
 )
 
 {{ fv_name }}_source = FileSource(
-    path="data/{{ fv_name }}",
+    path="../data/gold/gold_features_{{ config.composite_name or config.name }}",
     timestamp_field="{{ ts_col }}"
 )
 

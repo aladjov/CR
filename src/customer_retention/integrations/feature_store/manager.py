@@ -68,9 +68,10 @@ class FeatureStoreBackend(ABC):
 
 class FeastBackend(FeatureStoreBackend):
 
-    def __init__(self, repo_path: str = "./feature_store/feature_repo"):
+    def __init__(self, repo_path: str = "./feature_store/feature_repo", data_root: Optional[str] = None):
         self.repo_path = Path(repo_path)
         self.repo_path.mkdir(parents=True, exist_ok=True)
+        self.data_root = Path(data_root) if data_root else self.repo_path / "data"
         self._store = None
         self._tables: dict[str, dict] = {}
         self._load_table_metadata()
@@ -156,8 +157,8 @@ class FeastBackend(FeatureStoreBackend):
         mode: str = "merge",
         cutoff_date: Optional[datetime] = None,
     ) -> None:
-        delta_path = self.repo_path / "data" / table_name
-        parquet_path = self.repo_path / "data" / f"{table_name}.parquet"
+        delta_path = self.data_root / table_name
+        parquet_path = self.data_root / f"{table_name}.parquet"
         delta_path.parent.mkdir(parents=True, exist_ok=True)
 
         if self.storage:
@@ -280,19 +281,18 @@ class FeastBackend(FeatureStoreBackend):
 
     def list_tables(self) -> list[str]:
         """List all feature tables."""
-        data_dir = self.repo_path / "data"
-        if not data_dir.exists():
+        if not self.data_root.exists():
             return []
-        tables = [p.stem for p in data_dir.glob("*.parquet")]
+        tables = [p.stem for p in self.data_root.glob("*.parquet")]
         if self.storage:
-            for subdir in data_dir.iterdir():
+            for subdir in self.data_root.iterdir():
                 if subdir.is_dir() and self.storage.exists(str(subdir)) and subdir.name not in tables:
                     tables.append(subdir.name)
         return tables
 
     def _read_table_data(self, table_name: str) -> Optional[Any]:
-        delta_path = self.repo_path / "data" / table_name
-        parquet_path = self.repo_path / "data" / f"{table_name}.parquet"
+        delta_path = self.data_root / table_name
+        parquet_path = self.data_root / f"{table_name}.parquet"
         if self.storage and self.storage.exists(str(delta_path)):
             return self.storage.read(str(delta_path))
         if parquet_path.exists():
@@ -490,6 +490,7 @@ class FeatureStoreManager:
         catalog: str = "main",
         schema: str = "features",
         output_path: Optional[str] = None,
+        data_root: Optional[str] = None,
     ) -> "FeatureStoreManager":
         """Factory method to create a manager with the appropriate backend.
 
@@ -499,6 +500,7 @@ class FeatureStoreManager:
             catalog: Unity Catalog name (for databricks backend)
             schema: Schema name (for databricks backend)
             output_path: Path for output files
+            data_root: Override data directory for feast backend (e.g. gold path)
 
         Returns:
             Configured FeatureStoreManager
@@ -507,7 +509,7 @@ class FeatureStoreManager:
             ValueError: If unknown backend specified
         """
         if backend == "feast":
-            store_backend = FeastBackend(repo_path=repo_path)
+            store_backend = FeastBackend(repo_path=repo_path, data_root=data_root)
         elif backend == "databricks":
             store_backend = DatabricksBackend(catalog=catalog, schema=schema)
         else:
