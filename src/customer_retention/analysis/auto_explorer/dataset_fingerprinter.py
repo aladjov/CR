@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -112,7 +113,13 @@ class DatasetFingerprinter:
         )
 
     def fingerprint_all(self, datasets: dict[str, pd.DataFrame | str | Path]) -> dict[str, DatasetFingerprint]:
-        return {name: self.fingerprint(name, data) for name, data in datasets.items()}
+        results: dict[str, DatasetFingerprint] = {}
+        for name, data in datasets.items():
+            try:
+                results[name] = self.fingerprint(name, data)
+            except Exception as exc:
+                warnings.warn(f"Skipping dataset '{name}': {exc}", stacklevel=2)
+        return results
 
     @staticmethod
     def to_summary_dataframe(fingerprints: dict[str, DatasetFingerprint]) -> native_pd.DataFrame:

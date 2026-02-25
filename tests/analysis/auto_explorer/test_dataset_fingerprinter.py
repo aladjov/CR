@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -388,3 +389,79 @@ class TestTableLoading:
     def test_dataframe_input_unaffected(self):
         fp = DatasetFingerprinter().fingerprint("test", _entity_level_df())
         assert fp.row_count == 5
+
+
+class TestFingerprintAllSkipsInaccessible:
+    def _mock_spark(self, monkeypatch, mock_spark):
+        monkeypatch.setattr(DatasetFingerprinter, "_ensure_spark", staticmethod(lambda: mock_spark))
+
+    def test_skips_permission_denied_table(self, monkeypatch):
+        mock_spark = MagicMock()
+        mock_spark.table.side_effect = Exception("PERMISSION_DENIED: User does not have MANAGE on Connection 'snowflake_corp'")
+        self._mock_spark(monkeypatch, mock_spark)
+        datasets = {
+            "accessible": _entity_level_df(),
+            "foreign": "snowflake_corp.salesforce.contract",
+        }
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            results = DatasetFingerprinter().fingerprint_all(datasets)
+        assert "accessible" in results
+        assert "foreign" not in results
+        assert any("foreign" in str(w.message) for w in caught)
+
+    def test_warns_with_original_error_message(self, monkeypatch):
+        mock_spark = MagicMock()
+        mock_spark.table.side_effect = Exception("PERMISSION_DENIED: some detail")
+        self._mock_spark(monkeypatch, mock_spark)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            DatasetFingerprinter().fingerprint_all({"bad": "catalog.schema.bad_table"})
+        assert len(caught) == 1
+        assert "PERMISSION_DENIED" in str(caught[0].message)
+
+    def test_returns_empty_when_all_fail(self, monkeypatch):
+        mock_spark = MagicMock()
+        mock_spark.table.side_effect = Exception("PERMISSION_DENIED")
+        self._mock_spark(monkeypatch, mock_spark)
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            results = DatasetFingerprinter().fingerprint_all({"t1": "c.s.t1", "t2": "c.s.t2"})
+        assert results == {}
+
+    def test_all_succeed_no_warnings(self):
+        datasets = {"a": _entity_level_df(), "b": _event_level_df()}
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            results = DatasetFingerprinter().fingerprint_all(datasets)
+        assert len(results) == 2
+        assert len(caught) == 0
+
+    def test_mixed_success_and_failure(self, monkeypatch):
+        call_count = 0
+        original_ensure = DatasetFingerprinter._ensure_spark
+
+        mock_spark = MagicMock()
+
+        def table_side_effect(name):
+            if name == "catalog.schema.bad_table":
+                raise Exception("PERMISSION_DENIED")
+            result = MagicMock()
+            result.count.return_value = 3
+            result.limit.return_value.toPandas.return_value = pd.DataFrame({
+                "customer_id": ["C001", "C002", "C003"], "amount": [1, 2, 3],
+            })
+            return result
+
+        mock_spark.table.side_effect = table_side_effect
+        self._mock_spark(monkeypatch, mock_spark)
+        datasets = {
+            "df_ok": _entity_level_df(),
+            "table_bad": "catalog.schema.bad_table",
+        }
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            results = DatasetFingerprinter().fingerprint_all(datasets)
+        assert "df_ok" in results
+        assert "table_bad" not in results
+        assert len(caught) == 1
