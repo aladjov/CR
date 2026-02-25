@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from customer_retention.core.compat import (
-    _is_spark_pandas,
     as_tz_naive,
     native_pd,
     normalize_timestamp_columns,
@@ -31,14 +30,14 @@ class SparkTemporalMerger(TemporalMerger):
                 columns=[self.config.entity_key, self.config.as_of_column]
             ).astype({self.config.as_of_column: "datetime64[ns]"})
 
-        if not _is_spark_pandas(entity_ids):
+        spark = get_spark_session()
+
+        if not spark:
             idx = native_pd.MultiIndex.from_product(
                 [unique_entities, parsed_dates],
                 names=[self.config.entity_key, self.config.as_of_column],
             )
             return idx.to_frame(index=False)
-
-        spark = get_spark_session()
 
         entities_pdf = native_pd.DataFrame(
             {self.config.entity_key: unique_entities.to_numpy()}
