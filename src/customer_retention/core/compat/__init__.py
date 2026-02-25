@@ -810,8 +810,10 @@ def collect_for_sklearn(obj: Any) -> Any:
         return obj
     if _is_spark_pandas(obj):
         enable_arrow_optimization()
+        is_series = getattr(obj, "ndim", 2) == 1
         spark_df = obj.to_spark() if hasattr(obj, "to_spark") else obj.to_frame().to_spark()
-        return spark_df.toPandas()
+        result = spark_df.toPandas()
+        return result.iloc[:, 0] if is_series else result
     return obj
 
 

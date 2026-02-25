@@ -321,3 +321,51 @@ class TestGroupKFold:
         result = cv.run(model, X, y, groups=groups)
 
         assert len(result.cv_scores) == 5
+
+
+class TestGroupsAsDataFrame:
+    @pytest.fixture
+    def panel_data(self):
+        np.random.seed(42)
+        n_entities = 20
+        dates = pd.date_range("2023-01-01", periods=12, freq="MS")
+        rows = []
+        for eid in range(n_entities):
+            for d in dates:
+                rows.append({
+                    "entity_id": eid, "as_of_date": d,
+                    "feature1": np.random.randn(),
+                    "target": np.random.choice([0, 1], p=[0.3, 0.7]),
+                })
+        return pd.DataFrame(rows)
+
+    def test_temporal_entity_cv_with_dataframe_groups(self, panel_data):
+        X = panel_data[["feature1"]]
+        y = panel_data["target"]
+        groups_df = panel_data[["entity_id"]]
+        model = LogisticRegression(max_iter=1000, random_state=42)
+        cv = CrossValidator(strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5, scoring="roc_auc")
+        result = cv.run(model, X, y, groups=groups_df)
+        assert len(result.cv_scores) == 5
+
+    def test_group_kfold_with_dataframe_groups(self, panel_data):
+        X = panel_data[["feature1"]]
+        y = panel_data["target"]
+        groups_df = panel_data[["entity_id"]]
+        model = LogisticRegression(max_iter=1000, random_state=42)
+        cv = CrossValidator(strategy=CVStrategy.GROUP_KFOLD, n_splits=5, scoring="roc_auc")
+        result = cv.run(model, X, y, groups=groups_df)
+        assert len(result.cv_scores) == 5
+
+    def test_temporal_entity_cv_with_dataframe_temporal(self, panel_data):
+        X = panel_data[["feature1"]]
+        y = panel_data["target"]
+        groups = panel_data["entity_id"]
+        temporal_df = panel_data[["as_of_date"]]
+        model = LogisticRegression(max_iter=1000, random_state=42)
+        cv = CrossValidator(
+            strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5,
+            scoring="roc_auc", purge_gap_days=30,
+        )
+        result = cv.run(model, X, y, groups=groups, temporal_values=temporal_df)
+        assert len(result.cv_scores) == 5

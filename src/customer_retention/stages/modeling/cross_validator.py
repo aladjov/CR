@@ -7,7 +7,13 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from sklearn.model_selection import GroupKFold, RepeatedStratifiedKFold, StratifiedKFold, cross_val_score
 
-from customer_retention.core.compat import DataFrame, Series, _is_spark_pandas, to_pandas
+from customer_retention.core.compat import DataFrame, Series, _is_spark_pandas, native_pd, to_pandas
+
+
+def _squeeze_to_series(obj: Any) -> Any:
+    if isinstance(obj, native_pd.DataFrame) and obj.shape[1] == 1:
+        return obj.iloc[:, 0]
+    return obj
 
 
 class CVStrategy(Enum):
@@ -88,9 +94,9 @@ class CrossValidator:
 
         X, y = to_pandas(X), to_pandas(y)
         if groups is not None:
-            groups = to_pandas(groups)
+            groups = _squeeze_to_series(to_pandas(groups))
         if temporal_values is not None:
-            temporal_values = to_pandas(temporal_values)
+            temporal_values = _squeeze_to_series(to_pandas(temporal_values))
         cv_splitter = self._create_cv_splitter(groups, temporal_values)
         fold_details = []
 
@@ -132,8 +138,8 @@ class CrossValidator:
         if _is_spark_pandas(y):
             y = y.reset_index(drop=True)
 
-        groups_pd = to_pandas(groups) if groups is not None else None
-        temporal_pd = to_pandas(temporal_values) if temporal_values is not None else None
+        groups_pd = _squeeze_to_series(to_pandas(groups)) if groups is not None else None
+        temporal_pd = _squeeze_to_series(to_pandas(temporal_values)) if temporal_values is not None else None
 
         splitter = TemporalEntitySplit(
             n_splits=self.n_splits,

@@ -270,3 +270,24 @@ class TestDistributedNoCollect:
             assert fold["test_size"] > 0
             assert "train_entities" in fold
             assert "test_entities" in fold
+
+
+class TestDistributedGroupsAsDataFrame:
+    def test_run_distributed_with_dataframe_groups(self, grouped_data, mock_distributed_model):
+        X, y, groups, temporal = grouped_data
+        groups_df = groups.to_frame()
+        cv = CrossValidator(strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=3, scoring="roc_auc")
+        result = cv._run_distributed(mock_distributed_model, X, y, groups=groups_df, temporal_values=temporal)
+        assert isinstance(result, CVResult)
+        assert len(result.cv_scores) == 3
+
+    def test_run_distributed_with_dataframe_temporal(self, grouped_data, mock_distributed_model):
+        X, y, groups, temporal = grouped_data
+        temporal_df = temporal.to_frame()
+        cv = CrossValidator(
+            strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=3,
+            scoring="roc_auc", purge_gap_days=30,
+        )
+        result = cv._run_distributed(mock_distributed_model, X, y, groups=groups, temporal_values=temporal_df)
+        assert isinstance(result, CVResult)
+        assert len(result.cv_scores) == 3

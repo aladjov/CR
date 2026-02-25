@@ -181,3 +181,41 @@ class TestCollectForSklearn:
         df = pd.DataFrame({"x": [10, 20]})
         result = collect_for_sklearn(df)
         assert isinstance(result, pd.DataFrame)
+
+    def test_spark_pandas_series_returns_pandas_series(self):
+        expected = pd.DataFrame({"entity_id": [1, 2, 3]})
+
+        class FakeSparkDF:
+            def toPandas(self):  # noqa: N802
+                return expected
+
+        class FakeFrame:
+            def to_spark(self):
+                return FakeSparkDF()
+
+        class FakeSparkPandasSeries:
+            spark = True
+            ndim = 1
+            def to_frame(self):
+                return FakeFrame()
+
+        result = collect_for_sklearn(FakeSparkPandasSeries())
+        assert isinstance(result, pd.Series)
+        assert result.tolist() == [1, 2, 3]
+
+    def test_spark_pandas_dataframe_returns_pandas_dataframe(self):
+        expected = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+
+        class FakeSparkDF:
+            def toPandas(self):  # noqa: N802
+                return expected
+
+        class FakeSparkPandasDF:
+            spark = True
+            ndim = 2
+            def to_spark(self):
+                return FakeSparkDF()
+
+        result = collect_for_sklearn(FakeSparkPandasDF())
+        assert isinstance(result, pd.DataFrame)
+        pd.testing.assert_frame_equal(result, expected)
