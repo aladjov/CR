@@ -86,10 +86,12 @@ class SparkFeatureScaler(FeatureScaler):
         offsets, scales = self._as_vectors()
         zero_mask = scales == 0
         safe_scales = np.where(zero_mask, 1.0, scales)
-        result = X.sub(offsets.tolist(), axis="columns").div(safe_scales.tolist(), axis="columns")
-        zero_cols = [c for i, c in enumerate(self._feature_names) if zero_mask[i]]
-        if zero_cols:
-            result[zero_cols] = 0.0
+        result = X.copy()
+        for i, col in enumerate(self._feature_names):
+            if zero_mask[i]:
+                result[col] = 0.0
+            else:
+                result[col] = (X[col] - offsets[i]) / safe_scales[i]
         return result
 
     def _as_vectors(self) -> Tuple[np.ndarray, np.ndarray]:

@@ -281,6 +281,37 @@ class TestSparkFeatureScalerSaveScaler:
         assert result.scaler is not None
 
 
+class TestApplyUsesPerColumnScalarOps:
+    def test_apply_does_not_call_sub_with_axis(self, sample_data):
+        X_train, X_test = sample_data
+        scaler = SparkFeatureScaler(scaler_type=ScalerType.STANDARD)
+        scaler.fit_transform(X_train, X_test)
+
+        class SubSpy(pd.DataFrame):
+            def sub(self, other, **kwargs):
+                assert "axis" not in kwargs, ".sub(axis=) is not pyspark.pandas-compatible"
+                return super().sub(other, **kwargs)
+
+            def div(self, other, **kwargs):
+                assert "axis" not in kwargs, ".div(axis=) is not pyspark.pandas-compatible"
+                return super().div(other, **kwargs)
+
+        spy = SubSpy(X_test)
+        scaler._apply(spy)
+
+    @pytest.mark.parametrize("scaler_type", [ScalerType.STANDARD, ScalerType.ROBUST, ScalerType.MINMAX])
+    def test_apply_scales_each_column_independently(self, scaler_type):
+        X_train = pd.DataFrame({"a": [10.0, 20.0, 30.0], "b": [100.0, 200.0, 300.0]})
+        X_test = pd.DataFrame({"a": [15.0, 25.0], "b": [150.0, 250.0]})
+        scaler = SparkFeatureScaler(scaler_type=scaler_type)
+        result = scaler.fit_transform(X_train, X_test)
+
+        base = FeatureScaler(scaler_type=scaler_type)
+        base_result = base.fit_transform(X_train, X_test)
+        pd.testing.assert_frame_equal(result.X_train_scaled, base_result.X_train_scaled, atol=1e-10)
+        pd.testing.assert_frame_equal(result.X_test_scaled, base_result.X_test_scaled, atol=1e-10)
+
+
 class TestToPandasGuardsUnchanged:
     def test_baseline_trainer_accepts_native_pandas(self):
         from customer_retention.stages.modeling import BaselineTrainer, ModelType
