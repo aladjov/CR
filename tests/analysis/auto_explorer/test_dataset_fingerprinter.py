@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from customer_retention.analysis.auto_explorer.dataset_fingerprinter import (
     DatasetFingerprint,
     DatasetFingerprinter,
+    is_table_name,
 )
 from customer_retention.core.config.column_config import DatasetGranularity
 
@@ -274,3 +276,115 @@ class TestFingerprintDataSpan:
         start = date.fromisoformat(fp.data_start)
         end = date.fromisoformat(fp.data_end)
         assert (end - start).days == fp.temporal_span_days
+
+
+class TestIsTableName:
+    def test_three_part_unity_catalog_name(self):
+        assert is_table_name("catalog.schema.table") is True
+
+    def test_two_part_schema_table(self):
+        assert is_table_name("schema.table_name") is True
+
+    def test_real_snowflake_table(self):
+        assert is_table_name("snowflake_corp.salesforce.contract") is True
+
+    def test_long_dotted_name(self):
+        assert is_table_name("prod_networkdata.reporting_gold.customer_visible_transaction_volume_daily") is True
+
+    def test_two_part_catalog_name(self):
+        assert is_table_name("prod_networkdata.orderexchange_gold") is True
+
+    def test_csv_path_not_table(self):
+        assert is_table_name("data/file.csv") is False
+
+    def test_parquet_path_not_table(self):
+        assert is_table_name("data/file.parquet") is False
+
+    def test_relative_path_not_table(self):
+        assert is_table_name("../tests/fixtures/data.csv") is False
+
+    def test_absolute_path_not_table(self):
+        assert is_table_name("/home/user/data.csv") is False
+
+    def test_s3_path_not_table(self):
+        assert is_table_name("s3://bucket/path/file.parquet") is False
+
+    def test_abfss_path_not_table(self):
+        assert is_table_name("abfss://container@account.dfs.core.windows.net/path") is False
+
+    def test_dbfs_path_not_table(self):
+        assert is_table_name("dbfs:/mnt/data/file.csv") is False
+
+    def test_plain_name_without_dots_not_table(self):
+        assert is_table_name("my_table") is False
+
+    def test_local_csv_without_path_not_table(self):
+        assert is_table_name("data.csv") is False
+
+    def test_local_parquet_without_path_not_table(self):
+        assert is_table_name("data.parquet") is False
+
+    def test_delta_extension_not_table(self):
+        assert is_table_name("data.delta") is False
+
+
+class TestTableLoading:
+    def _mock_spark(self, monkeypatch, mock_spark):
+        monkeypatch.setattr(DatasetFingerprinter, "_ensure_spark", staticmethod(lambda: mock_spark))
+
+    def test_load_dispatches_to_spark_table(self, monkeypatch):
+        mock_spark = MagicMock()
+        mock_df = pd.DataFrame({"a": [1, 2, 3]})
+        mock_spark.table.return_value.limit.return_value.toPandas.return_value = mock_df
+        self._mock_spark(monkeypatch, mock_spark)
+        result = DatasetFingerprinter(nrows=100)._load("catalog.schema.my_table")
+        mock_spark.table.assert_called_once_with("catalog.schema.my_table")
+        assert len(result) == 3
+
+    def test_count_rows_dispatches_to_spark_table(self, monkeypatch):
+        mock_spark = MagicMock()
+        mock_spark.table.return_value.count.return_value = 42
+        self._mock_spark(monkeypatch, mock_spark)
+        result = DatasetFingerprinter()._count_rows("catalog.schema.my_table")
+        mock_spark.table.assert_called_once_with("catalog.schema.my_table")
+        assert result == 42
+
+    def test_load_table_applies_nrows_limit(self, monkeypatch):
+        mock_spark = MagicMock()
+        mock_spark.table.return_value.limit.return_value.toPandas.return_value = pd.DataFrame({"x": [1]})
+        self._mock_spark(monkeypatch, mock_spark)
+        DatasetFingerprinter(nrows=500)._load("schema.table")
+        mock_spark.table.return_value.limit.assert_called_once_with(500)
+
+    def test_fingerprint_all_with_table_names(self, monkeypatch):
+        mock_spark = MagicMock()
+        mock_df = pd.DataFrame({
+            "customer_id": ["C001", "C002", "C003"],
+            "amount": [100, 200, 300],
+        })
+        mock_spark.table.return_value.limit.return_value.toPandas.return_value = mock_df
+        mock_spark.table.return_value.count.return_value = 3
+        self._mock_spark(monkeypatch, mock_spark)
+        results = DatasetFingerprinter().fingerprint_all({
+            "contracts": "catalog.schema.contracts",
+        })
+        assert "contracts" in results
+        assert results["contracts"].row_count == 3
+
+    def test_load_table_no_spark_raises(self, monkeypatch):
+        self._mock_spark(monkeypatch, None)
+        with pytest.raises(RuntimeError, match="Spark session"):
+            DatasetFingerprinter()._load("catalog.schema.my_table")
+
+    def test_count_rows_table_no_spark_raises(self, monkeypatch):
+        self._mock_spark(monkeypatch, None)
+        with pytest.raises(RuntimeError, match="Spark session"):
+            DatasetFingerprinter()._count_rows("catalog.schema.my_table")
+
+    def test_file_path_still_loads_locally(self):
+        fp = DatasetFingerprinter().fingerprint("profiles", str(TINY_PROFILES))
+        assert fp.row_count > 0
+
+    def test_dataframe_input_unaffected(self):
+        fp = DatasetFingerprinter().fingerprint("test", _entity_level_df())
+        assert fp.row_count == 5

@@ -9,6 +9,16 @@ from customer_retention.core.compat import is_dataframe, native_pd, pd
 from customer_retention.core.config.column_config import ColumnType, DatasetGranularity
 from customer_retention.stages.profiling.type_detector import TypeDetector
 
+_FILE_EXTENSIONS = frozenset((".csv", ".parquet", ".json", ".orc", ".avro", ".delta", ".txt"))
+
+
+def is_table_name(source: str) -> bool:
+    if "/" in source or "\\" in source:
+        return False
+    if "." not in source:
+        return False
+    return Path(source).suffix.lower() not in _FILE_EXTENSIONS
+
 
 @dataclass
 class DatasetFingerprint:
@@ -125,6 +135,8 @@ class DatasetFingerprinter:
         if is_dataframe(data):
             return len(data)
         path_str = str(data)
+        if is_table_name(path_str):
+            return self._count_rows_table(path_str)
         from customer_retention.core.compat.remote_path import RemotePath
         if isinstance(data, RemotePath):
             return self._count_rows_remote(data, path_str)
@@ -149,10 +161,18 @@ class DatasetFingerprinter:
             return spark.read.parquet(path_str).count()
         return 0
 
+    def _count_rows_table(self, table_name: str) -> int:
+        spark = self._ensure_spark()
+        if not spark:
+            raise RuntimeError(f"No active Spark session to read table '{table_name}'")
+        return spark.table(table_name).count()
+
     def _load(self, data) -> pd.DataFrame:
         if is_dataframe(data):
             return data.head(self.nrows) if len(data) > self.nrows else data
         path_str = str(data)
+        if is_table_name(path_str):
+            return self._load_table(path_str)
         from customer_retention.core.compat.remote_path import RemotePath
         if isinstance(data, RemotePath):
             return self._load_remote(path_str)
@@ -166,6 +186,12 @@ class DatasetFingerprinter:
         if path_str.endswith(".csv"):
             return native_pd.read_csv(path_str, nrows=self.nrows)
         return native_pd.read_parquet(path_str).head(self.nrows)
+
+    def _load_table(self, table_name: str) -> pd.DataFrame:
+        spark = self._ensure_spark()
+        if not spark:
+            raise RuntimeError(f"No active Spark session to read table '{table_name}'")
+        return spark.table(table_name).limit(self.nrows).toPandas()
 
     @staticmethod
     def _is_remote() -> bool:

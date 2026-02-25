@@ -12,7 +12,7 @@ from .active_dataset_store import (
     save_aggregated_dataset,
 )
 from .analysis_context import AnalysisContext
-from .dataset_fingerprinter import DatasetFingerprint, DatasetFingerprinter
+from .dataset_fingerprinter import DatasetFingerprint, DatasetFingerprinter, is_table_name
 from .entity_timestamp_deriver import EntityFeatureTimestampDeriver, EntityTimestampResult
 from .exploration_manager import (
     AggregationPlanItem,
@@ -156,6 +156,7 @@ __all__ = [
     "mount_target_column",
     "DatasetFingerprint",
     "DatasetFingerprinter",
+    "is_table_name",
     "PredictionObjectiveDetector",
     "PredictionObjectiveAssessment",
     "derive_objective_support",
