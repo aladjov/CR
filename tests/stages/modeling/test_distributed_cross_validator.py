@@ -183,85 +183,42 @@ class TestRunDistributed:
         assert len(result.cv_scores) == 3
 
 
-class TestDistributedNoCollect:
-    def test_does_not_collect_features_to_pandas(self, grouped_data, mock_distributed_model):
+class TestDistributedEagerCollection:
+    def test_collects_to_pandas_once_before_fold_loop(self, grouped_data, mock_distributed_model):
         X, y, groups, temporal = grouped_data
-        cv = CrossValidator(
-            strategy=CVStrategy.TEMPORAL_ENTITY,
-            n_splits=3,
-            scoring="roc_auc",
-        )
-        original_to_pandas = __import__(
-            "customer_retention.core.compat", fromlist=["to_pandas"]
-        ).to_pandas
+        cv = CrossValidator(strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=3, scoring="roc_auc")
+        collected = []
+        original_to_pandas = __import__("customer_retention.core.compat", fromlist=["to_pandas"]).to_pandas
 
-        def guarded_to_pandas(obj):
-            if obj is X:
-                raise AssertionError("to_pandas was called on X — must stay distributed")
+        def tracking_to_pandas(obj):
+            collected.append(id(obj))
             return original_to_pandas(obj)
 
-        with patch(
-            "customer_retention.stages.modeling.cross_validator.to_pandas",
-            side_effect=guarded_to_pandas,
-        ):
+        with patch("customer_retention.stages.modeling.cross_validator.to_pandas", side_effect=tracking_to_pandas):
             result = cv._run_distributed(mock_distributed_model, X, y, groups=groups, temporal_values=temporal)
         assert isinstance(result, CVResult)
-        assert len(result.cv_scores) == 3
+        assert collected.count(id(X)) == 1
+        assert collected.count(id(y)) == 1
 
-    def test_does_not_collect_y_to_pandas(self, grouped_data, mock_distributed_model):
+    def test_no_iloc_on_original_spark_like_objects(self, grouped_data, mock_distributed_model):
         X, y, groups, temporal = grouped_data
-        cv = CrossValidator(
-            strategy=CVStrategy.TEMPORAL_ENTITY,
-            n_splits=3,
-            scoring="roc_auc",
-        )
-        original_to_pandas = __import__(
-            "customer_retention.core.compat", fromlist=["to_pandas"]
-        ).to_pandas
-
-        def guarded_to_pandas(obj):
-            if obj is y:
-                raise AssertionError("to_pandas was called on y — must stay distributed")
-            return original_to_pandas(obj)
-
-        with patch(
-            "customer_retention.stages.modeling.cross_validator.to_pandas",
-            side_effect=guarded_to_pandas,
-        ):
-            result = cv._run_distributed(mock_distributed_model, X, y, groups=groups, temporal_values=temporal)
-        assert isinstance(result, CVResult)
-        assert len(result.cv_scores) == 3
-
-    def test_resets_index_for_spark_pandas(self, grouped_data, mock_distributed_model):
-        X, y, groups, temporal = grouped_data
-        X_mock = MagicMock(wraps=X)
-        X_mock.spark = True  # Makes _is_spark_pandas return True
-        X_mock.reset_index = MagicMock(return_value=X.reset_index(drop=True))
-        X_mock.__len__ = lambda self: len(X)
-
-        y_mock = MagicMock(wraps=y)
+        X_mock = MagicMock()
+        X_mock.spark = True
+        X_mock.to_pandas = MagicMock(return_value=X)
+        y_mock = MagicMock()
         y_mock.spark = True
-        y_mock.reset_index = MagicMock(return_value=y.reset_index(drop=True))
-        y_mock.__len__ = lambda self: len(y)
+        y_mock.to_pandas = MagicMock(return_value=y)
 
-        cv = CrossValidator(
-            strategy=CVStrategy.TEMPORAL_ENTITY,
-            n_splits=3,
-            scoring="roc_auc",
-        )
+        cv = CrossValidator(strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=3, scoring="roc_auc")
         cv._run_distributed(mock_distributed_model, X_mock, y_mock, groups=groups, temporal_values=temporal)
-        X_mock.reset_index.assert_called_once_with(drop=True)
-        y_mock.reset_index.assert_called_once_with(drop=True)
+        X_mock.iloc.__getitem__.assert_not_called()
+        y_mock.iloc.__getitem__.assert_not_called()
 
     def test_backward_compatible_with_pandas(self, grouped_data, mock_distributed_model):
         X, y, groups, temporal = grouped_data
         assert isinstance(X, pd.DataFrame)
         assert isinstance(y, pd.Series)
-        cv = CrossValidator(
-            strategy=CVStrategy.TEMPORAL_ENTITY,
-            n_splits=3,
-            scoring="roc_auc",
-        )
+        cv = CrossValidator(strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=3, scoring="roc_auc")
         result = cv._run_distributed(mock_distributed_model, X, y, groups=groups, temporal_values=temporal)
         assert isinstance(result, CVResult)
         assert len(result.cv_scores) == 3

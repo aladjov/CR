@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from sklearn.model_selection import GroupKFold, RepeatedStratifiedKFold, StratifiedKFold, cross_val_score
 
-from customer_retention.core.compat import DataFrame, Series, _is_spark_pandas, native_pd, to_pandas
+from customer_retention.core.compat import DataFrame, Series, native_pd, to_pandas
 
 
 def _squeeze_to_series(obj: Any) -> Any:
@@ -133,11 +133,8 @@ class CrossValidator:
     ) -> CVResult:
         from sklearn.metrics import average_precision_score, roc_auc_score
 
-        if _is_spark_pandas(X):
-            X = X.reset_index(drop=True)
-        if _is_spark_pandas(y):
-            y = y.reset_index(drop=True)
-
+        X_pd = to_pandas(X)
+        y_pd = _squeeze_to_series(to_pandas(y))
         groups_pd = _squeeze_to_series(to_pandas(groups)) if groups is not None else None
         temporal_pd = _squeeze_to_series(to_pandas(temporal_values)) if temporal_values is not None else None
 
@@ -147,20 +144,14 @@ class CrossValidator:
             purge_gap_days=self.purge_gap_days,
         )
 
-        dummy_X = np.zeros(len(X))
         scores = []
         fold_details = []
 
-        for fold_idx, (train_idx, test_idx) in enumerate(splitter.split(dummy_X, groups=groups_pd)):
+        for fold_idx, (train_idx, test_idx) in enumerate(splitter.split(np.zeros(len(X_pd)), groups=groups_pd)):
             fold_model = model.clone()
-            X_fold_train = X.iloc[train_idx]
-            y_fold_train = y.iloc[train_idx]
-            X_fold_test = X.iloc[test_idx]
-
-            fold_model.fit(X_fold_train, y_fold_train)
-            y_proba = fold_model.predict_proba(X_fold_test)
-
-            y_fold_test = to_pandas(y.iloc[test_idx])
+            fold_model.fit(X_pd.iloc[train_idx], y_pd.iloc[train_idx])
+            y_proba = fold_model.predict_proba(X_pd.iloc[test_idx])
+            y_fold_test = y_pd.iloc[test_idx]
 
             if self.scoring == "roc_auc":
                 score = roc_auc_score(y_fold_test, y_proba[:, 1])
@@ -175,7 +166,7 @@ class CrossValidator:
                 "fold": fold_idx + 1,
                 "train_size": len(train_idx),
                 "test_size": len(test_idx),
-                "train_class_ratio": float(y_fold_train.mean()),
+                "train_class_ratio": float(y_pd.iloc[train_idx].mean()),
                 "score": score,
             }
             if groups_pd is not None:

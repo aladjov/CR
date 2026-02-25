@@ -1,4 +1,6 @@
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
+
+import numpy as np
 
 from customer_retention.core.compat import DataFrame
 
@@ -81,33 +83,29 @@ class SparkFeatureScaler(FeatureScaler):
         return params
 
     def _apply(self, X: DataFrame) -> DataFrame:
-        result = X.copy()
-
-        for col in self._feature_names:
-            p = self._params[col]
-
-            if self.scaler_type == ScalerType.STANDARD:
-                std = p["std"]
-                if std == 0:
-                    result[col] = 0.0
-                else:
-                    result[col] = (X[col] - p["mean"]) / std
-
-            elif self.scaler_type == ScalerType.ROBUST:
-                iqr = p["iqr"]
-                if iqr == 0:
-                    result[col] = 0.0
-                else:
-                    result[col] = (X[col] - p["center"]) / iqr
-
-            elif self.scaler_type == ScalerType.MINMAX:
-                range_val = p["max"] - p["min"]
-                if range_val == 0:
-                    result[col] = 0.0
-                else:
-                    result[col] = (X[col] - p["min"]) / range_val
-
+        offsets, scales = self._as_vectors()
+        zero_mask = scales == 0
+        safe_scales = np.where(zero_mask, 1.0, scales)
+        result = X.sub(offsets.tolist(), axis="columns").div(safe_scales.tolist(), axis="columns")
+        zero_cols = [c for i, c in enumerate(self._feature_names) if zero_mask[i]]
+        if zero_cols:
+            result[zero_cols] = 0.0
         return result
+
+    def _as_vectors(self) -> Tuple[np.ndarray, np.ndarray]:
+        n = len(self._feature_names)
+        offsets = np.empty(n)
+        scales = np.empty(n)
+        for i, c in enumerate(self._feature_names):
+            p = self._params[c]
+            if self.scaler_type == ScalerType.STANDARD:
+                offsets[i], scales[i] = p["mean"], p["std"]
+            elif self.scaler_type == ScalerType.ROBUST:
+                offsets[i], scales[i] = p["center"], p["iqr"]
+            elif self.scaler_type == ScalerType.MINMAX:
+                offsets[i] = p["min"]
+                scales[i] = p["max"] - p["min"]
+        return offsets, scales
 
     def _extract_params(self) -> Dict[str, Any]:
         if not self._params:
