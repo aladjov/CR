@@ -7,7 +7,6 @@ from customer_retention.analysis.notebook_progress import (
     _accept_workflow_params,
     _ensure_databricks_config_loaded,
     guard_skip,
-    publish_skip_flags,
     publish_workflow_metadata,
     resolve_config,
     track_and_export_previous,
@@ -182,62 +181,6 @@ class TestTrackAndExportPrevious:
         assert result is None
         data = json.loads(progress_file.read_text())
         assert data["last_notebook"] == "02.ipynb"
-
-
-class TestPublishSkipFlags:
-    def test_noop_outside_databricks(self, monkeypatch):
-        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
-        findings = MagicMock()
-        publish_skip_flags(findings)
-        findings.assert_not_called()
-
-    def test_sets_task_values_on_databricks(self, monkeypatch):
-        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
-        mock_dbutils = MagicMock()
-        findings = MagicMock()
-        findings.time_series_metadata = None
-        findings.text_processing = None
-        findings.column_types = {}
-        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
-             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
-            publish_skip_flags(findings)
-        calls = {c.kwargs["key"]: c.kwargs["value"] for c in mock_dbutils.jobs.taskValues.set.call_args_list}
-        assert calls == {"has_event_data": False, "has_text_columns": False}
-
-    def test_detects_event_level_data(self, monkeypatch):
-        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
-        from customer_retention.core.config.column_config import DatasetGranularity
-        mock_dbutils = MagicMock()
-        findings = MagicMock()
-        findings.time_series_metadata.granularity = DatasetGranularity.EVENT_LEVEL
-        findings.text_processing = None
-        findings.column_types = {}
-        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
-             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
-            publish_skip_flags(findings)
-        calls = {c.kwargs["key"]: c.kwargs["value"] for c in mock_dbutils.jobs.taskValues.set.call_args_list}
-        assert calls["has_event_data"] is True
-
-    def test_detects_text_columns(self, monkeypatch):
-        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
-        from customer_retention.core.config.column_config import ColumnType
-        mock_dbutils = MagicMock()
-        findings = MagicMock()
-        findings.time_series_metadata = None
-        findings.text_processing = None
-        findings.column_types = {"notes": ColumnType.TEXT}
-        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
-             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
-            publish_skip_flags(findings)
-        calls = {c.kwargs["key"]: c.kwargs["value"] for c in mock_dbutils.jobs.taskValues.set.call_args_list}
-        assert calls["has_text_columns"] is True
-
-    def test_noop_when_dbutils_unavailable(self, monkeypatch):
-        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
-        findings = MagicMock()
-        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
-             patch("customer_retention.core.compat.detection.get_dbutils", return_value=None):
-            publish_skip_flags(findings)
 
 
 class TestPublishWorkflowMetadata:

@@ -85,23 +85,6 @@ def _export_in_background(notebook_name: str, docs_dir: Path) -> None:
     ).start()
 
 
-def publish_skip_flags(findings) -> None:
-    if not is_databricks():
-        return
-    from customer_retention.core.compat.detection import get_dbutils
-    from customer_retention.core.config.column_config import ColumnType, DatasetGranularity
-    dbutils = get_dbutils()
-    if not dbutils:
-        return
-    has_event_data = bool(
-        findings.time_series_metadata
-        and findings.time_series_metadata.granularity == DatasetGranularity.EVENT_LEVEL
-    )
-    has_text = bool(findings.text_processing) or ColumnType.TEXT in findings.column_types.values()
-    dbutils.jobs.taskValues.set(key="has_event_data", value=has_event_data)
-    dbutils.jobs.taskValues.set(key="has_text_columns", value=bool(has_text))
-
-
 def publish_workflow_metadata(project_context) -> None:
     if not is_databricks():
         return
@@ -113,9 +96,7 @@ def publish_workflow_metadata(project_context) -> None:
     dataset_names = list(project_context.datasets.keys())
     dbutils.jobs.taskValues.set(key="dataset_names", value=json.dumps(dataset_names))
     dbutils.jobs.taskValues.set(key="dataset_count", value=len(dataset_names))
-    dbutils.jobs.taskValues.set(
-        key="target_dataset", value=project_context.target_dataset or ""
-    )
+    dbutils.jobs.taskValues.set(key="target_dataset", value=project_context.target_dataset or "")
     if project_context.run_id:
         dbutils.jobs.taskValues.set(key="run_id", value=project_context.run_id)
 
