@@ -140,6 +140,12 @@ def guard_skip(notebook_stem: str) -> None:
         dbutils.notebook.exit(f"SKIPPED: {skip_reasons.get(notebook_stem, 'skipped')}")
 
 
+def resolve_config(value, dataset_name: str, default=None):
+    if isinstance(value, dict):
+        return value.get(dataset_name, default)
+    return value
+
+
 def _write_current_notebook(progress_file: Path, current_notebook: str) -> None:
     """Write the current notebook name to the progress file."""
     try:

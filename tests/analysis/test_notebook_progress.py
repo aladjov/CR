@@ -9,6 +9,7 @@ from customer_retention.analysis.notebook_progress import (
     guard_skip,
     publish_skip_flags,
     publish_workflow_metadata,
+    resolve_config,
     track_and_export_previous,
 )
 
@@ -134,7 +135,7 @@ class TestTrackAndExportPrevious:
 
         progress_during_export = {}
 
-        def fake_export(notebook_name, docs_dir):
+        def fake_export(_notebook_name, _docs_dir):
             data = json.loads(progress_file.read_text())
             progress_during_export.update(data)
 
@@ -168,7 +169,7 @@ class TestTrackAndExportPrevious:
         progress_file = tmp_path / "notebook_progress.json"
         progress_file.write_text(json.dumps({"last_notebook": "01.ipynb"}))
 
-        def boom(notebook_name, docs_dir):
+        def boom(_notebook_name, _docs_dir):
             raise RuntimeError("export failed")
 
         with _patch_experiments_dir(tmp_path), \
@@ -421,6 +422,45 @@ class TestGuardSkip:
         with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
              patch("customer_retention.core.compat.detection.get_dbutils", return_value=None):
             guard_skip("01a_temporal_deep_dive")
+
+
+class TestResolveConfig:
+    def test_scalar_returns_as_is(self):
+        assert resolve_config("D", "any_dataset") == "D"
+
+    def test_dict_returns_matching_key(self):
+        cfg = {"emails": "H", "transactions": "D"}
+        assert resolve_config(cfg, "emails") == "H"
+        assert resolve_config(cfg, "transactions") == "D"
+
+    def test_dict_returns_default_for_missing_key(self):
+        cfg = {"emails": "H"}
+        assert resolve_config(cfg, "unknown", default="D") == "D"
+
+    def test_dict_returns_none_when_no_default(self):
+        cfg = {"emails": "H"}
+        assert resolve_config(cfg, "unknown") is None
+
+    def test_none_value_returns_none(self):
+        assert resolve_config(None, "ds") is None
+
+    def test_numeric_scalar(self):
+        assert resolve_config(90, "ds") == 90
+
+    def test_dict_with_numeric_values(self):
+        cfg = {"fast": 30, "slow": 180}
+        assert resolve_config(cfg, "fast") == 30
+
+    def test_bool_scalar(self):
+        assert resolve_config(True, "ds") is True
+
+    def test_list_scalar(self):
+        val = [7, 30, 90]
+        assert resolve_config(val, "ds") == [7, 30, 90]
+
+    def test_dict_with_list_values(self):
+        cfg = {"emails": [7, 30], "profiles": [90]}
+        assert resolve_config(cfg, "emails") == [7, 30]
 
 
 class TestEnsureDatabricksConfigLoaded:
