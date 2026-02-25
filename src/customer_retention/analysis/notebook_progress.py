@@ -1,5 +1,6 @@
 """Track notebook execution progress and export previous notebook on start."""
 import json
+import os
 import threading
 from pathlib import Path
 from typing import Optional
@@ -14,7 +15,25 @@ def _ensure_databricks_config_loaded() -> None:
     reload_config()
 
 
+def _accept_workflow_params() -> None:
+    if not is_databricks():
+        return
+    from customer_retention.core.compat.detection import get_dbutils
+
+    dbutils = get_dbutils()
+    if not dbutils:
+        return
+    for widget_name, env_name in [("dataset_id", "CR_DATASET_ID"), ("run_id", "CR_RUN_ID")]:
+        try:
+            val = dbutils.widgets.get(widget_name)
+            if val:
+                os.environ[env_name] = val
+        except Exception:
+            pass
+
+
 _ensure_databricks_config_loaded()
+_accept_workflow_params()
 
 
 def track_and_export_previous(current_notebook: str) -> None:
@@ -81,6 +100,44 @@ def publish_skip_flags(findings) -> None:
     has_text = bool(findings.text_processing) or ColumnType.TEXT in findings.column_types.values()
     dbutils.jobs.taskValues.set(key="has_event_data", value=has_event_data)
     dbutils.jobs.taskValues.set(key="has_text_columns", value=bool(has_text))
+
+
+def publish_workflow_metadata(project_context) -> None:
+    if not is_databricks():
+        return
+    from customer_retention.core.compat.detection import get_dbutils
+
+    dbutils = get_dbutils()
+    if not dbutils:
+        return
+    dataset_names = list(project_context.datasets.keys())
+    dbutils.jobs.taskValues.set(key="dataset_names", value=json.dumps(dataset_names))
+    dbutils.jobs.taskValues.set(key="dataset_count", value=len(dataset_names))
+    dbutils.jobs.taskValues.set(
+        key="target_dataset", value=project_context.target_dataset or ""
+    )
+    if project_context.run_id:
+        dbutils.jobs.taskValues.set(key="run_id", value=project_context.run_id)
+
+
+def guard_skip(notebook_stem: str) -> None:
+    if not is_databricks():
+        return
+    dataset_id = os.environ.get("CR_DATASET_ID")
+    if not dataset_id:
+        return
+    from customer_retention.core.compat.detection import get_dbutils
+
+    dbutils = get_dbutils()
+    if not dbutils:
+        return
+    from customer_retention.analysis.auto_explorer.skip_logic import detect_skip_set_for_dataset
+    from customer_retention.core.config.experiments import get_experiments_dir
+
+    findings_dir = get_experiments_dir() / "findings"
+    skip_set, skip_reasons = detect_skip_set_for_dataset(findings_dir, dataset_id)
+    if notebook_stem in skip_set:
+        dbutils.notebook.exit(f"SKIPPED: {skip_reasons.get(notebook_stem, 'skipped')}")
 
 
 def _write_current_notebook(progress_file: Path, current_notebook: str) -> None:

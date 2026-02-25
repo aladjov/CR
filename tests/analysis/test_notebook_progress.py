@@ -4,8 +4,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from customer_retention.analysis.notebook_progress import (
+    _accept_workflow_params,
     _ensure_databricks_config_loaded,
+    guard_skip,
     publish_skip_flags,
+    publish_workflow_metadata,
     track_and_export_previous,
 )
 
@@ -234,6 +237,190 @@ class TestPublishSkipFlags:
         with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
              patch("customer_retention.core.compat.detection.get_dbutils", return_value=None):
             publish_skip_flags(findings)
+
+
+class TestPublishWorkflowMetadata:
+    def _make_context(self, dataset_names, target_dataset=None, run_id=None):
+        ctx = MagicMock()
+        ctx.datasets = {name: MagicMock() for name in dataset_names}
+        ctx.target_dataset = target_dataset
+        ctx.run_id = run_id
+        return ctx
+
+    def test_noop_outside_databricks(self, monkeypatch):
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        ctx = self._make_context(["ds1", "ds2"])
+        publish_workflow_metadata(ctx)
+
+    def test_publishes_dataset_names(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        mock_dbutils = MagicMock()
+        ctx = self._make_context(["customers", "transactions"], target_dataset="customers")
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            publish_workflow_metadata(ctx)
+        calls = {c.kwargs["key"]: c.kwargs["value"] for c in mock_dbutils.jobs.taskValues.set.call_args_list}
+        assert json.loads(calls["dataset_names"]) == ["customers", "transactions"]
+        assert calls["dataset_count"] == 2
+
+    def test_publishes_target_dataset(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        mock_dbutils = MagicMock()
+        ctx = self._make_context(["ds1"], target_dataset="ds1")
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            publish_workflow_metadata(ctx)
+        calls = {c.kwargs["key"]: c.kwargs["value"] for c in mock_dbutils.jobs.taskValues.set.call_args_list}
+        assert calls["target_dataset"] == "ds1"
+
+    def test_publishes_run_id(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        mock_dbutils = MagicMock()
+        ctx = self._make_context(["ds1"], run_id="run-abc-123")
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            publish_workflow_metadata(ctx)
+        calls = {c.kwargs["key"]: c.kwargs["value"] for c in mock_dbutils.jobs.taskValues.set.call_args_list}
+        assert calls["run_id"] == "run-abc-123"
+
+    def test_no_run_id_when_absent(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        mock_dbutils = MagicMock()
+        ctx = self._make_context(["ds1"], run_id=None)
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            publish_workflow_metadata(ctx)
+        keys = [c.kwargs["key"] for c in mock_dbutils.jobs.taskValues.set.call_args_list]
+        assert "run_id" not in keys
+
+    def test_noop_when_dbutils_unavailable(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        ctx = self._make_context(["ds1"])
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=None):
+            publish_workflow_metadata(ctx)
+
+    def test_single_dataset(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        mock_dbutils = MagicMock()
+        ctx = self._make_context(["only_one"], target_dataset="only_one")
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            publish_workflow_metadata(ctx)
+        calls = {c.kwargs["key"]: c.kwargs["value"] for c in mock_dbutils.jobs.taskValues.set.call_args_list}
+        assert json.loads(calls["dataset_names"]) == ["only_one"]
+        assert calls["dataset_count"] == 1
+
+    def test_empty_target_dataset(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        mock_dbutils = MagicMock()
+        ctx = self._make_context(["ds1"], target_dataset=None)
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            publish_workflow_metadata(ctx)
+        calls = {c.kwargs["key"]: c.kwargs["value"] for c in mock_dbutils.jobs.taskValues.set.call_args_list}
+        assert calls["target_dataset"] == ""
+
+
+class TestAcceptWorkflowParams:
+    def test_noop_outside_databricks(self, monkeypatch):
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        _accept_workflow_params()
+        assert "CR_DATASET_ID" not in dict(monkeypatch._ENV_CHANGES if hasattr(monkeypatch, '_ENV_CHANGES') else {})
+
+    def test_sets_env_from_widgets(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        mock_dbutils = MagicMock()
+        mock_dbutils.widgets.get.side_effect = lambda name: {
+            "dataset_id": "my_dataset",
+            "run_id": "run-123",
+        }[name]
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            _accept_workflow_params()
+        import os
+        assert os.environ.get("CR_DATASET_ID") == "my_dataset"
+        assert os.environ.get("CR_RUN_ID") == "run-123"
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+
+    def test_ignores_missing_widgets(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        mock_dbutils = MagicMock()
+        mock_dbutils.widgets.get.side_effect = Exception("Widget not found")
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            _accept_workflow_params()
+        import os
+        assert os.environ.get("CR_DATASET_ID") is None
+
+    def test_noop_when_dbutils_unavailable(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=None):
+            _accept_workflow_params()
+
+    def test_skips_empty_widget_values(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        mock_dbutils = MagicMock()
+        mock_dbutils.widgets.get.side_effect = lambda name: {
+            "dataset_id": "",
+            "run_id": "",
+        }[name]
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            _accept_workflow_params()
+        import os
+        assert os.environ.get("CR_DATASET_ID") is None
+
+
+class TestGuardSkip:
+    def test_noop_outside_databricks(self, monkeypatch):
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        guard_skip("01a_temporal_deep_dive")
+
+    def test_noop_without_dataset_id(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True):
+            guard_skip("01a_temporal_deep_dive")
+
+    def test_exits_when_notebook_in_skip_set(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.setenv("CR_DATASET_ID", "entity_dataset")
+        mock_dbutils = MagicMock()
+        skip_set = {"01a_temporal_deep_dive"}
+        skip_reasons = {"01a_temporal_deep_dive": "no event-level data (entity_dataset)"}
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils), \
+             patch("customer_retention.analysis.auto_explorer.skip_logic.detect_skip_set_for_dataset",
+                   return_value=(skip_set, skip_reasons)):
+            guard_skip("01a_temporal_deep_dive")
+        mock_dbutils.notebook.exit.assert_called_once()
+        assert "SKIPPED" in mock_dbutils.notebook.exit.call_args[0][0]
+
+    def test_continues_when_notebook_not_in_skip_set(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.setenv("CR_DATASET_ID", "event_dataset")
+        mock_dbutils = MagicMock()
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils), \
+             patch("customer_retention.analysis.auto_explorer.skip_logic.detect_skip_set_for_dataset",
+                   return_value=(set(), {})):
+            guard_skip("01a_temporal_deep_dive")
+        mock_dbutils.notebook.exit.assert_not_called()
+
+    def test_noop_when_dbutils_unavailable(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.setenv("CR_DATASET_ID", "ds1")
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=None):
+            guard_skip("01a_temporal_deep_dive")
 
 
 class TestEnsureDatabricksConfigLoaded:
