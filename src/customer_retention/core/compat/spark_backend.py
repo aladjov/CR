@@ -63,16 +63,17 @@ def write_delta(df: Any, path: str, mode: str = "overwrite",
 def get_missing_stats(df: Any) -> Dict[str, float]:
     if not SPARK_AVAILABLE:
         raise ImportError("pyspark required")
-    pdf = df.to_pandas() if hasattr(df, "to_pandas") else df
-    return (pdf.isnull().sum() / len(pdf)).to_dict()
+    return (df.isnull().sum() / len(df)).to_dict()
 
 
 def correlation_matrix(df: Any, columns: Optional[List[str]] = None) -> Any:
     if not SPARK_AVAILABLE:
         raise ImportError("pyspark required")
-    if columns:
-        return df[columns].to_pandas().corr()
-    return df.select_dtypes(include=["number"]).to_pandas().corr()
+    subset = df[columns] if columns else df.select_dtypes(include=["number"])
+    result = subset.corr()
+    if hasattr(result, "to_pandas"):
+        return result.to_pandas()
+    return result
 
 
 def get_dtype_info(df: Any) -> Dict[str, str]:

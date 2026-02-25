@@ -169,7 +169,7 @@ class CrossValidator:
                 "fold": fold_idx + 1,
                 "train_size": len(train_idx),
                 "test_size": len(test_idx),
-                "train_class_ratio": float(y.iloc[train_idx].mean()),
+                "train_class_ratio": float(y_fold_train.mean()),
                 "score": score,
             }
             if groups_pd is not None:

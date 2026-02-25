@@ -98,13 +98,6 @@ class SparkClassifierWrapper:
             return self._classes
         return np.array([0, 1])
 
-    def _compute_balanced_weights(self, y: Any) -> Dict[int, float]:
-        y_np = y.to_numpy() if hasattr(y, "to_numpy") else np.asarray(y)
-        classes = np.unique(y_np)
-        n_total = len(y_np)
-        n_classes = len(classes)
-        return {int(cls): n_total / (n_classes * np.sum(y_np == cls)) for cls in classes}
-
     def _to_spark_df(self, X: Any, y: Any) -> Any:
         spark = _get_spark_session()
 
