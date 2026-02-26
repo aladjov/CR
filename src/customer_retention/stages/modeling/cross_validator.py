@@ -9,11 +9,18 @@ from sklearn.model_selection import GroupKFold, RepeatedStratifiedKFold, Stratif
 
 from customer_retention.core.compat import DataFrame, Series, native_pd, to_pandas
 
+_CV_ENTITY_COL = "__cv_entity__"
+_CV_DATE_COL = "__cv_date__"
+
 
 def _squeeze_to_series(obj: Any) -> Any:
     if isinstance(obj, native_pd.DataFrame) and obj.shape[1] == 1:
         return obj.iloc[:, 0]
     return obj
+
+
+def _has_cv_metadata(X: Any) -> bool:
+    return _CV_ENTITY_COL in X.columns and _CV_DATE_COL in X.columns
 
 
 class CVStrategy(Enum):
@@ -131,35 +138,45 @@ class CrossValidator:
         groups: Optional[Series] = None,
         temporal_values: Optional[Series] = None,
     ) -> CVResult:
-        from sklearn.metrics import average_precision_score, roc_auc_score
+        from customer_retention.core.compat import _is_spark_pandas
 
-        X_pd = to_pandas(X)
-        y_pd = _squeeze_to_series(to_pandas(y))
         groups_pd = _squeeze_to_series(to_pandas(groups)) if groups is not None else None
         temporal_pd = _squeeze_to_series(to_pandas(temporal_values)) if temporal_values is not None else None
+        y_pd = _squeeze_to_series(to_pandas(y))
 
         splitter = TemporalEntitySplit(
             n_splits=self.n_splits,
             temporal_values=temporal_pd,
             purge_gap_days=self.purge_gap_days,
         )
+        all_folds = list(splitter.split(np.zeros(len(y_pd)), groups=groups_pd))
 
+        if _is_spark_pandas(X) and _has_cv_metadata(X):
+            return self._score_folds_spark(model, X, y, y_pd, groups_pd, temporal_pd, all_folds)
+
+        X_pd = to_pandas(X)
+        return self._score_folds_pandas(model, X_pd, y_pd, groups_pd, all_folds)
+
+    def _score_fold(self, y_true: np.ndarray, y_proba: np.ndarray) -> float:
+        from sklearn.metrics import average_precision_score, roc_auc_score
+
+        if self.scoring == "roc_auc":
+            return roc_auc_score(y_true, y_proba[:, 1])
+        if self.scoring in ("average_precision", "pr_auc"):
+            return average_precision_score(y_true, y_proba[:, 1])
+        return roc_auc_score(y_true, y_proba[:, 1])
+
+    def _score_folds_pandas(self, model, X_pd, y_pd, groups_pd, all_folds) -> CVResult:
         scores = []
         fold_details = []
 
-        for fold_idx, (train_idx, test_idx) in enumerate(splitter.split(np.zeros(len(X_pd)), groups=groups_pd)):
+        for fold_idx, (train_idx, test_idx) in enumerate(all_folds):
             fold_model = model.clone()
             fold_model.fit(X_pd.iloc[train_idx], y_pd.iloc[train_idx])
             y_proba = fold_model.predict_proba(X_pd.iloc[test_idx])
-            y_fold_test = y_pd.iloc[test_idx]
+            y_fold_test = y_pd.iloc[test_idx].to_numpy()
 
-            if self.scoring == "roc_auc":
-                score = roc_auc_score(y_fold_test, y_proba[:, 1])
-            elif self.scoring in ("average_precision", "pr_auc"):
-                score = average_precision_score(y_fold_test, y_proba[:, 1])
-            else:
-                score = roc_auc_score(y_fold_test, y_proba[:, 1])
-
+            score = self._score_fold(y_fold_test, y_proba)
             scores.append(score)
 
             detail: Dict[str, Any] = {
@@ -174,10 +191,59 @@ class CrossValidator:
                 detail["test_entities"] = int(groups_pd.iloc[test_idx].nunique())
             fold_details.append(detail)
 
+        return self._build_cv_result(scores, fold_details)
+
+    def _score_folds_spark(self, model, X, y, y_pd, groups_pd, temporal_pd, all_folds) -> CVResult:
+        from customer_retention.core.compat import concat as compat_concat
+
+        combined = compat_concat([X, y.rename("__y__")], axis=1)
+        feature_cols = [c for c in X.columns if not c.startswith("__cv_")]
+
+        scores = []
+        fold_details = []
+
+        for fold_idx, (train_idx, test_idx) in enumerate(all_folds):
+            fold_model = model.clone()
+
+            train_entities = groups_pd.iloc[train_idx].unique().tolist()
+            test_entities = groups_pd.iloc[test_idx].unique().tolist()
+
+            train_fold = combined[combined[_CV_ENTITY_COL].isin(train_entities)]
+            test_fold = combined[combined[_CV_ENTITY_COL].isin(test_entities)]
+
+            if self.purge_gap_days > 0 and temporal_pd is not None:
+                test_dates = temporal_pd.iloc[test_idx]
+                test_min = native_pd.Timestamp(test_dates.min())
+                purge_cutoff = test_min - native_pd.Timedelta(days=self.purge_gap_days)
+                train_purged = train_fold[train_fold[_CV_DATE_COL] < purge_cutoff]
+                if len(train_purged) > len(train_fold) * 0.1:
+                    train_fold = train_purged
+
+            fold_model.fit(train_fold[feature_cols], train_fold["__y__"])
+            y_proba = fold_model.predict_proba(test_fold[feature_cols])
+            y_fold_test = to_pandas(test_fold["__y__"]).to_numpy()
+
+            score = self._score_fold(y_fold_test, y_proba)
+            scores.append(score)
+
+            detail: Dict[str, Any] = {
+                "fold": fold_idx + 1,
+                "train_size": int(len(train_fold)),
+                "test_size": int(len(test_fold)),
+                "train_class_ratio": float(y_pd.iloc[train_idx].mean()),
+                "score": score,
+            }
+            if groups_pd is not None:
+                detail["train_entities"] = int(groups_pd.iloc[train_idx].nunique())
+                detail["test_entities"] = int(groups_pd.iloc[test_idx].nunique())
+            fold_details.append(detail)
+
+        return self._build_cv_result(scores, fold_details)
+
+    def _build_cv_result(self, scores: list, fold_details: list) -> CVResult:
         cv_scores = np.array(scores)
         cv_mean = float(np.mean(cv_scores))
         cv_std = float(np.std(cv_scores))
-
         return CVResult(
             cv_scores=cv_scores,
             cv_mean=cv_mean,

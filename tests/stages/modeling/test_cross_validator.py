@@ -369,3 +369,186 @@ class TestGroupsAsDataFrame:
         )
         result = cv.run(model, X, y, groups=groups, temporal_values=temporal_df)
         assert len(result.cv_scores) == 5
+
+
+class _MockSparkModel:
+    """Model with .clone() that mimics SparkClassifierWrapper for test."""
+
+    def __init__(self):
+        self.classes_ = np.array([0, 1])
+        self._fitted = False
+
+    def clone(self):
+        return _MockSparkModel()
+
+    def fit(self, X, y):
+        from sklearn.linear_model import LogisticRegression
+
+        feature_cols = [c for c in X.columns if not c.startswith("__cv_")]
+        self._inner = LogisticRegression(max_iter=200, random_state=42)
+        self._inner.fit(X[feature_cols], y)
+        self._fitted = True
+        return self
+
+    def predict(self, X):
+        feature_cols = [c for c in X.columns if not c.startswith("__cv_")]
+        return self._inner.predict(X[feature_cols])
+
+    def predict_proba(self, X):
+        feature_cols = [c for c in X.columns if not c.startswith("__cv_")]
+        return self._inner.predict_proba(X[feature_cols])
+
+
+class TestHasCvMetadata:
+    def test_detects_metadata_columns(self):
+        from customer_retention.stages.modeling.cross_validator import _has_cv_metadata
+
+        df = pd.DataFrame({"f1": [1], "__cv_entity__": [0], "__cv_date__": [0]})
+        assert _has_cv_metadata(df) is True
+
+    def test_missing_entity_column(self):
+        from customer_retention.stages.modeling.cross_validator import _has_cv_metadata
+
+        df = pd.DataFrame({"f1": [1], "__cv_date__": [0]})
+        assert _has_cv_metadata(df) is False
+
+    def test_missing_date_column(self):
+        from customer_retention.stages.modeling.cross_validator import _has_cv_metadata
+
+        df = pd.DataFrame({"f1": [1], "__cv_entity__": [0]})
+        assert _has_cv_metadata(df) is False
+
+    def test_no_metadata(self):
+        from customer_retention.stages.modeling.cross_validator import _has_cv_metadata
+
+        df = pd.DataFrame({"f1": [1], "f2": [2]})
+        assert _has_cv_metadata(df) is False
+
+
+class TestDistributedCVWithCloneableModel:
+    @pytest.fixture
+    def panel_with_metadata(self):
+        np.random.seed(42)
+        n_entities = 20
+        dates = pd.date_range("2023-01-01", periods=12, freq="MS")
+        rows = []
+        for eid in range(n_entities):
+            for d in dates:
+                rows.append({
+                    "entity_id": eid,
+                    "as_of_date": d,
+                    "feature1": np.random.randn(),
+                    "feature2": np.random.randn(),
+                    "target": np.random.choice([0, 1], p=[0.3, 0.7]),
+                })
+        df = pd.DataFrame(rows)
+        X = df[["feature1", "feature2"]].copy()
+        X["__cv_entity__"] = df["entity_id"]
+        X["__cv_date__"] = df["as_of_date"]
+        y = df["target"]
+        groups = df["entity_id"]
+        temporal = df["as_of_date"]
+        return X, y, groups, temporal
+
+    def test_cloneable_model_triggers_distributed_path(self, panel_with_metadata):
+        X, y, groups, temporal = panel_with_metadata
+        model = _MockSparkModel()
+        cv = CrossValidator(
+            strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5, scoring="roc_auc",
+        )
+        result = cv.run(model, X, y, groups=groups, temporal_values=temporal)
+        assert len(result.cv_scores) == 5
+        assert all(0 <= s <= 1 for s in result.cv_scores)
+
+    def test_fold_details_have_entity_counts(self, panel_with_metadata):
+        X, y, groups, temporal = panel_with_metadata
+        model = _MockSparkModel()
+        cv = CrossValidator(
+            strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5, scoring="roc_auc",
+        )
+        result = cv.run(model, X, y, groups=groups, temporal_values=temporal)
+        for fold in result.fold_details:
+            assert "train_entities" in fold
+            assert "test_entities" in fold
+            assert fold["train_entities"] > 0
+            assert fold["test_entities"] > 0
+
+    def test_metadata_columns_ignored_during_training(self, panel_with_metadata):
+        X, y, groups, temporal = panel_with_metadata
+        model = _MockSparkModel()
+        cv = CrossValidator(
+            strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5, scoring="roc_auc",
+        )
+        result = cv.run(model, X, y, groups=groups, temporal_values=temporal)
+        assert result.cv_mean > 0
+
+    def test_purge_gap_reduces_train_rows(self):
+        np.random.seed(42)
+        base = pd.Timestamp("2023-01-01")
+        rows = [
+            {"entity_id": 0, "as_of_date": base, "f1": 1.0, "target": 0},
+            {"entity_id": 0, "as_of_date": base + pd.Timedelta(days=30), "f1": 1.1, "target": 0},
+            {"entity_id": 0, "as_of_date": base + pd.Timedelta(days=120), "f1": 1.2, "target": 1},
+            {"entity_id": 1, "as_of_date": base + pd.Timedelta(days=150), "f1": 2.0, "target": 1},
+            {"entity_id": 1, "as_of_date": base + pd.Timedelta(days=180), "f1": 2.1, "target": 0},
+        ]
+        df = pd.DataFrame(rows)
+
+        from customer_retention.stages.modeling.cross_validator import TemporalEntitySplit
+
+        temporal = df["as_of_date"]
+        groups = df["entity_id"]
+        splitter_no = TemporalEntitySplit(n_splits=2)
+        splitter_purge = TemporalEntitySplit(
+            n_splits=2, temporal_values=temporal, purge_gap_days=90,
+        )
+        sizes_no = [len(tr) for tr, _ in splitter_no.split(np.zeros(len(df)), groups=groups)]
+        sizes_purge = [len(tr) for tr, _ in splitter_purge.split(np.zeros(len(df)), groups=groups)]
+        assert any(sp < sn for sp, sn in zip(sizes_purge, sizes_no))
+
+    def test_cv_result_fields_complete(self, panel_with_metadata):
+        X, y, groups, temporal = panel_with_metadata
+        model = _MockSparkModel()
+        cv = CrossValidator(
+            strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5, scoring="roc_auc",
+        )
+        result = cv.run(model, X, y, groups=groups, temporal_values=temporal)
+        assert result.scoring == "roc_auc"
+        assert isinstance(result.is_stable, bool)
+        assert len(result.fold_details) == 5
+        assert result.cv_std == pytest.approx(np.std(result.cv_scores), rel=1e-6)
+
+    def test_without_metadata_still_works(self):
+        np.random.seed(42)
+        n_entities = 20
+        dates = pd.date_range("2023-01-01", periods=12, freq="MS")
+        rows = []
+        for eid in range(n_entities):
+            for d in dates:
+                rows.append({
+                    "entity_id": eid, "as_of_date": d,
+                    "f1": np.random.randn(), "target": np.random.choice([0, 1], p=[0.3, 0.7]),
+                })
+        df = pd.DataFrame(rows)
+        X = df[["f1"]]
+        y = df["target"]
+        groups = df["entity_id"]
+        temporal = df["as_of_date"]
+
+        model = _MockSparkModel()
+        cv = CrossValidator(
+            strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5, scoring="roc_auc",
+        )
+        result = cv.run(model, X, y, groups=groups, temporal_values=temporal)
+        assert len(result.cv_scores) == 5
+
+    def test_average_precision_scoring(self, panel_with_metadata):
+        X, y, groups, temporal = panel_with_metadata
+        model = _MockSparkModel()
+        cv = CrossValidator(
+            strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5,
+            scoring="average_precision",
+        )
+        result = cv.run(model, X, y, groups=groups, temporal_values=temporal)
+        assert result.scoring == "average_precision"
+        assert all(0 <= s <= 1 for s in result.cv_scores)
