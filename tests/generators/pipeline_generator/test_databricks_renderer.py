@@ -1883,6 +1883,81 @@ class TestDatabricksSilverTemporalMerge:
         assert "SparkTemporalMerger" not in result
         assert "merge_sources" in result or "join" in result.lower()
 
+    @pytest.fixture
+    def temporal_config_with_key_resolution(self, entity_source, event_source, bronze_with_impute, gold_with_encode_scale):
+        from customer_retention.generators.pipeline_generator.models import (
+            KeyResolutionStepConfig,
+            TemporalMergeSourceConfig,
+        )
+
+        silver = SilverLayerConfig(
+            joins=[{
+                "left_keys": ["customer_id"],
+                "right_keys": ["customer_id"],
+                "right_source": "orders",
+                "how": "left",
+            }],
+            grid_dates=["2024-01-01", "2024-01-08"],
+            entity_key="customer_id",
+            merge_sources=[
+                TemporalMergeSourceConfig(name="customers", granularity="entity_level"),
+                TemporalMergeSourceConfig(
+                    name="case_history",
+                    granularity="event_level",
+                    feature_timestamp_column="created_date",
+                    key_resolution_steps=[
+                        KeyResolutionStepConfig(
+                            bridge_dataset="case",
+                            source_key="CASE_ID",
+                            bridge_key="CASE_ID",
+                            resolve_column="ACCOUNT_ID",
+                        ),
+                    ],
+                ),
+            ],
+        )
+        return PipelineConfig(
+            name="test_pipeline",
+            target_column="churn",
+            sources=[entity_source, event_source],
+            bronze={"customers": bronze_with_impute},
+            bronze_event={
+                "orders": BronzeEventConfig(
+                    source=event_source,
+                    entity_column="customer_id",
+                    time_column="order_date",
+                    aggregation=AggregationWindowConfig(
+                        windows=["7d", "30d"],
+                        value_columns=["amount"],
+                        agg_funcs=["sum", "mean"],
+                    ),
+                ),
+            },
+            silver=silver,
+            gold=gold_with_encode_scale,
+            output_dir="/output/test_pipeline",
+            composite_name="cust_orde__abc1234",
+        )
+
+    def test_silver_key_resolution_join(self, renderer, temporal_config_with_key_resolution):
+        result = renderer.render_silver(temporal_config_with_key_resolution)
+        assert ".join(" in result
+        assert "dropDuplicates" in result
+
+    def test_silver_key_resolution_before_entity_rename(self, renderer, temporal_config_with_key_resolution):
+        result = renderer.render_silver(temporal_config_with_key_resolution)
+        join_pos = result.index(".join(")
+        rename_pos = result.index("withColumnRenamed")
+        assert join_pos < rename_pos
+
+    def test_silver_no_key_resolution_when_empty(self, renderer, temporal_config):
+        result = renderer.render_silver(temporal_config)
+        assert "dropDuplicates" not in result or "key_resolution" not in result
+
+    def test_silver_with_key_resolution_valid_python(self, renderer, temporal_config_with_key_resolution):
+        result = renderer.render_silver(temporal_config_with_key_resolution)
+        ast.parse(result)
+
 
 class TestDatabricksGoldAsOfDate:
     def test_gold_checks_as_of_date(self, renderer, sample_pipeline_config):

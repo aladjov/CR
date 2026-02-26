@@ -255,6 +255,73 @@ class TestRenderSilverTemporalMerge:
         assert "TemporalMerger" not in result
         assert "merge" in result
 
+    @pytest.fixture
+    def temporal_config_with_key_resolution(self, entity_source, event_source, bronze_with_impute, gold_with_encode_scale):
+        from customer_retention.generators.pipeline_generator.models import (
+            KeyResolutionStepConfig,
+            SilverLayerConfig,
+            TemporalMergeSourceConfig,
+        )
+
+        silver = SilverLayerConfig(
+            joins=[{
+                "left_keys": ["customer_id"],
+                "right_keys": ["customer_id"],
+                "right_source": "orders",
+                "how": "left",
+            }],
+            grid_dates=["2024-01-01", "2024-01-08"],
+            entity_key="customer_id",
+            merge_sources=[
+                TemporalMergeSourceConfig(name="customers", granularity="entity_level"),
+                TemporalMergeSourceConfig(
+                    name="case_history",
+                    granularity="event_level",
+                    feature_timestamp_column="created_date",
+                    key_resolution_steps=[
+                        KeyResolutionStepConfig(
+                            bridge_dataset="case",
+                            source_key="CASE_ID",
+                            bridge_key="CASE_ID",
+                            resolve_column="ACCOUNT_ID",
+                        ),
+                    ],
+                ),
+            ],
+        )
+        return PipelineConfig(
+            name="test_pipeline",
+            target_column="churn",
+            sources=[entity_source, event_source],
+            bronze={"customers": bronze_with_impute},
+            silver=silver,
+            gold=gold_with_encode_scale,
+            output_dir="/output/test_pipeline",
+        )
+
+    def test_silver_key_resolution_import(self, renderer, temporal_config_with_key_resolution):
+        result = renderer.render_silver(temporal_config_with_key_resolution)
+        assert "resolve_entity_keys" in result
+        assert "KeyResolutionStep" in result
+
+    def test_silver_key_resolution_in_meta(self, renderer, temporal_config_with_key_resolution):
+        result = renderer.render_silver(temporal_config_with_key_resolution)
+        assert "key_resolution_steps" in result
+
+    def test_silver_key_resolution_before_rename(self, renderer, temporal_config_with_key_resolution):
+        result = renderer.render_silver(temporal_config_with_key_resolution)
+        resolve_pos = result.index("resolve_entity_keys")
+        rename_pos = result.index("rename(columns=")
+        assert resolve_pos < rename_pos
+
+    def test_silver_no_key_resolution_import_when_empty(self, renderer, temporal_config):
+        result = renderer.render_silver(temporal_config)
+        assert "resolve_entity_keys" not in result
+
+    def test_silver_with_key_resolution_valid_python(self, renderer, temporal_config_with_key_resolution):
+        result = renderer.render_silver(temporal_config_with_key_resolution)
+        ast.parse(result)
+
 
 class TestRenderGoldAsOfDate:
     def test_gold_checks_as_of_date(self, renderer, sample_pipeline_config):

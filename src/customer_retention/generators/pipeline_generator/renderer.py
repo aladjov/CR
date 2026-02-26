@@ -543,6 +543,11 @@ from customer_retention.transforms import {{ ops | sort | join(', ') }}
 from customer_retention.stages.temporal.temporal_merger import TemporalMerger, MergeConfig, DatasetMergeInput
 from customer_retention.core.config.column_config import DatasetGranularity
 {% endif %}
+{% set has_key_resolution = config.silver.merge_sources | selectattr('key_resolution_steps') | list | length > 0 %}
+{% if has_key_resolution %}
+from customer_retention.analysis.auto_explorer.key_resolver import resolve_entity_keys
+from customer_retention.analysis.auto_explorer.project_context import KeyResolutionStep
+{% endif %}
 from config import SOURCES, get_bronze_path, get_silver_path, TARGET_COLUMN
 
 {% if config.silver.grid_dates %}
@@ -550,7 +555,7 @@ GRID_DATES = {{ config.silver.grid_dates }}
 
 MERGE_SOURCE_META = [
 {% for src in config.silver.merge_sources %}
-    {"name": "{{ src.name }}", "granularity": "{{ src.granularity }}"{{ ', "feature_timestamp_column": "' + src.feature_timestamp_column + '"' if src.feature_timestamp_column else '' }}},
+    {"name": "{{ src.name }}", "granularity": "{{ src.granularity }}"{{ ', "feature_timestamp_column": "' + src.feature_timestamp_column + '"' if src.feature_timestamp_column else '' }}, "key_resolution_steps": [{% for kr in src.key_resolution_steps %}{"bridge_dataset": "{{ kr.bridge_dataset }}", "source_key": "{{ kr.source_key }}", "bridge_key": "{{ kr.bridge_key }}", "resolve_column": "{{ kr.resolve_column }}"}{{ ", " if not loop.last else "" }}{% endfor %}]},
 {% endfor %}
 ]
 {% endif %}
@@ -579,6 +584,17 @@ def merge_sources(bronze_outputs: dict) -> pd.DataFrame:
     raw_entity_key = "{{ config.silver.entity_key or config.sources[0].entity_key }}"
     base_source = "{{ config.sources[0].name }}"
     entity_ids = bronze_outputs[base_source][raw_entity_key].unique()
+{% if has_key_resolution %}
+    resolutions = {}
+    for meta in MERGE_SOURCE_META:
+        kr_steps = meta.get("key_resolution_steps", [])
+        if kr_steps:
+            resolutions[meta["name"]] = [
+                KeyResolutionStep(**s) for s in kr_steps
+            ]
+    if resolutions:
+        bronze_outputs = resolve_entity_keys(bronze_outputs, resolutions)
+{% endif %}
     for name, df in bronze_outputs.items():
         if raw_entity_key in df.columns and raw_entity_key != "entity_id":
             bronze_outputs[name] = df.rename(columns={raw_entity_key: "entity_id"})

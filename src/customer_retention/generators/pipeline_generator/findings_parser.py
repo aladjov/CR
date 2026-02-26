@@ -19,6 +19,7 @@ from .models import (
     DeduplicationConfig,
     GoldLayerConfig,
     HistoryWindowConfig,
+    KeyResolutionStepConfig,
     LabelTimestampConfig,
     LandingLayerConfig,
     LifecycleConfig,
@@ -374,12 +375,24 @@ class FindingsParser:
             return [], None, []
 
         entity_key = None
+        key_resolutions: Dict[str, list] = {}
         ctx_path = self._namespace.project_context_path
         if ctx_path.exists():
             from customer_retention.analysis.auto_explorer.project_context import ProjectContext
 
             ctx = ProjectContext.load(ctx_path)
             entity_key = ctx.entity_column
+            for ds_name, ds_entry in ctx.datasets.items():
+                if ds_entry.key_resolution:
+                    key_resolutions[ds_name] = [
+                        KeyResolutionStepConfig(
+                            bridge_dataset=step.bridge_dataset,
+                            source_key=step.source_key,
+                            bridge_key=step.bridge_key,
+                            resolve_column=step.resolve_column,
+                        )
+                        for step in ds_entry.key_resolution
+                    ]
 
         from customer_retention.core.config.column_config import DatasetGranularity
 
@@ -402,6 +415,7 @@ class FindingsParser:
                 name=name,
                 granularity=granularity,
                 feature_timestamp_column=ts_col,
+                key_resolution_steps=key_resolutions.get(name, []),
             ))
         return grid_dates, entity_key, merge_srcs
 

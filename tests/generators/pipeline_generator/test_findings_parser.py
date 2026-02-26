@@ -3987,3 +3987,209 @@ class TestTemporalMergeMetadata:
 
         excluded_names = {s.name for s in config.silver.merge_sources}
         assert "customers" not in excluded_names
+
+    def _make_namespace_with_key_resolution(self, tmp_path, grid_dates, key_resolution_entries):
+        from customer_retention.analysis.auto_explorer.project_context import (
+            DatasetRegistryEntry,
+            KeyResolutionStep,
+            ObjectivePriority,
+            ObjectiveSpec,
+            PredictionObjective,
+            ProjectContext,
+        )
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        from customer_retention.analysis.auto_explorer.snapshot_grid import SnapshotGrid
+
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        grid = SnapshotGrid(
+            cadence_interval="weekly",
+            observation_window_days=90,
+            grid_dates=grid_dates,
+        )
+        grid.save(ns.snapshot_grid_path)
+
+        datasets = {}
+        for name, kr_list in key_resolution_entries.items():
+            steps = [KeyResolutionStep(**kr) for kr in kr_list] if kr_list else []
+            datasets[name] = DatasetRegistryEntry(
+                name=name,
+                path=f"/data/{name}.csv",
+                entity_column="ACCOUNT_ID",
+                key_resolution=steps,
+            )
+        datasets.setdefault("customers", DatasetRegistryEntry(
+            name="customers",
+            path="/data/customers.csv",
+            entity_column="ACCOUNT_ID",
+        ))
+
+        ctx = ProjectContext(
+            entity_column="ACCOUNT_ID",
+            datasets=datasets,
+            objectives=[ObjectiveSpec(
+                objective=PredictionObjective.IMMEDIATE_RISK,
+                priority=ObjectivePriority.PRIMARY,
+            )],
+        )
+        ctx.save(ns.project_context_path)
+        return ns
+
+    def _write_findings_with_case_history(self, findings_dir, ns):
+        multi_dataset = {
+            "datasets": {
+                "customers": {
+                    "name": "customers",
+                    "findings_path": str(findings_dir / "customers_findings.yaml"),
+                    "source_path": "/data/customers.csv",
+                    "granularity": "entity_level",
+                    "row_count": 1000,
+                    "column_count": 3,
+                    "entity_column": "ACCOUNT_ID",
+                },
+                "case": {
+                    "name": "case",
+                    "findings_path": str(findings_dir / "case_findings.yaml"),
+                    "source_path": "/data/case.csv",
+                    "granularity": "entity_level",
+                    "row_count": 500,
+                    "column_count": 3,
+                    "entity_column": "ACCOUNT_ID",
+                },
+                "case_history": {
+                    "name": "case_history",
+                    "findings_path": str(findings_dir / "case_history_findings.yaml"),
+                    "source_path": "/data/case_history.csv",
+                    "granularity": "event_level",
+                    "row_count": 5000,
+                    "column_count": 4,
+                    "entity_column": "ACCOUNT_ID",
+                    "time_column": "created_date",
+                },
+            },
+            "relationships": [
+                {
+                    "left_dataset": "customers",
+                    "right_dataset": "case",
+                    "left_column": "ACCOUNT_ID",
+                    "right_column": "ACCOUNT_ID",
+                    "relationship_type": "one_to_many",
+                    "confidence": 1.0,
+                },
+                {
+                    "left_dataset": "case",
+                    "right_dataset": "case_history",
+                    "left_column": "CASE_ID",
+                    "right_column": "CASE_ID",
+                    "relationship_type": "one_to_many",
+                    "confidence": 1.0,
+                },
+            ],
+            "primary_entity_dataset": "customers",
+            "event_datasets": ["case_history"],
+        }
+        ns.multi_dataset_findings_path.parent.mkdir(parents=True, exist_ok=True)
+        ns.multi_dataset_findings_path.write_text(yaml.dump(multi_dataset))
+
+        base_findings = {
+            "row_count": 1000,
+            "column_count": 3,
+            "columns": {
+                "ACCOUNT_ID": {"name": "ACCOUNT_ID", "inferred_type": "identifier",
+                               "confidence": 0.95, "evidence": [], "quality_score": 100,
+                               "cleaning_needed": False, "cleaning_recommendations": []},
+            },
+            "identifier_columns": ["ACCOUNT_ID"],
+        }
+
+        customers = {**base_findings, "source_path": "/data/customers.csv", "source_format": "csv",
+                     "target_column": "churn",
+                     "columns": {**base_findings["columns"],
+                                 "churn": {"name": "churn", "inferred_type": "binary",
+                                           "confidence": 0.99, "evidence": [], "quality_score": 100,
+                                           "cleaning_needed": False, "cleaning_recommendations": []}}}
+        case = {**base_findings, "source_path": "/data/case.csv", "source_format": "csv",
+                "row_count": 500,
+                "columns": {**base_findings["columns"],
+                            "CASE_ID": {"name": "CASE_ID", "inferred_type": "identifier",
+                                        "confidence": 0.95, "evidence": [], "quality_score": 100,
+                                        "cleaning_needed": False, "cleaning_recommendations": []}},
+                "identifier_columns": ["ACCOUNT_ID", "CASE_ID"]}
+        case_history = {"source_path": "/data/case_history.csv", "source_format": "csv",
+                        "row_count": 5000, "column_count": 4,
+                        "columns": {
+                            "CASE_ID": {"name": "CASE_ID", "inferred_type": "identifier",
+                                        "confidence": 0.95, "evidence": [], "quality_score": 100,
+                                        "cleaning_needed": False, "cleaning_recommendations": []},
+                            "created_date": {"name": "created_date", "inferred_type": "datetime",
+                                             "confidence": 0.95, "evidence": [], "quality_score": 100,
+                                             "cleaning_needed": False, "cleaning_recommendations": []},
+                        },
+                        "identifier_columns": ["CASE_ID"],
+                        "datetime_columns": ["created_date"],
+                        "time_series_metadata": {
+                            "granularity": "event_level",
+                            "entity_column": "CASE_ID",
+                            "time_column": "created_date",
+                        }}
+        findings_dir.mkdir(parents=True, exist_ok=True)
+        (findings_dir / "customers_findings.yaml").write_text(yaml.dump(customers))
+        (findings_dir / "case_findings.yaml").write_text(yaml.dump(case))
+        (findings_dir / "case_history_findings.yaml").write_text(yaml.dump(case_history))
+
+    def test_key_resolution_steps_from_context(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        ns = self._make_namespace_with_key_resolution(
+            tmp_path,
+            ["2024-01-01"],
+            {"case_history": [{"bridge_dataset": "case", "source_key": "CASE_ID",
+                               "bridge_key": "CASE_ID", "resolve_column": "ACCOUNT_ID"}]},
+        )
+        findings_dir = ns.multi_dataset_findings_path.parent
+        self._write_findings_with_case_history(findings_dir, ns)
+
+        parser = FindingsParser(str(findings_dir), namespace=ns)
+        config = parser.parse()
+
+        ch_src = next(s for s in config.silver.merge_sources if s.name == "case_history")
+        assert len(ch_src.key_resolution_steps) == 1
+        assert ch_src.key_resolution_steps[0].bridge_dataset == "case"
+        assert ch_src.key_resolution_steps[0].source_key == "CASE_ID"
+        assert ch_src.key_resolution_steps[0].resolve_column == "ACCOUNT_ID"
+
+    def test_no_key_resolution_leaves_empty(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        ns = self._make_namespace_with_key_resolution(tmp_path, ["2024-01-01"], {})
+        findings_dir = ns.multi_dataset_findings_path.parent
+        self._write_findings_with_case_history(findings_dir, ns)
+
+        parser = FindingsParser(str(findings_dir), namespace=ns)
+        config = parser.parse()
+
+        for src in config.silver.merge_sources:
+            assert src.key_resolution_steps == []
+
+    def test_key_resolution_multi_step(self, tmp_path):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        ns = self._make_namespace_with_key_resolution(
+            tmp_path,
+            ["2024-01-01"],
+            {"case_history": [
+                {"bridge_dataset": "case", "source_key": "CASE_ID",
+                 "bridge_key": "CASE_ID", "resolve_column": "ACCOUNT_ID"},
+                {"bridge_dataset": "customers", "source_key": "ACCOUNT_ID",
+                 "bridge_key": "ACCOUNT_ID", "resolve_column": "ACCOUNT_ID"},
+            ]},
+        )
+        findings_dir = ns.multi_dataset_findings_path.parent
+        self._write_findings_with_case_history(findings_dir, ns)
+
+        parser = FindingsParser(str(findings_dir), namespace=ns)
+        config = parser.parse()
+
+        ch_src = next(s for s in config.silver.merge_sources if s.name == "case_history")
+        assert len(ch_src.key_resolution_steps) == 2
+        assert ch_src.key_resolution_steps[0].bridge_dataset == "case"
+        assert ch_src.key_resolution_steps[1].bridge_dataset == "customers"

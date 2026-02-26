@@ -12,6 +12,7 @@ from customer_retention.analysis.auto_explorer.project_context import (
     DatasetValidation,
     ExplorationContract,
     IntentConfig,
+    KeyResolutionStep,
     MergeScaffoldEntry,
     ObjectiveAssessment,
     ObjectivePriority,
@@ -1390,3 +1391,70 @@ class TestSplitStrategyEnum:
     def test_from_string(self):
         assert SplitStrategy("temporal") is SplitStrategy.TEMPORAL
         assert SplitStrategy("cohort_based") is SplitStrategy.COHORT_BASED
+
+
+class TestKeyResolutionStep:
+    def test_creation_with_all_fields(self):
+        step = KeyResolutionStep(
+            bridge_dataset="case",
+            source_key="CASE_ID",
+            bridge_key="CASE_ID",
+            resolve_column="ACCOUNT_ID",
+        )
+        assert step.bridge_dataset == "case"
+        assert step.source_key == "CASE_ID"
+        assert step.bridge_key == "CASE_ID"
+        assert step.resolve_column == "ACCOUNT_ID"
+
+    def test_dataset_registry_entry_with_key_resolution(self):
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="case",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        entry = _minimal_entry(key_resolution=steps)
+        assert len(entry.key_resolution) == 1
+        assert entry.key_resolution[0].bridge_dataset == "case"
+
+    def test_dataset_registry_entry_default_empty_key_resolution(self):
+        entry = _minimal_entry()
+        assert entry.key_resolution == []
+
+    def test_yaml_roundtrip_with_key_resolution(self, tmp_path):
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="case",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+            KeyResolutionStep(
+                bridge_dataset="account",
+                source_key="ACCOUNT_ID",
+                bridge_key="ACCOUNT_ID",
+                resolve_column="PARENT_ACCOUNT_ID",
+            ),
+        ]
+        entry = DatasetRegistryEntry(
+            name="case_history",
+            path="data/case_history.csv",
+            storage_format="csv",
+            key_resolution=steps,
+        )
+        ctx = ProjectContext(
+            project_name="roundtrip_test",
+            datasets={"case_history": entry},
+            objectives=[_immediate_spec()],
+            primary_objective=PredictionObjective.IMMEDIATE_RISK,
+        )
+        p = tmp_path / "ctx.yaml"
+        ctx.save(p)
+        loaded = ProjectContext.load(p)
+        loaded_entry = loaded.datasets["case_history"]
+        assert len(loaded_entry.key_resolution) == 2
+        assert loaded_entry.key_resolution[0].bridge_dataset == "case"
+        assert loaded_entry.key_resolution[0].source_key == "CASE_ID"
+        assert loaded_entry.key_resolution[1].resolve_column == "PARENT_ACCOUNT_ID"

@@ -24,6 +24,7 @@ from .exploration_manager import (
 from .explorer import DataExplorer
 from .findings import ColumnFinding, ExplorationFindings, TextProcessingMetadata, TimeSeriesMetadata
 from .intent_defaults import IntentDefaultsEngine, IntentSuggestion
+from .key_resolver import resolve_entity_keys, suggest_key_resolutions
 from .layered_recommendations import (
     ALL_AGGREGATIONS,
     CATEGORICAL_AGGREGATIONS,
@@ -55,6 +56,7 @@ from .project_context import (
     DatasetValidation,
     ExplorationContract,
     IntentConfig,
+    KeyResolutionStep,
     MergeScaffoldEntry,
     ObjectiveAssessment,
     ObjectivePriority,
@@ -136,6 +138,9 @@ __all__ = [
     "NUMERIC_AGGREGATIONS",
     "CATEGORICAL_AGGREGATIONS",
     "ALL_AGGREGATIONS",
+    "KeyResolutionStep",
+    "resolve_entity_keys",
+    "suggest_key_resolutions",
     "RecommendationBuilder",
     "BronzeBuilder",
     "SilverBuilder",

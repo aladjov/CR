@@ -387,3 +387,42 @@ class TestDeduplicationConfig:
         src = SourceConfig(name="e", path="e.csv", format="csv", entity_key="cid")
         be = BronzeEventConfig(source=src, entity_column="cid", time_column="ts", deduplicate=True)
         assert be.deduplicate is True
+
+
+class TestKeyResolutionStepConfig:
+    def test_creation_with_all_fields(self):
+        from customer_retention.generators.pipeline_generator.models import KeyResolutionStepConfig
+        step = KeyResolutionStepConfig(
+            bridge_dataset="case",
+            source_key="CASE_ID",
+            bridge_key="CASE_ID",
+            resolve_column="ACCOUNT_ID",
+        )
+        assert step.bridge_dataset == "case"
+        assert step.source_key == "CASE_ID"
+        assert step.bridge_key == "CASE_ID"
+        assert step.resolve_column == "ACCOUNT_ID"
+
+    def test_temporal_merge_source_with_key_resolution_steps(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            KeyResolutionStepConfig,
+            TemporalMergeSourceConfig,
+        )
+        step = KeyResolutionStepConfig(
+            bridge_dataset="case",
+            source_key="CASE_ID",
+            bridge_key="CASE_ID",
+            resolve_column="ACCOUNT_ID",
+        )
+        src = TemporalMergeSourceConfig(
+            name="case_history",
+            granularity="event_level",
+            key_resolution_steps=[step],
+        )
+        assert len(src.key_resolution_steps) == 1
+        assert src.key_resolution_steps[0].bridge_dataset == "case"
+
+    def test_temporal_merge_source_default_empty_key_resolution(self):
+        from customer_retention.generators.pipeline_generator.models import TemporalMergeSourceConfig
+        src = TemporalMergeSourceConfig(name="customers", granularity="entity_level")
+        assert src.key_resolution_steps == []

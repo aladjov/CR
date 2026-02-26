@@ -95,11 +95,19 @@ class DatasetValidation(BaseModel):
     label_timestamp_definition: Optional[str] = None
 
 
+class KeyResolutionStep(BaseModel):
+    bridge_dataset: str
+    source_key: str
+    bridge_key: str
+    resolve_column: str
+
+
 class DatasetRegistryEntry(BaseModel):
     name: str
     path: str
     storage_format: str = "csv"
     entity_column: Optional[str] = None
+    key_resolution: list[KeyResolutionStep] = Field(default_factory=list)
     time_column: Optional[str] = None
     raw_time_column_role: Optional[RawTimeColumnRole] = None
     granularity: Optional[DatasetGranularity] = None

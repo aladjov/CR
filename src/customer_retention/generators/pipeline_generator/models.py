@@ -57,10 +57,19 @@ class BronzeLayerConfig:
 
 
 @dataclass
+class KeyResolutionStepConfig:
+    bridge_dataset: str
+    source_key: str
+    bridge_key: str
+    resolve_column: str
+
+
+@dataclass
 class TemporalMergeSourceConfig:
     name: str
     granularity: str
     feature_timestamp_column: Optional[str] = None
+    key_resolution_steps: List[KeyResolutionStepConfig] = field(default_factory=list)
 
 
 @dataclass

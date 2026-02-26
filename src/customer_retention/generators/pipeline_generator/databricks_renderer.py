@@ -904,11 +904,12 @@ from customer_retention.core.config.column_config import DatasetGranularity
 # COMMAND ----------
 
 {% if config.silver.grid_dates %}
+{% set has_key_resolution = config.silver.merge_sources | selectattr('key_resolution_steps') | list | length > 0 %}
 GRID_DATES = {{ config.silver.grid_dates }}
 
 MERGE_SOURCE_META = [
 {% for src in config.silver.merge_sources %}
-    {"name": "{{ src.name }}", "granularity": "{{ src.granularity }}"{{ ', "feature_timestamp_column": "' + src.feature_timestamp_column + '"' if src.feature_timestamp_column else '' }}},
+    {"name": "{{ src.name }}", "granularity": "{{ src.granularity }}"{{ ', "feature_timestamp_column": "' + src.feature_timestamp_column + '"' if src.feature_timestamp_column else '' }}, "key_resolution_steps": [{% for kr in src.key_resolution_steps %}{"bridge_dataset": "{{ kr.bridge_dataset }}", "source_key": "{{ kr.source_key }}", "bridge_key": "{{ kr.bridge_key }}", "resolve_column": "{{ kr.resolve_column }}"}{{ ", " if not loop.last else "" }}{% endfor %}]},
 {% endfor %}
 ]
 {% endif %}
@@ -931,6 +932,25 @@ def merge_sources(bronze_outputs):
     raw_entity_key = "{{ config.silver.entity_key or config.sources[0].entity_key }}"
     base_source = "{{ config.sources[0].name }}"
     entity_ids = bronze_outputs[base_source].select(raw_entity_key).distinct().toPandas()[raw_entity_key]
+{% if has_key_resolution %}
+    for meta in MERGE_SOURCE_META:
+        kr_steps = meta.get("key_resolution_steps", [])
+        if not kr_steps:
+            continue
+        df = bronze_outputs[meta["name"]]
+        for step in kr_steps:
+            bridge_subset = bronze_outputs[step["bridge_dataset"]].select(
+                step["bridge_key"], step["resolve_column"]
+            ).dropDuplicates([step["bridge_key"]])
+            df = df.join(
+                bridge_subset,
+                df[step["source_key"]] == bridge_subset[step["bridge_key"]],
+                "inner",
+            )
+            if step["source_key"] != step["bridge_key"]:
+                df = df.drop(bridge_subset[step["bridge_key"]])
+        bronze_outputs[meta["name"]] = df
+{% endif %}
     if raw_entity_key != "entity_id":
         for name, df in bronze_outputs.items():
             if raw_entity_key in df.columns:
