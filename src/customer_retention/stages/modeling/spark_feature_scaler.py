@@ -60,7 +60,7 @@ class SparkFeatureScaler(FeatureScaler):
 
         if self.scaler_type == ScalerType.STANDARD:
             means = X.mean()
-            stds = X.std(ddof=0)
+            stds = X.std(axis=0, ddof=0)
             for col in X.columns:
                 params[col] = {"mean": float(means[col]), "std": float(stds[col])}
 
