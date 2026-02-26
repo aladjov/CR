@@ -817,6 +817,23 @@ def collect_for_sklearn(obj: Any) -> Any:
     return obj
 
 
+def as_pandas_api(spark_df: Any) -> Any:
+    from .spark_backend import _as_pandas_api
+    return _as_pandas_api(spark_df)
+
+
+def load_spark_table(source: str) -> Any:
+    spark = get_spark_session()
+    if not spark:
+        raise RuntimeError(f"No active Spark session to read table '{source}'")
+    return spark.table(source)
+
+
+def register_temp_view(spark_df: Any, view_name: str) -> str:
+    spark_df.createOrReplaceGlobalTempView(view_name)
+    return f"global_temp.{view_name}"
+
+
 __all__ = [
     "pd",
     "native_pd",
@@ -898,4 +915,7 @@ __all__ = [
     "bulk_median_impute",
     "bulk_zero_variance_cols",
     "collect_for_sklearn",
+    "as_pandas_api",
+    "load_spark_table",
+    "register_temp_view",
 ]
