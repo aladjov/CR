@@ -1,0 +1,121 @@
+
+from customer_retention.generators.notebook_sync.cell_types import (
+    CellSyncType,
+    detect_cell_sync_type,
+    has_magic_comment,
+    prepend_magic_comment,
+    strip_magic_comment,
+)
+
+
+class TestCellSyncType:
+
+    def test_enum_values(self):
+        assert CellSyncType.CONFIG.value == "config"
+        assert CellSyncType.USER_CODE.value == "user_code"
+        assert CellSyncType.CODE.value == "code"
+
+
+class TestDetectCellSyncType:
+
+    def test_config_tag(self):
+        assert detect_cell_sync_type(["# @cr:config\n", "X = 1\n"]) == CellSyncType.CONFIG
+
+    def test_user_code_tag(self):
+        assert detect_cell_sync_type(["# @cr:user_code\n", "def f(): pass\n"]) == CellSyncType.USER_CODE
+
+    def test_code_tag(self):
+        assert detect_cell_sync_type(["# @cr:code\n", "import os\n"]) == CellSyncType.CODE
+
+    def test_no_tag_defaults_to_code(self):
+        assert detect_cell_sync_type(["import os\n", "print(1)\n"]) == CellSyncType.CODE
+
+    def test_empty_source(self):
+        assert detect_cell_sync_type([]) == CellSyncType.CODE
+
+    def test_single_line_no_newline(self):
+        assert detect_cell_sync_type(["# @cr:config"]) == CellSyncType.CONFIG
+
+    def test_whitespace_before_tag(self):
+        assert detect_cell_sync_type(["  # @cr:config\n"]) == CellSyncType.CODE
+
+    def test_tag_with_trailing_text_ignored(self):
+        assert detect_cell_sync_type(["# @cr:config extra stuff\n"]) == CellSyncType.CODE
+
+    def test_tag_must_be_exact(self):
+        assert detect_cell_sync_type(["# @cr:configs\n"]) == CellSyncType.CODE
+        assert detect_cell_sync_type(["# @cr:user_codes\n"]) == CellSyncType.CODE
+
+
+class TestHasMagicComment:
+
+    def test_has_config(self):
+        assert has_magic_comment(["# @cr:config\n", "X = 1\n"]) is True
+
+    def test_has_user_code(self):
+        assert has_magic_comment(["# @cr:user_code\n"]) is True
+
+    def test_has_code(self):
+        assert has_magic_comment(["# @cr:code\n"]) is True
+
+    def test_no_magic(self):
+        assert has_magic_comment(["import os\n"]) is False
+
+    def test_empty(self):
+        assert has_magic_comment([]) is False
+
+
+class TestStripMagicComment:
+
+    def test_strips_config_tag(self):
+        result = strip_magic_comment(["# @cr:config\n", "X = 1\n", "Y = 2\n"])
+        assert result == ["X = 1\n", "Y = 2\n"]
+
+    def test_strips_user_code_tag(self):
+        result = strip_magic_comment(["# @cr:user_code\n", "def f(): pass\n"])
+        assert result == ["def f(): pass\n"]
+
+    def test_no_tag_returns_unchanged(self):
+        lines = ["import os\n", "print(1)\n"]
+        assert strip_magic_comment(lines) == lines
+
+    def test_empty_returns_empty(self):
+        assert strip_magic_comment([]) == []
+
+    def test_tag_only(self):
+        assert strip_magic_comment(["# @cr:config\n"]) == []
+
+    def test_does_not_mutate_input(self):
+        original = ["# @cr:config\n", "X = 1\n"]
+        copy = list(original)
+        strip_magic_comment(original)
+        assert original == copy
+
+
+class TestPrependMagicComment:
+
+    def test_prepend_config(self):
+        result = prepend_magic_comment(["X = 1\n"], CellSyncType.CONFIG)
+        assert result == ["# @cr:config\n", "X = 1\n"]
+
+    def test_prepend_user_code(self):
+        result = prepend_magic_comment(["def f(): pass\n"], CellSyncType.USER_CODE)
+        assert result == ["# @cr:user_code\n", "def f(): pass\n"]
+
+    def test_prepend_code(self):
+        result = prepend_magic_comment(["import os\n"], CellSyncType.CODE)
+        assert result == ["# @cr:code\n", "import os\n"]
+
+    def test_prepend_to_empty(self):
+        result = prepend_magic_comment([], CellSyncType.CONFIG)
+        assert result == ["# @cr:config\n"]
+
+    def test_does_not_mutate_input(self):
+        original = ["X = 1\n"]
+        copy = list(original)
+        prepend_magic_comment(original, CellSyncType.CONFIG)
+        assert original == copy
+
+    def test_replaces_existing_tag(self):
+        result = prepend_magic_comment(["# @cr:code\n", "X = 1\n"], CellSyncType.CONFIG)
+        assert result == ["# @cr:config\n", "X = 1\n"]

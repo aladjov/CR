@@ -12,6 +12,7 @@
 - [[Exploration Loop]]
 - [[Transforms & Scoring Validation|Transforms-and-Scoring-Validation]]
 - [[Feature Store]]
+- [[Notebook Sync]]
 
 ### Execution Tracks
 - [[Local Track]]

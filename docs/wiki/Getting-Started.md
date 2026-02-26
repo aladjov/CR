@@ -159,4 +159,5 @@ Exploration Notebooks (exploration_notebooks/)
 
 - [[Architecture]] - Understand the medallion architecture
 - [[Exploration Loop]] - Deep dive into the notebook workflow
+- [[Notebook Sync]] - Keep notebooks up to date across package upgrades
 - [[Tutorial: Retail Customer Retention|Tutorial-Retail-Churn]] - Complete hands-on tutorial with real data

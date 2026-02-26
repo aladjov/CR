@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -424,3 +425,89 @@ class TestNotebook08Architecture:
     def test_nb08_validates_entity_id_column(self):
         content = self._read_content()
         assert "entity_id" in content and "missing" in content.lower(), "NB08 must validate entity_id column"
+
+
+_CELL_ID_PATTERN = re.compile(r"^nb\w+-\d{3}$")
+
+
+class TestCellIdStandardization:
+
+    def test_all_cells_have_standardized_ids(self, notebook_list):
+        for nb_path in notebook_list:
+            with open(nb_path, 'r', encoding='utf-8') as f:
+                nb = json.load(f)
+            for i, cell in enumerate(nb.get('cells', [])):
+                cell_id = cell.get('id', '')
+                assert _CELL_ID_PATTERN.match(cell_id), (
+                    f"{nb_path.name} cell {i} has non-standard ID: {cell_id!r}"
+                )
+
+    def test_no_duplicate_ids_within_notebook(self, notebook_list):
+        for nb_path in notebook_list:
+            with open(nb_path, 'r', encoding='utf-8') as f:
+                nb = json.load(f)
+            ids = [cell.get('id') for cell in nb.get('cells', [])]
+            assert len(ids) == len(set(ids)), (
+                f"{nb_path.name} has duplicate cell IDs"
+            )
+
+    def test_cell_ids_are_valid_format(self, notebook_list):
+        for nb_path in notebook_list:
+            with open(nb_path, 'r', encoding='utf-8') as f:
+                nb = json.load(f)
+            for cell in nb.get('cells', []):
+                cell_id = cell.get('id', '')
+                assert cell_id, f"{nb_path.name}: cell missing ID"
+                assert len(cell_id) <= 20, (
+                    f"{nb_path.name}: cell ID too long: {cell_id!r}"
+                )
+
+    def test_all_code_cells_have_explicit_tags(self, notebook_list):
+        for nb_path in notebook_list:
+            with open(nb_path, 'r', encoding='utf-8') as f:
+                nb = json.load(f)
+            for i, cell in enumerate(nb.get('cells', [])):
+                if cell.get('cell_type') != 'code':
+                    continue
+                source = ''.join(cell.get('source', []))
+                first_line = source.split('\n')[0].rstrip() if source else ''
+                assert first_line.startswith('# @cr:'), (
+                    f"{nb_path.name} cell {i} ({cell.get('id')}): "
+                    f"code cell missing explicit tag (got {first_line!r})"
+                )
+
+    def test_config_cells_have_magic_comments(self, notebook_list):
+        for nb_path in notebook_list:
+            with open(nb_path, 'r', encoding='utf-8') as f:
+                nb = json.load(f)
+            for i, cell in enumerate(nb.get('cells', [])):
+                if cell.get('cell_type') != 'code':
+                    continue
+                source = ''.join(cell.get('source', []))
+                lines = source.split('\n')
+                all_caps_assignments = [
+                    line for line in lines
+                    if re.match(r'^[A-Z][A-Z_0-9]+ *= *', line)
+                    and not line.startswith('#')
+                ]
+                has_non_config = any(
+                    line.strip() and not line.startswith('#')
+                    and not re.match(r'^[A-Z][A-Z_0-9]+ *= *', line)
+                    and not line.strip().startswith('"')
+                    and not line.strip().startswith("'")
+                    and not line.strip().startswith('{')
+                    and not line.strip().startswith('[')
+                    and not line.strip().startswith('(')
+                    and not line.strip().startswith(')')
+                    and not line.strip().startswith(']')
+                    and not line.strip().startswith('}')
+                    and not line.strip() == ''
+                    for line in lines
+                )
+                if all_caps_assignments and not has_non_config:
+                    first_line = lines[0].rstrip() if lines else ''
+                    if first_line not in ('# @cr:config', '# @cr:user_code'):
+                        pytest.fail(
+                            f"{nb_path.name} cell {i} ({cell.get('id')}): "
+                            f"pure config cell missing magic comment"
+                        )
