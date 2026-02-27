@@ -15,6 +15,7 @@ class DatabricksInitResult:
     workspace_path: str | None
     model_name: str
     notebooks_copied: list[str] = field(default_factory=list)
+    notebooks_synced: list[str] = field(default_factory=list)
 
     @property
     def environment_variables(self) -> dict[str, str]:
@@ -51,8 +52,9 @@ def databricks_init(
     _setup_experiment_directories()
     _configure_mlflow_experiment(resolved_experiment_name)
     notebooks_copied: list[str] = []
+    notebooks_synced: list[str] = []
     if copy_notebooks and workspace_path:
-        notebooks_copied = _copy_exploration_notebooks(workspace_path)
+        notebooks_copied, notebooks_synced = _sync_exploration_notebooks(workspace_path)
     result = DatabricksInitResult(
         catalog=catalog,
         schema=schema,
@@ -60,6 +62,7 @@ def databricks_init(
         workspace_path=workspace_path,
         model_name=model_name,
         notebooks_copied=notebooks_copied,
+        notebooks_synced=notebooks_synced,
     )
     _display_init_summary(result)
     return result
@@ -171,24 +174,46 @@ def _ensure_workspace_directory(workspace_path: str) -> None:
         pass
 
 
-def _copy_exploration_notebooks(workspace_path: str) -> list[str]:
+def _sync_exploration_notebooks(workspace_path: str) -> tuple[list[str], list[str]]:
     from customer_retention.generators.notebook_generator.project_init import ProjectInitializer
 
     source_dir = ProjectInitializer(project_name="")._get_exploration_source_dir()
     if not source_dir or not source_dir.exists():
-        return []
+        return [], []
 
     dest_dir = Path(f"/Workspace/{workspace_path}/exploration_notebooks")
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     copied = []
+    synced = []
     for notebook in source_dir.glob("*.ipynb"):
         dest_path = dest_dir / notebook.name
         if not dest_path.exists():
             shutil.copy2(notebook, dest_path)
             copied.append(str(dest_path))
+        else:
+            if _sync_notebook(notebook, dest_path):
+                synced.append(str(dest_path))
 
-    return copied
+    return copied, synced
+
+
+def _sync_notebook(repo_path: Path, user_path: Path) -> bool:
+    import nbformat
+
+    from customer_retention.generators.notebook_sync.sync_engine import NotebookSyncEngine
+
+    repo_nb = nbformat.read(str(repo_path), as_version=4)
+    user_nb = nbformat.read(str(user_path), as_version=4)
+
+    engine = NotebookSyncEngine()
+    merged, report = engine.sync(repo_nb, user_nb)
+
+    if not report.has_changes:
+        return False
+
+    nbformat.write(merged, str(user_path))
+    return True
 
 
 def _display_init_summary(result: DatabricksInitResult) -> None:
@@ -205,5 +230,9 @@ def _display_init_summary(result: DatabricksInitResult) -> None:
     if result.notebooks_copied:
         print(f"  Notebooks Copied: {len(result.notebooks_copied)}")
         for nb in result.notebooks_copied:
+            print(f"    - {nb}")
+    if result.notebooks_synced:
+        print(f"  Notebooks Synced: {len(result.notebooks_synced)}")
+        for nb in result.notebooks_synced:
             print(f"    - {nb}")
     print("=" * 45)

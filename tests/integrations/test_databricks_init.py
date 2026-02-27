@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import nbformat
 import pytest
 
 
@@ -184,11 +185,14 @@ class TestDatabricksInitNotebookCopy:
         mock_initializer_cls.return_value._get_exploration_source_dir.return_value = source_dir
         return mock_initializer_cls
 
-    def test_copies_notebooks_when_enabled(self, monkeypatch, databricks_env, tmp_path):
+    def test_copies_new_notebooks(self, monkeypatch, databricks_env, tmp_path):
+        nb1 = _make_test_notebook([("c1", "code", "# @cr:code\nprint(1)")])
+        nb2 = _make_test_notebook([("c1", "code", "# @cr:code\nprint(2)")])
+
         source_dir = tmp_path / "source"
         source_dir.mkdir()
-        (source_dir / "notebook1.ipynb").write_text("{}")
-        (source_dir / "notebook2.ipynb").write_text("{}")
+        _write_notebook(source_dir / "notebook1.ipynb", nb1)
+        _write_notebook(source_dir / "notebook2.ipynb", nb2)
 
         dest_dir = tmp_path / "Workspace" / "Users" / "me" / "project" / "exploration_notebooks"
         dest_dir.mkdir(parents=True)
@@ -210,8 +214,9 @@ class TestDatabricksInitNotebookCopy:
                 "customer_retention.generators.notebook_generator.project_init.ProjectInitializer",
                 mock_cls,
             ):
-                copied = mod._copy_exploration_notebooks("Users/me/project")
+                copied, synced = mod._sync_exploration_notebooks("Users/me/project")
         assert len(copied) == 2
+        assert synced == []
 
     def test_skips_copy_when_disabled(self, monkeypatch, databricks_env):
         from customer_retention.integrations.databricks_init import databricks_init
@@ -219,14 +224,23 @@ class TestDatabricksInitNotebookCopy:
         result = databricks_init(copy_notebooks=False)
         assert result.notebooks_copied == []
 
-    def test_skips_existing_notebooks(self, monkeypatch, databricks_env, tmp_path):
+    def test_syncs_existing_notebooks(self, monkeypatch, databricks_env, tmp_path):
+        repo_nb = _make_test_notebook([
+            ("cell1", "code", "# @cr:config\nFOO = 1"),
+            ("cell2", "code", "# @cr:code\nnew_code()"),
+        ])
+        user_nb = _make_test_notebook([
+            ("cell1", "code", "# @cr:config\nFOO = 42"),
+            ("cell2", "code", "# @cr:code\nold_code()"),
+        ])
+
         source_dir = tmp_path / "source"
         source_dir.mkdir()
-        (source_dir / "existing.ipynb").write_text("{}")
+        _write_notebook(source_dir / "existing.ipynb", repo_nb)
 
         dest_dir = tmp_path / "Workspace" / "Users" / "me" / "project" / "exploration_notebooks"
         dest_dir.mkdir(parents=True)
-        (dest_dir / "existing.ipynb").write_text("{}")
+        _write_notebook(dest_dir / "existing.ipynb", user_nb)
 
         mock_cls = self._mock_copy_notebooks(source_dir, dest_dir)
 
@@ -244,8 +258,9 @@ class TestDatabricksInitNotebookCopy:
             "customer_retention.generators.notebook_generator.project_init.ProjectInitializer",
             mock_cls,
         ):
-            copied = mod._copy_exploration_notebooks("Users/me/project")
+            copied, synced = mod._sync_exploration_notebooks("Users/me/project")
         assert copied == []
+        assert len(synced) == 1
 
     def test_handles_missing_package_notebooks(self, monkeypatch, databricks_env):
         mock_cls = MagicMock()
@@ -255,10 +270,11 @@ class TestDatabricksInitNotebookCopy:
             "customer_retention.generators.notebook_generator.project_init.ProjectInitializer",
             mock_cls,
         ):
-            from customer_retention.integrations.databricks_init import _copy_exploration_notebooks
+            from customer_retention.integrations.databricks_init import _sync_exploration_notebooks
 
-            copied = _copy_exploration_notebooks("Users/me/project")
+            copied, synced = _sync_exploration_notebooks("Users/me/project")
         assert copied == []
+        assert synced == []
 
 
 class TestDatabricksInitResult:
@@ -504,3 +520,218 @@ class TestEnsureWorkspaceDirectory:
 
             databricks_init(copy_notebooks=False)
         mock_ensure.assert_not_called()
+
+
+def _make_test_notebook(cells):
+    nb = nbformat.v4.new_notebook()
+    for cell_id, cell_type, source in cells:
+        if cell_type == "code":
+            cell = nbformat.v4.new_code_cell(source=source)
+        else:
+            cell = nbformat.v4.new_markdown_cell(source=source)
+        cell.id = cell_id
+        nb.cells.append(cell)
+    return nb
+
+
+def _write_notebook(path, nb):
+    with open(path, "w") as f:
+        nbformat.write(nb, f)
+
+
+def _read_notebook(path):
+    with open(path) as f:
+        return nbformat.read(f, as_version=4)
+
+
+class TestDatabricksInitNotebookSync:
+    def _setup_sync(self, tmp_path, repo_cells, user_cells, notebook_name="test.ipynb"):
+        repo_nb = _make_test_notebook(repo_cells)
+        user_nb = _make_test_notebook(user_cells)
+
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        _write_notebook(source_dir / notebook_name, repo_nb)
+
+        dest_dir = tmp_path / "dest"
+        dest_dir.mkdir(parents=True)
+        _write_notebook(dest_dir / notebook_name, user_nb)
+
+        return source_dir, dest_dir
+
+    def _run_sync(self, monkeypatch, source_dir, dest_dir):
+        mock_cls = MagicMock()
+        mock_cls.return_value._get_exploration_source_dir.return_value = source_dir
+
+        import customer_retention.integrations.databricks_init as mod
+
+        real_path = mod.Path
+
+        def redirect_path(p):
+            if "/Workspace/" in str(p):
+                return dest_dir
+            return real_path(p)
+
+        monkeypatch.setattr(mod, "Path", redirect_path)
+        with patch(
+            "customer_retention.generators.notebook_generator.project_init.ProjectInitializer",
+            mock_cls,
+        ):
+            return mod._sync_exploration_notebooks("Users/me/project")
+
+    def test_updates_code_cells(self, monkeypatch, databricks_env, tmp_path):
+        repo_cells = [("cell1", "code", "# @cr:code\nnew_code()")]
+        user_cells = [("cell1", "code", "# @cr:code\nold_code()")]
+        source_dir, dest_dir = self._setup_sync(tmp_path, repo_cells, user_cells)
+
+        copied, synced = self._run_sync(monkeypatch, source_dir, dest_dir)
+
+        assert copied == []
+        assert len(synced) == 1
+        result_nb = _read_notebook(dest_dir / "test.ipynb")
+        assert "new_code()" in result_nb.cells[0].source
+
+    def test_preserves_config_cells(self, monkeypatch, databricks_env, tmp_path):
+        repo_cells = [
+            ("cell1", "code", "# @cr:config\nFOO = 'default'"),
+            ("cell2", "code", "# @cr:code\nrun()"),
+        ]
+        user_cells = [
+            ("cell1", "code", "# @cr:config\nFOO = 'custom'"),
+            ("cell2", "code", "# @cr:code\nrun()"),
+        ]
+        source_dir, dest_dir = self._setup_sync(tmp_path, repo_cells, user_cells)
+
+        self._run_sync(monkeypatch, source_dir, dest_dir)
+
+        result_nb = _read_notebook(dest_dir / "test.ipynb")
+        assert "FOO = 'custom'" in result_nb.cells[0].source
+
+    def test_preserves_user_code_cells(self, monkeypatch, databricks_env, tmp_path):
+        repo_cells = [
+            ("cell1", "code", "# @cr:user_code\n# add your code here"),
+            ("cell2", "code", "# @cr:code\nrun()"),
+        ]
+        user_cells = [
+            ("cell1", "code", "# @cr:user_code\nmy_custom_analysis()"),
+            ("cell2", "code", "# @cr:code\nrun()"),
+        ]
+        source_dir, dest_dir = self._setup_sync(tmp_path, repo_cells, user_cells)
+
+        self._run_sync(monkeypatch, source_dir, dest_dir)
+
+        result_nb = _read_notebook(dest_dir / "test.ipynb")
+        assert "my_custom_analysis()" in result_nb.cells[0].source
+
+    def test_no_write_when_unchanged(self, monkeypatch, databricks_env, tmp_path):
+        cells = [("cell1", "code", "# @cr:code\nsame_code()")]
+        source_dir, dest_dir = self._setup_sync(tmp_path, cells, cells)
+        dest_file = dest_dir / "test.ipynb"
+        mtime_before = dest_file.stat().st_mtime
+
+        self._run_sync(monkeypatch, source_dir, dest_dir)
+
+        assert dest_file.stat().st_mtime == mtime_before
+
+    def test_no_write_reports_empty_synced(self, monkeypatch, databricks_env, tmp_path):
+        cells = [("cell1", "code", "# @cr:code\nsame_code()")]
+        source_dir, dest_dir = self._setup_sync(tmp_path, cells, cells)
+
+        copied, synced = self._run_sync(monkeypatch, source_dir, dest_dir)
+
+        assert copied == []
+        assert synced == []
+
+    def test_adds_new_cells_from_repo(self, monkeypatch, databricks_env, tmp_path):
+        repo_cells = [
+            ("cell1", "code", "# @cr:code\noriginal()"),
+            ("cell2", "code", "# @cr:code\nnew_feature()"),
+        ]
+        user_cells = [("cell1", "code", "# @cr:code\noriginal()")]
+        source_dir, dest_dir = self._setup_sync(tmp_path, repo_cells, user_cells)
+
+        copied, synced = self._run_sync(monkeypatch, source_dir, dest_dir)
+
+        assert len(synced) == 1
+        result_nb = _read_notebook(dest_dir / "test.ipynb")
+        assert len(result_nb.cells) == 2
+        assert "new_feature()" in result_nb.cells[1].source
+
+    def test_result_has_notebooks_synced(self, monkeypatch, databricks_env, tmp_path):
+        repo_nb = _make_test_notebook([("c1", "code", "# @cr:code\nnew()")])
+        user_nb = _make_test_notebook([("c1", "code", "# @cr:code\nold()")])
+
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        _write_notebook(source_dir / "nb.ipynb", repo_nb)
+
+        dest_dir = tmp_path / "dest" / "exploration_notebooks"
+        dest_dir.mkdir(parents=True)
+        _write_notebook(dest_dir / "nb.ipynb", user_nb)
+
+        mock_cls = MagicMock()
+        mock_cls.return_value._get_exploration_source_dir.return_value = source_dir
+
+        import customer_retention.integrations.databricks_init as mod
+
+        real_path = mod.Path
+
+        def redirect_path(p):
+            if "/Workspace/" in str(p):
+                return dest_dir
+            return real_path(p)
+
+        monkeypatch.setattr(mod, "Path", redirect_path)
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: tmp_path / ".churnkit_config.json",
+        )
+
+        with patch(
+            "customer_retention.generators.notebook_generator.project_init.ProjectInitializer",
+            mock_cls,
+        ):
+            result = mod.databricks_init(
+                workspace_path="Users/me/project", copy_notebooks=True,
+            )
+
+        assert len(result.notebooks_synced) == 1
+
+    def test_display_summary_shows_synced(self, monkeypatch, databricks_env, tmp_path, capsys):
+        repo_nb = _make_test_notebook([("c1", "code", "# @cr:code\nnew()")])
+        user_nb = _make_test_notebook([("c1", "code", "# @cr:code\nold()")])
+
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        _write_notebook(source_dir / "nb.ipynb", repo_nb)
+
+        dest_dir = tmp_path / "dest" / "exploration_notebooks"
+        dest_dir.mkdir(parents=True)
+        _write_notebook(dest_dir / "nb.ipynb", user_nb)
+
+        mock_cls = MagicMock()
+        mock_cls.return_value._get_exploration_source_dir.return_value = source_dir
+
+        import customer_retention.integrations.databricks_init as mod
+
+        real_path = mod.Path
+
+        def redirect_path(p):
+            if "/Workspace/" in str(p):
+                return dest_dir
+            return real_path(p)
+
+        monkeypatch.setattr(mod, "Path", redirect_path)
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: tmp_path / ".churnkit_config.json",
+        )
+
+        with patch(
+            "customer_retention.generators.notebook_generator.project_init.ProjectInitializer",
+            mock_cls,
+        ):
+            mod.databricks_init(workspace_path="Users/me/project", copy_notebooks=True)
+
+        captured = capsys.readouterr()
+        assert "Synced" in captured.out
