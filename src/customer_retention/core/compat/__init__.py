@@ -471,13 +471,27 @@ def _spark_temporal_quantile(series: Any, q: float) -> _pandas.Timestamp:
     return _pandas.Timestamp(row["v"], unit="s")
 
 
+def _numeric_column_names(df: Any, columns: list[str]) -> set[str]:
+    if _is_spark_pandas(df):
+        from pyspark.sql.types import NumericType
+        spark_df = as_spark_df(df[columns])
+        return {f.name for f in spark_df.schema if isinstance(f.dataType, NumericType)}
+    return set(df[columns].select_dtypes(include="number").columns)
+
+
 def batched_corr_matrix(df: Any, columns: list[str]) -> _pandas.DataFrame:
+    import numpy as _np
     valid_cols = [c for c in columns if c in df.columns]
     if len(valid_cols) < 2:
         return _pandas.DataFrame(index=valid_cols, columns=valid_cols)
+    numeric = _numeric_column_names(df, valid_cols)
+    num_cols = [c for c in valid_cols if c in numeric]
     if not _is_spark_pandas(df):
-        return df[valid_cols].corr()
-    return _spark_pairwise_corr(df, valid_cols)
+        corr = df[num_cols].corr() if len(num_cols) >= 2 else _pandas.DataFrame(index=num_cols, columns=num_cols)
+        full = _pandas.DataFrame(_np.nan, index=valid_cols, columns=valid_cols)
+        full.loc[corr.index, corr.columns] = corr
+        return full
+    return _spark_pairwise_corr(df, valid_cols, numeric)
 
 
 def _safe_corr_expr(col_a: str, col_b: str) -> Any:
@@ -486,22 +500,24 @@ def _safe_corr_expr(col_a: str, col_b: str) -> Any:
     return F.when(denom > 0, F.covar_samp(col_a, col_b) / denom)
 
 
-def _spark_pairwise_corr(df: Any, cols: list[str]) -> _pandas.DataFrame:
+def _spark_pairwise_corr(df: Any, cols: list[str], numeric: set[str]) -> _pandas.DataFrame:
     import numpy as _np
     import pyspark.sql.functions as F  # noqa: N812
 
-    spark_df = as_spark_df(df[cols])
+    num_idx = {i for i, c in enumerate(cols) if c in numeric}
+    spark_df = as_spark_df(df[[cols[i] for i in num_idx]] if len(num_idx) < len(cols) else df[cols])
     n = len(cols)
     matrix = _np.full((n, n), _np.nan)
 
-    stddev_exprs = [F.stddev(c).alias(f"s_{i}") for i, c in enumerate(cols)]
-    stddev_row = spark_df.select(*stddev_exprs).head()
-    has_variance = set()
-    for i in range(n):
-        val = stddev_row[f"s_{i}"]
-        if val is not None and float(val) > 0:
-            has_variance.add(i)
-            matrix[i, i] = 1.0
+    stddev_exprs = [F.stddev(cols[i]).alias(f"s_{i}") for i in num_idx]
+    has_variance: set[int] = set()
+    if stddev_exprs:
+        stddev_row = spark_df.select(*stddev_exprs).head()
+        for i in num_idx:
+            val = stddev_row[f"s_{i}"]
+            if val is not None and float(val) > 0:
+                has_variance.add(i)
+                matrix[i, i] = 1.0
 
     pairs = [(i, j) for i in has_variance for j in has_variance if i < j]
     _BATCH = 500
@@ -539,11 +555,16 @@ def bulk_corr_with_target(df: Any, columns: list[str], target_column: str) -> di
 
 def _spark_bulk_corr_with_target(df: Any, columns: list[str], target_column: str) -> dict[str, float]:
     import math
-    spark_df = as_spark_df(df[columns + [target_column]])
+    numeric = _numeric_column_names(df, columns + [target_column])
+    num_cols = [c for c in columns if c in numeric]
+    result: dict[str, float] = {c: math.nan for c in columns if c not in numeric}
+    if not num_cols or target_column not in numeric:
+        result.update({c: math.nan for c in num_cols})
+        return result
+    spark_df = as_spark_df(df[num_cols + [target_column]])
     _BATCH = 500
-    result: dict[str, float] = {}
-    for start in range(0, len(columns), _BATCH):
-        batch = columns[start:start + _BATCH]
+    for start in range(0, len(num_cols), _BATCH):
+        batch = num_cols[start:start + _BATCH]
         exprs = [_safe_corr_expr(c, target_column).alias(f"c_{i}") for i, c in enumerate(batch)]
         row = spark_df.select(*exprs).head()
         for i, c in enumerate(batch):

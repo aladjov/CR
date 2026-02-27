@@ -122,3 +122,25 @@ class TestBulkCorrWithTarget:
         result = bulk_corr_with_target(df, ["no_nulls_indicator", "has_nulls_indicator"], "t")
         assert math.isnan(result["no_nulls_indicator"])
         assert not math.isnan(result["has_nulls_indicator"])
+
+    def test_string_column_returns_nan(self):
+        df = pd.DataFrame({
+            "lifecycle": ["steady_loyal", "new_user", "churn_risk", "steady_loyal"],
+            "score": [1.0, 2.0, 3.0, 4.0],
+            "t": [0.0, 1.0, 0.0, 1.0],
+        })
+        result = bulk_corr_with_target(df, ["lifecycle", "score"], "t")
+        assert math.isnan(result["lifecycle"])
+        assert "score" in result
+
+    def test_mixed_numeric_and_string_columns(self):
+        df = pd.DataFrame({
+            "category": ["a", "b", "c", "d", "e"],
+            "value": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "label": ["x", "y", "x", "y", "x"],
+            "t": [0.0, 1.0, 0.0, 1.0, 0.0],
+        })
+        result = bulk_corr_with_target(df, ["category", "value", "label"], "t")
+        assert math.isnan(result["category"])
+        assert math.isnan(result["label"])
+        assert not math.isnan(result["value"])

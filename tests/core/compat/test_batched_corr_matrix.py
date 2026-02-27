@@ -148,3 +148,14 @@ class TestBatchedCorrMatrix:
             df, ["strong"] + [f"col_{i}" for i in range(10)] + ["target"],
         )
         assert result.loc["strong", "target"] > 0.8
+
+    def test_string_columns_return_nan(self):
+        df = pd.DataFrame({
+            "label": ["a", "b", "c", "d", "e"],
+            "value": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "score": [5.0, 4.0, 3.0, 2.0, 1.0],
+        })
+        result = batched_corr_matrix(df, ["label", "value", "score"])
+        assert result.loc["value", "score"] == pytest.approx(-1.0)
+        assert np.isnan(result.loc["label", "value"])
+        assert np.isnan(result.loc["label", "score"])

@@ -298,6 +298,24 @@ class ExplorationFindings:
         path_str = str(path)
         return cls.from_yaml(content) if path_str.endswith((".yaml", ".yml")) else cls.from_json(content)
 
+    _NUMERIC_INFERRED = frozenset({ColumnType.NUMERIC_CONTINUOUS, ColumnType.NUMERIC_DISCRETE})
+
+    def reconcile_column_types(self, df) -> list[str]:
+        from pandas.api.types import is_numeric_dtype
+        corrected: list[str] = []
+        for name, col_finding in self.columns.items():
+            if name not in df.columns:
+                continue
+            if col_finding.inferred_type not in self._NUMERIC_INFERRED:
+                continue
+            if is_numeric_dtype(df[name]):
+                continue
+            col_finding.inferred_type = ColumnType.CATEGORICAL_NOMINAL
+            col_finding.confidence = 0.7
+            col_finding.evidence.append(f"Reconciled: dtype mismatch (actual={df[name].dtype})")
+            corrected.append(name)
+        return corrected
+
     TEMPORAL_METADATA_SKIP = frozenset({
         "feature_timestamp", "label_timestamp", "label_available_flag",
     })
