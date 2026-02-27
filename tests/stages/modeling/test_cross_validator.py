@@ -668,3 +668,75 @@ class TestOnFoldCompleteCallback:
         for detail, fold_num, total_folds in calls:
             assert "elapsed_seconds" in detail
             assert total_folds == 5
+
+
+class TestFoldClassRatioAccuracy:
+    @pytest.fixture
+    def panel_data_with_known_ratio(self):
+        np.random.seed(42)
+        n_entities = 20
+        dates = pd.date_range("2023-01-01", periods=12, freq="MS")
+        rows = []
+        for eid in range(n_entities):
+            for d in dates:
+                rows.append({
+                    "entity_id": eid,
+                    "as_of_date": d,
+                    "feature1": np.random.randn(),
+                    "feature2": np.random.randn(),
+                    "target": np.random.choice([0, 1], p=[0.3, 0.7]),
+                })
+        df = pd.DataFrame(rows)
+        X = df[["feature1", "feature2"]]
+        y = df["target"]
+        groups = df["entity_id"]
+        temporal = df["as_of_date"]
+        return X, y, groups, temporal
+
+    def test_train_class_ratio_matches_actual_fold_data(self, panel_data_with_known_ratio):
+        X, y, groups, temporal = panel_data_with_known_ratio
+        model = LogisticRegression(max_iter=1000, random_state=42)
+        cv = CrossValidator(
+            strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5, scoring="roc_auc",
+        )
+        result = cv.run(model, X, y, groups=groups, temporal_values=temporal)
+        overall_ratio = float(y.mean())
+        for fold in result.fold_details:
+            assert 0.0 <= fold["train_class_ratio"] <= 1.0
+            assert abs(fold["train_class_ratio"] - overall_ratio) < 0.3
+
+    def test_distributed_model_class_ratio_matches_actual(self, panel_data_with_known_ratio):
+        X, y, groups, temporal = panel_data_with_known_ratio
+        model = _MockSparkModel()
+        cv = CrossValidator(
+            strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5, scoring="roc_auc",
+        )
+        result = cv.run(model, X, y, groups=groups, temporal_values=temporal)
+        overall_ratio = float(y.mean())
+        for fold in result.fold_details:
+            assert 0.0 <= fold["train_class_ratio"] <= 1.0
+            assert abs(fold["train_class_ratio"] - overall_ratio) < 0.3
+
+    def test_f1_weighted_scoring(self):
+        np.random.seed(42)
+        n_entities = 20
+        dates = pd.date_range("2023-01-01", periods=12, freq="MS")
+        rows = []
+        for eid in range(n_entities):
+            for d in dates:
+                rows.append({
+                    "entity_id": eid, "as_of_date": d,
+                    "feature1": np.random.randn(),
+                    "target": np.random.choice([0, 1, 2], p=[0.3, 0.4, 0.3]),
+                })
+        df = pd.DataFrame(rows)
+        model = LogisticRegression(max_iter=1000, random_state=42)
+        cv = CrossValidator(
+            strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5, scoring="f1_weighted",
+        )
+        result = cv.run(
+            model, df[["feature1"]], df["target"],
+            groups=df["entity_id"], temporal_values=df["as_of_date"],
+        )
+        assert result.scoring == "f1_weighted"
+        assert all(0 <= s <= 1 for s in result.cv_scores)

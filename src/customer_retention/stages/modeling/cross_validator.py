@@ -149,22 +149,23 @@ class CrossValidator:
 
         groups_pd = _squeeze_to_series(to_pandas(groups)) if groups is not None else None
         temporal_pd = _squeeze_to_series(to_pandas(temporal_values)) if temporal_values is not None else None
-        y_pd = _squeeze_to_series(to_pandas(y))
 
+        n_rows = len(groups_pd) if groups_pd is not None else len(to_pandas(y))
         splitter = TemporalEntitySplit(
             n_splits=self.n_splits,
             temporal_values=temporal_pd,
             purge_gap_days=self.purge_gap_days,
         )
-        all_folds = list(splitter.split(np.zeros(len(y_pd)), groups=groups_pd))
+        all_folds = list(splitter.split(np.zeros(n_rows), groups=groups_pd))
 
         if _is_spark_pandas(X) and _has_cv_metadata(X):
             return self._score_folds_spark(
-                model, X, y, y_pd, groups_pd, temporal_pd, all_folds,
+                model, X, y, groups_pd, temporal_pd, all_folds,
                 on_fold_complete=on_fold_complete,
             )
 
         X_pd = to_pandas(X)
+        y_pd = _squeeze_to_series(to_pandas(y))
         return self._score_folds_pandas(
             model, X_pd, y_pd, groups_pd, all_folds,
             on_fold_complete=on_fold_complete,
@@ -195,10 +196,9 @@ class CrossValidator:
 
         scores = []
         fold_details = []
-        splits = list(cv_splitter.split(X, y, groups))
-        total_folds = len(splits)
+        total_folds = cv_splitter.get_n_splits(X, y, groups)
 
-        for fold_idx, (train_idx, test_idx) in enumerate(splits):
+        for fold_idx, (train_idx, test_idx) in enumerate(cv_splitter.split(X, y, groups)):
             t0 = time.monotonic()
             fold_model = clone(model)
             fold_model.fit(X.iloc[train_idx], y.iloc[train_idx])
@@ -220,6 +220,7 @@ class CrossValidator:
                 detail["train_entities"] = int(groups.iloc[train_idx].nunique())
                 detail["test_entities"] = int(groups.iloc[test_idx].nunique())
             fold_details.append(detail)
+            del fold_model, y_proba, y_fold_test
 
             if on_fold_complete is not None:
                 on_fold_complete(detail, fold_idx + 1, total_folds)
@@ -254,13 +255,14 @@ class CrossValidator:
                 detail["train_entities"] = int(groups_pd.iloc[train_idx].nunique())
                 detail["test_entities"] = int(groups_pd.iloc[test_idx].nunique())
             fold_details.append(detail)
+            del fold_model, y_proba, y_fold_test
 
             if on_fold_complete is not None:
                 on_fold_complete(detail, fold_idx + 1, total_folds)
 
         return self._build_cv_result(scores, fold_details)
 
-    def _score_folds_spark(self, model, X, y, y_pd, groups_pd, temporal_pd, all_folds, on_fold_complete=None) -> CVResult:
+    def _score_folds_spark(self, model, X, y, groups_pd, temporal_pd, all_folds, on_fold_complete=None) -> CVResult:
         from customer_retention.core.compat import concat as compat_concat
 
         combined = compat_concat([X, y.rename("__y__")], axis=1)
@@ -300,7 +302,7 @@ class CrossValidator:
                 "fold": fold_idx + 1,
                 "train_size": int(len(train_fold)),
                 "test_size": int(len(test_fold)),
-                "train_class_ratio": float(y_pd.iloc[train_idx].mean()),
+                "train_class_ratio": float(train_fold["__y__"].mean()),
                 "score": score,
                 "elapsed_seconds": elapsed,
             }
@@ -308,6 +310,8 @@ class CrossValidator:
                 detail["train_entities"] = int(groups_pd.iloc[train_idx].nunique())
                 detail["test_entities"] = int(groups_pd.iloc[test_idx].nunique())
             fold_details.append(detail)
+
+            del fold_model, train_fold, test_fold, y_proba, y_fold_test
 
             if on_fold_complete is not None:
                 on_fold_complete(detail, fold_idx + 1, total_folds)
@@ -378,29 +382,6 @@ class CrossValidator:
                 "train_size": len(train_idx),
                 "test_size": len(test_idx),
                 "train_class_ratio": y_train.mean(),
-                "score": None,
-            })
-        return fold_details
-
-    def _collect_temporal_entity_fold_details(
-        self,
-        X: DataFrame,
-        y: Series,
-        groups: Series,
-        cv_splitter,
-    ) -> List[Dict[str, Any]]:
-        fold_details = []
-        for fold_idx, (train_idx, test_idx) in enumerate(cv_splitter.split(X, y, groups)):
-            y_train = y.iloc[train_idx]
-            train_entities = groups.iloc[train_idx].nunique()
-            test_entities = groups.iloc[test_idx].nunique()
-            fold_details.append({
-                "fold": fold_idx + 1,
-                "train_size": len(train_idx),
-                "test_size": len(test_idx),
-                "train_class_ratio": y_train.mean(),
-                "train_entities": train_entities,
-                "test_entities": test_entities,
                 "score": None,
             })
         return fold_details
