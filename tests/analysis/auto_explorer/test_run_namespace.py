@@ -1,5 +1,3 @@
-
-
 from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 
 
@@ -365,3 +363,30 @@ class TestFromLatest:
         names = {r.name for r in result}
         assert "orders_aggregated_findings.yaml" in names
         assert "customers_findings.yaml" in names
+
+
+class TestFromEnvOrLatest:
+    def test_uses_env_when_set(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CR_RUN_ID", "env-run-12345678")
+        ns = RunNamespace.from_env_or_latest(root=tmp_path)
+        assert ns is not None
+        assert ns.run_id == "env-run-12345678"
+
+    def test_falls_back_locally(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        ns_created = RunNamespace(root=tmp_path, run_id="local-run")
+        ns_created.setup()
+        ns_created.project_context_path.write_text("run_id: local-run\n")
+        ns = RunNamespace.from_env_or_latest(root=tmp_path)
+        assert ns is not None
+        assert ns.run_id == "local-run"
+
+    def test_no_fallback_on_databricks(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        ns_created = RunNamespace(root=tmp_path, run_id="stale-run")
+        ns_created.setup()
+        ns_created.project_context_path.write_text("run_id: stale-run\n")
+        ns = RunNamespace.from_env_or_latest(root=tmp_path)
+        assert ns is None

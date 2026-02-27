@@ -223,9 +223,24 @@ class TestSparkBuildSpineWithMockedSpark:
         spark = MagicMock()
         created_sdfs = []
 
-        def _create_df(pdf, schema=None):
+        class _FakeField:
+            def __init__(self, name):
+                self.name = name
+
+        class _FakeSchema:
+            def __init__(self, fields):
+                self.fields = fields
+
+        def _fake_empty_spine_schema(entity_key, as_of_column):
+            return _FakeSchema([_FakeField(entity_key), _FakeField(as_of_column)])
+
+        def _create_df(pdf_or_data, schema=None):
             sdf = MagicMock()
-            sdf._pdf = pdf.copy()
+            if isinstance(pdf_or_data, list) and len(pdf_or_data) == 0 and schema is not None:
+                col_names = [f.name for f in schema.fields]
+                sdf._pdf = pd.DataFrame(columns=col_names)
+            else:
+                sdf._pdf = pdf_or_data.copy()
 
             def _cross_join(other):
                 cross_result = MagicMock()
@@ -235,6 +250,7 @@ class TestSparkBuildSpineWithMockedSpark:
                 return cross_result
 
             sdf.crossJoin = _cross_join
+            sdf.pandas_api.return_value = sdf._pdf
             created_sdfs.append(sdf)
             return sdf
 
@@ -246,6 +262,10 @@ class TestSparkBuildSpineWithMockedSpark:
         monkeypatch.setattr(
             "customer_retention.stages.temporal.spark_temporal_merger._as_pandas_api",
             lambda sdf: sdf.pandas_api(),
+        )
+        monkeypatch.setattr(
+            "customer_retention.stages.temporal.spark_temporal_merger._empty_spine_schema",
+            _fake_empty_spine_schema,
         )
         return spark
 
@@ -271,3 +291,33 @@ class TestSparkBuildSpineWithMockedSpark:
         merger = SparkTemporalMerger()
         spine = merger.build_spine(pd.Series(["A"]), [])
         assert len(spine) == 0
+
+    def test_empty_entities_returns_spark_dataframe(self, mock_spark):
+        merger = SparkTemporalMerger()
+        spine = merger.build_spine(pd.Series([], dtype=str), ["2024-01-01"])
+        assert mock_spark.createDataFrame.called
+        assert len(spine) == 0
+        assert "entity_id" in spine.columns
+        assert "as_of_date" in spine.columns
+
+    def test_empty_dates_returns_spark_dataframe(self, mock_spark):
+        merger = SparkTemporalMerger()
+        spine = merger.build_spine(pd.Series(["A"]), [])
+        assert mock_spark.createDataFrame.called
+        assert len(spine) == 0
+        assert "entity_id" in spine.columns
+        assert "as_of_date" in spine.columns
+
+    def test_merge_all_empty_spine_with_datasets(self, mock_spark):
+        merger = SparkTemporalMerger()
+        spine = merger.build_spine(pd.Series([], dtype=str), ["2024-01-01"])
+        entity_df = pd.DataFrame({
+            "entity_id": ["A", "B"],
+            "tier": ["gold", "silver"],
+        })
+        datasets = [
+            _merge_input("customers", entity_df, DatasetGranularity.ENTITY_LEVEL),
+        ]
+        result, report = merger.merge_all(spine, datasets)
+        assert len(result) == 0
+        assert report.spine_rows == 0

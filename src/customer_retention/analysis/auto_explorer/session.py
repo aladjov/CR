@@ -204,7 +204,7 @@ def load_notebook_findings(
     root: Optional[Path] = None,
     findings_dir: Optional[Path] = None,
 ) -> tuple[str, Optional[RunNamespace], Optional[str]]:
-    namespace = RunNamespace.from_env(root=root) or RunNamespace.from_latest(root=root)
+    namespace = RunNamespace.from_env_or_latest(root=root)
 
     if namespace and prefer_merged:
         if namespace.merged_findings_path.exists():

@@ -18,19 +18,32 @@ from customer_retention.stages.temporal.temporal_merger import (
 )
 
 
+def _empty_spine_schema(entity_key: str, as_of_column: str):
+    from pyspark.sql.types import StringType, StructField, StructType, TimestampNTZType
+
+    return StructType([
+        StructField(entity_key, StringType(), True),
+        StructField(as_of_column, TimestampNTZType(), True),
+    ])
+
+
 class SparkTemporalMerger(TemporalMerger):
     def build_spine(
         self, entity_ids: Any, grid_dates: list[str]
     ) -> Any:
         unique_entities = entity_ids.drop_duplicates().reset_index(drop=True)
         parsed_dates = as_tz_naive(to_datetime(grid_dates))
+        spark = get_spark_session()
 
         if len(unique_entities) == 0 or len(parsed_dates) == 0:
+            if spark:
+                schema = _empty_spine_schema(
+                    self.config.entity_key, self.config.as_of_column
+                )
+                return _as_pandas_api(spark.createDataFrame([], schema))
             return native_pd.DataFrame(
                 columns=[self.config.entity_key, self.config.as_of_column]
             ).astype({self.config.as_of_column: "datetime64[ns]"})
-
-        spark = get_spark_session()
 
         if not spark:
             idx = native_pd.MultiIndex.from_product(

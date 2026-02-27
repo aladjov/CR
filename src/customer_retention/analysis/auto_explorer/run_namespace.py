@@ -207,3 +207,14 @@ class RunNamespace:
 
             root = get_experiments_dir()
         return cls(root=root, run_id=run_id)
+
+    @classmethod
+    def from_env_or_latest(cls, root: Optional[Path] = None) -> Optional[RunNamespace]:
+        ns = cls.from_env(root=root)
+        if ns is not None:
+            return ns
+        from customer_retention.core.compat import is_databricks
+
+        if is_databricks():
+            return None
+        return cls.from_latest(root=root)
