@@ -414,6 +414,8 @@ def safe_isfinite(series: Any) -> Any:
 def safe_drop_duplicates(df: Any, subset: list[str], keep: str = "last") -> Any:
     if _is_spark_pandas(df):
         return df.drop_duplicates(subset=subset)
+    if hasattr(df, "rdd"):
+        return df.dropDuplicates(subset)
     return df.drop_duplicates(subset=subset, keep=keep)
 
 
