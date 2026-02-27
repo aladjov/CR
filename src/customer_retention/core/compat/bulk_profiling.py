@@ -6,6 +6,8 @@ from typing import Any, Optional
 import numpy as np
 import pandas as _pandas
 
+from customer_retention.core.compat import as_spark_df
+
 
 @dataclass
 class PerColumnStats:
@@ -55,7 +57,7 @@ def bulk_nunique(df: Any, columns: list[str] | None = None) -> dict[str, int]:
 def _spark_bulk_nunique(df: Any, columns: list[str]) -> dict[str, int]:
     import pyspark.sql.functions as F  # noqa: N812
 
-    spark_df = df.to_spark()
+    spark_df = as_spark_df(df)
     exprs = [F.countDistinct(F.col(c)).alias(f"__dist__{c}") for c in columns]
     row = spark_df.agg(*exprs).collect()[0]
     return {c: int(row[f"__dist__{c}"]) for c in columns}
@@ -185,7 +187,7 @@ def _spark_bulk_stats(df: Any) -> BulkStats:
     import pyspark.sql.functions as F  # noqa: N812
     from pyspark.sql.types import NumericType
 
-    spark_df = df.to_spark()
+    spark_df = as_spark_df(df)
     all_cols = [c for c in spark_df.columns]
 
     # --- Batch 1: count + null counts + distinct counts ---

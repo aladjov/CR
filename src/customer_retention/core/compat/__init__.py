@@ -355,6 +355,13 @@ def _is_spark_pandas(obj: Any) -> bool:
     return hasattr(obj, 'spark') or hasattr(obj, 'to_spark')
 
 
+def as_spark_df(df: Any) -> Any:
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*index_col.*")
+        return df.to_spark()
+
+
 def timestamp_diffs_seconds(series: Any) -> Any:
     if _is_spark_pandas(series):
         import pyspark.sql.functions as F  # noqa: N812
@@ -380,7 +387,7 @@ def period_start_time(series: Any, freq: str) -> Any:
 def groupby_multi_agg(df: Any, group_col: str, agg_col: str, agg_funcs: list) -> Any:
     if hasattr(df, 'to_spark'):
         import pyspark.sql.functions as F  # noqa: N812
-        spark_df = df.to_spark()
+        spark_df = as_spark_df(df)
         exprs = [getattr(F, fn)(agg_col).alias(fn) for fn in agg_funcs]
         result = spark_df.groupBy(group_col).agg(*exprs)
         from .spark_backend import _as_pandas_api
@@ -453,7 +460,7 @@ def temporal_quantile(series: Any, q: float) -> _pandas.Timestamp:
 def _spark_temporal_quantile(series: Any, q: float) -> _pandas.Timestamp:
     from pyspark.sql import functions as F  # noqa: N812
 
-    spark_df = series.to_frame().to_spark()
+    spark_df = as_spark_df(series.to_frame())
     col_name = spark_df.columns[0]
     epoch = F.unix_timestamp(F.col(col_name).cast("timestamp"))
     row = spark_df.select(F.percentile_approx(epoch, float(q)).alias("v")).head()
@@ -481,7 +488,7 @@ def _spark_pairwise_corr(df: Any, cols: list[str]) -> _pandas.DataFrame:
     import numpy as _np
     import pyspark.sql.functions as F  # noqa: N812
 
-    spark_df = df[cols].to_spark()
+    spark_df = as_spark_df(df[cols])
     n = len(cols)
     matrix = _np.full((n, n), _np.nan)
 
@@ -530,7 +537,7 @@ def bulk_corr_with_target(df: Any, columns: list[str], target_column: str) -> di
 
 def _spark_bulk_corr_with_target(df: Any, columns: list[str], target_column: str) -> dict[str, float]:
     import math
-    spark_df = df[columns + [target_column]].to_spark()
+    spark_df = as_spark_df(df[columns + [target_column]])
     _BATCH = 500
     result: dict[str, float] = {}
     for start in range(0, len(columns), _BATCH):
@@ -559,7 +566,7 @@ def _spark_bulk_class_overlap(df: Any, columns: list[str], target: Any) -> dict[
     _TARGET = "__overlap_target__"
     combined = df[columns].copy()
     combined[_TARGET] = target
-    spark_df = combined.to_spark()
+    spark_df = as_spark_df(combined)
     _BATCH = 200
     result: dict[str, float] = {}
     for start in range(0, len(columns), _BATCH):
@@ -652,7 +659,7 @@ def _spark_bulk_effect_sizes(
     import numpy as _np
     import pyspark.sql.functions as F  # noqa: N812
 
-    spark_df = df[columns + [target_column]].to_spark()
+    spark_df = as_spark_df(df[columns + [target_column]])
     _BATCH = 200
     effect_sizes: dict[str, float] = {}
     class_stats: dict[str, dict] = {}
@@ -703,7 +710,7 @@ def _spark_bulk_effect_sizes(
 
 def spark_checkpoint(df: Any) -> Any:
     if _is_spark_pandas(df):
-        spark_df = df.to_spark().localCheckpoint(eager=True)
+        spark_df = as_spark_df(df).localCheckpoint(eager=True)
         from .spark_backend import _as_pandas_api
         return _as_pandas_api(spark_df)
     return df
@@ -731,7 +738,7 @@ def _spark_bulk_label_encode(df: Any, columns: list[str]) -> Any:
     from pyspark.ml import Pipeline
     from pyspark.ml.feature import StringIndexer
 
-    spark_df = df.to_spark()
+    spark_df = as_spark_df(df)
     indexed_names = [f"__idx_{c}__" for c in columns]
     indexers = [
         StringIndexer(
@@ -771,7 +778,7 @@ def _pandas_bulk_median_impute(df: Any, columns: list[str] | None = None) -> Any
 def _spark_bulk_median_impute(df: Any, columns: list[str] | None = None) -> Any:
     import pyspark.sql.functions as F  # noqa: N812
 
-    spark_df = df.to_spark()
+    spark_df = as_spark_df(df)
     if columns is not None:
         num_cols = [c for c in columns if is_numeric_dtype(df[c])]
     else:
@@ -805,7 +812,7 @@ def _spark_bulk_zero_variance_cols(df: Any) -> list[str]:
     num_cols = [c for c in df.columns if is_numeric_dtype(df[c])]
     if not num_cols:
         return []
-    spark_df = df[num_cols].to_spark()
+    spark_df = as_spark_df(df[num_cols])
     exprs = [F.stddev(F.col(c)).alias(c) for c in num_cols]
     row = spark_df.agg(*exprs).head()
     return [c for c in num_cols if row[c] is None or float(row[c]) == 0]
@@ -817,7 +824,7 @@ def collect_for_sklearn(obj: Any) -> Any:
     if _is_spark_pandas(obj):
         enable_arrow_optimization()
         is_series = getattr(obj, "ndim", 2) == 1
-        spark_df = obj.to_spark() if hasattr(obj, "to_spark") else obj.to_frame().to_spark()
+        spark_df = as_spark_df(obj) if hasattr(obj, "to_spark") else as_spark_df(obj.to_frame())
         result = spark_df.toPandas()
         return result.iloc[:, 0] if is_series else result
     return obj
@@ -922,6 +929,7 @@ __all__ = [
     "bulk_zero_variance_cols",
     "collect_for_sklearn",
     "as_pandas_api",
+    "as_spark_df",
     "load_spark_table",
     "register_temp_view",
 ]

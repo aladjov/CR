@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from customer_retention.core.compat import as_spark_df
 from customer_retention.core.compat.detection import get_spark_session, is_spark_available
 
 from .base import DeltaStorage
@@ -57,7 +58,7 @@ class DatabricksDelta(DeltaStorage):
                 "spark.databricks.delta.commitInfo.userMetadata",
                 json.dumps(metadata),
             )
-        spark_df = df.to_spark() if hasattr(df, "to_spark") else self._to_spark_df(df)
+        spark_df = as_spark_df(df) if hasattr(df, "to_spark") else self._to_spark_df(df)
         writer = spark_df.write.format("delta").mode(mode)
         if mode == "overwrite":
             writer = writer.option("overwriteSchema", "true")
@@ -69,7 +70,7 @@ class DatabricksDelta(DeltaStorage):
               update_cols: Optional[List[str]] = None) -> None:
         path = self._normalize_path(path)
         from delta.tables import DeltaTable
-        spark_df = df.to_spark() if hasattr(df, "to_spark") else self._to_spark_df(df)
+        spark_df = as_spark_df(df) if hasattr(df, "to_spark") else self._to_spark_df(df)
         target = DeltaTable.forPath(self.spark, path)
         merge_builder = target.alias("target").merge(spark_df.alias("source"), condition)
         if update_cols:

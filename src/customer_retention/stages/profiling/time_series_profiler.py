@@ -8,6 +8,7 @@ from customer_retention.core.compat import (
     Timestamp,
     _infer_epoch_unit,
     _is_spark_pandas,
+    as_spark_df,
     groupby_multi_agg,
     is_datetime64_any_dtype,
     is_numeric_dtype,
@@ -320,7 +321,7 @@ class TimeSeriesProfiler:
         w = Window.partitionBy(self.entity_column).orderBy(self.time_column)
         tc, prev = F.col(self.time_column).cast("timestamp"), F.lag(self.time_column).over(w).cast("timestamp")
         result = (
-            df[[self.entity_column, self.time_column]].to_spark()
+            as_spark_df(df[[self.entity_column, self.time_column]])
             .withColumn("_diff", (F.unix_timestamp(tc) - F.unix_timestamp(prev)) / self.SECONDS_PER_DAY)
             .filter(F.col("_diff").isNotNull())
             .agg(F.mean("_diff"))

@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import _is_spark_pandas, enable_arrow_optimization, native_pd
+from customer_retention.core.compat import _is_spark_pandas, as_spark_df, enable_arrow_optimization, native_pd
 
 _MODEL_REGISTRY: Dict[str, str] = {
     "LogisticRegression": "pyspark.ml.classification.LogisticRegression",
@@ -106,7 +106,7 @@ class SparkClassifierWrapper:
             X_sel = X[self.feature_names].reset_index(drop=True)
             y_sel = y.rename(_LABEL_COL).reset_index(drop=True)
             combined = ps.concat([X_sel, y_sel], axis=1)
-            spark_df = combined.to_spark()
+            spark_df = as_spark_df(combined)
         else:
             combined = native_pd.concat(
                 [X[self.feature_names].reset_index(drop=True), y.reset_index(drop=True).rename(_LABEL_COL)],
@@ -140,7 +140,7 @@ class SparkClassifierWrapper:
         spark = _get_spark_session()
 
         if _is_spark_pandas(X):
-            spark_df = X[self.feature_names].to_spark()
+            spark_df = as_spark_df(X[self.feature_names])
         else:
             spark_df = spark.createDataFrame(X[self.feature_names])
 

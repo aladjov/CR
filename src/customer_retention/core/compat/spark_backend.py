@@ -47,7 +47,8 @@ def write_delta(df: Any, path: str, mode: str = "overwrite",
     if not SPARK_AVAILABLE:
         raise ImportError("pyspark required")
     if hasattr(df, "to_spark"):
-        spark_df = df.to_spark()
+        from . import as_spark_df
+        spark_df = as_spark_df(df)
     elif hasattr(df, "rdd"):
         spark_df = df
     else:
