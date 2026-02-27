@@ -552,3 +552,119 @@ class TestDistributedCVWithCloneableModel:
         result = cv.run(model, X, y, groups=groups, temporal_values=temporal)
         assert result.scoring == "average_precision"
         assert all(0 <= s <= 1 for s in result.cv_scores)
+
+
+class TestOnFoldCompleteCallback:
+    @pytest.fixture
+    def panel_data(self):
+        np.random.seed(42)
+        n_entities = 20
+        dates = pd.date_range("2023-01-01", periods=12, freq="MS")
+        rows = []
+        for eid in range(n_entities):
+            for d in dates:
+                rows.append({
+                    "entity_id": eid,
+                    "as_of_date": d,
+                    "feature1": np.random.randn(),
+                    "feature2": np.random.randn(),
+                    "target": np.random.choice([0, 1], p=[0.3, 0.7]),
+                })
+        df = pd.DataFrame(rows)
+        X = df[["feature1", "feature2"]]
+        y = df["target"]
+        groups = df["entity_id"]
+        temporal = df["as_of_date"]
+        return X, y, groups, temporal
+
+    def test_callback_called_per_fold(self, panel_data):
+        X, y, groups, temporal = panel_data
+        model = LogisticRegression(max_iter=1000, random_state=42)
+        cv = CrossValidator(
+            strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5, scoring="roc_auc",
+        )
+        calls = []
+        cv.run(
+            model, X, y, groups=groups, temporal_values=temporal,
+            on_fold_complete=lambda detail, fold_num, total_folds: calls.append(
+                (detail, fold_num, total_folds)
+            ),
+        )
+        assert len(calls) == 5
+        for detail, fold_num, total_folds in calls:
+            assert total_folds == 5
+        assert [c[1] for c in calls] == [1, 2, 3, 4, 5]
+
+    def test_callback_receives_elapsed_seconds(self, panel_data):
+        X, y, groups, temporal = panel_data
+        model = LogisticRegression(max_iter=1000, random_state=42)
+        cv = CrossValidator(
+            strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5, scoring="roc_auc",
+        )
+        details_seen = []
+        cv.run(
+            model, X, y, groups=groups, temporal_values=temporal,
+            on_fold_complete=lambda detail, fold_num, total_folds: details_seen.append(detail),
+        )
+        for detail in details_seen:
+            assert "elapsed_seconds" in detail
+            assert isinstance(detail["elapsed_seconds"], float)
+            assert detail["elapsed_seconds"] >= 0
+
+    def test_callback_optional(self, panel_data):
+        X, y, groups, temporal = panel_data
+        model = LogisticRegression(max_iter=1000, random_state=42)
+        cv = CrossValidator(
+            strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5, scoring="roc_auc",
+        )
+        result = cv.run(model, X, y, groups=groups, temporal_values=temporal)
+        assert len(result.cv_scores) == 5
+        assert all(0 <= s <= 1 for s in result.cv_scores)
+
+    def test_fold_details_have_elapsed_seconds(self, panel_data):
+        X, y, groups, temporal = panel_data
+        model = LogisticRegression(max_iter=1000, random_state=42)
+        cv = CrossValidator(
+            strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5, scoring="roc_auc",
+        )
+        result = cv.run(model, X, y, groups=groups, temporal_values=temporal)
+        for fold in result.fold_details:
+            assert "elapsed_seconds" in fold
+            assert isinstance(fold["elapsed_seconds"], float)
+            assert fold["elapsed_seconds"] >= 0
+
+    def test_callback_with_distributed_model(self):
+        np.random.seed(42)
+        n_entities = 20
+        dates = pd.date_range("2023-01-01", periods=12, freq="MS")
+        rows = []
+        for eid in range(n_entities):
+            for d in dates:
+                rows.append({
+                    "entity_id": eid,
+                    "as_of_date": d,
+                    "feature1": np.random.randn(),
+                    "feature2": np.random.randn(),
+                    "target": np.random.choice([0, 1], p=[0.3, 0.7]),
+                })
+        df = pd.DataFrame(rows)
+        X = df[["feature1", "feature2"]]
+        y = df["target"]
+        groups = df["entity_id"]
+        temporal = df["as_of_date"]
+
+        model = _MockSparkModel()
+        cv = CrossValidator(
+            strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5, scoring="roc_auc",
+        )
+        calls = []
+        result = cv.run(
+            model, X, y, groups=groups, temporal_values=temporal,
+            on_fold_complete=lambda detail, fold_num, total_folds: calls.append(
+                (detail, fold_num, total_folds)
+            ),
+        )
+        assert len(calls) == 5
+        for detail, fold_num, total_folds in calls:
+            assert "elapsed_seconds" in detail
+            assert total_folds == 5

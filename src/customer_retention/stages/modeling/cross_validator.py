@@ -1,8 +1,9 @@
 """Cross-validation strategies for model evaluation."""
 
+import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 from sklearn.model_selection import GroupKFold, RepeatedStratifiedKFold, StratifiedKFold, cross_val_score
@@ -95,9 +96,13 @@ class CrossValidator:
         y: Series,
         groups: Optional[Series] = None,
         temporal_values: Optional[Series] = None,
+        on_fold_complete: Optional[Callable] = None,
     ) -> CVResult:
         if hasattr(model, "clone") and self.strategy == CVStrategy.TEMPORAL_ENTITY:
-            return self._run_distributed(model, X, y, groups=groups, temporal_values=temporal_values)
+            return self._run_distributed(
+                model, X, y, groups=groups, temporal_values=temporal_values,
+                on_fold_complete=on_fold_complete,
+            )
 
         X, y = to_pandas(X), to_pandas(y)
         if groups is not None:
@@ -108,8 +113,9 @@ class CrossValidator:
         fold_details = []
 
         if self.strategy == CVStrategy.TEMPORAL_ENTITY:
-            scores = cross_val_score(model, X, y, cv=cv_splitter, scoring=self.scoring, groups=groups)
-            fold_details = self._collect_temporal_entity_fold_details(X, y, groups, cv_splitter)
+            scores, fold_details = self._run_manual_cv(
+                model, X, y, cv_splitter, groups=groups, on_fold_complete=on_fold_complete,
+            )
         elif self.strategy == CVStrategy.GROUP_KFOLD:
             scores = cross_val_score(model, X, y, cv=cv_splitter, scoring=self.scoring, groups=groups)
             fold_details = self._collect_fold_details_with_groups(X, y, groups, cv_splitter)
@@ -137,6 +143,7 @@ class CrossValidator:
         y: Series,
         groups: Optional[Series] = None,
         temporal_values: Optional[Series] = None,
+        on_fold_complete: Optional[Callable] = None,
     ) -> CVResult:
         from customer_retention.core.compat import _is_spark_pandas
 
@@ -152,31 +159,87 @@ class CrossValidator:
         all_folds = list(splitter.split(np.zeros(len(y_pd)), groups=groups_pd))
 
         if _is_spark_pandas(X) and _has_cv_metadata(X):
-            return self._score_folds_spark(model, X, y, y_pd, groups_pd, temporal_pd, all_folds)
+            return self._score_folds_spark(
+                model, X, y, y_pd, groups_pd, temporal_pd, all_folds,
+                on_fold_complete=on_fold_complete,
+            )
 
         X_pd = to_pandas(X)
-        return self._score_folds_pandas(model, X_pd, y_pd, groups_pd, all_folds)
+        return self._score_folds_pandas(
+            model, X_pd, y_pd, groups_pd, all_folds,
+            on_fold_complete=on_fold_complete,
+        )
 
     def _score_fold(self, y_true: np.ndarray, y_proba: np.ndarray) -> float:
-        from sklearn.metrics import average_precision_score, roc_auc_score
+        from sklearn.metrics import average_precision_score, f1_score, roc_auc_score
 
         if self.scoring == "roc_auc":
             return roc_auc_score(y_true, y_proba[:, 1])
         if self.scoring in ("average_precision", "pr_auc"):
             return average_precision_score(y_true, y_proba[:, 1])
+        if self.scoring == "f1_weighted":
+            y_pred = np.argmax(y_proba, axis=1)
+            return f1_score(y_true, y_pred, average="weighted")
         return roc_auc_score(y_true, y_proba[:, 1])
 
-    def _score_folds_pandas(self, model, X_pd, y_pd, groups_pd, all_folds) -> CVResult:
+    def _run_manual_cv(
+        self,
+        model,
+        X,
+        y,
+        cv_splitter,
+        groups: Optional[Series] = None,
+        on_fold_complete: Optional[Callable] = None,
+    ) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+        from sklearn.base import clone
+
         scores = []
         fold_details = []
+        splits = list(cv_splitter.split(X, y, groups))
+        total_folds = len(splits)
+
+        for fold_idx, (train_idx, test_idx) in enumerate(splits):
+            t0 = time.monotonic()
+            fold_model = clone(model)
+            fold_model.fit(X.iloc[train_idx], y.iloc[train_idx])
+            y_proba = fold_model.predict_proba(X.iloc[test_idx])
+            y_fold_test = y.iloc[test_idx].to_numpy()
+            score = self._score_fold(y_fold_test, y_proba)
+            elapsed = time.monotonic() - t0
+
+            scores.append(score)
+            detail: Dict[str, Any] = {
+                "fold": fold_idx + 1,
+                "train_size": len(train_idx),
+                "test_size": len(test_idx),
+                "train_class_ratio": float(y.iloc[train_idx].mean()),
+                "score": score,
+                "elapsed_seconds": elapsed,
+            }
+            if groups is not None:
+                detail["train_entities"] = int(groups.iloc[train_idx].nunique())
+                detail["test_entities"] = int(groups.iloc[test_idx].nunique())
+            fold_details.append(detail)
+
+            if on_fold_complete is not None:
+                on_fold_complete(detail, fold_idx + 1, total_folds)
+
+        return np.array(scores), fold_details
+
+    def _score_folds_pandas(self, model, X_pd, y_pd, groups_pd, all_folds, on_fold_complete=None) -> CVResult:
+        scores = []
+        fold_details = []
+        total_folds = len(all_folds)
 
         for fold_idx, (train_idx, test_idx) in enumerate(all_folds):
+            t0 = time.monotonic()
             fold_model = model.clone()
             fold_model.fit(X_pd.iloc[train_idx], y_pd.iloc[train_idx])
             y_proba = fold_model.predict_proba(X_pd.iloc[test_idx])
             y_fold_test = y_pd.iloc[test_idx].to_numpy()
 
             score = self._score_fold(y_fold_test, y_proba)
+            elapsed = time.monotonic() - t0
             scores.append(score)
 
             detail: Dict[str, Any] = {
@@ -185,15 +248,19 @@ class CrossValidator:
                 "test_size": len(test_idx),
                 "train_class_ratio": float(y_pd.iloc[train_idx].mean()),
                 "score": score,
+                "elapsed_seconds": elapsed,
             }
             if groups_pd is not None:
                 detail["train_entities"] = int(groups_pd.iloc[train_idx].nunique())
                 detail["test_entities"] = int(groups_pd.iloc[test_idx].nunique())
             fold_details.append(detail)
 
+            if on_fold_complete is not None:
+                on_fold_complete(detail, fold_idx + 1, total_folds)
+
         return self._build_cv_result(scores, fold_details)
 
-    def _score_folds_spark(self, model, X, y, y_pd, groups_pd, temporal_pd, all_folds) -> CVResult:
+    def _score_folds_spark(self, model, X, y, y_pd, groups_pd, temporal_pd, all_folds, on_fold_complete=None) -> CVResult:
         from customer_retention.core.compat import concat as compat_concat
 
         combined = compat_concat([X, y.rename("__y__")], axis=1)
@@ -201,8 +268,10 @@ class CrossValidator:
 
         scores = []
         fold_details = []
+        total_folds = len(all_folds)
 
         for fold_idx, (train_idx, test_idx) in enumerate(all_folds):
+            t0 = time.monotonic()
             fold_model = model.clone()
 
             train_entities = groups_pd.iloc[train_idx].unique().tolist()
@@ -224,6 +293,7 @@ class CrossValidator:
             y_fold_test = to_pandas(test_fold["__y__"]).to_numpy()
 
             score = self._score_fold(y_fold_test, y_proba)
+            elapsed = time.monotonic() - t0
             scores.append(score)
 
             detail: Dict[str, Any] = {
@@ -232,11 +302,15 @@ class CrossValidator:
                 "test_size": int(len(test_fold)),
                 "train_class_ratio": float(y_pd.iloc[train_idx].mean()),
                 "score": score,
+                "elapsed_seconds": elapsed,
             }
             if groups_pd is not None:
                 detail["train_entities"] = int(groups_pd.iloc[train_idx].nunique())
                 detail["test_entities"] = int(groups_pd.iloc[test_idx].nunique())
             fold_details.append(detail)
+
+            if on_fold_complete is not None:
+                on_fold_complete(detail, fold_idx + 1, total_folds)
 
         return self._build_cv_result(scores, fold_details)
 
