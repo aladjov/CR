@@ -4193,3 +4193,108 @@ class TestTemporalMergeMetadata:
         assert len(ch_src.key_resolution_steps) == 2
         assert ch_src.key_resolution_steps[0].bridge_dataset == "case"
         assert ch_src.key_resolution_steps[1].bridge_dataset == "customers"
+
+
+class TestBuildGoldConfigColumnTypes:
+    def _make_findings_with_types(self, col_types: dict):
+        from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings
+        columns = {}
+        for name, ct in col_types.items():
+            columns[name] = ColumnFinding(name=name, inferred_type=ct, confidence=1.0, evidence=[])
+        return ExplorationFindings(source_path="/test", source_format="csv", columns=columns, row_count=100)
+
+    def test_numeric_continuous_gets_scaling(self):
+        from customer_retention.core.config.column_config import ColumnType
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        findings = self._make_findings_with_types({"age": ColumnType.NUMERIC_CONTINUOUS})
+        parser = FindingsParser.__new__(FindingsParser)
+        gold = parser._build_gold_config({"test": findings})
+        assert len(gold.scalings) == 1
+        assert gold.scalings[0].column == "age"
+
+    def test_numeric_discrete_gets_scaling(self):
+        from customer_retention.core.config.column_config import ColumnType
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        findings = self._make_findings_with_types({"reopen_count": ColumnType.NUMERIC_DISCRETE})
+        parser = FindingsParser.__new__(FindingsParser)
+        gold = parser._build_gold_config({"test": findings})
+        assert len(gold.scalings) == 1
+        assert gold.scalings[0].column == "reopen_count"
+
+    def test_categorical_nominal_gets_encoding(self):
+        from customer_retention.core.config.column_config import ColumnType
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        findings = self._make_findings_with_types({"region": ColumnType.CATEGORICAL_NOMINAL})
+        parser = FindingsParser.__new__(FindingsParser)
+        gold = parser._build_gold_config({"test": findings})
+        assert len(gold.encodings) == 1
+        assert gold.encodings[0].column == "region"
+
+    def test_categorical_ordinal_gets_encoding(self):
+        from customer_retention.core.config.column_config import ColumnType
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        findings = self._make_findings_with_types({"priority": ColumnType.CATEGORICAL_ORDINAL})
+        parser = FindingsParser.__new__(FindingsParser)
+        gold = parser._build_gold_config({"test": findings})
+        assert len(gold.encodings) == 1
+
+    def test_binary_not_encoded_or_scaled(self):
+        from customer_retention.core.config.column_config import ColumnType
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        findings = self._make_findings_with_types({"is_active": ColumnType.BINARY})
+        parser = FindingsParser.__new__(FindingsParser)
+        gold = parser._build_gold_config({"test": findings})
+        assert len(gold.encodings) == 0
+        assert len(gold.scalings) == 0
+
+    def test_identifier_and_target_excluded(self):
+        from customer_retention.core.config.column_config import ColumnType
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        findings = self._make_findings_with_types({
+            "customer_id": ColumnType.IDENTIFIER,
+            "churn": ColumnType.TARGET,
+        })
+        parser = FindingsParser.__new__(FindingsParser)
+        gold = parser._build_gold_config({"test": findings})
+        assert len(gold.encodings) == 0
+        assert len(gold.scalings) == 0
+
+    def test_mixed_types(self):
+        from customer_retention.core.config.column_config import ColumnType
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        findings = self._make_findings_with_types({
+            "age": ColumnType.NUMERIC_CONTINUOUS,
+            "count": ColumnType.NUMERIC_DISCRETE,
+            "region": ColumnType.CATEGORICAL_NOMINAL,
+            "tier": ColumnType.CATEGORICAL_ORDINAL,
+            "is_active": ColumnType.BINARY,
+            "customer_id": ColumnType.IDENTIFIER,
+        })
+        parser = FindingsParser.__new__(FindingsParser)
+        gold = parser._build_gold_config({"test": findings})
+        scaled_cols = {s.column for s in gold.scalings}
+        encoded_cols = {e.column for e in gold.encodings}
+        assert scaled_cols == {"age", "count"}
+        assert encoded_cols == {"region", "tier"}
+
+
+class TestColumnTypeDeserialization:
+    def test_valid_column_type_deserializes(self):
+        from customer_retention.core.config.column_config import ColumnType
+        assert ColumnType("numeric_continuous") == ColumnType.NUMERIC_CONTINUOUS
+        assert ColumnType("categorical_nominal") == ColumnType.CATEGORICAL_NOMINAL
+
+    def test_bare_numeric_raises(self):
+        from customer_retention.core.config.column_config import ColumnType
+        with pytest.raises(ValueError):
+            ColumnType("numeric")
+
+    def test_bare_categorical_raises(self):
+        from customer_retention.core.config.column_config import ColumnType
+        with pytest.raises(ValueError):
+            ColumnType("categorical")
+
+    def test_bare_uppercase_numeric_raises(self):
+        from customer_retention.core.config.column_config import ColumnType
+        with pytest.raises(ValueError):
+            ColumnType("NUMERIC")

@@ -10,6 +10,7 @@ from customer_retention.analysis.auto_explorer.exploration_manager import (
 )
 from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
 from customer_retention.analysis.auto_explorer.layered_recommendations import RecommendationRegistry
+from customer_retention.core.config.column_config import ColumnType
 
 from .models import (
     AggregationWindowConfig,
@@ -42,13 +43,6 @@ def _edges_to_labels(edges: List[float]) -> List[str]:
         labels.append(f"{int(edges[i])}-{int(edges[i + 1])}d")
     labels.append(f"{int(edges[-1])}d+")
     return labels
-
-
-def _resolve_col_type(col_finding) -> str:
-    col_type = col_finding.inferred_type
-    if hasattr(col_type, "value"):
-        col_type = col_type.value
-    return col_type
 
 
 class FindingsParser:
@@ -425,13 +419,16 @@ class FindingsParser:
         filtered = [k for k in keys if k not in temporal]
         return filtered or keys
 
+    _CATEGORICAL_TYPES = {ColumnType.CATEGORICAL_NOMINAL, ColumnType.CATEGORICAL_ORDINAL, ColumnType.CATEGORICAL_CYCLICAL}
+    _NUMERIC_TYPES = {ColumnType.NUMERIC_CONTINUOUS, ColumnType.NUMERIC_DISCRETE}
+
     def _build_gold_config(self, sources: Dict[str, ExplorationFindings]) -> GoldLayerConfig:
         encodings = []
         scalings = []
         for findings in sources.values():
             for col_name, col_finding in findings.columns.items():
-                col_type = _resolve_col_type(col_finding)
-                if col_type == "categorical":
+                col_type = col_finding.inferred_type
+                if col_type in self._CATEGORICAL_TYPES:
                     encodings.append(
                         TransformationStep(
                             type=PipelineTransformationType.ENCODE,
@@ -440,7 +437,7 @@ class FindingsParser:
                             rationale=f"One-hot encode {col_name}",
                         )
                     )
-                elif col_type == "numeric":
+                elif col_type in self._NUMERIC_TYPES:
                     scalings.append(
                         TransformationStep(
                             type=PipelineTransformationType.SCALE,
@@ -881,17 +878,16 @@ class FindingsParser:
         entity_col = (findings.time_series_metadata.entity_column if findings.time_series_metadata else None) or ""
         time_col = (findings.time_series_metadata.time_column if findings.time_series_metadata else None) or ""
         exclude = {target, entity_col, time_col}
-        numeric_types = {"numeric_continuous", "numeric_discrete", "numeric"}
-        categorical_types = {"binary", "categorical_nominal", "categorical_ordinal", "categorical_cyclical"}
+        agg_categorical = self._CATEGORICAL_TYPES | {ColumnType.BINARY}
         value_columns = []
         categorical_columns = []
         for col_name, col_finding in findings.columns.items():
             if col_name in exclude:
                 continue
-            col_type = _resolve_col_type(col_finding)
-            if col_type in numeric_types:
+            col_type = col_finding.inferred_type
+            if col_type in self._NUMERIC_TYPES:
                 value_columns.append(col_name)
-            elif col_type in categorical_types:
+            elif col_type in agg_categorical:
                 categorical_columns.append(col_name)
         for src in getattr(findings, "datetime_derivation_sources", []):
             for suffix in ("_delta_hours", "_hour", "_dow", "_is_weekend"):
