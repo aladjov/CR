@@ -42,6 +42,25 @@ class BulkStats:
     numeric: dict[str, NumericColumnStats] = field(default_factory=dict)
 
 
+def bulk_nunique(df: Any, columns: list[str] | None = None) -> dict[str, int]:
+    if columns is None:
+        columns = list(df.columns)
+    if not columns:
+        return {}
+    if hasattr(df, "to_spark"):
+        return _spark_bulk_nunique(df, columns)
+    return {col: int(df[col].nunique()) for col in columns}
+
+
+def _spark_bulk_nunique(df: Any, columns: list[str]) -> dict[str, int]:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    spark_df = df.to_spark()
+    exprs = [F.countDistinct(F.col(c)).alias(f"__dist__{c}") for c in columns]
+    row = spark_df.agg(*exprs).collect()[0]
+    return {c: int(row[f"__dist__{c}"]) for c in columns}
+
+
 def compute_bulk_stats(df: Any) -> BulkStats:
     if hasattr(df, "to_spark"):
         return _spark_bulk_stats(df)

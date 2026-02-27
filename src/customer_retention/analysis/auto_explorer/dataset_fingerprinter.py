@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from customer_retention.core.compat import is_dataframe, native_pd, pd, safe_to_datetime
-from customer_retention.core.config.column_config import ColumnType, DatasetGranularity
+from customer_retention.core.config.column_config import DatasetGranularity
 from customer_retention.stages.profiling.type_detector import TypeDetector
 
 _FILE_EXTENSIONS = frozenset((".csv", ".parquet", ".json", ".orc", ".avro", ".delta", ".txt"))
@@ -50,19 +50,9 @@ class DatasetFingerprinter:
         df = self._load(data)
         sampled = len(df) < full_row_count
 
-        entity_columns = []
-        time_columns = []
-        target_candidates = []
-
-        for col in df.columns:
-            inference = self._type_detector.detect_type(df[col], col)
-            if inference.inferred_type == ColumnType.IDENTIFIER:
-                entity_columns.append(col)
-            elif inference.inferred_type == ColumnType.DATETIME:
-                time_columns.append(col)
-            elif inference.inferred_type in (ColumnType.TARGET, ColumnType.BINARY):
-                if inference.inferred_type == ColumnType.TARGET:
-                    target_candidates.append(col)
+        entity_columns, time_columns, target_candidates = (
+            self._type_detector.classify_structural_columns(df, total_count=full_row_count)
+        )
 
         granularity_result = self._type_detector.detect_granularity(df)
         granularity = granularity_result.granularity

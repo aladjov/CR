@@ -8,6 +8,7 @@ from customer_retention.core.compat import (
     pd,
     safe_to_list,
 )
+from customer_retention.core.compat.bulk_profiling import bulk_nunique
 from customer_retention.core.config.column_config import ColumnType, DatasetGranularity
 
 from .profile_result import GranularityResult, TypeConfidence, TypeInference
@@ -283,6 +284,53 @@ class TypeDetector:
             return True
 
         return False
+
+    def detect_text_columns(self, df: DataFrame, type_overrides: dict | None = None) -> list[str]:
+        string_cols = [
+            c for c in df.columns
+            if is_string_dtype(df[c]) or df[c].dtype == object
+        ]
+        if not string_cols:
+            return []
+        if type_overrides:
+            string_cols = [c for c in string_cols if c not in type_overrides]
+        if not string_cols:
+            return []
+        distinct_counts = bulk_nunique(df, string_cols)
+        skip_patterns = self.IDENTIFIER_PATTERNS + self.TARGET_PATTERNS_PRIMARY + self.TARGET_PATTERNS_SECONDARY + self.TARGET_PATTERNS_GENERIC
+        text_columns = []
+        for col in string_cols:
+            col_lower = col.lower()
+            if any(p in col_lower for p in skip_patterns):
+                continue
+            if distinct_counts.get(col, 0) > 100:
+                text_columns.append(col)
+        return text_columns
+
+    def classify_structural_columns(
+        self, df: DataFrame, total_count: int | None = None,
+    ) -> tuple[list[str], list[str], list[str]]:
+        if total_count is None:
+            total_count = len(df)
+        entity_columns = [
+            c for c in df.columns
+            if any(p in c.lower() for p in self.IDENTIFIER_PATTERNS)
+        ]
+        time_columns = [c for c in df.columns if is_datetime64_any_dtype(df[c])]
+        all_target_patterns = (
+            self.TARGET_PATTERNS_PRIMARY + self.TARGET_PATTERNS_SECONDARY + self.TARGET_PATTERNS_GENERIC
+        )
+        candidate_target_cols = [
+            c for c in df.columns
+            if any(p in c.lower() for p in all_target_patterns)
+            and c not in entity_columns
+            and c not in time_columns
+        ]
+        target_candidates: list[str] = []
+        if candidate_target_cols:
+            distinct_counts = bulk_nunique(df, candidate_target_cols)
+            target_candidates = [c for c in candidate_target_cols if distinct_counts.get(c, 999) <= 10]
+        return entity_columns, time_columns, target_candidates
 
     def detect_granularity(self, df: DataFrame) -> GranularityResult:
         """Detect whether dataset is entity-level or event-level (time series)."""
