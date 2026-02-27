@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from customer_retention.core.compat import is_dataframe, native_pd, pd
+from customer_retention.core.compat import is_dataframe, native_pd, pd, safe_to_datetime
 from customer_retention.core.config.column_config import ColumnType, DatasetGranularity
 from customer_retention.stages.profiling.type_detector import TypeDetector
 
@@ -83,7 +83,7 @@ class DatasetFingerprinter:
 
             if best_time and best_time in df.columns:
                 try:
-                    ts = native_pd.to_datetime(df[best_time], format="mixed", errors="coerce")
+                    ts = safe_to_datetime(df[best_time], errors="coerce")
                     ts_min = ts.min()
                     ts_max = ts.max()
                     span = ts_max - ts_min

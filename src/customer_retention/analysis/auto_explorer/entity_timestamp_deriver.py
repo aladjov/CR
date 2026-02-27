@@ -49,5 +49,5 @@ class EntityFeatureTimestampDeriver:
         elif result.method == "coalesced":
             coalesced = self._order_analyzer.derive_last_action_date(df)
             if coalesced is not None:
-                out["feature_timestamp"] = coalesced.to_numpy()
+                out["feature_timestamp"] = coalesced
         return out

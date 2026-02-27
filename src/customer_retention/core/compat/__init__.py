@@ -224,9 +224,17 @@ def safe_memory_usage_bytes(obj: Any) -> int:
         return 0
 
 
-def safe_to_datetime(series: Any, **kwargs: Any) -> _pandas.Series:
+def safe_to_datetime(series: Any, **kwargs: Any) -> Any:
     if _pandas.api.types.is_datetime64_any_dtype(series):
         return as_tz_naive(series if isinstance(series, _pandas.Series) else _pandas.Series(series))
+    if _is_spark_pandas(series):
+        import pyspark.sql.functions as F  # noqa: N812
+        dtype_str = str(series.dtype).lower()
+        if "timestamp" in dtype_str or "datetime" in dtype_str:
+            return series
+        if "int" in dtype_str or "long" in dtype_str:
+            return series.spark.transform(lambda c: F.from_unixtime(c).cast("timestamp"))
+        return series.spark.transform(lambda c: F.to_timestamp(c))
     arr = series.to_numpy() if hasattr(series, 'to_numpy') else _pandas.array(series)
     if _pandas.api.types.is_integer_dtype(arr) or _pandas.api.types.is_integer_dtype(series):
         arr = _pandas.to_numeric(arr, errors='coerce')
@@ -381,10 +389,8 @@ def groupby_multi_agg(df: Any, group_col: str, agg_col: str, agg_funcs: list) ->
 
 
 def safe_to_list(obj: Any) -> list:
-    if isinstance(obj, (_pandas.Series, _pandas.Index)):
+    if hasattr(obj, 'to_list'):
         return obj.to_list()
-    if hasattr(obj, 'to_numpy'):
-        return obj.to_numpy().tolist()
     if hasattr(obj, 'tolist'):
         return obj.tolist()
     return list(obj)
