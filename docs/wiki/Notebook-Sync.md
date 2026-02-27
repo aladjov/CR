@@ -14,12 +14,28 @@ Every code cell in an exploration notebook is classified into one of three types
 
 Markdown cells are always overwritten from the repo version (documentation improvements come through automatically).
 
+### Tag Format
+
+Every tag line carries three attributes on a single line:
+
+```
+# @cr:TYPE name='descriptive_name' id=HEXUUID
+```
+
+| Attribute | Purpose | Example |
+|-----------|---------|---------|
+| `TYPE` | Cell sync behavior (`config`, `user_code`, `code`) | `config` |
+| `name` | Human-readable label describing the cell's purpose | `project_settings` |
+| `id` | Stable 8-character hex UUID for cell matching | `846f56cb` |
+
+The `id` is the **primary key** for matching cells between repo and user notebooks. It never changes, even when cells are reordered or new cells are inserted. The `name` is for human readability when maintaining notebooks.
+
 ### What each type looks like
 
 **Config cell** -- variables you customize per project:
 
 ```python
-# @cr:config
+# @cr:config name='project_settings' id=846f56cb
 PROJECT_NAME = "my_project"
 LIGHT_RUN = False
 SAMPLE_FRACTION = None
@@ -30,7 +46,7 @@ MAX_GRID_DATES = None
 **User code cell** -- logic you write yourself:
 
 ```python
-# @cr:user_code
+# @cr:user_code name='business_context' id=064d7a18
 BUSINESS_CONTEXT = {
     "project_name": "Customer Churn Prediction",
     "business_objective": "Reduce churn by 20%",
@@ -38,10 +54,10 @@ BUSINESS_CONTEXT = {
 }
 ```
 
-**Repo code cell** -- framework logic maintained by the package. All framework cells are explicitly tagged with `# @cr:code`:
+**Repo code cell** -- framework logic maintained by the package:
 
 ```python
-# @cr:code
+# @cr:code name='fingerprint_datasets' id=43e89806
 from customer_retention.analysis.auto_explorer import DatasetFingerprinter
 
 fingerprinter = DatasetFingerprinter()
@@ -50,18 +66,18 @@ results = fingerprinter.profile_all(datasets)
 
 Every code cell in the repo notebooks has an explicit tag. An untagged code cell is a signal that the user created it without tagging -- the sync tool will prompt before removing it.
 
-## Cell ID Convention
+## Cell IDs and Embedded Matching
 
-Every cell has a standardized ID following the pattern `{notebook_prefix}-{sequence:03d}`:
+Every cell has a stable 8-character hex UUID as its ID (e.g., `846f56cb`). This UUID appears in two places:
 
-```
-nb00-001, nb00-002, nb00-003, ...   (00_start_here.ipynb)
-nb01-001, nb01-002, ...             (01_data_discovery.ipynb)
-nb01a-001, nb01a-002, ...           (01a_temporal_deep_dive.ipynb)
-nb09-001, nb09-002, ...             (09_business_alignment.ipynb)
-```
+1. **Jupyter cell metadata** -- the `cell.id` field in the notebook JSON
+2. **Source code** -- embedded in the `# @cr:` tag line as `id=846f56cb`
 
-Cell IDs are the anchor for sync -- the tool matches cells between repo and user notebooks by ID. Do not rename cell IDs manually.
+The embedded ID is the authoritative source. When notebooks are re-saved by Databricks or other platforms, Jupyter cell metadata can be stripped or regenerated. The sync engine reads the `id=` attribute from the tag line and sets `cell.id` accordingly before matching. This makes cell matching robust across any platform.
+
+### Why embedded IDs
+
+Databricks workspaces can strip or regenerate nbformat cell IDs when notebooks are re-saved. Sequential IDs (like `nb00-003`) break when users insert cells between them. Embedding a stable UUID in the source code comment solves both problems -- the ID travels with the cell content itself and never changes regardless of cell position or platform behavior.
 
 ## Using the Sync Tool
 
@@ -122,6 +138,10 @@ churnkit-sync --repo-dir /tmp/new_notebooks
 rm -rf /tmp/new_notebooks
 ```
 
+### Databricks automatic sync
+
+On Databricks, `databricks_init()` automatically syncs exploration notebooks when they already exist in the workspace. It uses the same `NotebookSyncEngine` -- `@cr:code` cells are updated from the installed package, while `@cr:config` and `@cr:user_code` cells are preserved. New notebooks are copied; existing notebooks are synced. The result includes both `notebooks_copied` and `notebooks_synced` lists.
+
 ## Merge Algorithm
 
 The sync engine walks cells in **repo order** (canonical ordering) and applies these rules:
@@ -131,6 +151,8 @@ The sync engine walks cells in **repo order** (canonical ordering) and applies t
 3. **Cell in repo but not in user** -- insert from repo (new cell added in the update)
 4. **Cell in user but not in repo, tagged `config`/`user_code` or markdown** -- keep near its original position
 5. **Cell in user but not in repo, untagged code** -- drop after confirmation (orphaned or user-created without tag)
+
+Cell matching is by embedded `id=` attribute, not by position or sequential numbering.
 
 ### Removal confirmation
 
@@ -157,7 +179,7 @@ On Databricks, you call `databricks_init()` once to bind a catalog, schema, work
 Put the call in its own notebook -- `00_databricks_setup.ipynb` -- inside your `exploration_notebooks/` directory:
 
 ```python
-# @cr:config
+# @cr:config name='databricks_setup' id=<your-uuid>
 from customer_retention.integrations.databricks_init import databricks_init
 
 result = databricks_init(
@@ -176,7 +198,7 @@ This notebook is completely invisible to sync. The sync tool only processes note
 
 You can add cells to notebooks and they will survive sync -- with one rule:
 
-- **Tag your cell** with `# @cr:config` or `# @cr:user_code` on line 1. Without a tag, user-added code cells will be dropped during sync (they look like orphaned repo cells).
+- **Tag your cell** with `# @cr:config name='your_name' id=<8-char-hex>` or `# @cr:user_code name='your_name' id=<8-char-hex>` on line 1. Generate a unique hex ID with `python -c "import uuid; print(uuid.uuid4().hex[:8])"`. Without a tag, user-added code cells will be dropped during sync (they look like orphaned repo cells).
 - **Markdown cells** you add are always kept.
 - User-added cells are inserted after their nearest preceding repo cell to maintain logical ordering.
 
@@ -189,48 +211,33 @@ When adding or modifying exploration notebooks in the repo:
 - Pure configuration variables (ALL_CAPS assignments) go in `# @cr:config` cells
 - Cells where users write custom logic (target derivation, business context, success metrics) get `# @cr:user_code`
 - Everything else is repo code -- **always** tag with `# @cr:code`. All framework cells must be explicitly tagged so that "untagged" means "user forgot to tag"
-- Keep config and code in **separate cells**. The migration script split blended cells for this reason.
+- Keep config and code in **separate cells**
+- Every tag must include `name='descriptive_name'` and `id=<8-char-hex>` -- bare tags like `# @cr:code` are not valid
+- The `name` should be a short snake_case description of the cell's purpose (e.g., `load_findings`, `detect_target`, `save_pattern_findings`)
+- The `id` must be a unique 8-character hex string. Generate with `python -c "import uuid; print(uuid.uuid4().hex[:8])"`
+- IDs are permanent -- once assigned, they never change even if the cell is moved or its content is rewritten
 
 ### CI guards
 
-Five structural tests run on every CI build to prevent accidental de-standardization:
+Six structural tests run on every CI build to prevent accidental de-standardization:
 
-- `test_all_cells_have_standardized_ids` -- every cell ID matches `nb\w+-\d{3}`
+- `test_all_cells_have_standardized_ids` -- every cell ID is an 8-character hex string
 - `test_no_duplicate_ids_within_notebook` -- no two cells share an ID
 - `test_cell_ids_are_valid_format` -- IDs are present and reasonable length
-- `test_all_code_cells_have_explicit_tags` -- every code cell starts with `# @cr:` (config, user_code, or code)
+- `test_all_code_cells_have_explicit_tags` -- every code cell has `# @cr:TYPE name='...' id=...` format
+- `test_embedded_id_matches_cell_id` -- the `id=` in the tag line matches the Jupyter `cell.id`
 - `test_config_cells_have_magic_comments` -- pure config cells have the `# @cr:config` tag
-
-### Re-running the migration
-
-If you add new notebooks or restructure existing ones:
-
-```bash
-python scripts/notebooks/migrate_notebook_cell_ids.py --dry-run
-python scripts/notebooks/migrate_notebook_cell_ids.py
-```
-
-The migration is idempotent -- running it twice produces the same result. It standardizes cell IDs and adds magic comment tags based on the split/tag maps defined in the script.
-
-### Tagging new framework cells
-
-After adding new code cells to notebooks, tag them with `# @cr:code`:
-
-```bash
-python scripts/notebooks/tag_framework_cells.py --dry-run
-python scripts/notebooks/tag_framework_cells.py
-```
-
-This is also idempotent -- it only tags cells that don't already have a `# @cr:` magic comment.
 
 ## Troubleshooting
 
-**"Cell ID not found" during sync** -- The user notebook has different cell IDs than the repo. This happens if the notebook was created before migration. Run the migration script on the user's notebooks first.
+**"Cell ID not found" during sync** -- The user notebook has cells whose embedded IDs don't match the repo. This can happen if a cell was duplicated or its tag was manually edited. Check the `id=` values in the tag lines.
 
-**Config values unexpectedly reset** -- The cell is missing its `# @cr:config` tag. Add the tag on line 1 and re-sync.
+**Config values unexpectedly reset** -- The cell is missing its `# @cr:config` tag. Add the full tag on line 1 (with `name=` and `id=`) and re-sync.
 
-**User-added cell disappeared** -- The cell was untagged code. Add `# @cr:config` or `# @cr:user_code` on line 1 to protect it from removal.
+**User-added cell disappeared** -- The cell was untagged code. Add `# @cr:config name='your_name' id=<hex>` or `# @cr:user_code name='your_name' id=<hex>` on line 1 to protect it from removal.
 
 **`databricks_init()` call lost after sync** -- The call was inside a repo notebook without a `# @cr:config` tag. Move it to a standalone `00_databricks_setup.ipynb` notebook (see [Databricks Initialization](#databricks-initialization)). Standalone notebooks are never touched by sync.
 
 **Backup files everywhere** -- `.bak` files are created by default. Use `--no-backup` to disable, or clean up with `find . -name "*.ipynb.bak" -delete`.
+
+**Databricks stripped cell IDs** -- Not a problem. The sync engine reads embedded `id=` attributes from the `# @cr:` tag lines and restores `cell.id` before matching. As long as the tag line is intact, sync works correctly.
