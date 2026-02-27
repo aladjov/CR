@@ -12,17 +12,18 @@ from pathlib import Path
 
 import pytest
 
-_STAGES_ROOT = (
+_SRC_ROOT = (
     Path(__file__).resolve().parents[3]
     / "src"
     / "customer_retention"
-    / "stages"
 )
+_STAGES_ROOT = _SRC_ROOT / "stages"
 
 PROFILING_DIR = _STAGES_ROOT / "profiling"
 FEATURES_DIR = _STAGES_ROOT / "features"
 TEMPORAL_DIR = _STAGES_ROOT / "temporal"
 MODELING_DIR = _STAGES_ROOT / "modeling"
+VALIDATION_DIR = _STAGES_ROOT / "validation"
 
 ALLOWLISTED_FILES = {"window_recommendation.py", "spark_segment_analyzer.py", "feature_manifest.py", "snapshot_manager.py"}
 
@@ -104,6 +105,15 @@ def _collect_modeling_files() -> list[Path]:
     )
 
 
+def _collect_validation_files() -> list[Path]:
+    return sorted(
+        p for p in VALIDATION_DIR.glob("*.py")
+        if p.name not in ALLOWLISTED_FILES and not p.name.startswith("__")
+    )
+
+
+
+
 def _check_file(source_file: Path) -> None:
     raw = source_file.read_text()
     cleaned = _strip_strings(raw)
@@ -138,4 +148,9 @@ def test_no_dangerous_spark_pandas_patterns_temporal(source_file: Path):
 
 @pytest.mark.parametrize("source_file", _collect_modeling_files(), ids=lambda p: p.name)
 def test_no_dangerous_spark_pandas_patterns_modeling(source_file: Path):
+    _check_file(source_file)
+
+
+@pytest.mark.parametrize("source_file", _collect_validation_files(), ids=lambda p: p.name)
+def test_no_dangerous_spark_pandas_patterns_validation(source_file: Path):
     _check_file(source_file)

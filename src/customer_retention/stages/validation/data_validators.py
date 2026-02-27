@@ -8,7 +8,14 @@ including duplicate detection, date logic validation, and value range validation
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype, is_numeric_dtype, pd, to_datetime
+from customer_retention.core.compat import (
+    DataFrame,
+    is_datetime64_any_dtype,
+    is_numeric_dtype,
+    pd,
+    safe_to_list,
+    to_datetime,
+)
 from customer_retention.core.components.enums import Severity
 
 
@@ -171,8 +178,7 @@ class DataValidator:
             exclude.add(key_column)
             value_columns = [c for c in df.columns if c not in exclude]
 
-            duplicated_keys = df[duplicate_mask][key_column].unique()
-            sample_keys = duplicated_keys[:5]  # Check up to 5 duplicate keys
+            sample_keys = safe_to_list(df[duplicate_mask][key_column].unique())[:5]
 
             for key_value in sample_keys:
                 key_rows = df[df[key_column] == key_value]
@@ -186,7 +192,7 @@ class DataValidator:
                             conflict_examples.append({
                                 "key": key_value,
                                 "column": col,
-                                "values": unique_vals[:5].tolist()
+                                "values": unique_vals[:5]
                             })
 
             # Value conflicts are additional concern - only increase severity, never decrease
@@ -439,7 +445,7 @@ class DataValidator:
 
             # Binary columns
             elif df[col].nunique() == 2:
-                unique_vals = df[col].dropna().unique()
+                unique_vals = safe_to_list(df[col].dropna().unique())
                 if set(unique_vals).issubset({0, 1, True, False, 0.0, 1.0}):
                     rules[col] = {"type": "binary", "valid_values": [0, 1]}
 

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Set
 
-from customer_retention.core.compat import DataFrame
+from customer_retention.core.compat import DataFrame, safe_to_list
 
 
 class RelationshipType(str, Enum):
@@ -189,8 +189,8 @@ class RelationshipDetector:
         if left_col not in df1.columns or right_col not in df2.columns:
             return 0.0, 0.0, 0.0
 
-        left_values = set(df1[left_col].dropna().unique())
-        right_values = set(df2[right_col].dropna().unique())
+        left_values = set(safe_to_list(df1[left_col].dropna().unique()))
+        right_values = set(safe_to_list(df2[right_col].dropna().unique()))
 
         if not left_values or not right_values:
             return 0.0, 0.0, 0.0

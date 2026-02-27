@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from customer_retention.core.compat import Series, cut
+from customer_retention.core.compat import Series, cut, safe_to_list
 
 
 @dataclass
@@ -39,7 +39,7 @@ class FairnessAnalyzer:
 
     def analyze(self, y_true: Series, y_pred: Series,
                 protected: Series) -> FairnessResult:
-        groups = protected.unique()
+        groups = safe_to_list(protected.unique())
         group_metrics = {}
         metrics = []
         for group in groups:
@@ -132,7 +132,7 @@ class FairnessAnalyzer:
 
     def analyze_calibration(self, y_true: Series, y_proba: Series,
                             protected: Series) -> FairnessResult:
-        groups = protected.unique()
+        groups = safe_to_list(protected.unique())
         group_metrics = {}
         for group in groups:
             mask = protected == group

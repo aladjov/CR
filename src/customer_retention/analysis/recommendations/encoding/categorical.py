@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import native_pd
+from customer_retention.core.compat import native_pd, safe_to_list
 
 from ..base import EncodingRecommendation, RecommendationResult
 
@@ -22,7 +22,7 @@ class OneHotEncodeRecommendation(EncodingRecommendation):
     def _fit_impl(self, df: Any) -> None:
         for col in self.columns:
             if col in df.columns:
-                self._categories[col] = list(df[col].dropna().unique())
+                self._categories[col] = safe_to_list(df[col].dropna().unique())
         self._fit_params["categories"] = self._categories
 
     def _transform_local(self, df: Any) -> RecommendationResult:
@@ -77,7 +77,7 @@ class LabelEncodeRecommendation(EncodingRecommendation):
     def _fit_impl(self, df: Any) -> None:
         for col in self.columns:
             if col in df.columns:
-                categories = sorted(df[col].dropna().unique())
+                categories = sorted(safe_to_list(df[col].dropna().unique()))
                 self._mappings[col] = {cat: idx for idx, cat in enumerate(categories)}
         self._fit_params["mappings"] = self._mappings
 

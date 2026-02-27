@@ -388,7 +388,7 @@ class TimeSeriesDetector:
     ) -> Tuple[TimeSeriesFrequency, float]:
         """Detect the frequency of the time series."""
         # Sample entities for efficiency
-        sample_entities = df[entity_column].unique()[:100]
+        sample_entities = safe_to_list(df[entity_column].unique())[:100]
 
         intervals = []
         for entity in sample_entities:
@@ -643,7 +643,7 @@ class TimeSeriesValidator:
         examples = []
 
         # Sample for efficiency
-        sample_entities = df[entity_column].unique()[:1000]
+        sample_entities = safe_to_list(df[entity_column].unique())[:1000]
 
         for entity in sample_entities:
             entity_data = df[df[entity_column] == entity]['_ts'].dropna()
@@ -696,7 +696,7 @@ class TimeSeriesValidator:
         gap_examples = []
 
         # Sample for efficiency
-        sample_entities = df[entity_column].unique()[:500]
+        sample_entities = safe_to_list(df[entity_column].unique())[:500]
 
         for entity in sample_entities:
             entity_data = df[df[entity_column] == entity]['_ts'].dropna().sort_values()
@@ -759,7 +759,7 @@ class TimeSeriesValidator:
         """Estimate the typical interval from the data."""
         intervals = []
 
-        sample_entities = df[entity_column].unique()[:100]
+        sample_entities = safe_to_list(df[entity_column].unique())[:100]
 
         for entity in sample_entities:
             entity_data = df[df[entity_column] == entity]['_ts'].dropna().sort_values()
