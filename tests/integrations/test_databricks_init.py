@@ -735,3 +735,49 @@ class TestDatabricksInitNotebookSync:
 
         captured = capsys.readouterr()
         assert "Synced" in captured.out
+
+    def test_syncs_via_embedded_ids_when_nbformat_ids_stripped(self, monkeypatch, databricks_env, tmp_path):
+        repo_nb = _make_test_notebook([
+            ("cell1", "code", "# @cr:config name='settings' id=a1b2c3d4\nFOO = 'default'"),
+            ("cell2", "code", "# @cr:code name='run' id=e5f6a7b8\nnew_code()"),
+        ])
+        user_nb = nbformat.v4.new_notebook()
+        c1 = nbformat.v4.new_code_cell(source="# @cr:config name='settings' id=a1b2c3d4\nFOO = 'custom'")
+        c2 = nbformat.v4.new_code_cell(source="# @cr:code name='run' id=e5f6a7b8\nold_code()")
+        if "id" in c1:
+            del c1["id"]
+        if "id" in c2:
+            del c2["id"]
+        user_nb.cells.extend([c1, c2])
+
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        _write_notebook(source_dir / "test.ipynb", repo_nb)
+
+        dest_dir = tmp_path / "dest"
+        dest_dir.mkdir(parents=True)
+        _write_notebook(dest_dir / "test.ipynb", user_nb)
+
+        copied, synced = self._run_sync(monkeypatch, source_dir, dest_dir)
+
+        assert copied == []
+        assert len(synced) == 1
+        result_nb = _read_notebook(dest_dir / "test.ipynb")
+        assert "FOO = 'custom'" in result_nb.cells[0].source
+        assert "new_code()" in result_nb.cells[1].source
+
+    def test_handles_corrupt_user_notebook(self, monkeypatch, databricks_env, tmp_path):
+        repo_nb = _make_test_notebook([("c1", "code", "# @cr:code\nrun()")])
+
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        _write_notebook(source_dir / "test.ipynb", repo_nb)
+
+        dest_dir = tmp_path / "dest"
+        dest_dir.mkdir(parents=True)
+        (dest_dir / "test.ipynb").write_text("not valid json{{{")
+
+        copied, synced = self._run_sync(monkeypatch, source_dir, dest_dir)
+
+        assert copied == []
+        assert synced == []

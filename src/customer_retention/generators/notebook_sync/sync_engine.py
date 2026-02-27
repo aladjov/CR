@@ -1,9 +1,10 @@
 import copy
+import uuid
 from typing import Dict, List, Tuple
 
 import nbformat
 
-from .cell_types import CellSyncType, detect_cell_sync_type
+from .cell_types import CellSyncType, detect_cell_sync_type, extract_embedded_id
 from .sync_report import CellSyncEntry, SyncAction, SyncReport
 
 
@@ -18,11 +19,22 @@ def _sources_equal(a, b) -> bool:
     return "".join(_source_lines(a)) == "".join(_source_lines(b))
 
 
+def apply_embedded_ids(nb: nbformat.NotebookNode) -> None:
+    for cell in nb.get("cells", []):
+        embedded = extract_embedded_id(_source_lines(cell))
+        if embedded:
+            cell["id"] = embedded
+        elif "id" not in cell:
+            cell["id"] = str(uuid.uuid4())[:8]
+
+
 class NotebookSyncEngine:
 
     def sync(
         self, repo_nb: nbformat.NotebookNode, user_nb: nbformat.NotebookNode
     ) -> Tuple[nbformat.NotebookNode, SyncReport]:
+        apply_embedded_ids(repo_nb)
+        apply_embedded_ids(user_nb)
         repo_map: Dict[str, nbformat.NotebookNode] = {c.id: c for c in repo_nb.cells}
         user_map: Dict[str, nbformat.NotebookNode] = {c.id: c for c in user_nb.cells}
         repo_ids = set(repo_map)

@@ -1,5 +1,6 @@
+import re
 from enum import Enum
-from typing import List
+from typing import List, NamedTuple, Optional
 
 
 class CellSyncType(str, Enum):
@@ -9,22 +10,60 @@ class CellSyncType(str, Enum):
 
 
 _TAG_PREFIX = "# @cr:"
-_VALID_TAGS = {f"{_TAG_PREFIX}{t.value}" for t in CellSyncType}
+_VALID_TYPE_VALUES = {t.value for t in CellSyncType}
+_TAG_PATTERN = re.compile(
+    r"^# @cr:(\w+)"
+    r"(?:\s+name='([^']*)')?"
+    r"(?:\s+id=(\S+))?"
+    r"$"
+)
+
+
+class TagInfo(NamedTuple):
+    cell_type: CellSyncType
+    name: Optional[str]
+    embedded_id: Optional[str]
+
+
+def _parse_tag_line(line: str) -> Optional[TagInfo]:
+    match = _TAG_PATTERN.match(line.rstrip("\n"))
+    if not match:
+        return None
+    type_value = match.group(1)
+    if type_value not in _VALID_TYPE_VALUES:
+        return None
+    return TagInfo(
+        cell_type=CellSyncType(type_value),
+        name=match.group(2) or None,
+        embedded_id=match.group(3) or None,
+    )
 
 
 def detect_cell_sync_type(source_lines: List[str]) -> CellSyncType:
     if not source_lines:
         return CellSyncType.CODE
-    tag = source_lines[0].rstrip("\n")
-    if tag in _VALID_TAGS:
-        return CellSyncType(tag[len(_TAG_PREFIX):])
-    return CellSyncType.CODE
+    info = _parse_tag_line(source_lines[0])
+    return info.cell_type if info else CellSyncType.CODE
+
+
+def extract_embedded_id(source_lines: List[str]) -> Optional[str]:
+    if not source_lines:
+        return None
+    info = _parse_tag_line(source_lines[0])
+    return info.embedded_id if info else None
+
+
+def extract_tag_name(source_lines: List[str]) -> Optional[str]:
+    if not source_lines:
+        return None
+    info = _parse_tag_line(source_lines[0])
+    return info.name if info else None
 
 
 def has_magic_comment(source_lines: List[str]) -> bool:
     if not source_lines:
         return False
-    return source_lines[0].rstrip("\n") in _VALID_TAGS
+    return _parse_tag_line(source_lines[0]) is not None
 
 
 def strip_magic_comment(source_lines: List[str]) -> List[str]:

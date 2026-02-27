@@ -427,7 +427,7 @@ class TestNotebook08Architecture:
         assert "entity_id" in content and "missing" in content.lower(), "NB08 must validate entity_id column"
 
 
-_CELL_ID_PATTERN = re.compile(r"^nb\w+-\d{3}$")
+_CELL_ID_PATTERN = re.compile(r"^[a-f0-9]{8}$")
 
 
 class TestCellIdStandardization:
@@ -463,6 +463,11 @@ class TestCellIdStandardization:
                 )
 
     def test_all_code_cells_have_explicit_tags(self, notebook_list):
+        tag_re = re.compile(
+            r"^# @cr:(config|user_code|code)"
+            r" name='[^']+'"
+            r" id=[a-f0-9]{8}$"
+        )
         for nb_path in notebook_list:
             with open(nb_path, 'r', encoding='utf-8') as f:
                 nb = json.load(f)
@@ -471,10 +476,26 @@ class TestCellIdStandardization:
                     continue
                 source = ''.join(cell.get('source', []))
                 first_line = source.split('\n')[0].rstrip() if source else ''
-                assert first_line.startswith('# @cr:'), (
+                assert tag_re.match(first_line), (
                     f"{nb_path.name} cell {i} ({cell.get('id')}): "
-                    f"code cell missing explicit tag (got {first_line!r})"
+                    f"code cell missing valid tag (got {first_line!r})"
                 )
+
+    def test_embedded_id_matches_cell_id(self, notebook_list):
+        for nb_path in notebook_list:
+            with open(nb_path, 'r', encoding='utf-8') as f:
+                nb = json.load(f)
+            for i, cell in enumerate(nb.get('cells', [])):
+                if cell.get('cell_type') != 'code':
+                    continue
+                source = ''.join(cell.get('source', []))
+                first_line = source.split('\n')[0].rstrip() if source else ''
+                m = re.search(r'id=([a-f0-9]{8})', first_line)
+                if m:
+                    assert cell.get('id') == m.group(1), (
+                        f"{nb_path.name} cell {i}: embedded id={m.group(1)} "
+                        f"does not match cell.id={cell.get('id')!r}"
+                    )
 
     def test_config_cells_have_magic_comments(self, notebook_list):
         for nb_path in notebook_list:
@@ -506,7 +527,7 @@ class TestCellIdStandardization:
                 )
                 if all_caps_assignments and not has_non_config:
                     first_line = lines[0].rstrip() if lines else ''
-                    if first_line not in ('# @cr:config', '# @cr:user_code'):
+                    if not (first_line.startswith('# @cr:config') or first_line.startswith('# @cr:user_code')):
                         pytest.fail(
                             f"{nb_path.name} cell {i} ({cell.get('id')}): "
                             f"pure config cell missing magic comment"

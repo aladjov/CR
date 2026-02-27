@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -192,8 +193,14 @@ def _sync_exploration_notebooks(workspace_path: str) -> tuple[list[str], list[st
             shutil.copy2(notebook, dest_path)
             copied.append(str(dest_path))
         else:
-            if _sync_notebook(notebook, dest_path):
-                synced.append(str(dest_path))
+            try:
+                if _sync_notebook(notebook, dest_path):
+                    synced.append(str(dest_path))
+            except Exception:
+                warnings.warn(
+                    f"Could not sync notebook '{notebook.name}', skipping",
+                    stacklevel=2,
+                )
 
     return copied, synced
 
@@ -203,8 +210,11 @@ def _sync_notebook(repo_path: Path, user_path: Path) -> bool:
 
     from customer_retention.generators.notebook_sync.sync_engine import NotebookSyncEngine
 
-    repo_nb = nbformat.read(str(repo_path), as_version=4)
-    user_nb = nbformat.read(str(user_path), as_version=4)
+    try:
+        repo_nb = nbformat.read(str(repo_path), as_version=4)
+        user_nb = nbformat.read(str(user_path), as_version=4)
+    except Exception:
+        return False
 
     engine = NotebookSyncEngine()
     merged, report = engine.sync(repo_nb, user_nb)

@@ -295,3 +295,47 @@ class TestNotebookSyncEngine:
         user = _make_nb([user_cell])
         merged, report = self.engine.sync(repo, user)
         assert len(merged.cells) == 1
+
+    def test_embedded_ids_match_when_nbformat_ids_missing(self):
+        repo = _make_nb([
+            _code_cell("c1", ["# @cr:config name='settings' id=a1b2c3d4\n", "X = 1\n"]),
+            _code_cell("c2", ["# @cr:code name='run' id=e5f6a7b8\n", "new_code()\n"]),
+        ])
+        user_cell_1 = _code_cell("random-aaa", ["# @cr:config name='settings' id=a1b2c3d4\n", "X = 42\n"])
+        user_cell_2 = _code_cell("random-bbb", ["# @cr:code name='run' id=e5f6a7b8\n", "old_code()\n"])
+        user = _make_nb([user_cell_1, user_cell_2])
+        merged, report = self.engine.sync(repo, user)
+        assert len(merged.cells) == 2
+        assert "X = 42" in "".join(merged.cells[0].source)
+        assert "new_code()" in "".join(merged.cells[1].source)
+        assert report.counts[SyncAction.PRESERVED] == 1
+        assert report.counts[SyncAction.UPDATED] == 1
+
+    def test_embedded_ids_match_when_user_has_no_nbformat_ids(self):
+        repo = _make_nb([
+            _code_cell("c1", ["# @cr:code name='run' id=a1b2c3d4\n", "run()\n"]),
+        ])
+        user_cell = nbformat.v4.new_code_cell(source="# @cr:code name='run' id=a1b2c3d4\nold()\n")
+        if "id" in user_cell:
+            del user_cell["id"]
+        user = _make_nb([user_cell])
+        merged, report = self.engine.sync(repo, user)
+        assert len(merged.cells) == 1
+        assert "run()" in "".join(merged.cells[0].source)
+        assert report.counts[SyncAction.UPDATED] == 1
+
+    def test_user_added_cells_preserved_with_embedded_ids(self):
+        repo = _make_nb([
+            _code_cell("c1", ["# @cr:code name='run' id=a1b2c3d4\n", "run()\n"]),
+            _code_cell("c2", ["# @cr:code name='done' id=e5f6a7b8\n", "done()\n"]),
+        ])
+        user = _make_nb([
+            _code_cell("random-a", ["# @cr:code name='run' id=a1b2c3d4\n", "run()\n"]),
+            _code_cell("user-custom", ["# @cr:user_code\n", "my_analysis()\n"]),
+            _code_cell("random-b", ["# @cr:code name='done' id=e5f6a7b8\n", "done()\n"]),
+        ])
+        merged, report = self.engine.sync(repo, user)
+        assert len(merged.cells) == 3
+        ids = [c.id for c in merged.cells]
+        assert ids.index("user-custom") > ids.index("a1b2c3d4")
+        assert ids.index("user-custom") < ids.index("e5f6a7b8")
