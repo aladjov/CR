@@ -28,8 +28,11 @@ def _accept_workflow_params() -> None:
             val = dbutils.widgets.get(widget_name)
             if val:
                 os.environ[env_name] = val
+            elif env_name == "CR_DATASET_ID":
+                os.environ.pop(env_name, None)
         except Exception:
-            pass
+            if env_name == "CR_DATASET_ID":
+                os.environ.pop(env_name, None)
 
 
 _ensure_databricks_config_loaded()
@@ -45,6 +48,8 @@ def track_and_export_previous(current_notebook: str) -> None:
 
     Returns ``None`` — the export runs asynchronously.
     """
+    _ensure_databricks_config_loaded()
+    _accept_workflow_params()
     experiments_dir = get_notebook_experiments_dir()
     try:
         experiments_dir.mkdir(parents=True, exist_ok=True)

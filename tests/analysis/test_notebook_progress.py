@@ -114,6 +114,15 @@ class TestTrackAndExportPrevious:
 
         assert result is None
 
+    def test_calls_accept_workflow_params_and_ensure_config(self, tmp_path):
+        """track_and_export_previous re-invokes both helpers on every call."""
+        with _patch_experiments_dir(tmp_path), \
+             patch("customer_retention.analysis.notebook_progress._accept_workflow_params") as mock_accept, \
+             patch("customer_retention.analysis.notebook_progress._ensure_databricks_config_loaded") as mock_ensure:
+            track_and_export_previous("01.ipynb")
+        mock_accept.assert_called_once()
+        mock_ensure.assert_called_once()
+
     def test_creates_experiments_dir_if_missing(self, tmp_path):
         """Experiments dir doesn't exist → created."""
         experiments_dir = tmp_path / "nested" / "experiments"
@@ -321,6 +330,77 @@ class TestAcceptWorkflowParams:
             _accept_workflow_params()
         import os
         assert os.environ.get("CR_DATASET_ID") is None
+
+    def test_clears_stale_cr_dataset_id_when_widget_absent(self, monkeypatch):
+        """Stale CR_DATASET_ID from a previous job is cleared when the widget is absent."""
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.setenv("CR_DATASET_ID", "stale_account_dataset")
+        monkeypatch.setenv("CR_RUN_ID", "run-previous")
+        mock_dbutils = MagicMock()
+        mock_dbutils.widgets.get.side_effect = Exception("Widget not found")
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            _accept_workflow_params()
+        import os
+        assert os.environ.get("CR_DATASET_ID") is None
+
+    def test_cr_run_id_not_cleared_when_widget_absent(self, monkeypatch):
+        """CR_RUN_ID may have been set by initialize_run — do NOT clear it."""
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.setenv("CR_RUN_ID", "run-from-initialize")
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        mock_dbutils = MagicMock()
+        mock_dbutils.widgets.get.side_effect = Exception("Widget not found")
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            _accept_workflow_params()
+        import os
+        assert os.environ.get("CR_RUN_ID") == "run-from-initialize"
+
+    def test_clears_stale_cr_dataset_id_when_widget_empty(self, monkeypatch):
+        """Empty widget value also clears stale CR_DATASET_ID."""
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.setenv("CR_DATASET_ID", "stale_value")
+        mock_dbutils = MagicMock()
+        mock_dbutils.widgets.get.side_effect = lambda name: {
+            "dataset_id": "",
+            "run_id": "run-123",
+        }[name]
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            _accept_workflow_params()
+        import os
+        assert os.environ.get("CR_DATASET_ID") is None
+        assert os.environ.get("CR_RUN_ID") == "run-123"
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+
+    def test_consecutive_calls_update_cr_dataset_id(self, monkeypatch):
+        """Simulates for_each_task iterations: widget value changes between calls."""
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        mock_dbutils = MagicMock()
+
+        mock_dbutils.widgets.get.side_effect = lambda name: {
+            "dataset_id": "emails",
+            "run_id": "run-1",
+        }[name]
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            _accept_workflow_params()
+        import os
+        assert os.environ.get("CR_DATASET_ID") == "emails"
+
+        mock_dbutils.widgets.get.side_effect = lambda name: {
+            "dataset_id": "transactions",
+            "run_id": "run-1",
+        }[name]
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            _accept_workflow_params()
+        assert os.environ.get("CR_DATASET_ID") == "transactions"
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
 
 
 class TestGuardSkip:
