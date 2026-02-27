@@ -102,6 +102,7 @@ def initialize_run(
     root: Path, project_name: str, username: Optional[str] = None
 ) -> RunNamespace:
     namespace = RunNamespace.create(root=root, project_name=project_name)
+    namespace.write_sentinel()
     os.environ["CR_RUN_ID"] = namespace.run_id
     if username is None:
         username = get_current_username()

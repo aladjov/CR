@@ -305,6 +305,19 @@ class TestInitializeRun:
         expected_user = getpass.getuser()
         assert ns.user_session_path(expected_user).exists()
 
+    def test_writes_sentinel_file(self, tmp_path):
+        ns = initialize_run(root=tmp_path, project_name="myproj")
+        sentinel = tmp_path / "runs" / ".active_run_id"
+        assert sentinel.exists()
+        assert sentinel.read_text() == ns.run_id
+
+    def test_sentinel_updated_on_second_run(self, tmp_path):
+        ns1 = initialize_run(root=tmp_path, project_name="proj")
+        ns2 = initialize_run(root=tmp_path, project_name="proj")
+        sentinel = tmp_path / "runs" / ".active_run_id"
+        assert sentinel.read_text() == ns2.run_id
+        assert ns1.run_id != ns2.run_id
+
 
 class TestResolveTargetColumn:
     @staticmethod
@@ -487,7 +500,7 @@ class TestLoadNotebookFindings:
 
 
 class TestLoadNotebookFindingsDatabricksGuard:
-    def test_no_from_latest_on_databricks(self, tmp_path, monkeypatch):
+    def test_databricks_finds_namespace_via_sentinel(self, tmp_path, monkeypatch):
         monkeypatch.delenv("CR_RUN_ID", raising=False)
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
         monkeypatch.setenv("CR_USERNAME", "testuser")
@@ -496,15 +509,31 @@ class TestLoadNotebookFindingsDatabricksGuard:
         findings_dir.mkdir(parents=True)
         (findings_dir / "customers_findings.yaml").write_text("source: customers\n")
         (ns.datasets_dir / "customers").mkdir(exist_ok=True)
-        ns.project_context_path.write_text("run_id: stale\n")
-        fallback_dir = tmp_path / "findings"
-        fallback_dir.mkdir()
-        (fallback_dir / "fallback_findings.yaml").write_text("source: fallback\n")
+        sentinel = tmp_path / "runs" / ".active_run_id"
+        sentinel.write_text(ns.run_id)
         path, namespace, ds_name = load_notebook_findings(
-            "04_column_deep_dive.ipynb", root=tmp_path, findings_dir=fallback_dir
+            "04_column_deep_dive.ipynb", root=tmp_path
         )
-        assert namespace is None
-        assert "fallback_findings.yaml" in path
+        assert namespace is not None
+        assert namespace.run_id == ns.run_id
+        assert "customers_findings.yaml" in path
+        assert ds_name == "customers"
+
+    def test_databricks_finds_namespace_via_from_latest(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.setenv("CR_USERNAME", "testuser")
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        findings_dir = ns.dataset_findings_dir("customers")
+        findings_dir.mkdir(parents=True)
+        (findings_dir / "customers_findings.yaml").write_text("source: customers\n")
+        (ns.datasets_dir / "customers").mkdir(exist_ok=True)
+        ns.project_context_path.write_text("run_id: test\n")
+        path, namespace, ds_name = load_notebook_findings(
+            "04_column_deep_dive.ipynb", root=tmp_path
+        )
+        assert namespace is not None
+        assert "customers_findings.yaml" in path
 
 
 class TestResolveDataPath:

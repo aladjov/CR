@@ -365,6 +365,47 @@ class TestFromLatest:
         assert "customers_findings.yaml" in names
 
 
+class TestFromSentinel:
+    def test_reads_run_id_from_sentinel(self, tmp_path):
+        sentinel = tmp_path / "runs" / ".active_run_id"
+        sentinel.parent.mkdir(parents=True)
+        sentinel.write_text("proj-abc12345")
+        ns = RunNamespace.from_sentinel(root=tmp_path)
+        assert ns is not None
+        assert ns.run_id == "proj-abc12345"
+        assert ns.root == tmp_path
+
+    def test_returns_none_when_no_sentinel(self, tmp_path):
+        assert RunNamespace.from_sentinel(root=tmp_path) is None
+
+    def test_returns_none_when_sentinel_empty(self, tmp_path):
+        sentinel = tmp_path / "runs" / ".active_run_id"
+        sentinel.parent.mkdir(parents=True)
+        sentinel.write_text("   \n")
+        assert RunNamespace.from_sentinel(root=tmp_path) is None
+
+    def test_strips_whitespace(self, tmp_path):
+        sentinel = tmp_path / "runs" / ".active_run_id"
+        sentinel.parent.mkdir(parents=True)
+        sentinel.write_text("  my-run-123  \n")
+        ns = RunNamespace.from_sentinel(root=tmp_path)
+        assert ns.run_id == "my-run-123"
+
+    def test_uses_explicit_root(self, tmp_path):
+        custom_root = tmp_path / "custom"
+        sentinel = custom_root / "runs" / ".active_run_id"
+        sentinel.parent.mkdir(parents=True)
+        sentinel.write_text("run-xyz")
+        ns = RunNamespace.from_sentinel(root=custom_root)
+        assert ns.root == custom_root
+
+    def test_returns_none_on_read_error(self, tmp_path):
+        sentinel = tmp_path / "runs" / ".active_run_id"
+        sentinel.parent.mkdir(parents=True)
+        sentinel.mkdir()
+        assert RunNamespace.from_sentinel(root=tmp_path) is None
+
+
 class TestFromEnvOrLatest:
     def test_uses_env_when_set(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CR_RUN_ID", "env-run-12345678")
@@ -382,11 +423,47 @@ class TestFromEnvOrLatest:
         assert ns is not None
         assert ns.run_id == "local-run"
 
-    def test_no_fallback_on_databricks(self, tmp_path, monkeypatch):
+    def test_sentinel_used_on_databricks(self, tmp_path, monkeypatch):
         monkeypatch.delenv("CR_RUN_ID", raising=False)
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
-        ns_created = RunNamespace(root=tmp_path, run_id="stale-run")
+        sentinel = tmp_path / "runs" / ".active_run_id"
+        sentinel.parent.mkdir(parents=True)
+        sentinel.write_text("sentinel-run-123")
+        ns = RunNamespace.from_env_or_latest(root=tmp_path)
+        assert ns is not None
+        assert ns.run_id == "sentinel-run-123"
+
+    def test_from_latest_used_on_databricks_without_sentinel(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        ns_created = RunNamespace(root=tmp_path, run_id="latest-run")
         ns_created.setup()
-        ns_created.project_context_path.write_text("run_id: stale-run\n")
+        ns_created.project_context_path.write_text("run_id: latest-run\n")
+        ns = RunNamespace.from_env_or_latest(root=tmp_path)
+        assert ns is not None
+        assert ns.run_id == "latest-run"
+
+    def test_env_takes_priority_over_sentinel(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CR_RUN_ID", "env-run")
+        sentinel = tmp_path / "runs" / ".active_run_id"
+        sentinel.parent.mkdir(parents=True)
+        sentinel.write_text("sentinel-run")
+        ns = RunNamespace.from_env_or_latest(root=tmp_path)
+        assert ns.run_id == "env-run"
+
+    def test_sentinel_takes_priority_over_from_latest(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        ns_created = RunNamespace(root=tmp_path, run_id="latest-run")
+        ns_created.setup()
+        ns_created.project_context_path.write_text("run_id: latest-run\n")
+        sentinel = tmp_path / "runs" / ".active_run_id"
+        sentinel.write_text("sentinel-run")
+        ns = RunNamespace.from_env_or_latest(root=tmp_path)
+        assert ns.run_id == "sentinel-run"
+
+    def test_returns_none_when_nothing_found(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
         ns = RunNamespace.from_env_or_latest(root=tmp_path)
         assert ns is None

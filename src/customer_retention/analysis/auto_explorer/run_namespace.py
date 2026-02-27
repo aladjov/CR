@@ -209,12 +209,32 @@ class RunNamespace:
         return cls(root=root, run_id=run_id)
 
     @classmethod
+    def sentinel_path(cls, root: Path) -> Path:
+        return root / "runs" / ".active_run_id"
+
+    @classmethod
+    def from_sentinel(cls, root: Optional[Path] = None) -> Optional[RunNamespace]:
+        if root is None:
+            from customer_retention.core.config.experiments import get_experiments_dir
+
+            root = get_experiments_dir()
+        try:
+            run_id = cls.sentinel_path(root).read_text().strip()
+        except (OSError, ValueError):
+            return None
+        return cls(root=root, run_id=run_id) if run_id else None
+
+    def write_sentinel(self) -> None:
+        sentinel = self.sentinel_path(self.root)
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text(self.run_id)
+
+    @classmethod
     def from_env_or_latest(cls, root: Optional[Path] = None) -> Optional[RunNamespace]:
         ns = cls.from_env(root=root)
         if ns is not None:
             return ns
-        from customer_retention.core.compat import is_databricks
-
-        if is_databricks():
-            return None
+        ns = cls.from_sentinel(root=root)
+        if ns is not None:
+            return ns
         return cls.from_latest(root=root)
