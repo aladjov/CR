@@ -259,7 +259,7 @@ class TestFingerprintDataSpan:
         assert fp.data_start is None
         assert fp.data_end is None
 
-    def test_sampled_data_no_dates(self):
+    def test_sampled_data_computes_dates_from_sample(self):
         big_df = pd.DataFrame({
             "customer_id": [f"C{i:04d}" for i in range(500)] * 2,
             "event_timestamp": pd.to_datetime(
@@ -268,8 +268,9 @@ class TestFingerprintDataSpan:
             "amount": range(1000),
         })
         fp = DatasetFingerprinter(nrows=100).fingerprint("big", big_df)
-        assert fp.data_start is None
-        assert fp.data_end is None
+        assert fp.sampled is True
+        assert fp.data_start is not None
+        assert fp.data_end is not None
 
     def test_dates_consistent_with_temporal_span(self):
         fp = DatasetFingerprinter().fingerprint("events", _event_level_df())

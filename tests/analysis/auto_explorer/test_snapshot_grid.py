@@ -313,6 +313,29 @@ class TestRecordVote:
         assert stored.suggested_cadence == CadenceInterval.DAILY
         assert stored.suggested_start == "2024-01-15"
 
+    def test_vote_with_spans_computes_boundaries_and_dates(self):
+        grid = _minimal_grid()
+        assert grid.grid_start is None
+        vote = _minimal_vote(
+            voted=True,
+            data_span_start="2020-01-01",
+            data_span_end="2024-12-31",
+        )
+        grid.record_vote("transactions", vote)
+        assert grid.grid_start is not None
+        assert grid.grid_end is not None
+        assert len(grid.grid_dates) > 0
+
+    def test_vote_without_spans_keeps_existing_boundaries(self):
+        grid = _minimal_grid(grid_start="2024-01-01", grid_end="2024-06-01")
+        grid.generate_grid_dates()
+        original_dates = list(grid.grid_dates)
+        vote = _minimal_vote(voted=True)
+        grid.record_vote("transactions", vote)
+        assert grid.grid_start == "2024-01-01"
+        assert grid.grid_end == "2024-06-01"
+        assert grid.grid_dates == original_dates
+
 
 class TestIsReadyForAggregation:
     def test_no_adjustments_always_ready(self):
@@ -474,6 +497,14 @@ class TestSerialization:
         loaded = SnapshotGrid.load(path)
         assert loaded.locked is True
         assert len(loaded.grid_dates) == 3
+
+    def test_load_does_not_regenerate_dates(self, tmp_path):
+        grid = _minimal_grid(grid_start="2024-01-01", grid_end="2024-01-22")
+        assert grid.grid_dates == []
+        path = tmp_path / "grid.yaml"
+        grid.save(path)
+        loaded = SnapshotGrid.load(path)
+        assert loaded.grid_dates == []
 
     def test_load_nonexistent_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
@@ -639,6 +670,20 @@ class TestFromIntentWithFingerprints:
         assert grid.grid_start is not None
         assert grid.grid_end is not None
 
+    def test_from_intent_generates_grid_dates(self):
+        intent = _minimal_intent(
+            observation_window_days=270, purge_gap_days=104, label_window_days=90,
+        )
+        datasets = {
+            "events": _minimal_entry("events", DatasetGranularity.EVENT_LEVEL),
+        }
+        fps = {"events": _fp("events", data_start="2020-01-01", data_end="2024-12-31")}
+        grid = SnapshotGrid.from_intent(intent, datasets, fingerprints=fps)
+        assert grid.grid_start is not None
+        assert grid.grid_end is not None
+        assert len(grid.grid_dates) > 0
+        assert grid.grid_dates[0] == grid.grid_start
+
 
 class TestLockWithBoundaryFallback:
     def test_lock_computes_from_votes_when_boundaries_none(self):
@@ -652,14 +697,23 @@ class TestLockWithBoundaryFallback:
         assert grid.grid_end is not None
         assert len(grid.grid_dates) > 0
 
-    def test_lock_preserves_existing_boundaries(self):
+    def test_lock_recomputes_boundaries_from_votes(self):
         grid = _minimal_grid(grid_start="2024-01-01", grid_end="2024-06-01")
         grid.dataset_votes["events"] = _minimal_vote(
             voted=True, data_span_start="2020-01-01", data_span_end="2024-12-31",
         )
         grid.lock(purge_gap_days=104, label_window_days=90)
+        assert grid.grid_start == "2020-09-27"
+        assert grid.grid_end == "2024-06-20"
+        assert len(grid.grid_dates) > 0
+
+    def test_lock_preserves_boundaries_when_no_vote_spans(self):
+        grid = _minimal_grid(grid_start="2024-01-01", grid_end="2024-06-01")
+        grid.dataset_votes["events"] = _minimal_vote(voted=True)
+        grid.lock()
         assert grid.grid_start == "2024-01-01"
         assert grid.grid_end == "2024-06-01"
+        assert len(grid.grid_dates) > 0
 
     def test_lock_default_params_backward_compatible(self):
         grid = _minimal_grid()
@@ -881,6 +935,21 @@ class TestPerDatasetVoteFiles:
         }
         grid.apply_votes(votes)
         assert "new_dataset" in grid.dataset_votes
+
+    def test_apply_votes_computes_boundaries_and_dates(self):
+        grid = _minimal_grid()
+        assert grid.grid_start is None
+        votes = {
+            "events": _minimal_vote(
+                voted=True,
+                data_span_start="2020-01-01",
+                data_span_end="2024-12-31",
+            ),
+        }
+        grid.apply_votes(votes)
+        assert grid.grid_start is not None
+        assert grid.grid_end is not None
+        assert len(grid.grid_dates) > 0
 
     def test_apply_votes_skipped_when_locked(self):
         grid = _minimal_grid(locked=True)

@@ -65,24 +65,24 @@ class DatasetFingerprinter:
         data_start = None
         data_end = None
 
-        if not sampled:
-            if best_entity and best_entity in df.columns:
-                unique_entities = df[best_entity].nunique()
-                if unique_entities > 0:
-                    avg_rows = round(len(df) / unique_entities, 2)
+        if best_entity and best_entity in df.columns:
+            unique_entities = df[best_entity].nunique()
+            if unique_entities > 0:
+                row_base = full_row_count if not sampled else len(df)
+                avg_rows = round(row_base / unique_entities, 2)
 
-            if best_time and best_time in df.columns:
-                try:
-                    ts = safe_to_datetime(df[best_time], errors="coerce")
-                    ts_min = ts.min()
-                    ts_max = ts.max()
-                    span = ts_max - ts_min
-                    temporal_span = int(span.days) if not native_pd.isna(span) else None
-                    if not native_pd.isna(ts_min) and not native_pd.isna(ts_max):
-                        data_start = str(ts_min.date())
-                        data_end = str(ts_max.date())
-                except Exception:
-                    pass
+        if best_time and best_time in df.columns:
+            try:
+                ts = safe_to_datetime(df[best_time], errors="coerce")
+                ts_min = ts.min()
+                ts_max = ts.max()
+                span = ts_max - ts_min
+                temporal_span = int(span.days) if not native_pd.isna(span) else None
+                if not native_pd.isna(ts_min) and not native_pd.isna(ts_max):
+                    data_start = str(ts_min.date())
+                    data_end = str(ts_max.date())
+            except Exception:
+                pass
 
         return DatasetFingerprint(
             name=name,

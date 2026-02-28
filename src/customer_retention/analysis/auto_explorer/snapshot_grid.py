@@ -75,6 +75,8 @@ class SnapshotGrid(BaseModel):
     mode: GridAdjustmentMode = GridAdjustmentMode.NO_ADJUSTMENTS
     cadence_interval: CadenceInterval
     observation_window_days: int
+    purge_gap_days: int = 0
+    label_window_days: int = 0
     grid_start: Optional[str] = None
     grid_end: Optional[str] = None
     grid_dates: list[str] = Field(default_factory=list)
@@ -125,14 +127,18 @@ class SnapshotGrid(BaseModel):
             earliest = (_dt.date.fromisoformat(grid_end) - _dt.timedelta(days=lookback_total)).isoformat()
             grid_start = max(grid_start, earliest) if grid_start is not None else earliest
 
-        return cls(
+        grid = cls(
             mode=mode,
             cadence_interval=intent.cadence_interval,
             observation_window_days=intent.observation_window_days,
+            purge_gap_days=intent.purge_gap_days,
+            label_window_days=intent.label_window_days,
             dataset_votes=votes,
             grid_start=grid_start,
             grid_end=grid_end,
         )
+        grid.generate_grid_dates()
+        return grid
 
     def cadence_to_days(self) -> int:
         return CADENCE_DAYS[self.cadence_interval]
@@ -158,6 +164,7 @@ class SnapshotGrid(BaseModel):
         if self.locked:
             return
         self.dataset_votes[name] = vote
+        self._refresh_grid()
 
     def is_ready_for_aggregation(self) -> tuple[bool, list[str]]:
         if self.mode == GridAdjustmentMode.NO_ADJUSTMENTS:
@@ -188,14 +195,14 @@ class SnapshotGrid(BaseModel):
         )
 
     def lock(self, purge_gap_days: int = 0, label_window_days: int = 0) -> None:
-        if self.grid_start is None or self.grid_end is None:
-            start, end = self.compute_boundaries_from_votes(purge_gap_days, label_window_days)
-            if start is not None and end is not None:
-                self.grid_start = start
-                self.grid_end = end
+        self.purge_gap_days = purge_gap_days
+        self.label_window_days = label_window_days
+        start, end = self.compute_boundaries_from_votes(purge_gap_days, label_window_days)
+        if start is not None and end is not None:
+            self.grid_start = start
+            self.grid_end = end
+        self.generate_grid_dates()
         self.locked = True
-        if not self.grid_dates and self.grid_start is not None and self.grid_end is not None:
-            self.generate_grid_dates()
 
     def estimated_grid_size(self, n_entities: int) -> int:
         return n_entities * len(self.grid_dates)
@@ -211,6 +218,7 @@ class SnapshotGrid(BaseModel):
             return
         for name, vote in votes.items():
             self.dataset_votes[name] = vote
+        self._refresh_grid()
 
     @classmethod
     def save_vote(cls, vote_dir, dataset_name: str, vote: DatasetGridVote) -> None:
@@ -231,6 +239,16 @@ class SnapshotGrid(BaseModel):
             data = yaml.safe_load(f.read_text())
             result[f.stem] = DatasetGridVote.model_validate(data)
         return result
+
+    def _refresh_grid(self) -> None:
+        if self.grid_start is None or self.grid_end is None:
+            start, end = self.compute_boundaries_from_votes(
+                self.purge_gap_days, self.label_window_days,
+            )
+            if start is not None and end is not None:
+                self.grid_start = start
+                self.grid_end = end
+        self.generate_grid_dates()
 
     @classmethod
     def load(cls, path) -> SnapshotGrid:
