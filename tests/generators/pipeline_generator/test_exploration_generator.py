@@ -138,3 +138,61 @@ class TestDatabricksExplorationGenerator:
         code = result.read_text()
         ast.parse(code)
         assert '"customers"' in code
+
+
+class TestDatabricksExplorationGeneratorWorkflow:
+    def test_creates_workflow_file(self, project_context_path, tmp_path):
+        output_dir = tmp_path / "output"
+        gen = DatabricksExplorationGenerator(
+            str(project_context_path), str(output_dir),
+        )
+        result = gen.generate_workflow()
+        assert result.exists()
+        assert result.name == "databricks_bundle.yaml"
+
+    def test_workflow_is_valid_yaml(self, project_context_path, tmp_path):
+        output_dir = tmp_path / "output"
+        gen = DatabricksExplorationGenerator(
+            str(project_context_path), str(output_dir),
+        )
+        result = gen.generate_workflow()
+        data = yaml.safe_load(result.read_text())
+        assert "resources" in data
+
+    def test_workflow_uses_project_name(self, project_context_path, tmp_path):
+        output_dir = tmp_path / "output"
+        gen = DatabricksExplorationGenerator(
+            str(project_context_path), str(output_dir),
+        )
+        result = gen.generate_workflow()
+        data = yaml.safe_load(result.read_text())
+        assert "retention_v2_exploration" in data["resources"]["jobs"]
+
+    def test_workflow_uses_custom_notebooks_base_path(self, project_context_path, tmp_path):
+        output_dir = tmp_path / "output"
+        gen = DatabricksExplorationGenerator(
+            str(project_context_path), str(output_dir),
+            notebooks_base_path="/Workspace/custom/nb",
+        )
+        result = gen.generate_workflow()
+        content = result.read_text()
+        assert "/Workspace/custom/nb/00_start_here" in content
+
+    def test_workflow_has_experiments_dir_in_all_params(self, project_context_path, tmp_path):
+        output_dir = tmp_path / "output"
+        gen = DatabricksExplorationGenerator(
+            str(project_context_path), str(output_dir),
+        )
+        result = gen.generate_workflow()
+        data = yaml.safe_load(result.read_text())
+        tasks = data["resources"]["jobs"]["retention_v2_exploration"]["tasks"]
+        for task in tasks:
+            if task["task_key"] == "00_Setup":
+                continue
+            if "for_each_task" in task:
+                params = task["for_each_task"]["task"]["notebook_task"]["base_parameters"]
+            else:
+                params = task["notebook_task"]["base_parameters"]
+            assert "experiments_dir" in params, (
+                f"{task['task_key']} missing experiments_dir"
+            )

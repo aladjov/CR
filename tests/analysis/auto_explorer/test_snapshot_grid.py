@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 import yaml
 
@@ -783,6 +785,217 @@ class TestFromIntentHistoryWindow:
         grid = SnapshotGrid.from_intent(intent, self._datasets())
         assert grid.grid_start is None
         assert grid.grid_end is None
+
+
+class TestPerDatasetVoteFiles:
+    def test_save_vote_creates_file(self, tmp_path):
+        vote = _minimal_vote(
+            voted=True, data_span_start="2023-01-01", data_span_end="2024-12-31",
+        )
+        SnapshotGrid.save_vote(tmp_path, "transactions", vote)
+        assert (tmp_path / "transactions.yaml").exists()
+
+    def test_save_vote_round_trips(self, tmp_path):
+        vote = _minimal_vote(
+            voted=True,
+            data_span_start="2023-01-01",
+            data_span_end="2024-12-31",
+            suggested_cadence=CadenceInterval.DAILY,
+        )
+        SnapshotGrid.save_vote(tmp_path, "transactions", vote)
+        loaded = SnapshotGrid.load_votes(tmp_path)
+        assert "transactions" in loaded
+        assert loaded["transactions"].voted is True
+        assert loaded["transactions"].data_span_start == "2023-01-01"
+        assert loaded["transactions"].data_span_end == "2024-12-31"
+
+    def test_load_votes_discovers_all_files(self, tmp_path):
+        SnapshotGrid.save_vote(tmp_path, "transactions", _minimal_vote(
+            voted=True, data_span_start="2022-01-01", data_span_end="2024-06-01",
+        ))
+        SnapshotGrid.save_vote(tmp_path, "profiles", _minimal_vote(
+            dataset_name="profiles",
+            granularity=DatasetGranularity.ENTITY_LEVEL,
+            voted=True,
+        ))
+        loaded = SnapshotGrid.load_votes(tmp_path)
+        assert len(loaded) == 2
+        assert "transactions" in loaded
+        assert "profiles" in loaded
+
+    def test_load_votes_empty_dir(self, tmp_path):
+        loaded = SnapshotGrid.load_votes(tmp_path)
+        assert loaded == {}
+
+    def test_load_votes_nonexistent_dir(self, tmp_path):
+        loaded = SnapshotGrid.load_votes(tmp_path / "nonexistent")
+        assert loaded == {}
+
+    def test_parallel_writes_no_data_loss(self, tmp_path):
+        """Simulates parallel for_each_task: each dataset writes its own file."""
+        SnapshotGrid.save_vote(tmp_path, "events_a", _minimal_vote(
+            dataset_name="events_a",
+            voted=True,
+            data_span_start="2022-01-01",
+            data_span_end="2024-06-01",
+        ))
+        SnapshotGrid.save_vote(tmp_path, "events_b", _minimal_vote(
+            dataset_name="events_b",
+            voted=True,
+            data_span_start="2023-01-01",
+            data_span_end="2024-12-31",
+        ))
+        SnapshotGrid.save_vote(tmp_path, "profiles", _minimal_vote(
+            dataset_name="profiles",
+            granularity=DatasetGranularity.ENTITY_LEVEL,
+            voted=True,
+        ))
+        loaded = SnapshotGrid.load_votes(tmp_path)
+        assert len(loaded) == 3
+        assert loaded["events_a"].data_span_start == "2022-01-01"
+        assert loaded["events_b"].data_span_start == "2023-01-01"
+
+    def test_apply_votes_overrides_grid(self):
+        grid = _minimal_grid()
+        grid.dataset_votes["events"] = _minimal_vote(voted=False)
+        votes = {
+            "events": _minimal_vote(
+                voted=True,
+                data_span_start="2022-01-01",
+                data_span_end="2024-12-31",
+            ),
+        }
+        grid.apply_votes(votes)
+        assert grid.dataset_votes["events"].voted is True
+        assert grid.dataset_votes["events"].data_span_start == "2022-01-01"
+
+    def test_apply_votes_adds_new_datasets(self):
+        grid = _minimal_grid()
+        votes = {
+            "new_dataset": _minimal_vote(
+                dataset_name="new_dataset",
+                voted=True,
+                data_span_start="2023-01-01",
+                data_span_end="2024-06-01",
+            ),
+        }
+        grid.apply_votes(votes)
+        assert "new_dataset" in grid.dataset_votes
+
+    def test_apply_votes_skipped_when_locked(self):
+        grid = _minimal_grid(locked=True)
+        grid.dataset_votes["events"] = _minimal_vote(voted=False)
+        votes = {"events": _minimal_vote(voted=True)}
+        grid.apply_votes(votes)
+        assert grid.dataset_votes["events"].voted is False
+
+    def test_full_flow_with_vote_files_and_lock(self, tmp_path):
+        """End-to-end: save vote files, load them, apply to grid, lock."""
+        grid = _minimal_grid()
+        SnapshotGrid.save_vote(tmp_path, "events", _minimal_vote(
+            voted=True,
+            data_span_start="2020-01-01",
+            data_span_end="2024-12-31",
+        ))
+        votes = SnapshotGrid.load_votes(tmp_path)
+        grid.apply_votes(votes)
+        grid.lock(purge_gap_days=104, label_window_days=90)
+        assert grid.locked is True
+        assert grid.grid_start is not None
+        assert grid.grid_end is not None
+        assert len(grid.grid_dates) > 0
+
+
+class TestGridVotesDir:
+    def test_namespace_grid_votes_dir(self, tmp_path):
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+
+        ns = RunNamespace(root=tmp_path, run_id="test-run")
+        assert ns.grid_votes_dir == tmp_path / "runs" / "test-run" / "grid_votes"
+
+
+class TestLockValidation:
+    def test_lock_without_boundaries_or_votes_returns_empty(self):
+        grid = _minimal_grid()
+        grid.lock()
+        assert grid.grid_dates == []
+
+    def test_lock_with_only_entity_votes_returns_empty(self):
+        grid = _minimal_grid()
+        grid.dataset_votes["profiles"] = _minimal_vote(
+            dataset_name="profiles",
+            granularity=DatasetGranularity.ENTITY_LEVEL,
+            voted=True,
+        )
+        grid.lock(purge_gap_days=104, label_window_days=90)
+        assert grid.grid_dates == []
+
+
+class TestAcceptWorkflowParamsExperimentsDir:
+    def test_experiments_dir_propagated(self, monkeypatch, tmp_path):
+        """_accept_workflow_params should propagate experiments_dir widget."""
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
+
+        class FakeWidgets:
+            def __init__(self):
+                self._vals = {"experiments_dir": str(tmp_path / "my_experiments")}
+
+            def get(self, name):
+                if name in self._vals:
+                    return self._vals[name]
+                raise Exception(f"No widget: {name}")
+
+        class FakeDbutils:
+            widgets = FakeWidgets()
+
+        monkeypatch.setattr(
+            "customer_retention.analysis.notebook_progress.is_databricks",
+            lambda: True,
+        )
+
+        import customer_retention.core.compat.detection as det_mod
+        monkeypatch.setattr(det_mod, "get_dbutils", lambda: FakeDbutils())
+
+        from customer_retention.analysis.notebook_progress import _accept_workflow_params
+
+        _accept_workflow_params()
+        assert os.environ.get("CR_EXPERIMENTS_DIR") == str(tmp_path / "my_experiments")
+        monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
+
+
+class TestPublishWorkflowMetadataExperimentsDir:
+    def test_experiments_dir_published(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            "customer_retention.analysis.notebook_progress.is_databricks",
+            lambda: True,
+        )
+        monkeypatch.setenv("CR_EXPERIMENTS_DIR", str(tmp_path / "experiments"))
+
+        published = {}
+
+        class FakeTaskValues:
+            def set(self, key, value):
+                published[key] = value
+
+        class FakeJobs:
+            taskValues = FakeTaskValues()  # noqa: N815
+
+        class FakeDbutils:
+            jobs = FakeJobs()
+
+        import customer_retention.core.compat.detection as det_mod
+        monkeypatch.setattr(det_mod, "get_dbutils", lambda: FakeDbutils())
+
+        from customer_retention.analysis.notebook_progress import publish_workflow_metadata
+
+        class FakeContext:
+            datasets = {"ds1": None}
+            target_dataset = "ds1"
+            run_id = "run-123"
+
+        publish_workflow_metadata(FakeContext())
+        assert published["experiments_dir"] == str(tmp_path / "experiments")
 
 
 class TestCadenceDaysPublicConstant:

@@ -1527,6 +1527,61 @@ run_notebook("gold/gold_features_{{ config.composite_name or config.name }}")
 
 run_notebook("training/ml_experiment")
 """,
+    "databricks_for_each_workflow.yaml.j2": """# Databricks Asset Bundle - Exploration Workflow (for_each_task pattern)
+#
+# Changes from basic sequential runner:
+# - Per-dataset notebooks run via for_each_task (parallel dataset processing)
+# - experiments_dir passed to ALL downstream tasks via base_parameters
+#   (REQUIRED: without this, notebooks cannot locate the experiments directory
+#    in multi-task jobs where env vars do not propagate between tasks)
+# - run_id passed to ALL downstream tasks via base_parameters
+#   (supplements sentinel-based discovery with explicit parameter passing)
+# - concurrency: 1 ensures per-dataset notebooks run sequentially per dataset,
+#   preventing race conditions on shared files. Per-dataset vote files
+#   (grid_votes/) provide additional safety for the snapshot grid.
+#
+# Add cluster configuration (existing_cluster_id or job_cluster_key) to each
+# task, or set a default at the job level.
+resources:
+  jobs:
+    {{ project_name }}_exploration:
+      name: "{{ project_name }} Exploration"
+      tasks:
+        - task_key: 00_Setup
+          notebook_task:
+            notebook_path: {{ notebooks_base_path }}/00_start_here
+            source: WORKSPACE
+{% for nb in per_dataset_notebooks %}
+        - task_key: {{ nb.task_key }}
+          depends_on:
+            - task_key: {{ nb.depends_on }}
+          for_each_task:
+            inputs: "{% raw %}{{tasks.00_Setup.values.dataset_names}}{% endraw %}"
+            concurrency: 1
+            task:
+              task_key: {{ nb.inner_task_key }}
+              notebook_task:
+                notebook_path: {{ notebooks_base_path }}/{{ nb.notebook_name }}
+                base_parameters:
+                  dataset_id: "{% raw %}{{input}}{% endraw %}"
+                  run_id: "{% raw %}{{tasks.00_Setup.values.run_id}}{% endraw %}"
+                  experiments_dir: "{% raw %}{{tasks.00_Setup.values.experiments_dir}}{% endraw %}"
+                source: WORKSPACE
+{% endfor %}
+{% for nb in global_notebooks %}
+        - task_key: {{ nb.task_key }}
+          depends_on:
+            - task_key: {{ nb.depends_on }}
+          notebook_task:
+            notebook_path: {{ notebooks_base_path }}/{{ nb.notebook_name }}
+            base_parameters:
+              run_id: "{% raw %}{{tasks.00_Setup.values.run_id}}{% endraw %}"
+              experiments_dir: "{% raw %}{{tasks.00_Setup.values.experiments_dir}}{% endraw %}"
+            source: WORKSPACE
+{% endfor %}
+      queue:
+        enabled: true
+""",
     "databricks_exploration_runner.py.j2": """# Databricks notebook source
 # MAGIC %md
 # MAGIC # Exploration Runner: {{ project_name }}
@@ -1736,6 +1791,7 @@ class DatabricksCodeRenderer:
         "training": "databricks_training.py.j2",
         "runner": "databricks_runner.py.j2",
         "exploration_runner": "databricks_exploration_runner.py.j2",
+        "for_each_workflow": "databricks_for_each_workflow.yaml.j2",
     }
 
     def __init__(self, catalog: str = "main", schema: str = "default"):
@@ -1807,4 +1863,54 @@ class DatabricksCodeRenderer:
             target_dataset=target_dataset,
             notebooks_base_path=notebooks_base_path,
             findings_base_path=findings_base_path,
+        )
+
+    _PER_DATASET_NOTEBOOKS = [
+        ("01_Data_Discovery", "01_data_discovery", "run_01", "00_Setup"),
+        ("01a_Temporal_Deep_Dive", "01a_temporal_deep_dive", "run_01a", "01_Data_Discovery"),
+        ("01a_a_Temporal_Text_Deep_Dive", "01a_a_temporal_text_deep_dive", "run_01a_a", "01a_Temporal_Deep_Dive"),
+        ("01b_Temporal_Quality", "01b_temporal_quality", "run_01b", "01a_a_Temporal_Text_Deep_Dive"),
+        ("01c_Temporal_Patterns", "01c_temporal_patterns", "run_01c", "01b_Temporal_Quality"),
+        ("01d_Event_Aggregation", "01d_event_aggregation", "run_01d", "01c_Temporal_Patterns"),
+        ("02_Source_Integrity", "02_source_integrity", "run_02", "01d_Event_Aggregation"),
+    ]
+
+    _GLOBAL_NOTEBOOKS = [
+        ("03_Dataset_Merge", "03_dataset_merge", "02_Source_Integrity"),
+        ("04_Column_Deep_Dive", "04_column_deep_dive", "03_Dataset_Merge"),
+        ("04a_Text_Columns_Deep_Dive", "04a_text_columns_deep_dive", "04_Column_Deep_Dive"),
+        ("05_Relationship_Analysis", "05_relationship_analysis", "04a_Text_Columns_Deep_Dive"),
+        ("06_Feature_Opportunities", "06_feature_opportunities", "05_Relationship_Analysis"),
+        ("07_Modeling_Readiness", "07_modeling_readiness", "06_Feature_Opportunities"),
+        ("08_Baseline_Experiments", "08_baseline_experiments", "07_Modeling_Readiness"),
+        ("09_Business_Alignment", "09_business_alignment", "08_Baseline_Experiments"),
+        ("10_Spec_Generation", "10_spec_generation", "09_Business_Alignment"),
+        ("11_Scoring_Validation", "11_scoring_validation", "10_Spec_Generation"),
+        ("12_View_Documentation", "12_view_documentation", "11_Scoring_Validation"),
+    ]
+
+    def render_for_each_workflow(self, project_name: str, notebooks_base_path: str) -> str:
+        per_dataset = [
+            {
+                "task_key": task_key,
+                "notebook_name": nb_name,
+                "inner_task_key": inner_key,
+                "depends_on": depends_on,
+            }
+            for task_key, nb_name, inner_key, depends_on in self._PER_DATASET_NOTEBOOKS
+        ]
+        global_nbs = [
+            {
+                "task_key": task_key,
+                "notebook_name": nb_name,
+                "depends_on": depends_on,
+            }
+            for task_key, nb_name, depends_on in self._GLOBAL_NOTEBOOKS
+        ]
+        return self._render(
+            "for_each_workflow",
+            project_name=project_name,
+            notebooks_base_path=notebooks_base_path,
+            per_dataset_notebooks=per_dataset,
+            global_notebooks=global_nbs,
         )

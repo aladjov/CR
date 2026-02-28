@@ -35,3 +35,14 @@ class DatabricksExplorationGenerator:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(code)
         return output_path
+
+    def generate_workflow(self) -> Path:
+        context = ProjectContext.load(self._context_path)
+        yaml_content = self._renderer.render_for_each_workflow(
+            project_name=context.project_name,
+            notebooks_base_path=self._notebooks_base_path,
+        )
+        output_path = self._output_dir / "databricks_bundle.yaml"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(yaml_content)
+        return output_path

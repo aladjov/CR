@@ -206,6 +206,32 @@ class SnapshotGrid(BaseModel):
         data = self.model_dump(mode="json")
         p.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
 
+    def apply_votes(self, votes: dict[str, DatasetGridVote]) -> None:
+        if self.locked:
+            return
+        for name, vote in votes.items():
+            self.dataset_votes[name] = vote
+
+    @classmethod
+    def save_vote(cls, vote_dir, dataset_name: str, vote: DatasetGridVote) -> None:
+        p = vote_dir if isinstance(vote_dir, Path) else Path(str(vote_dir))
+        p.mkdir(parents=True, exist_ok=True)
+        data = vote.model_dump(mode="json")
+        (p / f"{dataset_name}.yaml").write_text(
+            yaml.dump(data, default_flow_style=False, sort_keys=False),
+        )
+
+    @classmethod
+    def load_votes(cls, vote_dir) -> dict[str, DatasetGridVote]:
+        p = vote_dir if isinstance(vote_dir, Path) else Path(str(vote_dir))
+        if not p.is_dir():
+            return {}
+        result: dict[str, DatasetGridVote] = {}
+        for f in sorted(p.glob("*.yaml")):
+            data = yaml.safe_load(f.read_text())
+            result[f.stem] = DatasetGridVote.model_validate(data)
+        return result
+
     @classmethod
     def load(cls, path) -> SnapshotGrid:
         p = path if isinstance(path, Path) else Path(str(path))

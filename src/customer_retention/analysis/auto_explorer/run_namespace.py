@@ -98,6 +98,10 @@ class RunNamespace:
         return self.run_dir / "snapshot_grid.yaml"
 
     @property
+    def grid_votes_dir(self) -> Path:
+        return self.run_dir / "grid_votes"
+
+    @property
     def sample_entity_ids_path(self) -> Path:
         return self.run_dir / "sample_entity_ids.json"
 

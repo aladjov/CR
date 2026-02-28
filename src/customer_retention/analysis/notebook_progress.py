@@ -23,7 +23,11 @@ def _accept_workflow_params() -> None:
     dbutils = get_dbutils()
     if not dbutils:
         return
-    for widget_name, env_name in [("dataset_id", "CR_DATASET_ID"), ("run_id", "CR_RUN_ID")]:
+    for widget_name, env_name in [
+        ("dataset_id", "CR_DATASET_ID"),
+        ("run_id", "CR_RUN_ID"),
+        ("experiments_dir", "CR_EXPERIMENTS_DIR"),
+    ]:
         try:
             val = dbutils.widgets.get(widget_name)
             if val:
@@ -104,6 +108,9 @@ def publish_workflow_metadata(project_context) -> None:
     dbutils.jobs.taskValues.set(key="target_dataset", value=project_context.target_dataset or "")
     if project_context.run_id:
         dbutils.jobs.taskValues.set(key="run_id", value=project_context.run_id)
+    from customer_retention.core.config.experiments import get_experiments_dir
+
+    dbutils.jobs.taskValues.set(key="experiments_dir", value=str(get_experiments_dir()))
 
 
 def guard_skip(notebook_stem: str) -> None:
