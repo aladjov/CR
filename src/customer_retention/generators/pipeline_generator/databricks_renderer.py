@@ -924,7 +924,7 @@ def load_bronze_outputs():
     outputs = {}
     for name, source in SOURCES.items():
         tbl = bronze_table(_bronze_output_name(name))
-        outputs[name] = spark.table(tbl).pandas_api()
+        outputs[name] = spark.table(tbl)
     return outputs
 
 {% if config.silver.grid_dates %}

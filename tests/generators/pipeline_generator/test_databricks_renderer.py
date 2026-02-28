@@ -523,6 +523,10 @@ class TestDatabricksRenderSilver:
         result = renderer.render_silver(sample_pipeline_config)
         assert 'format("parquet")' not in result
 
+    def test_render_silver_loads_native_spark_dataframes(self, renderer, sample_pipeline_config):
+        result = renderer.render_silver(sample_pipeline_config)
+        assert ".pandas_api()" not in result
+
 
 class TestDatabricksRenderGold:
     def test_render_gold_returns_string(self, renderer, sample_pipeline_config):
@@ -1957,6 +1961,10 @@ class TestDatabricksSilverTemporalMerge:
     def test_silver_with_key_resolution_valid_python(self, renderer, temporal_config_with_key_resolution):
         result = renderer.render_silver(temporal_config_with_key_resolution)
         ast.parse(result)
+
+    def test_silver_temporal_loads_native_spark_dataframes(self, renderer, temporal_config):
+        result = renderer.render_silver(temporal_config)
+        assert ".pandas_api()" not in result
 
 
 class TestDatabricksGoldAsOfDate:

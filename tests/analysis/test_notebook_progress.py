@@ -213,7 +213,7 @@ class TestPublishWorkflowMetadata:
              patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
             publish_workflow_metadata(ctx)
         calls = {c.kwargs["key"]: c.kwargs["value"] for c in mock_dbutils.jobs.taskValues.set.call_args_list}
-        assert json.loads(calls["dataset_names"]) == ["customers", "transactions"]
+        assert calls["dataset_names"] == ["customers", "transactions"]
         assert calls["dataset_count"] == 2
 
     def test_publishes_target_dataset(self, monkeypatch):
@@ -261,7 +261,7 @@ class TestPublishWorkflowMetadata:
              patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
             publish_workflow_metadata(ctx)
         calls = {c.kwargs["key"]: c.kwargs["value"] for c in mock_dbutils.jobs.taskValues.set.call_args_list}
-        assert json.loads(calls["dataset_names"]) == ["only_one"]
+        assert calls["dataset_names"] == ["only_one"]
         assert calls["dataset_count"] == 1
 
     def test_empty_target_dataset(self, monkeypatch):

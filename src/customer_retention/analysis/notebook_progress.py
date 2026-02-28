@@ -103,7 +103,7 @@ def publish_workflow_metadata(project_context) -> None:
     if not dbutils:
         return
     dataset_names = list(project_context.datasets.keys())
-    dbutils.jobs.taskValues.set(key="dataset_names", value=json.dumps(dataset_names))
+    dbutils.jobs.taskValues.set(key="dataset_names", value=dataset_names)
     dbutils.jobs.taskValues.set(key="dataset_count", value=len(dataset_names))
     dbutils.jobs.taskValues.set(key="target_dataset", value=project_context.target_dataset or "")
     if project_context.run_id:
