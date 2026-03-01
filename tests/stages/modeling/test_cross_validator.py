@@ -670,6 +670,51 @@ class TestOnFoldCompleteCallback:
             assert total_folds == 5
 
 
+class TestDistributedPathAvoidsUnnecessaryCollection:
+    """Verify _run_distributed uses collect_for_sklearn (Arrow-optimized, no warning)."""
+
+    @pytest.fixture
+    def panel_with_metadata(self):
+        np.random.seed(42)
+        n_entities = 20
+        dates = pd.date_range("2023-01-01", periods=12, freq="MS")
+        rows = []
+        for eid in range(n_entities):
+            for d in dates:
+                rows.append({
+                    "entity_id": eid, "as_of_date": d,
+                    "feature1": np.random.randn(), "feature2": np.random.randn(),
+                    "target": np.random.choice([0, 1], p=[0.3, 0.7]),
+                })
+        df = pd.DataFrame(rows)
+        X = df[["feature1", "feature2"]].copy()
+        X["__cv_entity__"] = df["entity_id"]
+        X["__cv_date__"] = df["as_of_date"]
+        y = df["target"]
+        groups = df["entity_id"]
+        temporal = df["as_of_date"]
+        return X, y, groups, temporal
+
+    def test_to_pandas_not_imported_in_distributed_module(self):
+        import inspect
+
+        from customer_retention.stages.modeling import cross_validator as cv_mod
+
+        source = inspect.getsource(cv_mod)
+        assert "to_pandas" not in source, (
+            "cross_validator.py still imports or calls to_pandas; "
+            "use collect_for_sklearn for Arrow-optimized collection"
+        )
+
+    def test_collect_for_sklearn_produces_same_results(self, panel_with_metadata):
+        X, y, groups, temporal = panel_with_metadata
+        model = _MockSparkModel()
+        cv = CrossValidator(strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=5, scoring="roc_auc")
+        result = cv.run(model, X, y, groups=groups, temporal_values=temporal)
+        assert all(0 <= s <= 1 for s in result.cv_scores)
+        assert result.cv_mean == pytest.approx(np.mean(result.cv_scores), rel=1e-6)
+
+
 class TestFoldClassRatioAccuracy:
     @pytest.fixture
     def panel_data_with_known_ratio(self):

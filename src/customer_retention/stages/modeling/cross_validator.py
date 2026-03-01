@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
 from sklearn.model_selection import GroupKFold, RepeatedStratifiedKFold, StratifiedKFold, cross_val_score
 
-from customer_retention.core.compat import DataFrame, Series, native_pd, to_pandas
+from customer_retention.core.compat import DataFrame, Series, collect_for_sklearn, native_pd
 
 _CV_ENTITY_COL = "__cv_entity__"
 _CV_DATE_COL = "__cv_date__"
@@ -104,11 +104,11 @@ class CrossValidator:
                 on_fold_complete=on_fold_complete,
             )
 
-        X, y = to_pandas(X), to_pandas(y)
+        X, y = collect_for_sklearn(X), collect_for_sklearn(y)
         if groups is not None:
-            groups = _squeeze_to_series(to_pandas(groups))
+            groups = _squeeze_to_series(collect_for_sklearn(groups))
         if temporal_values is not None:
-            temporal_values = _squeeze_to_series(to_pandas(temporal_values))
+            temporal_values = _squeeze_to_series(collect_for_sklearn(temporal_values))
         cv_splitter = self._create_cv_splitter(groups, temporal_values)
         fold_details = []
 
@@ -147,10 +147,10 @@ class CrossValidator:
     ) -> CVResult:
         from customer_retention.core.compat import _is_spark_pandas
 
-        groups_pd = _squeeze_to_series(to_pandas(groups)) if groups is not None else None
-        temporal_pd = _squeeze_to_series(to_pandas(temporal_values)) if temporal_values is not None else None
+        groups_pd = _squeeze_to_series(collect_for_sklearn(groups)) if groups is not None else None
+        temporal_pd = _squeeze_to_series(collect_for_sklearn(temporal_values)) if temporal_values is not None else None
 
-        n_rows = len(groups_pd) if groups_pd is not None else len(to_pandas(y))
+        n_rows = len(groups_pd) if groups_pd is not None else len(y)
         splitter = TemporalEntitySplit(
             n_splits=self.n_splits,
             temporal_values=temporal_pd,
@@ -164,8 +164,8 @@ class CrossValidator:
                 on_fold_complete=on_fold_complete,
             )
 
-        X_pd = to_pandas(X)
-        y_pd = _squeeze_to_series(to_pandas(y))
+        X_pd = collect_for_sklearn(X)
+        y_pd = _squeeze_to_series(collect_for_sklearn(y))
         return self._score_folds_pandas(
             model, X_pd, y_pd, groups_pd, all_folds,
             on_fold_complete=on_fold_complete,
@@ -292,7 +292,7 @@ class CrossValidator:
 
             fold_model.fit(train_fold[feature_cols], train_fold["__y__"])
             y_proba = fold_model.predict_proba(test_fold[feature_cols])
-            y_fold_test = to_pandas(test_fold["__y__"]).to_numpy()
+            y_fold_test = collect_for_sklearn(test_fold["__y__"]).to_numpy()
 
             score = self._score_fold(y_fold_test, y_proba)
             elapsed = time.monotonic() - t0
