@@ -4,27 +4,34 @@ Exploration notebooks ship with ChurnKit and get cloned into user projects via `
 
 ## How It Works
 
-Every code cell in an exploration notebook is classified into one of three types, identified by a magic comment on line 1:
+Every cell in an exploration notebook is classified into one of four types, identified by a tag on line 1:
 
-| Tag | Meaning | On sync |
-|-----|---------|---------|
-| `# @cr:config` | User configuration (ALL_CAPS variables) | **Preserved** -- your values stay |
-| `# @cr:user_code` | User-written logic (target derivation, business context) | **Preserved** -- your code stays |
-| `# @cr:code` | Repo framework code | **Overwritten** from the new release |
+| Tag | Cell type | Meaning | On sync |
+|-----|-----------|---------|---------|
+| `# @cr:config` | Code | User configuration (ALL_CAPS variables) | **Preserved** -- your values stay |
+| `# @cr:user_code` | Code | User-written logic (target derivation, business context) | **Preserved** -- your code stays |
+| `# @cr:code` | Code | Repo framework code | **Overwritten** from the new release |
+| `[//]: # (cr:doc ...)` | Markdown | Documentation / section headings | **Overwritten** from the new release |
 
-Markdown cells are always overwritten from the repo version (documentation improvements come through automatically).
+Markdown cells use an invisible markdown comment (standard link-reference syntax) that renders as nothing in any markdown viewer.
 
 ### Tag Format
 
-Every tag line carries three attributes on a single line:
+Code cells use a Python comment tag on line 1:
 
 ```
 # @cr:TYPE name='descriptive_name' id=HEXUUID
 ```
 
+Markdown cells use an invisible markdown link-reference tag on line 1:
+
+```
+[//]: # (cr:doc name='descriptive_name' id=HEXUUID)
+```
+
 | Attribute | Purpose | Example |
 |-----------|---------|---------|
-| `TYPE` | Cell sync behavior (`config`, `user_code`, `code`) | `config` |
+| `TYPE` | Cell sync behavior (`config`, `user_code`, `code`, `doc`) | `config` |
 | `name` | Human-readable label describing the cell's purpose | `project_settings` |
 | `id` | Stable 8-character hex UUID for cell matching | `846f56cb` |
 
@@ -64,16 +71,25 @@ fingerprinter = DatasetFingerprinter()
 results = fingerprinter.profile_all(datasets)
 ```
 
-Every code cell in the repo notebooks has an explicit tag. An untagged code cell is a signal that the user created it without tagging -- the sync tool will prompt before removing it.
+**Doc cell** -- markdown documentation maintained by the package:
+
+```markdown
+[//]: # (cr:doc name='project_metadata' id=cca55d99)
+## 0.1 Project Metadata
+
+Configure your project name and settings below.
+```
+
+Every code cell in the repo notebooks has an explicit tag, and every markdown cell has a `cr:doc` tag. An untagged code cell is a signal that the user created it without tagging -- the sync tool will prompt before removing it.
 
 ## Cell IDs and Embedded Matching
 
 Every cell has a stable 8-character hex UUID as its ID (e.g., `846f56cb`). This UUID appears in two places:
 
 1. **Jupyter cell metadata** -- the `cell.id` field in the notebook JSON
-2. **Source code** -- embedded in the `# @cr:` tag line as `id=846f56cb`
+2. **Cell source** -- embedded in the tag line (`# @cr:code ... id=846f56cb` for code cells, `[//]: # (cr:doc ... id=846f56cb)` for markdown cells)
 
-The embedded ID is the authoritative source. When notebooks are re-saved by Databricks or other platforms, Jupyter cell metadata can be stripped or regenerated. The sync engine reads the `id=` attribute from the tag line and sets `cell.id` accordingly before matching. This makes cell matching robust across any platform.
+The embedded ID is the authoritative source. When notebooks are re-saved by Databricks or other platforms, Jupyter cell metadata can be stripped or regenerated. The sync engine reads the `id=` attribute from the tag line and sets `cell.id` accordingly before matching. This makes cell matching robust across any platform for both code and markdown cells.
 
 ### Why embedded IDs
 
@@ -211,6 +227,7 @@ When adding or modifying exploration notebooks in the repo:
 - Pure configuration variables (ALL_CAPS assignments) go in `# @cr:config` cells
 - Cells where users write custom logic (target derivation, business context, success metrics) get `# @cr:user_code`
 - Everything else is repo code -- **always** tag with `# @cr:code`. All framework cells must be explicitly tagged so that "untagged" means "user forgot to tag"
+- Markdown cells must have a `[//]: # (cr:doc name='...' id=...)` tag on line 1. Use `scripts/notebooks/tag_markdown_cells.py` to tag new markdown cells automatically
 - Keep config and code in **separate cells**
 - Every tag must include `name='descriptive_name'` and `id=<8-char-hex>` -- bare tags like `# @cr:code` are not valid
 - The `name` should be a short snake_case description of the cell's purpose (e.g., `load_findings`, `detect_target`, `save_pattern_findings`)
@@ -219,13 +236,14 @@ When adding or modifying exploration notebooks in the repo:
 
 ### CI guards
 
-Six structural tests run on every CI build to prevent accidental de-standardization:
+Seven structural tests run on every CI build to prevent accidental de-standardization:
 
 - `test_all_cells_have_standardized_ids` -- every cell ID is an 8-character hex string
 - `test_no_duplicate_ids_within_notebook` -- no two cells share an ID
 - `test_cell_ids_are_valid_format` -- IDs are present and reasonable length
 - `test_all_code_cells_have_explicit_tags` -- every code cell has `# @cr:TYPE name='...' id=...` format
-- `test_embedded_id_matches_cell_id` -- the `id=` in the tag line matches the Jupyter `cell.id`
+- `test_all_markdown_cells_have_doc_tags` -- every markdown cell has `[//]: # (cr:doc name='...' id=...)` format
+- `test_embedded_id_matches_cell_id` -- the `id=` in the tag line matches the Jupyter `cell.id` (both code and markdown cells)
 - `test_config_cells_have_magic_comments` -- pure config cells have the `# @cr:config` tag
 
 ## Troubleshooting
@@ -240,4 +258,6 @@ Six structural tests run on every CI build to prevent accidental de-standardizat
 
 **Backup files everywhere** -- `.bak` files are created by default. Use `--no-backup` to disable, or clean up with `find . -name "*.ipynb.bak" -delete`.
 
-**Databricks stripped cell IDs** -- Not a problem. The sync engine reads embedded `id=` attributes from the `# @cr:` tag lines and restores `cell.id` before matching. As long as the tag line is intact, sync works correctly.
+**Databricks stripped cell IDs** -- Not a problem. The sync engine reads embedded `id=` attributes from both code tag lines (`# @cr:`) and markdown doc tag lines (`[//]: # (cr:doc ...)`) and restores `cell.id` before matching. As long as the tag line is intact, sync works correctly.
+
+**Duplicate markdown sections after sync** -- The markdown cell was missing its `[//]: # (cr:doc ...)` tag, so the sync engine couldn't match it. Run `python scripts/notebooks/tag_markdown_cells.py` to add doc tags to all untagged markdown cells.

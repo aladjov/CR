@@ -482,20 +482,45 @@ class TestCellIdStandardization:
                 )
 
     def test_embedded_id_matches_cell_id(self, notebook_list):
+        _code_id_re = re.compile(r"id=([a-f0-9]{8})")
+        _doc_id_re = re.compile(r"\[//\]: # \(cr:doc\s.*?id=([a-f0-9]{8})\)")
         for nb_path in notebook_list:
             with open(nb_path, 'r', encoding='utf-8') as f:
                 nb = json.load(f)
             for i, cell in enumerate(nb.get('cells', [])):
-                if cell.get('cell_type') != 'code':
-                    continue
                 source = ''.join(cell.get('source', []))
                 first_line = source.split('\n')[0].rstrip() if source else ''
-                m = re.search(r'id=([a-f0-9]{8})', first_line)
+                if cell.get('cell_type') == 'code':
+                    m = _code_id_re.search(first_line)
+                elif cell.get('cell_type') == 'markdown':
+                    m = _doc_id_re.match(first_line)
+                else:
+                    continue
                 if m:
                     assert cell.get('id') == m.group(1), (
                         f"{nb_path.name} cell {i}: embedded id={m.group(1)} "
                         f"does not match cell.id={cell.get('id')!r}"
                     )
+
+    def test_all_markdown_cells_have_doc_tags(self, notebook_list):
+        doc_tag_re = re.compile(
+            r"^\[//\]: # \(cr:doc"
+            r" name='[^']+'"
+            r" id=[a-f0-9]{8}"
+            r"\)$"
+        )
+        for nb_path in notebook_list:
+            with open(nb_path, 'r', encoding='utf-8') as f:
+                nb = json.load(f)
+            for i, cell in enumerate(nb.get('cells', [])):
+                if cell.get('cell_type') != 'markdown':
+                    continue
+                source = ''.join(cell.get('source', []))
+                first_line = source.split('\n')[0].rstrip() if source else ''
+                assert doc_tag_re.match(first_line), (
+                    f"{nb_path.name} cell {i} ({cell.get('id')}): "
+                    f"markdown cell missing valid doc tag (got {first_line!r})"
+                )
 
     def test_config_cells_have_magic_comments(self, notebook_list):
         for nb_path in notebook_list:

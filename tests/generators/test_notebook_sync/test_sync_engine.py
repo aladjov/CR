@@ -339,3 +339,90 @@ class TestNotebookSyncEngine:
         ids = [c.id for c in merged.cells]
         assert ids.index("user-custom") > ids.index("a1b2c3d4")
         assert ids.index("user-custom") < ids.index("e5f6a7b8")
+
+
+class TestDocTaggedMarkdownSync:
+
+    def setup_method(self):
+        self.engine = NotebookSyncEngine()
+
+    def test_doc_tagged_markdown_matched_by_embedded_id(self):
+        repo = _make_nb([
+            _md_cell("a1b2c3d4", ["[//]: # (cr:doc name='intro' id=a1b2c3d4)\n", "# Introduction\n"]),
+        ])
+        user = _make_nb([
+            _md_cell("different-id", ["[//]: # (cr:doc name='intro' id=a1b2c3d4)\n", "# Old Intro\n"]),
+        ])
+        merged, report = self.engine.sync(repo, user)
+        assert len(merged.cells) == 1
+        assert "# Introduction\n" in merged.cells[0].source
+
+    def test_doc_tagged_markdown_not_in_user_added(self):
+        repo = _make_nb([
+            _md_cell("a1b2c3d4", ["[//]: # (cr:doc name='intro' id=a1b2c3d4)\n", "# Intro\n"]),
+            _md_cell("b2c3d4e5", ["[//]: # (cr:doc name='setup' id=b2c3d4e5)\n", "# Setup\n"]),
+        ])
+        user = _make_nb([
+            _md_cell("a1b2c3d4", ["[//]: # (cr:doc name='intro' id=a1b2c3d4)\n", "# Intro\n"]),
+        ])
+        merged, report = self.engine.sync(repo, user)
+        assert len(merged.cells) == 2
+        assert report.counts[SyncAction.ADDED] == 1
+
+    def test_user_doc_tagged_markdown_not_in_repo_kept(self):
+        repo = _make_nb([
+            _md_cell("a1b2c3d4", ["[//]: # (cr:doc name='intro' id=a1b2c3d4)\n", "# Intro\n"]),
+        ])
+        user = _make_nb([
+            _md_cell("a1b2c3d4", ["[//]: # (cr:doc name='intro' id=a1b2c3d4)\n", "# Intro\n"]),
+            _md_cell("user-note", ["## My Notes\n"]),
+        ])
+        merged, report = self.engine.sync(repo, user)
+        assert len(merged.cells) == 2
+        assert any(c.id == "user-note" for c in merged.cells)
+
+    def test_multiple_syncs_no_duplicate_sections(self):
+        repo = _make_nb([
+            _md_cell("a1b2c3d4", ["[//]: # (cr:doc name='intro' id=a1b2c3d4)\n", "# Intro\n"]),
+            _code_cell("c1c1c1c1", ["# @cr:code name='run' id=c1c1c1c1\n", "run()\n"]),
+        ])
+        merged1, _ = self.engine.sync(repo, _make_nb(list(repo.cells)))
+        merged2, _ = self.engine.sync(repo, merged1)
+        merged3, report = self.engine.sync(repo, merged2)
+        assert len(merged3.cells) == 2
+        assert report.has_changes is False
+
+    def test_untagged_user_markdown_still_kept(self):
+        repo = _make_nb([
+            _md_cell("a1b2c3d4", ["[//]: # (cr:doc name='intro' id=a1b2c3d4)\n", "# Intro\n"]),
+        ])
+        user = _make_nb([
+            _md_cell("a1b2c3d4", ["[//]: # (cr:doc name='intro' id=a1b2c3d4)\n", "# Intro\n"]),
+            _md_cell("user-plain", ["Some plain markdown\n"]),
+        ])
+        merged, report = self.engine.sync(repo, user)
+        assert len(merged.cells) == 2
+        assert any(c.id == "user-plain" for c in merged.cells)
+        assert report.counts[SyncAction.USER_ADDED_KEPT] == 1
+
+    def test_mixed_doc_tagged_markdown_and_code(self):
+        repo = _make_nb([
+            _md_cell("m1m1m1m1", ["[//]: # (cr:doc name='title' id=m1m1m1m1)\n", "# Notebook\n"]),
+            _code_cell("c1c1c1c1", ["# @cr:config name='settings' id=c1c1c1c1\n", "X = 1\n"]),
+            _md_cell("m2m2m2m2", ["[//]: # (cr:doc name='analysis' id=m2m2m2m2)\n", "## Analysis\n"]),
+            _code_cell("c2c2c2c2", ["# @cr:code name='run' id=c2c2c2c2\n", "run()\n"]),
+        ])
+        user = _make_nb([
+            _md_cell("rand-m1", ["[//]: # (cr:doc name='title' id=m1m1m1m1)\n", "# Old Title\n"]),
+            _code_cell("rand-c1", ["# @cr:config name='settings' id=c1c1c1c1\n", "X = 42\n"]),
+            _md_cell("rand-m2", ["[//]: # (cr:doc name='analysis' id=m2m2m2m2)\n", "## Analysis\n"]),
+            _code_cell("rand-c2", ["# @cr:code name='run' id=c2c2c2c2\n", "old()\n"]),
+        ])
+        merged, report = self.engine.sync(repo, user)
+        assert len(merged.cells) == 4
+        assert "# Notebook\n" in merged.cells[0].source
+        assert "X = 42" in "".join(merged.cells[1].source)
+        assert "## Analysis\n" in merged.cells[2].source
+        assert "run()" in "".join(merged.cells[3].source)
+        assert report.counts[SyncAction.PRESERVED] == 1
+        assert report.counts[SyncAction.UPDATED] == 2

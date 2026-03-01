@@ -16,6 +16,7 @@ class TestCellSyncType:
         assert CellSyncType.CONFIG.value == "config"
         assert CellSyncType.USER_CODE.value == "user_code"
         assert CellSyncType.CODE.value == "code"
+        assert CellSyncType.DOC.value == "doc"
 
 
 class TestDetectCellSyncType:
@@ -189,3 +190,80 @@ class TestPrependMagicComment:
     def test_replaces_tag_with_name_and_id(self):
         result = prepend_magic_comment(["# @cr:code name='x' id=abc\n", "X = 1\n"], CellSyncType.CONFIG)
         assert result == ["# @cr:config\n", "X = 1\n"]
+
+    def test_prepend_doc(self):
+        result = prepend_magic_comment(["# Section\n"], CellSyncType.DOC)
+        assert result == ["[//]: # (cr:doc)\n", "# Section\n"]
+
+    def test_prepend_doc_to_empty(self):
+        result = prepend_magic_comment([], CellSyncType.DOC)
+        assert result == ["[//]: # (cr:doc)\n"]
+
+    def test_replaces_existing_doc_tag(self):
+        result = prepend_magic_comment(
+            ["[//]: # (cr:doc name='old' id=aabbccdd)\n", "# Title\n"],
+            CellSyncType.DOC,
+        )
+        assert result == ["[//]: # (cr:doc)\n", "# Title\n"]
+
+
+class TestDocTag:
+
+    def test_detect_doc_type(self):
+        line = "[//]: # (cr:doc name='section_title' id=a1b2c3d4)\n"
+        assert detect_cell_sync_type([line, "# Title\n"]) == CellSyncType.DOC
+
+    def test_detect_doc_bare(self):
+        assert detect_cell_sync_type(["[//]: # (cr:doc)\n"]) == CellSyncType.DOC
+
+    def test_detect_doc_name_only(self):
+        assert detect_cell_sync_type(["[//]: # (cr:doc name='intro')\n"]) == CellSyncType.DOC
+
+    def test_detect_doc_id_only(self):
+        assert detect_cell_sync_type(["[//]: # (cr:doc id=aabbccdd)\n"]) == CellSyncType.DOC
+
+    def test_extract_id_from_doc_tag(self):
+        line = "[//]: # (cr:doc name='intro' id=a1b2c3d4)\n"
+        assert extract_embedded_id([line, "# Intro\n"]) == "a1b2c3d4"
+
+    def test_extract_id_from_doc_tag_no_name(self):
+        assert extract_embedded_id(["[//]: # (cr:doc id=deadbeef)\n"]) == "deadbeef"
+
+    def test_extract_id_from_doc_tag_returns_none_when_no_id(self):
+        assert extract_embedded_id(["[//]: # (cr:doc name='intro')\n"]) is None
+
+    def test_extract_name_from_doc_tag(self):
+        line = "[//]: # (cr:doc name='section_title' id=a1b2c3d4)\n"
+        assert extract_tag_name([line]) == "section_title"
+
+    def test_extract_name_from_doc_tag_no_id(self):
+        assert extract_tag_name(["[//]: # (cr:doc name='intro')\n"]) == "intro"
+
+    def test_extract_name_from_doc_bare(self):
+        assert extract_tag_name(["[//]: # (cr:doc)\n"]) is None
+
+    def test_has_magic_comment_doc(self):
+        assert has_magic_comment(["[//]: # (cr:doc name='x' id=abc)\n", "# Title\n"]) is True
+
+    def test_has_magic_comment_doc_bare(self):
+        assert has_magic_comment(["[//]: # (cr:doc)\n"]) is True
+
+    def test_strip_doc_tag(self):
+        result = strip_magic_comment(["[//]: # (cr:doc name='x' id=abc)\n", "# Title\n"])
+        assert result == ["# Title\n"]
+
+    def test_strip_doc_bare_tag(self):
+        result = strip_magic_comment(["[//]: # (cr:doc)\n", "Content\n"])
+        assert result == ["Content\n"]
+
+    def test_strip_doc_tag_only(self):
+        assert strip_magic_comment(["[//]: # (cr:doc)\n"]) == []
+
+    def test_doc_tag_no_newline(self):
+        assert detect_cell_sync_type(["[//]: # (cr:doc name='x' id=abc)"]) == CellSyncType.DOC
+
+    def test_doc_tag_invalid_type_rejected(self):
+        assert detect_cell_sync_type(["[//]: # (cr:invalid)\n"]) == CellSyncType.CODE
+
+    def test_doc_tag_whitespace_before_rejected(self):
+        assert detect_cell_sync_type(["  [//]: # (cr:doc)\n"]) == CellSyncType.CODE
