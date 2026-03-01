@@ -1,11 +1,14 @@
 """Tests for notebook progress tracker."""
-import json
-from pathlib import Path
+import ast
+import getpass
+import inspect
 from unittest.mock import MagicMock, patch
 
+from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+from customer_retention.analysis.auto_explorer.session import SessionState
 from customer_retention.analysis.notebook_progress import (
-    _accept_workflow_params,
     _ensure_databricks_config_loaded,
+    accept_workflow_params,
     guard_skip,
     publish_workflow_metadata,
     resolve_config,
@@ -13,31 +16,49 @@ from customer_retention.analysis.notebook_progress import (
 )
 
 
-def _patch_experiments_dir(tmp_path):
-    return patch(
-        "customer_retention.analysis.notebook_progress.get_notebook_experiments_dir",
-        return_value=tmp_path,
+def _make_namespace(tmp_path, run_id="test-run-001"):
+    ns = RunNamespace(root=tmp_path, run_id=run_id)
+    ns.setup()
+    return ns
+
+
+def _write_session(ns, username, last_notebook=None, active_dataset=None):
+    state = SessionState(
+        active_dataset=active_dataset,
+        active_run_id=ns.run_id,
+        last_notebook=last_notebook,
     )
+    state.save(ns.user_session_path(username))
+    return state
+
+
+_PATCH_NS = "customer_retention.analysis.auto_explorer.run_namespace.RunNamespace.from_env_or_latest"
 
 
 class TestTrackAndExportPrevious:
-    def test_first_run_no_export(self, tmp_path):
-        """No progress file exists → returns None, creates progress file."""
-        with _patch_experiments_dir(tmp_path):
+    def test_returns_none_when_no_namespace(self):
+        with patch(_PATCH_NS, return_value=None):
+            result = track_and_export_previous("01_data_discovery.ipynb")
+        assert result is None
+
+    def test_first_run_records_current_notebook(self, tmp_path):
+        ns = _make_namespace(tmp_path)
+        username = getpass.getuser()
+
+        with patch(_PATCH_NS, return_value=ns):
             result = track_and_export_previous("00_start_here.ipynb")
 
         assert result is None
-        progress = tmp_path / "notebook_progress.json"
-        assert progress.exists()
-        data = json.loads(progress.read_text())
-        assert data["last_notebook"] == "00_start_here.ipynb"
+        state = SessionState.load(ns.user_session_path(username))
+        assert state is not None
+        assert state.last_notebook == "00_start_here.ipynb"
 
     def test_exports_previous_notebook(self, tmp_path):
-        """Progress says '01.ipynb', current is '02.ipynb' → dispatches export in background, returns None."""
-        progress = tmp_path / "notebook_progress.json"
-        progress.write_text(json.dumps({"last_notebook": "01_data_discovery.ipynb"}))
+        ns = _make_namespace(tmp_path)
+        username = getpass.getuser()
+        _write_session(ns, username, last_notebook="01_data_discovery.ipynb")
 
-        with _patch_experiments_dir(tmp_path), \
+        with patch(_PATCH_NS, return_value=ns), \
              patch("customer_retention.analysis.notebook_progress.threading") as mock_threading:
             mock_thread = MagicMock()
             mock_threading.Thread.return_value = mock_thread
@@ -47,122 +68,45 @@ class TestTrackAndExportPrevious:
         mock_threading.Thread.assert_called_once()
         mock_thread.start.assert_called_once()
 
-    def test_updates_progress_after_export(self, tmp_path):
-        """Progress file content reflects the current notebook after call."""
-        progress = tmp_path / "notebook_progress.json"
-        progress.write_text(json.dumps({"last_notebook": "01_data_discovery.ipynb"}))
+    def test_updates_session_after_call(self, tmp_path):
+        ns = _make_namespace(tmp_path)
+        username = getpass.getuser()
+        _write_session(ns, username, last_notebook="01_data_discovery.ipynb")
 
-        with _patch_experiments_dir(tmp_path), \
+        with patch(_PATCH_NS, return_value=ns), \
              patch("customer_retention.analysis.notebook_progress.threading"):
             track_and_export_previous("04_column_deep_dive.ipynb")
 
-        data = json.loads(progress.read_text())
-        assert data["last_notebook"] == "04_column_deep_dive.ipynb"
+        state = SessionState.load(ns.user_session_path(username))
+        assert state.last_notebook == "04_column_deep_dive.ipynb"
 
-    def test_handles_missing_previous_notebook(self, tmp_path):
-        """Previous notebook file doesn't exist → export dispatched but result is None."""
-        progress = tmp_path / "notebook_progress.json"
-        progress.write_text(json.dumps({"last_notebook": "nonexistent.ipynb"}))
+    def test_no_export_when_no_previous(self, tmp_path):
+        ns = _make_namespace(tmp_path)
 
-        with _patch_experiments_dir(tmp_path), \
-             patch("customer_retention.analysis.notebook_progress.threading"):
-            result = track_and_export_previous("04_column_deep_dive.ipynb")
+        with patch(_PATCH_NS, return_value=ns), \
+             patch("customer_retention.analysis.notebook_progress.threading") as mock_threading:
+            track_and_export_previous("01_data_discovery.ipynb")
 
-        assert result is None
-        data = json.loads(progress.read_text())
-        assert data["last_notebook"] == "04_column_deep_dive.ipynb"
+        mock_threading.Thread.assert_not_called()
 
-    def test_handles_corrupt_progress_file(self, tmp_path):
-        """Bad JSON → no export, creates fresh progress."""
-        progress = tmp_path / "notebook_progress.json"
-        progress.write_text("not valid json {{{")
+    def test_no_export_on_databricks(self, tmp_path):
+        ns = _make_namespace(tmp_path)
+        username = getpass.getuser()
+        _write_session(ns, username, last_notebook="01_data_discovery.ipynb")
 
-        with _patch_experiments_dir(tmp_path):
-            result = track_and_export_previous("04_column_deep_dive.ipynb")
+        with patch(_PATCH_NS, return_value=ns), \
+             patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.analysis.notebook_progress.threading") as mock_threading:
+            track_and_export_previous("04_column_deep_dive.ipynb")
 
-        assert result is None
-        data = json.loads(progress.read_text())
-        assert data["last_notebook"] == "04_column_deep_dive.ipynb"
-
-    def test_handles_oserror_on_mkdir_gracefully(self):
-        mock_dir = MagicMock(spec=Path)
-        mock_dir.mkdir.side_effect = OSError(95, "Operation not supported")
-        with patch(
-            "customer_retention.analysis.notebook_progress.get_notebook_experiments_dir",
-            return_value=mock_dir,
-        ):
-            result = track_and_export_previous("01.ipynb")
-        assert result is None
-
-    def test_handles_databricks_execution_error_on_read(self, tmp_path):
-        """On Databricks Volumes, read_text raises ExecutionError, not FileNotFoundError."""
-        progress = tmp_path / "notebook_progress.json"
-
-        with _patch_experiments_dir(tmp_path), \
-             patch.object(type(progress), "read_text", side_effect=RuntimeError("Py4J ExecutionError")):
-            result = track_and_export_previous("01.ipynb")
-
-        assert result is None
-
-    def test_handles_databricks_execution_error_on_write(self, tmp_path):
-        """On Databricks Volumes, write_text may also raise non-standard errors."""
-        progress = tmp_path / "notebook_progress.json"
-
-        with _patch_experiments_dir(tmp_path), \
-             patch.object(type(progress), "write_text", side_effect=RuntimeError("Py4J ExecutionError")):
-            result = track_and_export_previous("01.ipynb")
-
-        assert result is None
-
-    def test_calls_accept_workflow_params_and_ensure_config(self, tmp_path):
-        """track_and_export_previous re-invokes both helpers on every call."""
-        with _patch_experiments_dir(tmp_path), \
-             patch("customer_retention.analysis.notebook_progress._accept_workflow_params") as mock_accept, \
-             patch("customer_retention.analysis.notebook_progress._ensure_databricks_config_loaded") as mock_ensure:
-            track_and_export_previous("01.ipynb")
-        mock_accept.assert_called_once()
-        mock_ensure.assert_called_once()
-
-    def test_creates_experiments_dir_if_missing(self, tmp_path):
-        """Experiments dir doesn't exist → created."""
-        experiments_dir = tmp_path / "nested" / "experiments"
-
-        with patch(
-            "customer_retention.analysis.notebook_progress.get_notebook_experiments_dir",
-            return_value=experiments_dir,
-        ):
-            track_and_export_previous("00_start_here.ipynb")
-
-        assert experiments_dir.exists()
-        assert (experiments_dir / "notebook_progress.json").exists()
-
-    def test_progress_updated_before_export_starts(self, tmp_path):
-        """Progress file must contain current notebook before export thread runs."""
-        progress_file = tmp_path / "notebook_progress.json"
-        progress_file.write_text(json.dumps({"last_notebook": "01.ipynb"}))
-
-        progress_during_export = {}
-
-        def fake_export(_notebook_name, _docs_dir):
-            data = json.loads(progress_file.read_text())
-            progress_during_export.update(data)
-
-        with _patch_experiments_dir(tmp_path), \
-             patch("customer_retention.analysis.notebook_progress._export_notebook", side_effect=fake_export):
-            # Use real threading so the thread actually calls fake_export
-            track_and_export_previous("02.ipynb")
-            # Give the daemon thread a moment to run
-            import time
-            time.sleep(0.1)
-
-        assert progress_during_export.get("last_notebook") == "02.ipynb"
+        mock_threading.Thread.assert_not_called()
 
     def test_export_runs_in_daemon_thread(self, tmp_path):
-        """Export should be dispatched as a daemon thread."""
-        progress_file = tmp_path / "notebook_progress.json"
-        progress_file.write_text(json.dumps({"last_notebook": "01.ipynb"}))
+        ns = _make_namespace(tmp_path)
+        username = getpass.getuser()
+        _write_session(ns, username, last_notebook="01.ipynb")
 
-        with _patch_experiments_dir(tmp_path), \
+        with patch(_PATCH_NS, return_value=ns), \
              patch("customer_retention.analysis.notebook_progress.threading") as mock_threading:
             mock_thread = MagicMock()
             mock_threading.Thread.return_value = mock_thread
@@ -172,24 +116,193 @@ class TestTrackAndExportPrevious:
         assert kwargs.get("daemon") is True
         mock_thread.start.assert_called_once()
 
+    def test_calls_ensure_config(self):
+        with patch(_PATCH_NS, return_value=None), \
+             patch("customer_retention.analysis.notebook_progress._ensure_databricks_config_loaded") as mock_ensure:
+            track_and_export_previous("01.ipynb")
+        mock_ensure.assert_called_once()
+
+    def test_no_notebook_progress_json_created(self, tmp_path):
+        ns = _make_namespace(tmp_path)
+
+        with patch(_PATCH_NS, return_value=ns):
+            track_and_export_previous("01.ipynb")
+
+        assert not list(tmp_path.rglob("notebook_progress.json"))
+
+    def test_session_updated_before_export_starts(self, tmp_path):
+        ns = _make_namespace(tmp_path)
+        username = getpass.getuser()
+        _write_session(ns, username, last_notebook="01.ipynb")
+
+        session_during_export = {}
+
+        def fake_export(_notebook_name, _docs_dir):
+            state = SessionState.load(ns.user_session_path(username))
+            session_during_export["last_notebook"] = state.last_notebook
+
+        with patch(_PATCH_NS, return_value=ns), \
+             patch("customer_retention.analysis.notebook_progress._export_notebook", side_effect=fake_export):
+            track_and_export_previous("02.ipynb")
+            import time
+            time.sleep(0.1)
+
+        assert session_during_export.get("last_notebook") == "02.ipynb"
+
     def test_export_exception_does_not_propagate(self, tmp_path):
-        """If export raises, it must not crash the caller."""
-        progress_file = tmp_path / "notebook_progress.json"
-        progress_file.write_text(json.dumps({"last_notebook": "01.ipynb"}))
+        ns = _make_namespace(tmp_path)
+        username = getpass.getuser()
+        _write_session(ns, username, last_notebook="01.ipynb")
 
         def boom(_notebook_name, _docs_dir):
             raise RuntimeError("export failed")
 
-        with _patch_experiments_dir(tmp_path), \
+        with patch(_PATCH_NS, return_value=ns), \
              patch("customer_retention.analysis.notebook_progress._export_notebook", side_effect=boom):
-            # Should not raise — the exception is in a daemon thread
             result = track_and_export_previous("02.ipynb")
             import time
             time.sleep(0.1)
 
         assert result is None
-        data = json.loads(progress_file.read_text())
-        assert data["last_notebook"] == "02.ipynb"
+        state = SessionState.load(ns.user_session_path(username))
+        assert state.last_notebook == "02.ipynb"
+
+
+class TestNoImportSideEffects:
+    def test_module_has_no_toplevel_function_calls(self):
+        import customer_retention.analysis.notebook_progress as mod
+
+        source = inspect.getsource(mod)
+        tree = ast.parse(source)
+        for node in ast.iter_child_nodes(tree):
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+                raise AssertionError(
+                    f"Module-level function call at line {node.lineno}: "
+                    f"{ast.unparse(node.value)}"
+                )
+
+
+class TestAcceptWorkflowParams:
+    def test_noop_outside_databricks(self, monkeypatch):
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        accept_workflow_params()
+
+    def test_sets_env_from_widgets(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        mock_dbutils = MagicMock()
+        mock_dbutils.widgets.get.side_effect = lambda name: {
+            "dataset_id": "my_dataset",
+            "run_id": "run-123",
+        }[name]
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            accept_workflow_params()
+        import os
+        assert os.environ.get("CR_DATASET_ID") == "my_dataset"
+        assert os.environ.get("CR_RUN_ID") == "run-123"
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+
+    def test_ignores_missing_widgets(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        mock_dbutils = MagicMock()
+        mock_dbutils.widgets.get.side_effect = Exception("Widget not found")
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            accept_workflow_params()
+        import os
+        assert os.environ.get("CR_DATASET_ID") is None
+
+    def test_noop_when_dbutils_unavailable(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=None):
+            accept_workflow_params()
+
+    def test_skips_empty_widget_values(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        mock_dbutils = MagicMock()
+        mock_dbutils.widgets.get.side_effect = lambda name: {
+            "dataset_id": "",
+            "run_id": "",
+        }[name]
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            accept_workflow_params()
+        import os
+        assert os.environ.get("CR_DATASET_ID") is None
+
+    def test_clears_stale_cr_dataset_id_when_widget_absent(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.setenv("CR_DATASET_ID", "stale_account_dataset")
+        monkeypatch.setenv("CR_RUN_ID", "run-previous")
+        mock_dbutils = MagicMock()
+        mock_dbutils.widgets.get.side_effect = Exception("Widget not found")
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            accept_workflow_params()
+        import os
+        assert os.environ.get("CR_DATASET_ID") is None
+
+    def test_cr_run_id_not_cleared_when_widget_absent(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.setenv("CR_RUN_ID", "run-from-initialize")
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        mock_dbutils = MagicMock()
+        mock_dbutils.widgets.get.side_effect = Exception("Widget not found")
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            accept_workflow_params()
+        import os
+        assert os.environ.get("CR_RUN_ID") == "run-from-initialize"
+
+    def test_clears_stale_cr_dataset_id_when_widget_empty(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.setenv("CR_DATASET_ID", "stale_value")
+        mock_dbutils = MagicMock()
+        mock_dbutils.widgets.get.side_effect = lambda name: {
+            "dataset_id": "",
+            "run_id": "run-123",
+        }[name]
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            accept_workflow_params()
+        import os
+        assert os.environ.get("CR_DATASET_ID") is None
+        assert os.environ.get("CR_RUN_ID") == "run-123"
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+
+    def test_consecutive_calls_update_cr_dataset_id(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        mock_dbutils = MagicMock()
+
+        mock_dbutils.widgets.get.side_effect = lambda name: {
+            "dataset_id": "emails",
+            "run_id": "run-1",
+        }[name]
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            accept_workflow_params()
+        import os
+        assert os.environ.get("CR_DATASET_ID") == "emails"
+
+        mock_dbutils.widgets.get.side_effect = lambda name: {
+            "dataset_id": "transactions",
+            "run_id": "run-1",
+        }[name]
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            accept_workflow_params()
+        assert os.environ.get("CR_DATASET_ID") == "transactions"
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
 
 
 class TestPublishWorkflowMetadata:
@@ -273,134 +386,6 @@ class TestPublishWorkflowMetadata:
             publish_workflow_metadata(ctx)
         calls = {c.kwargs["key"]: c.kwargs["value"] for c in mock_dbutils.jobs.taskValues.set.call_args_list}
         assert calls["target_dataset"] == ""
-
-
-class TestAcceptWorkflowParams:
-    def test_noop_outside_databricks(self, monkeypatch):
-        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
-        monkeypatch.delenv("CR_DATASET_ID", raising=False)
-        _accept_workflow_params()
-        assert "CR_DATASET_ID" not in dict(monkeypatch._ENV_CHANGES if hasattr(monkeypatch, '_ENV_CHANGES') else {})
-
-    def test_sets_env_from_widgets(self, monkeypatch):
-        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
-        monkeypatch.delenv("CR_DATASET_ID", raising=False)
-        monkeypatch.delenv("CR_RUN_ID", raising=False)
-        mock_dbutils = MagicMock()
-        mock_dbutils.widgets.get.side_effect = lambda name: {
-            "dataset_id": "my_dataset",
-            "run_id": "run-123",
-        }[name]
-        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
-             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
-            _accept_workflow_params()
-        import os
-        assert os.environ.get("CR_DATASET_ID") == "my_dataset"
-        assert os.environ.get("CR_RUN_ID") == "run-123"
-        monkeypatch.delenv("CR_DATASET_ID", raising=False)
-        monkeypatch.delenv("CR_RUN_ID", raising=False)
-
-    def test_ignores_missing_widgets(self, monkeypatch):
-        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
-        monkeypatch.delenv("CR_DATASET_ID", raising=False)
-        mock_dbutils = MagicMock()
-        mock_dbutils.widgets.get.side_effect = Exception("Widget not found")
-        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
-             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
-            _accept_workflow_params()
-        import os
-        assert os.environ.get("CR_DATASET_ID") is None
-
-    def test_noop_when_dbutils_unavailable(self, monkeypatch):
-        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
-        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
-             patch("customer_retention.core.compat.detection.get_dbutils", return_value=None):
-            _accept_workflow_params()
-
-    def test_skips_empty_widget_values(self, monkeypatch):
-        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
-        monkeypatch.delenv("CR_DATASET_ID", raising=False)
-        mock_dbutils = MagicMock()
-        mock_dbutils.widgets.get.side_effect = lambda name: {
-            "dataset_id": "",
-            "run_id": "",
-        }[name]
-        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
-             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
-            _accept_workflow_params()
-        import os
-        assert os.environ.get("CR_DATASET_ID") is None
-
-    def test_clears_stale_cr_dataset_id_when_widget_absent(self, monkeypatch):
-        """Stale CR_DATASET_ID from a previous job is cleared when the widget is absent."""
-        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
-        monkeypatch.setenv("CR_DATASET_ID", "stale_account_dataset")
-        monkeypatch.setenv("CR_RUN_ID", "run-previous")
-        mock_dbutils = MagicMock()
-        mock_dbutils.widgets.get.side_effect = Exception("Widget not found")
-        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
-             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
-            _accept_workflow_params()
-        import os
-        assert os.environ.get("CR_DATASET_ID") is None
-
-    def test_cr_run_id_not_cleared_when_widget_absent(self, monkeypatch):
-        """CR_RUN_ID may have been set by initialize_run — do NOT clear it."""
-        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
-        monkeypatch.setenv("CR_RUN_ID", "run-from-initialize")
-        monkeypatch.delenv("CR_DATASET_ID", raising=False)
-        mock_dbutils = MagicMock()
-        mock_dbutils.widgets.get.side_effect = Exception("Widget not found")
-        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
-             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
-            _accept_workflow_params()
-        import os
-        assert os.environ.get("CR_RUN_ID") == "run-from-initialize"
-
-    def test_clears_stale_cr_dataset_id_when_widget_empty(self, monkeypatch):
-        """Empty widget value also clears stale CR_DATASET_ID."""
-        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
-        monkeypatch.setenv("CR_DATASET_ID", "stale_value")
-        mock_dbutils = MagicMock()
-        mock_dbutils.widgets.get.side_effect = lambda name: {
-            "dataset_id": "",
-            "run_id": "run-123",
-        }[name]
-        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
-             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
-            _accept_workflow_params()
-        import os
-        assert os.environ.get("CR_DATASET_ID") is None
-        assert os.environ.get("CR_RUN_ID") == "run-123"
-        monkeypatch.delenv("CR_RUN_ID", raising=False)
-
-    def test_consecutive_calls_update_cr_dataset_id(self, monkeypatch):
-        """Simulates for_each_task iterations: widget value changes between calls."""
-        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
-        monkeypatch.delenv("CR_DATASET_ID", raising=False)
-        monkeypatch.delenv("CR_RUN_ID", raising=False)
-        mock_dbutils = MagicMock()
-
-        mock_dbutils.widgets.get.side_effect = lambda name: {
-            "dataset_id": "emails",
-            "run_id": "run-1",
-        }[name]
-        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
-             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
-            _accept_workflow_params()
-        import os
-        assert os.environ.get("CR_DATASET_ID") == "emails"
-
-        mock_dbutils.widgets.get.side_effect = lambda name: {
-            "dataset_id": "transactions",
-            "run_id": "run-1",
-        }[name]
-        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
-             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
-            _accept_workflow_params()
-        assert os.environ.get("CR_DATASET_ID") == "transactions"
-        monkeypatch.delenv("CR_DATASET_ID", raising=False)
-        monkeypatch.delenv("CR_RUN_ID", raising=False)
 
 
 class TestGuardSkip:

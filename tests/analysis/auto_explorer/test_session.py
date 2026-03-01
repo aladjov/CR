@@ -58,11 +58,12 @@ class TestSessionStateSaveLoad:
         path.write_text("not valid json{{{")
         assert SessionState.load(path) is None
 
-    def test_load_handles_unexpected_exception(self, tmp_path):
+    def test_load_propagates_unexpected_exception(self, tmp_path):
         path = tmp_path / "session.json"
         path.write_text('{"active_run_id": "run-1"}')
         with patch("json.loads", side_effect=RuntimeError("unexpected")):
-            assert SessionState.load(path) is None
+            with pytest.raises(RuntimeError, match="unexpected"):
+                SessionState.load(path)
 
 
 class TestGetCurrentUsername:
@@ -403,20 +404,12 @@ class TestLoadNotebookFindings:
         assert namespace.run_id == ns.run_id
         assert ds_name == "customers"
 
-    def test_load_notebook_findings_fallback_to_findings_dir(self, tmp_path, monkeypatch):
+    def test_load_notebook_findings_raises_when_no_namespace(self, tmp_path, monkeypatch):
         monkeypatch.delenv("CR_RUN_ID", raising=False)
-        monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
+        monkeypatch.setenv("CR_EXPERIMENTS_DIR", str(tmp_path))
         monkeypatch.setenv("CR_USERNAME", "testuser")
-        findings_dir = tmp_path / "findings"
-        findings_dir.mkdir()
-        (findings_dir / "customers_findings.yaml").write_text("source: customers\n")
-        path, namespace, ds_name = load_notebook_findings(
-            "04_column_deep_dive.ipynb", root=tmp_path, findings_dir=findings_dir
-        )
-        assert path is not None
-        assert "customers_findings.yaml" in path
-        assert namespace is None
-        assert ds_name is None
+        with pytest.raises(FileNotFoundError, match="No run namespace found"):
+            load_notebook_findings("04_column_deep_dive.ipynb", root=tmp_path)
 
     def test_load_notebook_findings_marks_notebook(self, tmp_path, monkeypatch):
         ns = self._make_namespace_with_findings(tmp_path, monkeypatch=monkeypatch)
@@ -436,16 +429,13 @@ class TestLoadNotebookFindings:
         assert "_aggregated" not in path
         assert ds_name == "orders"
 
-    def test_load_notebook_findings_raises_when_nothing_found(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("CR_RUN_ID", raising=False)
-        monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
+    def test_load_notebook_findings_raises_when_no_findings_in_namespace(self, tmp_path, monkeypatch):
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        monkeypatch.setenv("CR_RUN_ID", ns.run_id)
+        monkeypatch.setenv("CR_EXPERIMENTS_DIR", str(tmp_path))
         monkeypatch.setenv("CR_USERNAME", "testuser")
-        findings_dir = tmp_path / "findings"
-        findings_dir.mkdir()
-        with pytest.raises(FileNotFoundError):
-            _path, _ns, _ds = load_notebook_findings(
-                "04_column_deep_dive.ipynb", root=tmp_path, findings_dir=findings_dir
-            )
+        with pytest.raises(FileNotFoundError, match="No run namespace found"):
+            load_notebook_findings("04_column_deep_dive.ipynb", root=tmp_path)
 
     def test_load_notebook_findings_prefers_aggregated(self, tmp_path, monkeypatch):
         ns = self._make_namespace_with_findings(tmp_path, dataset_name="orders", monkeypatch=monkeypatch)

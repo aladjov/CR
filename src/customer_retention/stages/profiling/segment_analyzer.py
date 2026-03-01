@@ -9,7 +9,7 @@ from sklearn.manifold import TSNE
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
-from customer_retention.core.compat import DataFrame
+from customer_retention.core.compat import DataFrame, safe_to_datetime
 
 
 class SegmentationMethod(Enum):
@@ -171,8 +171,13 @@ class SegmentAnalyzer:
 
     def _to_latest_snapshot(self, df: DataFrame) -> DataFrame:
         for col in self.SNAPSHOT_COLUMNS:
-            if col in df.columns:
-                return df[df[col] == df[col].max()].reset_index(drop=True)
+            if col not in df.columns:
+                continue
+            coerced = safe_to_datetime(df[col], errors="coerce")
+            latest = coerced.max()
+            if latest != latest:
+                continue
+            return df[coerced == latest].reset_index(drop=True)
         return df
 
     def analyze(

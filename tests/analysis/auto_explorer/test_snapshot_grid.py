@@ -1026,9 +1026,9 @@ class TestAcceptWorkflowParamsExperimentsDir:
         import customer_retention.core.compat.detection as det_mod
         monkeypatch.setattr(det_mod, "get_dbutils", lambda: FakeDbutils())
 
-        from customer_retention.analysis.notebook_progress import _accept_workflow_params
+        from customer_retention.analysis.notebook_progress import accept_workflow_params
 
-        _accept_workflow_params()
+        accept_workflow_params()
         assert os.environ.get("CR_EXPERIMENTS_DIR") == str(tmp_path / "my_experiments")
         monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
 

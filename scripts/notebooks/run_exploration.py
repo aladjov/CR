@@ -44,16 +44,13 @@ def _resolve_namespace(findings_dir: Path, run_id: Optional[str]):
     experiments_dir = (
         findings_dir.parent if findings_dir.name == "findings" else findings_dir
     )
-    try:
-        from customer_retention.analysis.auto_explorer.run_namespace import (
-            RunNamespace,
-        )
+    from customer_retention.analysis.auto_explorer.run_namespace import (
+        RunNamespace,
+    )
 
-        if run_id:
-            return RunNamespace(root=experiments_dir, run_id=run_id)
-        return RunNamespace.from_latest(experiments_dir)
-    except Exception:
-        return None
+    if run_id:
+        return RunNamespace(root=experiments_dir, run_id=run_id)
+    return RunNamespace.from_latest(experiments_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -70,39 +67,23 @@ def _resolve_namespace(findings_dir: Path, run_id: Optional[str]):
 
 
 def _load_dataset_context(findings_dir: Path, run_id: Optional[str] = None):
-    """Load ProjectContext from findings.
+    """Load ProjectContext from run namespace."""
+    from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 
-    Also checks run namespace project_context.yaml when run_id is set.
-    """
+    experiments_dir = findings_dir.parent if findings_dir.name == "findings" else findings_dir
     if run_id:
-        try:
-            from customer_retention.analysis.auto_explorer.run_namespace import (
-                RunNamespace,
-            )
-            from customer_retention.core.config.experiments import get_experiments_dir
+        ns = RunNamespace(root=experiments_dir, run_id=run_id)
+    else:
+        ns = RunNamespace.from_env_or_latest(root=experiments_dir)
+    if ns is None:
+        return None
+    ns_path = ns.project_context_path
+    if ns_path.exists():
+        from customer_retention.analysis.auto_explorer import ProjectContext
 
-            ns = RunNamespace(root=get_experiments_dir(), run_id=run_id)
-            ns_path = ns.project_context_path
-            if ns_path.exists():
-                from customer_retention.analysis.auto_explorer import ProjectContext
-
-                ctx = ProjectContext.load(ns_path)
-                if ctx.datasets:
-                    return ctx
-        except Exception:
-            pass
-
-    project_path = findings_dir / "project_context.yaml"
-    if project_path.exists():
-        try:
-            from customer_retention.analysis.auto_explorer import ProjectContext
-
-            ctx = ProjectContext.load(project_path)
-            if ctx.datasets:
-                return ctx
-        except Exception:
-            pass
-
+        ctx = ProjectContext.load(ns_path)
+        if ctx.datasets:
+            return ctx
     return None
 
 
@@ -469,27 +450,12 @@ def _run_multi_dataset_flow(
 
 
 def _detect_run_id_from_context(findings_dir: Path) -> Optional[str]:
-    path = findings_dir / "project_context.yaml"
-    if path.exists():
-        try:
-            import yaml
-
-            data = yaml.safe_load(path.read_text())
-            run_id = data.get("run_id")
-            if run_id:
-                return run_id
-        except Exception:
-            pass
-
     experiments_dir = findings_dir.parent if findings_dir.name == "findings" else findings_dir
-    try:
-        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+    from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 
-        ns = RunNamespace.from_latest(experiments_dir)
-        if ns:
-            return ns.run_id
-    except Exception:
-        pass
+    ns = RunNamespace.from_env_or_latest(root=experiments_dir)
+    if ns:
+        return ns.run_id
     return None
 
 
@@ -536,6 +502,7 @@ def run_all(
 
     if not run_id:
         run_id = _detect_run_id_from_context(findings_dir)
+    prev_run_id = os.environ.get("CR_RUN_ID")
     if run_id:
         os.environ["CR_RUN_ID"] = run_id
 
@@ -563,6 +530,11 @@ def run_all(
     _print_summary(results, timings, time.time() - total_start)
 
     error_log.finalize()
+
+    if prev_run_id is None:
+        os.environ.pop("CR_RUN_ID", None)
+    else:
+        os.environ["CR_RUN_ID"] = prev_run_id
 
     return results
 

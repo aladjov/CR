@@ -15,7 +15,7 @@ def _workspace_config_path(workspace_path: str) -> Path:
 def _read_config_file(path: Path) -> dict | None:
     try:
         return json.loads(path.read_text()) if path.exists() else None
-    except Exception:
+    except (json.JSONDecodeError, OSError):
         return None
 
 
@@ -43,7 +43,7 @@ def persist_databricks_config(experiments_dir: str, catalog: str, schema: str, w
         _workspace_config_path(workspace_path).write_text(json.dumps({
             "experiments_dir": experiments_dir, "catalog": catalog, "schema": schema,
         }))
-    except Exception:
+    except OSError:
         pass
 
 
@@ -159,14 +159,3 @@ def get_active_run_dir() -> Path | None:
     if not run_id:
         return None
     return get_runs_dir() / run_id
-
-
-def get_notebook_experiments_dir() -> Union[Path, RemotePath]:
-    if "CR_EXPERIMENTS_DIR" in os.environ:
-        return make_path(os.environ["CR_EXPERIMENTS_DIR"])
-    cwd = Path.cwd()
-    if (cwd.parent / "experiments").exists():
-        return cwd.parent / "experiments"
-    elif (cwd / "experiments").exists():
-        return cwd / "experiments"
-    return get_experiments_dir()

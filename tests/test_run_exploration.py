@@ -63,9 +63,12 @@ def findings_dir(tmp_path):
     return d
 
 
+_TEST_RUN_ID = "test-run"
+
+
 @pytest.fixture()
-def multi_context_yaml(findings_dir):
-    """Create a project_context.yaml with 3 datasets (target first)."""
+def multi_context_yaml(tmp_path, findings_dir):
+    """Create a project_context.yaml in a namespace run dir."""
     data = _project_ctx(
         target_dataset="profiles",
         datasets={
@@ -94,14 +97,16 @@ def multi_context_yaml(findings_dir):
             },
         },
     )
-    path = findings_dir / "project_context.yaml"
+    run_dir = tmp_path / "runs" / _TEST_RUN_ID
+    run_dir.mkdir(parents=True)
+    path = run_dir / "project_context.yaml"
     path.write_text(yaml.dump(data, default_flow_style=False))
     return path
 
 
 @pytest.fixture()
-def single_context_yaml(findings_dir):
-    """Create a project_context.yaml with 1 dataset."""
+def single_context_yaml(tmp_path, findings_dir):
+    """Create a project_context.yaml in a namespace run dir."""
     data = _project_ctx(
         target_dataset="retail",
         datasets={
@@ -114,7 +119,9 @@ def single_context_yaml(findings_dir):
             },
         },
     )
-    path = findings_dir / "project_context.yaml"
+    run_dir = tmp_path / "runs" / _TEST_RUN_ID
+    run_dir.mkdir(parents=True, exist_ok=True)
+    path = run_dir / "project_context.yaml"
     path.write_text(yaml.dump(data, default_flow_style=False))
     return path
 
@@ -489,7 +496,7 @@ class TestRunAllDispatch:
         notebooks_dir = tmp_path / "notebooks"
         notebooks_dir.mkdir()
         self._make_notebooks(notebooks_dir)
-        findings_dir = multi_context_yaml.parent
+        findings_dir = tmp_path / "findings"
 
         results = run_all(
             notebooks_dir,
@@ -510,7 +517,7 @@ class TestRunAllDispatch:
         notebooks_dir = tmp_path / "notebooks"
         notebooks_dir.mkdir()
         self._make_notebooks(notebooks_dir)
-        findings_dir = single_context_yaml.parent
+        findings_dir = tmp_path / "findings"
 
         results = run_all(
             notebooks_dir,
@@ -542,7 +549,7 @@ class TestRunAllDispatch:
         notebooks_dir = tmp_path / "notebooks"
         notebooks_dir.mkdir()
         self._make_notebooks(notebooks_dir)
-        findings_dir = multi_context_yaml.parent
+        findings_dir = tmp_path / "findings"
 
         results = run_all(
             notebooks_dir,
@@ -574,7 +581,7 @@ class TestMultiDatasetWithSkips:
         notebooks_dir = tmp_path / "notebooks"
         notebooks_dir.mkdir()
         self._make_notebooks(notebooks_dir)
-        findings_dir = multi_context_yaml.parent
+        findings_dir = tmp_path / "findings"
 
         results = run_all(
             notebooks_dir,
@@ -595,7 +602,7 @@ class TestMultiDatasetWithSkips:
         notebooks_dir = tmp_path / "notebooks"
         notebooks_dir.mkdir()
         self._make_notebooks(notebooks_dir)
-        findings_dir = multi_context_yaml.parent
+        findings_dir = tmp_path / "findings"
 
         results = run_all(
             notebooks_dir,
@@ -620,7 +627,7 @@ class TestMultiDatasetWithSkips:
         notebooks_dir = tmp_path / "notebooks"
         notebooks_dir.mkdir()
         self._make_notebooks(notebooks_dir)
-        findings_dir = multi_context_yaml.parent
+        findings_dir = tmp_path / "findings"
 
         results = run_all(
             notebooks_dir,
@@ -675,7 +682,9 @@ class TestSkipDetectionWithoutFlatFindingsDir:
                 },
             },
         )
-        (findings_dir / "project_context.yaml").write_text(yaml.dump(ctx_data))
+        run_dir = tmp_path / "runs" / _TEST_RUN_ID
+        run_dir.mkdir(parents=True)
+        (run_dir / "project_context.yaml").write_text(yaml.dump(ctx_data))
 
         notebooks_dir = tmp_path / "notebooks"
         notebooks_dir.mkdir()
@@ -715,7 +724,7 @@ class TestSingleDatasetSkipDetection:
         notebooks_dir = tmp_path / "notebooks"
         notebooks_dir.mkdir()
         self._make_notebooks(notebooks_dir)
-        findings_dir = single_context_yaml.parent
+        findings_dir = tmp_path / "findings"
 
         from customer_retention.core.config.column_config import ColumnType
 
@@ -736,7 +745,7 @@ class TestSingleDatasetSkipDetection:
         notebooks_dir = tmp_path / "notebooks"
         notebooks_dir.mkdir()
         self._make_notebooks(notebooks_dir)
-        findings_dir = single_context_yaml.parent
+        findings_dir = tmp_path / "findings"
 
         from customer_retention.core.config.column_config import ColumnType
 
@@ -758,7 +767,7 @@ class TestSingleDatasetSkipDetection:
         notebooks_dir = tmp_path / "notebooks"
         notebooks_dir.mkdir()
         self._make_notebooks(notebooks_dir)
-        findings_dir = single_context_yaml.parent
+        findings_dir = tmp_path / "findings"
 
         from customer_retention.core.config.column_config import ColumnType
 
@@ -855,7 +864,7 @@ class TestMultiDatasetSetDataPath:
 
         notebooks_dir = tmp_path / "notebooks"
         notebooks_dir.mkdir()
-        findings_dir = multi_context_yaml.parent
+        findings_dir = tmp_path / "findings"
 
         nb_json = json.dumps({
             "nbformat": 4, "nbformat_minor": 5,
@@ -889,7 +898,7 @@ class TestMultiDatasetSetDataPath:
 
         notebooks_dir = tmp_path / "notebooks"
         notebooks_dir.mkdir()
-        findings_dir = multi_context_yaml.parent
+        findings_dir = tmp_path / "findings"
 
         nb_json = json.dumps({
             "nbformat": 4, "nbformat_minor": 5,
@@ -1066,7 +1075,7 @@ class TestPerDatasetTextNotebook:
 
         notebooks_dir = tmp_path / "notebooks"
         notebooks_dir.mkdir()
-        findings_dir = multi_context_yaml.parent
+        findings_dir = tmp_path / "findings"
 
         from customer_retention.core.config.column_config import ColumnType
 
@@ -1097,7 +1106,7 @@ class TestPerDatasetTextNotebook:
 
         notebooks_dir = tmp_path / "notebooks"
         notebooks_dir.mkdir()
-        findings_dir = multi_context_yaml.parent
+        findings_dir = tmp_path / "findings"
 
         from customer_retention.core.config.column_config import ColumnType
 
@@ -1207,7 +1216,9 @@ class TestGlobalSkipDetection:
                 },
             },
         )
-        (findings_dir / "project_context.yaml").write_text(yaml.dump(context_data))
+        run_dir = tmp_path / "runs" / _TEST_RUN_ID
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "project_context.yaml").write_text(yaml.dump(context_data))
         context = _load_dataset_context(findings_dir)
 
         skip, reasons = _detect_global_skip_set(findings_dir, context)
@@ -1248,7 +1259,9 @@ class TestGlobalSkipDetection:
                 },
             },
         )
-        (findings_dir / "project_context.yaml").write_text(yaml.dump(context_data))
+        run_dir = tmp_path / "runs" / _TEST_RUN_ID
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "project_context.yaml").write_text(yaml.dump(context_data))
         context = _load_dataset_context(findings_dir)
 
         skip, reasons = _detect_global_skip_set(findings_dir, context)
@@ -1278,7 +1291,7 @@ class TestDatasetIdEnvVar:
         notebooks_dir = tmp_path / "notebooks"
         notebooks_dir.mkdir()
         self._make_notebooks(notebooks_dir)
-        findings_dir = multi_context_yaml.parent
+        findings_dir = tmp_path / "findings"
 
         captured_env: dict[str, str | None] = {}
 
@@ -1316,7 +1329,7 @@ class TestDatasetIdEnvVar:
         notebooks_dir = tmp_path / "notebooks"
         notebooks_dir.mkdir()
         self._make_notebooks(notebooks_dir)
-        findings_dir = multi_context_yaml.parent
+        findings_dir = tmp_path / "findings"
 
         global_env_vals: list[str | None] = []
 
@@ -1384,7 +1397,7 @@ class TestCriticalGlobalStop:
         notebooks_dir = tmp_path / "notebooks"
         notebooks_dir.mkdir()
         self._make_notebooks(notebooks_dir)
-        findings_dir = multi_context_yaml.parent
+        findings_dir = tmp_path / "findings"
 
         monkeypatch.setattr("run_exploration._execute_one", self._make_spy("03_dataset_merge"))
 
@@ -1415,7 +1428,7 @@ class TestCriticalGlobalStop:
         notebooks_dir = tmp_path / "notebooks"
         notebooks_dir.mkdir()
         self._make_notebooks(notebooks_dir)
-        findings_dir = multi_context_yaml.parent
+        findings_dir = tmp_path / "findings"
 
         monkeypatch.setattr("run_exploration._execute_one", self._make_spy("04_column_deep_dive"))
 
@@ -1524,7 +1537,7 @@ class TestProgressiveErrorLogHeader:
 
         run_all(
             notebooks_dir,
-            findings_dir=single_context_yaml.parent,
+            findings_dir=tmp_path / "findings",
             dry_run=True,
             timeout=300,
             kernel="python3",

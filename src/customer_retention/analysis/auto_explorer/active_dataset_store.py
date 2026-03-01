@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+from customer_retention.core.compat import normalize_timestamp_columns
 from customer_retention.core.compat import to_pandas as _compat_to_pandas
 from customer_retention.core.config.column_config import DatasetGranularity
 from customer_retention.integrations.adapters.factory import get_delta
@@ -16,7 +17,7 @@ def _local_delta() -> Any:
 def _to_native_pandas(df: Any) -> Any:
     result = _compat_to_pandas(df)
     result.attrs.clear()
-    return result
+    return normalize_timestamp_columns(result)
 
 
 def save_active_dataset(namespace: RunNamespace, dataset_name: str, df: Any) -> Path:

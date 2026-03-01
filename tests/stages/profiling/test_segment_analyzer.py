@@ -1137,6 +1137,40 @@ class TestLatestSnapshotFiltering:
         result = analyzer.analyze(df, target_col="target", feature_cols=["feature_a", "feature_b"])
         assert len(result.labels) == 100
 
+    def test_object_dtype_as_of_date_with_nan(self):
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({"feature_a": [1, 2, 3, 4]})
+        df["as_of_date"] = pd.Series(
+            [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-01"),
+             pd.Timestamp("2024-02-01"), "not_a_date"],
+            dtype=object,
+        )
+        assert df["as_of_date"].dtype == object
+        result = analyzer._to_latest_snapshot(df)
+        assert len(result) == 1
+        assert result["feature_a"].iloc[0] == 3
+
+    def test_string_dates_in_object_column(self):
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({
+            "feature_a": [1, 2, 3, 4],
+            "as_of_date": ["2024-01-01", "2024-01-01", "2024-02-01", "2024-02-01"],
+        })
+        result = analyzer._to_latest_snapshot(df)
+        assert len(result) == 2
+
+    def test_all_nan_snapshot_column_skips_to_next(self):
+        analyzer = SegmentAnalyzer()
+        df = pd.DataFrame({
+            "feature_a": [1, 2, 3, 4],
+            "as_of_date": [float("nan")] * 4,
+            "feature_timestamp": pd.to_datetime(
+                ["2024-01-01", "2024-01-01", "2024-02-01", "2024-02-01"]
+            ),
+        })
+        result = analyzer._to_latest_snapshot(df)
+        assert len(result) == 2
+
 
 class TestSilhouetteSampling:
     def test_silhouette_uses_sample_size_for_large_data(self):

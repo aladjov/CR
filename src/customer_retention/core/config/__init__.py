@@ -24,7 +24,6 @@ from .experiments import (
     get_feature_store_dir,
     get_findings_dir,
     get_mlruns_dir,
-    get_notebook_experiments_dir,
     get_schema,
     get_workspace_path,
     setup_experiments_structure,
@@ -79,6 +78,5 @@ __all__ = [
     "get_data_dir",
     "get_mlruns_dir",
     "get_feature_store_dir",
-    "get_notebook_experiments_dir",
     "setup_experiments_structure",
 ]

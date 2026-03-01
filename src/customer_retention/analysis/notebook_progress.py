@@ -1,12 +1,11 @@
 """Track notebook execution progress and export previous notebook on start."""
-import json
 import os
 import threading
 from pathlib import Path
 from typing import Optional
 
 from customer_retention.core.compat import is_databricks, is_remote_spark
-from customer_retention.core.config.experiments import get_notebook_experiments_dir, reload_config
+from customer_retention.core.config.experiments import get_experiments_dir, reload_config
 
 
 def _ensure_databricks_config_loaded() -> None:
@@ -15,7 +14,7 @@ def _ensure_databricks_config_loaded() -> None:
     reload_config()
 
 
-def _accept_workflow_params() -> None:
+def accept_workflow_params() -> None:
     if not is_databricks():
         return
     from customer_retention.core.compat.detection import get_dbutils
@@ -39,43 +38,36 @@ def _accept_workflow_params() -> None:
                 os.environ.pop(env_name, None)
 
 
-_ensure_databricks_config_loaded()
-_accept_workflow_params()
-
-
 def track_and_export_previous(current_notebook: str) -> None:
     """Record the current notebook and export the previous one in the background.
 
-    Called at the top of each notebook.  Progress is written *before* the
-    export thread starts so that the current notebook is already recorded
-    even if export is slow or fails.
+    Called at the top of each notebook.  Uses RunNamespace + SessionState
+    as single source of truth for progress tracking.
 
     Returns ``None`` — the export runs asynchronously.
     """
     _ensure_databricks_config_loaded()
-    _accept_workflow_params()
-    experiments_dir = get_notebook_experiments_dir()
-    try:
-        experiments_dir.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        return
-    progress_file = experiments_dir / "notebook_progress.json"
+    from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+    from customer_retention.analysis.auto_explorer.session import (
+        SessionState,
+        get_current_username,
+        mark_notebook,
+    )
 
-    previous = _read_last_notebook(progress_file)
-    _write_current_notebook(progress_file, current_notebook)
+    namespace = RunNamespace.from_env_or_latest()
+    if namespace is None:
+        return
+
+    username = get_current_username()
+    session_path = namespace.user_session_path(username)
+    state = SessionState.load(session_path)
+    previous = state.last_notebook if state else None
+
+    mark_notebook(namespace, current_notebook, username=username)
 
     if previous and not is_databricks() and not is_remote_spark():
-        docs_dir = experiments_dir / "docs"
+        docs_dir = get_experiments_dir() / "docs"
         _export_in_background(previous, docs_dir)
-
-
-def _read_last_notebook(progress_file: Path) -> Optional[str]:
-    """Return the last-run notebook name, or ``None`` if missing/corrupt."""
-    try:
-        data = json.loads(progress_file.read_text(encoding="utf-8"))
-        return data.get("last_notebook")
-    except Exception:
-        return None
 
 
 def _export_notebook(notebook_name: str, docs_dir: Path) -> Optional[Path]:
@@ -108,8 +100,6 @@ def publish_workflow_metadata(project_context) -> None:
     dbutils.jobs.taskValues.set(key="target_dataset", value=project_context.target_dataset or "")
     if project_context.run_id:
         dbutils.jobs.taskValues.set(key="run_id", value=project_context.run_id)
-    from customer_retention.core.config.experiments import get_experiments_dir
-
     dbutils.jobs.taskValues.set(key="experiments_dir", value=str(get_experiments_dir()))
 
 
@@ -125,7 +115,6 @@ def guard_skip(notebook_stem: str) -> None:
     if not dbutils:
         return
     from customer_retention.analysis.auto_explorer.skip_logic import detect_skip_set_for_dataset
-    from customer_retention.core.config.experiments import get_experiments_dir
 
     findings_dir = get_experiments_dir() / "findings"
     skip_set, skip_reasons = detect_skip_set_for_dataset(findings_dir, dataset_id)
@@ -137,14 +126,3 @@ def resolve_config(value, dataset_name: str, default=None):
     if isinstance(value, dict):
         return value.get(dataset_name, default)
     return value
-
-
-def _write_current_notebook(progress_file: Path, current_notebook: str) -> None:
-    """Write the current notebook name to the progress file."""
-    try:
-        progress_file.write_text(
-            json.dumps({"last_notebook": current_notebook}),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass

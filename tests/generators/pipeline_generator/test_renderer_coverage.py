@@ -401,6 +401,37 @@ class TestCodeRendererTraining:
         assert "best_auc = None, -1" in result or "best_auc = -1" in result
 
 
+class TestSmoteTrainingTemplate:
+    @pytest.fixture
+    def smote_pipeline_config(self, sample_pipeline_config):
+        from customer_retention.generators.pipeline_generator.models import TrainingConfig
+        config = sample_pipeline_config
+        config.training = TrainingConfig(imbalance_strategy="smote")
+        return config
+
+    def test_smote_uses_fit_transform(self, renderer, smote_pipeline_config):
+        result = renderer.render_training(smote_pipeline_config)
+        assert "fit_transform(" in result
+        assert "handler.fit(" not in result
+
+    def test_smote_unpacks_imbalance_result(self, renderer, smote_pipeline_config):
+        result = renderer.render_training(smote_pipeline_config)
+        assert ".X_resampled" in result
+        assert ".y_resampled" in result
+
+    def test_smote_specifies_strategy(self, renderer, smote_pipeline_config):
+        result = renderer.render_training(smote_pipeline_config)
+        assert "ImbalanceStrategy.SMOTE" in result
+
+    def test_smote_imports_strategy_enum(self, renderer, smote_pipeline_config):
+        result = renderer.render_training(smote_pipeline_config)
+        assert "ImbalanceStrategy" in result
+
+    def test_smote_template_is_valid_python(self, renderer, smote_pipeline_config):
+        result = renderer.render_training(smote_pipeline_config)
+        ast.parse(result)
+
+
 class TestCodeRendererRunner:
     def test_render_runner(self, renderer, sample_pipeline_config):
         result = renderer.render_runner(sample_pipeline_config)

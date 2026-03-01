@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from customer_retention.core.config.experiments import (
     DATA_DIR,
     EXPERIMENTS_DIR,
@@ -18,7 +20,6 @@ from customer_retention.core.config.experiments import (
     get_feature_store_dir,
     get_findings_dir,
     get_mlruns_dir,
-    get_notebook_experiments_dir,
     get_runs_dir,
     persist_databricks_config,
     setup_experiments_structure,
@@ -203,36 +204,6 @@ class TestSetupExperimentsStructure:
         assert (tmp_path / "data" / "bronze").exists()
 
 
-class TestGetNotebookExperimentsDir:
-    def test_uses_env_var_when_set(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("CR_EXPERIMENTS_DIR", str(tmp_path / "from_env"))
-        result = get_notebook_experiments_dir()
-        assert str(result) == str(tmp_path / "from_env")
-
-    def test_finds_experiments_in_parent_dir(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
-        (tmp_path / "experiments").mkdir()
-        notebook_dir = tmp_path / "notebooks"
-        notebook_dir.mkdir()
-        monkeypatch.chdir(notebook_dir)
-        result = get_notebook_experiments_dir()
-        assert result == tmp_path / "experiments"
-
-    def test_finds_experiments_in_current_dir(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
-        (tmp_path / "experiments").mkdir()
-        monkeypatch.chdir(tmp_path)
-        result = get_notebook_experiments_dir()
-        assert result == tmp_path / "experiments"
-
-    def test_falls_back_to_get_experiments_dir(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
-        empty_dir = tmp_path / "empty"
-        empty_dir.mkdir()
-        monkeypatch.chdir(empty_dir)
-        result = get_notebook_experiments_dir()
-        assert result.name == "experiments"
-
 
 class TestPersistedDatabricksConfig:
     def test_load_returns_none_outside_databricks(self, monkeypatch):
@@ -336,20 +307,22 @@ class TestPersistedDatabricksConfig:
         persist_databricks_config("/Volumes/c/s/experiments", "c", "s", "")
         assert not config_file.exists()
 
-    def test_persist_handles_non_standard_exception(self, monkeypatch):
+    def test_persist_propagates_non_os_exception(self, monkeypatch):
         monkeypatch.setattr(
             "customer_retention.core.config.experiments._workspace_config_path",
             lambda wp: Path("/nonexistent_dir/subdir/deep/config.json"),
         )
         with patch("json.dumps", side_effect=RuntimeError("Py4J error")):
-            persist_databricks_config("/Volumes/c/s/experiments", "c", "s", "Users/me")
+            with pytest.raises(RuntimeError, match="Py4J error"):
+                persist_databricks_config("/Volumes/c/s/experiments", "c", "s", "Users/me")
 
-    def test_read_config_handles_non_standard_exception(self, tmp_path):
+    def test_read_config_propagates_non_json_os_exception(self, tmp_path):
         config_file = tmp_path / "config.json"
         config_file.write_text('{"key": "value"}')
         from customer_retention.core.config.experiments import _read_config_file
         with patch("json.loads", side_effect=RuntimeError("unexpected")):
-            assert _read_config_file(config_file) is None
+            with pytest.raises(RuntimeError, match="unexpected"):
+                _read_config_file(config_file)
 
     def test_load_returns_none_when_config_missing_experiments_dir_key(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "17.3")

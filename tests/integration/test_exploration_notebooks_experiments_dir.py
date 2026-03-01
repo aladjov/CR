@@ -557,3 +557,35 @@ class TestCellIdStandardization:
                             f"{nb_path.name} cell {i} ({cell.get('id')}): "
                             f"pure config cell missing magic comment"
                         )
+
+
+class TestNoBareExceptInCoreMetadata:
+
+    CORE_FILES = [
+        Path("src/customer_retention/analysis/auto_explorer/session.py"),
+        Path("src/customer_retention/core/config/experiments.py"),
+        Path("src/customer_retention/analysis/notebook_progress.py"),
+        Path("scripts/notebooks/run_exploration.py"),
+    ]
+
+    _PATTERN = re.compile(
+        r"except\s+Exception\s*:\s*\n\s*(?:pass|return\s+None)\s*$",
+        re.MULTILINE,
+    )
+
+    def test_no_bare_except_in_core_metadata_files(self):
+        project_root = Path(__file__).parent.parent.parent
+        violations = []
+        for rel_path in self.CORE_FILES:
+            full_path = project_root / rel_path
+            if not full_path.exists():
+                continue
+            content = full_path.read_text()
+            for match in self._PATTERN.finditer(content):
+                line_no = content[:match.start()].count("\n") + 1
+                violations.append(f"{rel_path}:{line_no}")
+        if violations:
+            pytest.fail(
+                "Found bare 'except Exception: pass/return None' in core files:\n"
+                + "\n".join(f"  - {v}" for v in violations)
+            )

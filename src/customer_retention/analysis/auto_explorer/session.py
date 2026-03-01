@@ -41,7 +41,7 @@ class SessionState:
                 active_run_id=data["active_run_id"],
                 last_notebook=data.get("last_notebook"),
             )
-        except Exception:
+        except (json.JSONDecodeError, KeyError):
             return None
 
 
@@ -187,12 +187,9 @@ def resolve_target_column(namespace: Optional[RunNamespace], findings) -> Option
         if ctx_path.exists():
             from .project_context import ProjectContext
 
-            try:
-                ctx = ProjectContext.load(ctx_path)
-                if ctx.target_column:
-                    return ctx.target_column
-            except Exception:
-                pass
+            ctx = ProjectContext.load(ctx_path)
+            if ctx.target_column:
+                return ctx.target_column
     return findings.target_column
 
 
@@ -203,7 +200,6 @@ def load_notebook_findings(
     exclude_aggregated: bool = False,
     prefer_merged: bool = False,
     root: Optional[Path] = None,
-    findings_dir: Optional[Path] = None,
 ) -> tuple[str, Optional[RunNamespace], Optional[str]]:
     namespace = RunNamespace.from_env_or_latest(root=root)
 
@@ -240,29 +236,6 @@ def load_notebook_findings(
                     mark_notebook(namespace, notebook_name)
                     return str(resolved), namespace, dataset_name
 
-    if findings_dir is None:
-        from customer_retention.core.config.experiments import FINDINGS_DIR
-
-        findings_dir = FINDINGS_DIR
-
-    all_files = [
-        f
-        for f in findings_dir.glob("*_findings.yaml")
-        if "multi_dataset" not in f.name
-    ]
-    if exclude_aggregated:
-        all_files = [f for f in all_files if "_aggregated" not in f.name]
-
-    if not all_files:
-        raise FileNotFoundError(
-            f"No findings files found in {findings_dir}. Run notebook 01 first."
-        )
-
-    aggregated = sorted(f for f in all_files if "_aggregated" in f.name)
-    non_aggregated = sorted(f for f in all_files if "_aggregated" not in f.name)
-
-    if prefer_aggregated and aggregated:
-        return str(aggregated[0]), None, None
-    if non_aggregated:
-        return str(non_aggregated[0]), None, None
-    return str(sorted(all_files)[0]), None, None
+    raise FileNotFoundError(
+        "No run namespace found. Run notebook 00 first."
+    )

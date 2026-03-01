@@ -922,7 +922,7 @@ from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score,
                              precision_score, recall_score, accuracy_score)
 from customer_retention.stages.modeling.data_splitter import DataSplitter, SplitStrategy
 {% if config.training and config.training.imbalance_strategy == "smote" %}
-from customer_retention.stages.modeling.imbalance_handler import ImbalanceHandler
+from customer_retention.stages.modeling.imbalance_handler import ImbalanceHandler, ImbalanceStrategy
 {% endif %}
 from config import (TARGET_COLUMN, PIPELINE_NAME, COMPOSITE_NAME, RECOMMENDATIONS_HASH, MLFLOW_TRACKING_URI,
                     MLFLOW_ARTIFACT_ROOT, FEAST_REPO_PATH, FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY,
@@ -1108,8 +1108,9 @@ def run_experiment():
     X_train, X_test = splits.X_train[feature_names], splits.X_test[feature_names]
     y_train, y_test = splits.y_train, splits.y_test
 {% if config.training and config.training.imbalance_strategy == "smote" %}
-    handler = ImbalanceHandler()
-    X_train, y_train = handler.fit(X_train, y_train)
+    handler = ImbalanceHandler(strategy=ImbalanceStrategy.SMOTE)
+    _imb_result = handler.fit_transform(X_train, y_train)
+    X_train, y_train = _imb_result.X_resampled, _imb_result.y_resampled
 {% endif %}
 
 {% set class_weight_param = ', class_weight="balanced"' if config.training and config.training.imbalance_strategy == "class_weight" else '' %}
