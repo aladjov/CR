@@ -970,6 +970,8 @@ def merge_sources(bronze_outputs):
             feature_timestamp_column=meta.get("feature_timestamp_column"),
         ))
     merged, _report = merger.merge_all(spine, inputs)
+    if hasattr(merged, "to_spark"):
+        merged = merged.to_spark()
     return merged
 {% else %}
 def merge_sources(bronze_outputs):
@@ -1079,6 +1081,33 @@ def _scale_minmax(df, col):
     df = df.withColumn(col, (F.col(col) - min_val) / range_val)
     return df
 
+def _batch_scale_standard(df, cols):
+    exprs = []
+    for c in cols:
+        exprs.extend([F.mean(c).alias(f"{c}__mean"), F.stddev(c).alias(f"{c}__std")])
+    stats = df.agg(*exprs).collect()[0]
+    for c in cols:
+        mean_val = stats[f"{c}__mean"] or 0
+        std_val = stats[f"{c}__std"] or 1
+        if std_val == 0:
+            std_val = 1
+        df = df.withColumn(c, (F.col(c) - mean_val) / std_val)
+    return df
+
+def _batch_scale_minmax(df, cols):
+    exprs = []
+    for c in cols:
+        exprs.extend([F.min(c).alias(f"{c}__min"), F.max(c).alias(f"{c}__max")])
+    stats = df.agg(*exprs).collect()[0]
+    for c in cols:
+        min_val = stats[f"{c}__min"] or 0
+        max_val = stats[f"{c}__max"] or 1
+        range_val = max_val - min_val
+        if range_val == 0:
+            range_val = 1
+        df = df.withColumn(c, (F.col(c) - min_val) / range_val)
+    return df
+
 def _segment_aware_cap(df, col, n_segments=2):
     quantiles = df.approxQuantile(col, [0.25, 0.75], 0.01)
     if len(quantiles) == 2:
@@ -1113,10 +1142,16 @@ def apply_scalings(df):
 {{ _prov }}
 {%- endif %}
 {% if config.gold.scalings %}
+{% set ns = namespace(standard=[], minmax=[]) %}
 {% for step in config.gold.scalings %}
-    # {{ step.rationale }}
-    df = {{ render_spark_step_call(step) }}
+{% if step.parameters.get('method') == 'minmax' %}{% set ns.minmax = ns.minmax + [step.column] %}{% else %}{% set ns.standard = ns.standard + [step.column] %}{% endif %}
 {% endfor %}
+{% if ns.standard %}
+    df = _batch_scale_standard(df, [{% for c in ns.standard %}"{{ c }}"{{ ", " if not loop.last }}{% endfor %}])
+{% endif %}
+{% if ns.minmax %}
+    df = _batch_scale_minmax(df, [{% for c in ns.minmax %}"{{ c }}"{{ ", " if not loop.last }}{% endfor %}])
+{% endif %}
 {% endif %}
     return df
 
@@ -1155,9 +1190,9 @@ def run_gold():
     df = apply_encodings(df)
     df = apply_scalings(df)
     df = apply_feature_selection(df)
-    if "as_of_date" in [c for c in df.columns]:
+    if "as_of_date" in df.columns:
         df = df.withColumnRenamed("as_of_date", TIMESTAMP_COLUMN)
-    elif "feature_timestamp" in [c for c in df.columns]:
+    elif "feature_timestamp" in df.columns:
         df = df.withColumnRenamed("feature_timestamp", TIMESTAMP_COLUMN)
     output_table = gold_table()
     df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)

@@ -2074,3 +2074,121 @@ class TestDatabricksBronzeEntityLifecycleReadsFromLanding:
         assert "landing_table" in cohort_fn
         assert "bronze_table" not in cohort_fn
         ast.parse(result)
+
+
+class TestDatabricksSilverToSparkConversion:
+    @pytest.fixture
+    def temporal_config(self, entity_source, event_source, bronze_with_impute, gold_with_encode_scale):
+        from customer_retention.generators.pipeline_generator.models import TemporalMergeSourceConfig
+
+        silver = SilverLayerConfig(
+            joins=[{
+                "left_keys": ["customer_id"], "right_keys": ["customer_id"],
+                "right_source": "orders", "how": "left",
+            }],
+            grid_dates=["2024-01-01", "2024-01-08"],
+            entity_key="customer_id",
+            merge_sources=[
+                TemporalMergeSourceConfig(name="customers", granularity="entity_level"),
+                TemporalMergeSourceConfig(name="orders", granularity="event_level",
+                                          feature_timestamp_column="order_date"),
+            ],
+        )
+        return PipelineConfig(
+            name="test_pipeline", target_column="churn",
+            sources=[entity_source, event_source],
+            bronze={"customers": bronze_with_impute},
+            bronze_event={"orders": BronzeEventConfig(
+                source=event_source, entity_column="customer_id", time_column="order_date",
+                aggregation=AggregationWindowConfig(windows=["7d"], value_columns=["amount"], agg_funcs=["sum"]),
+            )},
+            silver=silver, gold=gold_with_encode_scale,
+            output_dir="/output/test_pipeline", composite_name="cust_orde__abc1234",
+        )
+
+    def test_silver_temporal_converts_to_spark_after_merge(self, renderer, temporal_config):
+        result = renderer.render_silver(temporal_config)
+        merge_pos = result.index("merge_all")
+        to_spark_pos = result.index("to_spark", merge_pos)
+        save_pos = result.index("saveAsTable", to_spark_pos)
+        assert merge_pos < to_spark_pos < save_pos
+
+    def test_silver_temporal_to_spark_is_guarded(self, renderer, temporal_config):
+        result = renderer.render_silver(temporal_config)
+        assert 'hasattr(merged, "to_spark")' in result
+
+    def test_silver_temporal_to_spark_valid_python(self, renderer, temporal_config):
+        result = renderer.render_silver(temporal_config)
+        ast.parse(result)
+
+
+class TestDatabricksGoldBatchedScaling:
+    def test_gold_uses_batch_scale_standard(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "_batch_scale_standard" in result
+
+    def test_gold_batch_scale_standard_function_defined(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "def _batch_scale_standard(df, cols):" in result
+
+    def test_gold_batch_scale_minmax_function_defined(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "def _batch_scale_minmax(df, cols):" in result
+
+    def test_gold_no_per_column_scale_calls_in_apply_scalings(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        apply_scalings_fn = result[result.index("def apply_scalings"):]
+        apply_scalings_fn = apply_scalings_fn[:apply_scalings_fn.index("\n\n")]
+        assert '_scale_standard(df, "' not in apply_scalings_fn
+        assert '_scale_minmax(df, "' not in apply_scalings_fn
+
+    def test_gold_mixed_scaling_methods(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join):
+        gold = GoldLayerConfig(
+            encodings=[],
+            scalings=[
+                TransformationStep(
+                    type=PipelineTransformationType.SCALE, column="amount",
+                    parameters={"method": "standard"}, rationale="Standardize amount",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.SCALE, column="revenue",
+                    parameters={"method": "standard"}, rationale="Standardize revenue",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.SCALE, column="score",
+                    parameters={"method": "minmax"}, rationale="MinMax score",
+                ),
+            ],
+        )
+        config = PipelineConfig(
+            name="test_pipeline", target_column="churn",
+            sources=[entity_source, event_source],
+            bronze={"customers": bronze_with_impute},
+            silver=SilverLayerConfig(joins=silver_with_join.joins, aggregations=[]),
+            gold=gold, output_dir="/output", composite_name="cust_orde__abc1234",
+        )
+        result = renderer.render_gold(config)
+        assert '_batch_scale_standard(df, ["amount", "revenue"])' in result
+        assert '_batch_scale_minmax(df, ["score"])' in result
+        ast.parse(result)
+
+    def test_gold_batch_scale_single_agg_call(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        batch_fn = result[result.index("def _batch_scale_standard"):]
+        batch_fn = batch_fn[:batch_fn.index("\ndef ")]
+        assert batch_fn.count(".collect()") == 1
+
+    def test_gold_is_valid_python_with_batched_scaling(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        ast.parse(result)
+
+
+class TestDatabricksGoldColumnCheckClean:
+    def test_gold_no_list_comprehension_column_check(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "[c for c in df.columns]" not in result
+
+    def test_gold_uses_direct_column_check(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert '"as_of_date" in df.columns' in result
+        assert '"feature_timestamp" in df.columns' in result

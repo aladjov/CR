@@ -28,6 +28,24 @@ def _empty_spine_schema(entity_key: str, as_of_column: str):
 
 
 class SparkTemporalMerger(TemporalMerger):
+    def merge_all(
+        self,
+        spine: Any,
+        datasets: list[DatasetMergeInput],
+    ) -> tuple[Any, Any]:
+        converted = []
+        for ds in datasets:
+            df = ds.df
+            if hasattr(df, "rdd"):
+                df = _as_pandas_api(df)
+            converted.append(DatasetMergeInput(
+                name=ds.name,
+                df=df,
+                granularity=ds.granularity,
+                feature_timestamp_column=ds.feature_timestamp_column,
+            ))
+        return super().merge_all(spine, converted)
+
     def build_spine(
         self, entity_ids: Any, grid_dates: list[str]
     ) -> Any:

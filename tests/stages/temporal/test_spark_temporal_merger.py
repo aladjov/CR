@@ -321,3 +321,63 @@ class TestSparkBuildSpineWithMockedSpark:
         result, report = merger.merge_all(spine, datasets)
         assert len(result) == 0
         assert report.spine_rows == 0
+
+
+class TestMergeAllConvertsSparkDataFrames:
+    def test_entity_broadcast_with_spark_df(self, monkeypatch):
+        merger = SparkTemporalMerger()
+        spine = _spine(["A", "B"], ["2024-01-01"])
+        entity_pdf = pd.DataFrame({
+            "entity_id": ["A", "B"],
+            "tier": ["gold", "silver"],
+        })
+        spark_df = MagicMock()
+        spark_df.rdd = MagicMock()
+
+        monkeypatch.setattr(
+            "customer_retention.stages.temporal.spark_temporal_merger._as_pandas_api",
+            lambda sdf: entity_pdf,
+        )
+        datasets = [
+            _merge_input("customers", spark_df, DatasetGranularity.ENTITY_LEVEL),
+        ]
+        result, report = merger.merge_all(spine, datasets)
+        assert len(result) == 2
+        assert "tier" in result.columns
+
+    def test_event_snapshot_with_spark_df(self, monkeypatch):
+        merger = SparkTemporalMerger()
+        spine = _spine(["A"], ["2024-01-01", "2024-02-01"])
+        event_pdf = _event_snapshot("entity_id", "as_of_date", {
+            "entity_id": ["A", "A"],
+            "as_of_date": ["2024-01-01", "2024-02-01"],
+            "amount": [10, 20],
+        })
+        spark_df = MagicMock()
+        spark_df.rdd = MagicMock()
+
+        monkeypatch.setattr(
+            "customer_retention.stages.temporal.spark_temporal_merger._as_pandas_api",
+            lambda sdf: event_pdf,
+        )
+        datasets = [
+            _merge_input("events", spark_df, DatasetGranularity.EVENT_LEVEL),
+        ]
+        result, report = merger.merge_all(spine, datasets)
+        assert len(result) == 2
+        assert "amount" in result.columns
+
+    def test_original_input_not_mutated(self, monkeypatch):
+        merger = SparkTemporalMerger()
+        spine = _spine(["A"], ["2024-01-01"])
+        entity_pdf = pd.DataFrame({"entity_id": ["A"], "val": [1]})
+        spark_df = MagicMock()
+        spark_df.rdd = MagicMock()
+
+        monkeypatch.setattr(
+            "customer_retention.stages.temporal.spark_temporal_merger._as_pandas_api",
+            lambda sdf: entity_pdf,
+        )
+        ds = _merge_input("src", spark_df, DatasetGranularity.ENTITY_LEVEL)
+        merger.merge_all(spine, [ds])
+        assert ds.df is spark_df
