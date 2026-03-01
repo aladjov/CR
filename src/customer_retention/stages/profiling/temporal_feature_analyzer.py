@@ -9,10 +9,10 @@ from customer_retention.core.compat import (
     DataFrame,
     ensure_timestamp,
     groupby_multi_agg,
+    head_as_list,
     native_pd,
     pd,
     qcut,
-    safe_to_list,
     timedelta_to_days,
 )
 from customer_retention.core.utils import compute_effect_size
@@ -247,7 +247,7 @@ class TemporalFeatureAnalyzer:
         period_means = df.groupby(period_key)[col].mean()
         velocity = period_means.diff().dropna()
         accel = velocity.diff().dropna()
-        return safe_to_list(velocity), safe_to_list(accel)
+        return head_as_list(velocity, 1000), head_as_list(accel, 1000)
 
     def generate_velocity_recommendations(
         self, results: Dict[str, List[CohortVelocityResult]]
@@ -313,7 +313,7 @@ class TemporalFeatureAnalyzer:
         self, df: DataFrame, col: str, short_window: int, long_window: int, reference_date
     ) -> MomentumResult:
         entity_momentum = []
-        for entity_id in safe_to_list(df[self.entity_column].unique()):
+        for entity_id in head_as_list(df[self.entity_column].unique(), 1000):
             entity_data = df[df[self.entity_column] == entity_id].copy()
             entity_data["days_ago"] = timedelta_to_days(reference_date - entity_data[self.time_column])
             short_mean = entity_data[entity_data["days_ago"] <= short_window][col].mean()

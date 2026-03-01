@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from customer_retention.core.compat import batched_corr_matrix, pd, safe_to_list
+from customer_retention.core.compat import batched_corr_matrix, head_as_list, pd
 
 
 @dataclass
@@ -324,7 +324,7 @@ class FeatureCapacityAnalyzer:
         min_per_segment = class_counts.groupby(segment_col)["n"].min()
 
         result = {}
-        for seg in safe_to_list(sizes.index):
+        for seg in head_as_list(sizes.index, 100):
             if int(non_null_counts.get(seg, 0)) == 0:
                 continue
             minority = int(min_per_segment.loc[seg]) if seg in min_per_segment.index else 0

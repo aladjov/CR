@@ -1,7 +1,7 @@
 import re
 from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import safe_to_list
+from customer_retention.core.compat import head_as_list
 
 from ..base import CleaningRecommendation, RecommendationResult
 
@@ -28,7 +28,7 @@ class ConsistencyNormalizeRecommendation(CleaningRecommendation):
                 continue
             unique_before[col] = df[col].nunique()
             if df[col].dtype == object:
-                variants[col] = safe_to_list(df[col].dropna().unique())[:20]
+                variants[col] = head_as_list(df[col].dropna().unique(), 20)
         self._fit_params["variants"] = variants
         self._fit_params["unique_before"] = unique_before
         self._unique_before = unique_before

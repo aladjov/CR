@@ -6,8 +6,8 @@ from customer_retention.core.compat import (
     Timestamp,
     as_tz_naive,
     ensure_timestamp,
+    head_as_list,
     safe_to_datetime,
-    safe_to_list,
     timestamp_diffs_seconds,
     to_pandas,
 )
@@ -98,7 +98,7 @@ class TemporalGapCheck(TemporalQualityCheck):
                 check_id=self.check_id, check_name=self.check_name, passed=False, severity=self.severity,
                 message=f"Found {len(large_gaps)} gaps exceeding {threshold_days:.1f} days",
                 details={"threshold_days": threshold_days, "expected_frequency": self.expected_frequency,
-                         "gap_locations": safe_to_list(large_gaps.index)[:10]},
+                         "gap_locations": head_as_list(large_gaps.index, 10)},
                 recommendation="Investigate data collection gaps or missing data",
                 gap_count=len(large_gaps), max_gap_days=max_gap)
 
@@ -131,7 +131,7 @@ class FutureDateCheck(TemporalQualityCheck):
                 check_id=self.check_id, check_name=self.check_name, passed=False, severity=self.severity,
                 message=f"Found {future_count} events with future dates",
                 details={"reference_date": str(self.reference_date),
-                         "future_date_examples": [str(d) for d in time_col[future_mask].head(10).tolist()]},
+                         "future_date_examples": [str(d) for d in head_as_list(time_col[future_mask], 10)]},
                 recommendation="Review data entry or timestamp handling", future_count=future_count)
 
         return self._pass_result("No future dates detected")

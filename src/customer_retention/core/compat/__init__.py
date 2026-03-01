@@ -400,12 +400,80 @@ def groupby_multi_agg(df: Any, group_col: str, agg_col: str, agg_funcs: list) ->
     return df.groupby(group_col)[agg_col].agg(agg_funcs).reset_index()
 
 
-def safe_to_list(obj: Any) -> list:
+def _to_list(obj: Any) -> list:
     if hasattr(obj, 'to_list'):
         return obj.to_list()
     if hasattr(obj, 'tolist'):
         return obj.tolist()
     return list(obj)
+
+
+def head_as_list(obj: Any, n: int) -> list:
+    import warnings
+    bounded = obj.head(n) if hasattr(obj, 'head') else obj[:n]
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=UserWarning, message=".*to_list.*")
+        return _to_list(bounded)
+
+
+def unique_overlap_counts(series_a: Any, series_b: Any) -> tuple[int, int, int]:
+    if _is_spark_pandas(series_a) and _is_spark_pandas(series_b):
+        return _spark_unique_overlap(series_a, series_b)
+    left = set(_to_list(series_a.dropna().unique()))
+    right = set(_to_list(series_b.dropna().unique()))
+    return len(left), len(right), len(left & right)
+
+
+def _spark_unique_overlap(series_a: Any, series_b: Any) -> tuple[int, int, int]:
+    col_a = series_a.name or "__a__"
+    col_b = series_b.name or "__b__"
+    spark_a = as_spark_df(series_a.dropna().to_frame()).select(
+        _spark_col(col_a).alias("__key__")
+    ).distinct()
+    spark_b = as_spark_df(series_b.dropna().to_frame()).select(
+        _spark_col(col_b).alias("__key__")
+    ).distinct()
+    left_count = spark_a.count()
+    right_count = spark_b.count()
+    overlap_count = spark_a.join(spark_b, on="__key__", how="inner").count()
+    return left_count, right_count, overlap_count
+
+
+def _spark_col(name: str) -> Any:
+    import pyspark.sql.functions as F  # noqa: N812
+    return F.col(name)
+
+
+def distributed_case_variations(str_series: Any, max_results: int = 10) -> list[str]:
+    if _is_spark_pandas(str_series):
+        return _spark_case_variations(str_series, max_results)
+    lower_to_originals: dict[str, list[str]] = {}
+    for value in _to_list(str_series.drop_duplicates()):
+        lower_val = str(value).lower()
+        if lower_val not in lower_to_originals:
+            lower_to_originals[lower_val] = []
+        lower_to_originals[lower_val].append(str(value))
+    variations = []
+    for originals in lower_to_originals.values():
+        if len(originals) > 1:
+            variations.append(f"{originals[0]} vs {originals[1]}")
+    return variations[:max_results]
+
+
+def _spark_case_variations(str_series: Any, max_results: int) -> list[str]:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    spark_df = as_spark_df(str_series.astype(str).to_frame())
+    col_name = spark_df.columns[0]
+    grouped = (
+        spark_df
+        .groupBy(F.lower(F.col(col_name)).alias("__lower__"))
+        .agg(F.collect_set(F.col(col_name)).alias("__variants__"))
+        .filter(F.size(F.col("__variants__")) > 1)
+        .limit(max_results)
+        .collect()
+    )
+    return [f"{row['__variants__'][0]} vs {row['__variants__'][1]}" for row in grouped]
 
 
 def safe_isinf(series: Any) -> Any:
@@ -927,7 +995,9 @@ __all__ = [
     "as_tz_naive",
     "groupby_multi_agg",
     "timestamp_diffs_seconds",
-    "safe_to_list",
+    "head_as_list",
+    "unique_overlap_counts",
+    "distributed_case_variations",
     "timedelta_to_days",
     "timedelta_to_seconds",
     "_is_spark_pandas",

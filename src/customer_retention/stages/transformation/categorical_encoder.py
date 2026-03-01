@@ -4,7 +4,7 @@ from typing import Optional
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, Series, safe_to_list, to_numeric
+from customer_retention.core.compat import DataFrame, Series, head_as_list, to_numeric
 
 
 class EncodingStrategy(str, Enum):
@@ -83,7 +83,7 @@ class CategoricalEncoder:
         return self._apply_encoding(series, target)
 
     def _fit_one_hot(self, clean: Series):
-        categories = safe_to_list(clean.unique())
+        categories = head_as_list(clean.unique(), 1000)
         if self.min_frequency is not None:
             vc_dict = clean.value_counts().to_dict()
             categories = [c for c in categories if vc_dict.get(c, 0) >= self.min_frequency]
@@ -91,7 +91,7 @@ class CategoricalEncoder:
         self._mapping = {cat: i for i, cat in enumerate(self._categories)}
 
     def _fit_label(self, clean: Series):
-        categories = sorted(safe_to_list(clean.unique()))
+        categories = sorted(head_as_list(clean.unique(), 1000))
         self._mapping = {cat: i for i, cat in enumerate(categories)}
 
     def _fit_ordinal(self, clean: Series):
@@ -104,7 +104,7 @@ class CategoricalEncoder:
             raise ValueError("Cyclical encoding requires period parameter")
         # Check if values are strings and need mapping to indices
         if clean.dtype == object:
-            unique_values = sorted(safe_to_list(clean.unique()))
+            unique_values = sorted(head_as_list(clean.unique(), 1000))
             # Auto-detect day of week names
             day_names = {
                 'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
@@ -141,7 +141,7 @@ class CategoricalEncoder:
         self._global_mean = target.mean()
         self._target_means = {}
 
-        for cat in safe_to_list(clean.unique()):
+        for cat in head_as_list(clean.unique(), 1000):
             mask = clean == cat
             cat_target = target[mask]
             n = len(cat_target)
@@ -167,7 +167,7 @@ class CategoricalEncoder:
         return CategoricalEncodeResult(series=series, strategy=self.strategy)
 
     def _encode_one_hot(self, series: Series) -> CategoricalEncodeResult:
-        categories = self._categories if self._categories else sorted(safe_to_list(series.dropna().unique()))
+        categories = self._categories if self._categories else sorted(head_as_list(series.dropna().unique(), 1000))
         if self.drop_first and len(categories) > 0:
             categories = categories[1:]
 
@@ -200,7 +200,7 @@ class CategoricalEncoder:
     def _encode_ordinal(self, series: Series) -> CategoricalEncodeResult:
         unknown = series[series.notna() & ~series.isin(self._mapping.keys())]
         if len(unknown) > 0 and self.handle_unknown == "error":
-            raise ValueError(f"Found unknown categories: {safe_to_list(unknown.unique())}")
+            raise ValueError(f"Found unknown categories: {head_as_list(unknown.unique(), 100)}")
 
         result = series.map(self._mapping)
         return CategoricalEncodeResult(

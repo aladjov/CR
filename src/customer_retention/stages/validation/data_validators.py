@@ -10,10 +10,10 @@ from typing import Any, Dict, List, Optional
 
 from customer_retention.core.compat import (
     DataFrame,
+    head_as_list,
     is_datetime64_any_dtype,
     is_numeric_dtype,
     pd,
-    safe_to_list,
     to_datetime,
 )
 from customer_retention.core.components.enums import Severity
@@ -178,7 +178,7 @@ class DataValidator:
             exclude.add(key_column)
             value_columns = [c for c in df.columns if c not in exclude]
 
-            sample_keys = safe_to_list(df[duplicate_mask][key_column].unique())[:5]
+            sample_keys = head_as_list(df[duplicate_mask][key_column].unique(), 5)
 
             for key_value in sample_keys:
                 key_rows = df[df[key_column] == key_value]
@@ -387,7 +387,7 @@ class DataValidator:
             actual_range = f"[{actual_min:.2f}, {actual_max:.2f}]"
 
             # Get invalid examples
-            invalid_examples = series[invalid_mask].head(5).tolist() if invalid_values > 0 else []
+            invalid_examples = head_as_list(series[invalid_mask], 5) if invalid_values > 0 else []
 
             # Determine severity
             if invalid_percentage > 10:
@@ -445,7 +445,7 @@ class DataValidator:
 
             # Binary columns
             elif df[col].nunique() == 2:
-                unique_vals = safe_to_list(df[col].dropna().unique())
+                unique_vals = head_as_list(df[col].dropna().unique(), 10)
                 if set(unique_vals).issubset({0, 1, True, False, 0.0, 1.0}):
                     rules[col] = {"type": "binary", "valid_values": [0, 1]}
 

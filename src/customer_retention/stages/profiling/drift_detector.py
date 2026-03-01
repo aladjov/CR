@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import pd, safe_to_list
+from customer_retention.core.compat import head_as_list, pd
 from customer_retention.core.config import ColumnType
 from customer_retention.core.utils.statistics import (
     compute_chi_square,
@@ -75,8 +75,8 @@ class BaselineDriftChecker:
         clean_series = series.dropna()
         value_counts = clean_series.value_counts()
         return {
-            "categories": safe_to_list(value_counts.index),
-            "counts": safe_to_list(value_counts),
+            "categories": head_as_list(value_counts.index, 1000),
+            "counts": head_as_list(value_counts, 1000),
             "proportions": (value_counts / len(clean_series)).to_dict(),
         }
 
@@ -171,7 +171,7 @@ class BaselineDriftChecker:
 
         # Get current distribution
         current_counts = clean_series.value_counts()
-        current_categories = set(safe_to_list(current_counts.index))
+        current_categories = set(head_as_list(current_counts.index, 1000))
         baseline_categories = set(baseline["categories"])
 
         # New and missing categories

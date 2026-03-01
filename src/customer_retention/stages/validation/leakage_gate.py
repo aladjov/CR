@@ -7,9 +7,9 @@ from customer_retention.core.compat import (
     Timestamp,
     as_tz_naive,
     bulk_corr_with_target,
+    head_as_list,
     is_numeric_dtype,
     notna,
-    safe_to_list,
     to_datetime,
 )
 from customer_retention.core.components.enums import Severity
@@ -168,7 +168,7 @@ class LeakageGate:
         if self.target_column not in df.columns:
             return issues
 
-        target_values = safe_to_list(df[self.target_column].unique())
+        target_values = head_as_list(df[self.target_column].unique(), 10)
         if len(target_values) != 2:
             return issues
 
@@ -225,7 +225,7 @@ class LeakageGate:
         if self.target_column not in df.columns:
             return issues
 
-        target_values = safe_to_list(df[self.target_column].unique())
+        target_values = head_as_list(df[self.target_column].unique(), 10)
         if len(target_values) != 2:
             return issues
 

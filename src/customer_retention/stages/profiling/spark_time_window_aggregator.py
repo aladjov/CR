@@ -8,9 +8,9 @@ from customer_retention.core.compat import (
     Timestamp,
     as_tz_naive,
     ensure_timestamp,
+    head_as_list,
     is_numeric_dtype,
     native_pd,
-    safe_to_list,
     timedelta_to_days,
     to_pandas,
 )
@@ -187,7 +187,7 @@ class SparkTimeWindowAggregator(TimeWindowAggregator):
         window: TimeWindow, value_columns: List[str],
     ) -> Any:
         for col in value_columns:
-            unique_values = safe_to_list(full_df[col].dropna().unique())
+            unique_values = head_as_list(full_df[col].dropna().unique(), 100)
             for val in unique_values:
                 col_name = f"{col}_{val}_count_{window.name}"
                 if len(filtered) == 0:

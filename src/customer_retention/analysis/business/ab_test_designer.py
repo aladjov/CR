@@ -7,7 +7,7 @@ from typing import List, Optional
 import numpy as np
 from scipy import stats
 
-from customer_retention.core.compat import DataFrame, concat, safe_to_list
+from customer_retention.core.compat import DataFrame, concat, head_as_list
 
 
 @dataclass
@@ -126,7 +126,7 @@ class ABTestDesigner:
     def _stratified_assignment(self, sample: DataFrame, groups: List[str],
                                stratify_by: str) -> DataFrame:
         assignments = []
-        for stratum in safe_to_list(sample[stratify_by].unique()):
+        for stratum in head_as_list(sample[stratify_by].unique(), 100):
             stratum_data = sample[sample[stratify_by] == stratum]
             n_per_group = len(stratum_data) // len(groups)
             shuffled = stratum_data.sample(frac=1, random_state=42)

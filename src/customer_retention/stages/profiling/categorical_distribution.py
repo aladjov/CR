@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import Series, pd, safe_to_list
+from customer_retention.core.compat import Series, head_as_list, pd
 
 
 class EncodingType(Enum):
@@ -112,7 +112,7 @@ class CategoricalDistributionAnalyzer:
         rare_threshold = total_count * self.RARE_CATEGORY_THRESHOLD
         rare_mask = value_counts < rare_threshold
         rare_category_count = int(rare_mask.sum())
-        rare_category_names = safe_to_list(value_counts[rare_mask].index)
+        rare_category_names = head_as_list(value_counts[rare_mask].index, 10)
 
         return CategoricalDistributionAnalysis(
             column_name=column_name,

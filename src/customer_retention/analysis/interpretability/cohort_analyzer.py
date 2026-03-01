@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 import numpy as np
 import shap
 
-from customer_retention.core.compat import DataFrame, Series, cut, safe_to_list
+from customer_retention.core.compat import DataFrame, Series, cut, head_as_list
 
 
 @dataclass
@@ -49,7 +49,7 @@ class CohortAnalyzer:
         return shap.KernelExplainer(self.model.predict_proba, self.background_data)
 
     def analyze(self, X: DataFrame, y: Series, cohorts: Series) -> CohortAnalysisResult:
-        unique_cohorts = safe_to_list(cohorts.unique())
+        unique_cohorts = head_as_list(cohorts.unique(), 100)
         insights = []
         all_features_by_cohort = {}
         for cohort in unique_cohorts:

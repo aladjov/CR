@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from customer_retention.core.compat import safe_to_list
+from customer_retention.core.compat import head_as_list
 from customer_retention.core.config import ColumnType, DatasetGranularity
 from customer_retention.stages.profiling import TypeConfidence, TypeDetector
 
@@ -415,42 +415,42 @@ class TestDatasetGranularityDetection:
 
 class TestTypeDetectorSparkCompat:
     """Regression: pyspark.pandas Series.__iter__() raises PandasNotImplementedError.
-    Verify safe_to_list is used instead of direct iteration in all code paths."""
+    Verify head_as_list is used instead of direct iteration in all code paths."""
 
-    PATCH_TARGET = "customer_retention.stages.profiling.type_detector.safe_to_list"
+    PATCH_TARGET = "customer_retention.stages.profiling.type_detector.head_as_list"
 
-    def test_is_binary_uses_safe_to_list(self):
+    def test_is_binary_uses_head_as_list(self):
         detector = TypeDetector()
         series = pd.Series([0, 1, 0, 1])
-        with patch(self.PATCH_TARGET, wraps=safe_to_list) as mock:
+        with patch(self.PATCH_TARGET, wraps=head_as_list) as mock:
             detector.is_binary(series, series.nunique())
             mock.assert_called_once()
 
-    def test_is_datetime_string_uses_safe_to_list(self):
+    def test_is_datetime_string_uses_head_as_list(self):
         detector = TypeDetector()
-        with patch(self.PATCH_TARGET, wraps=safe_to_list) as mock:
+        with patch(self.PATCH_TARGET, wraps=head_as_list) as mock:
             detector.is_datetime(pd.Series(["2023-01-01", "2023-01-02"]))
             mock.assert_called_once()
 
-    def test_is_cyclical_pattern_uses_safe_to_list(self):
+    def test_is_cyclical_pattern_uses_head_as_list(self):
         detector = TypeDetector()
-        with patch(self.PATCH_TARGET, wraps=safe_to_list) as mock:
+        with patch(self.PATCH_TARGET, wraps=head_as_list) as mock:
             detector.is_cyclical_pattern(pd.Series(["Monday", "Tuesday", "Wednesday"]))
             mock.assert_called_once()
 
-    def test_is_identifier_datetime_check_uses_safe_to_list(self):
+    def test_is_identifier_datetime_check_uses_head_as_list(self):
         detector = TypeDetector()
         series = pd.Series(["2023-01-01", "2023-01-02", "2023-01-03"])
-        with patch(self.PATCH_TARGET, wraps=safe_to_list) as mock:
+        with patch(self.PATCH_TARGET, wraps=head_as_list) as mock:
             detector.is_identifier(series, "random_col", series.nunique())
             assert mock.called
 
-    def test_detect_time_column_uses_safe_to_list(self):
+    def test_detect_time_column_uses_head_as_list(self):
         detector = TypeDetector()
         df = pd.DataFrame({
             "customer_id": ["C001", "C001", "C002"],
             "event_date": ["2023-01-01", "2023-01-02", "2023-01-03"],
         })
-        with patch(self.PATCH_TARGET, wraps=safe_to_list) as mock:
+        with patch(self.PATCH_TARGET, wraps=head_as_list) as mock:
             detector._detect_time_column(df)
             assert mock.called

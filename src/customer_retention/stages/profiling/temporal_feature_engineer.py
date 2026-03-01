@@ -28,9 +28,9 @@ import numpy as np
 from customer_retention.core.compat import (
     Timedelta,
     groupby_multi_agg,
+    head_as_list,
     native_pd,
     pd,
-    safe_to_list,
     timedelta_to_days,
     timestamp_diffs_seconds,
     to_datetime,
@@ -497,7 +497,7 @@ class TemporalFeatureEngineer:
             ])
 
         # Process each entity
-        for entity in safe_to_list(result[entity_col].unique()):
+        for entity in head_as_list(result[entity_col].unique(), 10000):
             entity_df = df[df[entity_col] == entity]
             if len(entity_df) == 0:
                 continue
@@ -601,7 +601,7 @@ class TemporalFeatureEngineer:
         """Compute frequency and regularity features (Group 6)."""
         result = ref_dates[[entity_col]].copy()
 
-        for entity in safe_to_list(result[entity_col].unique()):
+        for entity in head_as_list(result[entity_col].unique(), 10000):
             entity_events = events_df[events_df[entity_col] == entity].sort_values(time_col)
 
             if len(entity_events) < 2:

@@ -6,7 +6,7 @@ import numpy as np
 
 from customer_retention.core.compat import (
     DataFrame,
-    safe_to_list,
+    head_as_list,
     timedelta_to_days,
     to_pandas,
 )
@@ -47,7 +47,7 @@ class SparkTemporalFeatureAnalyzer(TemporalFeatureAnalyzer):
         long_means = df_calc[df_calc["_days_ago"] <= long_w].groupby(self.entity_column)[col].mean()
         valid = (long_means > 0) & short_means.notna() & long_means.notna()
         momentum = (short_means[valid] / long_means[valid]).dropna()
-        return safe_to_list(momentum)
+        return head_as_list(momentum, 10000)
 
     def _velocity_accel_series(
         self, df: DataFrame, col: str, window: int,

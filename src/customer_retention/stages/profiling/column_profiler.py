@@ -7,13 +7,14 @@ import numpy as np
 from customer_retention.core.compat import (
     Timestamp,
     as_tz_naive,
+    distributed_case_variations,
+    head_as_list,
     is_bool_dtype,
     is_datetime64_any_dtype,
     pd,
     safe_isfinite,
     safe_isinf,
     safe_memory_usage_bytes,
-    safe_to_list,
     to_datetime,
 )
 from customer_retention.core.config.column_config import ColumnType
@@ -65,7 +66,7 @@ class IdentifierProfiler(ColumnProfiler):
         is_unique = series.nunique() == len(series.dropna())
         duplicates = series[series.duplicated(keep=False)]
         duplicate_count = int(duplicates.nunique())
-        duplicate_values = safe_to_list(duplicates.drop_duplicates().head(10))
+        duplicate_values = head_as_list(duplicates.drop_duplicates(), 10)
 
         str_series = series.dropna().astype(str)
         lengths = str_series.str.len()
@@ -246,7 +247,7 @@ class CategoricalProfiler(ColumnProfiler):
         rare_category_percentage = round((rare_rows / len(clean_series) * 100), 2)
 
         unknown_values = {"unknown", "other", "n/a", "na", "none", "null", "missing"}
-        unique_sample = safe_to_list(clean_series.drop_duplicates().head(100))
+        unique_sample = head_as_list(clean_series.drop_duplicates(), 100)
         contains_unknown = any(str(v).lower() in unknown_values for v in unique_sample)
 
         case_variations = self.detect_case_variations(clean_series)
@@ -271,27 +272,13 @@ class CategoricalProfiler(ColumnProfiler):
         }
 
     def detect_case_variations(self, clean_series: pd.Series) -> list[str]:
-        str_series = clean_series.astype(str)
-        lower_to_originals = {}
-
-        for value in safe_to_list(str_series.drop_duplicates()):
-            lower_val = value.lower()
-            if lower_val not in lower_to_originals:
-                lower_to_originals[lower_val] = []
-            lower_to_originals[lower_val].append(value)
-
-        variations = []
-        for lower_val, originals in lower_to_originals.items():
-            if len(originals) > 1:
-                variations.append(f"{originals[0]} vs {originals[1]}")
-
-        return variations[:10]
+        return distributed_case_variations(clean_series.astype(str), max_results=10)
 
     def detect_whitespace_issues(self, clean_series: pd.Series) -> list[str]:
         str_series = clean_series.astype(str)
         issues = []
 
-        for value in safe_to_list(str_series.drop_duplicates().head(100)):
+        for value in head_as_list(str_series.drop_duplicates(), 100):
             if value != value.strip():
                 issues.append(value)
 
@@ -317,7 +304,7 @@ class DatetimeProfiler(ColumnProfiler):
         format_detected, format_consistency = self.detect_datetime_format(series)
 
         if not is_datetime64_any_dtype(clean_series):
-            sample = safe_to_list(clean_series.head(10))
+            sample = head_as_list(clean_series, 10)
             if len(sample) > 0 and all(isinstance(v, (Timestamp, datetime)) for v in sample):
                 pass
             else:
@@ -370,7 +357,7 @@ class DatetimeProfiler(ColumnProfiler):
         if is_datetime64_any_dtype(series):
             return 'datetime64', 100.0
 
-        sample = safe_to_list(series.dropna().astype(str).head(min(100, len(series))))
+        sample = head_as_list(series.dropna().astype(str), 100)
         if len(sample) == 0:
             return None, None
 

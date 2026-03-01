@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Set
 
-from customer_retention.core.compat import DataFrame, safe_to_list
+from customer_retention.core.compat import DataFrame, unique_overlap_counts
 
 
 class RelationshipType(str, Enum):
@@ -189,16 +189,15 @@ class RelationshipDetector:
         if left_col not in df1.columns or right_col not in df2.columns:
             return 0.0, 0.0, 0.0
 
-        left_values = set(safe_to_list(df1[left_col].dropna().unique()))
-        right_values = set(safe_to_list(df2[right_col].dropna().unique()))
+        left_count, right_count, overlap_count = unique_overlap_counts(
+            df1[left_col], df2[right_col]
+        )
 
-        if not left_values or not right_values:
+        if left_count == 0 or right_count == 0:
             return 0.0, 0.0, 0.0
 
-        # Calculate coverage
-        overlap = left_values & right_values
-        left_coverage = len(overlap) / len(left_values) if left_values else 0
-        right_coverage = len(overlap) / len(right_values) if right_values else 0
+        left_coverage = overlap_count / left_count
+        right_coverage = overlap_count / right_count
 
         # Score based on coverage (harmonic mean for balance)
         if left_coverage + right_coverage > 0:

@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import Series, Timestamp, native_pd, safe_to_list, to_datetime
+from customer_retention.core.compat import Series, Timestamp, head_as_list, native_pd, to_datetime
 
 
 class TemporalGranularity(Enum):
@@ -193,8 +193,8 @@ class TemporalAnalyzer:
                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
         if len(monthly_totals) >= 3:
-            peak_months = safe_to_list(monthly_totals.nlargest(3).index)
-            trough_months = safe_to_list(monthly_totals.nsmallest(3).index)
+            peak_months = head_as_list(monthly_totals.nlargest(3).index, 3)
+            trough_months = head_as_list(monthly_totals.nsmallest(3).index, 3)
             peak_periods = [month_names[m - 1] for m in peak_months if m <= 12]
             trough_periods = [month_names[m - 1] for m in trough_months if m <= 12]
         else:

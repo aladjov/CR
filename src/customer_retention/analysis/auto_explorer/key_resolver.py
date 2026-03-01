@@ -4,7 +4,7 @@ import logging
 from typing import Optional
 
 from customer_retention.analysis.auto_explorer.project_context import KeyResolutionStep
-from customer_retention.core.compat import pd, safe_to_list
+from customer_retention.core.compat import pd, unique_overlap_counts
 
 logger = logging.getLogger(__name__)
 
@@ -110,12 +110,12 @@ def suggest_key_resolutions(
             for col in source_id_cols:
                 if col not in bridge_df.columns:
                     continue
-                source_keys = set(safe_to_list(source_df[col].dropna().unique()))
-                if not source_keys:
+                source_count, _bridge_count, matched = unique_overlap_counts(
+                    source_df[col], bridge_df[col]
+                )
+                if source_count == 0:
                     continue
-                bridge_keys = set(safe_to_list(bridge_df[col].dropna().unique()))
-                matched = len(source_keys & bridge_keys)
-                coverage = matched / len(source_keys)
+                coverage = matched / source_count
                 if coverage > best_coverage:
                     best_coverage = coverage
                     best_step = KeyResolutionStep(

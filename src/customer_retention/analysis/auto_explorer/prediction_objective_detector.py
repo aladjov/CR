@@ -10,7 +10,7 @@ from customer_retention.analysis.auto_explorer.project_context import (
     PredictionAnchor,
     PredictionObjective,
 )
-from customer_retention.core.compat import is_datetime64_any_dtype, native_pd, pd
+from customer_retention.core.compat import head_as_list, is_datetime64_any_dtype, native_pd, pd
 from customer_retention.stages.profiling.temporal_coverage import TemporalComparison
 
 _IMMEDIATE_RISK_PATTERNS = [
@@ -359,7 +359,7 @@ def _looks_like_date_column(df: pd.DataFrame, col: str) -> bool:
     if len(sample) == 0:
         return False
     parseable = 0
-    for val in sample.tolist():
+    for val in head_as_list(sample, 20):
         try:
             native_pd.to_datetime(val, format="mixed")
             parseable += 1

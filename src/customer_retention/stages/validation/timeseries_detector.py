@@ -13,9 +13,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from customer_retention.core.compat import (
     DataFrame,
+    head_as_list,
     is_datetime64_any_dtype,
     pd,
-    safe_to_list,
     timestamp_diffs_seconds,
     to_datetime,
 )
@@ -388,7 +388,7 @@ class TimeSeriesDetector:
     ) -> Tuple[TimeSeriesFrequency, float]:
         """Detect the frequency of the time series."""
         # Sample entities for efficiency
-        sample_entities = safe_to_list(df[entity_column].unique())[:100]
+        sample_entities = head_as_list(df[entity_column].unique(), 100)
 
         intervals = []
         for entity in sample_entities:
@@ -405,7 +405,7 @@ class TimeSeriesDetector:
                 continue
 
             diff_seconds = timestamp_diffs_seconds(ts).dropna()
-            intervals.extend(safe_to_list(diff_seconds / 3600))
+            intervals.extend(head_as_list(diff_seconds / 3600, 10000))
 
         if not intervals:
             return TimeSeriesFrequency.UNKNOWN, 0.0
@@ -643,7 +643,7 @@ class TimeSeriesValidator:
         examples = []
 
         # Sample for efficiency
-        sample_entities = safe_to_list(df[entity_column].unique())[:1000]
+        sample_entities = head_as_list(df[entity_column].unique(), 1000)
 
         for entity in sample_entities:
             entity_data = df[df[entity_column] == entity]['_ts'].dropna()
@@ -696,7 +696,7 @@ class TimeSeriesValidator:
         gap_examples = []
 
         # Sample for efficiency
-        sample_entities = safe_to_list(df[entity_column].unique())[:500]
+        sample_entities = head_as_list(df[entity_column].unique(), 500)
 
         for entity in sample_entities:
             entity_data = df[df[entity_column] == entity]['_ts'].dropna().sort_values()
@@ -759,7 +759,7 @@ class TimeSeriesValidator:
         """Estimate the typical interval from the data."""
         intervals = []
 
-        sample_entities = safe_to_list(df[entity_column].unique())[:100]
+        sample_entities = head_as_list(df[entity_column].unique(), 100)
 
         for entity in sample_entities:
             entity_data = df[df[entity_column] == entity]['_ts'].dropna().sort_values()
@@ -767,7 +767,7 @@ class TimeSeriesValidator:
                 continue
 
             diffs_sec = timestamp_diffs_seconds(entity_data).dropna()
-            intervals.extend(safe_to_list(diffs_sec))
+            intervals.extend(head_as_list(diffs_sec, 10000))
 
         if not intervals:
             return None

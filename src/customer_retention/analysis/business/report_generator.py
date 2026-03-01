@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import DataFrame, Series, pd, safe_to_list
+from customer_retention.core.compat import DataFrame, Series, head_as_list, pd
 
 
 @dataclass
@@ -166,7 +166,7 @@ class ReportGenerator:
         top_drivers = [{"feature": f, "importance": i} for f, i in sorted_features[:5]]
         segment_profiles = {}
         if "risk_segment" in customer_data.columns:
-            for segment in safe_to_list(customer_data["risk_segment"].unique()):
+            for segment in head_as_list(customer_data["risk_segment"].unique(), 50):
                 seg_data = customer_data[customer_data["risk_segment"] == segment]
                 segment_profiles[segment] = {
                     "count": len(seg_data),

@@ -8,7 +8,6 @@ from customer_retention.core.compat import (
     Timestamp,
     is_datetime64_any_dtype,
     native_pd,
-    safe_to_list,
     to_datetime,
 )
 
@@ -279,7 +278,7 @@ def _detect_gaps(events_over_time: native_pd.Series, freq: str) -> List[Temporal
                     ))
                 gap_start = None
     if gap_start is not None:
-        idx_list = safe_to_list(series.index)
+        idx_list = list(series.index)
         end = idx_list[-1]
         duration = (end - gap_start).days
         if duration >= 3:

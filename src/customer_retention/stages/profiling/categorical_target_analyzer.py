@@ -4,7 +4,7 @@ from typing import Dict, List
 import numpy as np
 from scipy.stats import chi2_contingency
 
-from customer_retention.core.compat import DataFrame, is_datetime64_any_dtype, native_pd, safe_to_list
+from customer_retention.core.compat import DataFrame, head_as_list, is_datetime64_any_dtype, native_pd
 from customer_retention.stages.profiling.stats_helpers import calculate_group_retention_stats
 
 CARDINALITY_THRESHOLD = 0.5
@@ -182,8 +182,8 @@ class CategoricalTargetAnalyzer:
         category_stats = self._calculate_category_stats(clean_df, categorical_col, target_col, overall_rate)
         cramers_v, chi2_stat, p_value = self._calculate_cramers_v(clean_df, categorical_col, target_col)
         effect_strength = self._determine_effect_strength(cramers_v)
-        high_risk = safe_to_list(category_stats[category_stats['lift'] < self.HIGH_RISK_LIFT_THRESHOLD]['category'])
-        low_risk = safe_to_list(category_stats[category_stats['lift'] > self.LOW_RISK_LIFT_THRESHOLD]['category'])
+        high_risk = head_as_list(category_stats[category_stats['lift'] < self.HIGH_RISK_LIFT_THRESHOLD]['category'], 50)
+        low_risk = head_as_list(category_stats[category_stats['lift'] > self.LOW_RISK_LIFT_THRESHOLD]['category'], 50)
 
         return CategoricalTargetResult(
             categorical_col=categorical_col,

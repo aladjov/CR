@@ -10,11 +10,11 @@ from customer_retention.core.compat import (
     _is_spark_pandas,
     as_spark_df,
     groupby_multi_agg,
+    head_as_list,
     is_datetime64_any_dtype,
     is_numeric_dtype,
     native_pd,
     pd,
-    safe_to_list,
     timedelta_to_days,
     timestamp_diffs_seconds,
 )
@@ -94,7 +94,7 @@ def classify_lifecycle_quadrants(entity_lifecycles: DataFrame) -> LifecycleQuadr
     counts = lc["lifecycle_quadrant"].value_counts()
     total = len(lc)
     rows = []
-    for quadrant in safe_to_list(counts.index):
+    for quadrant in head_as_list(counts.index, 10):
         n = counts[quadrant]
         rec = _QUADRANT_RECOMMENDATIONS[quadrant]
         rows.append({
@@ -170,7 +170,7 @@ def classify_activity_segments(entity_lifecycles: DataFrame) -> ActivitySegmentR
     counts = lc["activity_segment"].value_counts()
     total = len(lc)
     rows = []
-    for segment in safe_to_list(counts.index):
+    for segment in head_as_list(counts.index, 50):
         n = counts[segment]
         subset = lc[lc["activity_segment"] == segment]
         rec = _SEGMENT_RECOMMENDATIONS[segment]

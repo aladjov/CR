@@ -2,11 +2,11 @@ from typing import Optional
 
 from customer_retention.core.compat import (
     DataFrame,
+    head_as_list,
     is_datetime64_any_dtype,
     is_numeric_dtype,
     is_string_dtype,
     pd,
-    safe_to_list,
 )
 from customer_retention.core.compat.bulk_profiling import bulk_nunique
 from customer_retention.core.config.column_config import ColumnType, DatasetGranularity
@@ -110,7 +110,7 @@ class TypeDetector:
                 sample = series.dropna().head(100)
                 if len(sample) > 0:
                     parseable_count = 0
-                    for value in safe_to_list(sample):
+                    for value in head_as_list(sample, 100):
                         try:
                             pd.to_datetime(value, format="mixed")
                             parseable_count += 1
@@ -157,7 +157,7 @@ class TypeDetector:
         if distinct_count != 2:
             return False
 
-        unique_values = set(safe_to_list(series.dropna().unique()))
+        unique_values = set(head_as_list(series.dropna().unique(), 10))
 
         binary_sets = [
             {0, 1},
@@ -196,7 +196,7 @@ class TypeDetector:
                 return False
 
             parseable_count = 0
-            for value in safe_to_list(sample):
+            for value in head_as_list(sample, 100):
                 try:
                     pd.to_datetime(value, format="mixed")
                     parseable_count += 1
@@ -264,7 +264,7 @@ class TypeDetector:
     MAX_CYCLICAL_VALUE_LENGTH = 15
 
     def is_cyclical_pattern(self, series: pd.Series) -> bool:
-        sample_values = [str(v).lower() for v in safe_to_list(series.dropna().unique()[:20])]
+        sample_values = [str(v).lower() for v in head_as_list(series.dropna().unique(), 20)]
 
         if len(sample_values) == 0:
             return False
@@ -450,7 +450,7 @@ class TypeDetector:
                     sample = df[col].dropna().head(20)
                     if len(sample) > 0:
                         parseable = 0
-                        for val in safe_to_list(sample):
+                        for val in head_as_list(sample, 20):
                             try:
                                 pd.to_datetime(val, format="mixed")
                                 parseable += 1

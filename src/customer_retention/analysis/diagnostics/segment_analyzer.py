@@ -6,7 +6,7 @@ from typing import Dict, List
 import numpy as np
 from sklearn.metrics import average_precision_score, precision_score, recall_score, roc_auc_score
 
-from customer_retention.core.compat import DataFrame, Series, cut, pd, qcut, safe_to_list
+from customer_retention.core.compat import DataFrame, Series, cut, head_as_list, pd, qcut
 from customer_retention.core.components.enums import Severity
 
 
@@ -48,7 +48,7 @@ class SegmentPerformanceAnalyzer:
         checks = []
         segment_metrics = {}
         global_metrics = self._compute_metrics(model, X, y)
-        unique_segments = safe_to_list(segments.unique())
+        unique_segments = head_as_list(segments.unique(), 100)
         for seg in unique_segments:
             mask = segments == seg
             if mask.sum() < 10:

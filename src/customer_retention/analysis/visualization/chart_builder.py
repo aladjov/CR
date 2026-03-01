@@ -13,9 +13,9 @@ from customer_retention.core.compat import (
     DataFrame,
     Series,
     batched_corr_matrix,
+    head_as_list,
     safe_memory_usage_bytes,
     safe_to_datetime,
-    safe_to_list,
     to_pandas,
 )
 
@@ -349,7 +349,7 @@ class ChartBuilder:
         fig = go.Figure(go.Heatmap(
             z=retention_matrix.to_numpy(),
             x=list(retention_matrix.columns),
-            y=safe_to_list(retention_matrix.index),
+            y=head_as_list(retention_matrix.index, 1000),
             colorscale="Greens",
             text=np.round(retention_matrix.to_numpy(), 2),
             texttemplate="%{text:.0%}"

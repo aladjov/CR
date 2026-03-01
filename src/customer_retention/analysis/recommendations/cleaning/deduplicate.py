@@ -1,6 +1,6 @@
 from typing import Any, List, Optional
 
-from customer_retention.core.compat import safe_to_list
+from customer_retention.core.compat import head_as_list
 
 from ..base import CleaningRecommendation, RecommendationResult
 
@@ -32,7 +32,7 @@ class DeduplicateRecommendation(CleaningRecommendation):
         dup_count = len(duplicated_df) - duplicated_df.drop_duplicates(subset=existing_keys).shape[0]
         self._fit_params["duplicate_count"] = dup_count
         first_key = existing_keys[0]
-        self._fit_params["duplicate_keys"] = safe_to_list(duplicated_df[first_key].unique())
+        self._fit_params["duplicate_keys"] = head_as_list(duplicated_df[first_key].unique(), 10000)
 
     def _transform_local(self, df: Any) -> RecommendationResult:
         df = df.copy()

@@ -2,7 +2,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel
 
-from customer_retention.core.compat import is_datetime64_any_dtype, pd, safe_to_list
+from customer_retention.core.compat import head_as_list, is_datetime64_any_dtype, pd
 from customer_retention.core.components.enums import Severity
 from customer_retention.core.config import ColumnType
 
@@ -814,7 +814,7 @@ class SuspiciousPrecisionCheck(QualityCheck):
             return None
 
         # Check if all values end in .00 (are whole numbers)
-        all_whole = all((isinstance(v, (int, float)) and v == int(v)) for v in safe_to_list(clean_series.head(min(100, len(clean_series)))))
+        all_whole = all((isinstance(v, (int, float)) and v == int(v)) for v in head_as_list(clean_series, 100))
 
         if all_whole and len(clean_series) > 10:
             return self.create_result(
