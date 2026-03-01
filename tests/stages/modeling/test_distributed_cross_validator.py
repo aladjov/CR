@@ -184,17 +184,17 @@ class TestRunDistributed:
 
 
 class TestDistributedEagerCollection:
-    def test_collects_to_pandas_once_before_fold_loop(self, grouped_data, mock_distributed_model):
+    def test_collects_via_collect_for_sklearn_before_fold_loop(self, grouped_data, mock_distributed_model):
         X, y, groups, temporal = grouped_data
         cv = CrossValidator(strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=3, scoring="roc_auc")
         collected = []
-        original_to_pandas = __import__("customer_retention.core.compat", fromlist=["to_pandas"]).to_pandas
+        original = __import__("customer_retention.core.compat", fromlist=["collect_for_sklearn"]).collect_for_sklearn
 
-        def tracking_to_pandas(obj):
+        def tracking(obj):
             collected.append(id(obj))
-            return original_to_pandas(obj)
+            return original(obj)
 
-        with patch("customer_retention.stages.modeling.cross_validator.to_pandas", side_effect=tracking_to_pandas):
+        with patch("customer_retention.stages.modeling.cross_validator.collect_for_sklearn", side_effect=tracking):
             result = cv._run_distributed(mock_distributed_model, X, y, groups=groups, temporal_values=temporal)
         assert isinstance(result, CVResult)
         assert collected.count(id(X)) == 1
@@ -209,8 +209,15 @@ class TestDistributedEagerCollection:
         y_mock.spark = True
         y_mock.to_pandas = MagicMock(return_value=y)
 
+        def mock_collect(obj):
+            if not isinstance(obj, (pd.DataFrame, pd.Series)) and hasattr(obj, "to_pandas"):
+                return obj.to_pandas()
+            from customer_retention.core.compat import collect_for_sklearn
+            return collect_for_sklearn(obj)
+
         cv = CrossValidator(strategy=CVStrategy.TEMPORAL_ENTITY, n_splits=3, scoring="roc_auc")
-        cv._run_distributed(mock_distributed_model, X_mock, y_mock, groups=groups, temporal_values=temporal)
+        with patch("customer_retention.stages.modeling.cross_validator.collect_for_sklearn", side_effect=mock_collect):
+            cv._run_distributed(mock_distributed_model, X_mock, y_mock, groups=groups, temporal_values=temporal)
         X_mock.iloc.__getitem__.assert_not_called()
         y_mock.iloc.__getitem__.assert_not_called()
 
