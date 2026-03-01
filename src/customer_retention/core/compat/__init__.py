@@ -50,6 +50,7 @@ else:
     DataFrame = _pandas.DataFrame
     Series = _pandas.Series
 
+_SparkDF: type | None = None
 try:
     from pyspark.sql import DataFrame as _SparkDF
     _DATAFRAME_TYPES = (*_DATAFRAME_TYPES, _SparkDF)
@@ -355,6 +356,10 @@ def _is_spark_pandas(obj: Any) -> bool:
     return hasattr(obj, 'spark') or hasattr(obj, 'to_spark')
 
 
+def _is_native_spark_df(obj: Any) -> bool:
+    return _SparkDF is not None and isinstance(obj, _SparkDF)
+
+
 def as_spark_df(df: Any) -> Any:
     import warnings
     with warnings.catch_warnings():
@@ -414,7 +419,7 @@ def safe_isfinite(series: Any) -> Any:
 def safe_drop_duplicates(df: Any, subset: list[str], keep: str = "last") -> Any:
     if _is_spark_pandas(df):
         return df.drop_duplicates(subset=subset)
-    if hasattr(df, "rdd"):
+    if _is_native_spark_df(df):
         return df.dropDuplicates(subset)
     return df.drop_duplicates(subset=subset, keep=keep)
 

@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+_SparkDF: type | None = None
 try:
     import pyspark.pandas as ps
+    from pyspark.sql import DataFrame as _SparkDF
     from pyspark.sql import SparkSession
     SPARK_AVAILABLE = True
 except ImportError:
     SPARK_AVAILABLE = False
+
+
+def _is_native_spark(obj: Any) -> bool:
+    return _SparkDF is not None and isinstance(obj, _SparkDF)
 
 
 def _get_spark() -> Any:
@@ -49,7 +55,7 @@ def write_delta(df: Any, path: str, mode: str = "overwrite",
     if hasattr(df, "to_spark"):
         from . import as_spark_df
         spark_df = as_spark_df(df)
-    elif hasattr(df, "rdd"):
+    elif _is_native_spark(df):
         spark_df = df
     else:
         from . import pandas_backend

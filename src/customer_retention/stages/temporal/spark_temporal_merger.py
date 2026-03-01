@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from customer_retention.core.compat import (
+    _is_native_spark_df,
     as_tz_naive,
     native_pd,
     normalize_timestamp_columns,
@@ -36,7 +37,7 @@ class SparkTemporalMerger(TemporalMerger):
         converted = []
         for ds in datasets:
             df = ds.df
-            if hasattr(df, "rdd"):
+            if _is_native_spark_df(df):
                 df = _as_pandas_api(df)
             converted.append(DatasetMergeInput(
                 name=ds.name,

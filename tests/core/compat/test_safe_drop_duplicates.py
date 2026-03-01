@@ -70,6 +70,41 @@ class TestSafeDropDuplicates:
         assert result["val"].iloc[0] == 2
 
 
+class TestIsNativeSparkDf:
+    def test_pandas_dataframe_returns_false(self):
+        from customer_retention.core.compat import _is_native_spark_df
+        assert _is_native_spark_df(pd.DataFrame()) is False
+
+    def test_plain_object_returns_false(self):
+        from customer_retention.core.compat import _is_native_spark_df
+        assert _is_native_spark_df({"a": 1}) is False
+
+    def test_does_not_access_rdd_attribute(self):
+        from customer_retention.core.compat import _is_native_spark_df
+
+        class FakeSparkDF:
+            @property
+            def rdd(self):
+                raise RuntimeError("RDD access not allowed on shared clusters")
+
+        assert _is_native_spark_df(FakeSparkDF()) is False
+
+    def test_safe_drop_duplicates_does_not_access_rdd(self):
+        from customer_retention.core.compat import safe_drop_duplicates
+
+        class SharedClusterDF:
+            @property
+            def rdd(self):
+                raise RuntimeError("RDD access not allowed on shared clusters")
+
+            def drop_duplicates(self, subset=None, keep="first"):
+                return pd.DataFrame({"id": ["A"], "val": [2]})
+
+        df = SharedClusterDF()
+        result = safe_drop_duplicates(df, subset=["id"], keep="last")
+        assert len(result) == 1
+
+
 class TestSafeDropDuplicatesInExports:
     def test_in_compat_all(self):
         from customer_retention.core import compat

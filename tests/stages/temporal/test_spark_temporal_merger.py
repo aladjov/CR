@@ -324,6 +324,12 @@ class TestSparkBuildSpineWithMockedSpark:
 
 
 class TestMergeAllConvertsSparkDataFrames:
+    def _patch_native_spark(self, monkeypatch, spark_df):
+        monkeypatch.setattr(
+            "customer_retention.stages.temporal.spark_temporal_merger._is_native_spark_df",
+            lambda obj: obj is spark_df,
+        )
+
     def test_entity_broadcast_with_spark_df(self, monkeypatch):
         merger = SparkTemporalMerger()
         spine = _spine(["A", "B"], ["2024-01-01"])
@@ -332,8 +338,7 @@ class TestMergeAllConvertsSparkDataFrames:
             "tier": ["gold", "silver"],
         })
         spark_df = MagicMock()
-        spark_df.rdd = MagicMock()
-
+        self._patch_native_spark(monkeypatch, spark_df)
         monkeypatch.setattr(
             "customer_retention.stages.temporal.spark_temporal_merger._as_pandas_api",
             lambda sdf: entity_pdf,
@@ -354,8 +359,7 @@ class TestMergeAllConvertsSparkDataFrames:
             "amount": [10, 20],
         })
         spark_df = MagicMock()
-        spark_df.rdd = MagicMock()
-
+        self._patch_native_spark(monkeypatch, spark_df)
         monkeypatch.setattr(
             "customer_retention.stages.temporal.spark_temporal_merger._as_pandas_api",
             lambda sdf: event_pdf,
@@ -372,8 +376,7 @@ class TestMergeAllConvertsSparkDataFrames:
         spine = _spine(["A"], ["2024-01-01"])
         entity_pdf = pd.DataFrame({"entity_id": ["A"], "val": [1]})
         spark_df = MagicMock()
-        spark_df.rdd = MagicMock()
-
+        self._patch_native_spark(monkeypatch, spark_df)
         monkeypatch.setattr(
             "customer_retention.stages.temporal.spark_temporal_merger._as_pandas_api",
             lambda sdf: entity_pdf,

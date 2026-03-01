@@ -70,6 +70,11 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
         ".drop_duplicates(keep=) is not supported in pyspark.pandas",
         "Use safe_drop_duplicates() from core.compat",
     ),
+    (
+        re.compile(r"""hasattr\([^,]+,\s*['"]rdd['"]\)"""),
+        "hasattr(df, 'rdd') triggers RDD access on shared Databricks clusters",
+        "Use _is_native_spark_df() from core.compat",
+    ),
 ]
 
 
