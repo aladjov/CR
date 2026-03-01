@@ -134,6 +134,16 @@ def resolve_data_path(
     namespace: RunNamespace,
     project_ctx: Optional[Any] = None,
 ) -> tuple[str, str]:
+    env_dataset_id = os.environ.get("CR_DATASET_ID")
+    if env_dataset_id:
+        if project_ctx and env_dataset_id in project_ctx.datasets:
+            return project_ctx.datasets[env_dataset_id].path, env_dataset_id
+        raise ValueError(
+            f"CR_DATASET_ID={env_dataset_id!r} is set but cannot be resolved. "
+            f"Available datasets: {list(project_ctx.datasets.keys()) if project_ctx else '(no project context)'}. "
+            "Check that notebook 00 registered this dataset."
+        )
+
     if data_path is not None:
         name = (
             (project_ctx.resolve_dataset_name(data_path) if project_ctx else None)

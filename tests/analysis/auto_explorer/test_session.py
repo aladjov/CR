@@ -638,3 +638,33 @@ class TestResolveDataPath:
         path, name = resolve_data_path(None, ns, project_ctx=ctx)
         assert name == "customers"
         assert path == str(tmp_path / "customers.csv")
+
+    def test_cr_dataset_id_overrides_hardcoded_data_path(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CR_DATASET_ID", "customers")
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        ctx = self._make_project_ctx(tmp_path)
+        path, name = resolve_data_path("hardcoded/other.csv", ns, project_ctx=ctx)
+        assert name == "customers"
+        assert path == str(tmp_path / "customers.csv")
+        monkeypatch.delenv("CR_DATASET_ID")
+
+    def test_cr_dataset_id_fails_without_context(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CR_DATASET_ID", "customers")
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        with pytest.raises(ValueError, match="CR_DATASET_ID.*cannot be resolved"):
+            resolve_data_path("hardcoded/other.csv", ns)
+
+    def test_cr_dataset_id_fails_when_not_in_context(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CR_DATASET_ID", "unknown_ds")
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        ctx = self._make_project_ctx(tmp_path)
+        with pytest.raises(ValueError, match="CR_DATASET_ID.*cannot be resolved"):
+            resolve_data_path("hardcoded/other.csv", ns, project_ctx=ctx)
+
+    def test_no_cr_dataset_id_uses_data_path(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        ctx = self._make_project_ctx(tmp_path)
+        path, name = resolve_data_path("local/data.csv", ns, project_ctx=ctx)
+        assert name == "data"
+        assert path == "local/data.csv"

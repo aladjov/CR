@@ -431,6 +431,48 @@ class TestGuardSkip:
              patch("customer_retention.core.compat.detection.get_dbutils", return_value=None):
             guard_skip("01a_temporal_deep_dive")
 
+    def test_passes_namespace_to_detect_skip_set(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        monkeypatch.setenv("CR_DATASET_ID", "my_dataset")
+        monkeypatch.setenv("CR_RUN_ID", "test-run-001")
+        monkeypatch.setenv("CR_EXPERIMENTS_DIR", str(tmp_path))
+        _make_namespace(tmp_path, run_id="test-run-001")
+        mock_dbutils = MagicMock()
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils), \
+             patch("customer_retention.analysis.auto_explorer.skip_logic.detect_skip_set_for_dataset",
+                   return_value=(set(), {})) as mock_detect:
+            guard_skip("01a_temporal_deep_dive")
+        _, kwargs = mock_detect.call_args
+        assert kwargs.get("namespace") is not None
+        assert kwargs["namespace"].run_id == "test-run-001"
+
+    def test_event_level_not_skipped_with_namespace_findings(self, monkeypatch, tmp_path):
+        from customer_retention.analysis.auto_explorer.findings import ExplorationFindings, TimeSeriesMetadata
+        from customer_retention.core.config.column_config import DatasetGranularity
+
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        monkeypatch.setenv("CR_DATASET_ID", "events")
+        monkeypatch.setenv("CR_RUN_ID", "run-ev")
+        monkeypatch.setenv("CR_EXPERIMENTS_DIR", str(tmp_path))
+        ns = _make_namespace(tmp_path, run_id="run-ev")
+        findings = ExplorationFindings(
+            column_count=5, columns={}, target_column=None,
+            source_path="events.csv", source_format="csv",
+            time_series_metadata=TimeSeriesMetadata(
+                granularity=DatasetGranularity.EVENT_LEVEL,
+                entity_column="cid", time_column="ts", temporal_pattern="recurring",
+            ),
+        )
+        findings_dir = ns.dataset_findings_dir("events")
+        findings_dir.mkdir(parents=True, exist_ok=True)
+        findings.save(str(findings_dir / "events_findings.yaml"))
+        mock_dbutils = MagicMock()
+        with patch("customer_retention.analysis.notebook_progress.is_databricks", return_value=True), \
+             patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
+            guard_skip("01a_temporal_deep_dive")
+        mock_dbutils.notebook.exit.assert_not_called()
+
 
 class TestResolveConfig:
     def test_scalar_returns_as_is(self):

@@ -22,6 +22,7 @@ def accept_workflow_params() -> None:
     dbutils = get_dbutils()
     if not dbutils:
         return
+    resolved = {}
     for widget_name, env_name in [
         ("dataset_id", "CR_DATASET_ID"),
         ("run_id", "CR_RUN_ID"),
@@ -31,11 +32,14 @@ def accept_workflow_params() -> None:
             val = dbutils.widgets.get(widget_name)
             if val:
                 os.environ[env_name] = val
+                resolved[widget_name] = val
             elif env_name == "CR_DATASET_ID":
                 os.environ.pop(env_name, None)
         except Exception:
             if env_name == "CR_DATASET_ID":
                 os.environ.pop(env_name, None)
+    if resolved:
+        print(f"[CR] workflow params: {resolved}")
 
 
 def track_and_export_previous(current_notebook: str) -> None:
@@ -114,10 +118,14 @@ def guard_skip(notebook_stem: str) -> None:
     dbutils = get_dbutils()
     if not dbutils:
         return
+    from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
     from customer_retention.analysis.auto_explorer.skip_logic import detect_skip_set_for_dataset
 
+    namespace = RunNamespace.from_env_or_latest()
     findings_dir = get_experiments_dir() / "findings"
-    skip_set, skip_reasons = detect_skip_set_for_dataset(findings_dir, dataset_id)
+    skip_set, skip_reasons = detect_skip_set_for_dataset(
+        findings_dir, dataset_id, namespace=namespace,
+    )
     if notebook_stem in skip_set:
         dbutils.notebook.exit(f"SKIPPED: {skip_reasons.get(notebook_stem, 'skipped')}")
 
