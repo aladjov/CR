@@ -4642,6 +4642,250 @@ class TestSilverDerivedColumnValidation:
         assert "momentum_7d_30d" in cols
 
 
+class TestCollectPipelineColumnsLagFeatures:
+    def test_pipeline_columns_include_lag_features(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeEventConfig,
+            BronzeLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+            TemporalFeatureConfig,
+        )
+
+        entity_source = SourceConfig(
+            name="customers", path="customers.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/customers.csv",
+        )
+        event_source = SourceConfig(
+            name="events", path="events.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/events.csv",
+            is_event_level=True, time_column="sent_date",
+        )
+        config = PipelineConfig(
+            name="test", target_column="churn",
+            sources=[entity_source, event_source],
+            bronze={"customers": BronzeLayerConfig(source=entity_source)},
+            silver=SilverLayerConfig(), gold=None, output_dir=".",
+        )
+        config.bronze_event["events"] = BronzeEventConfig(
+            source=event_source, entity_column="customer_id", time_column="sent_date",
+            temporal_features=TemporalFeatureConfig(
+                lag_columns=["amount"],
+                num_lags=2,
+                lag_agg_funcs=["sum", "mean"],
+                feature_groups=["lagged_windows"],
+            ),
+        )
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {"customers": {"customer_id"}}
+        parser._source_findings_paths = {}
+        cols = parser._collect_pipeline_columns(config)
+        assert "lag0_amount_sum" in cols
+        assert "lag0_amount_mean" in cols
+        assert "lag1_amount_sum" in cols
+        assert "lag1_amount_mean" in cols
+
+    def test_pipeline_columns_include_velocity_features(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeEventConfig,
+            BronzeLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+            TemporalFeatureConfig,
+        )
+
+        entity_source = SourceConfig(
+            name="customers", path="customers.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/customers.csv",
+        )
+        event_source = SourceConfig(
+            name="events", path="events.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/events.csv",
+            is_event_level=True, time_column="sent_date",
+        )
+        config = PipelineConfig(
+            name="test", target_column="churn",
+            sources=[entity_source, event_source],
+            bronze={"customers": BronzeLayerConfig(source=entity_source)},
+            silver=SilverLayerConfig(), gold=None, output_dir=".",
+        )
+        config.bronze_event["events"] = BronzeEventConfig(
+            source=event_source, entity_column="customer_id", time_column="sent_date",
+            temporal_features=TemporalFeatureConfig(
+                lag_columns=["amount"],
+                num_lags=2,
+                lag_agg_funcs=["sum", "mean"],
+                feature_groups=["lagged_windows", "velocity"],
+            ),
+        )
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {"customers": {"customer_id"}}
+        parser._source_findings_paths = {}
+        cols = parser._collect_pipeline_columns(config)
+        assert "velocity_amount_sum" in cols
+        assert "velocity_amount_mean" in cols
+
+    def test_pipeline_columns_no_velocity_without_feature_group(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeEventConfig,
+            BronzeLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+            TemporalFeatureConfig,
+        )
+
+        entity_source = SourceConfig(
+            name="customers", path="customers.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/customers.csv",
+        )
+        event_source = SourceConfig(
+            name="events", path="events.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/events.csv",
+            is_event_level=True, time_column="sent_date",
+        )
+        config = PipelineConfig(
+            name="test", target_column="churn",
+            sources=[entity_source, event_source],
+            bronze={"customers": BronzeLayerConfig(source=entity_source)},
+            silver=SilverLayerConfig(), gold=None, output_dir=".",
+        )
+        config.bronze_event["events"] = BronzeEventConfig(
+            source=event_source, entity_column="customer_id", time_column="sent_date",
+            temporal_features=TemporalFeatureConfig(
+                lag_columns=["amount"],
+                num_lags=2,
+                lag_agg_funcs=["sum"],
+                feature_groups=["lagged_windows"],
+            ),
+        )
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {"customers": {"customer_id"}}
+        parser._source_findings_paths = {}
+        cols = parser._collect_pipeline_columns(config)
+        assert "velocity_amount_sum" not in cols
+
+
+class TestGoldRecommendationFiltering:
+    @staticmethod
+    def _make_config_with_columns(pipeline_columns):
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeLayerConfig,
+            GoldLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
+
+        entity_source = SourceConfig(
+            name="customers", path="customers.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/customers.csv",
+        )
+        config = PipelineConfig(
+            name="test", target_column="churn",
+            sources=[entity_source],
+            bronze={"customers": BronzeLayerConfig(source=entity_source)},
+            silver=SilverLayerConfig(), gold=GoldLayerConfig(), output_dir=".",
+        )
+        return config, pipeline_columns
+
+    @staticmethod
+    def _make_parser(raw_columns):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = raw_columns
+        parser._source_findings_paths = {}
+        return parser
+
+    @staticmethod
+    def _make_registry_with_gold(encoding=None, scaling=None, transformations=None):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            GoldRecommendations,
+            RecommendationRegistry,
+        )
+        registry = RecommendationRegistry()
+        registry.gold = GoldRecommendations(
+            target_column="churn",
+            encoding=encoding or [],
+            scaling=scaling or [],
+            transformations=transformations or [],
+        )
+        return registry
+
+    @staticmethod
+    def _make_rec(target_column, action, parameters=None):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import LayeredRecommendation
+        return LayeredRecommendation(
+            id="test_rec",
+            layer="gold",
+            category="test",
+            action=action,
+            target_column=target_column,
+            parameters=parameters or {},
+            rationale="test rationale",
+            source_notebook="nb04",
+        )
+
+    def test_gold_transformation_filtered_when_column_missing(self):
+        config, _ = self._make_config_with_columns({"entity_id", "as_of_date", "age"})
+        parser = self._make_parser({"customers": {"customer_id", "age"}})
+        rec = self._make_rec("nonexistent_col", "log_transform")
+        registry = self._make_registry_with_gold(transformations=[rec])
+        parser._apply_gold_recommendations(config, registry)
+        assert len(config.gold.transformations) == 0
+
+    def test_gold_encoding_filtered_when_column_missing(self):
+        config, _ = self._make_config_with_columns({"entity_id", "as_of_date", "age"})
+        parser = self._make_parser({"customers": {"customer_id", "age"}})
+        rec = self._make_rec("nonexistent_col", "onehot", {"method": "onehot"})
+        registry = self._make_registry_with_gold(encoding=[rec])
+        parser._apply_gold_recommendations(config, registry)
+        assert len(config.gold.encodings) == 0
+
+    def test_gold_scaling_filtered_when_column_missing(self):
+        config, _ = self._make_config_with_columns({"entity_id", "as_of_date", "age"})
+        parser = self._make_parser({"customers": {"customer_id", "age"}})
+        rec = self._make_rec("nonexistent_col", "standard", {"method": "standard"})
+        registry = self._make_registry_with_gold(scaling=[rec])
+        parser._apply_gold_recommendations(config, registry)
+        assert len(config.gold.scalings) == 0
+
+    def test_gold_recommendation_kept_when_column_exists(self):
+        config, _ = self._make_config_with_columns({"entity_id", "as_of_date", "age"})
+        parser = self._make_parser({"customers": {"customer_id", "age"}})
+        rec = self._make_rec("age", "log_transform")
+        registry = self._make_registry_with_gold(transformations=[rec])
+        parser._apply_gold_recommendations(config, registry)
+        assert len(config.gold.transformations) == 1
+        assert config.gold.transformations[0].column == "age"
+
+    def test_gold_keeps_columns_from_silver_derived(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            PipelineTransformationType,
+            TransformationStep,
+        )
+        config, _ = self._make_config_with_columns({"entity_id", "as_of_date", "age"})
+        config.silver.derived_columns.append(
+            TransformationStep(
+                type=PipelineTransformationType.DERIVED_COLUMN,
+                column="age_income_ratio",
+                parameters={"action": "ratio"},
+                rationale="test",
+            )
+        )
+        parser = self._make_parser({"customers": {"customer_id", "age"}})
+        rec = self._make_rec("age_income_ratio", "log_transform")
+        registry = self._make_registry_with_gold(transformations=[rec])
+        parser._apply_gold_recommendations(config, registry)
+        assert len(config.gold.transformations) == 1
+        assert config.gold.transformations[0].column == "age_income_ratio"
+
+
 class TestColumnTypeDeserialization:
     def test_valid_column_type_deserializes(self):
         from customer_retention.core.config.column_config import ColumnType

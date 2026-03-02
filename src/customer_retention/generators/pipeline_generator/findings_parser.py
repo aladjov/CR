@@ -724,6 +724,16 @@ class FindingsParser:
                 else:
                     for i in range(text_cfg.n_components):
                         columns.add(f"{text_cfg.column}_emb_{i}")
+            tf = event_cfg.temporal_features
+            if tf and tf.lag_columns:
+                for lag_idx in range(tf.num_lags):
+                    for col in tf.lag_columns:
+                        for agg in tf.lag_agg_funcs:
+                            columns.add(f"lag{lag_idx}_{col}_{agg}")
+                if "velocity" in (tf.feature_groups or []):
+                    for col in tf.lag_columns:
+                        for agg in tf.lag_agg_funcs:
+                            columns.add(f"velocity_{col}_{agg}")
         return columns
 
     @staticmethod
@@ -752,9 +762,18 @@ class FindingsParser:
         if not hasattr(registry, "gold") or registry.gold is None:
             return
         gold = registry.gold
+        pipeline_columns = self._collect_pipeline_columns(config)
+        for step in config.silver.derived_columns:
+            pipeline_columns.add(step.column)
         seen_encoding_columns: Set[str] = {e.column for e in config.gold.encodings}
         for rec in getattr(gold, "encoding", []):
             if rec.target_column in seen_encoding_columns:
+                continue
+            if rec.target_column not in pipeline_columns:
+                logger.info(
+                    "Skipping gold encoding '%s': column not in pipeline",
+                    rec.target_column,
+                )
                 continue
             seen_encoding_columns.add(rec.target_column)
             method = rec.parameters.get("method", rec.action)
@@ -773,6 +792,12 @@ class FindingsParser:
         for rec in getattr(gold, "scaling", []):
             if rec.target_column in seen_scaling_columns:
                 continue
+            if rec.target_column not in pipeline_columns:
+                logger.info(
+                    "Skipping gold scaling '%s': column not in pipeline",
+                    rec.target_column,
+                )
+                continue
             seen_scaling_columns.add(rec.target_column)
             config.gold.scalings.append(
                 TransformationStep(
@@ -784,6 +809,12 @@ class FindingsParser:
                 )
             )
         for rec in getattr(gold, "transformations", []):
+            if rec.target_column not in pipeline_columns:
+                logger.info(
+                    "Skipping gold transformation '%s': column not in pipeline",
+                    rec.target_column,
+                )
+                continue
             step = self._map_gold_transformation(rec)
             if step:
                 config.gold.transformations.append(step)
