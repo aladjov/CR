@@ -115,7 +115,7 @@ def _zero_inflation_handling(col, _p):
 
 
 def _cap_then_log(col, _p):
-    return f'df.withColumn("{col}", F.log1p(F.least(F.col("{col}"), F.lit(F.col("{col}").cast("double")))))'
+    return f'_cap_then_log(df, "{col}")'
 
 
 def _type_cast(col, p):
@@ -1121,6 +1121,13 @@ def _segment_aware_cap(df, col, n_segments=2):
             .when(F.col(col) > upper, upper)
             .otherwise(F.col(col)))
     return df
+
+def _cap_then_log(df, col):
+    quantiles = df.approxQuantile(col, [0.99], 0.01)
+    if not quantiles:
+        return df
+    q99 = quantiles[0]
+    return df.withColumn(col, F.log1p(F.greatest(F.least(F.col(col), F.lit(q99)), F.lit(0)).cast("double")))
 
 # COMMAND ----------
 

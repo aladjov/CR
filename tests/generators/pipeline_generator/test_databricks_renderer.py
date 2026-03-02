@@ -291,8 +291,7 @@ class TestRenderSparkStepCall:
             rationale="",
         )
         result = render_spark_step_call(step)
-        assert "revenue" in result
-        assert "F.log1p" in result
+        assert result == '_cap_then_log(df, "revenue")'
 
 
 class TestDatabricksRenderConfig:
@@ -2224,3 +2223,51 @@ class TestDatabricksGoldColumnCheckClean:
         result = renderer.render_gold(sample_pipeline_config)
         assert '"as_of_date" in df.columns' in result
         assert '"feature_timestamp" in df.columns' in result
+
+
+class TestDatabricksGoldCapThenLog:
+    def _make_config(self, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
+        gold = GoldLayerConfig(
+            encodings=gold_with_encode_scale.encodings,
+            scalings=gold_with_encode_scale.scalings,
+            transformations=[
+                TransformationStep(
+                    type=PipelineTransformationType.CAP_THEN_LOG,
+                    column="revenue",
+                    parameters={},
+                    rationale="cap at p99 then log",
+                ),
+            ],
+        )
+        return PipelineConfig(
+            name="test_pipeline", target_column="churn",
+            sources=[entity_source, event_source],
+            bronze={"customers": bronze_with_impute},
+            silver=SilverLayerConfig(joins=silver_with_join.joins, aggregations=[]),
+            gold=gold, output_dir="/output", composite_name="cust_orde__abc1234",
+        )
+
+    def test_gold_defines_cap_then_log_helper(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
+        config = self._make_config(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale)
+        result = renderer.render_gold(config)
+        assert "def _cap_then_log(df, col):" in result
+
+    def test_gold_cap_then_log_uses_approx_quantile(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
+        config = self._make_config(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale)
+        result = renderer.render_gold(config)
+        assert "approxQuantile" in result
+
+    def test_gold_cap_then_log_applies_log1p(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
+        config = self._make_config(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale)
+        result = renderer.render_gold(config)
+        assert "F.log1p" in result
+
+    def test_gold_cap_then_log_is_valid_python(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
+        config = self._make_config(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale)
+        result = renderer.render_gold(config)
+        ast.parse(result)
+
+    def test_gold_cap_then_log_no_f_lit_column(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
+        config = self._make_config(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale)
+        result = renderer.render_gold(config)
+        assert "F.lit(F.col(" not in result
