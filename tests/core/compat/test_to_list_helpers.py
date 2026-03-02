@@ -43,7 +43,7 @@ class TestHeadAsList:
         result = head_as_list([5, 6, 7, 8, 9], 3)
         assert result == [5, 6, 7]
 
-    def test_suppresses_to_list_warning(self):
+    def test_does_not_suppress_to_list_warning(self):
         class WarningSeries:
             def head(self, n):
                 return self
@@ -63,7 +63,7 @@ class TestHeadAsList:
             to_list_warnings = [
                 x for x in w if "to_list" in str(x.message)
             ]
-            assert len(to_list_warnings) == 0
+            assert len(to_list_warnings) == 1
 
 
 class TestUniqueOverlapCounts:

@@ -400,32 +400,50 @@ def groupby_multi_agg(df: Any, group_col: str, agg_col: str, agg_funcs: list) ->
     return df.groupby(group_col)[agg_col].agg(agg_funcs).reset_index()
 
 
-def _to_list(obj: Any) -> list:
-    if hasattr(obj, 'to_list'):
-        return obj.to_list()
-    if hasattr(obj, 'tolist'):
+def _to_native_list(obj: Any) -> list:
+    if _is_spark_pandas(obj):
+        raise TypeError("_to_native_list cannot be used with distributed pandas-on-Spark objects")
+
+    if hasattr(obj, "tolist"):
         return obj.tolist()
+
+    if hasattr(obj, "to_list"):
+        return obj.to_list()
+
     return list(obj)
 
 
+def _spark_head_values(series: Any, n: int) -> list:
+    if n <= 0:
+        return []
+    spark_df = as_spark_df(series.to_frame() if hasattr(series, "to_frame") else series)
+    col_name = spark_df.columns[0]
+    rows = spark_df.select(_spark_col(col_name)).limit(n).collect()
+    return [row[col_name] for row in rows]
+
+
 def head_as_list(obj: Any, n: int) -> list:
-    import warnings
+    if n <= 0:
+        return []
+
+    series_obj = obj.to_series() if hasattr(obj, "to_series") and not _is_spark_pandas(obj) else obj
+    if _is_spark_pandas(series_obj):
+        return _spark_head_values(series_obj, n)
+
     if hasattr(obj, 'head'):
         bounded = obj.head(n)
     elif hasattr(obj, 'to_series'):
         bounded = obj.to_series().head(n)
     else:
         bounded = obj[:n]
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=UserWarning, message=".*to_list.*")
-        return _to_list(bounded)
+    return _to_native_list(bounded)
 
 
 def unique_overlap_counts(series_a: Any, series_b: Any) -> tuple[int, int, int]:
     if _is_spark_pandas(series_a) and _is_spark_pandas(series_b):
         return _spark_unique_overlap(series_a, series_b)
-    left = set(_to_list(series_a.dropna().unique()))
-    right = set(_to_list(series_b.dropna().unique()))
+    left = set(_to_native_list(series_a.dropna().unique()))
+    right = set(_to_native_list(series_b.dropna().unique()))
     return len(left), len(right), len(left & right)
 
 
@@ -452,12 +470,15 @@ def _spark_col(name: str) -> Any:
 def distributed_case_variations(str_series: Any, max_results: int = 10) -> list[str]:
     if _is_spark_pandas(str_series):
         return _spark_case_variations(str_series, max_results)
+    unique_values = str_series.dropna().astype(str).drop_duplicates()
+    if len(unique_values) == 0:
+        return []
+    grouped = native_pd.DataFrame({"original": unique_values.to_numpy()})
+    grouped["lower"] = grouped["original"].str.lower()
     lower_to_originals: dict[str, list[str]] = {}
-    for value in _to_list(str_series.drop_duplicates()):
-        lower_val = str(value).lower()
-        if lower_val not in lower_to_originals:
-            lower_to_originals[lower_val] = []
-        lower_to_originals[lower_val].append(str(value))
+    for _, group in grouped.groupby("lower", sort=False):
+        variants = group["original"].tolist()
+        lower_to_originals[group["lower"].iloc[0]] = variants
     variations = []
     for originals in lower_to_originals.values():
         if len(originals) > 1:

@@ -6,6 +6,7 @@ from customer_retention.core.compat import (
     is_datetime64_any_dtype,
     is_numeric_dtype,
     is_string_dtype,
+    native_pd,
     pd,
 )
 from customer_retention.core.compat.bulk_profiling import bulk_nunique
@@ -112,7 +113,7 @@ class TypeDetector:
                     parseable_count = 0
                     for value in head_as_list(sample, 100):
                         try:
-                            pd.to_datetime(value, format="mixed")
+                            native_pd.to_datetime(value, format="mixed")
                             parseable_count += 1
                         except (ValueError, TypeError):
                             pass
@@ -198,7 +199,7 @@ class TypeDetector:
             parseable_count = 0
             for value in head_as_list(sample, 100):
                 try:
-                    pd.to_datetime(value, format="mixed")
+                    native_pd.to_datetime(value, format="mixed")
                     parseable_count += 1
                 except (ValueError, TypeError):
                     pass
@@ -452,7 +453,7 @@ class TypeDetector:
                         parseable = 0
                         for val in head_as_list(sample, 20):
                             try:
-                                pd.to_datetime(val, format="mixed")
+                                native_pd.to_datetime(val, format="mixed")
                                 parseable += 1
                             except (ValueError, TypeError):
                                 pass

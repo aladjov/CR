@@ -15,7 +15,7 @@ from customer_retention.core.compat import (
     safe_isfinite,
     safe_isinf,
     safe_memory_usage_bytes,
-    to_datetime,
+    safe_to_datetime,
 )
 from customer_retention.core.config.column_config import ColumnType
 
@@ -309,7 +309,7 @@ class DatetimeProfiler(ColumnProfiler):
                 pass
             else:
                 try:
-                    clean_series = to_datetime(clean_series, errors='coerce', format='mixed')
+                    clean_series = safe_to_datetime(clean_series, errors='coerce', format='mixed')
                 except Exception:
                     return {"datetime_metrics": None}
 
@@ -333,7 +333,7 @@ class DatetimeProfiler(ColumnProfiler):
             weekend_count = int(clean_series.dt.dayofweek.isin([5, 6]).sum())
         else:
             try:
-                dt_series = to_datetime(clean_series, errors='coerce')
+                dt_series = safe_to_datetime(clean_series, errors='coerce')
                 weekend_count = int(dt_series.dt.dayofweek.isin([5, 6]).sum())
             except Exception:
                 weekend_count = 0
