@@ -471,7 +471,7 @@ class TestEnsureExperimentsVolumeExists:
             from customer_retention.integrations.databricks_init import _ensure_experiments_volume_exists
 
             _ensure_experiments_volume_exists("churnkit", "analysis")
-        mock_spark.sql.assert_called_once_with("CREATE VOLUME IF NOT EXISTS churnkit.analysis.experiments")
+        mock_spark.sql.assert_called_once_with("CREATE VOLUME IF NOT EXISTS `churnkit`.`analysis`.`experiments`")
 
     def test_handles_no_spark_session(self, databricks_env):
         with patch("customer_retention.core.compat.detection.get_spark_session", return_value=None):
@@ -479,13 +479,14 @@ class TestEnsureExperimentsVolumeExists:
 
             _ensure_experiments_volume_exists("churnkit", "analysis")
 
-    def test_handles_spark_sql_error(self, databricks_env):
+    def test_propagates_spark_sql_error(self, databricks_env):
         mock_spark = MagicMock()
-        mock_spark.sql.side_effect = Exception("permission denied")
+        mock_spark.sql.side_effect = RuntimeError("permission denied")
         with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
             from customer_retention.integrations.databricks_init import _ensure_experiments_volume_exists
 
-            _ensure_experiments_volume_exists("churnkit", "analysis")
+            with pytest.raises(RuntimeError, match="permission denied"):
+                _ensure_experiments_volume_exists("churnkit", "analysis")
 
     def test_called_during_init(self, databricks_env):
         with patch("customer_retention.integrations.databricks_init._ensure_experiments_volume_exists") as mock_ensure:

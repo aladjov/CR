@@ -136,8 +136,31 @@ def reload_config() -> None:
     EXPERIMENT_NAME = get_experiment_name()
 
 
+def _parse_uc_volume(path_str: str) -> tuple[str, str, str] | None:
+    parts = str(path_str).strip("/").split("/")
+    if len(parts) >= 4 and parts[0] == "Volumes":
+        return parts[1], parts[2], parts[3]
+    return None
+
+
+def _ensure_uc_volume(base_path: Union[str, Path, "RemotePath"]) -> None:
+    parsed = _parse_uc_volume(str(base_path))
+    if not parsed:
+        return
+    catalog, schema, volume = parsed
+    try:
+        from customer_retention.core.compat.detection import get_spark_session
+        spark = get_spark_session()
+    except ImportError:
+        return
+    if not spark:
+        return
+    spark.sql(f"CREATE VOLUME IF NOT EXISTS `{catalog}`.`{schema}`.`{volume}`")
+
+
 def setup_experiments_structure(experiments_dir: Optional[Path] = None) -> None:
     base = experiments_dir or get_experiments_dir()
+    _ensure_uc_volume(base)
     directories = [
         base / "data" / "bronze",
         base / "data" / "silver",

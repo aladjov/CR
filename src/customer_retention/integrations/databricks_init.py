@@ -102,15 +102,9 @@ def _reload_config_constants() -> None:
 
 
 def _ensure_experiments_volume_exists(catalog: str, schema: str) -> None:
-    from customer_retention.core.compat.detection import get_spark_session
+    from customer_retention.core.config.experiments import _ensure_uc_volume
 
-    spark = get_spark_session()
-    if not spark:
-        return
-    try:
-        spark.sql(f"CREATE VOLUME IF NOT EXISTS {catalog}.{schema}.experiments")
-    except Exception:
-        pass
+    _ensure_uc_volume(f"/Volumes/{catalog}/{schema}/experiments")
 
 
 def _setup_experiment_directories() -> None:

@@ -205,6 +205,114 @@ class TestSetupExperimentsStructure:
 
 
 
+class TestParseUcVolume:
+    def test_parses_standard_volume_path(self):
+        from customer_retention.core.config.experiments import _parse_uc_volume
+
+        assert _parse_uc_volume("/Volumes/mycat/mysch/experiments") == ("mycat", "mysch", "experiments")
+
+    def test_parses_path_with_subdirectories(self):
+        from customer_retention.core.config.experiments import _parse_uc_volume
+
+        assert _parse_uc_volume("/Volumes/cat/sch/vol/data/bronze") == ("cat", "sch", "vol")
+
+    def test_returns_none_for_local_path(self):
+        from customer_retention.core.config.experiments import _parse_uc_volume
+
+        assert _parse_uc_volume("/home/user/experiments") is None
+
+    def test_returns_none_for_relative_path(self):
+        from customer_retention.core.config.experiments import _parse_uc_volume
+
+        assert _parse_uc_volume("experiments/data") is None
+
+    def test_returns_none_for_short_volume_path(self):
+        from customer_retention.core.config.experiments import _parse_uc_volume
+
+        assert _parse_uc_volume("/Volumes/catalog") is None
+
+    def test_returns_none_for_volume_with_only_catalog_and_schema(self):
+        from customer_retention.core.config.experiments import _parse_uc_volume
+
+        assert _parse_uc_volume("/Volumes/catalog/schema") is None
+
+    def test_handles_underscored_names(self):
+        from customer_retention.core.config.experiments import _parse_uc_volume
+
+        result = _parse_uc_volume("/Volumes/prod_tradingpartnermap_internal_use1/customer_churn_model/experiments")
+        assert result == ("prod_tradingpartnermap_internal_use1", "customer_churn_model", "experiments")
+
+
+class TestEnsureUcVolume:
+    def test_creates_volume_via_spark_sql(self):
+        from unittest.mock import MagicMock
+
+        mock_spark = MagicMock()
+        with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
+            from customer_retention.core.config.experiments import _ensure_uc_volume
+
+            _ensure_uc_volume("/Volumes/mycat/mysch/experiments")
+        mock_spark.sql.assert_called_once_with("CREATE VOLUME IF NOT EXISTS `mycat`.`mysch`.`experiments`")
+
+    def test_noop_for_local_path(self):
+        from unittest.mock import MagicMock
+
+        mock_spark = MagicMock()
+        with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
+            from customer_retention.core.config.experiments import _ensure_uc_volume
+
+            _ensure_uc_volume("/home/user/experiments")
+        mock_spark.sql.assert_not_called()
+
+    def test_noop_when_no_spark_session(self):
+        with patch("customer_retention.core.compat.detection.get_spark_session", return_value=None):
+            from customer_retention.core.config.experiments import _ensure_uc_volume
+
+            _ensure_uc_volume("/Volumes/cat/sch/experiments")
+
+    def test_propagates_spark_sql_error(self):
+        from unittest.mock import MagicMock
+
+        mock_spark = MagicMock()
+        mock_spark.sql.side_effect = RuntimeError("UC_VOLUME_CREATE_DENIED")
+        with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
+            from customer_retention.core.config.experiments import _ensure_uc_volume
+
+            with pytest.raises(RuntimeError, match="UC_VOLUME_CREATE_DENIED"):
+                _ensure_uc_volume("/Volumes/cat/sch/experiments")
+
+    def test_accepts_remote_path(self):
+        from unittest.mock import MagicMock
+
+        from customer_retention.core.compat.remote_path import RemotePath
+
+        mock_spark = MagicMock()
+        with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
+            from customer_retention.core.config.experiments import _ensure_uc_volume
+
+            _ensure_uc_volume(RemotePath("/Volumes/cat/sch/vol"))
+        mock_spark.sql.assert_called_once_with("CREATE VOLUME IF NOT EXISTS `cat`.`sch`.`vol`")
+
+
+class TestSetupExperimentsStructureAutoCreatesVolume:
+    def test_calls_ensure_uc_volume_for_volume_path(self, monkeypatch):
+        monkeypatch.setenv("CR_EXPERIMENTS_DIR", "/Volumes/cat/sch/experiments")
+        with patch("customer_retention.core.config.experiments._ensure_uc_volume") as mock_ensure:
+            from customer_retention.core.config.experiments import setup_experiments_structure
+
+            try:
+                setup_experiments_structure()
+            except OSError:
+                pass
+        mock_ensure.assert_called_once()
+        assert str(mock_ensure.call_args[0][0]) == "/Volumes/cat/sch/experiments"
+
+    def test_calls_ensure_uc_volume_for_local_path(self, tmp_path):
+        with patch("customer_retention.core.config.experiments._ensure_uc_volume") as mock_ensure:
+            setup_experiments_structure(tmp_path)
+        mock_ensure.assert_called_once_with(tmp_path)
+
+
 class TestPersistedDatabricksConfig:
     def test_load_returns_none_outside_databricks(self, monkeypatch):
         monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
