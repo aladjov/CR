@@ -697,6 +697,29 @@ class TestDataExplorerTypedBulkPath:
         assert "future_date_count" in tm
         assert "weekend_percentage" in tm
 
+    def test_datetime_bulk_no_pd_timestamp_access(self, sample_dataframe):
+        from unittest.mock import PropertyMock, patch
+
+        from customer_retention.analysis.auto_explorer import explorer as _mod
+
+        orig_pd = _mod.pd
+        fake_pd = type("FakePd", (), {})()
+        for attr in dir(orig_pd):
+            if attr != "Timestamp":
+                try:
+                    setattr(fake_pd, attr, getattr(orig_pd, attr))
+                except Exception:
+                    pass
+        type(fake_pd).Timestamp = PropertyMock(
+            side_effect=NotImplementedError("ps.Timestamp is not reimplemented")
+        )
+        with patch.object(_mod, "pd", fake_pd):
+            explorer = DataExplorer(visualize=False, save_findings=False)
+            findings = explorer.explore(sample_dataframe)
+        date_finding = findings.columns["signup_date"]
+        assert date_finding.type_metrics["format_detected"] == "datetime64"
+        assert date_finding.type_metrics["format_consistency"] == 100.0
+
     def test_categorical_uses_bulk_path(self, sample_dataframe):
         explorer = DataExplorer(visualize=False, save_findings=False)
         findings = explorer.explore(sample_dataframe)

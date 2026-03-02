@@ -24,8 +24,9 @@ FEATURES_DIR = _STAGES_ROOT / "features"
 TEMPORAL_DIR = _STAGES_ROOT / "temporal"
 MODELING_DIR = _STAGES_ROOT / "modeling"
 VALIDATION_DIR = _STAGES_ROOT / "validation"
+AUTO_EXPLORER_DIR = _SRC_ROOT / "analysis" / "auto_explorer"
 
-ALLOWLISTED_FILES = {"window_recommendation.py", "spark_segment_analyzer.py", "feature_manifest.py", "snapshot_manager.py"}
+ALLOWLISTED_FILES = {"window_recommendation.py", "spark_segment_analyzer.py", "feature_manifest.py", "snapshot_manager.py", "analysis_context.py"}
 
 _STRING_LITERAL = re.compile(r'''("""[\s\S]*?"""|'''  r"""'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')""")
 
@@ -75,6 +76,11 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
         "hasattr(df, 'rdd') triggers RDD access on shared Databricks clusters",
         "Use _is_native_spark_df() from core.compat",
     ),
+    (
+        re.compile(r"\bpd\.Timestamp\b"),
+        "pd.Timestamp fails when pd is pyspark.pandas (scalar not reimplemented)",
+        "Use datetime.datetime (pandas Timestamp is a subclass) or import pandas as _pandas",
+    ),
 ]
 
 
@@ -113,6 +119,13 @@ def _collect_modeling_files() -> list[Path]:
 def _collect_validation_files() -> list[Path]:
     return sorted(
         p for p in VALIDATION_DIR.glob("*.py")
+        if p.name not in ALLOWLISTED_FILES and not p.name.startswith("__")
+    )
+
+
+def _collect_auto_explorer_files() -> list[Path]:
+    return sorted(
+        p for p in AUTO_EXPLORER_DIR.glob("*.py")
         if p.name not in ALLOWLISTED_FILES and not p.name.startswith("__")
     )
 
@@ -158,4 +171,9 @@ def test_no_dangerous_spark_pandas_patterns_modeling(source_file: Path):
 
 @pytest.mark.parametrize("source_file", _collect_validation_files(), ids=lambda p: p.name)
 def test_no_dangerous_spark_pandas_patterns_validation(source_file: Path):
+    _check_file(source_file)
+
+
+@pytest.mark.parametrize("source_file", _collect_auto_explorer_files(), ids=lambda p: p.name)
+def test_no_dangerous_spark_pandas_patterns_auto_explorer(source_file: Path):
     _check_file(source_file)

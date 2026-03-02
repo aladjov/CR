@@ -351,7 +351,7 @@ class DataExplorer:
         if sample:
             from datetime import datetime as _dt
 
-            if all(isinstance(v, (_dt, pd.Timestamp)) for v in sample):
+            if all(isinstance(v, _dt) for v in sample):
                 format_detected = "datetime64"
                 format_consistency = 100.0
             else:

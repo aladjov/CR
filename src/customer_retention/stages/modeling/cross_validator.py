@@ -43,13 +43,11 @@ class TemporalEntitySplit:
         return self.n_splits
 
     def split(self, X, y=None, groups=None):
-        import pandas as pd
-
         for train_idx, test_idx in self._inner.split(X, y, groups):
             if self.purge_gap_days > 0 and self.temporal_values is not None:
                 test_dates = self.temporal_values.iloc[test_idx]
-                test_min = pd.Timestamp(test_dates.min())
-                purge_cutoff = test_min - pd.Timedelta(days=self.purge_gap_days)
+                test_min = native_pd.Timestamp(test_dates.min())
+                purge_cutoff = test_min - native_pd.Timedelta(days=self.purge_gap_days)
                 train_dates = self.temporal_values.iloc[train_idx]
                 keep_mask = train_dates < purge_cutoff
                 purged_train = train_idx[keep_mask.to_numpy()]
