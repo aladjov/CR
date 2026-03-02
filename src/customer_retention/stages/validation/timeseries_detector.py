@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from customer_retention.core.compat import (
     DataFrame,
+    _is_spark_pandas,
+    as_spark_df,
     head_as_list,
     is_datetime64_any_dtype,
     pd,
@@ -387,7 +389,9 @@ class TimeSeriesDetector:
         timestamp_column: str
     ) -> Tuple[TimeSeriesFrequency, float]:
         """Detect the frequency of the time series."""
-        # Sample entities for efficiency
+        if _is_spark_pandas(df):
+            return self._spark_detect_frequency(df, entity_column, timestamp_column)
+
         sample_entities = head_as_list(df[entity_column].unique(), 100)
 
         intervals = []
@@ -411,30 +415,64 @@ class TimeSeriesDetector:
             return TimeSeriesFrequency.UNKNOWN, 0.0
 
         median_hours = float(pd.Series(intervals).median())
+        std_hours = float(pd.Series(intervals).std())
+        return self._classify_frequency(median_hours, std_hours), median_hours
 
-        # Classify frequency based on median interval
+    def _classify_frequency(
+        self, median_hours: float, std_hours: float
+    ) -> TimeSeriesFrequency:
         if median_hours < 2:
-            freq = TimeSeriesFrequency.HOURLY
-        elif 20 <= median_hours <= 28:
-            freq = TimeSeriesFrequency.DAILY
-        elif 144 <= median_hours <= 192:  # 6-8 days
-            freq = TimeSeriesFrequency.WEEKLY
-        elif 672 <= median_hours <= 768:  # 28-32 days
-            freq = TimeSeriesFrequency.MONTHLY
-        elif 2016 <= median_hours <= 2208:  # ~84-92 days
-            freq = TimeSeriesFrequency.QUARTERLY
-        elif 8400 <= median_hours <= 8880:  # ~350-370 days
-            freq = TimeSeriesFrequency.YEARLY
-        else:
-            # Check variance to determine if irregular
-            std_hours = float(pd.Series(intervals).std())
-            cv = std_hours / median_hours if median_hours > 0 else 1
-            if cv > 0.5:  # High coefficient of variation
-                freq = TimeSeriesFrequency.IRREGULAR
-            else:
-                freq = TimeSeriesFrequency.IRREGULAR
+            return TimeSeriesFrequency.HOURLY
+        if 20 <= median_hours <= 28:
+            return TimeSeriesFrequency.DAILY
+        if 144 <= median_hours <= 192:
+            return TimeSeriesFrequency.WEEKLY
+        if 672 <= median_hours <= 768:
+            return TimeSeriesFrequency.MONTHLY
+        if 2016 <= median_hours <= 2208:
+            return TimeSeriesFrequency.QUARTERLY
+        if 8400 <= median_hours <= 8880:
+            return TimeSeriesFrequency.YEARLY
+        return TimeSeriesFrequency.IRREGULAR
 
-        return freq, median_hours
+    def _spark_detect_frequency(
+        self,
+        df: DataFrame,
+        entity_column: str,
+        timestamp_column: str,
+    ) -> Tuple[TimeSeriesFrequency, float]:
+        import pyspark.sql.functions as F  # noqa: N812
+        from pyspark.sql.window import Window
+
+        spark_df = as_spark_df(df)
+        spark_df = spark_df.withColumn(
+            "__ts__", F.to_timestamp(F.col(timestamp_column))
+        ).filter(F.col("__ts__").isNotNull())
+
+        w = Window.partitionBy(entity_column).orderBy("__ts__")
+        diffs_df = (
+            spark_df
+            .withColumn("__prev__", F.lag("__ts__").over(w))
+            .filter(F.col("__prev__").isNotNull())
+            .withColumn(
+                "__diff_h__",
+                (F.unix_timestamp("__ts__") - F.unix_timestamp("__prev__"))
+                .cast("double") / 3600.0,
+            )
+        )
+
+        row = diffs_df.agg(
+            F.percentile_approx("__diff_h__", 0.5).alias("med"),
+            F.stddev("__diff_h__").alias("std"),
+            F.count("__diff_h__").alias("cnt"),
+        ).head()
+
+        if row["cnt"] == 0:
+            return TimeSeriesFrequency.UNKNOWN, 0.0
+
+        median_hours = float(row["med"])
+        std_hours = float(row["std"]) if row["std"] is not None else 0.0
+        return self._classify_frequency(median_hours, std_hours), median_hours
 
     def _calculate_confidence(
         self,
@@ -614,7 +652,9 @@ class TimeSeriesValidator:
         df: DataFrame,
         entity_column: str
     ) -> Dict[str, Any]:
-        """Check for duplicate timestamps within each entity."""
+        if _is_spark_pandas(df):
+            return self._spark_check_duplicate_timestamps(df, entity_column)
+
         dup_counts = df.groupby([entity_column, '_ts']).size()
         duplicates = dup_counts[dup_counts > 1]
 
@@ -633,16 +673,49 @@ class TimeSeriesValidator:
             'examples': examples
         }
 
+    def _spark_check_duplicate_timestamps(
+        self, df: DataFrame, entity_column: str
+    ) -> Dict[str, Any]:
+        import pyspark.sql.functions as F  # noqa: N812
+
+        spark_df = as_spark_df(df)
+        dup_df = (
+            spark_df
+            .groupBy(entity_column, "_ts")
+            .agg(F.count("*").alias("__cnt__"))
+            .filter(F.col("__cnt__") > 1)
+        )
+
+        stats = dup_df.agg(
+            F.count("*").alias("total"),
+            F.countDistinct(entity_column).alias("entities"),
+        ).head()
+
+        total = int(stats["total"] or 0)
+        entities = int(stats["entities"] or 0)
+
+        examples = []
+        if total > 0:
+            for row in dup_df.limit(3).collect():
+                examples.append({
+                    'entity': row[entity_column],
+                    'timestamp': str(row["_ts"]),
+                    'count': int(row["__cnt__"]),
+                })
+
+        return {'total': total, 'entities': entities, 'examples': examples}
+
     def _check_ordering(
         self,
         df: DataFrame,
         entity_column: str
     ) -> Dict[str, Any]:
-        """Check if timestamps are properly ordered within each entity."""
+        if _is_spark_pandas(df):
+            return self._spark_check_ordering(df, entity_column)
+
         entities_with_issues = []
         examples = []
 
-        # Sample for efficiency
         sample_entities = head_as_list(df[entity_column].unique(), 1000)
 
         for entity in sample_entities:
@@ -650,7 +723,6 @@ class TimeSeriesValidator:
             if len(entity_data) < 2:
                 continue
 
-            # Check if sorted
             if not entity_data.is_monotonic_increasing:
                 entities_with_issues.append(entity)
                 if len(examples) < 3:
@@ -664,6 +736,36 @@ class TimeSeriesValidator:
             'examples': examples
         }
 
+    def _spark_check_ordering(
+        self, df: DataFrame, entity_column: str
+    ) -> Dict[str, Any]:
+        import pyspark.sql.functions as F  # noqa: N812
+        from pyspark.sql.window import Window
+
+        spark_df = as_spark_df(df).filter(F.col("_ts").isNotNull())
+        spark_df = spark_df.withColumn("__rid__", F.monotonically_increasing_id())
+
+        w = Window.partitionBy(entity_column).orderBy("__rid__")
+        unordered = (
+            spark_df
+            .withColumn("__prev__", F.lag("_ts").over(w))
+            .filter(F.col("__prev__").isNotNull())
+            .filter(F.col("_ts") < F.col("__prev__"))
+            .select(entity_column)
+            .distinct()
+        )
+
+        entity_count = unordered.count()
+        examples = []
+        if entity_count > 0:
+            for row in unordered.limit(3).collect():
+                examples.append({
+                    'entity': row[entity_column],
+                    'issue': 'timestamps not in ascending order',
+                })
+
+        return {'entities': entity_count, 'examples': examples}
+
     def _analyze_gaps(
         self,
         df: DataFrame,
@@ -671,12 +773,14 @@ class TimeSeriesValidator:
         expected_frequency: Optional[str],
         max_allowed_gap_periods: int
     ) -> Dict[str, Any]:
-        """Analyze gaps in time series."""
-        # Determine expected interval
+        if _is_spark_pandas(df):
+            return self._spark_analyze_gaps(
+                df, entity_column, expected_frequency, max_allowed_gap_periods,
+            )
+
         if expected_frequency:
             expected_interval = self._frequency_to_timedelta(expected_frequency)
         else:
-            # Estimate from data
             expected_interval = self._estimate_interval(df, entity_column)
 
         if expected_interval is None:
@@ -695,7 +799,6 @@ class TimeSeriesValidator:
         max_gap = 0
         gap_examples = []
 
-        # Sample for efficiency
         sample_entities = head_as_list(df[entity_column].unique(), 500)
 
         for entity in sample_entities:
@@ -722,7 +825,6 @@ class TimeSeriesValidator:
                         'gap_periods': gap_periods,
                     })
 
-        # Calculate coverage
         coverage = 100.0
         if len(sample_entities) > 0:
             coverage = 100.0 * (1 - len(entities_with_gaps) / len(sample_entities))
@@ -737,6 +839,91 @@ class TimeSeriesValidator:
             'frequency_deviation': 0.0,
             'expected_periods': 0,
             'actual_periods': 0
+        }
+
+    def _spark_analyze_gaps(
+        self,
+        df: DataFrame,
+        entity_column: str,
+        expected_frequency: Optional[str],
+        max_allowed_gap_periods: int,
+    ) -> Dict[str, Any]:
+        import pyspark.sql.functions as F  # noqa: N812
+        from pyspark.sql.window import Window
+
+        _EMPTY = {
+            'entities_with_gaps': 0, 'total_gaps': 0, 'max_gap': 0,
+            'examples': [], 'coverage': 100.0,
+            'frequency_consistent': True, 'frequency_deviation': 0.0,
+            'expected_periods': 0, 'actual_periods': 0,
+        }
+
+        if expected_frequency:
+            expected_interval = self._frequency_to_timedelta(expected_frequency)
+        else:
+            expected_interval = self._estimate_interval(df, entity_column)
+
+        if expected_interval is None:
+            return _EMPTY
+
+        interval_sec = expected_interval.total_seconds()
+        threshold_sec = interval_sec * max_allowed_gap_periods
+
+        spark_df = as_spark_df(df).filter(F.col("_ts").isNotNull())
+        w = Window.partitionBy(entity_column).orderBy("_ts")
+        diffs_df = (
+            spark_df
+            .withColumn("__prev__", F.lag("_ts").over(w))
+            .filter(F.col("__prev__").isNotNull())
+            .withColumn(
+                "__diff_sec__",
+                (F.unix_timestamp("_ts") - F.unix_timestamp("__prev__"))
+                .cast("double"),
+            )
+            .filter(F.col("__diff_sec__") > threshold_sec)
+        )
+
+        gap_stats = diffs_df.groupBy(entity_column).agg(
+            F.count("__diff_sec__").alias("gap_count"),
+            F.max("__diff_sec__").alias("max_gap_sec"),
+        )
+
+        agg_row = gap_stats.agg(
+            F.count(entity_column).alias("ent"),
+            F.coalesce(F.sum("gap_count"), F.lit(0)).alias("gaps"),
+            F.max("max_gap_sec").alias("max_sec"),
+        ).head()
+
+        ent_with_gaps = int(agg_row["ent"] or 0)
+        total_gaps_count = int(agg_row["gaps"] or 0)
+        max_sec = float(agg_row["max_sec"]) if agg_row["max_sec"] is not None else 0
+        max_gap_periods = int(max_sec / interval_sec) if interval_sec > 0 else 0
+
+        examples = []
+        if ent_with_gaps > 0:
+            for row in gap_stats.limit(3).collect():
+                examples.append({
+                    'entity': row[entity_column],
+                    'gap_size': f"{float(row['max_gap_sec']) / 86400:.1f} days",
+                    'gap_periods': int(float(row['max_gap_sec']) / interval_sec),
+                })
+
+        total_entity_count = spark_df.select(entity_column).distinct().count()
+        coverage = (
+            100.0 * (1 - ent_with_gaps / total_entity_count)
+            if total_entity_count > 0 else 100.0
+        )
+
+        return {
+            'entities_with_gaps': ent_with_gaps,
+            'total_gaps': total_gaps_count,
+            'max_gap': max_gap_periods,
+            'examples': examples,
+            'coverage': coverage,
+            'frequency_consistent': ent_with_gaps < total_entity_count * 0.1,
+            'frequency_deviation': 0.0,
+            'expected_periods': 0,
+            'actual_periods': 0,
         }
 
     def _frequency_to_timedelta(self, frequency: str) -> Optional[timedelta]:
@@ -756,7 +943,9 @@ class TimeSeriesValidator:
         df: DataFrame,
         entity_column: str
     ) -> Optional[timedelta]:
-        """Estimate the typical interval from the data."""
+        if _is_spark_pandas(df):
+            return self._spark_estimate_interval(df, entity_column)
+
         intervals = []
 
         sample_entities = head_as_list(df[entity_column].unique(), 100)
@@ -773,3 +962,32 @@ class TimeSeriesValidator:
             return None
 
         return timedelta(seconds=float(pd.Series(intervals).median()))
+
+    def _spark_estimate_interval(
+        self, df: DataFrame, entity_column: str
+    ) -> Optional[timedelta]:
+        import pyspark.sql.functions as F  # noqa: N812
+        from pyspark.sql.window import Window
+
+        spark_df = as_spark_df(df).filter(F.col("_ts").isNotNull())
+        w = Window.partitionBy(entity_column).orderBy("_ts")
+        diffs_df = (
+            spark_df
+            .withColumn("__prev__", F.lag("_ts").over(w))
+            .filter(F.col("__prev__").isNotNull())
+            .withColumn(
+                "__diff_sec__",
+                (F.unix_timestamp("_ts") - F.unix_timestamp("__prev__"))
+                .cast("double"),
+            )
+        )
+
+        row = diffs_df.agg(
+            F.percentile_approx("__diff_sec__", 0.5).alias("med"),
+            F.count("__diff_sec__").alias("cnt"),
+        ).head()
+
+        if row["cnt"] == 0:
+            return None
+
+        return timedelta(seconds=float(row["med"]))

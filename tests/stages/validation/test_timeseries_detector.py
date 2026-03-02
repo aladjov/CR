@@ -1,6 +1,7 @@
 """Tests for time series detection and validation module."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
+from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
@@ -777,3 +778,134 @@ class TestEdgeCases:
         assert result.is_time_series is False
         assert result.dataset_type == DatasetType.SNAPSHOT
         assert result.confidence == 0.8
+
+
+class TestClassifyFrequency:
+
+    @pytest.fixture
+    def detector(self):
+        return TimeSeriesDetector()
+
+    @pytest.mark.parametrize("median_hours,std_hours,expected", [
+        (1.0, 0.2, TimeSeriesFrequency.HOURLY),
+        (24.0, 1.0, TimeSeriesFrequency.DAILY),
+        (168.0, 5.0, TimeSeriesFrequency.WEEKLY),
+        (730.0, 10.0, TimeSeriesFrequency.MONTHLY),
+        (2100.0, 50.0, TimeSeriesFrequency.QUARTERLY),
+        (8760.0, 100.0, TimeSeriesFrequency.YEARLY),
+        (500.0, 300.0, TimeSeriesFrequency.IRREGULAR),
+        (50.0, 5.0, TimeSeriesFrequency.IRREGULAR),
+    ])
+    def test_classify_frequency(self, detector, median_hours, std_hours, expected):
+        assert detector._classify_frequency(median_hours, std_hours) == expected
+
+    def test_classify_frequency_zero_median(self, detector):
+        assert detector._classify_frequency(0.0, 0.0) == TimeSeriesFrequency.HOURLY
+
+
+class TestSparkDispatch:
+
+    @pytest.fixture
+    def detector(self):
+        return TimeSeriesDetector()
+
+    @pytest.fixture
+    def validator(self):
+        return TimeSeriesValidator()
+
+    def test_detect_frequency_dispatches_to_spark(self, detector, monkeypatch):
+        called = {}
+
+        def mock_spark_freq(df, ec, tc):
+            called['spark'] = True
+            return TimeSeriesFrequency.DAILY, 24.0
+
+        monkeypatch.setattr(detector, '_spark_detect_frequency', mock_spark_freq)
+        monkeypatch.setattr(
+            'customer_retention.stages.validation.timeseries_detector._is_spark_pandas',
+            lambda x: True,
+        )
+        freq, hours = detector._detect_frequency(MagicMock(), 'entity', 'ts')
+        assert called.get('spark') is True
+        assert freq == TimeSeriesFrequency.DAILY
+
+    def test_detect_frequency_stays_pandas(self, detector, monkeypatch):
+        dates = pd.date_range('2023-01-01', periods=30, freq='D')
+        df = pd.DataFrame({'cid': [1] * 30, 'date': dates})
+        monkeypatch.setattr(
+            'customer_retention.stages.validation.timeseries_detector._is_spark_pandas',
+            lambda x: False,
+        )
+        freq, hours = detector._detect_frequency(df, 'cid', 'date')
+        assert freq == TimeSeriesFrequency.DAILY
+
+    def test_check_ordering_dispatches_to_spark(self, validator, monkeypatch):
+        called = {}
+
+        def mock_spark_ordering(df, ec):
+            called['spark'] = True
+            return {'entities': 0, 'examples': []}
+
+        monkeypatch.setattr(validator, '_spark_check_ordering', mock_spark_ordering)
+        monkeypatch.setattr(
+            'customer_retention.stages.validation.timeseries_detector._is_spark_pandas',
+            lambda x: True,
+        )
+        result = validator._check_ordering(MagicMock(), 'entity')
+        assert called.get('spark') is True
+        assert result['entities'] == 0
+
+    def test_analyze_gaps_dispatches_to_spark(self, validator, monkeypatch):
+        called = {}
+
+        def mock_spark_gaps(df, ec, ef, m):
+            called['spark'] = True
+            return {
+                'entities_with_gaps': 0, 'total_gaps': 0, 'max_gap': 0,
+                'examples': [], 'coverage': 100.0,
+                'frequency_consistent': True, 'frequency_deviation': 0.0,
+                'expected_periods': 0, 'actual_periods': 0,
+            }
+
+        monkeypatch.setattr(validator, '_spark_analyze_gaps', mock_spark_gaps)
+        monkeypatch.setattr(
+            'customer_retention.stages.validation.timeseries_detector._is_spark_pandas',
+            lambda x: True,
+        )
+        result = validator._analyze_gaps(MagicMock(), 'entity', 'monthly', 3)
+        assert called.get('spark') is True
+        assert result['entities_with_gaps'] == 0
+
+    def test_estimate_interval_dispatches_to_spark(self, validator, monkeypatch):
+        called = {}
+
+        def mock_spark_interval(df, ec):
+            called['spark'] = True
+            return timedelta(days=30)
+
+        monkeypatch.setattr(validator, '_spark_estimate_interval', mock_spark_interval)
+        monkeypatch.setattr(
+            'customer_retention.stages.validation.timeseries_detector._is_spark_pandas',
+            lambda x: True,
+        )
+        result = validator._estimate_interval(MagicMock(), 'entity')
+        assert called.get('spark') is True
+        assert result == timedelta(days=30)
+
+    def test_check_duplicate_timestamps_dispatches_to_spark(self, validator, monkeypatch):
+        called = {}
+
+        def mock_spark_dups(df, ec):
+            called['spark'] = True
+            return {'total': 0, 'entities': 0, 'examples': []}
+
+        monkeypatch.setattr(
+            validator, '_spark_check_duplicate_timestamps', mock_spark_dups,
+        )
+        monkeypatch.setattr(
+            'customer_retention.stages.validation.timeseries_detector._is_spark_pandas',
+            lambda x: True,
+        )
+        result = validator._check_duplicate_timestamps(MagicMock(), 'entity')
+        assert called.get('spark') is True
+        assert result['total'] == 0
