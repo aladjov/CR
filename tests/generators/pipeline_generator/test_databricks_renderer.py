@@ -219,6 +219,18 @@ class TestRenderSparkStepCall:
         assert "count" in result
         assert "/" in result or "div" in result.lower()
 
+    def test_derived_ratio_no_runtime_guard(self):
+        step = TransformationStep(
+            type=PipelineTransformationType.DERIVED_COLUMN,
+            column="click_to_open_rate",
+            parameters={"action": "ratio", "numerator": "clicked_velocity_pct", "denominator": "opened_velocity_pct"},
+            rationale="",
+        )
+        result = render_spark_step_call(step)
+        assert "in df.columns" not in result
+        assert "clicked_velocity_pct" in result
+        assert "opened_velocity_pct" in result
+
     def test_derived_column_interaction(self):
         step = TransformationStep(
             type=PipelineTransformationType.DERIVED_COLUMN,
@@ -230,6 +242,26 @@ class TestRenderSparkStepCall:
         assert "a" in result
         assert "b" in result
         assert "*" in result
+
+    def test_derived_interaction_no_runtime_guard(self):
+        step = TransformationStep(
+            type=PipelineTransformationType.DERIVED_COLUMN,
+            column="combo",
+            parameters={"action": "interaction", "features": ["feat_a", "feat_b"]},
+            rationale="",
+        )
+        result = render_spark_step_call(step)
+        assert "in df.columns" not in result
+
+    def test_derived_composite_no_runtime_guard(self):
+        step = TransformationStep(
+            type=PipelineTransformationType.DERIVED_COLUMN,
+            column="avg_score",
+            parameters={"action": "composite", "columns": ["x", "y", "z"]},
+            rationale="",
+        )
+        result = render_spark_step_call(step)
+        assert "in df.columns" not in result
 
     def test_segment_aware_cap(self):
         step = TransformationStep(

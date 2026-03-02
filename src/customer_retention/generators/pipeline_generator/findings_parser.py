@@ -1,7 +1,10 @@
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 from customer_retention.analysis.auto_explorer.exploration_manager import (
     DatasetInfo,
@@ -58,6 +61,7 @@ class FindingsParser:
         selected_sources = list(multi_dataset.datasets.keys())
         source_findings = self._load_source_findings(selected_sources, self._findings_dir, multi_dataset)
         discovered_events = self._discover_event_sources(source_findings)
+        self._index_raw_source_columns(source_findings)
         self._index_raw_source_columns(discovered_events)
         recommendations_registry = self._load_recommendations()
         recommendations_hash = (
@@ -65,12 +69,11 @@ class FindingsParser:
         )
         config = self._build_pipeline_config(multi_dataset, source_findings, recommendations_hash)
         config.training = self._build_training_config(multi_dataset, source_findings)
-        if recommendations_registry:
-            self._apply_recommendations_to_config(config, recommendations_registry, multi_dataset)
         self._build_landing_configs(config, multi_dataset, source_findings)
         self._build_discovered_landing_configs(config, discovered_events, multi_dataset)
         self._build_bronze_event_configs(config, multi_dataset, source_findings, discovered_events)
         if recommendations_registry:
+            self._apply_recommendations_to_config(config, recommendations_registry, multi_dataset)
             self._apply_event_recommendations(config, recommendations_registry)
         self._reconcile_discovered_event_transforms(config, discovered_events)
         return config
@@ -648,7 +651,10 @@ class FindingsParser:
     def _apply_silver_recommendations(self, config: PipelineConfig, registry: RecommendationRegistry) -> None:
         if not hasattr(registry, "silver") or registry.silver is None:
             return
+        pipeline_columns = self._collect_pipeline_columns(config)
         for rec in getattr(registry.silver, "derived_columns", []):
+            if not self._silver_derived_sources_available(rec, pipeline_columns):
+                continue
             step = self._map_silver_derived(rec)
             if step:
                 config.silver.derived_columns.append(step)
@@ -665,6 +671,82 @@ class FindingsParser:
                 source_notebook=rec.source_notebook,
             )
         return None
+
+    def _collect_pipeline_columns(self, config: PipelineConfig) -> Set[str]:
+        columns: Set[str] = {"entity_id", "as_of_date"}
+        for name, bronze in config.bronze.items():
+            raw_cols = self._raw_source_columns.get(name, set())
+            dropped = {
+                step.column for step in bronze.transformations
+                if step.type == PipelineTransformationType.DROP_COLUMN
+            }
+            columns |= (raw_cols - dropped)
+        for _name, event_cfg in config.bronze_event.items():
+            agg = event_cfg.aggregation
+            if agg:
+                for window in agg.windows:
+                    for col in agg.value_columns:
+                        for func in agg.agg_funcs:
+                            columns.add(f"{col}_{func}_{window}")
+                    for col in agg.categorical_columns:
+                        for func in agg.categorical_agg_funcs:
+                            columns.add(f"{col}_{func}_{window}")
+                    columns.add(f"event_count_{window}")
+            lc = event_cfg.lifecycle
+            if lc:
+                columns |= {"days_since_last", "days_since_first"}
+                if lc.include_recency_bucket:
+                    columns.add("recency_bucket")
+                if lc.include_lifecycle_quadrant:
+                    columns.add("lifecycle_quadrant")
+                if lc.include_cyclical_features:
+                    columns |= {"dow_sin", "dow_cos"}
+                if lc.include_month_cyclical:
+                    columns |= {"month_sin", "month_cos"}
+                if lc.include_quarter_cyclical:
+                    columns |= {"quarter_sin", "quarter_cos"}
+                if lc.include_trend_features:
+                    columns |= {"recent_vs_overall_ratio", "entity_trend_slope"}
+                if lc.include_cohort_features:
+                    columns |= {"cohort_year", "cohort_quarter"}
+                for pair in lc.momentum_pairs:
+                    short = pair.get("short_window", "")
+                    long = pair.get("long_window", "")
+                    columns.add(f"momentum_{short}_{long}")
+            dd = event_cfg.datetime_derivation
+            if dd:
+                for src in dd.source_columns:
+                    for suffix in ("_delta_hours", "_hour", "_dow", "_is_weekend"):
+                        columns.add(f"{src}{suffix}")
+            for text_cfg in event_cfg.text_features:
+                if text_cfg.component_columns:
+                    columns |= set(text_cfg.component_columns)
+                else:
+                    for i in range(text_cfg.n_components):
+                        columns.add(f"{text_cfg.column}_emb_{i}")
+        return columns
+
+    @staticmethod
+    def _silver_derived_sources_available(rec, pipeline_columns: Set[str]) -> bool:
+        action = rec.action
+        params = rec.parameters
+        if action == "ratio":
+            needed = {params.get("numerator", ""), params.get("denominator", "")}
+        elif action == "interaction":
+            needed = set(params.get("features", []))
+        elif action == "composite":
+            needed = set(params.get("columns", []))
+        else:
+            return True
+        missing = needed - pipeline_columns
+        if missing:
+            logger.info(
+                "Skipping silver derived-column '%s': missing source columns %s",
+                rec.target_column,
+                sorted(missing),
+            )
+            return False
+        return True
 
     def _apply_gold_recommendations(self, config: PipelineConfig, registry: RecommendationRegistry) -> None:
         if not hasattr(registry, "gold") or registry.gold is None:

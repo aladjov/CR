@@ -4278,6 +4278,370 @@ class TestBuildGoldConfigColumnTypes:
         assert encoded_cols == {"region", "tier"}
 
 
+class TestSilverDerivedColumnValidation:
+    def _make_parser(self, raw_source_columns=None):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = raw_source_columns or {}
+        parser._source_findings_paths = {}
+        return parser
+
+    def _make_config_with_entity_and_event(self, entity_columns, event_config):
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeEventConfig,
+            BronzeLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
+
+        entity_source = SourceConfig(
+            name="customers", path="customers.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/customers.csv",
+        )
+        event_source = SourceConfig(
+            name="events", path="events.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/events.csv",
+            is_event_level=True, time_column="sent_date",
+        )
+        config = PipelineConfig(
+            name="test", target_column="churn",
+            sources=[entity_source, event_source],
+            bronze={"customers": BronzeLayerConfig(source=entity_source)},
+            silver=SilverLayerConfig(),
+            gold=None, output_dir=".",
+        )
+        config.bronze_event["events"] = event_config or BronzeEventConfig(
+            source=event_source, entity_column="customer_id", time_column="sent_date",
+        )
+        return config
+
+    def _make_registry_with_silver_derived(self, recs):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            RecommendationRegistry,
+            SilverRecommendations,
+        )
+
+        registry = RecommendationRegistry()
+        registry.silver = SilverRecommendations(entity_column="customer_id", derived_columns=recs)
+        return registry
+
+    def test_ratio_valid_columns_passes(self):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import LayeredRecommendation
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+            BronzeEventConfig,
+            SourceConfig,
+        )
+
+        event_source = SourceConfig(
+            name="events", path="events.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/events.csv",
+            is_event_level=True, time_column="sent_date",
+        )
+        event_cfg = BronzeEventConfig(
+            source=event_source, entity_column="customer_id", time_column="sent_date",
+            aggregation=AggregationWindowConfig(
+                windows=["7d", "30d"],
+                value_columns=["amount"],
+                agg_funcs=["sum", "mean"],
+            ),
+        )
+        parser = self._make_parser(raw_source_columns={"customers": {"customer_id", "age", "income"}})
+        config = self._make_config_with_entity_and_event(
+            entity_columns={"customer_id", "age", "income"},
+            event_config=event_cfg,
+        )
+        rec = LayeredRecommendation(
+            id="d1", layer="silver", category="derived_column", action="ratio",
+            target_column="age_to_income", parameters={"numerator": "age", "denominator": "income"},
+            rationale="ratio", source_notebook="06",
+        )
+        registry = self._make_registry_with_silver_derived([rec])
+        parser._apply_silver_recommendations(config, registry)
+        assert len(config.silver.derived_columns) == 1
+        assert config.silver.derived_columns[0].column == "age_to_income"
+
+    def test_ratio_missing_columns_filtered(self):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import LayeredRecommendation
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+            BronzeEventConfig,
+            SourceConfig,
+        )
+
+        event_source = SourceConfig(
+            name="events", path="events.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/events.csv",
+            is_event_level=True, time_column="sent_date",
+        )
+        event_cfg = BronzeEventConfig(
+            source=event_source, entity_column="customer_id", time_column="sent_date",
+            aggregation=AggregationWindowConfig(
+                windows=["7d", "30d"],
+                value_columns=["amount"],
+                agg_funcs=["sum", "mean"],
+            ),
+        )
+        parser = self._make_parser(raw_source_columns={"customers": {"customer_id", "age", "income"}})
+        config = self._make_config_with_entity_and_event(
+            entity_columns={"customer_id", "age", "income"},
+            event_config=event_cfg,
+        )
+        rec = LayeredRecommendation(
+            id="d1", layer="silver", category="derived_column", action="ratio",
+            target_column="click_to_open_rate",
+            parameters={"numerator": "clicked_velocity_pct", "denominator": "opened_velocity_pct"},
+            rationale="ratio", source_notebook="06",
+        )
+        registry = self._make_registry_with_silver_derived([rec])
+        parser._apply_silver_recommendations(config, registry)
+        assert len(config.silver.derived_columns) == 0
+
+    def test_interaction_valid_columns_passes(self):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import LayeredRecommendation
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+            BronzeEventConfig,
+            SourceConfig,
+        )
+
+        event_source = SourceConfig(
+            name="events", path="events.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/events.csv",
+            is_event_level=True, time_column="sent_date",
+        )
+        event_cfg = BronzeEventConfig(
+            source=event_source, entity_column="customer_id", time_column="sent_date",
+            aggregation=AggregationWindowConfig(
+                windows=["7d"],
+                value_columns=["amount"],
+                agg_funcs=["sum", "mean"],
+            ),
+        )
+        parser = self._make_parser(raw_source_columns={"customers": {"customer_id", "age", "income"}})
+        config = self._make_config_with_entity_and_event(
+            entity_columns={"customer_id", "age", "income"},
+            event_config=event_cfg,
+        )
+        rec = LayeredRecommendation(
+            id="d1", layer="silver", category="derived_column", action="interaction",
+            target_column="amount_sum_7d_x_age",
+            parameters={"features": ["amount_sum_7d", "age"]},
+            rationale="interaction", source_notebook="06",
+        )
+        registry = self._make_registry_with_silver_derived([rec])
+        parser._apply_silver_recommendations(config, registry)
+        assert len(config.silver.derived_columns) == 1
+
+    def test_interaction_missing_columns_filtered(self):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import LayeredRecommendation
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+            BronzeEventConfig,
+            SourceConfig,
+        )
+
+        event_source = SourceConfig(
+            name="events", path="events.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/events.csv",
+            is_event_level=True, time_column="sent_date",
+        )
+        event_cfg = BronzeEventConfig(
+            source=event_source, entity_column="customer_id", time_column="sent_date",
+            aggregation=AggregationWindowConfig(
+                windows=["7d"],
+                value_columns=["amount"],
+                agg_funcs=["sum"],
+            ),
+        )
+        parser = self._make_parser(raw_source_columns={"customers": {"customer_id", "age"}})
+        config = self._make_config_with_entity_and_event(
+            entity_columns={"customer_id", "age"},
+            event_config=event_cfg,
+        )
+        rec = LayeredRecommendation(
+            id="d1", layer="silver", category="derived_column", action="interaction",
+            target_column="combo",
+            parameters={"features": ["clicked_velocity_pct", "age"]},
+            rationale="interaction", source_notebook="06",
+        )
+        registry = self._make_registry_with_silver_derived([rec])
+        parser._apply_silver_recommendations(config, registry)
+        assert len(config.silver.derived_columns) == 0
+
+    def test_composite_missing_columns_filtered(self):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import LayeredRecommendation
+        from customer_retention.generators.pipeline_generator.models import BronzeEventConfig, SourceConfig
+
+        event_source = SourceConfig(
+            name="events", path="events.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/events.csv",
+            is_event_level=True, time_column="sent_date",
+        )
+        event_cfg = BronzeEventConfig(
+            source=event_source, entity_column="customer_id", time_column="sent_date",
+        )
+        parser = self._make_parser(raw_source_columns={"customers": {"customer_id", "age"}})
+        config = self._make_config_with_entity_and_event(
+            entity_columns={"customer_id", "age"},
+            event_config=event_cfg,
+        )
+        rec = LayeredRecommendation(
+            id="d1", layer="silver", category="derived_column", action="composite",
+            target_column="avg_score",
+            parameters={"columns": ["score_a", "score_b", "score_c"]},
+            rationale="composite", source_notebook="06",
+        )
+        registry = self._make_registry_with_silver_derived([rec])
+        parser._apply_silver_recommendations(config, registry)
+        assert len(config.silver.derived_columns) == 0
+
+    def test_collect_pipeline_columns_aggregation(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+            BronzeEventConfig,
+            BronzeLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
+
+        entity_source = SourceConfig(
+            name="customers", path="customers.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/customers.csv",
+        )
+        event_source = SourceConfig(
+            name="events", path="events.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/events.csv",
+            is_event_level=True, time_column="sent_date",
+        )
+        config = PipelineConfig(
+            name="test", target_column="churn",
+            sources=[entity_source, event_source],
+            bronze={"customers": BronzeLayerConfig(source=entity_source)},
+            silver=SilverLayerConfig(), gold=None, output_dir=".",
+        )
+        config.bronze_event["events"] = BronzeEventConfig(
+            source=event_source, entity_column="customer_id", time_column="sent_date",
+            aggregation=AggregationWindowConfig(
+                windows=["7d", "30d"],
+                value_columns=["amount", "quantity"],
+                agg_funcs=["sum", "mean"],
+                categorical_columns=["category"],
+                categorical_agg_funcs=["nunique", "mode"],
+            ),
+        )
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {"customers": {"customer_id", "age", "income"}}
+        parser._source_findings_paths = {}
+        cols = parser._collect_pipeline_columns(config)
+        assert "amount_sum_7d" in cols
+        assert "amount_mean_30d" in cols
+        assert "quantity_sum_7d" in cols
+        assert "category_nunique_7d" in cols
+        assert "category_mode_30d" in cols
+        assert "event_count_7d" in cols
+        assert "event_count_30d" in cols
+        assert "age" in cols
+        assert "income" in cols
+
+    def test_collect_pipeline_columns_entity_minus_drops(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeLayerConfig,
+            PipelineConfig,
+            PipelineTransformationType,
+            SilverLayerConfig,
+            SourceConfig,
+            TransformationStep,
+        )
+
+        entity_source = SourceConfig(
+            name="customers", path="customers.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/customers.csv",
+        )
+        drop_step = TransformationStep(
+            type=PipelineTransformationType.DROP_COLUMN,
+            column="junk_col",
+            parameters={},
+            rationale="drop junk",
+        )
+        config = PipelineConfig(
+            name="test", target_column="churn",
+            sources=[entity_source],
+            bronze={"customers": BronzeLayerConfig(source=entity_source, transformations=[drop_step])},
+            silver=SilverLayerConfig(), gold=None, output_dir=".",
+        )
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {"customers": {"customer_id", "age", "junk_col"}}
+        parser._source_findings_paths = {}
+        cols = parser._collect_pipeline_columns(config)
+        assert "age" in cols
+        assert "junk_col" not in cols
+
+    def test_collect_pipeline_columns_lifecycle(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeEventConfig,
+            BronzeLayerConfig,
+            LifecycleConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
+
+        entity_source = SourceConfig(
+            name="customers", path="customers.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/customers.csv",
+        )
+        event_source = SourceConfig(
+            name="events", path="events.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/events.csv",
+            is_event_level=True, time_column="sent_date",
+        )
+        config = PipelineConfig(
+            name="test", target_column="churn",
+            sources=[entity_source, event_source],
+            bronze={"customers": BronzeLayerConfig(source=entity_source)},
+            silver=SilverLayerConfig(), gold=None, output_dir=".",
+        )
+        config.bronze_event["events"] = BronzeEventConfig(
+            source=event_source, entity_column="customer_id", time_column="sent_date",
+            lifecycle=LifecycleConfig(
+                include_lifecycle_quadrant=True,
+                include_cyclical_features=True,
+                include_recency_bucket=True,
+                include_trend_features=True,
+                include_cohort_features=True,
+                include_month_cyclical=True,
+                include_quarter_cyclical=True,
+                momentum_pairs=[{"short_window": "7d", "long_window": "30d"}],
+            ),
+        )
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {"customers": {"customer_id", "age"}}
+        parser._source_findings_paths = {}
+        cols = parser._collect_pipeline_columns(config)
+        assert "days_since_last" in cols
+        assert "days_since_first" in cols
+        assert "recency_bucket" in cols
+        assert "lifecycle_quadrant" in cols
+        assert "dow_sin" in cols
+        assert "dow_cos" in cols
+        assert "month_sin" in cols
+        assert "month_cos" in cols
+        assert "quarter_sin" in cols
+        assert "quarter_cos" in cols
+        assert "recent_vs_overall_ratio" in cols
+        assert "entity_trend_slope" in cols
+        assert "cohort_year" in cols
+        assert "cohort_quarter" in cols
+        assert "momentum_7d_30d" in cols
+
+
 class TestColumnTypeDeserialization:
     def test_valid_column_type_deserializes(self):
         from customer_retention.core.config.column_config import ColumnType

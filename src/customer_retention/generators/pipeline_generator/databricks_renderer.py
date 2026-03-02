@@ -82,7 +82,8 @@ def _derived_ratio(col, p):
     num = p.get("numerator", "")
     den = p.get("denominator", "")
     return (
-        f'df.withColumn("{col}", F.col("{num}") / F.when(F.col("{den}") != 0, F.col("{den}")).otherwise(F.lit(None)))'
+        f'df.withColumn("{col}", '
+        f'F.col("{num}") / F.when(F.col("{den}") != 0, F.col("{den}")).otherwise(F.lit(None)))'
     )
 
 
