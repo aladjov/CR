@@ -410,7 +410,12 @@ def _to_list(obj: Any) -> list:
 
 def head_as_list(obj: Any, n: int) -> list:
     import warnings
-    bounded = obj.head(n) if hasattr(obj, 'head') else obj[:n]
+    if hasattr(obj, 'head'):
+        bounded = obj.head(n)
+    elif hasattr(obj, 'to_series'):
+        bounded = obj.to_series().head(n)
+    else:
+        bounded = obj[:n]
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=UserWarning, message=".*to_list.*")
         return _to_list(bounded)

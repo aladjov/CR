@@ -26,6 +26,19 @@ class TestHeadAsList:
         result = head_as_list(s.index, 2)
         assert result == ["a", "b"]
 
+    def test_works_with_non_subscriptable_index(self):
+        class SparkPandasIndex:
+            """Mimics pyspark.pandas Index: no .head(), no [:n], but has .to_series()."""
+            def __init__(self, data):
+                self._data = data
+
+            def to_series(self):
+                return pd.Series(self._data)
+
+        idx = SparkPandasIndex(["x", "y", "z", "w"])
+        result = head_as_list(idx, 2)
+        assert result == ["x", "y"]
+
     def test_works_with_plain_list(self):
         result = head_as_list([5, 6, 7, 8, 9], 3)
         assert result == [5, 6, 7]
