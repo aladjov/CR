@@ -91,7 +91,7 @@ class IdentifierProfiler(ColumnProfiler):
         if len(str_series) == 0:
             return None, None
 
-        str_series.head(min(100, len(str_series)))
+        str_series = str_series.head(min(100, len(str_series)))
         pattern_map = {
             r'^[A-Z]{3}-\d{5}$': 'AAA-99999',
             r'^\d{3}-\d{3}-\d{4}$': '999-999-9999',

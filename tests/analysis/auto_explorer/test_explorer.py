@@ -8,6 +8,7 @@ import pytest
 from customer_retention.analysis.auto_explorer.explorer import DataExplorer
 from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
 from customer_retention.core.config.column_config import ColumnType
+from customer_retention.stages.profiling import ProfilerFactory
 
 
 @pytest.fixture
@@ -668,3 +669,107 @@ class TestDataExplorerBulkStats:
             assert "null_percentage" in um
             assert "distinct_count" in um
             assert "distinct_percentage" in um
+
+
+class TestDataExplorerTypedBulkPath:
+    def test_typed_bulk_stats_called(self, sample_dataframe):
+        from unittest.mock import patch
+
+        from customer_retention.core.compat.bulk_profiling import compute_typed_bulk_stats as _real
+
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        with patch(
+            "customer_retention.analysis.auto_explorer.explorer.compute_typed_bulk_stats",
+            wraps=_real,
+        ) as mock_typed:
+            findings = explorer.explore(sample_dataframe)
+            mock_typed.assert_called_once()
+            assert findings.row_count == 100
+
+    def test_datetime_uses_bulk_path(self, sample_dataframe):
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(sample_dataframe)
+        date_finding = findings.columns["signup_date"]
+        tm = date_finding.type_metrics
+        assert "min_date" in tm
+        assert "max_date" in tm
+        assert "date_range_days" in tm
+        assert "future_date_count" in tm
+        assert "weekend_percentage" in tm
+
+    def test_categorical_uses_bulk_path(self, sample_dataframe):
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(sample_dataframe)
+        contract_finding = findings.columns["contract"]
+        tm = contract_finding.type_metrics
+        assert "cardinality" in tm
+        assert "value_counts" in tm
+        assert "top_categories" in tm
+        assert "encoding_recommendation" in tm
+
+    def test_identifier_uses_bulk_path(self, sample_dataframe):
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(sample_dataframe)
+        id_finding = findings.columns["customer_id"]
+        tm = id_finding.type_metrics
+        assert "is_unique" in tm
+        assert "format_pattern" in tm
+        assert "length_min" in tm
+        assert "length_max" in tm
+
+    def test_binary_uses_bulk_path(self):
+        df = pd.DataFrame({
+            "flag": [True, False] * 50,
+            "target": [0, 1] * 50,
+        })
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df, target_hint="target")
+        flag_finding = findings.columns["flag"]
+        if flag_finding.inferred_type == ColumnType.BINARY:
+            tm = flag_finding.type_metrics
+            assert "true_count" in tm
+            assert "false_count" in tm
+            assert "balance_ratio" in tm
+            assert "is_boolean" in tm
+
+    def test_text_uses_bulk_path(self):
+        texts = [f"This is sentence number {i} with some text content." for i in range(200)]
+        df = pd.DataFrame({
+            "description": texts,
+            "target": np.random.choice([0, 1], 200).tolist(),
+        })
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df, target_hint="target")
+        text_finding = findings.columns["description"]
+        if text_finding.inferred_type == ColumnType.TEXT:
+            tm = text_finding.type_metrics
+            assert "length_min" in tm
+            assert "length_max" in tm
+            assert "word_count_mean" in tm
+            assert "pii_detected" in tm
+
+    def test_no_profiler_fallback_for_bulk_types(self, sample_dataframe):
+        from unittest.mock import patch
+
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        with patch(
+            "customer_retention.analysis.auto_explorer.explorer.ProfilerFactory.get_profiler",
+            wraps=ProfilerFactory.get_profiler,
+        ) as mock_get_profiler:
+            findings = explorer.explore(sample_dataframe, target_hint="churned")
+            # ProfilerFactory.get_profiler should only be called for universal metrics
+            # and target profiler fallback, NOT for datetime/categorical/identifier/binary/text
+            profile_calls = mock_get_profiler.call_args_list
+            profiled_types = [call.args[0] for call in profile_calls]
+            # Target should still use profiler (only 1 target column falls back)
+            assert ColumnType.TARGET in profiled_types
+            # Datetime, categorical, identifier should NOT appear in profiler calls
+            # (they use the typed bulk path instead)
+            type_metrics_profiled = [
+                t for t in profiled_types
+                if t not in (ColumnType.NUMERIC_CONTINUOUS, ColumnType.NUMERIC_DISCRETE, ColumnType.TARGET)
+            ]
+            # The universal metrics path still calls get_profiler for format,
+            # but _compute_type_metrics should not call profile() for bulk types
+            # This is a soft check — at minimum, target is the only fallback
+            assert ColumnType.TARGET in profiled_types

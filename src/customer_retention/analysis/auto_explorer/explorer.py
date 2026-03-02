@@ -4,17 +4,33 @@ from typing import List, Optional, Union
 
 logger = logging.getLogger(__name__)
 
-from customer_retention.core.compat import DataFrame, Series, is_dataframe, pd, safe_memory_usage_bytes
+from customer_retention.core.compat import DataFrame, Series, head_as_list, is_dataframe, pd, safe_memory_usage_bytes
 from customer_retention.core.compat.bulk_profiling import (
+    BinaryColumnStats,
+    CategoricalColumnStats,
+    DatetimeColumnStats,
+    IdentifierColumnStats,
     NumericColumnStats,
     PerColumnStats,
+    TextColumnStats,
     compute_bulk_stats,
+    compute_typed_bulk_stats,
 )
 from customer_retention.core.config.column_config import ColumnType
 from customer_retention.stages.profiling import ProfilerFactory, TypeDetector
 from customer_retention.stages.temporal import TEMPORAL_METADATA_COLS
 
 from .findings import ColumnFinding, ExplorationFindings
+
+
+def _try_strptime(value: str, fmt: str) -> bool:
+    from datetime import datetime as _dt
+
+    try:
+        _dt.strptime(value, fmt)
+        return True
+    except Exception:
+        return False
 
 
 class DataExplorer:
@@ -84,11 +100,52 @@ class DataExplorer:
         bulk = compute_bulk_stats(df)
         logger.info("Bulk statistics complete (%d numeric columns)", len(bulk.numeric))
 
+        # --- Pass 1: detect types using bulk distinct_counts (0 extra Spark jobs) ---
+        active_cols = [c for c in df.columns if c not in TEMPORAL_METADATA_COLS]
+        col_types: dict[str, ColumnType] = {}
+        for column_name in active_cols:
+            col_stats = bulk.columns.get(column_name)
+            distinct_count = col_stats.distinct_count if col_stats else None
+            type_inf = self.type_detector.detect_type(
+                df[column_name], column_name, distinct_count=distinct_count
+            )
+            if target_hint and column_name.lower() == target_hint.lower():
+                type_inf.inferred_type = ColumnType.TARGET
+                type_inf.evidence.append(f"Matched target hint: {target_hint}")
+            col_types[column_name] = type_inf.inferred_type
+
+        # --- Classify columns by type for bulk pass 2 ---
+        datetime_cols = [
+            c for c, t in col_types.items()
+            if t in (ColumnType.DATETIME, ColumnType.FEATURE_TIMESTAMP, ColumnType.LABEL_TIMESTAMP)
+        ]
+        categorical_cols = [
+            c for c, t in col_types.items()
+            if t in (ColumnType.CATEGORICAL_NOMINAL, ColumnType.CATEGORICAL_ORDINAL, ColumnType.CATEGORICAL_CYCLICAL)
+        ]
+        identifier_cols = [c for c, t in col_types.items() if t == ColumnType.IDENTIFIER]
+        binary_cols = [c for c, t in col_types.items() if t == ColumnType.BINARY]
+        text_cols = [c for c, t in col_types.items() if t == ColumnType.TEXT]
+
+        # --- Pass 2: compute typed bulk stats (3-5 Spark jobs) ---
+        typed_bulk = compute_typed_bulk_stats(
+            df, bulk,
+            datetime_cols=datetime_cols,
+            categorical_cols=categorical_cols,
+            identifier_cols=identifier_cols,
+            binary_cols=binary_cols,
+            text_cols=text_cols,
+        )
+        logger.info(
+            "Typed bulk stats complete (dt=%d cat=%d id=%d bin=%d txt=%d)",
+            len(typed_bulk.datetime), len(typed_bulk.categorical),
+            len(typed_bulk.identifier), len(typed_bulk.binary), len(typed_bulk.text),
+        )
+
+        # --- Per-column loop: use bulk metrics, avoid profiler.profile() ---
         processed = 0
         log_interval = max(1, total_cols // 5)
-        for column_name in df.columns:
-            if column_name in TEMPORAL_METADATA_COLS:
-                continue
+        for column_name in active_cols:
             col_stats = bulk.columns.get(column_name)
             numeric_stats = bulk.numeric.get(column_name)
             column_finding = self._explore_column(
@@ -98,6 +155,7 @@ class DataExplorer:
                 bulk_total=bulk.total_count,
                 col_stats=col_stats,
                 numeric_stats=numeric_stats,
+                typed_bulk=typed_bulk,
             )
             findings.columns[column_name] = column_finding
             self._track_special_columns(findings, column_finding, df[column_name], col_stats=col_stats)
@@ -113,6 +171,7 @@ class DataExplorer:
         bulk_total: Optional[int] = None,
         col_stats: Optional[PerColumnStats] = None,
         numeric_stats: Optional[NumericColumnStats] = None,
+        typed_bulk=None,
     ) -> ColumnFinding:
         distinct_count = col_stats.distinct_count if col_stats else None
         type_inference = self.type_detector.detect_type(series, column_name, distinct_count=distinct_count)
@@ -125,7 +184,12 @@ class DataExplorer:
             bulk_total=bulk_total,
             col_stats=col_stats,
         )
-        type_metrics = self._compute_type_metrics(series, type_inference.inferred_type, numeric_stats=numeric_stats)
+        type_metrics = self._compute_type_metrics(
+            series, type_inference.inferred_type,
+            numeric_stats=numeric_stats,
+            typed_bulk=typed_bulk,
+            column_name=column_name,
+        )
         quality_issues = self._identify_quality_issues(universal_metrics, type_metrics)
         quality_score = self._calculate_column_quality(universal_metrics, quality_issues)
         cleaning_recommendations = self._generate_cleaning_recommendations(universal_metrics, quality_issues)
@@ -189,10 +253,41 @@ class DataExplorer:
         }
 
     def _compute_type_metrics(
-        self, series: Series, col_type: ColumnType, numeric_stats: Optional[NumericColumnStats] = None
+        self,
+        series: Series,
+        col_type: ColumnType,
+        numeric_stats: Optional[NumericColumnStats] = None,
+        typed_bulk=None,
+        column_name: Optional[str] = None,
     ) -> dict:
         if numeric_stats is not None and col_type in (ColumnType.NUMERIC_CONTINUOUS, ColumnType.NUMERIC_DISCRETE):
             return self._numeric_metrics_from_bulk(series, numeric_stats)
+
+        if typed_bulk is not None and column_name is not None:
+            if col_type in (ColumnType.DATETIME, ColumnType.FEATURE_TIMESTAMP, ColumnType.LABEL_TIMESTAMP):
+                dt_stats = typed_bulk.datetime.get(column_name)
+                if dt_stats is not None:
+                    return self._datetime_metrics_from_bulk(series, dt_stats)
+
+            if col_type in (ColumnType.CATEGORICAL_NOMINAL, ColumnType.CATEGORICAL_ORDINAL, ColumnType.CATEGORICAL_CYCLICAL):
+                cat_stats = typed_bulk.categorical.get(column_name)
+                if cat_stats is not None:
+                    return self._categorical_metrics_from_bulk(series, cat_stats)
+
+            if col_type == ColumnType.IDENTIFIER:
+                id_stats = typed_bulk.identifier.get(column_name)
+                if id_stats is not None:
+                    return self._identifier_metrics_from_bulk(series, id_stats)
+
+            if col_type == ColumnType.BINARY:
+                bin_stats = typed_bulk.binary.get(column_name)
+                if bin_stats is not None:
+                    return self._binary_metrics_from_bulk(series, bin_stats)
+
+            if col_type == ColumnType.TEXT:
+                txt_stats = typed_bulk.text.get(column_name)
+                if txt_stats is not None:
+                    return self._text_metrics_from_bulk(txt_stats, len(series))
 
         profiler = ProfilerFactory.get_profiler(col_type)
         if not profiler:
@@ -246,6 +341,183 @@ class DataExplorer:
             "outlier_count_zscore": ns.outlier_count_zscore,
             "outlier_percentage": outlier_pct,
             "histogram_bins": histogram_bins,
+        }
+
+    @staticmethod
+    def _datetime_metrics_from_bulk(series: Series, ds: DatetimeColumnStats) -> dict:
+        sample = head_as_list(series.dropna(), 10)
+        format_detected = None
+        format_consistency = None
+        if sample:
+            from datetime import datetime as _dt
+
+            if all(isinstance(v, (_dt, pd.Timestamp)) for v in sample):
+                format_detected = "datetime64"
+                format_consistency = 100.0
+            else:
+                str_sample = [str(v) for v in sample]
+                formats = [
+                    "%Y-%m-%d", "%Y/%m/%d", "%d-%m-%Y", "%d/%m/%Y",
+                    "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S",
+                    "%Y-%m-%dT%H:%M:%S", "%m/%d/%Y",
+                ]
+                for fmt in formats:
+                    matches = sum(1 for s in str_sample if _try_strptime(s, fmt))
+                    pct = matches / len(str_sample) * 100
+                    if pct > 80:
+                        format_detected = fmt
+                        format_consistency = round(pct, 2)
+                        break
+                if format_detected is None:
+                    format_detected = "mixed"
+                    format_consistency = 0.0
+
+        non_null = len(series) - int(series.isna().sum()) if len(series) > 0 else 0
+        weekend_pct = round(ds.weekend_count / non_null * 100, 2) if non_null > 0 else None
+
+        return {
+            "min_date": ds.min_date or "",
+            "max_date": ds.max_date or "",
+            "date_range_days": ds.date_range_days or 0,
+            "format_detected": format_detected,
+            "format_consistency": format_consistency,
+            "future_date_count": ds.future_date_count,
+            "placeholder_count": ds.placeholder_count,
+            "timezone_consistent": True,
+            "weekend_percentage": weekend_pct,
+        }
+
+    @staticmethod
+    def _categorical_metrics_from_bulk(series: Series, cs: CategoricalColumnStats) -> dict:
+        non_null_count = max(1, sum(v for v in cs.value_counts.values())) if cs.value_counts else 1
+        cardinality_ratio = cs.cardinality_ratio
+
+        unknown_values = {"unknown", "other", "n/a", "na", "none", "null", "missing"}
+        unique_sample = head_as_list(series.dropna().drop_duplicates(), 100)
+        contains_unknown = any(str(v).lower() in unknown_values for v in unique_sample)
+
+        whitespace_issues = []
+        for value in head_as_list(series.dropna().drop_duplicates(), 100):
+            s = str(value)
+            if s != s.strip():
+                whitespace_issues.append(s)
+                if len(whitespace_issues) >= 10:
+                    break
+
+        cardinality = cs.cardinality
+        if cardinality <= 5:
+            encoding_rec = "one_hot"
+        elif cardinality <= 15:
+            encoding_rec = "one_hot_or_target"
+        elif cardinality <= 50:
+            encoding_rec = "target_or_embedding"
+        else:
+            encoding_rec = "hashing_or_embedding"
+
+        return {
+            "cardinality": cardinality,
+            "cardinality_ratio": cardinality_ratio,
+            "value_counts": cs.value_counts,
+            "top_categories": cs.top_categories,
+            "rare_categories": [
+                k for k, v in cs.value_counts.items()
+                if v < non_null_count * 0.01
+            ][:20],
+            "rare_category_count": cs.rare_category_count,
+            "rare_category_percentage": cs.rare_category_percentage,
+            "contains_unknown": contains_unknown,
+            "case_variations": cs.case_variations,
+            "whitespace_issues": whitespace_issues,
+            "encoding_recommendation": encoding_rec,
+        }
+
+    @staticmethod
+    def _identifier_metrics_from_bulk(series: Series, ids: IdentifierColumnStats) -> dict:
+        duplicate_values: list = []
+        if not ids.is_unique:
+            duplicated = series[series.duplicated(keep=False)]
+            duplicate_values = head_as_list(duplicated.drop_duplicates(), 10)
+
+        str_sample = head_as_list(series.dropna().astype(str), 100)
+        format_pattern = None
+        format_consistency = None
+        if str_sample:
+            import re
+            pattern_map = {
+                r'^[A-Z]{3}-\d{5}$': 'AAA-99999',
+                r'^\d{3}-\d{3}-\d{4}$': '999-999-9999',
+                r'^[A-Z]{2}\d{6}$': 'AA999999',
+                r'^\d+$': 'numeric_only',
+                r'^[A-Za-z]+$': 'alpha_only',
+                r'^[A-Z][0-9]{4,}$': 'A9999+',
+                r'^\w+-\d+$': 'text-digits',
+                r'^[A-Z0-9]+$': 'alphanumeric',
+            }
+            for pat, desc in pattern_map.items():
+                matches = sum(1 for s in str_sample if re.match(pat, s))
+                pct = matches / len(str_sample) * 100
+                if pct > 80:
+                    format_pattern = desc
+                    format_consistency = round(pct, 2)
+                    break
+            if format_pattern is None:
+                format_pattern = "mixed"
+                format_consistency = 0.0
+
+        return {
+            "is_unique": ids.is_unique,
+            "duplicate_count": ids.duplicate_count,
+            "duplicate_values": duplicate_values,
+            "format_pattern": format_pattern,
+            "format_consistency": format_consistency,
+            "length_min": ids.length_min,
+            "length_max": ids.length_max,
+            "length_mode": ids.length_mode,
+        }
+
+    @staticmethod
+    def _binary_metrics_from_bulk(series: Series, bs: BinaryColumnStats) -> dict:
+        values_found = head_as_list(series.dropna().drop_duplicates(), 2)
+        return {
+            "true_count": bs.true_count,
+            "false_count": bs.false_count,
+            "true_percentage": bs.true_percentage,
+            "balance_ratio": bs.balance_ratio,
+            "values_found": values_found,
+            "is_boolean": bs.is_boolean,
+        }
+
+    @staticmethod
+    def _text_metrics_from_bulk(ts: TextColumnStats, total_count: int) -> dict:
+        pii_detected = (
+            ts.pii_email_count > 0
+            or ts.pii_phone_count > 0
+            or ts.pii_ssn_count > 0
+            or ts.pii_cc_count > 0
+        )
+        pii_types: list[str] = []
+        if ts.pii_email_count > 0:
+            pii_types.append("email")
+        if ts.pii_phone_count > 0:
+            pii_types.append("phone")
+        if ts.pii_ssn_count > 0:
+            pii_types.append("ssn")
+        if ts.pii_cc_count > 0:
+            pii_types.append("credit_card")
+
+        return {
+            "length_min": ts.length_min,
+            "length_max": ts.length_max,
+            "length_mean": ts.length_mean,
+            "length_median": ts.length_median,
+            "empty_count": ts.empty_count,
+            "empty_percentage": ts.empty_percentage,
+            "word_count_mean": ts.word_count_mean,
+            "contains_digits_pct": ts.contains_digits_pct,
+            "contains_special_pct": ts.contains_special_pct,
+            "pii_detected": pii_detected,
+            "pii_types": pii_types,
+            "language_detected": None,
         }
 
     def _track_special_columns(
