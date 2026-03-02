@@ -1030,7 +1030,7 @@ class TestAcceptWorkflowParamsExperimentsDir:
 
         accept_workflow_params()
         assert os.environ.get("CR_EXPERIMENTS_DIR") == str(tmp_path / "my_experiments")
-        monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
+        os.environ.pop("CR_EXPERIMENTS_DIR", None)
 
 
 class TestPublishWorkflowMetadataExperimentsDir:

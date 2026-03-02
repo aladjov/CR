@@ -203,8 +203,8 @@ class TestAcceptWorkflowParams:
         import os
         assert os.environ.get("CR_DATASET_ID") == "my_dataset"
         assert os.environ.get("CR_RUN_ID") == "run-123"
-        monkeypatch.delenv("CR_DATASET_ID", raising=False)
-        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        os.environ.pop("CR_DATASET_ID", None)
+        os.environ.pop("CR_RUN_ID", None)
 
     def test_ignores_missing_widgets(self, monkeypatch):
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
@@ -275,7 +275,7 @@ class TestAcceptWorkflowParams:
         import os
         assert os.environ.get("CR_DATASET_ID") is None
         assert os.environ.get("CR_RUN_ID") == "run-123"
-        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        os.environ.pop("CR_RUN_ID", None)
 
     def test_consecutive_calls_update_cr_dataset_id(self, monkeypatch):
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
@@ -301,8 +301,8 @@ class TestAcceptWorkflowParams:
              patch("customer_retention.core.compat.detection.get_dbutils", return_value=mock_dbutils):
             accept_workflow_params()
         assert os.environ.get("CR_DATASET_ID") == "transactions"
-        monkeypatch.delenv("CR_DATASET_ID", raising=False)
-        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        os.environ.pop("CR_DATASET_ID", None)
+        os.environ.pop("CR_RUN_ID", None)
 
 
 class TestPublishWorkflowMetadata:
