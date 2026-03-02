@@ -265,6 +265,43 @@ Both generators read from `FindingsParser` (with optional `RunNamespace` integra
 - **Readable prefix**: first 4 characters of each word, lowercase, joined with `_`
 - **Stage naming**: `bronze_entity_{source}`, `silver_featureset_{CN}`, `gold_features_{CN}`
 
+## Notebook Data Sources
+
+Each notebook loads data from a specific pipeline stage. Post-merge notebooks (04+) always load from `silver_merged`; they never fall back to per-dataset landing or bronze data. This ensures recommendations target column names that actually exist in the merged feature matrix.
+
+| Notebook | Data Source | Findings Source | Loading Function |
+|----------|-------------|-----------------|------------------|
+| 01, 01a-01d | Landing (per dataset) | Per-dataset | `load_active_dataset` |
+| 02 | Bronze (per dataset, post-aggregation) | Per-dataset | `load_active_dataset` |
+| 03 | Bronze (all datasets) | Per-dataset (all) | `RunNamespace.discover_all_findings` |
+| 04-05 | **Silver merged** | **Merged findings** (`prefer_merged=True`) | `require_silver_merged` |
+| 06-09 | **Silver merged** | **Merged findings** (`prefer_merged=True`) | `require_silver_merged` |
+| 10 | N/A (code generation) | Merged findings + merged recommendations | `FindingsParser` |
+
+`require_silver_merged` raises `FileNotFoundError` if `silver_merged/` does not exist. There is no fallback to landing or bronze data — NB03 must have run first.
+
+## Recommendation Data Flow
+
+Recommendations are layered (Bronze, Silver, Gold) and accumulate across notebooks. Per-dataset recommendations merge into a single `merged/recommendations.yaml` at the transition from per-dataset to post-merge notebooks.
+
+```
+Per-Dataset Phase                       Post-Merge Phase
+─────────────────                       ────────────────
+NB01 → {dataset}/recs.yaml ──┐
+NB02 → {dataset}/recs.yaml ──┼── NB04 merges into merged/recommendations.yaml
+                              │         │
+                              │         ├── NB04 appends Gold recs (transforms, encoding)
+                              │         ├── NB05 reads merged, appends relationship recs
+                              │         ├── NB06-07 read merged, append feature recs
+                              │         ▼
+                              │   merged/recommendations.yaml (cumulative)
+                              │         │
+                              │         ▼
+                              └── NB10 reads merged recs → FindingsParser → pipeline code
+```
+
+**NB04 is the merge point.** It collects all `*_recommendations.yaml` files from each dataset's findings directory and merges them via `RecommendationRegistry.merge()` before adding its own Gold-layer recommendations. All subsequent notebooks read from and write to `merged/recommendations.yaml`.
+
 ## From Exploration to Production
 
 ```

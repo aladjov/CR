@@ -128,9 +128,11 @@ Notebook 03 uses the `TemporalMerger` to combine all Bronze outputs into a unifi
 
 The merge scaffold (join keys and relationship types) is defined in Notebook 00 and stored in `ProjectContext`. Notebook 03 reads it from the run namespace.
 
-## Capturing Recommendations (Notebook 06)
+## Capturing Recommendations
 
-As you explore, capture cleaning and transformation recommendations using the layered builder:
+As you explore, each notebook captures cleaning and transformation recommendations into a `RecommendationRegistry`. Per-dataset notebooks (01, 02) save recommendations to `{dataset}/findings/*_recommendations.yaml`. When the pipeline transitions to the merged feature matrix, NB04 merges all per-dataset recommendations into `merged/recommendations.yaml` and subsequent notebooks (05-09) read from and append to that merged file.
+
+Example of the layered builder API:
 
 ```python
 from customer_retention.analysis.auto_explorer import RecommendationBuilder
