@@ -2,7 +2,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel
 
-from customer_retention.core.compat import head_as_list, is_datetime64_any_dtype, pd
+from customer_retention.core.compat import head_as_list, is_datetime64_any_dtype, pd, safe_to_datetime
 from customer_retention.core.components.enums import Severity
 from customer_retention.core.config import ColumnType
 
@@ -1151,11 +1151,8 @@ class DatetimeInvalidDatesCheck(QualityCheck):
         invalid_count = 0
 
         if not is_datetime64_any_dtype(clean_series):
-            for val in clean_series:
-                try:
-                    pd.to_datetime(val, format='mixed')
-                except Exception:
-                    invalid_count += 1
+            parsed = safe_to_datetime(clean_series, errors='coerce', format='mixed')
+            invalid_count = int(parsed.isna().sum())
 
         if invalid_count > 0:
             invalid_pct = (invalid_count / len(series)) * 100 if len(series) > 0 else 0.0
