@@ -84,6 +84,17 @@ def run_notebook_01(notebook_workspace):
 
 
 @pytest.fixture(scope="module")
+def run_notebook_03(run_notebook_01, notebook_workspace):
+    """
+    Run notebook 03 to generate silver_merged data.
+    Depends on notebook 01 to provide findings.
+    """
+    workspace, _ = notebook_workspace
+    run_exploration_notebook("03_dataset_merge.ipynb", workspace, run_notebook_01)
+    return run_notebook_01
+
+
+@pytest.fixture(scope="module")
 def ts_workspace(tmp_path_factory):
     """Create a separate workspace for time series notebook tests."""
     workspace = tmp_path_factory.mktemp("ts_notebook_test")
@@ -242,10 +253,10 @@ class TestNotebook01DataDiscovery:
 class TestNotebook02ColumnDeepDive:
     """Test notebook 02: Column Deep Dive."""
 
-    def test_notebook_executes(self, run_notebook_01, notebook_workspace):
-        """Test that notebook 02 runs without errors."""
+    def test_notebook_executes(self, run_notebook_03, notebook_workspace):
+        """Test that notebook 04 runs without errors (requires silver_merged from NB03)."""
         workspace, _ = notebook_workspace
-        run_exploration_notebook("04_column_deep_dive.ipynb", workspace, run_notebook_01)
+        run_exploration_notebook("04_column_deep_dive.ipynb", workspace, run_notebook_03)
 
 
 class TestNotebook03QualityAssessment:
@@ -260,10 +271,10 @@ class TestNotebook03QualityAssessment:
 class TestNotebook04RelationshipAnalysis:
     """Test notebook 04: Relationship Analysis."""
 
-    def test_notebook_executes(self, run_notebook_01, notebook_workspace):
-        """Test that notebook 04 runs without errors."""
+    def test_notebook_executes(self, run_notebook_03, notebook_workspace):
+        """Test that notebook 05 runs without errors (requires silver_merged from NB03)."""
         workspace, _ = notebook_workspace
-        run_exploration_notebook("05_relationship_analysis.ipynb", workspace, run_notebook_01)
+        run_exploration_notebook("05_relationship_analysis.ipynb", workspace, run_notebook_03)
 
 
 class TestNotebook06FeatureOpportunities:

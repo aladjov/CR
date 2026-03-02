@@ -750,7 +750,7 @@ class FindingsParser:
             return True
         missing = needed - pipeline_columns
         if missing:
-            logger.info(
+            logger.warning(
                 "Skipping silver derived-column '%s': missing source columns %s",
                 rec.target_column,
                 sorted(missing),
@@ -770,7 +770,7 @@ class FindingsParser:
             if rec.target_column in seen_encoding_columns:
                 continue
             if rec.target_column not in pipeline_columns:
-                logger.info(
+                logger.warning(
                     "Skipping gold encoding '%s': column not in pipeline",
                     rec.target_column,
                 )
@@ -793,7 +793,7 @@ class FindingsParser:
             if rec.target_column in seen_scaling_columns:
                 continue
             if rec.target_column not in pipeline_columns:
-                logger.info(
+                logger.warning(
                     "Skipping gold scaling '%s': column not in pipeline",
                     rec.target_column,
                 )
@@ -810,7 +810,7 @@ class FindingsParser:
             )
         for rec in getattr(gold, "transformations", []):
             if rec.target_column not in pipeline_columns:
-                logger.info(
+                logger.warning(
                     "Skipping gold transformation '%s': column not in pipeline",
                     rec.target_column,
                 )

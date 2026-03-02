@@ -4831,38 +4831,54 @@ class TestGoldRecommendationFiltering:
             source_notebook="nb04",
         )
 
-    def test_gold_transformation_filtered_when_column_missing(self):
+    def test_gold_transformation_filtered_when_column_missing(self, caplog):
+        import logging
+
         config, _ = self._make_config_with_columns({"entity_id", "as_of_date", "age"})
         parser = self._make_parser({"customers": {"customer_id", "age"}})
         rec = self._make_rec("nonexistent_col", "log_transform")
         registry = self._make_registry_with_gold(transformations=[rec])
-        parser._apply_gold_recommendations(config, registry)
+        with caplog.at_level(logging.WARNING):
+            parser._apply_gold_recommendations(config, registry)
         assert len(config.gold.transformations) == 0
+        assert any("nonexistent_col" in m and "transformation" in m.lower() for m in caplog.messages)
 
-    def test_gold_encoding_filtered_when_column_missing(self):
+    def test_gold_encoding_filtered_when_column_missing(self, caplog):
+        import logging
+
         config, _ = self._make_config_with_columns({"entity_id", "as_of_date", "age"})
         parser = self._make_parser({"customers": {"customer_id", "age"}})
         rec = self._make_rec("nonexistent_col", "onehot", {"method": "onehot"})
         registry = self._make_registry_with_gold(encoding=[rec])
-        parser._apply_gold_recommendations(config, registry)
+        with caplog.at_level(logging.WARNING):
+            parser._apply_gold_recommendations(config, registry)
         assert len(config.gold.encodings) == 0
+        assert any("nonexistent_col" in m and "encoding" in m.lower() for m in caplog.messages)
 
-    def test_gold_scaling_filtered_when_column_missing(self):
+    def test_gold_scaling_filtered_when_column_missing(self, caplog):
+        import logging
+
         config, _ = self._make_config_with_columns({"entity_id", "as_of_date", "age"})
         parser = self._make_parser({"customers": {"customer_id", "age"}})
         rec = self._make_rec("nonexistent_col", "standard", {"method": "standard"})
         registry = self._make_registry_with_gold(scaling=[rec])
-        parser._apply_gold_recommendations(config, registry)
+        with caplog.at_level(logging.WARNING):
+            parser._apply_gold_recommendations(config, registry)
         assert len(config.gold.scalings) == 0
+        assert any("nonexistent_col" in m and "scaling" in m.lower() for m in caplog.messages)
 
-    def test_gold_recommendation_kept_when_column_exists(self):
+    def test_gold_recommendation_kept_when_column_exists(self, caplog):
+        import logging
+
         config, _ = self._make_config_with_columns({"entity_id", "as_of_date", "age"})
         parser = self._make_parser({"customers": {"customer_id", "age"}})
         rec = self._make_rec("age", "log_transform")
         registry = self._make_registry_with_gold(transformations=[rec])
-        parser._apply_gold_recommendations(config, registry)
+        with caplog.at_level(logging.WARNING):
+            parser._apply_gold_recommendations(config, registry)
         assert len(config.gold.transformations) == 1
         assert config.gold.transformations[0].column == "age"
+        assert not any("Skipping gold" in m for m in caplog.messages)
 
     def test_gold_keeps_columns_from_silver_derived(self):
         from customer_retention.generators.pipeline_generator.models import (
@@ -4884,6 +4900,20 @@ class TestGoldRecommendationFiltering:
         parser._apply_gold_recommendations(config, registry)
         assert len(config.gold.transformations) == 1
         assert config.gold.transformations[0].column == "age_income_ratio"
+
+    def test_silver_derived_missing_columns_emits_warning(self, caplog):
+        import logging
+
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        rec = self._make_rec("age_income_ratio", "ratio", {
+            "numerator": "age", "denominator": "nonexistent_col",
+        })
+        pipeline_columns = {"entity_id", "as_of_date", "age"}
+        with caplog.at_level(logging.WARNING):
+            result = FindingsParser._silver_derived_sources_available(rec, pipeline_columns)
+        assert result is False
+        assert any("nonexistent_col" in m and "silver derived" in m.lower() for m in caplog.messages)
 
 
 class TestColumnTypeDeserialization:
