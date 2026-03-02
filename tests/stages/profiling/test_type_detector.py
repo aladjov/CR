@@ -454,3 +454,26 @@ class TestTypeDetectorSparkCompat:
         with patch(self.PATCH_TARGET, wraps=head_as_list) as mock:
             detector._detect_time_column(df)
             assert mock.called
+
+    def test_is_datetime_uses_native_pandas_parser(self):
+        detector = TypeDetector()
+        series = pd.Series(["2023-01-01", "2023-01-02"])
+        with patch(
+            "customer_retention.stages.profiling.type_detector.native_pd.to_datetime",
+            return_value=pd.Timestamp("2023-01-01"),
+        ) as native_parse:
+            assert detector.is_datetime(series)
+            assert native_parse.called
+
+    def test_detect_time_column_uses_native_pandas_parser(self):
+        detector = TypeDetector()
+        df = pd.DataFrame(
+            {"customer_id": ["C001", "C001", "C002"], "event_date": ["2023-01-01", "2023-01-02", "2023-01-03"]}
+        )
+        with patch(
+            "customer_retention.stages.profiling.type_detector.native_pd.to_datetime",
+            return_value=pd.Timestamp("2023-01-01"),
+        ) as native_parse:
+            result = detector._detect_time_column(df)
+            assert result == "event_date"
+            assert native_parse.called
