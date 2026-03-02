@@ -134,6 +134,7 @@ class TestSparkBaselineTrainerFit:
 
         assert result.model is not None
 
+    @pytest.mark.spark
     @patch(f"{_WRAPPER_MOD}._make_assembler")
     @patch(f"{_WRAPPER_MOD}._get_spark_session")
     def test_fit_with_balanced_class_weight(self, mock_get_spark, mock_make_asm):

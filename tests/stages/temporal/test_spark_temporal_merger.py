@@ -269,6 +269,7 @@ class TestSparkBuildSpineWithMockedSpark:
         )
         return spark
 
+    @pytest.mark.spark
     def test_native_pandas_entities_use_spark_crossjoin(self, mock_spark):
         merger = SparkTemporalMerger()
         entities = pd.Series(["A", "B"])
@@ -276,6 +277,7 @@ class TestSparkBuildSpineWithMockedSpark:
         assert mock_spark.createDataFrame.called
         assert len(spine) == 4
 
+    @pytest.mark.spark
     def test_spine_has_correct_columns(self, mock_spark):
         merger = SparkTemporalMerger()
         spine = merger.build_spine(pd.Series(["X"]), ["2024-06-01"])

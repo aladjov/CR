@@ -302,6 +302,7 @@ class TestFitIntegration:
         assert wrapper._fitted_model is mock_fitted
         mock_model_cls.return_value.fit.assert_called_once_with(mock_assembled)
 
+    @pytest.mark.spark
     @patch(f"{_MOD}._make_assembler")
     @patch(f"{_MOD}._get_spark_session")
     def test_fit_with_balanced_weight_adds_column(self, mock_get_spark, mock_make_asm, imbalanced_data):
@@ -460,6 +461,7 @@ class TestToSparkDfAlignment:
         np.testing.assert_array_equal(combined["f1"].to_numpy(), [10.0, 20.0])
         np.testing.assert_array_equal(combined[_LABEL_COL].to_numpy(), [1, 0])
 
+    @pytest.mark.spark
     @patch(f"{_MOD}._make_assembler")
     @patch(f"{_MOD}._get_spark_session")
     def test_pyspark_pandas_path_resets_indexes(self, mock_get_spark, mock_make_asm):
