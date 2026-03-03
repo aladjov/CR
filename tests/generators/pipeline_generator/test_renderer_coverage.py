@@ -337,6 +337,22 @@ class TestCodeRendererGold:
         assert "get_gold_path" in result
         assert "get_delta" in result
 
+    def test_render_gold_train_subset_fitting(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+
+        assert "def apply_fitted_transforms" in result
+        assert "_train_mask" in result
+        assert "temporal_quantile" in result
+        assert "_cutoff" in result
+
+    def test_render_gold_no_module_level_store_when_fitted(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+
+        fitted_func_pos = result.index("def apply_fitted_transforms")
+        before_func = result[:fitted_func_pos]
+        assert "_store = ArtifactStore(" not in before_func
+        assert "ArtifactStore.from_manifest" not in before_func
+
 
 class TestCodeRendererTraining:
     def test_render_training_with_feast(self, renderer, sample_pipeline_config):
@@ -1727,10 +1743,10 @@ class TestProvenanceDedup:
             output_dir="./out",
         )
         result = renderer.render_gold(config)
-        scaling_start = result.index("def apply_scaling")
-        scaling_end = result.index("def apply_feature_selection")
-        scaling_block = result[scaling_start:scaling_end]
-        assert scaling_block.count('"""') == 2
+        fitted_start = result.index("def apply_fitted_transforms")
+        fitted_end = result.index("def get_feature_version_tag")
+        fitted_block = result[fitted_start:fitted_end]
+        assert fitted_block.count('"""') == 2
 
     def test_provenance_header_precedes_rationale(self, renderer, _source):
         bronze = BronzeLayerConfig(

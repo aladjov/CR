@@ -217,6 +217,7 @@ class ProjectContext(BaseModel):
     light_run: bool = False
     sample_fraction: Optional[float] = None
     sample_entity_count: Optional[int] = None
+    sample_stratify_columns: Optional[list[str]] = None
 
     @field_validator("sample_entity_count")
     @classmethod

@@ -733,6 +733,9 @@ if __name__ == "__main__":
 import warnings
 from datetime import datetime
 from pathlib import Path
+{% set parts = partition_gold_steps(config.gold) %}
+{% set fitted_steps = parts['fitted_transforms'] + parts['fitted_encodings'] + parts['fitted_scalings'] %}
+{% set stateless_steps = parts['stateless_transforms'] + parts['stateless_encodings'] %}
 {% set all_gold_steps = config.gold.transformations + config.gold.encodings + config.gold.scalings %}
 {% set ops, fitted = collect_imports(all_gold_steps, True) %}
 {% set fs_ops = ['apply_feature_select'] if config.gold.feature_selections else [] %}
@@ -745,10 +748,12 @@ from config import (get_silver_path, get_gold_path, get_feast_data_path,
                     FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL, EXPERIMENTS_DIR,
                     ARTIFACTS_PATH, FIT_MODE)
 
+{% if not fitted_steps %}
 {% if config.fit_mode %}
 _store = ArtifactStore(Path(ARTIFACTS_PATH))
 {% else %}
 _store = ArtifactStore.from_manifest(Path(ARTIFACTS_PATH) / "manifest.yaml")
+{% endif %}
 {% endif %}
 
 from customer_retention.generators.pipeline_generator.models import (
@@ -784,7 +789,7 @@ def load_gold() -> pd.DataFrame:
     return get_delta(force_local=True).read(str(get_gold_path()))
 
 
-{% set transform_groups = group_steps(config.gold.transformations) %}
+{% set transform_groups = group_steps(parts['stateless_transforms']) %}
 
 def apply_gold_transformations(df: pd.DataFrame) -> pd.DataFrame:
 {%- if transform_groups %}
@@ -811,12 +816,12 @@ def {{ func_name }}(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def apply_encodings(df: pd.DataFrame) -> pd.DataFrame:
-{%- set _prov = provenance_docstring_block(config.gold.encodings) %}
+{%- set _prov = provenance_docstring_block(parts['stateless_encodings']) %}
 {%- if _prov %}
 {{ _prov }}
 {%- endif %}
-{%- if config.gold.encodings %}
-{%- for enc in config.gold.encodings %}
+{%- if parts['stateless_encodings'] %}
+{%- for enc in parts['stateless_encodings'] %}
     # {{ enc.rationale }}
     # {{ action_description(enc) }}
     df = {{ render_step_call(enc, config.fit_mode) }}
@@ -826,17 +831,6 @@ def apply_encodings(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def apply_scaling(df: pd.DataFrame) -> pd.DataFrame:
-{%- set _prov = provenance_docstring_block(config.gold.scalings) %}
-{%- if _prov %}
-{{ _prov }}
-{%- endif %}
-{%- if config.gold.scalings %}
-{%- for scale in config.gold.scalings %}
-    # {{ scale.rationale }}
-    # {{ action_description(scale) }}
-    df = {{ render_step_call(scale, config.fit_mode) }}
-{%- endfor %}
-{%- endif %}
     return df
 
 
@@ -849,6 +843,52 @@ def apply_feature_selection(df: pd.DataFrame) -> pd.DataFrame:
 {% endfor %}
 {% endif %}
     return df
+
+{% if fitted_steps %}
+
+def apply_fitted_transforms(df: pd.DataFrame) -> pd.DataFrame:
+{%- set _prov = provenance_docstring_block(fitted_steps) %}
+{%- if _prov %}
+{{ _prov }}
+{%- endif %}
+{% if config.fit_mode %}
+    _store = ArtifactStore(Path(ARTIFACTS_PATH))
+    from customer_retention.core.compat import temporal_quantile
+    from datetime import timedelta
+    _ts_col = FEAST_TIMESTAMP_COL
+    if _ts_col not in df.columns:
+        for _candidate in ["as_of_date", "feature_timestamp", "event_timestamp"]:
+            if _candidate in df.columns:
+                _ts_col = _candidate
+                break
+    _cutoff = temporal_quantile(df[_ts_col], 1 - {{ config.training.test_size if config.training else 0.2 }})
+{% if config.training and config.training.purge_gap_days %}
+    _train_mask = df[_ts_col] < (_cutoff - timedelta(days={{ config.training.purge_gap_days }}))
+{% else %}
+    _train_mask = df[_ts_col] < _cutoff
+{% endif %}
+    _fit_subset = df[_train_mask].copy()
+{%- for step in fitted_steps %}
+    # {{ step.rationale }}
+    # {{ action_description(step) }}
+    _fit_subset = {{ render_step_call(step, fit_mode=True) }}
+{%- endfor %}
+    del _fit_subset
+{%- for step in fitted_steps %}
+    df = {{ render_step_call(step, fit_mode=False) }}
+{%- endfor %}
+    _store.save_manifest()
+    print(f"Fit artifacts saved to: {ARTIFACTS_PATH} (fitted on {_train_mask.sum():,} train rows, transforming {len(df):,} total)")
+{% else %}
+    _store = ArtifactStore.from_manifest(Path(ARTIFACTS_PATH) / "manifest.yaml")
+{%- for step in fitted_steps %}
+    # {{ step.rationale }}
+    # {{ action_description(step) }}
+    df = {{ render_step_call(step, fit_mode=False) }}
+{%- endfor %}
+{% endif %}
+    return df
+{% endif %}
 
 
 def get_feature_version_tag() -> str:
@@ -888,8 +928,11 @@ def run_gold_features():
     gold = apply_encodings(gold)
     gold = apply_scaling(gold)
     gold = apply_feature_selection(gold)
+{% if fitted_steps %}
+    gold = apply_fitted_transforms(gold)
+{% endif %}
     gold = add_feast_timestamp(gold)
-{% if config.fit_mode %}
+{% if not fitted_steps and config.fit_mode %}
     _store.save_manifest()
     print(f"Fit artifacts saved to: {ARTIFACTS_PATH}")
 {% endif %}
@@ -2358,6 +2401,7 @@ class CodeRenderer:
         self._env.globals["group_steps"] = group_steps
         self._env.globals["provenance_docstring_block"] = provenance_docstring_block
         self._env.globals["provenance_key"] = provenance_key
+        self._env.globals["partition_gold_steps"] = partition_gold_steps
 
     def set_docs_base(self, experiments_dir: str | None) -> None:
         global _docs_base
@@ -2606,3 +2650,29 @@ def collect_imports(steps, include_fitted):
             elif action == "composite":
                 ops.add("apply_derived_composite")
     return ops, fitted
+
+
+def partition_gold_steps(gold):
+    FITTED_TYPES = {PipelineTransformationType.SCALE, PipelineTransformationType.YEO_JOHNSON}
+
+    stateless_transforms, fitted_transforms = [], []
+    for t in gold.transformations:
+        (fitted_transforms if t.type in FITTED_TYPES else stateless_transforms).append(t)
+
+    stateless_encodings, fitted_encodings = [], []
+    for e in gold.encodings:
+        method = e.parameters.get("method", "one_hot")
+        if method in ("one_hot", "onehot"):
+            stateless_encodings.append(e)
+        else:
+            fitted_encodings.append(e)
+
+    fitted_scalings = list(gold.scalings)
+
+    return {
+        "stateless_transforms": stateless_transforms,
+        "stateless_encodings": stateless_encodings,
+        "fitted_transforms": fitted_transforms,
+        "fitted_encodings": fitted_encodings,
+        "fitted_scalings": fitted_scalings,
+    }
