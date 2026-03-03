@@ -76,6 +76,7 @@ class FindingsParser:
             self._apply_recommendations_to_config(config, recommendations_registry, multi_dataset)
             self._apply_event_recommendations(config, recommendations_registry)
         self._reconcile_discovered_event_transforms(config, discovered_events)
+        self._reconcile_gold_columns(config)
         return config
 
     def _index_raw_source_columns(self, discovered_events: Dict[str, ExplorationFindings]) -> None:
@@ -1364,6 +1365,28 @@ class FindingsParser:
             if name in config.bronze and name in config.bronze_event:
                 config.bronze_event[name].post_shaping.extend(config.bronze[name].transformations)
                 del config.bronze[name]
+
+    def _reconcile_gold_columns(self, config: "PipelineConfig") -> None:
+        if config.gold is None:
+            return
+        pipeline_columns = self._collect_pipeline_columns(config)
+        for step in config.silver.derived_columns:
+            pipeline_columns.add(step.column)
+        config.gold.scalings = self._filter_gold_steps(config.gold.scalings, pipeline_columns, "scaling")
+        config.gold.encodings = self._filter_gold_steps(config.gold.encodings, pipeline_columns, "encoding")
+        config.gold.transformations = self._filter_gold_steps(
+            config.gold.transformations, pipeline_columns, "transformation",
+        )
+
+    @staticmethod
+    def _filter_gold_steps(steps, pipeline_columns, label):
+        kept = []
+        for step in steps:
+            if step.column in pipeline_columns:
+                kept.append(step)
+            else:
+                logger.warning("Removing gold %s '%s': column not in pipeline", label, step.column)
+        return kept
 
     @staticmethod
     def _infer_format(path: str) -> str:

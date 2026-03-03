@@ -1049,6 +1049,9 @@ from pyspark.sql import functions as F
 # COMMAND ----------
 
 def _encode_one_hot(df, col):
+    if col not in df.columns:
+        print(f"WARNING: column '{col}' not in DataFrame, skipping one-hot encoding")
+        return df
     categories = [row[col] for row in df.select(col).distinct().collect() if row[col] is not None]
     for cat in sorted(categories):
         safe_name = f"{col}_{cat}".replace(" ", "_").replace("-", "_")
@@ -1057,6 +1060,9 @@ def _encode_one_hot(df, col):
     return df
 
 def _label_encode(df, col):
+    if col not in df.columns:
+        print(f"WARNING: column '{col}' not in DataFrame, skipping label encoding")
+        return df
     from pyspark.ml.feature import StringIndexer
     indexer = StringIndexer(inputCol=col, outputCol=f"{col}_encoded", handleInvalid="keep")
     df = indexer.fit(df).transform(df)
@@ -1083,6 +1089,9 @@ def _scale_minmax(df, col):
     return df
 
 def _batch_scale_standard(df, cols):
+    cols = [c for c in cols if c in df.columns]
+    if not cols:
+        return df
     exprs = []
     for c in cols:
         exprs.extend([F.mean(c).alias(f"{c}__mean"), F.stddev(c).alias(f"{c}__std")])
@@ -1096,6 +1105,9 @@ def _batch_scale_standard(df, cols):
     return df
 
 def _batch_scale_minmax(df, cols):
+    cols = [c for c in cols if c in df.columns]
+    if not cols:
+        return df
     exprs = []
     for c in cols:
         exprs.extend([F.min(c).alias(f"{c}__min"), F.max(c).alias(f"{c}__max")])

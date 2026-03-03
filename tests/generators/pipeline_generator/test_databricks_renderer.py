@@ -2271,3 +2271,33 @@ class TestDatabricksGoldCapThenLog:
         config = self._make_config(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale)
         result = renderer.render_gold(config)
         assert "F.lit(F.col(" not in result
+
+
+class TestDatabricksGoldColumnFiltering:
+    def test_batch_scale_standard_filters_to_existing_columns(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        batch_fn = result[result.index("def _batch_scale_standard"):]
+        batch_fn = batch_fn[:batch_fn.index("\ndef ")]
+        assert "c in df.columns" in batch_fn or "c for c in cols if c in" in batch_fn
+
+    def test_batch_scale_minmax_filters_to_existing_columns(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        batch_fn = result[result.index("def _batch_scale_minmax"):]
+        batch_fn = batch_fn[:batch_fn.index("\ndef ")]
+        assert "c in df.columns" in batch_fn or "c for c in cols if c in" in batch_fn
+
+    def test_encode_one_hot_checks_column_exists(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        encode_fn = result[result.index("def _encode_one_hot"):]
+        encode_fn = encode_fn[:encode_fn.index("\ndef ")]
+        assert "col not in df.columns" in encode_fn
+
+    def test_label_encode_checks_column_exists(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        encode_fn = result[result.index("def _label_encode"):]
+        encode_fn = encode_fn[:encode_fn.index("\ndef ")]
+        assert "col not in df.columns" in encode_fn
+
+    def test_batch_scale_standard_still_valid_python(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        ast.parse(result)

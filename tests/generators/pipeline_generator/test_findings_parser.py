@@ -4916,6 +4916,101 @@ class TestGoldRecommendationFiltering:
         assert any("nonexistent_col" in m and "silver derived" in m.lower() for m in caplog.messages)
 
 
+class TestReconcileGoldColumns:
+    @staticmethod
+    def _make_parser(raw_columns):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = raw_columns
+        parser._source_findings_paths = {}
+        return parser
+
+    @staticmethod
+    def _make_config(scaling_cols, encoding_cols=None):
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeLayerConfig,
+            GoldLayerConfig,
+            PipelineConfig,
+            PipelineTransformationType,
+            SilverLayerConfig,
+            SourceConfig,
+            TransformationStep,
+        )
+        entity_source = SourceConfig(
+            name="customers", path="customers.csv", format="csv",
+            entity_key="customer_id", raw_source_path="/data/customers.csv",
+        )
+        scalings = [
+            TransformationStep(type=PipelineTransformationType.SCALE, column=c,
+                               parameters={"method": "standard"}, rationale=f"Scale {c}")
+            for c in scaling_cols
+        ]
+        encodings = [
+            TransformationStep(type=PipelineTransformationType.ENCODE, column=c,
+                               parameters={"method": "one_hot"}, rationale=f"Encode {c}")
+            for c in (encoding_cols or [])
+        ]
+        return PipelineConfig(
+            name="test", target_column="churn", sources=[entity_source],
+            bronze={"customers": BronzeLayerConfig(source=entity_source)},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(scalings=scalings, encodings=encodings),
+            output_dir=".",
+        )
+
+    def test_removes_scaling_for_nonexistent_column(self, caplog):
+        import logging
+        parser = self._make_parser({"customers": {"customer_id", "age"}})
+        config = self._make_config(["age", "phantom_col"])
+        with caplog.at_level(logging.WARNING):
+            parser._reconcile_gold_columns(config)
+        assert len(config.gold.scalings) == 1
+        assert config.gold.scalings[0].column == "age"
+        assert any("phantom_col" in m for m in caplog.messages)
+
+    def test_removes_encoding_for_nonexistent_column(self, caplog):
+        import logging
+        parser = self._make_parser({"customers": {"customer_id", "region"}})
+        config = self._make_config([], encoding_cols=["region", "ghost"])
+        with caplog.at_level(logging.WARNING):
+            parser._reconcile_gold_columns(config)
+        assert len(config.gold.encodings) == 1
+        assert config.gold.encodings[0].column == "region"
+
+    def test_keeps_all_valid_columns(self):
+        parser = self._make_parser({"customers": {"customer_id", "age", "score"}})
+        config = self._make_config(["age", "score"])
+        parser._reconcile_gold_columns(config)
+        assert len(config.gold.scalings) == 2
+        assert {s.column for s in config.gold.scalings} == {"age", "score"}
+
+    def test_noop_when_gold_is_none(self):
+        parser = self._make_parser({"customers": {"customer_id"}})
+        config = self._make_config([])
+        config.gold = None
+        parser._reconcile_gold_columns(config)
+
+    def test_removes_transformation_for_nonexistent_column(self, caplog):
+        import logging
+
+        from customer_retention.generators.pipeline_generator.models import (
+            PipelineTransformationType,
+            TransformationStep,
+        )
+        parser = self._make_parser({"customers": {"customer_id", "amount"}})
+        config = self._make_config([])
+        config.gold.transformations = [
+            TransformationStep(type=PipelineTransformationType.LOG_TRANSFORM, column="amount",
+                               parameters={}, rationale="log amount"),
+            TransformationStep(type=PipelineTransformationType.LOG_TRANSFORM, column="missing_col",
+                               parameters={}, rationale="log missing"),
+        ]
+        with caplog.at_level(logging.WARNING):
+            parser._reconcile_gold_columns(config)
+        assert len(config.gold.transformations) == 1
+        assert config.gold.transformations[0].column == "amount"
+
+
 class TestColumnTypeDeserialization:
     def test_valid_column_type_deserializes(self):
         from customer_retention.core.config.column_config import ColumnType
