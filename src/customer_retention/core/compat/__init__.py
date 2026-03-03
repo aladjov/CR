@@ -281,6 +281,7 @@ def as_tz_naive(value: Any) -> Any:
 
 def normalize_timestamp_columns(df: _pandas.DataFrame) -> _pandas.DataFrame:
     import datetime as _dt
+    import decimal as _decimal
 
     df = df.copy()
     for col in df.columns:
@@ -292,6 +293,8 @@ def normalize_timestamp_columns(df: _pandas.DataFrame) -> _pandas.DataFrame:
                 sample = non_null.iloc[:10]
                 if all(isinstance(v, _dt.date) for v in sample):
                     df[col] = _pandas.to_datetime(df[col])
+                elif all(isinstance(v, _decimal.Decimal) for v in sample):
+                    df[col] = _pandas.to_numeric(df[col], errors="coerce")
     return df
 
 

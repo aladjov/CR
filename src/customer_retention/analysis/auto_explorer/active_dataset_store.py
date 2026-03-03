@@ -20,9 +20,16 @@ def _to_native_pandas(df: Any) -> Any:
     return normalize_timestamp_columns(result)
 
 
+def _write_delta(df: Any, path: str) -> None:
+    if hasattr(df, "to_spark"):
+        get_delta().write(df, path, mode="overwrite")
+        return
+    _local_delta().write(normalize_timestamp_columns(_compat_to_pandas(df)), path, mode="overwrite")
+
+
 def save_active_dataset(namespace: RunNamespace, dataset_name: str, df: Any) -> Path:
     dlt_path = namespace.landing_table_dir(dataset_name)
-    _local_delta().write(_to_native_pandas(df), str(dlt_path), mode="overwrite")
+    _write_delta(df, str(dlt_path))
     return dlt_path
 
 
@@ -35,7 +42,7 @@ def load_active_dataset(namespace: RunNamespace, dataset_name: str) -> Any:
 
 def save_aggregated_dataset(namespace: RunNamespace, dataset_name: str, df: Any) -> Path:
     dlt_path = namespace.bronze_table_dir(dataset_name)
-    _local_delta().write(_to_native_pandas(df), str(dlt_path), mode="overwrite")
+    _write_delta(df, str(dlt_path))
     return dlt_path
 
 
@@ -98,7 +105,7 @@ def load_silver_merged(
 
 def save_gold_features(namespace: RunNamespace, composite_name: str, df: Any) -> Path:
     dlt_path = namespace.gold_table_dir(composite_name)
-    _local_delta().write(_to_native_pandas(df), str(dlt_path), mode="overwrite")
+    _write_delta(df, str(dlt_path))
     return dlt_path
 
 

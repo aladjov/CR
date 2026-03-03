@@ -428,6 +428,45 @@ class TestNormalizeTimestampColumns:
         assert df["ts"].dt.tz is not None
 
 
+class TestNormalizeTimestampColumnsDecimal:
+    def test_decimal_column_converted_to_numeric(self):
+        from decimal import Decimal
+        df = pd.DataFrame({"amount": [Decimal("10.50"), Decimal("20.75"), Decimal("30.00")]})
+        result = normalize_timestamp_columns(df)
+        assert pd.api.types.is_numeric_dtype(result["amount"])
+        assert result["amount"].iloc[0] == pytest.approx(10.50)
+
+    def test_decimal_with_nulls(self):
+        from decimal import Decimal
+        df = pd.DataFrame({"amount": [Decimal("10.50"), None, Decimal("30.00")]})
+        result = normalize_timestamp_columns(df)
+        assert pd.api.types.is_numeric_dtype(result["amount"])
+        assert pd.isna(result["amount"].iloc[1])
+        assert result["amount"].iloc[2] == pytest.approx(30.00)
+
+    def test_string_column_not_converted(self):
+        df = pd.DataFrame({"name": ["alice", "bob"]})
+        result = normalize_timestamp_columns(df)
+        assert result["name"].dtype == "object"
+
+    def test_decimal_and_timestamp_mixed(self):
+        from decimal import Decimal
+        df = pd.DataFrame({
+            "ts": pd.to_datetime(["2023-01-01"]).tz_localize("UTC"),
+            "amount": [Decimal("99.99")],
+            "label": ["ok"],
+        })
+        result = normalize_timestamp_columns(df)
+        assert result["ts"].dt.tz is None
+        assert pd.api.types.is_numeric_dtype(result["amount"])
+        assert result["label"].dtype == "object"
+
+    def test_all_null_object_column_untouched(self):
+        df = pd.DataFrame({"x": [None, None]})
+        result = normalize_timestamp_columns(df)
+        assert result["x"].dtype == "object"
+
+
 class TestPandasDtypeToSparkSchema:
     @pytest.fixture(autouse=True)
     def _skip_without_pyspark(self):
@@ -496,6 +535,18 @@ class TestPandasDtypeToSparkSchema:
         df = pd.DataFrame({"cat": pd.Categorical(["a", "b", "a"])})
         schema = pandas_dtype_to_spark_schema(df)
         assert isinstance(schema.fields[0].dataType, StringType)
+
+    def test_decimal_column_maps_to_double_after_normalize(self):
+        from decimal import Decimal
+
+        from pyspark.sql.types import DoubleType
+
+        from customer_retention.core.compat import pandas_dtype_to_spark_schema
+        df = normalize_timestamp_columns(
+            pd.DataFrame({"amount": [Decimal("10.50"), Decimal("20.75")]})
+        )
+        schema = pandas_dtype_to_spark_schema(df)
+        assert isinstance(schema.fields[0].dataType, DoubleType)
 
 
 class TestBuildSpineWithTzAwareDates:
