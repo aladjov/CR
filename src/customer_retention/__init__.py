@@ -17,7 +17,7 @@ Main module categories:
                 llm_context, iteration)
 """
 
-__version__ = "0.91.0a8"
+__version__ = "0.92.0a1"
 
 # Environment utilities (always available)
 from .core.compat import (
