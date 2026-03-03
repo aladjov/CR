@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from customer_retention.analysis.auto_explorer.sampling import (
+    _compute_group_budget,
     estimate_sampling_accuracy,
     stratified_entity_sample,
 )
@@ -152,6 +153,46 @@ class TestStratifiedEntitySample:
         assert set(sampled["region"].unique()) == {"east", "west", "north", "south"}
         rate = sampled["churned"].mean()
         assert 0.1 <= rate <= 0.3
+
+
+class TestComputeGroupBudget:
+    def test_proportional_allocation(self):
+        budget = _compute_group_budget({"a": 60, "b": 40}, 50, 100)
+        assert budget["a"] == 30
+        assert budget["b"] == 20
+        assert sum(budget.values()) == 50
+
+    def test_min_one_guarantee(self):
+        budget = _compute_group_budget({"a": 90, "b": 5, "c": 5}, 10, 100)
+        assert budget.get("b", 0) >= 1
+
+    def test_last_group_gets_remainder(self):
+        budget = _compute_group_budget({"a": 50, "b": 50}, 11, 100)
+        assert sum(budget.values()) == 11
+
+    def test_cap_at_group_size(self):
+        budget = _compute_group_budget({"a": 3, "b": 100}, 50, 103)
+        assert budget["a"] <= 3
+
+    def test_total_matches_requested(self):
+        counts = {"x": 100, "y": 200, "z": 50}
+        budget = _compute_group_budget(counts, 70, 350)
+        assert sum(budget.values()) == 70
+
+    def test_single_group(self):
+        budget = _compute_group_budget({"only": 100}, 30, 100)
+        assert budget == {"only": 30}
+
+    def test_zero_remaining(self):
+        budget = _compute_group_budget({"a": 10, "b": 10}, 0, 20)
+        assert sum(budget.values()) == 0
+
+    def test_all_groups_represented(self):
+        counts = {"a": 20, "b": 20, "c": 20, "d": 20}
+        budget = _compute_group_budget(counts, 20, 80)
+        for key in counts:
+            assert budget.get(key, 0) >= 1
+
 
     def test_no_ndarray_column_assignment(self):
         df = pd.DataFrame({

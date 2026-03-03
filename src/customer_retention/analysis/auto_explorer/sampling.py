@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 import math
-from typing import Optional
+from typing import Any, Optional
 
-from customer_retention.core.compat import head_as_list, pd, safe_sample, safe_to_datetime
+from customer_retention.core.compat import (
+    _is_spark_pandas,
+    as_spark_df,
+    concat,
+    head_as_list,
+    pd,
+    safe_sample,
+    safe_to_datetime,
+)
 
 
 def estimate_sampling_accuracy(
@@ -32,6 +40,77 @@ def estimate_sampling_accuracy(
             "minority_expected": minority_expected,
         })
     return results
+
+
+def _compute_group_budget(
+    group_counts: dict[str, int],
+    n_remaining: int,
+    total_remaining: int,
+) -> dict[str, int]:
+    budget: dict[str, int] = {}
+    budget_left = n_remaining
+    groups = list(group_counts.items())
+    for i, (key, count) in enumerate(groups):
+        if i == len(groups) - 1:
+            n_take = budget_left
+        else:
+            n_take = max(1, round(n_remaining * count / total_remaining))
+            n_take = min(n_take, budget_left)
+        n_take = min(n_take, count)
+        if n_take > 0:
+            budget[key] = n_take
+            budget_left -= n_take
+    return budget
+
+
+def _spark_windowed_sample(
+    remaining_df: Any,
+    entity_col: str,
+    group_budget: dict[str, int],
+    n_remaining: int,
+    random_state: int,
+) -> list:
+    from pyspark.sql import Window, functions
+
+    spark_df = as_spark_df(remaining_df)
+
+    map_args: list = []
+    for k, v in group_budget.items():
+        map_args.extend([functions.lit(k), functions.lit(v)])
+    budget_map = functions.create_map(*map_args)
+
+    w = Window.partitionBy("_strat_key").orderBy(functions.rand(seed=random_state))
+
+    result = (
+        spark_df
+        .withColumn("_budget", budget_map[functions.col("_strat_key")])
+        .withColumn("_row_num", functions.row_number().over(w))
+        .filter(functions.col("_row_num") <= functions.col("_budget"))
+        .select(entity_col)
+        .limit(n_remaining)
+    )
+
+    return [row[0] for row in result.collect()]
+
+
+def _pandas_group_sample(
+    remaining_df: Any,
+    entity_col: str,
+    group_budget: dict[str, int],
+    n_remaining: int,
+    random_state: int,
+) -> list:
+    sampled_parts = []
+    for key, n_take in group_budget.items():
+        if n_take <= 0:
+            continue
+        group_df = remaining_df[remaining_df["_strat_key"] == key]
+        sampled_parts.append(safe_sample(group_df, n_take, random_state=random_state))
+
+    if sampled_parts:
+        sampled_df = concat(sampled_parts)
+        return head_as_list(sampled_df[entity_col], n_remaining)
+    return []
 
 
 def stratified_entity_sample(
@@ -101,28 +180,17 @@ def stratified_entity_sample(
         return rare_ids[:n_entities]
 
     group_counts = remaining_df["_strat_key"].value_counts().to_dict()
-    total_remaining = len(remaining_df)
-    sampled_parts = []
+    total_remaining = sum(group_counts.values())
 
-    budget_left = n_remaining
-    groups = list(group_counts.items())
-    for i, (key, count) in enumerate(groups):
-        group_df = remaining_df[remaining_df["_strat_key"] == key]
-        if i == len(groups) - 1:
-            n_take = budget_left
-        else:
-            n_take = max(1, round(n_remaining * count / total_remaining))
-            n_take = min(n_take, budget_left)
-        n_take = min(n_take, len(group_df))
-        if n_take > 0:
-            sampled_parts.append(safe_sample(group_df, n_take, random_state=random_state))
-            budget_left -= n_take
+    group_budget = _compute_group_budget(group_counts, n_remaining, total_remaining)
 
-    if sampled_parts:
-        from customer_retention.core.compat import concat
-        sampled_df = concat(sampled_parts)
-        sampled_ids = head_as_list(sampled_df[entity_col], n_remaining)
+    if _is_spark_pandas(remaining_df):
+        sampled_ids = _spark_windowed_sample(
+            remaining_df, entity_col, group_budget, n_remaining, random_state,
+        )
     else:
-        sampled_ids = []
+        sampled_ids = _pandas_group_sample(
+            remaining_df, entity_col, group_budget, n_remaining, random_state,
+        )
 
     return rare_ids + sampled_ids
