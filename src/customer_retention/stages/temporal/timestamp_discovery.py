@@ -127,6 +127,38 @@ def _looks_like_datetime_strings(sample: Any) -> bool:
     return matches.mean() > 0.8
 
 
+def _bulk_center_epochs(df: Any, cols: list[str]) -> dict[str, float]:
+    from customer_retention.core.compat import _is_spark_pandas
+    if _is_spark_pandas(df):
+        return _spark_bulk_center_epochs(df, cols)
+    result = {}
+    for col in cols:
+        series = df[col].dropna()
+        if not is_datetime64_any_dtype(series):
+            series = to_datetime(series, format="mixed", errors="coerce").dropna()
+        if len(series) == 0:
+            result[col] = 0.0
+        else:
+            median_ts = series.median()
+            result[col] = float(median_ts.timestamp()) if hasattr(median_ts, "timestamp") else 0.0
+    return result
+
+
+def _spark_bulk_center_epochs(df: Any, cols: list[str]) -> dict[str, float]:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    from customer_retention.core.compat import as_spark_df
+    spark_df = as_spark_df(df)
+    exprs = [
+        F.percentile_approx(
+            F.unix_timestamp(F.col(c).cast("timestamp")).cast("double"), 0.5
+        ).alias(f"__ep__{c}")
+        for c in cols
+    ]
+    row = spark_df.agg(*exprs).collect()[0]
+    return {c: float(row[f"__ep__{c}"] or 0.0) for c in cols}
+
+
 class DatetimeOrderAnalyzer:
     ACTIVITY_PATTERNS = [
         r"last_", r"latest_", r"recent_", r"final_", r"most_recent",
@@ -137,13 +169,8 @@ class DatetimeOrderAnalyzer:
         datetime_cols = [c for c in self._get_datetime_columns(df) if not self._has_future_dates(df, c)]
         if not datetime_cols:
             return []
-        median_dates = {}
-        for col in datetime_cols:
-            series = df[col].dropna()
-            if not is_datetime64_any_dtype(series):
-                series = to_datetime(series, format="mixed", errors="coerce")
-            median_dates[col] = series.dropna().median()
-        return sorted(datetime_cols, key=lambda c: median_dates[c])
+        center_epochs = _bulk_center_epochs(df, datetime_cols)
+        return sorted(datetime_cols, key=lambda c: center_epochs[c])
 
     def find_latest_activity_column(self, df: Any) -> Optional[str]:
         datetime_cols = self._get_datetime_columns(df)
@@ -203,16 +230,11 @@ class DatetimeOrderAnalyzer:
             return False
         if hasattr(series.dtype, "tz") and series.dtype.tz is not None:
             series = series.dt.tz_localize(None)
-        return series.median() > datetime.now()
+        return float((series > datetime.now()).mean()) > 0.5
 
     def _select_chronologically_latest(self, df: Any, cols: list[str]) -> str:
-        max_dates = {}
-        for col in cols:
-            series = df[col].dropna()
-            if not is_datetime64_any_dtype(series):
-                series = to_datetime(series, format="mixed", errors="coerce")
-            max_dates[col] = series.dropna().max()
-        return max(cols, key=lambda c: max_dates[c])
+        center_epochs = _bulk_center_epochs(df, cols)
+        return max(cols, key=lambda c: center_epochs[c])
 
 
 class TimestampDiscoveryEngine:
@@ -272,8 +294,13 @@ class TimestampDiscoveryEngine:
         self.label_window_days = label_window_days
         self.order_analyzer = DatetimeOrderAnalyzer()
 
-    def discover(self, df: Any, target_column: Optional[str] = None) -> TimestampDiscoveryResult:
-        datetime_candidates = self._discover_datetime_columns(df)
+    def discover(self, df: Any, target_column: Optional[str] = None,
+                 datetime_stats: Optional[dict] = None) -> TimestampDiscoveryResult:
+        datetime_candidates = (
+            self._discover_datetime_columns_from_stats(df, datetime_stats)
+            if datetime_stats is not None
+            else self._discover_datetime_columns(df)
+        )
         derivable_candidates = self._discover_derivable_timestamps(df)
         all_candidates = datetime_candidates + derivable_candidates
         classified = self._classify_candidates(all_candidates)
@@ -308,6 +335,22 @@ class TimestampDiscoveryEngine:
             if (c := self._analyze_column_for_datetime(df, col))
             and not self.order_analyzer._has_future_dates(df, col)
         ]
+
+    def _discover_datetime_columns_from_stats(self, df: Any, stats: dict) -> list[TimestampCandidate]:
+        candidates = []
+        for col, st in stats.items():
+            if col not in df.columns:
+                continue
+            if st.future_fraction > 0.5:
+                continue
+            role = self._infer_role_from_name(col)
+            confidence = self._calculate_confidence(col, role, st.coverage)
+            candidates.append(TimestampCandidate(
+                column_name=col, role=role, confidence=confidence, coverage=st.coverage,
+                date_range=(st.min_date, st.max_date), is_derived=False,
+                notes="Datetime column (from bulk stats)",
+            ))
+        return candidates
 
     def _analyze_column_for_datetime(self, df: Any, col: str) -> Optional[TimestampCandidate]:
         if is_datetime64_any_dtype(df[col]):

@@ -1,9 +1,10 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas as pd
 import pytest
 
 from customer_retention.stages.temporal.timestamp_discovery import (
+    DatetimeOrderAnalyzer,
     TimestampCandidate,
     TimestampDiscoveryEngine,
     TimestampRole,
@@ -457,3 +458,158 @@ class TestEdiTransactionsScenario:
         scenario, config, _ = detector.detect(df, None)
         assert scenario == "partial"
         assert config.feature_timestamp_column == "event_timestamp"
+
+
+class TestHasFutureDatesDistributedSafe:
+    @pytest.fixture
+    def analyzer(self):
+        return DatetimeOrderAnalyzer()
+
+    def test_majority_future_detected(self, analyzer):
+        future = datetime.now() + timedelta(days=365 * 10)
+        df = pd.DataFrame({"col": [future] * 10})
+        assert analyzer._has_future_dates(df, "col") is True
+
+    def test_majority_past_not_detected(self, analyzer):
+        past = datetime.now() - timedelta(days=365)
+        df = pd.DataFrame({"col": [past] * 10})
+        assert analyzer._has_future_dates(df, "col") is False
+
+    def test_minority_future_not_detected(self, analyzer):
+        past = datetime.now() - timedelta(days=365)
+        future = datetime.now() + timedelta(days=365 * 10)
+        df = pd.DataFrame({"col": [past] * 8 + [future] * 2})
+        assert analyzer._has_future_dates(df, "col") is False
+
+    def test_empty_after_dropna(self, analyzer):
+        df = pd.DataFrame({"col": pd.to_datetime([None, None, None])})
+        assert analyzer._has_future_dates(df, "col") is False
+
+    def test_no_median_called_on_datetime(self, analyzer):
+        """Ensure .median() is NOT used on datetime (fails on pyspark.pandas)."""
+        past = datetime.now() - timedelta(days=365)
+        df = pd.DataFrame({"col": pd.to_datetime([past] * 5)})
+        result = analyzer._has_future_dates(df, "col")
+        assert result is False
+
+
+class TestAnalyzeDatetimeOrderingDistributedSafe:
+    @pytest.fixture
+    def analyzer(self):
+        return DatetimeOrderAnalyzer()
+
+    def test_orders_by_chronological_center(self, analyzer):
+        df = pd.DataFrame({
+            "early": pd.to_datetime(["2020-01-01", "2020-06-01", "2021-01-01"]),
+            "late": pd.to_datetime(["2023-01-01", "2023-06-01", "2024-01-01"]),
+        })
+        ordering = analyzer.analyze_datetime_ordering(df)
+        assert ordering == ["early", "late"]
+
+    def test_empty_df_returns_empty(self, analyzer):
+        df = pd.DataFrame({"val": [1, 2, 3]})
+        assert analyzer.analyze_datetime_ordering(df) == []
+
+
+class TestBulkDatetimeDiscoveryStats:
+    def test_computes_stats_for_datetime_columns(self):
+        from customer_retention.core.compat.bulk_profiling import bulk_datetime_discovery_stats
+        df = pd.DataFrame({
+            "ts1": pd.to_datetime(["2020-01-01", "2021-01-01", "2022-01-01"]),
+            "ts2": pd.to_datetime(["2030-01-01", "2031-01-01", "2032-01-01"]),
+            "num": [1, 2, 3],
+        })
+        stats = bulk_datetime_discovery_stats(df, ["ts1", "ts2"])
+        assert "ts1" in stats
+        assert "ts2" in stats
+        assert stats["ts1"].future_fraction < 0.5
+        assert stats["ts2"].future_fraction > 0.5
+
+    def test_coverage_reflects_nulls(self):
+        from customer_retention.core.compat.bulk_profiling import bulk_datetime_discovery_stats
+        df = pd.DataFrame({
+            "ts": pd.to_datetime(["2020-01-01", None, "2022-01-01", None]),
+        })
+        stats = bulk_datetime_discovery_stats(df, ["ts"])
+        assert stats["ts"].coverage == pytest.approx(0.5)
+
+    def test_empty_columns_list(self):
+        from customer_retention.core.compat.bulk_profiling import bulk_datetime_discovery_stats
+        df = pd.DataFrame({"a": [1, 2]})
+        assert bulk_datetime_discovery_stats(df, []) == {}
+
+    def test_min_max_dates(self):
+        from customer_retention.core.compat.bulk_profiling import bulk_datetime_discovery_stats
+        df = pd.DataFrame({
+            "ts": pd.to_datetime(["2020-01-01", "2022-06-15", "2024-12-31"]),
+        })
+        stats = bulk_datetime_discovery_stats(df, ["ts"])
+        assert stats["ts"].min_date == pd.Timestamp("2020-01-01")
+        assert stats["ts"].max_date == pd.Timestamp("2024-12-31")
+
+
+class TestDiscoverWithPrecomputedStats:
+    def test_discover_uses_precomputed_stats(self):
+        from customer_retention.core.compat.bulk_profiling import DatetimeDiscoveryCandidateStats
+        engine = TimestampDiscoveryEngine()
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "last_activity_date": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "value": [100, 200, 300],
+        })
+        precomputed = {
+            "last_activity_date": DatetimeDiscoveryCandidateStats(
+                min_date=pd.Timestamp("2024-01-01"), max_date=pd.Timestamp("2024-03-01"),
+                coverage=1.0, future_fraction=0.0,
+            ),
+        }
+        result = engine.discover(df, datetime_stats=precomputed)
+        assert result.feature_timestamp is not None
+        assert result.feature_timestamp.column_name == "last_activity_date"
+
+    def test_precomputed_excludes_future_columns(self):
+        from customer_retention.core.compat.bulk_profiling import DatetimeDiscoveryCandidateStats
+        engine = TimestampDiscoveryEngine()
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "contract_end": pd.to_datetime(["2030-01-01", "2031-01-01", "2032-01-01"]),
+            "created_at": pd.to_datetime(["2020-01-01", "2021-01-01", "2022-01-01"]),
+        })
+        precomputed = {
+            "contract_end": DatetimeDiscoveryCandidateStats(
+                min_date=pd.Timestamp("2030-01-01"), max_date=pd.Timestamp("2032-01-01"),
+                coverage=1.0, future_fraction=1.0,
+            ),
+            "created_at": DatetimeDiscoveryCandidateStats(
+                min_date=pd.Timestamp("2020-01-01"), max_date=pd.Timestamp("2022-01-01"),
+                coverage=1.0, future_fraction=0.0,
+            ),
+        }
+        result = engine.discover(df, datetime_stats=precomputed)
+        candidate_names = [c.column_name for c in result.all_candidates]
+        assert "contract_end" not in candidate_names
+        assert "created_at" in candidate_names
+
+
+class TestEntityTimestampDeriverWithFindings:
+    def test_derive_with_known_datetime_columns(self):
+        from customer_retention.analysis.auto_explorer.entity_timestamp_deriver import EntityFeatureTimestampDeriver
+        deriver = EntityFeatureTimestampDeriver()
+        df = pd.DataFrame({
+            "customer_id": [1, 2, 3],
+            "last_activity_date": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "revenue": [100.0, 200.0, 300.0],
+        })
+        result = deriver.derive(df, target_column="revenue", known_datetime_columns=["last_activity_date"])
+        assert result.method == "direct"
+        assert "last_activity" in result.column_name.lower()
+
+    def test_derive_with_empty_known_columns_returns_none(self):
+        from customer_retention.analysis.auto_explorer.entity_timestamp_deriver import EntityFeatureTimestampDeriver
+        deriver = EntityFeatureTimestampDeriver()
+        df = pd.DataFrame({
+            "customer_id": [1, 2, 3],
+            "revenue": [100.0, 200.0, 300.0],
+        })
+        result = deriver.derive(df, target_column="revenue", known_datetime_columns=[])
+        assert result.method == "none"

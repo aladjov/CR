@@ -103,10 +103,77 @@ class TypedBulkStats:
 
 
 @dataclass
+class DatetimeDiscoveryCandidateStats:
+    min_date: Any = None
+    max_date: Any = None
+    coverage: float = 0.0
+    future_fraction: float = 0.0
+
+
+@dataclass
 class BulkStats:
     total_count: int
     columns: dict[str, PerColumnStats] = field(default_factory=dict)
     numeric: dict[str, NumericColumnStats] = field(default_factory=dict)
+
+
+def bulk_datetime_discovery_stats(
+    df: Any, columns: list[str],
+) -> dict[str, DatetimeDiscoveryCandidateStats]:
+    if not columns:
+        return {}
+    if hasattr(df, "to_spark"):
+        return _spark_bulk_datetime_discovery(df, columns)
+    return _pandas_bulk_datetime_discovery(df, columns)
+
+
+def _pandas_bulk_datetime_discovery(
+    df: Any, columns: list[str],
+) -> dict[str, DatetimeDiscoveryCandidateStats]:
+    now = _pandas.Timestamp.now()
+    total = len(df)
+    result: dict[str, DatetimeDiscoveryCandidateStats] = {}
+    for col in columns:
+        series = _pandas.to_datetime(df[col], errors="coerce")
+        non_null = series.notna().sum()
+        coverage = float(non_null / total) if total > 0 else 0.0
+        clean = series.dropna()
+        future_frac = float((clean > now).mean()) if len(clean) > 0 else 0.0
+        result[col] = DatetimeDiscoveryCandidateStats(
+            min_date=clean.min() if len(clean) > 0 else None,
+            max_date=clean.max() if len(clean) > 0 else None,
+            coverage=coverage, future_fraction=future_frac,
+        )
+    return result
+
+
+def _spark_bulk_datetime_discovery(
+    df: Any, columns: list[str],
+) -> dict[str, DatetimeDiscoveryCandidateStats]:
+    import pyspark.sql.functions as F  # noqa: N812
+    spark_df = as_spark_df(df)
+    now = _pandas.Timestamp.now()
+    total = spark_df.count()
+    exprs: list[Any] = []
+    for c in columns:
+        col_expr = F.col(c).cast("timestamp")
+        exprs.extend([
+            F.min(col_expr).alias(f"__min__{c}"),
+            F.max(col_expr).alias(f"__max__{c}"),
+            F.count(col_expr).alias(f"__cnt__{c}"),
+            F.sum(F.when(col_expr > F.lit(now), 1).otherwise(0)).alias(f"__fut__{c}"),
+        ])
+    row = spark_df.agg(*exprs).collect()[0]
+    result: dict[str, DatetimeDiscoveryCandidateStats] = {}
+    for c in columns:
+        cnt = int(row[f"__cnt__{c}"] or 0)
+        fut = int(row[f"__fut__{c}"] or 0)
+        result[c] = DatetimeDiscoveryCandidateStats(
+            min_date=row[f"__min__{c}"], max_date=row[f"__max__{c}"],
+            coverage=float(cnt / total) if total > 0 else 0.0,
+            future_fraction=float(fut / cnt) if cnt > 0 else 0.0,
+        )
+    return result
 
 
 def bulk_nunique(df: Any, columns: list[str] | None = None) -> dict[str, int]:
