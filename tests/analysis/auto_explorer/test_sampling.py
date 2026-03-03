@@ -141,3 +141,24 @@ class TestStratifiedEntitySample:
         ids = stratified_entity_sample(df, 2, "entity_id")
         assert len(ids) == 2
         assert len(set(ids)) == 2
+
+    def test_combined_strat_target_time_and_extra(self, entity_df):
+        ids = stratified_entity_sample(
+            entity_df, 80, "entity_id", "churned",
+            time_col="signup_date", extra_strat_cols=["region"],
+        )
+        assert len(ids) == 80
+        sampled = entity_df[entity_df["entity_id"].isin(ids)]
+        assert set(sampled["region"].unique()) == {"east", "west", "north", "south"}
+        rate = sampled["churned"].mean()
+        assert 0.1 <= rate <= 0.3
+
+    def test_no_ndarray_column_assignment(self):
+        df = pd.DataFrame({
+            "entity_id": list(range(50)),
+            "target": [1] * 10 + [0] * 40,
+            "ts": pd.date_range("2022-01-01", periods=50, freq="D"),
+        })
+        ids = stratified_entity_sample(df, 20, "entity_id", "target", time_col="ts")
+        assert len(ids) == 20
+        assert all(isinstance(i, int) for i in ids)

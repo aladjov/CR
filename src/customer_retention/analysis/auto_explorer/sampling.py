@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from customer_retention.core.compat import head_as_list, pd, safe_sample
+from customer_retention.core.compat import head_as_list, pd, safe_sample, safe_to_datetime
 
 
 def estimate_sampling_accuracy(
@@ -58,7 +58,7 @@ def stratified_entity_sample(
         strat_parts.append(deduped[target_col].astype(str))
 
     if time_col and time_col in deduped.columns:
-        ts = pd.to_datetime(deduped[time_col], errors="coerce")
+        ts = safe_to_datetime(deduped[time_col], errors="coerce")
         cohort_key = ts.dt.year.astype(str) + "-Q" + ts.dt.quarter.astype(str)
         cohort_key = cohort_key.fillna("unknown")
         strat_parts.append(cohort_key)
@@ -81,14 +81,14 @@ def stratified_entity_sample(
         for part in strat_parts[1:]:
             strat_key = strat_key + "|" + part
         deduped = deduped.copy()
-        deduped["_strat_key"] = strat_key.to_numpy()
+        deduped["_strat_key"] = strat_key
     else:
         deduped = deduped.copy()
         deduped["_strat_key"] = "all"
 
     rare_ids = []
     if target_col and target_col in deduped.columns:
-        class_counts = deduped[target_col].value_counts()
+        class_counts = deduped[target_col].value_counts().to_dict()
         for cls_val, cnt in class_counts.items():
             if cnt <= min_rare_count:
                 rare_mask = deduped[target_col] == cls_val
@@ -100,7 +100,7 @@ def stratified_entity_sample(
     if n_remaining <= 0:
         return rare_ids[:n_entities]
 
-    group_counts = remaining_df["_strat_key"].value_counts()
+    group_counts = remaining_df["_strat_key"].value_counts().to_dict()
     total_remaining = len(remaining_df)
     sampled_parts = []
 
