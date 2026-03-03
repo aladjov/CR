@@ -100,19 +100,27 @@ class DataExplorer:
         bulk = compute_bulk_stats(df)
         logger.info("Bulk statistics complete (%d numeric columns)", len(bulk.numeric))
 
-        # --- Pass 1: detect types using bulk distinct_counts (0 extra Spark jobs) ---
+        # --- Collect sample once (1 Spark job) — replaces ~400 per-column jobs ---
+        sample_df = df.head(200)
+
+        # --- Pass 1: detect types using sample + bulk distinct_counts (0 extra Spark jobs) ---
         active_cols = [c for c in df.columns if c not in TEMPORAL_METADATA_COLS]
         col_types: dict[str, ColumnType] = {}
+        type_inferences: dict = {}
         for column_name in active_cols:
             col_stats = bulk.columns.get(column_name)
             distinct_count = col_stats.distinct_count if col_stats else None
             type_inf = self.type_detector.detect_type(
-                df[column_name], column_name, distinct_count=distinct_count
+                sample_df[column_name],
+                column_name,
+                distinct_count=distinct_count,
+                total_count=bulk.total_count,
             )
             if target_hint and column_name.lower() == target_hint.lower():
                 type_inf.inferred_type = ColumnType.TARGET
                 type_inf.evidence.append(f"Matched target hint: {target_hint}")
             col_types[column_name] = type_inf.inferred_type
+            type_inferences[column_name] = type_inf
 
         # --- Classify columns by type for bulk pass 2 ---
         datetime_cols = [
@@ -142,23 +150,24 @@ class DataExplorer:
             len(typed_bulk.identifier), len(typed_bulk.binary), len(typed_bulk.text),
         )
 
-        # --- Per-column loop: use bulk metrics, avoid profiler.profile() ---
+        # --- Per-column loop: use sample series + bulk metrics, avoid profiler.profile() ---
         processed = 0
         log_interval = max(1, total_cols // 5)
         for column_name in active_cols:
             col_stats = bulk.columns.get(column_name)
             numeric_stats = bulk.numeric.get(column_name)
             column_finding = self._explore_column(
-                df[column_name],
+                sample_df[column_name],
                 column_name,
                 target_hint,
                 bulk_total=bulk.total_count,
                 col_stats=col_stats,
                 numeric_stats=numeric_stats,
                 typed_bulk=typed_bulk,
+                pre_detected_type=type_inferences.get(column_name),
             )
             findings.columns[column_name] = column_finding
-            self._track_special_columns(findings, column_finding, df[column_name], col_stats=col_stats)
+            self._track_special_columns(findings, column_finding, col_stats=col_stats)
             processed += 1
             if processed % log_interval == 0:
                 logger.info("Profiled %d/%d columns", processed, total_cols)
@@ -172,12 +181,16 @@ class DataExplorer:
         col_stats: Optional[PerColumnStats] = None,
         numeric_stats: Optional[NumericColumnStats] = None,
         typed_bulk=None,
+        pre_detected_type=None,
     ) -> ColumnFinding:
-        distinct_count = col_stats.distinct_count if col_stats else None
-        type_inference = self.type_detector.detect_type(series, column_name, distinct_count=distinct_count)
-        if target_hint and column_name.lower() == target_hint.lower():
-            type_inference.inferred_type = ColumnType.TARGET
-            type_inference.evidence.append(f"Matched target hint: {target_hint}")
+        if pre_detected_type is not None:
+            type_inference = pre_detected_type
+        else:
+            distinct_count = col_stats.distinct_count if col_stats else None
+            type_inference = self.type_detector.detect_type(series, column_name, distinct_count=distinct_count)
+            if target_hint and column_name.lower() == target_hint.lower():
+                type_inference.inferred_type = ColumnType.TARGET
+                type_inference.evidence.append(f"Matched target hint: {target_hint}")
         universal_metrics = self._compute_universal_metrics(
             series,
             type_inference.inferred_type,
@@ -189,6 +202,8 @@ class DataExplorer:
             numeric_stats=numeric_stats,
             typed_bulk=typed_bulk,
             column_name=column_name,
+            bulk_total=bulk_total,
+            col_stats=col_stats,
         )
         quality_issues = self._identify_quality_issues(universal_metrics, type_metrics)
         quality_score = self._calculate_column_quality(universal_metrics, quality_issues)
@@ -237,7 +252,7 @@ class DataExplorer:
                 "distinct_percentage": distinct_percentage,
                 "most_common_value": col_stats.most_common_value,
                 "most_common_frequency": col_stats.most_common_frequency,
-                "memory_size_bytes": safe_memory_usage_bytes(series),
+                "memory_size_bytes": 0,
             }
 
         universal = profiler.compute_universal_metrics(series)
@@ -259,15 +274,19 @@ class DataExplorer:
         numeric_stats: Optional[NumericColumnStats] = None,
         typed_bulk=None,
         column_name: Optional[str] = None,
+        bulk_total: Optional[int] = None,
+        col_stats: Optional[PerColumnStats] = None,
     ) -> dict:
         if numeric_stats is not None and col_type in (ColumnType.NUMERIC_CONTINUOUS, ColumnType.NUMERIC_DISCRETE):
             return self._numeric_metrics_from_bulk(series, numeric_stats)
 
         if typed_bulk is not None and column_name is not None:
+            non_null = (bulk_total - col_stats.null_count) if (bulk_total and col_stats) else len(series)
+
             if col_type in (ColumnType.DATETIME, ColumnType.FEATURE_TIMESTAMP, ColumnType.LABEL_TIMESTAMP):
                 dt_stats = typed_bulk.datetime.get(column_name)
                 if dt_stats is not None:
-                    return self._datetime_metrics_from_bulk(series, dt_stats)
+                    return self._datetime_metrics_from_bulk(series, dt_stats, non_null_count=non_null)
 
             if col_type in (ColumnType.CATEGORICAL_NOMINAL, ColumnType.CATEGORICAL_ORDINAL, ColumnType.CATEGORICAL_CYCLICAL):
                 cat_stats = typed_bulk.categorical.get(column_name)
@@ -287,7 +306,7 @@ class DataExplorer:
             if col_type == ColumnType.TEXT:
                 txt_stats = typed_bulk.text.get(column_name)
                 if txt_stats is not None:
-                    return self._text_metrics_from_bulk(txt_stats, len(series))
+                    return self._text_metrics_from_bulk(txt_stats, bulk_total or len(series))
 
         profiler = ProfilerFactory.get_profiler(col_type)
         if not profiler:
@@ -344,7 +363,9 @@ class DataExplorer:
         }
 
     @staticmethod
-    def _datetime_metrics_from_bulk(series: Series, ds: DatetimeColumnStats) -> dict:
+    def _datetime_metrics_from_bulk(
+        series: Series, ds: DatetimeColumnStats, non_null_count: Optional[int] = None,
+    ) -> dict:
         sample = head_as_list(series.dropna(), 10)
         format_detected = None
         format_consistency = None
@@ -372,8 +393,9 @@ class DataExplorer:
                     format_detected = "mixed"
                     format_consistency = 0.0
 
-        non_null = len(series) - int(series.isna().sum()) if len(series) > 0 else 0
-        weekend_pct = round(ds.weekend_count / non_null * 100, 2) if non_null > 0 else None
+        if non_null_count is None:
+            non_null_count = len(series) - int(series.isna().sum()) if len(series) > 0 else 0
+        weekend_pct = round(ds.weekend_count / non_null_count * 100, 2) if non_null_count > 0 else None
 
         return {
             "min_date": ds.min_date or "",
@@ -522,11 +544,11 @@ class DataExplorer:
 
     def _track_special_columns(
         self, findings: ExplorationFindings, column_finding: ColumnFinding,
-        series: Series, col_stats: Optional[PerColumnStats] = None,
+        col_stats: Optional[PerColumnStats] = None,
     ):
         if column_finding.inferred_type == ColumnType.TARGET:
             findings.target_column = column_finding.name
-            distinct = col_stats.distinct_count if col_stats else series.nunique()
+            distinct = col_stats.distinct_count if col_stats else 0
             findings.target_type = "binary" if distinct == 2 else "multiclass"
         elif column_finding.inferred_type == ColumnType.IDENTIFIER:
             findings.identifier_columns.append(column_finding.name)

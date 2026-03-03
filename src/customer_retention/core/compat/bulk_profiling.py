@@ -259,7 +259,7 @@ def _spark_bulk_stats(df: Any) -> BulkStats:
     exprs: list[Any] = [F.count("*").alias("__total_count__")]
     for col in all_cols:
         exprs.append(F.sum(F.isnull(F.col(col)).cast("int")).alias(f"__null__{col}"))
-        exprs.append(F.countDistinct(F.col(col)).alias(f"__dist__{col}"))
+        exprs.append(F.approx_count_distinct(F.col(col)).alias(f"__dist__{col}"))
 
     row1 = spark_df.agg(*exprs).collect()[0]
     total_count = int(row1["__total_count__"])

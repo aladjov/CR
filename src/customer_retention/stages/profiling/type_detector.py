@@ -53,13 +53,19 @@ class TypeDetector:
     def __init__(self):
         self.evidence = []
 
-    def detect_type(self, series: pd.Series, column_name: str, distinct_count: Optional[int] = None) -> TypeInference:
+    def detect_type(
+        self,
+        series: pd.Series,
+        column_name: str,
+        distinct_count: Optional[int] = None,
+        total_count: Optional[int] = None,
+    ) -> TypeInference:
         self.evidence = []
 
         if distinct_count is None:
             distinct_count = series.nunique() if len(series) > 0 else 0
 
-        if self.is_identifier(series, column_name, distinct_count):
+        if self.is_identifier(series, column_name, distinct_count, total_count=total_count):
             return TypeInference(
                 inferred_type=ColumnType.IDENTIFIER, confidence=TypeConfidence.HIGH, evidence=self.evidence.copy()
             )
@@ -89,7 +95,13 @@ class TypeDetector:
             inferred_type=ColumnType.UNKNOWN, confidence=TypeConfidence.LOW, evidence=["Could not determine type"]
         )
 
-    def is_identifier(self, series: pd.Series, column_name: str, distinct_count: int) -> bool:
+    def is_identifier(
+        self,
+        series: pd.Series,
+        column_name: str,
+        distinct_count: int,
+        total_count: Optional[int] = None,
+    ) -> bool:
         column_lower = column_name.lower()
         if any(pattern in column_lower for pattern in self.IDENTIFIER_PATTERNS):
             self.evidence.append("Column name contains identifier pattern")
@@ -104,7 +116,8 @@ class TypeDetector:
         if is_numeric_dtype(series):
             return False
 
-        distinct_ratio = distinct_count / len(series)
+        row_count = total_count or len(series)
+        distinct_ratio = distinct_count / row_count
 
         if distinct_ratio == 1.0 and distinct_count <= 100:
             if series.dtype == object:
