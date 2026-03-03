@@ -1120,28 +1120,70 @@ class TestSilverDerivedFeaturesFromNotebook06:
     def test_adds_engagement_score(self):
         registry = RecommendationRegistry()
         registry.init_silver("customer_id")
-        registry.add_silver_derived(
+        registry.add_silver_composite(
             column="email_engagement_score",
-            expression="0.6 * open_rate + 0.4 * click_rate",
-            feature_type="composite",
+            columns=["open_rate", "click_rate"],
             rationale="Weighted email engagement",
             source_notebook="06"
         )
         rec = registry.silver.derived_columns[0]
         assert rec.target_column == "email_engagement_score"
+        assert rec.action == "composite"
+        assert rec.parameters["columns"] == ["open_rate", "click_rate"]
 
     def test_adds_service_adoption_score(self):
         registry = RecommendationRegistry()
         registry.init_silver("customer_id")
-        registry.add_silver_derived(
+        registry.add_silver_composite(
             column="service_adoption_score",
-            expression="paperless + refill + doorstep",
-            feature_type="composite",
+            columns=["paperless", "refill", "doorstep"],
             rationale="Sum of service flags",
             source_notebook="06"
         )
         rec = registry.silver.derived_columns[0]
         assert rec.parameters["feature_type"] == "composite"
+        assert rec.parameters["columns"] == ["paperless", "refill", "doorstep"]
+
+
+class TestSilverCompositeRecommendations:
+    def test_adds_composite_to_silver(self):
+        registry = RecommendationRegistry()
+        registry.init_silver("customer_id")
+        registry.add_silver_composite(
+            column="score", columns=["a", "b", "c"],
+            rationale="mean score", source_notebook="06"
+        )
+        assert len(registry.silver.derived_columns) == 1
+        rec = registry.silver.derived_columns[0]
+        assert rec.target_column == "score"
+        assert rec.action == "composite"
+        assert rec.parameters["columns"] == ["a", "b", "c"]
+        assert rec.parameters["feature_type"] == "composite"
+
+    def test_composite_expression_reflects_columns(self):
+        registry = RecommendationRegistry()
+        registry.init_silver("customer_id")
+        registry.add_silver_composite("s", ["x", "y"], "", "06")
+        rec = registry.silver.derived_columns[0]
+        assert rec.parameters["expression"] == "mean(x, y)"
+
+    def test_composite_in_all_recommendations(self):
+        registry = RecommendationRegistry()
+        registry.init_silver("customer_id")
+        registry.add_silver_composite("s", ["a", "b"], "", "06")
+        registry.add_silver_ratio("r", "a", "b", "", "06")
+        assert len(registry.all_recommendations) == 2
+
+    def test_composite_round_trips_through_serialization(self, tmp_path):
+        registry = RecommendationRegistry()
+        registry.init_silver("customer_id")
+        registry.add_silver_composite("score", ["a", "b"], "test", "06")
+        path = str(tmp_path / "recs.yaml")
+        registry.save(path)
+        loaded = RecommendationRegistry.load(path)
+        rec = loaded.silver.derived_columns[0]
+        assert rec.action == "composite"
+        assert rec.parameters["columns"] == ["a", "b"]
 
 
 class TestRecommendationsHash:

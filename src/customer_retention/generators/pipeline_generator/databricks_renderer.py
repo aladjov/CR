@@ -97,7 +97,7 @@ def _derived_interaction(col, p):
 def _derived_composite(col, p):
     columns = p.get("columns", [])
     if not columns:
-        return f'df.withColumn("{col}", F.lit(None))'
+        raise ValueError(f"Composite derived column '{col}' requires non-empty 'columns' parameter")
     expr_parts = " + ".join(f'F.col("{c}")' for c in columns)
     return f'df.withColumn("{col}", ({expr_parts}) / {len(columns)})'
 

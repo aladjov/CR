@@ -747,6 +747,12 @@ class FindingsParser:
             needed = set(params.get("features", []))
         elif action == "composite":
             needed = set(params.get("columns", []))
+            if not needed:
+                logger.warning(
+                    "Skipping silver derived-column '%s': composite recommendation has no 'columns' key",
+                    rec.target_column,
+                )
+                return False
         else:
             return True
         missing = needed - pipeline_columns

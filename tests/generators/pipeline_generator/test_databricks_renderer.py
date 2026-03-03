@@ -263,6 +263,26 @@ class TestRenderSparkStepCall:
         result = render_spark_step_call(step)
         assert "in df.columns" not in result
 
+    def test_derived_composite_empty_columns_raises(self):
+        step = TransformationStep(
+            type=PipelineTransformationType.DERIVED_COLUMN,
+            column="avg_score",
+            parameters={"action": "composite", "columns": []},
+            rationale="",
+        )
+        with pytest.raises(ValueError, match="columns"):
+            render_spark_step_call(step)
+
+    def test_derived_composite_missing_columns_key_raises(self):
+        step = TransformationStep(
+            type=PipelineTransformationType.DERIVED_COLUMN,
+            column="avg_score",
+            parameters={"action": "composite"},
+            rationale="",
+        )
+        with pytest.raises(ValueError, match="columns"):
+            render_spark_step_call(step)
+
     def test_segment_aware_cap(self):
         step = TransformationStep(
             type=PipelineTransformationType.SEGMENT_AWARE_CAP,

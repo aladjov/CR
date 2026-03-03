@@ -301,6 +301,14 @@ class RecommendationRegistry:
                                           params, rationale, source_notebook)
         self.silver.derived_columns.append(rec)
 
+    def add_silver_composite(self, column: str, columns: List[str],
+                             rationale: str, source_notebook: str) -> None:
+        params = {"feature_type": "composite", "columns": columns,
+                  "expression": f"mean({', '.join(columns)})"}
+        rec = self._create_recommendation("silver", "derived", "composite", column,
+                                          params, rationale, source_notebook)
+        self.silver.derived_columns.append(rec)
+
     def add_silver_temporal_config(self, source_dataset: str, columns: List[str],
                                     lag_windows: int, lag_window_days: int,
                                     aggregations: List[str], feature_groups: List[str],

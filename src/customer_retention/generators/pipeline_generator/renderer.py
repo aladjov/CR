@@ -2605,7 +2605,10 @@ def render_step_call(step: TransformationStep, fit_mode: bool = True) -> str:
             col_b = features[1] if len(features) > 1 else p.get("col_b", "")
             return f"apply_derived_interaction(df, '{col}', col_a='{col_a}', col_b='{col_b}')"
         if action == "composite":
-            return f"apply_derived_composite(df, '{col}', columns={p.get('columns', [])})"
+            columns = p.get("columns", [])
+            if not columns:
+                raise ValueError(f"Composite derived column '{col}' requires non-empty 'columns' parameter")
+            return f"apply_derived_composite(df, '{col}', columns={columns})"
     if t == PipelineTransformationType.FILTER:
         condition = p.get("condition", "non_negative")
         if condition == "non_negative":

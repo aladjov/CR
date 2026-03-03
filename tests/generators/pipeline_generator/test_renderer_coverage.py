@@ -1054,6 +1054,18 @@ class TestRenderStepCall:
         )
         assert "apply_derived_composite" in result
 
+    def test_derived_composite_empty_columns_raises(self):
+        with pytest.raises(ValueError, match="columns"):
+            render_step_call(
+                _step(PipelineTransformationType.DERIVED_COLUMN, "avg", {"action": "composite", "columns": []})
+            )
+
+    def test_derived_composite_missing_columns_key_raises(self):
+        with pytest.raises(ValueError, match="columns"):
+            render_step_call(
+                _step(PipelineTransformationType.DERIVED_COLUMN, "avg", {"action": "composite"})
+            )
+
     def test_unknown_type_raises_value_error(self):
         step = _step(PipelineTransformationType.AGGREGATE, "x")
         with pytest.raises(ValueError, match="Unknown transformation type"):
