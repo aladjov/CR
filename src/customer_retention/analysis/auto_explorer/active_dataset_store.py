@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, List, Optional
 
 from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 from customer_retention.core.compat import normalize_timestamp_columns
@@ -20,6 +20,10 @@ def _to_native_pandas(df: Any) -> Any:
     return normalize_timestamp_columns(result)
 
 
+def optimize_delta(path: str, z_order_columns: Optional[List[str]] = None) -> None:
+    get_delta().optimize(path, z_order_columns or None)
+
+
 def _write_delta(df: Any, path: str) -> None:
     if hasattr(df, "to_spark"):
         get_delta().write(df, path, mode="overwrite")
@@ -27,9 +31,16 @@ def _write_delta(df: Any, path: str) -> None:
     _local_delta().write(normalize_timestamp_columns(_compat_to_pandas(df)), path, mode="overwrite")
 
 
-def save_active_dataset(namespace: RunNamespace, dataset_name: str, df: Any) -> Path:
+def save_active_dataset(
+    namespace: RunNamespace,
+    dataset_name: str,
+    df: Any,
+    z_order_columns: Optional[List[str]] = None,
+) -> Path:
     dlt_path = namespace.landing_table_dir(dataset_name)
     _write_delta(df, str(dlt_path))
+    if z_order_columns:
+        optimize_delta(str(dlt_path), z_order_columns)
     return dlt_path
 
 
@@ -40,9 +51,16 @@ def load_active_dataset(namespace: RunNamespace, dataset_name: str) -> Any:
     return _to_native_pandas(_local_delta().read(str(dlt_path)))
 
 
-def save_aggregated_dataset(namespace: RunNamespace, dataset_name: str, df: Any) -> Path:
+def save_aggregated_dataset(
+    namespace: RunNamespace,
+    dataset_name: str,
+    df: Any,
+    z_order_columns: Optional[List[str]] = None,
+) -> Path:
     dlt_path = namespace.bronze_table_dir(dataset_name)
     _write_delta(df, str(dlt_path))
+    if z_order_columns:
+        optimize_delta(str(dlt_path), z_order_columns)
     return dlt_path
 
 

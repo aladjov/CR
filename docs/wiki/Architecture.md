@@ -172,6 +172,7 @@ class DeltaStorage(ABC):
     def write(self, df, path, mode="overwrite", partition_by=None, metadata=None): ...
     def merge(self, df, path, condition, update_cols=None): ...
     def history(self, path) -> List[Dict]: ...
+    def optimize(self, path, z_order_columns=None): ...
     def vacuum(self, path, retention_hours=168): ...
     def exists(self, path) -> bool: ...
 ```
@@ -181,6 +182,41 @@ class DeltaStorage(ABC):
 - **`PRODUCTION_DIR` defaults to `EXPERIMENTS_DIR`** -- experiments and production share the same Delta tables until you explicitly separate them.
 - **`PipelineContext.build_commit_metadata()`** attaches `run_id`, `pipeline_stage`, `run_type`, and `timestamp` to every Delta commit.
 - **Version-pinned reads**: `storage.read(path, version=3)` gives you an exact historical snapshot for reproducibility.
+
+### OPTIMIZE + Z-ORDER After Writes
+
+Every Delta write in the pipeline is followed by an automatic `OPTIMIZE` with `Z-ORDER` on the columns most frequently used in downstream reads. This compacts small files produced by the write and clusters rows by the z-order columns, enabling data skipping on subsequent reads.
+
+The `DeltaStorage` interface exposes a single method:
+
+```python
+def optimize(self, path: str, z_order_columns: Optional[List[str]] = None) -> None: ...
+```
+
+| Implementation | Compact | Z-ORDER |
+|----------------|---------|---------|
+| `LocalDelta` (delta-rs) | `dt.optimize.compact()` | `dt.optimize.z_order(columns)` |
+| `DatabricksDelta` (delta-spark) | `dt.optimize().executeCompaction()` | `dt.optimize().executeZOrderBy(columns)` |
+
+Z-ORDER columns are chosen per stage based on the join keys used by downstream notebooks:
+
+| Stage | Z-ORDER Columns | Why |
+|-------|----------------|-----|
+| Landing | `(entity_col, time_col)` | NB01d aggregates by entity + time window |
+| Bronze Event (aggregated) | `(entity_col, as_of_date)` | NB03 merges on entity + snapshot date |
+| Bronze Entity | `(entity_col)` | NB03 joins on entity key |
+| Silver | `(entity_id, as_of_date)` | NB04-08 filter/group by entity and date |
+| Gold | `(entity_id, event_timestamp)` | Training and scoring read by entity |
+
+The optimization applies in three contexts:
+
+1. **Exploration notebooks** — `optimize_delta()` helper in `active_dataset_store.py` is called after `save_active_dataset()` (NB01), `save_aggregated_dataset()` (NB01d), and `delta.write()` (NB03). Columns are derived from findings (entity column, detected timestamp) or from the post-merge standard (`entity_id`, `as_of_date`).
+
+2. **Generated local pipelines** — Each template calls `get_delta(force_local=True).optimize(str(output_path), z_cols)` after writing. Column guards (`if c in df.columns`) ensure the call succeeds even if a column is absent.
+
+3. **Generated Databricks pipelines** — Each template calls `DeltaTable.forName(spark, output_table).optimize().executeZOrderBy(z_cols)` after `saveAsTable()`. Same column guards using Spark schema field names.
+
+When no z-order columns are available (e.g., column not present in the DataFrame), the call falls back to compaction-only, which still reduces small file overhead.
 
 ## Run Namespace
 

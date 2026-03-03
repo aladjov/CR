@@ -23,6 +23,10 @@ class DeltaStorage(ABC):
         pass
 
     @abstractmethod
+    def optimize(self, path: str, z_order_columns: Optional[List[str]] = None) -> None:
+        pass
+
+    @abstractmethod
     def vacuum(self, path: str, retention_hours: int = 168) -> None:
         pass
 

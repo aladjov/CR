@@ -526,7 +526,13 @@ def run_bronze_entity_{{ source }}():
     output_path = get_bronze_path(SOURCE_NAME)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     from customer_retention.integrations.adapters.factory import get_delta
-    get_delta(force_local=True).write(df, str(output_path))
+    _delta = get_delta(force_local=True)
+    _delta.write(df, str(output_path))
+    _z_cols = [c for c in ["{{ config.source.entity_key }}"] if c in df.columns]
+    if _z_cols:
+        _delta.optimize(str(output_path), _z_cols)
+    else:
+        _delta.optimize(str(output_path))
     return df
 
 
@@ -720,7 +726,13 @@ def run_silver_merge(create_holdout: bool = True, holdout_fraction: float = 0.1)
     output_path = get_silver_path()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     from customer_retention.integrations.adapters.factory import get_delta
-    get_delta(force_local=True).write(silver, str(output_path))
+    _delta = get_delta(force_local=True)
+    _delta.write(silver, str(output_path))
+    _z_cols = [c for c in ["entity_id", "as_of_date"] if c in silver.columns]
+    if _z_cols:
+        _delta.optimize(str(output_path), _z_cols)
+    else:
+        _delta.optimize(str(output_path))
     if ref_date:
         Path(str(output_path) + ".reference_date").write_text(ref_date)
     return silver
@@ -744,7 +756,7 @@ from customer_retention.transforms import ArtifactStore{{ (', ' + (ops | sort | 
 from customer_retention.transforms.fitted import {{ fitted | sort | join(', ') }}
 {% endif %}
 from config import (get_silver_path, get_gold_path, get_feast_data_path,
-                    TARGET_COLUMN, RECOMMENDATIONS_HASH, FEAST_REPO_PATH,
+                    TARGET_COLUMN, TIMESTAMP_COLUMN, RECOMMENDATIONS_HASH, FEAST_REPO_PATH,
                     FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL, EXPERIMENTS_DIR,
                     ARTIFACTS_PATH, FIT_MODE)
 
@@ -941,7 +953,13 @@ def run_gold_features():
     gold.attrs["recommendations_hash"] = RECOMMENDATIONS_HASH
     gold.attrs["feature_version"] = get_feature_version_tag()
     from customer_retention.integrations.adapters.factory import get_delta
-    get_delta(force_local=True).write(gold, str(output_path))
+    _delta = get_delta(force_local=True)
+    _delta.write(gold, str(output_path))
+    _z_cols = [c for c in ["entity_id", TIMESTAMP_COLUMN] if c in gold.columns]
+    if _z_cols:
+        _delta.optimize(str(output_path), _z_cols)
+    else:
+        _delta.optimize(str(output_path))
     print(f"Gold features saved with version: {get_feature_version_tag()}")
     return gold
 
@@ -1727,7 +1745,13 @@ def run_landing_{{ name }}():
     output_path = get_landing_output_path()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     from customer_retention.integrations.adapters.factory import get_delta
-    get_delta(force_local=True).write(df, str(output_path))
+    _delta = get_delta(force_local=True)
+    _delta.write(df, str(output_path))
+    _z_cols = [c for c in [ENTITY_COLUMN, TIME_COLUMN] if c in df.columns]
+    if _z_cols:
+        _delta.optimize(str(output_path), _z_cols)
+    else:
+        _delta.optimize(str(output_path))
     print(f"  Records: {len(df):,}")
     print(f"  Output: {output_path}")
     return df
@@ -1927,7 +1951,13 @@ def run_bronze_event_{{ source }}():
     output_name = f"{SOURCE_NAME}_aggregated"
     bronze_dir = PRODUCTION_DIR / "data" / "bronze"
     bronze_dir.mkdir(parents=True, exist_ok=True)
-    storage.write(df, str(bronze_dir / output_name))
+    _output_path = str(bronze_dir / output_name)
+    storage.write(df, _output_path)
+    _z_cols = [c for c in [ENTITY_COLUMN, "as_of_date"] if c in df.columns]
+    if _z_cols:
+        storage.optimize(_output_path, _z_cols)
+    else:
+        storage.optimize(_output_path)
     if "aggregation_reference_date" in df.attrs:
         (bronze_dir / f"{output_name}.reference_date").write_text(df.attrs["aggregation_reference_date"])
     return df

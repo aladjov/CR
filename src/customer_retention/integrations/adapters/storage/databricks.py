@@ -87,6 +87,15 @@ class DatabricksDelta(DeltaStorage):
         history_df = dt.history()
         return history_df.toPandas().to_dict("records")
 
+    def optimize(self, path: str, z_order_columns: Optional[List[str]] = None) -> None:
+        path = self._normalize_path(path)
+        from delta.tables import DeltaTable
+        dt = DeltaTable.forPath(self.spark, path)
+        if z_order_columns:
+            dt.optimize().executeZOrderBy(z_order_columns)
+        else:
+            dt.optimize().executeCompaction()
+
     def vacuum(self, path: str, retention_hours: int = 168) -> None:
         path = self._normalize_path(path)
         from delta.tables import DeltaTable

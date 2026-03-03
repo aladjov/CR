@@ -690,10 +690,22 @@ def run_bronze_event():
 {% endif %}
     output_table = bronze_table("{{ source }}_events")
     agg_df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
+    from delta.tables import DeltaTable
+    _z_cols = [c for c in [ENTITY_COLUMN, "as_of_date"] if c in [f.name for f in agg_df.schema.fields]]
+    if _z_cols:
+        DeltaTable.forName(spark, output_table).optimize().executeZOrderBy(_z_cols)
+    else:
+        DeltaTable.forName(spark, output_table).optimize().executeCompaction()
     return agg_df
 {% else %}
     output_table = bronze_table("{{ source }}_events")
     df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
+    from delta.tables import DeltaTable
+    _z_cols = [c for c in [ENTITY_COLUMN, TIME_COLUMN] if c in [f.name for f in df.schema.fields]]
+    if _z_cols:
+        DeltaTable.forName(spark, output_table).optimize().executeZOrderBy(_z_cols)
+    else:
+        DeltaTable.forName(spark, output_table).optimize().executeCompaction()
     return df
 {% endif %}
 
@@ -880,6 +892,12 @@ def run_bronze_entity():
 {% endif %}
     output_table = bronze_table(SOURCE_NAME)
     df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
+    from delta.tables import DeltaTable
+    _z_cols = [c for c in [ENTITY_COLUMN] if c in [f.name for f in df.schema.fields]]
+    if _z_cols:
+        DeltaTable.forName(spark, output_table).optimize().executeZOrderBy(_z_cols)
+    else:
+        DeltaTable.forName(spark, output_table).optimize().executeCompaction()
     return df
 
 result = run_bronze_entity()
@@ -1029,6 +1047,12 @@ def run_silver():
 {% endif %}
     output_table = silver_table()
     merged.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
+    from delta.tables import DeltaTable
+    _z_cols = [c for c in ["entity_id", "as_of_date"] if c in [f.name for f in merged.schema.fields]]
+    if _z_cols:
+        DeltaTable.forName(spark, output_table).optimize().executeZOrderBy(_z_cols)
+    else:
+        DeltaTable.forName(spark, output_table).optimize().executeCompaction()
     return merged
 
 result = run_silver()
@@ -1216,6 +1240,12 @@ def run_gold():
         df = df.withColumnRenamed("feature_timestamp", TIMESTAMP_COLUMN)
     output_table = gold_table()
     df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
+    from delta.tables import DeltaTable
+    _z_cols = [c for c in ["entity_id", TIMESTAMP_COLUMN] if c in [f.name for f in df.schema.fields]]
+    if _z_cols:
+        DeltaTable.forName(spark, output_table).optimize().executeZOrderBy(_z_cols)
+    else:
+        DeltaTable.forName(spark, output_table).optimize().executeCompaction()
     return df
 
 result = run_gold()
@@ -1487,6 +1517,12 @@ def run_landing():
 {% endif %}
     output_table = landing_table(SOURCE_NAME)
     df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
+    from delta.tables import DeltaTable
+    _z_cols = [c for c in [ENTITY_COLUMN, TIME_COLUMN] if c in [f.name for f in df.schema.fields]]
+    if _z_cols:
+        DeltaTable.forName(spark, output_table).optimize().executeZOrderBy(_z_cols)
+    else:
+        DeltaTable.forName(spark, output_table).optimize().executeCompaction()
     return df
 
 result = run_landing()

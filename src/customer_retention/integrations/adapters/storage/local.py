@@ -86,6 +86,14 @@ class LocalDelta(DeltaStorage):
         dt = dl.DeltaTable(path)
         return dt.history()
 
+    def optimize(self, path: str, z_order_columns: Optional[List[str]] = None) -> None:
+        dl = _import_deltalake()
+        dt = dl.DeltaTable(path)
+        if z_order_columns:
+            dt.optimize.z_order(z_order_columns)
+        else:
+            dt.optimize.compact()
+
     def vacuum(self, path: str, retention_hours: int = 168) -> None:
         dl = _import_deltalake()
         dt = dl.DeltaTable(path)
