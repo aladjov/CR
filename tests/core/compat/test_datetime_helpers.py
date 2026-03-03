@@ -111,6 +111,30 @@ class TestInferEpochUnit:
         assert _infer_epoch_unit(0) == "s"
 
 
+class TestSafeToDatetimeSparkPandasTimestamp:
+    def test_spark_pandas_datetime_series_returned_without_iter(self):
+        series = pd.Series(pd.to_datetime(["2023-01-01", "2023-06-15"]))
+        series.spark = True
+        series.to_spark = lambda: None
+        result = safe_to_datetime(series)
+        assert pd.api.types.is_datetime64_any_dtype(result)
+        assert len(result) == 2
+
+    def test_spark_pandas_string_series_falls_to_spark_branch(self):
+        from unittest.mock import MagicMock, patch
+        mock_series = MagicMock()
+        mock_series.spark = MagicMock()
+        mock_series.to_spark = MagicMock()
+        mock_series.dtype = "object"
+        transformed = MagicMock()
+        mock_series.spark.transform.return_value = transformed
+        with patch("customer_retention.core.compat._is_spark_pandas", return_value=True):
+            with patch("pandas.api.types.is_datetime64_any_dtype", return_value=False):
+                result = safe_to_datetime(mock_series)
+        mock_series.spark.transform.assert_called_once()
+        assert result is transformed
+
+
 class TestSafeToDatetime:
     def test_already_datetime(self):
         series = pd.Series(pd.to_datetime(["2023-01-01", "2023-06-15"]))
