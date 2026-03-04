@@ -76,6 +76,7 @@ class FindingsParser:
             self._apply_recommendations_to_config(config, recommendations_registry, multi_dataset)
             self._apply_event_recommendations(config, recommendations_registry)
         self._reconcile_discovered_event_transforms(config, discovered_events)
+        self._reconcile_event_post_shaping(config)
         self._reconcile_gold_columns(config)
         return config
 
@@ -701,59 +702,80 @@ class FindingsParser:
             }
             columns |= (raw_cols - dropped)
         for _name, event_cfg in config.bronze_event.items():
-            agg = event_cfg.aggregation
-            if agg:
-                for window in agg.windows:
-                    for col in agg.value_columns:
-                        for func in agg.agg_funcs:
-                            columns.add(f"{col}_{func}_{window}")
-                    for col in agg.categorical_columns:
-                        for func in agg.categorical_agg_funcs:
-                            columns.add(f"{col}_{func}_{window}")
-                    columns.add(f"event_count_{window}")
-            lc = event_cfg.lifecycle
-            if lc:
-                columns |= {"days_since_last", "days_since_first"}
-                if lc.include_recency_bucket:
-                    columns.add("recency_bucket")
-                if lc.include_lifecycle_quadrant:
-                    columns.add("lifecycle_quadrant")
-                if lc.include_cyclical_features:
-                    columns |= {"dow_sin", "dow_cos"}
-                if lc.include_month_cyclical:
-                    columns |= {"month_sin", "month_cos"}
-                if lc.include_quarter_cyclical:
-                    columns |= {"quarter_sin", "quarter_cos"}
-                if lc.include_trend_features:
-                    columns |= {"recent_vs_overall_ratio", "entity_trend_slope"}
-                if lc.include_cohort_features:
-                    columns |= {"cohort_year", "cohort_quarter"}
-                for pair in lc.momentum_pairs:
-                    short = pair.get("short_window", "")
-                    long = pair.get("long_window", "")
-                    columns.add(f"momentum_{short}_{long}")
-            dd = event_cfg.datetime_derivation
-            if dd:
-                for src in dd.source_columns:
-                    for suffix in ("_delta_hours", "_hour", "_dow", "_is_weekend"):
-                        columns.add(f"{src}{suffix}")
-            for text_cfg in event_cfg.text_features:
-                if text_cfg.component_columns:
-                    columns |= set(text_cfg.component_columns)
-                else:
-                    for i in range(text_cfg.n_components):
-                        columns.add(f"{text_cfg.column}_emb_{i}")
-            tf = event_cfg.temporal_features
-            if tf and tf.lag_columns:
-                for lag_idx in range(tf.num_lags):
-                    for col in tf.lag_columns:
-                        for agg in tf.lag_agg_funcs:
-                            columns.add(f"lag{lag_idx}_{col}_{agg}")
-                if "velocity" in (tf.feature_groups or []):
-                    for col in tf.lag_columns:
-                        for agg in tf.lag_agg_funcs:
-                            columns.add(f"velocity_{col}_{agg}")
+            columns |= self._event_aggregated_columns(event_cfg)
         return columns
+
+    @staticmethod
+    def _event_aggregated_columns(event_cfg: "BronzeEventConfig") -> Set[str]:
+        columns: Set[str] = set()
+        agg = event_cfg.aggregation
+        if agg:
+            for window in agg.windows:
+                for col in agg.value_columns:
+                    for func in agg.agg_funcs:
+                        columns.add(f"{col}_{func}_{window}")
+                for col in agg.categorical_columns:
+                    for func in agg.categorical_agg_funcs:
+                        columns.add(f"{col}_{func}_{window}")
+                columns.add(f"event_count_{window}")
+        lc = event_cfg.lifecycle
+        if lc:
+            columns |= {"days_since_last", "days_since_first"}
+            if lc.include_recency_bucket:
+                columns.add("recency_bucket")
+            if lc.include_lifecycle_quadrant:
+                columns.add("lifecycle_quadrant")
+            if lc.include_cyclical_features:
+                columns |= {"dow_sin", "dow_cos"}
+            if lc.include_month_cyclical:
+                columns |= {"month_sin", "month_cos"}
+            if lc.include_quarter_cyclical:
+                columns |= {"quarter_sin", "quarter_cos"}
+            if lc.include_trend_features:
+                columns |= {"recent_vs_overall_ratio", "entity_trend_slope"}
+            if lc.include_cohort_features:
+                columns |= {"cohort_year", "cohort_quarter"}
+            for pair in lc.momentum_pairs:
+                short = pair.get("short_window", "")
+                long = pair.get("long_window", "")
+                columns.add(f"momentum_{short}_{long}")
+        dd = event_cfg.datetime_derivation
+        if dd:
+            for src in dd.source_columns:
+                for suffix in ("_delta_hours", "_hour", "_dow", "_is_weekend"):
+                    columns.add(f"{src}{suffix}")
+        for text_cfg in event_cfg.text_features:
+            if text_cfg.component_columns:
+                columns |= set(text_cfg.component_columns)
+            else:
+                for i in range(text_cfg.n_components):
+                    columns.add(f"{text_cfg.column}_emb_{i}")
+        tf = event_cfg.temporal_features
+        if tf and tf.lag_columns:
+            for lag_idx in range(tf.num_lags):
+                for col in tf.lag_columns:
+                    for fn in tf.lag_agg_funcs:
+                        columns.add(f"lag{lag_idx}_{col}_{fn}")
+            if "velocity" in (tf.feature_groups or []):
+                for col in tf.lag_columns:
+                    for fn in tf.lag_agg_funcs:
+                        columns.add(f"velocity_{col}_{fn}")
+        return columns
+
+    def _reconcile_event_post_shaping(self, config: "PipelineConfig") -> None:
+        for name, event_cfg in config.bronze_event.items():
+            if not event_cfg.post_shaping:
+                continue
+            valid_columns = self._event_aggregated_columns(event_cfg)
+            if not valid_columns:
+                continue
+            dropped = [s.column for s in event_cfg.post_shaping if s.column not in valid_columns]
+            if dropped:
+                event_cfg.post_shaping = [s for s in event_cfg.post_shaping if s.column in valid_columns]
+                logger.warning(
+                    "Dropped post-shaping step(s) from '%s' — columns not in aggregated output: %s",
+                    name, ", ".join(dropped),
+                )
 
     @staticmethod
     def _silver_derived_sources_available(rec, pipeline_columns: Set[str]) -> bool:

@@ -662,8 +662,7 @@ class TestEventSourceDiscovery:
             for t in config.bronze_event["orders_agg"].post_shaping
             if t.type == PipelineTransformationType.IMPUTE_NULL
         ]
-        assert len(impute_steps) == 1
-        assert impute_steps[0].column == "total_amount"
+        assert len(impute_steps) == 0
 
     def test_parse_lifecycle_attached_for_discovered_event(self, aggregated_event_setup):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
@@ -697,8 +696,7 @@ class TestEventSourceDiscovery:
 
         bronze_event = config.bronze_event["orders_agg"]
         impute_steps = [t for t in bronze_event.post_shaping if t.type == PipelineTransformationType.IMPUTE_NULL]
-        assert len(impute_steps) == 1
-        assert impute_steps[0].column == "total_amount"
+        assert len(impute_steps) == 0
         cap_steps = [t for t in bronze_event.pre_shaping if t.type == PipelineTransformationType.CAP_OUTLIER]
         assert len(cap_steps) == 1
         assert cap_steps[0].column == "amount"
@@ -5072,6 +5070,186 @@ class TestReconcileGoldColumns:
             parser._reconcile_gold_columns(config)
         assert len(config.gold.transformations) == 1
         assert config.gold.transformations[0].column == "amount"
+
+
+class TestEventAggregatedColumns:
+    @staticmethod
+    def _make_event_cfg(**overrides):
+        from customer_retention.generators.pipeline_generator.models import BronzeEventConfig, SourceConfig
+        src = SourceConfig(name="events", path="events.csv", format="csv",
+                           entity_key="cid", raw_source_path="/data/events.csv")
+        defaults = dict(source=src, entity_column="cid", time_column="ts")
+        defaults.update(overrides)
+        return BronzeEventConfig(**defaults)
+
+    def test_aggregation_columns_cartesian(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import AggregationWindowConfig
+        agg = AggregationWindowConfig(
+            windows=["all_time", "30d"], value_columns=["amount"],
+            agg_funcs=["sum", "mean"],
+        )
+        cols = FindingsParser._event_aggregated_columns(self._make_event_cfg(aggregation=agg))
+        assert cols == {
+            "amount_sum_all_time", "amount_mean_all_time",
+            "amount_sum_30d", "amount_mean_30d",
+            "event_count_all_time", "event_count_30d",
+        }
+
+    def test_categorical_columns(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import AggregationWindowConfig
+        agg = AggregationWindowConfig(
+            windows=["7d"], value_columns=[], agg_funcs=[],
+            categorical_columns=["status"], categorical_agg_funcs=["nunique", "mode"],
+        )
+        cols = FindingsParser._event_aggregated_columns(self._make_event_cfg(aggregation=agg))
+        assert {"status_nunique_7d", "status_mode_7d", "event_count_7d"} <= cols
+
+    def test_lifecycle_columns(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import LifecycleConfig
+        lc = LifecycleConfig(include_recency_bucket=True, include_lifecycle_quadrant=True,
+                             include_cyclical_features=True, include_trend_features=True,
+                             include_cohort_features=True, include_month_cyclical=True,
+                             include_quarter_cyclical=True,
+                             momentum_pairs=[{"short_window": "7d", "long_window": "30d"}])
+        cols = FindingsParser._event_aggregated_columns(self._make_event_cfg(lifecycle=lc))
+        assert {"days_since_last", "days_since_first", "recency_bucket",
+                "lifecycle_quadrant", "dow_sin", "dow_cos", "month_sin", "month_cos",
+                "quarter_sin", "quarter_cos", "recent_vs_overall_ratio",
+                "entity_trend_slope", "cohort_year", "cohort_quarter",
+                "momentum_7d_30d"} <= cols
+
+    def test_empty_config_returns_empty(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        cols = FindingsParser._event_aggregated_columns(self._make_event_cfg())
+        assert cols == set()
+
+
+class TestReconcileEventPostShaping:
+    @staticmethod
+    def _make_parser():
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {}
+        parser._source_findings_paths = {}
+        return parser
+
+    @staticmethod
+    def _make_config_with_event(post_shaping_cols, agg_windows=None, agg_value_cols=None, agg_funcs=None):
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+            BronzeEventConfig,
+            GoldLayerConfig,
+            PipelineConfig,
+            PipelineTransformationType,
+            SilverLayerConfig,
+            SourceConfig,
+            TransformationStep,
+        )
+        src = SourceConfig(name="events", path="events.csv", format="csv",
+                           entity_key="cid", raw_source_path="/data/events.csv")
+        agg = None
+        if agg_windows:
+            agg = AggregationWindowConfig(
+                windows=agg_windows, value_columns=agg_value_cols or [],
+                agg_funcs=agg_funcs or [],
+            )
+        steps = [
+            TransformationStep(type=PipelineTransformationType.CAP_OUTLIER, column=c,
+                               parameters={"method": "iqr"}, rationale=f"Cap {c}")
+            for c in post_shaping_cols
+        ]
+        event_cfg = BronzeEventConfig(source=src, entity_column="cid", time_column="ts",
+                                      aggregation=agg, post_shaping=steps)
+        return PipelineConfig(
+            name="test", target_column="churn", sources=[src],
+            bronze={}, silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(), output_dir=".",
+            bronze_event={"events": event_cfg},
+        )
+
+    def test_drops_steps_for_nonexistent_aggregated_columns(self, caplog):
+        import logging
+        parser = self._make_parser()
+        config = self._make_config_with_event(
+            post_shaping_cols=["amount_sum_30d", "amount_mean_all_time"],
+            agg_windows=["30d"], agg_value_cols=["amount"], agg_funcs=["sum"],
+        )
+        with caplog.at_level(logging.WARNING):
+            parser._reconcile_event_post_shaping(config)
+        assert len(config.bronze_event["events"].post_shaping) == 1
+        assert config.bronze_event["events"].post_shaping[0].column == "amount_sum_30d"
+        assert any("amount_mean_all_time" in m for m in caplog.messages)
+
+    def test_keeps_all_valid_columns(self):
+        parser = self._make_parser()
+        config = self._make_config_with_event(
+            post_shaping_cols=["amount_sum_30d", "amount_mean_30d"],
+            agg_windows=["30d"], agg_value_cols=["amount"], agg_funcs=["sum", "mean"],
+        )
+        parser._reconcile_event_post_shaping(config)
+        assert len(config.bronze_event["events"].post_shaping) == 2
+
+    def test_noop_when_no_post_shaping(self):
+        parser = self._make_parser()
+        config = self._make_config_with_event(
+            post_shaping_cols=[], agg_windows=["30d"],
+            agg_value_cols=["amount"], agg_funcs=["sum"],
+        )
+        parser._reconcile_event_post_shaping(config)
+        assert config.bronze_event["events"].post_shaping == []
+
+    def test_noop_when_no_aggregation(self):
+        parser = self._make_parser()
+        config = self._make_config_with_event(post_shaping_cols=["amount"])
+        parser._reconcile_event_post_shaping(config)
+        assert len(config.bronze_event["events"].post_shaping) == 1
+
+    def test_drops_all_when_none_match(self, caplog):
+        import logging
+        parser = self._make_parser()
+        config = self._make_config_with_event(
+            post_shaping_cols=["phantom_mean_all_time", "ghost_sum_365d"],
+            agg_windows=["30d"], agg_value_cols=["amount"], agg_funcs=["sum"],
+        )
+        with caplog.at_level(logging.WARNING):
+            parser._reconcile_event_post_shaping(config)
+        assert config.bronze_event["events"].post_shaping == []
+
+    def test_lifecycle_columns_survive_reconciliation(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            LifecycleConfig,
+            PipelineTransformationType,
+            TransformationStep,
+        )
+        parser = self._make_parser()
+        config = self._make_config_with_event(
+            post_shaping_cols=[], agg_windows=["30d"],
+            agg_value_cols=["amount"], agg_funcs=["sum"],
+        )
+        event_cfg = config.bronze_event["events"]
+        event_cfg.lifecycle = LifecycleConfig(include_recency_bucket=True)
+        event_cfg.post_shaping = [
+            TransformationStep(type=PipelineTransformationType.CAP_OUTLIER, column="days_since_last",
+                               parameters={}, rationale="cap days"),
+            TransformationStep(type=PipelineTransformationType.CAP_OUTLIER, column="nonexistent_col",
+                               parameters={}, rationale="cap phantom"),
+        ]
+        parser._reconcile_event_post_shaping(config)
+        assert len(event_cfg.post_shaping) == 1
+        assert event_cfg.post_shaping[0].column == "days_since_last"
+
+    def test_partial_window_match_drops_missing_combos(self):
+        parser = self._make_parser()
+        config = self._make_config_with_event(
+            post_shaping_cols=["amount_sum_all_time", "amount_mean_all_time", "amount_sum_30d"],
+            agg_windows=["all_time", "30d"], agg_value_cols=["amount"], agg_funcs=["sum"],
+        )
+        parser._reconcile_event_post_shaping(config)
+        kept_cols = {s.column for s in config.bronze_event["events"].post_shaping}
+        assert kept_cols == {"amount_sum_all_time", "amount_sum_30d"}
 
 
 class TestColumnTypeDeserialization:
