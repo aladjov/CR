@@ -1,5 +1,6 @@
 """Tests for TimeWindowAggregator - TDD approach."""
 from datetime import timedelta
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -1428,3 +1429,40 @@ class TestDeriveEntityDatetimeFeatures:
         original_cols = set(entity_datetime_df.columns)
         actual_new = [c for c in result.columns if c not in original_cols]
         assert set(new_cols) == set(actual_new)
+
+
+_TWA_MODULE = "customer_retention.stages.profiling.time_window_aggregator"
+
+
+class TestDatetimeDerivationUsesSafeToDatetime:
+
+    def test_derive_extra_calls_safe_to_datetime(self):
+        df = pd.DataFrame({
+            "ts": pd.to_datetime(["2024-01-10"]),
+            "col_a": pd.to_datetime(["2024-01-09"]),
+        })
+        with patch(f"{_TWA_MODULE}.safe_to_datetime", wraps=pd.to_datetime) as mock_safe:
+            derive_extra_datetime_features(df, "ts", ["col_a"])
+        assert mock_safe.call_count == 2
+
+    def test_derive_entity_calls_safe_to_datetime(self):
+        df = pd.DataFrame({
+            "ts": pd.to_datetime(["2024-01-10"]),
+            "col_a": pd.to_datetime(["2024-01-09"]),
+        })
+        with patch(f"{_TWA_MODULE}.safe_to_datetime", wraps=pd.to_datetime) as mock_safe:
+            derive_entity_datetime_features(df, "ts", ["col_a"])
+        assert mock_safe.call_count == 2
+
+    def test_derive_entity_milestone_calls_safe_to_datetime(self):
+        df = pd.DataFrame({
+            "ts": pd.to_datetime(["2024-01-10"]),
+            "start_created": pd.to_datetime(["2024-01-05"]),
+            "start_closed": pd.to_datetime(["2024-01-08"]),
+        })
+        with patch(f"{_TWA_MODULE}.safe_to_datetime", wraps=pd.to_datetime) as mock_safe:
+            derive_entity_datetime_features(
+                df, "ts", ["start_created", "start_closed"],
+                milestone_pairs=[("start_created", "start_closed")],
+            )
+        assert mock_safe.call_count == 5

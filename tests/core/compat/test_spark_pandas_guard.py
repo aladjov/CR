@@ -81,6 +81,11 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
         "pd.Timestamp fails when pd is pyspark.pandas (scalar not reimplemented)",
         "Use datetime.datetime (pandas Timestamp is a subclass) or import pandas as _pandas",
     ),
+    (
+        re.compile(r"native_pd\.to_datetime\(df\b"),
+        "native_pd.to_datetime(df[col]) triggers __iter__() on pyspark.pandas Series",
+        "Use safe_to_datetime(df[col]) from core.compat",
+    ),
 ]
 
 
