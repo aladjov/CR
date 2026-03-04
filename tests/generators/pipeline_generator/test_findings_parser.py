@@ -2598,7 +2598,7 @@ class TestFilterRecommendationsSkipDerivedColumns:
         assert "opened" in pre_cols
         assert "opened_velocity_pct" not in pre_cols
 
-    def test_pre_shaping_allows_all_when_no_raw_index(self):
+    def test_pre_shaping_skips_all_when_no_raw_index(self):
         from customer_retention.analysis.auto_explorer.layered_recommendations import (
             LayeredRecommendation,
             RecommendationRegistry,
@@ -2625,7 +2625,7 @@ class TestFilterRecommendationsSkipDerivedColumns:
         ]
         parser._apply_filter_recommendations(config, registry)
         pre_cols = [s.column for s in config.bronze_event["events"].pre_shaping]
-        assert "velocity_pct" in pre_cols
+        assert "velocity_pct" not in pre_cols
 
     def test_default_source_resolves_to_event_name(self):
         from customer_retention.analysis.auto_explorer.layered_recommendations import (

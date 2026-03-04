@@ -6,7 +6,7 @@ from typing import Any, Optional
 import numpy as np
 import pandas as _pandas
 
-from customer_retention.core.compat import as_spark_df
+from customer_retention.core.compat import as_spark_df, as_tz_naive
 
 
 @dataclass
@@ -134,7 +134,7 @@ def _pandas_bulk_datetime_discovery(
     total = len(df)
     result: dict[str, DatetimeDiscoveryCandidateStats] = {}
     for col in columns:
-        series = _pandas.to_datetime(df[col], errors="coerce")
+        series = as_tz_naive(_pandas.to_datetime(df[col], errors="coerce"))
         non_null = series.notna().sum()
         coverage = float(non_null / total) if total > 0 else 0.0
         clean = series.dropna()
@@ -580,6 +580,7 @@ def _pandas_datetime_stats(series: _pandas.Series) -> DatetimeColumnStats:
     except Exception:
         return DatetimeColumnStats()
 
+    clean = as_tz_naive(clean)
     min_date = clean.min()
     max_date = clean.max()
     date_range_days = (max_date - min_date).days

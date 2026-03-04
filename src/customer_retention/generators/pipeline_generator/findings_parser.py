@@ -472,6 +472,12 @@ class FindingsParser:
         self._apply_dedup_recommendations(config, registry)
         self._apply_filter_recommendations(config, registry)
 
+    def _resolve_bronze_source_name(self, config: PipelineConfig, target_bronze) -> Optional[str]:
+        for name, cfg in config.bronze.items():
+            if cfg is target_bronze:
+                return name
+        return None
+
     def _apply_bronze_recommendations(self, config: PipelineConfig, registry: RecommendationRegistry) -> None:
         sources_to_process = dict(registry.sources)
         if not sources_to_process and hasattr(registry, "bronze") and registry.bronze is not None:
@@ -480,11 +486,16 @@ class FindingsParser:
             target_bronze = self._find_bronze_config_for_source(config, source_name, bronze_recs.source_file)
             if target_bronze is None:
                 continue
+            resolved = self._resolve_bronze_source_name(config, target_bronze) or source_name
             for rec in bronze_recs.null_handling:
+                if not self._column_in_raw_source(resolved, rec.target_column):
+                    continue
                 step = self._map_bronze_null(rec)
                 if step:
                     target_bronze.transformations.append(step)
             for rec in bronze_recs.outlier_handling:
+                if not self._column_in_raw_source(resolved, rec.target_column):
+                    continue
                 step = self._map_bronze_outlier(rec)
                 if step:
                     target_bronze.transformations.append(step)
@@ -546,10 +557,15 @@ class FindingsParser:
                 if not step:
                     continue
                 target_event = self._find_event_config_for_source(config, source_name, bronze_recs.source_file)
-                resolved = self._resolve_event_source_name(config, target_event) if target_event else source_name
+                target_bronze = self._find_bronze_config_for_source(config, source_name, bronze_recs.source_file)
+                if target_event:
+                    resolved = self._resolve_event_source_name(config, target_event)
+                elif target_bronze:
+                    resolved = self._resolve_bronze_source_name(config, target_bronze) or source_name
+                else:
+                    resolved = source_name
                 if not self._column_in_raw_source(resolved, step.column):
                     continue
-                target_bronze = self._find_bronze_config_for_source(config, source_name, bronze_recs.source_file)
                 if target_bronze is not None:
                     target_bronze.transformations.append(step)
                 if target_event is not None:
@@ -563,7 +579,9 @@ class FindingsParser:
 
     def _column_in_raw_source(self, source_name: str, column: str) -> bool:
         raw_cols = self._raw_source_columns.get(source_name)
-        return raw_cols is None or column in raw_cols
+        if raw_cols is None:
+            return False
+        return column in raw_cols
 
     def _map_bronze_filter(self, rec) -> Optional[TransformationStep]:
         return TransformationStep(

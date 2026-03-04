@@ -47,6 +47,11 @@ class TypeDetector:
         "patient",
         "employee",
     ]
+    TIMESTAMP_PATTERNS = [
+        "timestamp", "datetime", "date", "time", "_at", "_on",
+        "created", "updated", "modified", "sent", "received",
+        "resolved", "expired", "started", "ended", "occurred",
+    ]
     CYCLICAL_DAY_PATTERNS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun", "monday", "tuesday", "wednesday"]
     CYCLICAL_MONTH_PATTERNS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
 
@@ -311,7 +316,7 @@ class TypeDetector:
         if not string_cols:
             return []
         distinct_counts = bulk_nunique(df, string_cols)
-        skip_patterns = self.IDENTIFIER_PATTERNS + self.TARGET_PATTERNS_PRIMARY + self.TARGET_PATTERNS_SECONDARY + self.TARGET_PATTERNS_GENERIC
+        skip_patterns = self.IDENTIFIER_PATTERNS + self.TARGET_PATTERNS_PRIMARY + self.TARGET_PATTERNS_SECONDARY + self.TARGET_PATTERNS_GENERIC + self.TIMESTAMP_PATTERNS
         text_columns = []
         for col in string_cols:
             col_lower = col.lower()

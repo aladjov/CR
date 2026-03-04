@@ -21,7 +21,7 @@ def _to_native_pandas(df: Any) -> Any:
 
 
 def optimize_delta(path: str, z_order_columns: Optional[List[str]] = None) -> None:
-    get_delta().optimize(path, z_order_columns or None)
+    _local_delta().optimize(path, z_order_columns or None)
 
 
 def _write_delta(df: Any, path: str) -> None:
