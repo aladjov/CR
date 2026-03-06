@@ -4,11 +4,14 @@ import logging
 
 import pytest
 
+from customer_retention.analysis.auto_explorer.active_dataset_store import save_active_dataset
 from customer_retention.analysis.auto_explorer.key_resolver import (
     resolve_entity_keys,
+    resolve_sample_ids_via_bridge,
     suggest_key_resolutions,
 )
 from customer_retention.analysis.auto_explorer.project_context import KeyResolutionStep
+from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 from customer_retention.core.compat import pd
 
 
@@ -294,3 +297,147 @@ class TestSuggestKeyResolutions:
         frames = {"case": case}
         suggestions = suggest_key_resolutions(frames, "ACCOUNT_ID")
         assert "case" not in suggestions
+
+
+class TestResolveSampleIdsViaBridge:
+    @pytest.fixture()
+    def namespace(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="bridge-test")
+        ns.setup()
+        return ns
+
+    def test_single_hop(self, namespace):
+        bridge_df = pd.DataFrame(
+            {"CASE_ID": [1, 2, 3], "ACCOUNT_ID": ["A1", "A2", "A3"]}
+        )
+        save_active_dataset(namespace, "case", bridge_df)
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="case",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        local_key, local_ids = resolve_sample_ids_via_bridge(
+            namespace, steps, ["A1", "A3"],
+        )
+        assert local_key == "CASE_ID"
+        assert local_ids == {1, 3}
+
+    def test_multi_hop(self, namespace):
+        item_df = pd.DataFrame(
+            {"ITEM_ID": [10, 20, 30], "ORDER_ID": [100, 200, 300]}
+        )
+        order_df = pd.DataFrame(
+            {"ORDER_ID": [100, 200, 300], "ACCOUNT_ID": ["A1", "A2", "A3"]}
+        )
+        save_active_dataset(namespace, "item", item_df)
+        save_active_dataset(namespace, "order", order_df)
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="item",
+                source_key="ITEM_ID",
+                bridge_key="ITEM_ID",
+                resolve_column="ORDER_ID",
+            ),
+            KeyResolutionStep(
+                bridge_dataset="order",
+                source_key="ORDER_ID",
+                bridge_key="ORDER_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        local_key, local_ids = resolve_sample_ids_via_bridge(
+            namespace, steps, ["A1", "A3"],
+        )
+        assert local_key == "ITEM_ID"
+        assert local_ids == {10, 30}
+
+    def test_empty_sample_ids(self, namespace):
+        bridge_df = pd.DataFrame(
+            {"CASE_ID": [1, 2], "ACCOUNT_ID": ["A1", "A2"]}
+        )
+        save_active_dataset(namespace, "case", bridge_df)
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="case",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        local_key, local_ids = resolve_sample_ids_via_bridge(
+            namespace, steps, [],
+        )
+        assert local_key == "CASE_ID"
+        assert local_ids == set()
+
+    def test_no_matching_ids(self, namespace):
+        bridge_df = pd.DataFrame(
+            {"CASE_ID": [1, 2], "ACCOUNT_ID": ["A1", "A2"]}
+        )
+        save_active_dataset(namespace, "case", bridge_df)
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="case",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        local_key, local_ids = resolve_sample_ids_via_bridge(
+            namespace, steps, ["Z99"],
+        )
+        assert local_key == "CASE_ID"
+        assert local_ids == set()
+
+    def test_bridge_not_saved_raises(self, namespace):
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="missing_bridge",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        with pytest.raises(FileNotFoundError):
+            resolve_sample_ids_via_bridge(namespace, steps, ["A1"])
+
+    def test_many_to_one(self, namespace):
+        bridge_df = pd.DataFrame(
+            {"CASE_ID": [1, 2, 3, 4], "ACCOUNT_ID": ["A1", "A1", "A2", "A2"]}
+        )
+        save_active_dataset(namespace, "case", bridge_df)
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="case",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        local_key, local_ids = resolve_sample_ids_via_bridge(
+            namespace, steps, ["A1"],
+        )
+        assert local_key == "CASE_ID"
+        assert local_ids == {1, 2}
+
+    def test_bridge_key_differs_from_source_key(self, namespace):
+        bridge_df = pd.DataFrame(
+            {"TICKET_ID": [1, 2, 3], "ACCOUNT_ID": ["A1", "A2", "A3"]}
+        )
+        save_active_dataset(namespace, "ticket", bridge_df)
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="ticket",
+                source_key="CASE_ID",
+                bridge_key="TICKET_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        local_key, local_ids = resolve_sample_ids_via_bridge(
+            namespace, steps, ["A1", "A2"],
+        )
+        assert local_key == "CASE_ID"
+        assert local_ids == {1, 2}

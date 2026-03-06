@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from customer_retention.analysis.auto_explorer.project_context import KeyResolutionStep
-from customer_retention.core.compat import pd, unique_overlap_counts
+from customer_retention.core.compat import native_pd, pd, unique_overlap_counts
+
+if TYPE_CHECKING:
+    from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +132,22 @@ def suggest_key_resolutions(
             suggestions[source_name] = [best_step]
 
     return suggestions
+
+
+def resolve_sample_ids_via_bridge(
+    namespace: RunNamespace,
+    steps: list[KeyResolutionStep],
+    sample_entity_ids: list,
+) -> tuple[str, set]:
+    from customer_retention.analysis.auto_explorer.active_dataset_store import load_active_dataset
+
+    current_ids = set(sample_entity_ids)
+    for step in reversed(steps):
+        bridge_df = native_pd.DataFrame(load_active_dataset(namespace, step.bridge_dataset))
+        matched = bridge_df[bridge_df[step.resolve_column].isin(current_ids)]
+        current_ids = set(matched[step.bridge_key].tolist())
+    source_key = steps[0].source_key
+    return source_key, current_ids
 
 
 def _id_like_columns(df: pd.DataFrame) -> list[str]:

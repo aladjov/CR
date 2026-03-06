@@ -24,7 +24,7 @@ from .exploration_manager import (
 from .explorer import DataExplorer
 from .findings import ColumnFinding, ExplorationFindings, TextProcessingMetadata, TimeSeriesMetadata
 from .intent_defaults import IntentDefaultsEngine, IntentSuggestion
-from .key_resolver import resolve_entity_keys, suggest_key_resolutions
+from .key_resolver import resolve_entity_keys, resolve_sample_ids_via_bridge, suggest_key_resolutions
 from .layered_recommendations import (
     ALL_AGGREGATIONS,
     CATEGORICAL_AGGREGATIONS,
@@ -140,6 +140,7 @@ __all__ = [
     "ALL_AGGREGATIONS",
     "KeyResolutionStep",
     "resolve_entity_keys",
+    "resolve_sample_ids_via_bridge",
     "suggest_key_resolutions",
     "RecommendationBuilder",
     "BronzeBuilder",
