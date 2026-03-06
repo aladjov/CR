@@ -290,12 +290,17 @@ class TestExplorerNoPandasConversion:
         assert len(df) == len(entity_df)
         assert df is entity_df
 
-    def test_no_to_pandas_import(self):
+    def test_to_pandas_only_on_bounded_sample(self):
         import inspect
 
         from customer_retention.analysis.auto_explorer import explorer
         source = inspect.getsource(explorer)
-        assert "to_pandas" not in source
+        lines_with_to_pandas = [
+            line.strip() for line in source.split("\n")
+            if "to_pandas()" in line and "import" not in line
+        ]
+        for line in lines_with_to_pandas:
+            assert "sample_df" in line, f"to_pandas used on non-sample data: {line}"
 
 
 class TestTemporalFeatureAnalyzerNoPandasConversion:

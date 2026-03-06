@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 from customer_retention.core.compat import (
     DataFrame,
     Series,
+    _is_spark_pandas,
     as_spark_df,
     head_as_list,
     is_dataframe,
@@ -124,6 +125,8 @@ class DataExplorer:
 
         with log_timing("df.head(200) sample", logger):
             sample_df = df.head(200)
+            if _is_spark_pandas(sample_df):
+                sample_df = sample_df.to_pandas()
 
         # --- Pass 1: detect types using sample + bulk distinct_counts (0 extra Spark jobs) ---
         active_cols = [c for c in df.columns if c not in TEMPORAL_METADATA_COLS]
