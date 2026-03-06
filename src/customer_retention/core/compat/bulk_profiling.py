@@ -232,6 +232,121 @@ def _spark_bulk_future_fractions(
     return result
 
 
+@dataclass
+class HistogramData:
+    bin_edges: list[float] = field(default_factory=list)
+    counts: list[int] = field(default_factory=list)
+
+    @property
+    def bin_centers(self) -> list[float]:
+        return [
+            (self.bin_edges[i] + self.bin_edges[i + 1]) / 2
+            for i in range(len(self.counts))
+        ]
+
+
+def bulk_histogram(
+    df: Any, column: str, nbins: int = 20,
+) -> HistogramData:
+    if column not in df.columns:
+        return HistogramData()
+    if hasattr(df, "to_spark"):
+        return _spark_bulk_histogram(df, column, nbins)
+    return _pandas_bulk_histogram(df, column, nbins)
+
+
+def _pandas_bulk_histogram(
+    df: Any, column: str, nbins: int,
+) -> HistogramData:
+    series = df[column].dropna()
+    finite = series[np.isfinite(series)]
+    if len(finite) == 0:
+        return HistogramData()
+    arr = finite.to_numpy()
+    lo, hi = float(arr.min()), float(arr.max())
+    if lo >= hi:
+        return HistogramData()
+    counts_arr, edges_arr = np.histogram(arr, bins=nbins, range=(lo, hi))
+    return HistogramData(
+        bin_edges=[round(float(e), 6) for e in edges_arr],
+        counts=[int(c) for c in counts_arr],
+    )
+
+
+def _spark_bulk_histogram(
+    df: Any, column: str, nbins: int,
+) -> HistogramData:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    spark_df = as_spark_df(df)
+    c = F.col(column)
+    finite = c.isNotNull() & (c != float("inf")) & (c != float("-inf"))
+    bounds = spark_df.agg(
+        F.min(F.when(finite, c)).alias("__lo__"),
+        F.max(F.when(finite, c)).alias("__hi__"),
+    ).collect()[0]
+    lo, hi = bounds["__lo__"], bounds["__hi__"]
+    if lo is None or hi is None or float(lo) >= float(hi):
+        return HistogramData()
+    lo, hi = float(lo), float(hi)
+    bin_width = (hi - lo) / nbins
+    edges = [lo + i * bin_width for i in range(nbins)] + [hi]
+    exprs: list[Any] = []
+    for i in range(nbins):
+        b_lo = edges[i]
+        b_hi = edges[i + 1]
+        cond = finite & (c >= b_lo) & (c <= b_hi if i == nbins - 1 else c < b_hi)
+        exprs.append(F.sum(cond.cast("int")).alias(f"__hbin_{i}__"))
+    row = spark_df.agg(*exprs).collect()[0]
+    counts = [_safe_int(row[f"__hbin_{i}__"]) for i in range(nbins)]
+    return HistogramData(
+        bin_edges=[round(e, 6) for e in edges],
+        counts=counts,
+    )
+
+
+def bulk_monthly_counts(
+    df: Any, column: str,
+) -> list[tuple[str, int]]:
+    if column not in df.columns:
+        return []
+    if hasattr(df, "to_spark"):
+        return _spark_bulk_monthly_counts(df, column)
+    return _pandas_bulk_monthly_counts(df, column)
+
+
+def _pandas_bulk_monthly_counts(
+    df: Any, column: str,
+) -> list[tuple[str, int]]:
+    from customer_retention.core.compat import safe_to_datetime
+
+    dates = safe_to_datetime(df[column], errors="coerce").dropna()
+    if len(dates) == 0:
+        return []
+    tz_free = dates.dt.tz_localize(None) if dates.dt.tz is not None else dates
+    counts = tz_free.dt.strftime("%Y-%m").value_counts().sort_index()
+    return [(str(k), int(v)) for k, v in zip(counts.index, counts.values)]
+
+
+def _spark_bulk_monthly_counts(
+    df: Any, column: str,
+) -> list[tuple[str, int]]:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    spark_df = as_spark_df(df)
+    c = F.col(column).cast("timestamp")
+    month_col = F.date_format(c, "yyyy-MM")
+    result = (
+        spark_df
+        .filter(c.isNotNull())
+        .groupBy(month_col.alias("month"))
+        .agg(F.count(F.lit(1)).alias("cnt"))
+        .orderBy("month")
+        .collect()
+    )
+    return [(str(row["month"]), int(row["cnt"])) for row in result]
+
+
 def bulk_nunique(df: Any, columns: list[str] | None = None) -> dict[str, int]:
     if columns is None:
         columns = list(df.columns)

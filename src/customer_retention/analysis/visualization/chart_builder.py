@@ -12,12 +12,18 @@ import plotly.graph_objects as go
 from customer_retention.core.compat import (
     DataFrame,
     Series,
+    _is_spark_pandas,
     batched_corr_matrix,
     head_as_list,
     safe_memory_usage_bytes,
     safe_to_datetime,
     to_pandas,
 )
+
+
+def _collect_value_counts(series: Series, n: int = 5) -> "Any":
+    vc = series.value_counts().head(n)
+    return to_pandas(vc) if _is_spark_pandas(vc) else vc
 
 from .number_formatter import NumberFormatter
 
@@ -2250,17 +2256,22 @@ class ChartBuilder:
         row: int, col: int, n_cols: int, formatter: "NumberFormatter"
     ) -> None:
         """Add numeric column tile with histogram and stats."""
-        clean = series.dropna()
-        if len(clean) == 0:
+        from customer_retention.core.compat.bulk_profiling import bulk_histogram
+
+        frame = series.to_frame()
+        hist = bulk_histogram(frame, frame.columns[0], nbins=20)
+        if not hist.counts:
             return
 
-        mean_val = type_metrics.get('mean', clean.mean())
-        median_val = type_metrics.get('median', clean.median())
-        std_val = type_metrics.get('std', clean.std())
+        mean_val = type_metrics.get('mean', 0)
+        median_val = type_metrics.get('median', 0)
+        std_val = type_metrics.get('std', 0)
         null_pct = metrics.get('null_percentage', 0)
 
-        fig.add_trace(go.Histogram(
-            x=clean, nbinsx=20,
+        fig.add_trace(go.Bar(
+            x=hist.bin_centers,
+            y=hist.counts,
+            width=[(hist.bin_edges[i + 1] - hist.bin_edges[i]) for i in range(len(hist.counts))],
             marker_color=self.colors["primary"],
             opacity=0.7,
             hovertemplate="Range: %{x}<br>Count: %{y}<extra></extra>"
@@ -2291,9 +2302,8 @@ class ChartBuilder:
         row: int, col: int, n_cols: int, formatter: "NumberFormatter"
     ) -> None:
         """Add categorical column tile with top categories bar."""
-        value_counts = series.value_counts().head(5)
+        value_counts = _collect_value_counts(series, 5)
 
-        # Gradient colors to show rank
         colors = [self.colors["info"]] + [self.colors["primary"]] * (len(value_counts) - 1)
 
         fig.add_trace(go.Bar(
@@ -2309,7 +2319,7 @@ class ChartBuilder:
         row: int, col: int, n_cols: int, formatter: "NumberFormatter"
     ) -> None:
         """Add binary column tile with horizontal bars showing labels clearly."""
-        value_counts = series.value_counts()
+        value_counts = _collect_value_counts(series, 5)
         if len(value_counts) == 0:
             return
 
@@ -2352,22 +2362,18 @@ class ChartBuilder:
         row: int, col: int, n_cols: int
     ) -> None:
         """Add datetime column tile with date range visualization."""
-        import warnings
+        from customer_retention.core.compat.bulk_profiling import bulk_monthly_counts
 
-        from customer_retention.core.compat import native_pd
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            dates = safe_to_datetime(native_pd.Series(series), errors='coerce').dropna()
-        if len(dates) == 0:
+        frame = series.to_frame()
+        monthly = bulk_monthly_counts(frame, frame.columns[0])
+        if not monthly:
             return
 
-        # Monthly distribution as area chart for cleaner look
-        tz_free = dates.dt.tz_localize(None) if dates.dt.tz is not None else dates
-        counts = tz_free.dt.strftime('%Y-%m').value_counts().sort_index()
-        x_labels = [str(p) for p in counts.index]
+        x_labels = [m for m, _ in monthly]
+        y_values = [c for _, c in monthly]
         fig.add_trace(go.Scatter(
             x=x_labels,
-            y=counts.to_numpy(),
+            y=y_values,
             mode='lines',
             fill='tozeroy',
             line={"color": self.colors["info"]},
@@ -2417,16 +2423,15 @@ class ChartBuilder:
         row: int, col: int, n_cols: int, formatter: "NumberFormatter"
     ) -> None:
         """Add target column tile with horizontal bars showing class distribution."""
-        value_counts = series.value_counts()
+        value_counts = _collect_value_counts(series, 4)
         total = len(series)
 
         colors_list = [self.colors["success"], self.colors["danger"]] + \
                      [self.colors["warning"], self.colors["info"]]
 
-        labels = [str(v) for v in value_counts.head(4).index]
-        percentages = [(c / total * 100) for c in value_counts.head(4).values]
+        labels = [str(v) for v in value_counts.index]
+        percentages = [(c / total * 100) for c in value_counts.values]
 
-        # Horizontal bars with labels on y-axis
         fig.add_trace(go.Bar(
             y=labels,
             x=percentages,
@@ -2458,7 +2463,7 @@ class ChartBuilder:
         row: int, col: int, n_cols: int, formatter: "NumberFormatter"
     ) -> None:
         """Add generic tile for unknown column types."""
-        value_counts = series.value_counts().head(5)
+        value_counts = _collect_value_counts(series, 5)
 
         fig.add_trace(go.Bar(
             x=value_counts.values,

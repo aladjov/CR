@@ -6,12 +6,15 @@ import pytest
 
 from customer_retention.core.compat.bulk_profiling import (
     BulkStats,
+    HistogramData,
     NumericColumnStats,
     PerColumnStats,
     _pandas_bulk_stats,
     _safe_float,
     _safe_int,
     bulk_future_fractions,
+    bulk_histogram,
+    bulk_monthly_counts,
     compute_bulk_stats,
 )
 
@@ -461,3 +464,81 @@ class TestBulkFutureFractions:
         df = pd.DataFrame({"ref": pd.Series(dtype="datetime64[ns]"), "col_a": pd.Series(dtype="datetime64[ns]")})
         result = bulk_future_fractions(df, "ref", ["col_a"])
         assert result["col_a"] == 0.0
+
+
+class TestBulkHistogram:
+    def test_basic_histogram(self):
+        df = pd.DataFrame({"x": np.arange(100, dtype=float)})
+        hist = bulk_histogram(df, "x", nbins=10)
+        assert len(hist.counts) == 10
+        assert len(hist.bin_edges) == 11
+        assert sum(hist.counts) == 100
+        assert hist.bin_edges[0] == pytest.approx(0.0, abs=0.01)
+        assert hist.bin_edges[-1] == pytest.approx(99.0, abs=0.01)
+
+    def test_bin_centers(self):
+        hist = HistogramData(bin_edges=[0.0, 1.0, 2.0], counts=[5, 3])
+        assert hist.bin_centers == [0.5, 1.5]
+
+    def test_missing_column(self):
+        df = pd.DataFrame({"y": [1, 2, 3]})
+        hist = bulk_histogram(df, "x", nbins=5)
+        assert hist.counts == []
+        assert hist.bin_edges == []
+
+    def test_all_nulls(self):
+        df = pd.DataFrame({"x": [np.nan, np.nan, np.nan]})
+        hist = bulk_histogram(df, "x", nbins=5)
+        assert hist.counts == []
+
+    def test_constant_column(self):
+        df = pd.DataFrame({"x": [5.0] * 50})
+        hist = bulk_histogram(df, "x", nbins=10)
+        assert hist.counts == []
+
+    def test_with_inf_and_nan(self):
+        values = list(range(50)) + [np.nan, np.inf, -np.inf]
+        df = pd.DataFrame({"x": [float(v) for v in values]})
+        hist = bulk_histogram(df, "x", nbins=10)
+        assert sum(hist.counts) == 50
+
+    def test_nbins_respected(self):
+        df = pd.DataFrame({"x": np.arange(1000, dtype=float)})
+        hist = bulk_histogram(df, "x", nbins=20)
+        assert len(hist.counts) == 20
+        assert len(hist.bin_edges) == 21
+
+
+class TestBulkMonthlyCounts:
+    def test_basic_monthly_counts(self):
+        dates = pd.date_range("2023-01-01", periods=365, freq="D")
+        df = pd.DataFrame({"dt": dates})
+        result = bulk_monthly_counts(df, "dt")
+        assert len(result) == 12
+        assert result[0][0] == "2023-01"
+        assert result[-1][0] == "2023-12"
+        assert sum(c for _, c in result) == 365
+
+    def test_missing_column(self):
+        df = pd.DataFrame({"other": [1, 2]})
+        result = bulk_monthly_counts(df, "dt")
+        assert result == []
+
+    def test_all_nulls(self):
+        df = pd.DataFrame({"dt": pd.Series([pd.NaT, pd.NaT])})
+        result = bulk_monthly_counts(df, "dt")
+        assert result == []
+
+    def test_sorted_output(self):
+        dates = pd.to_datetime(["2023-06-01", "2023-01-01", "2023-03-01", "2023-01-15"])
+        df = pd.DataFrame({"dt": dates})
+        result = bulk_monthly_counts(df, "dt")
+        months = [m for m, _ in result]
+        assert months == sorted(months)
+
+    def test_single_month(self):
+        dates = pd.to_datetime(["2023-05-01", "2023-05-15", "2023-05-28"])
+        df = pd.DataFrame({"dt": dates})
+        result = bulk_monthly_counts(df, "dt")
+        assert len(result) == 1
+        assert result[0] == ("2023-05", 3)
