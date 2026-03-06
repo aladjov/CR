@@ -392,6 +392,67 @@ class TestTableLoading:
         assert fp.row_count == 5
 
 
+class TestFingerprinterWithHints:
+    def test_known_entity_skips_detection(self):
+        from unittest.mock import patch
+        fp_er = DatasetFingerprinter()
+        with patch.object(fp_er._type_detector, "classify_structural_columns", wraps=fp_er._type_detector.classify_structural_columns) as mock_cls, \
+                patch.object(fp_er._type_detector, "detect_granularity", wraps=fp_er._type_detector.detect_granularity) as mock_gran:
+            fp = fp_er.fingerprint("events", _event_level_df(),
+                                   known_entity_column="customer_id",
+                                   known_time_column="event_timestamp",
+                                   known_granularity=DatasetGranularity.EVENT_LEVEL)
+            mock_cls.assert_not_called()
+            mock_gran.assert_not_called()
+        assert fp.entity_column == "customer_id"
+        assert fp.time_column == "event_timestamp"
+        assert fp.granularity == DatasetGranularity.EVENT_LEVEL
+
+    def test_known_hints_still_compute_temporal_span(self):
+        fp = DatasetFingerprinter().fingerprint(
+            "events", _event_level_df(),
+            known_entity_column="customer_id",
+            known_time_column="event_timestamp",
+            known_granularity=DatasetGranularity.EVENT_LEVEL,
+        )
+        assert fp.data_start == "2024-01-01"
+        assert fp.data_end == "2024-09-01"
+        assert fp.temporal_span_days is not None
+        assert fp.temporal_span_days > 0
+
+    def test_known_hints_still_compute_unique_entities(self):
+        fp = DatasetFingerprinter().fingerprint(
+            "events", _event_level_df(),
+            known_entity_column="customer_id",
+            known_time_column="event_timestamp",
+            known_granularity=DatasetGranularity.EVENT_LEVEL,
+        )
+        assert fp.unique_entities == 4
+        assert fp.avg_rows_per_entity == pytest.approx(2.5)
+
+    def test_known_entity_only_still_detects_granularity(self):
+        fp = DatasetFingerprinter().fingerprint(
+            "events", _event_level_df(),
+            known_entity_column="customer_id",
+        )
+        assert fp.entity_column == "customer_id"
+        assert fp.granularity == DatasetGranularity.EVENT_LEVEL
+
+    def test_known_granularity_only_still_detects_columns(self):
+        fp = DatasetFingerprinter().fingerprint(
+            "events", _event_level_df(),
+            known_granularity=DatasetGranularity.EVENT_LEVEL,
+        )
+        assert fp.granularity == DatasetGranularity.EVENT_LEVEL
+        assert fp.entity_column == "customer_id"
+
+    def test_no_hints_behaves_as_before(self):
+        fp = DatasetFingerprinter().fingerprint("events", _event_level_df())
+        assert fp.entity_column == "customer_id"
+        assert fp.granularity == DatasetGranularity.EVENT_LEVEL
+        assert fp.time_column == "event_timestamp"
+
+
 class TestFingerprintAllSkipsInaccessible:
     def _mock_spark(self, monkeypatch, mock_spark):
         monkeypatch.setattr(DatasetFingerprinter, "_ensure_spark", staticmethod(lambda: mock_spark))

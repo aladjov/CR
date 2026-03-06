@@ -4,7 +4,15 @@ from typing import List, Optional, Union
 
 logger = logging.getLogger(__name__)
 
-from customer_retention.core.compat import DataFrame, Series, head_as_list, is_dataframe, pd, safe_memory_usage_bytes
+from customer_retention.core.compat import (
+    DataFrame,
+    Series,
+    as_spark_df,
+    head_as_list,
+    is_dataframe,
+    pd,
+    safe_memory_usage_bytes,
+)
 from customer_retention.core.compat.bulk_profiling import (
     BinaryColumnStats,
     CategoricalColumnStats,
@@ -45,16 +53,24 @@ class DataExplorer:
         self, source: Union[str, DataFrame], target_hint: Optional[str] = None, name: Optional[str] = None
     ) -> ExplorationFindings:
         df, source_path, source_format = self._load_source(source)
-        findings = self._create_findings(df, source_path, source_format)
-        self._explore_all_columns(df, findings, target_hint)
-        self._calculate_overall_metrics(findings)
-        self._check_modeling_readiness(findings)
-        if self.visualize:
-            self._display_summary(findings)
-        self.last_findings_path = self._compute_findings_path(findings, name)
-        if self.save_findings:
-            self._save_findings(findings)
-        return findings
+        cached_spark_df = None
+        if hasattr(df, "to_spark"):
+            cached_spark_df = as_spark_df(df)
+            cached_spark_df.cache()
+        try:
+            findings = self._create_findings(df, source_path, source_format)
+            self._explore_all_columns(df, findings, target_hint)
+            self._calculate_overall_metrics(findings)
+            self._check_modeling_readiness(findings)
+            if self.visualize:
+                self._display_summary(findings)
+            self.last_findings_path = self._compute_findings_path(findings, name)
+            if self.save_findings:
+                self._save_findings(findings)
+            return findings
+        finally:
+            if cached_spark_df is not None:
+                cached_spark_df.unpersist()
 
     def _load_source(self, source: Union[str, DataFrame]) -> tuple:
         if is_dataframe(source):

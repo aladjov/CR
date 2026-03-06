@@ -796,3 +796,49 @@ class TestDataExplorerTypedBulkPath:
             # but _compute_type_metrics should not call profile() for bulk types
             # This is a soft check — at minimum, target is the only fallback
             assert ColumnType.TARGET in profiled_types
+
+
+class TestDataExplorerSparkCaching:
+    def test_spark_df_cached_during_explore(self):
+        from unittest.mock import MagicMock, patch
+
+        mock_spark_df = MagicMock()
+        mock_spark_df.cache.return_value = mock_spark_df
+
+        df = pd.DataFrame({"val": [1, 2, 3], "target": [0, 1, 0]})
+        df.to_spark = MagicMock(return_value=mock_spark_df)
+
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        with patch("customer_retention.analysis.auto_explorer.explorer.as_spark_df", return_value=mock_spark_df):
+            findings = explorer.explore(df, target_hint="target")
+
+        mock_spark_df.cache.assert_called_once()
+        mock_spark_df.unpersist.assert_called_once()
+        assert findings.row_count == 3
+
+    def test_spark_df_unpersisted_on_error(self):
+        from unittest.mock import MagicMock, patch
+
+        mock_spark_df = MagicMock()
+        mock_spark_df.cache.return_value = mock_spark_df
+
+        df = pd.DataFrame({"val": [1, 2, 3]})
+        df.to_spark = MagicMock(return_value=mock_spark_df)
+
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        with patch("customer_retention.analysis.auto_explorer.explorer.as_spark_df", return_value=mock_spark_df), \
+                patch("customer_retention.analysis.auto_explorer.explorer.compute_bulk_stats", side_effect=RuntimeError("boom")):
+            with pytest.raises(RuntimeError, match="boom"):
+                explorer.explore(df)
+
+        mock_spark_df.unpersist.assert_called_once()
+
+    def test_pandas_df_no_caching(self):
+        from unittest.mock import patch
+
+        df = pd.DataFrame({"val": [1, 2, 3], "target": [0, 1, 0]})
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        with patch("customer_retention.analysis.auto_explorer.explorer.as_spark_df") as mock_as_spark:
+            findings = explorer.explore(df, target_hint="target")
+            mock_as_spark.assert_not_called()
+        assert findings.row_count == 3

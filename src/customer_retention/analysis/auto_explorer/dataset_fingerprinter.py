@@ -45,19 +45,31 @@ class DatasetFingerprinter:
         self.nrows = nrows
         self._type_detector = TypeDetector()
 
-    def fingerprint(self, name: str, data: pd.DataFrame | str | Path) -> DatasetFingerprint:
+    def fingerprint(
+        self, name: str, data: pd.DataFrame | str | Path,
+        known_entity_column: Optional[str] = None, known_time_column: Optional[str] = None,
+        known_granularity: Optional[DatasetGranularity] = None,
+    ) -> DatasetFingerprint:
         full_row_count = self._count_rows(data)
         df = self._load(data)
         sampled = len(df) < full_row_count
 
-        entity_columns, time_columns, target_candidates = (
-            self._type_detector.classify_structural_columns(df, total_count=full_row_count)
-        )
-
-        granularity_result = self._type_detector.detect_granularity(df)
-        granularity = granularity_result.granularity
-        best_entity = granularity_result.entity_column or (entity_columns[0] if entity_columns else None)
-        best_time = granularity_result.time_column or (time_columns[0] if time_columns else None)
+        all_known = known_entity_column and known_time_column and known_granularity
+        if all_known:
+            entity_columns = [known_entity_column] if known_entity_column in df.columns else []
+            time_columns = [known_time_column] if known_time_column in df.columns else []
+            target_candidates: list[str] = []
+            granularity = known_granularity
+            best_entity = known_entity_column
+            best_time = known_time_column
+        else:
+            entity_columns, time_columns, target_candidates = (
+                self._type_detector.classify_structural_columns(df, total_count=full_row_count)
+            )
+            granularity_result = self._type_detector.detect_granularity(df)
+            granularity = known_granularity or granularity_result.granularity
+            best_entity = known_entity_column or granularity_result.entity_column or (entity_columns[0] if entity_columns else None)
+            best_time = known_time_column or granularity_result.time_column or (time_columns[0] if time_columns else None)
 
         unique_entities = None
         avg_rows = None
