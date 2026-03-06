@@ -398,6 +398,62 @@ class TestComputeTypedBulkStatsDispatch:
             assert isinstance(result, TypedBulkStats)
 
 
+class TestSparkTypedBulkStatsTypeFiltering:
+    def test_non_string_columns_filtered_from_text_cols(self):
+        from pyspark.sql.types import DoubleType, StringType, StructField, StructType
+
+        from customer_retention.core.compat.bulk_profiling import _spark_typed_bulk_stats
+
+        schema = StructType([
+            StructField("str_col", StringType(), True),
+            StructField("num_col", DoubleType(), True),
+        ])
+        mock_spark_df = MagicMock()
+        mock_spark_df.schema = schema
+        mock_row = MagicMock()
+        mock_row.__getitem__ = MagicMock(return_value=0)
+        mock_spark_df.agg.return_value.collect.return_value = [mock_row]
+        mock_spark_df.groupBy.return_value.agg.return_value.collect.return_value = [mock_row]
+
+        bulk = BulkStats(
+            total_count=10,
+            columns={
+                "str_col": PerColumnStats(null_count=0, distinct_count=5),
+                "num_col": PerColumnStats(null_count=0, distinct_count=5),
+            },
+        )
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=mock_spark_df):
+            result = _spark_typed_bulk_stats(
+                mock_spark_df, bulk,
+                text_cols=["str_col", "num_col"],
+                identifier_cols=["num_col"],
+            )
+
+        assert "str_col" in result.text
+        assert "num_col" not in result.text
+        assert "num_col" not in result.identifier
+
+    def test_all_non_string_text_cols_produces_empty_result(self):
+        from pyspark.sql.types import DoubleType, IntegerType, StructField, StructType
+
+        from customer_retention.core.compat.bulk_profiling import _spark_typed_bulk_stats
+
+        schema = StructType([
+            StructField("a", DoubleType(), True),
+            StructField("b", IntegerType(), True),
+        ])
+        mock_spark_df = MagicMock()
+        mock_spark_df.schema = schema
+        bulk = BulkStats(total_count=5, columns={})
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=mock_spark_df):
+            result = _spark_typed_bulk_stats(mock_spark_df, bulk, text_cols=["a", "b"])
+
+        assert result.text == {}
+        assert result.identifier == {}
+
+
 class TestPandasTypedBulkStatsNoColumns:
     def test_no_columns_returns_empty(self):
         df = pd.DataFrame({"x": [1, 2, 3]})

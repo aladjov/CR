@@ -972,6 +972,7 @@ def _spark_typed_bulk_stats(
     cardinality_limit: int = 10000,
 ) -> TypedBulkStats:
     import pyspark.sql.functions as F  # noqa: N812
+    from pyspark.sql.types import StringType
 
     spark_df = as_spark_df(df)
     result = TypedBulkStats()
@@ -981,6 +982,10 @@ def _spark_typed_bulk_stats(
     identifier_cols = identifier_cols or []
     binary_cols = binary_cols or []
     text_cols = text_cols or []
+
+    _string_fields = {f.name for f in spark_df.schema.fields if isinstance(f.dataType, StringType)}
+    text_cols = [c for c in text_cols if c in _string_fields]
+    identifier_cols = [c for c in identifier_cols if c in _string_fields]
 
     # --- Batch 5: Datetime stats (1 Spark job) ---
     if datetime_cols:
