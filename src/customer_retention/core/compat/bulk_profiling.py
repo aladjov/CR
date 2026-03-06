@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -7,6 +8,9 @@ import numpy as np
 import pandas as _pandas
 
 from customer_retention.core.compat import as_spark_df, as_tz_naive
+from customer_retention.core.compat.timing import log_timing, timed
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -195,6 +199,7 @@ def _spark_bulk_nunique(df: Any, columns: list[str]) -> dict[str, int]:
     return {c: int(row[f"__dist__{c}"]) for c in columns}
 
 
+@timed(label="compute_bulk_stats")
 def compute_bulk_stats(df: Any) -> BulkStats:
     if hasattr(df, "to_spark"):
         return _spark_bulk_stats(df)
@@ -229,35 +234,40 @@ def _pandas_bulk_stats(df: _pandas.DataFrame) -> BulkStats:
     if total_count == 0 or len(df.columns) == 0:
         return BulkStats(total_count=total_count)
 
-    null_counts = df.isnull().sum()
-    distinct_counts = df.nunique()
+    with log_timing("_pandas_bulk null_counts", logger):
+        null_counts = df.isnull().sum()
 
-    columns: dict[str, PerColumnStats] = {}
-    for col in df.columns:
-        mode_val, mode_freq = _compute_mode(df[col])
-        columns[col] = PerColumnStats(
-            null_count=int(null_counts[col]),
-            distinct_count=int(distinct_counts[col]),
-            most_common_value=mode_val,
-            most_common_frequency=mode_freq,
-        )
+    with log_timing("_pandas_bulk nunique", logger):
+        distinct_counts = df.nunique()
+
+    with log_timing("_pandas_bulk mode loop", logger, cols=len(df.columns)):
+        columns: dict[str, PerColumnStats] = {}
+        for col in df.columns:
+            mode_val, mode_freq = _compute_mode(df[col])
+            columns[col] = PerColumnStats(
+                null_count=int(null_counts[col]),
+                distinct_count=int(distinct_counts[col]),
+                most_common_value=mode_val,
+                most_common_frequency=mode_freq,
+            )
 
     numeric_cols = df.select_dtypes(include="number").columns.tolist()
     numeric: dict[str, NumericColumnStats] = {}
 
     if numeric_cols:
-        numeric_df = df[numeric_cols]
-        desc = numeric_df.describe(percentiles=[0.25, 0.5, 0.75])
+        with log_timing("_pandas_bulk describe+skew+kurt", logger):
+            numeric_df = df[numeric_cols]
+            desc = numeric_df.describe(percentiles=[0.25, 0.5, 0.75])
 
-        try:
-            skew_vals = numeric_df.skew()
-        except Exception:
-            skew_vals = _pandas.Series(dtype=float)
+            try:
+                skew_vals = numeric_df.skew()
+            except Exception:
+                skew_vals = _pandas.Series(dtype=float)
 
-        try:
-            kurt_vals = numeric_df.kurtosis()
-        except Exception:
-            kurt_vals = _pandas.Series(dtype=float)
+            try:
+                kurt_vals = numeric_df.kurtosis()
+            except Exception:
+                kurt_vals = _pandas.Series(dtype=float)
 
         for col in numeric_cols:
             null_count = int(null_counts[col])
@@ -311,7 +321,6 @@ def _pandas_bulk_stats(df: _pandas.DataFrame) -> BulkStats:
                 non_null_count=non_null_count,
                 histogram_bins=histogram_bins,
             )
-
     return BulkStats(total_count=total_count, columns=columns, numeric=numeric)
 
 
@@ -323,29 +332,31 @@ def _spark_bulk_stats(df: Any) -> BulkStats:
     all_cols = [c for c in spark_df.columns]
 
     # --- Batch 1: count + null counts + distinct counts ---
-    exprs: list[Any] = [F.count("*").alias("__total_count__")]
-    for col in all_cols:
-        exprs.append(F.sum(F.isnull(F.col(col)).cast("int")).alias(f"__null__{col}"))
-        exprs.append(F.approx_count_distinct(F.col(col)).alias(f"__dist__{col}"))
-
-    row1 = spark_df.agg(*exprs).collect()[0]
+    with log_timing("spark_bulk batch1 (count/null/distinct)", logger, cols=len(all_cols)):
+        exprs: list[Any] = [F.count("*").alias("__total_count__")]
+        for col in all_cols:
+            exprs.append(F.sum(F.isnull(F.col(col)).cast("int")).alias(f"__null__{col}"))
+            exprs.append(F.approx_count_distinct(F.col(col)).alias(f"__dist__{col}"))
+        row1 = spark_df.agg(*exprs).collect()[0]
     total_count = int(row1["__total_count__"])
 
     # --- Batch 1b: mode values for all columns ---
-    mode_exprs: list[Any] = [F.mode(F.col(c)).alias(f"__mode__{c}") for c in all_cols]
-    mode_row = spark_df.agg(*mode_exprs).collect()[0]
+    with log_timing("spark_bulk batch1b (mode)", logger, cols=len(all_cols)):
+        mode_exprs: list[Any] = [F.mode(F.col(c)).alias(f"__mode__{c}") for c in all_cols]
+        mode_row = spark_df.agg(*mode_exprs).collect()[0]
 
     # --- Batch 1c: mode counts ---
-    count_exprs: list[Any] = []
-    for col in all_cols:
-        mode_val = mode_row[f"__mode__{col}"]
-        if mode_val is not None:
-            count_exprs.append(
-                F.sum(F.when(F.col(col) == F.lit(mode_val), 1).otherwise(0)).alias(f"__mcount__{col}")
-            )
-        else:
-            count_exprs.append(F.lit(0).alias(f"__mcount__{col}"))
-    mode_count_row = spark_df.agg(*count_exprs).collect()[0]
+    with log_timing("spark_bulk batch1c (mode counts)", logger, cols=len(all_cols)):
+        count_exprs: list[Any] = []
+        for col in all_cols:
+            mode_val = mode_row[f"__mode__{col}"]
+            if mode_val is not None:
+                count_exprs.append(
+                    F.sum(F.when(F.col(col) == F.lit(mode_val), 1).otherwise(0)).alias(f"__mcount__{col}")
+                )
+            else:
+                count_exprs.append(F.lit(0).alias(f"__mcount__{col}"))
+        mode_count_row = spark_df.agg(*count_exprs).collect()[0]
 
     columns: dict[str, PerColumnStats] = {}
     for col in all_cols:
@@ -366,20 +377,20 @@ def _spark_bulk_stats(df: Any) -> BulkStats:
         return BulkStats(total_count=total_count, columns=columns, numeric=numeric)
 
     # --- Batch 2: numeric descriptive stats ---
-    exprs2: list[Any] = []
-    for col in numeric_cols:
-        c = F.col(col)
-        exprs2.append(F.mean(c).alias(f"__mean__{col}"))
-        exprs2.append(F.stddev(c).alias(f"__std__{col}"))
-        exprs2.append(F.min(c).alias(f"__min__{col}"))
-        exprs2.append(F.max(c).alias(f"__max__{col}"))
-        exprs2.append(F.percentile_approx(c, 0.25).alias(f"__q1__{col}"))
-        exprs2.append(F.percentile_approx(c, 0.5).alias(f"__med__{col}"))
-        exprs2.append(F.percentile_approx(c, 0.75).alias(f"__q3__{col}"))
-        exprs2.append(F.skewness(c).alias(f"__skew__{col}"))
-        exprs2.append(F.kurtosis(c).alias(f"__kurt__{col}"))
-
-    row2 = spark_df.agg(*exprs2).collect()[0]
+    with log_timing("spark_bulk batch2 (numeric stats)", logger, cols=len(numeric_cols)):
+        exprs2: list[Any] = []
+        for col in numeric_cols:
+            c = F.col(col)
+            exprs2.append(F.mean(c).alias(f"__mean__{col}"))
+            exprs2.append(F.stddev(c).alias(f"__std__{col}"))
+            exprs2.append(F.min(c).alias(f"__min__{col}"))
+            exprs2.append(F.max(c).alias(f"__max__{col}"))
+            exprs2.append(F.percentile_approx(c, 0.25).alias(f"__q1__{col}"))
+            exprs2.append(F.percentile_approx(c, 0.5).alias(f"__med__{col}"))
+            exprs2.append(F.percentile_approx(c, 0.75).alias(f"__q3__{col}"))
+            exprs2.append(F.skewness(c).alias(f"__skew__{col}"))
+            exprs2.append(F.kurtosis(c).alias(f"__kurt__{col}"))
+        row2 = spark_df.agg(*exprs2).collect()[0]
 
     batch2_results: dict[str, dict[str, Any]] = {}
     for col in numeric_cols:
@@ -400,56 +411,56 @@ def _spark_bulk_stats(df: Any) -> BulkStats:
         }
 
     # --- Batch 3: counts (zero, negative, inf) + outliers ---
-    exprs3: list[Any] = []
-    for col in numeric_cols:
-        c = F.col(col)
-        exprs3.append(F.sum((c == 0).cast("int")).alias(f"__zero__{col}"))
-        exprs3.append(F.sum((c < 0).cast("int")).alias(f"__neg__{col}"))
-        exprs3.append(F.sum(((c == float("inf")) | (c == float("-inf"))).cast("int")).alias(f"__inf__{col}"))
+    with log_timing("spark_bulk batch3 (counts/outliers)", logger, cols=len(numeric_cols)):
+        exprs3: list[Any] = []
+        for col in numeric_cols:
+            c = F.col(col)
+            exprs3.append(F.sum((c == 0).cast("int")).alias(f"__zero__{col}"))
+            exprs3.append(F.sum((c < 0).cast("int")).alias(f"__neg__{col}"))
+            exprs3.append(F.sum(((c == float("inf")) | (c == float("-inf"))).cast("int")).alias(f"__inf__{col}"))
 
-        b2 = batch2_results[col]
-        q1 = b2["q1"]
-        q3 = b2["q3"]
-        mean_val = b2["mean"]
-        std_val = b2["std"]
+            b2 = batch2_results[col]
+            q1 = b2["q1"]
+            q3 = b2["q3"]
+            mean_val = b2["mean"]
+            std_val = b2["std"]
 
-        if q1 is not None and q3 is not None:
-            iqr = q3 - q1
-            lower = q1 - 1.5 * iqr
-            upper = q3 + 1.5 * iqr
-            exprs3.append(F.sum(((c < lower) | (c > upper)).cast("int")).alias(f"__oiqr__{col}"))
-        else:
-            exprs3.append(F.lit(0).alias(f"__oiqr__{col}"))
+            if q1 is not None and q3 is not None:
+                iqr = q3 - q1
+                lower = q1 - 1.5 * iqr
+                upper = q3 + 1.5 * iqr
+                exprs3.append(F.sum(((c < lower) | (c > upper)).cast("int")).alias(f"__oiqr__{col}"))
+            else:
+                exprs3.append(F.lit(0).alias(f"__oiqr__{col}"))
 
-        if std_val is not None and std_val > 0 and mean_val is not None:
-            z_expr = F.abs((c - mean_val) / std_val)
-            exprs3.append(F.sum((z_expr > 3).cast("int")).alias(f"__ozscore__{col}"))
-        else:
-            exprs3.append(F.lit(0).alias(f"__ozscore__{col}"))
-
-    row3 = spark_df.agg(*exprs3).collect()[0]
+            if std_val is not None and std_val > 0 and mean_val is not None:
+                z_expr = F.abs((c - mean_val) / std_val)
+                exprs3.append(F.sum((z_expr > 3).cast("int")).alias(f"__ozscore__{col}"))
+            else:
+                exprs3.append(F.lit(0).alias(f"__ozscore__{col}"))
+        row3 = spark_df.agg(*exprs3).collect()[0]
 
     # --- Batch 4: histogram bin counts for all numeric columns ---
-    hist_exprs: list[Any] = []
-    hist_cols: list[str] = []
-    for col in numeric_cols:
-        b2 = batch2_results[col]
-        min_v, max_v = b2["min_val"], b2["max_val"]
-        if min_v is None or max_v is None or min_v >= max_v:
-            continue
-        hist_cols.append(col)
-        c = F.col(col)
-        finite = c.isNotNull() & (c != float("inf")) & (c != float("-inf"))
-        bin_width = (max_v - min_v) / 10
-        for i in range(10):
-            lo = min_v + i * bin_width
-            hi = min_v + (i + 1) * bin_width if i < 9 else max_v
-            cond = finite & (c >= lo) & (c <= hi if i == 9 else c < hi)
-            hist_exprs.append(F.sum(cond.cast("int")).alias(f"__hist_{i}__{col}"))
-
-    hist_row = None
-    if hist_exprs:
-        hist_row = spark_df.agg(*hist_exprs).collect()[0]
+    with log_timing("spark_bulk batch4 (histograms)", logger, cols=len(numeric_cols)):
+        hist_exprs: list[Any] = []
+        hist_cols: list[str] = []
+        for col in numeric_cols:
+            b2 = batch2_results[col]
+            min_v, max_v = b2["min_val"], b2["max_val"]
+            if min_v is None or max_v is None or min_v >= max_v:
+                continue
+            hist_cols.append(col)
+            c = F.col(col)
+            finite = c.isNotNull() & (c != float("inf")) & (c != float("-inf"))
+            bin_width = (max_v - min_v) / 10
+            for i in range(10):
+                lo = min_v + i * bin_width
+                hi = min_v + (i + 1) * bin_width if i < 9 else max_v
+                cond = finite & (c >= lo) & (c <= hi if i == 9 else c < hi)
+                hist_exprs.append(F.sum(cond.cast("int")).alias(f"__hist_{i}__{col}"))
+        hist_row = None
+        if hist_exprs:
+            hist_row = spark_df.agg(*hist_exprs).collect()[0]
 
     for col in numeric_cols:
         b2 = batch2_results[col]
@@ -489,6 +500,7 @@ def _spark_bulk_stats(df: Any) -> BulkStats:
     return BulkStats(total_count=total_count, columns=columns, numeric=numeric)
 
 
+@timed(label="compute_typed_bulk_stats")
 def compute_typed_bulk_stats(
     df: Any,
     bulk: BulkStats,
@@ -542,27 +554,32 @@ def _pandas_typed_bulk_stats(
 ) -> TypedBulkStats:
     result = TypedBulkStats()
 
-    for col in datetime_cols or []:
-        result.datetime[col] = _pandas_datetime_stats(df[col])
+    with log_timing("pandas_typed datetime", logger, cols=len(datetime_cols or [])):
+        for col in datetime_cols or []:
+            result.datetime[col] = _pandas_datetime_stats(df[col])
 
-    for col in categorical_cols or []:
-        distinct = bulk.columns[col].distinct_count if col in bulk.columns else 0
-        non_null = bulk.total_count - (bulk.columns[col].null_count if col in bulk.columns else 0)
-        result.categorical[col] = _pandas_categorical_stats(
-            df[col], distinct, non_null, cardinality_limit
-        )
+    with log_timing("pandas_typed categorical", logger, cols=len(categorical_cols or [])):
+        for col in categorical_cols or []:
+            distinct = bulk.columns[col].distinct_count if col in bulk.columns else 0
+            non_null = bulk.total_count - (bulk.columns[col].null_count if col in bulk.columns else 0)
+            result.categorical[col] = _pandas_categorical_stats(
+                df[col], distinct, non_null, cardinality_limit
+            )
 
-    for col in identifier_cols or []:
-        distinct = bulk.columns[col].distinct_count if col in bulk.columns else 0
-        non_null = bulk.total_count - (bulk.columns[col].null_count if col in bulk.columns else 0)
-        result.identifier[col] = _pandas_identifier_stats(df[col], distinct, non_null)
+    with log_timing("pandas_typed identifier", logger, cols=len(identifier_cols or [])):
+        for col in identifier_cols or []:
+            distinct = bulk.columns[col].distinct_count if col in bulk.columns else 0
+            non_null = bulk.total_count - (bulk.columns[col].null_count if col in bulk.columns else 0)
+            result.identifier[col] = _pandas_identifier_stats(df[col], distinct, non_null)
 
-    for col in binary_cols or []:
-        col_stats = bulk.columns.get(col)
-        result.binary[col] = _pandas_binary_stats(df[col], col_stats)
+    with log_timing("pandas_typed binary", logger, cols=len(binary_cols or [])):
+        for col in binary_cols or []:
+            col_stats = bulk.columns.get(col)
+            result.binary[col] = _pandas_binary_stats(df[col], col_stats)
 
-    for col in text_cols or []:
-        result.text[col] = _pandas_text_stats(df[col], bulk.total_count)
+    with log_timing("pandas_typed text", logger, cols=len(text_cols or [])):
+        for col in text_cols or []:
+            result.text[col] = _pandas_text_stats(df[col], bulk.total_count)
 
     return result
 
@@ -800,137 +817,140 @@ def _spark_typed_bulk_stats(
 
     # --- Batch 5: Datetime stats (1 Spark job) ---
     if datetime_cols:
-        dt_exprs: list[Any] = []
-        now = _pandas.Timestamp.now()
-        for col in datetime_cols:
-            c = F.col(col)
-            dt_exprs.append(F.min(c).alias(f"__dtmin__{col}"))
-            dt_exprs.append(F.max(c).alias(f"__dtmax__{col}"))
-            dt_exprs.append(
-                F.sum(F.when(c > F.lit(now), 1).otherwise(0)).alias(f"__dtfut__{col}")
-            )
-            for i, pd_date in enumerate(_PLACEHOLDER_DATES):
+        with log_timing("spark_typed batch5 (datetime)", logger, cols=len(datetime_cols)):
+            dt_exprs: list[Any] = []
+            now = _pandas.Timestamp.now()
+            for col in datetime_cols:
+                c = F.col(col)
+                dt_exprs.append(F.min(c).alias(f"__dtmin__{col}"))
+                dt_exprs.append(F.max(c).alias(f"__dtmax__{col}"))
                 dt_exprs.append(
-                    F.sum(F.when(c == F.lit(pd_date), 1).otherwise(0)).alias(
-                        f"__dtph{i}__{col}"
-                    )
+                    F.sum(F.when(c > F.lit(now), 1).otherwise(0)).alias(f"__dtfut__{col}")
                 )
-            dt_exprs.append(
-                F.sum(
-                    F.when(F.dayofweek(c).isin([1, 7]), 1).otherwise(0)
-                ).alias(f"__dtwknd__{col}")
-            )
-        dt_row = spark_df.agg(*dt_exprs).collect()[0]
+                for i, pd_date in enumerate(_PLACEHOLDER_DATES):
+                    dt_exprs.append(
+                        F.sum(F.when(c == F.lit(pd_date), 1).otherwise(0)).alias(
+                            f"__dtph{i}__{col}"
+                        )
+                    )
+                dt_exprs.append(
+                    F.sum(
+                        F.when(F.dayofweek(c).isin([1, 7]), 1).otherwise(0)
+                    ).alias(f"__dtwknd__{col}")
+                )
+            dt_row = spark_df.agg(*dt_exprs).collect()[0]
 
-        for col in datetime_cols:
-            min_val = dt_row[f"__dtmin__{col}"]
-            max_val = dt_row[f"__dtmax__{col}"]
-            if min_val is not None and max_val is not None:
-                min_ts = _pandas.Timestamp(min_val)
-                max_ts = _pandas.Timestamp(max_val)
-                date_range_days = (max_ts - min_ts).days
-                min_str = str(min_ts)
-                max_str = str(max_ts)
-            else:
-                date_range_days = None
-                min_str = None
-                max_str = None
-            ph_count = sum(
-                _safe_int(dt_row[f"__dtph{i}__{col}"])
-                for i in range(len(_PLACEHOLDER_DATES))
-            )
-            result.datetime[col] = DatetimeColumnStats(
-                min_date=min_str,
-                max_date=max_str,
-                date_range_days=date_range_days,
-                future_date_count=_safe_int(dt_row[f"__dtfut__{col}"]),
-                placeholder_count=ph_count,
-                weekend_count=_safe_int(dt_row[f"__dtwknd__{col}"]),
-            )
+            for col in datetime_cols:
+                min_val = dt_row[f"__dtmin__{col}"]
+                max_val = dt_row[f"__dtmax__{col}"]
+                if min_val is not None and max_val is not None:
+                    min_ts = _pandas.Timestamp(min_val)
+                    max_ts = _pandas.Timestamp(max_val)
+                    date_range_days = (max_ts - min_ts).days
+                    min_str = str(min_ts)
+                    max_str = str(max_ts)
+                else:
+                    date_range_days = None
+                    min_str = None
+                    max_str = None
+                ph_count = sum(
+                    _safe_int(dt_row[f"__dtph{i}__{col}"])
+                    for i in range(len(_PLACEHOLDER_DATES))
+                )
+                result.datetime[col] = DatetimeColumnStats(
+                    min_date=min_str,
+                    max_date=max_str,
+                    date_range_days=date_range_days,
+                    future_date_count=_safe_int(dt_row[f"__dtfut__{col}"]),
+                    placeholder_count=ph_count,
+                    weekend_count=_safe_int(dt_row[f"__dtwknd__{col}"]),
+                )
 
     # --- Batch 6: String/text length stats (1 Spark job) ---
     str_cols = list(set(identifier_cols + text_cols))
     if str_cols:
-        str_exprs: list[Any] = []
-        for col in str_cols:
-            c = F.col(col)
-            ln = F.length(c)
-            str_exprs.append(F.min(ln).alias(f"__smin__{col}"))
-            str_exprs.append(F.max(ln).alias(f"__smax__{col}"))
-            str_exprs.append(F.mean(ln.cast("double")).alias(f"__smean__{col}"))
-            str_exprs.append(
-                F.percentile_approx(ln, 0.5).alias(f"__smed__{col}")
-            )
-        for col in text_cols:
-            c = F.col(col)
-            str_exprs.append(
-                F.sum(F.when(c == "", 1).otherwise(0)).alias(f"__tempty__{col}")
-            )
-            str_exprs.append(
-                F.mean(F.size(F.split(c, r"\s+")).cast("double")).alias(
-                    f"__twcm__{col}"
+        with log_timing("spark_typed batch6 (string stats)", logger, cols=len(str_cols)):
+            str_exprs: list[Any] = []
+            for col in str_cols:
+                c = F.col(col)
+                ln = F.length(c)
+                str_exprs.append(F.min(ln).alias(f"__smin__{col}"))
+                str_exprs.append(F.max(ln).alias(f"__smax__{col}"))
+                str_exprs.append(F.mean(ln.cast("double")).alias(f"__smean__{col}"))
+                str_exprs.append(
+                    F.percentile_approx(ln, 0.5).alias(f"__smed__{col}")
                 )
-            )
-            str_exprs.append(
-                F.sum(F.when(c.rlike(r"\d"), 1).otherwise(0)).alias(
-                    f"__tdig__{col}"
+            for col in text_cols:
+                c = F.col(col)
+                str_exprs.append(
+                    F.sum(F.when(c == "", 1).otherwise(0)).alias(f"__tempty__{col}")
                 )
-            )
-            str_exprs.append(
-                F.sum(
-                    F.when(c.rlike(r'[!@#$%^&*(),.?":{}|<>]'), 1).otherwise(0)
-                ).alias(f"__tspec__{col}")
-            )
-            str_exprs.append(
-                F.sum(
-                    F.when(
-                        c.rlike(
-                            r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
-                        ),
-                        1,
-                    ).otherwise(0)
-                ).alias(f"__temail__{col}")
-            )
-            str_exprs.append(
-                F.sum(
-                    F.when(c.rlike(r"\d{3}[-.]?\d{3}[-.]?\d{4}"), 1).otherwise(0)
-                ).alias(f"__tphone__{col}")
-            )
-            str_exprs.append(
-                F.sum(
-                    F.when(c.rlike(r"\d{3}-\d{2}-\d{4}"), 1).otherwise(0)
-                ).alias(f"__tssn__{col}")
-            )
-            str_exprs.append(
-                F.sum(
-                    F.when(
-                        c.rlike(r"\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}"), 1
-                    ).otherwise(0)
-                ).alias(f"__tcc__{col}")
-            )
-        str_row = spark_df.agg(*str_exprs).collect()[0]
+                str_exprs.append(
+                    F.mean(F.size(F.split(c, r"\s+")).cast("double")).alias(
+                        f"__twcm__{col}"
+                    )
+                )
+                str_exprs.append(
+                    F.sum(F.when(c.rlike(r"\d"), 1).otherwise(0)).alias(
+                        f"__tdig__{col}"
+                    )
+                )
+                str_exprs.append(
+                    F.sum(
+                        F.when(c.rlike(r'[!@#$%^&*(),.?":{}|<>]'), 1).otherwise(0)
+                    ).alias(f"__tspec__{col}")
+                )
+                str_exprs.append(
+                    F.sum(
+                        F.when(
+                            c.rlike(
+                                r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+                            ),
+                            1,
+                        ).otherwise(0)
+                    ).alias(f"__temail__{col}")
+                )
+                str_exprs.append(
+                    F.sum(
+                        F.when(c.rlike(r"\d{3}[-.]?\d{3}[-.]?\d{4}"), 1).otherwise(0)
+                    ).alias(f"__tphone__{col}")
+                )
+                str_exprs.append(
+                    F.sum(
+                        F.when(c.rlike(r"\d{3}-\d{2}-\d{4}"), 1).otherwise(0)
+                    ).alias(f"__tssn__{col}")
+                )
+                str_exprs.append(
+                    F.sum(
+                        F.when(
+                            c.rlike(r"\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}"), 1
+                        ).otherwise(0)
+                    ).alias(f"__tcc__{col}")
+                )
+            str_row = spark_df.agg(*str_exprs).collect()[0]
 
-        for col in identifier_cols:
-            distinct = bulk.columns[col].distinct_count if col in bulk.columns else 0
-            null_count = bulk.columns[col].null_count if col in bulk.columns else 0
-            non_null = bulk.total_count - null_count
-            is_unique = distinct == non_null and non_null > 0
-            dup_count = 0
-            if not is_unique:
-                dup_row = (
-                    spark_df.groupBy(col)
-                    .count()
-                    .filter(F.col("count") > 1)
-                    .count()
+        with log_timing("spark_typed identifier groupBy loop", logger, cols=len(identifier_cols)):
+            for col in identifier_cols:
+                distinct = bulk.columns[col].distinct_count if col in bulk.columns else 0
+                null_count = bulk.columns[col].null_count if col in bulk.columns else 0
+                non_null = bulk.total_count - null_count
+                is_unique = distinct == non_null and non_null > 0
+                dup_count = 0
+                if not is_unique:
+                    dup_row = (
+                        spark_df.groupBy(col)
+                        .count()
+                        .filter(F.col("count") > 1)
+                        .count()
+                    )
+                    dup_count = int(dup_row)
+                result.identifier[col] = IdentifierColumnStats(
+                    is_unique=is_unique,
+                    duplicate_count=dup_count,
+                    length_min=_safe_int(str_row[f"__smin__{col}"]) or None,
+                    length_max=_safe_int(str_row[f"__smax__{col}"]) or None,
+                    length_mode=None,
                 )
-                dup_count = int(dup_row)
-            result.identifier[col] = IdentifierColumnStats(
-                is_unique=is_unique,
-                duplicate_count=dup_count,
-                length_min=_safe_int(str_row[f"__smin__{col}"]) or None,
-                length_max=_safe_int(str_row[f"__smax__{col}"]) or None,
-                length_mode=None,
-            )
 
         for col in text_cols:
             non_null = bulk.total_count - (
@@ -963,9 +983,6 @@ def _spark_typed_bulk_stats(
                 pii_cc_count=_safe_int(str_row[f"__tcc__{col}"]),
             )
 
-    # --- Identifier-only columns (not in str_cols already handled above) ---
-    # Already handled in the str_cols block
-
     # --- Batch 7: Categorical value counts (1-2 Spark jobs) ---
     eligible_cat_cols = [
         c for c in (categorical_cols or [])
@@ -976,125 +993,127 @@ def _spark_typed_bulk_stats(
         if c in bulk.columns and bulk.columns[c].distinct_count > cardinality_limit
     ]
 
-    for col in high_card_cat_cols:
-        distinct = bulk.columns[col].distinct_count
-        non_null = bulk.total_count - bulk.columns[col].null_count
-        result.categorical[col] = CategoricalColumnStats(
-            cardinality=distinct,
-            cardinality_ratio=round(distinct / non_null, 4) if non_null > 0 else 0.0,
-        )
-
-    if eligible_cat_cols:
-        stack_parts = []
-        for col in eligible_cat_cols:
-            stack_parts.append(
-                spark_df.select(
-                    F.lit(col).alias("__col_label__"),
-                    F.col(col).cast("string").alias("__value__"),
-                ).filter(F.col("__value__").isNotNull())
-            )
-
-        stacked = stack_parts[0]
-        for part in stack_parts[1:]:
-            stacked = stacked.unionAll(part)
-
-        vc_rows = (
-            stacked.groupBy("__col_label__", "__value__")
-            .count()
-            .collect()
-        )
-
-        col_vc: dict[str, dict[str, int]] = {c: {} for c in eligible_cat_cols}
-        for row in vc_rows:
-            label = row["__col_label__"]
-            if label in col_vc:
-                col_vc[label][row["__value__"]] = int(row["count"])
-
-        # Case variations batch
-        case_rows = (
-            stacked.select(
-                "__col_label__",
-                F.col("__value__").alias("__orig__"),
-                F.lower(F.col("__value__")).alias("__lower__"),
-            )
-            .groupBy("__col_label__", "__lower__")
-            .agg(F.collect_set("__orig__").alias("__variants__"))
-            .filter(F.size("__variants__") > 1)
-            .collect()
-        )
-
-        col_case_vars: dict[str, list[str]] = {c: [] for c in eligible_cat_cols}
-        for row in case_rows:
-            label = row["__col_label__"]
-            if label in col_case_vars:
-                variants = sorted(row["__variants__"])
-                col_case_vars[label].append(" vs ".join(variants))
-
-        for col in eligible_cat_cols:
-            vc = col_vc[col]
+    with log_timing("spark_typed batch7 (categorical)", logger, eligible=len(eligible_cat_cols), high_card=len(high_card_cat_cols)):
+        for col in high_card_cat_cols:
             distinct = bulk.columns[col].distinct_count
             non_null = bulk.total_count - bulk.columns[col].null_count
-            sorted_vc = sorted(vc.items(), key=lambda x: x[1], reverse=True)
-            top_categories = [(k, v) for k, v in sorted_vc[:10]]
-
-            rare_threshold = non_null * 0.01
-            rare_count = sum(1 for v in vc.values() if v < rare_threshold)
-            rare_rows = sum(v for v in vc.values() if v < rare_threshold)
-            rare_pct = round(rare_rows / non_null * 100, 2) if non_null > 0 else 0.0
-
             result.categorical[col] = CategoricalColumnStats(
                 cardinality=distinct,
                 cardinality_ratio=round(distinct / non_null, 4) if non_null > 0 else 0.0,
-                top_categories=top_categories,
-                value_counts=vc,
-                rare_category_count=rare_count,
-                rare_category_percentage=rare_pct,
-                case_variations=col_case_vars.get(col, [])[:10],
             )
 
-    # --- Binary stats (0 Spark jobs — derive from bulk + small collect) ---
-    for col in binary_cols:
-        clean_vc = (
-            spark_df.select(col)
-            .filter(F.col(col).isNotNull())
-            .groupBy(col)
-            .count()
-            .collect()
-        )
-        vc_dict = {row[col]: int(row["count"]) for row in clean_vc}
-        values_found = list(vc_dict.keys())
+        if eligible_cat_cols:
+            stack_parts = []
+            for col in eligible_cat_cols:
+                stack_parts.append(
+                    spark_df.select(
+                        F.lit(col).alias("__col_label__"),
+                        F.col(col).cast("string").alias("__value__"),
+                    ).filter(F.col("__value__").isNotNull())
+                )
 
-        true_count = int(sum(vc_dict.get(v, 0) for v in values_found if v in _TRUE_VALUES))
-        false_count = int(sum(vc_dict.get(v, 0) for v in values_found if v in _FALSE_VALUES))
-        if true_count == 0 and false_count == 0:
-            vc_values = list(vc_dict.values())
-            true_count = int(vc_values[0]) if len(vc_values) > 0 else 0
-            false_count = int(vc_values[1]) if len(vc_values) > 1 else 0
+            stacked = stack_parts[0]
+            for part in stack_parts[1:]:
+                stacked = stacked.unionAll(part)
 
-        total = true_count + false_count
-        true_pct = round(true_count / total * 100, 2) if total > 0 else 0.0
-        balance = (
-            round(max(true_count, false_count) / min(true_count, false_count), 2)
-            if min(true_count, false_count) > 0
-            else float("inf")
-        )
+            vc_rows = (
+                stacked.groupBy("__col_label__", "__value__")
+                .count()
+                .collect()
+            )
 
-        field_schema = None
-        for f in spark_df.schema.fields:
-            if f.name == col:
-                field_schema = f
-                break
-        from pyspark.sql.types import BooleanType
+            col_vc: dict[str, dict[str, int]] = {c: {} for c in eligible_cat_cols}
+            for row in vc_rows:
+                label = row["__col_label__"]
+                if label in col_vc:
+                    col_vc[label][row["__value__"]] = int(row["count"])
 
-        is_boolean = isinstance(field_schema.dataType, BooleanType) if field_schema else False
+            # Case variations batch
+            case_rows = (
+                stacked.select(
+                    "__col_label__",
+                    F.col("__value__").alias("__orig__"),
+                    F.lower(F.col("__value__")).alias("__lower__"),
+                )
+                .groupBy("__col_label__", "__lower__")
+                .agg(F.collect_set("__orig__").alias("__variants__"))
+                .filter(F.size("__variants__") > 1)
+                .collect()
+            )
 
-        result.binary[col] = BinaryColumnStats(
-            true_count=true_count,
-            false_count=false_count,
-            true_percentage=true_pct,
-            balance_ratio=balance,
-            is_boolean=is_boolean,
-        )
+            col_case_vars: dict[str, list[str]] = {c: [] for c in eligible_cat_cols}
+            for row in case_rows:
+                label = row["__col_label__"]
+                if label in col_case_vars:
+                    variants = sorted(row["__variants__"])
+                    col_case_vars[label].append(" vs ".join(variants))
+
+            for col in eligible_cat_cols:
+                vc = col_vc[col]
+                distinct = bulk.columns[col].distinct_count
+                non_null = bulk.total_count - bulk.columns[col].null_count
+                sorted_vc = sorted(vc.items(), key=lambda x: x[1], reverse=True)
+                top_categories = [(k, v) for k, v in sorted_vc[:10]]
+
+                rare_threshold = non_null * 0.01
+                rare_count = sum(1 for v in vc.values() if v < rare_threshold)
+                rare_rows = sum(v for v in vc.values() if v < rare_threshold)
+                rare_pct = round(rare_rows / non_null * 100, 2) if non_null > 0 else 0.0
+
+                result.categorical[col] = CategoricalColumnStats(
+                    cardinality=distinct,
+                    cardinality_ratio=round(distinct / non_null, 4) if non_null > 0 else 0.0,
+                    top_categories=top_categories,
+                    value_counts=vc,
+                    rare_category_count=rare_count,
+                    rare_category_percentage=rare_pct,
+                    case_variations=col_case_vars.get(col, [])[:10],
+                )
+
+    # --- Binary stats (per-column groupBy + collect) ---
+    with log_timing("spark_typed binary loop", logger, cols=len(binary_cols)):
+        for col in binary_cols:
+            clean_vc = (
+                spark_df.select(col)
+                .filter(F.col(col).isNotNull())
+                .groupBy(col)
+                .count()
+                .collect()
+            )
+            vc_dict = {row[col]: int(row["count"]) for row in clean_vc}
+            values_found = list(vc_dict.keys())
+
+            true_count = int(sum(vc_dict.get(v, 0) for v in values_found if v in _TRUE_VALUES))
+            false_count = int(sum(vc_dict.get(v, 0) for v in values_found if v in _FALSE_VALUES))
+            if true_count == 0 and false_count == 0:
+                vc_values = list(vc_dict.values())
+                true_count = int(vc_values[0]) if len(vc_values) > 0 else 0
+                false_count = int(vc_values[1]) if len(vc_values) > 1 else 0
+
+            total = true_count + false_count
+            true_pct = round(true_count / total * 100, 2) if total > 0 else 0.0
+            balance = (
+                round(max(true_count, false_count) / min(true_count, false_count), 2)
+                if min(true_count, false_count) > 0
+                else float("inf")
+            )
+
+            field_schema = None
+            for f in spark_df.schema.fields:
+                if f.name == col:
+                    field_schema = f
+                    break
+            from pyspark.sql.types import BooleanType
+
+            is_boolean = isinstance(field_schema.dataType, BooleanType) if field_schema else False
+
+            result.binary[col] = BinaryColumnStats(
+                true_count=true_count,
+                false_count=false_count,
+                true_percentage=true_pct,
+                balance_ratio=balance,
+                is_boolean=is_boolean,
+            )
 
     return result
 

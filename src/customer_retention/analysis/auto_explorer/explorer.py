@@ -24,6 +24,7 @@ from customer_retention.core.compat.bulk_profiling import (
     compute_bulk_stats,
     compute_typed_bulk_stats,
 )
+from customer_retention.core.compat.timing import log_timing
 from customer_retention.core.config.column_config import ColumnType
 from customer_retention.stages.profiling import ProfilerFactory, TypeDetector
 from customer_retention.stages.temporal import TEMPORAL_METADATA_COLS
@@ -52,25 +53,30 @@ class DataExplorer:
     def explore(
         self, source: Union[str, DataFrame], target_hint: Optional[str] = None, name: Optional[str] = None
     ) -> ExplorationFindings:
-        df, source_path, source_format = self._load_source(source)
-        cached_spark_df = None
-        if hasattr(df, "to_spark"):
-            cached_spark_df = as_spark_df(df)
-            cached_spark_df.cache()
-        try:
-            findings = self._create_findings(df, source_path, source_format)
-            self._explore_all_columns(df, findings, target_hint)
-            self._calculate_overall_metrics(findings)
-            self._check_modeling_readiness(findings)
-            if self.visualize:
-                self._display_summary(findings)
-            self.last_findings_path = self._compute_findings_path(findings, name)
-            if self.save_findings:
-                self._save_findings(findings)
-            return findings
-        finally:
-            if cached_spark_df is not None:
-                cached_spark_df.unpersist()
+        with log_timing("explore() total", logger):
+            df, source_path, source_format = self._load_source(source)
+            cached_spark_df = None
+            if hasattr(df, "to_spark"):
+                cached_spark_df = as_spark_df(df)
+                cached_spark_df.cache()
+            try:
+                with log_timing("_create_findings", logger):
+                    findings = self._create_findings(df, source_path, source_format)
+
+                with log_timing("_explore_all_columns", logger):
+                    self._explore_all_columns(df, findings, target_hint)
+
+                self._calculate_overall_metrics(findings)
+                self._check_modeling_readiness(findings)
+                if self.visualize:
+                    self._display_summary(findings)
+                self.last_findings_path = self._compute_findings_path(findings, name)
+                if self.save_findings:
+                    self._save_findings(findings)
+                return findings
+            finally:
+                if cached_spark_df is not None:
+                    cached_spark_df.unpersist()
 
     def _load_source(self, source: Union[str, DataFrame]) -> tuple:
         if is_dataframe(source):
@@ -112,31 +118,32 @@ class DataExplorer:
             return
 
         total_cols = len(df.columns)
-        logger.info("Computing bulk statistics for %d columns", total_cols)
-        bulk = compute_bulk_stats(df)
-        logger.info("Bulk statistics complete (%d numeric columns)", len(bulk.numeric))
 
-        # --- Collect sample once (1 Spark job) — replaces ~400 per-column jobs ---
-        sample_df = df.head(200)
+        with log_timing("compute_bulk_stats", logger, cols=total_cols):
+            bulk = compute_bulk_stats(df)
+
+        with log_timing("df.head(200) sample", logger):
+            sample_df = df.head(200)
 
         # --- Pass 1: detect types using sample + bulk distinct_counts (0 extra Spark jobs) ---
         active_cols = [c for c in df.columns if c not in TEMPORAL_METADATA_COLS]
-        col_types: dict[str, ColumnType] = {}
-        type_inferences: dict = {}
-        for column_name in active_cols:
-            col_stats = bulk.columns.get(column_name)
-            distinct_count = col_stats.distinct_count if col_stats else None
-            type_inf = self.type_detector.detect_type(
-                sample_df[column_name],
-                column_name,
-                distinct_count=distinct_count,
-                total_count=bulk.total_count,
-            )
-            if target_hint and column_name.lower() == target_hint.lower():
-                type_inf.inferred_type = ColumnType.TARGET
-                type_inf.evidence.append(f"Matched target hint: {target_hint}")
-            col_types[column_name] = type_inf.inferred_type
-            type_inferences[column_name] = type_inf
+        with log_timing("type detection", logger, cols=len(active_cols)):
+            col_types: dict[str, ColumnType] = {}
+            type_inferences: dict = {}
+            for column_name in active_cols:
+                col_stats = bulk.columns.get(column_name)
+                distinct_count = col_stats.distinct_count if col_stats else None
+                type_inf = self.type_detector.detect_type(
+                    sample_df[column_name],
+                    column_name,
+                    distinct_count=distinct_count,
+                    total_count=bulk.total_count,
+                )
+                if target_hint and column_name.lower() == target_hint.lower():
+                    type_inf.inferred_type = ColumnType.TARGET
+                    type_inf.evidence.append(f"Matched target hint: {target_hint}")
+                col_types[column_name] = type_inf.inferred_type
+                type_inferences[column_name] = type_inf
 
         # --- Classify columns by type for bulk pass 2 ---
         datetime_cols = [
@@ -150,43 +157,46 @@ class DataExplorer:
         identifier_cols = [c for c, t in col_types.items() if t == ColumnType.IDENTIFIER]
         binary_cols = [c for c, t in col_types.items() if t == ColumnType.BINARY]
         text_cols = [c for c, t in col_types.items() if t == ColumnType.TEXT]
+        numeric_cols = [c for c, t in col_types.items() if t in (ColumnType.NUMERIC_CONTINUOUS, ColumnType.NUMERIC_DISCRETE)]
+        logger.info(
+            "Column classification: dt=%d cat=%d id=%d bin=%d txt=%d num=%d",
+            len(datetime_cols), len(categorical_cols), len(identifier_cols),
+            len(binary_cols), len(text_cols), len(numeric_cols),
+        )
 
         # --- Pass 2: compute typed bulk stats (3-5 Spark jobs) ---
-        typed_bulk = compute_typed_bulk_stats(
-            df, bulk,
-            datetime_cols=datetime_cols,
-            categorical_cols=categorical_cols,
-            identifier_cols=identifier_cols,
-            binary_cols=binary_cols,
-            text_cols=text_cols,
-        )
-        logger.info(
-            "Typed bulk stats complete (dt=%d cat=%d id=%d bin=%d txt=%d)",
-            len(typed_bulk.datetime), len(typed_bulk.categorical),
-            len(typed_bulk.identifier), len(typed_bulk.binary), len(typed_bulk.text),
-        )
+        with log_timing("compute_typed_bulk_stats", logger, dt=len(datetime_cols), cat=len(categorical_cols), id=len(identifier_cols), bin=len(binary_cols), txt=len(text_cols)):
+            typed_bulk = compute_typed_bulk_stats(
+                df, bulk,
+                datetime_cols=datetime_cols,
+                categorical_cols=categorical_cols,
+                identifier_cols=identifier_cols,
+                binary_cols=binary_cols,
+                text_cols=text_cols,
+            )
 
         # --- Per-column loop: use sample series + bulk metrics, avoid profiler.profile() ---
-        processed = 0
-        log_interval = max(1, total_cols // 5)
-        for column_name in active_cols:
-            col_stats = bulk.columns.get(column_name)
-            numeric_stats = bulk.numeric.get(column_name)
-            column_finding = self._explore_column(
-                sample_df[column_name],
-                column_name,
-                target_hint,
-                bulk_total=bulk.total_count,
-                col_stats=col_stats,
-                numeric_stats=numeric_stats,
-                typed_bulk=typed_bulk,
-                pre_detected_type=type_inferences.get(column_name),
-            )
-            findings.columns[column_name] = column_finding
-            self._track_special_columns(findings, column_finding, col_stats=col_stats)
-            processed += 1
-            if processed % log_interval == 0:
-                logger.info("Profiled %d/%d columns", processed, total_cols)
+        with log_timing("per-column loop", logger, cols=len(active_cols)):
+            processed = 0
+            log_interval = max(1, total_cols // 5)
+            for column_name in active_cols:
+                col_stats = bulk.columns.get(column_name)
+                numeric_stats = bulk.numeric.get(column_name)
+                column_finding = self._explore_column(
+                    sample_df[column_name],
+                    column_name,
+                    target_hint,
+                    bulk_total=bulk.total_count,
+                    col_stats=col_stats,
+                    numeric_stats=numeric_stats,
+                    typed_bulk=typed_bulk,
+                    pre_detected_type=type_inferences.get(column_name),
+                )
+                findings.columns[column_name] = column_finding
+                self._track_special_columns(findings, column_finding, col_stats=col_stats)
+                processed += 1
+                if processed % log_interval == 0:
+                    logger.info("Profiled %d/%d columns", processed, total_cols)
 
     def _explore_column(
         self,
