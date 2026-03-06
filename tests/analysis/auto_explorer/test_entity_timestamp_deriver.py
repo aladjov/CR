@@ -98,6 +98,52 @@ class TestFutureDatesExcluded:
             assert "future_col" != result.column_name
 
 
+class TestDeriveWithPrecomputedStats:
+    def test_precomputed_stats_bypass_bulk_computation(self, deriver):
+        from unittest.mock import patch
+
+        from customer_retention.core.compat.bulk_profiling import DatetimeDiscoveryCandidateStats
+
+        df = pd.DataFrame({
+            "customer_id": [1, 2, 3],
+            "last_activity_date": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "revenue": [100.0, 200.0, 300.0],
+        })
+        precomputed = {
+            "last_activity_date": DatetimeDiscoveryCandidateStats(
+                min_date=pd.Timestamp("2024-01-01"),
+                max_date=pd.Timestamp("2024-03-01"),
+                coverage=1.0,
+                future_fraction=0.0,
+            ),
+        }
+        with patch("customer_retention.core.compat.bulk_profiling.bulk_datetime_discovery_stats") as mock_bulk:
+            result = deriver.derive(
+                df, target_column="revenue",
+                known_datetime_columns=["last_activity_date"],
+                datetime_stats=precomputed,
+            )
+            mock_bulk.assert_not_called()
+        assert result.method in ("direct", "coalesced")
+
+    def test_none_stats_triggers_bulk_computation(self, deriver):
+        from unittest.mock import patch
+
+        df = pd.DataFrame({
+            "customer_id": [1, 2, 3],
+            "last_activity_date": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "revenue": [100.0, 200.0, 300.0],
+        })
+        with patch("customer_retention.core.compat.bulk_profiling.bulk_datetime_discovery_stats") as mock_bulk:
+            mock_bulk.return_value = {}
+            deriver.derive(
+                df, target_column="revenue",
+                known_datetime_columns=["last_activity_date"],
+                datetime_stats=None,
+            )
+            mock_bulk.assert_called_once()
+
+
 class TestEntityTimestampResult:
     def test_dataclass_fields(self):
         result = EntityTimestampResult(column_name="ts", source_columns=["ts"], method="direct")

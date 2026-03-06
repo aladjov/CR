@@ -370,6 +370,19 @@ def as_spark_df(df: Any) -> Any:
         return df.to_spark()
 
 
+def timestamp_diff_seconds(a: Any, b: Any) -> Any:
+    if _is_spark_pandas(a):
+        import pyspark.sql.functions as F  # noqa: N812
+        a_epoch = a.spark.transform(lambda c: F.unix_timestamp(c.cast("timestamp")).cast("double"))
+        b_epoch = b.spark.transform(lambda c: F.unix_timestamp(c.cast("timestamp")).cast("double"))
+        return a_epoch - b_epoch
+    return timedelta_to_seconds(a - b)
+
+
+def timestamp_diff_days(a: Any, b: Any) -> Any:
+    return timestamp_diff_seconds(a, b) / _SECONDS_PER_DAY
+
+
 def timestamp_diffs_seconds(series: Any) -> Any:
     if _is_spark_pandas(series):
         import pyspark.sql.functions as F  # noqa: N812
@@ -1023,6 +1036,8 @@ __all__ = [
     "safe_memory_usage_bytes",
     "as_tz_naive",
     "groupby_multi_agg",
+    "timestamp_diff_seconds",
+    "timestamp_diff_days",
     "timestamp_diffs_seconds",
     "head_as_list",
     "unique_overlap_counts",

@@ -11,12 +11,14 @@ from customer_retention.core.compat import (
     Timedelta,
     Timestamp,
     as_tz_naive,
+    cut,
     ensure_timestamp,
     is_numeric_dtype,
     native_pd,
     safe_to_datetime,
     timedelta_to_days,
-    timedelta_to_seconds,
+    timestamp_diff_days,
+    timestamp_diff_seconds,
     to_pandas,
 )
 
@@ -353,7 +355,7 @@ def derive_extra_datetime_features(
         dow_name = f"{col}_dow"
         is_weekend_name = f"{col}_is_weekend"
 
-        df[delta_hours_name] = timedelta_to_seconds(parsed - time_series) / 3600
+        df[delta_hours_name] = timestamp_diff_seconds(parsed, time_series) / 3600
         df[hour_name] = parsed.dt.hour.astype("Float64")
         df[dow_name] = parsed.dt.dayofweek.astype("Float64")
         df[is_weekend_name] = (parsed.dt.dayofweek >= 5).astype("Float64")
@@ -361,7 +363,7 @@ def derive_extra_datetime_features(
         if col in _mask_set:
             future_mask = parsed > time_series
             for name in [delta_hours_name, hour_name, dow_name, is_weekend_name]:
-                df.loc[future_mask, name] = native_pd.NA
+                df[name] = df[name].where(~future_mask)
 
         new_columns.extend([delta_hours_name, hour_name, dow_name, is_weekend_name])
 
@@ -416,7 +418,7 @@ def derive_entity_datetime_features(
 def _derive_universal_features(
     df: DataFrame, time_series, col: str, parsed, mask_set: set,
 ) -> list[str]:
-    delta = timedelta_to_days(time_series - parsed)
+    delta = timestamp_diff_days(time_series, parsed)
     names = {
         "days_since": f"days_since_{col}",
         "days_until": f"days_until_{col}",
@@ -434,7 +436,7 @@ def _derive_universal_features(
         future_mask = parsed > time_series
         for name in names.values():
             if name != names["is_missing"]:
-                df.loc[future_mask, name] = native_pd.NA
+                df[name] = df[name].where(~future_mask)
 
     col_names = list(names.values())
     return col_names
@@ -454,13 +456,13 @@ def _derive_milestone_features(
     bucket_name = f"milestone_bucket_{end_col}"
     progress_name = f"contract_progress_{prefix}"
 
-    tenure = timedelta_to_days(time_series - start_parsed).astype("Float64")
-    dtm = timedelta_to_days(end_parsed - time_series).astype("Float64")
-    duration = timedelta_to_days(end_parsed - start_parsed).astype("Float64")
+    tenure = timestamp_diff_days(time_series, start_parsed).astype("Float64")
+    dtm = timestamp_diff_days(end_parsed, time_series).astype("Float64")
+    duration = timestamp_diff_days(end_parsed, start_parsed).astype("Float64")
     progress = (tenure / duration).clip(0, 2)
 
     edges = [-np.inf, -90, -30, -7, 0, 7, 30, 90, np.inf]
-    bucket = native_pd.cut(dtm, bins=edges, labels=False).astype("Float64")
+    bucket = cut(dtm, bins=edges, labels=False).astype("Float64")
 
     df[tenure_name] = tenure
     df[dtm_name] = dtm
@@ -476,7 +478,7 @@ def _derive_milestone_features(
         if col in mask_set:
             future_mask = parsed > time_series
             for name in col_names:
-                df.loc[future_mask, name] = native_pd.NA
+                df[name] = df[name].where(~future_mask)
 
     return col_names
 

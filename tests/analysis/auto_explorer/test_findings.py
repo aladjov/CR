@@ -745,3 +745,109 @@ class TestMergeFromDatasets:
         assert "customer_id" in merged.columns
         assert "entity_id" not in merged.columns
         assert merged.columns["customer_id"].inferred_type == ColumnType.IDENTIFIER
+
+
+class TestBuildDatetimeDiscoveryStats:
+    def _make_findings(self, datetime_cols, columns, row_count=100):
+        return ExplorationFindings(
+            source_path="/test",
+            source_format="csv",
+            row_count=row_count,
+            column_count=len(columns),
+            columns=columns,
+            datetime_columns=datetime_cols,
+        )
+
+    def test_basic_reconstruction(self):
+        columns = {
+            "created_at": ColumnFinding(
+                name="created_at",
+                inferred_type=ColumnType.DATETIME,
+                confidence=1.0,
+                evidence=["test"],
+                universal_metrics={"null_count": 10},
+                type_metrics={
+                    "min_date": "2023-01-01T00:00:00",
+                    "max_date": "2023-12-31T00:00:00",
+                    "future_date_count": 5,
+                },
+            ),
+        }
+        findings = self._make_findings(["created_at"], columns, row_count=100)
+        stats = findings.build_datetime_discovery_stats()
+        assert "created_at" in stats
+        s = stats["created_at"]
+        assert s.coverage == 0.9
+        assert s.future_fraction == 5 / 90
+        assert s.min_date is not None
+        assert s.max_date is not None
+
+    def test_empty_datetime_columns(self):
+        findings = self._make_findings([], {}, row_count=100)
+        stats = findings.build_datetime_discovery_stats()
+        assert stats == {}
+
+    def test_missing_column_in_columns_dict(self):
+        findings = self._make_findings(["nonexistent"], {}, row_count=100)
+        stats = findings.build_datetime_discovery_stats()
+        assert stats == {}
+
+    def test_zero_row_count(self):
+        columns = {
+            "ts": ColumnFinding(
+                name="ts",
+                inferred_type=ColumnType.DATETIME,
+                confidence=1.0,
+                evidence=["test"],
+                universal_metrics={"null_count": 0},
+                type_metrics={"min_date": None, "max_date": None, "future_date_count": 0},
+            ),
+        }
+        findings = self._make_findings(["ts"], columns, row_count=0)
+        stats = findings.build_datetime_discovery_stats()
+        assert stats["ts"].coverage == 0.0
+        assert stats["ts"].future_fraction == 0.0
+
+    def test_all_null_column(self):
+        columns = {
+            "ts": ColumnFinding(
+                name="ts",
+                inferred_type=ColumnType.DATETIME,
+                confidence=1.0,
+                evidence=["test"],
+                universal_metrics={"null_count": 100},
+                type_metrics={"min_date": None, "max_date": None, "future_date_count": 0},
+            ),
+        }
+        findings = self._make_findings(["ts"], columns, row_count=100)
+        stats = findings.build_datetime_discovery_stats()
+        assert stats["ts"].coverage == 0.0
+        assert stats["ts"].future_fraction == 0.0
+        assert stats["ts"].min_date is None
+
+    def test_multiple_datetime_columns(self):
+        columns = {
+            "created_at": ColumnFinding(
+                name="created_at",
+                inferred_type=ColumnType.DATETIME,
+                confidence=1.0,
+                evidence=["test"],
+                universal_metrics={"null_count": 0},
+                type_metrics={"min_date": "2023-01-01", "max_date": "2023-12-31", "future_date_count": 0},
+            ),
+            "updated_at": ColumnFinding(
+                name="updated_at",
+                inferred_type=ColumnType.DATETIME,
+                confidence=1.0,
+                evidence=["test"],
+                universal_metrics={"null_count": 50},
+                type_metrics={"min_date": "2023-06-01", "max_date": "2024-01-15", "future_date_count": 10},
+            ),
+        }
+        findings = self._make_findings(["created_at", "updated_at"], columns, row_count=100)
+        stats = findings.build_datetime_discovery_stats()
+        assert len(stats) == 2
+        assert stats["created_at"].coverage == 1.0
+        assert stats["created_at"].future_fraction == 0.0
+        assert stats["updated_at"].coverage == 0.5
+        assert stats["updated_at"].future_fraction == 10 / 50

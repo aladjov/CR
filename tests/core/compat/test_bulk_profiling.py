@@ -11,6 +11,7 @@ from customer_retention.core.compat.bulk_profiling import (
     _pandas_bulk_stats,
     _safe_float,
     _safe_int,
+    bulk_future_fractions,
     compute_bulk_stats,
 )
 
@@ -404,3 +405,59 @@ class TestPandasBulkStatsHistogram:
         df = pd.DataFrame({"val": [1, 2, 3, 4, 5]})
         result = _pandas_bulk_stats(df)
         assert result.numeric["val"].non_null_count == 5
+
+
+class TestBulkFutureFractions:
+    def test_basic_future_detection(self):
+        df = pd.DataFrame({
+            "ref": pd.to_datetime(["2024-01-10", "2024-01-10", "2024-01-10", "2024-01-10"]),
+            "col_a": pd.to_datetime(["2024-01-11", "2024-01-09", "2024-01-11", "2024-01-09"]),
+            "col_b": pd.to_datetime(["2024-01-09", "2024-01-09", "2024-01-09", "2024-01-09"]),
+        })
+        result = bulk_future_fractions(df, "ref", ["col_a", "col_b"])
+        assert result["col_a"] == 0.5
+        assert result["col_b"] == 0.0
+
+    def test_all_future(self):
+        df = pd.DataFrame({
+            "ref": pd.to_datetime(["2024-01-01", "2024-01-01"]),
+            "col_a": pd.to_datetime(["2024-06-01", "2024-06-01"]),
+        })
+        result = bulk_future_fractions(df, "ref", ["col_a"])
+        assert result["col_a"] == 1.0
+
+    def test_no_future(self):
+        df = pd.DataFrame({
+            "ref": pd.to_datetime(["2024-06-01", "2024-06-01"]),
+            "col_a": pd.to_datetime(["2024-01-01", "2024-01-01"]),
+        })
+        result = bulk_future_fractions(df, "ref", ["col_a"])
+        assert result["col_a"] == 0.0
+
+    def test_empty_check_cols(self):
+        df = pd.DataFrame({
+            "ref": pd.to_datetime(["2024-01-01"]),
+        })
+        result = bulk_future_fractions(df, "ref", [])
+        assert result == {}
+
+    def test_missing_reference_col(self):
+        df = pd.DataFrame({
+            "col_a": pd.to_datetime(["2024-01-01"]),
+        })
+        result = bulk_future_fractions(df, "ref", ["col_a"])
+        assert result == {}
+
+    def test_nonexistent_check_col_skipped(self):
+        df = pd.DataFrame({
+            "ref": pd.to_datetime(["2024-01-01"]),
+            "col_a": pd.to_datetime(["2024-06-01"]),
+        })
+        result = bulk_future_fractions(df, "ref", ["col_a", "nonexistent"])
+        assert "col_a" in result
+        assert "nonexistent" not in result
+
+    def test_empty_dataframe(self):
+        df = pd.DataFrame({"ref": pd.Series(dtype="datetime64[ns]"), "col_a": pd.Series(dtype="datetime64[ns]")})
+        result = bulk_future_fractions(df, "ref", ["col_a"])
+        assert result["col_a"] == 0.0

@@ -180,6 +180,58 @@ def _spark_bulk_datetime_discovery(
     return result
 
 
+def bulk_future_fractions(
+    df: Any, reference_col: str, check_cols: list[str],
+) -> dict[str, float]:
+    if not check_cols:
+        return {}
+    valid = [c for c in check_cols if c in df.columns and c != reference_col]
+    if not valid:
+        return {}
+    if reference_col not in df.columns:
+        return {}
+    if hasattr(df, "to_spark"):
+        return _spark_bulk_future_fractions(df, reference_col, valid)
+    return _pandas_bulk_future_fractions(df, reference_col, valid)
+
+
+def _pandas_bulk_future_fractions(
+    df: Any, reference_col: str, check_cols: list[str],
+) -> dict[str, float]:
+    ref = _pandas.to_datetime(df[reference_col], errors="coerce")
+    total = len(df)
+    result: dict[str, float] = {}
+    for c in check_cols:
+        parsed = _pandas.to_datetime(df[c], errors="coerce")
+        if total == 0:
+            result[c] = 0.0
+        else:
+            result[c] = float((parsed > ref).sum()) / total
+    return result
+
+
+def _spark_bulk_future_fractions(
+    df: Any, reference_col: str, check_cols: list[str],
+) -> dict[str, float]:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    spark_df = as_spark_df(df)
+    ref = F.col(reference_col).cast("timestamp")
+    exprs: list[Any] = [F.count(F.lit(1)).alias("__total__")]
+    for c in check_cols:
+        col_ts = F.col(c).cast("timestamp")
+        exprs.append(
+            F.sum(F.when(col_ts > ref, 1).otherwise(0)).alias(f"__fut__{c}")
+        )
+    row = spark_df.agg(*exprs).collect()[0]
+    total = int(row["__total__"])
+    result: dict[str, float] = {}
+    for c in check_cols:
+        fut = int(row[f"__fut__{c}"] or 0)
+        result[c] = float(fut / total) if total > 0 else 0.0
+    return result
+
+
 def bulk_nunique(df: Any, columns: list[str] | None = None) -> dict[str, int]:
     if columns is None:
         columns = list(df.columns)

@@ -11,6 +11,8 @@ from customer_retention.core.compat import (
     groupby_multi_agg,
     normalize_timestamp_columns,
     safe_to_datetime,
+    timestamp_diff_days,
+    timestamp_diff_seconds,
     timestamp_diffs_seconds,
 )
 
@@ -89,6 +91,54 @@ class TestTimestampDiffsSeconds:
         ts = pd.Series(pd.to_datetime(["2023-01-01 00:00:00", "2023-01-01 01:30:00"]))
         result = timestamp_diffs_seconds(ts)
         assert result.iloc[1] == 5400.0
+
+
+class TestTimestampDiffSeconds:
+    def test_basic_diff(self):
+        a = pd.Series(pd.to_datetime(["2024-01-02", "2024-01-03"]))
+        b = pd.Series(pd.to_datetime(["2024-01-01", "2024-01-01"]))
+        result = timestamp_diff_seconds(a, b)
+        assert result.iloc[0] == 86400.0
+        assert result.iloc[1] == 172800.0
+
+    def test_negative_diff(self):
+        a = pd.Series(pd.to_datetime(["2024-01-01"]))
+        b = pd.Series(pd.to_datetime(["2024-01-02"]))
+        result = timestamp_diff_seconds(a, b)
+        assert result.iloc[0] == -86400.0
+
+    def test_same_timestamps(self):
+        a = pd.Series(pd.to_datetime(["2024-01-01"]))
+        b = pd.Series(pd.to_datetime(["2024-01-01"]))
+        result = timestamp_diff_seconds(a, b)
+        assert result.iloc[0] == 0.0
+
+    def test_sub_day_precision(self):
+        a = pd.Series(pd.to_datetime(["2024-01-01 01:30:00"]))
+        b = pd.Series(pd.to_datetime(["2024-01-01 00:00:00"]))
+        result = timestamp_diff_seconds(a, b)
+        assert result.iloc[0] == 5400.0
+
+
+class TestTimestampDiffDays:
+    def test_basic_diff(self):
+        a = pd.Series(pd.to_datetime(["2024-01-11", "2024-01-05"]))
+        b = pd.Series(pd.to_datetime(["2024-01-01", "2024-01-01"]))
+        result = timestamp_diff_days(a, b)
+        assert np.isclose(result.iloc[0], 10.0)
+        assert np.isclose(result.iloc[1], 4.0)
+
+    def test_negative_diff(self):
+        a = pd.Series(pd.to_datetime(["2024-01-01"]))
+        b = pd.Series(pd.to_datetime(["2024-01-04"]))
+        result = timestamp_diff_days(a, b)
+        assert np.isclose(result.iloc[0], -3.0)
+
+    def test_fractional_days(self):
+        a = pd.Series(pd.to_datetime(["2024-01-01 12:00:00"]))
+        b = pd.Series(pd.to_datetime(["2024-01-01 00:00:00"]))
+        result = timestamp_diff_days(a, b)
+        assert np.isclose(result.iloc[0], 0.5)
 
 
 class TestInferEpochUnit:

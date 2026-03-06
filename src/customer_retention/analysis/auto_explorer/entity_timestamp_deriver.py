@@ -22,9 +22,9 @@ class EntityFeatureTimestampDeriver:
         self._order_analyzer = DatetimeOrderAnalyzer()
 
     def derive(self, df: Any, target_column: Optional[str] = None,
-               known_datetime_columns: Optional[list[str]] = None) -> EntityTimestampResult:
-        datetime_stats = None
-        if known_datetime_columns is not None:
+               known_datetime_columns: Optional[list[str]] = None,
+               datetime_stats: Optional[dict] = None) -> EntityTimestampResult:
+        if datetime_stats is None and known_datetime_columns is not None:
             from customer_retention.core.compat.bulk_profiling import bulk_datetime_discovery_stats
             valid_cols = [c for c in known_datetime_columns if c in df.columns]
             datetime_stats = bulk_datetime_discovery_stats(df, valid_cols) if valid_cols else {}

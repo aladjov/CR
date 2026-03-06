@@ -9,6 +9,17 @@ import yaml
 from customer_retention.core.config.column_config import ColumnConfig, ColumnType, DatasetGranularity
 
 
+def _parse_iso(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
 def _convert_to_native(obj: Any) -> Any:
     if obj is None:
         return None
@@ -297,6 +308,29 @@ class ExplorationFindings:
         content = p.read_text()
         path_str = str(path)
         return cls.from_yaml(content) if path_str.endswith((".yaml", ".yml")) else cls.from_json(content)
+
+    def build_datetime_discovery_stats(self) -> dict:
+        from customer_retention.core.compat.bulk_profiling import DatetimeDiscoveryCandidateStats
+
+        stats: dict = {}
+        for col_name in self.datetime_columns:
+            col = self.columns.get(col_name)
+            if col is None:
+                continue
+            tm = col.type_metrics
+            um = col.universal_metrics
+            null_count = um.get("null_count", 0)
+            non_null = self.row_count - null_count
+            coverage = non_null / self.row_count if self.row_count > 0 else 0.0
+            future_count = tm.get("future_date_count", 0)
+            future_fraction = future_count / non_null if non_null > 0 else 0.0
+            stats[col_name] = DatetimeDiscoveryCandidateStats(
+                min_date=_parse_iso(tm.get("min_date")),
+                max_date=_parse_iso(tm.get("max_date")),
+                coverage=coverage,
+                future_fraction=future_fraction,
+            )
+        return stats
 
     _NUMERIC_INFERRED = frozenset({ColumnType.NUMERIC_CONTINUOUS, ColumnType.NUMERIC_DISCRETE})
 
