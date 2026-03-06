@@ -313,39 +313,18 @@ class TestFromLatest:
         result = RunNamespace.from_latest(root=tmp_path)
         assert result.run_id == "real-run"
 
-    def test_finds_run_with_datasets_dir_only(self, tmp_path):
+    def test_ignores_run_with_datasets_dir_only(self, tmp_path):
         ns = RunNamespace(root=tmp_path, run_id="datasets-only")
         ns.setup()
         result = RunNamespace.from_latest(root=tmp_path)
-        assert result is not None
-        assert result.run_id == "datasets-only"
+        assert result is None
 
-    def test_prefers_project_context_over_datasets_only(self, tmp_path):
-        import time
-
-        ns_datasets = RunNamespace(root=tmp_path, run_id="datasets-only")
-        ns_datasets.setup()
-
-        time.sleep(0.05)
-
-        self._make_run_with_context(tmp_path, "has-context", mtime_offset=0)
-
+    def test_ignores_partially_initialized_run(self, tmp_path):
+        ns_partial = RunNamespace(root=tmp_path, run_id="partial-run")
+        ns_partial.setup()
+        self._make_run_with_context(tmp_path, "complete-run", mtime_offset=0)
         result = RunNamespace.from_latest(root=tmp_path)
-        assert result.run_id == "has-context"
-
-    def test_latest_datasets_only_wins_over_older_context(self, tmp_path):
-        self._make_run_with_context(tmp_path, "old-context", mtime_offset=-100)
-
-        ns_datasets = RunNamespace(root=tmp_path, run_id="new-datasets")
-        ns_datasets.setup()
-        import os
-        import time
-
-        base = time.time()
-        os.utime(ns_datasets.datasets_dir, (base, base))
-
-        result = RunNamespace.from_latest(root=tmp_path)
-        assert result.run_id == "new-datasets"
+        assert result.run_id == "complete-run"
 
 
     def test_mixed_aggregated_and_non_aggregated(self, tmp_path):
@@ -367,13 +346,14 @@ class TestFromLatest:
 
 class TestFromSentinel:
     def test_reads_run_id_from_sentinel(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="proj-abc12345")
+        ns.setup()
         sentinel = tmp_path / "runs" / ".active_run_id"
-        sentinel.parent.mkdir(parents=True)
         sentinel.write_text("proj-abc12345")
-        ns = RunNamespace.from_sentinel(root=tmp_path)
-        assert ns is not None
-        assert ns.run_id == "proj-abc12345"
-        assert ns.root == tmp_path
+        result = RunNamespace.from_sentinel(root=tmp_path)
+        assert result is not None
+        assert result.run_id == "proj-abc12345"
+        assert result.root == tmp_path
 
     def test_returns_none_when_no_sentinel(self, tmp_path):
         assert RunNamespace.from_sentinel(root=tmp_path) is None
@@ -385,24 +365,39 @@ class TestFromSentinel:
         assert RunNamespace.from_sentinel(root=tmp_path) is None
 
     def test_strips_whitespace(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="my-run-123")
+        ns.setup()
         sentinel = tmp_path / "runs" / ".active_run_id"
-        sentinel.parent.mkdir(parents=True)
         sentinel.write_text("  my-run-123  \n")
-        ns = RunNamespace.from_sentinel(root=tmp_path)
-        assert ns.run_id == "my-run-123"
+        result = RunNamespace.from_sentinel(root=tmp_path)
+        assert result.run_id == "my-run-123"
 
     def test_uses_explicit_root(self, tmp_path):
         custom_root = tmp_path / "custom"
+        ns = RunNamespace(root=custom_root, run_id="run-xyz")
+        ns.setup()
         sentinel = custom_root / "runs" / ".active_run_id"
-        sentinel.parent.mkdir(parents=True)
         sentinel.write_text("run-xyz")
-        ns = RunNamespace.from_sentinel(root=custom_root)
-        assert ns.root == custom_root
+        result = RunNamespace.from_sentinel(root=custom_root)
+        assert result.root == custom_root
 
     def test_returns_none_on_read_error(self, tmp_path):
         sentinel = tmp_path / "runs" / ".active_run_id"
         sentinel.parent.mkdir(parents=True)
         sentinel.mkdir()
+        assert RunNamespace.from_sentinel(root=tmp_path) is None
+
+    def test_returns_none_when_run_dir_missing(self, tmp_path):
+        sentinel = tmp_path / "runs" / ".active_run_id"
+        sentinel.parent.mkdir(parents=True)
+        sentinel.write_text("deleted-run-12345678")
+        assert RunNamespace.from_sentinel(root=tmp_path) is None
+
+    def test_returns_none_for_stale_sentinel_after_run_deleted(self, tmp_path):
+        ns = RunNamespace.create(root=tmp_path, project_name="proj")
+        ns.write_sentinel()
+        import shutil
+        shutil.rmtree(ns.run_dir)
         assert RunNamespace.from_sentinel(root=tmp_path) is None
 
 
@@ -426,8 +421,9 @@ class TestFromEnvOrLatest:
     def test_sentinel_used_on_databricks(self, tmp_path, monkeypatch):
         monkeypatch.delenv("CR_RUN_ID", raising=False)
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        ns_created = RunNamespace(root=tmp_path, run_id="sentinel-run-123")
+        ns_created.setup()
         sentinel = tmp_path / "runs" / ".active_run_id"
-        sentinel.parent.mkdir(parents=True)
         sentinel.write_text("sentinel-run-123")
         ns = RunNamespace.from_env_or_latest(root=tmp_path)
         assert ns is not None
@@ -454,13 +450,25 @@ class TestFromEnvOrLatest:
     def test_sentinel_takes_priority_over_from_latest(self, tmp_path, monkeypatch):
         monkeypatch.delenv("CR_RUN_ID", raising=False)
         monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
-        ns_created = RunNamespace(root=tmp_path, run_id="latest-run")
-        ns_created.setup()
-        ns_created.project_context_path.write_text("run_id: latest-run\n")
+        ns_latest = RunNamespace(root=tmp_path, run_id="latest-run")
+        ns_latest.setup()
+        ns_latest.project_context_path.write_text("run_id: latest-run\n")
+        ns_sentinel = RunNamespace(root=tmp_path, run_id="sentinel-run")
+        ns_sentinel.setup()
         sentinel = tmp_path / "runs" / ".active_run_id"
         sentinel.write_text("sentinel-run")
         ns = RunNamespace.from_env_or_latest(root=tmp_path)
         assert ns.run_id == "sentinel-run"
+
+    def test_stale_sentinel_falls_through_to_from_latest(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        ns_valid = RunNamespace(root=tmp_path, run_id="valid-run")
+        ns_valid.setup()
+        ns_valid.project_context_path.write_text("run_id: valid-run\n")
+        sentinel = tmp_path / "runs" / ".active_run_id"
+        sentinel.write_text("deleted-run")
+        ns = RunNamespace.from_env_or_latest(root=tmp_path)
+        assert ns.run_id == "valid-run"
 
     def test_returns_none_when_nothing_found(self, tmp_path, monkeypatch):
         monkeypatch.delenv("CR_RUN_ID", raising=False)

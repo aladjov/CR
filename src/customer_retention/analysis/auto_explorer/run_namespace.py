@@ -192,14 +192,8 @@ class RunNamespace:
 
     @staticmethod
     def _best_marker_mtime(run_dir: Path) -> Optional[float]:
-        best: Optional[float] = None
-        for marker_name in ("project_context.yaml", "datasets"):
-            marker = run_dir / marker_name
-            if marker.exists():
-                mtime = marker.stat().st_mtime
-                if best is None or mtime > best:
-                    best = mtime
-        return best
+        marker = run_dir / "project_context.yaml"
+        return marker.stat().st_mtime if marker.exists() else None
 
     @classmethod
     def from_env(cls, root: Optional[Path] = None) -> Optional[RunNamespace]:
@@ -226,7 +220,12 @@ class RunNamespace:
             run_id = cls.sentinel_path(root).read_text().strip()
         except (OSError, ValueError):
             return None
-        return cls(root=root, run_id=run_id) if run_id else None
+        if not run_id:
+            return None
+        candidate = cls(root=root, run_id=run_id)
+        if not candidate.run_dir.is_dir():
+            return None
+        return candidate
 
     def write_sentinel(self) -> None:
         sentinel = self.sentinel_path(self.root)
