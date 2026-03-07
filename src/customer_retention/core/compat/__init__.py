@@ -128,6 +128,16 @@ notna = _pandas.notna
 isna = _pandas.isna
 
 
+def resolve_column_name(columns: Any, name: str) -> str:
+    if name in columns:
+        return name
+    lower = name.lower()
+    for c in columns:
+        if c.lower() == lower:
+            return c
+    raise KeyError(f"Column '{name}' not found (tried case-insensitive). Available: {list(columns)}")
+
+
 def _is_native_pandas(obj: Any) -> bool:
     return isinstance(obj, (_pandas.DataFrame, _pandas.Series))
 

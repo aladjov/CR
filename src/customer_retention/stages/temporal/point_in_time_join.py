@@ -22,7 +22,13 @@ Example:
 
 from typing import Any
 
-from customer_retention.core.compat import as_tz_naive, is_datetime64_any_dtype, native_pd, to_datetime
+from customer_retention.core.compat import (
+    as_tz_naive,
+    is_datetime64_any_dtype,
+    native_pd,
+    resolve_column_name,
+    to_datetime,
+)
 
 
 class PointInTimeJoiner:
@@ -42,9 +48,13 @@ class PointInTimeJoiner:
         base_df: Any, feature_df: Any, entity_key: str,
         base_timestamp_col: str = "feature_timestamp", feature_timestamp_col: str = "feature_timestamp"
     ) -> Any:
-        if base_timestamp_col not in base_df.columns:
+        try:
+            base_timestamp_col = resolve_column_name(base_df.columns, base_timestamp_col)
+        except KeyError:
             raise ValueError(f"Base df missing timestamp column: {base_timestamp_col}")
-        if feature_timestamp_col not in feature_df.columns:
+        try:
+            feature_timestamp_col = resolve_column_name(feature_df.columns, feature_timestamp_col)
+        except KeyError:
             raise ValueError(f"Feature df missing timestamp column: {feature_timestamp_col}")
 
         feature_df = feature_df.rename(columns={feature_timestamp_col: "_feature_ts"})

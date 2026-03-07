@@ -5,6 +5,7 @@ from customer_retention.core.compat import (
     Timestamp,
     as_tz_naive,
     is_datetime64_any_dtype,
+    resolve_column_name,
     to_datetime,
     to_numeric,
 )
@@ -64,11 +65,22 @@ class DataQualityGate(ValidationGate):
 
         return issues
 
+    @staticmethod
+    def _resolve_keys(columns, keys: list[str]) -> list[str]:
+        resolved = []
+        for key in keys:
+            try:
+                resolved.append(resolve_column_name(columns, key))
+            except KeyError:
+                resolved.append(key)
+        return resolved
+
     def check_duplicates(self, df: DataFrame, bronze_config: BronzeConfig) -> list[ValidationIssue]:
         issues = []
         total_rows = len(df)
 
-        missing_keys = [key for key in bronze_config.dedup_keys if key not in df.columns]
+        dedup_keys = self._resolve_keys(df.columns, bronze_config.dedup_keys)
+        missing_keys = [key for key in dedup_keys if key not in df.columns]
         if missing_keys:
             issues.append(self.create_issue(
                 "DQ010", f"Deduplication keys not found: {', '.join(missing_keys)}",
@@ -77,7 +89,7 @@ class DataQualityGate(ValidationGate):
             ))
             return issues
 
-        duplicate_count = df.duplicated(subset=bronze_config.dedup_keys).sum()
+        duplicate_count = df.duplicated(subset=dedup_keys).sum()
         if duplicate_count == 0:
             return issues
 
@@ -85,14 +97,14 @@ class DataQualityGate(ValidationGate):
 
         if dup_pct > 0.1:
             issues.append(self.create_issue(
-                "DQ011", f"High duplicate rate on keys {bronze_config.dedup_keys}",
+                "DQ011", f"High duplicate rate on keys {dedup_keys}",
                 Severity.HIGH, None, duplicate_count, total_rows,
                 f"Review data source or adjust dedup strategy to {bronze_config.dedup_strategy.value}",
                 auto_fixable=True
             ))
         else:
             issues.append(self.create_issue(
-                "DQ012", f"Duplicates present on keys {bronze_config.dedup_keys}",
+                "DQ012", f"Duplicates present on keys {dedup_keys}",
                 Severity.MEDIUM, None, duplicate_count, total_rows,
                 f"Will be handled by deduplication with {bronze_config.dedup_strategy.value}",
                 auto_fixable=True
@@ -102,7 +114,10 @@ class DataQualityGate(ValidationGate):
 
     def check_target_column(self, df: DataFrame, config: PipelineConfig) -> list[ValidationIssue]:
         issues = []
-        target_column = config.modeling.target_column
+        try:
+            target_column = resolve_column_name(df.columns, config.modeling.target_column)
+        except KeyError:
+            target_column = config.modeling.target_column
 
         if target_column not in df.columns:
             issues.append(self.create_issue(
@@ -124,7 +139,10 @@ class DataQualityGate(ValidationGate):
 
     def check_class_imbalance(self, df: DataFrame, config: PipelineConfig) -> list[ValidationIssue]:
         issues = []
-        target_column = config.modeling.target_column
+        try:
+            target_column = resolve_column_name(df.columns, config.modeling.target_column)
+        except KeyError:
+            target_column = config.modeling.target_column
 
         if target_column not in df.columns:
             return issues

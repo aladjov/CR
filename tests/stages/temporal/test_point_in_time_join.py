@@ -222,3 +222,32 @@ class TestTzAwarePointInTimeJoin(TestPointInTimeJoiner):
         })
         report = PointInTimeJoiner.validate_temporal_integrity(df)
         assert report["valid"] is True
+
+
+class TestCaseInsensitiveColumns:
+    def test_join_features_lowercased_timestamp(self):
+        base_df = pd.DataFrame({
+            "entity_id": ["A", "B"],
+            "feature_timestamp": pd.to_datetime(["2024-03-01", "2024-05-01"]),
+            "base_value": [100, 200],
+        })
+        feature_df = pd.DataFrame({
+            "entity_id": ["A", "B"],
+            "feature_timestamp": pd.to_datetime(["2024-01-01", "2024-01-15"]),
+            "ext_feat": [10, 40],
+        })
+        result = PointInTimeJoiner.join_features(
+            base_df, feature_df, "entity_id",
+            base_timestamp_col="FEATURE_TIMESTAMP",
+            feature_timestamp_col="FEATURE_TIMESTAMP",
+        )
+        assert len(result) > 0
+
+    def test_join_features_missing_column_still_raises(self):
+        base_df = pd.DataFrame({"entity_id": ["A"], "ts": pd.to_datetime(["2024-01-01"])})
+        feature_df = pd.DataFrame({"entity_id": ["A"], "ts": pd.to_datetime(["2024-01-01"])})
+        with pytest.raises(ValueError, match="missing timestamp column"):
+            PointInTimeJoiner.join_features(
+                base_df, feature_df, "entity_id",
+                base_timestamp_col="NONEXISTENT",
+            )

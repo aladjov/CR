@@ -528,3 +528,39 @@ class TestClassifyActivitySegments:
 
         assert result.q25_threshold >= 0
         assert result.q75_threshold >= result.q25_threshold
+
+
+class TestCaseInsensitiveColumns:
+    def test_profile_with_lowercased_columns(self):
+        df = pd.DataFrame({
+            "customer_id": ["A", "A", "B"],
+            "transaction_date": pd.to_datetime(["2023-01-01", "2023-02-01", "2023-01-15"]),
+        })
+        profiler = TimeSeriesProfiler(
+            entity_column="CUSTOMER_ID", time_column="TRANSACTION_DATE"
+        )
+        result = profiler.profile(df)
+        assert result.unique_entities == 2
+        assert result.total_events == 3
+
+    def test_profile_with_uppercased_columns(self):
+        df = pd.DataFrame({
+            "CUSTOMER_ID": ["A", "A", "B"],
+            "TRANSACTION_DATE": pd.to_datetime(["2023-01-01", "2023-02-01", "2023-01-15"]),
+        })
+        profiler = TimeSeriesProfiler(
+            entity_column="customer_id", time_column="transaction_date"
+        )
+        result = profiler.profile(df)
+        assert result.unique_entities == 2
+
+    def test_profile_missing_column_still_raises(self):
+        df = pd.DataFrame({
+            "customer_id": ["A"],
+            "transaction_date": pd.to_datetime(["2023-01-01"]),
+        })
+        profiler = TimeSeriesProfiler(
+            entity_column="NONEXISTENT", time_column="transaction_date"
+        )
+        with pytest.raises(KeyError, match="NONEXISTENT"):
+            profiler.profile(df)

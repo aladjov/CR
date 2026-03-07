@@ -313,3 +313,21 @@ class TestResultDataclasses:
 
         assert d["column"] == "rate"
         assert d["rule_type"] == "percentage"
+
+
+class TestCaseInsensitiveKeyColumn:
+    def test_check_duplicates_lowercased_key(self):
+        df = pd.DataFrame({
+            "custid": [1, 2, 3, 1],
+            "name": ["A", "B", "C", "A"],
+        })
+        validator = DataValidator()
+        result = validator.check_duplicates(df, "CUSTID")
+        assert result.duplicate_rows > 0
+        assert result.key_column == "CUSTID"
+
+    def test_check_duplicates_missing_key_still_returns_critical(self):
+        df = pd.DataFrame({"custid": [1, 2]})
+        validator = DataValidator()
+        result = validator.check_duplicates(df, "NONEXISTENT")
+        assert result.severity == Severity.CRITICAL

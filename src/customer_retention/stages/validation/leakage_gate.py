@@ -10,6 +10,7 @@ from customer_retention.core.compat import (
     head_as_list,
     is_numeric_dtype,
     notna,
+    resolve_column_name,
     to_datetime,
 )
 from customer_retention.core.components.enums import Severity
@@ -68,9 +69,24 @@ class LeakageGate:
         self.enforce_point_in_time = enforce_point_in_time
         self.availability_coverage_threshold = availability_coverage_threshold
 
+    def _resolve_columns(self, df: DataFrame) -> None:
+        try:
+            self.target_column = resolve_column_name(df.columns, self.target_column)
+        except KeyError:
+            pass
+        try:
+            self.feature_timestamp_column = resolve_column_name(df.columns, self.feature_timestamp_column)
+        except KeyError:
+            pass
+        try:
+            self.label_timestamp_column = resolve_column_name(df.columns, self.label_timestamp_column)
+        except KeyError:
+            pass
+
     def run(
         self, df: DataFrame, feature_availability: Optional["FeatureAvailabilityMetadata"] = None
     ) -> LeakageCheckResult:
+        self._resolve_columns(df)
         critical_issues: List[LeakageIssue] = []
         high_issues: List[LeakageIssue] = []
         suspicious_features: List[str] = []

@@ -4,7 +4,7 @@ import logging
 from typing import TYPE_CHECKING, Optional
 
 from customer_retention.analysis.auto_explorer.project_context import KeyResolutionStep
-from customer_retention.core.compat import native_pd, pd, unique_overlap_counts
+from customer_retention.core.compat import native_pd, pd, resolve_column_name, unique_overlap_counts
 
 if TYPE_CHECKING:
     from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
@@ -14,14 +14,7 @@ logger = logging.getLogger(__name__)
 _ID_SUFFIXES = ("_ID", "_KEY", "_Id", "_Key", "_id", "_key")
 
 
-def _resolve_column_name(columns, name: str) -> str:
-    if name in columns:
-        return name
-    lower = name.lower()
-    for c in columns:
-        if c.lower() == lower:
-            return c
-    raise KeyError(f"Column '{name}' not found (tried case-insensitive). Available: {list(columns)}")
+_resolve_column_name = resolve_column_name
 
 
 def resolve_entity_keys(

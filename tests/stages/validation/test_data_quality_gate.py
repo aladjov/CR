@@ -369,3 +369,37 @@ class TestDataQualityGate:
         issues = gate.check_temporal_logic(df, config)
         assert len(issues) == 1
         assert issues[0].code == "DQ031"
+
+
+class TestCaseInsensitiveColumns:
+    def test_check_duplicates_lowercased_keys(self):
+        df = pd.DataFrame({
+            "custid": [1, 2, 3, 4, 5, 6, 7, 8, 9, 1],
+            "age": [25, 30, 35, 40, 45, 50, 55, 60, 65, 25]
+        })
+        config = BronzeConfig(dedup_keys=["CUSTID"])
+        gate = DataQualityGate()
+        issues = gate.check_duplicates(df, config)
+        assert any(i.code == "DQ012" for i in issues)
+
+    def test_check_target_column_lowercased(self):
+        df = pd.DataFrame({
+            "retained": [1, 0, 1, None, 1],
+            "age": [25, 30, 35, 40, 45],
+        })
+        config = PipelineConfig(project_name="test", data_sources=[])
+        config.modeling.target_column = "RETAINED"
+        gate = DataQualityGate()
+        issues = gate.check_target_column(df, config)
+        null_issues = [i for i in issues if i.code == "DQ021"]
+        assert len(null_issues) == 1
+
+    def test_check_class_imbalance_lowercased(self):
+        df = pd.DataFrame({
+            "retained": [1] * 99 + [0],
+        })
+        config = PipelineConfig(project_name="test", data_sources=[])
+        config.modeling.target_column = "RETAINED"
+        gate = DataQualityGate()
+        issues = gate.check_class_imbalance(df, config)
+        assert any(i.code == "DQ023" for i in issues)

@@ -558,3 +558,31 @@ class TestAntiPatternsIntegration:
                 lk009_issues = [i for i in result.critical_issues if "LK009" in str(i)]
                 # Snapshot should not have point-in-time violations
                 assert len(lk009_issues) == 0
+
+
+class TestCaseInsensitiveTimestampColumns:
+    def test_pit_violation_detected_with_lowercased_columns(self):
+        df = pd.DataFrame({
+            "feature_timestamp": pd.to_datetime(["2024-06-01", "2024-01-01"]),
+            "label_timestamp": pd.to_datetime(["2024-01-01", "2024-06-01"]),
+            "target": [0, 1],
+            "feat": [10, 20],
+        })
+        gate = LeakageGate(
+            target_column="target",
+            feature_timestamp_column="FEATURE_TIMESTAMP",
+            label_timestamp_column="LABEL_TIMESTAMP",
+        )
+        result = gate.run(df)
+        lk009 = [i for i in result.critical_issues if i.check_id == "LK009"]
+        assert len(lk009) == 1
+
+    def test_target_column_lowercased(self):
+        np.random.seed(42)
+        n = 200
+        target = np.random.choice([0, 1], n)
+        leaky = target + np.random.randn(n) * 0.05
+        df = pd.DataFrame({"leaky": leaky, "target": target})
+        gate = LeakageGate(target_column="TARGET")
+        result = gate.run(df)
+        assert len(result.critical_issues) > 0

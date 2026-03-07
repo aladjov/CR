@@ -14,6 +14,7 @@ from customer_retention.core.compat import (
     is_datetime64_any_dtype,
     is_numeric_dtype,
     pd,
+    resolve_column_name,
     to_datetime,
 )
 from customer_retention.core.components.enums import Severity
@@ -136,7 +137,11 @@ class DataValidator:
         DuplicateResult
             Detailed analysis of duplicates and conflicts
         """
-        if key_column not in df.columns:
+        try:
+            resolved_key = resolve_column_name(df.columns, key_column)
+        except KeyError:
+            resolved_key = key_column
+        if resolved_key not in df.columns:
             return DuplicateResult(
                 key_column=key_column,
                 total_rows=len(df),
@@ -149,10 +154,10 @@ class DataValidator:
             )
 
         total_rows = len(df)
-        unique_keys = df[key_column].nunique()
-        duplicate_mask = df[key_column].duplicated(keep=False)
+        unique_keys = df[resolved_key].nunique()
+        duplicate_mask = df[resolved_key].duplicated(keep=False)
         duplicate_rows = duplicate_mask.sum()
-        duplicate_keys = df[duplicate_mask][key_column].nunique()
+        duplicate_keys = df[duplicate_mask][resolved_key].nunique()
         duplicate_percentage = (duplicate_rows / total_rows * 100) if total_rows > 0 else 0.0
 
         # Check for exact duplicate rows
@@ -175,13 +180,13 @@ class DataValidator:
 
         if check_value_conflicts and duplicate_keys > 0:
             exclude = set(exclude_columns or [])
-            exclude.add(key_column)
+            exclude.add(resolved_key)
             value_columns = [c for c in df.columns if c not in exclude]
 
-            sample_keys = head_as_list(df[duplicate_mask][key_column].unique(), 5)
+            sample_keys = head_as_list(df[duplicate_mask][resolved_key].unique(), 5)
 
             for key_value in sample_keys:
-                key_rows = df[df[key_column] == key_value]
+                key_rows = df[df[resolved_key] == key_value]
                 for col in value_columns:
                     unique_vals = key_rows[col].dropna().unique()
                     if len(unique_vals) > 1:

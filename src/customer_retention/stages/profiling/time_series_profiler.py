@@ -15,6 +15,7 @@ from customer_retention.core.compat import (
     is_numeric_dtype,
     native_pd,
     pd,
+    resolve_column_name,
     timedelta_to_days,
     timestamp_diffs_seconds,
 )
@@ -222,6 +223,7 @@ class TimeSeriesProfiler:
         self.time_column = time_column
 
     def profile(self, df: DataFrame) -> TimeSeriesProfile:
+        self._resolve_columns(df)
         df = self._prepare_dataframe(df)
 
         if len(df) == 0:
@@ -249,6 +251,10 @@ class TimeSeriesProfiler:
             first_event_date=df[self.time_column].min(),
             last_event_date=df[self.time_column].max(),
         )
+
+    def _resolve_columns(self, df: DataFrame) -> None:
+        self.entity_column = resolve_column_name(df.columns, self.entity_column)
+        self.time_column = resolve_column_name(df.columns, self.time_column)
 
     def _validate_columns(self, df: DataFrame) -> None:
         if self.entity_column not in df.columns:
