@@ -525,6 +525,36 @@ class TestDatabricksDeltaPathNormalization:
         assert DatabricksDelta._normalize_path("dbfs:/mnt/data/table") == "dbfs:/mnt/data/table"
 
 
+class TestDatabricksDeltaReadMissingTable:
+    def test_read_raises_file_not_found_for_missing_delta_table(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            storage.spark.read.format("delta").load.side_effect = Exception(
+                "[DELTA_TABLE_NOT_FOUND] Delta table `/fake/path` doesn't exist."
+            )
+            with pytest.raises(FileNotFoundError, match="/fake/path"):
+                storage.read("/fake/path")
+
+    def test_read_propagates_other_spark_exceptions(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            storage.spark.read.format("delta").load.side_effect = RuntimeError("disk full")
+            with pytest.raises(RuntimeError, match="disk full"):
+                storage.read("/fake/path")
+
+
 class TestDatabricksDeltaReadNormalizesPath:
     def test_read_normalizes_path(self):
         from unittest.mock import MagicMock, patch

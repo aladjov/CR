@@ -41,7 +41,12 @@ class DatabricksDelta(DeltaStorage):
         reader = self.spark.read.format("delta")
         if version is not None:
             reader = reader.option("versionAsOf", version)
-        return self._as_pandas_api(reader.load(path))
+        try:
+            return self._as_pandas_api(reader.load(path))
+        except Exception as exc:
+            if "DELTA_TABLE_NOT_FOUND" in str(exc):
+                raise FileNotFoundError(f"Delta table not found: {path}") from exc
+            raise
 
     def _to_spark_df(self, df: pd.DataFrame) -> Any:
         from customer_retention.core.compat import normalize_timestamp_columns, pandas_dtype_to_spark_schema
