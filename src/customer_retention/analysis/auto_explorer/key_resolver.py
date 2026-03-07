@@ -14,6 +14,16 @@ logger = logging.getLogger(__name__)
 _ID_SUFFIXES = ("_ID", "_KEY", "_Id", "_Key", "_id", "_key")
 
 
+def _resolve_column_name(columns, name: str) -> str:
+    if name in columns:
+        return name
+    lower = name.lower()
+    for c in columns:
+        if c.lower() == lower:
+            return c
+    raise KeyError(f"Column '{name}' not found (tried case-insensitive). Available: {list(columns)}")
+
+
 def resolve_entity_keys(
     loaded_frames: dict[str, pd.DataFrame],
     resolutions: dict[str, list[KeyResolutionStep]],
@@ -144,8 +154,10 @@ def resolve_sample_ids_via_bridge(
     current_ids = set(sample_entity_ids)
     for step in reversed(steps):
         bridge_df = native_pd.DataFrame(load_active_dataset(namespace, step.bridge_dataset))
-        matched = bridge_df[bridge_df[step.resolve_column].isin(current_ids)]
-        current_ids = set(matched[step.bridge_key].tolist())
+        resolve_col = _resolve_column_name(bridge_df.columns, step.resolve_column)
+        bridge_key = _resolve_column_name(bridge_df.columns, step.bridge_key)
+        matched = bridge_df[bridge_df[resolve_col].isin(current_ids)]
+        current_ids = set(matched[bridge_key].tolist())
     source_key = steps[0].source_key
     return source_key, current_ids
 

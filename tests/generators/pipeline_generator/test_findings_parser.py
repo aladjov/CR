@@ -5096,6 +5096,21 @@ class TestEventAggregatedColumns:
             "event_count_all_time", "event_count_30d",
         }
 
+    def test_aggregation_excludes_per_column_count(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import AggregationWindowConfig
+        agg = AggregationWindowConfig(
+            windows=["7d", "180d"], value_columns=["send_hour"],
+            agg_funcs=["sum", "mean", "count"],
+        )
+        cols = FindingsParser._event_aggregated_columns(self._make_event_cfg(aggregation=agg))
+        assert "send_hour_sum_7d" in cols
+        assert "send_hour_mean_7d" in cols
+        assert "event_count_7d" in cols
+        assert "event_count_180d" in cols
+        assert "send_hour_count_7d" not in cols
+        assert "send_hour_count_180d" not in cols
+
     def test_categorical_columns(self):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
         from customer_retention.generators.pipeline_generator.models import AggregationWindowConfig

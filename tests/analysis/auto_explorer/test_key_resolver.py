@@ -441,3 +441,38 @@ class TestResolveSampleIdsViaBridge:
         )
         assert local_key == "CASE_ID"
         assert local_ids == {1, 2}
+
+    def test_case_insensitive_column_match(self, namespace):
+        bridge_df = pd.DataFrame(
+            {"case_id": [1, 2, 3], "account_id": ["A1", "A2", "A3"]}
+        )
+        save_active_dataset(namespace, "case", bridge_df)
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="case",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        local_key, local_ids = resolve_sample_ids_via_bridge(
+            namespace, steps, ["A1", "A3"],
+        )
+        assert local_key == "CASE_ID"
+        assert local_ids == {1, 3}
+
+    def test_missing_column_raises(self, namespace):
+        bridge_df = pd.DataFrame(
+            {"UNRELATED_KEY": [1, 2], "UNRELATED_COL": ["X", "Y"]}
+        )
+        save_active_dataset(namespace, "case", bridge_df)
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="case",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        with pytest.raises(KeyError, match="ACCOUNT_ID"):
+            resolve_sample_ids_via_bridge(namespace, steps, ["A1"])

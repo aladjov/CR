@@ -2213,6 +2213,72 @@ class TestBronzeEventCategoricalAggregation:
         assert "event_count_7d" in result_df.columns
         assert len(result_df) == 2
 
+    def test_bronze_event_aggregation_excludes_per_column_count(self, renderer):
+        import pandas as pd
+
+        source = SourceConfig(
+            name="emails", path="data/emails.csv", format="csv",
+            entity_key="customer_id", time_column="sent_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="sent_date",
+            deduplicate=True,
+            aggregation=AggregationWindowConfig(
+                windows=["7d"], value_columns=["send_hour"],
+                agg_funcs=["sum", "mean", "count"],
+            ),
+        )
+        result = renderer.render_bronze_event("emails", config)
+
+        local_ns = {}
+        mock_code = (
+            "import pandas as pd\nimport numpy as np\n"
+            "from pandas.api.types import is_numeric_dtype\n"
+            "from customer_retention.core.compat import ensure_timestamp, as_tz_naive\n"
+            "TARGET_COLUMN = 'churn'\n"
+            "PRODUCTION_DIR = __import__('pathlib').Path('/tmp/test_prod')\n"
+        )
+        exec(mock_code, local_ns)
+
+        df = pd.DataFrame({
+            "customer_id": ["A", "A", "B", "B"],
+            "sent_date": pd.date_range("2024-01-01", periods=4, freq="D"),
+            "send_hour": [10, 14, 9, 11],
+        })
+
+        lines = result.split("\n")
+        capture = False
+        extracted_lines = []
+        for line in lines:
+            if line.startswith("ENTITY_COLUMN") or line.startswith("TIME_COLUMN"):
+                extracted_lines.append(line)
+            if line.startswith("def _parse_window(") or line.startswith("def _safe_mode("):
+                capture = True
+            if capture:
+                extracted_lines.append(line)
+            if line.startswith("AGGREGATION_WINDOWS"):
+                extracted_lines.append(line)
+                capture = False
+            if line.startswith("VALUE_COLUMNS") or line.startswith("AGG_FUNCS"):
+                extracted_lines.append(line)
+            if line.startswith("CATEGORICAL_COLUMNS") or line.startswith("CATEGORICAL_AGG_FUNCS"):
+                extracted_lines.append(line)
+            if line.startswith("def apply_event_aggregation("):
+                capture = True
+                extracted_lines.append(line)
+            if capture and line.strip() == "return df":
+                extracted_lines.append(line)
+                capture = False
+
+        extracted = "\n".join(extracted_lines)
+        exec(extracted, local_ns)
+        result_df = local_ns["apply_event_aggregation"](df.copy())
+
+        assert "send_hour_sum_7d" in result_df.columns
+        assert "send_hour_mean_7d" in result_df.columns
+        assert "event_count_7d" in result_df.columns
+        assert "send_hour_count_7d" not in result_df.columns
+
 
 class TestDatetimeDerivationRendering:
 

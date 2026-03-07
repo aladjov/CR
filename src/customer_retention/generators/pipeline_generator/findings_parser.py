@@ -713,6 +713,8 @@ class FindingsParser:
             for window in agg.windows:
                 for col in agg.value_columns:
                     for func in agg.agg_funcs:
+                        if func == "count":
+                            continue
                         columns.add(f"{col}_{func}_{window}")
                 for col in agg.categorical_columns:
                     for func in agg.categorical_agg_funcs:
