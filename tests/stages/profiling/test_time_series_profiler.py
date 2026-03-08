@@ -530,6 +530,81 @@ class TestClassifyActivitySegments:
         assert result.q75_threshold >= result.q25_threshold
 
 
+class TestFallbackEntityColumns:
+    def test_fallback_used_when_primary_missing(self):
+        df = pd.DataFrame({
+            "contract_id": ["C1", "C1", "C2"],
+            "event_date": pd.to_datetime(["2023-01-01", "2023-02-01", "2023-03-01"]),
+        })
+        profiler = TimeSeriesProfiler(
+            entity_column="account_id", time_column="event_date",
+            fallback_entity_columns=["contract_id"],
+        )
+        result = profiler.profile(df)
+        assert result.entity_column == "contract_id"
+        assert result.unique_entities == 2
+
+    def test_primary_preferred_over_fallback(self):
+        df = pd.DataFrame({
+            "account_id": ["A1", "A1", "A2"],
+            "contract_id": ["C1", "C1", "C2"],
+            "event_date": pd.to_datetime(["2023-01-01", "2023-02-01", "2023-03-01"]),
+        })
+        profiler = TimeSeriesProfiler(
+            entity_column="account_id", time_column="event_date",
+            fallback_entity_columns=["contract_id"],
+        )
+        result = profiler.profile(df)
+        assert result.entity_column == "account_id"
+
+    def test_fallback_tries_in_order(self):
+        df = pd.DataFrame({
+            "opportunity_id": ["O1", "O1", "O2"],
+            "event_date": pd.to_datetime(["2023-01-01", "2023-02-01", "2023-03-01"]),
+        })
+        profiler = TimeSeriesProfiler(
+            entity_column="account_id", time_column="event_date",
+            fallback_entity_columns=["contract_id", "opportunity_id"],
+        )
+        result = profiler.profile(df)
+        assert result.entity_column == "opportunity_id"
+
+    def test_fallback_case_insensitive(self):
+        df = pd.DataFrame({
+            "CONTRACT_ID": ["C1", "C1", "C2"],
+            "event_date": pd.to_datetime(["2023-01-01", "2023-02-01", "2023-03-01"]),
+        })
+        profiler = TimeSeriesProfiler(
+            entity_column="account_id", time_column="event_date",
+            fallback_entity_columns=["contract_id"],
+        )
+        result = profiler.profile(df)
+        assert result.entity_column == "CONTRACT_ID"
+
+    def test_no_fallback_still_raises(self):
+        df = pd.DataFrame({
+            "contract_id": ["C1"],
+            "event_date": pd.to_datetime(["2023-01-01"]),
+        })
+        profiler = TimeSeriesProfiler(
+            entity_column="account_id", time_column="event_date",
+        )
+        with pytest.raises(KeyError, match="account_id"):
+            profiler.profile(df)
+
+    def test_all_fallbacks_missing_raises(self):
+        df = pd.DataFrame({
+            "some_col": ["X"],
+            "event_date": pd.to_datetime(["2023-01-01"]),
+        })
+        profiler = TimeSeriesProfiler(
+            entity_column="account_id", time_column="event_date",
+            fallback_entity_columns=["contract_id", "case_id"],
+        )
+        with pytest.raises(KeyError, match="account_id"):
+            profiler.profile(df)
+
+
 class TestCaseInsensitiveColumns:
     def test_profile_with_lowercased_columns(self):
         df = pd.DataFrame({

@@ -218,9 +218,11 @@ class TimeSeriesProfile:
 class TimeSeriesProfiler:
     SECONDS_PER_DAY = 86400
 
-    def __init__(self, entity_column: str, time_column: str):
+    def __init__(self, entity_column: str, time_column: str,
+                 fallback_entity_columns: Optional[list[str]] = None):
         self.entity_column = entity_column
         self.time_column = time_column
+        self._fallback_entity_columns = fallback_entity_columns or []
 
     def profile(self, df: DataFrame) -> TimeSeriesProfile:
         self._resolve_columns(df)
@@ -253,7 +255,15 @@ class TimeSeriesProfiler:
         )
 
     def _resolve_columns(self, df: DataFrame) -> None:
-        self.entity_column = resolve_column_name(df.columns, self.entity_column)
+        candidates = [self.entity_column, *self._fallback_entity_columns]
+        for col in candidates:
+            try:
+                self.entity_column = resolve_column_name(df.columns, col)
+                break
+            except KeyError:
+                continue
+        else:
+            resolve_column_name(df.columns, self.entity_column)
         self.time_column = resolve_column_name(df.columns, self.time_column)
 
     def _validate_columns(self, df: DataFrame) -> None:
