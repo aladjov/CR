@@ -570,6 +570,125 @@ class TestDatabricksDeltaReadNormalizesPath:
             load_call.assert_called_once_with("/mnt/data/table")
 
 
+class TestDatabricksDeltaStripTimestampTz:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_casts_timestamp_to_ntz(self):
+        from unittest.mock import MagicMock
+
+        from pyspark.sql.types import (
+            IntegerType,
+            StringType,
+            StructField,
+            StructType,
+            TimestampNTZType,
+            TimestampType,
+        )
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        schema = StructType([
+            StructField("id", IntegerType()),
+            StructField("ts", TimestampType()),
+            StructField("name", StringType()),
+        ])
+        mock_df = MagicMock()
+        mock_df.schema.fields = schema.fields
+
+        result = DatabricksDelta._strip_spark_timestamp_tz(mock_df)
+
+        mock_df.select.assert_called_once()
+        select_args = mock_df.select.call_args[0][0]
+        assert len(select_args) == 3
+
+    def test_no_timestamp_columns_returns_original(self):
+        from unittest.mock import MagicMock
+
+        from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        schema = StructType([
+            StructField("id", IntegerType()),
+            StructField("name", StringType()),
+        ])
+        mock_df = MagicMock()
+        mock_df.schema.fields = schema.fields
+
+        result = DatabricksDelta._strip_spark_timestamp_tz(mock_df)
+
+        assert result is mock_df
+        mock_df.select.assert_not_called()
+
+    def test_ntz_columns_returns_original(self):
+        from unittest.mock import MagicMock
+
+        from pyspark.sql.types import IntegerType, StructField, StructType, TimestampNTZType
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        schema = StructType([
+            StructField("id", IntegerType()),
+            StructField("ts", TimestampNTZType()),
+        ])
+        mock_df = MagicMock()
+        mock_df.schema.fields = schema.fields
+
+        result = DatabricksDelta._strip_spark_timestamp_tz(mock_df)
+
+        assert result is mock_df
+        mock_df.select.assert_not_called()
+
+    def test_write_applies_strip_tz(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            mock_spark_df = MagicMock()
+            mock_ps_df = MagicMock()
+            mock_ps_df.to_spark.return_value = mock_spark_df
+
+            mock_stripped = MagicMock()
+            with patch.object(DatabricksDelta, "_strip_spark_timestamp_tz", return_value=mock_stripped):
+                storage.write(mock_ps_df, "/fake/path")
+                DatabricksDelta._strip_spark_timestamp_tz.assert_called_once_with(mock_spark_df)
+                mock_stripped.write.format("delta").mode("overwrite").option(
+                    "overwriteSchema", "true"
+                ).save.assert_called_once_with("/fake/path")
+
+    def test_merge_applies_strip_tz(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            mock_spark_df = MagicMock()
+            mock_ps_df = MagicMock()
+            mock_ps_df.to_spark.return_value = mock_spark_df
+
+            mock_stripped = MagicMock()
+            with patch.object(DatabricksDelta, "_strip_spark_timestamp_tz", return_value=mock_stripped), \
+                 patch("delta.tables.DeltaTable") as mock_dt:
+                mock_target = MagicMock()
+                mock_dt.forPath.return_value = mock_target
+                mock_target.alias.return_value.merge.return_value \
+                    .whenMatchedUpdateAll.return_value \
+                    .whenNotMatchedInsertAll.return_value \
+                    .execute = MagicMock()
+
+                storage.merge(mock_ps_df, "/fake/path", "source.id = target.id")
+                DatabricksDelta._strip_spark_timestamp_tz.assert_called_once_with(mock_spark_df)
+
+
 class TestDatabricksDeltaWriteNormalizesPath:
     def test_write_normalizes_path(self):
         from unittest.mock import MagicMock, patch

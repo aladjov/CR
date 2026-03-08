@@ -54,6 +54,20 @@ class DatabricksDelta(DeltaStorage):
         schema = pandas_dtype_to_spark_schema(normalized)
         return self.spark.createDataFrame(normalized, schema=schema)
 
+    @staticmethod
+    def _strip_spark_timestamp_tz(spark_df: Any) -> Any:
+        from pyspark.sql.functions import col as spark_col
+        from pyspark.sql.types import TimestampType
+        casts = [
+            spark_col(f.name).cast("timestamp_ntz").alias(f.name)
+            if isinstance(f.dataType, TimestampType)
+            else spark_col(f.name)
+            for f in spark_df.schema.fields
+        ]
+        return spark_df.select(casts) if any(
+            isinstance(f.dataType, TimestampType) for f in spark_df.schema.fields
+        ) else spark_df
+
     def write(self, df: Any, path: str, mode: str = "overwrite",
               partition_by: Optional[List[str]] = None,
               metadata: Optional[Dict[str, str]] = None) -> None:
@@ -64,6 +78,7 @@ class DatabricksDelta(DeltaStorage):
                 json.dumps(metadata),
             )
         spark_df = as_spark_df(df) if hasattr(df, "to_spark") else self._to_spark_df(df)
+        spark_df = self._strip_spark_timestamp_tz(spark_df)
         writer = spark_df.write.format("delta").mode(mode)
         if mode == "overwrite":
             writer = writer.option("overwriteSchema", "true")
@@ -76,6 +91,7 @@ class DatabricksDelta(DeltaStorage):
         path = self._normalize_path(path)
         from delta.tables import DeltaTable
         spark_df = as_spark_df(df) if hasattr(df, "to_spark") else self._to_spark_df(df)
+        spark_df = self._strip_spark_timestamp_tz(spark_df)
         target = DeltaTable.forPath(self.spark, path)
         merge_builder = target.alias("target").merge(spark_df.alias("source"), condition)
         if update_cols:
