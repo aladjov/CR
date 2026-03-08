@@ -1245,7 +1245,7 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import PIPELINE_NAME, COMPOSITE_NAME, EXPERIMENTS_DIR, PRODUCTION_DIR
-{% for name in config.landing %}
+{% for name in sorted_landing_names(config.landing) %}
 from landing.landing_{{ name }} import run_landing_{{ name }}
 {% endfor %}
 {% for name in config.bronze %}
@@ -1276,7 +1276,7 @@ def run_pipeline(validate=False):
 {% if config.landing %}
 
     print("\\n[1/6] Landing (event sources)...")
-{% for name in config.landing %}
+{% for name in sorted_landing_names(config.landing) %}
     run_landing_{{ name }}()
 {% endfor %}
     print("Landing complete")
@@ -1352,7 +1352,7 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import PIPELINE_NAME, COMPOSITE_NAME, SOURCES, MLFLOW_TRACKING_URI, EXPERIMENTS_DIR, PRODUCTION_DIR, FINDINGS_DIR
-{% for name in config.landing %}
+{% for name in sorted_landing_names(config.landing) %}
 from landing.landing_{{ name }} import run_landing_{{ name }}
 {% endfor %}
 {% for name in config.bronze %}
@@ -1382,7 +1382,7 @@ def setup_experiments_dir():
 
 
 def run_landing():
-{% for name in config.landing %}
+{% for name in sorted_landing_names(config.landing) %}
     run_landing_{{ name }}()
 {% endfor %}
     pass
@@ -1496,9 +1496,18 @@ if __name__ == "__main__":
 {% set cn = config.composite_name or config.name %}
   "name": "{{ config.name }}_pipeline",
   "tasks": [
-{% for name in config.landing %}
+{% for name, lcfg in config.landing.items() %}
     {
       "task_key": "landing_{{ name }}",
+{% if lcfg.key_resolution_steps %}
+      "depends_on": [
+{% for step in lcfg.key_resolution_steps %}
+{% if step.bridge_dataset in config.landing %}
+        {"task_key": "landing_{{ step.bridge_dataset }}"}{{ "," if not loop.last else "" }}
+{% endif %}
+{% endfor %}
+      ],
+{% endif %}
       "notebook_task": {
         "notebook_path": "/Workspace/orchestration/{{ config.name }}/landing/landing_{{ name }}"
       }
@@ -1724,6 +1733,23 @@ def apply_history_window(df: pd.DataFrame) -> pd.DataFrame:
 {% endif %}
 
 
+{% if config.key_resolution_steps %}
+
+def resolve_entity_key(df: pd.DataFrame) -> pd.DataFrame:
+    from customer_retention.integrations.adapters.factory import get_delta
+{% for step in config.key_resolution_steps %}
+    _bridge_path = PRODUCTION_DIR / "data" / "landing" / "{{ step.bridge_dataset }}"
+    _bridge = get_delta(force_local=True).read(str(_bridge_path))
+    _bridge = _bridge[["{{ step.bridge_key }}", "{{ step.resolve_column }}"]].drop_duplicates(subset=["{{ step.bridge_key }}"])
+    df = df.merge(_bridge, left_on="{{ step.source_key }}", right_on="{{ step.bridge_key }}", how="inner")
+{% if step.source_key != step.bridge_key %}
+    df = df.drop(columns=["{{ step.bridge_key }}"])
+{% endif %}
+{% endfor %}
+    return df
+{% endif %}
+
+
 def get_landing_output_path() -> Path:
     return PRODUCTION_DIR / "data" / "landing" / SOURCE_NAME
 
@@ -1737,6 +1763,10 @@ def run_landing_{{ name }}():
 {% endif %}
 {% if config.original_target_column %}
     df = df.rename(columns={"{{ config.original_target_column }}": TARGET_COLUMN})
+{% endif %}
+{% if config.key_resolution_steps %}
+    df = resolve_entity_key(df)
+    print(f"  After key resolution: {len(df):,}")
 {% endif %}
     df = derive_temporal_columns(df)
 {% if config.history_window %}
@@ -2405,6 +2435,27 @@ if __name__ == "__main__":
 }
 
 
+def _sorted_landing_names(landing_dict):
+    bridge_deps = {}
+    for name, cfg in landing_dict.items():
+        deps = set()
+        for step in getattr(cfg, "key_resolution_steps", []) or []:
+            if step.bridge_dataset in landing_dict:
+                deps.add(step.bridge_dataset)
+        bridge_deps[name] = deps
+    ordered = []
+    remaining = set(landing_dict)
+    while remaining:
+        ready = [n for n in remaining if not bridge_deps[n] - set(ordered)]
+        if not ready:
+            ordered.extend(sorted(remaining))
+            break
+        for n in sorted(ready):
+            ordered.append(n)
+            remaining.discard(n)
+    return ordered
+
+
 class CodeRenderer:
     _TEMPLATE_MAP = {
         "config": "config.py.j2",
@@ -2432,6 +2483,7 @@ class CodeRenderer:
         self._env.globals["provenance_docstring_block"] = provenance_docstring_block
         self._env.globals["provenance_key"] = provenance_key
         self._env.globals["partition_gold_steps"] = partition_gold_steps
+        self._env.globals["sorted_landing_names"] = _sorted_landing_names
 
     def set_docs_base(self, experiments_dir: str | None) -> None:
         global _docs_base

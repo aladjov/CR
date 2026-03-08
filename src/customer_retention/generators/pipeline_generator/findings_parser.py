@@ -977,6 +977,17 @@ class FindingsParser:
     def _build_landing_configs(
         self, config: PipelineConfig, multi: MultiDatasetFindings, sources: Dict[str, ExplorationFindings]
     ) -> None:
+        ctx_key_resolutions: Dict[str, list] = {}
+        if self._namespace:
+            ctx_path = self._namespace.project_context_path
+            if ctx_path.exists():
+                from customer_retention.analysis.auto_explorer.project_context import ProjectContext
+
+                ctx = ProjectContext.load(ctx_path)
+                for ds_name, ds_entry in ctx.datasets.items():
+                    if ds_entry.key_resolution:
+                        ctx_key_resolutions[ds_name] = ds_entry.key_resolution
+
         for event_name in multi.event_datasets:
             dataset_info = multi.datasets.get(event_name)
             if not dataset_info:
@@ -1002,6 +1013,15 @@ class FindingsParser:
             if not source_cfg:
                 continue
             original_target = self._resolve_original_target(findings, config.target_column)
+            key_steps = [
+                KeyResolutionStepConfig(
+                    bridge_dataset=s.bridge_dataset,
+                    source_key=s.source_key,
+                    bridge_key=s.bridge_key,
+                    resolve_column=s.resolve_column,
+                )
+                for s in ctx_key_resolutions.get(event_name, [])
+            ]
             config.landing[event_name] = LandingLayerConfig(
                 source=source_cfg,
                 raw_source_path=raw_source,
@@ -1019,6 +1039,7 @@ class FindingsParser:
                     mask_future=True,
                 ),
                 history_window=self._build_history_window_config(time_col),
+                key_resolution_steps=key_steps,
             )
 
     @staticmethod

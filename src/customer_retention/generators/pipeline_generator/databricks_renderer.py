@@ -12,6 +12,7 @@ from .renderer import (
     SECTION_MAP,
     InlineLoader,
     _notebook_title,
+    _sorted_landing_names,
     group_steps,
     provenance_key,
 )
@@ -1496,6 +1497,22 @@ def apply_history_window(df):
     return df
 {% endif %}
 
+{% if config.key_resolution_steps %}
+
+# COMMAND ----------
+
+def resolve_entity_key(df):
+{% for step in config.key_resolution_steps %}
+    _bridge = spark.read.format("delta").table(landing_table("{{ step.bridge_dataset }}"))
+    _bridge = _bridge.select("{{ step.bridge_key }}", "{{ step.resolve_column }}").dropDuplicates(["{{ step.bridge_key }}"])
+    df = df.join(_bridge, df["{{ step.source_key }}"] == _bridge["{{ step.bridge_key }}"], "inner")
+{% if step.source_key != step.bridge_key %}
+    df = df.drop("{{ step.bridge_key }}")
+{% endif %}
+{% endfor %}
+    return df
+{% endif %}
+
 # COMMAND ----------
 
 def run_landing():
@@ -1505,6 +1522,9 @@ def run_landing():
 {% endif %}
 {% if config.original_target_column %}
     df = df.withColumnRenamed("{{ config.original_target_column }}", TARGET_COLUMN)
+{% endif %}
+{% if config.key_resolution_steps %}
+    df = resolve_entity_key(df)
 {% endif %}
     df = derive_feature_timestamp(df)
     df = derive_label_timestamp(df)
@@ -1571,7 +1591,7 @@ def run_notebook(path, timeout=3600):
 
 # COMMAND ----------
 
-{% for name in config.landing %}
+{% for name in sorted_landing_names(config.landing) %}
 run_notebook("landing/landing_{{ name }}")
 {% endfor %}
 
@@ -1892,6 +1912,7 @@ class DatabricksCodeRenderer:
         self._env.globals["render_spark_step_call"] = render_spark_step_call
         self._env.globals["group_steps"] = group_steps
         self._env.globals["spark_provenance_block"] = spark_provenance_block
+        self._env.globals["sorted_landing_names"] = _sorted_landing_names
 
     def _render(self, template_key: str, **context) -> str:
         return self._env.get_template(self._TEMPLATE_MAP[template_key]).render(**context)

@@ -36,34 +36,31 @@ def _apply_resolution_step(
     step: KeyResolutionStep,
     all_frames: dict[str, pd.DataFrame],
 ) -> pd.DataFrame:
+    try:
+        _resolve_column_name(df.columns, step.resolve_column)
+        return df
+    except KeyError:
+        pass
+
     if step.bridge_dataset not in all_frames:
         raise KeyError(
             f"Bridge dataset '{step.bridge_dataset}' not found in loaded frames"
         )
     bridge_df = all_frames[step.bridge_dataset]
 
-    if step.source_key not in df.columns:
-        raise KeyError(
-            f"Source key column '{step.source_key}' not found in dataset '{dataset_name}'"
-        )
-    if step.bridge_key not in bridge_df.columns:
-        raise KeyError(
-            f"Bridge key column '{step.bridge_key}' not found in bridge dataset '{step.bridge_dataset}'"
-        )
-    if step.resolve_column not in bridge_df.columns:
-        raise KeyError(
-            f"Resolve column '{step.resolve_column}' not found in bridge dataset '{step.bridge_dataset}'"
-        )
+    source_key = _resolve_column_name(df.columns, step.source_key)
+    bridge_key = _resolve_column_name(bridge_df.columns, step.bridge_key)
+    resolve_col = _resolve_column_name(bridge_df.columns, step.resolve_column)
 
-    bridge_subset = bridge_df[[step.bridge_key, step.resolve_column]].drop_duplicates(
-        subset=[step.bridge_key]
+    bridge_subset = bridge_df[[bridge_key, resolve_col]].drop_duplicates(
+        subset=[bridge_key]
     )
 
     rows_before = len(df)
-    merged = df.merge(bridge_subset, left_on=step.source_key, right_on=step.bridge_key, how="inner")
+    merged = df.merge(bridge_subset, left_on=source_key, right_on=bridge_key, how="inner")
 
-    if step.source_key != step.bridge_key and step.bridge_key in merged.columns:
-        merged = merged.drop(columns=[step.bridge_key])
+    if source_key != bridge_key and bridge_key in merged.columns:
+        merged = merged.drop(columns=[bridge_key])
 
     rows_after = len(merged)
     if rows_after == 0:
@@ -84,6 +81,19 @@ def _apply_resolution_step(
         )
 
     return merged
+
+
+def resolve_single_dataset_keys(
+    df: pd.DataFrame,
+    steps: list[KeyResolutionStep],
+    namespace: RunNamespace,
+) -> pd.DataFrame:
+    from customer_retention.analysis.auto_explorer.active_dataset_store import load_active_dataset
+
+    for step in steps:
+        bridge_df = load_active_dataset(namespace, step.bridge_dataset)
+        df = _apply_resolution_step(df, "<inline>", step, {step.bridge_dataset: bridge_df})
+    return df
 
 
 def suggest_key_resolutions(

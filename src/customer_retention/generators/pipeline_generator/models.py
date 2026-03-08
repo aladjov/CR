@@ -230,6 +230,7 @@ class LandingLayerConfig:
     label_timestamp: Optional[LabelTimestampConfig] = None
     datetime_derivation: Optional[DatetimeDerivationConfig] = None
     history_window: Optional[HistoryWindowConfig] = None
+    key_resolution_steps: List[KeyResolutionStepConfig] = field(default_factory=list)
 
 
 @dataclass
