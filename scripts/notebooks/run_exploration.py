@@ -148,10 +148,16 @@ def _set_data_path(notebook_path: Path, data_path: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_notebooks(notebooks_dir: Path) -> List[Path]:
-    """Return ordered list of existing notebook paths."""
+def _resolve_notebooks(notebooks_dir: Path, start_notebook: Optional[str] = None) -> List[Path]:
+    """Return ordered list of existing notebook paths, optionally starting from a given notebook."""
     result = []
+    started = start_notebook is None
     for stem in NOTEBOOKS_ORDER:
+        if not started:
+            if stem == start_notebook or stem.startswith(start_notebook):
+                started = True
+            else:
+                continue
         path = notebooks_dir / f"{stem}.ipynb"
         if path.exists():
             result.append(path)
@@ -175,6 +181,7 @@ def _run_notebook(
             request_save_on_cell_execute=True,
             cwd=str(notebook_path.parent),
             progress_bar={"desc": f"  Executing ({stem.split('_', 1)[0]})"},
+            execution_timeout=timeout,
         )
         return True, None
     except pm.PapermillExecutionError:
@@ -466,11 +473,12 @@ def run_all(
     timeout: int = 600,
     kernel: str = "python3",
     run_id: Optional[str] = None,
+    start_notebook: Optional[str] = None,
 ) -> Dict[str, str]:
     if findings_dir is None:
         findings_dir = notebooks_dir.parent / "experiments" / "findings"
 
-    notebooks = _resolve_notebooks(notebooks_dir)
+    notebooks = _resolve_notebooks(notebooks_dir, start_notebook=start_notebook)
     if not notebooks:
         print(f"No notebooks found in {notebooks_dir}")
         return {}
@@ -707,6 +715,11 @@ def main():
         default=None,
         help="Cap snapshot grid to N dates (sets CR_GRID_MAX_DATES)",
     )
+    parser.add_argument(
+        "--start-notebook",
+        default=None,
+        help="Start from this notebook stem (e.g. 08_baseline or just 08), skipping earlier ones",
+    )
     args = parser.parse_args()
     if args.sample_entities:
         os.environ["CR_SAMPLE_ENTITY_COUNT"] = str(args.sample_entities)
@@ -731,6 +744,7 @@ def main():
         timeout=args.timeout,
         kernel=args.kernel,
         run_id=args.run_id,
+        start_notebook=args.start_notebook,
     )
     if any(v.startswith("FAILED") for v in results.values()):
         sys.exit(1)
