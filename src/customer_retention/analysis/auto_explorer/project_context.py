@@ -9,7 +9,7 @@ from typing import Any, Optional
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from customer_retention.core.compat import pd
+from customer_retention.core.compat import native_pd, pd
 from customer_retention.core.config.column_config import DatasetGranularity
 
 
@@ -393,7 +393,8 @@ def _build_mount_df(
     if target_label_df is not None:
         return _mount_df_from_label_source(target_label_df, context)
     usecols = [context.entity_column, context.target_column]
-    target_df = pd.read_csv(target_entry.path, usecols=usecols)
+    resolved_path = str(Path(target_entry.path).resolve())
+    target_df = native_pd.read_csv(resolved_path, usecols=usecols)
     return target_df.drop_duplicates(subset=[context.entity_column]), False
 
 
