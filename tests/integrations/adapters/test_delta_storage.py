@@ -826,6 +826,10 @@ class TestDatabricksDeltaWriteClamps:
 
 
 class TestDatabricksDeltaWriteNormalizesPath:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def test_write_normalizes_path(self):
         from unittest.mock import MagicMock, patch
 

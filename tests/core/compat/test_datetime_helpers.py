@@ -163,6 +163,10 @@ class TestInferEpochUnit:
 
 
 class TestSafeToDatetimeSparkPandasTimestamp:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def test_spark_pandas_datetime_series_returned_without_iter(self):
         series = pd.Series(pd.to_datetime(["2023-01-01", "2023-06-15"]))
         series.spark = True

@@ -799,6 +799,10 @@ class TestDataExplorerTypedBulkPath:
 
 
 class TestDataExplorerSparkCaching:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def test_spark_df_cached_during_explore(self):
         from unittest.mock import MagicMock, patch
 

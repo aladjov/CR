@@ -399,6 +399,10 @@ class TestComputeTypedBulkStatsDispatch:
 
 
 class TestSparkTypedBulkStatsTypeFiltering:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def test_non_string_columns_filtered_from_text_cols(self):
         from pyspark.sql.types import DoubleType, StringType, StructField, StructType
 
