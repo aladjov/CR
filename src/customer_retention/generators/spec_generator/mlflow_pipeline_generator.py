@@ -204,9 +204,7 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
             "",
         ]
 
-        if not cleaning_steps:
-            code_lines.append("    # No cleaning recommendations found")
-        else:
+        if cleaning_steps:
             for col_name, actions in cleaning_steps.items():
                 for action in actions:
                     code_lines.extend(self._action_to_cleaning_code(col_name, action))
@@ -245,7 +243,6 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
             if action.strategy == "median":
                 lines.extend(
                     [
-                        f"    # Impute {col_name} with median",
                         f"    if df['{col_name}'].isna().any():",
                         f"        median_val = df['{col_name}'].median()",
                         f"        cleaning_stats['{col_name}_imputed'] = df['{col_name}'].isna().sum()",
@@ -256,7 +253,6 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
             elif action.strategy == "mode":
                 lines.extend(
                     [
-                        f"    # Impute {col_name} with mode",
                         f"    if df['{col_name}'].isna().any():",
                         f"        mode_val = df['{col_name}'].mode().iloc[0] if not df['{col_name}'].mode().empty else None",
                         "        if mode_val is not None:",
@@ -269,7 +265,6 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
                 fill_value = action.params.get("fill_value", 0)
                 lines.extend(
                     [
-                        f"    # Impute {col_name} with constant",
                         f"    if df['{col_name}'].isna().any():",
                         f"        cleaning_stats['{col_name}_imputed'] = df['{col_name}'].isna().sum()",
                         f"        df['{col_name}'] = df['{col_name}'].fillna({repr(fill_value)})",
@@ -281,7 +276,6 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
             percentile = action.params.get("percentile", 99)
             lines.extend(
                 [
-                    f"    # Cap outliers in {col_name} at {percentile}th percentile",
                     f"    lower = df['{col_name}'].quantile({(100 - percentile) / 100})",
                     f"    upper = df['{col_name}'].quantile({percentile / 100})",
                     f"    outliers = ((df['{col_name}'] < lower) | (df['{col_name}'] > upper)).sum()",
@@ -295,7 +289,6 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
             threshold = action.params.get("threshold_percent", 5)
             lines.extend(
                 [
-                    f"    # Drop rare categories in {col_name} (< {threshold}%)",
                     f"    value_counts = df['{col_name}'].value_counts(normalize=True)",
                     f"    rare_values = value_counts[value_counts < {threshold / 100}].index",
                     "    if len(rare_values) > 0:",
@@ -321,20 +314,17 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
             "",
         ]
 
-        # Log transform for skewed columns
         log_cols = [col for col, actions in transform_actions.items() if any(a.method == "log1p" for a in actions)]
         if log_cols:
             for col in log_cols:
                 code_lines.extend(
                     [
-                        f"    # Log transform {col} (recommended for skewness)",
                         f"    df['{col}_log'] = np.log1p(df['{col}'].clip(lower=0))",
                         f"    transformers['{col}_log_transform'] = True",
                         "",
                     ]
                 )
 
-        # Standard scaling
         scale_standard = [
             col
             for col, actions in transform_actions.items()
@@ -343,7 +333,6 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
         if scale_standard:
             code_lines.extend(
                 [
-                    "    # Standard scaling",
                     f"    standard_cols = {scale_standard}",
                     "    if standard_cols:",
                     "        scaler = StandardScaler()",
@@ -353,7 +342,6 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
                 ]
             )
 
-        # MinMax scaling
         scale_minmax = [
             col
             for col, actions in transform_actions.items()
@@ -362,7 +350,6 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
         if scale_minmax:
             code_lines.extend(
                 [
-                    "    # MinMax scaling",
                     f"    minmax_cols = {scale_minmax}",
                     "    if minmax_cols:",
                     "        minmax_scaler = MinMaxScaler()",
@@ -372,7 +359,6 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
                 ]
             )
 
-        # One-hot encoding
         onehot_cols = [
             col
             for col, actions in transform_actions.items()
@@ -381,7 +367,6 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
         if onehot_cols:
             code_lines.extend(
                 [
-                    "    # One-hot encoding",
                     f"    onehot_cols = {onehot_cols}",
                     "    for col in onehot_cols:",
                     "        dummies = pd.get_dummies(df[col], prefix=col, drop_first=True)",
@@ -391,7 +376,6 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
                 ]
             )
 
-        # Label encoding
         label_cols = [
             col
             for col, actions in transform_actions.items()
@@ -400,7 +384,6 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
         if label_cols:
             code_lines.extend(
                 [
-                    "    # Label encoding",
                     f"    label_cols = {label_cols}",
                     "    label_encoders = {{}}",
                     "    for col in label_cols:",
@@ -451,7 +434,6 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
             "",
         ]
 
-        # Datetime feature extraction
         for col_name in datetime_cols:
             actions = transform_actions.get(col_name, [])
             extract_types = [a.method for a in actions if a.action_type == "datetime_extract"]
@@ -461,7 +443,6 @@ def log_data_quality_metrics(df: pd.DataFrame, prefix: str = "data"):
 
             code_lines.extend(
                 [
-                    f"    # Datetime features from {col_name}",
                     f"    if '{col_name}' in df.columns:",
                     f"        df['{col_name}'] = safe_to_datetime(df['{col_name}'], errors='coerce')",
                     "",
@@ -520,11 +501,9 @@ def train_model(
 ) -> Dict[str, Any]:
     """Train model with comprehensive MLflow tracking."""
 
-    # Exclude non-feature columns
     exclude_cols = {exclude_cols}
     feature_cols = [col for col in df.columns if col not in exclude_cols and col != target_column]
 
-    # Handle non-numeric columns
     X = df[feature_cols].copy()
     for col in X.select_dtypes(include=['object', 'category']).columns:
         X[col] = pd.factorize(X[col])[0]
@@ -532,7 +511,6 @@ def train_model(
 
     y = df[target_column]
 
-    # Split: train/validation/test
     X_temp, X_test, y_temp, y_test = train_test_split(
         X, y, test_size=test_size, random_state=42, stratify=y
     )
@@ -549,7 +527,6 @@ def train_model(
         "val_size": val_size,
     }})
 
-    # Train models
     models = {{
         "logistic_regression": LogisticRegression(max_iter=1000, random_state=42),
         "random_forest": RandomForestClassifier(n_estimators=100, random_state=42),
@@ -562,18 +539,14 @@ def train_model(
 
     for name, model in models.items():
         with mlflow.start_run(run_name=name, nested=True):
-            # Train
             model.fit(X_train, y_train)
 
-            # Validation predictions
             y_val_pred = model.predict(X_val)
             y_val_proba = model.predict_proba(X_val)[:, 1] if hasattr(model, "predict_proba") else y_val_pred
 
-            # Test predictions
             y_test_pred = model.predict(X_test)
             y_test_proba = model.predict_proba(X_test)[:, 1] if hasattr(model, "predict_proba") else y_test_pred
 
-            # Calculate metrics
             val_metrics = {{
                 "val_accuracy": accuracy_score(y_val, y_val_pred),
                 "val_precision": precision_score(y_val, y_val_pred, average="weighted", zero_division=0),
@@ -590,14 +563,12 @@ def train_model(
                 "test_roc_auc": roc_auc_score(y_test, y_test_proba) if len(np.unique(y_test)) > 1 else 0,
             }}
 
-            # Cross-validation
             cv_scores = cross_val_score(model, X_train, y_train, cv=5, scoring="roc_auc")
             cv_metrics = {{
                 "cv_roc_auc_mean": cv_scores.mean(),
                 "cv_roc_auc_std": cv_scores.std(),
             }}
 
-            # Log everything
             mlflow.log_params(model.get_params())
             mlflow.log_metrics({{**val_metrics, **test_metrics, **cv_metrics}})
             mlflow.sklearn.log_model(model, name=f"model_{{name}}")
@@ -620,7 +591,6 @@ def train_model(
             reg_name = f"{self.mlflow_config.catalog}.{self.mlflow_config.schema}.{self.mlflow_config.model_name}"
             main_body += f'''
 
-    # Register best model in Unity Catalog and set alias
     if best_model:
         best_run = results[best_model]
         model_info = mlflow.sklearn.log_model(
@@ -676,7 +646,6 @@ def main():
     setup_mlflow()
 
     with mlflow.start_run(run_name="full_pipeline"):
-        # Load data
         print("Loading data...")
         df = {load_expr}'''
 
@@ -685,7 +654,6 @@ def main():
 
         main_body += """
 
-        # Clean data
         print("Cleaning data...")
         df = clean_data(df)"""
 
@@ -694,11 +662,9 @@ def main():
 
         main_body += """
 
-        # Apply transformations
         print("Applying transformations...")
         df, transformers = apply_transforms(df)
 
-        # Engineer features
         print("Engineering features...")
         df = engineer_features(df)"""
 
@@ -707,7 +673,6 @@ def main():
 
         main_body += """
 
-        # Train models
         print("Training models...")
         results = train_model(df)
 

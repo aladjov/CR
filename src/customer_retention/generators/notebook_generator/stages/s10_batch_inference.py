@@ -78,8 +78,7 @@ print(f"All features will be retrieved as they existed at this timestamp.")
 print(f"This ensures no future data leakage in predictions.")'''),
 
             self.cb.section("3. Load Production Model"),
-            self.cb.code('''# Load the production model
-model_path = Path("./experiments/data/models/best_model.joblib")
+            self.cb.code('''model_path = Path("./experiments/data/models/best_model.joblib")
 if not model_path.exists():
     raise FileNotFoundError(f"Model not found at {model_path}. Run training first.")
 
@@ -105,10 +104,7 @@ print(f"Feature store initialized (backend: {'databricks' if is_databricks() els
 print(f"Available tables: {manager.list_tables()}")'''),
 
             self.cb.section("5. Load Customers to Score"),
-            self.cb.code(f'''# Load the entities (customers) to score
-# These are customers we want to make predictions for
-
-# Option 1: Load from a specific file
+            self.cb.code(f'''# Option 1: Load from a specific file
 from customer_retention.integrations.adapters.factory import get_delta
 storage = get_delta()
 
@@ -149,16 +145,13 @@ This is crucial for:
 - **Training-serving consistency**: Same features used in training and inference
 - **No future leakage**: Only data available at prediction time is used
 - **Reproducibility**: Same timestamp always gives same features'''),
-            self.cb.code('''# Create entity DataFrame with inference timestamp
-# All customers get the same inference timestamp for this batch
-entity_df = df_customers[[entity_col]].copy()
+            self.cb.code('''entity_df = df_customers[[entity_col]].copy()
 entity_df = entity_df.rename(columns={entity_col: "entity_id"})
 entity_df["event_timestamp"] = INFERENCE_TIMESTAMP
 
 print(f"Retrieving features for {len(entity_df):,} entities")
 print(f"Point-in-Time: {INFERENCE_TIMESTAMP}")
 
-# Get features from feature store with PIT correctness
 if registry:
     feature_names = registry.list_features()
 else:
@@ -168,7 +161,6 @@ else:
         raise ValueError("Cannot determine feature names. Please provide a feature registry.")
     feature_names = list(feature_names)
 
-# Retrieve point-in-time correct features
 inference_df = manager.get_inference_features(
     entity_df=entity_df,
     registry=registry,
@@ -181,25 +173,20 @@ print(f"Retrieved {len(inference_df.columns)} features for {len(inference_df):,}
 print(f"Feature retrieval timestamp: {INFERENCE_TIMESTAMP}")'''),
 
             self.cb.section("7. Generate Predictions"),
-            self.cb.code(f'''# Prepare features for prediction
-# Remove non-feature columns
-meta_cols = ["entity_id", "event_timestamp"]
+            self.cb.code(f'''meta_cols = ["entity_id", "event_timestamp"]
 feature_cols = [c for c in inference_df.columns if c not in meta_cols]
 
 X = inference_df[feature_cols]
 
-# Handle any missing values from feature retrieval
 missing_pct = X.isnull().sum().sum() / (len(X) * len(X.columns)) * 100
 if missing_pct > 0:
     print(f"Warning: {{missing_pct:.2f}}% missing values in features")
     X = X.fillna(X.median())
 
-# Generate predictions
 threshold = {threshold}
 y_prob = model.predict_proba(X)[:, 1]
 y_pred = (y_prob >= threshold).astype(int)
 
-# Add predictions to results
 results_df = inference_df[["entity_id"]].copy()
 results_df["churn_probability"] = y_prob
 results_df["churn_prediction"] = y_pred
@@ -209,7 +196,6 @@ results_df["risk_tier"] = pd.cut(
     labels=["Low", "Medium", "High"]
 )
 
-# Add inference metadata
 results_df["inference_timestamp"] = INFERENCE_TIMESTAMP
 results_df["model_version"] = str(model_path)
 
@@ -218,8 +204,7 @@ print(f"Threshold: {{threshold}}")'''),
 
             self.cb.section("8. Prediction Summary Dashboard"),
             self.cb.markdown('''This dashboard shows the batch scoring results with the **point-in-time** used for inference prominently displayed.'''),
-            self.cb.code('''# Create summary statistics
-total_customers = len(results_df)
+            self.cb.code('''total_customers = len(results_df)
 predicted_churners = results_df["churn_prediction"].sum()
 churn_rate = predicted_churners / total_customers * 100
 avg_probability = results_df["churn_probability"].mean()
@@ -246,8 +231,7 @@ print(f"")
 print("=" * 70)'''),
 
             self.cb.section("9. Interactive Results Dashboard"),
-            self.cb.code('''# Create interactive dashboard with Plotly
-fig = make_subplots(
+            self.cb.code('''fig = make_subplots(
     rows=2, cols=2,
     subplot_titles=[
         f"Risk Distribution (PIT: {INFERENCE_TIMESTAMP.strftime('%Y-%m-%d %H:%M')})",
@@ -261,7 +245,6 @@ fig = make_subplots(
     ]
 )
 
-# Risk tier pie chart
 colors = {"High": "#e74c3c", "Medium": "#f39c12", "Low": "#27ae60"}
 fig.add_trace(
     go.Pie(
@@ -274,7 +257,6 @@ fig.add_trace(
     row=1, col=1
 )
 
-# Probability histogram
 fig.add_trace(
     go.Histogram(
         x=results_df["churn_probability"],
@@ -285,7 +267,6 @@ fig.add_trace(
     row=1, col=2
 )
 
-# Risk by probability range bar chart
 prob_bins = pd.cut(results_df["churn_probability"], bins=[0, 0.2, 0.4, 0.6, 0.8, 1.0])
 prob_counts = prob_bins.value_counts().sort_index()
 fig.add_trace(
@@ -298,7 +279,6 @@ fig.add_trace(
     row=2, col=1
 )
 
-# Metadata table
 metadata = [
     ["Metric", "Value"],
     ["Inference Point-in-Time", INFERENCE_TIMESTAMP.strftime('%Y-%m-%d %H:%M:%S')],
@@ -330,15 +310,12 @@ fig.update_layout(
 fig.show()'''),
 
             self.cb.section("10. Save Predictions with Metadata"),
-            self.cb.code('''# Save predictions with full metadata
-output_dir = Path("./experiments/data/predictions")
+            self.cb.code('''output_dir = Path("./experiments/data/predictions")
 output_dir.mkdir(parents=True, exist_ok=True)
 
-# Create timestamped filename for audit trail
 timestamp_str = INFERENCE_TIMESTAMP.strftime('%Y%m%d_%H%M%S')
 output_file = output_dir / f"batch_predictions_{timestamp_str}.parquet"
 
-# Save with all metadata via delta
 storage.write(results_df, str(output_dir / f"batch_predictions_{timestamp_str}"))
 
 # Also save a "latest" version for downstream consumption
@@ -427,8 +404,7 @@ print("=" * 70)
 print("Features will be retrieved as they existed at this timestamp.")'''),
 
             self.cb.section("3. Load Customers to Score"),
-            self.cb.code(f'''# Load customers to score from the gold layer
-df_customers = spark.table("{catalog}.{schema}.gold_customers")
+            self.cb.code(f'''df_customers = spark.table("{catalog}.{schema}.gold_customers")
 
 # Select only entity IDs - features will come from the feature store
 entity_df = df_customers.select("entity_id")
@@ -446,9 +422,7 @@ entity_df.show(5)'''),
             self.cb.section("4. Define Feature Lookups with Point-in-Time"),
             self.cb.markdown('''The `timestamp_lookup_key` parameter ensures that features are retrieved
 as they existed at the specified inference timestamp - no future data leakage.'''),
-            self.cb.code('''# Define feature lookups with PIT correctness
-# The timestamp_lookup_key ensures features are retrieved as of inference_timestamp
-feature_lookups = [
+            self.cb.code('''feature_lookups = [
     FeatureLookup(
         table_name=FEATURE_TABLE,
         lookup_key=["entity_id"],
@@ -464,10 +438,7 @@ print(f"  Timestamp Key: inference_timestamp")'''),
             self.cb.section("5. Score with Feature Store (PIT-Correct)"),
             self.cb.markdown('''Use `fe.score_batch()` to automatically retrieve features with PIT correctness
 and apply the model. This ensures training-serving consistency.'''),
-            self.cb.code('''# Score using the feature store with automatic PIT feature retrieval
-# This is the recommended approach for production inference
-try:
-    # Method 1: Use fe.score_batch for automatic feature lookup
+            self.cb.code('''try:
     predictions = fe.score_batch(
         df=entity_df,
         model_uri=MODEL_URI,
@@ -478,7 +449,6 @@ except Exception as e:
     print(f"fe.score_batch not available: {e}")
     print("Falling back to manual feature retrieval...")
 
-    # Method 2: Manual feature retrieval with PIT join
     training_set = fe.create_training_set(
         df=entity_df,
         feature_lookups=feature_lookups,
@@ -486,10 +456,7 @@ except Exception as e:
     )
     inference_df = training_set.load_df()
 
-    # Load model and score
     model = mlflow.pyfunc.load_model(MODEL_URI)
-
-    # Convert to pandas for scoring
     pdf = inference_df.toPandas()
     feature_cols = [c for c in pdf.columns if c not in ["entity_id", "inference_timestamp"]]
 
@@ -502,7 +469,6 @@ except Exception as e:
             self.cb.section("6. Apply Threshold and Risk Tiers"),
             self.cb.code(f'''threshold = {threshold}
 
-# Add prediction columns and risk tiers
 df_scored = (predictions
     .withColumn("churn_probability", col("prediction"))
     .withColumn("churn_prediction", when(col("prediction") >= threshold, 1).otherwise(0))
@@ -520,8 +486,7 @@ print(f"Added risk tiers: High (>=0.6), Medium (>=0.3), Low (<0.3)")'''),
 
             self.cb.section("7. Batch Inference Results Dashboard"),
             self.cb.markdown('''Display the batch scoring results with the **point-in-time** prominently shown.'''),
-            self.cb.code('''# Calculate summary statistics
-summary = df_scored.agg(
+            self.cb.code('''summary = df_scored.agg(
     count("*").alias("total_customers"),
     spark_sum("churn_prediction").alias("predicted_churners"),
     mean("churn_probability").alias("avg_probability")
@@ -531,7 +496,6 @@ total = summary["total_customers"]
 churners = summary["predicted_churners"]
 avg_prob = summary["avg_probability"]
 
-# Risk distribution
 risk_dist = df_scored.groupBy("risk_tier").count().collect()
 risk_dict = {row["risk_tier"]: row["count"] for row in risk_dist}
 
@@ -554,11 +518,9 @@ print(f"")
 print("=" * 70)'''),
 
             self.cb.section("8. Interactive Dashboard Display"),
-            self.cb.code('''# Display risk distribution
-print(f"\\n📊 Risk Distribution (PIT: {INFERENCE_TIMESTAMP.strftime('%Y-%m-%d %H:%M')}):")
+            self.cb.code('''print(f"\\n📊 Risk Distribution (PIT: {INFERENCE_TIMESTAMP.strftime('%Y-%m-%d %H:%M')}):")
 display(df_scored.groupBy("risk_tier").count().orderBy("risk_tier"))
 
-# Display sample predictions with inference metadata
 print(f"\\n📋 Sample Predictions (showing inference_point_in_time):")
 display(
     df_scored.select(
@@ -569,24 +531,19 @@ display(
     ).limit(10)
 )
 
-# Display probability distribution
 print(f"\\n📈 Probability Distribution:")
 display(df_scored.select("churn_probability").summary())'''),
 
             self.cb.section("9. Save Predictions with Metadata"),
-            self.cb.code(f'''# Save predictions with full audit trail
-# Include inference_point_in_time for reproducibility
-
-output_cols = [
+            self.cb.code(f'''output_cols = [
     "entity_id",
     "churn_probability",
     "churn_prediction",
     "risk_tier",
-    "inference_point_in_time",  # Critical for audit
+    "inference_point_in_time",
     "model_uri"
 ]
 
-# Save to Delta table with timestamp partition
 df_scored.select(output_cols).write \\
     .format("delta") \\
     .mode("overwrite") \\
@@ -600,7 +557,6 @@ print(f"📊 Records: {{df_scored.count():,}}")'''),
             self.cb.section("10. Create Predictions Audit Log"),
             self.cb.code(f'''from pyspark.sql.functions import current_timestamp as spark_current_timestamp
 
-# Create or append to audit log
 audit_record = spark.createDataFrame([{{
     "inference_id": f"batch_{{INFERENCE_TIMESTAMP.strftime('%Y%m%d_%H%M%S')}}",
     "inference_timestamp": INFERENCE_TIMESTAMP,
@@ -612,7 +568,6 @@ audit_record = spark.createDataFrame([{{
     "created_at": datetime.now(),
 }}])
 
-# Append to audit log
 audit_record.write \\
     .format("delta") \\
     .mode("append") \\

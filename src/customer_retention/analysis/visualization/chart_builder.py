@@ -678,7 +678,6 @@ class ChartBuilder:
         formatter = NumberFormatter()
         fig = go.Figure()
 
-        # Define indicator positions (x_center, label)
         indicators = [
             (0.15, "Overall Growth", growth_data["overall_growth_pct"], "%"),
             (0.5, "Avg Monthly", growth_data["avg_monthly_growth"], "%/mo"),
@@ -691,7 +690,6 @@ class ChartBuilder:
             sign = "+" if value >= 0 else "-"
             display_text = f"{sign}{formatted_value}{suffix}"
 
-            # Value annotation
             fig.add_annotation(
                 x=x_pos, y=0.55,
                 text=display_text,
@@ -699,7 +697,6 @@ class ChartBuilder:
                 showarrow=False,
                 xref="paper", yref="paper"
             )
-            # Label annotation
             fig.add_annotation(
                 x=x_pos, y=0.15,
                 text=label,
@@ -856,7 +853,6 @@ class ChartBuilder:
 
         fig = go.Figure()
 
-        # Recommendation header
         fig.add_annotation(
             x=0.5, y=0.85,
             text=rec_label,
@@ -865,7 +861,6 @@ class ChartBuilder:
             xref="paper", yref="paper"
         )
 
-        # Confidence indicator
         fig.add_annotation(
             x=0.5, y=0.65,
             text=f"Confidence: {result.confidence*100:.0f}%",
@@ -874,7 +869,6 @@ class ChartBuilder:
             xref="paper", yref="paper"
         )
 
-        # Key metrics
         metrics_text = (
             f"Segments: {result.n_segments} | "
             f"Quality: {result.quality_score:.2f} | "
@@ -890,7 +884,6 @@ class ChartBuilder:
             xref="paper", yref="paper"
         )
 
-        # Rationale
         rationale_text = "<br>".join(f"• {r}" for r in result.rationale[:4])
         fig.add_annotation(
             x=0.5, y=0.2,
@@ -910,10 +903,6 @@ class ChartBuilder:
             yaxis={"visible": False, "range": [0, 1]},
         )
         return fig
-
-    # =========================================================================
-    # Advanced Time Series Visualizations
-    # =========================================================================
 
     def sparkline(
         self,
@@ -1148,7 +1137,6 @@ class ChartBuilder:
 
         fig = go.Figure()
 
-        # Confidence band
         fig.add_trace(go.Scatter(
             x=pd.concat([df["date"], df["date"][::-1]]),
             y=pd.concat([df["upper"], df["lower"][::-1]]),
@@ -1159,7 +1147,6 @@ class ChartBuilder:
             hoverinfo="skip",
         ))
 
-        # Rolling mean
         fig.add_trace(go.Scatter(
             x=df["date"], y=df["rolling_mean"],
             mode="lines",
@@ -1167,7 +1154,6 @@ class ChartBuilder:
             name="Rolling Mean",
         ))
 
-        # Normal points
         normal = df[~df["is_anomaly"]]
         fig.add_trace(go.Scatter(
             x=normal["date"], y=normal["value"],
@@ -1177,7 +1163,6 @@ class ChartBuilder:
             name="Normal",
         ))
 
-        # Anomaly points
         anomalies = df[df["is_anomaly"]]
         if len(anomalies) > 0:
             fig.add_trace(go.Scatter(
@@ -1227,10 +1212,10 @@ class ChartBuilder:
         y_values.append(cumulative)
         text_values.append(f"{cumulative:,.0f}")
 
-        colors = [self.colors["info"]]  # Initial
+        colors = [self.colors["info"]]
         for v in values:
             colors.append(self.colors["success"] if v >= 0 else self.colors["danger"])
-        colors.append(self.colors["primary"])  # Total
+        colors.append(self.colors["primary"])
 
         fig = go.Figure(go.Waterfall(
             x=x_labels,
@@ -1273,7 +1258,7 @@ class ChartBuilder:
         for check in check_results:
             categories.append(check["name"])
             if check["passed"]:
-                values.append(0)  # No penalty
+                values.append(0)
             else:
                 penalty = -check["weight"] * (max_score / sum(c["weight"] for c in check_results))
                 values.append(penalty)
@@ -1315,7 +1300,6 @@ class ChartBuilder:
             row = i + 1
             col_data = data[col]
 
-            # Value
             if "retained" in col_data:
                 fig.add_trace(go.Scatter(
                     y=col_data["retained"], mode="lines",
@@ -1329,7 +1313,6 @@ class ChartBuilder:
                     name="Churned", showlegend=(i == 0), legendgroup="churned"
                 ), row=row, col=1)
 
-            # Velocity
             if "velocity_retained" in col_data:
                 fig.add_trace(go.Scatter(
                     y=col_data["velocity_retained"], mode="lines",
@@ -1344,7 +1327,6 @@ class ChartBuilder:
                 ), row=row, col=2)
             fig.add_hline(y=0, line_dash="dot", line_color="gray", row=row, col=2)
 
-            # Acceleration
             if "accel_retained" in col_data:
                 fig.add_trace(go.Scatter(
                     y=col_data["accel_retained"], mode="lines",
@@ -1499,7 +1481,6 @@ class ChartBuilder:
         """
         from plotly.subplots import make_subplots
 
-        # Sort by IV
         sorted_cols = sorted(iv_values.keys(), key=lambda x: iv_values[x], reverse=True)
         ivs = [iv_values[c] for c in sorted_cols]
         kss = [ks_values.get(c, 0) for c in sorted_cols]
@@ -1878,11 +1859,9 @@ class ChartBuilder:
 
         formatter = NumberFormatter()
 
-        # Exclude temporal metadata columns from visualization
         temporal_metadata_cols = {"feature_timestamp", "label_timestamp", "label_available_flag"}
         available_cols = {k: v for k, v in findings.columns.items() if k not in temporal_metadata_cols}
 
-        # Select columns to display (prioritize by type)
         type_priority = ['target', 'binary', 'numeric_continuous', 'numeric_discrete',
                          'categorical_nominal', 'categorical_ordinal', 'datetime', 'identifier']
         sorted_cols = []
@@ -1956,17 +1935,14 @@ class ChartBuilder:
 
         memory_mb = safe_memory_usage_bytes(df) / 1024**2
 
-        # Detect format from path
         path = Path(source_path) if source_path else Path("data.csv")
         fmt = path.suffix.lstrip('.').upper() or "CSV"
         if fmt == "":
             fmt = "CSV"
 
-        # Exclude temporal metadata columns from visualization
         temporal_metadata_cols = {"feature_timestamp", "label_timestamp", "label_available_flag"}
         available_cols = {k: v for k, v in findings.columns.items() if k not in temporal_metadata_cols}
 
-        # Select columns to display (prioritize by type)
         type_priority = ['target', 'binary', 'numeric_continuous', 'numeric_discrete',
                          'categorical_nominal', 'categorical_ordinal', 'datetime', 'identifier']
         sorted_cols = []
@@ -1982,11 +1958,9 @@ class ChartBuilder:
         n_cols = min(columns_per_row, len(display_cols))
         n_tile_rows = (len(display_cols) + n_cols - 1) // n_cols
 
-        # Build specs: 1 header row + tile rows
         header_specs = [{"type": "indicator"} for _ in range(n_cols)]
         tile_specs = [[{"type": "xy"} for _ in range(n_cols)] for _ in range(n_tile_rows)]
 
-        # Subplot titles: empty for header, column names for tiles
         titles = [""] * n_cols + [f"<b>{c[:18]}</b>" for c in display_cols]
 
         fig = make_subplots(
@@ -1999,12 +1973,9 @@ class ChartBuilder:
             horizontal_spacing=0.06,
         )
 
-        # Header row: Order is Rows, Columns, Structure, Format, Memory
-        # Use annotations for all to ensure consistent appearance
         structure_label = "Event" if granularity.lower() == "event" else "Entity"
         memory_str = f"{memory_mb:.1f} MB"
 
-        # Calculate header column positions for paper coordinates
         h_spacing = 0.06
         col_width = (1.0 - h_spacing * (n_cols - 1)) / n_cols
 
@@ -2012,7 +1983,6 @@ class ChartBuilder:
             """Get x center position for header column (1-indexed)."""
             return (col_idx - 1) * (col_width + h_spacing) + col_width / 2
 
-        # Header data: (label, value)
         header_items = [
             ("Rows", f"{findings.row_count:,}"),
             ("Columns", str(findings.column_count)),
@@ -2021,21 +1991,18 @@ class ChartBuilder:
             ("Memory", memory_str),
         ]
 
-        # Add placeholder indicators (needed for subplot structure)
         for i in range(min(n_cols, len(header_items))):
             fig.add_trace(go.Indicator(
                 mode="number", value=0,
                 number={"font": {"size": 1, "color": "rgba(0,0,0,0)"}}
             ), row=1, col=i+1)
 
-        # Add labels (small, gray, top) and values (large, blue, below) as annotations
         label_y = 0.96
         value_y = 0.92
 
         for i, (label, value) in enumerate(header_items[:n_cols]):
             x_pos = get_header_x(i + 1)
 
-            # Label
             fig.add_annotation(
                 x=x_pos, y=label_y,
                 xref="paper", yref="paper",
@@ -2044,7 +2011,6 @@ class ChartBuilder:
                 xanchor="center", yanchor="middle"
             )
 
-            # Value
             fig.add_annotation(
                 x=x_pos, y=value_y,
                 xref="paper", yref="paper",
@@ -2053,9 +2019,8 @@ class ChartBuilder:
                 xanchor="center", yanchor="middle"
             )
 
-        # Column tiles (starting from row 2)
         for i, col_name in enumerate(display_cols):
-            tile_row = (i // n_cols) + 2  # +2 because row 1 is header
+            tile_row = (i // n_cols) + 2
             tile_col = (i % n_cols) + 1
             col_finding = findings.columns.get(col_name)
             col_type = col_finding.inferred_type.value if col_finding else "unknown"
@@ -2244,9 +2209,7 @@ class ChartBuilder:
 
     def _get_axis_ref(self, row: int, col: int, n_cols: int, axis: str = "x") -> str:
         """Get the correct axis reference for subplot annotations."""
-        # Calculate linear index (0-based)
         idx = (row - 1) * n_cols + col
-        # First subplot uses 'x'/'y', others use 'x2', 'x3', etc.
         if idx == 1:
             return axis
         return f"{axis}{idx}"
@@ -2333,7 +2296,6 @@ class ChartBuilder:
                         else self.colors["warning"] if balance_ratio < 10
                         else self.colors["danger"])
 
-        # Horizontal bars with labels on y-axis
         colors = [self.colors["primary"], self.colors["secondary"]]
         fig.add_trace(go.Bar(
             y=labels[:2],
@@ -2381,7 +2343,6 @@ class ChartBuilder:
             hovertemplate="%{x}: %{y:,}<extra></extra>"
         ), row=row, col=col)
 
-        # Force categorical x-axis to prevent Plotly from interpreting as dates
         xaxis_name = f"xaxis{(row - 1) * n_cols + col}" if (row - 1) * n_cols + col > 1 else "xaxis"
         fig.update_layout(**{xaxis_name: {"type": "category", "tickangle": -45}})
 
@@ -2398,7 +2359,6 @@ class ChartBuilder:
                       else self.colors["warning"] if unique_pct >= 95
                       else self.colors["danger"])
 
-        # Progress bar style for uniqueness
         fig.add_trace(go.Bar(
             x=[unique_pct], y=[""],
             orientation='h',
@@ -2579,7 +2539,6 @@ class ChartBuilder:
         )
         features = [i.feature_name for i in insights]
         cramers_values = [i.cramers_v for i in insights]
-        # Top-Left: Strength gradient (red=strong, orange=moderate, light blue=weak)
         strength_colors = ["#c0392b" if v >= 0.3 else "#e67e22" if v >= 0.1 else "#85c1e9" for v in cramers_values]
         fig.add_trace(go.Bar(
             y=features, x=cramers_values, orientation="h", marker_color=strength_colors,
@@ -2589,13 +2548,11 @@ class ChartBuilder:
                       annotation_position="top right", row=1, col=1)
         fig.add_vline(x=0.1, line_dash="dash", line_color="#e67e22", annotation_text="Moderate",
                       annotation_position="top left", row=1, col=1)
-        # Top-Right: Count distribution (purple palette - distinct from strength colors)
         effect_counts = {"strong": 0, "moderate": 0, "weak": 0, "negligible": 0}
         for i in insights:
             effect_counts[i.effect_strength] = effect_counts.get(i.effect_strength, 0) + 1
         effect_labels = list(effect_counts.keys())
         effect_values = list(effect_counts.values())
-        # Purple gradient for counts (darker = more significant category)
         count_colors = ["#6c3483", "#8e44ad", "#a569bd", "#d2b4de"]
         fig.add_trace(go.Bar(
             x=effect_labels, y=effect_values, marker_color=count_colors, showlegend=False,

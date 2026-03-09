@@ -138,12 +138,10 @@ class FeatureEngineer:
         }
         self._is_fitted = False
 
-        # Initialize generators
         self._init_generators()
 
     def _init_generators(self) -> None:
         """Initialize feature generators based on config."""
-        # Temporal generator
         if self.config.generate_temporal and self.config.reference_date:
             self._temporal_generator = TemporalFeatureGenerator(
                 reference_date=self.config.reference_date,
@@ -155,7 +153,6 @@ class FeatureEngineer:
         else:
             self._temporal_generator = None
 
-        # Behavioral generator
         if self.config.generate_behavioral:
             self._behavioral_generator = BehavioralFeatureGenerator(
                 tenure_months_column=self.config.tenure_months_column,
@@ -168,7 +165,6 @@ class FeatureEngineer:
         else:
             self._behavioral_generator = None
 
-        # Interaction generator
         if self.config.generate_interaction:
             self._interaction_generator = InteractionFeatureGenerator(
                 combinations=self.config.interaction_combinations,
@@ -226,11 +222,9 @@ class FeatureEngineer:
         }
         pit_validation = None
 
-        # Run point-in-time validation if enabled and feature_timestamp exists
         if self.config.enforce_point_in_time:
             pit_validation = self._validate_point_in_time(result_df)
 
-        # Apply temporal features
         if self._temporal_generator:
             result_df = self._temporal_generator.transform(result_df)
             temporal_features = self._temporal_generator.generated_features
@@ -239,7 +233,6 @@ class FeatureEngineer:
             if self.config.populate_catalog:
                 self._add_temporal_definitions(temporal_features)
 
-        # Apply behavioral features
         if self._behavioral_generator:
             result_df = self._behavioral_generator.transform(result_df)
             behavioral_features = self._behavioral_generator.generated_features
@@ -248,7 +241,6 @@ class FeatureEngineer:
             if self.config.populate_catalog:
                 self._add_behavioral_definitions(behavioral_features)
 
-        # Apply interaction features (needs computed features)
         if self._interaction_generator:
             result_df = self._interaction_generator.transform(result_df)
             interaction_features = self._interaction_generator.generated_features
@@ -442,7 +434,6 @@ class FeatureEngineer:
         entity_key = self.config.id_column or "entity_id"
         timestamp_col = self.config.feature_timestamp_column or "feature_timestamp"
 
-        # Map FeatureCategory to leakage risk
         category_to_risk = {
             FeatureCategory.TEMPORAL: "low",
             FeatureCategory.BEHAVIORAL: "low",
@@ -456,13 +447,11 @@ class FeatureEngineer:
             FeatureCategory.MONETARY: "low",
         }
 
-        # Convert catalog entries to temporal feature definitions
         for name in self.catalog.list_names():
             old_def = self.catalog.get(name)
             if old_def is None:
                 continue
 
-            # Determine computation type
             if "interaction" in name.lower() or "_x_" in name:
                 comp_type = FeatureComputationType.INTERACTION
             elif "ratio" in name.lower() or "_per_" in name:
@@ -472,7 +461,6 @@ class FeatureEngineer:
             else:
                 comp_type = FeatureComputationType.DERIVED
 
-            # For DERIVED type, we need a formula - fall back to PASSTHROUGH if none
             if comp_type == FeatureComputationType.DERIVED and not old_def.derivation:
                 comp_type = FeatureComputationType.PASSTHROUGH
 
@@ -489,7 +477,6 @@ class FeatureEngineer:
                 leakage_notes=f"Category: {old_def.category.value}",
             ))
 
-        # Add any generated features not in catalog
         for feature_name in self.generated_features:
             if feature_name not in registry:
                 registry.register(TemporalFeatureDefinition(

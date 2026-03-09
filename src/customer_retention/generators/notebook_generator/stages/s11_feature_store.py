@@ -57,13 +57,11 @@ print("Feature store imports loaded")'''),
 
             self.cb.section("2. Load Gold Layer Data"),
             self.cb.markdown('''Load the gold layer features. These should already have `feature_timestamp` for point-in-time correctness.'''),
-            self.cb.code('''# Load gold layer data
-gold_path = Path("./experiments/data/gold/customers_features.parquet")
+            self.cb.code('''gold_path = Path("./experiments/data/gold/customers_features.parquet")
 if gold_path.exists():
     df = pd.read_parquet(gold_path)
     print(f"Loaded gold layer: {df.shape}")
 else:
-    # Fall back to snapshot
     snapshot_manager = SnapshotManager(Path("./experiments/data"))
     latest = snapshot_manager.get_latest_snapshot()
     if latest:
@@ -72,7 +70,6 @@ else:
     else:
         raise FileNotFoundError("No gold layer or snapshot found")
 
-# Verify temporal columns exist
 required_cols = ["entity_id", "feature_timestamp"]
 missing = [c for c in required_cols if c not in df.columns]
 if missing:
@@ -83,14 +80,11 @@ else:
 
             self.cb.section("3. Define Feature Registry"),
             self.cb.markdown('''Create feature definitions with temporal metadata. This ensures consistent feature computation across training and inference.'''),
-            self.cb.code('''# Create feature registry
-registry = FeatureRegistry()
+            self.cb.code('''registry = FeatureRegistry()
 
-# Get numeric columns (excluding metadata)
 exclude_cols = {"entity_id", "target", "feature_timestamp", "label_timestamp", "label_available_flag"}
 numeric_cols = [c for c in df.select_dtypes(include=[np.number]).columns if c not in exclude_cols]
 
-# Register each numeric feature
 for col in numeric_cols:
     registry.register(TemporalFeatureDefinition(
         name=col,
@@ -118,8 +112,7 @@ print(f"Existing tables: {manager.list_tables()}")
 '''),
 
             self.cb.section("5. Publish Features to Feature Store"),
-            self.cb.code('''# Publish features
-table_name = manager.publish_features(
+            self.cb.code('''table_name = manager.publish_features(
     df=df,
     registry=registry,
     table_name="customer_features",
@@ -134,12 +127,9 @@ print(f"Tables after publish: {manager.list_tables()}")
 
             self.cb.section("6. Create Point-in-Time Training Set"),
             self.cb.markdown('''Create a training set with point-in-time correct feature retrieval. The entity DataFrame specifies when we want to "observe" each customer.'''),
-            self.cb.code('''# Create entity DataFrame with observation timestamps
-# This simulates "when would we have made a prediction?"
-entity_df = df[["entity_id", "feature_timestamp"]].copy()
+            self.cb.code('''entity_df = df[["entity_id", "feature_timestamp"]].copy()
 entity_df = entity_df.rename(columns={"feature_timestamp": "event_timestamp"})
 
-# Get point-in-time correct features
 training_df = manager.get_training_features(
     entity_df=entity_df,
     registry=registry,
@@ -153,20 +143,17 @@ print(f"Columns: {list(training_df.columns)}")
 '''),
 
             self.cb.section("7. Save Feature Registry"),
-            self.cb.code('''# Save registry for later use
-registry_path = Path("./experiments/feature_store/feature_registry.json")
+            self.cb.code('''registry_path = Path("./experiments/feature_store/feature_registry.json")
 registry_path.parent.mkdir(parents=True, exist_ok=True)
 registry.save(registry_path)
 print(f"Saved feature registry to {registry_path}")
 
-# Verify we can reload it
 loaded_registry = FeatureRegistry.load(registry_path)
 print(f"Reloaded registry: {len(loaded_registry)} features")
 '''),
 
             self.cb.section("8. Validate Feature Store Integration"),
-            self.cb.code('''# Validate that features match between direct load and feature store
-direct_features = df[["entity_id"] + registry.list_features()[:5]].head(10)
+            self.cb.code('''direct_features = df[["entity_id"] + registry.list_features()[:5]].head(10)
 store_features = training_df[["entity_id"] + [f for f in registry.list_features()[:5] if f in training_df.columns]].head(10)
 
 print("Direct load sample:")
@@ -174,7 +161,6 @@ print(direct_features)
 print("\\nFeature store sample:")
 print(store_features)
 
-# Check for mismatches
 if set(direct_features.columns) == set(store_features.columns):
     merged = direct_features.merge(store_features, on="entity_id", suffixes=("_direct", "_store"))
     for col in registry.list_features()[:5]:
@@ -222,24 +208,19 @@ print(f"Using catalog: {{CATALOG}}.{{SCHEMA}}")
 '''),
 
             self.cb.section("2. Load Gold Table"),
-            self.cb.code(f'''# Load gold layer
-df = spark.table("{catalog}.{schema}.gold_customers")
+            self.cb.code(f'''df = spark.table("{catalog}.{schema}.gold_customers")
 print(f"Loaded gold table: {{df.count()}} rows")
 
-# Display schema
 df.printSchema()
 '''),
 
             self.cb.section("3. Create Feature Table"),
             self.cb.markdown('''Create a Unity Catalog feature table with primary keys and timestamp column for point-in-time lookups.'''),
-            self.cb.code(f'''# Define feature table
-FEATURE_TABLE = "{catalog}.{schema}.customer_features"
+            self.cb.code(f'''FEATURE_TABLE = "{catalog}.{schema}.customer_features"
 
-# Select feature columns (exclude metadata)
 exclude_cols = {{"entity_id", "target", "feature_timestamp", "label_timestamp", "label_available_flag"}}
 feature_cols = [c for c in df.columns if c not in exclude_cols]
 
-# Create or replace feature table
 feature_df = df.select(
     "entity_id",
     "feature_timestamp",
@@ -258,10 +239,8 @@ print(f"Created feature table: {{FEATURE_TABLE}}")
 '''),
 
             self.cb.section("4. Create Training Set with Point-in-Time Lookups"),
-            self.cb.code('''# Create entity DataFrame with observation timestamps
-entity_df = df.select("entity_id", col("feature_timestamp").alias("event_timestamp"))
+            self.cb.code('''entity_df = df.select("entity_id", col("feature_timestamp").alias("event_timestamp"))
 
-# Define feature lookups with timestamp_lookup_key for PIT correctness
 feature_lookups = [
     FeatureLookup(
         table_name=FEATURE_TABLE,
@@ -270,11 +249,10 @@ feature_lookups = [
     )
 ]
 
-# Create training set
 training_set = fe.create_training_set(
     df=entity_df,
     feature_lookups=feature_lookups,
-    label=None,  # Add label column name if joining labels
+    label=None,
 )
 
 training_df = training_set.load_df()
@@ -284,23 +262,17 @@ training_df.show(5)
 
             self.cb.section("5. Log Model with Feature Store Lineage"),
             self.cb.markdown('''When training models, use `fe.log_model()` to capture feature lineage. This enables automatic feature lookup during inference.'''),
-            self.cb.code('''# Example: Train and log model with feature lineage
-# (Uncomment and modify for your model)
+            self.cb.code('''# Uncomment and modify for your model
 
 # from sklearn.ensemble import RandomForestClassifier
 # import mlflow
 #
-# # Prepare features
 # pdf = training_df.toPandas()
 # feature_cols = [c for c in pdf.columns if c not in ["entity_id", "event_timestamp", "target"]]
 # X = pdf[feature_cols]
 # y = pdf["target"]
-#
-# # Train model
 # model = RandomForestClassifier(n_estimators=100)
 # model.fit(X, y)
-#
-# # Log with feature lineage
 # with mlflow.start_run():
 #     fe.log_model(
 #         model=model,
@@ -313,16 +285,11 @@ training_df.show(5)
 
             self.cb.section("6. Online Feature Serving"),
             self.cb.markdown('''For real-time inference, use Model Serving with automatic feature lookup.'''),
-            self.cb.code('''# Score batch with automatic feature lookup
-# The model automatically retrieves latest features from the feature table
-
-# Example: Score new customers
+            self.cb.code('''# Example: Score new customers
 # new_customers = spark.createDataFrame([
 #     {"entity_id": "new_customer_1"},
 #     {"entity_id": "new_customer_2"},
 # ])
-#
-# # Feature lookups happen automatically during scoring
 # predictions = fe.score_batch(
 #     df=new_customers,
 #     model_uri="models:/churn_model/production",

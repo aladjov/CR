@@ -339,8 +339,6 @@ def {{ func_name }}(df: pd.DataFrame) -> pd.DataFrame:
 
 {% if config.lifecycle %}
 
-# --- Lifecycle enrichment (computed on cleaned data) ---
-
 ENTITY_COLUMN = "{{ config.entity_column or config.source.entity_key }}"
 TIME_COLUMN = "{{ config.time_column or config.source.time_column }}"
 
@@ -656,7 +654,6 @@ def create_holdout_mask(df: pd.DataFrame, holdout_fraction: float = 0.1, random_
     """
     ORIGINAL_COLUMN = f"original_{TARGET_COLUMN}"
 
-    # Skip if holdout already exists
     if ORIGINAL_COLUMN in df.columns:
         print(f"  Holdout already exists ({ORIGINAL_COLUMN}), skipping creation")
         return df
@@ -671,11 +668,9 @@ def create_holdout_mask(df: pd.DataFrame, holdout_fraction: float = 0.1, random_
     n_holdout = int(len(df) * holdout_fraction)
     holdout_idx = df.sample(n=n_holdout, random_state=random_state).index
 
-    # Store original values for holdout records only
     df[ORIGINAL_COLUMN] = pd.NA
     df.loc[holdout_idx, ORIGINAL_COLUMN] = df.loc[holdout_idx, TARGET_COLUMN]
 
-    # Mask target values for holdout records
     df.loc[holdout_idx, TARGET_COLUMN] = pd.NA
 
     print(f"  Holdout records: {n_holdout:,} ({holdout_fraction:.0%})")
@@ -852,8 +847,6 @@ def apply_scaling(df: pd.DataFrame) -> pd.DataFrame:
 def apply_feature_selection(df: pd.DataFrame) -> pd.DataFrame:
 {% if config.gold.feature_selections %}
 {% for fs in config.gold.feature_selections %}
-    # Feature selection
-    # drop {{ fs }} (feature selection)
     df = apply_feature_select(df, '{{ fs }}')
 {% endfor %}
 {% endif %}
@@ -992,7 +985,6 @@ from config import (TARGET_COLUMN, PIPELINE_NAME, COMPOSITE_NAME, RECOMMENDATION
                     MLFLOW_ARTIFACT_ROOT, FEAST_REPO_PATH, FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY,
                     FEAST_TIMESTAMP_COL, get_feast_data_path)
 
-# Set tracking URI immediately to prevent default mlruns directory creation
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
 
@@ -1009,7 +1001,6 @@ def get_training_data_from_feast() -> pd.DataFrame:
     """
     feast_path = Path(FEAST_REPO_PATH)
 
-    # Check if Feast repo is initialized
     if not (feast_path / "feature_store.yaml").exists():
         print("Feast repo not initialized, falling back to data file")
         return _load_feast_data()
@@ -1017,31 +1008,25 @@ def get_training_data_from_feast() -> pd.DataFrame:
     try:
         store = FeatureStore(repo_path=str(feast_path))
 
-        # Read the materialized features to get entity keys and timestamps
         features_df = _load_feast_data()
 
-        # Create entity dataframe for historical feature retrieval
         entity_df = features_df[[FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL]].copy()
 
-        # Get all feature names (excluding entity key, timestamp, target, and holdout ground truth)
         exclude_cols = {FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL, TARGET_COLUMN}
         feature_cols = [c for c in features_df.columns
                         if c not in exclude_cols and not c.startswith("original_")]
 
-        # Build feature references
         feature_refs = [f"{FEAST_FEATURE_VIEW}:{col}" for col in feature_cols]
 
         print(f"Retrieving {len(feature_refs)} features from Feast...")
         print(f"  Feature view: {FEAST_FEATURE_VIEW}")
         print(f"  Entity key: {FEAST_ENTITY_KEY}")
 
-        # Get historical features with point-in-time correctness
         training_df = store.get_historical_features(
             entity_df=entity_df,
             features=feature_refs
         ).to_df()
 
-        # Add target column back
         training_df = training_df.merge(
             features_df[[FEAST_ENTITY_KEY, TARGET_COLUMN]],
             on=FEAST_ENTITY_KEY,
@@ -1064,15 +1049,12 @@ def prepare_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
 
-    # Drop Feast metadata columns and temporal spine columns
-    drop_cols = [FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL, "as_of_date"]
-    df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
+    metadata_cols = [FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL, "as_of_date"]
+    df = df.drop(columns=[c for c in metadata_cols if c in df.columns], errors="ignore")
 
-    # Exclude original_* columns (holdout ground truth - prevents data leakage)
-    original_cols = [c for c in df.columns if c.startswith("original_")]
-    df = df.drop(columns=original_cols, errors="ignore")
+    holdout_ground_truth_cols = [c for c in df.columns if c.startswith("original_")]
+    df = df.drop(columns=holdout_ground_truth_cols, errors="ignore")
 
-    # Encode categorical columns
     for col in df.select_dtypes(include=["object", "category"]).columns:
         df[col] = LabelEncoder().fit_transform(df[col].astype(str))
 
@@ -1136,7 +1118,6 @@ def run_experiment():
     print(f"MLflow tracking: {MLFLOW_TRACKING_URI}")
     print(f"Artifacts: {MLFLOW_ARTIFACT_ROOT}")
 
-    # Load training data from Feast (ensures training/serving consistency)
     print("\\nLoading training data from Feast...")
     training_data = get_training_data_from_feast()
 

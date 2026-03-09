@@ -103,6 +103,21 @@ class RangeValidationResult:
         }
 
 
+def _severity_from_percentage(percentage: float) -> Severity:
+    if percentage > 10:
+        return Severity.CRITICAL
+    if percentage > 5:
+        return Severity.WARNING
+    return Severity.INFO
+
+
+_SEVERITY_ORDER = [Severity.INFO, Severity.WARNING, Severity.CRITICAL]
+
+
+def _highest_severity(severities: List[Severity]) -> Severity:
+    return max(severities, key=lambda s: _SEVERITY_ORDER.index(s))
+
+
 class DataValidator:
     """
     Validator for data quality checks in exploratory analysis.
@@ -160,20 +175,9 @@ class DataValidator:
         duplicate_keys = df[duplicate_mask][resolved_key].nunique()
         duplicate_percentage = (duplicate_rows / total_rows * 100) if total_rows > 0 else 0.0
 
-        # Check for exact duplicate rows
         exact_duplicate_rows = df.duplicated(keep=False).sum()
+        severity = _severity_from_percentage(duplicate_percentage)
 
-        # Determine severity based on duplicate percentage
-        if duplicate_percentage > 10:
-            severity = Severity.CRITICAL
-        elif duplicate_percentage > 5:
-            severity = Severity.WARNING
-        elif duplicate_percentage > 0:
-            severity = Severity.INFO
-        else:
-            severity = Severity.INFO
-
-        # Check for value conflicts
         has_value_conflicts = False
         conflict_columns = []
         conflict_examples = []
@@ -200,7 +204,6 @@ class DataValidator:
                                 "values": unique_vals[:5]
                             })
 
-            # Value conflicts are additional concern - only increase severity, never decrease
             if has_value_conflicts and severity == Severity.INFO:
                 severity = Severity.WARNING
 
@@ -241,7 +244,6 @@ class DataValidator:
         DateLogicResult
             Detailed analysis of date logic violations
         """
-        # Filter to columns that exist
         existing_cols = [c for c in date_columns if c in df.columns]
 
         if len(existing_cols) < 2:
@@ -257,22 +259,18 @@ class DataValidator:
         order = expected_order if expected_order else existing_cols
         order = [c for c in order if c in existing_cols]
 
-        # Convert to datetime if needed
         df_dates = df[order].copy()
         for col in order:
             if not is_datetime64_any_dtype(df_dates[col]):
                 df_dates[col] = to_datetime(df_dates[col], errors='coerce', format='mixed')
 
-        # Check sequential ordering
         violations = []
         violation_types = {}
         invalid_mask = pd.Series(False, index=df.index)
 
         for i in range(len(order) - 1):
             col1, col2 = order[i], order[i + 1]
-            # col1 should be <= col2
             invalid = df_dates[col1] > df_dates[col2]
-            # Exclude rows where either is NaT
             valid_comparison = df_dates[col1].notna() & df_dates[col2].notna()
             invalid = invalid & valid_comparison
 
@@ -282,7 +280,6 @@ class DataValidator:
                 violation_types[violation_key] = int(violation_count)
                 invalid_mask = invalid_mask | invalid
 
-                # Sample violations
                 if len(violations) < 5:
                     sample_idx = df[invalid].head(3).index
                     for idx in sample_idx:
@@ -298,15 +295,7 @@ class DataValidator:
         valid_rows = total_rows - invalid_rows
         invalid_percentage = (invalid_rows / total_rows * 100) if total_rows > 0 else 0.0
 
-        # Determine severity
-        if invalid_percentage > 10:
-            severity = Severity.CRITICAL
-        elif invalid_percentage > 5:
-            severity = Severity.WARNING
-        elif invalid_percentage > 0:
-            severity = Severity.INFO
-        else:
-            severity = Severity.INFO
+        severity = _severity_from_percentage(invalid_percentage)
 
         return DateLogicResult(
             date_columns=order,
@@ -386,23 +375,12 @@ class DataValidator:
             valid_values = total_values - invalid_values
             invalid_percentage = (invalid_values / total_values * 100) if total_values > 0 else 0.0
 
-            # Get actual range
             actual_min = float(series.min())
             actual_max = float(series.max())
             actual_range = f"[{actual_min:.2f}, {actual_max:.2f}]"
 
-            # Get invalid examples
             invalid_examples = head_as_list(series[invalid_mask], 5) if invalid_values > 0 else []
-
-            # Determine severity
-            if invalid_percentage > 10:
-                severity = Severity.CRITICAL
-            elif invalid_percentage > 5:
-                severity = Severity.WARNING
-            elif invalid_percentage > 0:
-                severity = Severity.INFO
-            else:
-                severity = Severity.INFO
+            severity = _severity_from_percentage(invalid_percentage)
 
             results.append(RangeValidationResult(
                 column_name=col_name,
@@ -438,23 +416,19 @@ class DataValidator:
         for col in df.columns:
             col_lower = col.lower()
 
-            # Percentage columns (rates, percentages)
             if any(pattern in col_lower for pattern in ['rate', 'pct', 'percent', 'ratio']):
                 if df[col].dtype in ['float64', 'float32', 'int64', 'int32']:
-                    # Check if it's 0-1 scale or 0-100 scale
                     max_val = df[col].max()
                     if max_val <= 1.0:
                         rules[col] = {"type": "percentage", "min": 0, "max": 1}
                     else:
                         rules[col] = {"type": "percentage", "min": 0, "max": 100}
 
-            # Binary columns
             elif df[col].nunique() == 2:
                 unique_vals = head_as_list(df[col].dropna().unique(), 10)
                 if set(unique_vals).issubset({0, 1, True, False, 0.0, 1.0}):
                     rules[col] = {"type": "binary", "valid_values": [0, 1]}
 
-            # Count/amount columns (non-negative)
             elif any(pattern in col_lower for pattern in ['count', 'amount', 'quantity', 'num_', 'n_']):
                 if df[col].dtype in ['float64', 'float32', 'int64', 'int32']:
                     rules[col] = {"type": "non_negative"}
@@ -510,15 +484,8 @@ class DataValidator:
         results["range_validations"] = [r.to_dict() for r in range_results]
         severities.extend([r.severity for r in range_results])
 
-        # Determine overall severity (highest)
-        severity_order = [
-            Severity.INFO,
-            Severity.WARNING,
-            Severity.CRITICAL,
-            Severity.CRITICAL
-        ]
         if severities:
-            results["overall_severity"] = max(severities, key=lambda s: severity_order.index(s)).value
+            results["overall_severity"] = _highest_severity(severities).value
         else:
             results["overall_severity"] = Severity.INFO.value
 

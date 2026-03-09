@@ -25,9 +25,9 @@ from customer_retention.core.compat import (
 
 class DatasetType(Enum):
     """Classification of dataset structure."""
-    SNAPSHOT = "snapshot"           # Single row per entity (point-in-time)
-    TIME_SERIES = "time_series"     # Multiple rows per entity over time
-    EVENT_LOG = "event_log"         # Irregular events per entity
+    SNAPSHOT = "snapshot"
+    TIME_SERIES = "time_series"
+    EVENT_LOG = "event_log"
     UNKNOWN = "unknown"
 
 
@@ -51,24 +51,21 @@ class TimeSeriesCharacteristics:
     entity_column: Optional[str] = None
     timestamp_column: Optional[str] = None
 
-    # Entity statistics
     total_entities: int = 0
     min_observations_per_entity: int = 0
     max_observations_per_entity: int = 0
     avg_observations_per_entity: float = 0.0
     median_observations_per_entity: float = 0.0
 
-    # Temporal statistics
     time_span_days: float = 0.0
     detected_frequency: TimeSeriesFrequency = TimeSeriesFrequency.UNKNOWN
     median_interval_hours: float = 0.0
 
-    # Quality indicators
     entities_with_single_observation: int = 0
     entities_with_gaps: int = 0
     duplicate_timestamps_count: int = 0
 
-    confidence: float = 0.0  # 0-1 confidence in detection
+    confidence: float = 0.0
     evidence: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -90,31 +87,25 @@ class TimeSeriesCharacteristics:
 @dataclass
 class TimeSeriesValidationResult:
     """Result of time series quality validation."""
-    # Temporal coverage
     total_expected_periods: int = 0
     total_actual_periods: int = 0
     coverage_percentage: float = 100.0
 
-    # Gap analysis
     entities_with_gaps: int = 0
     total_gaps: int = 0
     max_gap_periods: int = 0
     gap_examples: List[Dict[str, Any]] = field(default_factory=list)
 
-    # Duplicate timestamps
     entities_with_duplicate_timestamps: int = 0
     total_duplicate_timestamps: int = 0
     duplicate_examples: List[Dict[str, Any]] = field(default_factory=list)
 
-    # Temporal ordering
     entities_with_ordering_issues: int = 0
     ordering_issue_examples: List[Dict[str, Any]] = field(default_factory=list)
 
-    # Frequency consistency
     frequency_consistent: bool = True
     frequency_deviation_percentage: float = 0.0
 
-    # Overall quality score for time series aspects
     temporal_quality_score: float = 100.0
     issues: List[str] = field(default_factory=list)
 
@@ -149,14 +140,12 @@ class TimeSeriesDetector:
     ...     print(f"Time series detected with {result.avg_observations_per_entity:.1f} obs/entity")
     """
 
-    # Common timestamp column name patterns
     TIMESTAMP_PATTERNS = [
         'date', 'time', 'timestamp', 'datetime', 'created', 'updated',
         'event_date', 'transaction_date', 'order_date', 'period',
         'month', 'year', 'week', 'day', 'ts', 'dt'
     ]
 
-    # Common entity/ID column name patterns
     ENTITY_PATTERNS = [
         'id', 'customer_id', 'user_id', 'account_id', 'entity_id',
         'custid', 'userid', 'client_id', 'member_id', 'subscriber_id'
@@ -192,19 +181,16 @@ class TimeSeriesDetector:
         """
         evidence = []
 
-        # Auto-detect entity column if not provided
         if entity_column is None:
             entity_column = self._detect_entity_column(df)
             if entity_column:
                 evidence.append(f"Auto-detected entity column: {entity_column}")
 
-        # Auto-detect timestamp column if not provided
         if timestamp_column is None:
             timestamp_column = self._detect_timestamp_column(df)
             if timestamp_column:
                 evidence.append(f"Auto-detected timestamp column: {timestamp_column}")
 
-        # If we can't detect both, return as unknown
         if entity_column is None or entity_column not in df.columns:
             return TimeSeriesCharacteristics(
                 is_time_series=False,
@@ -213,11 +199,9 @@ class TimeSeriesDetector:
                 evidence=["Could not detect entity column"]
             )
 
-        # Calculate entity statistics
         entity_counts = df[entity_column].value_counts()
         total_entities = len(entity_counts)
 
-        # Handle empty dataframe
         if total_entities == 0:
             return TimeSeriesCharacteristics(
                 is_time_series=False,
@@ -238,9 +222,7 @@ class TimeSeriesDetector:
         evidence.append(f"Found {total_entities:,} unique entities")
         evidence.append(f"Observations per entity: min={min_obs}, max={max_obs}, avg={avg_obs:.1f}")
 
-        # Determine dataset type based on observations per entity
         if avg_obs < min_observations_threshold:
-            # Mostly single observations - likely snapshot data
             return TimeSeriesCharacteristics(
                 is_time_series=False,
                 dataset_type=DatasetType.SNAPSHOT,
@@ -256,37 +238,18 @@ class TimeSeriesDetector:
                 evidence=evidence + ["Dataset appears to be snapshot (single observation per entity)"]
             )
 
-        # Multiple observations per entity - analyze temporal aspects
         time_span_days = 0.0
         detected_frequency = TimeSeriesFrequency.UNKNOWN
         median_interval_hours = 0.0
         duplicate_timestamps = 0
 
         if timestamp_column and timestamp_column in df.columns:
-            # Convert to datetime if needed
-            ts_series = to_datetime(
-                df[timestamp_column], errors='coerce', format='mixed'
-            )
-            valid_ts = ts_series.notna()
-
-            if valid_ts.sum() > 0:
-                time_span = ts_series.max() - ts_series.min()
-                time_span_days = time_span.total_seconds() / 86400
-                evidence.append(f"Time span: {time_span_days:.1f} days")
-
-                # Detect frequency
-                detected_frequency, median_interval_hours = self._detect_frequency(
-                    df, entity_column, timestamp_column
+            time_span_days, detected_frequency, median_interval_hours, duplicate_timestamps = (
+                self._analyze_temporal_aspects(
+                    df, entity_column, timestamp_column, evidence
                 )
-                evidence.append(f"Detected frequency: {detected_frequency.value}")
+            )
 
-                # Check for duplicate timestamps per entity
-                dup_check = df.groupby([entity_column, timestamp_column]).size()
-                duplicate_timestamps = int((dup_check > 1).sum())
-                if duplicate_timestamps > 0:
-                    evidence.append(f"Found {duplicate_timestamps} duplicate timestamps")
-
-        # Determine if this is time series or event log
         if detected_frequency == TimeSeriesFrequency.IRREGULAR:
             dataset_type = DatasetType.EVENT_LOG
             evidence.append("Irregular intervals suggest event log data")
@@ -294,7 +257,6 @@ class TimeSeriesDetector:
             dataset_type = DatasetType.TIME_SERIES
             evidence.append("Regular intervals suggest time series data")
 
-        # Calculate confidence
         confidence = self._calculate_confidence(
             avg_obs, timestamp_column is not None,
             detected_frequency != TimeSeriesFrequency.UNKNOWN
@@ -319,68 +281,102 @@ class TimeSeriesDetector:
             evidence=evidence
         )
 
+    def _analyze_temporal_aspects(
+        self,
+        df: DataFrame,
+        entity_column: str,
+        timestamp_column: str,
+        evidence: List[str],
+    ) -> Tuple[float, TimeSeriesFrequency, float, int]:
+        ts_series = to_datetime(
+            df[timestamp_column], errors='coerce', format='mixed'
+        )
+        valid_ts = ts_series.notna()
+
+        if valid_ts.sum() == 0:
+            return 0.0, TimeSeriesFrequency.UNKNOWN, 0.0, 0
+
+        time_span = ts_series.max() - ts_series.min()
+        time_span_days = time_span.total_seconds() / 86400
+        evidence.append(f"Time span: {time_span_days:.1f} days")
+
+        detected_frequency, median_interval_hours = self._detect_frequency(
+            df, entity_column, timestamp_column
+        )
+        evidence.append(f"Detected frequency: {detected_frequency.value}")
+
+        dup_check = df.groupby([entity_column, timestamp_column]).size()
+        duplicate_timestamps = int((dup_check > 1).sum())
+        if duplicate_timestamps > 0:
+            evidence.append(f"Found {duplicate_timestamps} duplicate timestamps")
+
+        return time_span_days, detected_frequency, median_interval_hours, duplicate_timestamps
+
     def _detect_entity_column(self, df: DataFrame) -> Optional[str]:
-        """Auto-detect the entity/ID column."""
-        # First, look for columns matching common patterns
+        matched = self._find_column_by_name_pattern(df)
+        if matched:
+            return matched
+        return self._find_column_by_cardinality(df)
+
+    def _find_column_by_name_pattern(self, df: DataFrame) -> Optional[str]:
         for col in df.columns:
             col_lower = col.lower()
             for pattern in self.ENTITY_PATTERNS:
                 if pattern in col_lower:
                     return col
+        return None
 
-        # Look for columns that might be identifiers based on characteristics
+    def _find_column_by_cardinality(self, df: DataFrame) -> Optional[str]:
         for col in df.columns:
             if df[col].dtype == 'object' or df[col].dtype.name.startswith('int'):
-                # High cardinality but not unique (multiple rows per entity)
                 distinct_ratio = df[col].nunique() / len(df)
-                if 0.01 < distinct_ratio < 0.9:  # Not constant, not unique
-                    # Check if values repeat
+                if 0.01 < distinct_ratio < 0.9:
                     if df[col].value_counts().max() > 1:
                         return col
-
         return None
 
     def _detect_timestamp_column(self, df: DataFrame) -> Optional[str]:
-        """Auto-detect the timestamp column."""
         candidates = []
 
         for col in df.columns:
-            col_lower = col.lower()
-
-            # Check if column name matches timestamp patterns
-            name_match = any(pattern in col_lower for pattern in self.TIMESTAMP_PATTERNS)
-
-            # Check if column is datetime type
-            is_datetime = is_datetime64_any_dtype(df[col])
-
-            # Try to parse as datetime
-            can_parse = False
-            if not is_datetime and df[col].dtype == 'object':
-                try:
-                    with warnings.catch_warnings():
-                        warnings.filterwarnings('ignore', category=FutureWarning)
-                        parsed = to_datetime(
-                            df[col].head(100), errors='coerce', format='mixed'
-                        )
-                    can_parse = parsed.notna().mean() > 0.8
-                except Exception:
-                    pass
-
-            if is_datetime:
-                candidates.append((col, 3))  # Highest priority
-            elif name_match and can_parse:
-                candidates.append((col, 2))
-            elif name_match:
-                candidates.append((col, 1))
-            elif can_parse:
-                candidates.append((col, 1))
+            priority = self._timestamp_column_priority(df, col)
+            if priority > 0:
+                candidates.append((col, priority))
 
         if candidates:
-            # Return highest priority candidate
             candidates.sort(key=lambda x: x[1], reverse=True)
             return candidates[0][0]
 
         return None
+
+    def _timestamp_column_priority(self, df: DataFrame, col: str) -> int:
+        col_lower = col.lower()
+        name_match = any(pattern in col_lower for pattern in self.TIMESTAMP_PATTERNS)
+        is_datetime = is_datetime64_any_dtype(df[col])
+
+        if is_datetime:
+            return 3
+
+        can_parse = self._can_parse_as_datetime(df[col])
+
+        if name_match and can_parse:
+            return 2
+        if name_match or can_parse:
+            return 1
+        return 0
+
+    def _can_parse_as_datetime(self, series) -> bool:
+        if series.dtype != 'object':
+            return False
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', category=FutureWarning)
+                parsed = to_datetime(
+                    series.head(100), errors='coerce', format='mixed'
+                )
+            return parsed.notna().mean() > 0.8
+        except Exception:
+            return False
 
     def _detect_frequency(
         self,
@@ -480,26 +476,22 @@ class TimeSeriesDetector:
         has_timestamp: bool,
         has_frequency: bool
     ) -> float:
-        """Calculate confidence score for time series detection."""
-        confidence = 0.5  # Base confidence
-
-        # More observations per entity = higher confidence
-        if avg_observations >= 10:
-            confidence += 0.3
-        elif avg_observations >= 5:
-            confidence += 0.2
-        elif avg_observations >= 2:
-            confidence += 0.1
-
-        # Having a timestamp column increases confidence
+        confidence = 0.5
+        confidence += self._observation_count_bonus(avg_observations)
         if has_timestamp:
             confidence += 0.1
-
-        # Having detected frequency increases confidence
         if has_frequency:
             confidence += 0.1
-
         return min(1.0, confidence)
+
+    def _observation_count_bonus(self, avg_observations: float) -> float:
+        if avg_observations >= 10:
+            return 0.3
+        if avg_observations >= 5:
+            return 0.2
+        if avg_observations >= 2:
+            return 0.1
+        return 0.0
 
 
 class TimeSeriesValidator:
@@ -553,9 +545,6 @@ class TimeSeriesValidator:
         TimeSeriesValidationResult
             Validation results with quality metrics
         """
-        issues = []
-
-        # Validate inputs
         if entity_column not in df.columns:
             return TimeSeriesValidationResult(
                 temporal_quality_score=0,
@@ -568,13 +557,12 @@ class TimeSeriesValidator:
                 issues=[f"Timestamp column '{timestamp_column}' not found"]
             )
 
-        # Convert timestamp
         df_copy = df.copy()
         df_copy['_ts'] = to_datetime(
             df_copy[timestamp_column], errors='coerce', format='mixed'
         )
 
-        # Check for duplicate timestamps per entity
+        issues = []
         dup_result = self._check_duplicate_timestamps(df_copy, entity_column)
         if dup_result['total'] > 0:
             issues.append(
@@ -582,14 +570,12 @@ class TimeSeriesValidator:
                 f"{dup_result['entities']} entities"
             )
 
-        # Check temporal ordering
         order_result = self._check_ordering(df_copy, entity_column)
         if order_result['entities'] > 0:
             issues.append(
                 f"{order_result['entities']} entities have ordering issues"
             )
 
-        # Analyze gaps
         gap_result = self._analyze_gaps(
             df_copy, entity_column, expected_frequency, max_allowed_gap_periods
         )
@@ -598,35 +584,10 @@ class TimeSeriesValidator:
                 f"{gap_result['entities_with_gaps']} entities have significant gaps"
             )
 
-        # Calculate temporal quality score
         total_entities = df[entity_column].nunique()
-
-        penalties = 0
-
-        # Duplicate timestamp penalty
-        dup_rate = dup_result['entities'] / total_entities if total_entities > 0 else 0
-        if dup_rate > 0.1:
-            penalties += 20
-        elif dup_rate > 0.01:
-            penalties += 10
-
-        # Ordering issues penalty
-        order_rate = order_result['entities'] / total_entities if total_entities > 0 else 0
-        if order_rate > 0.1:
-            penalties += 20
-        elif order_rate > 0.01:
-            penalties += 10
-
-        # Gap penalty
-        gap_rate = gap_result['entities_with_gaps'] / total_entities if total_entities > 0 else 0
-        if gap_rate > 0.2:
-            penalties += 20
-        elif gap_rate > 0.1:
-            penalties += 10
-        elif gap_rate > 0.05:
-            penalties += 5
-
-        temporal_quality_score = max(0, 100 - penalties)
+        temporal_quality_score = self._compute_temporal_quality_score(
+            total_entities, dup_result, order_result, gap_result
+        )
 
         return TimeSeriesValidationResult(
             total_expected_periods=gap_result.get('expected_periods', 0),
@@ -646,6 +607,43 @@ class TimeSeriesValidator:
             temporal_quality_score=temporal_quality_score,
             issues=issues
         )
+
+    def _compute_temporal_quality_score(
+        self,
+        total_entities: int,
+        dup_result: Dict[str, Any],
+        order_result: Dict[str, Any],
+        gap_result: Dict[str, Any],
+    ) -> float:
+        penalties = 0
+        penalties += self._rate_penalty(
+            dup_result['entities'], total_entities, high_threshold=0.1, low_threshold=0.01
+        )
+        penalties += self._rate_penalty(
+            order_result['entities'], total_entities, high_threshold=0.1, low_threshold=0.01
+        )
+        penalties += self._gap_penalty(gap_result['entities_with_gaps'], total_entities)
+        return max(0, 100 - penalties)
+
+    def _rate_penalty(
+        self, affected: int, total: int, high_threshold: float, low_threshold: float
+    ) -> int:
+        rate = affected / total if total > 0 else 0
+        if rate > high_threshold:
+            return 20
+        if rate > low_threshold:
+            return 10
+        return 0
+
+    def _gap_penalty(self, entities_with_gaps: int, total_entities: int) -> int:
+        gap_rate = entities_with_gaps / total_entities if total_entities > 0 else 0
+        if gap_rate > 0.2:
+            return 20
+        if gap_rate > 0.1:
+            return 10
+        if gap_rate > 0.05:
+            return 5
+        return 0
 
     def _check_duplicate_timestamps(
         self,

@@ -132,59 +132,11 @@ class TemporalFeatureGenerator:
 
         result = df.copy()
         self.generated_features = []
-        warnings_list = []
-
-        # Get reference date(s) for this transform
-        if self.reference_date_source in [ReferenceDateSource.COLUMN, ReferenceDateSource.FEATURE_TIMESTAMP]:
-            ref_dates = safe_to_datetime(df[self.reference_date_column])
-        else:
-            ref_dates = self.reference_date
-
-        # Tenure features
-        if self.created_column and self.created_column in df.columns:
-            created = safe_to_datetime(df[self.created_column])
-            tenure_days = self._compute_days_diff(ref_dates, created)
-            result["tenure_days"] = tenure_days
-            self.generated_features.append("tenure_days")
-
-            # Check for negative values
-            if (tenure_days < 0).any():
-                warnings.warn(
-                    "negative tenure_days detected. Reference date may be before "
-                    "some created dates.",
-                    UserWarning
-                )
-                warnings_list.append("negative_tenure_days")
-
-            # Account age in months
-            result["account_age_months"] = tenure_days / 30.44
-            self.generated_features.append("account_age_months")
-
-        # Recency features
-        if self.last_order_column and self.last_order_column in df.columns:
-            last_order = safe_to_datetime(df[self.last_order_column])
-            days_since_last = self._compute_days_diff(ref_dates, last_order)
-            result["days_since_last_order"] = days_since_last
-            self.generated_features.append("days_since_last_order")
-
-        # Activation features
-        if (self.first_order_column and self.first_order_column in df.columns and
-                self.created_column and self.created_column in df.columns):
-            created = safe_to_datetime(df[self.created_column])
-            first_order = safe_to_datetime(df[self.first_order_column])
-            days_to_first = self._compute_days_diff(first_order, created)
-            result["days_to_first_order"] = days_to_first
-            self.generated_features.append("days_to_first_order")
-
-        # Active period
-        if (self.first_order_column and self.first_order_column in df.columns and
-                self.last_order_column and self.last_order_column in df.columns):
-            first_order = safe_to_datetime(df[self.first_order_column])
-            last_order = safe_to_datetime(df[self.last_order_column])
-            active_period = self._compute_days_diff(last_order, first_order)
-            result["active_period_days"] = active_period
-            self.generated_features.append("active_period_days")
-
+        ref_dates = self._resolve_reference_dates(df)
+        result = self._add_tenure_features(result, df, ref_dates)
+        result = self._add_recency_features(result, df, ref_dates)
+        result = self._add_activation_features(result, df)
+        result = self._add_active_period_features(result, df)
         return result
 
     def fit_transform(self, df: DataFrame) -> DataFrame:
@@ -203,6 +155,56 @@ class TemporalFeatureGenerator:
         """
         self.fit(df)
         return self.transform(df)
+
+    def _resolve_reference_dates(self, df: DataFrame) -> Union[Timestamp, Series]:
+        if self.reference_date_source in [ReferenceDateSource.COLUMN, ReferenceDateSource.FEATURE_TIMESTAMP]:
+            return safe_to_datetime(df[self.reference_date_column])
+        return self.reference_date
+
+    def _add_tenure_features(self, result: DataFrame, df: DataFrame, ref_dates: Union[Timestamp, Series]) -> DataFrame:
+        if not (self.created_column and self.created_column in df.columns):
+            return result
+        created = safe_to_datetime(df[self.created_column])
+        tenure_days = self._compute_days_diff(ref_dates, created)
+        result["tenure_days"] = tenure_days
+        self.generated_features.append("tenure_days")
+        if (tenure_days < 0).any():
+            warnings.warn(
+                "negative tenure_days detected. Reference date may be before "
+                "some created dates.",
+                UserWarning
+            )
+        result["account_age_months"] = tenure_days / 30.44
+        self.generated_features.append("account_age_months")
+        return result
+
+    def _add_recency_features(self, result: DataFrame, df: DataFrame, ref_dates: Union[Timestamp, Series]) -> DataFrame:
+        if not (self.last_order_column and self.last_order_column in df.columns):
+            return result
+        last_order = safe_to_datetime(df[self.last_order_column])
+        result["days_since_last_order"] = self._compute_days_diff(ref_dates, last_order)
+        self.generated_features.append("days_since_last_order")
+        return result
+
+    def _add_activation_features(self, result: DataFrame, df: DataFrame) -> DataFrame:
+        if not (self.first_order_column and self.first_order_column in df.columns and
+                self.created_column and self.created_column in df.columns):
+            return result
+        created = safe_to_datetime(df[self.created_column])
+        first_order = safe_to_datetime(df[self.first_order_column])
+        result["days_to_first_order"] = self._compute_days_diff(first_order, created)
+        self.generated_features.append("days_to_first_order")
+        return result
+
+    def _add_active_period_features(self, result: DataFrame, df: DataFrame) -> DataFrame:
+        if not (self.first_order_column and self.first_order_column in df.columns and
+                self.last_order_column and self.last_order_column in df.columns):
+            return result
+        first_order = safe_to_datetime(df[self.first_order_column])
+        last_order = safe_to_datetime(df[self.last_order_column])
+        result["active_period_days"] = self._compute_days_diff(last_order, first_order)
+        self.generated_features.append("active_period_days")
+        return result
 
     def _determine_reference_date(self, df: DataFrame) -> None:
         """Determine the reference date based on configuration."""
