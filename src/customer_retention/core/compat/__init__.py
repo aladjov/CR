@@ -330,6 +330,23 @@ def strip_spark_timestamp_tz(spark_df: Any) -> Any:
     return spark_df.select(casts)
 
 
+def clamp_spark_timestamps(spark_df: Any) -> Any:
+    from pyspark.sql.functions import col as spark_col
+    from pyspark.sql.functions import when, year
+    from pyspark.sql.types import TimestampNTZType, TimestampType
+
+    ts_names = {f.name for f in spark_df.schema.fields
+                if isinstance(f.dataType, (TimestampType, TimestampNTZType))}
+    if not ts_names:
+        return spark_df
+    cols = [
+        when(year(spark_col(f.name)).between(1678, 2261), spark_col(f.name)).alias(f.name)
+        if f.name in ts_names else spark_col(f.name)
+        for f in spark_df.schema.fields
+    ]
+    return spark_df.select(cols)
+
+
 def _normalize_timestamps_distributed(df: Any) -> Any:
     spark_df = df.to_spark()
     stripped = strip_spark_timestamp_tz(spark_df)

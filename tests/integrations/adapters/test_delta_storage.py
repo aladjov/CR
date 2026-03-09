@@ -797,6 +797,34 @@ class TestDatabricksDeltaWriteNativeSparkDf:
                 DatabricksDelta._strip_spark_timestamp_tz.assert_called_once_with(mock_spark_df)
 
 
+class TestDatabricksDeltaWriteClamps:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_write_calls_clamp_spark_timestamps(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            mock_spark_df = MagicMock()
+            mock_stripped = MagicMock()
+            mock_clamped = MagicMock()
+            with (
+                patch.object(DatabricksDelta, "_strip_spark_timestamp_tz", return_value=mock_stripped),
+                patch("customer_retention.core.compat.clamp_spark_timestamps", return_value=mock_clamped) as mock_clamp,
+            ):
+                storage.write(mock_spark_df, "/fake/path")
+                mock_clamp.assert_called_once_with(mock_stripped)
+                mock_clamped.write.format("delta").mode("overwrite").option(
+                    "overwriteSchema", "true"
+                ).save.assert_called_once_with("/fake/path")
+
+
 class TestDatabricksDeltaWriteNormalizesPath:
     def test_write_normalizes_path(self):
         from unittest.mock import MagicMock, patch

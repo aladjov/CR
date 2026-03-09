@@ -82,6 +82,8 @@ class DatabricksDelta(DeltaStorage):
         else:
             spark_df = self._to_spark_df(df)
         spark_df = self._strip_spark_timestamp_tz(spark_df)
+        from customer_retention.core.compat import clamp_spark_timestamps
+        spark_df = clamp_spark_timestamps(spark_df)
         writer = spark_df.write.format("delta").mode(mode)
         if mode == "overwrite":
             writer = writer.option("overwriteSchema", "true")
