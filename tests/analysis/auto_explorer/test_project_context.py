@@ -1370,6 +1370,26 @@ class TestLightRunAndSampleFraction:
         ctx = _minimal_context(sample_fraction=1.0)
         assert ctx.sample_fraction == 1.0
 
+    def test_sample_filters_default_none(self):
+        ctx = _minimal_context()
+        assert ctx.sample_filters is None
+
+    def test_sample_filters_roundtrip(self, tmp_path):
+        filters = {"transactions": "amount > 100", "customers": "region == 'US'"}
+        ctx = _minimal_context(sample_filters=filters)
+        assert ctx.sample_filters == filters
+        out = tmp_path / "ctx.yaml"
+        ctx.save(out)
+        loaded = ProjectContext.load(out)
+        assert loaded.sample_filters == filters
+
+    def test_sample_filters_empty_dict_roundtrip(self, tmp_path):
+        ctx = _minimal_context(sample_filters={})
+        out = tmp_path / "ctx.yaml"
+        ctx.save(out)
+        loaded = ProjectContext.load(out)
+        assert loaded.sample_filters == {}
+
 
 class TestCadenceIntervalEnum:
     def test_values(self):

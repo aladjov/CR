@@ -14,6 +14,16 @@ from customer_retention.core.compat import (
 )
 
 
+def apply_sample_filters(
+    df: pd.DataFrame,
+    dataset_name: str,
+    filters: Optional[dict[str, str]],
+) -> pd.DataFrame:
+    if not filters or dataset_name not in filters:
+        return df
+    return df.query(filters[dataset_name])
+
+
 def estimate_sampling_accuracy(
     total_entities: int,
     target_rate: float,

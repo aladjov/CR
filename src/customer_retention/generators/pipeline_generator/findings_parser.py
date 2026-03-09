@@ -430,8 +430,11 @@ class FindingsParser:
     def _build_gold_config(self, sources: Dict[str, ExplorationFindings]) -> GoldLayerConfig:
         encodings = []
         scalings = []
+        target_column = self._find_target_column(sources)
         for findings in sources.values():
             for col_name, col_finding in findings.columns.items():
+                if col_name == target_column:
+                    continue
                 col_type = col_finding.inferred_type
                 if col_type in self._CATEGORICAL_TYPES:
                     encodings.append(
@@ -816,6 +819,8 @@ class FindingsParser:
             pipeline_columns.add(step.column)
         seen_encoding_columns: Set[str] = {e.column for e in config.gold.encodings}
         for rec in getattr(gold, "encoding", []):
+            if rec.target_column == config.target_column:
+                continue
             if rec.target_column in seen_encoding_columns:
                 continue
             if rec.target_column not in pipeline_columns:
@@ -839,6 +844,8 @@ class FindingsParser:
             )
         seen_scaling_columns: Set[str] = {s.column for s in config.gold.scalings}
         for rec in getattr(gold, "scaling", []):
+            if rec.target_column == config.target_column:
+                continue
             if rec.target_column in seen_scaling_columns:
                 continue
             if rec.target_column not in pipeline_columns:

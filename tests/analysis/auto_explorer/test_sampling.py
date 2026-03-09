@@ -5,9 +5,74 @@ import pytest
 
 from customer_retention.analysis.auto_explorer.sampling import (
     _compute_group_budget,
+    apply_sample_filters,
     estimate_sampling_accuracy,
     stratified_entity_sample,
 )
+
+
+class TestApplySampleFilters:
+    def test_no_filter_returns_unchanged(self):
+        df = pd.DataFrame({"a": [1, 2, 3]})
+        result = apply_sample_filters(df, "ds1", {})
+        assert len(result) == 3
+
+    def test_matching_filter_applied(self):
+        df = pd.DataFrame({"a": [1, 2, 3, 4, 5]})
+        result = apply_sample_filters(df, "ds1", {"ds1": "a > 3"})
+        assert list(result["a"]) == [4, 5]
+
+    def test_non_matching_dataset_unchanged(self):
+        df = pd.DataFrame({"a": [1, 2, 3]})
+        result = apply_sample_filters(df, "ds2", {"ds1": "a > 1"})
+        assert len(result) == 3
+
+    def test_string_equality_filter(self):
+        df = pd.DataFrame({"region": ["US", "UK", "US", "FR"]})
+        result = apply_sample_filters(df, "sales", {"sales": "region == 'US'"})
+        assert len(result) == 2
+
+    def test_compound_filter(self):
+        df = pd.DataFrame({"a": [1, 2, 3, 4], "b": ["x", "y", "x", "y"]})
+        result = apply_sample_filters(df, "ds", {"ds": "a > 1 and b == 'x'"})
+        assert len(result) == 1
+        assert result.iloc[0]["a"] == 3
+
+    def test_none_filters_returns_unchanged(self):
+        df = pd.DataFrame({"a": [1, 2]})
+        result = apply_sample_filters(df, "ds", None)
+        assert len(result) == 2
+
+    def test_in_operator(self):
+        df = pd.DataFrame({"status": ["active", "cancelled", "pending", "active"]})
+        result = apply_sample_filters(df, "ds", {"ds": "status in ['active', 'pending']"})
+        assert len(result) == 3
+
+    def test_numeric_range(self):
+        df = pd.DataFrame({"amount": [10, 50, 100, 200, 500]})
+        result = apply_sample_filters(df, "ds", {"ds": "amount >= 50 and amount <= 200"})
+        assert list(result["amount"]) == [50, 100, 200]
+
+    def test_not_equal_filter(self):
+        df = pd.DataFrame({"type": ["A", "B", "C", "A"]})
+        result = apply_sample_filters(df, "ds", {"ds": "type != 'B'"})
+        assert len(result) == 3
+
+    def test_multiple_datasets_only_matching_applied(self):
+        df = pd.DataFrame({"x": [1, 2, 3]})
+        filters = {"ds1": "x > 2", "ds2": "x < 2"}
+        result = apply_sample_filters(df, "ds1", filters)
+        assert list(result["x"]) == [3]
+
+    def test_preserves_dataframe_type(self):
+        df = pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]})
+        result = apply_sample_filters(df, "ds", {"ds": "a > 1"})
+        assert isinstance(result, pd.DataFrame)
+
+    def test_filter_all_rows_returns_empty(self):
+        df = pd.DataFrame({"a": [1, 2, 3]})
+        result = apply_sample_filters(df, "ds", {"ds": "a > 100"})
+        assert len(result) == 0
 
 
 class TestEstimateSamplingAccuracy:

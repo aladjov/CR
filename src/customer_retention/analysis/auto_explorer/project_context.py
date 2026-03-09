@@ -218,6 +218,7 @@ class ProjectContext(BaseModel):
     sample_fraction: Optional[float] = None
     sample_entity_count: Optional[int] = None
     sample_stratify_columns: Optional[list[str]] = None
+    sample_filters: Optional[dict[str, str]] = None
 
     @field_validator("sample_entity_count")
     @classmethod

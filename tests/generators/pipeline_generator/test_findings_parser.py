@@ -4275,6 +4275,107 @@ class TestBuildGoldConfigColumnTypes:
         assert scaled_cols == {"age", "count"}
         assert encoded_cols == {"region", "tier"}
 
+    def test_target_column_categorical_not_encoded(self):
+        from customer_retention.core.config.column_config import ColumnType
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        findings = self._make_findings_with_types({"unsubscribed": ColumnType.CATEGORICAL_NOMINAL, "region": ColumnType.CATEGORICAL_NOMINAL})
+        findings.target_column = "unsubscribed"
+        parser = FindingsParser.__new__(FindingsParser)
+        gold = parser._build_gold_config({"test": findings})
+        encoded_cols = {e.column for e in gold.encodings}
+        assert "unsubscribed" not in encoded_cols
+        assert "region" in encoded_cols
+
+    def test_target_column_numeric_not_scaled(self):
+        from customer_retention.core.config.column_config import ColumnType
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        findings = self._make_findings_with_types({"churn_score": ColumnType.NUMERIC_CONTINUOUS, "age": ColumnType.NUMERIC_CONTINUOUS})
+        findings.target_column = "churn_score"
+        parser = FindingsParser.__new__(FindingsParser)
+        gold = parser._build_gold_config({"test": findings})
+        scaled_cols = {s.column for s in gold.scalings}
+        assert "churn_score" not in scaled_cols
+        assert "age" in scaled_cols
+
+    def test_target_column_ordinal_not_encoded(self):
+        from customer_retention.core.config.column_config import ColumnType
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        findings = self._make_findings_with_types({"risk_level": ColumnType.CATEGORICAL_ORDINAL})
+        findings.target_column = "risk_level"
+        parser = FindingsParser.__new__(FindingsParser)
+        gold = parser._build_gold_config({"test": findings})
+        assert len(gold.encodings) == 0
+
+
+class TestGoldRecommendationsSkipTarget:
+    def test_apply_gold_encoding_skips_target_column(self):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            GoldRecommendations,
+            LayeredRecommendation,
+            RecommendationRegistry,
+        )
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeLayerConfig,
+            GoldLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
+
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {"data": {"customer_id", "unsubscribed", "region"}}
+        parser._source_findings_paths = {}
+
+        source = SourceConfig(name="data", path="data.csv", format="csv", entity_key="customer_id", raw_source_path="/data/data.csv")
+        config = PipelineConfig(name="test", target_column="unsubscribed", sources=[source], bronze={"data": BronzeLayerConfig(source=source)}, silver=SilverLayerConfig(), gold=GoldLayerConfig(), output_dir=".")
+
+        registry = RecommendationRegistry()
+        registry.add_source("data", "data.csv")
+        registry.gold = GoldRecommendations(target_column="unsubscribed")
+        registry.gold.encoding = [
+            LayeredRecommendation(id="e1", layer="gold", category="encoding", action="one_hot", target_column="unsubscribed", parameters={"method": "one_hot"}, rationale="encode", source_notebook="04"),
+            LayeredRecommendation(id="e2", layer="gold", category="encoding", action="one_hot", target_column="region", parameters={"method": "one_hot"}, rationale="encode", source_notebook="04"),
+        ]
+        parser._apply_gold_recommendations(config, registry)
+        encoded_cols = {e.column for e in config.gold.encodings}
+        assert "unsubscribed" not in encoded_cols
+        assert "region" in encoded_cols
+
+    def test_apply_gold_scaling_skips_target_column(self):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            GoldRecommendations,
+            LayeredRecommendation,
+            RecommendationRegistry,
+        )
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeLayerConfig,
+            GoldLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
+
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {"data": {"customer_id", "churn_score", "age"}}
+        parser._source_findings_paths = {}
+
+        source = SourceConfig(name="data", path="data.csv", format="csv", entity_key="customer_id", raw_source_path="/data/data.csv")
+        config = PipelineConfig(name="test", target_column="churn_score", sources=[source], bronze={"data": BronzeLayerConfig(source=source)}, silver=SilverLayerConfig(), gold=GoldLayerConfig(), output_dir=".")
+
+        registry = RecommendationRegistry()
+        registry.add_source("data", "data.csv")
+        registry.gold = GoldRecommendations(target_column="churn_score")
+        registry.gold.scaling = [
+            LayeredRecommendation(id="s1", layer="gold", category="scaling", action="standard", target_column="churn_score", parameters={"method": "standard"}, rationale="scale", source_notebook="04"),
+            LayeredRecommendation(id="s2", layer="gold", category="scaling", action="standard", target_column="age", parameters={"method": "standard"}, rationale="scale", source_notebook="04"),
+        ]
+        parser._apply_gold_recommendations(config, registry)
+        scaled_cols = {s.column for s in config.gold.scalings}
+        assert "churn_score" not in scaled_cols
+        assert "age" in scaled_cols
+
 
 class TestSilverDerivedColumnValidation:
     def _make_parser(self, raw_source_columns=None):
