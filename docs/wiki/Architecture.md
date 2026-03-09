@@ -81,7 +81,7 @@ Notebook 09 aligns model output with business objectives. Notebook 10 generates 
 | Layer | Scope | Notebooks | What Happens |
 |-------|-------|-----------|--------------|
 | **Intent** | Contract | 00 | Objective, posture, horizon, control variables, snapshot grid |
-| **Landing** | Raw → Delta | 01 | Dataset fingerprinting, data discovery, Delta table creation |
+| **Landing** | Raw → Delta | 01 | Dataset fingerprinting, data discovery, entity key resolution, Delta table creation |
 | **Bronze-Event** | Temporal evidence | 01a-01d | Temporal deep dive, quality, patterns, aggregation |
 | **Bronze-Entity** | Source cleanup | 02 | Integrity checks per dataset before merge |
 | **Silver** | Unified features | 03, 04, 05 | Temporal merge, column analysis, relationship analysis |
@@ -136,6 +136,14 @@ A deterministic set of `as_of_date` values that defines when point-in-time snaps
 ### Objective Support Voting
 
 Notebook 01 records objective support evidence (strength 0-3 per objective) during data discovery via `derive_objective_support()`. Notebooks 01a-01c contribute snapshot grid votes (cadence and date range evidence) during temporal exploration. These are aggregated into a synthesis that shows which objectives the data can support and where gaps exist. See [[Model Intent and Objective Support]].
+
+### Entity Key Resolution (Landing Only)
+
+Not every source dataset contains the entity column directly. Notebook 00 detects these datasets and creates `KeyResolutionStep` entries that describe how to join through a bridge dataset to obtain the entity column (e.g., join `case_history` → `case` on `CASE_ID` to obtain `ACCOUNT_ID`).
+
+Notebook 01 applies these steps once at landing time via `resolve_single_dataset_keys()`. After resolution, the entity column is present in the Delta table written to `landing/{dataset_name}/`. All downstream stages (Bronze, Silver, Gold) operate on data that already contains the entity column — no further key resolution is attempted.
+
+If a resolution step references columns that no longer exist (e.g., schema changed between NB00 and NB01), the step is skipped with a warning rather than failing the notebook.
 
 ### Entity-Aware Temporal Cross-Validation
 

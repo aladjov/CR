@@ -6,8 +6,12 @@ import pytest
 
 from customer_retention.analysis.auto_explorer.active_dataset_store import save_active_dataset
 from customer_retention.analysis.auto_explorer.key_resolver import (
+    _column_exists,
+    _is_empty,
+    _StaleStepError,
     resolve_entity_keys,
     resolve_sample_ids_via_bridge,
+    resolve_single_dataset_keys,
     suggest_key_resolutions,
 )
 from customer_retention.analysis.auto_explorer.project_context import KeyResolutionStep
@@ -142,7 +146,7 @@ class TestResolveEntityKeys:
         with pytest.raises(KeyError, match="ACCOUNT_ID"):
             resolve_entity_keys(frames, resolutions)
 
-    def test_orphan_rows_warns_and_proceeds(self, caplog):
+    def test_orphan_rows_dropped_by_inner_join(self):
         case_history = pd.DataFrame(
             {"CASE_ID": [1, 2, 99], "STATUS": ["Open", "Closed", "Open"]}
         )
@@ -160,10 +164,9 @@ class TestResolveEntityKeys:
                 ),
             ],
         }
-        with caplog.at_level(logging.WARNING):
-            result = resolve_entity_keys(frames, resolutions)
+        result = resolve_entity_keys(frames, resolutions)
         assert len(result["case_history"]) == 2
-        assert "1" in caplog.text
+        assert list(result["case_history"]["ACCOUNT_ID"]) == ["A1", "A2"]
 
     def test_duplicate_bridge_keys(self):
         case_history = pd.DataFrame({"CASE_ID": [1, 2]})
@@ -476,3 +479,123 @@ class TestResolveSampleIdsViaBridge:
         ]
         with pytest.raises(KeyError, match="ACCOUNT_ID"):
             resolve_sample_ids_via_bridge(namespace, steps, ["A1"])
+
+
+class TestStaleStepHandling:
+    def test_stale_step_error_is_key_error(self):
+        assert issubclass(_StaleStepError, KeyError)
+
+    def test_column_exists_true(self):
+        df = pd.DataFrame({"A": [1], "B": [2]})
+        assert _column_exists(df.columns, "A") is True
+
+    def test_column_exists_false(self):
+        df = pd.DataFrame({"A": [1], "B": [2]})
+        assert _column_exists(df.columns, "Z") is False
+
+    def test_column_exists_case_insensitive(self):
+        df = pd.DataFrame({"account_id": [1]})
+        assert _column_exists(df.columns, "ACCOUNT_ID") is True
+
+    def test_is_empty_true(self):
+        df = pd.DataFrame({"A": pd.Series([], dtype=int)})
+        assert _is_empty(df) is True
+
+    def test_is_empty_false(self):
+        df = pd.DataFrame({"A": [1]})
+        assert _is_empty(df) is False
+
+    def test_resolve_entity_keys_raises_key_error_for_stale_step(self):
+        frames = {
+            "source": pd.DataFrame({"X": [1]}),
+            "bridge": pd.DataFrame({"Y": [1], "Z": ["A"]}),
+        }
+        resolutions = {
+            "source": [
+                KeyResolutionStep(
+                    bridge_dataset="bridge",
+                    source_key="MISSING_COL",
+                    bridge_key="Y",
+                    resolve_column="Z",
+                ),
+            ],
+        }
+        with pytest.raises(KeyError):
+            resolve_entity_keys(frames, resolutions)
+
+    def test_skip_when_resolve_column_already_present(self):
+        frames = {
+            "source": pd.DataFrame({"CASE_ID": [1], "ACCOUNT_ID": ["A1"]}),
+            "bridge": pd.DataFrame({"CASE_ID": [1], "ACCOUNT_ID": ["A1"]}),
+        }
+        resolutions = {
+            "source": [
+                KeyResolutionStep(
+                    bridge_dataset="bridge",
+                    source_key="CASE_ID",
+                    bridge_key="CASE_ID",
+                    resolve_column="ACCOUNT_ID",
+                ),
+            ],
+        }
+        result = resolve_entity_keys(frames, resolutions)
+        assert list(result["source"]["ACCOUNT_ID"]) == ["A1"]
+
+
+class TestResolveSingleDatasetKeysStaleStep:
+    @pytest.fixture()
+    def namespace(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="stale-test")
+        ns.setup()
+        return ns
+
+    def test_skips_stale_step_with_warning(self, namespace, caplog):
+        bridge_df = pd.DataFrame({"Y": [1], "Z": ["A"]})
+        save_active_dataset(namespace, "bridge", bridge_df)
+        source_df = pd.DataFrame({"X": [1, 2]})
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="bridge",
+                source_key="MISSING_COL",
+                bridge_key="Y",
+                resolve_column="Z",
+            ),
+        ]
+        with caplog.at_level(logging.WARNING):
+            result = resolve_single_dataset_keys(source_df, steps, namespace)
+        assert len(result) == 2
+        assert "Skipping stale key resolution step" in caplog.text
+
+    def test_applies_valid_step(self, namespace):
+        bridge_df = pd.DataFrame({"CASE_ID": [1, 2], "ACCOUNT_ID": ["A1", "A2"]})
+        save_active_dataset(namespace, "bridge", bridge_df)
+        source_df = pd.DataFrame({"CASE_ID": [1, 2], "VALUE": [10, 20]})
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="bridge",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        result = resolve_single_dataset_keys(source_df, steps, namespace)
+        assert "ACCOUNT_ID" in result.columns
+        assert list(result["ACCOUNT_ID"]) == ["A1", "A2"]
+
+    def test_skips_when_entity_column_already_present(self, namespace):
+        bridge_df = pd.DataFrame({"CASE_ID": [1], "ACCOUNT_ID": ["A1"]})
+        save_active_dataset(namespace, "bridge", bridge_df)
+        source_df = pd.DataFrame(
+            {"CASE_ID": [1, 2], "VALUE": [10, 20], "ACCOUNT_ID": ["A1", "A2"]}
+        )
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="bridge",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        result = resolve_single_dataset_keys(source_df, steps, namespace)
+        assert len(result) == 2
+        assert list(result["ACCOUNT_ID"]) == ["A1", "A2"]

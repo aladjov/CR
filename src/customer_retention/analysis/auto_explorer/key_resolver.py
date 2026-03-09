@@ -30,23 +30,58 @@ def resolve_entity_keys(
     return result
 
 
+class _StaleStepError(KeyError):
+    pass
+
+
+def _validate_step_columns(
+    df: pd.DataFrame,
+    step: KeyResolutionStep,
+    bridge_df: pd.DataFrame,
+) -> None:
+    missing = []
+    if not _column_exists(df.columns, step.source_key):
+        missing.append(f"source_key '{step.source_key}' not in source columns")
+    if not _column_exists(bridge_df.columns, step.bridge_key):
+        missing.append(f"bridge_key '{step.bridge_key}' not in bridge '{step.bridge_dataset}'")
+    if not _column_exists(bridge_df.columns, step.resolve_column):
+        missing.append(f"resolve_column '{step.resolve_column}' not in bridge '{step.bridge_dataset}'")
+    if missing:
+        raise _StaleStepError(
+            f"KeyResolutionStep invalid — {'; '.join(missing)}. "
+            f"Step: source_key='{step.source_key}', bridge='{step.bridge_dataset}', "
+            f"bridge_key='{step.bridge_key}', resolve='{step.resolve_column}'"
+        )
+
+
+def _column_exists(columns, name: str) -> bool:
+    try:
+        _resolve_column_name(columns, name)
+        return True
+    except KeyError:
+        return False
+
+
+def _is_empty(df: pd.DataFrame) -> bool:
+    return len(df.head(1)) == 0
+
+
 def _apply_resolution_step(
     df: pd.DataFrame,
     dataset_name: str,
     step: KeyResolutionStep,
     all_frames: dict[str, pd.DataFrame],
 ) -> pd.DataFrame:
-    try:
-        _resolve_column_name(df.columns, step.resolve_column)
+    if _column_exists(df.columns, step.resolve_column):
         return df
-    except KeyError:
-        pass
 
     if step.bridge_dataset not in all_frames:
         raise KeyError(
             f"Bridge dataset '{step.bridge_dataset}' not found in loaded frames"
         )
     bridge_df = all_frames[step.bridge_dataset]
+
+    _validate_step_columns(df, step, bridge_df)
 
     source_key = _resolve_column_name(df.columns, step.source_key)
     bridge_key = _resolve_column_name(bridge_df.columns, step.bridge_key)
@@ -56,28 +91,15 @@ def _apply_resolution_step(
         subset=[bridge_key]
     )
 
-    rows_before = len(df)
     merged = df.merge(bridge_subset, left_on=source_key, right_on=bridge_key, how="inner")
 
     if source_key != bridge_key and bridge_key in merged.columns:
         merged = merged.drop(columns=[bridge_key])
 
-    rows_after = len(merged)
-    if rows_after == 0:
+    if _is_empty(merged):
         raise ValueError(
             f"Resolution of '{dataset_name}' via '{step.bridge_dataset}' produced empty result — "
             f"no matching keys between '{step.source_key}' and '{step.bridge_key}'"
-        )
-
-    dropped = rows_before - rows_after
-    if dropped > 0:
-        logger.warning(
-            "Key resolution for '%s' via '%s': dropped %d orphan rows (%d → %d)",
-            dataset_name,
-            step.bridge_dataset,
-            dropped,
-            rows_before,
-            rows_after,
         )
 
     return merged
@@ -92,7 +114,10 @@ def resolve_single_dataset_keys(
 
     for step in steps:
         bridge_df = load_active_dataset_distributed(namespace, step.bridge_dataset)
-        df = _apply_resolution_step(df, "<inline>", step, {step.bridge_dataset: bridge_df})
+        try:
+            df = _apply_resolution_step(df, "<inline>", step, {step.bridge_dataset: bridge_df})
+        except _StaleStepError as exc:
+            logger.warning("Skipping stale key resolution step: %s", exc)
     return df
 
 
