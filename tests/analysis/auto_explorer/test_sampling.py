@@ -7,6 +7,7 @@ from customer_retention.analysis.auto_explorer.sampling import (
     _compute_group_budget,
     apply_sample_filters,
     estimate_sampling_accuracy,
+    resolve_segment_entity_ids,
     stratified_entity_sample,
 )
 
@@ -73,6 +74,136 @@ class TestApplySampleFilters:
         df = pd.DataFrame({"a": [1, 2, 3]})
         result = apply_sample_filters(df, "ds", {"ds": "a > 100"})
         assert len(result) == 0
+
+
+class TestResolveSegmentEntityIds:
+    def test_no_filters_returns_none(self):
+        frames = {"ds": pd.DataFrame({"eid": [1, 2], "x": [10, 20]})}
+        assert resolve_segment_entity_ids(frames, {}, {"ds": "eid"}) is None
+        assert resolve_segment_entity_ids(frames, None, {"ds": "eid"}) is None
+
+    def test_single_dataset_all_pass(self):
+        df = pd.DataFrame({"eid": [1, 2, 3], "status": ["active", "active", "active"]})
+        result = resolve_segment_entity_ids(
+            {"customers": df}, {"customers": "status == 'active'"}, {"customers": "eid"},
+        )
+        assert result == {1, 2, 3}
+
+    def test_single_dataset_some_excluded(self):
+        df = pd.DataFrame({"eid": [1, 2, 3], "region": ["US", "UK", "US"]})
+        result = resolve_segment_entity_ids(
+            {"customers": df}, {"customers": "region == 'US'"}, {"customers": "eid"},
+        )
+        assert result == {1, 3}
+
+    def test_event_level_all_rows_must_match(self):
+        df = pd.DataFrame({
+            "eid": [1, 1, 1, 2, 2, 2],
+            "amount": [100, 200, 50, 150, 300, 200],
+        })
+        result = resolve_segment_entity_ids(
+            {"txn": df}, {"txn": "amount >= 100"}, {"txn": "eid"},
+        )
+        assert result == {2}
+
+    def test_event_level_single_non_matching_row_excludes(self):
+        df = pd.DataFrame({
+            "eid": [1, 1, 2, 2, 3, 3],
+            "status": ["ok", "ok", "ok", "cancelled", "ok", "ok"],
+        })
+        result = resolve_segment_entity_ids(
+            {"orders": df}, {"orders": "status == 'ok'"}, {"orders": "eid"},
+        )
+        assert result == {1, 3}
+
+    def test_multiple_datasets_intersection(self):
+        customers = pd.DataFrame({"eid": [1, 2, 3], "region": ["US", "UK", "US"]})
+        orders = pd.DataFrame({
+            "eid": [1, 1, 2, 3, 3],
+            "status": ["ok", "cancelled", "ok", "ok", "ok"],
+        })
+        result = resolve_segment_entity_ids(
+            {"customers": customers, "orders": orders},
+            {"customers": "region == 'US'", "orders": "status == 'ok'"},
+            {"customers": "eid", "orders": "eid"},
+        )
+        assert result == {3}
+
+    def test_filter_dataset_not_in_frames_skipped(self):
+        df = pd.DataFrame({"eid": [1, 2], "x": [10, 20]})
+        result = resolve_segment_entity_ids(
+            {"ds1": df}, {"missing_ds": "x > 5"}, {"ds1": "eid"},
+        )
+        assert result is None
+
+    def test_entity_column_missing_in_dataset_raises(self):
+        df = pd.DataFrame({"other_col": [1, 2], "x": [10, 20]})
+        with pytest.raises(KeyError):
+            resolve_segment_entity_ids(
+                {"ds": df}, {"ds": "x > 5"}, {"ds": "eid"},
+            )
+
+    def test_filter_removes_all_entities(self):
+        df = pd.DataFrame({"eid": [1, 2, 3], "val": [1, 2, 3]})
+        result = resolve_segment_entity_ids(
+            {"ds": df}, {"ds": "val > 100"}, {"ds": "eid"},
+        )
+        assert result == set()
+
+    def test_compound_filter(self):
+        df = pd.DataFrame({
+            "eid": [1, 2, 3, 4],
+            "amount": [100, 50, 200, 30],
+            "status": ["active", "active", "cancelled", "active"],
+        })
+        result = resolve_segment_entity_ids(
+            {"ds": df},
+            {"ds": "amount >= 50 and status == 'active'"},
+            {"ds": "eid"},
+        )
+        assert result == {1, 2}
+
+    def test_in_operator_filter(self):
+        df = pd.DataFrame({"eid": [1, 2, 3, 4], "region": ["US", "UK", "FR", "US"]})
+        result = resolve_segment_entity_ids(
+            {"ds": df},
+            {"ds": "region in ['US', 'UK']"},
+            {"ds": "eid"},
+        )
+        assert result == {1, 2, 4}
+
+    def test_entity_with_no_matching_rows_excluded(self):
+        df = pd.DataFrame({
+            "eid": [1, 1, 2, 2],
+            "val": [0, 0, 10, 20],
+        })
+        result = resolve_segment_entity_ids(
+            {"ds": df}, {"ds": "val > 5"}, {"ds": "eid"},
+        )
+        assert result == {2}
+
+    def test_different_entity_columns_per_dataset(self):
+        customers = pd.DataFrame({"customer_id": [1, 2, 3], "tier": ["gold", "silver", "gold"]})
+        orders = pd.DataFrame({
+            "account_id": [1, 2, 3, 3],
+            "amount": [100, 200, 50, 300],
+        })
+        result = resolve_segment_entity_ids(
+            {"customers": customers, "orders": orders},
+            {"customers": "tier == 'gold'", "orders": "amount >= 100"},
+            {"customers": "customer_id", "orders": "account_id"},
+        )
+        assert result == {1}
+
+    def test_one_filtered_one_unfiltered_dataset(self):
+        customers = pd.DataFrame({"eid": [1, 2, 3], "region": ["US", "UK", "US"]})
+        orders = pd.DataFrame({"eid": [1, 2, 3], "val": [10, 20, 30]})
+        result = resolve_segment_entity_ids(
+            {"customers": customers, "orders": orders},
+            {"customers": "region == 'US'"},
+            {"customers": "eid", "orders": "eid"},
+        )
+        assert result == {1, 3}
 
 
 class TestEstimateSamplingAccuracy:

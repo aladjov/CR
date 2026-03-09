@@ -14,6 +14,34 @@ from customer_retention.core.compat import (
 )
 
 
+def resolve_segment_entity_ids(
+    frames: dict[str, pd.DataFrame],
+    filters: Optional[dict[str, str]],
+    entity_columns: dict[str, str],
+) -> Optional[set]:
+    if not filters:
+        return None
+    allowed_sets = []
+    for dataset_name, query_expr in filters.items():
+        if dataset_name not in frames:
+            continue
+        df = frames[dataset_name]
+        entity_col = entity_columns[dataset_name]
+        pre_counts = df.groupby(entity_col).size().rename("_pre").reset_index()
+        post_counts = (
+            df.query(query_expr).groupby(entity_col).size().rename("_post").reset_index()
+        )
+        merged = pre_counts.merge(post_counts, on=entity_col, how="left").fillna({"_post": 0})
+        passing = merged[merged["_pre"] == merged["_post"]]
+        allowed_sets.append(set(passing[entity_col].to_numpy()))
+    if not allowed_sets:
+        return None
+    result = allowed_sets[0]
+    for s in allowed_sets[1:]:
+        result &= s
+    return result
+
+
 def apply_sample_filters(
     df: pd.DataFrame,
     dataset_name: str,
