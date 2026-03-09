@@ -1021,7 +1021,7 @@ class TestTrainingTemplateDatabricks:
             test_size=0.2,
         )
         result = databricks_renderer.render_training(pipeline_config_minimal)
-        assert "target_column=TARGET_COLUMN" in result
+        assert 'target_column="label"' in result
 
     def test_databricks_split_result_uses_attribute_access(self, databricks_renderer, pipeline_config_minimal):
         pipeline_config_minimal.training = TrainingConfig(
@@ -1261,6 +1261,7 @@ class TestTextFeaturesRenderer:
         result = databricks_renderer.render_bronze_event("orders", config)
         assert "TextColumnProcessor" in result
         assert "compute_text_features" in result
+        assert "FIT_MODE" in result
         ast.parse(result)
 
     def test_databricks_bronze_entity_with_text_features(self, databricks_renderer, entity_source):
@@ -1271,6 +1272,7 @@ class TestTextFeaturesRenderer:
         result = databricks_renderer.render_bronze("customers", config)
         assert "TextColumnProcessor" in result
         assert "compute_text_features_entity" in result
+        assert "FIT_MODE" in result
         ast.parse(result)
 
 

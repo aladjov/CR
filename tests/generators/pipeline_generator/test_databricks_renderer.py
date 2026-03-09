@@ -21,6 +21,7 @@ from customer_retention.generators.pipeline_generator.models import (
     PipelineTransformationType,
     SilverLayerConfig,
     SourceConfig,
+    TextFeatureConfig,
     TimestampCoalesceConfig,
     TransformationStep,
 )
@@ -341,6 +342,19 @@ class TestDatabricksRenderConfig:
         result = renderer.render_config(sample_pipeline_config)
         ast.parse(result)
 
+    def test_render_config_includes_fit_mode(self, renderer, sample_pipeline_config):
+        result = renderer.render_config(sample_pipeline_config)
+        assert "FIT_MODE" in result
+
+    def test_render_config_fit_mode_true_by_default(self, renderer, sample_pipeline_config):
+        result = renderer.render_config(sample_pipeline_config)
+        assert "FIT_MODE = True" in result
+
+    def test_render_config_fit_mode_false(self, renderer, sample_pipeline_config):
+        sample_pipeline_config.fit_mode = False
+        result = renderer.render_config(sample_pipeline_config)
+        assert "FIT_MODE = False" in result
+
 
 class TestDatabricksConfigRunPath:
     def test_bronze_entity_uses_parent_config_path(self, renderer, sample_pipeline_config):
@@ -545,6 +559,21 @@ class TestDatabricksRenderBronzeEntity:
         assert "lifecycle" in result.lower() or "recency" in result.lower()
 
 
+class TestDatabricksSilverHoldout:
+    def test_silver_includes_holdout_mask(self, renderer, sample_pipeline_config):
+        result = renderer.render_silver(sample_pipeline_config)
+        assert "create_holdout_mask" in result
+
+    def test_silver_holdout_creates_original_column(self, renderer, sample_pipeline_config):
+        result = renderer.render_silver(sample_pipeline_config)
+        assert "original_" in result
+        assert "TARGET_COLUMN" in result
+
+    def test_silver_holdout_is_valid_python(self, renderer, sample_pipeline_config):
+        result = renderer.render_silver(sample_pipeline_config)
+        ast.parse(result)
+
+
 class TestDatabricksRenderSilver:
     def test_render_silver_returns_string(self, renderer, sample_pipeline_config):
         result = renderer.render_silver(sample_pipeline_config)
@@ -665,6 +694,17 @@ class TestDatabricksRenderTraining:
     def test_best_auc_initialized_below_zero(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
         assert "best_auc = -1" in result
+
+    def test_training_passes_target_and_timestamp_to_splitter(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "TIMESTAMP_COLUMN" in result
+        fn_text = result[result.index("def prepare_features"):]
+        assert "TARGET" in fn_text
+        assert "TIMESTAMP_COLUMN" in fn_text
+
+    def test_training_splitter_receives_temporal_column(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "temporal_column=TIMESTAMP_COLUMN" in result
 
 
 class TestDatabricksRenderTrainingImbalance:
@@ -2069,9 +2109,10 @@ class TestDatabricksGoldAsOfDate:
 
 
 class TestDatabricksTrainingDropAsOfDate:
-    def test_training_excludes_as_of_date(self, renderer, sample_pipeline_config):
+    def test_training_excludes_timestamp_and_entity(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        assert "as_of_date" in result
+        assert "TIMESTAMP_COLUMN" in result
+        assert '"entity_id"' in result
 
 
 class TestDatabricksConfigRawSources:
@@ -2381,4 +2422,56 @@ class TestDatabricksGoldColumnFiltering:
 
     def test_batch_scale_standard_still_valid_python(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
+        ast.parse(result)
+
+
+class TestDatabricksTextFeatureFitMode:
+    def test_bronze_event_text_features_check_fit_mode(self, renderer, event_source):
+        config = BronzeEventConfig(
+            source=event_source,
+            entity_column="customer_id",
+            time_column="order_date",
+            aggregation=AggregationWindowConfig(
+                windows=["7d", "all_time"],
+                value_columns=["amount"],
+                agg_funcs=["sum"],
+            ),
+            text_features=[TextFeatureConfig(column="notes")],
+        )
+        result = renderer.render_bronze_event("orders", config)
+        assert "FIT_MODE" in result
+        assert "fit=True" in result
+        assert "fit=False" in result
+
+    def test_bronze_entity_text_features_check_fit_mode(self, renderer, entity_source):
+        config = BronzeLayerConfig(
+            source=entity_source,
+            text_features=[TextFeatureConfig(column="bio")],
+        )
+        result = renderer.render_bronze("customers", config)
+        assert "FIT_MODE" in result
+        assert "fit=True" in result
+        assert "fit=False" in result
+
+    def test_bronze_event_text_features_valid_python(self, renderer, event_source):
+        config = BronzeEventConfig(
+            source=event_source,
+            entity_column="customer_id",
+            time_column="order_date",
+            aggregation=AggregationWindowConfig(
+                windows=["7d", "all_time"],
+                value_columns=["amount"],
+                agg_funcs=["sum"],
+            ),
+            text_features=[TextFeatureConfig(column="notes")],
+        )
+        result = renderer.render_bronze_event("orders", config)
+        ast.parse(result)
+
+    def test_bronze_entity_text_features_valid_python(self, renderer, entity_source):
+        config = BronzeLayerConfig(
+            source=entity_source,
+            text_features=[TextFeatureConfig(column="bio")],
+        )
+        result = renderer.render_bronze("customers", config)
         ast.parse(result)

@@ -222,6 +222,7 @@ PIPELINE_NAME = "{{ config.name }}"
 COMPOSITE_NAME = "{{ config.composite_name or config.name }}"
 TARGET_COLUMN = "{{ config.target_column }}"
 TIMESTAMP_COLUMN = "event_timestamp"
+FIT_MODE = {{ 'True' if config.fit_mode else 'False' }}
 
 CATALOG = "{{ catalog }}"
 SCHEMA = "{{ schema }}"
@@ -461,7 +462,10 @@ def compute_text_features_entity(df):
 {% for tf in config.text_features %}
     if "{{ tf.column }}" in pdf.columns:
         processor = TextColumnProcessor(TextProcessingConfig(embedding_model="{{ tf.embedding_model }}"), registry=None)
-        pdf, result = processor.process_column(pdf, "{{ tf.column }}", fit=True)
+        if FIT_MODE:
+            pdf, result = processor.process_column(pdf, "{{ tf.column }}", fit=True)
+        else:
+            pdf, result = processor.process_column(pdf, "{{ tf.column }}", fit=False)
 {% endfor %}
     return spark.createDataFrame(pdf)
 {% endif %}
@@ -666,7 +670,10 @@ def compute_text_features(agg_df, raw_df):
     if "{{ tf.column }}" in raw_pdf.columns:
         processor = TextColumnProcessor(TextProcessingConfig(embedding_model="{{ tf.embedding_model }}"), registry=None)
         text_data = raw_pdf.groupby(ENTITY_COLUMN)["{{ tf.column }}"].first().reset_index()
-        text_data, result = processor.process_column(text_data, "{{ tf.column }}", fit=True)
+        if FIT_MODE:
+            text_data, result = processor.process_column(text_data, "{{ tf.column }}", fit=True)
+        else:
+            text_data, result = processor.process_column(text_data, "{{ tf.column }}", fit=False)
         component_cols = result.component_columns
         agg_pdf = agg_pdf.merge(text_data[[ENTITY_COLUMN] + component_cols], on=ENTITY_COLUMN, how="left")
 {% endfor %}
@@ -1062,12 +1069,36 @@ def {{ func_name }}(df):
 
 # COMMAND ----------
 
+def create_holdout_mask(df, holdout_fraction=0.1, random_state=42):
+    original_col = f"original_{TARGET_COLUMN}"
+    if original_col in df.columns:
+        return df
+    if TARGET_COLUMN not in [f.name for f in df.schema.fields]:
+        return df
+    total = df.count()
+    frac = min(1.0, max(0.0, holdout_fraction))
+    holdout_df = df.sample(withReplacement=False, fraction=frac, seed=random_state)
+    holdout_ids = holdout_df.select("entity_id").distinct()
+    df = df.join(holdout_ids, on="entity_id", how="left_semi").withColumn(
+        original_col, F.col(TARGET_COLUMN)
+    ).withColumn(
+        TARGET_COLUMN, F.lit(None).cast(df.schema[TARGET_COLUMN].dataType)
+    ).unionByName(
+        df.join(holdout_ids, on="entity_id", how="left_anti").withColumn(
+            original_col, F.lit(None).cast(df.schema[TARGET_COLUMN].dataType)
+        )
+    )
+    return df
+
+# COMMAND ----------
+
 def run_silver():
     bronze_outputs = load_bronze_outputs()
     merged = merge_sources(bronze_outputs)
 {% if config.silver.derived_columns %}
     merged = apply_derived_columns(merged)
 {% endif %}
+    merged = create_holdout_mask(merged)
     output_table = silver_table()
     merged.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
     from delta.tables import DeltaTable
@@ -1304,14 +1335,17 @@ def load_training_data():
 
 def prepare_features(df):
     exclude_prefixes = ["original_"]
-    exclude_cols = {TARGET, "as_of_date"}
+    exclude_cols = {TARGET, TIMESTAMP_COLUMN, "entity_id"}
     feature_cols = [
         c for c in df.columns
         if c not in exclude_cols and not any(c.startswith(p) for p in exclude_prefixes)
         and df.schema[c].dataType.typeName() in ("double", "float", "integer", "long", "short")
     ]
     assembler = VectorAssembler(inputCols=feature_cols, outputCol="features", handleInvalid="skip")
-    assembled = assembler.transform(df).select("features", F.col(TARGET).alias("label"))
+    keep = ["features", F.col(TARGET).alias("label")]
+    if TIMESTAMP_COLUMN in df.columns:
+        keep.append(TIMESTAMP_COLUMN)
+    assembled = assembler.transform(df).select(*keep)
     return assembled, feature_cols
 
 def train_and_evaluate():
@@ -1327,7 +1361,7 @@ def train_and_evaluate():
     assembled, feature_cols = prepare_features(df)
     pdf = assembled.toPandas()
     splitter = DataSplitter(
-        target_column=TARGET_COLUMN,
+        target_column="label",
         strategy=SplitStrategy.TEMPORAL,
         temporal_column=TIMESTAMP_COLUMN,
 {% if config.training and config.training.purge_gap_days %}
@@ -1336,7 +1370,10 @@ def train_and_evaluate():
         test_size={{ config.training.test_size if config.training else 0.2 }},
     )
     splits = splitter.split(pdf)
-    train_pdf, test_pdf = splits.X_train, splits.X_test
+    train_pdf = splits.X_train[["features"]].copy()
+    train_pdf["label"] = splits.y_train.values
+    test_pdf = splits.X_test[["features"]].copy()
+    test_pdf["label"] = splits.y_test.values
     train_df = spark.createDataFrame(train_pdf)
     test_df = spark.createDataFrame(test_pdf)
 
