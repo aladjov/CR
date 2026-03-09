@@ -875,7 +875,7 @@ class FindingsParser:
             if step:
                 config.gold.transformations.append(step)
         prioritized_columns = self._collect_prioritized_columns(gold)
-        drop_columns = self._collect_feature_selection_drops(gold, prioritized_columns)
+        drop_columns = self._collect_feature_selection_drops(gold, prioritized_columns, config.target_column)
         config.gold.feature_selections = list(drop_columns)
 
     def _map_gold_transformation(self, rec) -> Optional[TransformationStep]:
@@ -907,11 +907,11 @@ class FindingsParser:
                 prioritized.add(rec.target_column)
         return prioritized
 
-    def _collect_feature_selection_drops(self, gold, prioritized: Set[str]) -> Set[str]:
+    def _collect_feature_selection_drops(self, gold, prioritized: Set[str], target_column: str) -> Set[str]:
         drops = set()
         for rec in getattr(gold, "feature_selection", []):
             if rec.action in ("drop_multicollinear", "drop_weak"):
-                if rec.target_column not in prioritized:
+                if rec.target_column not in prioritized and rec.target_column != target_column:
                     drops.add(rec.target_column)
         return drops
 

@@ -5388,3 +5388,81 @@ class TestColumnTypeDeserialization:
         from customer_retention.core.config.column_config import ColumnType
         with pytest.raises(ValueError):
             ColumnType("NUMERIC")
+
+
+class TestFeatureSelectionDropSkipsTarget:
+    @staticmethod
+    def _make_parser():
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {"data": {"customer_id", "unsubscribed", "age", "region"}}
+        parser._source_findings_paths = {}
+        return parser
+
+    @staticmethod
+    def _make_config(target_column="unsubscribed"):
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeLayerConfig,
+            GoldLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
+        source = SourceConfig(name="data", path="data.csv", format="csv", entity_key="customer_id", raw_source_path="/data/data.csv")
+        return PipelineConfig(
+            name="test", target_column=target_column, sources=[source],
+            bronze={"data": BronzeLayerConfig(source=source)},
+            silver=SilverLayerConfig(), gold=GoldLayerConfig(), output_dir=".",
+        )
+
+    @staticmethod
+    def _make_registry(feature_selection=None):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            GoldRecommendations,
+            RecommendationRegistry,
+        )
+        registry = RecommendationRegistry()
+        registry.gold = GoldRecommendations(target_column="unsubscribed", feature_selection=feature_selection or [])
+        return registry
+
+    @staticmethod
+    def _make_rec(target_column, action):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import LayeredRecommendation
+        return LayeredRecommendation(
+            id="fs_rec", layer="gold", category="feature_selection", action=action,
+            target_column=target_column, parameters={}, rationale="test", source_notebook="04",
+        )
+
+    def test_drop_weak_skips_target_column(self):
+        parser = self._make_parser()
+        config = self._make_config()
+        registry = self._make_registry(feature_selection=[
+            self._make_rec("unsubscribed", "drop_weak"),
+            self._make_rec("age", "drop_weak"),
+        ])
+        parser._apply_gold_recommendations(config, registry)
+        assert "unsubscribed" not in config.gold.feature_selections
+        assert "age" in config.gold.feature_selections
+
+    def test_drop_multicollinear_skips_target_column(self):
+        parser = self._make_parser()
+        config = self._make_config()
+        registry = self._make_registry(feature_selection=[
+            self._make_rec("unsubscribed", "drop_multicollinear"),
+            self._make_rec("region", "drop_multicollinear"),
+        ])
+        parser._apply_gold_recommendations(config, registry)
+        assert "unsubscribed" not in config.gold.feature_selections
+        assert "region" in config.gold.feature_selections
+
+    def test_prioritized_column_still_excluded(self):
+        parser = self._make_parser()
+        config = self._make_config()
+        registry = self._make_registry(feature_selection=[
+            self._make_rec("age", "prioritize"),
+            self._make_rec("age", "drop_weak"),
+            self._make_rec("region", "drop_weak"),
+        ])
+        parser._apply_gold_recommendations(config, registry)
+        assert "age" not in config.gold.feature_selections
+        assert "region" in config.gold.feature_selections
