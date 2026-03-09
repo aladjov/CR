@@ -632,6 +632,9 @@ def apply_event_aggregation(df):
     if "feature_timestamp" in [f.name for f in df.schema.fields]:
         ts_agg = df.groupBy(ENTITY_COLUMN).agg(F.max("feature_timestamp").alias("feature_timestamp"))
         merged = merged.join(ts_agg, on=ENTITY_COLUMN, how="left")
+    if TARGET_COLUMN in [f.name for f in df.schema.fields]:
+        target_agg = df.groupBy(ENTITY_COLUMN).agg(F.first(TARGET_COLUMN, ignorenulls=True).alias(TARGET_COLUMN))
+        merged = merged.join(target_agg, on=ENTITY_COLUMN, how="left")
     return merged, reference_date
 {% endif %}
 

@@ -1782,6 +1782,24 @@ class TestDatabricksBronzeEventReadsFromLanding:
         assert "F.max" in result
         ast.parse(result)
 
+    def test_bronze_event_aggregation_preserves_target_column(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.parquet", format="parquet",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="order_date",
+            aggregation=AggregationWindowConfig(
+                windows=["7d", "30d"],
+                value_columns=["amount"],
+                agg_funcs=["sum", "mean"],
+            ),
+        )
+        result = renderer.render_bronze_event("orders", config)
+        assert "F.first(TARGET_COLUMN" in result
+        assert "target_agg" in result
+        ast.parse(result)
+
 
 class TestDatabricksGoldFeatureTimestamp:
     def test_gold_renames_feature_timestamp(self, renderer, sample_pipeline_config):
