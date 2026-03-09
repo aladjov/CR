@@ -124,11 +124,11 @@ class RealtimeScorer:
 
     def health_check(self) -> EndpointHealth:
         model_loaded = self._model is not None
-        store_connected = True
         try:
             self._feature_store.read_batch("__health_check__", [])
-        except Exception:
             store_connected = True
+        except Exception:
+            store_connected = False
         return EndpointHealth(
             status="healthy" if model_loaded and store_connected else "unhealthy",
             model_loaded=model_loaded,

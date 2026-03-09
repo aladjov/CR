@@ -1375,7 +1375,8 @@ class FindingsParser:
                 continue
             try:
                 preagg = ExplorationFindings.load(str(candidate))
-            except Exception:
+            except (FileNotFoundError, KeyError, ValueError, TypeError) as exc:
+                logger.debug("Skipping unloadable findings %s: %s", candidate, exc)
                 continue
             source_name = self._match_preagg_to_source(preagg, index)
             if source_name is not None:

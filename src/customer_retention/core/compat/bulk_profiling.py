@@ -428,12 +428,14 @@ def _pandas_bulk_stats(df: _pandas.DataFrame) -> BulkStats:
 
             try:
                 skew_vals = numeric_df.skew()
-            except Exception:
+            except (ValueError, TypeError) as exc:
+                logger.debug("Skew computation failed: %s", exc)
                 skew_vals = _pandas.Series(dtype=float)
 
             try:
                 kurt_vals = numeric_df.kurtosis()
-            except Exception:
+            except (ValueError, TypeError) as exc:
+                logger.debug("Kurtosis computation failed: %s", exc)
                 kurt_vals = _pandas.Series(dtype=float)
 
         for col in numeric_cols:
@@ -761,7 +763,8 @@ def _pandas_datetime_stats(series: _pandas.Series) -> DatetimeColumnStats:
             clean = _pandas.to_datetime(clean, errors="coerce").dropna()
             if len(clean) == 0:
                 return DatetimeColumnStats()
-    except Exception:
+    except (ValueError, TypeError, OverflowError) as exc:
+        logger.debug("Datetime conversion failed for column: %s", exc)
         return DatetimeColumnStats()
 
     clean = as_tz_naive(clean)

@@ -445,7 +445,7 @@ and apply the model. This ensures training-serving consistency.'''),
         result_type="double",
     )
     print("Scored using fe.score_batch with automatic feature lookup")
-except Exception as e:
+except (AttributeError, NotImplementedError, TypeError) as e:
     print(f"fe.score_batch not available: {e}")
     print("Falling back to manual feature retrieval...")
 

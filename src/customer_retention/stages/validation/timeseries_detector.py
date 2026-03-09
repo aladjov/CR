@@ -375,7 +375,7 @@ class TimeSeriesDetector:
                     series.head(100), errors='coerce', format='mixed'
                 )
             return parsed.notna().mean() > 0.8
-        except Exception:
+        except (ValueError, TypeError, OverflowError):
             return False
 
     def _detect_frequency(

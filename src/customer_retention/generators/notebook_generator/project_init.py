@@ -152,14 +152,14 @@ dev = [
         # 2. Installed package: resolve from package metadata RECORD.
         #    Works across pip, conda, uv, pipx — any PEP 376 compliant installer.
         try:
-            from importlib.metadata import distribution
+            from importlib.metadata import PackageNotFoundError, distribution
             dist = distribution("churnkit")
             for f in dist.files or []:
                 if str(f).endswith("exploration_notebooks/00_start_here.ipynb"):
                     resolved = Path(dist.locate_file(f)).resolve()
                     if resolved.parent.is_dir():
                         return resolved.parent
-        except Exception:
+        except (PackageNotFoundError, FileNotFoundError, TypeError):
             pass
 
         # 3. Fallback: common shared-data location under sys.prefix

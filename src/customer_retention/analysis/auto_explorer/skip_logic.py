@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
+
+logger = logging.getLogger(__name__)
 
 NOTEBOOKS_ORDER = [
     "00_start_here",
@@ -103,8 +106,8 @@ def is_event_level_dataset(
             findings = ExplorationFindings.load(str(findings_path))
             if findings.time_series_metadata:
                 return findings.time_series_metadata.granularity == DatasetGranularity.EVENT_LEVEL
-        except Exception:
-            pass
+        except (FileNotFoundError, KeyError, ValueError, TypeError) as exc:
+            logger.debug("Failed to load findings from %s: %s", findings_path, exc)
 
     if context is not None:
         entry = context.datasets.get(dataset_name)
@@ -124,8 +127,8 @@ def is_event_level_dataset(
             detector = TypeDetector()
             result = detector.detect_granularity(raw)
             return result.granularity == DatasetGranularity.EVENT_LEVEL
-        except Exception:
-            pass
+        except (FileNotFoundError, ValueError, TypeError) as exc:
+            logger.debug("Failed to detect granularity from %s: %s", dataset_path, exc)
 
     return False
 
@@ -151,8 +154,8 @@ def has_text_columns_for_dataset(
             if ColumnType.TEXT in findings.column_types.values():
                 return True
             return False
-        except Exception:
-            pass
+        except (FileNotFoundError, KeyError, ValueError, TypeError) as exc:
+            logger.debug("Failed to check text columns in %s: %s", findings_path, exc)
 
     if dataset_path:
         try:
@@ -169,8 +172,8 @@ def has_text_columns_for_dataset(
                 result = detector.detect_type(raw[col], col)
                 if result.inferred_type == ColumnType.TEXT:
                     return True
-        except Exception:
-            pass
+        except (FileNotFoundError, ValueError, TypeError) as exc:
+            logger.debug("Failed to detect text columns from %s: %s", dataset_path, exc)
 
     return False
 

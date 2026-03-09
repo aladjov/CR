@@ -1909,7 +1909,8 @@ try:
     from customer_retention.analysis.auto_explorer import ProjectContext
     _ctx = ProjectContext.load(str(findings_dir / "project_context.yaml"))
     global_skip, global_reasons = detect_global_skip_set(findings_dir, _ctx)
-except Exception:
+except (FileNotFoundError, KeyError, ValueError, TypeError) as _skip_exc:
+    print(f"  Skip detection unavailable ({_skip_exc}), running all notebooks")
     global_skip, global_reasons = set(), {}
 
 for nb in GLOBAL_NOTEBOOKS:

@@ -59,6 +59,15 @@ class TestScoringEndpoint:
         assert health.uptime_seconds >= 0
         assert health.last_request_time is not None or health.last_request_time is None
 
+    def test_health_check_reports_store_disconnected_on_failure(self, mock_model):
+        broken_store = MagicMock()
+        broken_store.read_batch = MagicMock(side_effect=ConnectionError("store down"))
+        config = ScoringConfig(endpoint_name="test", timeout_ms=200, model_version="v1")
+        scorer = RealtimeScorer(model=mock_model, feature_store=broken_store, config=config)
+        health = scorer.health_check()
+        assert health.feature_store_connected is False
+        assert health.status == "unhealthy"
+
 
 class TestScoringLatency:
     def test_ac9_17_latency_under_200ms(self, scorer):

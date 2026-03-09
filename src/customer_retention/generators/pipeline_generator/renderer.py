@@ -1039,8 +1039,9 @@ def get_training_data_from_feast() -> pd.DataFrame:
         print(f"  Retrieved {len(training_df):,} rows, {len(training_df.columns)} columns")
         return training_df
 
-    except Exception as e:
-        print(f"Feast retrieval failed ({e}), falling back to data file")
+    except (ImportError, ConnectionError, RuntimeError, KeyError) as e:
+        import warnings
+        warnings.warn(f"Feast retrieval failed ({e}), loading directly from gold data")
         return _load_feast_data()
 
 
