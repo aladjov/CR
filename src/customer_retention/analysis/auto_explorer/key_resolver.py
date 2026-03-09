@@ -4,7 +4,7 @@ import logging
 from typing import TYPE_CHECKING, Optional
 
 from customer_retention.analysis.auto_explorer.project_context import KeyResolutionStep
-from customer_retention.core.compat import native_pd, pd, resolve_column_name, unique_overlap_counts
+from customer_retention.core.compat import head_as_list, pd, resolve_column_name, unique_overlap_counts
 
 if TYPE_CHECKING:
     from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
@@ -88,10 +88,10 @@ def resolve_single_dataset_keys(
     steps: list[KeyResolutionStep],
     namespace: RunNamespace,
 ) -> pd.DataFrame:
-    from customer_retention.analysis.auto_explorer.active_dataset_store import load_active_dataset
+    from customer_retention.analysis.auto_explorer.active_dataset_store import load_active_dataset_distributed
 
     for step in steps:
-        bridge_df = load_active_dataset(namespace, step.bridge_dataset)
+        bridge_df = load_active_dataset_distributed(namespace, step.bridge_dataset)
         df = _apply_resolution_step(df, "<inline>", step, {step.bridge_dataset: bridge_df})
     return df
 
@@ -152,15 +152,15 @@ def resolve_sample_ids_via_bridge(
     steps: list[KeyResolutionStep],
     sample_entity_ids: list,
 ) -> tuple[str, set]:
-    from customer_retention.analysis.auto_explorer.active_dataset_store import load_active_dataset
+    from customer_retention.analysis.auto_explorer.active_dataset_store import load_active_dataset_distributed
 
     current_ids = set(sample_entity_ids)
     for step in reversed(steps):
-        bridge_df = native_pd.DataFrame(load_active_dataset(namespace, step.bridge_dataset))
+        bridge_df = load_active_dataset_distributed(namespace, step.bridge_dataset)
         resolve_col = _resolve_column_name(bridge_df.columns, step.resolve_column)
         bridge_key = _resolve_column_name(bridge_df.columns, step.bridge_key)
-        matched = bridge_df[bridge_df[resolve_col].isin(current_ids)]
-        current_ids = set(matched[bridge_key].tolist())
+        matched = bridge_df[bridge_df[resolve_col].isin(list(current_ids))]
+        current_ids = set(head_as_list(matched[bridge_key], max(len(current_ids) * 100, 10_000)))
     source_key = steps[0].source_key
     return source_key, current_ids
 

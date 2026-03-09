@@ -314,21 +314,27 @@ def normalize_timestamps(df: Any) -> Any:
     return normalize_timestamp_columns(df)
 
 
-def _normalize_timestamps_distributed(df: Any) -> Any:
+def strip_spark_timestamp_tz(spark_df: Any) -> Any:
     from pyspark.sql.functions import col as spark_col
     from pyspark.sql.types import TimestampType
 
-    spark_df = df.to_spark()
     ts_fields = [f for f in spark_df.schema.fields if isinstance(f.dataType, TimestampType)]
     if not ts_fields:
-        return df
+        return spark_df
     casts = [
         spark_col(f.name).cast("timestamp_ntz").alias(f.name)
         if isinstance(f.dataType, TimestampType)
         else spark_col(f.name)
         for f in spark_df.schema.fields
     ]
-    stripped = spark_df.select(casts)
+    return spark_df.select(casts)
+
+
+def _normalize_timestamps_distributed(df: Any) -> Any:
+    spark_df = df.to_spark()
+    stripped = strip_spark_timestamp_tz(spark_df)
+    if stripped is spark_df:
+        return df
     return as_pandas_api(stripped)
 
 
@@ -1084,6 +1090,7 @@ __all__ = [
     "ensure_datetime_column",
     "ensure_timestamp",
     "normalize_timestamp_columns",
+    "strip_spark_timestamp_tz",
     "pandas_dtype_to_spark_schema",
     "ops",
     "DataOps",
