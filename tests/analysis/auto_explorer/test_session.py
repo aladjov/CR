@@ -266,6 +266,52 @@ class TestMarkNotebook:
         assert state.active_run_id == original_run_id
 
 
+class TestAutomatedPipelineSkipsSessionWrites:
+
+    def test_mark_notebook_skips_write_in_automated_databricks_run(self, namespace, monkeypatch):
+        monkeypatch.setenv("CR_USERNAME", "alice")
+        monkeypatch.setenv("CR_DATASET_ID", "customers")
+        monkeypatch.setenv("CR_RUN_ID", namespace.run_id)
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        mark_notebook(namespace, "01_data_discovery.ipynb", username="alice")
+        state = SessionState.load(namespace.user_session_path("alice"))
+        assert state is None
+
+    def test_mark_notebook_writes_when_not_automated(self, namespace, monkeypatch):
+        monkeypatch.setenv("CR_USERNAME", "alice")
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        mark_notebook(namespace, "01_data_discovery.ipynb", username="alice")
+        state = SessionState.load(namespace.user_session_path("alice"))
+        assert state is not None
+        assert state.last_notebook == "01_data_discovery.ipynb"
+
+    def test_set_active_dataset_skips_write_in_automated_databricks_run(self, namespace, monkeypatch):
+        monkeypatch.setenv("CR_DATASET_ID", "customers")
+        monkeypatch.setenv("CR_RUN_ID", namespace.run_id)
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        set_active_dataset(namespace, "transactions", username="alice")
+        state = SessionState.load(namespace.user_session_path("alice"))
+        assert state is None
+
+    def test_set_active_dataset_writes_when_not_automated(self, namespace, monkeypatch):
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        set_active_dataset(namespace, "transactions", username="alice")
+        state = SessionState.load(namespace.user_session_path("alice"))
+        assert state is not None
+        assert state.active_dataset == "transactions"
+
+    def test_mark_notebook_writes_in_interactive_databricks(self, namespace, monkeypatch):
+        monkeypatch.setenv("CR_USERNAME", "alice")
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
+        mark_notebook(namespace, "04_column_deep_dive.ipynb", username="alice")
+        state = SessionState.load(namespace.user_session_path("alice"))
+        assert state is not None
+        assert state.last_notebook == "04_column_deep_dive.ipynb"
+
+
 class TestInitializeRun:
     def test_creates_namespace_directories(self, tmp_path):
         ns = initialize_run(root=tmp_path, project_name="myproj")

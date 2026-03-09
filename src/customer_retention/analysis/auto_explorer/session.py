@@ -11,6 +11,14 @@ from typing import Any, Optional
 from .run_namespace import RunNamespace
 
 
+def _is_automated_databricks_run() -> bool:
+    return bool(
+        os.environ.get("CR_DATASET_ID")
+        and os.environ.get("CR_RUN_ID")
+        and os.environ.get("DATABRICKS_RUNTIME_VERSION")
+    )
+
+
 @dataclass
 class SessionState:
     active_dataset: Optional[str]
@@ -86,6 +94,8 @@ def resolve_active_dataset(
 def set_active_dataset(
     namespace: RunNamespace, dataset_name: str, username: Optional[str] = None
 ) -> None:
+    if _is_automated_databricks_run():
+        return
     if username is None:
         username = get_current_username()
 
@@ -114,6 +124,8 @@ def initialize_run(
 def mark_notebook(
     namespace: RunNamespace, notebook_name: str, username: Optional[str] = None
 ) -> None:
+    if _is_automated_databricks_run():
+        return
     if username is None:
         username = get_current_username()
     session_path = namespace.user_session_path(username)

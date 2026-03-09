@@ -43,23 +43,20 @@ def accept_workflow_params() -> None:
 
 
 def track_and_export_previous(current_notebook: str) -> None:
-    """Record the current notebook and export the previous one in the background.
-
-    Called at the top of each notebook.  Uses RunNamespace + SessionState
-    as single source of truth for progress tracking.
-
-    Returns ``None`` — the export runs asynchronously.
-    """
     _ensure_databricks_config_loaded()
     from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
     from customer_retention.analysis.auto_explorer.session import (
         SessionState,
+        _is_automated_databricks_run,
         get_current_username,
         mark_notebook,
     )
 
     namespace = RunNamespace.from_env_or_latest()
     if namespace is None:
+        return
+
+    if _is_automated_databricks_run():
         return
 
     username = get_current_username()
