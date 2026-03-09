@@ -390,6 +390,70 @@ class TestNotebook03Architecture:
         assert "rename" in code, "NB03 must rename original entity column to entity_id"
 
 
+class TestNotebook06Architecture:
+
+    NOTEBOOK_PATH = NOTEBOOKS_DIR / "06_feature_opportunities.ipynb"
+
+    def _read_content(self):
+        with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
+            return f.read()
+
+    def test_nb06_uses_prefer_merged(self):
+        content = self._read_content()
+        assert "prefer_merged=True" in content, "NB06 must use prefer_merged=True for load_notebook_findings"
+
+    def test_nb06_uses_require_silver_merged(self):
+        content = self._read_content()
+        assert "require_silver_merged" in content, "NB06 must use require_silver_merged"
+        assert "load_active_dataset(" not in content, "NB06 must not fall back to load_active_dataset"
+
+    def test_nb06_uses_merged_recommendations_path(self):
+        content = self._read_content()
+        assert "merged_recommendations_path" in content, "NB06 must use namespace merged_recommendations_path"
+
+
+class TestNotebook07Architecture:
+
+    NOTEBOOK_PATH = NOTEBOOKS_DIR / "07_modeling_readiness.ipynb"
+
+    def _read_content(self):
+        with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
+            return f.read()
+
+    def test_nb07_uses_prefer_merged(self):
+        content = self._read_content()
+        assert "prefer_merged=True" in content, "NB07 must use prefer_merged=True for load_notebook_findings"
+
+    def test_nb07_uses_require_silver_merged(self):
+        content = self._read_content()
+        assert "require_silver_merged" in content, "NB07 must use require_silver_merged"
+        assert "load_active_dataset(" not in content, "NB07 must not fall back to load_active_dataset"
+
+
+class TestNotebook10Architecture:
+
+    NOTEBOOK_PATH = NOTEBOOKS_DIR / "10_spec_generation.ipynb"
+
+    def _read_content(self):
+        with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
+            return f.read()
+
+    def test_nb10_uses_namespace_discovery(self):
+        content = self._read_content()
+        assert "discover_all_findings" in content or "merged_recommendations_path" in content, (
+            "NB10 must use namespace discovery methods, not glob patterns"
+        )
+
+    def test_nb10_no_findings_dir_glob(self):
+        content = self._read_content()
+        assert 'findings_dir.glob("*_findings' not in content, (
+            "NB10 must not glob findings_dir for findings files — use namespace discovery"
+        )
+        assert 'findings_dir.glob("*_recommendations' not in content, (
+            "NB10 must not glob findings_dir for recommendations — use namespace.merged_recommendations_path"
+        )
+
+
 class TestNotebook08Architecture:
 
     NOTEBOOK_PATH = NOTEBOOKS_DIR / "08_baseline_experiments.ipynb"
