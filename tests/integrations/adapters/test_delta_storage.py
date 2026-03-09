@@ -662,6 +662,25 @@ class TestDatabricksDeltaStripTimestampTz:
                     "overwriteSchema", "true"
                 ).save.assert_called_once_with("/fake/path")
 
+    def test_write_sets_timestamp_micros_output(self):
+        from unittest.mock import MagicMock, call, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            mock_spark_df = MagicMock()
+            mock_ps_df = MagicMock()
+            mock_ps_df.to_spark.return_value = mock_spark_df
+
+            with patch.object(DatabricksDelta, "_strip_spark_timestamp_tz", return_value=mock_spark_df):
+                storage.write(mock_ps_df, "/fake/path")
+                storage._spark.conf.set.assert_any_call(
+                    "spark.sql.parquet.outputTimestampType", "TIMESTAMP_MICROS",
+                )
+
     def test_merge_applies_strip_tz(self):
         from unittest.mock import MagicMock, patch
 

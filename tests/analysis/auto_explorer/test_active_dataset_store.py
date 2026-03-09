@@ -52,6 +52,29 @@ class TestLoadMissing:
             load_active_dataset(namespace, "nonexistent")
 
 
+class TestSaveNormalizesTimestamps:
+    def test_tz_aware_timestamps_saved_as_tz_naive(self, namespace):
+        df = pd.DataFrame({
+            "customer_id": [1, 2],
+            "event_time": pd.to_datetime(["2023-01-01", "2023-06-15"]).tz_localize("UTC"),
+        })
+        save_active_dataset(namespace, "customers", df)
+        loaded = load_active_dataset(namespace, "customers")
+        assert loaded["event_time"].dt.tz is None
+        assert loaded["event_time"].iloc[0] == pd.Timestamp("2023-01-01")
+
+    def test_mixed_tz_and_naive_timestamps(self, namespace):
+        df = pd.DataFrame({
+            "customer_id": [1],
+            "ts_utc": pd.to_datetime(["2023-01-01"]).tz_localize("UTC"),
+            "ts_naive": pd.to_datetime(["2023-06-15"]),
+        })
+        save_active_dataset(namespace, "customers", df)
+        loaded = load_active_dataset(namespace, "customers")
+        assert loaded["ts_utc"].dt.tz is None
+        assert loaded["ts_naive"].dt.tz is None
+
+
 class TestOverwrite:
     def test_overwrite_replaces_data(self, namespace, sample_df):
         save_active_dataset(namespace, "customers", sample_df)

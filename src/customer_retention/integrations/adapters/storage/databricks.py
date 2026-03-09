@@ -72,6 +72,7 @@ class DatabricksDelta(DeltaStorage):
               partition_by: Optional[List[str]] = None,
               metadata: Optional[Dict[str, str]] = None) -> None:
         path = self._normalize_path(path)
+        self.spark.conf.set("spark.sql.parquet.outputTimestampType", "TIMESTAMP_MICROS")
         if metadata:
             self.spark.conf.set(
                 "spark.databricks.delta.commitInfo.userMetadata",
