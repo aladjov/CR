@@ -816,6 +816,88 @@ class TestNormalizeTimestamps:
         assert pd.api.types.is_numeric_dtype(result["amount"])
 
 
+class TestStripSparkTimestampTz:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_casts_timestamp_to_ntz(self):
+        from unittest.mock import MagicMock
+
+        from pyspark.sql.types import IntegerType, StringType, StructField, StructType, TimestampType
+
+        from customer_retention.core.compat import strip_spark_timestamp_tz
+
+        schema = StructType([
+            StructField("id", IntegerType()),
+            StructField("ts", TimestampType()),
+            StructField("name", StringType()),
+        ])
+        mock_df = MagicMock()
+        mock_df.schema.fields = schema.fields
+        result = strip_spark_timestamp_tz(mock_df)
+        mock_df.select.assert_called_once()
+        assert result is mock_df.select.return_value
+
+    def test_no_timestamp_columns_returns_original(self):
+        from unittest.mock import MagicMock
+
+        from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+
+        from customer_retention.core.compat import strip_spark_timestamp_tz
+
+        schema = StructType([
+            StructField("id", IntegerType()),
+            StructField("name", StringType()),
+        ])
+        mock_df = MagicMock()
+        mock_df.schema.fields = schema.fields
+        result = strip_spark_timestamp_tz(mock_df)
+        assert result is mock_df
+        mock_df.select.assert_not_called()
+
+    def test_ntz_columns_returns_original(self):
+        from unittest.mock import MagicMock
+
+        from pyspark.sql.types import IntegerType, StructField, StructType, TimestampNTZType
+
+        from customer_retention.core.compat import strip_spark_timestamp_tz
+
+        schema = StructType([
+            StructField("id", IntegerType()),
+            StructField("ts", TimestampNTZType()),
+        ])
+        mock_df = MagicMock()
+        mock_df.schema.fields = schema.fields
+        result = strip_spark_timestamp_tz(mock_df)
+        assert result is mock_df
+        mock_df.select.assert_not_called()
+
+    def test_mixed_timestamp_and_ntz(self):
+        from unittest.mock import MagicMock
+
+        from pyspark.sql.types import (
+            IntegerType,
+            StructField,
+            StructType,
+            TimestampNTZType,
+            TimestampType,
+        )
+
+        from customer_retention.core.compat import strip_spark_timestamp_tz
+
+        schema = StructType([
+            StructField("id", IntegerType()),
+            StructField("ts_tz", TimestampType()),
+            StructField("ts_ntz", TimestampNTZType()),
+        ])
+        mock_df = MagicMock()
+        mock_df.schema.fields = schema.fields
+        result = strip_spark_timestamp_tz(mock_df)
+        mock_df.select.assert_called_once()
+        assert result is mock_df.select.return_value
+
+
 class TestNormalizeTimestampsDistributed:
     @pytest.fixture(autouse=True)
     def _skip_without_pyspark(self):

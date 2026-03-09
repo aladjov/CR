@@ -56,29 +56,31 @@ class DatabricksDelta(DeltaStorage):
 
     @staticmethod
     def _strip_spark_timestamp_tz(spark_df: Any) -> Any:
-        from pyspark.sql.functions import col as spark_col
-        from pyspark.sql.types import TimestampType
-        casts = [
-            spark_col(f.name).cast("timestamp_ntz").alias(f.name)
-            if isinstance(f.dataType, TimestampType)
-            else spark_col(f.name)
-            for f in spark_df.schema.fields
-        ]
-        return spark_df.select(casts) if any(
-            isinstance(f.dataType, TimestampType) for f in spark_df.schema.fields
-        ) else spark_df
+        from customer_retention.core.compat import strip_spark_timestamp_tz
+        return strip_spark_timestamp_tz(spark_df)
+
+    @staticmethod
+    def _is_native_spark_df(df: Any) -> bool:
+        from pyspark.sql import DataFrame as NativeSparkDF
+        return isinstance(df, NativeSparkDF)
 
     def write(self, df: Any, path: str, mode: str = "overwrite",
               partition_by: Optional[List[str]] = None,
               metadata: Optional[Dict[str, str]] = None) -> None:
         path = self._normalize_path(path)
         self.spark.conf.set("spark.sql.parquet.outputTimestampType", "TIMESTAMP_MICROS")
+        self.spark.conf.set("spark.sql.execution.arrow.pyspark.fallback.enabled", "true")
         if metadata:
             self.spark.conf.set(
                 "spark.databricks.delta.commitInfo.userMetadata",
                 json.dumps(metadata),
             )
-        spark_df = as_spark_df(df) if hasattr(df, "to_spark") else self._to_spark_df(df)
+        if self._is_native_spark_df(df):
+            spark_df = df
+        elif hasattr(df, "to_spark"):
+            spark_df = as_spark_df(df)
+        else:
+            spark_df = self._to_spark_df(df)
         spark_df = self._strip_spark_timestamp_tz(spark_df)
         writer = spark_df.write.format("delta").mode(mode)
         if mode == "overwrite":
@@ -91,7 +93,12 @@ class DatabricksDelta(DeltaStorage):
               update_cols: Optional[List[str]] = None) -> None:
         path = self._normalize_path(path)
         from delta.tables import DeltaTable
-        spark_df = as_spark_df(df) if hasattr(df, "to_spark") else self._to_spark_df(df)
+        if self._is_native_spark_df(df):
+            spark_df = df
+        elif hasattr(df, "to_spark"):
+            spark_df = as_spark_df(df)
+        else:
+            spark_df = self._to_spark_df(df)
         spark_df = self._strip_spark_timestamp_tz(spark_df)
         target = DeltaTable.forPath(self.spark, path)
         merge_builder = target.alias("target").merge(spark_df.alias("source"), condition)

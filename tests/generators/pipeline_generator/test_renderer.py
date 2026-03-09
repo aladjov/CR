@@ -95,6 +95,26 @@ class TestRenderSilver:
         result = renderer.render_silver(sample_pipeline_config)
         ast.parse(result)
 
+    def test_simplified_merge_renames_entity_key_to_entity_id(self, renderer, sample_pipeline_config):
+        result = renderer.render_silver(sample_pipeline_config)
+        assert "TemporalMerger" not in result
+        assert 'raw_entity_key' in result
+        assert 'rename(columns={raw_entity_key: "entity_id"})' in result
+
+    def test_simplified_merge_skips_rename_when_already_entity_id(self, renderer):
+        from customer_retention.generators.pipeline_generator.models import (
+            SilverLayerConfig,
+            SourceConfig,
+        )
+        source = SourceConfig(name="data", path="/data.csv", format="csv", entity_key="entity_id")
+        silver = SilverLayerConfig(joins=[], aggregations=[])
+        config = PipelineConfig(
+            name="test", target_column="churn", sources=[source],
+            bronze={}, silver=silver, gold=None, output_dir="/out",
+        )
+        result = renderer.render_silver(config)
+        assert 'raw_entity_key != "entity_id"' in result
+
 
 class TestRenderGold:
     def test_render_gold_returns_string(self, renderer, sample_pipeline_config):

@@ -281,43 +281,64 @@ class TestDistributedSavePath:
         mock_df.to_spark = MagicMock()
         return mock_df
 
+    @patch("customer_retention.analysis.auto_explorer.active_dataset_store.strip_spark_timestamp_tz")
+    @patch("customer_retention.analysis.auto_explorer.active_dataset_store.as_spark_df")
     @patch("customer_retention.analysis.auto_explorer.active_dataset_store.get_delta")
-    def test_save_active_bypasses_collection_for_spark_pandas(self, mock_get_delta, namespace):
+    def test_save_active_converts_to_native_spark(self, mock_get_delta, mock_as_spark, mock_strip, namespace):
         mock_delta = MagicMock()
         mock_get_delta.return_value = mock_delta
-        spark_df = self._make_spark_pandas_df()
+        ps_df = self._make_spark_pandas_df()
+        mock_native = MagicMock()
+        mock_as_spark.return_value = mock_native
+        mock_stripped = MagicMock()
+        mock_strip.return_value = mock_stripped
 
-        save_active_dataset(namespace, "customers", spark_df)
+        save_active_dataset(namespace, "customers", ps_df)
 
-        mock_get_delta.assert_called_once_with()
+        mock_as_spark.assert_called_once_with(ps_df)
+        mock_strip.assert_called_once_with(mock_native)
         mock_delta.write.assert_called_once_with(
-            spark_df, str(namespace.landing_table_dir("customers")), mode="overwrite",
+            mock_stripped, str(namespace.landing_table_dir("customers")), mode="overwrite",
         )
 
+    @patch("customer_retention.analysis.auto_explorer.active_dataset_store.strip_spark_timestamp_tz")
+    @patch("customer_retention.analysis.auto_explorer.active_dataset_store.as_spark_df")
     @patch("customer_retention.analysis.auto_explorer.active_dataset_store.get_delta")
-    def test_save_aggregated_bypasses_collection_for_spark_pandas(self, mock_get_delta, namespace):
+    def test_save_aggregated_converts_to_native_spark(self, mock_get_delta, mock_as_spark, mock_strip, namespace):
         mock_delta = MagicMock()
         mock_get_delta.return_value = mock_delta
-        spark_df = self._make_spark_pandas_df()
+        ps_df = self._make_spark_pandas_df()
+        mock_native = MagicMock()
+        mock_as_spark.return_value = mock_native
+        mock_stripped = MagicMock()
+        mock_strip.return_value = mock_stripped
 
-        save_aggregated_dataset(namespace, "events", spark_df)
+        save_aggregated_dataset(namespace, "events", ps_df)
 
-        mock_get_delta.assert_called_once_with()
+        mock_as_spark.assert_called_once_with(ps_df)
+        mock_strip.assert_called_once_with(mock_native)
         mock_delta.write.assert_called_once_with(
-            spark_df, str(namespace.bronze_table_dir("events")), mode="overwrite",
+            mock_stripped, str(namespace.bronze_table_dir("events")), mode="overwrite",
         )
 
+    @patch("customer_retention.analysis.auto_explorer.active_dataset_store.strip_spark_timestamp_tz")
+    @patch("customer_retention.analysis.auto_explorer.active_dataset_store.as_spark_df")
     @patch("customer_retention.analysis.auto_explorer.active_dataset_store.get_delta")
-    def test_save_gold_bypasses_collection_for_spark_pandas(self, mock_get_delta, namespace):
+    def test_save_gold_converts_to_native_spark(self, mock_get_delta, mock_as_spark, mock_strip, namespace):
         mock_delta = MagicMock()
         mock_get_delta.return_value = mock_delta
-        spark_df = self._make_spark_pandas_df()
+        ps_df = self._make_spark_pandas_df()
+        mock_native = MagicMock()
+        mock_as_spark.return_value = mock_native
+        mock_stripped = MagicMock()
+        mock_strip.return_value = mock_stripped
 
-        save_gold_features(namespace, "cust_emai__abc1234", spark_df)
+        save_gold_features(namespace, "cust_emai__abc1234", ps_df)
 
-        mock_get_delta.assert_called_once_with()
+        mock_as_spark.assert_called_once_with(ps_df)
+        mock_strip.assert_called_once_with(mock_native)
         mock_delta.write.assert_called_once_with(
-            spark_df, str(namespace.gold_table_dir("cust_emai__abc1234")), mode="overwrite",
+            mock_stripped, str(namespace.gold_table_dir("cust_emai__abc1234")), mode="overwrite",
         )
 
     def test_native_pandas_still_uses_local_delta(self, namespace):

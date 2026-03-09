@@ -995,6 +995,7 @@ def merge_sources(bronze_outputs):
     return merged
 {% else %}
 def merge_sources(bronze_outputs):
+    raw_entity_key = "{{ config.silver.entity_key or config.sources[0].entity_key }}"
     base_source = "{{ config.sources[0].name }}"
     merged = bronze_outputs[base_source]
 {% for join in config.silver.joins %}
@@ -1013,6 +1014,8 @@ def merge_sources(bronze_outputs):
 
 {% endif %}
 {% endfor %}
+    if raw_entity_key != "entity_id" and raw_entity_key in merged.columns:
+        merged = merged.withColumnRenamed(raw_entity_key, "entity_id")
     return merged
 {% endif %}
 

@@ -581,6 +581,8 @@ class ProgressiveErrorLog:
             _add(f"  sample_entities: {params['sample_entities']}")
         if params.get("max_grid_dates"):
             _add(f"  max_grid_dates:  {params['max_grid_dates']}")
+        if params.get("light"):
+            _add("  light:         yes (baseline training capped)")
         return "\n" + "\n".join(lines) + "\n"
 
     def append_error(self, entry: Dict) -> None:
@@ -720,11 +722,19 @@ def main():
         default=None,
         help="Start from this notebook stem (e.g. 08_baseline or just 08), skipping earlier ones",
     )
+    parser.add_argument(
+        "--light",
+        action="store_true",
+        default=False,
+        help="Light mode: cap baseline training data to 200k rows via entity sampling (sets CR_MAX_BASELINE_ROWS)",
+    )
     args = parser.parse_args()
     if args.sample_entities:
         os.environ["CR_SAMPLE_ENTITY_COUNT"] = str(args.sample_entities)
     if args.max_grid_dates:
         os.environ["CR_GRID_MAX_DATES"] = str(args.max_grid_dates)
+    if args.light:
+        os.environ.setdefault("CR_MAX_BASELINE_ROWS", "200000")
     if args.spark_remote:
         os.environ["CR_SPARK_REMOTE"] = "1"
     else:

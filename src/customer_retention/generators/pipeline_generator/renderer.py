@@ -622,6 +622,7 @@ def merge_sources(bronze_outputs: dict) -> pd.DataFrame:
     return merged
 {% else %}
 def merge_sources(bronze_outputs: dict) -> pd.DataFrame:
+    raw_entity_key = "{{ config.silver.entity_key or config.sources[0].entity_key }}"
     base_source = "{{ config.sources[0].name }}"
     merged = bronze_outputs[base_source]
 {% for join in config.silver.joins %}
@@ -632,6 +633,8 @@ def merge_sources(bronze_outputs: dict) -> pd.DataFrame:
         how="{{ join.how }}"
     )
 {% endfor %}
+    if raw_entity_key in merged.columns and raw_entity_key != "entity_id":
+        merged = merged.rename(columns={raw_entity_key: "entity_id"})
     return merged
 {% endif %}
 
