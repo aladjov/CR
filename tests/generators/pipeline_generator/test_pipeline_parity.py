@@ -372,6 +372,16 @@ class TestDatabricksRendererTrendCohortCyclical:
         assert "cohort_year" in result
         assert "entity_trend_slope" in result
 
+    def test_databricks_bronze_entity_includes_dow_cyclical(
+        self, databricks_renderer, bronze_event_config_with_lifecycle
+    ):
+        result = databricks_renderer.render_bronze_entity(
+            "orders", bronze_event_config_with_lifecycle, "orders", "orders"
+        )
+        assert "dow_sin" in result
+        assert "dow_cos" in result
+        assert "add_cyclical_features" in result
+
 
 # ======================================================================
 # Phase 2: Model Tests — Configurable Recency Buckets

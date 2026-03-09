@@ -2125,6 +2125,29 @@ class TestDatabricksBronzeEntityLifecycleReadsFromLanding:
         assert "bronze_table" not in cyclical_fn
         ast.parse(result)
 
+    def test_cyclical_features_reads_from_landing_table(self, renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="order_date",
+            lifecycle=LifecycleConfig(include_cyclical_features=True),
+            post_shaping=[],
+        )
+        result = renderer.render_bronze_entity(
+            "orders_aggregated", config, "orders", "orders",
+        )
+        assert 'landing_table("orders")' in result
+        assert "add_cyclical_features" in result
+        assert "dow_sin" in result
+        assert "dow_cos" in result
+        cyclical_fn = result[result.index("def add_cyclical_features"):]
+        cyclical_fn = cyclical_fn[:cyclical_fn.index("\ndef ")]
+        assert "landing_table" in cyclical_fn
+        assert "bronze_table" not in cyclical_fn
+        ast.parse(result)
+
     def test_cohort_features_reads_from_landing_table(self, renderer):
         source = SourceConfig(
             name="orders", path="/data/orders.csv", format="csv",

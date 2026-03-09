@@ -799,6 +799,19 @@ def add_lifecycle_quadrant(df):
         .otherwise("one_shot_lifecycle"))
     return df
 {% endif %}
+{% if config.lifecycle.include_cyclical_features %}
+def add_cyclical_features(df):
+    raw_df = spark.table(landing_table("{{ raw_source }}"))
+    time_col = "{{ config.time_column }}"
+    mean_dow = raw_df.groupBy(ENTITY_COLUMN).agg(
+        F.mean(F.dayofweek(F.col(time_col)).cast("double")).alias("mean_dow")
+    )
+    df = df.join(mean_dow, on=ENTITY_COLUMN, how="left")
+    df = df.withColumn("dow_sin", F.sin(2 * 3.141592653589793 * F.col("mean_dow") / 7))
+    df = df.withColumn("dow_cos", F.cos(2 * 3.141592653589793 * F.col("mean_dow") / 7))
+    df = df.drop("mean_dow")
+    return df
+{% endif %}
 {% if config.lifecycle.include_month_cyclical %}
 def add_month_quarter_cyclical(df):
     raw_df = spark.table(landing_table("{{ raw_source }}"))
@@ -865,6 +878,9 @@ def enrich_lifecycle(df):
 {% endif %}
 {% if config.lifecycle.include_lifecycle_quadrant %}
     df = add_lifecycle_quadrant(df)
+{% endif %}
+{% if config.lifecycle.include_cyclical_features %}
+    df = add_cyclical_features(df)
 {% endif %}
 {% if config.lifecycle.include_month_cyclical %}
     df = add_month_quarter_cyclical(df)
