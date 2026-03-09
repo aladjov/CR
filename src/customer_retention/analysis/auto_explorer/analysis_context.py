@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
-import pandas as pd
 import yaml
 
+from customer_retention.core.compat import pd
 from customer_retention.core.config.column_config import DatasetGranularity
 from customer_retention.integrations.adapters.factory import get_delta
 

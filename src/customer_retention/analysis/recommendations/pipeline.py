@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional
 
-import pandas as pd
+from customer_retention.core.compat import pd
 
 from .base import BaseRecommendation, Platform
 

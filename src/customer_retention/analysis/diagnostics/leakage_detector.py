@@ -9,7 +9,13 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
 
-from customer_retention.core.compat import DataFrame, Series, bulk_class_overlap, bulk_corr_with_target, pd
+from customer_retention.core.compat import (
+    DataFrame,
+    Series,
+    bulk_class_overlap,
+    bulk_corr_with_target,
+    safe_to_datetime,
+)
 from customer_retention.core.components.enums import Severity
 from customer_retention.core.utils.leakage import TEMPORAL_METADATA_COLUMNS
 
@@ -216,7 +222,7 @@ class LeakageDetector:
         if col not in df.columns:
             return None
         try:
-            return pd.to_datetime(df[col], errors="coerce", format="mixed")
+            return safe_to_datetime(df[col])
         except Exception:
             return None
 
@@ -237,7 +243,7 @@ class LeakageDetector:
             if col in skip_cols:
                 continue
             try:
-                col_ts = pd.to_datetime(df[col], errors="coerce", format="mixed")
+                col_ts = safe_to_datetime(df[col])
                 violations = (col_ts > feature_ts).sum()
                 if violations > 0:
                     pct = violations / len(df) * 100
@@ -255,7 +261,7 @@ class LeakageDetector:
             return self._build_result([])
 
         try:
-            timestamps = pd.to_datetime(df[timestamp_column], errors="coerce").dropna()
+            timestamps = safe_to_datetime(df[timestamp_column]).dropna()
             if len(timestamps) < 2:
                 return self._build_result([])
 
@@ -336,8 +342,8 @@ class LeakageDetector:
     def check_temporal_split(self, train_timestamps: Series, test_timestamps: Series, timestamp_column: str = "timestamp") -> LeakageResult:
         checks = []
         try:
-            train_ts = pd.to_datetime(train_timestamps, errors="coerce").dropna()
-            test_ts = pd.to_datetime(test_timestamps, errors="coerce").dropna()
+            train_ts = safe_to_datetime(train_timestamps).dropna()
+            test_ts = safe_to_datetime(test_timestamps).dropna()
             if len(train_ts) == 0 or len(test_ts) == 0:
                 return self._build_result([])
 

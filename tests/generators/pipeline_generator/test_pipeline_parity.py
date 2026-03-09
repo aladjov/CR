@@ -933,7 +933,7 @@ class TestTrainingTemplateLocal:
             temporal_column="order_date",
         )
         result = renderer.render_training(pipeline_config_minimal)
-        assert "Timestamp.now()" in result
+        assert "datetime.now()" in result
         ast.parse(result)
 
     def test_smote_import(self, renderer, pipeline_config_minimal):

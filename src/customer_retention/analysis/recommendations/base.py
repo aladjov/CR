@@ -2,8 +2,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-import pandas as pd
-
+from customer_retention.core.compat import pd
 from customer_retention.core.components.enums import Platform
 
 if TYPE_CHECKING:

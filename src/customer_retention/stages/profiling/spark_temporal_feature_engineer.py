@@ -5,6 +5,7 @@ from typing import Any, List, Optional
 import numpy as np
 
 from customer_retention.core.compat import (
+    _is_spark_pandas,
     groupby_multi_agg,
     pd,
     timedelta_to_days,
@@ -106,9 +107,17 @@ class SparkTemporalFeatureEngineer(TemporalFeatureEngineer):
         result = ref_dates[[entity_col]].copy()
 
         sorted_events = events_df.sort_values([entity_col, time_col])
-        sorted_events["_prev_time"] = sorted_events.groupby(entity_col)[time_col].shift(1)
-        sorted_events["_gap_seconds"] = timedelta_to_days(
-            sorted_events[time_col] - sorted_events["_prev_time"])
+        if _is_spark_pandas(sorted_events):
+            import pyspark.sql.functions as F  # noqa: N812
+            sorted_events["_ts_epoch"] = sorted_events[time_col].spark.transform(
+                lambda c: F.unix_timestamp(c.cast("timestamp")).cast("double"))
+            prev_epoch = sorted_events.groupby(entity_col)["_ts_epoch"].shift(1)
+            sorted_events["_gap_seconds"] = (sorted_events["_ts_epoch"] - prev_epoch) / 86400
+            sorted_events = sorted_events.drop(columns=["_ts_epoch"])
+        else:
+            sorted_events["_prev_time"] = sorted_events.groupby(entity_col)[time_col].shift(1)
+            sorted_events["_gap_seconds"] = timedelta_to_days(
+                sorted_events[time_col] - sorted_events["_prev_time"])
         gaps = sorted_events.dropna(subset=["_gap_seconds"])
 
         if len(gaps) > 0:

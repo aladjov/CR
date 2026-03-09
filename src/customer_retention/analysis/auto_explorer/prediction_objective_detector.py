@@ -10,7 +10,7 @@ from customer_retention.analysis.auto_explorer.project_context import (
     PredictionAnchor,
     PredictionObjective,
 )
-from customer_retention.core.compat import head_as_list, is_datetime64_any_dtype, native_pd, pd
+from customer_retention.core.compat import head_as_list, is_datetime64_any_dtype, native_pd, pd, safe_to_datetime
 from customer_retention.stages.profiling.temporal_coverage import TemporalComparison
 
 _IMMEDIATE_RISK_PATTERNS = [
@@ -164,7 +164,7 @@ class PredictionObjectiveDetector:
             return None
 
         try:
-            ts = pd.to_datetime(df[time_column], format="mixed", errors="coerce")
+            ts = safe_to_datetime(df[time_column])
         except Exception:
             return None
 

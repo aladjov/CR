@@ -1,8 +1,9 @@
 from enum import Enum
 from typing import Optional
 
-import pandas as pd
 from pydantic import BaseModel, model_validator
+
+from customer_retention.core.compat import pd
 
 
 class ColumnType(str, Enum):

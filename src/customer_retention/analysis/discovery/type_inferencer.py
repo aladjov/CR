@@ -2,9 +2,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Union
 
-import pandas as pd
-
-from customer_retention.core.compat import is_datetime64_any_dtype, is_integer_dtype, is_numeric_dtype, ops
+from customer_retention.core.compat import is_datetime64_any_dtype, is_integer_dtype, is_numeric_dtype, ops, pd
 from customer_retention.core.config.column_config import ColumnType
 
 

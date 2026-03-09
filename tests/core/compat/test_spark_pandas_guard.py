@@ -25,8 +25,14 @@ TEMPORAL_DIR = _STAGES_ROOT / "temporal"
 MODELING_DIR = _STAGES_ROOT / "modeling"
 VALIDATION_DIR = _STAGES_ROOT / "validation"
 AUTO_EXPLORER_DIR = _SRC_ROOT / "analysis" / "auto_explorer"
+RECOMMENDATIONS_DIR = _SRC_ROOT / "analysis" / "recommendations"
+DISCOVERY_DIR = _SRC_ROOT / "analysis" / "discovery"
+DIAGNOSTICS_DIR = _SRC_ROOT / "analysis" / "diagnostics"
+CONFIG_DIR = _SRC_ROOT / "core" / "config"
+FEATURE_STORE_DIR = _SRC_ROOT / "integrations" / "adapters" / "feature_store"
+STORAGE_DIR = _SRC_ROOT / "integrations" / "adapters" / "storage"
 
-ALLOWLISTED_FILES = {"window_recommendation.py", "spark_segment_analyzer.py", "feature_manifest.py", "snapshot_manager.py", "analysis_context.py"}
+ALLOWLISTED_FILES = {"window_recommendation.py", "spark_segment_analyzer.py", "feature_manifest.py", "snapshot_manager.py"}
 
 _STRING_LITERAL = re.compile(r'''("""[\s\S]*?"""|'''  r"""'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')""")
 
@@ -86,6 +92,11 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
         "native_pd.to_datetime(df[col]) triggers __iter__() on pyspark.pandas Series",
         "Use safe_to_datetime(df[col]) from core.compat",
     ),
+    (
+        re.compile(r"(?<!\w)pd\.to_datetime\(df\["),
+        "pd.to_datetime(df[col]) may not support format/errors kwargs on pyspark.pandas",
+        "Use safe_to_datetime(df[col]) from core.compat",
+    ),
 ]
 
 
@@ -135,6 +146,18 @@ def _collect_auto_explorer_files() -> list[Path]:
     )
 
 
+def _collect_guarded_analysis_and_adapter_files() -> list[Path]:
+    dirs = [
+        RECOMMENDATIONS_DIR, DISCOVERY_DIR, DIAGNOSTICS_DIR,
+        CONFIG_DIR, FEATURE_STORE_DIR, STORAGE_DIR,
+    ]
+    files = []
+    for d in dirs:
+        files.extend(
+            p for p in d.glob("*.py")
+            if p.name not in ALLOWLISTED_FILES and not p.name.startswith("__")
+        )
+    return sorted(files)
 
 
 def _check_file(source_file: Path) -> None:
@@ -181,4 +204,9 @@ def test_no_dangerous_spark_pandas_patterns_validation(source_file: Path):
 
 @pytest.mark.parametrize("source_file", _collect_auto_explorer_files(), ids=lambda p: p.name)
 def test_no_dangerous_spark_pandas_patterns_auto_explorer(source_file: Path):
+    _check_file(source_file)
+
+
+@pytest.mark.parametrize("source_file", _collect_guarded_analysis_and_adapter_files(), ids=lambda p: f"{p.parent.name}/{p.name}")
+def test_no_dangerous_spark_pandas_patterns_analysis_and_adapters(source_file: Path):
     _check_file(source_file)

@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import pandas as pd
+from customer_retention.core.compat import pd
 
 from ..base import AdapterResult
 from ..storage import LocalDelta

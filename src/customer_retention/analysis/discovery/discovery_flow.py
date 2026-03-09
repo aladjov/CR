@@ -1,7 +1,6 @@
 from typing import Optional, Union
 
-import pandas as pd
-
+from customer_retention.core.compat import pd
 from customer_retention.core.config.pipeline_config import PipelineConfig
 
 from .config_generator import ConfigGenerator

@@ -47,8 +47,8 @@ class ErrorAnalyzer:
         false_negatives["probability"] = y_proba[fn_mask]
         high_conf_fp = false_positives[false_positives["probability"] > self.HIGH_CONFIDENCE_FP_THRESHOLD]
         high_conf_fn = false_negatives[false_negatives["probability"] < self.HIGH_CONFIDENCE_FN_THRESHOLD]
-        fp_confidence_dist = self._compute_confidence_dist(false_positives["probability"].values if len(false_positives) > 0 else np.array([]))
-        fn_confidence_dist = self._compute_confidence_dist(false_negatives["probability"].values if len(false_negatives) > 0 else np.array([]))
+        fp_confidence_dist = self._compute_confidence_dist(false_positives["probability"].to_numpy() if len(false_positives) > 0 else np.array([]))
+        fn_confidence_dist = self._compute_confidence_dist(false_negatives["probability"].to_numpy() if len(false_negatives) > 0 else np.array([]))
         error_patterns = self._find_patterns(X, y, y_pred, fp_mask, fn_mask)
         hypotheses = self._generate_hypotheses(false_positives, false_negatives, high_conf_fp, high_conf_fn)
         total_errors = fp_mask.sum() + fn_mask.sum()

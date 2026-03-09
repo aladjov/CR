@@ -293,7 +293,7 @@ from pathlib import Path
 {% if ops %}
 from customer_retention.transforms import {{ ops | sort | join(', ') }}
 {% endif %}
-from customer_retention.core.compat import ensure_timestamp, safe_to_datetime
+from customer_retention.core.compat import ensure_timestamp, safe_to_datetime, timedelta_to_days
 from config import SOURCES, get_bronze_path{{ ', RAW_SOURCES' if config.lifecycle else '' }}
 
 SOURCE_NAME = "{{ source }}"
@@ -360,9 +360,11 @@ def _load_raw_events():
 def add_recency_tenure(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
     ensure_timestamp(raw_df, TIME_COLUMN)
     reference_date = raw_df[TIME_COLUMN].max()
-    entity_stats = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].agg(["min", "max"])
-    entity_stats["days_since_last"] = (reference_date - entity_stats["max"]).dt.days
-    entity_stats["days_since_first"] = (reference_date - entity_stats["min"]).dt.days
+    _grp = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN]
+    entity_stats = _grp.min().to_frame("_time_min")
+    entity_stats["_time_max"] = _grp.max()
+    entity_stats["days_since_last"] = timedelta_to_days(reference_date - entity_stats["_time_max"])
+    entity_stats["days_since_first"] = timedelta_to_days(reference_date - entity_stats["_time_min"])
     df = df.merge(entity_stats[["days_since_last", "days_since_first"]], left_on=ENTITY_COLUMN, right_index=True, how="left")
     return df
 
@@ -913,7 +915,7 @@ def add_feast_timestamp(df: pd.DataFrame, reference_date=None) -> pd.DataFrame:
     if "feature_timestamp" in df.columns:
         return df.rename(columns={"feature_timestamp": FEAST_TIMESTAMP_COL})
     if "aggregation_reference_date" in df.attrs:
-        timestamp = pd.Timestamp(df.attrs["aggregation_reference_date"])
+        timestamp = pd.to_datetime(df.attrs["aggregation_reference_date"])
         print(f"  Using aggregation reference_date for Feast timestamp: {timestamp}")
     elif reference_date is not None:
         timestamp = reference_date
@@ -965,6 +967,7 @@ if __name__ == "__main__":
 """,
     "training.py.j2": '''import numpy as np
 import pandas as pd
+from datetime import datetime
 import mlflow
 import mlflow.sklearn
 import mlflow.xgboost
@@ -1128,12 +1131,12 @@ def run_experiment():
     X, y = X.loc[train_mask], y.loc[train_mask]
 {% if config.training and config.training.recommended_training_start %}
     if FEAST_TIMESTAMP_COL in training_data.columns:
-        time_mask = training_data.loc[train_mask, FEAST_TIMESTAMP_COL] >= pd.Timestamp("{{ config.training.recommended_training_start }}")
+        time_mask = training_data.loc[train_mask, FEAST_TIMESTAMP_COL] >= pd.to_datetime("{{ config.training.recommended_training_start }}")
         X, y = X.loc[time_mask], y.loc[time_mask]
 {% endif %}
 {% if config.training and config.training.filter_future_dates %}
     if FEAST_TIMESTAMP_COL in training_data.columns:
-        future_mask = training_data.loc[X.index, FEAST_TIMESTAMP_COL] <= pd.Timestamp.now()
+        future_mask = training_data.loc[X.index, FEAST_TIMESTAMP_COL] <= datetime.now()
         X, y = X.loc[future_mask], y.loc[future_mask]
 {% endif %}
     splitter = DataSplitter(
@@ -1987,7 +1990,7 @@ from pathlib import Path
 {% if ops %}
 from customer_retention.transforms import {{ ops | sort | join(', ') }}
 {% endif %}
-from customer_retention.core.compat import ensure_timestamp, safe_to_datetime
+from customer_retention.core.compat import ensure_timestamp, safe_to_datetime, timedelta_to_days
 from config import PRODUCTION_DIR, RAW_SOURCES, get_bronze_path
 
 SOURCE_NAME = "{{ source }}"
@@ -2013,9 +2016,11 @@ def _load_raw_events():
 def add_recency_tenure(df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
     ensure_timestamp(raw_df, TIME_COLUMN)
     reference_date = raw_df[TIME_COLUMN].max()
-    entity_stats = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN].agg(["min", "max"])
-    entity_stats["days_since_last"] = (reference_date - entity_stats["max"]).dt.days
-    entity_stats["days_since_first"] = (reference_date - entity_stats["min"]).dt.days
+    _grp = raw_df.groupby(ENTITY_COLUMN)[TIME_COLUMN]
+    entity_stats = _grp.min().to_frame("_time_min")
+    entity_stats["_time_max"] = _grp.max()
+    entity_stats["days_since_last"] = timedelta_to_days(reference_date - entity_stats["_time_max"])
+    entity_stats["days_since_first"] = timedelta_to_days(reference_date - entity_stats["_time_min"])
     df = df.merge(entity_stats[["days_since_last", "days_since_first"]], left_on=ENTITY_COLUMN, right_index=True, how="left")
     return df
 

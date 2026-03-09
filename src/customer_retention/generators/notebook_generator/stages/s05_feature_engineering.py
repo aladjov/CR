@@ -56,8 +56,9 @@ else:
 else:
     print("Warning: No feature_timestamp column found. Using current date (may cause leakage).")
     if "signup_date" in df.columns:
-        from customer_retention.core.compat import safe_to_datetime
-        df["tenure_days"] = (pd.Timestamp.now() - safe_to_datetime(df["signup_date"])).dt.days'''),
+        from datetime import datetime as _dt
+        from customer_retention.core.compat import safe_to_datetime, timedelta_to_days
+        df["tenure_days"] = timedelta_to_days(_dt.now() - safe_to_datetime(df["signup_date"]))'''),
             self.cb.section("Validate Point-in-Time Correctness"),
             self.cb.code('''if "feature_timestamp" in df.columns:
     pit_report = PointInTimeJoiner.validate_temporal_integrity(df)
