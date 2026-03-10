@@ -2108,6 +2108,24 @@ class TestDatabricksGoldAsOfDate:
         assert as_of_pos < feature_ts_pos
 
 
+class TestDatabricksTrainingNullImputation:
+    def test_training_fills_nan_before_assembly(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        prepare_fn = result[result.index("def prepare_features"):]
+        fillna_pos = prepare_fn.index("fillna(0")
+        assembler_pos = prepare_fn.index("VectorAssembler")
+        assert fillna_pos < assembler_pos
+
+    def test_training_assembler_uses_error_mode(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert 'handleInvalid="error"' in result
+        assert 'handleInvalid="skip"' not in result
+
+    def test_training_fillna_targets_feature_cols(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "fillna(0, subset=feature_cols)" in result
+
+
 class TestDatabricksTrainingDropAsOfDate:
     def test_training_excludes_timestamp_and_entity(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)

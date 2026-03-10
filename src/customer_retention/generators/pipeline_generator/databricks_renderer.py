@@ -1347,7 +1347,8 @@ def prepare_features(df):
         if c not in exclude_cols and not any(c.startswith(p) for p in exclude_prefixes)
         and df.schema[c].dataType.typeName() in ("double", "float", "integer", "long", "short")
     ]
-    assembler = VectorAssembler(inputCols=feature_cols, outputCol="features", handleInvalid="skip")
+    df = df.fillna(0, subset=feature_cols)
+    assembler = VectorAssembler(inputCols=feature_cols, outputCol="features", handleInvalid="error")
     keep = ["features", F.col(TARGET).alias("label")]
     if TIMESTAMP_COLUMN in df.columns:
         keep.append(TIMESTAMP_COLUMN)
