@@ -349,6 +349,17 @@ def strip_spark_timestamp_tz(spark_df: Any) -> Any:
     return spark_df.select(casts)
 
 
+def sanitize_spark_timestamps(spark_df: Any) -> Any:
+    """Strip timezone and clamp extreme timestamps on a native Spark DataFrame.
+
+    Apply at system boundaries (data load) BEFORE wrapping as pyspark.pandas
+    to prevent Arrow serialization failures in downstream Python UDFs.
+    """
+    if not hasattr(spark_df, "schema"):
+        return spark_df
+    return clamp_spark_timestamps(strip_spark_timestamp_tz(spark_df))
+
+
 def clamp_spark_timestamps(spark_df: Any) -> Any:
     from pyspark.sql.functions import col as spark_col
     from pyspark.sql.functions import when, year
@@ -1050,7 +1061,7 @@ def collect_for_sklearn(obj: Any) -> Any:
 
 def as_pandas_api(spark_df: Any) -> Any:
     from .spark_backend import _as_pandas_api
-    return _as_pandas_api(spark_df)
+    return _as_pandas_api(sanitize_spark_timestamps(spark_df))
 
 
 def load_spark_table(source: str) -> Any:
@@ -1131,6 +1142,7 @@ __all__ = [
     "ensure_timestamp",
     "normalize_timestamp_columns",
     "clamp_distributed_timestamps",
+    "sanitize_spark_timestamps",
     "strip_spark_timestamp_tz",
     "pandas_dtype_to_spark_schema",
     "ops",

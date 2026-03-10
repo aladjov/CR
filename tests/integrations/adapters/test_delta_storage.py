@@ -315,6 +315,8 @@ class TestDatabricksDeltaReturnsSparkPandas:
     def test_read_falls_back_to_to_pandas_on_spark(self):
         from unittest.mock import MagicMock, patch
 
+        from pyspark.sql.types import IntegerType, StructField, StructType
+
         from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
 
         with patch.object(DatabricksDelta, "__init__", lambda self: None):
@@ -322,6 +324,7 @@ class TestDatabricksDeltaReturnsSparkPandas:
             storage._spark = MagicMock()
 
             mock_spark_df = MagicMock(spec=[])
+            mock_spark_df.schema = StructType([StructField("id", IntegerType())])
             mock_spark_df.to_pandas_on_spark = MagicMock()
             storage.spark.read.format("delta").load.return_value = mock_spark_df
 
@@ -795,6 +798,35 @@ class TestDatabricksDeltaWriteNativeSparkDf:
                 storage.merge(mock_spark_df, "/fake/path", "source.id = target.id")
                 mock_to_spark.assert_not_called()
                 DatabricksDelta._strip_spark_timestamp_tz.assert_called_once_with(mock_spark_df)
+
+
+class TestDatabricksDeltaReadSanitizes:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_read_sanitizes_timestamps_before_wrapping(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            mock_spark_df = MagicMock()
+            storage.spark.read.format("delta").load.return_value = mock_spark_df
+            mock_sanitized = MagicMock()
+            mock_ps_result = MagicMock()
+
+            with (
+                patch("customer_retention.core.compat.sanitize_spark_timestamps", return_value=mock_sanitized) as mock_sanitize,
+                patch.object(DatabricksDelta, "_as_pandas_api", return_value=mock_ps_result),
+            ):
+                result = storage.read("/some/path")
+
+            mock_sanitize.assert_called_once_with(mock_spark_df)
+            assert result is mock_ps_result
 
 
 class TestDatabricksDeltaWriteClamps:

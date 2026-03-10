@@ -145,13 +145,18 @@ Notebook 01 applies these steps once at landing time via `resolve_single_dataset
 
 If a resolution step references columns that no longer exist (e.g., schema changed between NB00 and NB01), the step is skipped with a warning rather than failing the notebook.
 
-### Timezone Stripping at Landing
+### Timestamp Sanitization at System Boundaries
 
-All timezone information is removed at landing time. Source systems (e.g., Salesforce, Databricks tables) often store timestamps as `timestamp[us, tz=Etc/UTC]` or similar tz-aware types. These are converted to timezone-naive timestamps (`TIMESTAMP_NTZ` on Spark, `datetime64[ns]` on pandas) before writing to Delta.
+All timezone information is removed and extreme timestamps are clamped at the point where data enters the system. Source systems (e.g., Salesforce, Databricks tables) often store timestamps as `timestamp[us, tz=Etc/UTC]` with sentinel values (e.g., year 0017 for nulls). These must be sanitized BEFORE wrapping as pyspark.pandas, because pyspark.pandas operations may internally create Python UDFs that serialize data through Arrow, and Arrow cannot represent timestamps outside the nanosecond range (years 1678-2262).
 
-On the Spark path, `strip_spark_timestamp_tz()` casts `TimestampType` columns to `timestamp_ntz`, and `clamp_spark_timestamps()` nulls values outside the safe range (years 1678-2261) to prevent Arrow serialization overflow. On the pandas path, `normalize_timestamp_columns()` calls `tz_localize(None)` on any tz-aware column.
+`sanitize_spark_timestamps(spark_df)` combines `strip_spark_timestamp_tz()` (cast `TimestampType` → `timestamp_ntz`) and `clamp_spark_timestamps()` (null values outside years 1678-2261). It is automatically applied in two places:
 
-Custom user-code cells that create derived Spark DataFrames (e.g., joining source tables to derive a target column) must apply `strip_spark_timestamp_tz` and `clamp_spark_timestamps` before registering temp views. Otherwise, tz-aware timestamps with extreme sentinel values from the source system will cause `ArrowInvalid` errors when downstream code writes to Delta.
+1. **`as_pandas_api(spark_df)`** — the gateway from native Spark to pyspark.pandas. Every Spark DataFrame converted to pyspark.pandas is sanitized first, ensuring no downstream pyspark.pandas operation encounters extreme or tz-aware timestamps.
+2. **`DatabricksDelta.read()`** — sanitizes before wrapping the loaded Delta table as pyspark.pandas.
+
+On the pandas path, `normalize_timestamp_columns()` calls `tz_localize(None)` on any tz-aware column.
+
+Additional safety nets exist at the write boundary (`clamp_distributed_timestamps` in `_write_delta`, `clamp_spark_timestamps` in `DatabricksDelta.write()`), but these are defense-in-depth — the primary sanitization happens at the input boundary.
 
 All downstream stages (Bronze through Gold) operate exclusively on tz-naive timestamps.
 

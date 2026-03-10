@@ -1043,6 +1043,108 @@ class TestClampDistributedTimestamps:
         mock_name.spark.transform.assert_not_called()
 
 
+class TestSanitizeSparkTimestamps:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_strips_tz_and_clamps(self):
+        from unittest.mock import MagicMock
+
+        from pyspark.sql.types import IntegerType, StructField, StructType, TimestampNTZType, TimestampType
+
+        from customer_retention.core.compat import sanitize_spark_timestamps
+
+        ts_schema = StructType([
+            StructField("id", IntegerType()),
+            StructField("ts", TimestampType()),
+        ])
+        ntz_schema = StructType([
+            StructField("id", IntegerType()),
+            StructField("ts", TimestampNTZType()),
+        ])
+        mock_df = MagicMock()
+        mock_df.schema.fields = ts_schema.fields
+        mock_stripped = MagicMock()
+        mock_stripped.schema.fields = ntz_schema.fields
+        mock_df.select.return_value = mock_stripped
+        mock_clamped = MagicMock()
+        mock_stripped.select.return_value = mock_clamped
+
+        result = sanitize_spark_timestamps(mock_df)
+        mock_df.select.assert_called_once()
+        mock_stripped.select.assert_called_once()
+        assert result is mock_clamped
+
+    def test_no_timestamp_columns_returns_original(self):
+        from unittest.mock import MagicMock
+
+        from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+
+        from customer_retention.core.compat import sanitize_spark_timestamps
+
+        schema = StructType([
+            StructField("id", IntegerType()),
+            StructField("name", StringType()),
+        ])
+        mock_df = MagicMock()
+        mock_df.schema.fields = schema.fields
+        result = sanitize_spark_timestamps(mock_df)
+        assert result is mock_df
+        mock_df.select.assert_not_called()
+
+    def test_no_schema_returns_original(self):
+        from customer_retention.core.compat import sanitize_spark_timestamps
+
+        class FakeDF:
+            pass
+
+        df = FakeDF()
+        assert sanitize_spark_timestamps(df) is df
+
+    def test_ntz_only_still_clamps(self):
+        from unittest.mock import MagicMock
+
+        from pyspark.sql.types import IntegerType, StructField, StructType, TimestampNTZType
+
+        from customer_retention.core.compat import sanitize_spark_timestamps
+
+        schema = StructType([
+            StructField("id", IntegerType()),
+            StructField("ts", TimestampNTZType()),
+        ])
+        mock_df = MagicMock()
+        mock_df.schema.fields = schema.fields
+        mock_clamped = MagicMock()
+        mock_df.select.return_value = mock_clamped
+
+        result = sanitize_spark_timestamps(mock_df)
+        mock_df.select.assert_called_once()
+        assert result is mock_clamped
+
+
+class TestAsPandasApiSanitizes:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_sanitizes_before_wrapping(self):
+        from unittest.mock import MagicMock, call, patch
+
+        from customer_retention.core.compat import as_pandas_api
+
+        mock_spark_df = MagicMock()
+        mock_sanitized = MagicMock()
+        mock_ps_result = MagicMock()
+        mock_sanitized.pandas_api.return_value = mock_ps_result
+
+        with patch("customer_retention.core.compat.sanitize_spark_timestamps", return_value=mock_sanitized) as mock_sanitize:
+            result = as_pandas_api(mock_spark_df)
+
+        mock_sanitize.assert_called_once_with(mock_spark_df)
+        assert result is mock_ps_result
+
+
 class TestNormalizeTimestampsDistributed:
     @pytest.fixture(autouse=True)
     def _skip_without_pyspark(self):

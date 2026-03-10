@@ -40,7 +40,9 @@ class DatabricksDelta(DeltaStorage):
         if version is not None:
             reader = reader.option("versionAsOf", version)
         try:
-            return self._as_pandas_api(reader.load(path))
+            spark_df = reader.load(path)
+            from customer_retention.core.compat import sanitize_spark_timestamps
+            return self._as_pandas_api(sanitize_spark_timestamps(spark_df))
         except Exception as exc:
             if "DELTA_TABLE_NOT_FOUND" in str(exc):
                 raise FileNotFoundError(f"Delta table not found: {path}") from exc
