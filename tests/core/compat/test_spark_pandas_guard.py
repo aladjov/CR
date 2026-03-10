@@ -102,6 +102,16 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
         ".query() with Python list syntax fails on pyspark.pandas (Spark SQL parse error)",
         "Use safe_query(df, expr) from core.compat",
     ),
+    (
+        re.compile(r"(?<!\w)pd\.api\.types\."),
+        "pd.api.types does not exist in pyspark.pandas",
+        "Use is_numeric_dtype() / is_datetime64_any_dtype() from core.compat",
+    ),
+    (
+        re.compile(r"(?<!\w)pd\.qcut\("),
+        "pd.qcut() does not exist in pyspark.pandas",
+        "Use qcut() from core.compat",
+    ),
 ]
 
 
