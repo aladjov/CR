@@ -965,7 +965,8 @@ def run_gold_features():
 if __name__ == "__main__":
     run_gold_features()
 """,
-    "training.py.j2": '''import numpy as np
+    "training.py.j2": '''import logging
+import numpy as np
 import pandas as pd
 from datetime import datetime
 import mlflow
@@ -981,6 +982,8 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score,
                              precision_score, recall_score, accuracy_score)
 from customer_retention.stages.modeling.data_splitter import DataSplitter, SplitStrategy
+from customer_retention.stages.modeling.feature_profile import FeatureProfile, ColumnProfile, build_feature_profile, compare_feature_profiles
+from customer_retention.core.compat.timing import log_timing
 {% if config.training and config.training.imbalance_strategy == "smote" %}
 from customer_retention.stages.modeling.imbalance_handler import ImbalanceHandler, ImbalanceStrategy
 {% endif %}
@@ -989,6 +992,19 @@ from config import (TARGET_COLUMN, PIPELINE_NAME, COMPOSITE_NAME, RECOMMENDATION
                     FEAST_TIMESTAMP_COL, get_feast_data_path)
 
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+logger = logging.getLogger("training")
+_EXCLUDE_COLS = {TARGET_COLUMN, FEAST_TIMESTAMP_COL, FEAST_ENTITY_KEY, "as_of_date", "feature_timestamp", "label_timestamp", "label_available_flag"}
+{% if config.training and config.training.exploration_feature_profile %}
+_EXPLORATION_PROFILE = {{ config.training.exploration_feature_profile }}
+{% else %}
+_EXPLORATION_PROFILE = None
+{% endif %}
+
+
+def _assert_rows(count, stage):
+    if count == 0:
+        raise ValueError(f"[TRAINING] {stage}: 0 rows remaining — cannot proceed")
+    return count
 
 
 def _load_feast_data():
@@ -1046,23 +1062,12 @@ def get_training_data_from_feast() -> pd.DataFrame:
 
 
 def prepare_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Prepare features for model training.
-
-    Explicitly excludes original_* columns which contain holdout ground truth.
-    These columns are reserved for scoring validation and must never be used in training.
-    """
     df = df.copy()
-
-    metadata_cols = [FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL, "as_of_date"]
-    df = df.drop(columns=[c for c in metadata_cols if c in df.columns], errors="ignore")
-
-    holdout_ground_truth_cols = [c for c in df.columns if c.startswith("original_")]
-    df = df.drop(columns=holdout_ground_truth_cols, errors="ignore")
-
+    drop_cols = [c for c in df.columns if c in _EXCLUDE_COLS or c.startswith("original_")]
+    df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
     for col in df.select_dtypes(include=["object", "category"]).columns:
         df[col] = LabelEncoder().fit_transform(df[col].astype(str))
-
-    return df.select_dtypes(include=["int64", "float64", "int32", "float32"]).fillna(0)
+    return df.select_dtypes(include=["int64", "float64", "int32", "float32", "bool"]).fillna(0)
 
 
 def compute_metrics(y_true, y_proba, y_pred) -> dict:
@@ -1122,14 +1127,47 @@ def run_experiment():
     print(f"MLflow tracking: {MLFLOW_TRACKING_URI}")
     print(f"Artifacts: {MLFLOW_ARTIFACT_ROOT}")
 
-    print("\\nLoading training data from Feast...")
-    training_data = get_training_data_from_feast()
+    with log_timing("load_gold_data", logger):
+        training_data = get_training_data_from_feast()
+    raw_count = _assert_rows(len(training_data), "gold_data")
+    type_summary = dict(training_data.dtypes.value_counts())
+    print(f"[TRAINING] Gold data: {raw_count:,} rows, {len(training_data.columns)} columns")
+    print(f"[TRAINING] Column types: {type_summary}")
 
-    y = training_data[TARGET_COLUMN]
-    X = prepare_features(training_data.drop(columns=[TARGET_COLUMN]))
-    feature_names = list(X.columns)
+    with log_timing("prepare_features", logger):
+        y = training_data[TARGET_COLUMN]
+        X = prepare_features(training_data.drop(columns=[TARGET_COLUMN]))
+        feature_names = list(X.columns)
+    print(f"[TRAINING] Features: {len(feature_names)} columns after preparation")
     train_mask = y.notna()
     X, y = X.loc[train_mask], y.loc[train_mask]
+    filtered_count = _assert_rows(len(X), "after_null_label_filter")
+    print(f"[TRAINING] After null-label filter: {filtered_count:,} rows")
+
+    with log_timing("feature_profile", logger):
+        excluded_cols = {}
+        for c in training_data.columns:
+            if c in _EXCLUDE_COLS:
+                excluded_cols[c] = "metadata"
+            elif c.startswith("original_"):
+                excluded_cols[c] = "original_prefix"
+        feature_stats = {}
+        for c in feature_names:
+            null_count = int(X[c].isna().sum())
+            feature_stats[c] = ColumnProfile(dtype=str(X[c].dtype), non_null_count=filtered_count - null_count, null_count=null_count)
+        prod_profile = build_feature_profile("production", TARGET_COLUMN, filtered_count, feature_stats, excluded_cols)
+        print(f"[TRAINING] Production profile: {prod_profile.feature_count} features, {filtered_count:,} rows")
+        if _EXPLORATION_PROFILE is not None:
+            exp_profile = FeatureProfile.from_dict(_EXPLORATION_PROFILE)
+            discrepancies = compare_feature_profiles(exp_profile, prod_profile)
+            if discrepancies:
+                print(f"[TRAINING] WARNING: {len(discrepancies)} feature discrepancies vs exploration:")
+                for d in discrepancies:
+                    print(f"[TRAINING]   {d}")
+            else:
+                print("[TRAINING] Feature profile matches exploration")
+        else:
+            print("[TRAINING] WARNING: No exploration feature profile available for comparison")
 {% if config.training and config.training.recommended_training_start %}
     if FEAST_TIMESTAMP_COL in training_data.columns:
         time_mask = training_data.loc[train_mask, FEAST_TIMESTAMP_COL] >= pd.to_datetime("{{ config.training.recommended_training_start }}")
@@ -1140,22 +1178,31 @@ def run_experiment():
         future_mask = training_data.loc[X.index, FEAST_TIMESTAMP_COL] <= datetime.now()
         X, y = X.loc[future_mask], y.loc[future_mask]
 {% endif %}
-    splitter = DataSplitter(
-        target_column=TARGET_COLUMN,
-        strategy=SplitStrategy.TEMPORAL,
-        temporal_column=FEAST_TIMESTAMP_COL,
+    with log_timing("temporal_split", logger):
+        splitter = DataSplitter(
+            target_column=TARGET_COLUMN,
+            strategy=SplitStrategy.TEMPORAL,
+            temporal_column=FEAST_TIMESTAMP_COL,
 {% if config.training and config.training.purge_gap_days %}
-        purge_gap_days={{ config.training.purge_gap_days }},
+            purge_gap_days={{ config.training.purge_gap_days }},
 {% endif %}
-        test_size={{ config.training.test_size if config.training else 0.2 }},
-    )
-    split_df = training_data.loc[X.index].copy()
-    split_df[TARGET_COLUMN] = y
-    for col in X.columns:
-        split_df[col] = X[col]
-    splits = splitter.split(split_df)
+            test_size={{ config.training.test_size if config.training else 0.2 }},
+        )
+        split_df = training_data.loc[X.index].copy()
+        split_df[TARGET_COLUMN] = y
+        for col in X.columns:
+            split_df[col] = X[col]
+        splits = splitter.split(split_df)
     X_train, X_test = splits.X_train[feature_names], splits.X_test[feature_names]
     y_train, y_test = splits.y_train, splits.y_test
+    _assert_rows(len(X_train), "train_set_after_split")
+    _assert_rows(len(X_test), "test_set_after_split")
+    print(f"[TRAINING] Split: train={len(X_train):,}, test={len(X_test):,}")
+    print(f"[TRAINING] Split info: {splits.split_info}")
+    label_dist = dict(y_train.value_counts())
+    print(f"[TRAINING] Label distribution: {label_dist}")
+    if y_train.nunique() < 2:
+        raise ValueError(f"[TRAINING] Only {y_train.nunique()} class(es) — Need at least 2 for binary classification")
 {% if config.training and config.training.imbalance_strategy == "smote" %}
     handler = ImbalanceHandler(strategy=ImbalanceStrategy.SMOTE)
     _imb_result = handler.fit_transform(X_train, y_train)
@@ -1183,7 +1230,8 @@ def run_experiment():
                 if RECOMMENDATIONS_HASH:
                     mlflow.set_tag("recommendations_hash", RECOMMENDATIONS_HASH)
                 mlflow.set_tag("feature_source", "feast")
-                model.fit(X_train, y_train)
+                with log_timing(f"fit_{name}", logger):
+                    model.fit(X_train, y_train)
                 y_proba = model.predict_proba(X_test)[:, 1]
                 y_pred = model.predict(X_test)
                 metrics = compute_metrics(y_test, y_proba, y_pred)

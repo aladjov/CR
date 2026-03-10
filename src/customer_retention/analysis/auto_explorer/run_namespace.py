@@ -79,6 +79,10 @@ class RunNamespace:
     def merged_recommendations_path(self) -> Path:
         return self.merged_dir / "recommendations.yaml"
 
+    @property
+    def exploration_feature_profile_path(self) -> Path:
+        return self.merged_dir / "exploration_feature_profile.yaml"
+
     def candidate_dir(self, name: str) -> Path:
         return self.merged_dir / name
 

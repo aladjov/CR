@@ -2627,3 +2627,54 @@ class TestDatabricksTrainingFeatureTypeParity:
         prepare_fn = result[result.index("def prepare_features"):]
         assert "_NUMERIC_TYPES" in prepare_fn
         assert "_EXCLUDE_COLS" in prepare_fn
+
+
+class TestDatabricksTrainingFeatureProfile:
+    def test_training_imports_feature_profile(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "from customer_retention.stages.modeling.feature_profile import" in result
+        assert "FeatureProfile" in result
+        assert "build_feature_profile" in result
+        assert "compare_feature_profiles" in result
+
+    def test_training_computes_production_profile(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def train_and_evaluate"):]
+        assert "build_feature_profile(" in fn
+        assert '"production"' in fn
+        assert "Production profile:" in fn
+
+    def test_training_warns_when_no_exploration_profile(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "_EXPLORATION_PROFILE = None" in result
+        assert "No exploration feature profile available for comparison" in result
+
+    def test_training_compares_when_exploration_profile_present(self, renderer, sample_pipeline_config):
+        from customer_retention.generators.pipeline_generator.models import TrainingConfig
+        config = sample_pipeline_config
+        config.training = TrainingConfig(
+            exploration_feature_profile={"stage": "exploration", "created_at": "2024-01-01", "row_count": 100, "feature_count": 2, "target_column": "churn", "features": {"col_a": {"dtype": "double", "non_null": 90, "null_count": 10}}, "excluded": {}},
+        )
+        result = renderer.render_training(config)
+        assert "_EXPLORATION_PROFILE = {" in result
+        assert "FeatureProfile.from_dict(_EXPLORATION_PROFILE)" in result
+        assert "compare_feature_profiles(" in result
+        assert "feature discrepancies" in result
+
+    def test_training_profile_uses_batched_null_agg(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def train_and_evaluate"):]
+        assert "F.sum(F.when(F.col(c).isNull()" in fn
+
+    def test_training_profile_timing(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert 'log_timing("feature_profile"' in result
+
+    def test_training_profile_is_valid_python(self, renderer, sample_pipeline_config):
+        from customer_retention.generators.pipeline_generator.models import TrainingConfig
+        config = sample_pipeline_config
+        config.training = TrainingConfig(
+            exploration_feature_profile={"stage": "exploration", "created_at": "2024-01-01", "row_count": 100, "feature_count": 2, "target_column": "churn", "features": {"col_a": {"dtype": "double", "non_null": 90, "null_count": 10}}, "excluded": {}},
+        )
+        result = renderer.render_training(config)
+        ast.parse(result)

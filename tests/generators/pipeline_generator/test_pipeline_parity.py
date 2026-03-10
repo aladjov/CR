@@ -971,7 +971,8 @@ class TestTrainingTemplateLocal:
         )
         result = renderer.render_training(pipeline_config_minimal)
         assert "temporal_column=FEAST_TIMESTAMP_COL" in result
-        assert "feature_timestamp" not in result
+        splitter_section = result[result.index("DataSplitter("):]
+        assert 'temporal_column="feature_timestamp"' not in splitter_section
 
     def test_recommended_start_uses_feast_timestamp_col(self, renderer, pipeline_config_minimal):
         pipeline_config_minimal.training = TrainingConfig(
@@ -1655,3 +1656,57 @@ class TestGeneratorBaseSharedStages:
         core_local = {f for f in local_files if any(p in str(f) for p in CORE_STAGE_PATTERNS)}
         core_db = {f for f in db_files if any(p in str(f) for p in CORE_STAGE_PATTERNS)}
         assert core_local == core_db, f"Core file name mismatch:\nLocal-only: {core_local - core_db}\nDB-only: {core_db - core_local}"
+
+
+class TestLocalTrainingFeatureProfile:
+    def test_local_training_imports_feature_profile(self, renderer, pipeline_config_minimal):
+        result = renderer.render_training(pipeline_config_minimal)
+        assert "from customer_retention.stages.modeling.feature_profile import" in result
+
+    def test_local_training_computes_production_profile(self, renderer, pipeline_config_minimal):
+        result = renderer.render_training(pipeline_config_minimal)
+        assert "build_feature_profile(" in result
+        assert '"production"' in result
+        assert "Production profile:" in result
+
+    def test_local_training_warns_when_no_exploration_profile(self, renderer, pipeline_config_minimal):
+        result = renderer.render_training(pipeline_config_minimal)
+        assert "_EXPLORATION_PROFILE = None" in result
+        assert "No exploration feature profile available for comparison" in result
+
+    def test_local_training_compares_when_exploration_profile_present(self, renderer, pipeline_config_minimal):
+        pipeline_config_minimal.training = TrainingConfig(
+            exploration_feature_profile={"stage": "exploration", "created_at": "2024-01-01", "row_count": 100, "feature_count": 2, "target_column": "churn", "features": {"col_a": {"dtype": "double", "non_null": 90, "null_count": 10}}, "excluded": {}},
+        )
+        result = renderer.render_training(pipeline_config_minimal)
+        assert "_EXPLORATION_PROFILE = {" in result
+        assert "FeatureProfile.from_dict(_EXPLORATION_PROFILE)" in result
+        assert "compare_feature_profiles(" in result
+
+    def test_local_training_has_assert_rows(self, renderer, pipeline_config_minimal):
+        result = renderer.render_training(pipeline_config_minimal)
+        assert "def _assert_rows" in result
+
+    def test_local_training_timing(self, renderer, pipeline_config_minimal):
+        result = renderer.render_training(pipeline_config_minimal)
+        assert "from customer_retention.core.compat.timing import log_timing" in result
+        assert 'log_timing("load_gold_data"' in result
+        assert 'log_timing("temporal_split"' in result
+        assert 'log_timing("feature_profile"' in result
+
+    def test_local_training_excludes_temporal_metadata(self, renderer, pipeline_config_minimal):
+        result = renderer.render_training(pipeline_config_minimal)
+        assert '"as_of_date"' in result
+        assert '"feature_timestamp"' in result
+        assert '"label_timestamp"' in result
+
+    def test_local_training_is_valid_python(self, renderer, pipeline_config_minimal):
+        result = renderer.render_training(pipeline_config_minimal)
+        ast.parse(result)
+
+    def test_local_training_with_exploration_profile_is_valid_python(self, renderer, pipeline_config_minimal):
+        pipeline_config_minimal.training = TrainingConfig(
+            exploration_feature_profile={"stage": "exploration", "created_at": "2024-01-01", "row_count": 100, "feature_count": 2, "target_column": "churn", "features": {"col_a": {"dtype": "double", "non_null": 90, "null_count": 10}}, "excluded": {}},
+        )
+        result = renderer.render_training(pipeline_config_minimal)
+        ast.parse(result)

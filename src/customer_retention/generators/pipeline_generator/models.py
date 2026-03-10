@@ -163,6 +163,7 @@ class TrainingConfig:
     filter_future_dates: bool = False
     imbalance_strategy: str = "class_weight"
     imbalance_ratio: Optional[float] = None
+    exploration_feature_profile: Optional[Dict[str, Any]] = None
 
 
 @dataclass

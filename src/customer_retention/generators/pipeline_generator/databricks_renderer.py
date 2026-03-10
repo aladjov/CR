@@ -1321,6 +1321,7 @@ from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClass
 from pyspark.sql import functions as F
 from pyspark.sql.types import StructType, StructField, DoubleType
 from customer_retention.stages.modeling.data_splitter import DataSplitter, SplitStrategy
+from customer_retention.stages.modeling.feature_profile import FeatureProfile, ColumnProfile, build_feature_profile, compare_feature_profiles
 from customer_retention.core.compat.timing import log_timing
 {% if config.training and config.training.imbalance_strategy == "smote" %}
 from imblearn.over_sampling import SMOTE
@@ -1341,6 +1342,11 @@ _vector_schema = StructType([
     StructField("features", VectorUDT(), True),
     StructField("label", DoubleType(), True),
 ])
+{% if config.training and config.training.exploration_feature_profile %}
+_EXPLORATION_PROFILE = {{ config.training.exploration_feature_profile }}
+{% else %}
+_EXPLORATION_PROFILE = None
+{% endif %}
 
 def _assert_rows(count, stage):
     if count == 0:
@@ -1398,6 +1404,33 @@ def train_and_evaluate():
         assembled, feature_cols = prepare_features(df)
     assembled_count = _assert_rows(assembled.count(), "after_assembly")
     print(f"[TRAINING] Assembled: {assembled_count:,} rows, {len(feature_cols)} features")
+
+    with log_timing("feature_profile", logger):
+        null_exprs = [F.sum(F.when(F.col(c).isNull(), 1).otherwise(0)).alias(c) for c in feature_cols]
+        null_row = df.select(null_exprs).collect()[0]
+        feature_stats = {}
+        excluded_cols = {}
+        for c in df.columns:
+            if c in _EXCLUDE_COLS:
+                excluded_cols[c] = "metadata"
+            elif any(c.startswith(p) for p in ["original_"]):
+                excluded_cols[c] = "original_prefix"
+        for c in feature_cols:
+            null_count = int(null_row[c])
+            feature_stats[c] = ColumnProfile(dtype=df.schema[c].dataType.typeName(), non_null_count=filtered_count - null_count, null_count=null_count)
+        prod_profile = build_feature_profile("production", TARGET, filtered_count, feature_stats, excluded_cols)
+        print(f"[TRAINING] Production profile: {prod_profile.feature_count} features, {filtered_count:,} rows")
+        if _EXPLORATION_PROFILE is not None:
+            exp_profile = FeatureProfile.from_dict(_EXPLORATION_PROFILE)
+            discrepancies = compare_feature_profiles(exp_profile, prod_profile)
+            if discrepancies:
+                print(f"[TRAINING] WARNING: {len(discrepancies)} feature discrepancies vs exploration:")
+                for d in discrepancies:
+                    print(f"[TRAINING]   {d}")
+            else:
+                print("[TRAINING] Feature profile matches exploration")
+        else:
+            print("[TRAINING] WARNING: No exploration feature profile available for comparison")
 
     with log_timing("to_pandas", logger, rows=assembled_count):
         pdf = assembled.toPandas()

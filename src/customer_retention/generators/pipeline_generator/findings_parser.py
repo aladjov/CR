@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import yaml
 
@@ -1277,6 +1277,8 @@ class FindingsParser:
         if not temporal_column and not filter_future and not recommended_start and self._intent is None:
             return None
 
+        exploration_profile = self._load_exploration_feature_profile()
+
         return TrainingConfig(
             split_strategy=split_strategy,
             temporal_column=temporal_column,
@@ -1284,7 +1286,22 @@ class FindingsParser:
             recommended_training_start=recommended_start,
             filter_future_dates=filter_future,
             imbalance_strategy=imbalance_strategy,
+            exploration_feature_profile=exploration_profile,
         )
+
+    def _load_exploration_feature_profile(self) -> Optional[Dict[str, Any]]:
+        if getattr(self, "_namespace", None) is None:
+            return None
+        profile_path = self._namespace.exploration_feature_profile_path
+        if not profile_path.exists():
+            return None
+        try:
+            from customer_retention.stages.modeling.feature_profile import FeatureProfile
+            profile = FeatureProfile.load(profile_path)
+            return profile.to_dict() if profile else None
+        except Exception:
+            logger.warning("Could not load exploration feature profile from %s", profile_path)
+            return None
 
     def _build_bronze_event_configs(
         self,
