@@ -9,6 +9,7 @@ from customer_retention.core.compat import (
     concat,
     head_as_list,
     pd,
+    safe_isin,
     safe_query,
     safe_sample,
     safe_to_datetime,
@@ -241,7 +242,7 @@ def stratified_entity_sample(
                 rare_mask = deduped[target_col] == cls_val
                 rare_ids.extend(head_as_list(deduped.loc[rare_mask, entity_col], cnt))
 
-    remaining_df = deduped[~deduped[entity_col].isin(rare_ids)] if rare_ids else deduped
+    remaining_df = safe_isin(deduped, entity_col, rare_ids, negate=True) if rare_ids else deduped
     n_remaining = n_entities - len(rare_ids)
 
     if n_remaining <= 0:

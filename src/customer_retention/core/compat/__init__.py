@@ -620,6 +620,23 @@ def safe_query(df: Any, expr: str) -> Any:
     return df.query(expr)
 
 
+_ISIN_JOIN_THRESHOLD = 100_000
+
+
+def safe_isin(df: Any, column: str, values: Any, negate: bool = False) -> Any:
+    values_list = list(values) if not isinstance(values, list) else values
+    if not _is_spark_pandas(df) or len(values_list) <= _ISIN_JOIN_THRESHOLD:
+        mask = df[column].isin(values_list)
+        return df[~mask] if negate else df[mask]
+    spark_df = as_spark_df(df)
+    values_df = spark_df.sparkSession.createDataFrame(
+        [(v,) for v in values_list], [column],
+    )
+    join_type = "left_anti" if negate else "left_semi"
+    result = spark_df.join(values_df, on=column, how=join_type)
+    return result.pandas_api()
+
+
 def safe_isinf(series: Any) -> Any:
     return (series == float('inf')) | (series == float('-inf'))
 
@@ -1161,6 +1178,7 @@ __all__ = [
     "RemotePath",
     "make_path",
     "safe_drop_duplicates",
+    "safe_isin",
     "safe_sample",
     "safe_select",
     "safe_describe",
