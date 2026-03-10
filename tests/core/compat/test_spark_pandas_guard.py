@@ -97,6 +97,11 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
         "pd.to_datetime(df[col]) may not support format/errors kwargs on pyspark.pandas",
         "Use safe_to_datetime(df[col]) from core.compat",
     ),
+    (
+        re.compile(r"\.query\("),
+        ".query() with Python list syntax fails on pyspark.pandas (Spark SQL parse error)",
+        "Use safe_query(df, expr) from core.compat",
+    ),
 ]
 
 

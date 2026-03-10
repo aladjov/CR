@@ -75,6 +75,11 @@ class TestApplySampleFilters:
         result = apply_sample_filters(df, "ds", {"ds": "a > 100"})
         assert len(result) == 0
 
+    def test_in_operator_with_tuple_syntax(self):
+        df = pd.DataFrame({"region": ["US", "UK", "FR", "DE"]})
+        result = apply_sample_filters(df, "ds", {"ds": "region in ('US', 'UK')"})
+        assert len(result) == 2
+
 
 class TestResolveSegmentEntityIds:
     def test_no_filters_returns_none(self):

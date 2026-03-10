@@ -9,6 +9,7 @@ from customer_retention.core.compat import (
     concat,
     head_as_list,
     pd,
+    safe_query,
     safe_sample,
     safe_to_datetime,
 )
@@ -29,7 +30,7 @@ def resolve_segment_entity_ids(
         entity_col = entity_columns[dataset_name]
         pre_counts = df.groupby(entity_col).size().rename("_pre").reset_index()
         post_counts = (
-            df.query(query_expr).groupby(entity_col).size().rename("_post").reset_index()
+            safe_query(df, query_expr).groupby(entity_col).size().rename("_post").reset_index()
         )
         merged = pre_counts.merge(post_counts, on=entity_col, how="left").fillna({"_post": 0})
         passing = merged[merged["_pre"] == merged["_post"]]
@@ -49,7 +50,7 @@ def apply_sample_filters(
 ) -> pd.DataFrame:
     if not filters or dataset_name not in filters:
         return df
-    return df.query(filters[dataset_name])
+    return safe_query(df, filters[dataset_name])
 
 
 def estimate_sampling_accuracy(

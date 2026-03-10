@@ -609,6 +609,17 @@ def _spark_case_variations(str_series: Any, max_results: int) -> list[str]:
     return [f"{row['__variants__'][0]} vs {row['__variants__'][1]}" for row in grouped]
 
 
+def _spark_safe_query_expr(expr: str) -> str:
+    import re
+    return re.sub(r'\bin\s*\[([^\]]*)\]', r'in (\1)', expr)
+
+
+def safe_query(df: Any, expr: str) -> Any:
+    if _is_spark_pandas(df):
+        return df.query(_spark_safe_query_expr(expr))
+    return df.query(expr)
+
+
 def safe_isinf(series: Any) -> Any:
     return (series == float('inf')) | (series == float('-inf'))
 
