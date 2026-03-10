@@ -15,6 +15,37 @@ from customer_retention.core.compat import (
 )
 
 
+def _spark_passing_entities(df: Any, query_expr: str, entity_col: str) -> set:
+    """Single-pass Spark SQL: count total vs matching rows per entity."""
+    from pyspark.sql import functions as F  # noqa: N812
+
+    from customer_retention.core.compat import _spark_safe_query_expr
+
+    spark_df = as_spark_df(df)
+    spark_expr = _spark_safe_query_expr(query_expr)
+    rows = (
+        spark_df
+        .withColumn("_m", F.when(F.expr(spark_expr), F.lit(1)).otherwise(F.lit(0)))
+        .groupBy(entity_col)
+        .agg(F.count("*").alias("_total"), F.sum("_m").alias("_matching"))
+        .filter(F.col("_total") == F.col("_matching"))
+        .select(entity_col)
+        .collect()
+    )
+    return {row[0] for row in rows}
+
+
+def _pandas_passing_entities(df: Any, query_expr: str, entity_col: str) -> set:
+    """Pandas path: inner join avoids fillna type issues."""
+    pre_counts = df.groupby(entity_col).size().rename("_pre").reset_index()
+    post_counts = (
+        safe_query(df, query_expr).groupby(entity_col).size().rename("_post").reset_index()
+    )
+    merged = pre_counts.merge(post_counts, on=entity_col, how="inner")
+    passing = merged[merged["_pre"] == merged["_post"]]
+    return set(passing[entity_col].to_numpy())
+
+
 def resolve_segment_entity_ids(
     frames: dict[str, pd.DataFrame],
     filters: Optional[dict[str, str]],
@@ -28,13 +59,11 @@ def resolve_segment_entity_ids(
             continue
         df = frames[dataset_name]
         entity_col = entity_columns[dataset_name]
-        pre_counts = df.groupby(entity_col).size().rename("_pre").reset_index()
-        post_counts = (
-            safe_query(df, query_expr).groupby(entity_col).size().rename("_post").reset_index()
-        )
-        merged = pre_counts.merge(post_counts, on=entity_col, how="left").fillna({"_post": 0})
-        passing = merged[merged["_pre"] == merged["_post"]]
-        allowed_sets.append(set(passing[entity_col].to_numpy()))
+        if _is_spark_pandas(df):
+            passing_ids = _spark_passing_entities(df, query_expr, entity_col)
+        else:
+            passing_ids = _pandas_passing_entities(df, query_expr, entity_col)
+        allowed_sets.append(passing_ids)
     if not allowed_sets:
         return None
     result = allowed_sets[0]

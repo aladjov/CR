@@ -210,6 +210,65 @@ class TestResolveSegmentEntityIds:
         )
         assert result == {1, 3}
 
+    def test_inner_join_avoids_fillna_type_issues(self):
+        """Entities with no matching rows after filter must be excluded
+        without relying on fillna (which can fail on pyspark.pandas)."""
+        df = pd.DataFrame({
+            "eid": [1, 1, 2, 2, 3, 3],
+            "status": ["ok", "ok", "ok", "bad", "bad", "bad"],
+        })
+        result = resolve_segment_entity_ids(
+            {"ds": df}, {"ds": "status == 'ok'"}, {"ds": "eid"},
+        )
+        assert result == {1}
+        assert 2 not in result  # partial match excluded
+        assert 3 not in result  # no match excluded
+
+    def test_entity_level_single_row_per_entity(self):
+        """Entity-level data: each entity has exactly 1 row. Matching row = passes."""
+        df = pd.DataFrame({
+            "eid": [10, 20, 30, 40],
+            "account_type": ["Enterprise", "Strategic", "SMB", "Enterprise"],
+        })
+        result = resolve_segment_entity_ids(
+            {"accounts": df},
+            {"accounts": "account_type in ['Enterprise', 'Strategic']"},
+            {"accounts": "eid"},
+        )
+        assert result == {10, 20, 40}
+
+    def test_not_equal_filter(self):
+        df = pd.DataFrame({
+            "eid": [1, 2, 3],
+            "status": ["Test", "Active", "Active"],
+        })
+        result = resolve_segment_entity_ids(
+            {"ds": df}, {"ds": "status != 'Test'"}, {"ds": "eid"},
+        )
+        assert result == {2, 3}
+
+    def test_all_entities_pass_filter(self):
+        """When all rows pass, all entities are returned."""
+        df = pd.DataFrame({
+            "eid": [1, 1, 2, 2],
+            "val": [10, 20, 30, 40],
+        })
+        result = resolve_segment_entity_ids(
+            {"ds": df}, {"ds": "val > 0"}, {"ds": "eid"},
+        )
+        assert result == {1, 2}
+
+    def test_string_entity_ids(self):
+        """Entity IDs that are strings (common in Salesforce-like systems)."""
+        df = pd.DataFrame({
+            "eid": ["ACC001", "ACC002", "ACC003"],
+            "region": ["US", "UK", "US"],
+        })
+        result = resolve_segment_entity_ids(
+            {"ds": df}, {"ds": "region == 'US'"}, {"ds": "eid"},
+        )
+        assert result == {"ACC001", "ACC003"}
+
 
 class TestEstimateSamplingAccuracy:
     def test_correct_ci_formula(self):
