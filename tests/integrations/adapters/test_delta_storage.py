@@ -846,6 +846,7 @@ class TestDatabricksDeltaWriteClamps:
             mock_spark_df = MagicMock()
             mock_stripped = MagicMock()
             mock_clamped = MagicMock()
+            mock_clamped.schema.fields = []
             with (
                 patch.object(DatabricksDelta, "_strip_spark_timestamp_tz", return_value=mock_stripped),
                 patch("customer_retention.core.compat.clamp_spark_timestamps", return_value=mock_clamped) as mock_clamp,
@@ -855,6 +856,57 @@ class TestDatabricksDeltaWriteClamps:
                 mock_clamped.write.format("delta").mode("overwrite").option(
                     "overwriteSchema", "true"
                 ).save.assert_called_once_with("/fake/path")
+
+    def test_write_materializes_when_timestamps_present(self):
+        from unittest.mock import MagicMock, call, patch
+
+        from pyspark.sql.types import StringType, StructField, TimestampNTZType
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            mock_spark_df = MagicMock()
+            mock_clamped = MagicMock()
+            mock_clamped.schema.fields = [
+                StructField("id", StringType()),
+                StructField("event_time", TimestampNTZType()),
+            ]
+            with (
+                patch.object(DatabricksDelta, "_strip_spark_timestamp_tz", return_value=MagicMock()),
+                patch("customer_retention.core.compat.clamp_spark_timestamps", return_value=mock_clamped),
+            ):
+                storage.write(mock_spark_df, "/fake/path")
+                mock_clamped.cache.assert_called_once()
+                mock_clamped.count.assert_called_once()
+                mock_clamped.unpersist.assert_called_once()
+
+    def test_write_skips_materialization_without_timestamps(self):
+        from unittest.mock import MagicMock, patch
+
+        from pyspark.sql.types import IntegerType, StringType, StructField
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            mock_spark_df = MagicMock()
+            mock_clamped = MagicMock()
+            mock_clamped.schema.fields = [
+                StructField("id", StringType()),
+                StructField("value", IntegerType()),
+            ]
+            with (
+                patch.object(DatabricksDelta, "_strip_spark_timestamp_tz", return_value=MagicMock()),
+                patch("customer_retention.core.compat.clamp_spark_timestamps", return_value=mock_clamped),
+            ):
+                storage.write(mock_spark_df, "/fake/path")
+                mock_clamped.cache.assert_not_called()
+                mock_clamped.count.assert_not_called()
 
 
 class TestDatabricksDeltaWriteNormalizesPath:
@@ -872,7 +924,15 @@ class TestDatabricksDeltaWriteNormalizesPath:
             storage._spark = MagicMock()
 
             df = pd.DataFrame({"val": [1, 2]})
-            with patch.object(storage, "_to_spark_df", return_value=MagicMock()) as mock_to:
+            mock_spark_result = MagicMock()
+            mock_clamped = MagicMock()
+            mock_clamped.schema.fields = []
+            with (
+                patch.object(storage, "_to_spark_df", return_value=mock_spark_result),
+                patch.object(DatabricksDelta, "_strip_spark_timestamp_tz", return_value=MagicMock()),
+                patch("customer_retention.core.compat.clamp_spark_timestamps", return_value=mock_clamped),
+            ):
                 storage.write(df, "/dbfs/mnt/data/table")
-                writer = mock_to.return_value.write.format("delta").mode("overwrite")
-                writer.option("overwriteSchema", "true").save.assert_called_once_with("/mnt/data/table")
+                mock_clamped.write.format("delta").mode("overwrite").option(
+                    "overwriteSchema", "true"
+                ).save.assert_called_once_with("/mnt/data/table")

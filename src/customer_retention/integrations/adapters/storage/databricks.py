@@ -84,12 +84,24 @@ class DatabricksDelta(DeltaStorage):
         spark_df = self._strip_spark_timestamp_tz(spark_df)
         from customer_retention.core.compat import clamp_spark_timestamps
         spark_df = clamp_spark_timestamps(spark_df)
-        writer = spark_df.write.format("delta").mode(mode)
-        if mode == "overwrite":
-            writer = writer.option("overwriteSchema", "true")
-        if partition_by:
-            writer = writer.partitionBy(*partition_by)
-        writer.save(path)
+        from pyspark.sql.types import TimestampNTZType, TimestampType
+        _has_ts = any(
+            isinstance(f.dataType, (TimestampType, TimestampNTZType))
+            for f in spark_df.schema.fields
+        )
+        if _has_ts:
+            spark_df.cache()
+            spark_df.count()
+        try:
+            writer = spark_df.write.format("delta").mode(mode)
+            if mode == "overwrite":
+                writer = writer.option("overwriteSchema", "true")
+            if partition_by:
+                writer = writer.partitionBy(*partition_by)
+            writer.save(path)
+        finally:
+            if _has_ts:
+                spark_df.unpersist()
 
     def merge(self, df: Any, path: str, condition: str,
               update_cols: Optional[List[str]] = None) -> None:

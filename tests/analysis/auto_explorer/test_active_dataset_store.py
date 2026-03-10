@@ -281,87 +281,66 @@ class TestDistributedSavePath:
         mock_df.to_spark = MagicMock()
         return mock_df
 
-    @patch("customer_retention.analysis.auto_explorer.active_dataset_store.clamp_distributed_timestamps", side_effect=lambda df: df)
-    @patch("customer_retention.analysis.auto_explorer.active_dataset_store.strip_spark_timestamp_tz")
     @patch("customer_retention.analysis.auto_explorer.active_dataset_store.as_spark_df")
     @patch("customer_retention.analysis.auto_explorer.active_dataset_store.get_delta")
-    def test_save_active_converts_to_native_spark(self, mock_get_delta, mock_as_spark, mock_strip, mock_clamp, namespace):
+    def test_save_active_converts_to_native_spark(self, mock_get_delta, mock_as_spark, namespace):
         mock_delta = MagicMock()
         mock_get_delta.return_value = mock_delta
         ps_df = self._make_spark_pandas_df()
         mock_native = MagicMock()
         mock_as_spark.return_value = mock_native
-        mock_stripped = MagicMock()
-        mock_strip.return_value = mock_stripped
 
         save_active_dataset(namespace, "customers", ps_df)
 
-        mock_clamp.assert_called_once_with(ps_df)
         mock_as_spark.assert_called_once_with(ps_df)
-        mock_strip.assert_called_once_with(mock_native)
         mock_delta.write.assert_called_once_with(
-            mock_stripped, str(namespace.landing_table_dir("customers")), mode="overwrite",
+            mock_native, str(namespace.landing_table_dir("customers")), mode="overwrite",
         )
 
-    @patch("customer_retention.analysis.auto_explorer.active_dataset_store.clamp_distributed_timestamps", side_effect=lambda df: df)
-    @patch("customer_retention.analysis.auto_explorer.active_dataset_store.strip_spark_timestamp_tz")
     @patch("customer_retention.analysis.auto_explorer.active_dataset_store.as_spark_df")
     @patch("customer_retention.analysis.auto_explorer.active_dataset_store.get_delta")
-    def test_save_aggregated_converts_to_native_spark(self, mock_get_delta, mock_as_spark, mock_strip, mock_clamp, namespace):
+    def test_save_aggregated_converts_to_native_spark(self, mock_get_delta, mock_as_spark, namespace):
         mock_delta = MagicMock()
         mock_get_delta.return_value = mock_delta
         ps_df = self._make_spark_pandas_df()
         mock_native = MagicMock()
         mock_as_spark.return_value = mock_native
-        mock_stripped = MagicMock()
-        mock_strip.return_value = mock_stripped
 
         save_aggregated_dataset(namespace, "events", ps_df)
 
-        mock_clamp.assert_called_once_with(ps_df)
         mock_as_spark.assert_called_once_with(ps_df)
-        mock_strip.assert_called_once_with(mock_native)
         mock_delta.write.assert_called_once_with(
-            mock_stripped, str(namespace.bronze_table_dir("events")), mode="overwrite",
+            mock_native, str(namespace.bronze_table_dir("events")), mode="overwrite",
         )
 
-    @patch("customer_retention.analysis.auto_explorer.active_dataset_store.clamp_distributed_timestamps", side_effect=lambda df: df)
-    @patch("customer_retention.analysis.auto_explorer.active_dataset_store.strip_spark_timestamp_tz")
     @patch("customer_retention.analysis.auto_explorer.active_dataset_store.as_spark_df")
     @patch("customer_retention.analysis.auto_explorer.active_dataset_store.get_delta")
-    def test_save_gold_converts_to_native_spark(self, mock_get_delta, mock_as_spark, mock_strip, mock_clamp, namespace):
+    def test_save_gold_converts_to_native_spark(self, mock_get_delta, mock_as_spark, namespace):
         mock_delta = MagicMock()
         mock_get_delta.return_value = mock_delta
         ps_df = self._make_spark_pandas_df()
         mock_native = MagicMock()
         mock_as_spark.return_value = mock_native
-        mock_stripped = MagicMock()
-        mock_strip.return_value = mock_stripped
 
         save_gold_features(namespace, "cust_emai__abc1234", ps_df)
 
-        mock_clamp.assert_called_once_with(ps_df)
         mock_as_spark.assert_called_once_with(ps_df)
-        mock_strip.assert_called_once_with(mock_native)
         mock_delta.write.assert_called_once_with(
-            mock_stripped, str(namespace.gold_table_dir("cust_emai__abc1234")), mode="overwrite",
+            mock_native, str(namespace.gold_table_dir("cust_emai__abc1234")), mode="overwrite",
         )
 
-    @patch("customer_retention.analysis.auto_explorer.active_dataset_store.clamp_distributed_timestamps", side_effect=lambda df: df)
-    @patch("customer_retention.analysis.auto_explorer.active_dataset_store.strip_spark_timestamp_tz")
     @patch("customer_retention.analysis.auto_explorer.active_dataset_store.as_spark_df")
     @patch("customer_retention.analysis.auto_explorer.active_dataset_store.get_delta")
-    def test_clamp_called_before_to_spark(self, mock_get_delta, mock_as_spark, mock_strip, mock_clamp, namespace):
-        call_order = []
-        mock_clamp.side_effect = lambda df: (call_order.append("clamp"), df)[1]
-        mock_as_spark.side_effect = lambda df: (call_order.append("as_spark"), MagicMock())[1]
-        mock_strip.side_effect = lambda df: (call_order.append("strip"), MagicMock())[1]
-        mock_get_delta.return_value = MagicMock()
+    def test_delegates_to_delta_write(self, mock_get_delta, mock_as_spark, namespace):
+        mock_delta = MagicMock()
+        mock_get_delta.return_value = mock_delta
+        mock_as_spark.return_value = MagicMock()
         ps_df = self._make_spark_pandas_df()
 
         save_active_dataset(namespace, "customers", ps_df)
 
-        assert call_order == ["clamp", "as_spark", "strip"]
+        mock_as_spark.assert_called_once_with(ps_df)
+        mock_delta.write.assert_called_once()
 
     def test_native_pandas_still_uses_local_delta(self, namespace):
         df = pd.DataFrame({"customer_id": [1, 2, 3], "revenue": [100.0, 200.0, 300.0]})
