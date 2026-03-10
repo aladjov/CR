@@ -6,10 +6,10 @@ import pytest
 
 from customer_retention.core.compat import (
     _infer_epoch_unit,
+    _normalize_timestamp_columns,
     as_tz_naive,
     ensure_datetime_column,
     groupby_multi_agg,
-    normalize_timestamp_columns,
     normalize_timestamps,
     safe_to_datetime,
     timestamp_diff_days,
@@ -466,7 +466,7 @@ class TestNormalizeTimestampColumns:
             "ts": pd.to_datetime(["2023-01-01", "2023-06-15"]),
             "val": [1, 2],
         })
-        result = normalize_timestamp_columns(df)
+        result = _normalize_timestamp_columns(df)
         pd.testing.assert_frame_equal(result, df)
 
     def test_tz_aware_stripped(self):
@@ -474,7 +474,7 @@ class TestNormalizeTimestampColumns:
             "ts": pd.to_datetime(["2023-01-01", "2023-06-15"]).tz_localize("UTC"),
             "val": [1, 2],
         })
-        result = normalize_timestamp_columns(df)
+        result = _normalize_timestamp_columns(df)
         assert result["ts"].dt.tz is None
         assert result["ts"].iloc[0] == pd.Timestamp("2023-01-01")
 
@@ -484,26 +484,26 @@ class TestNormalizeTimestampColumns:
             "ts2": pd.to_datetime(["2023-06-15"]),
             "val": [42],
         })
-        result = normalize_timestamp_columns(df)
+        result = _normalize_timestamp_columns(df)
         assert result["ts1"].dt.tz is None
         assert result["ts2"].dt.tz is None
         assert result["val"].iloc[0] == 42
 
     def test_non_datetime_untouched(self):
         df = pd.DataFrame({"name": ["alice"], "age": [30]})
-        result = normalize_timestamp_columns(df)
+        result = _normalize_timestamp_columns(df)
         pd.testing.assert_frame_equal(result, df)
 
     def test_empty_dataframe(self):
         df = pd.DataFrame()
-        result = normalize_timestamp_columns(df)
+        result = _normalize_timestamp_columns(df)
         assert result.empty
 
     def test_does_not_mutate_original(self):
         df = pd.DataFrame({
             "ts": pd.to_datetime(["2023-01-01"]).tz_localize("UTC"),
         })
-        normalize_timestamp_columns(df)
+        _normalize_timestamp_columns(df)
         assert df["ts"].dt.tz is not None
 
 
@@ -511,21 +511,21 @@ class TestNormalizeTimestampColumnsDecimal:
     def test_decimal_column_converted_to_numeric(self):
         from decimal import Decimal
         df = pd.DataFrame({"amount": [Decimal("10.50"), Decimal("20.75"), Decimal("30.00")]})
-        result = normalize_timestamp_columns(df)
+        result = _normalize_timestamp_columns(df)
         assert pd.api.types.is_numeric_dtype(result["amount"])
         assert result["amount"].iloc[0] == pytest.approx(10.50)
 
     def test_decimal_with_nulls(self):
         from decimal import Decimal
         df = pd.DataFrame({"amount": [Decimal("10.50"), None, Decimal("30.00")]})
-        result = normalize_timestamp_columns(df)
+        result = _normalize_timestamp_columns(df)
         assert pd.api.types.is_numeric_dtype(result["amount"])
         assert pd.isna(result["amount"].iloc[1])
         assert result["amount"].iloc[2] == pytest.approx(30.00)
 
     def test_string_column_not_converted(self):
         df = pd.DataFrame({"name": ["alice", "bob"]})
-        result = normalize_timestamp_columns(df)
+        result = _normalize_timestamp_columns(df)
         assert result["name"].dtype == "object"
 
     def test_decimal_and_timestamp_mixed(self):
@@ -535,14 +535,14 @@ class TestNormalizeTimestampColumnsDecimal:
             "amount": [Decimal("99.99")],
             "label": ["ok"],
         })
-        result = normalize_timestamp_columns(df)
+        result = _normalize_timestamp_columns(df)
         assert result["ts"].dt.tz is None
         assert pd.api.types.is_numeric_dtype(result["amount"])
         assert result["label"].dtype == "object"
 
     def test_all_null_object_column_untouched(self):
         df = pd.DataFrame({"x": [None, None]})
-        result = normalize_timestamp_columns(df)
+        result = _normalize_timestamp_columns(df)
         assert result["x"].dtype == "object"
 
 
@@ -621,7 +621,7 @@ class TestPandasDtypeToSparkSchema:
         from pyspark.sql.types import DoubleType
 
         from customer_retention.core.compat import pandas_dtype_to_spark_schema
-        df = normalize_timestamp_columns(
+        df = _normalize_timestamp_columns(
             pd.DataFrame({"amount": [Decimal("10.50"), Decimal("20.75")]})
         )
         schema = pandas_dtype_to_spark_schema(df)

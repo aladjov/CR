@@ -6,7 +6,7 @@ from typing import Any, List, Optional
 from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 from customer_retention.core.compat import (
     as_spark_df,
-    normalize_timestamp_columns,
+    normalize_timestamps,
 )
 from customer_retention.core.compat import to_pandas as _compat_to_pandas
 from customer_retention.core.config.column_config import DatasetGranularity
@@ -20,7 +20,7 @@ def _local_delta() -> Any:
 def _to_native_pandas(df: Any) -> Any:
     result = _compat_to_pandas(df)
     result.attrs.clear()
-    return normalize_timestamp_columns(result)
+    return normalize_timestamps(result)
 
 
 def optimize_delta(path: str, z_order_columns: Optional[List[str]] = None) -> None:
@@ -31,7 +31,7 @@ def _write_delta(df: Any, path: str) -> None:
     if hasattr(df, "to_spark"):
         get_delta().write(as_spark_df(df), path, mode="overwrite")
         return
-    _local_delta().write(normalize_timestamp_columns(_compat_to_pandas(df)), path, mode="overwrite")
+    _local_delta().write(normalize_timestamps(_compat_to_pandas(df)), path, mode="overwrite")
 
 
 def save_active_dataset(

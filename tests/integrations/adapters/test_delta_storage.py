@@ -422,7 +422,7 @@ class TestDatabricksDeltaToSparkDf:
             })
 
             with patch(
-                "customer_retention.core.compat.normalize_timestamp_columns",
+                "customer_retention.core.compat.normalize_timestamps",
                 wraps=lambda d: d,
             ) as mock_norm, patch(
                 "customer_retention.core.compat.pandas_dtype_to_spark_schema",
@@ -489,7 +489,7 @@ class TestDatabricksDeltaToSparkDf:
     def test_to_spark_df_with_tz_aware_column(self):
         from unittest.mock import MagicMock, patch
 
-        from customer_retention.core.compat import normalize_timestamp_columns
+        from customer_retention.core.compat import normalize_timestamps
         from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
 
         with patch.object(DatabricksDelta, "__init__", lambda self: None):

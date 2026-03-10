@@ -6,7 +6,7 @@ from customer_retention.core.compat import (
     _is_native_spark_df,
     as_tz_naive,
     native_pd,
-    normalize_timestamp_columns,
+    normalize_timestamps,
     pandas_dtype_to_spark_schema,
     safe_drop_duplicates,
     to_datetime,
@@ -74,7 +74,7 @@ class SparkTemporalMerger(TemporalMerger):
         entities_pdf = native_pd.DataFrame(
             {self.config.entity_key: unique_entities.to_numpy()}
         )
-        dates_pdf = normalize_timestamp_columns(
+        dates_pdf = normalize_timestamps(
             native_pd.DataFrame(
                 {self.config.as_of_column: parsed_dates}
             )

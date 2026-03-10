@@ -154,7 +154,7 @@ All timezone information is removed and extreme timestamps are clamped at the po
 1. **`as_pandas_api(spark_df)`** — the gateway from native Spark to pyspark.pandas. Every Spark DataFrame converted to pyspark.pandas is sanitized first, ensuring no downstream pyspark.pandas operation encounters extreme or tz-aware timestamps.
 2. **`DatabricksDelta.read()`** — sanitizes before wrapping the loaded Delta table as pyspark.pandas.
 
-On the pandas path, `normalize_timestamp_columns()` calls `tz_localize(None)` on any tz-aware column.
+On the pandas path, `normalize_timestamps()` delegates to the internal `_normalize_timestamp_columns()` which calls `tz_localize(None)` on any tz-aware column. The public API is always `normalize_timestamps()` — it dispatches to the correct backend (pandas or pyspark.pandas).
 
 Additional safety nets exist at the write boundary (`clamp_distributed_timestamps` in `_write_delta`, `clamp_spark_timestamps` in `DatabricksDelta.write()`), but these are defense-in-depth — the primary sanitization happens at the input boundary.
 

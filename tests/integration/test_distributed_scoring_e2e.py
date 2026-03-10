@@ -191,7 +191,7 @@ class TestDistributedScoringPipelineDatabricks:
 
     def test_export_to_delta_uses_normalize(self, databricks_scoring_config, gold_features_df):
         pytest.importorskip("pyspark")
-        from customer_retention.core.compat import normalize_timestamp_columns, pandas_dtype_to_spark_schema
+        from customer_retention.core.compat import normalize_timestamps, pandas_dtype_to_spark_schema
 
         predictions_df = pd.DataFrame({
             "customer_id": ["c80", "c81", "c82"],
@@ -200,7 +200,7 @@ class TestDistributedScoringPipelineDatabricks:
             "actual": [1.0, 0.0, 1.0],
         })
 
-        normalized = normalize_timestamp_columns(predictions_df)
+        normalized = normalize_timestamps(predictions_df)
         schema = pandas_dtype_to_spark_schema(normalized)
 
         assert len(schema.fields) == len(predictions_df.columns)

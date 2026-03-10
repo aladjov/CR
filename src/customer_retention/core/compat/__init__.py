@@ -289,7 +289,7 @@ def as_tz_naive(value: Any) -> Any:
     return value
 
 
-def normalize_timestamp_columns(df: _pandas.DataFrame) -> _pandas.DataFrame:
+def _normalize_timestamp_columns(df: _pandas.DataFrame) -> _pandas.DataFrame:
     import datetime as _dt
     import decimal as _decimal
 
@@ -300,7 +300,7 @@ def normalize_timestamp_columns(df: _pandas.DataFrame) -> _pandas.DataFrame:
         elif df[col].dtype == "object":
             non_null = df[col].dropna()
             if len(non_null) > 0:
-                sample = non_null.iloc[:10]
+                sample = non_null.iloc[:10].to_numpy()
                 if all(isinstance(v, _dt.date) for v in sample):
                     df[col] = _pandas.to_datetime(df[col])
                 elif all(isinstance(v, _decimal.Decimal) for v in sample):
@@ -311,7 +311,7 @@ def normalize_timestamp_columns(df: _pandas.DataFrame) -> _pandas.DataFrame:
 def normalize_timestamps(df: Any) -> Any:
     if _is_spark_pandas(df):
         return _normalize_timestamps_distributed(df)
-    return normalize_timestamp_columns(df)
+    return _normalize_timestamp_columns(df)
 
 
 def clamp_distributed_timestamps(df: Any) -> Any:
@@ -1168,7 +1168,7 @@ __all__ = [
     "safe_to_datetime",
     "ensure_datetime_column",
     "ensure_timestamp",
-    "normalize_timestamp_columns",
+    "_normalize_timestamp_columns",
     "clamp_distributed_timestamps",
     "sanitize_spark_timestamps",
     "strip_spark_timestamp_tz",

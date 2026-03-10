@@ -49,8 +49,8 @@ class DatabricksDelta(DeltaStorage):
             raise
 
     def _to_spark_df(self, df: pd.DataFrame) -> Any:
-        from customer_retention.core.compat import normalize_timestamp_columns, pandas_dtype_to_spark_schema
-        normalized = normalize_timestamp_columns(df)
+        from customer_retention.core.compat import normalize_timestamps, pandas_dtype_to_spark_schema
+        normalized = normalize_timestamps(df)
         schema = pandas_dtype_to_spark_schema(normalized)
         return self.spark.createDataFrame(normalized, schema=schema)
 

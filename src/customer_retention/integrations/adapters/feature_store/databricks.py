@@ -26,8 +26,8 @@ def _validate_write_mode(mode: str) -> None:
 
 
 def _to_spark_df(spark: Any, df: pd.DataFrame) -> Any:
-    from customer_retention.core.compat import normalize_timestamp_columns, pandas_dtype_to_spark_schema
-    normalized = normalize_timestamp_columns(df)
+    from customer_retention.core.compat import normalize_timestamps, pandas_dtype_to_spark_schema
+    normalized = normalize_timestamps(df)
     schema = pandas_dtype_to_spark_schema(normalized)
     return spark.createDataFrame(normalized, schema=schema)
 
