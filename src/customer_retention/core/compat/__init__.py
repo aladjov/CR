@@ -314,6 +314,25 @@ def normalize_timestamps(df: Any) -> Any:
     return normalize_timestamp_columns(df)
 
 
+def clamp_distributed_timestamps(df: Any) -> Any:
+    """Null out extreme timestamp values in a pyspark.pandas DataFrame.
+
+    Must be called BEFORE ``.to_spark()`` so that the clamp expression is
+    part of the internal Spark plan and is evaluated before any Arrow
+    serialization that Spark Connect may trigger.
+    """
+    if not _is_spark_pandas(df):
+        return df
+    import pyspark.sql.functions as F  # noqa: N812
+    for col_name in list(df.columns):
+        dtype_str = str(df[col_name].dtype).lower()
+        if "datetime" in dtype_str or "timestamp" in dtype_str:
+            df[col_name] = df[col_name].spark.transform(
+                lambda c: F.when(F.year(c).between(1678, 2261), c)
+            )
+    return df
+
+
 def strip_spark_timestamp_tz(spark_df: Any) -> Any:
     from pyspark.sql.functions import col as spark_col
     from pyspark.sql.types import TimestampType
@@ -340,7 +359,10 @@ def clamp_spark_timestamps(spark_df: Any) -> Any:
     if not ts_names:
         return spark_df
     cols = [
-        when(year(spark_col(f.name)).between(1678, 2261), spark_col(f.name)).alias(f.name)
+        when(
+            year(spark_col(f.name)).between(1678, 2261),
+            spark_col(f.name).cast("timestamp_ntz"),
+        ).alias(f.name)
         if f.name in ts_names else spark_col(f.name)
         for f in spark_df.schema.fields
     ]
@@ -350,9 +372,10 @@ def clamp_spark_timestamps(spark_df: Any) -> Any:
 def _normalize_timestamps_distributed(df: Any) -> Any:
     spark_df = df.to_spark()
     stripped = strip_spark_timestamp_tz(spark_df)
-    if stripped is spark_df:
+    clamped = clamp_spark_timestamps(stripped)
+    if clamped is spark_df:
         return df
-    return as_pandas_api(stripped)
+    return as_pandas_api(clamped)
 
 
 def pandas_dtype_to_spark_schema(df: _pandas.DataFrame) -> "Any":
@@ -1107,6 +1130,7 @@ __all__ = [
     "ensure_datetime_column",
     "ensure_timestamp",
     "normalize_timestamp_columns",
+    "clamp_distributed_timestamps",
     "strip_spark_timestamp_tz",
     "pandas_dtype_to_spark_schema",
     "ops",

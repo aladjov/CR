@@ -4,7 +4,12 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
-from customer_retention.core.compat import as_spark_df, normalize_timestamp_columns, strip_spark_timestamp_tz
+from customer_retention.core.compat import (
+    as_spark_df,
+    clamp_distributed_timestamps,
+    normalize_timestamp_columns,
+    strip_spark_timestamp_tz,
+)
 from customer_retention.core.compat import to_pandas as _compat_to_pandas
 from customer_retention.core.config.column_config import DatasetGranularity
 from customer_retention.integrations.adapters.factory import get_delta
@@ -26,6 +31,7 @@ def optimize_delta(path: str, z_order_columns: Optional[List[str]] = None) -> No
 
 def _write_delta(df: Any, path: str) -> None:
     if hasattr(df, "to_spark"):
+        df = clamp_distributed_timestamps(df)
         spark_df = strip_spark_timestamp_tz(as_spark_df(df))
         get_delta().write(spark_df, path, mode="overwrite")
         return

@@ -984,12 +984,71 @@ class TestClampSparkTimestamps:
         assert len(args) == 3
 
 
+class TestClampDistributedTimestamps:
+    def test_returns_native_pandas_unchanged(self):
+        from customer_retention.core.compat import clamp_distributed_timestamps
+
+        df = pd.DataFrame({"id": [1], "ts": pd.to_datetime(["2020-01-01"])})
+        result = clamp_distributed_timestamps(df)
+        assert result is df
+
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_clamps_datetime_columns(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.core.compat import clamp_distributed_timestamps
+
+        mock_df = MagicMock()
+        mock_df.columns = ["id", "ts"]
+        mock_id_series = MagicMock()
+        mock_id_series.dtype = "int64"
+        mock_ts_series = MagicMock()
+        mock_ts_series.dtype = "datetime64[ns]"
+        mock_transformed = MagicMock()
+        mock_ts_series.spark.transform.return_value = mock_transformed
+
+        def getitem(key):
+            return {"id": mock_id_series, "ts": mock_ts_series}[key]
+        mock_df.__getitem__ = MagicMock(side_effect=getitem)
+
+        with patch("customer_retention.core.compat._is_spark_pandas", return_value=True):
+            result = clamp_distributed_timestamps(mock_df)
+
+        mock_ts_series.spark.transform.assert_called_once()
+        assert result is mock_df
+
+    def test_skips_non_timestamp_columns(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.core.compat import clamp_distributed_timestamps
+
+        mock_df = MagicMock()
+        mock_df.columns = ["id", "name"]
+        mock_id = MagicMock()
+        mock_id.dtype = "int64"
+        mock_name = MagicMock()
+        mock_name.dtype = "object"
+
+        def getitem(key):
+            return {"id": mock_id, "name": mock_name}[key]
+        mock_df.__getitem__ = MagicMock(side_effect=getitem)
+
+        with patch("customer_retention.core.compat._is_spark_pandas", return_value=True):
+            clamp_distributed_timestamps(mock_df)
+
+        mock_id.spark.transform.assert_not_called()
+        mock_name.spark.transform.assert_not_called()
+
+
 class TestNormalizeTimestampsDistributed:
     @pytest.fixture(autouse=True)
     def _skip_without_pyspark(self):
         pytest.importorskip("pyspark")
 
-    def test_strips_spark_timestamp_tz(self):
+    def test_strips_and_clamps_spark_timestamps(self):
         from unittest.mock import MagicMock
 
         from pyspark.sql.types import (
@@ -997,20 +1056,58 @@ class TestNormalizeTimestampsDistributed:
             StringType,
             StructField,
             StructType,
+            TimestampNTZType,
             TimestampType,
         )
 
-        schema = StructType([
+        ts_schema = StructType([
             StructField("id", IntegerType()),
             StructField("ts", TimestampType()),
             StructField("name", StringType()),
         ])
+        ntz_schema = StructType([
+            StructField("id", IntegerType()),
+            StructField("ts", TimestampNTZType()),
+            StructField("name", StringType()),
+        ])
+        mock_spark_df = MagicMock()
+        mock_spark_df.schema.fields = ts_schema.fields
+        mock_stripped = MagicMock()
+        mock_stripped.schema.fields = ntz_schema.fields
+        mock_spark_df.select.return_value = mock_stripped
+        mock_clamped = MagicMock()
+        mock_stripped.select.return_value = mock_clamped
+        mock_ps_result = MagicMock()
+        mock_clamped.pandas_api.return_value = mock_ps_result
+
+        mock_df = MagicMock()
+        mock_df.to_spark.return_value = mock_spark_df
+
+        with (
+            __import__("unittest.mock", fromlist=["patch"]).patch(
+                "customer_retention.core.compat._is_spark_pandas", return_value=True,
+            ),
+        ):
+            result = normalize_timestamps(mock_df)
+        mock_spark_df.select.assert_called_once()
+        mock_stripped.select.assert_called_once()
+        assert result is mock_ps_result
+
+    def test_clamps_ntz_columns(self):
+        from unittest.mock import MagicMock
+
+        from pyspark.sql.types import IntegerType, StructField, StructType, TimestampNTZType
+
+        schema = StructType([
+            StructField("id", IntegerType()),
+            StructField("ts", TimestampNTZType()),
+        ])
         mock_spark_df = MagicMock()
         mock_spark_df.schema.fields = schema.fields
-        mock_stripped = MagicMock()
-        mock_spark_df.select.return_value = mock_stripped
+        mock_clamped = MagicMock()
+        mock_spark_df.select.return_value = mock_clamped
         mock_ps_result = MagicMock()
-        mock_stripped.pandas_api.return_value = mock_ps_result
+        mock_clamped.pandas_api.return_value = mock_ps_result
 
         mock_df = MagicMock()
         mock_df.to_spark.return_value = mock_spark_df
@@ -1023,30 +1120,6 @@ class TestNormalizeTimestampsDistributed:
             result = normalize_timestamps(mock_df)
         mock_spark_df.select.assert_called_once()
         assert result is mock_ps_result
-
-    def test_ntz_columns_returns_original(self):
-        from unittest.mock import MagicMock
-
-        from pyspark.sql.types import IntegerType, StructField, StructType, TimestampNTZType
-
-        schema = StructType([
-            StructField("id", IntegerType()),
-            StructField("ts", TimestampNTZType()),
-        ])
-        mock_spark_df = MagicMock()
-        mock_spark_df.schema.fields = schema.fields
-
-        mock_df = MagicMock()
-        mock_df.to_spark.return_value = mock_spark_df
-
-        with (
-            __import__("unittest.mock", fromlist=["patch"]).patch(
-                "customer_retention.core.compat._is_spark_pandas", return_value=True,
-            ),
-        ):
-            result = normalize_timestamps(mock_df)
-        mock_spark_df.select.assert_not_called()
-        assert result is mock_df
 
     def test_no_timestamp_columns_returns_original(self):
         from unittest.mock import MagicMock
