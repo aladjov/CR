@@ -1,3 +1,4 @@
+import decimal
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
@@ -9,6 +10,8 @@ import yaml
 
 
 def _to_native(value: Any) -> Any:
+    if isinstance(value, decimal.Decimal):
+        return float(value)
     if isinstance(value, (np.integer, np.floating)):
         return value.item()
     if isinstance(value, np.ndarray):
@@ -466,11 +469,11 @@ class RecommendationRegistry:
         result = {}
         for key, value in asdict(layer_obj).items():
             if isinstance(value, list) and value and isinstance(value[0], dict):
-                result[key] = value
+                result[key] = [_to_native(item) for item in value]
             elif isinstance(value, list):
-                result[key] = [asdict(r) if hasattr(r, '__dataclass_fields__') else r for r in value]
+                result[key] = [_to_native(asdict(r)) if hasattr(r, '__dataclass_fields__') else _to_native(r) for r in value]
             else:
-                result[key] = value
+                result[key] = _to_native(value)
         return result
 
     @classmethod

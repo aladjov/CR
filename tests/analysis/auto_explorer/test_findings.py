@@ -1,3 +1,4 @@
+import decimal
 import json
 import tempfile
 from pathlib import Path
@@ -37,6 +38,17 @@ class TestConvertToNative:
         assert _convert_to_native(42) == 42
         assert _convert_to_native("text") == "text"
         assert _convert_to_native(3.14) == 3.14
+
+    def test_converts_decimal(self):
+        assert _convert_to_native(decimal.Decimal("3.14")) == 3.14
+        assert isinstance(_convert_to_native(decimal.Decimal("3.14")), float)
+
+    def test_converts_nested_decimal(self):
+        data = {"a": decimal.Decimal("1.5"), "b": [decimal.Decimal("2.0")]}
+        result = _convert_to_native(data)
+        assert result == {"a": 1.5, "b": [2.0]}
+        assert isinstance(result["a"], float)
+        assert isinstance(result["b"][0], float)
 
 
 class TestColumnFinding:
@@ -288,6 +300,23 @@ class TestExplorationFindings:
         assert "!!python" not in yaml_str
         restored = ExplorationFindings.from_yaml(yaml_str)
         assert restored.row_count == 1000
+
+    def test_decimal_types_converted_to_native(self):
+        findings = ExplorationFindings(
+            source_path="test.csv",
+            source_format="csv",
+            memory_usage_mb=decimal.Decimal("1.5"),
+            row_count=1000,
+            overall_quality_score=decimal.Decimal("95.5"),
+        )
+        data = findings.to_dict()
+        assert isinstance(data["memory_usage_mb"], float)
+        assert isinstance(data["overall_quality_score"], float)
+        yaml_str = findings.to_yaml()
+        assert "!!python" not in yaml_str
+        assert "decimal" not in yaml_str.lower()
+        restored = ExplorationFindings.from_yaml(yaml_str)
+        assert restored.overall_quality_score == 95.5
 
 
 class TestTimeSeriesMetadata:

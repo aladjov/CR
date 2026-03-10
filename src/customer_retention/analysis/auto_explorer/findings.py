@@ -1,3 +1,4 @@
+import decimal
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -23,6 +24,8 @@ def _parse_iso(value: Any) -> Any:
 def _convert_to_native(obj: Any) -> Any:
     if obj is None:
         return None
+    if isinstance(obj, decimal.Decimal):
+        return float(obj)
     if isinstance(obj, dict):
         return {k: _convert_to_native(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):

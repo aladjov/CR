@@ -1382,6 +1382,33 @@ class TestRecommendationRegistrySaveLoad:
         assert manual_content == save_content
 
 
+class TestRecommendationRegistryDecimalSafe:
+    def test_decimal_parameters_roundtrip(self, tmp_path):
+        import decimal
+
+
+        registry = RecommendationRegistry()
+        registry.init_bronze("data.csv")
+        registry.add_bronze_null("age", "median", "5% nulls", "03")
+        # Inject Decimal values (as Spark aggregations would produce)
+        rec = registry.bronze.null_handling[0]
+        rec.parameters["threshold"] = decimal.Decimal("0.95")
+        rec.parameters["ratio"] = decimal.Decimal("1.23456")
+
+        path = str(tmp_path / "recs.yaml")
+        registry.save(path)
+
+        with open(path) as f:
+            content = f.read()
+        assert "!!python" not in content
+        assert "decimal" not in content.lower()
+
+        loaded = RecommendationRegistry.load(path)
+        params = loaded.bronze.null_handling[0].parameters
+        assert params["threshold"] == 0.95
+        assert params["ratio"] == 1.23456
+
+
 class TestRecommendationRegistryMerge:
 
     def test_merge_empty_list(self):
