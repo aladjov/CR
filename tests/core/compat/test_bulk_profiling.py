@@ -307,6 +307,67 @@ class TestComputeBulkStatsDispatch:
             assert result.total_count == 10
 
 
+class TestSparkBulkStatsNullAggregates:
+    """Spark agg results may return None despite F.coalesce wrapping."""
+
+    def _run_with_row1(self, row1_dict, mode_dict, mode_count_dict, cols, numeric_fields=None):
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_stats
+
+        mock_row1 = MagicMock()
+        mock_row1.__getitem__ = lambda self, k: row1_dict[k]
+        mock_mode_row = MagicMock()
+        mock_mode_row.__getitem__ = lambda self, k: mode_dict[k]
+        mock_mode_count_row = MagicMock()
+        mock_mode_count_row.__getitem__ = lambda self, k: mode_count_dict[k]
+
+        schema_fields = []
+        for c in cols:
+            field = MagicMock()
+            field.name = c
+            field.dataType = MagicMock()
+            field.dataType.__class__ = type("StringType", (), {})
+            schema_fields.append(field)
+
+        mock_spark_df = MagicMock()
+        mock_spark_df.columns = cols
+        mock_spark_df.schema.fields = schema_fields
+        mock_spark_df.agg.return_value.collect.side_effect = [
+            [mock_row1], [mock_mode_row], [mock_mode_count_row],
+        ]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=mock_spark_df):
+            return _spark_bulk_stats(MagicMock())
+
+    def test_null_count_none_from_spark(self):
+        result = self._run_with_row1(
+            row1_dict={"__total_count__": 5, "__null__a": None, "__dist__a": 3},
+            mode_dict={"__mode__a": "x"},
+            mode_count_dict={"__mcount__a": 2},
+            cols=["a"],
+        )
+        assert result.columns["a"].null_count == 0
+
+    def test_distinct_count_none_from_spark(self):
+        result = self._run_with_row1(
+            row1_dict={"__total_count__": 5, "__null__a": 2, "__dist__a": None},
+            mode_dict={"__mode__a": "x"},
+            mode_count_dict={"__mcount__a": 2},
+            cols=["a"],
+        )
+        assert result.columns["a"].distinct_count == 0
+
+    def test_both_null_and_distinct_none(self):
+        result = self._run_with_row1(
+            row1_dict={"__total_count__": 0, "__null__a": None, "__dist__a": None},
+            mode_dict={"__mode__a": None},
+            mode_count_dict={"__mcount__a": 0},
+            cols=["a"],
+        )
+        assert result.columns["a"].null_count == 0
+        assert result.columns["a"].distinct_count == 0
+        assert result.columns["a"].most_common_value is None
+
+
 class TestPandasBulkStatsEdgeCases:
     def test_single_row(self):
         df = pd.DataFrame({"a": [42], "b": ["hello"]})

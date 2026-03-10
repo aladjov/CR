@@ -532,8 +532,8 @@ def _spark_bulk_stats(df: Any) -> BulkStats:
         mode_val = mode_row[f"__mode__{col}"]
         mode_freq = _safe_int(mode_count_row[f"__mcount__{col}"]) if mode_val is not None else None
         columns[col] = PerColumnStats(
-            null_count=int(row1[f"__null__{col}"]),
-            distinct_count=int(row1[f"__dist__{col}"]),
+            null_count=_safe_int(row1[f"__null__{col}"]),
+            distinct_count=_safe_int(row1[f"__dist__{col}"]),
             most_common_value=str(mode_val) if mode_val is not None else None,
             most_common_frequency=mode_freq,
         )
