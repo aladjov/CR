@@ -504,8 +504,8 @@ def _spark_bulk_stats(df: Any) -> BulkStats:
     with log_timing("spark_bulk batch1 (count/null/distinct)", logger, cols=len(all_cols)):
         exprs: list[Any] = [F.count("*").alias("__total_count__")]
         for col in all_cols:
-            exprs.append(F.sum(F.isnull(F.col(col)).cast("int")).alias(f"__null__{col}"))
-            exprs.append(F.approx_count_distinct(F.col(col)).alias(f"__dist__{col}"))
+            exprs.append(F.coalesce(F.sum(F.isnull(F.col(col)).cast("int")), F.lit(0)).alias(f"__null__{col}"))
+            exprs.append(F.coalesce(F.approx_count_distinct(F.col(col)), F.lit(0)).alias(f"__dist__{col}"))
         row1 = spark_df.agg(*exprs).collect()[0]
     total_count = int(row1["__total_count__"])
 
