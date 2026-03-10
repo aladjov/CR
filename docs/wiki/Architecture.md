@@ -145,6 +145,16 @@ Notebook 01 applies these steps once at landing time via `resolve_single_dataset
 
 If a resolution step references columns that no longer exist (e.g., schema changed between NB00 and NB01), the step is skipped with a warning rather than failing the notebook.
 
+### Timezone Stripping at Landing
+
+All timezone information is removed at landing time. Source systems (e.g., Salesforce, Databricks tables) often store timestamps as `timestamp[us, tz=Etc/UTC]` or similar tz-aware types. These are converted to timezone-naive timestamps (`TIMESTAMP_NTZ` on Spark, `datetime64[ns]` on pandas) before writing to Delta.
+
+On the Spark path, `strip_spark_timestamp_tz()` casts `TimestampType` columns to `timestamp_ntz`, and `clamp_spark_timestamps()` nulls values outside the safe range (years 1678-2261) to prevent Arrow serialization overflow. On the pandas path, `normalize_timestamp_columns()` calls `tz_localize(None)` on any tz-aware column.
+
+Custom user-code cells that create derived Spark DataFrames (e.g., joining source tables to derive a target column) must apply `strip_spark_timestamp_tz` and `clamp_spark_timestamps` before registering temp views. Otherwise, tz-aware timestamps with extreme sentinel values from the source system will cause `ArrowInvalid` errors when downstream code writes to Delta.
+
+All downstream stages (Bronze through Gold) operate exclusively on tz-naive timestamps.
+
 ### Entity-Aware Temporal Cross-Validation
 
 Notebook 08 uses `TemporalEntitySplit` -- a custom sklearn-compatible CV splitter that wraps `GroupKFold` with optional temporal purging. All rows of an entity go entirely to train OR test in each fold, preventing entity information leakage. An optional purge gap removes training rows temporally close to the test period.
