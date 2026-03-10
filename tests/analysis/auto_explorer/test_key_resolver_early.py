@@ -128,6 +128,60 @@ class TestResolveSingleDatasetKeys:
         with pytest.raises(FileNotFoundError, match="missing_bridge"):
             resolve_single_dataset_keys(source_df, steps, namespace)
 
+    def test_stale_step_skipped_does_not_add_resolve_column(self, namespace):
+        """When a step is stale (bridge schema changed), the resolve column
+        is NOT added.  Callers must check the result columns before assuming
+        the entity key exists — otherwise findings and landing diverge."""
+        bridge_df = pd.DataFrame({"CASE_ID": [1, 2], "WRONG_COL": ["x", "y"]})
+        save_active_dataset(namespace, "case", bridge_df)
+        source_df = pd.DataFrame({"CASE_ID": [1, 2], "STATUS": ["Open", "Closed"]})
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="case",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        result = resolve_single_dataset_keys(source_df, steps, namespace)
+        # Stale step is skipped — ACCOUNT_ID should NOT be in result
+        assert "ACCOUNT_ID" not in result.columns
+        # Original data preserved
+        assert list(result.columns) == ["CASE_ID", "STATUS"]
+        assert len(result) == 2
+
+    def test_nb00_bridge_saved_makes_resolution_available(self, namespace):
+        """Simulates NB00 saving a bridge dataset to landing, then NB01
+        resolving a dependent dataset — the full landing-time flow."""
+        # NB00: save bridge to landing (raw data with entity column)
+        bridge_df = pd.DataFrame({
+            "OPPORTUNITY_ID": [10, 20, 30],
+            "ACCOUNT_ID": ["A1", "A2", "A3"],
+            "OPP_NAME": ["Deal1", "Deal2", "Deal3"],
+        })
+        save_active_dataset(namespace, "opportunities_bridge", bridge_df)
+
+        # NB01: dependent dataset lacks entity column
+        source_df = pd.DataFrame({
+            "OPPORTUNITY_ID": [10, 20, 30],
+            "ONE_TIME_FEES": [100, 200, 300],
+            "CREATED_DATE": ["2024-01-01", "2024-02-01", "2024-03-01"],
+        })
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="opportunities_bridge",
+                source_key="OPPORTUNITY_ID",
+                bridge_key="OPPORTUNITY_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        result = resolve_single_dataset_keys(source_df, steps, namespace)
+        assert "ACCOUNT_ID" in result.columns
+        assert list(result["ACCOUNT_ID"]) == ["A1", "A2", "A3"]
+        # Original columns preserved
+        assert "OPPORTUNITY_ID" in result.columns
+        assert "ONE_TIME_FEES" in result.columns
+
     def test_idempotent_when_already_resolved(self, namespace):
         bridge_df = pd.DataFrame({"CASE_ID": [1, 2], "ACCOUNT_ID": ["A1", "A2"]})
         save_active_dataset(namespace, "case", bridge_df)
