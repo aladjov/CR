@@ -1081,7 +1081,9 @@ class TestTrainingTemplateDatabricks:
         )
         result = databricks_renderer.render_training(pipeline_config_minimal)
         assert "temporal_column=TIMESTAMP_COLUMN" in result
-        assert "feature_timestamp" not in result
+        splitter_section = result[result.index("DataSplitter("):]
+        splitter_section = splitter_section[:splitter_section.index(")")]
+        assert 'temporal_column="feature_timestamp"' not in splitter_section
 
     def test_databricks_recommended_start_uses_timestamp_column(self, databricks_renderer, pipeline_config_minimal):
         pipeline_config_minimal.training = TrainingConfig(

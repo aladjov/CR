@@ -2541,3 +2541,89 @@ class TestDatabricksTrainingVectorSchema:
         smote_section = result[result.index("SMOTE"):]
         assert "createDataFrame(resampled_pdf, schema=" in smote_section or "createDataFrame(resampled_pdf, _vector_schema" in smote_section
         ast.parse(result)
+
+
+class TestDatabricksTrainingInstrumentation:
+    def test_training_imports_timing(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "from customer_retention.core.compat.timing import log_timing" in result
+
+    def test_training_has_assert_rows(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "def _assert_rows" in result
+
+    def test_training_asserts_after_load(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def train_and_evaluate"):]
+        load_pos = fn.index("load_training_data()")
+        assert_pos = fn.index("_assert_rows(")
+        assert load_pos < assert_pos
+
+    def test_training_asserts_after_null_filter(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def train_and_evaluate"):]
+        filter_pos = fn.index("isNotNull")
+        remaining = fn[filter_pos:]
+        assert "_assert_rows(" in remaining
+
+    def test_training_logs_label_distribution(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert 'groupBy("label")' in result
+        assert "Label distribution" in result
+
+    def test_training_checks_null_features_after_conversion(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def train_and_evaluate"):]
+        assert "isNull" in fn
+        assert "null feature vectors" in fn
+
+    def test_training_per_model_timing(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "log_timing" in result
+        fn = result[result.index("for name, model in"):]
+        assert "log_timing" in fn
+
+    def test_training_timing_around_load(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert 'log_timing("load_gold_table"' in result
+
+    def test_training_timing_around_split(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert 'log_timing("temporal_split"' in result
+
+    def test_training_timing_around_prepare(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert 'log_timing("prepare_features"' in result
+
+    def test_training_logs_split_info(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "split_info" in result
+
+    def test_training_is_valid_python(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        ast.parse(result)
+
+
+class TestDatabricksTrainingFeatureTypeParity:
+    def test_training_includes_boolean_in_feature_types(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert '"boolean"' in result
+
+    def test_training_includes_byte_in_feature_types(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert '"byte"' in result
+
+    def test_training_excludes_temporal_metadata_columns(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert '"as_of_date"' in result
+        assert '"feature_timestamp"' in result
+
+    def test_training_checks_minimum_two_classes(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "Need at least 2" in result
+
+    def test_training_feature_types_used_in_prepare_features(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        prepare_fn = result[result.index("def prepare_features"):]
+        assert "_NUMERIC_TYPES" in prepare_fn
+        assert "_EXCLUDE_COLS" in prepare_fn

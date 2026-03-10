@@ -1311,6 +1311,7 @@ display(result)
 
 # COMMAND ----------
 
+import logging
 import mlflow
 import mlflow.spark
 from pyspark.ml.classification import LogisticRegression, RandomForestClassifier, GBTClassifier
@@ -1320,6 +1321,7 @@ from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClass
 from pyspark.sql import functions as F
 from pyspark.sql.types import StructType, StructField, DoubleType
 from customer_retention.stages.modeling.data_splitter import DataSplitter, SplitStrategy
+from customer_retention.core.compat.timing import log_timing
 {% if config.training and config.training.imbalance_strategy == "smote" %}
 from imblearn.over_sampling import SMOTE
 {% endif %}
@@ -1330,23 +1332,34 @@ from imblearn.over_sampling import SMOTE
 
 # COMMAND ----------
 
+logger = logging.getLogger("training")
+
 TARGET = TARGET_COLUMN
+_NUMERIC_TYPES = ("double", "float", "integer", "long", "short", "boolean", "byte", "decimal")
+_EXCLUDE_COLS = {TARGET, TIMESTAMP_COLUMN, "entity_id", "as_of_date", "feature_timestamp", "label_timestamp", "label_available_flag"}
 _vector_schema = StructType([
     StructField("features", VectorUDT(), True),
     StructField("label", DoubleType(), True),
 ])
+
+def _assert_rows(count, stage):
+    if count == 0:
+        raise ValueError(f"[TRAINING] {stage}: 0 rows remaining — cannot proceed")
+    return count
 
 def load_training_data():
     return spark.table(gold_table())
 
 def prepare_features(df):
     exclude_prefixes = ["original_"]
-    exclude_cols = {TARGET, TIMESTAMP_COLUMN, "entity_id"}
     feature_cols = [
         c for c in df.columns
-        if c not in exclude_cols and not any(c.startswith(p) for p in exclude_prefixes)
-        and df.schema[c].dataType.typeName() in ("double", "float", "integer", "long", "short")
+        if c not in _EXCLUDE_COLS and not any(c.startswith(p) for p in exclude_prefixes)
+        and df.schema[c].dataType.typeName() in _NUMERIC_TYPES
     ]
+    if not feature_cols:
+        col_types = {c: df.schema[c].dataType.typeName() for c in df.columns}
+        raise ValueError(f"[TRAINING] No numeric feature columns found. Column types: {col_types}")
     df = df.fillna(0, subset=feature_cols)
     assembler = VectorAssembler(inputCols=feature_cols, outputCol="features", handleInvalid="error")
     keep = ["features", F.col(TARGET).alias("label")]
@@ -1356,34 +1369,72 @@ def prepare_features(df):
     return assembled, feature_cols
 
 def train_and_evaluate():
-    df = load_training_data()
+    with log_timing("load_gold_table", logger):
+        df = load_training_data()
+    raw_count = _assert_rows(df.count(), "gold_table")
+    col_types = {}
+    for field in df.schema.fields:
+        col_types.setdefault(field.dataType.typeName(), []).append(field.name)
+    type_summary = {t: len(cols) for t, cols in sorted(col_types.items())}
+    print(f"[TRAINING] Gold table: {raw_count:,} rows, {len(df.columns)} columns")
+    print(f"[TRAINING] Column types: {type_summary}")
+
 {% if config.training and config.training.recommended_training_start %}
     if TIMESTAMP_COLUMN in df.columns:
         df = df.filter(F.col(TIMESTAMP_COLUMN) >= F.lit("{{ config.training.recommended_training_start }}"))
+        after_start = df.count()
+        print(f"[TRAINING] After training_start filter: {after_start:,} rows (dropped {raw_count - after_start:,})")
+        _assert_rows(after_start, "after training_start filter")
 {% endif %}
 {% if config.training and config.training.filter_future_dates %}
     if TIMESTAMP_COLUMN in df.columns:
         df = df.filter(F.col(TIMESTAMP_COLUMN) <= F.current_timestamp())
 {% endif %}
     df = df.filter(F.col(TARGET).isNotNull())
-    assembled, feature_cols = prepare_features(df)
-    pdf = assembled.toPandas()
-    splitter = DataSplitter(
-        target_column="label",
-        strategy=SplitStrategy.TEMPORAL,
-        temporal_column=TIMESTAMP_COLUMN,
+    filtered_count = _assert_rows(df.count(), "after_null_label_filter")
+    print(f"[TRAINING] After null-label filter: {filtered_count:,} rows")
+
+    with log_timing("prepare_features", logger):
+        assembled, feature_cols = prepare_features(df)
+    assembled_count = _assert_rows(assembled.count(), "after_assembly")
+    print(f"[TRAINING] Assembled: {assembled_count:,} rows, {len(feature_cols)} features")
+
+    with log_timing("to_pandas", logger, rows=assembled_count):
+        pdf = assembled.toPandas()
+
+    with log_timing("temporal_split", logger):
+        splitter = DataSplitter(
+            target_column="label",
+            strategy=SplitStrategy.TEMPORAL,
+            temporal_column=TIMESTAMP_COLUMN,
 {% if config.training and config.training.purge_gap_days %}
-        purge_gap_days={{ config.training.purge_gap_days }},
+            purge_gap_days={{ config.training.purge_gap_days }},
 {% endif %}
-        test_size={{ config.training.test_size if config.training else 0.2 }},
-    )
-    splits = splitter.split(pdf)
-    train_pdf = splits.X_train[["features"]].copy()
-    train_pdf["label"] = splits.y_train.values
-    test_pdf = splits.X_test[["features"]].copy()
-    test_pdf["label"] = splits.y_test.values
-    train_df = spark.createDataFrame(train_pdf, schema=_vector_schema)
-    test_df = spark.createDataFrame(test_pdf, schema=_vector_schema)
+            test_size={{ config.training.test_size if config.training else 0.2 }},
+        )
+        splits = splitter.split(pdf)
+    _assert_rows(len(splits.X_train), "train_set_after_split")
+    _assert_rows(len(splits.X_test), "test_set_after_split")
+    print(f"[TRAINING] Split: train={len(splits.X_train):,}, test={len(splits.X_test):,}")
+    print(f"[TRAINING] Split info: {splits.split_info}")
+
+    with log_timing("create_spark_dataframes", logger):
+        train_pdf = splits.X_train[["features"]].copy()
+        train_pdf["label"] = splits.y_train.values
+        test_pdf = splits.X_test[["features"]].copy()
+        test_pdf["label"] = splits.y_test.values
+        train_df = spark.createDataFrame(train_pdf, schema=_vector_schema)
+        test_df = spark.createDataFrame(test_pdf, schema=_vector_schema)
+
+    train_count = _assert_rows(train_df.count(), "spark_train_df")
+    null_features = train_df.filter(F.col("features").isNull()).count()
+    if null_features > 0:
+        raise ValueError(f"[TRAINING] {null_features} null feature vectors after Spark conversion")
+
+    label_dist = {float(row["label"]): row["count"] for row in train_df.groupBy("label").count().collect()}
+    print(f"[TRAINING] Label distribution: {label_dist}")
+    if len(label_dist) < 2:
+        raise ValueError(f"[TRAINING] Only {len(label_dist)} class(es) — Need at least 2 for binary classification")
 
     mlflow.set_experiment(f"/Shared/{PIPELINE_NAME}")
     mlflow.set_tag("composite_name", COMPOSITE_NAME)
@@ -1426,10 +1477,12 @@ def train_and_evaluate():
 
     for name, model in models.items():
         with mlflow.start_run(run_name=name, nested=True):
-            fitted = model.fit(train_df)
+            with log_timing(f"fit_{name}", logger, train_rows=train_count):
+                fitted = model.fit(train_df)
             predictions = fitted.transform(test_df)
             auc = binary_eval.evaluate(predictions)
             f1 = multi_eval.evaluate(predictions)
+            print(f"[TRAINING] {name}: AUC={auc:.4f}, F1={f1:.4f}")
             mlflow.log_param("model_type", name)
             mlflow.log_param("num_features", len(feature_cols))
             mlflow.spark.log_model(fitted, f"model_{name}")
