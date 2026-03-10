@@ -304,6 +304,12 @@ class TestCodeRendererSilver:
         assert "create_holdout_mask" in result
         assert "holdout_fraction" in result
 
+    def test_render_silver_holdout_samples_entities_not_rows(self, renderer, sample_pipeline_config):
+        result = renderer.render_silver(sample_pipeline_config)
+        assert "entity_ids" in result
+        assert 'entity_ids = df["entity_id"].drop_duplicates()' in result
+        assert "df.sample(n=n_holdout" not in result
+
 
 class TestCodeRendererGold:
     def test_render_gold_with_encodings_and_scalings(self, renderer, sample_pipeline_config):

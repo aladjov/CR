@@ -573,6 +573,11 @@ class TestDatabricksSilverHoldout:
         result = renderer.render_silver(sample_pipeline_config)
         ast.parse(result)
 
+    def test_silver_holdout_samples_entities_not_rows(self, renderer, sample_pipeline_config):
+        result = renderer.render_silver(sample_pipeline_config)
+        assert 'df.select("entity_id").distinct().sample(' in result
+        assert "holdout_df = df.sample(" not in result
+
 
 class TestDatabricksRenderSilver:
     def test_render_silver_returns_string(self, renderer, sample_pipeline_config):

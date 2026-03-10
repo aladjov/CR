@@ -1075,10 +1075,10 @@ def create_holdout_mask(df, holdout_fraction=0.1, random_state=42):
         return df
     if TARGET_COLUMN not in [f.name for f in df.schema.fields]:
         return df
-    total = df.count()
     frac = min(1.0, max(0.0, holdout_fraction))
-    holdout_df = df.sample(withReplacement=False, fraction=frac, seed=random_state)
-    holdout_ids = holdout_df.select("entity_id").distinct()
+    holdout_ids = df.select("entity_id").distinct().sample(
+        withReplacement=False, fraction=frac, seed=random_state
+    )
     df = df.join(holdout_ids, on="entity_id", how="left_semi").withColumn(
         original_col, F.col(TARGET_COLUMN)
     ).withColumn(
