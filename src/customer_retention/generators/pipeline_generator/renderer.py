@@ -972,13 +972,13 @@ import mlflow.xgboost
 import xgboost as xgb
 from pathlib import Path
 from feast import FeatureStore
-from sklearn.model_selection import cross_val_score
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score,
                              precision_score, recall_score, accuracy_score)
 from customer_retention.stages.modeling.data_splitter import DataSplitter, SplitStrategy
+from customer_retention.stages.modeling.cross_validator import CrossValidator, CVStrategy
 from customer_retention.stages.modeling.feature_profile import FeatureProfile, ColumnProfile, build_feature_profile, compare_feature_profiles
 from customer_retention.core.compat.timing import log_timing
 {% if config.training and config.training.imbalance_strategy == "smote" %}
@@ -1109,6 +1109,10 @@ def train_xgboost(X_train, y_train, X_test, y_test, feature_names):
     return model
 
 
+def _on_fold(detail, fold_num, total_folds):
+    print(f"  CV fold {fold_num}/{total_folds}: roc_auc={detail['score']:.4f} ({detail['elapsed_seconds']:.0f}s)", flush=True)
+
+
 def get_model_name_with_hash(base_name: str) -> str:
     if RECOMMENDATIONS_HASH:
         return f"{base_name}_{RECOMMENDATIONS_HASH}"
@@ -1234,10 +1238,12 @@ def run_experiment():
                 metrics = compute_metrics(y_test, y_proba, y_pred)
                 model_artifact_name = get_model_name_with_hash(f"model_{name}")
                 mlflow.sklearn.log_model(model, model_artifact_name)
-                cv = cross_val_score(model, X_train, y_train, cv=5, scoring="roc_auc")
-                mlflow.log_metrics({**metrics, "cv_mean": cv.mean(), "cv_std": cv.std()})
+                _cv = CrossValidator(strategy=CVStrategy.STRATIFIED_KFOLD, n_splits=5, scoring="roc_auc")
+                _cv_result = _cv.run(model, X_train, y_train, on_fold_complete=_on_fold)
+                print(f"  CV: {_cv_result.cv_mean:.4f} +/- {_cv_result.cv_std:.4f}", flush=True)
+                mlflow.log_metrics({**metrics, "cv_mean": _cv_result.cv_mean, "cv_std": _cv_result.cv_std})
                 log_feature_importance(model, feature_names)
-                print(f"{name}: ROC-AUC={metrics['roc_auc']:.4f}, PR-AUC={metrics['pr_auc']:.4f}, F1={metrics['f1']:.4f}")
+                print(f"{name}: ROC-AUC={metrics['roc_auc']:.4f}, PR-AUC={metrics['pr_auc']:.4f}, F1={metrics['f1']:.4f}", flush=True)
                 if metrics["roc_auc"] > best_auc:
                     best_auc, best_model = metrics["roc_auc"], name
 

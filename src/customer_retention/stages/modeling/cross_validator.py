@@ -110,7 +110,7 @@ class CrossValidator:
         cv_splitter = self._create_cv_splitter(groups, temporal_values)
         fold_details = []
 
-        if self.strategy == CVStrategy.TEMPORAL_ENTITY:
+        if self.strategy == CVStrategy.TEMPORAL_ENTITY or on_fold_complete is not None:
             scores, fold_details = self._run_manual_cv(
                 model, X, y, cv_splitter, groups=groups, on_fold_complete=on_fold_complete,
             )

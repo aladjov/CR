@@ -785,3 +785,65 @@ class TestFoldClassRatioAccuracy:
         )
         assert result.scoring == "f1_weighted"
         assert all(0 <= s <= 1 for s in result.cv_scores)
+
+
+class TestOnFoldCompleteForAllStrategies:
+    """on_fold_complete callback should fire for any strategy, not just TEMPORAL_ENTITY."""
+
+    def test_stratified_kfold_callback_called_per_fold(self, sample_data, sample_model):
+        X, y = sample_data
+        cv = CrossValidator(strategy=CVStrategy.STRATIFIED_KFOLD, n_splits=5, scoring="roc_auc")
+        calls = []
+        result = cv.run(
+            sample_model, X, y,
+            on_fold_complete=lambda detail, fold_num, total_folds: calls.append(
+                (detail, fold_num, total_folds)
+            ),
+        )
+        assert len(calls) == 5
+        assert [c[1] for c in calls] == [1, 2, 3, 4, 5]
+        assert all(c[2] == 5 for c in calls)
+
+    def test_stratified_kfold_callback_has_elapsed_seconds(self, sample_data, sample_model):
+        X, y = sample_data
+        cv = CrossValidator(strategy=CVStrategy.STRATIFIED_KFOLD, n_splits=3, scoring="roc_auc")
+        details = []
+        cv.run(
+            sample_model, X, y,
+            on_fold_complete=lambda detail, fold_num, total_folds: details.append(detail),
+        )
+        for detail in details:
+            assert "elapsed_seconds" in detail
+            assert isinstance(detail["elapsed_seconds"], float)
+            assert detail["elapsed_seconds"] >= 0
+            assert "score" in detail
+            assert 0 <= detail["score"] <= 1
+
+    def test_stratified_kfold_callback_result_matches_no_callback(self, sample_data, sample_model):
+        X, y = sample_data
+        cv = CrossValidator(strategy=CVStrategy.STRATIFIED_KFOLD, n_splits=5, scoring="roc_auc")
+        result_no_cb = cv.run(sample_model, X, y)
+        result_with_cb = cv.run(sample_model, X, y, on_fold_complete=lambda d, f, t: None)
+        assert len(result_no_cb.cv_scores) == len(result_with_cb.cv_scores)
+        assert result_no_cb.scoring == result_with_cb.scoring
+
+    def test_no_callback_uses_original_path(self, sample_data, sample_model):
+        X, y = sample_data
+        cv = CrossValidator(strategy=CVStrategy.STRATIFIED_KFOLD, n_splits=5, scoring="roc_auc")
+        result = cv.run(sample_model, X, y)
+        assert len(result.cv_scores) == 5
+        assert all(0 <= s <= 1 for s in result.cv_scores)
+
+    def test_callback_fold_details_have_train_test_sizes(self, sample_data, sample_model):
+        X, y = sample_data
+        cv = CrossValidator(strategy=CVStrategy.STRATIFIED_KFOLD, n_splits=3, scoring="roc_auc")
+        details = []
+        cv.run(
+            sample_model, X, y,
+            on_fold_complete=lambda detail, fold_num, total_folds: details.append(detail),
+        )
+        for detail in details:
+            assert "train_size" in detail
+            assert "test_size" in detail
+            assert detail["train_size"] > 0
+            assert detail["test_size"] > 0

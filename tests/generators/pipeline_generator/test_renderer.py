@@ -367,3 +367,28 @@ class TestRenderTrainingDropAsOfDate:
     def test_training_is_valid_python(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
         ast.parse(result)
+
+
+class TestRenderTrainingCVProgress:
+    def test_training_imports_cross_validator(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "CrossValidator" in result
+        assert "CVStrategy" in result
+
+    def test_training_has_on_fold_callback(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "on_fold_complete" in result
+        assert "_on_fold" in result
+
+    def test_training_no_cross_val_score_import(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "from sklearn.model_selection import cross_val_score" not in result
+
+    def test_training_shows_per_fold_progress(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "CV fold" in result
+
+    def test_training_shows_cv_summary(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "cv_mean" in result
+        assert "cv_std" in result
