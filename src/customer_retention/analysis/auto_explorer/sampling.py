@@ -8,7 +8,9 @@ from customer_retention.core.compat import (
     as_spark_df,
     concat,
     head_as_list,
+    is_numeric_dtype,
     pd,
+    qcut,
     safe_isin,
     safe_query,
     safe_sample,
@@ -215,9 +217,9 @@ def stratified_entity_sample(
         if col not in deduped.columns:
             continue
         series = deduped[col]
-        if pd.api.types.is_numeric_dtype(series):
+        if is_numeric_dtype(series):
             try:
-                binned = pd.qcut(series, q=4, labels=False, duplicates="drop").astype(str)
+                binned = qcut(series, q=4, labels=False, duplicates="drop").astype(str)
             except (ValueError, TypeError):
                 binned = series.astype(str)
             strat_parts.append(binned)
