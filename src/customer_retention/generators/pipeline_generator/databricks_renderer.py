@@ -1315,8 +1315,10 @@ import mlflow
 import mlflow.spark
 from pyspark.ml.classification import LogisticRegression, RandomForestClassifier, GBTClassifier
 from pyspark.ml.feature import VectorAssembler
+from pyspark.ml.linalg import VectorUDT
 from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
 from pyspark.sql import functions as F
+from pyspark.sql.types import StructType, StructField, DoubleType
 from customer_retention.stages.modeling.data_splitter import DataSplitter, SplitStrategy
 {% if config.training and config.training.imbalance_strategy == "smote" %}
 from imblearn.over_sampling import SMOTE
@@ -1329,6 +1331,10 @@ from imblearn.over_sampling import SMOTE
 # COMMAND ----------
 
 TARGET = TARGET_COLUMN
+_vector_schema = StructType([
+    StructField("features", VectorUDT(), True),
+    StructField("label", DoubleType(), True),
+])
 
 def load_training_data():
     return spark.table(gold_table())
@@ -1358,6 +1364,7 @@ def train_and_evaluate():
     if TIMESTAMP_COLUMN in df.columns:
         df = df.filter(F.col(TIMESTAMP_COLUMN) <= F.current_timestamp())
 {% endif %}
+    df = df.filter(F.col(TARGET).isNotNull())
     assembled, feature_cols = prepare_features(df)
     pdf = assembled.toPandas()
     splitter = DataSplitter(
@@ -1374,8 +1381,8 @@ def train_and_evaluate():
     train_pdf["label"] = splits.y_train.values
     test_pdf = splits.X_test[["features"]].copy()
     test_pdf["label"] = splits.y_test.values
-    train_df = spark.createDataFrame(train_pdf)
-    test_df = spark.createDataFrame(test_pdf)
+    train_df = spark.createDataFrame(train_pdf, schema=_vector_schema)
+    test_df = spark.createDataFrame(test_pdf, schema=_vector_schema)
 
     mlflow.set_experiment(f"/Shared/{PIPELINE_NAME}")
     mlflow.set_tag("composite_name", COMPOSITE_NAME)
@@ -1400,7 +1407,7 @@ def train_and_evaluate():
     import pandas as pd
     from pyspark.ml.linalg import Vectors
     resampled_pdf = pd.DataFrame({"features": [Vectors.dense(x) for x in X_resampled], "label": y_resampled})
-    train_df = spark.createDataFrame(resampled_pdf)
+    train_df = spark.createDataFrame(resampled_pdf, schema=_vector_schema)
 {% endif %}
 
 {% set weight_param = ', weightCol="class_weight"' if config.training and config.training.imbalance_strategy == "class_weight" else '' %}

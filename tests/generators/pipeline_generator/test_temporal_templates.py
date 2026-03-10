@@ -354,6 +354,24 @@ class TestTrainingTemporalSplitEnforcement:
         training_template = DATABRICKS_TEMPLATES["databricks_training.py.j2"]
         assert "SplitStrategy.TEMPORAL" in training_template
 
+    def test_local_training_filters_null_labels(self):
+        from customer_retention.generators.pipeline_generator.renderer import TEMPLATES
+
+        training_template = TEMPLATES["training.py.j2"]
+        assert "y.notna()" in training_template
+
+    def test_databricks_training_filters_null_labels(self):
+        from customer_retention.generators.pipeline_generator.databricks_renderer import DATABRICKS_TEMPLATES
+
+        training_template = DATABRICKS_TEMPLATES["databricks_training.py.j2"]
+        assert "isNotNull" in training_template
+
+    def test_databricks_training_uses_explicit_vector_schema(self):
+        from customer_retention.generators.pipeline_generator.databricks_renderer import DATABRICKS_TEMPLATES
+
+        training_template = DATABRICKS_TEMPLATES["databricks_training.py.j2"]
+        assert "VectorUDT" in training_template
+
 
 class TestEntityIdStandardization:
 

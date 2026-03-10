@@ -2475,3 +2475,51 @@ class TestDatabricksTextFeatureFitMode:
         )
         result = renderer.render_bronze("customers", config)
         ast.parse(result)
+
+
+class TestDatabricksTrainingNullLabelFilter:
+    def test_training_filters_null_labels_before_prepare(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        train_fn = result[result.index("def train_and_evaluate"):]
+        filter_pos = train_fn.index("isNotNull")
+        prepare_pos = train_fn.index("prepare_features(df)")
+        assert filter_pos < prepare_pos
+
+    def test_training_null_filter_targets_label_column(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "F.col(TARGET).isNotNull()" in result or "col(TARGET).isNotNull()" in result
+
+    def test_training_null_filter_is_valid_python(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        ast.parse(result)
+
+
+class TestDatabricksTrainingVectorSchema:
+    def test_training_imports_vector_udt(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "VectorUDT" in result
+
+    def test_training_uses_explicit_schema_for_train_df(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "createDataFrame(train_pdf, schema=" in result or "createDataFrame(train_pdf, _vector_schema" in result
+
+    def test_training_uses_explicit_schema_for_test_df(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "createDataFrame(test_pdf, schema=" in result or "createDataFrame(test_pdf, _vector_schema" in result
+
+    def test_training_smote_uses_explicit_schema(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
+        from customer_retention.generators.pipeline_generator.models import TrainingConfig
+        silver = SilverLayerConfig(joins=silver_with_join.joins, aggregations=[])
+        gold = GoldLayerConfig(encodings=gold_with_encode_scale.encodings, scalings=gold_with_encode_scale.scalings)
+        config = PipelineConfig(
+            name="test_pipeline", target_column="churn",
+            sources=[entity_source, event_source],
+            bronze={"customers": bronze_with_impute}, bronze_event={},
+            silver=silver, gold=gold, output_dir="/output",
+            composite_name="test__abc1234",
+            training=TrainingConfig(imbalance_strategy="smote"),
+        )
+        result = renderer.render_training(config)
+        smote_section = result[result.index("SMOTE"):]
+        assert "createDataFrame(resampled_pdf, schema=" in smote_section or "createDataFrame(resampled_pdf, _vector_schema" in smote_section
+        ast.parse(result)

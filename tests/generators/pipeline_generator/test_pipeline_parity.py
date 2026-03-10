@@ -1552,6 +1552,12 @@ class TestTrainingTemplateParity:
         assert local_models, "Local training should reference at least one model"
         assert local_models == db_models, f"Model mismatch: local={local_models}, db={db_models}"
 
+    def test_both_renderers_filter_null_labels(self, pipeline_config_minimal):
+        local_code = CodeRenderer().render_training(pipeline_config_minimal)
+        db_code = DatabricksCodeRenderer(catalog="c", schema="s").render_training(pipeline_config_minimal)
+        assert "notna" in local_code or "isNotNull" in local_code
+        assert "isNotNull" in db_code
+
 
 # ======================================================================
 # Generator Base Tests — shared core stages
