@@ -1,5 +1,6 @@
 import ast
 import re
+from pathlib import Path
 
 import pytest
 import yaml
@@ -1561,6 +1562,33 @@ class TestTrainingTemplateParity:
         assert "notna" in local_code or "isNotNull" in local_code
         assert "isNotNull" in db_code
 
+    def test_both_experiment_names_use_composite_name(self, pipeline_config_minimal):
+        local_code = CodeRenderer().render_training(pipeline_config_minimal)
+        db_code = DatabricksCodeRenderer(catalog="c", schema="s").render_training(pipeline_config_minimal)
+        for code, label in [(local_code, "local"), (db_code, "databricks")]:
+            assert 'f"training_{COMPOSITE_NAME}"' in code, f"{label} experiment name missing COMPOSITE_NAME"
+
+    def test_both_use_parent_run_pattern(self, pipeline_config_minimal):
+        local_code = CodeRenderer().render_training(pipeline_config_minimal)
+        db_code = DatabricksCodeRenderer(catalog="c", schema="s").render_training(pipeline_config_minimal)
+        for code, label in [(local_code, "local"), (db_code, "databricks")]:
+            parent_lines = [line for line in code.splitlines() if "with mlflow.start_run(run_name=" in line and "nested" not in line]
+            assert parent_lines, f"{label} template missing parent mlflow.start_run"
+            nested_lines = [line for line in code.splitlines() if "nested=True" in line]
+            assert nested_lines, f"{label} template missing nested model runs"
+
+    def test_both_tag_composite_name_inside_parent_run(self, pipeline_config_minimal):
+        local_code = CodeRenderer().render_training(pipeline_config_minimal)
+        db_code = DatabricksCodeRenderer(catalog="c", schema="s").render_training(pipeline_config_minimal)
+        for code, label in [(local_code, "local"), (db_code, "databricks")]:
+            assert 'set_tag("composite_name", COMPOSITE_NAME)' in code, f"{label} missing composite_name tag"
+
+    def test_neither_has_standalone_best_model_run(self, pipeline_config_minimal):
+        local_code = CodeRenderer().render_training(pipeline_config_minimal)
+        db_code = DatabricksCodeRenderer(catalog="c", schema="s").render_training(pipeline_config_minimal)
+        assert 'start_run(run_name="best_model")' not in db_code
+        assert 'start_run(run_name="best_model")' not in local_code
+
 
 # ======================================================================
 # Generator Base Tests — shared core stages
@@ -1704,9 +1732,49 @@ class TestLocalTrainingFeatureProfile:
         result = renderer.render_training(pipeline_config_minimal)
         ast.parse(result)
 
+    def test_local_training_experiment_uses_composite_name(self, renderer, pipeline_config_minimal):
+        result = renderer.render_training(pipeline_config_minimal)
+        assert 'f"training_{COMPOSITE_NAME}"' in result
+
+    def test_local_training_parent_run_uses_composite_name(self, renderer, pipeline_config_minimal):
+        result = renderer.render_training(pipeline_config_minimal)
+        assert 'f"training_{COMPOSITE_NAME}"' in result
+        parent_lines = [line for line in result.splitlines() if "with mlflow.start_run(run_name=" in line and "nested" not in line]
+        assert parent_lines, "No parent start_run found"
+
     def test_local_training_with_exploration_profile_is_valid_python(self, renderer, pipeline_config_minimal):
         pipeline_config_minimal.training = TrainingConfig(
             exploration_feature_profile={"stage": "exploration", "created_at": "2024-01-01", "row_count": 100, "feature_count": 2, "target_column": "churn", "features": {"col_a": {"dtype": "double", "non_null": 90, "null_count": 10}}, "excluded": {}},
         )
         result = renderer.render_training(pipeline_config_minimal)
         ast.parse(result)
+
+
+class TestExplorationFeatureProfileSaved:
+    NB08_PATH = Path(__file__).parent.parent.parent.parent / "exploration_notebooks" / "08_baseline_experiments.ipynb"
+
+    def test_nb08_saves_exploration_feature_profile(self):
+        import json
+        nb = json.loads(self.NB08_PATH.read_text())
+        all_source = "\n".join("".join(cell["source"]) for cell in nb["cells"] if cell["cell_type"] == "code")
+        assert "build_feature_profile(" in all_source
+        assert "exploration_feature_profile_path" in all_source
+
+    def test_nb08_profile_uses_namespace_path(self):
+        import json
+        nb = json.loads(self.NB08_PATH.read_text())
+        all_source = "\n".join("".join(cell["source"]) for cell in nb["cells"] if cell["cell_type"] == "code")
+        assert "_namespace.exploration_feature_profile_path" in all_source
+
+    def test_nb08_profile_guarded_by_skip_and_namespace(self):
+        import json
+        nb = json.loads(self.NB08_PATH.read_text())
+        profile_cell = None
+        for cell in nb["cells"]:
+            source = "".join(cell["source"])
+            if "exploration_feature_profile_path" in source:
+                profile_cell = source
+                break
+        assert profile_cell is not None
+        assert "_skip_modeling" in profile_cell
+        assert "_namespace" in profile_cell

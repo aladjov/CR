@@ -1469,8 +1469,7 @@ def train_and_evaluate():
     if len(label_dist) < 2:
         raise ValueError(f"[TRAINING] Only {len(label_dist)} class(es) — Need at least 2 for binary classification")
 
-    mlflow.set_experiment(f"/Shared/{PIPELINE_NAME}")
-    mlflow.set_tag("composite_name", COMPOSITE_NAME)
+    mlflow.set_experiment(f"/Shared/training_{COMPOSITE_NAME}")
 
 {% if config.training and config.training.imbalance_strategy == "class_weight" %}
     label_counts = train_df.groupBy("label").count().collect()
@@ -1508,26 +1507,29 @@ def train_and_evaluate():
     binary_eval = BinaryClassificationEvaluator(labelCol="label", metricName="areaUnderROC")
     multi_eval = MulticlassClassificationEvaluator(labelCol="label", metricName="f1")
 
-    for name, model in models.items():
-        with mlflow.start_run(run_name=name, nested=True):
-            with log_timing(f"fit_{name}", logger, train_rows=train_count):
-                fitted = model.fit(train_df)
-            predictions = fitted.transform(test_df)
-            auc = binary_eval.evaluate(predictions)
-            f1 = multi_eval.evaluate(predictions)
-            print(f"[TRAINING] {name}: AUC={auc:.4f}, F1={f1:.4f}")
-            mlflow.log_param("model_type", name)
-            mlflow.log_param("num_features", len(feature_cols))
-            mlflow.spark.log_model(fitted, f"model_{name}")
-            mlflow.log_metric("auc", auc)
-            mlflow.log_metric("f1", f1)
-            if auc > best_auc:
-                best_auc = auc
-                best_model_name = name
-                best_model = fitted
+    with mlflow.start_run(run_name=f"training_{COMPOSITE_NAME}"):
+        mlflow.set_tag("composite_name", COMPOSITE_NAME)
+        mlflow.set_tag("pipeline_name", PIPELINE_NAME)
 
-    with mlflow.start_run(run_name="best_model"):
-        mlflow.log_param("best_model", best_model_name)
+        for name, model in models.items():
+            with mlflow.start_run(run_name=name, nested=True):
+                with log_timing(f"fit_{name}", logger, train_rows=train_count):
+                    fitted = model.fit(train_df)
+                predictions = fitted.transform(test_df)
+                auc = binary_eval.evaluate(predictions)
+                f1 = multi_eval.evaluate(predictions)
+                print(f"[TRAINING] {name}: AUC={auc:.4f}, F1={f1:.4f}")
+                mlflow.log_param("model_type", name)
+                mlflow.log_param("num_features", len(feature_cols))
+                mlflow.spark.log_model(fitted, f"model_{name}")
+                mlflow.log_metric("auc", auc)
+                mlflow.log_metric("f1", f1)
+                if auc > best_auc:
+                    best_auc = auc
+                    best_model_name = name
+                    best_model = fitted
+
+        mlflow.set_tag("best_model", best_model_name)
         mlflow.log_metric("best_auc", best_auc)
         mlflow.spark.log_model(best_model, "best_model")
 

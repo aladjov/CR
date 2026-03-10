@@ -1121,10 +1121,11 @@ def get_model_name_with_hash(base_name: str) -> str:
 
 def run_experiment():
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-    experiment = mlflow.get_experiment_by_name(PIPELINE_NAME)
+    _experiment_name = f"training_{COMPOSITE_NAME}"
+    experiment = mlflow.get_experiment_by_name(_experiment_name)
     if experiment is None:
-        mlflow.create_experiment(PIPELINE_NAME, artifact_location=MLFLOW_ARTIFACT_ROOT)
-    mlflow.set_experiment(PIPELINE_NAME)
+        mlflow.create_experiment(_experiment_name, artifact_location=MLFLOW_ARTIFACT_ROOT)
+    mlflow.set_experiment(_experiment_name)
     print(f"MLflow tracking: {MLFLOW_TRACKING_URI}")
     print(f"Artifacts: {MLFLOW_ARTIFACT_ROOT}")
 
@@ -1216,12 +1217,13 @@ def run_experiment():
         "random_forest": RandomForestClassifier(n_estimators=100, random_state=42{{ class_weight_param }}),
     }
 
-    run_name = get_model_name_with_hash("pipeline_run")
+    run_name = get_model_name_with_hash(f"training_{COMPOSITE_NAME}")
     with mlflow.start_run(run_name=run_name):
         mlflow.log_params({"train_samples": len(X_train), "test_samples": len(X_test), "n_features": X.shape[1]})
         mlflow.set_tag("feature_source", "feast")
         mlflow.set_tag("feast_feature_view", FEAST_FEATURE_VIEW)
         mlflow.set_tag("composite_name", COMPOSITE_NAME)
+        mlflow.set_tag("pipeline_name", PIPELINE_NAME)
         if RECOMMENDATIONS_HASH:
             mlflow.set_tag("recommendations_hash", RECOMMENDATIONS_HASH)
         best_model, best_auc = None, -1

@@ -2683,3 +2683,42 @@ class TestDatabricksTrainingFeatureProfile:
         )
         result = renderer.render_training(config)
         ast.parse(result)
+
+
+class TestDatabricksTrainingMlflowNesting:
+    def test_parent_run_wraps_nested_model_runs(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        parent_pos = result.find("with mlflow.start_run(run_name=")
+        nested_pos = result.find("nested=True")
+        assert parent_pos > 0, "Parent mlflow.start_run not found"
+        assert nested_pos > parent_pos, "Nested runs should appear after parent run"
+
+    def test_no_set_tag_outside_start_run(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def train_and_evaluate"):]
+        set_tag_pos = fn.find('mlflow.set_tag(')
+        start_run_pos = fn.find('with mlflow.start_run(')
+        assert start_run_pos < set_tag_pos, "set_tag must be inside a start_run context"
+
+    def test_no_standalone_best_model_run(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert 'start_run(run_name="best_model")' not in result
+
+    def test_best_model_logged_to_parent_run(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def train_and_evaluate"):]
+        assert 'mlflow.set_tag("best_model"' in fn
+        assert 'mlflow.log_metric("best_auc"' in fn
+
+    def test_experiment_name_uses_composite_name(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "COMPOSITE_NAME" in result.split("set_experiment")[1].split(")")[0]
+
+    def test_parent_run_name_uses_composite_name(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        parent_line = [line for line in result.splitlines() if "with mlflow.start_run(run_name=" in line and "nested" not in line][0]
+        assert "COMPOSITE_NAME" in parent_line
+
+    def test_pipeline_name_tagged(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert 'mlflow.set_tag("pipeline_name", PIPELINE_NAME)' in result
