@@ -421,6 +421,36 @@ class TestDatabricksInitConfigPersistence:
         assert data["catalog"] == "churnkit"
         assert data["schema"] == "analysis"
 
+    def test_persists_experiment_name_to_workspace(self, monkeypatch, databricks_env, tmp_path):
+        config_file = tmp_path / ".churnkit_config.json"
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        databricks_init(
+            experiment_name="my_exp", workspace_path="Users/me/proj", copy_notebooks=False,
+        )
+        data = json.loads(config_file.read_text())
+        assert data["experiment_name"] == "/Users/me/proj/my_exp"
+
+    def test_persisted_experiment_name_survives_for_subsequent_import(self, monkeypatch, databricks_env, tmp_path):
+        config_file = tmp_path / ".churnkit_config.json"
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        databricks_init(
+            experiment_name="my_exp", workspace_path="Users/me/proj", copy_notebooks=False,
+        )
+        monkeypatch.delenv("CR_EXPERIMENT_NAME", raising=False)
+        from customer_retention.core.config.experiments import get_experiment_name
+
+        assert get_experiment_name() == "/Users/me/proj/my_exp"
+
     def test_persisted_config_survives_for_subsequent_import(self, monkeypatch, databricks_env, tmp_path):
         config_file = tmp_path / ".churnkit_config.json"
         monkeypatch.setattr(

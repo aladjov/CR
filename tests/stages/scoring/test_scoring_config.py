@@ -167,6 +167,33 @@ class TestFromDatabricks:
         assert config.pipeline_name == "customer_churn"
         assert config.target_column == "churned"
 
+    def test_from_databricks_finds_experiment_via_persisted_config(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
+        monkeypatch.delenv("CR_EXPERIMENT_NAME", raising=False)
+        monkeypatch.setenv("CR_CATALOG", "analytics")
+        monkeypatch.setenv("CR_SCHEMA", "churn")
+        monkeypatch.setenv("CR_EXPERIMENTS_DIR", "/Volumes/analytics/churn/experiments")
+        monkeypatch.setenv("CR_WORKSPACE_PATH", "Users/me/project")
+        config_file = tmp_path / ".churnkit_config.json"
+        import json
+        config_file.write_text(json.dumps({"experiment_name": "/Users/me/project/customer_churn"}))
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        client = MagicMock()
+        experiment = MagicMock()
+        experiment.experiment_id = "789"
+        client.get_experiment_by_name.return_value = experiment
+        run = MagicMock()
+        run.data.tags = {"target_column": "churned", "composite_name": "test__abc1234"}
+        run.data.params = {}
+        client.search_runs.return_value = [run]
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=client):
+            config = ScoringConfig.from_databricks()
+        client.get_experiment_by_name.assert_called_with("/Users/me/project/customer_churn")
+        assert config.pipeline_name == "/Users/me/project/customer_churn"
+
     def test_from_databricks_raises_when_no_experiment_anywhere(self, databricks_env):
         client = MagicMock()
         client.get_experiment_by_name.return_value = None

@@ -379,6 +379,29 @@ class TestPersistedDatabricksConfig:
         assert data["catalog"] == "mycat"
         assert data["schema"] == "mysch"
 
+    def test_persist_writes_experiment_name(self, tmp_path, monkeypatch):
+        config_file = tmp_path / ".churnkit_config.json"
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        persist_databricks_config(
+            "/Volumes/c/s/experiments", "c", "s", "Users/me",
+            experiment_name="/Users/me/my_experiment",
+        )
+        data = json.loads(config_file.read_text())
+        assert data["experiment_name"] == "/Users/me/my_experiment"
+
+    def test_persist_omits_experiment_name_when_not_provided(self, tmp_path, monkeypatch):
+        config_file = tmp_path / ".churnkit_config.json"
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        persist_databricks_config("/Volumes/c/s/experiments", "c", "s", "Users/me")
+        data = json.loads(config_file.read_text())
+        assert "experiment_name" not in data
+
     def test_persist_skips_without_workspace_path(self, tmp_path, monkeypatch):
         config_file = tmp_path / ".churnkit_config.json"
         monkeypatch.setattr(

@@ -36,13 +36,17 @@ def _load_persisted_databricks_config() -> dict | None:
     return None
 
 
-def persist_databricks_config(experiments_dir: str, catalog: str, schema: str, workspace_path: str | None = None) -> None:
+def persist_databricks_config(
+    experiments_dir: str, catalog: str, schema: str,
+    workspace_path: str | None = None, experiment_name: str | None = None,
+) -> None:
     if not workspace_path:
         return
+    data: dict = {"experiments_dir": experiments_dir, "catalog": catalog, "schema": schema}
+    if experiment_name:
+        data["experiment_name"] = experiment_name
     try:
-        _workspace_config_path(workspace_path).write_text(json.dumps({
-            "experiments_dir": experiments_dir, "catalog": catalog, "schema": schema,
-        }))
+        _workspace_config_path(workspace_path).write_text(json.dumps(data))
     except OSError:
         pass
 
@@ -106,7 +110,12 @@ def get_workspace_path(default: str | None = None) -> str | None:
 
 
 def get_experiment_name(default: str = "customer_retention") -> str:
-    return os.environ.get("CR_EXPERIMENT_NAME", default)
+    if "CR_EXPERIMENT_NAME" in os.environ:
+        return os.environ["CR_EXPERIMENT_NAME"]
+    persisted = _load_persisted_databricks_config()
+    if persisted and "experiment_name" in persisted:
+        return persisted["experiment_name"]
+    return default
 
 
 EXPERIMENTS_DIR = get_experiments_dir()
