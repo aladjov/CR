@@ -314,6 +314,51 @@ def normalize_timestamps(df: Any) -> Any:
     return _normalize_timestamp_columns(df)
 
 
+def normalize_decimal_columns(df: Any) -> Any:
+    """Cast Decimal-typed columns to float64/double.
+
+    PySpark ``DecimalType`` values are ``decimal.Decimal`` in Python, which
+    cannot be multiplied by ``float``.  This causes failures in numpy
+    quantile / percentile operations.  Call at profiling entry points.
+    """
+    if _is_spark_pandas(df):
+        return _normalize_decimal_distributed(df)
+    return _normalize_decimal_pandas(df)
+
+
+def _normalize_decimal_pandas(df: _pandas.DataFrame) -> _pandas.DataFrame:
+    import decimal as _decimal
+
+    for col in df.columns:
+        if df[col].dtype == "object":
+            non_null = df[col].dropna()
+            if len(non_null) > 0 and isinstance(non_null.iloc[0], _decimal.Decimal):
+                df = df.copy()
+                df[col] = _pandas.to_numeric(df[col], errors="coerce")
+    return df
+
+
+def _normalize_decimal_distributed(df: Any) -> Any:
+    from pyspark.sql.types import DecimalType
+
+    spark_df = as_spark_df(df)
+    decimal_cols = {
+        f.name for f in spark_df.schema.fields
+        if isinstance(f.dataType, DecimalType)
+    }
+    if not decimal_cols:
+        return df
+    from pyspark.sql.functions import col as spark_col
+    casts = [
+        spark_col(f.name).cast("double").alias(f.name)
+        if f.name in decimal_cols
+        else spark_col(f.name)
+        for f in spark_df.schema.fields
+    ]
+    from .spark_backend import _as_pandas_api
+    return _as_pandas_api(spark_df.select(casts))
+
+
 def clamp_distributed_timestamps(df: Any) -> Any:
     """Null out extreme timestamp values in a pyspark.pandas DataFrame.
 
@@ -1170,6 +1215,7 @@ __all__ = [
     "ensure_timestamp",
     "_normalize_timestamp_columns",
     "clamp_distributed_timestamps",
+    "normalize_decimal_columns",
     "sanitize_spark_timestamps",
     "strip_spark_timestamp_tz",
     "pandas_dtype_to_spark_schema",

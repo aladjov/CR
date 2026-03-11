@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, pd
+from customer_retention.core.compat import DataFrame, normalize_decimal_columns, pd
 from customer_retention.stages.cleaning.outlier_handler import OutlierDetectionMethod, OutlierHandler, OutlierResult
 
 from .segment_analyzer import SegmentAnalyzer, SegmentationResult
@@ -60,6 +60,8 @@ class SegmentAwareOutlierAnalyzer:
         valid_cols = [c for c in feature_cols if c in df.columns]
         if not valid_cols:
             return self._empty_result(feature_cols)
+
+        df = normalize_decimal_columns(df)
 
         global_analysis = self._analyze_global(df, valid_cols)
 

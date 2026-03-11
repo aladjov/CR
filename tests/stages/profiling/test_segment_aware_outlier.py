@@ -1,4 +1,6 @@
 """Tests for SegmentAwareOutlierAnalyzer."""
+import decimal
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -290,6 +292,30 @@ class TestEdgeCases:
         analyzer = SegmentAwareOutlierAnalyzer()
         result = analyzer.analyze(df, feature_cols=['value'], target_col='target')
         assert result.n_segments >= 1
+
+
+class TestDecimalColumnHandling:
+    def test_decimal_columns_do_not_raise(self):
+        """Reproduce Databricks DecimalType failure: decimal.Decimal * float."""
+        np.random.seed(42)
+        values = [decimal.Decimal(str(round(v, 2))) for v in np.random.normal(50, 10, 60)]
+        df = pd.DataFrame({"amount": values})
+        analyzer = SegmentAwareOutlierAnalyzer()
+        result = analyzer.analyze(df, feature_cols=["amount"])
+        assert "amount" in result.global_analysis
+        assert result.global_analysis["amount"].outliers_detected >= 0
+
+    def test_mixed_decimal_and_float_columns(self):
+        np.random.seed(42)
+        dec_values = [decimal.Decimal(str(round(v, 2))) for v in np.random.normal(50, 10, 60)]
+        df = pd.DataFrame({
+            "amount": dec_values,
+            "score": np.random.normal(0, 1, 60),
+        })
+        analyzer = SegmentAwareOutlierAnalyzer()
+        result = analyzer.analyze(df, feature_cols=["amount", "score"])
+        assert "amount" in result.global_analysis
+        assert "score" in result.global_analysis
 
 
 class TestVectorizedFalseOutlierIdentification:
