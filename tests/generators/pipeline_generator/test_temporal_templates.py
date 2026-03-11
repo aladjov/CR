@@ -336,11 +336,12 @@ class TestTrainingTemporalSplitEnforcement:
             if "validate_training" in template:
                 assert "random_stratified" not in template, f"Template {key} still references random_stratified"
 
-    def test_databricks_training_always_imports_data_splitter(self):
+    def test_databricks_training_uses_distributed_temporal_split(self):
         from customer_retention.generators.pipeline_generator.databricks_renderer import DATABRICKS_TEMPLATES
 
         training_template = DATABRICKS_TEMPLATES["databricks_training.py.j2"]
-        assert "from customer_retention.stages.modeling.data_splitter import DataSplitter, SplitStrategy" in training_template
+        assert "percentile_approx" in training_template
+        assert "TIMESTAMP_COLUMN" in training_template
 
     def test_databricks_training_never_uses_random_split(self):
         from customer_retention.generators.pipeline_generator.databricks_renderer import DATABRICKS_TEMPLATES
@@ -348,11 +349,12 @@ class TestTrainingTemporalSplitEnforcement:
         training_template = DATABRICKS_TEMPLATES["databricks_training.py.j2"]
         assert "randomSplit" not in training_template
 
-    def test_databricks_training_always_uses_temporal_strategy(self):
+    def test_databricks_training_always_uses_temporal_split(self):
         from customer_retention.generators.pipeline_generator.databricks_renderer import DATABRICKS_TEMPLATES
 
         training_template = DATABRICKS_TEMPLATES["databricks_training.py.j2"]
-        assert "SplitStrategy.TEMPORAL" in training_template
+        assert "_temporal_split" in training_template
+        assert "randomSplit" not in training_template
 
     def test_local_training_filters_null_labels(self):
         from customer_retention.generators.pipeline_generator.renderer import TEMPLATES

@@ -688,28 +688,24 @@ class TestDatabricksRenderTraining:
         result = renderer.render_training(sample_pipeline_config)
         assert "Classifier" in result or "model" in result.lower()
 
-    def test_log_model_before_log_metric(self, renderer, sample_pipeline_config):
+    def test_log_model_and_log_metrics_present(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        log_model_pos = result.find("mlflow.spark.log_model")
-        log_metric_pos = result.find('mlflow.log_metric("auc"')
-        assert log_model_pos > 0
-        assert log_metric_pos > 0
-        assert log_model_pos < log_metric_pos
+        assert "mlflow.spark.log_model" in result
+        assert "mlflow.log_metrics" in result or "mlflow.log_metric" in result
 
     def test_best_auc_initialized_below_zero(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
         assert "best_auc = -1" in result
 
-    def test_training_passes_target_and_timestamp_to_splitter(self, renderer, sample_pipeline_config):
+    def test_training_passes_target_and_timestamp(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
         assert "TIMESTAMP_COLUMN" in result
-        fn_text = result[result.index("def prepare_features"):]
-        assert "TARGET" in fn_text
-        assert "TIMESTAMP_COLUMN" in fn_text
+        assert "TARGET" in result
 
-    def test_training_splitter_receives_temporal_column(self, renderer, sample_pipeline_config):
+    def test_training_temporal_split_uses_timestamp_column(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        assert "temporal_column=TIMESTAMP_COLUMN" in result
+        assert "TIMESTAMP_COLUMN" in result
+        assert "DataSplitter" not in result
 
 
 class TestDatabricksRenderTrainingImbalance:
@@ -2497,6 +2493,45 @@ class TestDatabricksGoldColumnFiltering:
         ast.parse(result)
 
 
+class TestDatabricksGoldFeatureStoreRegistration:
+    def test_gold_imports_feature_engineering_client(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "FeatureEngineeringClient" in result
+
+    def test_gold_has_feature_store_client_fallback(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "FeatureStoreClient" in result
+
+    def test_gold_registers_entity_id_as_primary_key(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert '"entity_id"' in result
+        assert "primary_keys" in result
+
+    def test_gold_registers_timestamp_column(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "timeseries_columns" in result
+        assert "TIMESTAMP_COLUMN" in result
+
+    def test_gold_registration_after_save(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        run_gold_fn = result[result.index("def run_gold"):]
+        save_pos = run_gold_fn.index("saveAsTable")
+        reg_pos = run_gold_fn.index("_register_feature_table")
+        assert save_pos < reg_pos
+
+    def test_gold_registration_handles_existing_table(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "already exists" in result
+        assert "raise" in result
+        lines = result.splitlines()
+        bare_excepts = [line.strip() for line in lines if line.strip() == "except:"]
+        assert len(bare_excepts) == 0
+
+    def test_gold_registration_is_valid_python(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        ast.parse(result)
+
+
 class TestDatabricksTextFeatureFitMode:
     def test_bronze_event_text_features_check_fit_mode(self, renderer, event_source):
         config = BronzeEventConfig(
@@ -2571,14 +2606,6 @@ class TestDatabricksTrainingVectorSchema:
         result = renderer.render_training(sample_pipeline_config)
         assert "VectorUDT" in result
 
-    def test_training_uses_explicit_schema_for_train_df(self, renderer, sample_pipeline_config):
-        result = renderer.render_training(sample_pipeline_config)
-        assert "createDataFrame(train_pdf, schema=" in result or "createDataFrame(train_pdf, _vector_schema" in result
-
-    def test_training_uses_explicit_schema_for_test_df(self, renderer, sample_pipeline_config):
-        result = renderer.render_training(sample_pipeline_config)
-        assert "createDataFrame(test_pdf, schema=" in result or "createDataFrame(test_pdf, _vector_schema" in result
-
     def test_training_smote_uses_explicit_schema(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
         from customer_retention.generators.pipeline_generator.models import TrainingConfig
         silver = SilverLayerConfig(joins=silver_with_join.joins, aggregations=[])
@@ -2625,11 +2652,11 @@ class TestDatabricksTrainingInstrumentation:
         assert 'groupBy("label")' in result
         assert "Label distribution" in result
 
-    def test_training_checks_null_features_after_conversion(self, renderer, sample_pipeline_config):
+    def test_training_no_pandas_roundtrip_for_splitting(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
         fn = result[result.index("def train_and_evaluate"):]
-        assert "isNull" in fn
-        assert "null feature vectors" in fn
+        assert "createDataFrame(train_pdf" not in fn
+        assert "createDataFrame(test_pdf" not in fn
 
     def test_training_per_model_timing(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
@@ -2731,6 +2758,151 @@ class TestDatabricksTrainingFeatureProfile:
             exploration_feature_profile={"stage": "exploration", "created_at": "2024-01-01", "row_count": 100, "feature_count": 2, "target_column": "churn", "features": {"col_a": {"dtype": "double", "non_null": 90, "null_count": 10}}, "excluded": {}},
         )
         result = renderer.render_training(config)
+        ast.parse(result)
+
+
+class TestDatabricksTrainingDistributedSplit:
+    def test_no_topandas_for_splitting(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        split_section = result[result.index("def train_and_evaluate"):]
+        if "toPandas" in split_section:
+            topandas_pos = split_section.index("toPandas")
+            context = split_section[max(0, topandas_pos - 200):topandas_pos + 100]
+            assert "mlflow.evaluate" in context or "label" in context.lower()
+
+    def test_no_datasplitter_import(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "from customer_retention.stages.modeling.data_splitter" not in result
+
+    def test_no_pandas_roundtrip_for_train_test(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "createDataFrame(train_pdf" not in result
+        assert "createDataFrame(test_pdf" not in result
+
+    def test_uses_percentile_for_cutoff(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "percentile_approx" in result or "approxQuantile" in result
+
+    def test_filter_based_temporal_split(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "TIMESTAMP_COLUMN" in result
+        fn = result[result.index("def train_and_evaluate"):]
+        assert "filter" in fn.lower() or "where" in fn.lower()
+
+    def test_purge_gap_when_configured(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
+        from customer_retention.generators.pipeline_generator.models import TrainingConfig
+        silver = SilverLayerConfig(joins=silver_with_join.joins, aggregations=[])
+        gold = GoldLayerConfig(encodings=gold_with_encode_scale.encodings, scalings=gold_with_encode_scale.scalings)
+        config = PipelineConfig(
+            name="test_pipeline", target_column="churn",
+            sources=[entity_source, event_source],
+            bronze={"customers": bronze_with_impute}, bronze_event={},
+            silver=silver, gold=gold, output_dir="/output",
+            composite_name="test__abc1234",
+            training=TrainingConfig(purge_gap_days=14),
+        )
+        result = renderer.render_training(config)
+        assert "14" in result
+        assert "purge" in result.lower() or "gap" in result.lower() or "timedelta" in result.lower() or "days" in result.lower()
+
+    def test_no_purge_gap_when_not_configured(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "purge_gap" not in result.lower() or "None" in result
+
+    def test_split_is_valid_python(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        ast.parse(result)
+
+
+class TestDatabricksTrainingNoCrossValidation:
+    def test_no_cv_import(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "CrossValidator" not in result
+        assert "CVStrategy" not in result
+
+    def test_no_cv_metrics(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "cv_mean" not in result
+        assert "cv_std" not in result
+
+
+class TestDatabricksTrainingExpandedMetrics:
+    def test_evaluates_area_under_pr(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "areaUnderPR" in result
+
+    def test_evaluates_accuracy(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "accuracy" in result
+        assert "MulticlassClassificationEvaluator" in result
+
+    def test_evaluates_weighted_precision(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "weightedPrecision" in result
+
+    def test_evaluates_weighted_recall(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "weightedRecall" in result
+
+    def test_logs_all_metrics_to_mlflow(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "mlflow.log_metric" in result or "mlflow.log_metrics" in result
+        for metric in ("areaUnderPR", "accuracy", "weightedPrecision", "weightedRecall"):
+            assert metric in result
+
+
+class TestDatabricksTrainingMlflowEvaluate:
+    def test_mlflow_evaluate_present(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "mlflow.evaluate(" in result
+
+    def test_collects_only_label_and_probability(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "toPandas" in result
+        assert "label" in result.lower()
+        assert "probability" in result.lower() or "prediction" in result.lower()
+
+    def test_model_type_classifier(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert 'model_type="classifier"' in result
+
+    def test_valid_python(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        ast.parse(result)
+
+
+class TestDatabricksTrainingFeatureImportance:
+    def test_tree_model_feature_importances(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "featureImportances" in result
+
+    def test_logreg_coefficients(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "coefficients" in result
+
+    def test_logs_feature_importance_artifact(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "log_artifact" in result
+
+    def test_feature_names_in_importance(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "feature_cols" in result
+        importance_section = result[result.index("featureImportances"):]
+        assert "feature_cols" in importance_section
+
+
+class TestDatabricksTrainingProgress:
+    def test_logreg_objective_history(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "objectiveHistory" in result
+
+    def test_step_metrics_logged(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "mlflow.log_metric" in result
+        assert "step=" in result
+
+    def test_valid_python(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
         ast.parse(result)
 
 

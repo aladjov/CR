@@ -1290,6 +1290,27 @@ def apply_feature_selection(df):
 
 # COMMAND ----------
 
+def _register_feature_table(table_name, df):
+    try:
+        from databricks.feature_engineering import FeatureEngineeringClient
+        fe = FeatureEngineeringClient()
+    except ImportError:
+        from databricks.feature_store import FeatureStoreClient
+        fe = FeatureStoreClient()
+    pk = ["entity_id"]
+    ts_cols = [TIMESTAMP_COLUMN] if TIMESTAMP_COLUMN in [f.name for f in df.schema.fields] else []
+    kwargs = {"name": table_name, "primary_keys": pk, "df": df}
+    if ts_cols:
+        kwargs["timeseries_columns"] = ts_cols
+    try:
+        fe.create_table(**kwargs)
+        print(f"[GOLD] Registered feature table: {table_name}")
+    except Exception as e:
+        if "already exists" in str(e).lower():
+            print(f"[GOLD] Feature table {table_name} already registered")
+        else:
+            raise
+
 def run_gold():
     df = spark.table(silver_table())
     df = apply_transformations(df)
@@ -1308,6 +1329,7 @@ def run_gold():
         DeltaTable.forName(spark, output_table).optimize().executeZOrderBy(_z_cols)
     else:
         DeltaTable.forName(spark, output_table).optimize().executeCompaction()
+    _register_feature_table(output_table, df)
     return df
 
 result = run_gold()
@@ -1322,6 +1344,8 @@ dbutils.notebook.exit(_summary)
 # COMMAND ----------
 
 import logging
+import tempfile
+import csv
 import mlflow
 import mlflow.spark
 from pyspark.ml.classification import LogisticRegression, RandomForestClassifier, GBTClassifier
@@ -1330,7 +1354,6 @@ from pyspark.ml.linalg import VectorUDT
 from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
 from pyspark.sql import functions as F
 from pyspark.sql.types import StructType, StructField, DoubleType
-from customer_retention.stages.modeling.data_splitter import DataSplitter, SplitStrategy
 from customer_retention.stages.modeling.feature_profile import FeatureProfile, ColumnProfile, build_feature_profile, compare_feature_profiles
 from customer_retention.core.compat.timing import log_timing
 {% if config.training and config.training.imbalance_strategy == "smote" %}
@@ -1383,6 +1406,76 @@ def prepare_features(df):
         keep.append(TIMESTAMP_COLUMN)
     assembled = assembler.transform(df).select(*keep)
     return assembled, feature_cols
+
+def _temporal_split(assembled, test_size):
+    cutoff_ts = assembled.select(
+        F.percentile_approx(F.unix_timestamp(F.col(TIMESTAMP_COLUMN)), 1.0 - test_size).alias("cutoff")
+    ).collect()[0]["cutoff"]
+    import datetime
+    cutoff_date = datetime.datetime.fromtimestamp(cutoff_ts)
+{% if config.training and config.training.purge_gap_days %}
+    purge_gap_days = {{ config.training.purge_gap_days }}
+    train_df = assembled.filter(F.col(TIMESTAMP_COLUMN) < F.date_sub(F.lit(cutoff_date), purge_gap_days))
+{% else %}
+    train_df = assembled.filter(F.col(TIMESTAMP_COLUMN) < F.lit(cutoff_date))
+{% endif %}
+    test_df = assembled.filter(F.col(TIMESTAMP_COLUMN) >= F.lit(cutoff_date))
+    return train_df, test_df, cutoff_date
+
+def _extract_feature_importance(fitted, feature_cols):
+    if hasattr(fitted, "featureImportances"):
+        importances = fitted.featureImportances.toArray()
+    elif hasattr(fitted, "coefficients"):
+        importances = [abs(v) for v in fitted.coefficients.toArray()]
+    else:
+        return None
+    return sorted(zip(feature_cols, importances), key=lambda x: x[1], reverse=True)
+
+def _log_feature_importance(fitted, feature_cols):
+    pairs = _extract_feature_importance(fitted, feature_cols)
+    if pairs is None:
+        return
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+        writer = csv.writer(f)
+        writer.writerow(["feature", "importance"])
+        writer.writerows(pairs)
+        tmp_path = f.name
+    mlflow.log_artifact(tmp_path, "feature_importance")
+
+def _log_training_progress(fitted, name):
+    if hasattr(fitted, "summary") and hasattr(fitted.summary, "objectiveHistory"):
+        for step, loss in enumerate(fitted.summary.objectiveHistory):
+            mlflow.log_metric(f"{name}_loss", loss, step=step)
+
+def _evaluate_model(predictions):
+    roc_eval = BinaryClassificationEvaluator(labelCol="label", metricName="areaUnderROC")
+    pr_eval = BinaryClassificationEvaluator(labelCol="label", metricName="areaUnderPR")
+    acc_eval = MulticlassClassificationEvaluator(labelCol="label", metricName="accuracy")
+    f1_eval = MulticlassClassificationEvaluator(labelCol="label", metricName="f1")
+    prec_eval = MulticlassClassificationEvaluator(labelCol="label", metricName="weightedPrecision")
+    rec_eval = MulticlassClassificationEvaluator(labelCol="label", metricName="weightedRecall")
+    return {
+        "roc_auc": roc_eval.evaluate(predictions),
+        "pr_auc": pr_eval.evaluate(predictions),
+        "accuracy": acc_eval.evaluate(predictions),
+        "f1": f1_eval.evaluate(predictions),
+        "weighted_precision": prec_eval.evaluate(predictions),
+        "weighted_recall": rec_eval.evaluate(predictions),
+    }
+
+def _mlflow_evaluate_predictions(predictions):
+    eval_pdf = predictions.select(
+        F.col("label"),
+        F.col("probability").getItem(1).alias("prob_1"),
+        F.col("prediction"),
+    ).toPandas()
+    mlflow.evaluate(
+        data=eval_pdf,
+        model_type="classifier",
+        targets="label",
+        predictions="prediction",
+        extra_metrics=None,
+    )
 
 def train_and_evaluate():
     with log_timing("load_gold_table", logger):
@@ -1442,37 +1535,13 @@ def train_and_evaluate():
         else:
             print("[TRAINING] WARNING: No exploration feature profile available for comparison")
 
-    with log_timing("to_pandas", logger, rows=assembled_count):
-        pdf = assembled.toPandas()
-
     with log_timing("temporal_split", logger):
-        splitter = DataSplitter(
-            target_column="label",
-            strategy=SplitStrategy.TEMPORAL,
-            temporal_column=TIMESTAMP_COLUMN,
-{% if config.training and config.training.purge_gap_days %}
-            purge_gap_days={{ config.training.purge_gap_days }},
-{% endif %}
-            test_size={{ config.training.test_size if config.training else 0.2 }},
-        )
-        splits = splitter.split(pdf)
-    _assert_rows(len(splits.X_train), "train_set_after_split")
-    _assert_rows(len(splits.X_test), "test_set_after_split")
-    print(f"[TRAINING] Split: train={len(splits.X_train):,}, test={len(splits.X_test):,}")
-    print(f"[TRAINING] Split info: {splits.split_info}")
-
-    with log_timing("create_spark_dataframes", logger):
-        train_pdf = splits.X_train[["features"]].copy()
-        train_pdf["label"] = splits.y_train.values
-        test_pdf = splits.X_test[["features"]].copy()
-        test_pdf["label"] = splits.y_test.values
-        train_df = spark.createDataFrame(train_pdf, schema=_vector_schema)
-        test_df = spark.createDataFrame(test_pdf, schema=_vector_schema)
-
-    train_count = _assert_rows(train_df.count(), "spark_train_df")
-    null_features = train_df.filter(F.col("features").isNull()).count()
-    if null_features > 0:
-        raise ValueError(f"[TRAINING] {null_features} null feature vectors after Spark conversion")
+        train_df, test_df, cutoff_date = _temporal_split(assembled, {{ config.training.test_size if config.training else 0.2 }})
+    train_count = _assert_rows(train_df.count(), "train_set_after_split")
+    test_count = _assert_rows(test_df.count(), "test_set_after_split")
+    print(f"[TRAINING] Split: train={train_count:,}, test={test_count:,}")
+    split_info = {"cutoff_date": str(cutoff_date), "train_count": train_count, "test_count": test_count}
+    print(f"[TRAINING] Split info: {split_info}")
 
     label_dist = {float(row["label"]): row["count"] for row in train_df.groupBy("label").count().collect()}
     print(f"[TRAINING] Label distribution: {label_dist}")
@@ -1514,28 +1583,28 @@ def train_and_evaluate():
     best_model_name = None
     best_auc = -1.0
     best_model = None
-    binary_eval = BinaryClassificationEvaluator(labelCol="label", metricName="areaUnderROC")
-    multi_eval = MulticlassClassificationEvaluator(labelCol="label", metricName="f1")
 
     with mlflow.start_run(run_name=f"training_{COMPOSITE_NAME}"):
         mlflow.set_tag("composite_name", COMPOSITE_NAME)
         mlflow.set_tag("pipeline_name", PIPELINE_NAME)
+        mlflow.log_params({"train_samples": train_count, "test_samples": test_count, "n_features": len(feature_cols)})
 
         for name, model in models.items():
             with mlflow.start_run(run_name=name, nested=True):
                 with log_timing(f"fit_{name}", logger, train_rows=train_count):
                     fitted = model.fit(train_df)
+                _log_training_progress(fitted, name)
                 predictions = fitted.transform(test_df)
-                auc = binary_eval.evaluate(predictions)
-                f1 = multi_eval.evaluate(predictions)
-                print(f"[TRAINING] {name}: AUC={auc:.4f}, F1={f1:.4f}")
+                metrics = _evaluate_model(predictions)
+                print(f"[TRAINING] {name}: AUC={metrics['roc_auc']:.4f}, PR-AUC={metrics['pr_auc']:.4f}, F1={metrics['f1']:.4f}")
                 mlflow.log_param("model_type", name)
                 mlflow.log_param("num_features", len(feature_cols))
                 mlflow.spark.log_model(fitted, f"model_{name}")
-                mlflow.log_metric("auc", auc)
-                mlflow.log_metric("f1", f1)
-                if auc > best_auc:
-                    best_auc = auc
+                mlflow.log_metrics(metrics)
+                _log_feature_importance(fitted, feature_cols)
+                _mlflow_evaluate_predictions(predictions)
+                if metrics["roc_auc"] > best_auc:
+                    best_auc = metrics["roc_auc"]
                     best_model_name = name
                     best_model = fitted
 
