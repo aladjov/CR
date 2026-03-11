@@ -1,16 +1,12 @@
-.PHONY: test test-cov test-fast test-verbose test-notebooks test-notebooks-fast clean build clean-build publish publish-test
+.PHONY: test test-cov test-verbose test-notebooks test-notebooks-fast clean build clean-build publish publish-test
 
-# Run tests without coverage enforcement (for TDD/VS Code)
+# Run tests (no coverage — fast, for TDD/VS Code)
 test:
 	pytest tests/
 
-# Run tests with coverage enforcement (for CI/CD)
+# Run tests with coverage enforcement (matches CI/pre-push gate: 75% minimum)
 test-cov:
-	pytest tests/ --cov-fail-under=75
-
-# Run tests without coverage reporting (fastest)
-test-fast:
-	pytest tests/ --no-cov
+	pytest tests/ --cov=src/customer_retention --cov-report=term-missing:skip-covered --cov-report=html --cov-config=.coveragerc --cov-fail-under=75
 
 # Run tests with verbose output
 test-verbose:
@@ -58,7 +54,7 @@ test-notebook:
 
 # Run notebook tests via pytest (slower but integrated with test suite)
 test-notebooks-pytest:
-	pytest tests/test_notebooks.py -v --no-cov
+	pytest tests/test_notebooks.py -v
 
 # ---------- Build & Publish ----------
 
