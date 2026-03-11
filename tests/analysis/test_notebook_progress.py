@@ -512,6 +512,13 @@ class TestResolveConfig:
         cfg = {"emails": [7, 30], "profiles": [90]}
         assert resolve_config(cfg, "emails") == [7, 30]
 
+    def test_target_column_dict_nullifies_non_target_datasets(self):
+        cfg = {"account": "churned"}
+        assert resolve_config(cfg, "account") == "churned"
+        assert resolve_config(cfg, "case") is None
+        assert resolve_config(cfg, "contract") is None
+        assert resolve_config(cfg, "subscription") is None
+
 
 class TestEnsureDatabricksConfigLoaded:
     def test_reloads_config_on_databricks(self, monkeypatch):

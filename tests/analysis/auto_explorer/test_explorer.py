@@ -518,6 +518,87 @@ class TestDataExplorerSaveFindingsEdgeCases:
             assert len(saved_files) == 1
 
 
+class TestTargetColumnSuppressionForNonTargetDatasets:
+    """Verify that auto-detected target columns are suppressed for non-target datasets.
+
+    When a multi-dataset project has a designated target dataset (e.g. "account"),
+    non-target datasets (e.g. "case", "contract") should NOT have a target column,
+    even if their column names match target patterns like "IS_CLOSED" or "CLOSED".
+    """
+
+    def test_auto_detects_target_from_secondary_pattern(self):
+        df = pd.DataFrame({
+            "entity_id": range(50),
+            "IS_CLOSED": np.random.choice([0, 1], 50),
+            "amount": np.random.uniform(10, 100, 50),
+        })
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df)
+        assert findings.target_column == "IS_CLOSED"
+
+    def test_auto_detects_closed_column_as_target(self):
+        df = pd.DataFrame({
+            "entity_id": range(50),
+            "CLOSED": np.random.choice([True, False], 50),
+            "revenue": np.random.uniform(100, 1000, 50),
+        })
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df)
+        assert findings.target_column == "CLOSED"
+
+    def test_no_target_detected_for_generic_columns(self):
+        df = pd.DataFrame({
+            "entity_id": range(50),
+            "revenue": np.random.uniform(100, 1000, 50),
+            "status": np.random.choice(["Active", "Pending", "Expired"], 50),
+        })
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df)
+        assert findings.target_column is None
+
+    def test_clearing_target_column_after_exploration(self):
+        df = pd.DataFrame({
+            "entity_id": range(50),
+            "IS_CLOSED": np.random.choice([0, 1], 50),
+            "amount": np.random.uniform(10, 100, 50),
+        })
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df)
+        assert findings.target_column == "IS_CLOSED"
+        findings.target_column = None
+        findings.target_type = None
+        assert findings.target_column is None
+        assert findings.target_type is None
+
+    def test_target_hint_none_still_auto_detects(self):
+        df = pd.DataFrame({
+            "entity_id": range(50),
+            "churned": np.random.choice([0, 1], 50),
+            "tenure": np.random.randint(1, 100, 50),
+        })
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df, target_hint=None)
+        assert findings.target_column == "churned"
+
+    def test_string_target_column_would_fail_astype_float(self):
+        """Reproduces the ValueError from NB01d: string column falsely detected as target."""
+        df = pd.DataFrame({
+            "entity_id": range(50),
+            "cancel_reason": np.random.choice(
+                ["30 Days Prior to Renewal", "Immediate", "End of Term"], 50
+            ),
+            "amount": np.random.uniform(10, 100, 50),
+        })
+        explorer = DataExplorer(visualize=False, save_findings=False)
+        findings = explorer.explore(df)
+        if findings.target_column == "cancel_reason":
+            with pytest.raises(ValueError, match="could not convert string to float"):
+                df[findings.target_column].astype(float)
+            findings.target_column = None
+            findings.target_type = None
+        assert findings.target_column is None
+
+
 class TestDataExplorerBulkStats:
     @pytest.fixture(autouse=True)
     def _skip_without_pyspark(self):

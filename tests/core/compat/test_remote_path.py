@@ -10,6 +10,7 @@ import yaml
 
 from customer_retention.core.compat.remote_path import (
     RemotePath,
+    _is_scheme_path,
     _RemoteStat,
     _RemoteTextReader,
     _RemoteTextWriter,
@@ -436,12 +437,38 @@ class TestMakePath:
             assert isinstance(result, RemotePath)
             assert str(result) == "/Volumes/catalog/schema/experiments"
 
-    def test_databricks_mode(self):
+    def test_databricks_fuse_path_returns_path(self):
         with (
             patch("customer_retention.core.compat.detection.is_remote_spark", return_value=False),
             patch("customer_retention.core.compat.detection.is_databricks", return_value=True),
         ):
             result = make_path("/Volumes/catalog/schema/experiments")
+            assert isinstance(result, Path)
+            assert str(result) == "/Volumes/catalog/schema/experiments"
+
+    def test_databricks_scheme_path_returns_remote(self):
+        with (
+            patch("customer_retention.core.compat.detection.is_remote_spark", return_value=False),
+            patch("customer_retention.core.compat.detection.is_databricks", return_value=True),
+        ):
+            result = make_path("dbfs:/FileStore/experiments")
+            assert isinstance(result, RemotePath)
+            assert str(result) == "dbfs:/FileStore/experiments"
+
+    def test_databricks_workspace_fuse_path(self):
+        with (
+            patch("customer_retention.core.compat.detection.is_remote_spark", return_value=False),
+            patch("customer_retention.core.compat.detection.is_databricks", return_value=True),
+        ):
+            result = make_path("/Workspace/Users/me/experiments")
+            assert isinstance(result, Path)
+
+    def test_databricks_s3_scheme_path(self):
+        with (
+            patch("customer_retention.core.compat.detection.is_remote_spark", return_value=False),
+            patch("customer_retention.core.compat.detection.is_databricks", return_value=True),
+        ):
+            result = make_path("s3://bucket/experiments")
             assert isinstance(result, RemotePath)
 
     def test_already_remote_path(self):
@@ -570,6 +597,59 @@ class TestExperimentsIntegration:
 
             result = get_experiments_dir()
             assert isinstance(result, Path)
+
+
+class TestIsSchemaPath:
+    def test_dbfs_scheme(self):
+        assert _is_scheme_path("dbfs:/FileStore/data") is True
+
+    def test_s3_scheme(self):
+        assert _is_scheme_path("s3://bucket/key") is True
+
+    def test_abfss_scheme(self):
+        assert _is_scheme_path("abfss://container@storage.dfs.core.windows.net/path") is True
+
+    def test_absolute_posix_path(self):
+        assert _is_scheme_path("/Volumes/catalog/schema/vol") is False
+
+    def test_workspace_path(self):
+        assert _is_scheme_path("/Workspace/Users/me/project") is False
+
+    def test_relative_path(self):
+        assert _is_scheme_path("experiments/data") is False
+
+    def test_empty_string(self):
+        assert _is_scheme_path("") is False
+
+
+class TestMakePathDatabricksFuse:
+    def test_databricks_fuse_setup_experiments(self, tmp_path):
+        with (
+            patch("customer_retention.core.compat.detection.is_remote_spark", return_value=False),
+            patch("customer_retention.core.compat.detection.is_databricks", return_value=True),
+        ):
+            base = make_path(str(tmp_path / "experiments"))
+            assert isinstance(base, Path)
+            sub = base / "data" / "bronze"
+            sub.mkdir(parents=True, exist_ok=True)
+            assert sub.exists()
+
+    def test_remote_spark_always_returns_remote(self):
+        with (
+            patch("customer_retention.core.compat.detection.is_remote_spark", return_value=True),
+            patch("customer_retention.core.compat.detection.is_databricks", return_value=False),
+        ):
+            result = make_path("/Volumes/catalog/schema/experiments")
+            assert isinstance(result, RemotePath)
+
+    def test_cr_spark_remote_env_returns_remote(self):
+        with (
+            patch.dict("os.environ", {"CR_SPARK_REMOTE": "1"}),
+            patch("customer_retention.core.compat.detection.is_remote_spark", return_value=False),
+            patch("customer_retention.core.compat.detection.is_databricks", return_value=False),
+        ):
+            result = make_path("/Volumes/catalog/schema/experiments")
+            assert isinstance(result, RemotePath)
 
 
 class TestTranslateRemoteError:
