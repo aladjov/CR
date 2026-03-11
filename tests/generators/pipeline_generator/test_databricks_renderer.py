@@ -794,6 +794,55 @@ class TestDatabricksRenderRunner:
         gold_pos = result.find("gold")
         assert bronze_pos < silver_pos < gold_pos
 
+    def test_render_runner_exits_with_log(self, renderer, sample_pipeline_config):
+        result = renderer.render_runner(sample_pipeline_config)
+        assert "dbutils.notebook.exit" in result
+        assert "_log" in result
+
+    def test_render_runner_accumulates_results(self, renderer, sample_pipeline_config):
+        result = renderer.render_runner(sample_pipeline_config)
+        assert "_log.append(line)" in result
+
+
+class TestDatabricksNotebookExitSummary:
+    def test_bronze_exits_with_summary(self, renderer):
+        source = SourceConfig(name="t", path="t.csv", format="csv", entity_key="id")
+        config = BronzeLayerConfig(source=source, transformations=[])
+        result = renderer.render_bronze("t", config)
+        assert "dbutils.notebook.exit(_summary)" in result
+        assert "result.count()" in result
+
+    def test_bronze_event_exits_with_summary(self, renderer):
+        source = SourceConfig(name="ev", path="ev.csv", format="csv", entity_key="id", time_column="ts", is_event_level=True)
+        config = BronzeEventConfig(source=source, entity_column="id", time_column="ts")
+        result = renderer.render_bronze_event("ev", config)
+        assert "dbutils.notebook.exit(_summary)" in result
+
+    def test_bronze_entity_exits_with_summary(self, renderer):
+        source = SourceConfig(name="ev", path="ev.csv", format="csv", entity_key="id", time_column="ts", is_event_level=True)
+        config = BronzeEventConfig(source=source, entity_column="id", time_column="ts")
+        result = renderer.render_bronze_entity("ev_aggregated", config, "ev")
+        assert "dbutils.notebook.exit(_summary)" in result
+
+    def test_silver_exits_with_summary(self, renderer, sample_pipeline_config):
+        result = renderer.render_silver(sample_pipeline_config)
+        assert "dbutils.notebook.exit(_summary)" in result
+
+    def test_gold_exits_with_summary(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "dbutils.notebook.exit(_summary)" in result
+
+    def test_training_exits_with_summary(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "dbutils.notebook.exit(_summary)" in result
+        assert "Best model" in result
+
+    def test_landing_exits_with_summary(self, renderer):
+        source = SourceConfig(name="t", path="t.csv", format="csv", entity_key="id")
+        config = LandingLayerConfig(source=source, raw_source_path="t.csv", raw_source_format="csv", entity_column="id", time_column="ts", target_column="churn")
+        result = renderer.render_landing("t", config)
+        assert "dbutils.notebook.exit(_summary)" in result
+
 
 class TestDatabricksConfigSourcePaths:
     def test_config_uses_raw_source_path_when_available(self, renderer):

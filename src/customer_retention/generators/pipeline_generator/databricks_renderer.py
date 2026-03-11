@@ -486,7 +486,9 @@ def run_bronze():
     return df
 
 result = run_bronze()
+_summary = f"{result.count():,} rows, {len(result.columns)} columns"
 display(result)
+dbutils.notebook.exit(_summary)
 """,
     "databricks_bronze_event.py.j2": """# Databricks notebook source
 # MAGIC %md
@@ -721,7 +723,9 @@ def run_bronze_event():
 {% endif %}
 
 result = run_bronze_event()
+_summary = f"{result.count():,} rows, {len(result.columns)} columns"
 display(result)
+dbutils.notebook.exit(_summary)
 """,
     "databricks_bronze_entity.py.j2": """# Databricks notebook source
 # MAGIC %md
@@ -928,7 +932,9 @@ def run_bronze_entity():
     return df
 
 result = run_bronze_entity()
+_summary = f"{result.count():,} rows, {len(result.columns)} columns"
 display(result)
+dbutils.notebook.exit(_summary)
 """,
     "databricks_silver.py.j2": """# Databricks notebook source
 # MAGIC %md
@@ -1110,7 +1116,9 @@ def run_silver():
     return merged
 
 result = run_silver()
+_summary = f"{result.count():,} rows, {len(result.columns)} columns"
 display(result)
+dbutils.notebook.exit(_summary)
 """,
     "databricks_gold.py.j2": """# Databricks notebook source
 # MAGIC %md
@@ -1303,7 +1311,9 @@ def run_gold():
     return df
 
 result = run_gold()
+_summary = f"{result.count():,} rows, {len(result.columns)} columns"
 display(result)
+dbutils.notebook.exit(_summary)
 """,
     "databricks_training.py.j2": """# Databricks notebook source
 # MAGIC %md
@@ -1538,7 +1548,9 @@ def train_and_evaluate():
 # COMMAND ----------
 
 best_name, best_auc = train_and_evaluate()
-print(f"Best model: {best_name} with AUC: {best_auc:.4f}")
+_summary = f"Best model: {best_name} (AUC={best_auc:.4f})"
+print(_summary)
+dbutils.notebook.exit(_summary)
 """,
     "databricks_landing.py.j2": """# Databricks notebook source
 # MAGIC %md
@@ -1701,7 +1713,9 @@ def run_landing():
     return df
 
 result = run_landing()
+_summary = f"{result.count():,} rows, {len(result.columns)} columns"
 display(result)
+dbutils.notebook.exit(_summary)
 """,
     "databricks_runner.py.j2": """# Databricks notebook source
 # MAGIC %md
@@ -1730,12 +1744,15 @@ spark.sql(f"CREATE SCHEMA IF NOT EXISTS {CATALOG}.{SCHEMA}")
 
 # COMMAND ----------
 
+_log = []
+
 def run_notebook(path, timeout=3600):
-    print(f"Running: {path}")
     start = time.time()
     result = dbutils.notebook.run(path, timeout)
     elapsed = time.time() - start
-    print(f"Completed: {path} in {elapsed:.1f}s")
+    line = f"{path}: {result} ({elapsed:.1f}s)"
+    print(line)
+    _log.append(line)
     return result
 
 # COMMAND ----------
@@ -1792,6 +1809,10 @@ run_notebook("gold/gold_features_{{ config.composite_name or config.name }}")
 # COMMAND ----------
 
 run_notebook("training/ml_experiment")
+
+# COMMAND ----------
+
+dbutils.notebook.exit("\\n".join(_log))
 """,
     "databricks_for_each_workflow.yaml.j2": """# Databricks Asset Bundle - Exploration Workflow (for_each_task pattern)
 #
