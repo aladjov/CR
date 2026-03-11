@@ -434,6 +434,18 @@ def _normalize_timestamps_distributed(df: Any) -> Any:
     return as_pandas_api(clamped)
 
 
+def _infer_object_column_spark_type(series: _pandas.Series) -> "Any":
+    from pyspark.sql.types import BooleanType, DoubleType, LongType, StringType, TimestampNTZType
+    inferred = _pandas.api.types.infer_dtype(series, skipna=True)
+    _INFERRED_MAP = {
+        "floating": DoubleType(), "mixed-integer-float": DoubleType(),
+        "decimal": DoubleType(), "integer": LongType(),
+        "boolean": BooleanType(),
+        "datetime64": TimestampNTZType(), "datetime": TimestampNTZType(),
+    }
+    return _INFERRED_MAP.get(inferred, StringType())
+
+
 def pandas_dtype_to_spark_schema(df: _pandas.DataFrame) -> "Any":
     from pyspark.sql.types import (
         BooleanType,
@@ -455,7 +467,6 @@ def pandas_dtype_to_spark_schema(df: _pandas.DataFrame) -> "Any":
         "float32": FloatType(),
         "float64": DoubleType(),
         "bool": BooleanType(),
-        "object": StringType(),
     }
     fields = []
     for col in df.columns:
@@ -464,6 +475,8 @@ def pandas_dtype_to_spark_schema(df: _pandas.DataFrame) -> "Any":
             spark_type = TimestampNTZType()
         elif hasattr(dtype, "numpy_dtype"):
             spark_type = _MAP.get(str(dtype.numpy_dtype), StringType())
+        elif str(dtype) == "object":
+            spark_type = _infer_object_column_spark_type(df[col])
         else:
             spark_type = _MAP.get(str(dtype), StringType())
         fields.append(StructField(col, spark_type, True))

@@ -627,6 +627,81 @@ class TestPandasDtypeToSparkSchema:
         schema = pandas_dtype_to_spark_schema(df)
         assert isinstance(schema.fields[0].dataType, DoubleType)
 
+    def test_object_column_with_floats_inferred_as_double(self):
+        from pyspark.sql.types import DoubleType
+
+        from customer_retention.core.compat import pandas_dtype_to_spark_schema
+        df = pd.DataFrame({"val": pd.array([1.5, None, 3.0], dtype="object")})
+        schema = pandas_dtype_to_spark_schema(df)
+        assert isinstance(schema.fields[0].dataType, DoubleType)
+
+    def test_object_column_with_ints_inferred_as_long(self):
+        from pyspark.sql.types import LongType
+
+        from customer_retention.core.compat import pandas_dtype_to_spark_schema
+        df = pd.DataFrame({"val": pd.array([1, None, 3], dtype="object")})
+        schema = pandas_dtype_to_spark_schema(df)
+        assert isinstance(schema.fields[0].dataType, LongType)
+
+    def test_object_column_with_mixed_int_float_inferred_as_double(self):
+        from pyspark.sql.types import DoubleType
+
+        from customer_retention.core.compat import pandas_dtype_to_spark_schema
+        df = pd.DataFrame({"val": pd.array([1, 2.5, None], dtype="object")})
+        schema = pandas_dtype_to_spark_schema(df)
+        assert isinstance(schema.fields[0].dataType, DoubleType)
+
+    def test_object_column_with_bools_inferred_as_boolean(self):
+        from pyspark.sql.types import BooleanType
+
+        from customer_retention.core.compat import pandas_dtype_to_spark_schema
+        df = pd.DataFrame({"val": pd.array([True, None, False], dtype="object")})
+        schema = pandas_dtype_to_spark_schema(df)
+        assert isinstance(schema.fields[0].dataType, BooleanType)
+
+    def test_object_column_with_datetimes_inferred_as_timestamp(self):
+        import datetime
+
+        from pyspark.sql.types import TimestampNTZType
+
+        from customer_retention.core.compat import pandas_dtype_to_spark_schema
+        df = pd.DataFrame({"val": pd.array([datetime.datetime(2023, 1, 1), None], dtype="object")})
+        schema = pandas_dtype_to_spark_schema(df)
+        assert isinstance(schema.fields[0].dataType, TimestampNTZType)
+
+    def test_object_column_with_strings_stays_string(self):
+        from pyspark.sql.types import StringType
+
+        from customer_retention.core.compat import pandas_dtype_to_spark_schema
+        df = pd.DataFrame({"val": ["hello", None, "world"]})
+        schema = pandas_dtype_to_spark_schema(df)
+        assert isinstance(schema.fields[0].dataType, StringType)
+
+    def test_object_column_all_none_defaults_to_string(self):
+        from pyspark.sql.types import StringType
+
+        from customer_retention.core.compat import pandas_dtype_to_spark_schema
+        df = pd.DataFrame({"val": [None, None, None]})
+        schema = pandas_dtype_to_spark_schema(df)
+        assert isinstance(schema.fields[0].dataType, StringType)
+
+    def test_object_column_mixed_types_defaults_to_string(self):
+        from pyspark.sql.types import StringType
+
+        from customer_retention.core.compat import pandas_dtype_to_spark_schema
+        df = pd.DataFrame({"val": pd.array([1.0, "hello", None], dtype="object")})
+        schema = pandas_dtype_to_spark_schema(df)
+        assert isinstance(schema.fields[0].dataType, StringType)
+
+    def test_object_column_numpy_float64_values(self):
+        import numpy as np
+        from pyspark.sql.types import DoubleType
+
+        from customer_retention.core.compat import pandas_dtype_to_spark_schema
+        df = pd.DataFrame({"hour_mean_90d": pd.array([np.float64(12.5), None, np.float64(8.3)], dtype="object")})
+        schema = pandas_dtype_to_spark_schema(df)
+        assert isinstance(schema.fields[0].dataType, DoubleType)
+
 
 class TestBuildSpineWithTzAwareDates:
     def test_tz_aware_grid_dates_produce_naive_spine(self):
