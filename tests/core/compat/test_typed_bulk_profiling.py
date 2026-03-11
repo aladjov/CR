@@ -458,6 +458,82 @@ class TestSparkTypedBulkStatsTypeFiltering:
         assert result.identifier == {}
 
 
+class TestSparkTypedBulkStatsDatetimeFiltering:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_string_datetime_cols_filtered_out(self):
+        from pyspark.sql.types import StringType, StructField, StructType, TimestampNTZType
+
+        from customer_retention.core.compat.bulk_profiling import _spark_typed_bulk_stats
+
+        schema = StructType([
+            StructField("real_ts", TimestampNTZType(), True),
+            StructField("quarter_str", StringType(), True),
+        ])
+        mock_spark_df = MagicMock()
+        mock_spark_df.schema = schema
+        mock_row = MagicMock()
+        mock_row.__getitem__ = MagicMock(return_value=None)
+        mock_spark_df.agg.return_value.collect.return_value = [mock_row]
+
+        bulk = BulkStats(
+            total_count=10,
+            columns={
+                "real_ts": PerColumnStats(null_count=0, distinct_count=5),
+                "quarter_str": PerColumnStats(null_count=0, distinct_count=4),
+            },
+        )
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=mock_spark_df):
+            result = _spark_typed_bulk_stats(
+                mock_spark_df, bulk, datetime_cols=["real_ts", "quarter_str"],
+            )
+
+        assert "quarter_str" not in result.datetime
+
+    def test_all_string_datetime_cols_skips_batch(self):
+        from pyspark.sql.types import StringType, StructField, StructType
+
+        from customer_retention.core.compat.bulk_profiling import _spark_typed_bulk_stats
+
+        schema = StructType([
+            StructField("q_col", StringType(), True),
+        ])
+        mock_spark_df = MagicMock()
+        mock_spark_df.schema = schema
+        bulk = BulkStats(total_count=5, columns={})
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=mock_spark_df):
+            result = _spark_typed_bulk_stats(mock_spark_df, bulk, datetime_cols=["q_col"])
+
+        assert result.datetime == {}
+        mock_spark_df.agg.assert_not_called()
+
+    def test_date_type_cols_included(self):
+        from pyspark.sql.types import DateType, StructField, StructType
+
+        from customer_retention.core.compat.bulk_profiling import _spark_typed_bulk_stats
+
+        schema = StructType([StructField("d_col", DateType(), True)])
+        mock_spark_df = MagicMock()
+        mock_spark_df.schema = schema
+        mock_row = MagicMock()
+        mock_row.__getitem__ = MagicMock(return_value=None)
+        mock_spark_df.agg.return_value.collect.return_value = [mock_row]
+
+        bulk = BulkStats(
+            total_count=5,
+            columns={"d_col": PerColumnStats(null_count=0, distinct_count=3)},
+        )
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=mock_spark_df):
+            result = _spark_typed_bulk_stats(mock_spark_df, bulk, datetime_cols=["d_col"])
+
+        mock_spark_df.agg.assert_called_once()
+
+
 class TestPandasTypedBulkStatsNoColumns:
     def test_no_columns_returns_empty(self):
         df = pd.DataFrame({"x": [1, 2, 3]})
