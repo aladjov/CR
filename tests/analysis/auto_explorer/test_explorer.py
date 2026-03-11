@@ -519,6 +519,10 @@ class TestDataExplorerSaveFindingsEdgeCases:
 
 
 class TestDataExplorerBulkStats:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def test_bulk_stats_called_once(self, sample_dataframe):
         from unittest.mock import patch
 
@@ -672,6 +676,10 @@ class TestDataExplorerBulkStats:
 
 
 class TestDataExplorerTypedBulkPath:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def test_typed_bulk_stats_called(self, sample_dataframe):
         from unittest.mock import patch
 

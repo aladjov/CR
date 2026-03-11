@@ -21,6 +21,10 @@ import pytest
 class TestDatabricksDeltaStorage:
     """Test DatabricksDelta adapter with real Spark/Delta."""
 
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def test_delta_write_and_read(self, tmp_path):
         from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
         storage = DatabricksDelta()

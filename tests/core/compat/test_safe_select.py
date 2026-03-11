@@ -81,6 +81,9 @@ class TestSafeSelect:
 
 @pytest.mark.databricks
 class TestSafeSelectSparkPandas:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
 
     def _to_spark_series(self, s):
         import pyspark.pandas as ps

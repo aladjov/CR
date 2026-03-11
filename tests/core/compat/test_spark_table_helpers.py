@@ -47,6 +47,10 @@ class TestRegisterTempView:
 
 
 class TestAsPandasApi:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def test_calls_pandas_api_when_available(self):
         mock_sdf = MagicMock()
         mock_sdf.pandas_api.return_value = MagicMock(name="psdf")

@@ -99,6 +99,10 @@ class TestFutureDatesExcluded:
 
 
 class TestDeriveWithPrecomputedStats:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def test_precomputed_stats_bypass_bulk_computation(self, deriver):
         from unittest.mock import patch
 

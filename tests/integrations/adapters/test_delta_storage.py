@@ -507,6 +507,10 @@ class TestDatabricksDeltaToSparkDf:
 
 
 class TestDatabricksDeltaPathNormalization:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def test_strips_dbfs_prefix(self):
         from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
         assert DatabricksDelta._normalize_path("/dbfs/mnt/data/table") == "/mnt/data/table"
@@ -529,6 +533,10 @@ class TestDatabricksDeltaPathNormalization:
 
 
 class TestDatabricksDeltaReadMissingTable:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def test_read_raises_file_not_found_for_missing_delta_table(self):
         from unittest.mock import MagicMock, patch
 
@@ -559,6 +567,10 @@ class TestDatabricksDeltaReadMissingTable:
 
 
 class TestDatabricksDeltaReadNormalizesPath:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def test_read_normalizes_path(self):
         from unittest.mock import MagicMock, patch
 

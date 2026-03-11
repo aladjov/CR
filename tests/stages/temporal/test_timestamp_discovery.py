@@ -512,6 +512,10 @@ class TestAnalyzeDatetimeOrderingDistributedSafe:
 
 
 class TestBulkDatetimeDiscoveryStats:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def test_computes_stats_for_datetime_columns(self):
         from customer_retention.core.compat.bulk_profiling import bulk_datetime_discovery_stats
         df = pd.DataFrame({
@@ -549,6 +553,10 @@ class TestBulkDatetimeDiscoveryStats:
 
 
 class TestDiscoverWithPrecomputedStats:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def test_discover_uses_precomputed_stats(self):
         from customer_retention.core.compat.bulk_profiling import DatetimeDiscoveryCandidateStats
         engine = TimestampDiscoveryEngine()

@@ -310,6 +310,10 @@ class TestComputeBulkStatsDispatch:
 class TestSparkBulkStatsNullAggregates:
     """Spark agg results may return None despite F.coalesce wrapping."""
 
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def _run_with_row1(self, row1_dict, mode_dict, mode_count_dict, cols, numeric_fields=None):
         from customer_retention.core.compat.bulk_profiling import _spark_bulk_stats
 
