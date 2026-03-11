@@ -138,6 +138,7 @@ Issues = "https://github.com/aladjov/CR/issues"
 # CLI command to bootstrap new projects
 churnkit-init = "customer_retention.cli:init_project"
 churnkit-sync = "customer_retention.generators.notebook_sync.cli:main"
+churnkit-merge = "customer_retention.generators.notebook_merge.cli:main"
 
 [build-system]
 requires = ["hatchling"]
