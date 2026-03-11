@@ -312,16 +312,28 @@ class RemotePath:
         return str(self._pure)
 
 
+def _is_scheme_path(path_str: str) -> bool:
+    """Whether *path_str* uses a URI scheme (``dbfs:/``, ``s3://``, ``abfss://``)."""
+    first_segment = path_str.split("/", 1)[0]
+    return ":" in first_segment
+
+
 def make_path(path: Union[str, Path, RemotePath], force_remote: Optional[bool] = None) -> Union[Path, RemotePath]:
     if isinstance(path, RemotePath):
         return path
     from customer_retention.core.compat.detection import is_databricks, is_remote_spark
 
-    remote = (
-        force_remote
-        if force_remote is not None
-        else (is_remote_spark() or is_databricks() or bool(os.environ.get("CR_SPARK_REMOTE")))
-    )
+    path_str = str(path)
+    if force_remote is not None:
+        remote = force_remote
+    elif is_remote_spark() or bool(os.environ.get("CR_SPARK_REMOTE")):
+        remote = True
+    elif is_databricks():
+        # On Databricks runtime, FUSE-mounted paths (absolute POSIX) work as
+        # regular Path — only URI-scheme paths (dbfs:/, s3:/) need dbutils.fs.
+        remote = _is_scheme_path(path_str)
+    else:
+        remote = False
     if remote:
-        return RemotePath(str(path))
-    return Path(str(path)) if not isinstance(path, Path) else path
+        return RemotePath(path_str)
+    return Path(path_str) if not isinstance(path, Path) else path
