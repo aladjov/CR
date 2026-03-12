@@ -599,6 +599,170 @@ class TestDiscoverWithPrecomputedStats:
         assert "created_at" in candidate_names
 
 
+class TestLooksLikeDatetimeStrings:
+    def test_iso_format_detected(self):
+        from customer_retention.stages.temporal.timestamp_discovery import _looks_like_datetime_strings
+        sample = pd.Series(["2024-01-01", "2024-02-15", "2024-03-20"])
+        assert _looks_like_datetime_strings(sample)
+
+    def test_non_datetime_strings_rejected(self):
+        from customer_retention.stages.temporal.timestamp_discovery import _looks_like_datetime_strings
+        sample = pd.Series(["hello", "world", "foo", "bar"])
+        assert not _looks_like_datetime_strings(sample)
+
+    def test_empty_series_returns_false(self):
+        from customer_retention.stages.temporal.timestamp_discovery import _looks_like_datetime_strings
+        sample = pd.Series([], dtype=object)
+        assert not _looks_like_datetime_strings(sample)
+
+    def test_mixed_formats_above_threshold(self):
+        from customer_retention.stages.temporal.timestamp_discovery import _looks_like_datetime_strings
+        sample = pd.Series(["2024-01-01", "01/15/2024", "Mar 20, 2024", "10:30:00", "Jun 1", "not-a-date"])
+        assert _looks_like_datetime_strings(sample)
+
+    def test_time_strings_detected(self):
+        from customer_retention.stages.temporal.timestamp_discovery import _looks_like_datetime_strings
+        sample = pd.Series(["10:30", "14:45", "23:59", "08:00"])
+        assert _looks_like_datetime_strings(sample)
+
+    def test_month_abbreviations_detected(self):
+        from customer_retention.stages.temporal.timestamp_discovery import _looks_like_datetime_strings
+        sample = pd.Series(["Jan 2024", "Feb 2024", "Mar 2024"])
+        assert _looks_like_datetime_strings(sample)
+
+    def test_collects_distributed_sample(self, monkeypatch):
+        """Regression: .apply(lambda).mean() fails on pyspark.pandas with void dtype."""
+        from customer_retention.stages.temporal.timestamp_discovery import _looks_like_datetime_strings
+        sample = pd.Series(["2024-01-01", "2024-02-15", "2024-03-20"])
+        collected = []
+        original_to_pandas = getattr(sample, "to_pandas", None)
+
+        def track_to_pandas():
+            collected.append(True)
+            return sample.copy()
+
+        sample.to_pandas = track_to_pandas
+        monkeypatch.setattr("customer_retention.core.compat._is_spark_pandas", lambda obj: True)
+        assert _looks_like_datetime_strings(sample)
+        assert len(collected) == 1
+
+
+class TestGetDatetimeColumnsDistributed:
+    def test_skips_object_columns_on_distributed_data(self, monkeypatch):
+        analyzer = DatetimeOrderAnalyzer()
+        df = pd.DataFrame({
+            "ts_col": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "str_date": ["2024-01-01", "2024-02-01", "2024-03-01"],
+            "value": [1, 2, 3],
+        })
+        monkeypatch.setattr(
+            "customer_retention.core.compat._is_spark_pandas",
+            lambda obj: True,
+        )
+        result = analyzer._get_datetime_columns(df)
+        assert "ts_col" in result
+        assert "str_date" not in result
+
+    def test_detects_string_dates_on_native_pandas(self):
+        analyzer = DatetimeOrderAnalyzer()
+        df = pd.DataFrame({
+            "str_date": ["2024-01-01", "2024-02-01", "2024-03-01"],
+            "value": [1, 2, 3],
+        })
+        result = analyzer._get_datetime_columns(df)
+        assert "str_date" in result
+
+
+class TestAnalyzeDatetimeOrderingPreKnownCols:
+    def test_uses_pre_known_columns(self):
+        analyzer = DatetimeOrderAnalyzer()
+        df = pd.DataFrame({
+            "early": pd.to_datetime(["2020-01-01", "2020-06-01", "2021-01-01"]),
+            "late": pd.to_datetime(["2023-01-01", "2023-06-01", "2024-01-01"]),
+            "str_col": ["hello", "world", "foo"],
+        })
+        ordering = analyzer.analyze_datetime_ordering(df, datetime_cols=["early", "late"])
+        assert ordering == ["early", "late"]
+
+    def test_empty_pre_known_returns_empty(self):
+        analyzer = DatetimeOrderAnalyzer()
+        df = pd.DataFrame({"val": [1, 2, 3]})
+        assert analyzer.analyze_datetime_ordering(df, datetime_cols=[]) == []
+
+    def test_none_falls_back_to_scanning(self):
+        analyzer = DatetimeOrderAnalyzer()
+        df = pd.DataFrame({
+            "ts": pd.to_datetime(["2024-01-01", "2024-02-01"]),
+        })
+        ordering = analyzer.analyze_datetime_ordering(df, datetime_cols=None)
+        assert ordering == ["ts"]
+
+
+class TestDiscoverPassesKnownColumnsToOrdering:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_discover_with_stats_avoids_column_scanning(self):
+        from customer_retention.core.compat.bulk_profiling import DatetimeDiscoveryCandidateStats
+        engine = TimestampDiscoveryEngine()
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "last_activity": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "str_col": ["not-a-date", "not-a-date", "not-a-date"],
+        })
+        precomputed = {
+            "last_activity": DatetimeDiscoveryCandidateStats(
+                min_date=pd.Timestamp("2024-01-01"), max_date=pd.Timestamp("2024-03-01"),
+                coverage=1.0, future_fraction=0.0,
+            ),
+        }
+        result = engine.discover(df, datetime_stats=precomputed)
+        assert result.feature_timestamp is not None
+        assert "datetime_ordering" in result.discovery_report
+
+    def test_discover_with_stats_and_object_columns_no_crash(self):
+        """Regression: object dtype columns must not crash discover() on distributed path."""
+        from customer_retention.core.compat.bulk_profiling import DatetimeDiscoveryCandidateStats
+        engine = TimestampDiscoveryEngine()
+        df = pd.DataFrame({
+            "customer_id": ["A", "B", "C"],
+            "last_activity": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+            "status": ["active", "churned", "active"],
+            "notes": ["foo bar", "2024-01-01 note", "baz"],
+        })
+        precomputed = {
+            "last_activity": DatetimeDiscoveryCandidateStats(
+                min_date=pd.Timestamp("2024-01-01"), max_date=pd.Timestamp("2024-03-01"),
+                coverage=1.0, future_fraction=0.0,
+            ),
+        }
+        result = engine.discover(df, datetime_stats=precomputed)
+        assert result.feature_timestamp is not None
+
+
+class TestAnalyzeColumnSkipsDistributed:
+    def test_skips_object_dtype_on_distributed_series(self, monkeypatch):
+        engine = TimestampDiscoveryEngine()
+        df = pd.DataFrame({
+            "str_date": ["2024-01-01", "2024-02-01", "2024-03-01"],
+        })
+        monkeypatch.setattr(
+            "customer_retention.core.compat._is_spark_pandas",
+            lambda obj: True,
+        )
+        result = engine._analyze_column_for_datetime(df, "str_date")
+        assert result is None
+
+    def test_detects_datetime_dtype_on_distributed(self):
+        engine = TimestampDiscoveryEngine()
+        df = pd.DataFrame({
+            "ts": pd.to_datetime(["2024-01-01", "2024-02-01", "2024-03-01"]),
+        })
+        result = engine._analyze_column_for_datetime(df, "ts")
+        assert result is not None
+
+
 class TestEntityTimestampDeriverWithFindings:
     def test_derive_with_known_datetime_columns(self):
         from customer_retention.analysis.auto_explorer.entity_timestamp_deriver import EntityFeatureTimestampDeriver

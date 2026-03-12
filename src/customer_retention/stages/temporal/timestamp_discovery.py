@@ -115,15 +115,20 @@ class TimestampDiscoveryResult:
         ]
 
 
+_DATETIME_STRING_RE = re.compile(
+    r"\d{4}[-/]|\d{1,2}[-/]\d{1,2}[-/]|\d{1,2}:\d{2}|"
+    r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)", re.IGNORECASE,
+)
+
+
 def _looks_like_datetime_strings(sample: Any) -> bool:
     if len(sample) == 0:
         return False
+    from customer_retention.core.compat import _is_spark_pandas
+    if _is_spark_pandas(sample):
+        sample = sample.to_pandas()
     str_sample = sample.astype(str)
-    datetime_pattern = re.compile(
-        r"\d{4}[-/]|\d{1,2}[-/]\d{1,2}[-/]|\d{1,2}:\d{2}|"
-        r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)", re.IGNORECASE
-    )
-    matches = str_sample.apply(lambda x: bool(datetime_pattern.search(str(x))))
+    matches = str_sample.apply(lambda x: bool(_DATETIME_STRING_RE.search(str(x))))
     return matches.mean() > 0.8
 
 
@@ -165,8 +170,9 @@ class DatetimeOrderAnalyzer:
         r"lastorder", r"lastlogin", r"lastpurchase", r"lastvisit",
     ]
 
-    def analyze_datetime_ordering(self, df: Any) -> list[str]:
-        datetime_cols = [c for c in self._get_datetime_columns(df) if not self._has_future_dates(df, c)]
+    def analyze_datetime_ordering(self, df: Any, datetime_cols: list[str] | None = None) -> list[str]:
+        if datetime_cols is None:
+            datetime_cols = [c for c in self._get_datetime_columns(df) if not self._has_future_dates(df, c)]
         if not datetime_cols:
             return []
         center_epochs = _bulk_center_epochs(df, datetime_cols)
@@ -205,11 +211,13 @@ class DatetimeOrderAnalyzer:
         return to_datetime(df[col], format="mixed", errors="coerce")
 
     def _get_datetime_columns(self, df: Any) -> list[str]:
+        from customer_retention.core.compat import _is_spark_pandas
+        is_distributed = _is_spark_pandas(df)
         result = []
         for col in df.columns:
             if is_datetime64_any_dtype(df[col]):
                 result.append(col)
-            elif df[col].dtype == object:
+            elif not is_distributed and df[col].dtype == object:
                 sample = df[col].dropna().head(100)
                 if _looks_like_datetime_strings(sample):
                     parsed = to_datetime(sample, format="mixed", errors="coerce")
@@ -304,7 +312,8 @@ class TimestampDiscoveryEngine:
         derivable_candidates = self._discover_derivable_timestamps(df)
         all_candidates = datetime_candidates + derivable_candidates
         classified = self._classify_candidates(all_candidates)
-        datetime_ordering = self.order_analyzer.analyze_datetime_ordering(df)
+        known_dt_cols = [c.column_name for c in datetime_candidates if not c.is_derived and c.column_name in df.columns]
+        datetime_ordering = self.order_analyzer.analyze_datetime_ordering(df, datetime_cols=known_dt_cols or None)
 
         feature_ts = self._select_best_candidate(classified, TimestampRole.FEATURE_TIMESTAMP)
         label_ts = self._select_best_candidate(classified, TimestampRole.LABEL_TIMESTAMP)
@@ -357,6 +366,9 @@ class TimestampDiscoveryEngine:
             return self._create_datetime_candidate(df, col)
 
         if df[col].dtype == object:
+            from customer_retention.core.compat import _is_spark_pandas
+            if _is_spark_pandas(df[col]):
+                return None
             sample = df[col].dropna().head(100)
             if _looks_like_datetime_strings(sample):
                 parsed = to_datetime(sample, format="mixed", errors="coerce")
