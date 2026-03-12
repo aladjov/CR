@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from customer_retention.core.compat import (
     _is_native_spark_df,
+    _is_spark_pandas,
+    as_spark_df,
     as_tz_naive,
     native_pd,
     normalize_timestamps,
@@ -13,10 +16,14 @@ from customer_retention.core.compat import (
 )
 from customer_retention.core.compat.detection import get_spark_session
 from customer_retention.core.compat.spark_backend import _as_pandas_api
+from customer_retention.core.config.column_config import DatasetGranularity
 from customer_retention.stages.temporal.temporal_merger import (
     DatasetMergeInput,
+    MergeReport,
     TemporalMerger,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _empty_spine_schema(entity_key: str, as_of_column: str):
@@ -28,24 +35,190 @@ def _empty_spine_schema(entity_key: str, as_of_column: str):
     ])
 
 
+def _to_native_spark(df: Any) -> Any:
+    """Convert any DataFrame to a native Spark DataFrame."""
+    if _is_native_spark_df(df):
+        return df
+    if _is_spark_pandas(df):
+        return as_spark_df(df)
+    # pandas DataFrame
+    spark = get_spark_session()
+    pdf = normalize_timestamps(df)
+    return spark.createDataFrame(pdf, schema=pandas_dtype_to_spark_schema(pdf))
+
+
+def _spark_rename_columns(sdf: Any, rename_map: dict[str, str]) -> Any:
+    """Apply column renames on a native Spark DataFrame."""
+    for old_name, new_name in rename_map.items():
+        sdf = sdf.withColumnRenamed(old_name, new_name)
+    return sdf
+
+
 class SparkTemporalMerger(TemporalMerger):
     def merge_all(
         self,
         spine: Any,
         datasets: list[DatasetMergeInput],
     ) -> tuple[Any, Any]:
-        converted = []
+        spark = get_spark_session()
+        if spark is None:
+            return super().merge_all(spine, datasets)
+
+        entity_key = self.config.entity_key
+        as_of_column = self.config.as_of_column
+
+        merged_sdf = _to_native_spark(spine)
+
+        report = MergeReport(
+            spine_rows=merged_sdf.count(),
+            spine_entities=merged_sdf.select(entity_key).distinct().count(),
+            spine_dates=merged_sdf.select(as_of_column).distinct().count(),
+        )
+
         for ds in datasets:
-            df = ds.df
-            if _is_native_spark_df(df):
-                df = _as_pandas_api(df)
-            converted.append(DatasetMergeInput(
-                name=ds.name,
-                df=df,
-                granularity=ds.granularity,
-                feature_timestamp_column=ds.feature_timestamp_column,
-            ))
-        return super().merge_all(spine, converted)
+            existing_cols = set(merged_sdf.columns)
+            right_sdf = _to_native_spark(ds.df)
+
+            if ds.granularity == DatasetGranularity.EVENT_LEVEL:
+                merged_sdf = self._spark_join_event(
+                    merged_sdf, right_sdf, ds, existing_cols,
+                )
+            elif ds.feature_timestamp_column:
+                merged_sdf = self._spark_join_asof(
+                    merged_sdf, right_sdf, ds, existing_cols,
+                )
+            else:
+                merged_sdf = self._spark_join_broadcast(
+                    merged_sdf, right_sdf, ds, existing_cols,
+                )
+
+            new_cols = set(merged_sdf.columns) - existing_cols
+            report.datasets_merged.append(ds.name)
+            report.columns_per_dataset[ds.name] = len(new_cols)
+
+        report.total_columns = len(merged_sdf.columns)
+        report.renamed_columns = {
+            col: col
+            for col in merged_sdf.columns
+            if self.config.conflict_separator in col
+        }
+
+        if self.config.validate_temporal:
+            from customer_retention.stages.temporal.point_in_time_join import (
+                PointInTimeJoiner,
+            )
+            result_psdf = _as_pandas_api(merged_sdf)
+            report.temporal_integrity = (
+                PointInTimeJoiner.validate_temporal_integrity(result_psdf)
+            )
+            return result_psdf, report
+
+        return _as_pandas_api(merged_sdf), report
+
+    def _spark_join_event(
+        self,
+        left_sdf: Any,
+        right_sdf: Any,
+        ds: DatasetMergeInput,
+        existing_cols: set[str],
+    ) -> Any:
+        """Equi-join on (entity_key, as_of_date) for event-level datasets."""
+        entity_key = self.config.entity_key
+        as_of_column = self.config.as_of_column
+        join_cols = [entity_key, as_of_column]
+
+        if as_of_column not in right_sdf.columns:
+            right_sdf = right_sdf.dropDuplicates([entity_key])
+            return self._spark_join_broadcast(
+                left_sdf, right_sdf, ds, existing_cols,
+            )
+
+        right_sdf = right_sdf.dropDuplicates(join_cols)
+
+        right_feature_cols = set(right_sdf.columns) - set(join_cols)
+        rename_map = self._resolve_conflicts(
+            existing_cols, right_feature_cols, set(join_cols),
+            ds.name, self.config.conflict_separator,
+        )
+        if rename_map:
+            right_sdf = _spark_rename_columns(right_sdf, rename_map)
+
+        return left_sdf.join(right_sdf, on=join_cols, how="left")
+
+    def _spark_join_broadcast(
+        self,
+        left_sdf: Any,
+        right_sdf: Any,
+        ds: DatasetMergeInput,
+        existing_cols: set[str],
+    ) -> Any:
+        """Broadcast join on entity_key for entity-level datasets."""
+        import pyspark.sql.functions as F  # noqa: N812
+
+        entity_key = self.config.entity_key
+        join_keys = {entity_key}
+
+        right_sdf = right_sdf.dropDuplicates([entity_key])
+
+        right_feature_cols = set(right_sdf.columns) - join_keys
+        rename_map = self._resolve_conflicts(
+            existing_cols, right_feature_cols, join_keys,
+            ds.name, self.config.conflict_separator,
+        )
+        if rename_map:
+            right_sdf = _spark_rename_columns(right_sdf, rename_map)
+
+        return left_sdf.join(F.broadcast(right_sdf), on=entity_key, how="left")
+
+    def _spark_join_asof(
+        self,
+        left_sdf: Any,
+        right_sdf: Any,
+        ds: DatasetMergeInput,
+        existing_cols: set[str],
+    ) -> Any:
+        """Window-based point-in-time (as-of) join for entity datasets with timestamps."""
+        import pyspark.sql.functions as F  # noqa: N812
+        from pyspark.sql import Window
+
+        entity_key = self.config.entity_key
+        as_of_column = self.config.as_of_column
+        ft_col = ds.feature_timestamp_column
+
+        join_keys = {entity_key, as_of_column}
+        right_feature_cols = set(right_sdf.columns) - {entity_key, ft_col}
+        rename_map = self._resolve_conflicts(
+            existing_cols, right_feature_cols, join_keys,
+            ds.name, self.config.conflict_separator,
+        )
+        if rename_map:
+            right_sdf = _spark_rename_columns(right_sdf, rename_map)
+            ft_col = rename_map.get(ft_col, ft_col)
+
+        feature_cols = [
+            c for c in right_sdf.columns if c not in {entity_key, ft_col}
+        ]
+
+        # Use a unique alias for the right timestamp to avoid ambiguity
+        right_ts_alias = f"__{ds.name}_ts__"
+        right_sdf = right_sdf.withColumnRenamed(ft_col, right_ts_alias)
+
+        # Inner join on entity_key, filter right_ts <= as_of_date
+        joined = left_sdf.join(right_sdf, on=entity_key, how="inner")
+        joined = joined.filter(F.col(right_ts_alias) <= F.col(as_of_column))
+
+        # Window: pick the most recent right row per (entity_key, as_of_date)
+        w = Window.partitionBy(entity_key, as_of_column).orderBy(
+            F.col(right_ts_alias).desc()
+        )
+        joined = joined.withColumn("_rn_", F.row_number().over(w))
+        joined = joined.filter(F.col("_rn_") == 1).drop("_rn_", right_ts_alias)
+
+        # Left join back to preserve all spine rows
+        best_cols = [entity_key, as_of_column] + feature_cols
+        best = joined.select(*[c for c in best_cols if c in joined.columns])
+
+        return left_sdf.join(best, on=[entity_key, as_of_column], how="left")
 
     def build_spine(
         self, entity_ids: Any, grid_dates: list[str]
