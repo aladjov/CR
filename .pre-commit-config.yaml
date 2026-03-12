@@ -39,7 +39,7 @@ repos:
       # Pre-push hook: Run tests with coverage enforcement (75% minimum)
       - id: pytest-coverage
         name: pytest with coverage (75% minimum required)
-        entry: python -m pytest tests/ --cov=src/customer_retention --cov-fail-under=75 -q --tb=no
+        entry: python -m pytest tests/ --cov=customer_retention --cov-fail-under=75 -q --tb=no
         language: system
         pass_filenames: false
         always_run: true

@@ -1,7 +1,0 @@
-We need to execute the following plan: Coding_Practices_Compliance_Audit.md
-
-Since I have noticed that for longer plans the results often skip steps and mark them as complete we will do the following. Execute the plan in digestible steps and create report-on-{{name of the plan}}/PhaseX_StepsN-M.md reports on what is covered. Before going to the next step clear context - and load the plan once again starting from the current step we have reached - basically keep a file progress checklist where we keep track where we are so we can load the plan + this progress checklist in clean context to start the next part of the process. If I have selected to auto approved all edits do not ask again but auto-accept them. 
-
-After we go through the entire plan create a report of what is achieved combining the saved report-on-{{name of the plan}}/PhaseX_StepsN-M.md reports into one meaningful final report. This will serve for another agentic call that will independently once agin asses the alignment between what the original plan goals were, what was reported as complete and what are the actual gaps remaining. This will produce hopefully smaller plan that loops through the same mechanism.
-
-Unless it is a complete must for clarity and separation of concerns do not create new files that suffer from the same pitfalls you are trying to clean. We will sit loop here forever - I know this is no problem for you more usage more tokens more income but will be if I decice to abandon you as a tool!
