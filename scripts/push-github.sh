@@ -22,4 +22,11 @@ git commit --amend --no-edit --quiet
 git push --force "$REMOTE" HEAD:"$BRANCH"
 
 popd > /dev/null
+
+# Force-update the remote tracking ref to match local master so git
+# doesn't see diverged branches.  The amended commit on origin has a
+# different hash, but we don't want pull/status to complain — the next
+# push-all will force-push again anyway.
+git update-ref "refs/remotes/$REMOTE/$BRANCH" "refs/heads/$BRANCH"
+
 echo "Pushed $BRANCH to $REMOTE (without docs/*.md)"
