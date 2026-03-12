@@ -19,7 +19,7 @@ git add docs/.gitignore
 git add docs/*.md 2>/dev/null || true
 git commit --amend --no-edit --quiet
 
-git push --force-with-lease "$REMOTE" HEAD:"$BRANCH"
+git push --force "$REMOTE" HEAD:"$BRANCH"
 
 popd > /dev/null
 echo "Pushed $BRANCH to $REMOTE (with docs/*.md)"
