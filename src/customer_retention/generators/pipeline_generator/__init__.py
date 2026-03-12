@@ -3,6 +3,7 @@ from .databricks_renderer import DatabricksCodeRenderer
 from .exploration_generator import DatabricksExplorationGenerator
 from .findings_parser import FindingsParser
 from .generator import PipelineGenerator
+from .llm_docs_generator import LLMDocsGenerator
 from .models import (
     AggregationWindowConfig,
     BronzeEventConfig,
@@ -33,6 +34,7 @@ __all__ = [
     "PipelineGenerator",
     "DatabricksPipelineGenerator",
     "DatabricksExplorationGenerator",
+    "LLMDocsGenerator",
     "FindingsParser",
     "CodeRenderer",
     "DatabricksCodeRenderer",
