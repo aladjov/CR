@@ -311,9 +311,11 @@ def {{ func_name }}(df):
     return df
 {% endfor %}
 
-{% if config.lifecycle %}
-{% if config.lifecycle.include_recency_bucket %}
+{%- if config.lifecycle %}
+{%- if config.lifecycle.include_recency_bucket %}
+
 def add_recency_tenure(df, raw_df):
+    \"\"\"Source: Data Discovery > Recency Analysis\"\"\"
     entity_col = "{{ config.entity_column or config.source.entity_key }}"
     time_col = "{{ config.time_column or config.source.time_column }}"
     reference_date = raw_df.agg(F.max(time_col)).collect()[0][0]
@@ -330,17 +332,20 @@ def add_recency_tenure(df, raw_df):
     return df
 
 def add_recency_buckets(df):
-{% set edges = config.lifecycle.recency_bucket_edges %}
-{% set labels = config.lifecycle.recency_bucket_labels %}
+    \"\"\"Source: Data Discovery > Recency Analysis\"\"\"
+{%- set edges = config.lifecycle.recency_bucket_edges %}
+{%- set labels = config.lifecycle.recency_bucket_labels %}
     df = df.withColumn("recency_bucket", F.when(F.col("days_since_last") <= {{ edges[1] }}, "{{ labels[0] }}")
-{% for i in range(2, edges | length) %}
+{%- for i in range(2, edges | length) %}
         .when(F.col("days_since_last") <= {{ edges[i] }}, "{{ labels[i - 1] }}")
-{% endfor %}
+{%- endfor %}
         .otherwise("{{ labels[-1] }}"))
     return df
-{% endif %}
-{% if config.lifecycle.include_lifecycle_quadrant %}
+{%- endif %}
+{%- if config.lifecycle.include_lifecycle_quadrant %}
+
 def add_lifecycle_quadrant(df):
+    \"\"\"Source: Data Discovery > Lifecycle Segmentation\"\"\"
     if "days_since_first" not in df.columns:
         return df
     intensity_cols = [c for c in df.columns if c.startswith("event_count_")]
@@ -354,9 +359,11 @@ def add_lifecycle_quadrant(df):
         .when((F.col("days_since_first") < tenure_med) & (F.col(intensity_cols[0]) >= intensity_med), "intense_brief_lifecycle")
         .otherwise("one_shot_lifecycle"))
     return df
-{% endif %}
-{% if config.lifecycle.include_cyclical_features %}
+{%- endif %}
+{%- if config.lifecycle.include_cyclical_features %}
+
 def add_cyclical_features(df, raw_df):
+    \"\"\"Source: Data Discovery > Cyclical Patterns\"\"\"
     entity_col = "{{ config.entity_column or config.source.entity_key }}"
     time_col = "{{ config.time_column or config.source.time_column }}"
     mean_dow = raw_df.groupBy(entity_col).agg(
@@ -367,9 +374,11 @@ def add_cyclical_features(df, raw_df):
     df = df.withColumn("dow_cos", F.cos(2 * 3.141592653589793 * F.col("mean_dow") / 7))
     df = df.drop("mean_dow")
     return df
-{% endif %}
-{% if config.lifecycle.include_month_cyclical %}
+{%- endif %}
+{%- if config.lifecycle.include_month_cyclical %}
+
 def add_month_quarter_cyclical(df, raw_df):
+    \"\"\"Source: Data Discovery > Seasonal Patterns\"\"\"
     entity_col = "{{ config.entity_column or config.source.entity_key }}"
     time_col = "{{ config.time_column or config.source.time_column }}"
     mean_month = raw_df.groupBy(entity_col).agg(
@@ -378,7 +387,7 @@ def add_month_quarter_cyclical(df, raw_df):
     df = df.join(mean_month, on=entity_col, how="left")
     df = df.withColumn("month_sin", F.sin(2 * 3.141592653589793 * F.col("mean_month") / 12))
     df = df.withColumn("month_cos", F.cos(2 * 3.141592653589793 * F.col("mean_month") / 12))
-{% if config.lifecycle.include_quarter_cyclical %}
+{%- if config.lifecycle.include_quarter_cyclical %}
     mean_quarter = raw_df.groupBy(entity_col).agg(
         F.mean(F.quarter(F.col(time_col)).cast("double")).alias("mean_quarter")
     )
@@ -386,13 +395,15 @@ def add_month_quarter_cyclical(df, raw_df):
     df = df.withColumn("quarter_sin", F.sin(2 * 3.141592653589793 * F.col("mean_quarter") / 4))
     df = df.withColumn("quarter_cos", F.cos(2 * 3.141592653589793 * F.col("mean_quarter") / 4))
     df = df.drop("mean_month", "mean_quarter")
-{% else %}
+{%- else %}
     df = df.drop("mean_month")
-{% endif %}
+{%- endif %}
     return df
-{% endif %}
-{% if config.lifecycle.include_trend_features %}
+{%- endif %}
+{%- if config.lifecycle.include_trend_features %}
+
 def add_trend_features(df):
+    \"\"\"Source: Data Discovery > Trend Analysis\"\"\"
     import numpy as np
     pdf = df.toPandas()
     window_cols = sorted([c for c in pdf.columns if c.startswith("event_count_") and c != "event_count_all_time"])
@@ -406,9 +417,11 @@ def add_trend_features(df):
         pdf["entity_trend_slope"] = slopes
     df = spark.createDataFrame(pdf)
     return df
-{% endif %}
-{% if config.lifecycle.include_cohort_features %}
+{%- endif %}
+{%- if config.lifecycle.include_cohort_features %}
+
 def add_cohort_features(df, raw_df):
+    \"\"\"Source: Data Discovery > Cohort Analysis\"\"\"
     entity_col = "{{ config.entity_column or config.source.entity_key }}"
     time_col = "{{ config.time_column or config.source.time_column }}"
     first_event = raw_df.groupBy(entity_col).agg(F.min(time_col).alias("first_event"))
@@ -416,46 +429,50 @@ def add_cohort_features(df, raw_df):
     first_event = first_event.withColumn("cohort_quarter", F.quarter("first_event"))
     df = df.join(first_event.select(entity_col, "cohort_year", "cohort_quarter"), on=entity_col, how="left")
     return df
-{% endif %}
-{% if config.lifecycle.momentum_pairs %}
+{%- endif %}
+{%- if config.lifecycle.momentum_pairs %}
+
 def add_momentum_ratios(df):
-{% for pair in config.lifecycle.momentum_pairs %}
+    \"\"\"Source: Data Discovery > Engagement Momentum\"\"\"
+{%- for pair in config.lifecycle.momentum_pairs %}
     short_col = "event_count_{{ pair.short_window }}"
     long_col = "event_count_{{ pair.long_window }}"
     if short_col in df.columns and long_col in df.columns:
         df = df.withColumn("momentum_{{ pair.short_window }}_{{ pair.long_window }}", F.col(short_col) / F.when(F.col(long_col) != 0, F.col(long_col)).otherwise(F.lit(None)))
-{% endfor %}
+{%- endfor %}
     return df
-{% endif %}
+{%- endif %}
+
 def enrich_lifecycle(df):
+    \"\"\"Source: Data Discovery > Entity Lifecycle Enrichment\"\"\"
     raw_table = bronze_table("{{ source }}")
     raw_df = spark.table(raw_table)
-{% if config.lifecycle.include_recency_bucket %}
+{%- if config.lifecycle.include_recency_bucket %}
     df = add_recency_tenure(df, raw_df)
     df = add_recency_buckets(df)
-{% endif %}
-{% if config.lifecycle.include_lifecycle_quadrant %}
+{%- endif %}
+{%- if config.lifecycle.include_lifecycle_quadrant %}
     df = add_lifecycle_quadrant(df)
-{% endif %}
-{% if config.lifecycle.include_cyclical_features %}
+{%- endif %}
+{%- if config.lifecycle.include_cyclical_features %}
     df = add_cyclical_features(df, raw_df)
-{% endif %}
-{% if config.lifecycle.include_month_cyclical %}
+{%- endif %}
+{%- if config.lifecycle.include_month_cyclical %}
     df = add_month_quarter_cyclical(df, raw_df)
-{% endif %}
-{% if config.lifecycle.include_trend_features %}
+{%- endif %}
+{%- if config.lifecycle.include_trend_features %}
     df = add_trend_features(df)
-{% endif %}
-{% if config.lifecycle.include_cohort_features %}
+{%- endif %}
+{%- if config.lifecycle.include_cohort_features %}
     df = add_cohort_features(df, raw_df)
-{% endif %}
-{% if config.lifecycle.momentum_pairs %}
+{%- endif %}
+{%- if config.lifecycle.momentum_pairs %}
     df = add_momentum_ratios(df)
-{% endif %}
+{%- endif %}
     return df
-{% endif %}
+{%- endif %}
+{%- if config.text_features %}
 
-{% if config.text_features %}
 def compute_text_features_entity(df):
     from customer_retention.stages.profiling.text_processor import TextColumnProcessor, TextProcessingConfig
     pdf = df.toPandas()
@@ -475,12 +492,12 @@ def compute_text_features_entity(df):
 def run_bronze():
     df = load_source()
     df = apply_transformations(df)
-{% if config.lifecycle %}
+{%- if config.lifecycle %}
     df = enrich_lifecycle(df)
-{% endif %}
-{% if config.text_features %}
+{%- endif %}
+{%- if config.text_features %}
     df = compute_text_features_entity(df)
-{% endif %}
+{%- endif %}
     output_table = bronze_table(SOURCE_NAME)
     df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
     return df
@@ -533,17 +550,19 @@ def {{ func_name }}(df):
     return df
 {% endfor %}
 
-{% if config.deduplicate %}
+{%- if config.deduplicate %}
+
 def deduplicate(df):
-{% if config.deduplicate is not true and config.deduplicate.strategy is defined and config.deduplicate.strategy == "keep_most_complete" %}
+    \"\"\"Source: Source Integrity > Duplicate Detection\"\"\"
+{%- if config.deduplicate is not true and config.deduplicate.strategy is defined and config.deduplicate.strategy == "keep_most_complete" %}
     _all_cols = [f.name for f in df.schema.fields if f.name not in (ENTITY_COLUMN, TIME_COLUMN)]
     _null_expr = sum(F.when(F.col(c).isNull(), 1).otherwise(0) for c in _all_cols) if _all_cols else F.lit(0)
     df = df.withColumn("_null_count", _null_expr)
-{% if config.deduplicate.conflict_columns %}
+{%- if config.deduplicate.conflict_columns %}
     _partition_cols = {{ config.deduplicate.conflict_columns }}
-{% else %}
+{%- else %}
     _partition_cols = [ENTITY_COLUMN, TIME_COLUMN]
-{% endif %}
+{%- endif %}
     window = Window.partitionBy(*_partition_cols).orderBy(F.col("_null_count").asc(), F.monotonically_increasing_id())
     df = df.withColumn("_row_num", F.row_number().over(window))
     df = df.filter(F.col("_row_num") == 1).drop("_row_num", "_null_count")
@@ -559,11 +578,13 @@ def deduplicate(df):
     return df
 {% endif %}
 
-{% if config.datetime_derivation %}
+{%- if config.datetime_derivation %}
+
 DATETIME_DERIVATION_SOURCES = {{ config.datetime_derivation.source_columns }}
 MASK_FUTURE_COLUMNS = {{ config.datetime_derivation.mask_future_columns }}
 
 def derive_datetime_features(df):
+    \"\"\"Source: Data Discovery > Datetime Feature Derivation\"\"\"
     ref_col = "{{ config.datetime_derivation.reference_column }}"
     mask_set = set(MASK_FUTURE_COLUMNS)
     for col in DATETIME_DERIVATION_SOURCES:
@@ -587,9 +608,8 @@ def derive_datetime_features(df):
             df = df.withColumn(f"{col}_dow", dow_val)
             df = df.withColumn(f"{col}_is_weekend", is_weekend_val)
     return df
-{% endif %}
-
-{% if config.aggregation %}
+{%- endif %}
+{%- if config.aggregation %}
 def _window_to_days(window_str):
     if window_str.endswith("d"):
         return int(window_str[:-1])
@@ -607,24 +627,23 @@ def _get_numeric_columns(df, value_columns):
     return [c for c in value_columns if c in numeric_cols]
 
 def apply_event_aggregation(df):
+    \"\"\"Source: Event Aggregation > Time-Window Analysis\"\"\"
     reference_date = df.agg(F.max(TIME_COLUMN)).collect()[0][0]
     numeric_columns = _get_numeric_columns(df, {{ config.aggregation.value_columns }})
     results = []
 {% for window in config.aggregation.windows %}
-{% if window == "all_time" %}
+{%- if window == "all_time" %}
     window_df = df
-{% else %}
+{%- else %}
     window_df = df.filter(
         F.col(TIME_COLUMN) >= F.date_sub(F.lit(reference_date), _window_to_days("{{ window }}"))
     )
-{% endif %}
+{%- endif %}
     agg_exprs = [F.count("*").alias("event_count_{{ window }}")]
     for col in numeric_columns:
-{% for agg_func in config.aggregation.agg_funcs %}
-{% if agg_func != "count" %}
+{%- for agg_func in config.aggregation.agg_funcs if agg_func != "count" %}
         agg_exprs.append(F.{{ agg_func }}(col).alias(f"{col}_{{ agg_func }}_{{ window }}"))
-{% endif %}
-{% endfor %}
+{%- endfor %}
     for col in CATEGORICAL_COLUMNS:
         if col in [f.name for f in window_df.schema.fields]:
             agg_exprs.append(F.countDistinct(col).alias(f"{col}_nunique_{{ window }}"))
@@ -644,8 +663,10 @@ def apply_event_aggregation(df):
     return merged, reference_date
 {% endif %}
 
-{% if config.temporal_features %}
+{%- if config.temporal_features %}
+
 def compute_temporal_features(agg_df, raw_df):
+    \"\"\"Source: Temporal Deep Dive > Lag Features\"\"\"
     from customer_retention.stages.profiling.spark_temporal_feature_engineer import SparkTemporalFeatureEngineer
     from customer_retention.stages.profiling.temporal_feature_engineer import TemporalAggregationConfig
     value_cols = {{ config.temporal_features.lag_columns or (config.aggregation.value_columns if config.aggregation else []) }}
@@ -663,8 +684,10 @@ def compute_temporal_features(agg_df, raw_df):
     return spark.createDataFrame(merged)
 {% endif %}
 
-{% if config.text_features %}
+{%- if config.text_features %}
+
 def compute_text_features(agg_df, raw_df):
+    \"\"\"Source: Temporal Text Deep Dive > Text Embeddings\"\"\"
     from customer_retention.stages.profiling.text_processor import TextColumnProcessor, TextProcessingConfig
     agg_pdf = agg_df.toPandas() if hasattr(agg_df, "toPandas") else agg_df
     raw_pdf = raw_df.toPandas() if hasattr(raw_df, "toPandas") else raw_df
@@ -687,20 +710,20 @@ def compute_text_features(agg_df, raw_df):
 def run_bronze_event():
     raw_df = load_source()
     df = apply_pre_shaping(raw_df)
-{% if config.deduplicate %}
+{%- if config.deduplicate %}
     df = deduplicate(df)
-{% endif %}
-{% if config.datetime_derivation %}
+{%- endif %}
+{%- if config.datetime_derivation %}
     df = derive_datetime_features(df)
-{% endif %}
-{% if config.aggregation %}
+{%- endif %}
+{%- if config.aggregation %}
     agg_df, reference_date = apply_event_aggregation(df)
-{% if config.temporal_features %}
+{%- if config.temporal_features %}
     agg_df = compute_temporal_features(agg_df, raw_df)
-{% endif %}
-{% if config.text_features %}
+{%- endif %}
+{%- if config.text_features %}
     agg_df = compute_text_features(agg_df, raw_df)
-{% endif %}
+{%- endif %}
     output_table = bronze_table("{{ source }}_events")
     agg_df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
     from delta.tables import DeltaTable
@@ -710,7 +733,7 @@ def run_bronze_event():
     else:
         DeltaTable.forName(spark, output_table).optimize().executeCompaction()
     return agg_df
-{% else %}
+{%- else %}
     output_table = bronze_table("{{ source }}_events")
     df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
     from delta.tables import DeltaTable
@@ -720,7 +743,7 @@ def run_bronze_event():
     else:
         DeltaTable.forName(spark, output_table).optimize().executeCompaction()
     return df
-{% endif %}
+{%- endif %}
 
 result = run_bronze_event()
 _summary = f"{result.count():,} rows, {len(result.columns)} columns"
@@ -769,9 +792,11 @@ def {{ func_name }}(df):
 {% endfor %}
 {% endif %}
 
-{% if config.lifecycle %}
-{% if config.lifecycle.include_recency_bucket %}
+{%- if config.lifecycle %}
+{%- if config.lifecycle.include_recency_bucket %}
+
 def add_recency_tenure(df):
+    \"\"\"Source: Data Discovery > Recency Analysis\"\"\"
     raw_df = spark.table(landing_table("{{ raw_source }}"))
     time_col = "{{ config.time_column }}"
     reference_date = raw_df.agg(F.max(time_col)).collect()[0][0]
@@ -788,17 +813,20 @@ def add_recency_tenure(df):
     return df
 
 def add_recency_buckets(df):
-{% set edges = config.lifecycle.recency_bucket_edges %}
-{% set labels = config.lifecycle.recency_bucket_labels %}
+    \"\"\"Source: Data Discovery > Recency Analysis\"\"\"
+{%- set edges = config.lifecycle.recency_bucket_edges %}
+{%- set labels = config.lifecycle.recency_bucket_labels %}
     df = df.withColumn("recency_bucket", F.when(F.col("days_since_last") <= {{ edges[1] }}, "{{ labels[0] }}")
-{% for i in range(2, edges | length) %}
+{%- for i in range(2, edges | length) %}
         .when(F.col("days_since_last") <= {{ edges[i] }}, "{{ labels[i - 1] }}")
-{% endfor %}
+{%- endfor %}
         .otherwise("{{ labels[-1] }}"))
     return df
-{% endif %}
-{% if config.lifecycle.include_lifecycle_quadrant %}
+{%- endif %}
+{%- if config.lifecycle.include_lifecycle_quadrant %}
+
 def add_lifecycle_quadrant(df):
+    \"\"\"Source: Data Discovery > Lifecycle Segmentation\"\"\"
     if "days_since_first" not in df.columns:
         return df
     intensity_cols = [c for c in df.columns if c.startswith("event_count_")]
@@ -812,9 +840,11 @@ def add_lifecycle_quadrant(df):
         .when((F.col("days_since_first") < tenure_med) & (F.col(intensity_cols[0]) >= intensity_med), "intense_brief_lifecycle")
         .otherwise("one_shot_lifecycle"))
     return df
-{% endif %}
-{% if config.lifecycle.include_cyclical_features %}
+{%- endif %}
+{%- if config.lifecycle.include_cyclical_features %}
+
 def add_cyclical_features(df):
+    \"\"\"Source: Data Discovery > Cyclical Patterns\"\"\"
     raw_df = spark.table(landing_table("{{ raw_source }}"))
     time_col = "{{ config.time_column }}"
     mean_dow = raw_df.groupBy(ENTITY_COLUMN).agg(
@@ -825,9 +855,11 @@ def add_cyclical_features(df):
     df = df.withColumn("dow_cos", F.cos(2 * 3.141592653589793 * F.col("mean_dow") / 7))
     df = df.drop("mean_dow")
     return df
-{% endif %}
-{% if config.lifecycle.include_month_cyclical %}
+{%- endif %}
+{%- if config.lifecycle.include_month_cyclical %}
+
 def add_month_quarter_cyclical(df):
+    \"\"\"Source: Data Discovery > Seasonal Patterns\"\"\"
     raw_df = spark.table(landing_table("{{ raw_source }}"))
     time_col = "{{ config.time_column }}"
     mean_month = raw_df.groupBy(ENTITY_COLUMN).agg(
@@ -836,7 +868,7 @@ def add_month_quarter_cyclical(df):
     df = df.join(mean_month, on=ENTITY_COLUMN, how="left")
     df = df.withColumn("month_sin", F.sin(2 * 3.141592653589793 * F.col("mean_month") / 12))
     df = df.withColumn("month_cos", F.cos(2 * 3.141592653589793 * F.col("mean_month") / 12))
-{% if config.lifecycle.include_quarter_cyclical %}
+{%- if config.lifecycle.include_quarter_cyclical %}
     mean_quarter = raw_df.groupBy(ENTITY_COLUMN).agg(
         F.mean(F.quarter(F.col(time_col)).cast("double")).alias("mean_quarter")
     )
@@ -844,13 +876,15 @@ def add_month_quarter_cyclical(df):
     df = df.withColumn("quarter_sin", F.sin(2 * 3.141592653589793 * F.col("mean_quarter") / 4))
     df = df.withColumn("quarter_cos", F.cos(2 * 3.141592653589793 * F.col("mean_quarter") / 4))
     df = df.drop("mean_month", "mean_quarter")
-{% else %}
+{%- else %}
     df = df.drop("mean_month")
-{% endif %}
+{%- endif %}
     return df
-{% endif %}
-{% if config.lifecycle.include_trend_features %}
+{%- endif %}
+{%- if config.lifecycle.include_trend_features %}
+
 def add_trend_features(df):
+    \"\"\"Source: Data Discovery > Trend Analysis\"\"\"
     import numpy as np
     pdf = df.toPandas()
     window_cols = sorted([c for c in pdf.columns if c.startswith("event_count_") and c != "event_count_all_time"])
@@ -864,9 +898,11 @@ def add_trend_features(df):
         pdf["entity_trend_slope"] = slopes
     df = spark.createDataFrame(pdf)
     return df
-{% endif %}
-{% if config.lifecycle.include_cohort_features %}
+{%- endif %}
+{%- if config.lifecycle.include_cohort_features %}
+
 def add_cohort_features(df):
+    \"\"\"Source: Data Discovery > Cohort Analysis\"\"\"
     raw_df = spark.table(landing_table("{{ raw_source }}"))
     time_col = "{{ config.time_column }}"
     first_event = raw_df.groupBy(ENTITY_COLUMN).agg(F.min(time_col).alias("first_event"))
@@ -874,53 +910,57 @@ def add_cohort_features(df):
     first_event = first_event.withColumn("cohort_quarter", F.quarter("first_event"))
     df = df.join(first_event.select(ENTITY_COLUMN, "cohort_year", "cohort_quarter"), on=ENTITY_COLUMN, how="left")
     return df
-{% endif %}
-{% if config.lifecycle.momentum_pairs %}
+{%- endif %}
+{%- if config.lifecycle.momentum_pairs %}
+
 def add_momentum_ratios(df):
-{% for pair in config.lifecycle.momentum_pairs %}
+    \"\"\"Source: Data Discovery > Engagement Momentum\"\"\"
+{%- for pair in config.lifecycle.momentum_pairs %}
     short_col = "event_count_{{ pair.short_window }}"
     long_col = "event_count_{{ pair.long_window }}"
     if short_col in df.columns and long_col in df.columns:
         df = df.withColumn("momentum_{{ pair.short_window }}_{{ pair.long_window }}", F.col(short_col) / F.when(F.col(long_col) != 0, F.col(long_col)).otherwise(F.lit(None)))
-{% endfor %}
+{%- endfor %}
     return df
-{% endif %}
+{%- endif %}
+
 def enrich_lifecycle(df):
-{% if config.lifecycle.include_recency_bucket %}
+    \"\"\"Source: Data Discovery > Entity Lifecycle Enrichment\"\"\"
+{%- if config.lifecycle.include_recency_bucket %}
     df = add_recency_tenure(df)
     df = add_recency_buckets(df)
-{% endif %}
-{% if config.lifecycle.include_lifecycle_quadrant %}
+{%- endif %}
+{%- if config.lifecycle.include_lifecycle_quadrant %}
     df = add_lifecycle_quadrant(df)
-{% endif %}
-{% if config.lifecycle.include_cyclical_features %}
+{%- endif %}
+{%- if config.lifecycle.include_cyclical_features %}
     df = add_cyclical_features(df)
-{% endif %}
-{% if config.lifecycle.include_month_cyclical %}
+{%- endif %}
+{%- if config.lifecycle.include_month_cyclical %}
     df = add_month_quarter_cyclical(df)
-{% endif %}
-{% if config.lifecycle.include_trend_features %}
+{%- endif %}
+{%- if config.lifecycle.include_trend_features %}
     df = add_trend_features(df)
-{% endif %}
-{% if config.lifecycle.include_cohort_features %}
+{%- endif %}
+{%- if config.lifecycle.include_cohort_features %}
     df = add_cohort_features(df)
-{% endif %}
-{% if config.lifecycle.momentum_pairs %}
+{%- endif %}
+{%- if config.lifecycle.momentum_pairs %}
     df = add_momentum_ratios(df)
-{% endif %}
+{%- endif %}
     return df
-{% endif %}
+{%- endif %}
 
 # COMMAND ----------
 
 def run_bronze_entity():
     df = load_aggregated()
-{% if config.post_shaping %}
+{%- if config.post_shaping %}
     df = apply_post_shaping(df)
-{% endif %}
-{% if config.lifecycle %}
+{%- endif %}
+{%- if config.lifecycle %}
     df = enrich_lifecycle(df)
-{% endif %}
+{%- endif %}
     output_table = bronze_table(SOURCE_NAME)
     df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
     from delta.tables import DeltaTable
@@ -1250,12 +1290,10 @@ def apply_encodings(df):
 {%- if _prov %}
 {{ _prov }}
 {%- endif %}
-{% if config.gold.encodings %}
-{% for step in config.gold.encodings %}
+{%- for step in config.gold.encodings %}
     # {{ step.rationale }}
     df = {{ render_spark_step_call(step) }}
-{% endfor %}
-{% endif %}
+{%- endfor %}
     return df
 
 def apply_scalings(df):
@@ -1263,18 +1301,18 @@ def apply_scalings(df):
 {%- if _prov %}
 {{ _prov }}
 {%- endif %}
-{% if config.gold.scalings %}
-{% set ns = namespace(standard=[], minmax=[]) %}
-{% for step in config.gold.scalings %}
-{% if step.parameters.get('method') == 'minmax' %}{% set ns.minmax = ns.minmax + [step.column] %}{% else %}{% set ns.standard = ns.standard + [step.column] %}{% endif %}
-{% endfor %}
-{% if ns.standard %}
+{%- if config.gold.scalings %}
+{%- set ns = namespace(standard=[], minmax=[]) %}
+{%- for step in config.gold.scalings %}
+{%- if step.parameters.get('method') == 'minmax' %}{% set ns.minmax = ns.minmax + [step.column] %}{% else %}{% set ns.standard = ns.standard + [step.column] %}{% endif %}
+{%- endfor %}
+{%- if ns.standard %}
     df = _batch_scale_standard(df, [{% for c in ns.standard %}"{{ c }}"{{ ", " if not loop.last }}{% endfor %}])
-{% endif %}
-{% if ns.minmax %}
+{%- endif %}
+{%- if ns.minmax %}
     df = _batch_scale_minmax(df, [{% for c in ns.minmax %}"{{ c }}"{{ ", " if not loop.last }}{% endfor %}])
-{% endif %}
-{% endif %}
+{%- endif %}
+{%- endif %}
     return df
 
 {% set transform_groups = group_steps(config.gold.transformations) %}
@@ -1298,10 +1336,10 @@ def {{ func_name }}(df):
 {% endfor %}
 
 def apply_feature_selection(df):
-{% if config.gold.feature_selections %}
+{%- if config.gold.feature_selections %}
     drop_cols = {{ config.gold.feature_selections }}
     df = df.drop(*[c for c in drop_cols if c in df.columns])
-{% endif %}
+{%- endif %}
     return df
 
 # COMMAND ----------
@@ -1669,34 +1707,36 @@ def load_source():
     return spark.read.format(fmt).load(path)
 
 def derive_feature_timestamp(df):
-{% if config.timestamp_coalesce %}
-{% set cols = config.timestamp_coalesce.datetime_columns_ordered %}
+    \"\"\"Source: Data Discovery > Timestamp Detection\"\"\"
+{%- if config.timestamp_coalesce %}
+{%- set cols = config.timestamp_coalesce.datetime_columns_ordered %}
     df = df.withColumn("feature_timestamp", F.coalesce(
-{% for col in cols %}
+{%- for col in cols %}
         F.to_timestamp(F.col("{{ col }}")){{ "," if not loop.last else "" }}
-{% endfor %}
+{%- endfor %}
     ))
-{% else %}
+{%- else %}
     if TIME_COLUMN in [f.name for f in df.schema.fields]:
         df = df.withColumn("feature_timestamp", F.to_timestamp(F.col(TIME_COLUMN)))
     elif "feature_timestamp" not in [f.name for f in df.schema.fields]:
         raise ValueError(f"Time column '{TIME_COLUMN}' not found. Available: {df.columns}")
-{% endif %}
+{%- endif %}
     return df
 
 def derive_label_timestamp(df):
-{% if config.label_timestamp %}
-{% set lt = config.label_timestamp %}
-{% if lt.label_column %}
+    \"\"\"Source: Intent Contract > Label Horizon\"\"\"
+{%- if config.label_timestamp %}
+{%- set lt = config.label_timestamp %}
+{%- if lt.label_column %}
     label_ts = F.to_timestamp(F.col("{{ lt.label_column }}"))
     fallback_ts = F.expr(f"feature_timestamp + INTERVAL {{ lt.fallback_window_days }} DAYS")
     df = df.withColumn("label_timestamp", F.coalesce(label_ts, fallback_ts))
-{% else %}
+{%- else %}
     df = df.withColumn("label_timestamp", F.expr(f"feature_timestamp + INTERVAL {{ lt.fallback_window_days }} DAYS"))
-{% endif %}
-{% else %}
+{%- endif %}
+{%- else %}
     df = df.withColumn("label_timestamp", F.expr("feature_timestamp + INTERVAL 180 DAYS"))
-{% endif %}
+{%- endif %}
     return df
 
 def derive_label_available_flag(df):
@@ -1706,11 +1746,13 @@ def derive_label_available_flag(df):
         df = df.withColumn("label_available_flag", F.lit(False))
     return df
 
-{% if config.datetime_derivation %}
+{%- if config.datetime_derivation %}
+
 DATETIME_DERIVATION_SOURCES = {{ config.datetime_derivation.source_columns }}
 MASK_FUTURE_COLUMNS = {{ config.datetime_derivation.mask_future_columns }}
 
 def derive_datetime_features(df):
+    \"\"\"Source: Data Discovery > Datetime Feature Derivation\"\"\"
     ref_col = "{{ config.datetime_derivation.reference_column }}"
     mask_set = set(MASK_FUTURE_COLUMNS)
     for col in DATETIME_DERIVATION_SOURCES:
@@ -1734,64 +1776,66 @@ def derive_datetime_features(df):
             df = df.withColumn(f"{col}_dow", dow_val)
             df = df.withColumn(f"{col}_is_weekend", is_weekend_val)
     return df
-{% endif %}
+{%- endif %}
+{%- if config.history_window %}
 
-{% if config.history_window %}
 def apply_history_window(df):
-{% if config.history_window.upper_limit %}
+    \"\"\"Source: Temporal Deep Dive > History Window\"\"\"
+{%- if config.history_window.upper_limit %}
     upper = F.lit("{{ config.history_window.upper_limit }}").cast("timestamp")
-{% else %}
+{%- else %}
     upper = df.agg(F.max("feature_timestamp")).collect()[0][0]
-{% endif %}
-{% if config.history_window.lookback_periods %}
+{%- endif %}
+{%- if config.history_window.lookback_periods %}
     lookback_days = {{ config.history_window.lookback_periods }} * {{ config.history_window.cadence_days }}
     lower = F.date_sub(F.lit(upper), lookback_days)
     df = df.filter(F.col("feature_timestamp").isNull() | (F.col("feature_timestamp") >= lower))
-{% endif %}
-{% if config.history_window.upper_limit %}
+{%- endif %}
+{%- if config.history_window.upper_limit %}
     df = df.filter(F.col("feature_timestamp").isNull() | (F.col("feature_timestamp") <= upper))
-{% endif %}
+{%- endif %}
     return df
-{% endif %}
+{%- endif %}
 
-{% if config.key_resolution_steps %}
+{%- if config.key_resolution_steps %}
 
 # COMMAND ----------
 
 def resolve_entity_key(df):
-{% for step in config.key_resolution_steps %}
+    \"\"\"Source: Intent Contract > Key Resolution\"\"\"
+{%- for step in config.key_resolution_steps %}
     _bridge = spark.read.format("delta").table(landing_table("{{ step.bridge_dataset }}"))
     _bridge = _bridge.select("{{ step.bridge_key }}", "{{ step.resolve_column }}").dropDuplicates(["{{ step.bridge_key }}"])
     df = df.join(_bridge, df["{{ step.source_key }}"] == _bridge["{{ step.bridge_key }}"], "inner")
-{% if step.source_key != step.bridge_key %}
+{%- if step.source_key != step.bridge_key %}
     df = df.drop("{{ step.bridge_key }}")
-{% endif %}
-{% endfor %}
+{%- endif %}
+{%- endfor %}
     return df
-{% endif %}
+{%- endif %}
 
 # COMMAND ----------
 
 def run_landing():
     df = load_source()
-{% if config.raw_time_column %}
+{%- if config.raw_time_column %}
     df = df.withColumnRenamed("{{ config.raw_time_column }}", TIME_COLUMN)
-{% endif %}
-{% if config.original_target_column %}
+{%- endif %}
+{%- if config.original_target_column %}
     df = df.withColumnRenamed("{{ config.original_target_column }}", TARGET_COLUMN)
-{% endif %}
-{% if config.key_resolution_steps %}
+{%- endif %}
+{%- if config.key_resolution_steps %}
     df = resolve_entity_key(df)
-{% endif %}
+{%- endif %}
     df = derive_feature_timestamp(df)
     df = derive_label_timestamp(df)
     df = derive_label_available_flag(df)
-{% if config.datetime_derivation %}
+{%- if config.datetime_derivation %}
     df = derive_datetime_features(df)
-{% endif %}
-{% if config.history_window %}
+{%- endif %}
+{%- if config.history_window %}
     df = apply_history_window(df)
-{% endif %}
+{%- endif %}
     output_table = landing_table(SOURCE_NAME)
     df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
     from delta.tables import DeltaTable
