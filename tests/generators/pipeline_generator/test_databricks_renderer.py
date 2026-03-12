@@ -2791,6 +2791,32 @@ class TestDatabricksTrainingFeatureProfile:
         ast.parse(result)
 
 
+class TestDatabricksTrainingProfilePersistence:
+    def test_training_imports_run_namespace(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace" in result
+
+    def test_training_constructs_namespace_from_widgets(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def train_and_evaluate"):]
+        assert "dbutils.widgets.get(" in fn or "_NAMESPACE" in result
+
+    def test_training_saves_production_profile(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def train_and_evaluate"):]
+        assert "prod_profile.save(" in fn
+        assert "production_feature_profile_path" in fn
+
+    def test_training_profile_save_is_valid_python(self, renderer, sample_pipeline_config):
+        from customer_retention.generators.pipeline_generator.models import TrainingConfig
+        config = sample_pipeline_config
+        config.training = TrainingConfig(
+            exploration_feature_profile={"stage": "exploration", "created_at": "2024-01-01", "row_count": 100, "feature_count": 2, "target_column": "churn", "features": {"col_a": {"dtype": "double", "non_null": 90, "null_count": 10}}, "excluded": {}},
+        )
+        result = renderer.render_training(config)
+        ast.parse(result)
+
+
 class TestDatabricksTrainingDistributedSplit:
     def test_no_topandas_for_splitting(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)

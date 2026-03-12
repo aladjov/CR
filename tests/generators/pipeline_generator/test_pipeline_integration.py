@@ -281,6 +281,7 @@ class TestMultiDatasetGeneration:
             "from customer_retention.stages.modeling.data_splitter",
             "from customer_retention.stages.modeling.cross_validator",
             "from customer_retention.stages.modeling.feature_profile",
+            "from customer_retention.analysis.auto_explorer.run_namespace",
         }
         for f in generated_output.rglob("*.py"):
             if f.stat().st_size > 0:

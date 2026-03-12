@@ -980,13 +980,14 @@ from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score,
 from customer_retention.stages.modeling.data_splitter import DataSplitter, SplitStrategy
 from customer_retention.stages.modeling.cross_validator import CrossValidator, CVStrategy
 from customer_retention.stages.modeling.feature_profile import FeatureProfile, ColumnProfile, build_feature_profile, compare_feature_profiles
+from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 from customer_retention.core.compat.timing import log_timing
 {% if config.training and config.training.imbalance_strategy == "smote" %}
 from customer_retention.stages.modeling.imbalance_handler import ImbalanceHandler, ImbalanceStrategy
 {% endif %}
 from config import (TARGET_COLUMN, PIPELINE_NAME, COMPOSITE_NAME, RECOMMENDATIONS_HASH, MLFLOW_TRACKING_URI,
                     MLFLOW_ARTIFACT_ROOT, FEAST_REPO_PATH, FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY,
-                    FEAST_TIMESTAMP_COL, get_feast_data_path)
+                    FEAST_TIMESTAMP_COL, EXPERIMENTS_DIR, get_feast_data_path)
 
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 logger = logging.getLogger("training")
@@ -996,7 +997,7 @@ _EXPLORATION_PROFILE = {{ config.training.exploration_feature_profile }}
 {% else %}
 _EXPLORATION_PROFILE = None
 {% endif %}
-
+_NAMESPACE = RunNamespace.from_env_or_latest(EXPERIMENTS_DIR)
 
 def _assert_rows(count, stage):
     if count == 0:
@@ -1159,6 +1160,9 @@ def run_experiment():
             feature_stats[c] = ColumnProfile(dtype=str(X[c].dtype), non_null_count=filtered_count - null_count, null_count=null_count)
         prod_profile = build_feature_profile("production", TARGET_COLUMN, filtered_count, feature_stats, excluded_cols)
         print(f"[TRAINING] Production profile: {prod_profile.feature_count} features, {filtered_count:,} rows")
+        if _NAMESPACE is not None:
+            prod_profile.save(_NAMESPACE.production_feature_profile_path)
+            print(f"[TRAINING] Production profile saved to {_NAMESPACE.production_feature_profile_path}")
         if _EXPLORATION_PROFILE is not None:
             exp_profile = FeatureProfile.from_dict(_EXPLORATION_PROFILE)
             discrepancies = compare_feature_profiles(exp_profile, prod_profile)

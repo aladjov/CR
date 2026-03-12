@@ -1405,6 +1405,7 @@ dbutils.notebook.exit(_summary)
 import logging
 import tempfile
 import csv
+from pathlib import Path
 import mlflow
 import mlflow.spark
 from pyspark.ml.classification import LogisticRegression, RandomForestClassifier, GBTClassifier
@@ -1414,6 +1415,7 @@ from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClass
 from pyspark.sql import functions as F
 from pyspark.sql.types import StructType, StructField, DoubleType
 from customer_retention.stages.modeling.feature_profile import FeatureProfile, ColumnProfile, build_feature_profile, compare_feature_profiles
+from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 from customer_retention.core.compat.timing import log_timing
 {% if config.training and config.training.imbalance_strategy == "smote" %}
 from imblearn.over_sampling import SMOTE
@@ -1439,6 +1441,12 @@ _EXPLORATION_PROFILE = {{ config.training.exploration_feature_profile }}
 {% else %}
 _EXPLORATION_PROFILE = None
 {% endif %}
+try:
+    _exp_dir = dbutils.widgets.get("experiments_dir")
+    _run_id = dbutils.widgets.get("run_id")
+    _NAMESPACE = RunNamespace(root=Path(_exp_dir), run_id=_run_id) if _exp_dir and _run_id else None
+except Exception:
+    _NAMESPACE = RunNamespace.from_env_or_latest()
 
 def _assert_rows(count, stage):
     if count == 0:
@@ -1582,6 +1590,9 @@ def train_and_evaluate():
             feature_stats[c] = ColumnProfile(dtype=df.schema[c].dataType.typeName(), non_null_count=filtered_count - null_count, null_count=null_count)
         prod_profile = build_feature_profile("production", TARGET, filtered_count, feature_stats, excluded_cols)
         print(f"[TRAINING] Production profile: {prod_profile.feature_count} features, {filtered_count:,} rows")
+        if _NAMESPACE is not None:
+            prod_profile.save(_NAMESPACE.production_feature_profile_path)
+            print(f"[TRAINING] Production profile saved to {_NAMESPACE.production_feature_profile_path}")
         if _EXPLORATION_PROFILE is not None:
             exp_profile = FeatureProfile.from_dict(_EXPLORATION_PROFILE)
             discrepancies = compare_feature_profiles(exp_profile, prod_profile)

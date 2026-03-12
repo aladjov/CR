@@ -1765,6 +1765,36 @@ class TestExplorationFeatureProfileSaved:
         assert "_namespace" in profile_cell
 
 
+class TestProductionFeatureProfilePersistence:
+    def test_local_training_imports_run_namespace(self, renderer, pipeline_config_minimal):
+        result = renderer.render_training(pipeline_config_minimal)
+        assert "from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace" in result
+
+    def test_local_training_saves_production_profile(self, renderer, pipeline_config_minimal):
+        result = renderer.render_training(pipeline_config_minimal)
+        fn = result[result.index("def run_experiment"):]
+        assert "prod_profile.save(" in fn
+        assert "production_feature_profile_path" in fn
+
+    def test_local_training_constructs_namespace(self, renderer, pipeline_config_minimal):
+        result = renderer.render_training(pipeline_config_minimal)
+        assert "RunNamespace.from_env_or_latest" in result or "_NAMESPACE" in result
+
+    def test_databricks_training_saves_production_profile(self, pipeline_config_minimal):
+        db_code = DatabricksCodeRenderer(catalog="c", schema="s").render_training(pipeline_config_minimal)
+        fn = db_code[db_code.index("def train_and_evaluate"):]
+        assert "prod_profile.save(" in fn
+        assert "production_feature_profile_path" in fn
+
+    def test_both_templates_persist_production_profile(self, pipeline_config_minimal):
+        local_code = CodeRenderer().render_training(pipeline_config_minimal)
+        db_code = DatabricksCodeRenderer(catalog="c", schema="s").render_training(pipeline_config_minimal)
+        assert "prod_profile.save(" in local_code
+        assert "prod_profile.save(" in db_code
+        assert "production_feature_profile_path" in local_code
+        assert "production_feature_profile_path" in db_code
+
+
 class TestTrainingMetricsParity:
     def test_both_templates_log_feature_importance(self, pipeline_config_minimal):
         local_code = CodeRenderer().render_training(pipeline_config_minimal)

@@ -213,6 +213,18 @@ class TestMergedRecommendationsPath:
         assert ns.merged_recommendations_path == expected
 
 
+class TestFeatureProfilePaths:
+    def test_exploration_feature_profile_path(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="proj-abc")
+        expected = tmp_path / "runs" / "proj-abc" / "merged" / "exploration_feature_profile.yaml"
+        assert ns.exploration_feature_profile_path == expected
+
+    def test_production_feature_profile_path(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="proj-abc")
+        expected = tmp_path / "runs" / "proj-abc" / "merged" / "production_feature_profile.yaml"
+        assert ns.production_feature_profile_path == expected
+
+
 class TestDiscoverAllFindings:
     def test_empty_datasets_returns_empty(self, tmp_path):
         ns = RunNamespace(root=tmp_path, run_id="proj-abc")
