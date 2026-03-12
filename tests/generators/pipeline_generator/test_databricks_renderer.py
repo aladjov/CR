@@ -2509,8 +2509,13 @@ class TestDatabricksGoldFeatureStoreRegistration:
 
     def test_gold_registers_timestamp_column(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        assert "timeseries_columns" in result
+        assert '"timeseries_column"' in result
         assert "TIMESTAMP_COLUMN" in result
+
+    def test_gold_timestamp_in_primary_keys(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        fn = result[result.index("def _register_feature_table"):]
+        assert 'pk = ["entity_id", TIMESTAMP_COLUMN] if has_ts' in fn
 
     def test_gold_registration_after_save(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)

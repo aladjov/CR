@@ -1297,11 +1297,11 @@ def _register_feature_table(table_name, df):
     except ImportError:
         from databricks.feature_store import FeatureStoreClient
         fe = FeatureStoreClient()
-    pk = ["entity_id"]
-    ts_cols = [TIMESTAMP_COLUMN] if TIMESTAMP_COLUMN in [f.name for f in df.schema.fields] else []
+    has_ts = TIMESTAMP_COLUMN in [f.name for f in df.schema.fields]
+    pk = ["entity_id", TIMESTAMP_COLUMN] if has_ts else ["entity_id"]
     kwargs = {"name": table_name, "primary_keys": pk, "df": df}
-    if ts_cols:
-        kwargs["timeseries_columns"] = ts_cols
+    if has_ts:
+        kwargs["timeseries_column"] = TIMESTAMP_COLUMN
     try:
         fe.create_table(**kwargs)
         print(f"[GOLD] Registered feature table: {table_name}")
