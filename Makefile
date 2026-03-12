@@ -56,6 +56,16 @@ test-notebook:
 test-notebooks-pytest:
 	pytest tests/test_notebooks.py -v
 
+# Run the full CI pipeline locally (lint + tests + coverage) — use before pushing
+ci:
+	@echo "=== Lint (ruff) ==="
+	ruff check src/ tests/
+	@echo ""
+	@echo "=== Tests + Coverage (75% minimum) ==="
+	pytest tests/ --cov=customer_retention --cov-report=term-missing --cov-fail-under=75 -v
+	@echo ""
+	@echo "✅ Local CI passed — safe to push"
+
 # ---------- Build & Publish ----------
 
 # Build sdist and wheel

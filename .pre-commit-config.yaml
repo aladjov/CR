@@ -36,10 +36,20 @@ repos:
   # Local hooks for test coverage enforcement
   - repo: local
     hooks:
+      # Pre-push hook: Lint check (mirrors CI lint job)
+      - id: ruff-check
+        name: ruff lint check (mirrors CI)
+        entry: python -m ruff check src/ tests/
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+        verbose: true
+
       # Pre-push hook: Run tests with coverage enforcement (75% minimum)
       - id: pytest-coverage
         name: pytest with coverage (75% minimum required)
-        entry: python -m pytest tests/ --cov=customer_retention --cov-fail-under=75 -q --tb=no
+        entry: python -m pytest tests/ --cov=customer_retention --cov-fail-under=75 -q --tb=short
         language: system
         pass_filenames: false
         always_run: true
