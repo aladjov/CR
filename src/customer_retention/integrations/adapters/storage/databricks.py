@@ -90,18 +90,13 @@ class DatabricksDelta(DeltaStorage):
             for f in spark_df.schema.fields
         )
         if _has_ts:
-            spark_df.cache()
-            spark_df.count()
-        try:
-            writer = spark_df.write.format("delta").mode(mode)
-            if mode == "overwrite":
-                writer = writer.option("overwriteSchema", "true")
-            if partition_by:
-                writer = writer.partitionBy(*partition_by)
-            writer.save(path)
-        finally:
-            if _has_ts:
-                spark_df.unpersist()
+            spark_df = spark_df.localCheckpoint(eager=True)
+        writer = spark_df.write.format("delta").mode(mode)
+        if mode == "overwrite":
+            writer = writer.option("overwriteSchema", "true")
+        if partition_by:
+            writer = writer.partitionBy(*partition_by)
+        writer.save(path)
 
     def merge(self, df: Any, path: str, condition: str,
               update_cols: Optional[List[str]] = None) -> None:

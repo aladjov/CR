@@ -869,8 +869,8 @@ class TestDatabricksDeltaWriteClamps:
                     "overwriteSchema", "true"
                 ).save.assert_called_once_with("/fake/path")
 
-    def test_write_materializes_when_timestamps_present(self):
-        from unittest.mock import MagicMock, call, patch
+    def test_write_checkpoints_when_timestamps_present(self):
+        from unittest.mock import MagicMock, patch
 
         from pyspark.sql.types import StringType, StructField, TimestampNTZType
 
@@ -882,18 +882,22 @@ class TestDatabricksDeltaWriteClamps:
 
             mock_spark_df = MagicMock()
             mock_clamped = MagicMock()
+            mock_checkpointed = MagicMock()
             mock_clamped.schema.fields = [
                 StructField("id", StringType()),
                 StructField("event_time", TimestampNTZType()),
             ]
+            mock_clamped.localCheckpoint.return_value = mock_checkpointed
             with (
                 patch.object(DatabricksDelta, "_strip_spark_timestamp_tz", return_value=MagicMock()),
                 patch("customer_retention.core.compat.clamp_spark_timestamps", return_value=mock_clamped),
             ):
                 storage.write(mock_spark_df, "/fake/path")
-                mock_clamped.cache.assert_called_once()
-                mock_clamped.count.assert_called_once()
-                mock_clamped.unpersist.assert_called_once()
+                mock_clamped.localCheckpoint.assert_called_once_with(eager=True)
+                mock_clamped.cache.assert_not_called()
+                mock_checkpointed.write.format("delta").mode("overwrite").option(
+                    "overwriteSchema", "true"
+                ).save.assert_called_once_with("/fake/path")
 
     def test_write_skips_materialization_without_timestamps(self):
         from unittest.mock import MagicMock, patch
