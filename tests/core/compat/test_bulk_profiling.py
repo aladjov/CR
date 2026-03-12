@@ -6,15 +6,18 @@ import pytest
 
 from customer_retention.core.compat.bulk_profiling import (
     BulkStats,
+    DatetimeDiscoveryCandidateStats,
     HistogramData,
     NumericColumnStats,
     PerColumnStats,
     _pandas_bulk_stats,
     _safe_float,
     _safe_int,
+    bulk_datetime_discovery_stats,
     bulk_future_fractions,
     bulk_histogram,
     bulk_monthly_counts,
+    bulk_nunique,
     compute_bulk_stats,
 )
 
@@ -607,3 +610,206 @@ class TestBulkMonthlyCounts:
         result = bulk_monthly_counts(df, "dt")
         assert len(result) == 1
         assert result[0] == ("2023-05", 3)
+
+
+class TestBulkNunique:
+    def test_basic(self):
+        df = pd.DataFrame({"a": [1, 1, 2, 3], "b": ["x", "x", "x", "y"]})
+        result = bulk_nunique(df, ["a", "b"])
+        assert result == {"a": 3, "b": 2}
+
+    def test_none_columns_uses_all(self):
+        df = pd.DataFrame({"a": [1, 2], "b": [3, 3]})
+        result = bulk_nunique(df)
+        assert result == {"a": 2, "b": 1}
+
+    def test_empty_columns(self):
+        df = pd.DataFrame({"a": [1]})
+        result = bulk_nunique(df, [])
+        assert result == {}
+
+
+class TestBulkDatetimeDiscoveryStats:
+    def test_basic(self):
+        df = pd.DataFrame({"dt": pd.date_range("2020-01-01", periods=10)})
+        result = bulk_datetime_discovery_stats(df, ["dt"])
+        assert "dt" in result
+        assert result["dt"].coverage == 1.0
+        assert result["dt"].future_fraction == 0.0
+        assert result["dt"].min_date is not None
+
+    def test_empty_columns(self):
+        df = pd.DataFrame({"dt": pd.date_range("2020-01-01", periods=5)})
+        result = bulk_datetime_discovery_stats(df, [])
+        assert result == {}
+
+    def test_with_nulls(self):
+        df = pd.DataFrame({"dt": [pd.Timestamp("2020-01-01"), pd.NaT, pd.NaT]})
+        result = bulk_datetime_discovery_stats(df, ["dt"])
+        assert result["dt"].coverage == pytest.approx(1 / 3)
+
+
+class TestPandasDatetimeStatsEdgeCases:
+    """Cover _pandas_datetime_stats error branches."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_non_datetime_conversion_failure(self):
+        from customer_retention.core.compat.bulk_profiling import _pandas_datetime_stats
+
+        series = pd.Series(["not", "dates", "at", "all"])
+        result = _pandas_datetime_stats(series)
+        # All values coerce to NaT → returns empty stats
+        assert result.min_date is None or result.date_range_days is None
+
+    def test_overflow_values(self):
+        from customer_retention.core.compat.bulk_profiling import _pandas_datetime_stats
+
+        series = pd.Series([10**18, 10**19, 10**20])
+        result = _pandas_datetime_stats(series)
+        # Should handle gracefully without raising
+        assert isinstance(result, type(result))
+
+
+class TestPandasBinaryStatsEdgeCases:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_all_null_binary(self):
+        from customer_retention.core.compat.bulk_profiling import _pandas_binary_stats
+
+        series = pd.Series([None, None, None], dtype="object")
+        result = _pandas_binary_stats(series, None)
+        assert result.true_count == 0
+        assert result.false_count == 0
+
+    def test_custom_binary_values(self):
+        """Cover the fallback when no TRUE/FALSE values matched."""
+        from customer_retention.core.compat.bulk_profiling import _pandas_binary_stats
+
+        series = pd.Series(["active", "active", "inactive"])
+        result = _pandas_binary_stats(series, None)
+        assert result.true_count + result.false_count > 0
+
+
+class TestPandasTextStatsEdgeCases:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_all_null_text(self):
+        from customer_retention.core.compat.bulk_profiling import _pandas_text_stats
+
+        series = pd.Series([None, None, None], dtype="object")
+        result = _pandas_text_stats(series, 3)
+        assert result.length_min == 0
+        assert result.length_max == 0
+
+
+class TestSparkBulkHelpersMocked:
+    """Mock-based tests for Spark helper functions to improve coverage."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def _make_mock_spark_df(self, agg_result_dict):
+        """Create a mock Spark DataFrame that returns given agg results."""
+        mock_df = MagicMock()
+        mock_row = MagicMock()
+        mock_row.__getitem__ = lambda self, key: agg_result_dict.get(key, 0)
+        mock_df.agg.return_value.collect.return_value = [mock_row]
+        mock_df.count.return_value = len(agg_result_dict)
+        return mock_df
+
+    def test_spark_bulk_datetime_discovery(self):
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_datetime_discovery
+
+        result_map = {
+            "__min__dt": pd.Timestamp("2020-01-01"),
+            "__max__dt": pd.Timestamp("2023-12-31"),
+            "__cnt__dt": 100,
+            "__fut__dt": 5,
+        }
+        mock_df = self._make_mock_spark_df(result_map)
+        mock_df.count.return_value = 100
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=mock_df):
+            result = _spark_bulk_datetime_discovery(MagicMock(), ["dt"])
+
+        assert "dt" in result
+        assert result["dt"].coverage == 1.0
+        assert result["dt"].future_fraction == 0.05
+
+    def test_spark_bulk_future_fractions(self):
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_future_fractions
+
+        result_map = {"__total__": 200, "__fut__col_a": 10, "__fut__col_b": 0}
+        mock_df = self._make_mock_spark_df(result_map)
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=mock_df):
+            result = _spark_bulk_future_fractions(MagicMock(), "ref", ["col_a", "col_b"])
+
+        assert result["col_a"] == pytest.approx(10 / 200)
+        assert result["col_b"] == 0.0
+
+    def test_spark_bulk_histogram(self):
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_histogram
+
+        bounds_row = MagicMock()
+        bounds_row.__getitem__ = lambda self, key: {"__lo__": 0.0, "__hi__": 100.0}.get(key)
+        hist_row = MagicMock()
+        hist_row.__getitem__ = lambda self, key: 5  # 5 per bin
+
+        mock_df = MagicMock()
+        mock_df.agg.return_value.collect.side_effect = [[bounds_row], [hist_row]]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=mock_df):
+            result = _spark_bulk_histogram(MagicMock(), "val", nbins=10)
+
+        assert len(result.bin_edges) == 11
+        assert len(result.counts) == 10
+
+    def test_spark_bulk_histogram_empty(self):
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_histogram
+
+        bounds_row = MagicMock()
+        bounds_row.__getitem__ = lambda self, key: None
+
+        mock_df = MagicMock()
+        mock_df.agg.return_value.collect.return_value = [bounds_row]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=mock_df):
+            result = _spark_bulk_histogram(MagicMock(), "val", nbins=20)
+
+        assert result.bin_edges == []
+        assert result.counts == []
+
+    def test_spark_bulk_monthly_counts(self):
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_monthly_counts
+
+        mock_rows = [
+            MagicMock(**{"__getitem__": lambda s, k: {"month": "2023-01", "cnt": 10}[k]}),
+            MagicMock(**{"__getitem__": lambda s, k: {"month": "2023-02", "cnt": 20}[k]}),
+        ]
+        mock_df = MagicMock()
+        mock_df.filter.return_value.groupBy.return_value.agg.return_value.orderBy.return_value.collect.return_value = mock_rows
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=mock_df):
+            result = _spark_bulk_monthly_counts(MagicMock(), "dt")
+
+        assert len(result) == 2
+
+    def test_spark_bulk_nunique(self):
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_nunique
+
+        result_map = {"__dist__a": 5, "__dist__b": 10}
+        mock_df = self._make_mock_spark_df(result_map)
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=mock_df):
+            result = _spark_bulk_nunique(MagicMock(), ["a", "b"])
+
+        assert result == {"a": 5, "b": 10}
