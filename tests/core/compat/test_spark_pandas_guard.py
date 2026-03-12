@@ -83,6 +83,11 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
         "Use _is_native_spark_df() from core.compat",
     ),
     (
+        re.compile(r"\.rdd[.\)]"),
+        ".rdd access is banned on Databricks shared clusters (Unity Catalog)",
+        "Use F.spark_partition_id() for partition info, or Spark SQL APIs",
+    ),
+    (
         re.compile(r"\bpd\.Timestamp\b"),
         "pd.Timestamp fails when pd is pyspark.pandas (scalar not reimplemented)",
         "Use datetime.datetime (pandas Timestamp is a subclass) or import pandas as _pandas",
