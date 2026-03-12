@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import os
 import uuid
 from enum import Enum
 from pathlib import Path
@@ -10,6 +11,7 @@ import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from customer_retention.core.compat import native_pd, pd
+from customer_retention.core.compat.remote_path import RemotePath
 from customer_retention.core.config.column_config import DatasetGranularity
 
 
@@ -283,14 +285,19 @@ class ProjectContext(BaseModel):
         return None
 
     def save(self, path) -> None:
-        p = path if isinstance(path, Path) else Path(str(path))
+        p = path if isinstance(path, (Path, RemotePath)) else Path(str(path))
         p.parent.mkdir(parents=True, exist_ok=True)
-        data = self.model_dump(mode="json")
-        p.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
+        content = yaml.dump(self.model_dump(mode="json"), default_flow_style=False, sort_keys=False)
+        if isinstance(p, Path):
+            tmp = p.parent / (p.name + ".tmp")
+            tmp.write_text(content)
+            os.replace(str(tmp), str(p))
+        else:
+            p.write_text(content)
 
     @classmethod
     def load(cls, path) -> ProjectContext:
-        p = path if isinstance(path, Path) else Path(str(path))
+        p = path if isinstance(path, (Path, RemotePath)) else Path(str(path))
         if not p.exists():
             raise FileNotFoundError(f"Project context file not found: {p}")
         data = yaml.safe_load(p.read_text())

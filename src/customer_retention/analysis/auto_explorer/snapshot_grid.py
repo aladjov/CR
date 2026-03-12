@@ -14,7 +14,23 @@ from customer_retention.analysis.auto_explorer.project_context import (
     DatasetRegistryEntry,
     IntentConfig,
 )
+from customer_retention.core.compat.remote_path import RemotePath
 from customer_retention.core.config.column_config import DatasetGranularity
+
+
+def _coerce_path(path):
+    if isinstance(path, (Path, RemotePath)):
+        return path
+    return Path(str(path))
+
+
+def _atomic_write_text(path, content: str) -> None:
+    if isinstance(path, Path):
+        tmp = path.parent / (path.name + ".tmp")
+        tmp.write_text(content)
+        os.replace(str(tmp), str(path))
+    else:
+        path.write_text(content)
 
 
 def _cap_grid_dates(dates: list[str], max_dates_override: Optional[int] = None) -> list[str]:
@@ -208,10 +224,10 @@ class SnapshotGrid(BaseModel):
         return n_entities * len(self.grid_dates)
 
     def save(self, path) -> None:
-        p = path if isinstance(path, Path) else Path(str(path))
+        p = _coerce_path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        data = self.model_dump(mode="json")
-        p.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
+        content = yaml.dump(self.model_dump(mode="json"), default_flow_style=False, sort_keys=False)
+        _atomic_write_text(p, content)
 
     def apply_votes(self, votes: dict[str, DatasetGridVote]) -> None:
         if self.locked:
@@ -222,16 +238,14 @@ class SnapshotGrid(BaseModel):
 
     @classmethod
     def save_vote(cls, vote_dir, dataset_name: str, vote: DatasetGridVote) -> None:
-        p = vote_dir if isinstance(vote_dir, Path) else Path(str(vote_dir))
+        p = _coerce_path(vote_dir)
         p.mkdir(parents=True, exist_ok=True)
-        data = vote.model_dump(mode="json")
-        (p / f"{dataset_name}.yaml").write_text(
-            yaml.dump(data, default_flow_style=False, sort_keys=False),
-        )
+        content = yaml.dump(vote.model_dump(mode="json"), default_flow_style=False, sort_keys=False)
+        _atomic_write_text(p / f"{dataset_name}.yaml", content)
 
     @classmethod
     def load_votes(cls, vote_dir) -> dict[str, DatasetGridVote]:
-        p = vote_dir if isinstance(vote_dir, Path) else Path(str(vote_dir))
+        p = _coerce_path(vote_dir)
         if not p.is_dir():
             return {}
         result: dict[str, DatasetGridVote] = {}
@@ -252,7 +266,7 @@ class SnapshotGrid(BaseModel):
 
     @classmethod
     def load(cls, path) -> SnapshotGrid:
-        p = path if isinstance(path, Path) else Path(str(path))
+        p = _coerce_path(path)
         if not p.exists():
             raise FileNotFoundError(f"Snapshot grid file not found: {p}")
         data = yaml.safe_load(p.read_text())

@@ -530,6 +530,90 @@ class TestSerialization:
         grid.save(path)
         assert path.exists()
 
+    def test_round_trip_many_datasets(self, tmp_path):
+        grid = _minimal_grid(
+            grid_start="2020-01-01", grid_end="2024-12-31",
+            cadence_interval=CadenceInterval.WEEKLY,
+        )
+        grid.generate_grid_dates()
+        for i in range(50):
+            grid.dataset_votes[f"dataset_{i:03d}"] = DatasetGridVote(
+                dataset_name=f"dataset_{i:03d}",
+                granularity=DatasetGranularity.EVENT_LEVEL if i % 2 == 0 else DatasetGranularity.ENTITY_LEVEL,
+                voted=True,
+                data_span_start=f"2020-{(i % 12) + 1:02d}-01",
+                data_span_end=f"2024-{(i % 12) + 1:02d}-28",
+                suggested_cadence=CadenceInterval.WEEKLY,
+            )
+        path = tmp_path / "grid.yaml"
+        grid.save(path)
+        loaded = SnapshotGrid.load(path)
+        assert len(loaded.dataset_votes) == 50
+        assert len(loaded.grid_dates) == len(grid.grid_dates)
+        for name, vote in grid.dataset_votes.items():
+            assert loaded.dataset_votes[name].data_span_start == vote.data_span_start
+            assert loaded.dataset_votes[name].data_span_end == vote.data_span_end
+
+    def test_atomic_write_no_temp_file_left(self, tmp_path):
+        grid = _minimal_grid(grid_start="2024-01-01", grid_end="2024-06-01")
+        path = tmp_path / "grid.yaml"
+        grid.save(path)
+        leftovers = list(tmp_path.glob("*.tmp"))
+        assert leftovers == []
+
+    def test_atomic_write_preserves_content_on_overwrite(self, tmp_path):
+        path = tmp_path / "grid.yaml"
+        grid1 = _minimal_grid(grid_start="2024-01-01", grid_end="2024-06-01")
+        grid1.save(path)
+        grid2 = _minimal_grid(grid_start="2025-01-01", grid_end="2025-12-31")
+        grid2.save(path)
+        loaded = SnapshotGrid.load(path)
+        assert loaded.grid_start == "2025-01-01"
+        content = path.read_text()
+        assert yaml.safe_load(content) is not None
+
+    def test_save_load_with_pathlike_object(self, tmp_path):
+        from customer_retention.core.compat.remote_path import RemotePath
+
+        grid = _minimal_grid(grid_start="2024-01-01", grid_end="2024-06-01")
+        grid.dataset_votes["events"] = _minimal_vote(
+            voted=True, data_span_start="2023-06-01", data_span_end="2024-06-01",
+        )
+        local_path = tmp_path / "grid.yaml"
+        grid.save(local_path)
+        remote = RemotePath(str(local_path))
+        loaded = SnapshotGrid.load(local_path)
+        assert loaded.grid_start == "2024-01-01"
+        assert loaded.dataset_votes["events"].data_span_start == "2023-06-01"
+
+    def test_save_vote_load_votes_with_pathlike(self, tmp_path):
+        vote = _minimal_vote(
+            voted=True, data_span_start="2023-01-01", data_span_end="2024-12-31",
+        )
+        SnapshotGrid.save_vote(tmp_path, "transactions", vote)
+        loaded = SnapshotGrid.load_votes(tmp_path)
+        assert "transactions" in loaded
+        assert loaded["transactions"].data_span_start == "2023-01-01"
+
+    def test_load_truncated_yaml_raises_error(self, tmp_path):
+        grid = _minimal_grid()
+        for i in range(30):
+            grid.dataset_votes[f"ds_{i:03d}"] = DatasetGridVote(
+                dataset_name=f"dataset_{i:03d}",
+                granularity=DatasetGranularity.EVENT_LEVEL,
+                voted=True,
+                data_span_start=f"2020-{(i % 12) + 1:02d}-01",
+                data_span_end=f"2024-{(i % 12) + 1:02d}-28",
+            )
+        path = tmp_path / "grid.yaml"
+        grid.save(path)
+        content = path.read_text()
+        cut_idx = content.rfind("data_span_start")
+        truncated = content[:cut_idx + 4]
+        path.write_text(truncated)
+        with pytest.raises((yaml.YAMLError, Exception)):
+            SnapshotGrid.load(path)
+
 
 class TestComputeBoundaries:
     def test_training_safe_formula(self):
