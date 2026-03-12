@@ -84,13 +84,6 @@ class DatabricksDelta(DeltaStorage):
         spark_df = self._strip_spark_timestamp_tz(spark_df)
         from customer_retention.core.compat import clamp_spark_timestamps
         spark_df = clamp_spark_timestamps(spark_df)
-        from pyspark.sql.types import TimestampNTZType, TimestampType
-        _has_ts = any(
-            isinstance(f.dataType, (TimestampType, TimestampNTZType))
-            for f in spark_df.schema.fields
-        )
-        if _has_ts:
-            spark_df = spark_df.localCheckpoint(eager=True)
         writer = spark_df.write.format("delta").mode(mode)
         if mode == "overwrite":
             writer = writer.option("overwriteSchema", "true")
