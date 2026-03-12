@@ -7,6 +7,24 @@ omit =
     */__pycache__/*
     */site-packages/*
     */__init__.py
+    ; Spark/Databricks-only modules — no coverage without PySpark
+    */generators/pipeline_generator/databricks_renderer.py
+    */generators/pipeline_generator/databricks_generator.py
+    */generators/notebook_generator/databricks_generator.py
+    */generators/orchestration/databricks_exporter.py
+    */integrations/adapters/storage/databricks.py
+    */integrations/adapters/feature_store/databricks.py
+    */integrations/adapters/mlflow/databricks.py
+    */integrations/databricks_init.py
+    */stages/modeling/spark_baseline_trainer.py
+    */stages/modeling/spark_classifier_wrapper.py
+    */stages/modeling/spark_feature_scaler.py
+    */stages/profiling/spark_segment_analyzer.py
+    */stages/profiling/spark_temporal_feature_analyzer.py
+    */stages/profiling/spark_temporal_feature_engineer.py
+    */stages/profiling/spark_time_window_aggregator.py
+    */stages/temporal/spark_temporal_merger.py
+    */core/compat/spark_backend.py
 
 [report]
 precision = 2
