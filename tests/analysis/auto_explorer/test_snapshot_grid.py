@@ -15,6 +15,7 @@ from customer_retention.analysis.auto_explorer.snapshot_grid import (
     DatasetGridVote,
     GridAdjustmentMode,
     SnapshotGrid,
+    _atomic_write_text,
     _cap_grid_dates,
     compute_boundaries,
 )
@@ -633,6 +634,50 @@ class TestSerialization:
         loaded = SnapshotGrid.load_votes(tmp_path)
         assert "transactions" in loaded
         assert loaded["transactions"].data_span_start == "2023-01-01"
+
+    def test_atomic_write_skips_rename_on_volumes_fuse_path(self, tmp_path, monkeypatch):
+        path = tmp_path / "grid.yaml"
+        monkeypatch.setattr(
+            "customer_retention.analysis.auto_explorer.snapshot_grid._is_fuse_volume",
+            lambda _: True,
+        )
+        monkeypatch.setattr(
+            "customer_retention.analysis.auto_explorer.snapshot_grid.os.replace",
+            lambda *a, **kw: (_ for _ in ()).throw(OSError("should not be called")),
+        )
+        _atomic_write_text(path, "hello: world\n")
+        assert path.read_text() == "hello: world\n"
+        assert not (tmp_path / "grid.yaml.tmp").exists()
+
+    def test_atomic_write_uses_rename_on_local_path(self, tmp_path):
+        path = tmp_path / "grid.yaml"
+        _atomic_write_text(path, "hello: world\n")
+        assert path.read_text() == "hello: world\n"
+        assert not (tmp_path / "grid.yaml.tmp").exists()
+
+    def test_save_grid_on_volumes_path(self, tmp_path, monkeypatch):
+        path = tmp_path / "snapshot_grid.yaml"
+        monkeypatch.setattr(
+            "customer_retention.analysis.auto_explorer.snapshot_grid._is_fuse_volume",
+            lambda _: True,
+        )
+        monkeypatch.setattr(
+            "customer_retention.analysis.auto_explorer.snapshot_grid.os.replace",
+            lambda *a, **kw: (_ for _ in ()).throw(OSError("FUSE rename unsupported")),
+        )
+        grid = _minimal_grid(grid_start="2024-01-01", grid_end="2024-06-01")
+        grid.save(path)
+        loaded = SnapshotGrid.load(path)
+        assert loaded.grid_start == "2024-01-01"
+        assert not (tmp_path / "snapshot_grid.yaml.tmp").exists()
+
+    def test_is_fuse_volume_detects_volumes_prefix(self):
+        from pathlib import Path as _Path
+
+        from customer_retention.analysis.auto_explorer.snapshot_grid import _is_fuse_volume
+        assert _is_fuse_volume(_Path("/Volumes/cat/sch/experiments/grid.yaml"))
+        assert not _is_fuse_volume(_Path("/tmp/grid.yaml"))
+        assert not _is_fuse_volume(_Path("/home/user/Volumes/grid.yaml"))
 
     def test_load_truncated_yaml_raises_error(self, tmp_path):
         grid = _minimal_grid()

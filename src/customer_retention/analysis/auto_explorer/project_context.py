@@ -15,6 +15,10 @@ from customer_retention.core.compat.remote_path import RemotePath
 from customer_retention.core.config.column_config import DatasetGranularity
 
 
+def _is_fuse_volume(path) -> bool:
+    return str(path).startswith("/Volumes/")
+
+
 class PredictionObjective(str, Enum):
     IMMEDIATE_RISK = "immediate_risk"
     RENEWAL_RISK = "renewal_risk"
@@ -288,7 +292,7 @@ class ProjectContext(BaseModel):
         p = path if isinstance(path, (Path, RemotePath)) else Path(str(path))
         p.parent.mkdir(parents=True, exist_ok=True)
         content = yaml.dump(self.model_dump(mode="json"), default_flow_style=False, sort_keys=False)
-        if isinstance(p, Path):
+        if isinstance(p, Path) and not _is_fuse_volume(p):
             tmp = p.parent / (p.name + ".tmp")
             tmp.write_text(content)
             os.replace(str(tmp), str(p))

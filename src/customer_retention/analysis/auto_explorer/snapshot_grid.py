@@ -24,8 +24,12 @@ def _coerce_path(path):
     return Path(str(path))
 
 
+def _is_fuse_volume(path) -> bool:
+    return str(path).startswith("/Volumes/")
+
+
 def _atomic_write_text(path, content: str) -> None:
-    if isinstance(path, Path):
+    if isinstance(path, Path) and not _is_fuse_volume(path):
         tmp = path.parent / (path.name + ".tmp")
         tmp.write_text(content)
         os.replace(str(tmp), str(path))

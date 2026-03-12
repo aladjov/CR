@@ -637,6 +637,22 @@ class TestProjectContextSerialization:
         assert a.rationale == ["binary target", "churn pattern"]
         assert a.feasibility["positive_rate"] == 0.15
 
+    def test_save_on_volumes_fuse_path_skips_rename(self, tmp_path, monkeypatch):
+        path = tmp_path / "project_context.yaml"
+        monkeypatch.setattr(
+            "customer_retention.analysis.auto_explorer.project_context._is_fuse_volume",
+            lambda _: True,
+        )
+        monkeypatch.setattr(
+            "customer_retention.analysis.auto_explorer.project_context.os.replace",
+            lambda *a, **kw: (_ for _ in ()).throw(OSError("FUSE rename unsupported")),
+        )
+        ctx = _minimal_context()
+        ctx.save(path)
+        loaded = ProjectContext.load(path)
+        assert loaded.project_name == "test_project"
+        assert not (tmp_path / "project_context.yaml.tmp").exists()
+
     def test_legacy_posture_values_load_correctly(self, tmp_path):
         ctx = _minimal_context()
         out = tmp_path / "ctx.yaml"
