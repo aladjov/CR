@@ -2574,6 +2574,13 @@ class TestDatabricksGoldFeatureStoreRegistration:
         assert "ALTER TABLE" in fn
         assert "PRIMARY KEY" in fn
 
+    def test_gold_pk_columns_set_not_null_before_constraint(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        fn = result[result.index("def _add_pk_constraint"):]
+        not_null_pos = fn.index("SET NOT NULL")
+        pk_pos = fn.index("PRIMARY KEY")
+        assert not_null_pos < pk_pos
+
     def test_gold_pk_constraint_handles_existing(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
         fn = result[result.index("def _add_pk_constraint"):]

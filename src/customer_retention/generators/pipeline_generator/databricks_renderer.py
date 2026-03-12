@@ -1349,6 +1349,8 @@ def apply_feature_selection(df):
 # COMMAND ----------
 
 def _add_pk_constraint(table_name, pk):
+    for col in pk:
+        spark.sql(f"ALTER TABLE {table_name} ALTER COLUMN {col} SET NOT NULL")
     constraint_name = table_name.replace(".", "_") + "_pk"
     pk_cols = ", ".join(pk)
     try:
