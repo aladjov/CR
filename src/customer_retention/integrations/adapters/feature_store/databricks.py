@@ -58,7 +58,7 @@ class DatabricksFeatureStore(FeatureStoreAdapter):
         df = spark.createDataFrame([], self._schema_to_spark(schema))
         kwargs: Dict[str, Any] = {"name": full_name, "primary_keys": primary_keys, "df": df}
         if timeseries_column:
-            kwargs["timeseries_columns"] = [timeseries_column]
+            kwargs["timeseries_columns"] = timeseries_column
         self.fe_client.create_table(**kwargs)
         return AdapterResult(success=True, metadata={"name": full_name})
 
@@ -117,7 +117,7 @@ class DatabricksFeatureStore(FeatureStoreAdapter):
         spark_df = _to_spark_df(spark, df)
         kwargs: Dict[str, Any] = {"name": table_name, "primary_keys": [config.entity_key], "df": spark_df}
         if hasattr(config, "timeseries_column") and config.timeseries_column:
-            kwargs["timeseries_columns"] = [config.timeseries_column]
+            kwargs["timeseries_columns"] = config.timeseries_column
         self.fe_client.create_table(**kwargs)
         return table_name
 

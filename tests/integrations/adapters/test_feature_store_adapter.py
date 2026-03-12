@@ -235,6 +235,29 @@ class TestDatabricksFeatureStoreTimeseries:
         assert config.timeseries_column == "event_ts"
 
 
+class TestDatabricksFeatureStoreTimeseriesParam:
+    def test_timeseries_columns_passes_string_not_list(self):
+        import ast
+        from pathlib import Path
+
+        source = Path(__file__).resolve().parents[3] / "src" / "customer_retention" / "integrations" / "adapters" / "feature_store" / "databricks.py"
+        tree = ast.parse(source.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+                if isinstance(node.slice, ast.Constant) and node.slice.value == "timeseries_columns":
+                    assign = node
+                    parent = None
+                    for parent_node in ast.walk(tree):
+                        for child in ast.iter_child_nodes(parent_node):
+                            if child is node:
+                                parent = parent_node
+                    break
+        source_text = source.read_text()
+        assert 'kwargs["timeseries_columns"] = [' not in source_text, (
+            "timeseries_columns should be a string, not a list — FeatureEngineeringClient expects str"
+        )
+
+
 class TestDatabricksFeatureStoreImportFallback:
     def test_import_function_exists(self):
         from customer_retention.integrations.adapters.feature_store.databricks import _import_feature_engineering_client

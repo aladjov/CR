@@ -708,6 +708,48 @@ class TestDatabricksRenderTraining:
         assert "DataSplitter" not in result
 
 
+class TestDatabricksTrainingFeatureEngineering:
+    def test_training_uses_fe_log_model_for_best(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "fe.log_model" in result
+
+    def test_training_creates_feature_lookup(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def _log_best_model"):]
+        assert "FeatureLookup" in fn
+        assert "gold_table()" in fn
+
+    def test_training_creates_training_set(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def _log_best_model"):]
+        assert "create_training_set" in fn
+
+    def test_training_registers_model_in_uc(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "registered_model_name" in result
+        assert "CATALOG" in result.split("registered_model_name")[1][:50]
+        assert "SCHEMA" in result.split("registered_model_name")[1][:50]
+
+    def test_training_fe_has_import_fallback(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def _log_best_model"):]
+        assert "except ImportError" in fn
+
+    def test_training_fallback_uses_mlflow_spark(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def _log_best_model"):]
+        assert "mlflow.spark.log_model" in fn
+
+    def test_training_nested_runs_still_use_mlflow_spark(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("for name, model in models"):]
+        assert "mlflow.spark.log_model(fitted" in fn
+
+    def test_training_log_best_model_is_valid_python(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        ast.parse(result)
+
+
 class TestDatabricksRenderTrainingImbalance:
     def _make_config_with_imbalance(self, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale, strategy):
         from customer_retention.generators.pipeline_generator.models import TrainingConfig
@@ -2494,23 +2536,41 @@ class TestDatabricksGoldColumnFiltering:
 
 
 class TestDatabricksGoldFeatureStoreRegistration:
-    def test_gold_imports_feature_engineering_client(self, renderer, sample_pipeline_config):
+    def test_gold_casts_timestamp_ntz_before_write(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        assert "FeatureEngineeringClient" in result
+        fn = result[result.index("def run_gold"):]
+        cast_pos = fn.index("_cast_timestamp_ntz_to_timestamp")
+        save_pos = fn.index("saveAsTable")
+        assert cast_pos < save_pos
 
-    def test_gold_has_feature_store_client_fallback(self, renderer, sample_pipeline_config):
+    def test_gold_cast_function_uses_timestamp_type(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        assert "FeatureStoreClient" in result
+        fn = result[result.index("def _cast_timestamp_ntz_to_timestamp"):]
+        assert "TimestampNTZType" in fn
+        assert "TimestampType" in fn
+        assert ".cast(TimestampType())" in fn
 
-    def test_gold_registers_entity_id_as_primary_key(self, renderer, sample_pipeline_config):
+    def test_gold_no_alter_table_for_type_conversion(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        assert '"entity_id"' in result
-        assert "primary_keys" in result
+        assert "SET DATA TYPE" not in result
 
-    def test_gold_registers_timestamp_column(self, renderer, sample_pipeline_config):
+    def test_gold_no_feature_engineering_client_import(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        assert '"timeseries_column"' in result
-        assert "TIMESTAMP_COLUMN" in result
+        assert "FeatureEngineeringClient" not in result
+        assert "FeatureStoreClient" not in result
+
+    def test_gold_registers_via_sql_pk_constraint(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        fn = result[result.index("def _register_feature_table"):]
+        assert "PRIMARY KEY" in fn
+        assert "SET NOT NULL" in fn
+        assert "TIMESERIES" in fn
+
+    def test_gold_timeseries_in_pk_clause(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        fn = result[result.index("def _register_feature_table"):]
+        assert "TIMESERIES" in fn
+        assert "TIMESTAMP_COLUMN" in fn
 
     def test_gold_timestamp_in_primary_keys(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
@@ -2536,59 +2596,17 @@ class TestDatabricksGoldFeatureStoreRegistration:
         result = renderer.render_gold(sample_pipeline_config)
         ast.parse(result)
 
-    def test_gold_registration_alters_timestamp_ntz_to_timestamp(self, renderer, sample_pipeline_config):
+    def test_gold_not_null_before_pk_constraint(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
         fn = result[result.index("def _register_feature_table"):]
-        assert "TimestampNTZType" in fn
-        assert "ALTER TABLE" in fn
-        assert "SET DATA TYPE TIMESTAMP" in fn
-
-    def test_gold_registration_alter_before_create_table(self, renderer, sample_pipeline_config):
-        result = renderer.render_gold(sample_pipeline_config)
-        fn = result[result.index("def _register_feature_table"):]
-        alter_pos = fn.index("ALTER TABLE")
-        create_pos = fn.index("create_table")
-        assert alter_pos < create_pos
-
-    def test_gold_registration_rereads_table_after_alter(self, renderer, sample_pipeline_config):
-        result = renderer.render_gold(sample_pipeline_config)
-        fn = result[result.index("def _register_feature_table"):]
-        assert "df = spark.table(table_name)" in fn
-
-    def test_gold_registration_passes_df_not_reg_df(self, renderer, sample_pipeline_config):
-        result = renderer.render_gold(sample_pipeline_config)
-        fn = result[result.index("def _register_feature_table"):]
-        assert '"df": df' in fn or "'df': df" in fn
-        assert "reg_df" not in fn
-
-    def test_gold_adds_pk_constraint_before_registration(self, renderer, sample_pipeline_config):
-        result = renderer.render_gold(sample_pipeline_config)
-        fn = result[result.index("def _register_feature_table"):]
-        pk_pos = fn.index("_add_pk_constraint")
-        create_pos = fn.index("create_table")
-        assert pk_pos < create_pos
-
-    def test_gold_pk_constraint_uses_alter_table(self, renderer, sample_pipeline_config):
-        result = renderer.render_gold(sample_pipeline_config)
-        fn = result[result.index("def _add_pk_constraint"):]
-        assert "ALTER TABLE" in fn
-        assert "PRIMARY KEY" in fn
-
-    def test_gold_pk_columns_set_not_null_before_constraint(self, renderer, sample_pipeline_config):
-        result = renderer.render_gold(sample_pipeline_config)
-        fn = result[result.index("def _add_pk_constraint"):]
         not_null_pos = fn.index("SET NOT NULL")
         pk_pos = fn.index("PRIMARY KEY")
         assert not_null_pos < pk_pos
 
     def test_gold_pk_constraint_handles_existing(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        fn = result[result.index("def _add_pk_constraint"):]
+        fn = result[result.index("def _register_feature_table"):]
         assert "already exists" in fn
-
-    def test_gold_pk_constraint_is_valid_python(self, renderer, sample_pipeline_config):
-        result = renderer.render_gold(sample_pipeline_config)
-        ast.parse(result)
 
     def test_gold_no_rdd_access(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)

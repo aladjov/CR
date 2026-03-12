@@ -1348,45 +1348,29 @@ def apply_feature_selection(df):
 
 # COMMAND ----------
 
-def _add_pk_constraint(table_name, pk):
+def _cast_timestamp_ntz_to_timestamp(df):
+    from pyspark.sql.types import TimestampNTZType, TimestampType
+    for field in df.schema.fields:
+        if isinstance(field.dataType, TimestampNTZType):
+            df = df.withColumn(field.name, F.col(field.name).cast(TimestampType()))
+    return df
+
+def _register_feature_table(table_name, df):
+    has_ts = TIMESTAMP_COLUMN in [f.name for f in df.schema.fields]
+    pk = ["entity_id", TIMESTAMP_COLUMN] if has_ts else ["entity_id"]
     for col in pk:
-        spark.sql(f"ALTER TABLE {table_name} ALTER COLUMN {col} SET NOT NULL")
+        spark.sql(f"ALTER TABLE {table_name} ALTER COLUMN `{col}` SET NOT NULL")
     constraint_name = table_name.replace(".", "_") + "_pk"
-    pk_cols = ", ".join(pk)
+    pk_clause = ", ".join(
+        f"`{c}` TIMESERIES" if c == TIMESTAMP_COLUMN and has_ts else f"`{c}`" for c in pk
+    )
     try:
-        spark.sql(f"ALTER TABLE {table_name} ADD CONSTRAINT {constraint_name} PRIMARY KEY ({pk_cols})")
-        print(f"[GOLD] Added PK constraint: ({pk_cols})")
+        spark.sql(f"ALTER TABLE {table_name} ADD CONSTRAINT {constraint_name} PRIMARY KEY ({pk_clause})")
+        print(f"[GOLD] Registered feature table: {table_name} PK=({pk_clause})")
     except Exception as e:
         if "already exists" not in str(e).lower():
             raise
-
-def _register_feature_table(table_name, df):
-    from pyspark.sql.types import TimestampNTZType
-    try:
-        from databricks.feature_engineering import FeatureEngineeringClient
-        fe = FeatureEngineeringClient()
-    except ImportError:
-        from databricks.feature_store import FeatureStoreClient
-        fe = FeatureStoreClient()
-    ntz_cols = [f.name for f in df.schema.fields if isinstance(f.dataType, TimestampNTZType)]
-    for col_name in ntz_cols:
-        spark.sql(f"ALTER TABLE {table_name} ALTER COLUMN `{col_name}` SET DATA TYPE TIMESTAMP")
-    if ntz_cols:
-        df = spark.table(table_name)
-    has_ts = TIMESTAMP_COLUMN in [f.name for f in df.schema.fields]
-    pk = ["entity_id", TIMESTAMP_COLUMN] if has_ts else ["entity_id"]
-    _add_pk_constraint(table_name, pk)
-    kwargs = {"name": table_name, "primary_keys": pk, "df": df}
-    if has_ts:
-        kwargs["timeseries_column"] = TIMESTAMP_COLUMN
-    try:
-        fe.create_table(**kwargs)
-        print(f"[GOLD] Registered feature table: {table_name}")
-    except Exception as e:
-        if "already exists" in str(e).lower():
-            print(f"[GOLD] Feature table {table_name} already registered")
-        else:
-            raise
+        print(f"[GOLD] Feature table {table_name} already registered")
 
 def run_gold():
     df = spark.table(silver_table())
@@ -1398,6 +1382,7 @@ def run_gold():
         df = df.withColumnRenamed("as_of_date", TIMESTAMP_COLUMN)
     elif "feature_timestamp" in df.columns:
         df = df.withColumnRenamed("feature_timestamp", TIMESTAMP_COLUMN)
+    df = _cast_timestamp_ntz_to_timestamp(df)
     output_table = gold_table()
     df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
     del df
@@ -1564,6 +1549,29 @@ def _mlflow_evaluate_predictions(predictions):
         extra_metrics=None,
     )
 
+def _log_best_model(model, df, feature_cols):
+    try:
+        from databricks.feature_engineering import FeatureEngineeringClient, FeatureLookup
+        fe = FeatureEngineeringClient()
+        ts_key = TIMESTAMP_COLUMN if TIMESTAMP_COLUMN in df.columns else None
+        entity_cols = ["entity_id"] + ([TIMESTAMP_COLUMN] if ts_key else [])
+        lookups = [FeatureLookup(
+            table_name=gold_table(), feature_names=feature_cols,
+            lookup_key="entity_id", timestamp_lookup_key=ts_key,
+        )]
+        training_set = fe.create_training_set(
+            df=df.select(*entity_cols, TARGET), feature_lookups=lookups,
+            label=TARGET, exclude_columns=entity_cols,
+        )
+        fe.log_model(
+            model=model, artifact_path="best_model", flavor=mlflow.spark,
+            training_set=training_set,
+            registered_model_name=f"{CATALOG}.{SCHEMA}.model_{COMPOSITE_NAME}",
+        )
+        print(f"[TRAINING] Model registered: {CATALOG}.{SCHEMA}.model_{COMPOSITE_NAME}")
+    except ImportError:
+        mlflow.spark.log_model(model, "best_model")
+
 def train_and_evaluate():
     with log_timing("load_gold_table", logger):
         df = load_training_data()
@@ -1700,7 +1708,7 @@ def train_and_evaluate():
 
         mlflow.set_tag("best_model", best_model_name)
         mlflow.log_metric("best_auc", best_auc)
-        mlflow.spark.log_model(best_model, "best_model")
+        _log_best_model(best_model, df, feature_cols)
 
     return best_model_name, best_auc
 
