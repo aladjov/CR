@@ -2561,6 +2561,62 @@ class TestDatabricksGoldFeatureStoreRegistration:
         save_line = [line for line in run_gold_fn.splitlines() if "saveAsTable" in line][0]
         assert "reg_df" not in save_line
 
+    def test_gold_adds_pk_constraint_before_registration(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        fn = result[result.index("def _register_feature_table"):]
+        pk_pos = fn.index("_add_pk_constraint")
+        create_pos = fn.index("create_table")
+        assert pk_pos < create_pos
+
+    def test_gold_pk_constraint_uses_alter_table(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        fn = result[result.index("def _add_pk_constraint"):]
+        assert "ALTER TABLE" in fn
+        assert "PRIMARY KEY" in fn
+
+    def test_gold_pk_constraint_handles_existing(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        fn = result[result.index("def _add_pk_constraint"):]
+        assert "already exists" in fn
+
+    def test_gold_pk_constraint_is_valid_python(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        ast.parse(result)
+
+    def test_gold_no_rdd_access(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert ".rdd" not in result
+
+    def test_gold_reads_back_from_delta_after_save(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        fn = result[result.index("def run_gold"):]
+        assert "del df" in fn
+        assert "saved = spark.table(output_table)" in fn
+        assert "return saved" in fn
+
+    def test_gold_no_triple_materialization(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        fn = result[result.index("def run_gold"):]
+        after_save = fn[fn.index("saveAsTable"):]
+        lines_with_df_ref = [
+            line.strip() for line in after_save.splitlines()
+            if "df" in line and "del df" not in line
+            and "reg_df" not in line and "saved" not in line
+            and line.strip() and not line.strip().startswith("#")
+            and "df.schema" not in line
+        ]
+        assert not lines_with_df_ref, f"Stale df references after saveAsTable: {lines_with_df_ref}"
+
+    def test_gold_display_is_bounded(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "display(result.limit(" in result
+
+    def test_gold_one_hot_has_cardinality_guard(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        fn = result[result.index("def _encode_one_hot"):]
+        assert "max_categories" in fn
+        assert "_label_encode" in fn
+
 
 class TestDatabricksTextFeatureFitMode:
     def test_bronze_event_text_features_check_fit_mode(self, renderer, event_source):

@@ -1190,10 +1190,14 @@ from pyspark.sql import functions as F
 
 # COMMAND ----------
 
-def _encode_one_hot(df, col):
+def _encode_one_hot(df, col, max_categories=100):
     if col not in df.columns:
         print(f"WARNING: column '{col}' not in DataFrame, skipping one-hot encoding")
         return df
+    n_distinct = df.select(col).distinct().count()
+    if n_distinct > max_categories:
+        print(f"WARNING: column '{col}' has {n_distinct} categories (>{max_categories}), using label encoding instead")
+        return _label_encode(df, col)
     categories = [row[col] for row in df.select(col).distinct().collect() if row[col] is not None]
     for cat in sorted(categories):
         safe_name = f"{col}_{cat}".replace(" ", "_").replace("-", "_")
@@ -1344,6 +1348,16 @@ def apply_feature_selection(df):
 
 # COMMAND ----------
 
+def _add_pk_constraint(table_name, pk):
+    constraint_name = table_name.replace(".", "_") + "_pk"
+    pk_cols = ", ".join(pk)
+    try:
+        spark.sql(f"ALTER TABLE {table_name} ADD CONSTRAINT {constraint_name} PRIMARY KEY ({pk_cols})")
+        print(f"[GOLD] Added PK constraint: ({pk_cols})")
+    except Exception as e:
+        if "already exists" not in str(e).lower():
+            raise
+
 def _register_feature_table(table_name, df):
     from pyspark.sql.types import TimestampNTZType, TimestampType
     try:
@@ -1358,6 +1372,7 @@ def _register_feature_table(table_name, df):
             reg_df = reg_df.withColumn(field.name, F.col(field.name).cast(TimestampType()))
     has_ts = TIMESTAMP_COLUMN in [f.name for f in reg_df.schema.fields]
     pk = ["entity_id", TIMESTAMP_COLUMN] if has_ts else ["entity_id"]
+    _add_pk_constraint(table_name, pk)
     kwargs = {"name": table_name, "primary_keys": pk, "df": reg_df}
     if has_ts:
         kwargs["timeseries_column"] = TIMESTAMP_COLUMN
@@ -1382,18 +1397,20 @@ def run_gold():
         df = df.withColumnRenamed("feature_timestamp", TIMESTAMP_COLUMN)
     output_table = gold_table()
     df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
+    del df
     from delta.tables import DeltaTable
-    _z_cols = [c for c in ["entity_id", TIMESTAMP_COLUMN] if c in [f.name for f in df.schema.fields]]
+    saved = spark.table(output_table)
+    _z_cols = [c for c in ["entity_id", TIMESTAMP_COLUMN] if c in saved.columns]
     if _z_cols:
         DeltaTable.forName(spark, output_table).optimize().executeZOrderBy(_z_cols)
     else:
         DeltaTable.forName(spark, output_table).optimize().executeCompaction()
-    _register_feature_table(output_table, df)
-    return df
+    _register_feature_table(output_table, saved)
+    return saved
 
 result = run_gold()
 _summary = f"{result.count():,} rows, {len(result.columns)} columns"
-display(result)
+display(result.limit(1000))
 dbutils.notebook.exit(_summary)
 """,
     "databricks_training.py.j2": """# Databricks notebook source
