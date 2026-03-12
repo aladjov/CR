@@ -2536,30 +2536,30 @@ class TestDatabricksGoldFeatureStoreRegistration:
         result = renderer.render_gold(sample_pipeline_config)
         ast.parse(result)
 
-    def test_gold_registration_casts_timestamp_ntz_to_timestamp(self, renderer, sample_pipeline_config):
+    def test_gold_registration_alters_timestamp_ntz_to_timestamp(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
         fn = result[result.index("def _register_feature_table"):]
         assert "TimestampNTZType" in fn
-        assert "TimestampType" in fn
-        assert ".cast(" in fn
+        assert "ALTER TABLE" in fn
+        assert "SET DATA TYPE TIMESTAMP" in fn
 
-    def test_gold_registration_cast_before_create_table(self, renderer, sample_pipeline_config):
+    def test_gold_registration_alter_before_create_table(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
         fn = result[result.index("def _register_feature_table"):]
-        cast_pos = fn.index(".cast(")
+        alter_pos = fn.index("ALTER TABLE")
         create_pos = fn.index("create_table")
-        assert cast_pos < create_pos
+        assert alter_pos < create_pos
 
-    def test_gold_registration_cast_uses_reg_df(self, renderer, sample_pipeline_config):
+    def test_gold_registration_rereads_table_after_alter(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
         fn = result[result.index("def _register_feature_table"):]
-        assert '"df": reg_df' in fn or "'df': reg_df" in fn
+        assert "df = spark.table(table_name)" in fn
 
-    def test_gold_delta_table_not_affected_by_cast(self, renderer, sample_pipeline_config):
+    def test_gold_registration_passes_df_not_reg_df(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        run_gold_fn = result[result.index("def run_gold"):]
-        save_line = [line for line in run_gold_fn.splitlines() if "saveAsTable" in line][0]
-        assert "reg_df" not in save_line
+        fn = result[result.index("def _register_feature_table"):]
+        assert '"df": df' in fn or "'df': df" in fn
+        assert "reg_df" not in fn
 
     def test_gold_adds_pk_constraint_before_registration(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)

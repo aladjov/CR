@@ -1361,21 +1361,22 @@ def _add_pk_constraint(table_name, pk):
             raise
 
 def _register_feature_table(table_name, df):
-    from pyspark.sql.types import TimestampNTZType, TimestampType
+    from pyspark.sql.types import TimestampNTZType
     try:
         from databricks.feature_engineering import FeatureEngineeringClient
         fe = FeatureEngineeringClient()
     except ImportError:
         from databricks.feature_store import FeatureStoreClient
         fe = FeatureStoreClient()
-    reg_df = df
-    for field in df.schema.fields:
-        if isinstance(field.dataType, TimestampNTZType):
-            reg_df = reg_df.withColumn(field.name, F.col(field.name).cast(TimestampType()))
-    has_ts = TIMESTAMP_COLUMN in [f.name for f in reg_df.schema.fields]
+    ntz_cols = [f.name for f in df.schema.fields if isinstance(f.dataType, TimestampNTZType)]
+    for col_name in ntz_cols:
+        spark.sql(f"ALTER TABLE {table_name} ALTER COLUMN `{col_name}` SET DATA TYPE TIMESTAMP")
+    if ntz_cols:
+        df = spark.table(table_name)
+    has_ts = TIMESTAMP_COLUMN in [f.name for f in df.schema.fields]
     pk = ["entity_id", TIMESTAMP_COLUMN] if has_ts else ["entity_id"]
     _add_pk_constraint(table_name, pk)
-    kwargs = {"name": table_name, "primary_keys": pk, "df": reg_df}
+    kwargs = {"name": table_name, "primary_keys": pk, "df": df}
     if has_ts:
         kwargs["timeseries_column"] = TIMESTAMP_COLUMN
     try:
