@@ -275,21 +275,44 @@ class TestGenerateGridDates:
 
 class TestRecordVote:
     def test_basic_record(self):
-        grid = _minimal_grid()
+        grid = _minimal_grid(mode=GridAdjustmentMode.ALLOW_ADJUSTMENTS)
         vote = _minimal_vote(voted=True)
         grid.record_vote("transactions", vote)
         assert grid.dataset_votes["transactions"].voted is True
 
     def test_skips_when_locked(self):
-        grid = _minimal_grid(locked=True)
+        grid = _minimal_grid(mode=GridAdjustmentMode.ALLOW_ADJUSTMENTS, locked=True)
         grid.dataset_votes["transactions"] = _minimal_vote(voted=False)
         vote = _minimal_vote(voted=True, data_span_start="2024-01-01")
         grid.record_vote("transactions", vote)
         assert grid.dataset_votes["transactions"].voted is False
         assert grid.dataset_votes["transactions"].data_span_start is None
 
+    def test_skips_when_no_adjustments(self):
+        grid = _minimal_grid(mode=GridAdjustmentMode.NO_ADJUSTMENTS)
+        grid.dataset_votes["transactions"] = _minimal_vote(voted=False)
+        vote = _minimal_vote(voted=True, data_span_start="2024-01-01")
+        grid.record_vote("transactions", vote)
+        assert grid.dataset_votes["transactions"].voted is False
+        assert grid.dataset_votes["transactions"].data_span_start is None
+
+    def test_no_adjustments_does_not_modify_grid(self, tmp_path):
+        grid = _minimal_grid(
+            mode=GridAdjustmentMode.NO_ADJUSTMENTS,
+            grid_start="2024-01-01", grid_end="2024-06-01",
+        )
+        grid.generate_grid_dates()
+        path = tmp_path / "grid.yaml"
+        grid.save(path)
+        original_content = path.read_text()
+        loaded = SnapshotGrid.load(path)
+        vote = _minimal_vote(voted=True, data_span_start="2020-01-01", data_span_end="2025-12-31")
+        loaded.record_vote("transactions", vote)
+        loaded.save(path)
+        assert path.read_text() == original_content
+
     def test_overwrites_existing(self):
-        grid = _minimal_grid()
+        grid = _minimal_grid(mode=GridAdjustmentMode.ALLOW_ADJUSTMENTS)
         vote1 = _minimal_vote(voted=False)
         grid.record_vote("transactions", vote1)
         assert grid.dataset_votes["transactions"].voted is False
@@ -300,7 +323,7 @@ class TestRecordVote:
         assert grid.dataset_votes["transactions"].data_span_start == "2024-01-01"
 
     def test_with_suggestions(self):
-        grid = _minimal_grid()
+        grid = _minimal_grid(mode=GridAdjustmentMode.ALLOW_ADJUSTMENTS)
         vote = _minimal_vote(
             voted=True,
             suggested_cadence=CadenceInterval.DAILY,
@@ -314,7 +337,7 @@ class TestRecordVote:
         assert stored.suggested_start == "2024-01-15"
 
     def test_vote_with_spans_computes_boundaries_and_dates(self):
-        grid = _minimal_grid()
+        grid = _minimal_grid(mode=GridAdjustmentMode.ALLOW_ADJUSTMENTS)
         assert grid.grid_start is None
         vote = _minimal_vote(
             voted=True,
@@ -327,7 +350,10 @@ class TestRecordVote:
         assert len(grid.grid_dates) > 0
 
     def test_vote_without_spans_keeps_existing_boundaries(self):
-        grid = _minimal_grid(grid_start="2024-01-01", grid_end="2024-06-01")
+        grid = _minimal_grid(
+            mode=GridAdjustmentMode.ALLOW_ADJUSTMENTS,
+            grid_start="2024-01-01", grid_end="2024-06-01",
+        )
         grid.generate_grid_dates()
         original_dates = list(grid.grid_dates)
         vote = _minimal_vote(voted=True)
@@ -335,6 +361,19 @@ class TestRecordVote:
         assert grid.grid_start == "2024-01-01"
         assert grid.grid_end == "2024-06-01"
         assert grid.grid_dates == original_dates
+
+    def test_nb01d_apply_votes_still_works_in_no_adjustments(self, tmp_path):
+        grid = _minimal_grid(mode=GridAdjustmentMode.NO_ADJUSTMENTS)
+        vote = _minimal_vote(
+            voted=True, data_span_start="2020-01-01", data_span_end="2024-12-31",
+        )
+        SnapshotGrid.save_vote(tmp_path, "events", vote)
+        loaded_votes = SnapshotGrid.load_votes(tmp_path)
+        grid.apply_votes(loaded_votes)
+        grid.lock(purge_gap_days=104, label_window_days=90)
+        assert grid.locked is True
+        assert grid.grid_start is not None
+        assert len(grid.grid_dates) > 0
 
 
 class TestIsReadyForAggregation:

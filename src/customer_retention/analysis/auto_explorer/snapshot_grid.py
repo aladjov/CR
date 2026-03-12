@@ -177,7 +177,7 @@ class SnapshotGrid(BaseModel):
         self.grid_dates = _cap_grid_dates(dates, max_dates_override=self.max_grid_dates)
 
     def record_vote(self, name: str, vote: DatasetGridVote) -> None:
-        if self.locked:
+        if self.locked or self.mode == GridAdjustmentMode.NO_ADJUSTMENTS:
             return
         self.dataset_votes[name] = vote
         self._refresh_grid()
