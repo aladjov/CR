@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from customer_retention.core.compat import (
@@ -54,6 +55,15 @@ def _spark_rename_columns(sdf: Any, rename_map: dict[str, str]) -> Any:
     return sdf
 
 
+def _break_lineage(sdf: Any) -> Any:
+    """Truncate Spark execution plan via local checkpoint.
+
+    Prevents driver OOM on wide merges by materialising the DataFrame
+    in executor storage and discarding the accumulated join lineage.
+    """
+    return sdf.localCheckpoint(eager=True)
+
+
 class SparkTemporalMerger(TemporalMerger):
     def merge_all(
         self,
@@ -75,7 +85,8 @@ class SparkTemporalMerger(TemporalMerger):
             spine_dates=merged_sdf.select(as_of_column).distinct().count(),
         )
 
-        for ds in datasets:
+        for i, ds in enumerate(datasets):
+            t0 = time.monotonic()
             existing_cols = set(merged_sdf.columns)
             right_sdf = _to_native_spark(ds.df)
 
@@ -92,9 +103,16 @@ class SparkTemporalMerger(TemporalMerger):
                     merged_sdf, right_sdf, ds, existing_cols,
                 )
 
+            merged_sdf = _break_lineage(merged_sdf)
+
             new_cols = set(merged_sdf.columns) - existing_cols
             report.datasets_merged.append(ds.name)
             report.columns_per_dataset[ds.name] = len(new_cols)
+            logger.info(
+                "Merged %d/%d '%s': +%d cols → %d total (%.1fs)",
+                i + 1, len(datasets), ds.name, len(new_cols),
+                len(merged_sdf.columns), time.monotonic() - t0,
+            )
 
         report.total_columns = len(merged_sdf.columns)
         report.renamed_columns = {
@@ -223,9 +241,16 @@ class SparkTemporalMerger(TemporalMerger):
     def build_spine(
         self, entity_ids: Any, grid_dates: list[str]
     ) -> Any:
-        unique_entities = entity_ids.drop_duplicates().reset_index(drop=True)
-        parsed_dates = as_tz_naive(to_datetime(grid_dates))
         spark = get_spark_session()
+        parsed_dates = as_tz_naive(to_datetime(grid_dates))
+
+        # Native Spark DataFrame path — entities stay distributed, no driver collect
+        if spark and _is_native_spark_df(entity_ids):
+            return self._build_spine_from_spark_df(
+                spark, entity_ids, parsed_dates,
+            )
+
+        unique_entities = entity_ids.drop_duplicates().reset_index(drop=True)
 
         if len(unique_entities) == 0 or len(parsed_dates) == 0:
             if spark:
@@ -260,6 +285,29 @@ class SparkTemporalMerger(TemporalMerger):
 
         spine_sdf = entities_sdf.crossJoin(dates_sdf)
         return _as_pandas_api(spine_sdf)
+
+    def _build_spine_from_spark_df(
+        self, spark: Any, entity_ids_sdf: Any, parsed_dates: Any,
+    ) -> Any:
+        """Build spine from a native Spark DataFrame — no driver collect."""
+        entity_col = entity_ids_sdf.columns[0]
+        entities_sdf = entity_ids_sdf.dropDuplicates()
+        if entity_col != self.config.entity_key:
+            entities_sdf = entities_sdf.withColumnRenamed(
+                entity_col, self.config.entity_key,
+            )
+        if len(parsed_dates) == 0:
+            schema = _empty_spine_schema(
+                self.config.entity_key, self.config.as_of_column,
+            )
+            return _as_pandas_api(spark.createDataFrame([], schema))
+        dates_pdf = normalize_timestamps(
+            native_pd.DataFrame({self.config.as_of_column: parsed_dates})
+        )
+        dates_sdf = spark.createDataFrame(
+            dates_pdf, schema=pandas_dtype_to_spark_schema(dates_pdf),
+        )
+        return _as_pandas_api(entities_sdf.crossJoin(dates_sdf))
 
     def _merge_entity_asof(
         self,

@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -125,6 +126,8 @@ class FakeSparkDF:
     """Wraps a pandas DataFrame with the subset of Spark DataFrame API
     used by SparkTemporalMerger's native join methods."""
 
+    _is_fake_spark_df = True
+
     def __init__(self, pdf):
         self._pdf = pdf.copy()
 
@@ -146,7 +149,7 @@ class FakeSparkDF:
     def drop(self, *cols):
         return FakeSparkDF(self._pdf.drop(columns=list(cols), errors="ignore"))
 
-    def dropDuplicates(self, cols):  # noqa: N802
+    def dropDuplicates(self, cols=None):  # noqa: N802
         return FakeSparkDF(self._pdf.drop_duplicates(subset=cols, keep="last"))
 
     def withColumnRenamed(self, old, new):  # noqa: N802
@@ -168,6 +171,13 @@ class FakeSparkDF:
             on = [on]
         result = self._pdf.merge(other._pdf, on=on, how=how)
         return FakeSparkDF(result)
+
+    def crossJoin(self, other):  # noqa: N802
+        cross_pdf = self._pdf.merge(other._pdf, how="cross")
+        return FakeSparkDF(cross_pdf)
+
+    def localCheckpoint(self, eager=True):  # noqa: N802
+        return FakeSparkDF(self._pdf.copy())
 
     def pandas_api(self):
         return self._pdf
@@ -462,6 +472,176 @@ class TestSparkBuildSpineWithMockedSpark:
         assert len(spine) == 0
         assert "entity_id" in spine.columns
         assert "as_of_date" in spine.columns
+
+
+# ---------------------------------------------------------------------------
+# Tests for build_spine with native Spark DataFrame input
+# ---------------------------------------------------------------------------
+
+def _patch_build_spine_spark(monkeypatch):
+    """Patch so build_spine recognises FakeSparkDF as native Spark."""
+    mock_spark = MagicMock()
+
+    def _create_df(pdf_or_data, schema=None):
+        if isinstance(pdf_or_data, list) and len(pdf_or_data) == 0:
+            col_names = [f.name for f in schema.fields] if schema else []
+            return FakeSparkDF(pd.DataFrame(columns=col_names))
+        return FakeSparkDF(pdf_or_data.copy())
+
+    mock_spark.createDataFrame.side_effect = _create_df
+    monkeypatch.setattr(
+        "customer_retention.stages.temporal.spark_temporal_merger.get_spark_session",
+        lambda: mock_spark,
+    )
+    monkeypatch.setattr(
+        "customer_retention.stages.temporal.spark_temporal_merger._as_pandas_api",
+        lambda sdf: sdf.pandas_api(),
+    )
+    monkeypatch.setattr(
+        "customer_retention.stages.temporal.spark_temporal_merger._is_native_spark_df",
+        lambda df: isinstance(df, FakeSparkDF),
+    )
+    return mock_spark
+
+
+class TestSparkBuildSpineWithNativeDF:
+    """Tests build_spine when entity_ids is already a native Spark DataFrame."""
+
+    def test_native_spark_df_produces_cross_product(self, monkeypatch):
+        _patch_build_spine_spark(monkeypatch)
+        merger = SparkTemporalMerger()
+        entity_sdf = FakeSparkDF(pd.DataFrame({"entity_id": ["A", "B", "C"]}))
+        spine = merger.build_spine(entity_sdf, ["2024-01-01", "2024-02-01"])
+        assert len(spine) == 6
+        assert set(spine["entity_id"]) == {"A", "B", "C"}
+        assert "as_of_date" in spine.columns
+
+    def test_native_spark_df_deduplicates_entities(self, monkeypatch):
+        _patch_build_spine_spark(monkeypatch)
+        merger = SparkTemporalMerger()
+        entity_sdf = FakeSparkDF(pd.DataFrame({"entity_id": ["A", "A", "B"]}))
+        spine = merger.build_spine(entity_sdf, ["2024-01-01"])
+        assert len(spine) == 2
+
+    def test_native_spark_df_renames_entity_column(self, monkeypatch):
+        _patch_build_spine_spark(monkeypatch)
+        merger = SparkTemporalMerger()
+        entity_sdf = FakeSparkDF(pd.DataFrame({"customer_id": ["X", "Y"]}))
+        spine = merger.build_spine(entity_sdf, ["2024-06-01"])
+        assert "entity_id" in spine.columns
+        assert len(spine) == 2
+
+    def test_native_spark_df_empty_dates(self, monkeypatch):
+        mock_spark = _patch_build_spine_spark(monkeypatch)
+
+        class _FakeField:
+            def __init__(self, name):
+                self.name = name
+
+        class _FakeSchema:
+            def __init__(self, fields):
+                self.fields = fields
+
+        monkeypatch.setattr(
+            "customer_retention.stages.temporal.spark_temporal_merger._empty_spine_schema",
+            lambda ek, ac: _FakeSchema([_FakeField(ek), _FakeField(ac)]),
+        )
+        merger = SparkTemporalMerger()
+        entity_sdf = FakeSparkDF(pd.DataFrame({"entity_id": ["A"]}))
+        spine = merger.build_spine(entity_sdf, [])
+        assert len(spine) == 0
+
+    def test_no_create_data_frame_called_for_entities(self, monkeypatch):
+        """Entity IDs should stay distributed — no createDataFrame for entities."""
+        mock_spark = _patch_build_spine_spark(monkeypatch)
+        merger = SparkTemporalMerger()
+        entity_sdf = FakeSparkDF(pd.DataFrame({"entity_id": ["A", "B"]}))
+        merger.build_spine(entity_sdf, ["2024-01-01"])
+        # createDataFrame should only be called for dates, not entities
+        assert mock_spark.createDataFrame.call_count == 1
+        call_args = mock_spark.createDataFrame.call_args
+        assert "as_of_date" in call_args[0][0].columns
+
+
+# ---------------------------------------------------------------------------
+# Tests for lineage breaking in merge_all
+# ---------------------------------------------------------------------------
+
+class TestMergeAllLineageBreaking:
+    """Verify that merge_all checkpoints after each dataset join."""
+
+    def test_checkpoint_called_per_dataset(self, monkeypatch):
+        _patch_native_spark(monkeypatch)
+        checkpoint_calls = []
+        original_break = None
+
+        # Import after patching to get the module reference
+        import customer_retention.stages.temporal.spark_temporal_merger as mod
+        original_break = mod._break_lineage
+
+        def _tracking_break(sdf):
+            checkpoint_calls.append(len(sdf.columns))
+            return sdf.localCheckpoint(eager=True)
+
+        monkeypatch.setattr(mod, "_break_lineage", _tracking_break)
+
+        merger = SparkTemporalMerger(config=MergeConfig(validate_temporal=False))
+        spine = _spine(["A", "B"], ["2024-01-01"])
+        event_df = _event_snapshot("entity_id", "as_of_date", {
+            "entity_id": ["A", "B"],
+            "as_of_date": ["2024-01-01", "2024-01-01"],
+            "amount": [10, 20],
+        })
+        entity_df = _entity_df("entity_id", {
+            "entity_id": ["A", "B"],
+            "tier": ["gold", "silver"],
+        })
+        datasets = [
+            _merge_input("txns", event_df, DatasetGranularity.EVENT_LEVEL),
+            _merge_input("customers", entity_df, DatasetGranularity.ENTITY_LEVEL),
+        ]
+        result, report = merger.merge_all(spine, datasets)
+        assert len(checkpoint_calls) == 2  # one per dataset
+        assert "amount" in result.columns
+        assert "tier" in result.columns
+
+    def test_checkpoint_preserves_data_correctness(self, monkeypatch):
+        _patch_native_spark(monkeypatch)
+        merger = SparkTemporalMerger(config=MergeConfig(validate_temporal=False))
+        spine = _spine(["A", "B"], ["2024-01-01", "2024-02-01"])
+        event_df = _event_snapshot("entity_id", "as_of_date", {
+            "entity_id": ["A", "A", "B", "B"],
+            "as_of_date": ["2024-01-01", "2024-02-01", "2024-01-01", "2024-02-01"],
+            "amount": [10, 20, 30, 40],
+        })
+        entity_df = _entity_df("entity_id", {
+            "entity_id": ["A", "B"],
+            "tier": ["gold", "silver"],
+        })
+        datasets = [
+            _merge_input("txns", event_df, DatasetGranularity.EVENT_LEVEL),
+            _merge_input("customers", entity_df, DatasetGranularity.ENTITY_LEVEL),
+        ]
+        result, report = merger.merge_all(spine, datasets)
+        assert len(result) == 4
+        row_a_jan = result[
+            (result["entity_id"] == "A")
+            & (result["as_of_date"] == pd.Timestamp("2024-01-01"))
+        ]
+        assert row_a_jan["amount"].iloc[0] == 10
+        assert row_a_jan["tier"].iloc[0] == "gold"
+
+    def test_timing_logged(self, monkeypatch, caplog):
+        _patch_native_spark(monkeypatch)
+        merger = SparkTemporalMerger(config=MergeConfig(validate_temporal=False))
+        spine = _spine(["A"], ["2024-01-01"])
+        entity_df = _entity_df("entity_id", {"entity_id": ["A"], "tier": ["gold"]})
+        datasets = [
+            _merge_input("customers", entity_df, DatasetGranularity.ENTITY_LEVEL),
+        ]
+        with caplog.at_level(logging.INFO, logger="customer_retention.stages.temporal.spark_temporal_merger"):
+            merger.merge_all(spine, datasets)
+        assert any("Merged 1/1" in msg and "customers" in msg for msg in caplog.messages)
 
 
 # ---------------------------------------------------------------------------

@@ -983,7 +983,7 @@ def load_bronze_outputs():
 def merge_sources(bronze_outputs):
     raw_entity_key = "{{ config.silver.entity_key or config.sources[0].entity_key }}"
     base_source = "{{ config.sources[0].name }}"
-    entity_ids = bronze_outputs[base_source].select(raw_entity_key).distinct().toPandas()[raw_entity_key]
+    entity_ids = bronze_outputs[base_source].select(raw_entity_key).distinct()
 {% if has_key_resolution %}
     for meta in MERGE_SOURCE_META:
         kr_steps = meta.get("key_resolution_steps", [])
@@ -1024,6 +1024,7 @@ def merge_sources(bronze_outputs):
     merged, _report = merger.merge_all(spine, inputs)
     if hasattr(merged, "to_spark"):
         merged = merged.to_spark()
+    print(f"  merge complete: {len(merged.columns)} columns, datasets={_report.datasets_merged}")
     return merged
 {% else %}
 def merge_sources(bronze_outputs):
@@ -1099,25 +1100,40 @@ def create_holdout_mask(df, holdout_fraction=0.1, random_state=42):
 # COMMAND ----------
 
 def run_silver():
+    import time as _time
+    _t0 = _time.monotonic()
     bronze_outputs = load_bronze_outputs()
+    print(f"  load_bronze: {_time.monotonic() - _t0:.1f}s")
+    _t1 = _time.monotonic()
     merged = merge_sources(bronze_outputs)
+    print(f"  merge_sources: {_time.monotonic() - _t1:.1f}s ({len(merged.columns)} cols)")
 {% if config.silver.derived_columns %}
+    _t2 = _time.monotonic()
     merged = apply_derived_columns(merged)
+    print(f"  apply_derived: {_time.monotonic() - _t2:.1f}s")
 {% endif %}
+    _t3 = _time.monotonic()
     merged = create_holdout_mask(merged)
+    print(f"  holdout_mask: {_time.monotonic() - _t3:.1f}s")
+    _t4 = _time.monotonic()
     output_table = silver_table()
     merged.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
+    print(f"  delta_write: {_time.monotonic() - _t4:.1f}s")
+    _t5 = _time.monotonic()
     from delta.tables import DeltaTable
     _z_cols = [c for c in ["entity_id", "as_of_date"] if c in [f.name for f in merged.schema.fields]]
     if _z_cols:
         DeltaTable.forName(spark, output_table).optimize().executeZOrderBy(_z_cols)
     else:
         DeltaTable.forName(spark, output_table).optimize().executeCompaction()
-    return merged
+    print(f"  optimize: {_time.monotonic() - _t5:.1f}s")
+    print(f"  total: {_time.monotonic() - _t0:.1f}s")
+    return output_table
 
-result = run_silver()
-_summary = f"{result.count():,} rows, {len(result.columns)} columns"
-display(result)
+_output_table = run_silver()
+_result = spark.table(_output_table)
+_summary = f"{_result.count():,} rows, {len(_result.columns)} columns"
+display(_result)
 dbutils.notebook.exit(_summary)
 """,
     "databricks_gold.py.j2": """# Databricks notebook source
