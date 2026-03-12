@@ -1307,15 +1307,20 @@ def apply_feature_selection(df):
 # COMMAND ----------
 
 def _register_feature_table(table_name, df):
+    from pyspark.sql.types import TimestampNTZType, TimestampType
     try:
         from databricks.feature_engineering import FeatureEngineeringClient
         fe = FeatureEngineeringClient()
     except ImportError:
         from databricks.feature_store import FeatureStoreClient
         fe = FeatureStoreClient()
-    has_ts = TIMESTAMP_COLUMN in [f.name for f in df.schema.fields]
+    reg_df = df
+    for field in df.schema.fields:
+        if isinstance(field.dataType, TimestampNTZType):
+            reg_df = reg_df.withColumn(field.name, F.col(field.name).cast(TimestampType()))
+    has_ts = TIMESTAMP_COLUMN in [f.name for f in reg_df.schema.fields]
     pk = ["entity_id", TIMESTAMP_COLUMN] if has_ts else ["entity_id"]
-    kwargs = {"name": table_name, "primary_keys": pk, "df": df}
+    kwargs = {"name": table_name, "primary_keys": pk, "df": reg_df}
     if has_ts:
         kwargs["timeseries_column"] = TIMESTAMP_COLUMN
     try:

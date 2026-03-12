@@ -2536,6 +2536,31 @@ class TestDatabricksGoldFeatureStoreRegistration:
         result = renderer.render_gold(sample_pipeline_config)
         ast.parse(result)
 
+    def test_gold_registration_casts_timestamp_ntz_to_timestamp(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        fn = result[result.index("def _register_feature_table"):]
+        assert "TimestampNTZType" in fn
+        assert "TimestampType" in fn
+        assert ".cast(" in fn
+
+    def test_gold_registration_cast_before_create_table(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        fn = result[result.index("def _register_feature_table"):]
+        cast_pos = fn.index(".cast(")
+        create_pos = fn.index("create_table")
+        assert cast_pos < create_pos
+
+    def test_gold_registration_cast_uses_reg_df(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        fn = result[result.index("def _register_feature_table"):]
+        assert '"df": reg_df' in fn or "'df': reg_df" in fn
+
+    def test_gold_delta_table_not_affected_by_cast(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        run_gold_fn = result[result.index("def run_gold"):]
+        save_line = [line for line in run_gold_fn.splitlines() if "saveAsTable" in line][0]
+        assert "reg_df" not in save_line
+
 
 class TestDatabricksTextFeatureFitMode:
     def test_bronze_event_text_features_check_fit_mode(self, renderer, event_source):
