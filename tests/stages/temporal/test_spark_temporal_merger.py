@@ -776,6 +776,107 @@ def _patched_asof_join(self, left_sdf, right_sdf, ds, existing_cols):
     return left_sdf.join(best, on=[entity_key, as_of_column], how="left")
 
 
+class TestMergeOne:
+    """Tests for SparkTemporalMerger.merge_one() — single-dataset join."""
+
+    def test_event_join_adds_columns(self, monkeypatch):
+        _patch_native_spark(monkeypatch)
+        merger = SparkTemporalMerger(config=MergeConfig(validate_temporal=False))
+        spine_pdf = _spine(["A", "B"], ["2024-01-01", "2024-02-01"])
+        spine_sdf = FakeSparkDF(spine_pdf)
+
+        event_df = _event_snapshot("entity_id", "as_of_date", {
+            "entity_id": ["A", "A", "B", "B"],
+            "as_of_date": ["2024-01-01", "2024-02-01", "2024-01-01", "2024-02-01"],
+            "amount": [10, 20, 30, 40],
+        })
+        ds = _merge_input("txns", event_df, DatasetGranularity.EVENT_LEVEL)
+        result_sdf, new_cols = merger.merge_one(spine_sdf, ds)
+        assert "amount" in new_cols
+        assert result_sdf.count() == 4
+
+    def test_broadcast_join_adds_columns(self, monkeypatch):
+        _patch_native_spark(monkeypatch)
+        merger = SparkTemporalMerger(config=MergeConfig(validate_temporal=False))
+        spine_sdf = FakeSparkDF(_spine(["A", "B"], ["2024-01-01"]))
+
+        entity_df = _entity_df("entity_id", {
+            "entity_id": ["A", "B"],
+            "tier": ["gold", "silver"],
+        })
+        ds = _merge_input("customers", entity_df, DatasetGranularity.ENTITY_LEVEL)
+        result_sdf, new_cols = merger.merge_one(spine_sdf, ds)
+        assert "tier" in new_cols
+        result_pdf = result_sdf.pandas_api()
+        assert result_pdf[result_pdf["entity_id"] == "A"]["tier"].iloc[0] == "gold"
+
+    def test_asof_join_adds_columns(self, monkeypatch):
+        _patch_native_spark(monkeypatch)
+        merger = SparkTemporalMerger(config=MergeConfig(validate_temporal=False))
+        spine_sdf = FakeSparkDF(_spine(["A"], ["2024-03-01", "2024-06-01"]))
+
+        asof_df = pd.DataFrame({
+            "entity_id": ["A", "A"],
+            "feature_timestamp": pd.to_datetime(["2024-01-01", "2024-04-01"]),
+            "score": [10, 20],
+        })
+        ds = _merge_input(
+            "credit", asof_df, DatasetGranularity.ENTITY_LEVEL,
+            feature_ts="feature_timestamp",
+        )
+        result_sdf, new_cols = merger.merge_one(spine_sdf, ds)
+        assert "score" in new_cols
+
+    def test_does_not_break_lineage(self, monkeypatch):
+        _patch_native_spark(monkeypatch)
+        checkpoint_calls = []
+
+        import customer_retention.stages.temporal.spark_temporal_merger as mod
+        original_break = mod._break_lineage
+
+        def _tracking_break(sdf):
+            checkpoint_calls.append(1)
+            return original_break(sdf)
+
+        monkeypatch.setattr(mod, "_break_lineage", _tracking_break)
+
+        merger = SparkTemporalMerger(config=MergeConfig(validate_temporal=False))
+        spine_sdf = FakeSparkDF(_spine(["A"], ["2024-01-01"]))
+        entity_df = _entity_df("entity_id", {"entity_id": ["A"], "tier": ["gold"]})
+        ds = _merge_input("customers", entity_df, DatasetGranularity.ENTITY_LEVEL)
+        merger.merge_one(spine_sdf, ds)
+        assert len(checkpoint_calls) == 0, "merge_one must not call _break_lineage"
+
+    def test_column_conflicts_resolved(self, monkeypatch):
+        _patch_native_spark(monkeypatch)
+        merger = SparkTemporalMerger(config=MergeConfig(validate_temporal=False))
+        spine_pdf = _spine(["A", "B"], ["2024-01-01"])
+        spine_pdf["score"] = [1, 2]
+        spine_sdf = FakeSparkDF(spine_pdf)
+
+        entity_df = _entity_df("entity_id", {
+            "entity_id": ["A", "B"],
+            "score": [10, 20],
+        })
+        ds = _merge_input("src", entity_df, DatasetGranularity.ENTITY_LEVEL)
+        result_sdf, new_cols = merger.merge_one(spine_sdf, ds)
+        assert "src__score" in new_cols
+        assert "src__score" in result_sdf.columns
+
+    def test_spine_rows_preserved(self, monkeypatch):
+        _patch_native_spark(monkeypatch)
+        merger = SparkTemporalMerger(config=MergeConfig(validate_temporal=False))
+        spine_sdf = FakeSparkDF(_spine(["A", "B", "C"], ["2024-01-01", "2024-02-01"]))
+
+        entity_df = _entity_df("entity_id", {
+            "entity_id": ["A"],
+            "tier": ["gold"],
+        })
+        ds = _merge_input("customers", entity_df, DatasetGranularity.ENTITY_LEVEL)
+        result_sdf, _ = merger.merge_one(spine_sdf, ds)
+        assert result_sdf.count() == 6
+
+
 class TestNativeSparkMergeAll:
     """Tests the native Spark join path via FakeSparkDF mocks."""
 

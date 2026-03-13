@@ -65,6 +65,36 @@ def _break_lineage(sdf: Any) -> Any:
 
 
 class SparkTemporalMerger(TemporalMerger):
+    def merge_one(
+        self,
+        merged_sdf: Any,
+        ds: DatasetMergeInput,
+    ) -> tuple[Any, set[str]]:
+        """Merge a single dataset into the accumulated result (native Spark).
+
+        Returns ``(merged_sdf, new_column_names)``.  Does **not** break
+        lineage — the caller is responsible for materialisation (e.g. a
+        Delta write/read cycle).
+        """
+        existing_cols = set(merged_sdf.columns)
+        right_sdf = _to_native_spark(ds.df)
+
+        if ds.granularity == DatasetGranularity.EVENT_LEVEL:
+            merged_sdf = self._spark_join_event(
+                merged_sdf, right_sdf, ds, existing_cols,
+            )
+        elif ds.feature_timestamp_column:
+            merged_sdf = self._spark_join_asof(
+                merged_sdf, right_sdf, ds, existing_cols,
+            )
+        else:
+            merged_sdf = self._spark_join_broadcast(
+                merged_sdf, right_sdf, ds, existing_cols,
+            )
+
+        new_cols = set(merged_sdf.columns) - existing_cols
+        return merged_sdf, new_cols
+
     def merge_all(
         self,
         spine: Any,
@@ -87,25 +117,10 @@ class SparkTemporalMerger(TemporalMerger):
 
         for i, ds in enumerate(datasets):
             t0 = time.monotonic()
-            existing_cols = set(merged_sdf.columns)
-            right_sdf = _to_native_spark(ds.df)
-
-            if ds.granularity == DatasetGranularity.EVENT_LEVEL:
-                merged_sdf = self._spark_join_event(
-                    merged_sdf, right_sdf, ds, existing_cols,
-                )
-            elif ds.feature_timestamp_column:
-                merged_sdf = self._spark_join_asof(
-                    merged_sdf, right_sdf, ds, existing_cols,
-                )
-            else:
-                merged_sdf = self._spark_join_broadcast(
-                    merged_sdf, right_sdf, ds, existing_cols,
-                )
+            merged_sdf, new_cols = self.merge_one(merged_sdf, ds)
 
             merged_sdf = _break_lineage(merged_sdf)
 
-            new_cols = set(merged_sdf.columns) - existing_cols
             report.datasets_merged.append(ds.name)
             report.columns_per_dataset[ds.name] = len(new_cols)
             logger.info(

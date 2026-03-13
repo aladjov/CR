@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import gc
+import logging
+import time
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -7,10 +10,13 @@ from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 from customer_retention.core.compat import (
     as_spark_df,
     normalize_timestamps,
+    release_stage_memory,
 )
 from customer_retention.core.compat import to_pandas as _compat_to_pandas
 from customer_retention.core.config.column_config import DatasetGranularity
 from customer_retention.integrations.adapters.factory import get_delta
+
+logger = logging.getLogger(__name__)
 
 
 def _local_delta() -> Any:
@@ -160,3 +166,94 @@ def load_gold_features_distributed(namespace: RunNamespace, composite_name: str)
     if not dlt_path.is_dir():
         raise FileNotFoundError(f"Gold features not found: {dlt_path}")
     return get_delta().read(str(dlt_path))
+
+
+def merge_datasets_incremental(
+    namespace: RunNamespace,
+    spine_sdf: Any,
+    datasets: "list[Any]",
+    merger: Any,
+) -> Any:
+    """Incrementally merge datasets via Delta checkpointing.
+
+    Instead of accumulating a wide Spark plan and relying on
+    ``localCheckpoint``, this function writes the intermediate result to
+    Delta after every dataset join, reads it back (breaking lineage
+    completely), and releases all Spark resources before the next step.
+
+    Parameters
+    ----------
+    namespace:
+        Active ``RunNamespace`` — used to locate ``silver_merged_path``.
+    spine_sdf:
+        Native Spark DataFrame with the temporal spine.
+    datasets:
+        ``DatasetMergeInput`` objects to merge.
+    merger:
+        ``SparkTemporalMerger`` instance.
+
+    Returns
+    -------
+    ``MergeReport`` with merge statistics.
+    """
+    from customer_retention.core.compat.detection import get_spark_session
+    from customer_retention.stages.temporal.temporal_merger import MergeReport
+
+    delta = get_delta()
+    output_path = str(namespace.silver_merged_path)
+    entity_key = merger.config.entity_key
+    as_of_column = merger.config.as_of_column
+
+    report = MergeReport(
+        spine_rows=spine_sdf.count(),
+        spine_entities=spine_sdf.select(entity_key).distinct().count(),
+        spine_dates=spine_sdf.select(as_of_column).distinct().count(),
+    )
+
+    # Step 1: write spine to Delta
+    delta.write(spine_sdf, output_path, mode="overwrite")
+    del spine_sdf
+    gc.collect()
+    logger.info("Spine written to Delta (%d rows)", report.spine_rows)
+
+    # Step 2: merge each dataset incrementally
+    for i, ds in enumerate(datasets):
+        t0 = time.monotonic()
+
+        spark = get_spark_session()
+        current_sdf = spark.read.format("delta").load(output_path)
+
+        merged_sdf, new_cols = merger.merge_one(current_sdf, ds)
+
+        delta.write(merged_sdf, output_path, mode="overwrite")
+
+        # Release all Spark resources
+        del current_sdf, merged_sdf
+        release_stage_memory()
+
+        report.datasets_merged.append(ds.name)
+        report.columns_per_dataset[ds.name] = len(new_cols)
+
+        logger.info(
+            "Incremental merge %d/%d '%s': +%d cols (%.1fs)",
+            i + 1, len(datasets), ds.name, len(new_cols),
+            time.monotonic() - t0,
+        )
+
+    # Step 3: compaction only (no Z-ORDER)
+    delta.optimize(output_path)
+    logger.info("OPTIMIZE (compaction-only) complete")
+
+    # Step 4: read final schema for report
+    spark = get_spark_session()
+    final_sdf = spark.read.format("delta").load(output_path)
+    report.total_columns = len(final_sdf.columns)
+    report.renamed_columns = {
+        col: col
+        for col in final_sdf.columns
+        if merger.config.conflict_separator in col
+    }
+    del final_sdf
+    gc.collect()
+
+    return report

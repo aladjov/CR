@@ -12,6 +12,7 @@ from customer_retention.analysis.auto_explorer.active_dataset_store import (
     load_merge_dataset_distributed,
     load_silver_merged,
     load_silver_merged_distributed,
+    merge_datasets_incremental,
     require_silver_merged,
     require_silver_merged_distributed,
     save_active_dataset,
@@ -347,3 +348,253 @@ class TestDistributedSavePath:
         save_active_dataset(namespace, "customers", df)
         loaded = load_active_dataset(namespace, "customers")
         pd.testing.assert_frame_equal(loaded, df)
+
+
+# ---------------------------------------------------------------------------
+# FakeSparkDF for merge_datasets_incremental tests
+# ---------------------------------------------------------------------------
+
+
+class _FakeSparkDF:
+    """Minimal native Spark DF simulation for merge_datasets_incremental."""
+
+    _is_fake_spark_df = True
+
+    def __init__(self, pdf):
+        self._pdf = pdf.copy()
+
+    @property
+    def columns(self):
+        return list(self._pdf.columns)
+
+    def count(self):
+        return len(self._pdf)
+
+    def select(self, *cols):
+        return _FakeSparkDF(self._pdf[list(cols)])
+
+    def distinct(self):
+        return _FakeSparkDF(self._pdf.drop_duplicates())
+
+
+class _FakeDeltaForIncremental:
+    """In-memory Delta stand-in that stores one table at a time."""
+
+    def __init__(self):
+        self.store: dict[str, pd.DataFrame] = {}
+        self.optimize_calls: list[dict] = []
+
+    def write(self, data, path, mode="overwrite"):
+        if isinstance(data, _FakeSparkDF):
+            self.store[path] = data._pdf.copy()
+        elif isinstance(data, pd.DataFrame):
+            self.store[path] = data.copy()
+        else:
+            # native Spark → just store columns for schema tests
+            self.store[path] = data._pdf.copy()
+
+    def read(self, path):
+        return self.store[path].copy()
+
+    def optimize(self, path, z_order_columns=None):
+        self.optimize_calls.append({"path": path, "z_order_columns": z_order_columns})
+
+
+class _FakeSparkSession:
+    """Simulates spark.read.format('delta').load(path)."""
+
+    def __init__(self, delta_store):
+        self._delta = delta_store
+
+    @property
+    def read(self):
+        return self
+
+    def format(self, fmt):
+        return self
+
+    def load(self, path):
+        pdf = self._delta.store[path].copy()
+        return _FakeSparkDF(pdf)
+
+    @property
+    def catalog(self):
+        return self
+
+    def clearCache(self):  # noqa: N802
+        pass
+
+
+class TestMergeDatasetsIncremental:
+    @pytest.fixture()
+    def _setup(self, namespace, monkeypatch):
+        """Wire up fakes for Delta, Spark, and merge_one."""
+        fake_delta = _FakeDeltaForIncremental()
+        fake_spark = _FakeSparkSession(fake_delta)
+
+        monkeypatch.setattr(
+            "customer_retention.analysis.auto_explorer.active_dataset_store.get_delta",
+            lambda **kw: fake_delta,
+        )
+        # get_spark_session is imported inside the function from detection module
+        monkeypatch.setattr(
+            "customer_retention.core.compat.detection.get_spark_session",
+            lambda: fake_spark,
+        )
+        monkeypatch.setattr(
+            "customer_retention.analysis.auto_explorer.active_dataset_store.release_stage_memory",
+            lambda: None,
+        )
+        return namespace, fake_delta, fake_spark
+
+    def _make_merger(self, merge_one_side_effect=None):
+        """Build a mock SparkTemporalMerger with controllable merge_one."""
+        from customer_retention.stages.temporal.temporal_merger import MergeConfig
+
+        merger = MagicMock()
+        merger.config = MergeConfig(entity_key="entity_id")
+
+        if merge_one_side_effect:
+            merger.merge_one.side_effect = merge_one_side_effect
+        return merger
+
+    def _spine_sdf(self):
+        pdf = pd.MultiIndex.from_product(
+            [["A", "B"], pd.to_datetime(["2024-01-01", "2024-02-01"])],
+            names=["entity_id", "as_of_date"],
+        ).to_frame(index=False)
+        return _FakeSparkDF(pdf)
+
+    def test_produces_correct_merged_result(self, _setup):
+        namespace, fake_delta, _ = _setup
+        spine_sdf = self._spine_sdf()
+
+        ds1 = MagicMock(name="ds1_input")
+        ds1.name = "txns"
+        ds2 = MagicMock(name="ds2_input")
+        ds2.name = "customers"
+
+        def _merge_one(current_sdf, ds):
+            pdf = current_sdf._pdf.copy()
+            if ds.name == "txns":
+                pdf["amount"] = range(len(pdf))
+                return _FakeSparkDF(pdf), {"amount"}
+            else:
+                pdf["tier"] = "gold"
+                return _FakeSparkDF(pdf), {"tier"}
+
+        merger = self._make_merger(merge_one_side_effect=_merge_one)
+        report = merge_datasets_incremental(namespace, spine_sdf, [ds1, ds2], merger)
+
+        final = fake_delta.store[str(namespace.silver_merged_path)]
+        assert "amount" in final.columns
+        assert "tier" in final.columns
+        assert len(final) == 4
+
+    def test_report_has_correct_column_counts(self, _setup):
+        namespace, _, _ = _setup
+        spine_sdf = self._spine_sdf()
+
+        ds1 = MagicMock()
+        ds1.name = "txns"
+
+        def _merge_one(current_sdf, ds):
+            pdf = current_sdf._pdf.copy()
+            pdf["a"] = 1
+            pdf["b"] = 2
+            return _FakeSparkDF(pdf), {"a", "b"}
+
+        merger = self._make_merger(merge_one_side_effect=_merge_one)
+        report = merge_datasets_incremental(namespace, spine_sdf, [ds1], merger)
+
+        assert report.columns_per_dataset == {"txns": 2}
+        assert report.total_columns == 4  # entity_id, as_of_date, a, b
+
+    def test_compaction_only_no_zorder(self, _setup):
+        namespace, fake_delta, _ = _setup
+        spine_sdf = self._spine_sdf()
+
+        merger = self._make_merger()
+        merge_datasets_incremental(namespace, spine_sdf, [], merger)
+
+        assert len(fake_delta.optimize_calls) == 1
+        call = fake_delta.optimize_calls[0]
+        assert call["z_order_columns"] is None
+
+    def test_memory_released_between_steps(self, _setup, monkeypatch):
+        namespace, _, _ = _setup
+        spine_sdf = self._spine_sdf()
+        release_calls = []
+
+        monkeypatch.setattr(
+            "customer_retention.analysis.auto_explorer.active_dataset_store.release_stage_memory",
+            lambda: release_calls.append(1),
+        )
+
+        ds1 = MagicMock()
+        ds1.name = "d1"
+        ds2 = MagicMock()
+        ds2.name = "d2"
+
+        def _merge_one(current_sdf, ds):
+            pdf = current_sdf._pdf.copy()
+            pdf[f"col_{ds.name}"] = 1
+            return _FakeSparkDF(pdf), {f"col_{ds.name}"}
+
+        merger = self._make_merger(merge_one_side_effect=_merge_one)
+        merge_datasets_incremental(namespace, spine_sdf, [ds1, ds2], merger)
+        assert len(release_calls) == 2
+
+    def test_empty_datasets_list(self, _setup):
+        namespace, fake_delta, _ = _setup
+        spine_sdf = self._spine_sdf()
+
+        merger = self._make_merger()
+        report = merge_datasets_incremental(namespace, spine_sdf, [], merger)
+
+        final = fake_delta.store[str(namespace.silver_merged_path)]
+        assert len(final) == 4
+        assert report.datasets_merged == []
+        assert report.total_columns == 2  # entity_id, as_of_date
+
+    def test_column_conflicts_across_datasets(self, _setup):
+        namespace, fake_delta, _ = _setup
+        spine_sdf = self._spine_sdf()
+
+        ds1 = MagicMock()
+        ds1.name = "src1"
+        ds2 = MagicMock()
+        ds2.name = "src2"
+
+        def _merge_one(current_sdf, ds):
+            pdf = current_sdf._pdf.copy()
+            if ds.name == "src1":
+                pdf["val"] = 1
+                return _FakeSparkDF(pdf), {"val"}
+            else:
+                pdf["src2__val"] = 2
+                return _FakeSparkDF(pdf), {"src2__val"}
+
+        merger = self._make_merger(merge_one_side_effect=_merge_one)
+        report = merge_datasets_incremental(namespace, spine_sdf, [ds1, ds2], merger)
+
+        assert "src2__val" in report.renamed_columns
+
+    def test_spine_row_count_preserved(self, _setup):
+        namespace, fake_delta, _ = _setup
+        spine_sdf = self._spine_sdf()
+
+        ds1 = MagicMock()
+        ds1.name = "ds1"
+
+        def _merge_one(current_sdf, ds):
+            # Left join preserves rows
+            pdf = current_sdf._pdf.copy()
+            pdf["x"] = 1
+            return _FakeSparkDF(pdf), {"x"}
+
+        merger = self._make_merger(merge_one_side_effect=_merge_one)
+        report = merge_datasets_incremental(namespace, spine_sdf, [ds1], merger)
+
+        final = fake_delta.store[str(namespace.silver_merged_path)]
+        assert len(final) == report.spine_rows
