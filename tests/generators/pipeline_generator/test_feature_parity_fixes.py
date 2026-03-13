@@ -515,6 +515,53 @@ class TestGoldTransformApplicator:
         result = executor.apply_all(df, steps)
         assert "revenue" in result.columns
 
+    def test_executor_applies_fitted_gold_steps_with_artifact_store(self, tmp_path):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            RecommendationRegistry,
+        )
+        from customer_retention.generators.pipeline_generator.gold_transform_applicator import (
+            build_gold_steps,
+        )
+        from customer_retention.transforms import TransformExecutor
+        from customer_retention.transforms.artifact_store import ArtifactStore
+
+        registry = RecommendationRegistry()
+        registry.init_gold("churn")
+        registry.add_gold_transformation(
+            "revenue", "yeo_johnson", {}, "skewed", "04",
+        )
+        registry.add_gold_transformation(
+            "orders", "log", {}, "skewed", "04",
+        )
+        steps = build_gold_steps(registry, {"revenue", "orders"})
+        df = pd.DataFrame({"revenue": [10.0, 100.0, 1000.0], "orders": [1.0, 5.0, 20.0], "churn": [0, 1, 0]})
+        executor = TransformExecutor()
+        store = ArtifactStore(tmp_path / "artifacts")
+        result = executor.apply_all(df, steps, fit_mode=True, artifact_store=store)
+        assert "revenue" in result.columns
+        assert "orders" in result.columns
+        assert store.has("revenue_power_transformer")
+
+    def test_executor_fitted_gold_without_store_raises(self):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            RecommendationRegistry,
+        )
+        from customer_retention.generators.pipeline_generator.gold_transform_applicator import (
+            build_gold_steps,
+        )
+        from customer_retention.transforms import TransformExecutor
+
+        registry = RecommendationRegistry()
+        registry.init_gold("churn")
+        registry.add_gold_transformation(
+            "revenue", "yeo_johnson", {}, "skewed", "04",
+        )
+        steps = build_gold_steps(registry, {"revenue"})
+        df = pd.DataFrame({"revenue": [10.0, 100.0, 1000.0], "churn": [0, 1, 0]})
+        executor = TransformExecutor()
+        with pytest.raises(AttributeError):
+            executor.apply_all(df, steps)
+
 
 class TestNullFillAfterOuterJoin:
     def test_databricks_event_agg_fills_nulls_after_merge(self, renderer, binary_event_config):

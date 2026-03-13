@@ -1170,7 +1170,10 @@ def release_stage_memory() -> None:
     if session is None:
         return
     session.catalog.clearCache()
-    session._jvm.System.gc()
+    try:
+        session._jvm.System.gc()
+    except Exception:
+        pass
 
 
 __all__ = [
