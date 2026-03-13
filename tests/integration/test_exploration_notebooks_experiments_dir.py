@@ -482,6 +482,34 @@ class TestNotebook08Architecture:
         assert "CVStrategy.TEMPORAL_ENTITY" in content, "NB08 must use temporal entity CV"
         assert "cross_val_score" not in content, "NB08 must not use sklearn cross_val_score"
 
+    def test_nb08_has_cv_folds_config_cell(self):
+        import json
+
+        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+        config_cells = [
+            c for c in nb["cells"]
+            if c["cell_type"] == "code"
+            and c["source"]
+            and "@cr:config" in c["source"][0]
+            and "CV_FOLDS" in "".join(c["source"])
+        ]
+        assert config_cells, "NB08 must have a @cr:config cell defining CV_FOLDS"
+
+    def test_nb08_train_models_uses_cv_folds_variable(self):
+        import json
+
+        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+        train_cell = next(
+            c for c in nb["cells"]
+            if c["cell_type"] == "code"
+            and c["source"]
+            and "train_models" in c["source"][0]
+        )
+        source = "".join(train_cell["source"])
+        assert "n_splits=CV_FOLDS" in source, "train_models must use CV_FOLDS variable for n_splits"
+
     def test_nb08_validates_as_of_date_column(self):
         content = self._read_content()
         assert "as_of_date" in content and "missing" in content.lower(), "NB08 must validate as_of_date column"
