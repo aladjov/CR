@@ -90,7 +90,15 @@ class ScoringDataLoader:
         df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
         df = df.drop(columns=[c for c in df.columns if c.startswith("original_")], errors="ignore")
         df = executor.apply_all(df, transforms, fit_mode=False, artifact_store=artifact_store)
-        return select_model_ready_columns(df).select_dtypes(include=["number", "bool"]).fillna(0)
+        df = select_model_ready_columns(df)
+        from customer_retention.core.compat import _is_spark_pandas
+        if _is_spark_pandas(df):
+            import pandas.api.types as ptypes
+            dtypes = df.dtypes
+            keep = [c for c, dt in dtypes.items()
+                    if ptypes.is_numeric_dtype(dt) or ptypes.is_bool_dtype(dt)]
+            return df[keep].fillna(0)
+        return df.select_dtypes(include=["number", "bool"]).fillna(0)
 
     def align_features_to_model(
         self,

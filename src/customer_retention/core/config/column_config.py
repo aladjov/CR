@@ -35,6 +35,15 @@ NON_FEATURE_DTYPES = frozenset({"datetime64", "datetimetz", "timedelta64"})
 
 
 def select_model_ready_columns(df: pd.DataFrame) -> pd.DataFrame:
+    from customer_retention.core.compat import _is_spark_pandas
+
+    if _is_spark_pandas(df):
+        dtypes = df.dtypes
+        keep = [
+            col for col, dtype in dtypes.items()
+            if not str(dtype).startswith(("datetime", "timedelta"))
+        ]
+        return df[keep]
     return df.select_dtypes(exclude=list(NON_FEATURE_DTYPES))
 
 
