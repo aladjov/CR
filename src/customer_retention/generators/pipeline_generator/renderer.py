@@ -1929,6 +1929,7 @@ VALUE_COLUMNS = {{ config.aggregation.value_columns }}
 AGG_FUNCS = {{ config.aggregation.agg_funcs | reject("equalto", "count") | list }}
 CATEGORICAL_COLUMNS = {{ config.aggregation.categorical_columns }}
 CATEGORICAL_AGG_FUNCS = {{ config.aggregation.categorical_agg_funcs }}
+BINARY_COLUMNS = {{ config.aggregation.binary_columns }}
 {% endif %}
 
 
@@ -1952,10 +1953,18 @@ def apply_event_aggregation(df: pd.DataFrame) -> pd.DataFrame:
             if col in window_df.columns:
                 parts.append(window_df.groupby(ENTITY_COLUMN)[col].nunique().rename(f"{col}_nunique_{window}"))
                 parts.append(window_df.groupby(ENTITY_COLUMN)[col].agg(_safe_mode).rename(f"{col}_mode_{window}"))
+        for col in BINARY_COLUMNS:
+            if col in window_df.columns:
+                parts.append(window_df.groupby(ENTITY_COLUMN)[col].mean().rename(f"{col}_rate_{window}"))
+                parts.append(window_df.groupby(ENTITY_COLUMN)[col].sum().rename(f"{col}_count_{window}"))
+                parts.append(window_df.groupby(ENTITY_COLUMN)[col].max().rename(f"{col}_any_{window}"))
         parts.append(window_df.groupby(ENTITY_COLUMN).size().rename(f"event_count_{window}"))
     if "feature_timestamp" in df.columns:
         parts.append(df.groupby(ENTITY_COLUMN)["feature_timestamp"].max().rename("feature_timestamp"))
     df = pd.concat([base] + parts, axis=1).reset_index()
+    _fill_cols = [c for c in df.columns if any(c.endswith(s) for s in ("_count", "_sum", "_rate")) or c.startswith("event_count_")]
+    if _fill_cols:
+        df[_fill_cols] = df[_fill_cols].fillna(0)
     df.attrs["aggregation_reference_date"] = str(reference_date)
 {% endif %}
     return df

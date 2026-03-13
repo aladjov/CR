@@ -116,6 +116,8 @@ class AggregationWindowConfig:
     agg_funcs: List[str] = field(default_factory=list)
     categorical_columns: List[str] = field(default_factory=list)
     categorical_agg_funcs: List[str] = field(default_factory=list)
+    binary_columns: List[str] = field(default_factory=list)
+    binary_agg_funcs: List[str] = field(default_factory=lambda: ["rate", "count", "any"])
     reference_date: Optional[str] = None
 
 

@@ -2201,6 +2201,8 @@ class TestBronzeEventCategoricalAggregation:
                 extracted_lines.append(line)
             if line.startswith("CATEGORICAL_COLUMNS") or line.startswith("CATEGORICAL_AGG_FUNCS"):
                 extracted_lines.append(line)
+            if line.startswith("BINARY_COLUMNS"):
+                extracted_lines.append(line)
             if line.startswith("def apply_event_aggregation("):
                 capture = True
                 extracted_lines.append(line)
@@ -2268,6 +2270,8 @@ class TestBronzeEventCategoricalAggregation:
             if line.startswith("VALUE_COLUMNS") or line.startswith("AGG_FUNCS"):
                 extracted_lines.append(line)
             if line.startswith("CATEGORICAL_COLUMNS") or line.startswith("CATEGORICAL_AGG_FUNCS"):
+                extracted_lines.append(line)
+            if line.startswith("BINARY_COLUMNS"):
                 extracted_lines.append(line)
             if line.startswith("def apply_event_aggregation("):
                 capture = True

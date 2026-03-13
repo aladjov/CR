@@ -722,6 +722,9 @@ class FindingsParser:
                 for col in agg.categorical_columns:
                     for func in agg.categorical_agg_funcs:
                         columns.add(f"{col}_{func}_{window}")
+                for col in agg.binary_columns:
+                    for func in agg.binary_agg_funcs:
+                        columns.add(f"{col}_{func}_{window}")
                 columns.add(f"event_count_{window}")
         lc = event_cfg.lifecycle
         if lc:
@@ -1068,16 +1071,19 @@ class FindingsParser:
         entity_col = (findings.time_series_metadata.entity_column if findings.time_series_metadata else None) or ""
         time_col = (findings.time_series_metadata.time_column if findings.time_series_metadata else None) or ""
         exclude = {target, entity_col, time_col}
-        agg_categorical = self._CATEGORICAL_TYPES | {ColumnType.BINARY}
         value_columns = []
         categorical_columns = []
+        binary_columns = []
         for col_name, col_finding in findings.columns.items():
             if col_name in exclude:
                 continue
             col_type = col_finding.inferred_type
             if col_type in self._NUMERIC_TYPES:
                 value_columns.append(col_name)
-            elif col_type in agg_categorical:
+            elif col_type == ColumnType.BINARY:
+                binary_columns.append(col_name)
+                categorical_columns.append(col_name)
+            elif col_type in self._CATEGORICAL_TYPES:
                 categorical_columns.append(col_name)
         for src in getattr(findings, "datetime_derivation_sources", []):
             for suffix in ("_delta_hours", "_hour", "_dow", "_is_weekend"):
@@ -1091,6 +1097,8 @@ class FindingsParser:
             agg_funcs=["sum", "mean", "max", "count"],
             categorical_columns=categorical_columns,
             categorical_agg_funcs=["nunique", "mode"],
+            binary_columns=binary_columns,
+            binary_agg_funcs=["rate", "count", "any"],
         )
 
     def _build_lifecycle_config(
@@ -1201,6 +1209,8 @@ class FindingsParser:
                     lag_window_days=tp.get("lag_window_days", 30),
                     num_lags=tp.get("num_lags", 4),
                     lag_columns=tp.get("lag_columns", []),
+                    lag_agg_funcs=tp.get("lag_agg_funcs", ["sum", "mean", "count", "max"]),
+                    feature_groups=tp.get("feature_groups", ["lagged_windows", "velocity"]),
                 )
         return None
 

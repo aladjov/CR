@@ -618,6 +618,7 @@ def _window_to_days(window_str):
     return int(window_str)
 
 CATEGORICAL_COLUMNS = {{ config.aggregation.categorical_columns }}
+BINARY_COLUMNS = {{ config.aggregation.binary_columns }}
 
 def _get_numeric_columns(df, value_columns):
     numeric_cols = set()
@@ -648,12 +649,20 @@ def apply_event_aggregation(df):
         if col in [f.name for f in window_df.schema.fields]:
             agg_exprs.append(F.countDistinct(col).alias(f"{col}_nunique_{{ window }}"))
             agg_exprs.append(F.first(col).alias(f"{col}_mode_{{ window }}"))
+    for col in BINARY_COLUMNS:
+        if col in [f.name for f in window_df.schema.fields]:
+            agg_exprs.append(F.mean(col).alias(f"{col}_rate_{{ window }}"))
+            agg_exprs.append(F.sum(col).alias(f"{col}_count_{{ window }}"))
+            agg_exprs.append(F.max(col).alias(f"{col}_any_{{ window }}"))
     window_agg = window_df.groupBy(ENTITY_COLUMN).agg(*agg_exprs)
     results.append(window_agg)
 {% endfor %}
     merged = results[0]
     for r in results[1:]:
         merged = merged.join(r, on=ENTITY_COLUMN, how="outer")
+    _fill_cols = [c for c in merged.columns if any(c.endswith(s) for s in ("_count", "_sum", "_rate")) or c.startswith("event_count_")]
+    if _fill_cols:
+        merged = merged.fillna(0, subset=_fill_cols)
     if "feature_timestamp" in [f.name for f in df.schema.fields]:
         ts_agg = df.groupBy(ENTITY_COLUMN).agg(F.max("feature_timestamp").alias("feature_timestamp"))
         merged = merged.join(ts_agg, on=ENTITY_COLUMN, how="left")
@@ -1415,6 +1424,7 @@ import mlflow
 import mlflow.spark
 from pyspark.ml.classification import LogisticRegression, RandomForestClassifier, GBTClassifier
 from pyspark.ml.feature import VectorAssembler
+from pyspark.ml.functions import vector_to_array
 from pyspark.ml.linalg import VectorUDT
 from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
 from pyspark.sql import functions as F
@@ -1538,7 +1548,7 @@ def _evaluate_model(predictions):
 def _mlflow_evaluate_predictions(predictions):
     eval_pdf = predictions.select(
         F.col("label"),
-        F.col("probability").getItem(1).alias("prob_1"),
+        vector_to_array(F.col("probability"))[1].alias("prob_1"),
         F.col("prediction"),
     ).toPandas()
     mlflow.evaluate(
