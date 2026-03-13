@@ -9,6 +9,50 @@ import yaml
 
 from customer_retention.core.config.column_config import ColumnConfig, ColumnType, DatasetGranularity
 
+_NUMERIC_TYPES = frozenset({ColumnType.NUMERIC_CONTINUOUS, ColumnType.NUMERIC_DISCRETE})
+_CATEGORICAL_TYPES = frozenset({
+    ColumnType.CATEGORICAL_NOMINAL, ColumnType.CATEGORICAL_ORDINAL, ColumnType.CATEGORICAL_CYCLICAL,
+})
+_DATETIME_TYPES = frozenset({ColumnType.DATETIME, ColumnType.FEATURE_TIMESTAMP, ColumnType.LABEL_TIMESTAMP})
+
+
+@dataclass
+class ColumnClassification:
+    numeric: List[str] = field(default_factory=list)
+    categorical: List[str] = field(default_factory=list)
+    datetime: List[str] = field(default_factory=list)
+    binary: List[str] = field(default_factory=list)
+    text: List[str] = field(default_factory=list)
+    identifier: List[str] = field(default_factory=list)
+    target: Optional[str] = None
+
+
+def classify_columns(
+    findings: "ExplorationFindings",
+    exclude: Optional[set[str]] = None,
+) -> ColumnClassification:
+    cc = ColumnClassification()
+    skip = exclude or set()
+    for name, col in findings.columns.items():
+        if name in skip:
+            continue
+        t = col.inferred_type
+        if t in _NUMERIC_TYPES:
+            cc.numeric.append(name)
+        elif t in _CATEGORICAL_TYPES:
+            cc.categorical.append(name)
+        elif t in _DATETIME_TYPES:
+            cc.datetime.append(name)
+        elif t == ColumnType.BINARY:
+            cc.binary.append(name)
+        elif t == ColumnType.TEXT:
+            cc.text.append(name)
+        elif t == ColumnType.IDENTIFIER:
+            cc.identifier.append(name)
+        elif t == ColumnType.TARGET:
+            cc.target = name
+    return cc
+
 
 def _parse_iso(value: Any) -> Any:
     if value is None:

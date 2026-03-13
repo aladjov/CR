@@ -1162,18 +1162,35 @@ def register_temp_view(spark_df: Any, view_name: str) -> str:
     return f"global_temp.{view_name}"
 
 
+_stage_objects: list[Any] = []
+
+
+def track_stage_object(*objects: Any) -> None:
+    """Register heavy objects (DataFrames, models) for cleanup by release_stage_memory()."""
+    _stage_objects.extend(objects)
+
+
+def _try_unpersist(obj: Any) -> None:
+    if hasattr(obj, 'unpersist') and hasattr(obj, 'to_spark'):
+        obj.unpersist()
+    elif hasattr(obj, 'spark') and hasattr(obj.spark, 'unpersist'):
+        obj.spark.unpersist()
+
+
 def release_stage_memory() -> None:
-    """Free Spark storage memory and JVM heap between notebook stages."""
+    """Unpersist tracked objects, run GC, and clear Spark cache."""
+    for obj in _stage_objects:
+        try:
+            _try_unpersist(obj)
+        except (AttributeError, RuntimeError, OSError):
+            pass
+    _stage_objects.clear()
     import gc
     gc.collect()
     session = get_spark_session()
     if session is None:
         return
     session.catalog.clearCache()
-    try:
-        session._jvm.System.gc()
-    except Exception:
-        pass
 
 
 __all__ = [
@@ -1271,4 +1288,5 @@ __all__ = [
     "load_spark_table",
     "register_temp_view",
     "release_stage_memory",
+    "track_stage_object",
 ]
