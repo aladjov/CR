@@ -43,6 +43,7 @@ dependencies = [
     # Static image export for Plotly
     "kaleido>=0.2.1",
     "ipykernel>=7.1.0",
+    "ipywidgets>=8.0.0",
 ]
 
 [project.optional-dependencies]

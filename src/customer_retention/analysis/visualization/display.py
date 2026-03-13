@@ -156,6 +156,15 @@ def _display_styler(styler: Any, title: Optional[str] = None):
         print(styler.data.to_string())
 
 
+def has_interactive_widgets() -> bool:
+    """Return True if ipywidgets is available and we're in a notebook environment."""
+    try:
+        import ipywidgets  # noqa: F401
+        return detect_environment() in ("jupyter", "databricks")
+    except ImportError:
+        return False
+
+
 def display_summary(findings: Any, charts: Any):
     env = detect_environment()
 

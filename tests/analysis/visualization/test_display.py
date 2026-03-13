@@ -7,6 +7,7 @@ from customer_retention.analysis.visualization.display import (
     display_figure,
     display_summary,
     display_table,
+    has_interactive_widgets,
 )
 
 
@@ -475,3 +476,29 @@ class TestDisplayTableImportError:
 
             with patch("builtins.__import__", side_effect=mock_import):
                 display_table(df)
+
+
+class TestHasInteractiveWidgets:
+    def test_returns_false_in_terminal(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("customer_retention.analysis.visualization.display.get_ipython", side_effect=NameError):
+                assert has_interactive_widgets() is False
+
+    def test_returns_true_in_jupyter_with_ipywidgets(self):
+        mock_shell = MagicMock()
+        mock_shell.__class__.__name__ = "ZMQInteractiveShell"
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("customer_retention.analysis.visualization.display.get_ipython", return_value=mock_shell):
+                assert has_interactive_widgets() is True
+
+    def test_returns_false_when_ipywidgets_missing(self):
+        import builtins
+        original_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "ipywidgets":
+                raise ImportError("no ipywidgets")
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=mock_import):
+            assert has_interactive_widgets() is False
