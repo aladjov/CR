@@ -103,16 +103,20 @@ class SegmentAwareOutlierAnalyzer:
         return {col: handler.detect(df[col]) for col in feature_cols}
 
     def _use_explicit_segments(self, df: DataFrame, segment_col: str) -> tuple:
-        unique_segments = df[segment_col].dropna().unique()
-        label_map = {v: i for i, v in enumerate(unique_segments)}
-        labels = df[segment_col].map(label_map).fillna(-1).astype(int).to_numpy()
-        return labels, len(unique_segments)
+        unique_vals = df[segment_col].dropna().unique()
+        if hasattr(unique_vals, 'to_numpy'):
+            unique_vals = unique_vals.to_numpy()
+        label_map = {v: i for i, v in enumerate(unique_vals)}
+        raw = df[segment_col].to_numpy()
+        labels = np.array([label_map.get(v, -1) for v in raw], dtype=int)
+        return labels, len(unique_vals)
 
     def _detect_segments(
         self, df: DataFrame, feature_cols: List[str], target_col: Optional[str]
     ) -> tuple:
-        if len(df) < self.MIN_SEGMENT_SIZE * 2:
-            return np.zeros(len(df), dtype=int), 1, None
+        n_rows = len(df)
+        if n_rows < self.MIN_SEGMENT_SIZE * 2:
+            return np.zeros(n_rows, dtype=int), 1, None
 
         try:
             result = self._segment_analyzer.analyze(
@@ -121,9 +125,11 @@ class SegmentAwareOutlierAnalyzer:
                 feature_cols=feature_cols,
                 max_segments=self.max_segments
             )
+            if len(result.labels) != n_rows:
+                return np.zeros(n_rows, dtype=int), 1, None
             return result.labels, result.n_segments, result
         except Exception:
-            return np.zeros(len(df), dtype=int), 1, None
+            return np.zeros(n_rows, dtype=int), 1, None
 
     def _analyze_by_segment(
         self,

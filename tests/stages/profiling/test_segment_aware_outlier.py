@@ -349,3 +349,87 @@ class TestVectorizedFalseOutlierIdentification:
         analyzer = SegmentAwareOutlierAnalyzer()
         result = analyzer.analyze(df, feature_cols=['value'], segment_col='segment')
         assert result.false_outliers['value'] == 0
+
+
+class TestSnapshotColumnInteraction:
+    def test_segment_labels_match_df_length_with_snapshot_columns(self):
+        """SegmentAnalyzer filters to latest snapshot internally.
+        _detect_segments must return labels matching the original df length."""
+        np.random.seed(42)
+        df = pd.DataFrame({
+            'feature1': np.random.normal(10, 2, 100),
+            'as_of_date': pd.to_datetime(
+                ['2024-01-01'] * 80 + ['2024-06-01'] * 20
+            ),
+        })
+        analyzer = SegmentAwareOutlierAnalyzer()
+        result = analyzer.analyze(df, feature_cols=['feature1'])
+        assert len(result.segment_labels) == len(df)
+
+    def test_no_broadcast_error_with_snapshot_filtered_segments(self):
+        """Reproduces ValueError: shapes (N,) (M,) when SegmentAnalyzer
+        returns labels for a snapshot subset shorter than the full DataFrame."""
+        np.random.seed(42)
+        df = pd.DataFrame({
+            'feature1': np.concatenate([
+                np.random.normal(10, 2, 80),
+                np.random.normal(50, 5, 20),
+            ]),
+            'as_of_date': pd.to_datetime(
+                ['2024-01-01'] * 80 + ['2024-06-01'] * 20
+            ),
+        })
+        analyzer = SegmentAwareOutlierAnalyzer()
+        result = analyzer.analyze(df, feature_cols=['feature1'])
+        assert result.n_segments >= 1
+        for col, count in result.false_outliers.items():
+            assert count <= result.global_analysis[col].outliers_detected
+
+    def test_explicit_segment_col_with_snapshot_columns(self):
+        """Explicit segment_col bypasses SegmentAnalyzer snapshot filtering."""
+        np.random.seed(42)
+        df = pd.DataFrame({
+            'feature1': np.concatenate([
+                np.random.normal(10, 2, 50),
+                np.random.normal(100, 10, 50),
+            ]),
+            'as_of_date': pd.to_datetime(
+                ['2024-01-01'] * 50 + ['2024-06-01'] * 50
+            ),
+            'segment': ['A'] * 50 + ['B'] * 50,
+        })
+        analyzer = SegmentAwareOutlierAnalyzer()
+        result = analyzer.analyze(
+            df, feature_cols=['feature1'], segment_col='segment'
+        )
+        assert len(result.segment_labels) == len(df)
+        assert result.n_segments == 2
+
+
+class TestExplicitSegmentsNumpyMapping:
+    def test_labels_always_match_df_length(self):
+        """_use_explicit_segments must return labels of len(df)."""
+        np.random.seed(42)
+        df = pd.DataFrame({
+            'segment': ['X'] * 30 + ['Y'] * 20 + ['Z'] * 10,
+            'value': np.random.normal(50, 10, 60),
+        })
+        analyzer = SegmentAwareOutlierAnalyzer()
+        result = analyzer.analyze(
+            df, feature_cols=['value'], segment_col='segment'
+        )
+        assert len(result.segment_labels) == 60
+        assert result.n_segments == 3
+
+    def test_nan_segment_values_get_minus_one(self):
+        """Rows with NaN segment get label -1."""
+        np.random.seed(42)
+        df = pd.DataFrame({
+            'segment': ['A'] * 20 + [None] * 10 + ['B'] * 20,
+            'value': np.random.normal(50, 10, 50),
+        })
+        analyzer = SegmentAwareOutlierAnalyzer()
+        labels, n = analyzer._use_explicit_segments(df, 'segment')
+        assert len(labels) == 50
+        assert n == 2
+        assert all(labels[20:30] == -1)
