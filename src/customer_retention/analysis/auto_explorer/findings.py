@@ -74,12 +74,17 @@ def _convert_to_native(obj: Any) -> Any:
         return {k: _convert_to_native(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_convert_to_native(v) for v in obj]
+    if isinstance(obj, datetime):
+        return obj.isoformat()
     if hasattr(obj, 'item'):
         return obj.item()
     if hasattr(obj, 'tolist'):
         return obj.tolist()
-    if type(obj).__module__ == 'numpy':
+    mod = type(obj).__module__
+    if mod == 'numpy':
         return obj.item() if hasattr(obj, 'item') else float(obj)
+    if mod.startswith('pandas'):
+        return str(obj)
     return obj
 
 

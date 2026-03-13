@@ -50,6 +50,44 @@ class TestConvertToNative:
         assert isinstance(result["a"], float)
         assert isinstance(result["b"][0], float)
 
+    def test_converts_pandas_timestamp_to_isoformat(self):
+        import pandas as pd
+        ts = pd.Timestamp("2024-03-15 10:30:00")
+        result = _convert_to_native(ts)
+        assert isinstance(result, str)
+        assert result == "2024-03-15T10:30:00"
+
+    def test_converts_pandas_timestamp_in_dict(self):
+        import pandas as pd
+        data = {"minority_class": pd.Timestamp("2024-01-01"), "ratio": 3.5}
+        result = _convert_to_native(data)
+        assert isinstance(result["minority_class"], str)
+        assert result["minority_class"] == "2024-01-01T00:00:00"
+        assert result["ratio"] == 3.5
+
+    def test_converts_pandas_timedelta(self):
+        import pandas as pd
+        td = pd.Timedelta("5 days")
+        result = _convert_to_native(td)
+        assert isinstance(result, str)
+
+    def test_pandas_timestamp_yaml_roundtrip(self):
+        import pandas as pd
+        import yaml
+        data = {"minority_class": pd.Timestamp("2024-06-15"), "count": np.int64(42)}
+        native = _convert_to_native(data)
+        dumped = yaml.dump(native, default_flow_style=False)
+        loaded = yaml.safe_load(dumped)
+        assert loaded["minority_class"] == "2024-06-15T00:00:00"
+        assert loaded["count"] == 42
+
+    def test_converts_datetime_to_isoformat(self):
+        from datetime import datetime
+        dt = datetime(2024, 3, 15, 10, 30)
+        result = _convert_to_native(dt)
+        assert isinstance(result, str)
+        assert result == "2024-03-15T10:30:00"
+
 
 class TestColumnFinding:
     def test_creation_with_required_fields(self):

@@ -1409,6 +1409,30 @@ class TestRecommendationRegistryDecimalSafe:
         assert params["ratio"] == 1.23456
 
 
+class TestRecommendationRegistryPandasTimestampSafe:
+    def test_pandas_timestamp_minority_class_roundtrip(self, tmp_path):
+        import pandas as pd
+
+        registry = RecommendationRegistry()
+        registry.init_bronze("data.csv")
+        registry.add_bronze_imbalance_strategy(
+            "target", 5.0, pd.Timestamp("2024-01-01"),
+            "oversample", "severe imbalance", "01",
+        )
+
+        path = str(tmp_path / "recs.yaml")
+        registry.save(path)
+
+        with open(path) as f:
+            content = f.read()
+        assert "!!python" not in content
+
+        loaded = RecommendationRegistry.load(path)
+        params = loaded.bronze.modeling_strategy[0].parameters
+        assert isinstance(params["minority_class"], str)
+        assert "2024-01-01" in params["minority_class"]
+
+
 class TestRecommendationRegistryMerge:
 
     def test_merge_empty_list(self):

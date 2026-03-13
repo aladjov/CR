@@ -2,6 +2,7 @@ import decimal
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -12,6 +13,8 @@ import yaml
 def _to_native(value: Any) -> Any:
     if isinstance(value, decimal.Decimal):
         return float(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
     if isinstance(value, (np.integer, np.floating)):
         return value.item()
     if isinstance(value, np.ndarray):
@@ -20,6 +23,9 @@ def _to_native(value: Any) -> Any:
         return {k: _to_native(v) for k, v in value.items()}
     if isinstance(value, list):
         return [_to_native(v) for v in value]
+    mod = type(value).__module__
+    if mod.startswith('pandas'):
+        return str(value)
     return value
 
 

@@ -34,6 +34,20 @@ class TestFittedScaler:
         assert result["val"].std() == pytest.approx(1, abs=0.1)
         assert artifact_store.has("val_scaler")
 
+    def test_standard_matches_sklearn(self, numeric_df, artifact_store):
+        from sklearn.preprocessing import StandardScaler as SkStandard
+        scaler = FittedScaler("standard")
+        result = scaler.fit_transform(numeric_df.copy(), "val", artifact_store)
+        expected = SkStandard().fit_transform(numeric_df["val"].to_numpy().reshape(-1, 1)).ravel()
+        np.testing.assert_array_almost_equal(result["val"].to_numpy(), expected)
+
+    def test_minmax_matches_sklearn(self, numeric_df, artifact_store):
+        from sklearn.preprocessing import MinMaxScaler as SkMinMax
+        scaler = FittedScaler("minmax")
+        result = scaler.fit_transform(numeric_df.copy(), "val", artifact_store)
+        expected = SkMinMax().fit_transform(numeric_df["val"].to_numpy().reshape(-1, 1)).ravel()
+        np.testing.assert_array_almost_equal(result["val"].to_numpy(), expected)
+
     def test_standard_transform(self, numeric_df, artifact_store):
         scaler = FittedScaler("standard")
         scaler.fit_transform(numeric_df.copy(), "val", artifact_store)
@@ -46,6 +60,18 @@ class TestFittedScaler:
         result = scaler.fit_transform(numeric_df.copy(), "val", artifact_store)
         assert result["val"].min() >= -0.01
         assert result["val"].max() <= 1.01
+
+    def test_constant_column_standard(self, artifact_store):
+        df = pd.DataFrame({"val": [5.0] * 20})
+        scaler = FittedScaler("standard")
+        result = scaler.fit_transform(df.copy(), "val", artifact_store)
+        assert (result["val"] == 0).all()
+
+    def test_constant_column_minmax(self, artifact_store):
+        df = pd.DataFrame({"val": [5.0] * 20})
+        scaler = FittedScaler("minmax")
+        result = scaler.fit_transform(df.copy(), "val", artifact_store)
+        assert (result["val"] == 0).all()
 
     def test_missing_column_noop(self, numeric_df, artifact_store):
         scaler = FittedScaler("standard")
@@ -101,12 +127,40 @@ class TestFittedPowerTransform:
         assert abs(result["val"].skew()) < abs(numeric_df["val"].skew()) + 1
         assert artifact_store.has("val_power_transformer")
 
+    def test_matches_sklearn(self, numeric_df, artifact_store):
+        from sklearn.preprocessing import PowerTransformer as SkPower
+        pt = FittedPowerTransform()
+        result = pt.fit_transform(numeric_df.copy(), "val", artifact_store)
+        expected = SkPower(method="yeo-johnson").fit_transform(
+            numeric_df["val"].to_numpy().reshape(-1, 1)
+        ).ravel()
+        np.testing.assert_array_almost_equal(result["val"].to_numpy(), expected, decimal=10)
+
+    def test_with_negative_values(self, artifact_store):
+        np.random.seed(99)
+        df = pd.DataFrame({"val": np.random.randn(200) * 5})
+        pt = FittedPowerTransform()
+        result = pt.fit_transform(df.copy(), "val", artifact_store)
+        assert not result["val"].isna().any()
+        from sklearn.preprocessing import PowerTransformer as SkPower
+        expected = SkPower(method="yeo-johnson").fit_transform(df["val"].to_numpy().reshape(-1, 1)).ravel()
+        np.testing.assert_array_almost_equal(result["val"].to_numpy(), expected, decimal=10)
+
     def test_transform(self, numeric_df, artifact_store):
         pt = FittedPowerTransform()
         pt.fit_transform(numeric_df.copy(), "val", artifact_store)
         pt2 = FittedPowerTransform()
         result = pt2.transform(numeric_df.copy(), "val", artifact_store)
         assert not result["val"].isna().any()
+
+    def test_transform_matches_fit_transform(self, numeric_df, artifact_store):
+        pt = FittedPowerTransform()
+        fit_result = pt.fit_transform(numeric_df.copy(), "val", artifact_store)
+        pt2 = FittedPowerTransform()
+        transform_result = pt2.transform(numeric_df.copy(), "val", artifact_store)
+        np.testing.assert_array_almost_equal(
+            fit_result["val"].to_numpy(), transform_result["val"].to_numpy()
+        )
 
     def test_missing_column_noop(self, numeric_df, artifact_store):
         pt = FittedPowerTransform()

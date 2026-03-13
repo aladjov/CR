@@ -12,7 +12,7 @@ from typing import Any
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, get_dummies, pd
+from customer_retention.core.compat import DataFrame, get_dummies
 
 
 def _requires_column(fn):
@@ -65,22 +65,32 @@ def apply_segment_aware_cap(df: DataFrame, column: str, *, n_segments: int = 2) 
         return df
     from sklearn.cluster import KMeans
 
-    valid = df[column].dropna()
-    if len(valid) < n_segments:
+    valid_np = df[column].dropna().to_numpy()
+    if len(valid_np) < n_segments:
         return df
 
-    labels = KMeans(n_clusters=n_segments, random_state=42, n_init=10).fit_predict(
-        valid.values.reshape(-1, 1)
-    )
-    df = df.copy()
+    km = KMeans(n_clusters=n_segments, random_state=42, n_init=10)
+    km.fit(valid_np.reshape(-1, 1))
+    centroids = km.cluster_centers_.ravel()
+    labels = km.labels_
+    seg_bounds = {}
     for seg in range(n_segments):
-        mask = pd.Series(False, index=df.index)
-        mask.iloc[valid.index[labels == seg]] = True
-        seg_vals = df.loc[mask, column]
-        q1, q3 = seg_vals.quantile(0.25), seg_vals.quantile(0.75)
+        seg_vals = valid_np[labels == seg]
+        q1, q3 = np.percentile(seg_vals, 25), np.percentile(seg_vals, 75)
         iqr = q3 - q1
-        lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
-        df.loc[mask, column] = df.loc[mask, column].clip(lower=lower, upper=upper)
+        seg_bounds[seg] = (q1 - 1.5 * iqr, q3 + 1.5 * iqr)
+    sorted_idx = np.argsort(centroids)
+    sorted_c = centroids[sorted_idx]
+    mids = [(sorted_c[i] + sorted_c[i + 1]) / 2 for i in range(n_segments - 1)]
+    boundaries = [-np.inf] + mids + [np.inf]
+    df = df.copy()
+    col = df[column]
+    result = col
+    for rank, orig_seg in enumerate(sorted_idx):
+        in_seg = col.notna() & (col >= boundaries[rank]) & (col < boundaries[rank + 1])
+        lower, upper = seg_bounds[orig_seg]
+        result = col.clip(lower=lower, upper=upper).where(in_seg, result)
+    df[column] = result
     return df
 
 
