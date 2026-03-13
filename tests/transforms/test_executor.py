@@ -209,6 +209,49 @@ class TestApplyAll:
         assert result["age"].max() <= 100
         assert result["amount"].max() < 50000
 
+    def test_many_steps_produce_correct_result(self, executor):
+        df = pd.DataFrame({"v": [1.0, 2.0, 3.0, 100.0, 200.0] * 20})
+        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "v") for _ in range(15)]
+        result = executor.apply_all(df.copy(), steps)
+        expected = df.copy()
+        for _ in range(15):
+            expected["v"] = np.log1p(expected["v"].clip(lower=0))
+        np.testing.assert_array_almost_equal(result["v"].to_numpy(), expected["v"].to_numpy())
+
+    def test_checkpoint_interval_respected(self, executor, sample_df):
+        from unittest.mock import patch
+        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "amount") for _ in range(25)]
+        with patch("customer_retention.transforms.executor._is_spark_pandas", return_value=True), \
+             patch("customer_retention.transforms.executor.spark_checkpoint", side_effect=lambda d: d) as mock_cp:
+            executor.apply_all(sample_df.copy(), steps)
+        assert mock_cp.call_count == 2
+
+    def test_no_checkpoint_on_pandas(self, executor, sample_df):
+        from unittest.mock import patch
+        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "amount") for _ in range(25)]
+        with patch("customer_retention.transforms.executor.spark_checkpoint") as mock_cp:
+            executor.apply_all(sample_df.copy(), steps)
+        mock_cp.assert_not_called()
+
+    def test_batch_quantiles_match_per_column(self, executor):
+        np.random.seed(42)
+        df = pd.DataFrame({"a": np.random.randn(200), "b": np.random.exponential(5, 200)})
+        steps = [
+            _step(PipelineTransformationType.CAP_THEN_LOG, "a"),
+            _step(PipelineTransformationType.CAP_THEN_LOG, "b"),
+        ]
+        result_sequential = executor.apply_all(df.copy(), steps)
+        executor._precompute_quantiles(df, steps)
+        assert "_precomputed_q99" in steps[0].parameters
+        assert "_precomputed_q99" in steps[1].parameters
+        result_batch = executor.apply_all(df.copy(), steps)
+        np.testing.assert_array_almost_equal(
+            result_batch["a"].to_numpy(), result_sequential["a"].to_numpy()
+        )
+        np.testing.assert_array_almost_equal(
+            result_batch["b"].to_numpy(), result_sequential["b"].to_numpy()
+        )
+
     def test_unknown_type_raises(self, executor, sample_df):
         step = _step(PipelineTransformationType.AGGREGATE, "age")
         with pytest.raises(ValueError, match="Unknown transformation"):

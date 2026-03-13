@@ -140,6 +140,21 @@ class TestZeroInflationHandling:
         assert result["v_is_zero"].sum() == 3
         assert result.loc[2, "v"] == pytest.approx(np.log1p(5))
 
+    def test_nan_values_preserved(self):
+        df = pd.DataFrame({"v": [0, np.nan, 5, 10, 0]})
+        result = apply_zero_inflation_handling(df, "v")
+        assert pd.isna(result["v"].iloc[1])
+        assert result["v_is_zero"].iloc[1] == 0
+        assert result["v"].iloc[0] == 0
+        assert result["v"].iloc[2] == pytest.approx(np.log1p(5))
+
+    def test_negative_values_clipped(self):
+        df = pd.DataFrame({"v": [0, -3, 5, 10]})
+        result = apply_zero_inflation_handling(df, "v")
+        assert result["v"].iloc[0] == 0
+        assert result["v"].iloc[1] == pytest.approx(np.log1p(0))
+        assert result["v"].iloc[2] == pytest.approx(np.log1p(5))
+
     def test_missing_column_noop(self, sample_df):
         result = apply_zero_inflation_handling(sample_df, "nonexistent")
         pd.testing.assert_frame_equal(result, sample_df)
@@ -150,6 +165,13 @@ class TestCapThenLog:
         df = pd.DataFrame({"v": list(range(100)) + [10000]})
         result = apply_cap_then_log(df, "v")
         assert result["v"].max() < np.log1p(10000)
+
+    def test_precomputed_q99(self):
+        df = pd.DataFrame({"v": list(range(100)) + [10000]})
+        q99 = df["v"].quantile(0.99)
+        result = apply_cap_then_log(df.copy(), "v", _precomputed_q99=q99)
+        expected = apply_cap_then_log(df.copy(), "v")
+        np.testing.assert_array_almost_equal(result["v"].to_numpy(), expected["v"].to_numpy())
 
     def test_missing_column_noop(self, sample_df):
         result = apply_cap_then_log(sample_df, "nonexistent")

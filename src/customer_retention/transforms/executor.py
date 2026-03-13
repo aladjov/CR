@@ -6,11 +6,13 @@ Maps :class:`TransformationStep` types to the appropriate function in
 
 from __future__ import annotations
 
-from customer_retention.core.compat import DataFrame
+from customer_retention.core.compat import DataFrame, _is_spark_pandas, spark_checkpoint
 from customer_retention.generators.pipeline_generator.models import (
     PipelineTransformationType,
     TransformationStep,
 )
+
+_CHECKPOINT_INTERVAL = 10
 
 from . import ops
 from .artifact_store import ArtifactStore
@@ -45,9 +47,25 @@ class TransformExecutor:
         fit_mode: bool = False,
         artifact_store: ArtifactStore | None = None,
     ) -> DataFrame:
-        for step in steps:
+        distributed = _is_spark_pandas(df)
+        if distributed:
+            self._precompute_quantiles(df, steps)
+        for i, step in enumerate(steps):
             df = self.apply(df, step, fit_mode=fit_mode, artifact_store=artifact_store)
+            if distributed and (i + 1) % _CHECKPOINT_INTERVAL == 0 and i + 1 < len(steps):
+                df = spark_checkpoint(df)
         return df
+
+    def _precompute_quantiles(self, df: DataFrame, steps: list[TransformationStep]) -> None:
+        cap_steps = [
+            s for s in steps
+            if s.type == PipelineTransformationType.CAP_THEN_LOG and s.column in df.columns
+        ]
+        if not cap_steps:
+            return
+        quantiles = {s.column: df[s.column].quantile(0.99) for s in cap_steps}
+        for step in cap_steps:
+            step.parameters["_precomputed_q99"] = float(quantiles[step.column])
 
     def _apply_fitted(self, fitted, df, step, *, fit_mode=False, artifact_store=None):
         if fit_mode:
@@ -94,7 +112,9 @@ class TransformExecutor:
         return ops.apply_zero_inflation_handling(df, step.column)
 
     def _handle_cap_then_log(self, df, step, **kw):
-        return ops.apply_cap_then_log(df, step.column)
+        return ops.apply_cap_then_log(
+            df, step.column, _precomputed_q99=step.parameters.get("_precomputed_q99"),
+        )
 
     def _handle_encode(self, df, step, *, fit_mode=False, artifact_store=None, **kw):
         method = step.parameters.get("method", "one_hot")

@@ -104,16 +104,35 @@ class FittedEncoder:
 class FittedPowerTransform:
     """Wraps Yeo-Johnson :class:`PowerTransformer`."""
 
+    _MAX_FIT_SAMPLE = 50_000
+
     def __init__(self):
         self._pt = PowerTransformer(method="yeo-johnson")
 
     def fit_transform(self, df: DataFrame, column: str, artifact_store) -> DataFrame:
         if column not in df.columns:
             return df
-        self._pt.fit(df[column].fillna(0).to_numpy().reshape(-1, 1))
-        df[column] = self._apply_yj(df[column].fillna(0))
+        series = df[column].fillna(0)
+        self._fit(series)
+        df[column] = self._apply_yj(series)
         artifact_store.register("power_transformer", column, self._pt)
         return df
+
+    def _fit(self, series):
+        if _is_spark_pandas(series):
+            self._fit_from_sample(series)
+        else:
+            self._pt.fit(series.to_numpy().reshape(-1, 1))
+
+    def _fit_from_sample(self, series):
+        from customer_retention.core.compat import collect_for_sklearn, safe_sample
+        n = len(series)
+        if n > self._MAX_FIT_SAMPLE:
+            sampled = safe_sample(series.to_frame(), self._MAX_FIT_SAMPLE).iloc[:, 0]
+        else:
+            sampled = series
+        collected = collect_for_sklearn(sampled)
+        self._pt.fit(collected.to_numpy().reshape(-1, 1))
 
     def transform(self, df: DataFrame, column: str, artifact_store) -> DataFrame:
         if column not in df.columns:

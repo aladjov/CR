@@ -172,3 +172,15 @@ class TestFittedPowerTransform:
         pt.fit_transform(numeric_df.copy(), "val", artifact_store)
         result = pt.transform(numeric_df.copy(), "nonexistent", artifact_store)
         pd.testing.assert_frame_equal(result, numeric_df)
+
+    def test_sample_fit_reasonable(self, artifact_store):
+        np.random.seed(42)
+        large_df = pd.DataFrame({"val": np.random.exponential(5, 10_000)})
+        pt_full = FittedPowerTransform()
+        full_result = pt_full.fit_transform(large_df.copy(), "val", artifact_store)
+        full_lambda = pt_full._pt.lambdas_[0]
+        store2 = ArtifactStore(str(artifact_store._dir.parent / "artifacts2"))
+        pt_sample = FittedPowerTransform()
+        sample = large_df.sample(n=500, random_state=42)
+        pt_sample._pt.fit(sample["val"].to_numpy().reshape(-1, 1))
+        assert abs(pt_sample._pt.lambdas_[0] - full_lambda) < 0.2

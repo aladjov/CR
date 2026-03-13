@@ -109,14 +109,14 @@ def apply_sqrt_transform(df: DataFrame, column: str) -> DataFrame:
 @_requires_column
 def apply_zero_inflation_handling(df: DataFrame, column: str) -> DataFrame:
     df[f"{column}_is_zero"] = (df[column] == 0).astype(int)
-    nonzero = df[column] != 0
-    df.loc[nonzero, column] = np.log1p(df.loc[nonzero, column].clip(lower=0))
+    is_zero = df[column] == 0
+    df[column] = df[column].where(is_zero, np.log1p(df[column].clip(lower=0)))
     return df
 
 
 @_requires_column
-def apply_cap_then_log(df: DataFrame, column: str) -> DataFrame:
-    q99 = df[column].quantile(0.99)
+def apply_cap_then_log(df: DataFrame, column: str, *, _precomputed_q99: float | None = None) -> DataFrame:
+    q99 = _precomputed_q99 if _precomputed_q99 is not None else df[column].quantile(0.99)
     df[column] = np.log1p(df[column].clip(upper=q99).clip(lower=0))
     return df
 
