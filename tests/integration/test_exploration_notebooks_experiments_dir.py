@@ -623,6 +623,54 @@ class TestCellIdStandardization:
                         )
 
 
+class TestReleaseStageMemoryGuard:
+
+    EXPECTED_NOTEBOOKS = [
+        "00_start_here.ipynb",
+        "01_data_discovery.ipynb",
+        "01a_temporal_deep_dive.ipynb",
+        "01a_a_temporal_text_deep_dive.ipynb",
+        "01b_temporal_quality.ipynb",
+        "01c_temporal_patterns.ipynb",
+        "01d_event_aggregation.ipynb",
+        "02_source_integrity.ipynb",
+        "03_dataset_merge.ipynb",
+        "04_column_deep_dive.ipynb",
+        "04a_text_columns_deep_dive.ipynb",
+        "05_relationship_analysis.ipynb",
+        "06_feature_opportunities.ipynb",
+        "07_modeling_readiness.ipynb",
+        "08_baseline_experiments.ipynb",
+        "09_business_alignment.ipynb",
+        "10_spec_generation.ipynb",
+        "11_scoring_validation.ipynb",
+        "12_view_documentation.ipynb",
+    ]
+
+    def test_all_notebooks_have_release_stage_memory(self):
+        for nb_name in self.EXPECTED_NOTEBOOKS:
+            nb_path = NOTEBOOKS_DIR / nb_name
+            assert nb_path.exists(), f"{nb_name} not found"
+            code_cells = _read_notebook_cells(nb_path)
+            has_release = any(
+                "release_stage_memory" in src for _, src in code_cells
+            )
+            assert has_release, (
+                f"{nb_name} missing release_stage_memory cleanup cell"
+            )
+
+    def test_release_stage_memory_is_last_code_cell(self):
+        for nb_name in self.EXPECTED_NOTEBOOKS:
+            nb_path = NOTEBOOKS_DIR / nb_name
+            code_cells = _read_notebook_cells(nb_path)
+            assert code_cells, f"{nb_name} has no code cells"
+            last_idx, last_src = code_cells[-1]
+            assert "release_stage_memory" in last_src, (
+                f"{nb_name}: release_stage_memory is not the last code cell "
+                f"(last code cell {last_idx} contains: {last_src[:80]!r})"
+            )
+
+
 class TestNoBareExceptInCoreMetadata:
 
     CORE_FILES = [

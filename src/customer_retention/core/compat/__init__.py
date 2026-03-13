@@ -1162,6 +1162,17 @@ def register_temp_view(spark_df: Any, view_name: str) -> str:
     return f"global_temp.{view_name}"
 
 
+def release_stage_memory() -> None:
+    """Free Spark storage memory and JVM heap between notebook stages."""
+    import gc
+    gc.collect()
+    session = get_spark_session()
+    if session is None:
+        return
+    session.catalog.clearCache()
+    session._jvm.System.gc()
+
+
 __all__ = [
     "pd",
     "native_pd",
@@ -1256,4 +1267,5 @@ __all__ = [
     "as_spark_df",
     "load_spark_table",
     "register_temp_view",
+    "release_stage_memory",
 ]
