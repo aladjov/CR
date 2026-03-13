@@ -390,6 +390,38 @@ class TestNotebook03Architecture:
         assert "rename" in code, "NB03 must rename original entity column to entity_id"
 
 
+class TestNotebook04Architecture:
+
+    NOTEBOOK_PATH = NOTEBOOKS_DIR / "04_column_deep_dive.ipynb"
+
+    def _read_content(self):
+        with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
+            return f.read()
+
+    def test_nb04_uses_distributed_on_databricks(self):
+        content = self._read_content()
+        assert "require_silver_merged_distributed" in content, (
+            "NB04 must use require_silver_merged_distributed for Databricks"
+        )
+        assert "is_databricks" in content, "NB04 must branch on is_databricks()"
+
+
+class TestNotebook05Architecture:
+
+    NOTEBOOK_PATH = NOTEBOOKS_DIR / "05_relationship_analysis.ipynb"
+
+    def _read_content(self):
+        with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
+            return f.read()
+
+    def test_nb05_uses_distributed_on_databricks(self):
+        content = self._read_content()
+        assert "require_silver_merged_distributed" in content, (
+            "NB05 must use require_silver_merged_distributed for Databricks"
+        )
+        assert "is_databricks" in content, "NB05 must branch on is_databricks()"
+
+
 class TestNotebook06Architecture:
 
     NOTEBOOK_PATH = NOTEBOOKS_DIR / "06_feature_opportunities.ipynb"
@@ -406,6 +438,13 @@ class TestNotebook06Architecture:
         content = self._read_content()
         assert "require_silver_merged" in content, "NB06 must use require_silver_merged"
         assert "load_active_dataset(" not in content, "NB06 must not fall back to load_active_dataset"
+
+    def test_nb06_uses_distributed_on_databricks(self):
+        content = self._read_content()
+        assert "require_silver_merged_distributed" in content, (
+            "NB06 must use require_silver_merged_distributed for Databricks"
+        )
+        assert "is_databricks" in content, "NB06 must branch on is_databricks()"
 
     def test_nb06_uses_merged_recommendations_path(self):
         content = self._read_content()
@@ -428,6 +467,13 @@ class TestNotebook07Architecture:
         content = self._read_content()
         assert "require_silver_merged" in content, "NB07 must use require_silver_merged"
         assert "load_active_dataset(" not in content, "NB07 must not fall back to load_active_dataset"
+
+    def test_nb07_uses_distributed_on_databricks(self):
+        content = self._read_content()
+        assert "require_silver_merged_distributed" in content, (
+            "NB07 must use require_silver_merged_distributed for Databricks"
+        )
+        assert "is_databricks" in content, "NB07 must branch on is_databricks()"
 
 
 class TestNotebook10Architecture:
