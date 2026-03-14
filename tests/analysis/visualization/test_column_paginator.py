@@ -219,33 +219,102 @@ class TestSummaryCallback:
 
 
 # ===================================================================
-# Fallback path
+# Static page fallback
 # ===================================================================
 
 
-class TestFallback:
+class TestStaticPageFallback:
     @patch("customer_retention.analysis.visualization.column_paginator.has_interactive_widgets", return_value=False)
     @patch("customer_retention.analysis.visualization.column_paginator.display_table")
-    def test_fallback_renders_top_n(self, mock_table, mock_widgets):
+    def test_page_zero_renders_first_page_size_entries(self, mock_table, mock_widgets):
         entries = [_entry(f"c{i}", 100 - i) for i in range(30)]
         render_mock = MagicMock()
-        p = ColumnPaginator(
-            entries, render_mock, _noop_summary, page_size=5, fallback_top_n=10
-        )
-        p.show()
-        # Fallback should render top 10 entries
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10)
+        p.show(page=0)
         assert render_mock.call_count == 10
 
     @patch("customer_retention.analysis.visualization.column_paginator.has_interactive_widgets", return_value=False)
     @patch("customer_retention.analysis.visualization.column_paginator.display_table")
-    def test_fallback_fewer_than_top_n(self, mock_table, mock_widgets):
+    def test_page_one_renders_second_page(self, mock_table, mock_widgets):
+        entries = [_entry(f"c{i}", 100 - i) for i in range(25)]
+        render_mock = MagicMock()
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10)
+        p.show(page=1)
+        assert render_mock.call_count == 10
+        # Verify the entries rendered are from page 1 (indices 10-19)
+        rendered_names = [call.args[0].name for call in render_mock.call_args_list]
+        expected = [f"c{i}" for i in range(10, 20)]
+        assert rendered_names == expected
+
+    @patch("customer_retention.analysis.visualization.column_paginator.has_interactive_widgets", return_value=False)
+    @patch("customer_retention.analysis.visualization.column_paginator.display_table")
+    def test_partial_last_page(self, mock_table, mock_widgets):
+        entries = [_entry(f"c{i}", 100 - i) for i in range(25)]
+        render_mock = MagicMock()
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10)
+        p.show(page=2)
+        assert render_mock.call_count == 5
+
+    @patch("customer_retention.analysis.visualization.column_paginator.has_interactive_widgets", return_value=False)
+    @patch("customer_retention.analysis.visualization.column_paginator.display_table")
+    def test_page_beyond_total_clamps_to_last(self, mock_table, mock_widgets):
+        entries = [_entry(f"c{i}", 100 - i) for i in range(25)]
+        render_mock = MagicMock()
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10)
+        p.show(page=99)
+        # Should clamp to last page (page 2), rendering 5 entries
+        assert render_mock.call_count == 5
+
+    @patch("customer_retention.analysis.visualization.column_paginator.has_interactive_widgets", return_value=False)
+    @patch("customer_retention.analysis.visualization.column_paginator.display_table")
+    def test_fewer_entries_than_page_size(self, mock_table, mock_widgets):
         entries = [_entry(f"c{i}", 50) for i in range(3)]
         render_mock = MagicMock()
-        p = ColumnPaginator(
-            entries, render_mock, _noop_summary, fallback_top_n=20
-        )
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10)
         p.show()
         assert render_mock.call_count == 3
+
+    @patch("customer_retention.analysis.visualization.column_paginator.has_interactive_widgets", return_value=False)
+    @patch("customer_retention.analysis.visualization.column_paginator.display_table")
+    def test_empty_entries(self, mock_table, mock_widgets):
+        render_mock = MagicMock()
+        p = ColumnPaginator([], render_mock, _noop_summary, page_size=10)
+        p.show()
+        assert render_mock.call_count == 0
+
+    @patch("customer_retention.analysis.visualization.column_paginator.has_interactive_widgets", return_value=False)
+    @patch("customer_retention.analysis.visualization.column_paginator.display_table")
+    def test_navigation_hint_printed(self, mock_table, mock_widgets, capsys):
+        entries = [_entry(f"c{i}", 100 - i) for i in range(25)]
+        p = ColumnPaginator(entries, _noop_render, _noop_summary, page_size=10, title="Test")
+        p.show(page=0)
+        captured = capsys.readouterr()
+        assert "page 1 of 3" in captured.out
+        assert "25 columns" in captured.out
+        assert ".show(page=" in captured.out
+
+    @patch("customer_retention.analysis.visualization.column_paginator.has_interactive_widgets", return_value=False)
+    @patch("customer_retention.analysis.visualization.column_paginator.display_table")
+    def test_no_navigation_hint_for_single_page(self, mock_table, mock_widgets, capsys):
+        entries = [_entry(f"c{i}", 50) for i in range(3)]
+        p = ColumnPaginator(entries, _noop_render, _noop_summary, page_size=10, title="Test")
+        p.show()
+        captured = capsys.readouterr()
+        assert "page 1 of 1" in captured.out
+        assert ".show(page=" not in captured.out
+
+    @patch("customer_retention.analysis.visualization.column_paginator.has_interactive_widgets", return_value=False)
+    @patch("customer_retention.analysis.visualization.column_paginator.display_table")
+    def test_default_page_is_zero(self, mock_table, mock_widgets):
+        entries = [_entry(f"c{i}", 100 - i) for i in range(25)]
+        render_mock = MagicMock()
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10)
+        p.show()
+        # Default page=0 renders first 10
+        assert render_mock.call_count == 10
+        rendered_names = [call.args[0].name for call in render_mock.call_args_list]
+        expected = [f"c{i}" for i in range(10)]
+        assert rendered_names == expected
 
 
 # ===================================================================
@@ -270,5 +339,5 @@ class TestHasInteractiveWidgets:
 
     @patch("customer_retention.analysis.visualization.column_paginator.HAS_WIDGETS", True)
     @patch("customer_retention.analysis.visualization.column_paginator.detect_environment", return_value="databricks")
-    def test_databricks_environment(self, mock_env):
-        assert has_interactive_widgets() is True
+    def test_databricks_uses_static_pagination(self, mock_env):
+        assert has_interactive_widgets() is False

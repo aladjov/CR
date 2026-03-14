@@ -178,7 +178,7 @@ class TemporalAnalyzer:
         monthly_df = parsed.to_frame(name="date")
         monthly_df["year"] = parsed.dt.year
         monthly_df["month"] = parsed.dt.month
-        monthly_pivot = monthly_df.groupby(["year", "month"]).size().unstack(fill_value=0)
+        monthly_pivot = monthly_df.groupby(["year", "month"]).size().unstack().fillna(0)
         monthly_pivot.columns = [
             "Jan", "Feb", "Mar", "Apr", "May", "Jun",
             "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
@@ -227,7 +227,7 @@ class TemporalAnalyzer:
         df["year"] = parsed.dt.year
         df["month"] = parsed.dt.month
 
-        pivot = df.groupby(["year", "month"]).size().unstack(fill_value=0)
+        pivot = df.groupby(["year", "month"]).size().unstack().fillna(0)
         pivot.columns = [
             "Jan", "Feb", "Mar", "Apr", "May", "Jun",
             "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"

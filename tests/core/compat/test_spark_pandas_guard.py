@@ -117,6 +117,11 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
         "pd.qcut() does not exist in pyspark.pandas",
         "Use qcut() from core.compat",
     ),
+    (
+        re.compile(r"\.unstack\(fill_value="),
+        ".unstack(fill_value=) is not supported in pyspark.pandas",
+        "Use .unstack().fillna(0) instead",
+    ),
 ]
 
 
