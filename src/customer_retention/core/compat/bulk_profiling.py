@@ -1295,6 +1295,367 @@ def _spark_typed_bulk_stats(
     return result
 
 
+def _chunked(columns: list[str], size: int) -> list[list[str]]:
+    """Split a list of column names into chunks of the given size."""
+    return [columns[i:i + size] for i in range(0, len(columns), size)]
+
+
+# ---------------------------------------------------------------------------
+# Bulk range validation
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RangeValidationBulkResult:
+    non_null_count: int = 0
+    invalid_count: int = 0
+    actual_min: Optional[float] = None
+    actual_max: Optional[float] = None
+
+
+def bulk_validate_ranges(
+    df: Any,
+    rules: dict[str, dict[str, Any]],
+    chunk_size: int = 200,
+) -> dict[str, RangeValidationBulkResult]:
+    """Validate value ranges for many columns in batched Spark agg calls."""
+    if not rules:
+        return {}
+    if hasattr(df, "to_spark"):
+        return _spark_bulk_validate_ranges(df, rules, chunk_size)
+    return _pandas_bulk_validate_ranges(df, rules)
+
+
+def _pandas_bulk_validate_ranges(
+    df: Any,
+    rules: dict[str, dict[str, Any]],
+) -> dict[str, RangeValidationBulkResult]:
+    result: dict[str, RangeValidationBulkResult] = {}
+    for col, rule in rules.items():
+        if col not in df.columns:
+            continue
+        series = df[col].dropna()
+        total = len(series)
+        if total == 0:
+            result[col] = RangeValidationBulkResult()
+            continue
+        try:
+            series_numeric = series.astype(float)
+        except (TypeError, ValueError):
+            continue
+        rule_type = rule.get("type", "range")
+        invalid = _count_invalid_pandas(series_numeric, rule_type, rule)
+        result[col] = RangeValidationBulkResult(
+            non_null_count=total,
+            invalid_count=int(invalid),
+            actual_min=float(series_numeric.min()),
+            actual_max=float(series_numeric.max()),
+        )
+    return result
+
+
+def _count_invalid_pandas(series: Any, rule_type: str, rule: dict) -> int:
+    import pandas as _pd
+    min_val = rule.get("min")
+    max_val = rule.get("max")
+    if rule_type == "percentage":
+        mn = min_val if min_val is not None else 0
+        mx = max_val if max_val is not None else 100
+        return int(((series < mn) | (series > mx)).sum())
+    if rule_type == "binary":
+        valid_values = rule.get("valid_values", [0, 1])
+        return int((~series.isin(valid_values)).sum())
+    if rule_type == "non_negative":
+        return int((series < 0).sum())
+    if rule_type == "rate":
+        return int(((series < 0) | (series > 1)).sum())
+    # general range
+    mask = _pd.Series(False, index=series.index)
+    if min_val is not None:
+        mask = mask | (series < min_val)
+    if max_val is not None:
+        mask = mask | (series > max_val)
+    return int(mask.sum())
+
+
+def _spark_bulk_validate_ranges(
+    df: Any,
+    rules: dict[str, dict[str, Any]],
+    chunk_size: int,
+) -> dict[str, RangeValidationBulkResult]:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    spark_df = as_spark_df(df)
+    # Filter to columns that exist
+    valid_rules = {c: r for c, r in rules.items() if c in spark_df.columns}
+    if not valid_rules:
+        return {}
+
+    cols = list(valid_rules.keys())
+    result: dict[str, RangeValidationBulkResult] = {}
+
+    for chunk in _chunked(cols, chunk_size):
+        exprs: list[Any] = []
+        for col in chunk:
+            c = F.col(f"`{col}`")
+            rule = valid_rules[col]
+            rule_type = rule.get("type", "range")
+            invalid_expr = _spark_invalid_expr(c, rule_type, rule, F)
+            exprs.extend([
+                F.count(c).alias(f"__cnt__{col}"),
+                F.min(c).alias(f"__min__{col}"),
+                F.max(c).alias(f"__max__{col}"),
+                F.sum(invalid_expr.cast("int")).alias(f"__inv__{col}"),
+            ])
+        with log_timing(logger, f"bulk_validate_ranges chunk ({len(chunk)} cols)"):
+            row = spark_df.agg(*exprs).collect()[0]
+        for col in chunk:
+            result[col] = RangeValidationBulkResult(
+                non_null_count=_safe_int(row[f"__cnt__{col}"]),
+                invalid_count=_safe_int(row[f"__inv__{col}"]),
+                actual_min=_safe_float(row[f"__min__{col}"]),
+                actual_max=_safe_float(row[f"__max__{col}"]),
+            )
+    return result
+
+
+def _spark_invalid_expr(c: Any, rule_type: str, rule: dict, F: Any) -> Any:  # noqa: N803
+    """Build a Spark Column expression that is True for invalid (non-null) values."""
+    min_val = rule.get("min")
+    max_val = rule.get("max")
+    if rule_type == "percentage":
+        mn = min_val if min_val is not None else 0
+        mx = max_val if max_val is not None else 100
+        return c.isNotNull() & ((c < mn) | (c > mx))
+    if rule_type == "binary":
+        valid_values = rule.get("valid_values", [0, 1])
+        return c.isNotNull() & (~c.isin(*valid_values))
+    if rule_type == "non_negative":
+        return c.isNotNull() & (c < 0)
+    if rule_type == "rate":
+        return c.isNotNull() & ((c < 0) | (c > 1))
+    # general range
+    parts = []
+    if min_val is not None:
+        parts.append(c < min_val)
+    if max_val is not None:
+        parts.append(c > max_val)
+    if not parts:
+        return F.lit(False)
+    combined = parts[0]
+    for p in parts[1:]:
+        combined = combined | p
+    return c.isNotNull() & combined
+
+
+# ---------------------------------------------------------------------------
+# Bulk distribution stats
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DistributionBulkResult:
+    non_null_count: int = 0
+    mean: Optional[float] = None
+    std: Optional[float] = None
+    min_val: Optional[float] = None
+    max_val: Optional[float] = None
+    q1: Optional[float] = None
+    median: Optional[float] = None
+    q3: Optional[float] = None
+    skewness: Optional[float] = None
+    kurtosis: Optional[float] = None
+    zero_count: int = 0
+    negative_count: int = 0
+    outlier_count_iqr: int = 0
+    percentiles: dict[str, float] = field(default_factory=dict)
+
+
+def bulk_distribution_stats(
+    df: Any,
+    columns: list[str],
+    chunk_size: int = 200,
+) -> dict[str, DistributionBulkResult]:
+    """Compute distribution statistics for many numeric columns in batched Spark agg calls."""
+    if not columns:
+        return {}
+    valid = [c for c in columns if c in df.columns]
+    if not valid:
+        return {}
+    if hasattr(df, "to_spark"):
+        return _spark_bulk_distribution_stats(df, valid, chunk_size)
+    return _pandas_bulk_distribution_stats(df, valid)
+
+
+def _pandas_bulk_distribution_stats(
+    df: Any,
+    columns: list[str],
+) -> dict[str, DistributionBulkResult]:
+    result: dict[str, DistributionBulkResult] = {}
+    numeric_df = df[columns]
+    desc = numeric_df.describe()
+    try:
+        extra_q = numeric_df.quantile([0.01, 0.05, 0.10, 0.90, 0.95, 0.99])
+    except Exception:
+        extra_q = _pandas.DataFrame(index=[0.01, 0.05, 0.10, 0.90, 0.95, 0.99], columns=columns)
+    try:
+        skew_vals = numeric_df.skew()
+    except Exception:
+        skew_vals = _pandas.Series(0.0, index=columns)
+    try:
+        kurt_vals = numeric_df.kurtosis()
+    except Exception:
+        kurt_vals = _pandas.Series(0.0, index=columns)
+    zero_counts = (numeric_df == 0).sum()
+    neg_counts = (numeric_df < 0).sum()
+
+    for col in columns:
+        count = int(desc.loc["count", col])
+        if count == 0:
+            result[col] = DistributionBulkResult()
+            continue
+        q1 = float(desc.loc["25%", col])
+        q3 = float(desc.loc["75%", col])
+        iqr = q3 - q1
+        lower = q1 - 1.5 * iqr
+        upper = q3 + 1.5 * iqr
+        outlier_c = int(((numeric_df[col] < lower) | (numeric_df[col] > upper)).sum())
+
+        pct = {}
+        for label, idx in [("p1", 0.01), ("p5", 0.05), ("p10", 0.10),
+                           ("p90", 0.90), ("p95", 0.95), ("p99", 0.99)]:
+            try:
+                pct[label] = float(extra_q.loc[idx, col])
+            except Exception:
+                pct[label] = 0.0
+        pct["p25"] = q1
+        pct["p50"] = float(desc.loc["50%", col])
+        pct["p75"] = q3
+
+        result[col] = DistributionBulkResult(
+            non_null_count=count,
+            mean=float(desc.loc["mean", col]),
+            std=float(desc.loc["std", col]),
+            min_val=float(desc.loc["min", col]),
+            max_val=float(desc.loc["max", col]),
+            q1=q1,
+            median=float(desc.loc["50%", col]),
+            q3=q3,
+            skewness=float(skew_vals[col]),
+            kurtosis=float(kurt_vals[col]),
+            zero_count=int(zero_counts[col]),
+            negative_count=int(neg_counts[col]),
+            outlier_count_iqr=outlier_c,
+            percentiles=pct,
+        )
+    return result
+
+
+def _spark_bulk_distribution_stats(
+    df: Any,
+    columns: list[str],
+    chunk_size: int,
+) -> dict[str, DistributionBulkResult]:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    spark_df = as_spark_df(df)
+    result: dict[str, DistributionBulkResult] = {}
+    pctiles = [0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99]
+
+    # Pass 1: basic stats + percentiles per chunk
+    pass1: dict[str, dict[str, Any]] = {}
+    for chunk in _chunked(columns, chunk_size):
+        exprs: list[Any] = []
+        for col in chunk:
+            c = F.col(f"`{col}`")
+            exprs.extend([
+                F.count(c).alias(f"__cnt__{col}"),
+                F.mean(c).alias(f"__avg__{col}"),
+                F.stddev(c).alias(f"__std__{col}"),
+                F.min(c).alias(f"__min__{col}"),
+                F.max(c).alias(f"__max__{col}"),
+                F.percentile_approx(c, pctiles).alias(f"__pct__{col}"),
+                F.skewness(c).alias(f"__skw__{col}"),
+                F.kurtosis(c).alias(f"__krt__{col}"),
+                F.sum((c == 0).cast("int")).alias(f"__zer__{col}"),
+                F.sum((c < 0).cast("int")).alias(f"__neg__{col}"),
+            ])
+        with log_timing(logger, f"bulk_distribution_stats pass1 ({len(chunk)} cols)"):
+            row = spark_df.agg(*exprs).collect()[0]
+        for col in chunk:
+            pct_arr = row[f"__pct__{col}"] or [None] * len(pctiles)
+            pass1[col] = {
+                "cnt": _safe_int(row[f"__cnt__{col}"]),
+                "avg": _safe_float(row[f"__avg__{col}"]),
+                "std": _safe_float(row[f"__std__{col}"]),
+                "min": _safe_float(row[f"__min__{col}"]),
+                "max": _safe_float(row[f"__max__{col}"]),
+                "skw": _safe_float(row[f"__skw__{col}"]),
+                "krt": _safe_float(row[f"__krt__{col}"]),
+                "zer": _safe_int(row[f"__zer__{col}"]),
+                "neg": _safe_int(row[f"__neg__{col}"]),
+                "pct": pct_arr,
+            }
+
+    # Pass 2: outlier counts using q1/q3 from pass 1
+    cols_with_iqr = [c for c in columns if pass1.get(c, {}).get("cnt", 0) > 0]
+    outlier_counts: dict[str, int] = {}
+    for chunk in _chunked(cols_with_iqr, chunk_size):
+        exprs = []
+        for col in chunk:
+            p = pass1[col]
+            pct_arr = p["pct"]
+            q1_val = _safe_float(pct_arr[3]) if pct_arr[3] is not None else None
+            q3_val = _safe_float(pct_arr[5]) if pct_arr[5] is not None else None
+            if q1_val is None or q3_val is None:
+                outlier_counts[col] = 0
+                continue
+            iqr = q3_val - q1_val
+            lower = q1_val - 1.5 * iqr
+            upper = q3_val + 1.5 * iqr
+            c = F.col(f"`{col}`")
+            exprs.append(
+                F.sum(((c < lower) | (c > upper)).cast("int")).alias(f"__out__{col}")
+            )
+        if exprs:
+            with log_timing(logger, f"bulk_distribution_stats pass2 ({len(chunk)} cols)"):
+                row2 = spark_df.agg(*exprs).collect()[0]
+            for col in chunk:
+                alias = f"__out__{col}"
+                if alias in row2.asDict():
+                    outlier_counts[col] = _safe_int(row2[alias])
+                elif col not in outlier_counts:
+                    outlier_counts[col] = 0
+
+    # Assemble results
+    pct_labels = ["p1", "p5", "p10", "p25", "p50", "p75", "p90", "p95", "p99"]
+    for col in columns:
+        p = pass1.get(col)
+        if not p or p["cnt"] == 0:
+            result[col] = DistributionBulkResult()
+            continue
+        pct_arr = p["pct"]
+        pct_dict = {}
+        for i, label in enumerate(pct_labels):
+            pct_dict[label] = _safe_float(pct_arr[i]) if i < len(pct_arr) else None
+
+        result[col] = DistributionBulkResult(
+            non_null_count=p["cnt"],
+            mean=p["avg"],
+            std=p["std"],
+            min_val=p["min"],
+            max_val=p["max"],
+            q1=pct_dict.get("p25"),
+            median=pct_dict.get("p50"),
+            q3=pct_dict.get("p75"),
+            skewness=p["skw"],
+            kurtosis=p["krt"],
+            zero_count=p["zer"],
+            negative_count=p["neg"],
+            outlier_count_iqr=outlier_counts.get(col, 0),
+            percentiles=pct_dict,
+        )
+    return result
+
+
 def _safe_float(val: Any) -> Optional[float]:
     if val is None:
         return None

@@ -1,5 +1,7 @@
 """Tests for distribution analysis module."""
 
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -375,3 +377,75 @@ class TestTransformationRecommendationDataclass:
         assert d["priority"] == "high"
         assert "sqrt_transform" in d["alternatives"]
         assert len(d["warnings"]) == 1
+
+
+class TestBulkDistributionDispatch(TestDistributionAnalyzer):
+    """Tests for bulk dispatch in analyze_dataframe."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_bulk_dispatch_when_spark_pandas(self, analyzer):
+        """Verify bulk path is taken when _is_spark_pandas returns True."""
+        mock_df = MagicMock()
+        mock_df.columns = ["val"]
+        mock_df.select_dtypes.return_value.columns.tolist.return_value = ["val"]
+
+        from customer_retention.core.compat.bulk_profiling import DistributionBulkResult
+
+        with patch(
+            "customer_retention.stages.profiling.distribution_analysis._is_spark_pandas",
+            return_value=True,
+        ), patch(
+            "customer_retention.stages.profiling.distribution_analysis.bulk_distribution_stats",
+            return_value={"val": DistributionBulkResult(
+                non_null_count=100, mean=50.0, std=10.0,
+                min_val=0.0, max_val=100.0,
+                q1=40.0, median=50.0, q3=60.0,
+                skewness=0.5, kurtosis=3.0,
+                zero_count=5, negative_count=0,
+                outlier_count_iqr=3,
+                percentiles={"p1": 1.0, "p50": 50.0, "p99": 99.0},
+            )},
+        ) as mock_bulk:
+            results = analyzer.analyze_dataframe(mock_df, ["val"])
+            mock_bulk.assert_called_once()
+            assert "val" in results
+            a = results["val"]
+            assert a.count == 100
+            assert a.mean == 50.0
+            assert a.q1 == 40.0
+            assert a.q3 == 60.0
+            assert a.iqr == 20.0
+            assert a.zero_percentage == 5.0
+            assert a.outlier_percentage == 3.0
+
+    def test_bulk_empty_column(self, analyzer):
+        """Verify empty columns produce empty distribution in bulk path."""
+        mock_df = MagicMock()
+        mock_df.columns = ["val"]
+
+        from customer_retention.core.compat.bulk_profiling import DistributionBulkResult
+
+        with patch(
+            "customer_retention.stages.profiling.distribution_analysis._is_spark_pandas",
+            return_value=True,
+        ), patch(
+            "customer_retention.stages.profiling.distribution_analysis.bulk_distribution_stats",
+            return_value={"val": DistributionBulkResult()},
+        ):
+            results = analyzer.analyze_dataframe(mock_df, ["val"])
+            assert results["val"].count == 0
+
+    def test_pandas_path_unchanged(self, analyzer):
+        """Verify pandas DataFrames still use the original vectorized path."""
+        np.random.seed(42)
+        df = pd.DataFrame({
+            "col1": np.random.normal(0, 1, 100),
+            "col2": np.random.normal(50, 10, 100),
+        })
+        results = analyzer.analyze_dataframe(df, ["col1", "col2"])
+        assert "col1" in results
+        assert "col2" in results
+        assert results["col1"].count == 100

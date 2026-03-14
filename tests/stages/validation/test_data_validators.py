@@ -1,5 +1,7 @@
 """Tests for data validators module."""
 
+from unittest.mock import MagicMock, patch
+
 import pandas as pd
 import pytest
 
@@ -331,3 +333,67 @@ class TestCaseInsensitiveKeyColumn:
         validator = DataValidator()
         result = validator.check_duplicates(df, "NONEXISTENT")
         assert result.severity == Severity.CRITICAL
+
+
+class TestBulkValidateRangesDispatch(TestDataValidator):
+    """Tests for bulk dispatch in validate_value_ranges."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_bulk_dispatch_when_spark_pandas(self, validator):
+        """Verify bulk path is taken when _is_spark_pandas returns True."""
+        mock_df = MagicMock()
+        mock_df.columns = ["pct"]
+        rules = {"pct": {"type": "percentage", "min": 0, "max": 100}}
+
+        from customer_retention.core.compat.bulk_profiling import RangeValidationBulkResult
+
+        with patch(
+            "customer_retention.stages.validation.data_validators._is_spark_pandas",
+            return_value=True,
+        ), patch(
+            "customer_retention.stages.validation.data_validators.bulk_validate_ranges",
+            return_value={"pct": RangeValidationBulkResult(
+                non_null_count=100, invalid_count=5,
+                actual_min=0.0, actual_max=110.0,
+            )},
+        ) as mock_bulk:
+            results = validator.validate_value_ranges(mock_df, rules)
+            mock_bulk.assert_called_once()
+            assert len(results) == 1
+            assert results[0].column_name == "pct"
+            assert results[0].invalid_values == 5
+            assert results[0].invalid_examples == []
+
+    def test_bulk_result_severity(self, validator):
+        """Verify severity is computed from percentage in bulk path."""
+        mock_df = MagicMock()
+        mock_df.columns = ["val"]
+        rules = {"val": {"type": "non_negative"}}
+
+        from customer_retention.core.compat.bulk_profiling import RangeValidationBulkResult
+
+        with patch(
+            "customer_retention.stages.validation.data_validators._is_spark_pandas",
+            return_value=True,
+        ), patch(
+            "customer_retention.stages.validation.data_validators.bulk_validate_ranges",
+            return_value={"val": RangeValidationBulkResult(
+                non_null_count=100, invalid_count=15,
+                actual_min=-10.0, actual_max=50.0,
+            )},
+        ):
+            results = validator.validate_value_ranges(mock_df, rules)
+            assert results[0].severity == Severity.CRITICAL
+
+    def test_pandas_path_unchanged(self, validator):
+        """Verify pandas DataFrames still use the original per-column path."""
+        df = pd.DataFrame({"pct": [50.0, 110.0, -5.0, 80.0]})
+        rules = {"pct": {"type": "percentage", "min": 0, "max": 100}}
+        results = validator.validate_value_ranges(df, rules)
+        assert len(results) == 1
+        assert results[0].invalid_values == 2
+        # Pandas path collects examples
+        assert len(results[0].invalid_examples) > 0

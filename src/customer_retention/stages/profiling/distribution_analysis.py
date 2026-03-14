@@ -11,7 +11,8 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import Series, native_pd, pd, to_pandas
+from customer_retention.core.compat import Series, _is_spark_pandas, native_pd, pd, to_pandas
+from customer_retention.core.compat.bulk_profiling import bulk_distribution_stats
 
 
 class DistributionTransformationType(Enum):
@@ -370,6 +371,9 @@ class DistributionAnalyzer:
         if not valid_cols:
             return {}
 
+        if _is_spark_pandas(df):
+            return self._analyze_dataframe_bulk(df, valid_cols)
+
         numeric_df = df[valid_cols]
         desc = to_pandas(numeric_df.describe())
         extra_q = to_pandas(numeric_df.quantile([0.01, 0.05, 0.10, 0.90, 0.95, 0.99]))
@@ -426,6 +430,47 @@ class DistributionAnalyzer:
             negative_count=0, negative_percentage=0.0,
             outlier_count_iqr=0, outlier_percentage=0.0,
         )
+
+    def _analyze_dataframe_bulk(
+        self, df: pd.DataFrame, valid_cols: List[str],
+    ) -> Dict[str, DistributionAnalysis]:
+        """Analyze distributions using batched Spark aggregation."""
+        bulk = bulk_distribution_stats(df, valid_cols)
+        results: Dict[str, DistributionAnalysis] = {}
+        for col in valid_cols:
+            br = bulk.get(col)
+            if br is None or br.non_null_count == 0:
+                results[col] = self._empty_distribution(col)
+                continue
+            count = br.non_null_count
+            q1 = br.q1 or 0.0
+            q3 = br.q3 or 0.0
+            iqr = q3 - q1
+            zero_c = br.zero_count
+            neg_c = br.negative_count
+            outlier_c = br.outlier_count_iqr
+            results[col] = DistributionAnalysis(
+                column_name=col,
+                count=count,
+                mean=br.mean or 0.0,
+                std=br.std or 0.0,
+                min_value=br.min_val or 0.0,
+                max_value=br.max_val or 0.0,
+                median=br.median or 0.0,
+                q1=q1,
+                q3=q3,
+                iqr=iqr,
+                skewness=br.skewness or 0.0,
+                kurtosis=br.kurtosis or 0.0,
+                zero_count=zero_c,
+                zero_percentage=(zero_c / count * 100) if count > 0 else 0.0,
+                negative_count=neg_c,
+                negative_percentage=(neg_c / count * 100) if count > 0 else 0.0,
+                outlier_count_iqr=outlier_c,
+                outlier_percentage=(outlier_c / count * 100) if count > 0 else 0.0,
+                percentiles=br.percentiles,
+            )
+        return results
 
     def get_all_recommendations(
         self,

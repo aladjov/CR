@@ -10,12 +10,16 @@ from typing import Any, Dict, List, Optional
 
 from customer_retention.core.compat import (
     DataFrame,
+    _is_spark_pandas,
     head_as_list,
     is_datetime64_any_dtype,
     is_numeric_dtype,
     pd,
     resolve_column_name,
     to_datetime,
+)
+from customer_retention.core.compat.bulk_profiling import (
+    bulk_validate_ranges,
 )
 from customer_retention.core.components.enums import Severity
 
@@ -334,6 +338,9 @@ class DataValidator:
         if rules is None:
             rules = self._infer_default_rules(df)
 
+        if _is_spark_pandas(df):
+            return self._validate_ranges_bulk(df, rules)
+
         for col_name, rule in rules.items():
             if col_name not in df.columns:
                 continue
@@ -395,6 +402,57 @@ class DataValidator:
                 severity=severity
             ))
 
+        return results
+
+    def _validate_ranges_bulk(
+        self,
+        df: DataFrame,
+        rules: Dict[str, Dict[str, Any]],
+    ) -> List[RangeValidationResult]:
+        """Bulk-validate value ranges using batched Spark aggregation."""
+        bulk_results = bulk_validate_ranges(df, rules)
+        results = []
+        for col_name, br in bulk_results.items():
+            if br.non_null_count == 0:
+                continue
+            rule = rules[col_name]
+            rule_type = rule.get("type", "range")
+            min_val = rule.get("min")
+            max_val = rule.get("max")
+            if rule_type == "percentage":
+                mn = min_val if min_val is not None else 0
+                mx = max_val if max_val is not None else 100
+                expected_range = f"[{mn}, {mx}]"
+            elif rule_type == "binary":
+                expected_range = str(rule.get("valid_values", [0, 1]))
+            elif rule_type == "non_negative":
+                expected_range = "[0, +\u221e)"
+            elif rule_type == "rate":
+                expected_range = "[0, 1]"
+            else:
+                lo = min_val if min_val is not None else "-\u221e"
+                hi = max_val if max_val is not None else "+\u221e"
+                expected_range = f"[{lo}, {hi}]"
+
+            actual_range = ""
+            if br.actual_min is not None and br.actual_max is not None:
+                actual_range = f"[{br.actual_min:.2f}, {br.actual_max:.2f}]"
+
+            invalid_pct = (br.invalid_count / br.non_null_count * 100) if br.non_null_count > 0 else 0.0
+            severity = _severity_from_percentage(invalid_pct)
+
+            results.append(RangeValidationResult(
+                column_name=col_name,
+                total_values=br.non_null_count,
+                valid_values=br.non_null_count - br.invalid_count,
+                invalid_values=br.invalid_count,
+                invalid_percentage=invalid_pct,
+                rule_type=rule_type,
+                expected_range=expected_range,
+                actual_range=actual_range,
+                invalid_examples=[],
+                severity=severity,
+            ))
         return results
 
     def _infer_default_rules(self, df: DataFrame) -> Dict[str, Dict[str, Any]]:

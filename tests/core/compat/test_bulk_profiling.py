@@ -7,17 +7,24 @@ import pytest
 from customer_retention.core.compat.bulk_profiling import (
     BulkStats,
     DatetimeDiscoveryCandidateStats,
+    DistributionBulkResult,
     HistogramData,
     NumericColumnStats,
     PerColumnStats,
+    RangeValidationBulkResult,
+    _chunked,
+    _pandas_bulk_distribution_stats,
     _pandas_bulk_stats,
+    _pandas_bulk_validate_ranges,
     _safe_float,
     _safe_int,
     bulk_datetime_discovery_stats,
+    bulk_distribution_stats,
     bulk_future_fractions,
     bulk_histogram,
     bulk_monthly_counts,
     bulk_nunique,
+    bulk_validate_ranges,
     compute_bulk_stats,
 )
 
@@ -813,3 +820,194 @@ class TestSparkBulkHelpersMocked:
             result = _spark_bulk_nunique(MagicMock(), ["a", "b"])
 
         assert result == {"a": 5, "b": 10}
+
+
+class TestChunked:
+    def test_exact_chunks(self):
+        cols = ["a", "b", "c", "d"]
+        assert _chunked(cols, 2) == [["a", "b"], ["c", "d"]]
+
+    def test_remainder(self):
+        cols = ["a", "b", "c", "d", "e"]
+        result = _chunked(cols, 2)
+        assert result == [["a", "b"], ["c", "d"], ["e"]]
+
+    def test_empty(self):
+        assert _chunked([], 10) == []
+
+    def test_single_chunk(self):
+        cols = ["a", "b"]
+        assert _chunked(cols, 100) == [["a", "b"]]
+
+    def test_chunk_size_one(self):
+        cols = ["a", "b", "c"]
+        assert _chunked(cols, 1) == [["a"], ["b"], ["c"]]
+
+
+class TestBulkValidateRanges:
+    def test_percentage_rule(self):
+        df = pd.DataFrame({"pct": [50.0, 110.0, -5.0, 80.0, 99.0]})
+        rules = {"pct": {"type": "percentage", "min": 0, "max": 100}}
+        result = bulk_validate_ranges(df, rules)
+        assert "pct" in result
+        assert result["pct"].invalid_count == 2
+        assert result["pct"].non_null_count == 5
+
+    def test_binary_rule(self):
+        df = pd.DataFrame({"flag": [0, 1, 0, 1, 2, -1]})
+        rules = {"flag": {"type": "binary", "valid_values": [0, 1]}}
+        result = bulk_validate_ranges(df, rules)
+        assert result["flag"].invalid_count == 2
+
+    def test_non_negative_rule(self):
+        df = pd.DataFrame({"count": [5, 10, -1, 0, 20]})
+        rules = {"count": {"type": "non_negative"}}
+        result = bulk_validate_ranges(df, rules)
+        assert result["count"].invalid_count == 1
+
+    def test_rate_rule(self):
+        df = pd.DataFrame({"rate": [0.0, 0.5, 1.0, 1.5, -0.1]})
+        rules = {"rate": {"type": "rate"}}
+        result = bulk_validate_ranges(df, rules)
+        assert result["rate"].invalid_count == 2
+
+    def test_range_rule(self):
+        df = pd.DataFrame({"val": [1.0, 5.0, 15.0, -2.0]})
+        rules = {"val": {"type": "range", "min": 0, "max": 10}}
+        result = bulk_validate_ranges(df, rules)
+        assert result["val"].invalid_count == 2
+
+    def test_null_handling(self):
+        df = pd.DataFrame({"pct": [50.0, None, 110.0, None, 80.0]})
+        rules = {"pct": {"type": "percentage", "min": 0, "max": 100}}
+        result = bulk_validate_ranges(df, rules)
+        assert result["pct"].non_null_count == 3
+        assert result["pct"].invalid_count == 1
+
+    def test_empty_rules(self):
+        df = pd.DataFrame({"x": [1, 2, 3]})
+        assert bulk_validate_ranges(df, {}) == {}
+
+    def test_all_valid(self):
+        df = pd.DataFrame({"pct": [10.0, 50.0, 90.0]})
+        rules = {"pct": {"type": "percentage", "min": 0, "max": 100}}
+        result = bulk_validate_ranges(df, rules)
+        assert result["pct"].invalid_count == 0
+
+    def test_missing_column_skipped(self):
+        df = pd.DataFrame({"x": [1, 2]})
+        rules = {"y": {"type": "non_negative"}}
+        result = bulk_validate_ranges(df, rules)
+        assert "y" not in result
+
+    def test_actual_range(self):
+        df = pd.DataFrame({"val": [1.0, 5.0, 10.0]})
+        rules = {"val": {"type": "range", "min": 0, "max": 100}}
+        result = bulk_validate_ranges(df, rules)
+        assert result["val"].actual_min == pytest.approx(1.0)
+        assert result["val"].actual_max == pytest.approx(10.0)
+
+    def test_all_null_column(self):
+        df = pd.DataFrame({"val": pd.array([None, None, None], dtype="Float64")})
+        rules = {"val": {"type": "non_negative"}}
+        result = bulk_validate_ranges(df, rules)
+        assert result["val"].non_null_count == 0
+
+    def test_spark_dispatch(self):
+        mock_df = MagicMock()
+        mock_df.to_spark = MagicMock()
+        rules = {"a": {"type": "non_negative"}}
+
+        with patch("customer_retention.core.compat.bulk_profiling._spark_bulk_validate_ranges") as mock_spark:
+            mock_spark.return_value = {"a": RangeValidationBulkResult(non_null_count=10, invalid_count=1)}
+            result = bulk_validate_ranges(mock_df, rules)
+            mock_spark.assert_called_once()
+            assert result["a"].invalid_count == 1
+
+
+class TestBulkDistributionStats:
+    def test_normal_distribution(self):
+        np.random.seed(42)
+        df = pd.DataFrame({"val": np.random.normal(100, 15, 1000)})
+        result = bulk_distribution_stats(df, ["val"])
+        assert "val" in result
+        br = result["val"]
+        assert br.non_null_count == 1000
+        assert 95 < br.mean < 105
+        assert 12 < br.std < 18
+        assert br.q1 is not None
+        assert br.q3 is not None
+        assert br.q1 < br.median < br.q3
+
+    def test_skewed_distribution(self):
+        np.random.seed(42)
+        df = pd.DataFrame({"val": np.random.lognormal(3, 1, 1000)})
+        result = bulk_distribution_stats(df, ["val"])
+        br = result["val"]
+        assert br.skewness > 0  # log-normal is right-skewed
+
+    def test_zero_inflated(self):
+        np.random.seed(42)
+        values = np.random.exponential(10, 1000)
+        mask = np.random.random(1000) < 0.4
+        values[mask] = 0
+        df = pd.DataFrame({"val": values})
+        result = bulk_distribution_stats(df, ["val"])
+        br = result["val"]
+        assert br.zero_count > 300
+
+    def test_outlier_counts(self):
+        data = list(range(100)) + [1000, -500]
+        df = pd.DataFrame({"val": [float(x) for x in data]})
+        result = bulk_distribution_stats(df, ["val"])
+        assert result["val"].outlier_count_iqr > 0
+
+    def test_percentiles(self):
+        df = pd.DataFrame({"val": list(range(1000))})
+        result = bulk_distribution_stats(df, ["val"])
+        pct = result["val"].percentiles
+        assert "p1" in pct
+        assert "p50" in pct
+        assert "p99" in pct
+        assert pct["p1"] < pct["p50"] < pct["p99"]
+
+    def test_empty_column(self):
+        df = pd.DataFrame({"val": pd.array([None, None], dtype="Float64")})
+        result = bulk_distribution_stats(df, ["val"])
+        assert result["val"].non_null_count == 0
+
+    def test_empty_columns_list(self):
+        df = pd.DataFrame({"val": [1, 2, 3]})
+        assert bulk_distribution_stats(df, []) == {}
+
+    def test_missing_column(self):
+        df = pd.DataFrame({"x": [1, 2]})
+        result = bulk_distribution_stats(df, ["y"])
+        assert "y" not in result
+
+    def test_negative_counts(self):
+        df = pd.DataFrame({"val": [-5.0, -3.0, 0.0, 2.0, 4.0]})
+        result = bulk_distribution_stats(df, ["val"])
+        assert result["val"].negative_count == 2
+
+    def test_multiple_columns(self):
+        np.random.seed(42)
+        df = pd.DataFrame({
+            "a": np.random.normal(0, 1, 100),
+            "b": np.random.normal(50, 10, 100),
+        })
+        result = bulk_distribution_stats(df, ["a", "b"])
+        assert "a" in result
+        assert "b" in result
+        assert result["b"].mean > result["a"].mean
+
+    def test_spark_dispatch(self):
+        mock_df = MagicMock()
+        mock_df.to_spark = MagicMock()
+        mock_df.columns = ["a"]
+
+        with patch("customer_retention.core.compat.bulk_profiling._spark_bulk_distribution_stats") as mock_spark:
+            mock_spark.return_value = {"a": DistributionBulkResult(non_null_count=50, mean=10.0)}
+            result = bulk_distribution_stats(mock_df, ["a"])
+            mock_spark.assert_called_once()
+            assert result["a"].mean == 10.0
