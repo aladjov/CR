@@ -4,7 +4,8 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import Series, head_as_list, pd
+from customer_retention.core.compat import Series, _is_spark_pandas, head_as_list, pd
+from customer_retention.core.compat.bulk_profiling import bulk_categorical_distribution_stats
 
 
 class EncodingType(Enum):
@@ -222,16 +223,46 @@ class CategoricalDistributionAnalyzer:
     ) -> Dict[str, CategoricalDistributionAnalysis]:
         if categorical_columns is None:
             categorical_columns = df.select_dtypes(include=["object", "category"]).columns.tolist()
+        valid = [c for c in categorical_columns if c in df.columns]
+        if not valid:
+            return {}
+        if _is_spark_pandas(df):
+            return self._analyze_dataframe_bulk(df, valid)
+        return {col: self.analyze(df[col], col) for col in valid}
 
-        return {col: self.analyze(df[col], col) for col in categorical_columns if col in df.columns}
+    def _analyze_dataframe_bulk(
+        self, df: pd.DataFrame, columns: List[str],
+    ) -> Dict[str, CategoricalDistributionAnalysis]:
+        bulk = bulk_categorical_distribution_stats(
+            df, columns, top_n=20, rare_threshold=self.RARE_CATEGORY_THRESHOLD,
+        )
+        results: Dict[str, CategoricalDistributionAnalysis] = {}
+        for col in columns:
+            br = bulk.get(col)
+            if br is None or br.total_count == 0:
+                results[col] = self._empty_analysis(col)
+                continue
+            results[col] = CategoricalDistributionAnalysis(
+                column_name=col, category_count=br.category_count,
+                total_count=br.total_count, imbalance_ratio=br.imbalance_ratio,
+                entropy=br.entropy, normalized_entropy=br.normalized_entropy,
+                top1_concentration=br.top1_concentration,
+                top3_concentration=br.top3_concentration,
+                rare_category_count=br.rare_category_count,
+                rare_category_names=br.rare_category_names[:10],
+                value_counts=br.value_counts,
+            )
+        return results
 
     def get_all_recommendations(
-        self, df: pd.DataFrame, categorical_columns: Optional[List[str]] = None,
-        cyclical_columns: Optional[List[str]] = None, ordinal_columns: Optional[List[str]] = None
+        self, df: pd.DataFrame = None, categorical_columns: Optional[List[str]] = None,
+        cyclical_columns: Optional[List[str]] = None, ordinal_columns: Optional[List[str]] = None,
+        analyses: Optional[Dict[str, CategoricalDistributionAnalysis]] = None,
     ) -> List[EncodingRecommendation]:
         cyclical_columns = cyclical_columns or []
         ordinal_columns = ordinal_columns or []
-        analyses = self.analyze_dataframe(df, categorical_columns)
+        if analyses is None:
+            analyses = self.analyze_dataframe(df, categorical_columns)
 
         recommendations = []
         for col_name, analysis in analyses.items():

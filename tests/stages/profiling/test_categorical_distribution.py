@@ -1,5 +1,7 @@
 """Tests for CategoricalDistributionAnalyzer."""
 
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -182,6 +184,76 @@ class TestCategoricalDistributionAnalyzer:
         recs = analyzer.get_all_recommendations(df, ["low_card", "high_card"])
         assert len(recs) == 2
         assert recs[0].column_name == "low_card" or recs[1].column_name == "low_card"
+
+
+class TestBulkCategoricalDispatch:
+    """Tests for bulk dispatch in analyze_dataframe."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    @pytest.fixture
+    def analyzer(self):
+        return CategoricalDistributionAnalyzer()
+
+    def test_bulk_dispatch_when_spark_pandas(self, analyzer):
+        mock_df = MagicMock()
+        mock_df.columns = ["cat1"]
+
+        from customer_retention.core.compat.bulk_profiling import CategoricalDistributionBulkResult
+
+        bulk_result = CategoricalDistributionBulkResult(
+            total_count=300, category_count=3,
+            value_counts={"A": 100, "B": 100, "C": 100},
+            imbalance_ratio=1.0, entropy=1.585, normalized_entropy=1.0,
+            top1_concentration=33.3, top3_concentration=100.0,
+            rare_category_count=0, rare_category_names=[],
+        )
+
+        with patch(
+            "customer_retention.stages.profiling.categorical_distribution._is_spark_pandas",
+            return_value=True,
+        ), patch(
+            "customer_retention.stages.profiling.categorical_distribution.bulk_categorical_distribution_stats",
+            return_value={"cat1": bulk_result},
+        ) as mock_bulk:
+            results = analyzer.analyze_dataframe(mock_df, ["cat1"])
+            mock_bulk.assert_called_once()
+            assert "cat1" in results
+            a = results["cat1"]
+            assert a.category_count == 3
+            assert a.total_count == 300
+            assert a.imbalance_ratio == 1.0
+
+    def test_bulk_empty_column(self, analyzer):
+        mock_df = MagicMock()
+        mock_df.columns = ["cat1"]
+
+        from customer_retention.core.compat.bulk_profiling import CategoricalDistributionBulkResult
+
+        with patch(
+            "customer_retention.stages.profiling.categorical_distribution._is_spark_pandas",
+            return_value=True,
+        ), patch(
+            "customer_retention.stages.profiling.categorical_distribution.bulk_categorical_distribution_stats",
+            return_value={"cat1": CategoricalDistributionBulkResult()},
+        ):
+            results = analyzer.analyze_dataframe(mock_df, ["cat1"])
+            assert results["cat1"].category_count == 0
+            assert results["cat1"].total_count == 0
+
+    def test_pandas_path_unchanged(self, analyzer):
+        df = pd.DataFrame({"cat1": ["A", "B", "C"] * 50})
+        with patch(
+            "customer_retention.stages.profiling.categorical_distribution._is_spark_pandas",
+            return_value=False,
+        ), patch(
+            "customer_retention.stages.profiling.categorical_distribution.bulk_categorical_distribution_stats",
+        ) as mock_bulk:
+            results = analyzer.analyze_dataframe(df, ["cat1"])
+            mock_bulk.assert_not_called()
+            assert results["cat1"].category_count == 3
 
 
 class TestEncodingRecommendation:

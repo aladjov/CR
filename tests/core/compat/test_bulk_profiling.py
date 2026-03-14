@@ -6,6 +6,8 @@ import pytest
 
 from customer_retention.core.compat.bulk_profiling import (
     BulkStats,
+    CategoricalDistributionBulkResult,
+    DatetimeAnalysisBulkResult,
     DatetimeDiscoveryCandidateStats,
     DistributionBulkResult,
     HistogramData,
@@ -13,11 +15,15 @@ from customer_retention.core.compat.bulk_profiling import (
     PerColumnStats,
     RangeValidationBulkResult,
     _chunked,
+    _pandas_bulk_categorical_stats,
+    _pandas_bulk_datetime_analysis,
     _pandas_bulk_distribution_stats,
     _pandas_bulk_stats,
     _pandas_bulk_validate_ranges,
     _safe_float,
     _safe_int,
+    bulk_categorical_distribution_stats,
+    bulk_datetime_analysis_stats,
     bulk_datetime_discovery_stats,
     bulk_distribution_stats,
     bulk_future_fractions,
@@ -1011,3 +1017,135 @@ class TestBulkDistributionStats:
             result = bulk_distribution_stats(mock_df, ["a"])
             mock_spark.assert_called_once()
             assert result["a"].mean == 10.0
+
+
+class TestBulkCategoricalDistributionStats:
+    def test_basic(self):
+        df = pd.DataFrame({"cat": ["a", "b", "b", "c", "c", "c"]})
+        result = bulk_categorical_distribution_stats(df, ["cat"])
+        assert "cat" in result
+        br = result["cat"]
+        assert br.total_count == 6
+        assert br.category_count == 3
+        assert br.value_counts["c"] == 3
+        assert br.value_counts["b"] == 2
+        assert br.top1_concentration == pytest.approx(50.0)
+
+    def test_imbalance_ratio(self):
+        df = pd.DataFrame({"cat": ["a"] * 100 + ["b"]})
+        result = bulk_categorical_distribution_stats(df, ["cat"])
+        assert result["cat"].imbalance_ratio == 100.0
+
+    def test_entropy(self):
+        df = pd.DataFrame({"cat": ["a", "b", "c", "d"]})
+        result = bulk_categorical_distribution_stats(df, ["cat"])
+        assert result["cat"].normalized_entropy == pytest.approx(1.0, abs=0.01)
+
+    def test_rare_categories(self):
+        df = pd.DataFrame({"cat": ["a"] * 100 + ["b"]})
+        result = bulk_categorical_distribution_stats(df, ["cat"], rare_threshold=0.05)
+        assert result["cat"].rare_category_count == 1
+        assert "b" in result["cat"].rare_category_names
+
+    def test_top3_concentration(self):
+        df = pd.DataFrame({"cat": ["a"] * 50 + ["b"] * 30 + ["c"] * 20})
+        result = bulk_categorical_distribution_stats(df, ["cat"])
+        assert result["cat"].top3_concentration == 100.0
+
+    def test_empty_column(self):
+        df = pd.DataFrame({"cat": [None, None, None]})
+        result = bulk_categorical_distribution_stats(df, ["cat"])
+        assert result["cat"].total_count == 0
+
+    def test_multiple_columns(self):
+        df = pd.DataFrame({"a": ["x", "y", "z"], "b": ["p", "p", "q"]})
+        result = bulk_categorical_distribution_stats(df, ["a", "b"])
+        assert result["a"].category_count == 3
+        assert result["b"].category_count == 2
+
+    def test_empty_columns_list(self):
+        df = pd.DataFrame({"x": ["a"]})
+        assert bulk_categorical_distribution_stats(df, []) == {}
+
+    def test_missing_column(self):
+        df = pd.DataFrame({"x": ["a"]})
+        result = bulk_categorical_distribution_stats(df, ["y"])
+        assert "y" not in result
+
+    def test_top_n_limits_value_counts(self):
+        cats = [f"cat_{i}" for i in range(50)]
+        df = pd.DataFrame({"cat": cats})
+        result = bulk_categorical_distribution_stats(df, ["cat"], top_n=10)
+        assert len(result["cat"].value_counts) == 10
+
+    def test_spark_dispatch(self):
+        mock_df = MagicMock()
+        mock_df.to_spark = MagicMock()
+        mock_df.columns = ["a"]
+
+        with patch("customer_retention.core.compat.bulk_profiling._spark_bulk_categorical_stats") as mock_spark:
+            mock_spark.return_value = {"a": CategoricalDistributionBulkResult(
+                total_count=100, category_count=5,
+            )}
+            result = bulk_categorical_distribution_stats(mock_df, ["a"])
+            mock_spark.assert_called_once()
+            assert result["a"].category_count == 5
+
+
+class TestBulkDatetimeAnalysisStats:
+    def test_basic(self):
+        dates = pd.date_range("2023-01-01", periods=365, freq="D")
+        df = pd.DataFrame({"dt": dates})
+        result = bulk_datetime_analysis_stats(df, ["dt"])
+        assert "dt" in result
+        br = result["dt"]
+        assert br.total_count == 365
+        assert br.null_count == 0
+        assert br.span_days == 364
+        assert br.min_date is not None
+        assert br.max_date is not None
+        assert len(br.monthly_counts) == 12
+        assert sum(br.dow_counts) == 365
+
+    def test_with_nulls(self):
+        df = pd.DataFrame({"dt": [pd.Timestamp("2023-01-01"), pd.NaT, pd.NaT]})
+        result = bulk_datetime_analysis_stats(df, ["dt"])
+        assert result["dt"].null_count == 2
+        assert result["dt"].total_count == 3
+
+    def test_all_null(self):
+        df = pd.DataFrame({"dt": pd.Series([pd.NaT, pd.NaT])})
+        result = bulk_datetime_analysis_stats(df, ["dt"])
+        br = result["dt"]
+        assert br.min_date is None
+        assert br.monthly_counts == []
+
+    def test_multiple_columns(self):
+        df = pd.DataFrame({
+            "created": pd.date_range("2023-01-01", periods=10),
+            "updated": pd.date_range("2023-06-01", periods=10),
+        })
+        result = bulk_datetime_analysis_stats(df, ["created", "updated"])
+        assert result["created"].min_date < result["updated"].min_date
+
+    def test_empty_columns(self):
+        df = pd.DataFrame({"dt": pd.date_range("2020-01-01", periods=5)})
+        assert bulk_datetime_analysis_stats(df, []) == {}
+
+    def test_dow_counts_sum(self):
+        dates = pd.date_range("2023-01-02", periods=7, freq="D")  # Mon-Sun
+        df = pd.DataFrame({"dt": dates})
+        result = bulk_datetime_analysis_stats(df, ["dt"])
+        assert sum(result["dt"].dow_counts) == 7
+        assert all(c == 1 for c in result["dt"].dow_counts)
+
+    def test_spark_dispatch(self):
+        mock_df = MagicMock()
+        mock_df.to_spark = MagicMock()
+        mock_df.columns = ["dt"]
+
+        with patch("customer_retention.core.compat.bulk_profiling._spark_bulk_datetime_analysis") as mock_spark:
+            mock_spark.return_value = {"dt": DatetimeAnalysisBulkResult(total_count=100)}
+            result = bulk_datetime_analysis_stats(mock_df, ["dt"])
+            mock_spark.assert_called_once()
+            assert result["dt"].total_count == 100

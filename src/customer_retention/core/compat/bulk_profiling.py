@@ -1656,6 +1656,279 @@ def _spark_bulk_distribution_stats(
     return result
 
 
+# ---------------------------------------------------------------------------
+# Bulk categorical distribution stats
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CategoricalDistributionBulkResult:
+    total_count: int = 0
+    category_count: int = 0
+    value_counts: dict[str, int] = field(default_factory=dict)
+    imbalance_ratio: float = 0.0
+    entropy: float = 0.0
+    normalized_entropy: float = 0.0
+    top1_concentration: float = 0.0
+    top3_concentration: float = 0.0
+    rare_category_count: int = 0
+    rare_category_names: list[str] = field(default_factory=list)
+
+
+def bulk_categorical_distribution_stats(
+    df: Any, columns: list[str], top_n: int = 20, rare_threshold: float = 0.01,
+) -> dict[str, CategoricalDistributionBulkResult]:
+    """Compute categorical distribution stats for many columns in batched Spark jobs."""
+    if not columns:
+        return {}
+    valid = [c for c in columns if c in df.columns]
+    if not valid:
+        return {}
+    if hasattr(df, "to_spark"):
+        return _spark_bulk_categorical_stats(df, valid, top_n, rare_threshold)
+    return _pandas_bulk_categorical_stats(df, valid, top_n, rare_threshold)
+
+
+def _pandas_bulk_categorical_stats(
+    df: Any, columns: list[str], top_n: int, rare_threshold: float,
+) -> dict[str, CategoricalDistributionBulkResult]:
+    result: dict[str, CategoricalDistributionBulkResult] = {}
+    for col in columns:
+        series = df[col].dropna()
+        total = len(series)
+        if total == 0:
+            result[col] = CategoricalDistributionBulkResult()
+            continue
+        vc = series.value_counts()
+        result[col] = _build_categorical_result(col, total, vc.to_dict(), top_n, rare_threshold)
+    return result
+
+
+def _spark_bulk_categorical_stats(
+    df: Any, columns: list[str], top_n: int, rare_threshold: float,
+) -> dict[str, CategoricalDistributionBulkResult]:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    spark_df = as_spark_df(df)
+    # Pass 1: non-null counts per column (batched agg)
+    count_exprs = [F.count(F.col(f"`{c}`")).alias(f"__cnt__{c}") for c in columns]
+    with log_timing(logger, f"bulk_categorical_stats counts ({len(columns)} cols)"):
+        count_row = spark_df.agg(*count_exprs).collect()[0]
+    col_counts = {c: _safe_int(count_row[f"__cnt__{c}"]) for c in columns}
+
+    # Pass 2: stack all columns, single groupBy for value counts
+    stack_parts = []
+    for c in columns:
+        if col_counts[c] == 0:
+            continue
+        stack_parts.append(
+            spark_df.select(
+                F.lit(c).alias("__col__"),
+                F.col(f"`{c}`").cast("string").alias("__val__"),
+            ).filter(F.col("__val__").isNotNull())
+        )
+    if not stack_parts:
+        return {c: CategoricalDistributionBulkResult() for c in columns}
+
+    stacked = stack_parts[0]
+    for part in stack_parts[1:]:
+        stacked = stacked.unionAll(part)
+
+    with log_timing(logger, f"bulk_categorical_stats value_counts ({len(columns)} cols)"):
+        vc_rows = stacked.groupBy("__col__", "__val__").count().collect()
+
+    # Organize value counts per column
+    col_vc: dict[str, dict[str, int]] = {c: {} for c in columns}
+    for row in vc_rows:
+        label = row["__col__"]
+        if label in col_vc:
+            col_vc[label][row["__val__"]] = int(row["count"])
+
+    result: dict[str, CategoricalDistributionBulkResult] = {}
+    for c in columns:
+        total = col_counts[c]
+        if total == 0:
+            result[c] = CategoricalDistributionBulkResult()
+            continue
+        result[c] = _build_categorical_result(c, total, col_vc[c], top_n, rare_threshold)
+    return result
+
+
+def _build_categorical_result(
+    col: str, total: int, vc_dict: dict[str, int],
+    top_n: int, rare_threshold: float,
+) -> CategoricalDistributionBulkResult:
+    """Compute derived metrics from a value-counts dict (shared by pandas/spark paths)."""
+    if not vc_dict:
+        return CategoricalDistributionBulkResult()
+
+    sorted_vc = sorted(vc_dict.items(), key=lambda x: x[1], reverse=True)
+    category_count = len(sorted_vc)
+    max_count = sorted_vc[0][1]
+    min_count = sorted_vc[-1][1]
+    imbalance_ratio = float(max_count / min_count) if min_count > 0 else float("inf")
+
+    # Entropy
+    counts_arr = np.array([c for _, c in sorted_vc], dtype=float)
+    probs = counts_arr / total
+    entropy = float(-np.sum(probs * np.log2(probs + 1e-10)))
+    max_entropy = np.log2(category_count) if category_count > 1 else 1.0
+    normalized_entropy = entropy / max_entropy if max_entropy > 0 else 0.0
+
+    top1 = float(max_count / total * 100)
+    top3_sum = sum(c for _, c in sorted_vc[:3])
+    top3 = float(top3_sum / total * 100)
+
+    rare_cutoff = total * rare_threshold
+    rare_items = [(name, cnt) for name, cnt in sorted_vc if cnt < rare_cutoff]
+    rare_count = len(rare_items)
+    rare_names = [name for name, _ in rare_items[:10]]
+
+    top_vc = dict(sorted_vc[:top_n])
+
+    return CategoricalDistributionBulkResult(
+        total_count=total, category_count=category_count,
+        value_counts=top_vc, imbalance_ratio=imbalance_ratio,
+        entropy=entropy, normalized_entropy=normalized_entropy,
+        top1_concentration=top1, top3_concentration=top3,
+        rare_category_count=rare_count, rare_category_names=rare_names,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bulk datetime analysis stats
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DatetimeAnalysisBulkResult:
+    total_count: int = 0
+    null_count: int = 0
+    min_date: Any = None
+    max_date: Any = None
+    span_days: int = 0
+    monthly_counts: list[tuple[str, int]] = field(default_factory=list)
+    dow_counts: list[int] = field(default_factory=lambda: [0] * 7)
+
+
+def bulk_datetime_analysis_stats(
+    df: Any, columns: list[str],
+) -> dict[str, DatetimeAnalysisBulkResult]:
+    """Compute datetime stats for multiple columns in batched Spark agg calls."""
+    if not columns:
+        return {}
+    valid = [c for c in columns if c in df.columns]
+    if not valid:
+        return {}
+    if hasattr(df, "to_spark"):
+        return _spark_bulk_datetime_analysis(df, valid)
+    return _pandas_bulk_datetime_analysis(df, valid)
+
+
+def _pandas_bulk_datetime_analysis(
+    df: Any, columns: list[str],
+) -> dict[str, DatetimeAnalysisBulkResult]:
+    result: dict[str, DatetimeAnalysisBulkResult] = {}
+    for col in columns:
+        parsed = _pandas.to_datetime(df[col], errors="coerce")
+        total = len(parsed)
+        null_c = int(parsed.isna().sum())
+        clean = parsed.dropna()
+        if len(clean) == 0:
+            result[col] = DatetimeAnalysisBulkResult(total_count=total, null_count=null_c)
+            continue
+        mn, mx = clean.min(), clean.max()
+        span = (mx - mn).days
+        monthly = clean.dt.strftime("%Y-%m").value_counts().sort_index()
+        monthly_list = list(zip(monthly.index.tolist(), monthly.values.tolist()))
+        dow = clean.dt.dayofweek.value_counts().reindex(range(7), fill_value=0)
+        result[col] = DatetimeAnalysisBulkResult(
+            total_count=total, null_count=null_c, min_date=mn, max_date=mx,
+            span_days=span, monthly_counts=monthly_list,
+            dow_counts=dow.values.tolist(),
+        )
+    return result
+
+
+def _spark_bulk_datetime_analysis(
+    df: Any, columns: list[str],
+) -> dict[str, DatetimeAnalysisBulkResult]:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    spark_df = as_spark_df(df)
+    total = spark_df.count()
+
+    # Pass 1: min, max, null count per column (batched agg)
+    exprs: list[Any] = []
+    for c in columns:
+        col_expr = F.col(f"`{c}`").cast("timestamp")
+        exprs.extend([
+            F.min(col_expr).alias(f"__min__{c}"),
+            F.max(col_expr).alias(f"__max__{c}"),
+            F.sum(F.when(F.col(f"`{c}`").isNull(), 1).otherwise(0).cast("int")).alias(f"__null__{c}"),
+        ])
+    with log_timing(logger, f"bulk_datetime_analysis pass1 ({len(columns)} cols)"):
+        row = spark_df.agg(*exprs).collect()[0]
+
+    basic: dict[str, dict[str, Any]] = {}
+    for c in columns:
+        mn = row[f"__min__{c}"]
+        mx = row[f"__max__{c}"]
+        null_c = _safe_int(row[f"__null__{c}"])
+        span = (mx - mn).days if mn and mx else 0
+        basic[c] = {"min": mn, "max": mx, "null": null_c, "span": span}
+
+    # Pass 2: stack all columns, groupBy month + dow
+    stack_parts = []
+    for c in columns:
+        if basic[c]["min"] is None:
+            continue
+        col_ts = F.col(f"`{c}`").cast("timestamp")
+        stack_parts.append(
+            spark_df.select(
+                F.lit(c).alias("__col__"),
+                F.date_format(col_ts, "yyyy-MM").alias("__month__"),
+                F.dayofweek(col_ts).alias("__dow__"),
+            ).filter(col_ts.isNotNull())
+        )
+
+    monthly_data: dict[str, list[tuple[str, int]]] = {c: [] for c in columns}
+    dow_data: dict[str, list[int]] = {c: [0] * 7 for c in columns}
+
+    if stack_parts:
+        stacked = stack_parts[0]
+        for p in stack_parts[1:]:
+            stacked = stacked.unionAll(p)
+
+        with log_timing(logger, f"bulk_datetime_analysis monthly ({len(columns)} cols)"):
+            month_rows = stacked.groupBy("__col__", "__month__").count().collect()
+        for r in month_rows:
+            col_label = r["__col__"]
+            if col_label in monthly_data:
+                monthly_data[col_label].append((r["__month__"], int(r["count"])))
+        for c in monthly_data:
+            monthly_data[c].sort(key=lambda x: x[0])
+
+        with log_timing(logger, f"bulk_datetime_analysis dow ({len(columns)} cols)"):
+            dow_rows = stacked.groupBy("__col__", "__dow__").count().collect()
+        for r in dow_rows:
+            col_label = r["__col__"]
+            if col_label in dow_data:
+                # Spark dayofweek: 1=Sun..7=Sat → convert to 0=Mon..6=Sun
+                spark_dow = int(r["__dow__"])
+                py_dow = (spark_dow - 2) % 7
+                dow_data[col_label][py_dow] = int(r["count"])
+
+    result: dict[str, DatetimeAnalysisBulkResult] = {}
+    for c in columns:
+        b = basic[c]
+        result[c] = DatetimeAnalysisBulkResult(
+            total_count=total, null_count=b["null"],
+            min_date=b["min"], max_date=b["max"], span_days=b["span"],
+            monthly_counts=monthly_data.get(c, []),
+            dow_counts=dow_data.get(c, [0] * 7),
+        )
+    return result
+
+
 def _safe_float(val: Any) -> Optional[float]:
     if val is None:
         return None
