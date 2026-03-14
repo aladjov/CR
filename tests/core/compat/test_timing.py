@@ -101,3 +101,23 @@ def test_collector_not_active_by_default():
 def test_stop_collecting_without_start_returns_empty():
     entries = stop_collecting()
     assert entries == []
+
+
+def test_log_timing_with_explicit_logger(caplog):
+    custom_logger = logging.getLogger("test.custom")
+    with caplog.at_level(logging.INFO, logger="test.custom"):
+        with log_timing("explicit_logger_block", custom_logger):
+            pass
+    assert any(
+        "[TIMING] explicit_logger_block:" in r.message and r.name == "test.custom"
+        for r in caplog.records
+    )
+
+
+def test_log_timing_rejects_non_logger_as_logger():
+    """Passing a string where a Logger is expected must raise AttributeError."""
+    import pytest
+
+    with pytest.raises(AttributeError, match="log"):
+        with log_timing("label", "not_a_logger"):
+            pass

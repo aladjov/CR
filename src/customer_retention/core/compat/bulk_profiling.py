@@ -1406,7 +1406,7 @@ def _spark_bulk_validate_ranges(
                 F.max(c).alias(f"__max__{col}"),
                 F.sum(invalid_expr.cast("int")).alias(f"__inv__{col}"),
             ])
-        with log_timing(logger, f"bulk_validate_ranges chunk ({len(chunk)} cols)"):
+        with log_timing(f"bulk_validate_ranges chunk ({len(chunk)} cols)", logger):
             row = spark_df.agg(*exprs).collect()[0]
         for col in chunk:
             result[col] = RangeValidationBulkResult(
@@ -1578,7 +1578,7 @@ def _spark_bulk_distribution_stats(
                 F.sum((c == 0).cast("int")).alias(f"__zer__{col}"),
                 F.sum((c < 0).cast("int")).alias(f"__neg__{col}"),
             ])
-        with log_timing(logger, f"bulk_distribution_stats pass1 ({len(chunk)} cols)"):
+        with log_timing(f"bulk_distribution_stats pass1 ({len(chunk)} cols)", logger):
             row = spark_df.agg(*exprs).collect()[0]
         for col in chunk:
             pct_arr = row[f"__pct__{col}"] or [None] * len(pctiles)
@@ -1616,7 +1616,7 @@ def _spark_bulk_distribution_stats(
                 F.sum(((c < lower) | (c > upper)).cast("int")).alias(f"__out__{col}")
             )
         if exprs:
-            with log_timing(logger, f"bulk_distribution_stats pass2 ({len(chunk)} cols)"):
+            with log_timing(f"bulk_distribution_stats pass2 ({len(chunk)} cols)", logger):
                 row2 = spark_df.agg(*exprs).collect()[0]
             for col in chunk:
                 alias = f"__out__{col}"
@@ -1711,7 +1711,7 @@ def _spark_bulk_categorical_stats(
     spark_df = as_spark_df(df)
     # Pass 1: non-null counts per column (batched agg)
     count_exprs = [F.count(F.col(f"`{c}`")).alias(f"__cnt__{c}") for c in columns]
-    with log_timing(logger, f"bulk_categorical_stats counts ({len(columns)} cols)"):
+    with log_timing(f"bulk_categorical_stats counts ({len(columns)} cols)", logger):
         count_row = spark_df.agg(*count_exprs).collect()[0]
     col_counts = {c: _safe_int(count_row[f"__cnt__{c}"]) for c in columns}
 
@@ -1733,7 +1733,7 @@ def _spark_bulk_categorical_stats(
     for part in stack_parts[1:]:
         stacked = stacked.unionAll(part)
 
-    with log_timing(logger, f"bulk_categorical_stats value_counts ({len(columns)} cols)"):
+    with log_timing(f"bulk_categorical_stats value_counts ({len(columns)} cols)", logger):
         vc_rows = stacked.groupBy("__col__", "__val__").count().collect()
 
     # Organize value counts per column
@@ -1865,7 +1865,7 @@ def _spark_bulk_datetime_analysis(
             F.max(col_expr).alias(f"__max__{c}"),
             F.sum(F.when(F.col(f"`{c}`").isNull(), 1).otherwise(0).cast("int")).alias(f"__null__{c}"),
         ])
-    with log_timing(logger, f"bulk_datetime_analysis pass1 ({len(columns)} cols)"):
+    with log_timing(f"bulk_datetime_analysis pass1 ({len(columns)} cols)", logger):
         row = spark_df.agg(*exprs).collect()[0]
 
     basic: dict[str, dict[str, Any]] = {}
@@ -1898,7 +1898,7 @@ def _spark_bulk_datetime_analysis(
         for p in stack_parts[1:]:
             stacked = stacked.unionAll(p)
 
-        with log_timing(logger, f"bulk_datetime_analysis monthly ({len(columns)} cols)"):
+        with log_timing(f"bulk_datetime_analysis monthly ({len(columns)} cols)", logger):
             month_rows = stacked.groupBy("__col__", "__month__").count().collect()
         for r in month_rows:
             col_label = r["__col__"]
@@ -1907,7 +1907,7 @@ def _spark_bulk_datetime_analysis(
         for c in monthly_data:
             monthly_data[c].sort(key=lambda x: x[0])
 
-        with log_timing(logger, f"bulk_datetime_analysis dow ({len(columns)} cols)"):
+        with log_timing(f"bulk_datetime_analysis dow ({len(columns)} cols)", logger):
             dow_rows = stacked.groupBy("__col__", "__dow__").count().collect()
         for r in dow_rows:
             col_label = r["__col__"]
