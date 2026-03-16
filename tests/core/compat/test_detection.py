@@ -453,6 +453,65 @@ class TestGetDatabricksUsername:
                 assert get_databricks_username() is None
 
 
+class TestAsSparkDfBypassesPsseries:
+    def test_uses_internal_spark_frame_when_available(self):
+        from unittest.mock import MagicMock, PropertyMock
+
+        from customer_retention.core.compat import as_spark_df
+
+        mock_sdf = MagicMock()
+        mock_internal = MagicMock()
+        mock_internal.spark_frame = mock_sdf
+        mock_internal.data_spark_column_names = ["f1", "f2", "target"]
+
+        mock_df = MagicMock()
+        mock_df._internal = mock_internal
+        type(mock_df).to_spark = PropertyMock(side_effect=AssertionError(
+            "to_spark should not be called when _internal is available"
+        ))
+
+        result = as_spark_df(mock_df)
+        mock_sdf.select.assert_called_once_with(["f1", "f2", "target"])
+
+    def test_falls_back_to_to_spark_without_internal(self):
+        from unittest.mock import MagicMock
+
+        from customer_retention.core.compat import as_spark_df
+
+        mock_sdf = MagicMock()
+        mock_df = MagicMock(spec=["to_spark"])
+        mock_df.to_spark.return_value = mock_sdf
+
+        result = as_spark_df(mock_df)
+        mock_df.to_spark.assert_called_once()
+        assert result is mock_sdf
+
+    def test_returns_native_spark_df_as_is(self):
+        from unittest.mock import MagicMock
+
+        from customer_retention.core.compat import as_spark_df
+
+        mock_sdf = MagicMock(spec=["select", "filter", "columns", "schema"])
+        result = as_spark_df(mock_sdf)
+        assert result is mock_sdf
+
+    def test_drops_index_cols_when_data_spark_column_names_absent(self):
+        from unittest.mock import MagicMock
+
+        from customer_retention.core.compat import as_spark_df
+
+        mock_sdf = MagicMock()
+        mock_sdf.columns = ["f1", "target", "__index_level_0__"]
+        mock_internal = MagicMock(spec=["spark_frame"])
+        mock_internal.spark_frame = mock_sdf
+
+        mock_df = MagicMock()
+        mock_df._internal = mock_internal
+
+        as_spark_df(mock_df)
+        mock_sdf.drop.assert_called_once_with("__index_level_0__")
+
+
 class TestConfigureSparkPandas:
     def test_configure_when_pandas_api_available(self):
         mock_ps = MagicMock()

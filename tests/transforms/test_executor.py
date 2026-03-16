@@ -256,3 +256,49 @@ class TestApplyAll:
         step = _step(PipelineTransformationType.AGGREGATE, "age")
         with pytest.raises(ValueError, match="Unknown transformation"):
             executor.apply(sample_df, step)
+
+
+class TestPsseriesInvalidation:
+    def test_apply_all_clears_psseries_after_column_adding_ops(self, executor):
+        df = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
+        df._psseries = {"stale": "cache"}
+
+        steps = [
+            _step(PipelineTransformationType.DERIVED_COLUMN, "a_times_b",
+                  method="interaction", col_a="a", col_b="b"),
+        ]
+
+        from unittest.mock import patch
+        with patch("customer_retention.transforms.executor._is_spark_pandas", return_value=True):
+            with patch("customer_retention.transforms.executor.spark_checkpoint", side_effect=lambda x: x):
+                result = executor.apply_all(df, steps)
+
+        assert result._psseries is None
+        assert "a_times_b" in result.columns
+
+    def test_apply_all_invalidates_after_every_step(self, executor):
+        df = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
+
+        steps = [
+            _step(PipelineTransformationType.LOG_TRANSFORM, "a"),
+            _step(PipelineTransformationType.DERIVED_COLUMN, "a_times_b",
+                  method="interaction", col_a="a", col_b="b"),
+        ]
+
+        invalidation_count = 0
+        original_invalidate = __import__(
+            "customer_retention.transforms.executor", fromlist=["_invalidate_psseries"]
+        )._invalidate_psseries
+
+        def counting_invalidate(df):
+            nonlocal invalidation_count
+            invalidation_count += 1
+            original_invalidate(df)
+
+        from unittest.mock import patch
+        with patch("customer_retention.transforms.executor._is_spark_pandas", return_value=True):
+            with patch("customer_retention.transforms.executor.spark_checkpoint", side_effect=lambda x: x):
+                with patch("customer_retention.transforms.executor._invalidate_psseries", counting_invalidate):
+                    executor.apply_all(df, steps)
+
+        assert invalidation_count == 2

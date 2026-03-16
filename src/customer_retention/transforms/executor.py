@@ -14,6 +14,20 @@ from customer_retention.generators.pipeline_generator.models import (
 
 _CHECKPOINT_INTERVAL = 10
 
+
+def _invalidate_psseries(df: DataFrame) -> None:
+    """Clear stale ``_psseries`` cache on pyspark.pandas DataFrames.
+
+    pyspark.pandas ``__setitem__`` calls ``_update_internal_frame`` which
+    updates ``_internal`` (column count changes) but does NOT reset the
+    ``_psseries`` dict.  The next column read hits an assertion comparing
+    ``len(column_labels)`` vs ``len(_psseries)``.  Clearing the cache
+    forces a correct rebuild on next access.
+    """
+    if hasattr(df, '_psseries'):
+        df._psseries = None
+
+
 from . import ops
 from .artifact_store import ArtifactStore
 from .fitted import FittedEncoder, FittedPowerTransform, FittedScaler
@@ -52,8 +66,10 @@ class TransformExecutor:
             self._precompute_quantiles(df, steps)
         for i, step in enumerate(steps):
             df = self.apply(df, step, fit_mode=fit_mode, artifact_store=artifact_store)
-            if distributed and (i + 1) % _CHECKPOINT_INTERVAL == 0 and i + 1 < len(steps):
-                df = spark_checkpoint(df)
+            if distributed:
+                _invalidate_psseries(df)
+                if (i + 1) % _CHECKPOINT_INTERVAL == 0 and i + 1 < len(steps):
+                    df = spark_checkpoint(df)
         return df
 
     def _precompute_quantiles(self, df: DataFrame, steps: list[TransformationStep]) -> None:

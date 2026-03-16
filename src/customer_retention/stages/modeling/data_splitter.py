@@ -220,10 +220,6 @@ class DataSplitter:
 
         col = self.temporal_column
         spark_df = as_spark_df(df)
-        idx_cols = [c for c in spark_df.columns if c.startswith("__index_level_")]
-        if idx_cols:
-            spark_df = spark_df.drop(*idx_cols)
-
         epoch = F.unix_timestamp(F.col(col).cast("timestamp"))
         agg_row = spark_df.agg(
             F.percentile_approx(epoch, float(1 - self.test_size)).alias("cutoff"),

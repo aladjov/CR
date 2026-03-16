@@ -513,6 +513,14 @@ def _is_native_spark_df(obj: Any) -> bool:
 
 
 def as_spark_df(df: Any) -> Any:
+    internal = getattr(df, '_internal', None)
+    if internal is not None and hasattr(internal, 'spark_frame'):
+        sdf = internal.spark_frame
+        data_cols = getattr(internal, 'data_spark_column_names', None)
+        if data_cols:
+            return sdf.select(data_cols)
+        idx = [c for c in sdf.columns if c.startswith("__index_level_") or c == "__natural_order__"]
+        return sdf.drop(*idx) if idx else sdf
     if not hasattr(df, 'to_spark'):
         return df
     import warnings

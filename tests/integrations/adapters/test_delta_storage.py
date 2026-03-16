@@ -341,12 +341,17 @@ class TestDatabricksDeltaReturnsSparkPandas:
             storage = DatabricksDelta()
             storage._spark = MagicMock()
 
+            mock_spark_frame = MagicMock()
+            mock_internal = MagicMock()
+            mock_internal.spark_frame = mock_spark_frame
+            mock_internal.data_spark_column_names = ["col1", "col2"]
             mock_ps_df = MagicMock()
+            mock_ps_df._internal = mock_internal
             mock_ps_df.to_spark.return_value = MagicMock()
 
             with patch.object(storage, "_to_spark_df") as mock_to_spark:
                 storage.write(mock_ps_df, "/fake/path")
-                mock_ps_df.to_spark.assert_called_once()
+                mock_spark_frame.select.assert_called_once_with(["col1", "col2"])
                 mock_to_spark.assert_not_called()
 
     def test_write_regular_pandas_uses_to_spark_df(self):
@@ -373,9 +378,13 @@ class TestDatabricksDeltaReturnsSparkPandas:
             storage = DatabricksDelta()
             storage._spark = MagicMock()
 
+            mock_spark_frame = MagicMock()
+            mock_internal = MagicMock()
+            mock_internal.spark_frame = mock_spark_frame
+            mock_internal.data_spark_column_names = ["id", "val"]
             mock_ps_df = MagicMock()
-            mock_spark_df = MagicMock()
-            mock_ps_df.to_spark.return_value = mock_spark_df
+            mock_ps_df._internal = mock_internal
+            mock_ps_df.to_spark.return_value = MagicMock()
 
             with patch.object(storage, "_to_spark_df") as mock_to_spark, \
                  patch("delta.tables.DeltaTable") as mock_dt:
@@ -388,7 +397,7 @@ class TestDatabricksDeltaReturnsSparkPandas:
 
                 storage.merge(mock_ps_df, "/fake/path", "source.id = target.id")
 
-                mock_ps_df.to_spark.assert_called_once()
+                mock_spark_frame.select.assert_called_once_with(["id", "val"])
                 mock_to_spark.assert_not_called()
 
 
@@ -665,14 +674,18 @@ class TestDatabricksDeltaStripTimestampTz:
             storage = DatabricksDelta()
             storage._spark = MagicMock()
 
-            mock_spark_df = MagicMock()
+            mock_spark_frame = MagicMock()
+            mock_internal = MagicMock()
+            mock_internal.spark_frame = mock_spark_frame
+            mock_internal.data_spark_column_names = ["col1"]
+            mock_selected = mock_spark_frame.select.return_value
             mock_ps_df = MagicMock()
-            mock_ps_df.to_spark.return_value = mock_spark_df
+            mock_ps_df._internal = mock_internal
 
             mock_stripped = MagicMock()
             with patch.object(DatabricksDelta, "_strip_spark_timestamp_tz", return_value=mock_stripped):
                 storage.write(mock_ps_df, "/fake/path")
-                DatabricksDelta._strip_spark_timestamp_tz.assert_called_once_with(mock_spark_df)
+                DatabricksDelta._strip_spark_timestamp_tz.assert_called_once_with(mock_selected)
                 mock_stripped.write.format("delta").mode("overwrite").option(
                     "overwriteSchema", "true"
                 ).save.assert_called_once_with("/fake/path")
@@ -688,6 +701,7 @@ class TestDatabricksDeltaStripTimestampTz:
 
             mock_spark_df = MagicMock()
             mock_ps_df = MagicMock()
+            mock_ps_df._internal = None
             mock_ps_df.to_spark.return_value = mock_spark_df
 
             with patch.object(DatabricksDelta, "_strip_spark_timestamp_tz", return_value=mock_spark_df):
@@ -707,6 +721,7 @@ class TestDatabricksDeltaStripTimestampTz:
 
             mock_spark_df = MagicMock()
             mock_ps_df = MagicMock()
+            mock_ps_df._internal = None
             mock_ps_df.to_spark.return_value = mock_spark_df
 
             mock_stripped = MagicMock()
@@ -775,6 +790,7 @@ class TestDatabricksDeltaWriteNativeSparkDf:
 
             mock_spark_df = MagicMock()
             mock_ps_df = MagicMock()
+            mock_ps_df._internal = None
             mock_ps_df.to_spark.return_value = mock_spark_df
 
             with patch.object(DatabricksDelta, "_strip_spark_timestamp_tz", return_value=mock_spark_df):
