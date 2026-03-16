@@ -160,7 +160,7 @@ def _spark_bulk_datetime_discovery(
     total = spark_df.count()
     exprs: list[Any] = []
     for c in columns:
-        col_expr = F.to_timestamp(F.col(c))
+        col_expr = F.expr(f"try_to_timestamp(`{c}`)")
         exprs.extend([
             F.min(col_expr).alias(f"__min__{c}"),
             F.max(col_expr).alias(f"__max__{c}"),
@@ -216,10 +216,10 @@ def _spark_bulk_future_fractions(
     import pyspark.sql.functions as F  # noqa: N812
 
     spark_df = as_spark_df(df)
-    ref = F.to_timestamp(F.col(reference_col))
+    ref = F.expr(f"try_to_timestamp(`{reference_col}`)")
     exprs: list[Any] = [F.count(F.lit(1)).alias("__total__")]
     for c in check_cols:
-        col_ts = F.to_timestamp(F.col(c))
+        col_ts = F.expr(f"try_to_timestamp(`{c}`)")
         exprs.append(
             F.sum(F.when(col_ts > ref, 1).otherwise(0)).alias(f"__fut__{c}")
         )
@@ -334,7 +334,7 @@ def _spark_bulk_monthly_counts(
     import pyspark.sql.functions as F  # noqa: N812
 
     spark_df = as_spark_df(df)
-    c = F.to_timestamp(F.col(column))
+    c = F.expr(f"try_to_timestamp(`{column}`)")
     month_col = F.date_format(c, "yyyy-MM")
     result = (
         spark_df
@@ -1858,13 +1858,15 @@ def _spark_bulk_datetime_analysis(
     total = spark_df.count()
 
     # Pass 1: min, max, null count per column (batched agg)
+    # Use try_to_timestamp: returns NULL for unparseable strings (e.g. '2024Q4')
+    # instead of raising CAST_INVALID_INPUT
     exprs: list[Any] = []
     for c in columns:
-        col_expr = F.to_timestamp(F.col(f"`{c}`"))
+        col_expr = F.expr(f"try_to_timestamp(`{c}`)")
         exprs.extend([
             F.min(col_expr).alias(f"__min__{c}"),
             F.max(col_expr).alias(f"__max__{c}"),
-            F.sum(F.when(F.col(f"`{c}`").isNull(), 1).otherwise(0).cast("int")).alias(f"__null__{c}"),
+            F.sum(F.when(col_expr.isNull(), 1).otherwise(0).cast("int")).alias(f"__null__{c}"),
         ])
     with log_timing(f"bulk_datetime_analysis pass1 ({len(columns)} cols)", logger):
         row = spark_df.agg(*exprs).collect()[0]
@@ -1882,7 +1884,7 @@ def _spark_bulk_datetime_analysis(
     for c in columns:
         if basic[c]["min"] is None:
             continue
-        col_ts = F.to_timestamp(F.col(f"`{c}`"))
+        col_ts = F.expr(f"try_to_timestamp(`{c}`)")
         stack_parts.append(
             spark_df.select(
                 F.lit(c).alias("__col__"),

@@ -1150,6 +1150,24 @@ class TestBulkDatetimeAnalysisStats:
         assert sum(result["dt"].dow_counts) == 7
         assert all(c == 1 for c in result["dt"].dow_counts)
 
+    def test_unparseable_strings_coerced(self):
+        df = pd.DataFrame({"dt": ["2024-01-01", "N/A", "not-a-date", None, "2024-06-15"]})
+        result = bulk_datetime_analysis_stats(df, ["dt"])
+        br = result["dt"]
+        assert br.total_count == 5
+        assert br.null_count == 3
+        assert br.min_date is not None
+        assert br.max_date is not None
+        assert br.span_days > 0
+
+    def test_all_unparseable_strings(self):
+        df = pd.DataFrame({"dt": ["N/A", "UNKNOWN", "---"]})
+        result = bulk_datetime_analysis_stats(df, ["dt"])
+        br = result["dt"]
+        assert br.null_count == 3
+        assert br.min_date is None
+        assert br.monthly_counts == []
+
     def test_spark_dispatch(self):
         mock_df = MagicMock()
         mock_df.to_spark = MagicMock()
