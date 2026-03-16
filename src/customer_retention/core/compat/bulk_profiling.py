@@ -1808,6 +1808,7 @@ class DatetimeAnalysisBulkResult:
     span_days: int = 0
     monthly_counts: list[tuple[str, int]] = field(default_factory=list)
     dow_counts: list[int] = field(default_factory=lambda: [0] * 7)
+    placeholder_count: int = 0
 
 
 def bulk_datetime_analysis_stats(
@@ -1841,10 +1842,11 @@ def _pandas_bulk_datetime_analysis(
         monthly = clean.dt.strftime("%Y-%m").value_counts().sort_index()
         monthly_list = list(zip(monthly.index.tolist(), monthly.values.tolist()))
         dow = clean.dt.dayofweek.value_counts().reindex(range(7), fill_value=0)
+        plc = int((clean < _pandas.Timestamp("2000-01-01")).sum())
         result[col] = DatetimeAnalysisBulkResult(
             total_count=total, null_count=null_c, min_date=mn, max_date=mx,
             span_days=span, monthly_counts=monthly_list,
-            dow_counts=dow.values.tolist(),
+            dow_counts=dow.values.tolist(), placeholder_count=plc,
         )
     return result
 
@@ -1867,6 +1869,7 @@ def _spark_bulk_datetime_analysis(
             F.min(col_expr).alias(f"__min__{c}"),
             F.max(col_expr).alias(f"__max__{c}"),
             F.sum(F.when(col_expr.isNull(), 1).otherwise(0).cast("int")).alias(f"__null__{c}"),
+            F.sum(F.when(col_expr < F.lit("2000-01-01").cast("timestamp"), 1).otherwise(0).cast("int")).alias(f"__plc__{c}"),
         ])
     with log_timing(f"bulk_datetime_analysis pass1 ({len(columns)} cols)", logger):
         row = spark_df.agg(*exprs).collect()[0]
@@ -1876,8 +1879,9 @@ def _spark_bulk_datetime_analysis(
         mn = row[f"__min__{c}"]
         mx = row[f"__max__{c}"]
         null_c = _safe_int(row[f"__null__{c}"])
+        plc = _safe_int(row[f"__plc__{c}"])
         span = (mx - mn).days if mn and mx else 0
-        basic[c] = {"min": mn, "max": mx, "null": null_c, "span": span}
+        basic[c] = {"min": mn, "max": mx, "null": null_c, "span": span, "placeholder": plc}
 
     # Pass 2: stack all columns, groupBy month + dow
     stack_parts = []
@@ -1928,6 +1932,7 @@ def _spark_bulk_datetime_analysis(
             min_date=b["min"], max_date=b["max"], span_days=b["span"],
             monthly_counts=monthly_data.get(c, []),
             dow_counts=dow_data.get(c, [0] * 7),
+            placeholder_count=b["placeholder"],
         )
     return result
 

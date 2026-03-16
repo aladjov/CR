@@ -85,17 +85,17 @@ class TemporalAnalyzer:
         1825: TemporalGranularity.QUARTER,  # <= 5 years: quarterly
     }
 
-    def detect_granularity(self, dates: Series) -> TemporalGranularity:
-
-        clean_dates = to_datetime(dates, errors="coerce").dropna()
-        if len(clean_dates) == 0:
-            return TemporalGranularity.MONTH
-
-        span_days = (clean_dates.max() - clean_dates.min()).days
+    def _granularity_from_span(self, span_days: int) -> TemporalGranularity:
         for threshold, granularity in self.GRANULARITY_THRESHOLDS.items():
             if span_days <= threshold:
                 return granularity
         return TemporalGranularity.YEAR
+
+    def detect_granularity(self, dates: Series) -> TemporalGranularity:
+        clean_dates = to_datetime(dates, errors="coerce").dropna()
+        if len(clean_dates) == 0:
+            return TemporalGranularity.MONTH
+        return self._granularity_from_span((clean_dates.max() - clean_dates.min()).days)
 
     def aggregate_by_granularity(
         self, dates: Series, granularity: TemporalGranularity
@@ -268,22 +268,15 @@ class TemporalAnalyzer:
             "trend_slope": float(slope),
         }
 
-    def recommend_features(
-        self, dates: Series, column_name: str, other_date_columns: Optional[List[str]] = None
+    def _build_recommendations(
+        self, column_name: str, analysis: TemporalAnalysis,
+        seasonality: SeasonalityResult, growth: Dict[str, Any],
+        valid_count: int, placeholder_count: int,
+        dow_counts: List[int], other_date_columns: Optional[List[str]] = None,
     ) -> List[TemporalRecommendation]:
-
-        parsed = to_datetime(dates, errors="coerce")
-        valid_dates = parsed.dropna()
-        recommendations = []
-
-        if len(valid_dates) == 0:
-            return recommendations
-
-        analysis = self.analyze(dates)
-        seasonality = self.analyze_seasonality(dates)
-        growth = self.calculate_growth_rate(dates)
-
-        # FEATURE ENGINEERING: Recency - always useful for dates
+        if valid_count == 0:
+            return []
+        recommendations: List[TemporalRecommendation] = []
         recommendations.append(TemporalRecommendation(
             feature_name=f"days_since_{column_name}",
             recommendation_type=TemporalRecommendationType.FEATURE_ENGINEERING,
@@ -292,8 +285,6 @@ class TemporalAnalyzer:
             priority="medium",
             code_hint=f"(reference_date - df['{column_name}']).dt.days",
         ))
-
-        # FEATURE ENGINEERING: Duration between dates
         if other_date_columns:
             for other_col in other_date_columns:
                 recommendations.append(TemporalRecommendation(
@@ -304,8 +295,6 @@ class TemporalAnalyzer:
                     priority="medium",
                     code_hint=f"(df['{other_col}'] - df['{column_name}']).dt.days",
                 ))
-
-        # FEATURE ENGINEERING: Cyclical encoding for seasonality
         if seasonality.has_seasonality and seasonality.seasonal_strength > 0.15:
             priority = "high" if seasonality.seasonal_strength > 0.3 else "medium"
             recommendations.append(TemporalRecommendation(
@@ -316,8 +305,6 @@ class TemporalAnalyzer:
                 priority=priority,
                 code_hint=f"np.sin(2 * np.pi * df['{column_name}'].dt.month / 12)",
             ))
-
-        # MODELING STRATEGY: Time-based split for trends
         if growth.get("has_data") and abs(growth.get("overall_growth_pct", 0)) > 50:
             direction = growth["trend_direction"]
             pct = growth["overall_growth_pct"]
@@ -336,8 +323,6 @@ class TemporalAnalyzer:
                 reason="Moderate trend detected - time-aware validation ensures model generalizes to future data",
                 priority="medium",
             ))
-
-        # FEATURE ENGINEERING: Tenure for long histories
         if analysis.span_days > 365 * 2:
             years = analysis.span_days / 365
             recommendations.append(TemporalRecommendation(
@@ -348,11 +333,8 @@ class TemporalAnalyzer:
                 priority="medium",
                 code_hint=f"(reference_date - df['{column_name}']).dt.days / 365",
             ))
-
-        # DATA QUALITY: Placeholder dates
-        placeholder_count = (valid_dates < "2000-01-01").sum()
         if placeholder_count > 0:
-            pct = placeholder_count / len(valid_dates) * 100
+            pct = placeholder_count / valid_count * 100
             recommendations.append(TemporalRecommendation(
                 feature_name=f"{column_name}_placeholder_flag",
                 recommendation_type=TemporalRecommendationType.DATA_QUALITY,
@@ -361,13 +343,10 @@ class TemporalAnalyzer:
                 priority="high",
                 code_hint=f"df['{column_name}'] < '2000-01-01'",
             ))
-
-        # FEATURE ENGINEERING: Weekend indicator
-        dow_counts = valid_dates.dt.dayofweek.value_counts()
-        if len(dow_counts) == 7:
-            dow_imbalance = dow_counts.max() / dow_counts.min() if dow_counts.min() > 0 else 1
+        if len(dow_counts) == 7 and min(dow_counts) > 0:
+            dow_imbalance = max(dow_counts) / min(dow_counts)
             if dow_imbalance > 1.5:
-                weekday_pct = dow_counts[dow_counts.index < 5].sum() / len(valid_dates) * 100
+                weekday_pct = sum(dow_counts[:5]) / valid_count * 100
                 recommendations.append(TemporalRecommendation(
                     feature_name=f"{column_name}_is_weekend",
                     recommendation_type=TemporalRecommendationType.FEATURE_ENGINEERING,
@@ -376,5 +355,144 @@ class TemporalAnalyzer:
                     priority="low",
                     code_hint=f"df['{column_name}'].dt.dayofweek >= 5",
                 ))
-
         return recommendations
+
+    def recommend_features(
+        self, dates: Series, column_name: str, other_date_columns: Optional[List[str]] = None
+    ) -> List[TemporalRecommendation]:
+        parsed = to_datetime(dates, errors="coerce")
+        valid_dates = parsed.dropna()
+        if len(valid_dates) == 0:
+            return []
+        analysis = self.analyze(dates)
+        seasonality = self.analyze_seasonality(dates)
+        growth = self.calculate_growth_rate(dates)
+        placeholder_count = int((valid_dates < "2000-01-01").sum())
+        dow_vc = valid_dates.dt.dayofweek.value_counts()
+        dow_list = [int(dow_vc.get(i, 0)) for i in range(7)]
+        return self._build_recommendations(
+            column_name, analysis, seasonality, growth,
+            valid_count=len(valid_dates), placeholder_count=placeholder_count,
+            dow_counts=dow_list, other_date_columns=other_date_columns,
+        )
+
+    # ------------------------------------------------------------------
+    # Bulk-aware methods: build results from pre-aggregated stats
+    # (no raw Series access — fully distributed on Databricks)
+    # ------------------------------------------------------------------
+
+    def _period_counts_from_monthly(
+        self, monthly: List, granularity: TemporalGranularity,
+    ) -> native_pd.DataFrame:
+        if not monthly:
+            return native_pd.DataFrame({"period": [], "count": []})
+        if granularity in (TemporalGranularity.DAY, TemporalGranularity.WEEK, TemporalGranularity.MONTH):
+            return native_pd.DataFrame({"period": [ym for ym, _ in monthly], "count": [c for _, c in monthly]})
+        if granularity == TemporalGranularity.QUARTER:
+            agg = {}
+            for ym, cnt in monthly:
+                y, m = ym.split("-")
+                key = f"{y}-Q{(int(m) - 1) // 3 + 1}"
+                agg[key] = agg.get(key, 0) + cnt
+            return native_pd.DataFrame({"period": list(agg.keys()), "count": list(agg.values())})
+        agg = {}
+        for ym, cnt in monthly:
+            agg[ym.split("-")[0]] = agg.get(ym.split("-")[0], 0) + cnt
+        return native_pd.DataFrame({"period": list(agg.keys()), "count": list(agg.values())})
+
+    def analyze_from_bulk(self, bulk: Any) -> TemporalAnalysis:
+        if bulk.min_date is None:
+            return TemporalAnalysis(
+                granularity=TemporalGranularity.MONTH, min_date=native_pd.NaT,
+                max_date=native_pd.NaT, span_days=0, total_count=bulk.total_count,
+                null_count=bulk.null_count,
+                period_counts=native_pd.DataFrame({"period": [], "count": []}),
+            )
+        raw = self._granularity_from_span(bulk.span_days)
+        granularity = raw if raw in (
+            TemporalGranularity.MONTH, TemporalGranularity.QUARTER, TemporalGranularity.YEAR,
+        ) else TemporalGranularity.MONTH
+        return TemporalAnalysis(
+            granularity=granularity, min_date=bulk.min_date, max_date=bulk.max_date,
+            span_days=bulk.span_days, total_count=bulk.total_count,
+            null_count=bulk.null_count,
+            period_counts=self._period_counts_from_monthly(bulk.monthly_counts, granularity),
+        )
+
+    def calculate_growth_rate_from_bulk(self, bulk: Any) -> Dict[str, Any]:
+        if len(bulk.monthly_counts) < 2:
+            return {"has_data": False}
+        monthly = native_pd.Series(dict(bulk.monthly_counts))
+        mom_growth = monthly.pct_change().dropna()
+        cumulative = monthly.cumsum()
+        x = np.arange(len(monthly))
+        y = monthly.to_numpy()
+        slope, _ = np.polyfit(x, y, 1)
+        overall_growth = ((y[-1] - y[0]) / y[0] * 100) if y[0] > 0 else 0
+        return {
+            "has_data": True, "monthly_counts": monthly, "cumulative": cumulative,
+            "avg_monthly_growth": float(mom_growth.mean() * 100),
+            "overall_growth_pct": float(overall_growth),
+            "trend_direction": "growing" if slope > 0 else "declining",
+            "trend_slope": float(slope),
+        }
+
+    def analyze_seasonality_from_bulk(self, bulk: Any) -> SeasonalityResult:
+        valid_count = bulk.total_count - bulk.null_count
+        if valid_count < 30:
+            return SeasonalityResult(has_seasonality=False, confidence=0.0)
+
+        dow_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        weekly_pattern = native_pd.Series(bulk.dow_counts, index=dow_names)
+
+        ym_data: Dict[int, Dict[int, int]] = {}
+        month_totals: Dict[int, int] = {}
+        for ym, cnt in bulk.monthly_counts:
+            y, m = int(ym.split("-")[0]), int(ym.split("-")[1])
+            ym_data.setdefault(y, {})[m] = cnt
+            month_totals[m] = month_totals.get(m, 0) + cnt
+
+        month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        if ym_data:
+            all_months = sorted({m for y_dict in ym_data.values() for m in y_dict})
+            pivot_data = {y: {m: ym_data[y].get(m, 0) for m in all_months} for y in sorted(ym_data)}
+            monthly_pivot = native_pd.DataFrame(pivot_data).T
+            monthly_pivot.columns = [month_names[m - 1] for m in all_months]
+        else:
+            monthly_pivot = native_pd.DataFrame()
+
+        weekly_cv = float(weekly_pattern.std() / weekly_pattern.mean()) if weekly_pattern.mean() > 0 else 0
+        monthly_totals_s = native_pd.Series(month_totals).sort_index()
+
+        if len(monthly_totals_s) >= 3:
+            peak_months = list(monthly_totals_s.nlargest(3).index)
+            trough_months = list(monthly_totals_s.nsmallest(3).index)
+            peak_periods = [month_names[m - 1] for m in peak_months if m <= 12]
+            trough_periods = [month_names[m - 1] for m in trough_months if m <= 12]
+        else:
+            peak_periods, trough_periods = [], []
+
+        has_seasonality = weekly_cv > 0.15
+        dominant_period = "weekly" if weekly_cv > 0.2 else None
+        return SeasonalityResult(
+            has_seasonality=has_seasonality, dominant_period=dominant_period,
+            peak_periods=peak_periods, trough_periods=trough_periods,
+            monthly_pattern=monthly_pivot, weekly_pattern=weekly_pattern,
+            confidence=min(1.0, weekly_cv * 2) if has_seasonality else 0.0,
+            seasonal_strength=float(weekly_cv),
+        )
+
+    def analyze_all_from_bulk(
+        self, bulk: Any, column_name: str, other_date_columns: Optional[List[str]] = None,
+    ) -> tuple:
+        analysis = self.analyze_from_bulk(bulk)
+        growth = self.calculate_growth_rate_from_bulk(bulk)
+        seasonality = self.analyze_seasonality_from_bulk(bulk)
+        valid_count = bulk.total_count - bulk.null_count
+        recommendations = self._build_recommendations(
+            column_name, analysis, seasonality, growth,
+            valid_count=valid_count, placeholder_count=bulk.placeholder_count,
+            dow_counts=bulk.dow_counts, other_date_columns=other_date_columns,
+        )
+        return analysis, growth, seasonality, recommendations

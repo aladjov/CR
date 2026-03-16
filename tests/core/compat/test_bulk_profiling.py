@@ -1168,6 +1168,24 @@ class TestBulkDatetimeAnalysisStats:
         assert br.min_date is None
         assert br.monthly_counts == []
 
+    def test_placeholder_count_detects_old_dates(self):
+        df = pd.DataFrame({"dt": [
+            pd.Timestamp("1900-01-01"), pd.Timestamp("1970-01-01"),
+            pd.Timestamp("2023-06-15"), pd.Timestamp("2023-07-20"),
+        ]})
+        result = bulk_datetime_analysis_stats(df, ["dt"])
+        assert result["dt"].placeholder_count == 2
+
+    def test_placeholder_count_zero_when_no_old_dates(self):
+        df = pd.DataFrame({"dt": pd.date_range("2023-01-01", periods=10)})
+        result = bulk_datetime_analysis_stats(df, ["dt"])
+        assert result["dt"].placeholder_count == 0
+
+    def test_placeholder_count_all_null(self):
+        df = pd.DataFrame({"dt": pd.Series([pd.NaT, pd.NaT])})
+        result = bulk_datetime_analysis_stats(df, ["dt"])
+        assert result["dt"].placeholder_count == 0
+
     def test_spark_dispatch(self):
         mock_df = MagicMock()
         mock_df.to_spark = MagicMock()
