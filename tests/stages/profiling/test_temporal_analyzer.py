@@ -708,6 +708,10 @@ class TestAnalyzeSeasonalityFromBulk:
 
 
 class TestAnalyzeAllFromBulk:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
     @pytest.fixture
     def analyzer(self):
         return TemporalAnalyzer()

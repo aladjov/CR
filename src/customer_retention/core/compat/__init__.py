@@ -1182,7 +1182,7 @@ def _try_unpersist(obj: Any) -> None:
 
 
 def release_stage_memory() -> None:
-    """Unpersist tracked objects and run GC."""
+    """Unpersist tracked objects, run GC, and clear Spark cache."""
     for obj in _stage_objects:
         try:
             _try_unpersist(obj)
@@ -1191,6 +1191,10 @@ def release_stage_memory() -> None:
     _stage_objects.clear()
     import gc
     gc.collect()
+    session = get_spark_session()
+    if session is None:
+        return
+    session.catalog.clearCache()
 
 
 __all__ = [
