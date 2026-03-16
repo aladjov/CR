@@ -615,36 +615,6 @@ class TestSplitSparkDispatch:
         assert len(result.X_train) > 0
         assert len(result.X_test) > 0
 
-    def test_split_survives_corrupted_psseries_input(self):
-        from unittest.mock import MagicMock, patch
-
-        mock_sdf = MagicMock()
-        mock_sdf.columns = ["f1", "f2", "target", "as_of_date"]
-
-        mock_internal = MagicMock()
-        mock_internal.spark_frame = mock_sdf
-        mock_internal.data_spark_column_names = ["f1", "f2", "target", "as_of_date"]
-
-        mock_df = MagicMock()
-        mock_df._internal = mock_internal
-        mock_df.spark = MagicMock()
-        mock_df.to_spark = MagicMock(side_effect=AssertionError(
-            "(131, 128) — simulating corrupted _psseries"
-        ))
-
-        mock_result = MagicMock(spec=SplitResult)
-        mock_result.split_info = {}
-
-        splitter = DataSplitter(
-            target_column="target", strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date", test_size=0.2,
-        )
-        with patch("customer_retention.stages.modeling.data_splitter._is_spark_pandas", return_value=True):
-            with patch.object(splitter, "_split_spark", return_value=mock_result) as mock_split:
-                result = splitter.split(mock_df)
-        mock_split.assert_called_once()
-        mock_df.to_spark.assert_not_called()
-
     def test_spark_select_uses_separate_wrappers(self):
         try:
             from pyspark.sql.types import (

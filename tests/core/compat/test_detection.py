@@ -453,27 +453,8 @@ class TestGetDatabricksUsername:
                 assert get_databricks_username() is None
 
 
-class TestAsSparkDfBypassesPsseries:
-    def test_uses_internal_spark_frame_when_available(self):
-        from unittest.mock import MagicMock, PropertyMock
-
-        from customer_retention.core.compat import as_spark_df
-
-        mock_sdf = MagicMock()
-        mock_internal = MagicMock()
-        mock_internal.spark_frame = mock_sdf
-        mock_internal.data_spark_column_names = ["f1", "f2", "target"]
-
-        mock_df = MagicMock()
-        mock_df._internal = mock_internal
-        type(mock_df).to_spark = PropertyMock(side_effect=AssertionError(
-            "to_spark should not be called when _internal is available"
-        ))
-
-        result = as_spark_df(mock_df)
-        mock_sdf.select.assert_called_once_with(["f1", "f2", "target"])
-
-    def test_falls_back_to_to_spark_without_internal(self):
+class TestAsSparkDf:
+    def test_uses_to_spark_on_normal_path(self):
         from unittest.mock import MagicMock
 
         from customer_retention.core.compat import as_spark_df
@@ -495,21 +476,23 @@ class TestAsSparkDfBypassesPsseries:
         result = as_spark_df(mock_sdf)
         assert result is mock_sdf
 
-    def test_drops_index_cols_when_data_spark_column_names_absent(self):
-        from unittest.mock import MagicMock
+    def test_as_spark_df_never_uses_internal_spark_frame_directly(self):
+        """Regression: _internal.spark_frame contains __natural_order__
+        and __index_level_*__ columns with Databricks-internal references.
+        Selecting via data_spark_column_names produces UNRESOLVED_COLUMN
+        errors. as_spark_df must always go through to_spark()."""
+        import inspect
 
         from customer_retention.core.compat import as_spark_df
-
-        mock_sdf = MagicMock()
-        mock_sdf.columns = ["f1", "target", "__index_level_0__"]
-        mock_internal = MagicMock(spec=["spark_frame"])
-        mock_internal.spark_frame = mock_sdf
-
-        mock_df = MagicMock()
-        mock_df._internal = mock_internal
-
-        as_spark_df(mock_df)
-        mock_sdf.drop.assert_called_once_with("__index_level_0__")
+        source = inspect.getsource(as_spark_df)
+        assert "spark_frame" not in source, (
+            "as_spark_df must not read _internal.spark_frame — "
+            "column names are Databricks-internal and cause UNRESOLVED_COLUMN"
+        )
+        assert "data_spark_column_names" not in source, (
+            "as_spark_df must not use data_spark_column_names — "
+            "names don't match Spark SQL column references on Databricks"
+        )
 
 
 class TestConfigureSparkPandas:
