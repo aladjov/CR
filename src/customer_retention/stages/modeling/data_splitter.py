@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
 
-from customer_retention.core.compat import DataFrame, Series, temporal_quantile, to_pandas
+from customer_retention.core.compat import DataFrame, Series, _is_spark_pandas, temporal_quantile, to_pandas
 from customer_retention.core.config.column_config import select_model_ready_columns
 
 if TYPE_CHECKING:
@@ -140,6 +140,9 @@ class DataSplitter:
         )
 
     def _temporal_split(self, df: DataFrame) -> SplitResult:
+        if _is_spark_pandas(df):
+            return self._distributed_temporal_split(df)
+
         col = self.temporal_column
         cutoff_date = temporal_quantile(df[col], 1 - self.test_size)
 
@@ -175,6 +178,76 @@ class DataSplitter:
             X_val=X_val, y_val=y_val,
             split_info=split_info,
         )
+
+    def _distributed_temporal_split(self, df: DataFrame) -> SplitResult:
+        from pyspark.sql import functions as F  # noqa: N812
+
+        from customer_retention.core.compat import as_spark_df, native_pd
+
+        col = self.temporal_column
+        spark_df = as_spark_df(df)
+        idx_cols = [c for c in spark_df.columns if c.startswith("__index_level_")]
+        if idx_cols:
+            spark_df = spark_df.drop(*idx_cols)
+
+        epoch = F.unix_timestamp(F.col(col).cast("timestamp"))
+        agg_row = spark_df.agg(
+            F.percentile_approx(epoch, float(1 - self.test_size)).alias("cutoff"),
+            F.count("*").alias("total"),
+        ).head()
+        cutoff_date = native_pd.Timestamp(agg_row["cutoff"], unit="s")
+        total_rows = int(agg_row["total"])
+
+        if self.purge_gap_days and self.purge_gap_days > 0:
+            purge_start = cutoff_date - timedelta(days=self.purge_gap_days)
+            train_spark = spark_df.filter(F.col(col) < F.lit(purge_start))
+            test_spark = spark_df.filter(F.col(col) >= F.lit(cutoff_date))
+        else:
+            train_spark = spark_df.filter(F.col(col) < F.lit(cutoff_date))
+            test_spark = spark_df.filter(F.col(col) >= F.lit(cutoff_date))
+
+        X_val, y_val = None, None
+        if self.include_validation:
+            val_frac = self.validation_size / (1 - self.test_size)
+            val_epoch = F.unix_timestamp(F.col(col).cast("timestamp"))
+            val_row = train_spark.select(
+                F.percentile_approx(val_epoch, float(1 - val_frac)).alias("v"),
+            ).head()
+            val_cutoff = native_pd.Timestamp(val_row["v"], unit="s")
+            val_spark = train_spark.filter(F.col(col) >= F.lit(val_cutoff))
+            train_spark = train_spark.filter(F.col(col) < F.lit(val_cutoff))
+            X_val, y_val = self._spark_select_features_target(val_spark)
+
+        X_train, y_train = self._spark_select_features_target(train_spark)
+        X_test, y_test = self._spark_select_features_target(test_spark)
+
+        split_info = self._build_split_info(X_train, X_test, X_val)
+        split_info["cutoff_date"] = str(cutoff_date)
+        if self.purge_gap_days and self.purge_gap_days > 0:
+            split_info["purge_gap_days"] = self.purge_gap_days
+            kept = split_info["train_size"] + split_info["test_size"]
+            if X_val is not None:
+                kept += split_info.get("validation_size", 0)
+            split_info["purge_gap_rows"] = total_rows - kept
+
+        return SplitResult(
+            X_train=X_train, X_test=X_test, y_train=y_train, y_test=y_test,
+            X_val=X_val, y_val=y_val,
+            split_info=split_info,
+        )
+
+    def _spark_select_features_target(self, spark_df) -> tuple[DataFrame, Series]:
+        from pyspark.sql.types import DateType, DayTimeIntervalType, TimestampNTZType, TimestampType
+
+        from customer_retention.core.compat.spark_backend import _as_pandas_api
+
+        exclude = {self.target_column} | set(self.exclude_columns)
+        skip_types = (TimestampType, TimestampNTZType, DateType, DayTimeIntervalType)
+        feature_cols = [
+            f.name for f in spark_df.schema.fields
+            if f.name not in exclude and not isinstance(f.dataType, skip_types)
+        ]
+        return _as_pandas_api(spark_df.select(*feature_cols)), _as_pandas_api(spark_df.select(self.target_column))[self.target_column]
 
     def _group_split(self, df: DataFrame) -> SplitResult:
         X, y = self._prepare_features_target(df)

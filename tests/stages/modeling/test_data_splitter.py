@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from customer_retention.core.compat import to_pandas
-from customer_retention.stages.modeling import DataSplitter, SplitConfig, SplitStrategy
+from customer_retention.stages.modeling import DataSplitter, SplitConfig, SplitResult, SplitStrategy
 
 
 @pytest.fixture
@@ -453,6 +453,86 @@ class TestTemporalSplitNoIloc:
         train_dates = shuffled.loc[result.X_train.index, "as_of_date"]
         test_dates = shuffled.loc[result.X_test.index, "as_of_date"]
         assert train_dates.max() < test_dates.min()
+
+
+class TestDistributedTemporalSplitDispatch:
+    def test_dispatches_to_distributed_on_spark_pandas(self):
+        from unittest.mock import MagicMock, patch
+
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", test_size=0.2,
+        )
+        mock_result = MagicMock(spec=SplitResult)
+        with patch("customer_retention.stages.modeling.data_splitter._is_spark_pandas", return_value=True):
+            with patch.object(splitter, "_distributed_temporal_split", return_value=mock_result) as mock_dist:
+                result = splitter._temporal_split(MagicMock())
+        mock_dist.assert_called_once()
+        assert result is mock_result
+
+    def test_uses_pandas_path_for_native_pandas(self):
+        n = 200
+        df = pd.DataFrame({
+            "feature1": np.random.randn(n),
+            "target": np.random.choice([0, 1], n),
+            "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
+        })
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", test_size=0.2,
+        )
+        from unittest.mock import patch
+        with patch.object(splitter, "_distributed_temporal_split") as mock_dist:
+            result = splitter._temporal_split(df)
+        mock_dist.assert_not_called()
+        assert len(result.X_train) > 0
+
+    def test_no_banned_patterns_in_distributed_split(self):
+        import inspect
+
+        from customer_retention.stages.modeling.data_splitter import DataSplitter
+        source = inspect.getsource(DataSplitter._distributed_temporal_split)
+        assert ".iloc[" not in source
+        assert "sort_values" not in source
+        assert "toPandas()" not in source
+
+    def test_spark_features_target_column_selection(self):
+        try:
+            from pyspark.sql.types import (
+                DoubleType,
+                IntegerType,
+                StringType,
+                StructField,
+                StructType,
+                TimestampNTZType,
+            )
+        except ImportError:
+            pytest.skip("PySpark not installed")
+
+        from unittest.mock import MagicMock, patch
+
+        schema = StructType([
+            StructField("feature1", DoubleType()),
+            StructField("feature2", IntegerType()),
+            StructField("target", IntegerType()),
+            StructField("as_of_date", TimestampNTZType()),
+            StructField("entity_id", StringType()),
+        ])
+        mock_spark_df = MagicMock()
+        mock_spark_df.schema = schema
+        mock_spark_df.select.return_value = MagicMock()
+
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", test_size=0.2,
+            exclude_columns=["as_of_date", "entity_id"],
+        )
+        with patch("customer_retention.core.compat.spark_backend._as_pandas_api", side_effect=lambda x: x):
+            splitter._spark_select_features_target(mock_spark_df)
+
+        calls = mock_spark_df.select.call_args_list
+        assert set(calls[0].args) == {"feature1", "feature2"}
+        assert set(calls[1].args) == {"target"}
 
 
 class TestTemporalPurgeGap:
