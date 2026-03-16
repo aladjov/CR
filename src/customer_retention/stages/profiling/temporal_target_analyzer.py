@@ -3,12 +3,8 @@ from typing import List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, Timestamp, _is_spark_pandas, native_pd, to_datetime
+from customer_retention.core.compat import DataFrame, Timestamp, native_pd, to_datetime
 from customer_retention.stages.profiling.stats_helpers import calculate_group_retention_stats
-
-
-def _to_native(df: DataFrame) -> native_pd.DataFrame:
-    return df.to_pandas() if _is_spark_pandas(df) else df
 
 
 @dataclass
@@ -107,7 +103,7 @@ class TemporalTargetAnalyzer:
             df, period_col, target_col, overall_rate,
             min_samples=self.min_samples_per_period, sort_by="group",
         )
-        return _to_native(stats.rename(columns={"group": "period"}))
+        return stats.rename(columns={"group": "period"})
 
     def _calculate_monthly_stats(
         self,
@@ -119,7 +115,7 @@ class TemporalTargetAnalyzer:
             df, "_month", target_col, overall_rate,
             min_samples=self.min_samples_per_period, sort_by="group",
         )
-        stats = _to_native(stats.rename(columns={"group": "month"}))
+        stats = stats.rename(columns={"group": "month"})
         stats['month_name'] = stats['month'].apply(
             lambda x: self.MONTH_NAMES[int(x) - 1] if 1 <= x <= 12 else 'Unknown'
         )
@@ -134,7 +130,7 @@ class TemporalTargetAnalyzer:
         stats = calculate_group_retention_stats(
             df, "_dow", target_col, overall_rate, sort_by="group",
         )
-        stats = _to_native(stats.rename(columns={"group": "day_of_week"}))
+        stats = stats.rename(columns={"group": "day_of_week"})
         stats['day_name'] = stats['day_of_week'].apply(
             lambda x: self.DOW_NAMES[int(x)] if 0 <= x <= 6 else 'Unknown'
         )
