@@ -513,6 +513,8 @@ def _is_native_spark_df(obj: Any) -> bool:
 
 
 def as_spark_df(df: Any) -> Any:
+    if not hasattr(df, 'to_spark'):
+        return df
     import warnings
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message=".*index_col.*")
@@ -763,11 +765,18 @@ def _spark_temporal_quantile(series: Any, q: float) -> _pandas.Timestamp:
     return _pandas.Timestamp(row["v"], unit="s")
 
 
+def _spark_numeric_cols(spark_df: Any, columns: list[str] | None = None) -> list[str]:
+    from pyspark.sql.types import NumericType
+    allowed = set(columns) if columns is not None else None
+    return [
+        f.name for f in spark_df.schema.fields
+        if isinstance(f.dataType, NumericType) and (allowed is None or f.name in allowed)
+    ]
+
+
 def _numeric_column_names(df: Any, columns: list[str]) -> set[str]:
     if _is_spark_pandas(df):
-        from pyspark.sql.types import NumericType
-        spark_df = as_spark_df(df[columns])
-        return {f.name for f in spark_df.schema if isinstance(f.dataType, NumericType)}
+        return set(_spark_numeric_cols(as_spark_df(df), columns))
     return set(df[columns].select_dtypes(include="number").columns)
 
 
@@ -1094,15 +1103,10 @@ def _spark_bulk_median_impute(df: Any, columns: list[str] | None = None) -> Any:
     import pyspark.sql.functions as F  # noqa: N812
 
     spark_df = as_spark_df(df)
-    if columns is not None:
-        num_cols = [c for c in columns if is_numeric_dtype(df[c])]
-    else:
-        num_cols = [
-            c for c in df.columns
-            if is_numeric_dtype(df[c])
-        ]
+    num_cols = _spark_numeric_cols(spark_df, columns)
     if not num_cols:
-        return df
+        from .spark_backend import _as_pandas_api
+        return _as_pandas_api(spark_df)
     exprs = [F.percentile_approx(F.col(c), 0.5).alias(c) for c in num_cols]
     row = spark_df.agg(*exprs).head()
     fill_dict = {c: (float(row[c]) if row[c] is not None else 0) for c in num_cols}
@@ -1124,10 +1128,10 @@ def bulk_zero_variance_cols(df: Any) -> list[str]:
 def _spark_bulk_zero_variance_cols(df: Any) -> list[str]:
     import pyspark.sql.functions as F  # noqa: N812
 
-    num_cols = [c for c in df.columns if is_numeric_dtype(df[c])]
+    spark_df = as_spark_df(df)
+    num_cols = _spark_numeric_cols(spark_df)
     if not num_cols:
         return []
-    spark_df = as_spark_df(df[num_cols])
     exprs = [F.stddev(F.col(c)).alias(c) for c in num_cols]
     row = spark_df.agg(*exprs).head()
     return [c for c in num_cols if row[c] is None or float(row[c]) == 0]
@@ -1178,7 +1182,7 @@ def _try_unpersist(obj: Any) -> None:
 
 
 def release_stage_memory() -> None:
-    """Unpersist tracked objects, run GC, and clear Spark cache."""
+    """Unpersist tracked objects and run GC."""
     for obj in _stage_objects:
         try:
             _try_unpersist(obj)
@@ -1187,10 +1191,6 @@ def release_stage_memory() -> None:
     _stage_objects.clear()
     import gc
     gc.collect()
-    session = get_spark_session()
-    if session is None:
-        return
-    session.catalog.clearCache()
 
 
 __all__ = [

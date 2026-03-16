@@ -6,7 +6,14 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
 
-from customer_retention.core.compat import DataFrame, Series, _is_spark_pandas, temporal_quantile, to_pandas
+from customer_retention.core.compat import (
+    DataFrame,
+    Series,
+    _is_spark_pandas,
+    as_spark_df,
+    temporal_quantile,
+    to_pandas,
+)
 from customer_retention.core.config.column_config import select_model_ready_columns
 
 if TYPE_CHECKING:
@@ -68,6 +75,9 @@ class DataSplitter:
         self.purge_gap_days = purge_gap_days
 
     def split(self, df: DataFrame, feature_availability: Optional["FeatureAvailabilityMetadata"] = None) -> SplitResult:
+        if _is_spark_pandas(df):
+            return self._split_spark(as_spark_df(df), feature_availability)
+
         self._validate_minority_samples(df)
         availability_warnings = self.validate_feature_availability(df, feature_availability)
 
@@ -77,6 +87,29 @@ class DataSplitter:
             result = self._group_split(to_pandas(df))
         else:
             result = self._stratified_split(to_pandas(df))
+
+        if availability_warnings:
+            result.split_info["availability_warnings"] = [w.to_dict() for w in availability_warnings]
+        return result
+
+    def _split_spark(self, spark_df, feature_availability: Optional["FeatureAvailabilityMetadata"] = None) -> SplitResult:
+        from pyspark.sql import functions as F  # noqa: N812
+
+        min_count = spark_df.groupBy(self.target_column).count().agg(F.min("count")).head()[0] or 0
+        if min_count * self.test_size < 50:
+            warnings.warn(
+                f"Insufficient minority samples: expected ~{min_count * self.test_size:.0f} in test set. "
+                "Consider using a smaller test_size or collecting more data.", UserWarning,
+            )
+
+        availability_warnings = self.validate_feature_availability(spark_df, feature_availability)
+
+        if self.strategy == SplitStrategy.TEMPORAL:
+            result = self._distributed_temporal_split(spark_df)
+        elif self.strategy == SplitStrategy.GROUP:
+            result = self._group_split(spark_df.toPandas())
+        else:
+            result = self._stratified_split(spark_df.toPandas())
 
         if availability_warnings:
             result.split_info["availability_warnings"] = [w.to_dict() for w in availability_warnings]
@@ -245,20 +278,23 @@ class DataSplitter:
 
         from customer_retention.core.compat.spark_backend import _as_pandas_api
 
-        ps_df = _as_pandas_api(spark_df)
-        target = ps_df[self.target_column]
-        metadata: Dict[str, Series] = {}
-        if extract_metadata:
-            for c in self.exclude_columns:
-                if c in ps_df.columns:
-                    metadata[c] = ps_df[c]
         exclude = {self.target_column} | set(self.exclude_columns)
         skip_types = (TimestampType, TimestampNTZType, DateType, DayTimeIntervalType)
+        all_fields = {f.name for f in spark_df.schema.fields}
         feature_cols = [
             f.name for f in spark_df.schema.fields
             if f.name not in exclude and not isinstance(f.dataType, skip_types)
         ]
-        return ps_df[feature_cols], target, metadata
+
+        features = _as_pandas_api(spark_df.select(feature_cols))
+        target = _as_pandas_api(spark_df.select(self.target_column))[self.target_column]
+        metadata: Dict[str, Series] = {}
+        if extract_metadata:
+            meta_cols = [c for c in self.exclude_columns if c in all_fields]
+            if meta_cols:
+                meta_ps = _as_pandas_api(spark_df.select(meta_cols))
+                metadata = {c: meta_ps[c] for c in meta_cols}
+        return features, target, metadata
 
     def _group_split(self, df: DataFrame) -> SplitResult:
         X, y = self._prepare_features_target(df)

@@ -521,26 +521,21 @@ class TestDistributedTemporalSplitDispatch:
         mock_spark_df = MagicMock()
         mock_spark_df.schema = schema
 
-        mock_ps_df = MagicMock()
-        mock_ps_df.columns = ["feature1", "feature2", "target", "as_of_date", "entity_id"]
-        accessed_cols = []
-        def track_getitem(self_mock, key):
-            accessed_cols.append(key)
-            return MagicMock()
-        mock_ps_df.__getitem__ = track_getitem
+        mock_ps = MagicMock()
+        mock_ps.__getitem__ = MagicMock(return_value=MagicMock())
 
         splitter = DataSplitter(
             target_column="target", strategy=SplitStrategy.TEMPORAL,
             temporal_column="as_of_date", test_size=0.2,
             exclude_columns=["as_of_date", "entity_id"],
         )
-        with patch("customer_retention.core.compat.spark_backend._as_pandas_api", return_value=mock_ps_df):
-            X, y, meta = splitter._spark_select_features_target(mock_spark_df, extract_metadata=True)
+        with patch("customer_retention.core.compat.spark_backend._as_pandas_api", return_value=mock_ps):
+            splitter._spark_select_features_target(mock_spark_df, extract_metadata=True)
 
-        assert accessed_cols[0] == "target"
-        assert "entity_id" in accessed_cols
-        assert "as_of_date" in accessed_cols
-        assert accessed_cols[-1] == ["feature1", "feature2"]
+        calls = mock_spark_df.select.call_args_list
+        assert calls[0].args == (["feature1", "feature2"],)
+        assert calls[1].args == ("target",)
+        assert calls[2].args == (["as_of_date", "entity_id"],)
 
     def test_train_metadata_populated_on_distributed_path(self):
         n = 200
@@ -571,6 +566,93 @@ class TestDistributedTemporalSplitDispatch:
         )
         result = splitter.split(df)
         assert result.train_metadata == {}
+
+
+class TestSplitSparkDispatch:
+    def test_split_converts_to_spark_for_pyspark_pandas(self):
+        from unittest.mock import MagicMock, patch
+
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", test_size=0.2,
+        )
+        mock_df = MagicMock()
+        mock_result = MagicMock(spec=SplitResult)
+        mock_result.split_info = {}
+
+        with patch("customer_retention.stages.modeling.data_splitter._is_spark_pandas", return_value=True):
+            with patch("customer_retention.stages.modeling.data_splitter.as_spark_df", return_value=MagicMock()) as mock_conv:
+                with patch.object(splitter, "_split_spark", return_value=mock_result) as mock_split:
+                    splitter.split(mock_df)
+        mock_conv.assert_called_once_with(mock_df)
+        mock_split.assert_called_once()
+
+    def test_split_never_accesses_pyspark_pandas_getitem(self):
+        from unittest.mock import MagicMock, patch
+
+        mock_df = MagicMock()
+        def fail_on_access(key):
+            raise AssertionError(f"pyspark.pandas __getitem__ accessed: {key}")
+        mock_df.__getitem__ = fail_on_access
+        mock_result = MagicMock(spec=SplitResult)
+        mock_result.split_info = {}
+
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", test_size=0.2,
+        )
+        with patch("customer_retention.stages.modeling.data_splitter._is_spark_pandas", return_value=True):
+            with patch("customer_retention.stages.modeling.data_splitter.as_spark_df", return_value=MagicMock()):
+                with patch.object(splitter, "_split_spark", return_value=mock_result):
+                    splitter.split(mock_df)
+
+    def test_pandas_path_unchanged_when_not_spark(self, sample_df):
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="date", test_size=0.2,
+        )
+        result = splitter.split(sample_df)
+        assert len(result.X_train) > 0
+        assert len(result.X_test) > 0
+
+    def test_spark_select_uses_separate_wrappers(self):
+        try:
+            from pyspark.sql.types import (
+                DoubleType,
+                IntegerType,
+                StructField,
+                StructType,
+                TimestampNTZType,
+            )
+        except ImportError:
+            pytest.skip("PySpark not installed")
+
+        from unittest.mock import MagicMock, patch
+
+        schema = StructType([
+            StructField("f1", DoubleType()),
+            StructField("target", IntegerType()),
+            StructField("as_of_date", TimestampNTZType()),
+        ])
+        mock_spark_df = MagicMock()
+        mock_spark_df.schema = schema
+
+        wrappers = []
+        def track_wrappers(sdf):
+            m = MagicMock()
+            m.__getitem__ = MagicMock(return_value=MagicMock())
+            wrappers.append(m)
+            return m
+
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", test_size=0.2,
+            exclude_columns=["as_of_date"],
+        )
+        with patch("customer_retention.core.compat.spark_backend._as_pandas_api", side_effect=track_wrappers):
+            splitter._spark_select_features_target(mock_spark_df, extract_metadata=True)
+
+        assert len(wrappers) == 3, "each projection (features, target, metadata) gets its own wrapper"
 
 
 class TestTemporalPurgeGap:

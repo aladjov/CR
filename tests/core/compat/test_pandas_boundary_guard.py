@@ -54,6 +54,7 @@ TOPANDAS_BOUNDARY_FILES = {
     "stages/scoring/data_loader.py",
     # sklearn interface — needs pandas/numpy arrays
     "stages/modeling/spark_classifier_wrapper.py",
+    "stages/modeling/data_splitter.py",  # non-temporal strategies fall back to sklearn (pandas)
     # Bounded sampling for type detection / fingerprinting
     "stages/temporal/timestamp_discovery.py",
     "stages/profiling/temporal_coverage.py",
