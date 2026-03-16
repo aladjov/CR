@@ -520,19 +520,57 @@ class TestDistributedTemporalSplitDispatch:
         ])
         mock_spark_df = MagicMock()
         mock_spark_df.schema = schema
-        mock_spark_df.select.return_value = MagicMock()
+
+        mock_ps_df = MagicMock()
+        mock_ps_df.columns = ["feature1", "feature2", "target", "as_of_date", "entity_id"]
+        accessed_cols = []
+        def track_getitem(self_mock, key):
+            accessed_cols.append(key)
+            return MagicMock()
+        mock_ps_df.__getitem__ = track_getitem
 
         splitter = DataSplitter(
             target_column="target", strategy=SplitStrategy.TEMPORAL,
             temporal_column="as_of_date", test_size=0.2,
             exclude_columns=["as_of_date", "entity_id"],
         )
-        with patch("customer_retention.core.compat.spark_backend._as_pandas_api", side_effect=lambda x: x):
-            splitter._spark_select_features_target(mock_spark_df)
+        with patch("customer_retention.core.compat.spark_backend._as_pandas_api", return_value=mock_ps_df):
+            X, y, meta = splitter._spark_select_features_target(mock_spark_df, extract_metadata=True)
 
-        calls = mock_spark_df.select.call_args_list
-        assert set(calls[0].args) == {"feature1", "feature2"}
-        assert set(calls[1].args) == {"target"}
+        assert accessed_cols[0] == "target"
+        assert "entity_id" in accessed_cols
+        assert "as_of_date" in accessed_cols
+        assert accessed_cols[-1] == ["feature1", "feature2"]
+
+    def test_train_metadata_populated_on_distributed_path(self):
+        n = 200
+        df = pd.DataFrame({
+            "feature1": np.random.randn(n),
+            "target": np.random.choice([0, 1], n),
+            "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
+        })
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", test_size=0.2,
+        )
+        result = splitter.split(df)
+        assert result.train_metadata == {}
+
+    def test_train_metadata_empty_on_pandas_path(self):
+        n = 200
+        df = pd.DataFrame({
+            "feature1": np.random.randn(n),
+            "target": np.random.choice([0, 1], n),
+            "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
+            "entity_id": np.random.choice(["a", "b", "c"], n),
+        })
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", test_size=0.2,
+            exclude_columns=["as_of_date", "entity_id"],
+        )
+        result = splitter.split(df)
+        assert result.train_metadata == {}
 
 
 class TestTemporalPurgeGap:

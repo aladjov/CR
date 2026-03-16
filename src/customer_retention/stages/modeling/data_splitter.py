@@ -39,6 +39,7 @@ class SplitResult:
     X_val: Optional[DataFrame] = None
     y_val: Optional[Series] = None
     split_info: Dict[str, Any] = field(default_factory=dict)
+    train_metadata: Dict[str, Series] = field(default_factory=dict)
 
 
 @dataclass
@@ -216,10 +217,12 @@ class DataSplitter:
             val_cutoff = native_pd.Timestamp(val_row["v"], unit="s")
             val_spark = train_spark.filter(F.col(col) >= F.lit(val_cutoff))
             train_spark = train_spark.filter(F.col(col) < F.lit(val_cutoff))
-            X_val, y_val = self._spark_select_features_target(val_spark)
+            X_val, y_val, _ = self._spark_select_features_target(val_spark)
 
-        X_train, y_train = self._spark_select_features_target(train_spark)
-        X_test, y_test = self._spark_select_features_target(test_spark)
+        X_train, y_train, train_meta = self._spark_select_features_target(
+            train_spark, extract_metadata=True,
+        )
+        X_test, y_test, _ = self._spark_select_features_target(test_spark)
 
         split_info = self._build_split_info(X_train, X_test, X_val)
         split_info["cutoff_date"] = str(cutoff_date)
@@ -234,20 +237,28 @@ class DataSplitter:
             X_train=X_train, X_test=X_test, y_train=y_train, y_test=y_test,
             X_val=X_val, y_val=y_val,
             split_info=split_info,
+            train_metadata=train_meta,
         )
 
-    def _spark_select_features_target(self, spark_df) -> tuple[DataFrame, Series]:
+    def _spark_select_features_target(self, spark_df, extract_metadata: bool = False) -> tuple[DataFrame, Series, Dict[str, Series]]:
         from pyspark.sql.types import DateType, DayTimeIntervalType, TimestampNTZType, TimestampType
 
         from customer_retention.core.compat.spark_backend import _as_pandas_api
 
+        ps_df = _as_pandas_api(spark_df)
+        target = ps_df[self.target_column]
+        metadata: Dict[str, Series] = {}
+        if extract_metadata:
+            for c in self.exclude_columns:
+                if c in ps_df.columns:
+                    metadata[c] = ps_df[c]
         exclude = {self.target_column} | set(self.exclude_columns)
         skip_types = (TimestampType, TimestampNTZType, DateType, DayTimeIntervalType)
         feature_cols = [
             f.name for f in spark_df.schema.fields
             if f.name not in exclude and not isinstance(f.dataType, skip_types)
         ]
-        return _as_pandas_api(spark_df.select(*feature_cols)), _as_pandas_api(spark_df.select(self.target_column))[self.target_column]
+        return ps_df[feature_cols], target, metadata
 
     def _group_split(self, df: DataFrame) -> SplitResult:
         X, y = self._prepare_features_target(df)
