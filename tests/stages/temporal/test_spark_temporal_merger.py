@@ -504,6 +504,7 @@ def _patch_build_spine_spark(monkeypatch):
     return mock_spark
 
 
+@pytest.mark.spark
 class TestSparkBuildSpineWithNativeDF:
     """Tests build_spine when entity_ids is already a native Spark DataFrame."""
 
