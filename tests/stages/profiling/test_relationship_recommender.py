@@ -265,7 +265,7 @@ class TestPrecomputedInputs:
         assert isinstance(summary, RelationshipAnalysisSummary)
         assert len(summary.strong_predictors) > 0
 
-    def test_precomputed_effect_sizes_match_internal(self, recommender, sample_df):
+    def test_precomputed_effect_sizes_used(self, recommender, sample_df):
         from customer_retention.core.compat import bulk_effect_sizes
 
         result = bulk_effect_sizes(
@@ -278,15 +278,18 @@ class TestPrecomputedInputs:
             target_col="retained",
             effect_sizes=result.effect_sizes,
         )
-        summary_int = recommender.analyze(
+        pre_effects = {p["feature"]: p["effect_size"] for p in summary_pre.strong_predictors}
+        for feat, d in pre_effects.items():
+            assert d == pytest.approx(result.effect_sizes[feat], abs=1e-10)
+
+    def test_missing_effect_sizes_default_zero(self, recommender, sample_df):
+        summary = recommender.analyze(
             sample_df,
             numeric_cols=["feature_a", "feature_b", "feature_c"],
             target_col="retained",
         )
-        pre_effects = {p["feature"]: p["effect_size"] for p in summary_pre.strong_predictors}
-        int_effects = {p["feature"]: p["effect_size"] for p in summary_int.strong_predictors}
-        for feat in pre_effects:
-            assert pre_effects[feat] == pytest.approx(int_effects[feat], abs=1e-10)
+        for p in summary.strong_predictors:
+            assert p["effect_size"] == 0.0
 
     def test_partial_correlation_matrix_triggers_recompute(self, recommender, sample_df):
         partial_corr = sample_df[["feature_a", "feature_b"]].corr()

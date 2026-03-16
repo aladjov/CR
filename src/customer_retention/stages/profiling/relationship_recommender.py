@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import batched_corr_matrix, crosstab, groupby_multi_agg, pd
+from customer_retention.core.compat import batched_corr_matrix, groupby_multi_agg, pd
 
 
 class RecommendationCategory(Enum):
@@ -155,11 +155,11 @@ class RelationshipRecommender:
 
         if correlation_matrix is not None:
             available = [c for c in cols_to_analyze if c in correlation_matrix.index]
-            missing = [c for c in cols_to_analyze if c not in correlation_matrix.index]
-            if missing:
-                correlation_matrix = batched_corr_matrix(df, cols_to_analyze)
-            else:
+            if len(available) >= 2:
                 correlation_matrix = correlation_matrix.loc[available, available]
+                cols_to_analyze = available
+            else:
+                correlation_matrix = batched_corr_matrix(df, cols_to_analyze)
         else:
             correlation_matrix = batched_corr_matrix(df, cols_to_analyze)
 
@@ -214,21 +214,16 @@ class RelationshipRecommender:
         if not feature_cols:
             return {"strong": [], "weak": [], "recommendations": []}
 
-        if (
-            correlation_matrix is not None
-            and target_col in correlation_matrix.index
-            and all(c in correlation_matrix.index for c in feature_cols)
-        ):
+        if correlation_matrix is not None and target_col in correlation_matrix.index:
+            available = [c for c in feature_cols if c in correlation_matrix.index]
             corr_with_target = correlation_matrix
         else:
+            available = feature_cols
             corr_with_target = batched_corr_matrix(df, feature_cols + [target_col])
 
-        for col in feature_cols:
+        for col in available:
             corr = corr_with_target.loc[col, target_col]
-            if effect_sizes is not None and col in effect_sizes:
-                effect_size = effect_sizes[col]
-            else:
-                effect_size = self._calculate_effect_size(df, col, target_col)
+            effect_size = effect_sizes.get(col, 0.0) if effect_sizes else 0.0
 
             predictor_info = {
                 "feature": col,
@@ -269,24 +264,6 @@ class RelationshipRecommender:
 
         return {"strong": strong, "weak": weak, "recommendations": recommendations}
 
-    def _calculate_effect_size(self, df: pd.DataFrame, col: str, target_col: str) -> float:
-        """Calculate Cohen's d effect size."""
-        group0 = df[df[target_col] == 0][col].dropna()
-        group1 = df[df[target_col] == 1][col].dropna()
-
-        if len(group0) < 2 or len(group1) < 2:
-            return 0.0
-
-        pooled_std = np.sqrt(
-            ((len(group0) - 1) * group0.std() ** 2 + (len(group1) - 1) * group1.std() ** 2)
-            / (len(group0) + len(group1) - 2)
-        )
-
-        if pooled_std == 0:
-            return 0.0
-
-        return float((group1.mean() - group0.mean()) / pooled_std)
-
     def _analyze_categorical_relationships(
         self, df: pd.DataFrame, categorical_cols: List[str], target_col: str
     ) -> Dict[str, Any]:
@@ -303,13 +280,13 @@ class RelationshipRecommender:
             if col not in df.columns:
                 continue
 
-            # Calculate retention rates by category
-            cat_stats = groupby_multi_agg(df, col, target_col, ["mean", "count"])
-            cat_stats.columns = [col, "retention_rate", "count"]
+            # Calculate retention rates by category (single Spark job per column)
+            cat_stats = groupby_multi_agg(df, col, target_col, ["sum", "count", "mean"])
+            cat_stats.columns = [col, "retained_count", "count", "retention_rate"]
             cat_stats["lift"] = cat_stats["retention_rate"] / overall_rate
 
-            # Calculate Cramér's V
-            cramers_v = self._calculate_cramers_v(df, col, target_col)
+            # Derive Cramér's V from groupby stats (no extra Spark job)
+            cramers_v = self._cramers_v_from_stats(cat_stats, "retained_count", "count", len(df))
             associations.append({"feature": col, "cramers_v": cramers_v})
 
             high_risk_mask = (cat_stats["count"] >= self.MIN_CATEGORY_SIZE) & (cat_stats["lift"] < self.HIGH_RISK_LIFT_THRESHOLD)
@@ -356,17 +333,21 @@ class RelationshipRecommender:
             "recommendations": recommendations,
         }
 
-    def _calculate_cramers_v(self, df: pd.DataFrame, col: str, target_col: str) -> float:
-        """Calculate Cramér's V for categorical association."""
+    @staticmethod
+    def _cramers_v_from_stats(
+        cat_stats: pd.DataFrame, retained_col: str, count_col: str, n: int,
+    ) -> float:
         try:
             from scipy.stats import chi2_contingency
-            contingency = crosstab(df[col], df[target_col])
-            chi2, _, _, _ = chi2_contingency(contingency)
-            n = len(df)
-            min_dim = min(contingency.shape) - 1
-            if min_dim == 0:
+            counts = cat_stats[count_col].to_numpy()
+            retained = cat_stats[retained_col].to_numpy()
+            churned = counts - retained
+            contingency = np.column_stack([churned, retained])
+            if contingency.shape[0] < 2 or contingency.min() < 0:
                 return 0.0
-            return float(np.sqrt(chi2 / (n * min_dim)))
+            chi2, _, _, _ = chi2_contingency(contingency)
+            min_dim = min(contingency.shape) - 1
+            return float(np.sqrt(chi2 / (n * min_dim))) if min_dim > 0 else 0.0
         except Exception:
             return 0.0
 
@@ -455,11 +436,13 @@ class RelationshipRecommender:
         # Suggest ratio features for correlated pairs
         cols_in_df = [c for c in numeric_cols if c in df.columns and c != target_col]
         if len(cols_in_df) >= 2:
-            if (
-                correlation_matrix is not None
-                and all(c in correlation_matrix.index for c in cols_in_df)
-            ):
-                corr_matrix = correlation_matrix.loc[cols_in_df, cols_in_df]
+            if correlation_matrix is not None:
+                available = [c for c in cols_in_df if c in correlation_matrix.index]
+                if len(available) >= 2:
+                    corr_matrix = correlation_matrix.loc[available, available]
+                    cols_in_df = available
+                else:
+                    corr_matrix = batched_corr_matrix(df, cols_in_df)
             else:
                 corr_matrix = batched_corr_matrix(df, cols_in_df)
             moderate_pairs = []

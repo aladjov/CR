@@ -32,7 +32,36 @@ CONFIG_DIR = _SRC_ROOT / "core" / "config"
 FEATURE_STORE_DIR = _SRC_ROOT / "integrations" / "adapters" / "feature_store"
 STORAGE_DIR = _SRC_ROOT / "integrations" / "adapters" / "storage"
 
-ALLOWLISTED_FILES = {"window_recommendation.py", "spark_segment_analyzer.py", "feature_manifest.py", "snapshot_manager.py"}
+SCORING_DIR = _STAGES_ROOT / "scoring"
+DEPLOYMENT_DIR = _STAGES_ROOT / "deployment"
+CLEANING_DIR = _STAGES_ROOT / "cleaning"
+INGESTION_DIR = _STAGES_ROOT / "ingestion"
+PREPROCESSING_DIR = _STAGES_ROOT / "preprocessing"
+MONITORING_DIR = _STAGES_ROOT / "monitoring"
+TRANSFORMATION_DIR = _STAGES_ROOT / "transformation"
+VISUALIZATION_DIR = _SRC_ROOT / "analysis" / "visualization"
+BUSINESS_DIR = _SRC_ROOT / "analysis" / "business"
+INTERPRETABILITY_DIR = _SRC_ROOT / "analysis" / "interpretability"
+TRANSFORMS_DIR = _SRC_ROOT / "transforms"
+STREAMING_DIR = _SRC_ROOT / "integrations" / "streaming"
+ITERATION_DIR = _SRC_ROOT / "integrations" / "iteration"
+TOP_FEATURE_STORE_DIR = _SRC_ROOT / "integrations" / "feature_store"
+
+ALLOWLISTED_FILES = {
+    "window_recommendation.py", "spark_segment_analyzer.py",
+    "feature_manifest.py", "snapshot_manager.py",
+    # Visualization always operates on pre-collected local data for plotting
+    "chart_builder.py", "column_paginator.py", "console.py", "display.py",
+    # Interpretability modules require numpy arrays for sklearn/SHAP
+    "shap_explainer.py", "pdp_generator.py", "individual_explainer.py",
+    "cohort_analyzer.py", "counterfactual.py",
+    # Business analysis operates on aggregated summary data
+    "ab_test_designer.py", "risk_profile.py", "report_generator.py",
+    # Deployment scoring runs on collected batches
+    "batch_scorer.py", "champion_challenger.py",
+    # Streaming operates within Spark structured streaming context
+    "window_aggregator.py", "online_store_writer.py",
+}
 
 _STRING_LITERAL = re.compile(r'''("""[\s\S]*?"""|'''  r"""'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')""")
 
@@ -121,6 +150,21 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
         re.compile(r"\.unstack\(fill_value="),
         ".unstack(fill_value=) is not supported in pyspark.pandas",
         "Use .unstack().fillna(0) instead",
+    ),
+    (
+        re.compile(r"np\.where\("),
+        "np.where() triggers __iter__() on pyspark.pandas Series",
+        "Use series.where(cond, other) or F.when().otherwise()",
+    ),
+    (
+        re.compile(r"\.iterrows\(\)"),
+        ".iterrows() collects distributed data row-by-row — OOM on large datasets",
+        "Use vectorized operations or iterate on small collected aggregates only",
+    ),
+    (
+        re.compile(r"\.itertuples\(\)"),
+        ".itertuples() collects distributed data row-by-row — OOM on large datasets",
+        "Use vectorized operations or iterate on small collected aggregates only",
     ),
 ]
 
@@ -234,4 +278,45 @@ def test_no_dangerous_spark_pandas_patterns_auto_explorer(source_file: Path):
 
 @pytest.mark.parametrize("source_file", _collect_guarded_analysis_and_adapter_files(), ids=lambda p: f"{p.parent.name}/{p.name}")
 def test_no_dangerous_spark_pandas_patterns_analysis_and_adapters(source_file: Path):
+    _check_file(source_file)
+
+
+# ---------------------------------------------------------------------------
+# Catch-all: scan ALL source files not already covered by targeted tests above
+# ---------------------------------------------------------------------------
+
+_EXCLUDED_DIRS = {
+    _SRC_ROOT / "core" / "compat",  # compat layer itself
+    _SRC_ROOT / "generators",        # code generation templates
+}
+
+
+def _already_covered_files() -> set[Path]:
+    covered: set[Path] = set()
+    for collector in [
+        _collect_profiling_files, _collect_features_files, _collect_temporal_files,
+        _collect_modeling_files, _collect_validation_files, _collect_auto_explorer_files,
+        _collect_guarded_analysis_and_adapter_files,
+    ]:
+        covered.update(collector())
+    return covered
+
+
+def _collect_all_remaining_source_files() -> list[Path]:
+    covered = _already_covered_files()
+    remaining = []
+    for p in sorted(_SRC_ROOT.rglob("*.py")):
+        if p in covered or p.name.startswith("__") or p.name in ALLOWLISTED_FILES:
+            continue
+        if any(str(p).startswith(str(d)) for d in _EXCLUDED_DIRS):
+            continue
+        remaining.append(p)
+    return remaining
+
+
+@pytest.mark.parametrize(
+    "source_file", _collect_all_remaining_source_files(),
+    ids=lambda p: str(p.relative_to(_SRC_ROOT)),
+)
+def test_no_dangerous_spark_pandas_patterns_all_remaining(source_file: Path):
     _check_file(source_file)
