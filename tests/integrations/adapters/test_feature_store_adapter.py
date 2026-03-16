@@ -118,6 +118,98 @@ class TestLocalFeatureStoreMetadata:
         assert metadata["primary_keys"] == ["id"]
 
 
+@requires_delta
+class TestLocalFeatureStoreLoadExistingRegistry:
+    def test_loads_existing_registry_from_disk(self, tmp_path):
+        import json
+
+        from customer_retention.integrations.adapters.feature_store import LocalFeatureStore
+
+        registry_data = {
+            "tables": {
+                "existing_table": {
+                    "schema": {"id": "int", "val": "float"},
+                    "primary_keys": ["id"],
+                    "path": str(tmp_path / "tables" / "existing_table"),
+                }
+            }
+        }
+        (tmp_path / "registry.json").write_text(json.dumps(registry_data))
+
+        store = LocalFeatureStore(base_path=str(tmp_path))
+        assert "existing_table" in store.list_tables()
+        meta = store.get_table_metadata("existing_table")
+        assert meta["primary_keys"] == ["id"]
+
+
+@requires_delta
+class TestLocalFeatureStoreWriteTableNotFound:
+    def test_write_table_not_in_registry_returns_error(self, tmp_path):
+        from customer_retention.integrations.adapters.feature_store import LocalFeatureStore
+
+        store = LocalFeatureStore(base_path=str(tmp_path))
+        df = pd.DataFrame({"id": [1], "value": [1.0]})
+        result = store.write_table("nonexistent", df)
+        assert result.success is False
+        assert "not found" in result.error.lower()
+
+
+@requires_delta
+class TestLocalFeatureStoreReadTableNotFound:
+    def test_read_table_not_in_registry_raises_key_error(self, tmp_path):
+        from customer_retention.integrations.adapters.feature_store import LocalFeatureStore
+
+        store = LocalFeatureStore(base_path=str(tmp_path))
+        with pytest.raises(KeyError, match="not found"):
+            store.read_table("nonexistent")
+
+
+@requires_delta
+class TestLocalFeatureStoreGetMetadataNotFound:
+    def test_get_metadata_not_in_registry_raises_key_error(self, tmp_path):
+        from customer_retention.integrations.adapters.feature_store import LocalFeatureStore
+
+        store = LocalFeatureStore(base_path=str(tmp_path))
+        with pytest.raises(KeyError, match="not found"):
+            store.get_table_metadata("nonexistent")
+
+
+@requires_delta
+class TestLocalFeatureStoreDeleteTable:
+    def test_delete_existing_table_succeeds(self, tmp_path):
+        from customer_retention.integrations.adapters.feature_store import LocalFeatureStore
+
+        store = LocalFeatureStore(base_path=str(tmp_path))
+        store.create_table("to_delete", schema={"id": "int"}, primary_keys=["id"])
+        assert "to_delete" in store.list_tables()
+        result = store.delete_table("to_delete")
+        assert result.success is True
+        assert "to_delete" not in store.list_tables()
+
+    def test_delete_table_persists_registry(self, tmp_path):
+        import json
+
+        from customer_retention.integrations.adapters.feature_store import LocalFeatureStore
+
+        store = LocalFeatureStore(base_path=str(tmp_path))
+        store.create_table("tbl1", schema={"id": "int"}, primary_keys=["id"])
+        store.create_table("tbl2", schema={"id": "int"}, primary_keys=["id"])
+        store.delete_table("tbl1")
+
+        with open(tmp_path / "registry.json") as f:
+            saved = json.load(f)
+        assert "tbl1" not in saved["tables"]
+        assert "tbl2" in saved["tables"]
+
+    def test_delete_table_not_found_returns_error(self, tmp_path):
+        from customer_retention.integrations.adapters.feature_store import LocalFeatureStore
+
+        store = LocalFeatureStore(base_path=str(tmp_path))
+        result = store.delete_table("nonexistent")
+        assert result.success is False
+        assert "not found" in result.error.lower()
+
+
 class TestDatabricksFeatureStoreMocked:
     def test_databricks_store_requires_spark(self):
         from customer_retention.core.compat.detection import is_spark_available

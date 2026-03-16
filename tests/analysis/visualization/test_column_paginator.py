@@ -341,3 +341,169 @@ class TestHasInteractiveWidgets:
     @patch("customer_retention.analysis.visualization.column_paginator.detect_environment", return_value="databricks")
     def test_databricks_uses_static_pagination(self, mock_env):
         assert has_interactive_widgets() is False
+
+
+# ===================================================================
+# _show_static_page direct tests
+# ===================================================================
+
+
+class TestShowStaticPageDirect:
+    def test_static_page_multiple_pages(self, capsys):
+        entries = [_entry(f"col_{i}", 100 - i) for i in range(25)]
+        render_mock = MagicMock()
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10, title="Multi")
+        p._apply_filters()
+        p._show_static_page(1)
+
+        assert render_mock.call_count == 10
+        # Verify page 1 entries (indices 10-19 from sorted list)
+        rendered_names = [call.args[0].name for call in render_mock.call_args_list]
+        assert len(rendered_names) == 10
+
+        captured = capsys.readouterr()
+        assert "page 2 of 3" in captured.out
+        assert "25 columns" in captured.out
+
+    def test_static_page_empty_filtered_list(self, capsys):
+        entries = [_entry("alpha", 80), _entry("beta", 60)]
+        render_mock = MagicMock()
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10, title="Empty")
+        # Force empty filtered list
+        p._min_score = 99
+        p._apply_filters()
+        p._show_static_page(0)
+
+        assert render_mock.call_count == 0
+        captured = capsys.readouterr()
+        assert "no columns to display" in captured.out
+
+
+# ===================================================================
+# _apply_filters direct tests
+# ===================================================================
+
+
+class TestApplyFiltersDirect:
+    def test_apply_filters_min_score_nonzero(self):
+        entries = [
+            _entry("a", 90),
+            _entry("b", 50),
+            _entry("c", 30),
+            _entry("d", 10),
+        ]
+        p = ColumnPaginator(entries, _noop_render, _noop_summary, page_size=10)
+        p._min_score = 40
+        p._apply_filters()
+
+        names = [e.name for e in p._filtered_entries]
+        assert "a" in names
+        assert "b" in names
+        assert "c" not in names
+        assert "d" not in names
+
+    def test_apply_filters_search_text(self):
+        entries = [
+            _entry("customer_age", 80),
+            _entry("customer_name", 60),
+            _entry("order_amount", 40),
+        ]
+        p = ColumnPaginator(entries, _noop_render, _noop_summary, page_size=10)
+        p._search_text = "customer"
+        p._apply_filters()
+
+        names = [e.name for e in p._filtered_entries]
+        assert len(names) == 2
+        assert "customer_age" in names
+        assert "customer_name" in names
+        assert "order_amount" not in names
+
+    def test_apply_filters_sort_by_name(self):
+        entries = [
+            _entry("zebra", 90),
+            _entry("alpha", 50),
+            _entry("middle", 70),
+        ]
+        p = ColumnPaginator(entries, _noop_render, _noop_summary, page_size=10)
+        p._sort_key = "name"
+        p._apply_filters()
+
+        names = [e.name for e in p._filtered_entries]
+        assert names == ["alpha", "middle", "zebra"]
+
+    def test_apply_filters_sort_by_type(self):
+        entries = [
+            _entry("z_col", 80, "numeric"),
+            _entry("a_col", 90, "text"),
+            _entry("m_col", 70, "categorical"),
+        ]
+        p = ColumnPaginator(entries, _noop_render, _noop_summary, page_size=10)
+        p._sort_key = "type"
+        p._apply_filters()
+
+        types = [e.column_type for e in p._filtered_entries]
+        assert types == ["categorical", "numeric", "text"]
+
+    def test_apply_filters_sort_by_type_secondary_name(self):
+        entries = [
+            _entry("b_num", 80, "numeric"),
+            _entry("a_num", 90, "numeric"),
+            _entry("c_cat", 70, "categorical"),
+        ]
+        p = ColumnPaginator(entries, _noop_render, _noop_summary, page_size=10)
+        p._sort_key = "type"
+        p._apply_filters()
+
+        names = [e.name for e in p._filtered_entries]
+        # categorical first, then numeric sorted by name
+        assert names == ["c_cat", "a_num", "b_num"]
+
+
+# ===================================================================
+# _render_page direct tests
+# ===================================================================
+
+
+class TestRenderPageDirect:
+    def test_render_page_without_output_area(self):
+        entries = [_entry(f"c{i}", 100 - i) for i in range(5)]
+        render_mock = MagicMock()
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=3)
+        p._render_page(0, None)
+
+        assert render_mock.call_count == 3
+        # Verify each call passed None as output_area
+        for call in render_mock.call_args_list:
+            assert call.args[1] is None
+
+    def test_render_page_with_entries(self):
+        entries = [_entry("alpha", 90), _entry("beta", 80), _entry("gamma", 70)]
+        render_mock = MagicMock()
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=2)
+        p._render_page(0, None)
+
+        assert render_mock.call_count == 2
+        rendered_names = [call.args[0].name for call in render_mock.call_args_list]
+        assert rendered_names == ["alpha", "beta"]
+
+    def test_render_page_second_page_with_entries(self):
+        entries = [_entry(f"c{i}", 100 - i) for i in range(7)]
+        render_mock = MagicMock()
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=3)
+        p._render_page(2, None)
+
+        # Page 2 (0-indexed): entries 6 (last one)
+        assert render_mock.call_count == 1
+
+    def test_render_page_with_mock_output_area(self):
+        entries = [_entry("x", 50)]
+        render_mock = MagicMock()
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10)
+
+        mock_output = MagicMock()
+        mock_output.__enter__ = MagicMock(return_value=None)
+        mock_output.__exit__ = MagicMock(return_value=False)
+        p._render_page(0, mock_output)
+
+        mock_output.clear_output.assert_called_once_with(wait=True)
+        assert render_mock.call_count == 1

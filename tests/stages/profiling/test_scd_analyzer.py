@@ -140,6 +140,114 @@ class TestSCDMetrics:
         assert result["city"]["max_changes"] >= 1
 
 
+class TestSCDResultToDict:
+    def test_to_dict_returns_all_fields(self):
+        from customer_retention.stages.profiling.scd_analyzer import SCDResult
+
+        result = SCDResult(
+            column_name="city",
+            changes_detected=True,
+            entities_with_change=5,
+            change_percentage=33.33,
+            max_changes=3,
+            avg_changes_per_entity=1.5,
+            scd_type_recommendation="Type 2 (Track History - Frequent changes, full history needed)"
+        )
+        d = result.to_dict()
+
+        assert isinstance(d, dict)
+        assert d["column_name"] == "city"
+        assert d["changes_detected"] is True
+        assert d["entities_with_change"] == 5
+        assert d["change_percentage"] == 33.33
+        assert d["max_changes"] == 3
+        assert d["avg_changes_per_entity"] == 1.5
+        assert "Type 2" in d["scd_type_recommendation"]
+
+
+class TestSCDAnalyzerValidation:
+    def test_analyze_with_entity_key_none_raises(self):
+        analyzer = SCDAnalyzer(entity_key=None)
+        df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+        with pytest.raises(ValueError, match="entity_key must be set"):
+            analyzer.analyze(df)
+
+    def test_analyze_with_entity_key_not_in_df_raises(self):
+        analyzer = SCDAnalyzer(entity_key="nonexistent_col")
+        df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+        with pytest.raises(ValueError, match="not found in dataframe"):
+            analyzer.analyze(df)
+
+
+class TestSCDType3Recommendation:
+    def test_recommend_type_3_for_moderate_changes(self):
+        analyzer = SCDAnalyzer(entity_key="customer_id")
+
+        # Moderate changes: 10-30% change, avg_changes 1-3
+        scd_metrics = {
+            "changes_detected": True,
+            "change_percentage": 20.0,
+            "avg_changes_per_entity": 2.0
+        }
+
+        recommendation = analyzer.recommend_scd_type(scd_metrics)
+        assert "Type 3" in recommendation
+        assert "Previous" in recommendation
+
+    def test_recommend_type_3_boundary_low(self):
+        analyzer = SCDAnalyzer(entity_key="customer_id")
+
+        scd_metrics = {
+            "changes_detected": True,
+            "change_percentage": 10.0,
+            "avg_changes_per_entity": 2.0
+        }
+
+        recommendation = analyzer.recommend_scd_type(scd_metrics)
+        assert "Type 3" in recommendation
+
+    def test_recommend_type_3_boundary_high(self):
+        analyzer = SCDAnalyzer(entity_key="customer_id")
+
+        scd_metrics = {
+            "changes_detected": True,
+            "change_percentage": 29.99,
+            "avg_changes_per_entity": 2.99
+        }
+
+        recommendation = analyzer.recommend_scd_type(scd_metrics)
+        assert "Type 3" in recommendation
+
+
+class TestSCDToDataframe:
+    def test_to_dataframe_returns_dataframe(self, sample_transaction_data):
+        analyzer = SCDAnalyzer(entity_key="customer_id")
+        results = analyzer.analyze(sample_transaction_data)
+        df = analyzer.to_dataframe(results)
+
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == len(results)
+        assert "column" in df.columns
+        assert "changes_detected" in df.columns
+        assert "scd_type_recommendation" in df.columns
+
+    def test_to_dataframe_column_values(self, sample_transaction_data):
+        analyzer = SCDAnalyzer(entity_key="customer_id")
+        results = analyzer.analyze(sample_transaction_data)
+        df = analyzer.to_dataframe(results)
+
+        column_names = df["column"].tolist()
+        for col_name in results:
+            assert col_name in column_names
+
+    def test_to_dataframe_empty_results(self):
+        analyzer = SCDAnalyzer(entity_key="customer_id")
+        df = analyzer.to_dataframe({})
+
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 0
+
+
 class TestSCDWithConfig:
     def test_analyze_with_config(self, sample_transaction_data, sample_config):
         analyzer = SCDAnalyzer()
