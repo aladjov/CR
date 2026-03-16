@@ -160,7 +160,7 @@ def _spark_bulk_datetime_discovery(
     total = spark_df.count()
     exprs: list[Any] = []
     for c in columns:
-        col_expr = F.col(c).cast("timestamp")
+        col_expr = F.to_timestamp(F.col(c))
         exprs.extend([
             F.min(col_expr).alias(f"__min__{c}"),
             F.max(col_expr).alias(f"__max__{c}"),
@@ -216,10 +216,10 @@ def _spark_bulk_future_fractions(
     import pyspark.sql.functions as F  # noqa: N812
 
     spark_df = as_spark_df(df)
-    ref = F.col(reference_col).cast("timestamp")
+    ref = F.to_timestamp(F.col(reference_col))
     exprs: list[Any] = [F.count(F.lit(1)).alias("__total__")]
     for c in check_cols:
-        col_ts = F.col(c).cast("timestamp")
+        col_ts = F.to_timestamp(F.col(c))
         exprs.append(
             F.sum(F.when(col_ts > ref, 1).otherwise(0)).alias(f"__fut__{c}")
         )
@@ -334,7 +334,7 @@ def _spark_bulk_monthly_counts(
     import pyspark.sql.functions as F  # noqa: N812
 
     spark_df = as_spark_df(df)
-    c = F.col(column).cast("timestamp")
+    c = F.to_timestamp(F.col(column))
     month_col = F.date_format(c, "yyyy-MM")
     result = (
         spark_df
@@ -1860,7 +1860,7 @@ def _spark_bulk_datetime_analysis(
     # Pass 1: min, max, null count per column (batched agg)
     exprs: list[Any] = []
     for c in columns:
-        col_expr = F.col(f"`{c}`").cast("timestamp")
+        col_expr = F.to_timestamp(F.col(f"`{c}`"))
         exprs.extend([
             F.min(col_expr).alias(f"__min__{c}"),
             F.max(col_expr).alias(f"__max__{c}"),
@@ -1882,7 +1882,7 @@ def _spark_bulk_datetime_analysis(
     for c in columns:
         if basic[c]["min"] is None:
             continue
-        col_ts = F.col(f"`{c}`").cast("timestamp")
+        col_ts = F.to_timestamp(F.col(f"`{c}`"))
         stack_parts.append(
             spark_df.select(
                 F.lit(c).alias("__col__"),
