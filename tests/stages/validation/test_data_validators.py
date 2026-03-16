@@ -388,6 +388,32 @@ class TestBulkValidateRangesDispatch(TestDataValidator):
             results = validator.validate_value_ranges(mock_df, rules)
             assert results[0].severity == Severity.CRITICAL
 
+    def test_bulk_skips_non_numeric_columns(self, validator):
+        """String columns in rules must be filtered out in bulk Spark path."""
+        mock_df = MagicMock()
+        mock_df.columns = ["label", "score"]
+        rules = {
+            "label": {"type": "binary", "valid_values": [0, 1]},
+            "score": {"type": "range", "min": 0, "max": 100},
+        }
+
+        from customer_retention.core.compat.bulk_profiling import RangeValidationBulkResult
+
+        with patch(
+            "customer_retention.stages.validation.data_validators._is_spark_pandas",
+            return_value=True,
+        ), patch(
+            "customer_retention.stages.validation.data_validators.bulk_validate_ranges",
+            return_value={"score": RangeValidationBulkResult(
+                non_null_count=50, invalid_count=2,
+                actual_min=0.0, actual_max=105.0,
+            )},
+        ) as mock_bulk:
+            results = validator.validate_value_ranges(mock_df, rules)
+            mock_bulk.assert_called_once()
+            assert len(results) == 1
+            assert results[0].column_name == "score"
+
     def test_pandas_path_unchanged(self, validator):
         """Verify pandas DataFrames still use the original per-column path."""
         df = pd.DataFrame({"pct": [50.0, 110.0, -5.0, 80.0]})

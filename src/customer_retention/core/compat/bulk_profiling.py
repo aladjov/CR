@@ -1383,10 +1383,11 @@ def _spark_bulk_validate_ranges(
     chunk_size: int,
 ) -> dict[str, RangeValidationBulkResult]:
     import pyspark.sql.functions as F  # noqa: N812
+    from pyspark.sql.types import NumericType
 
     spark_df = as_spark_df(df)
-    # Filter to columns that exist
-    valid_rules = {c: r for c, r in rules.items() if c in spark_df.columns}
+    numeric_cols = {f.name for f in spark_df.schema.fields if isinstance(f.dataType, NumericType)}
+    valid_rules = {c: r for c, r in rules.items() if c in spark_df.columns and c in numeric_cols}
     if not valid_rules:
         return {}
 

@@ -919,6 +919,17 @@ class TestBulkValidateRanges:
         result = bulk_validate_ranges(df, rules)
         assert result["val"].non_null_count == 0
 
+    def test_non_numeric_column_skipped(self):
+        df = pd.DataFrame({"label": ["a", "b", "c"], "val": [1.0, 5.0, 10.0]})
+        rules = {
+            "label": {"type": "binary", "valid_values": [0, 1]},
+            "val": {"type": "range", "min": 0, "max": 100},
+        }
+        result = bulk_validate_ranges(df, rules)
+        assert "label" not in result
+        assert "val" in result
+        assert result["val"].invalid_count == 0
+
     def test_spark_dispatch(self):
         mock_df = MagicMock()
         mock_df.to_spark = MagicMock()
