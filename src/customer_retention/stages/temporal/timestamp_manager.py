@@ -27,7 +27,14 @@ from typing import Any, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import Timedelta, as_tz_naive, is_datetime64_any_dtype, native_pd, to_datetime
+from customer_retention.core.compat import (
+    Timedelta,
+    as_tz_naive,
+    is_datetime64_any_dtype,
+    native_pd,
+    to_datetime,
+    to_timedelta,
+)
 
 
 def _safe_index_timedeltas(row_count: int) -> Any:
@@ -195,7 +202,7 @@ class TimestampManager:
             tenure_col = sources[0]
             if tenure_col in df.columns:
                 reference_date = datetime.now()
-                df[target_col] = reference_date - native_pd.to_timedelta(df[tenure_col] * 30, unit="D")
+                df[target_col] = reference_date - to_timedelta(df[tenure_col] * 30, unit="D")
         return df
 
     def _add_synthetic_timestamps(self, df: Any) -> Any:

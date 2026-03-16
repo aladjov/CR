@@ -75,9 +75,10 @@ def _assign_lifecycle_quadrant(duration_days: np.ndarray, intensity: np.ndarray,
                                tenure_threshold: float, intensity_threshold: float) -> np.ndarray:
     long = duration_days >= tenure_threshold
     high = intensity >= intensity_threshold
-    result = np.where(long & high, LIFECYCLE_LABELS["high_high"],
-             np.where(long, LIFECYCLE_LABELS["high_low"],
-             np.where(high, LIFECYCLE_LABELS["low_high"], LIFECYCLE_LABELS["low_low"])))
+    result = np.full(len(duration_days), LIFECYCLE_LABELS["low_low"], dtype=object)
+    result[high & ~long] = LIFECYCLE_LABELS["low_high"]
+    result[long & ~high] = LIFECYCLE_LABELS["high_low"]
+    result[long & high] = LIFECYCLE_LABELS["high_high"]
     return result
 
 
@@ -144,9 +145,11 @@ _SEGMENT_RECOMMENDATIONS = {
 
 
 def _assign_activity_segment_numpy(event_count: np.ndarray, q25: float, q75: float) -> np.ndarray:
-    return np.where(event_count <= 1, "One-time",
-           np.where(event_count <= q25, "Low Activity",
-           np.where(event_count <= q75, "Medium Activity", "High Activity")))
+    result = np.full(len(event_count), "High Activity", dtype=object)
+    result[event_count <= q75] = "Medium Activity"
+    result[event_count <= q25] = "Low Activity"
+    result[event_count <= 1] = "One-time"
+    return result
 
 
 def _assign_activity_segment_spark(event_count_col, q25: float, q75: float):

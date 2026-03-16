@@ -184,7 +184,7 @@ class TransformationPipeline:
             if col in working_df.columns:
                 result = transformer.transform(working_df[col])
                 for new_col in result.df.columns:
-                    working_df[new_col] = result.df[new_col].values
+                    working_df[new_col] = result.df[new_col].to_numpy()
                     datetime_extracted_cols.append(new_col)
                 datetime_cols_to_drop.append(col)
                 manifest.datetime_transformations[col] = {
@@ -215,7 +215,7 @@ class TransformationPipeline:
                 result = encoder.transform(working_df[col])
                 if result.df is not None:
                     for new_col in result.df.columns:
-                        working_df[new_col] = result.df[new_col].values
+                        working_df[new_col] = result.df[new_col].to_numpy()
                     categorical_cols_to_drop.append(col)
                     manifest.column_mapping[col] = list(result.df.columns)
                 manifest.categorical_encodings[col] = {
@@ -251,7 +251,7 @@ class TransformationPipeline:
             errors.append(f"TQ001: Null values in columns: {null_cols}")
 
         numeric_df = non_target.select_dtypes(include=[np.number])
-        if np.isinf(numeric_df.values).any():
+        if np.isinf(numeric_df.to_numpy()).any():
             errors.append("TQ002: Infinite values found")
 
         return len(errors) == 0, errors

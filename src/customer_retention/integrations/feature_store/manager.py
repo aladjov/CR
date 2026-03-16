@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from customer_retention.core.compat import native_pd
+from customer_retention.core.compat import native_pd, safe_drop_duplicates
 from customer_retention.stages.temporal import PointInTimeRegistry, SnapshotManager
 
 from .registry import FeatureRegistry
@@ -174,7 +174,7 @@ class FeastBackend(FeatureStoreBackend):
                 existing = native_pd.read_parquet(str(parquet_path))
                 if table_name in self._tables:
                     entity_key = self._tables[table_name]["entity_key"]
-                    df = native_pd.concat([existing, df]).drop_duplicates(subset=[entity_key], keep="last")
+                    df = safe_drop_duplicates(native_pd.concat([existing, df]), subset=[entity_key], keep="last")
             df.to_parquet(str(parquet_path), index=False)
 
         effective_cutoff = cutoff_date or (

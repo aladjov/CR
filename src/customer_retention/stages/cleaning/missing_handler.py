@@ -149,9 +149,9 @@ class MissingValueHandler:
         df_copy = reference_df.select_dtypes(include=[np.number]).copy()
 
         if col_name in df_copy.columns:
-            df_copy[col_name] = series.values
+            df_copy[col_name] = series.to_numpy()
         else:
-            df_copy.insert(0, col_name, series.values)
+            df_copy.insert(0, col_name, series.to_numpy())
 
         imputer = KNNImputer(n_neighbors=self.knn_neighbors)
         imputed = imputer.fit_transform(df_copy)

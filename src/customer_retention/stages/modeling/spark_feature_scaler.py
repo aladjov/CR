@@ -85,7 +85,7 @@ class SparkFeatureScaler(FeatureScaler):
     def _apply(self, X: DataFrame) -> DataFrame:
         offsets, scales = self._as_vectors()
         zero_mask = scales == 0
-        safe_scales = np.where(zero_mask, 1.0, scales)
+        safe_scales = np.array([1.0 if z else s for z, s in zip(zero_mask, scales)])
         result = X.copy()
         for i, col in enumerate(self._feature_names):
             if zero_mask[i]:

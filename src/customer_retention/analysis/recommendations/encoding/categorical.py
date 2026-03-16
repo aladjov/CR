@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import head_as_list, native_pd
+from customer_retention.core.compat import concat, get_dummies, head_as_list
 
 from ..base import EncodingRecommendation, RecommendationResult
 
@@ -31,9 +31,9 @@ class OneHotEncodeRecommendation(EncodingRecommendation):
         new_cols = []
         for col in self.columns:
             if col in df.columns:
-                dummies = native_pd.get_dummies(df[col], prefix=col, drop_first=self.drop_first)
+                dummies = get_dummies(df[col], prefix=col, drop_first=self.drop_first)
                 new_cols.extend(dummies.columns.tolist())
-                df = native_pd.concat([df, dummies], axis=1)
+                df = concat([df, dummies], axis=1)
                 df = df.drop(columns=[col])
         return RecommendationResult(
             data=df, columns_affected=self.columns + new_cols, rows_before=rows_before,

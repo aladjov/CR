@@ -247,6 +247,8 @@ TOLIST_ALLOWLISTED_FILES = {
     "stages/profiling/pattern_analysis_config.py",
     # Transforms — fitted encoder classes list (small)
     "transforms/fitted.py",
+    # CV folds — groups_pd already collected via collect_for_sklearn
+    "stages/modeling/cross_validator.py",
 }
 
 

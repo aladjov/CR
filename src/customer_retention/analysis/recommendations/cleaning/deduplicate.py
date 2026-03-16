@@ -1,6 +1,6 @@
 from typing import Any, List, Optional
 
-from customer_retention.core.compat import head_as_list
+from customer_retention.core.compat import head_as_list, safe_drop_duplicates
 
 from ..base import CleaningRecommendation, RecommendationResult
 
@@ -44,15 +44,15 @@ class DeduplicateRecommendation(CleaningRecommendation):
                 rows_after=rows_before, metadata={"duplicates_removed": 0}
             )
         if self.strategy == "keep_first":
-            df = df.drop_duplicates(subset=existing_keys, keep="first")
+            df = safe_drop_duplicates(df, subset=existing_keys, keep="first")
         elif self.strategy == "keep_last":
-            df = df.drop_duplicates(subset=existing_keys, keep="last")
+            df = safe_drop_duplicates(df, subset=existing_keys, keep="last")
         elif self.strategy == "keep_most_recent" and self.timestamp_column:
             df = df.sort_values(self.timestamp_column, ascending=False)
-            df = df.drop_duplicates(subset=existing_keys, keep="first")
+            df = safe_drop_duplicates(df, subset=existing_keys, keep="first")
             df = df.sort_index()
         elif self.strategy == "drop_exact":
-            df = df.drop_duplicates(subset=existing_keys, keep="first")
+            df = safe_drop_duplicates(df, subset=existing_keys, keep="first")
         rows_after = len(df)
         return RecommendationResult(
             data=df, columns_affected=self.key_columns, rows_before=rows_before,

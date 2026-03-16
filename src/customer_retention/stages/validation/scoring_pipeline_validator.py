@@ -389,7 +389,7 @@ class ScoringPipelineValidator:
             score_preds = score_df[pred_col].to_numpy()
 
         mismatches = []
-        for idx in np.where(train_preds != score_preds)[0]:
+        for idx in np.flatnonzero(train_preds != score_preds):
             entity_id = str(train_df[self.entity_column].iloc[idx]) if self.entity_column else str(idx)
             t_proba = float(train_proba[idx]) if train_proba is not None else (
                 float(train_df[proba_col].iloc[idx]) if proba_col in train_df.columns else None)

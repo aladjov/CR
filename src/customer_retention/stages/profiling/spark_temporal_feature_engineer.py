@@ -65,9 +65,12 @@ class SparkTemporalFeatureEngineer(TemporalFeatureEngineer):
         df["_split2"] = df["first_event"] + pd.to_timedelta(
             df["history_days"] * (splits[0] + splits[1]), unit="D")
 
-        df["_phase"] = np.where(
-            df[time_col] < df["_split1"], "beginning",
-            np.where(df[time_col] < df["_split2"], "middle", "end"))
+        is_beginning = df[time_col] < df["_split1"]
+        is_middle = (df[time_col] >= df["_split1"]) & (df[time_col] < df["_split2"])
+        phase = pd.Series("end", index=df.index)
+        phase = phase.where(~is_middle, "middle")
+        phase = phase.where(~is_beginning, "beginning")
+        df["_phase"] = phase
 
         for col in value_cols:
             for phase in ["beginning", "middle", "end"]:
@@ -85,11 +88,8 @@ class SparkTemporalFeatureEngineer(TemporalFeatureEngineer):
             feature_names.append(trend_name)
             beg_col = f"{col}_beginning"
             end_col = f"{col}_end"
-            result[trend_name] = np.where(
-                result[beg_col].notna() & (result[beg_col] > 0),
-                result[end_col] / result[beg_col],
-                np.nan,
-            )
+            valid_beg = result[beg_col].notna() & (result[beg_col] > 0)
+            result[trend_name] = (result[end_col] / result[beg_col]).where(valid_beg, np.nan)
 
         return result, FeatureGroupResult(
             group=FeatureGroup.LIFECYCLE,
@@ -136,10 +136,10 @@ class SparkTemporalFeatureEngineer(TemporalFeatureEngineer):
         event_stats.columns = [entity_col, "_first", "_last", "_count"]
         event_stats["_total_days"] = timedelta_to_days(event_stats["_last"] - event_stats["_first"])
 
-        event_stats["event_frequency"] = np.where(
-            event_stats["_total_days"] > 0,
-            event_stats["_count"] / event_stats["_total_days"] * 30,
-            event_stats["_count"],
+        positive_days = event_stats["_total_days"] > 0
+        event_stats["event_frequency"] = (
+            (event_stats["_count"] / event_stats["_total_days"] * 30)
+            .where(positive_days, event_stats["_count"])
         )
         result = result.merge(
             event_stats[[entity_col, "event_frequency"]], on=entity_col, how="left")
@@ -147,11 +147,11 @@ class SparkTemporalFeatureEngineer(TemporalFeatureEngineer):
         if "inter_event_gap_mean" in result.columns:
             gap_mean = result["inter_event_gap_mean"]
             gap_std = result["inter_event_gap_std"].fillna(0)
-            result["regularity_score"] = np.where(
-                gap_mean.notna() & (gap_mean > 0),
-                np.maximum(0, 1 - gap_std / gap_mean),
-                np.where(gap_mean.notna() & (gap_mean == 0), 1.0, np.nan),
-            )
+            has_positive_mean = gap_mean.notna() & (gap_mean > 0)
+            has_zero_mean = gap_mean.notna() & (gap_mean == 0)
+            raw_score = (1 - gap_std / gap_mean).clip(lower=0)
+            regularity = raw_score.where(has_positive_mean, np.nan)
+            result["regularity_score"] = regularity.where(~has_zero_mean, 1.0)
         else:
             result["regularity_score"] = np.nan
 

@@ -568,11 +568,9 @@ class TemporalFeatureEngineer:
         )
 
         # Recency ratio: days_since_last / active_span (0 = just active, 1 = dormant)
-        result["recency_ratio"] = np.where(
-            result["active_span_days"] > 0,
-            result["days_since_last_event"] / (result["active_span_days"] + result["days_since_last_event"]),
-            0
-        )
+        active_positive = result["active_span_days"] > 0
+        ratio = result["days_since_last_event"] / (result["active_span_days"] + result["days_since_last_event"])
+        result["recency_ratio"] = ratio.where(active_positive, 0)
         result["recency_ratio"] = result["recency_ratio"].clip(0, 1)
 
         # Clean up
@@ -679,11 +677,10 @@ class TemporalFeatureEngineer:
 
                 # Percentage of cohort mean
                 vs_pct_name = f"{col}_vs_cohort_pct"
-                result[vs_pct_name] = np.where(
-                    cohort_mean != 0,
-                    lag_features[lag0_col] / cohort_mean,
-                    np.nan
-                )
+                if cohort_mean != 0:
+                    result[vs_pct_name] = lag_features[lag0_col] / cohort_mean
+                else:
+                    result[vs_pct_name] = np.nan
                 feature_names.append(vs_pct_name)
 
                 # Z-score (standard deviations from mean)

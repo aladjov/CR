@@ -187,7 +187,7 @@ class SegmentAwareOutlierAnalyzer:
         n = len(segment_labels)
         seg_index_map: Dict[Any, np.ndarray] = {}
         for seg_id in segment_analysis:
-            seg_index_map[seg_id] = np.where(segment_labels == seg_id)[0]
+            seg_index_map[seg_id] = np.flatnonzero(segment_labels == seg_id)
 
         result: Dict[str, np.ndarray] = {}
         for col in feature_cols:

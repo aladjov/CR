@@ -125,18 +125,12 @@ class SparkTimeWindowAggregator(TimeWindowAggregator):
             for func in funcs:
                 agg_dict[f"{col}_{func}_{window.name}"] = (col, func)
 
-        agg_spec = native_pd.DataFrame([
-            {"output": k, "col": v[0], "func": v[1]} for k, v in agg_dict.items()
-        ])
-
         grouped = filtered.groupby(self.entity_column)
-        for _, row in agg_spec.iterrows():
-            col_name = row["output"]
-            agg_result = grouped[row["col"]].agg(row["func"]).reset_index(name=col_name)
+        for output_name, (col, func) in agg_dict.items():
+            agg_result = grouped[col].agg(func).reset_index(name=output_name)
             result = result.merge(agg_result, on=self.entity_column, how="left")
-            default = 0 if row["func"] in ("sum", "count") else np.nan
-            if row["func"] in ("sum", "count"):
-                result[col_name] = result[col_name].fillna(default)
+            if func in ("sum", "count"):
+                result[output_name] = result[output_name].fillna(0)
 
         return result
 
