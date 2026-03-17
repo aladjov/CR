@@ -968,6 +968,56 @@ def _spark_null_corr_with_target(df: Any, columns: list[str], target_column: str
     return result
 
 
+def bulk_skew(df: Any, columns: list[str]) -> dict[str, float]:
+    import math
+    valid = [c for c in columns if c in df.columns]
+    if not valid:
+        return {}
+    if not _is_spark_pandas(df):
+        numeric = set(df[valid].select_dtypes(include="number").columns)
+        result: dict[str, float] = {c: math.nan for c in valid if c not in numeric}
+        num_cols = [c for c in valid if c in numeric]
+        if num_cols:
+            skew_series = df[num_cols].skew()
+            result.update({c: float(skew_series[c]) if _pandas.notna(skew_series[c]) else math.nan for c in num_cols})
+        return result
+    return _spark_bulk_skew(df, valid)
+
+
+def _spark_bulk_skew(df: Any, columns: list[str]) -> dict[str, float]:
+    import math
+
+    import pyspark.sql.functions as F  # noqa: N812
+
+    numeric = _numeric_column_names(df, columns)
+    num_cols = [c for c in columns if c in numeric]
+    result: dict[str, float] = {c: math.nan for c in columns if c not in numeric}
+    if not num_cols:
+        return result
+    spark_df = as_spark_df(df[num_cols])
+    _BATCH = 500
+    for start in range(0, len(num_cols), _BATCH):
+        batch = num_cols[start:start + _BATCH]
+        exprs = [F.skewness(F.col(c)).alias(f"s_{i}") for i, c in enumerate(batch)]
+        row = spark_df.select(*exprs).head()
+        for i, c in enumerate(batch):
+            val = row[f"s_{i}"]
+            result[c] = float(val) if val is not None else math.nan
+    return result
+
+
+def bulk_max(df: Any, columns: list[str]) -> dict[str, Any]:
+    valid = [c for c in columns if c in df.columns]
+    if not valid:
+        return {}
+    if not _is_spark_pandas(df):
+        return {c: df[c].max() for c in valid}
+    import pyspark.sql.functions as F  # noqa: N812
+    spark_df = as_spark_df(df[valid])
+    row = spark_df.agg(*[F.max(F.col(c)).alias(c) for c in valid]).head()
+    return {c: row[c] for c in valid if row[c] is not None}
+
+
 def bulk_class_overlap(df: Any, columns: list[str], target: Any) -> dict[str, float]:
     valid = [c for c in columns if c in df.columns]
     if not valid:
