@@ -36,20 +36,23 @@ class TestReleaseStageMemory:
     def teardown_method(self):
         compat_mod._stage_objects.clear()
 
+    @patch("customer_retention.core.compat.is_databricks", return_value=True)
     @patch("customer_retention.core.compat.get_spark_session", return_value=None)
-    def test_no_spark_session_runs_gc_only(self, mock_get_session):
+    def test_no_spark_session_runs_gc_only(self, mock_get_session, _):
         release_stage_memory()
         mock_get_session.assert_called_once()
 
+    @patch("customer_retention.core.compat.is_databricks", return_value=True)
     @patch("customer_retention.core.compat.get_spark_session")
-    def test_with_spark_session_calls_clear_cache(self, mock_get_session):
+    def test_with_spark_session_calls_clear_cache(self, mock_get_session, _):
         mock_session = MagicMock()
         mock_get_session.return_value = mock_session
         release_stage_memory()
         mock_session.catalog.clearCache.assert_called_once()
 
+    @patch("customer_retention.core.compat.is_databricks", return_value=True)
     @patch("customer_retention.core.compat.get_spark_session")
-    def test_no_jvm_access(self, mock_get_session):
+    def test_no_jvm_access(self, mock_get_session, _):
         """_jvm.System.gc() is no longer called — verify no JVM access."""
         mock_session = MagicMock()
         type(mock_session)._jvm = PropertyMock(
@@ -58,8 +61,9 @@ class TestReleaseStageMemory:
         release_stage_memory()
         mock_session.catalog.clearCache.assert_called_once()
 
+    @patch("customer_retention.core.compat.is_databricks", return_value=True)
     @patch("customer_retention.core.compat.get_spark_session")
-    def test_clear_cache_failure_propagates(self, mock_get_session):
+    def test_clear_cache_failure_propagates(self, mock_get_session, _):
         mock_session = MagicMock()
         mock_session.catalog.clearCache.side_effect = RuntimeError("cluster gone")
         mock_get_session.return_value = mock_session
