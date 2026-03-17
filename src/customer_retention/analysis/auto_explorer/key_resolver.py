@@ -7,6 +7,7 @@ from customer_retention.analysis.auto_explorer.project_context import KeyResolut
 from customer_retention.core.compat import head_as_list, pd, resolve_column_name, unique_overlap_counts
 
 if TYPE_CHECKING:
+    from customer_retention.analysis.auto_explorer.project_context import ProjectContext
     from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 
 logger = logging.getLogger(__name__)
@@ -108,12 +109,15 @@ def _apply_resolution_step(
 def resolve_single_dataset_keys(
     df: pd.DataFrame,
     steps: list[KeyResolutionStep],
-    namespace: RunNamespace,
+    namespace: "RunNamespace",
+    project_ctx: "Optional[ProjectContext]" = None,
 ) -> pd.DataFrame:
-    from customer_retention.analysis.auto_explorer.active_dataset_store import load_active_dataset_distributed
+    from customer_retention.analysis.auto_explorer.active_dataset_store import load_bridge_distributed
 
     for step in steps:
-        bridge_df = load_active_dataset_distributed(namespace, step.bridge_dataset)
+        if _column_exists(df.columns, step.resolve_column):
+            continue
+        bridge_df = load_bridge_distributed(namespace, step.bridge_dataset, project_ctx)
         try:
             df = _apply_resolution_step(df, "<inline>", step, {step.bridge_dataset: bridge_df})
         except _StaleStepError as exc:
@@ -173,15 +177,16 @@ def suggest_key_resolutions(
 
 
 def resolve_sample_ids_via_bridge(
-    namespace: RunNamespace,
+    namespace: "RunNamespace",
     steps: list[KeyResolutionStep],
     sample_entity_ids: list,
+    project_ctx: "Optional[ProjectContext]" = None,
 ) -> tuple[str, set]:
-    from customer_retention.analysis.auto_explorer.active_dataset_store import load_active_dataset_distributed
+    from customer_retention.analysis.auto_explorer.active_dataset_store import load_bridge_distributed
 
     current_ids = set(sample_entity_ids)
     for step in reversed(steps):
-        bridge_df = load_active_dataset_distributed(namespace, step.bridge_dataset)
+        bridge_df = load_bridge_distributed(namespace, step.bridge_dataset, project_ctx)
         resolve_col = _resolve_column_name(bridge_df.columns, step.resolve_column)
         bridge_key = _resolve_column_name(bridge_df.columns, step.bridge_key)
         matched = bridge_df[bridge_df[resolve_col].isin(list(current_ids))]

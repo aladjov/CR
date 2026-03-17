@@ -4,7 +4,10 @@ import logging
 
 import pytest
 
-from customer_retention.analysis.auto_explorer.active_dataset_store import save_active_dataset
+from customer_retention.analysis.auto_explorer.active_dataset_store import (
+    load_bridge_distributed,
+    save_active_dataset,
+)
 from customer_retention.analysis.auto_explorer.key_resolver import (
     _column_exists,
     _is_empty,
@@ -14,9 +17,16 @@ from customer_retention.analysis.auto_explorer.key_resolver import (
     resolve_single_dataset_keys,
     suggest_key_resolutions,
 )
-from customer_retention.analysis.auto_explorer.project_context import KeyResolutionStep
+from customer_retention.analysis.auto_explorer.project_context import (
+    DatasetRegistryEntry,
+    KeyResolutionStep,
+    ObjectivePriority,
+    ObjectiveSpec,
+    PredictionObjective,
+    ProjectContext,
+)
 from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
-from customer_retention.core.compat import pd
+from customer_retention.core.compat import native_pd, pd
 
 
 def _case_frames():
@@ -599,3 +609,266 @@ class TestResolveSingleDatasetKeysStaleStep:
         result = resolve_single_dataset_keys(source_df, steps, namespace)
         assert len(result) == 2
         assert list(result["ACCOUNT_ID"]) == ["A1", "A2"]
+
+
+_MINIMAL_OBJECTIVES = [
+    ObjectiveSpec(objective=PredictionObjective.IMMEDIATE_RISK, priority=ObjectivePriority.PRIMARY),
+]
+
+
+def _make_project_ctx(entries: dict[str, DatasetRegistryEntry]) -> ProjectContext:
+    return ProjectContext(datasets=entries, objectives=_MINIMAL_OBJECTIVES)
+
+
+class TestLoadBridgeDistributed:
+    @pytest.fixture()
+    def namespace(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="bridge-load-test")
+        ns.setup()
+        return ns
+
+    def test_loads_from_landing_when_available(self, namespace):
+        bridge_df = pd.DataFrame({"CASE_ID": [1, 2], "ACCOUNT_ID": ["A1", "A2"]})
+        save_active_dataset(namespace, "case", bridge_df)
+        result = load_bridge_distributed(namespace, "case")
+        pd.testing.assert_frame_equal(result, bridge_df)
+
+    def test_loads_from_raw_csv_when_landing_missing(self, namespace, tmp_path):
+        csv_path = tmp_path / "raw" / "case.csv"
+        csv_path.parent.mkdir(parents=True)
+        bridge_df = native_pd.DataFrame({"CASE_ID": [1, 2], "ACCOUNT_ID": ["A1", "A2"]})
+        bridge_df.to_csv(csv_path, index=False)
+        entry = DatasetRegistryEntry(name="case", path=str(csv_path), storage_format="csv")
+        ctx = _make_project_ctx({"case": entry})
+        result = load_bridge_distributed(namespace, "case", project_ctx=ctx)
+        pd.testing.assert_frame_equal(result, bridge_df)
+
+    def test_loads_from_raw_parquet_when_landing_missing(self, namespace, tmp_path):
+        pq_path = tmp_path / "raw" / "case.parquet"
+        pq_path.parent.mkdir(parents=True)
+        bridge_df = native_pd.DataFrame({"CASE_ID": [1, 2], "ACCOUNT_ID": ["A1", "A2"]})
+        bridge_df.to_parquet(pq_path, index=False)
+        entry = DatasetRegistryEntry(name="case", path=str(pq_path), storage_format="parquet")
+        ctx = _make_project_ctx({"case": entry})
+        result = load_bridge_distributed(namespace, "case", project_ctx=ctx)
+        pd.testing.assert_frame_equal(result, bridge_df)
+
+    def test_raises_when_landing_missing_and_no_project_ctx(self, namespace):
+        with pytest.raises(FileNotFoundError, match="Bridge dataset.*not found"):
+            load_bridge_distributed(namespace, "nonexistent")
+
+    def test_raises_when_landing_missing_and_dataset_not_in_ctx(self, namespace):
+        ctx = _make_project_ctx({})
+        with pytest.raises(FileNotFoundError, match="Bridge dataset.*not found"):
+            load_bridge_distributed(namespace, "nonexistent", project_ctx=ctx)
+
+    def test_prefers_landing_over_raw_source(self, namespace, tmp_path):
+        landing_df = pd.DataFrame({"CASE_ID": [1, 2], "ACCOUNT_ID": ["A1", "A2"]})
+        save_active_dataset(namespace, "case", landing_df)
+        csv_path = tmp_path / "raw" / "case.csv"
+        csv_path.parent.mkdir(parents=True)
+        native_pd.DataFrame({"CASE_ID": [99], "ACCOUNT_ID": ["Z99"]}).to_csv(csv_path, index=False)
+        entry = DatasetRegistryEntry(name="case", path=str(csv_path), storage_format="csv")
+        ctx = _make_project_ctx({"case": entry})
+        result = load_bridge_distributed(namespace, "case", project_ctx=ctx)
+        pd.testing.assert_frame_equal(result, landing_df)
+
+
+class TestResolveSingleDatasetKeysPreResolved:
+    @pytest.fixture()
+    def namespace(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="pre-resolved-test")
+        ns.setup()
+        return ns
+
+    def test_skips_bridge_load_when_column_already_present(self, namespace):
+        source_df = pd.DataFrame(
+            {"CASE_ID": [1, 2], "VALUE": [10, 20], "ACCOUNT_ID": ["A1", "A2"]},
+        )
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="nonexistent_bridge",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        result = resolve_single_dataset_keys(source_df, steps, namespace)
+        assert "ACCOUNT_ID" in result.columns
+        assert list(result["ACCOUNT_ID"]) == ["A1", "A2"]
+
+    def test_skips_bridge_load_multi_step_all_present(self, namespace):
+        source_df = pd.DataFrame(
+            {"CASE_ID": [1], "ORDER_ID": [100], "ACCOUNT_ID": ["A1"]},
+        )
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="missing_a",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ORDER_ID",
+            ),
+            KeyResolutionStep(
+                bridge_dataset="missing_b",
+                source_key="ORDER_ID",
+                bridge_key="ORDER_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        result = resolve_single_dataset_keys(source_df, steps, namespace)
+        assert len(result) == 1
+
+    def test_loads_bridge_only_for_missing_columns(self, namespace):
+        bridge_df = pd.DataFrame({"ORDER_ID": [100, 200], "ACCOUNT_ID": ["A1", "A2"]})
+        save_active_dataset(namespace, "bridge_b", bridge_df)
+        source_df = pd.DataFrame({"CASE_ID": [1, 2], "ORDER_ID": [100, 200]})
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="nonexistent_bridge",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ORDER_ID",
+            ),
+            KeyResolutionStep(
+                bridge_dataset="bridge_b",
+                source_key="ORDER_ID",
+                bridge_key="ORDER_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        result = resolve_single_dataset_keys(source_df, steps, namespace)
+        assert "ACCOUNT_ID" in result.columns
+        assert list(result["ACCOUNT_ID"]) == ["A1", "A2"]
+
+
+class TestResolveSingleDatasetKeysRawFallback:
+    @pytest.fixture()
+    def namespace(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="raw-fallback-test")
+        ns.setup()
+        return ns
+
+    def test_resolves_when_bridge_only_in_raw_source(self, namespace, tmp_path):
+        csv_path = tmp_path / "raw" / "case.csv"
+        csv_path.parent.mkdir(parents=True)
+        native_pd.DataFrame({"CASE_ID": [1, 2], "ACCOUNT_ID": ["A1", "A2"]}).to_csv(
+            csv_path, index=False,
+        )
+        entry = DatasetRegistryEntry(name="case", path=str(csv_path), storage_format="csv")
+        ctx = _make_project_ctx({"case": entry})
+        source_df = pd.DataFrame({"CASE_ID": [1, 2], "VALUE": [10, 20]})
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="case",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        result = resolve_single_dataset_keys(source_df, steps, namespace, project_ctx=ctx)
+        assert "ACCOUNT_ID" in result.columns
+        assert list(result["ACCOUNT_ID"]) == ["A1", "A2"]
+
+    def test_fails_when_bridge_missing_everywhere(self, namespace):
+        source_df = pd.DataFrame({"CASE_ID": [1, 2], "VALUE": [10, 20]})
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="case",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        with pytest.raises(FileNotFoundError):
+            resolve_single_dataset_keys(source_df, steps, namespace)
+
+    def test_backward_compatible_without_project_ctx(self, namespace):
+        bridge_df = pd.DataFrame({"CASE_ID": [1, 2], "ACCOUNT_ID": ["A1", "A2"]})
+        save_active_dataset(namespace, "bridge", bridge_df)
+        source_df = pd.DataFrame({"CASE_ID": [1, 2], "VALUE": [10, 20]})
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="bridge",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        result = resolve_single_dataset_keys(source_df, steps, namespace)
+        assert "ACCOUNT_ID" in result.columns
+
+    def test_multi_step_with_mixed_landing_and_raw(self, namespace, tmp_path):
+        bridge_a = pd.DataFrame({"CASE_ID": [1, 2], "ORDER_ID": [100, 200]})
+        save_active_dataset(namespace, "bridge_a", bridge_a)
+        csv_path = tmp_path / "raw" / "bridge_b.csv"
+        csv_path.parent.mkdir(parents=True)
+        native_pd.DataFrame({"ORDER_ID": [100, 200], "ACCOUNT_ID": ["A1", "A2"]}).to_csv(
+            csv_path, index=False,
+        )
+        entry = DatasetRegistryEntry(name="bridge_b", path=str(csv_path), storage_format="csv")
+        ctx = _make_project_ctx({"bridge_b": entry})
+        source_df = pd.DataFrame({"CASE_ID": [1, 2], "VALUE": [10, 20]})
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="bridge_a",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ORDER_ID",
+            ),
+            KeyResolutionStep(
+                bridge_dataset="bridge_b",
+                source_key="ORDER_ID",
+                bridge_key="ORDER_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        result = resolve_single_dataset_keys(source_df, steps, namespace, project_ctx=ctx)
+        assert "ACCOUNT_ID" in result.columns
+        assert list(result["ACCOUNT_ID"]) == ["A1", "A2"]
+
+
+class TestResolveSampleIdsViaBridgeRawFallback:
+    @pytest.fixture()
+    def namespace(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="sample-raw-test")
+        ns.setup()
+        return ns
+
+    def test_resolves_via_raw_source(self, namespace, tmp_path):
+        csv_path = tmp_path / "raw" / "case.csv"
+        csv_path.parent.mkdir(parents=True)
+        native_pd.DataFrame({"CASE_ID": [1, 2, 3], "ACCOUNT_ID": ["A1", "A2", "A3"]}).to_csv(
+            csv_path, index=False,
+        )
+        entry = DatasetRegistryEntry(name="case", path=str(csv_path), storage_format="csv")
+        ctx = _make_project_ctx({"case": entry})
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="case",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        local_key, local_ids = resolve_sample_ids_via_bridge(
+            namespace, steps, ["A1", "A3"], project_ctx=ctx,
+        )
+        assert local_key == "CASE_ID"
+        assert local_ids == {1, 3}
+
+    def test_backward_compatible_with_landing(self, namespace):
+        bridge_df = pd.DataFrame({"CASE_ID": [1, 2, 3], "ACCOUNT_ID": ["A1", "A2", "A3"]})
+        save_active_dataset(namespace, "case", bridge_df)
+        steps = [
+            KeyResolutionStep(
+                bridge_dataset="case",
+                source_key="CASE_ID",
+                bridge_key="CASE_ID",
+                resolve_column="ACCOUNT_ID",
+            ),
+        ]
+        local_key, local_ids = resolve_sample_ids_via_bridge(
+            namespace, steps, ["A1", "A3"],
+        )
+        assert local_key == "CASE_ID"
+        assert local_ids == {1, 3}
