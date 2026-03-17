@@ -29,9 +29,10 @@ def read_csv(path: str, **kwargs: Any) -> Any:
 
 
 def _as_pandas_api(spark_df: Any) -> Any:
-    if hasattr(spark_df, "pandas_api"):
-        return spark_df.pandas_api()
-    return spark_df.to_pandas_on_spark()
+    result = spark_df.pandas_api() if hasattr(spark_df, "pandas_api") else spark_df.to_pandas_on_spark()
+    if hasattr(result, '_psseries'):
+        result._psseries = None
+    return result
 
 
 def read_delta(path: str, version: Optional[int] = None) -> Any:

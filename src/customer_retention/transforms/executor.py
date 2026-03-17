@@ -65,10 +65,7 @@ class TransformExecutor:
                 spark_df = result
             else:
                 ps_df = _as_pandas_api(spark_df)
-                ps_result = self.apply(ps_df, step, fit_mode=fit_mode, artifact_store=artifact_store)
-                if hasattr(ps_result, '_psseries'):
-                    ps_result._psseries = None
-                spark_df = as_spark_df(ps_result)
+                spark_df = as_spark_df(self.apply(ps_df, step, fit_mode=fit_mode, artifact_store=artifact_store))
             if (i + 1) % _CHECKPOINT_INTERVAL == 0 and i + 1 < len(steps):
                 spark_df = spark_df.localCheckpoint(eager=True)
         return _as_pandas_api(spark_df)
