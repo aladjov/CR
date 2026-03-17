@@ -2479,10 +2479,10 @@ class TestDatabricksGoldCapThenLog:
             gold=gold, output_dir="/output", composite_name="cust_orde__abc1234",
         )
 
-    def test_gold_defines_cap_then_log_helper(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
+    def test_gold_defines_batch_cap_then_log_helper(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
         config = self._make_config(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale)
         result = renderer.render_gold(config)
-        assert "def _cap_then_log(df, col):" in result
+        assert "def _batch_cap_then_log(df, cols):" in result
 
     def test_gold_cap_then_log_uses_approx_quantile(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
         config = self._make_config(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale)

@@ -22,11 +22,13 @@ from customer_retention.generators.pipeline_generator.models import (
     GoldLayerConfig,
     LifecycleConfig,
     PipelineConfig,
+    PipelineTransformationType,
     SilverLayerConfig,
     SourceConfig,
     TemporalFeatureConfig,
     TextFeatureConfig,
     TrainingConfig,
+    TransformationStep,
 )
 from customer_retention.generators.pipeline_generator.protocols import (
     CodeRendererProtocol,
@@ -1555,6 +1557,138 @@ class TestGoldTemplateParity:
         core = {"apply_encodings", "apply_feature_selection"}
         assert core <= local_funcs, f"Local gold missing: {core - local_funcs}"
         assert core <= db_funcs, f"Databricks gold missing: {core - db_funcs}"
+
+
+class TestGoldSparkJobBulkOperations:
+    """Databricks gold template must batch Spark operations to minimize job count."""
+
+    def _gold_config_with_cap_then_log(self, entity_source, event_source):
+        return PipelineConfig(
+            name="test",
+            target_column="churn",
+            sources=[entity_source, event_source],
+            bronze={"customers": BronzeLayerConfig(source=entity_source)},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(transformations=[
+                TransformationStep(
+                    type=PipelineTransformationType.CAP_THEN_LOG,
+                    column="amount_sum", parameters={},
+                    rationale="High skewness",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.CAP_THEN_LOG,
+                    column="amount_mean", parameters={},
+                    rationale="High skewness",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.CAP_THEN_LOG,
+                    column="count_total", parameters={},
+                    rationale="High skewness",
+                ),
+            ]),
+            output_dir="/output",
+            composite_name="test_cn",
+        )
+
+    def _gold_config_with_segment_cap(self, entity_source, event_source):
+        return PipelineConfig(
+            name="test",
+            target_column="churn",
+            sources=[entity_source, event_source],
+            bronze={"customers": BronzeLayerConfig(source=entity_source)},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(transformations=[
+                TransformationStep(
+                    type=PipelineTransformationType.SEGMENT_AWARE_CAP,
+                    column="feat_a", parameters={},
+                    rationale="Outliers",
+                ),
+                TransformationStep(
+                    type=PipelineTransformationType.SEGMENT_AWARE_CAP,
+                    column="feat_b", parameters={},
+                    rationale="Outliers",
+                ),
+            ]),
+            output_dir="/output",
+            composite_name="test_cn",
+        )
+
+    def test_databricks_gold_batches_cap_then_log(self, entity_source, event_source):
+        """cap_then_log must use _batch_cap_then_log (1 approxQuantile call)
+        instead of per-column _cap_then_log (N calls)."""
+        config = self._gold_config_with_cap_then_log(entity_source, event_source)
+        result = DatabricksCodeRenderer(catalog="c", schema="s").render_gold(config)
+        assert "_batch_cap_then_log" in result
+        lines = result.split("\n")
+        func_body = []
+        in_func = False
+        for line in lines:
+            if "def apply_cap_then_log_transforms" in line:
+                in_func = True
+            elif in_func:
+                if line and not line[0].isspace() and not line.startswith("#"):
+                    break
+                func_body.append(line)
+        body = "\n".join(func_body)
+        assert 'df = _cap_then_log(df,' not in body, "must use batched version"
+        assert "_batch_cap_then_log(df," in body
+        ast.parse(result)
+
+    def test_databricks_gold_batches_segment_aware_cap(self, entity_source, event_source):
+        """segment_aware_cap must use _batch_segment_aware_cap (1 approxQuantile call)."""
+        config = self._gold_config_with_segment_cap(entity_source, event_source)
+        result = DatabricksCodeRenderer(catalog="c", schema="s").render_gold(config)
+        assert "_batch_segment_aware_cap" in result
+        lines = result.split("\n")
+        func_body = []
+        in_func = False
+        for line in lines:
+            if "def cap_segment_aware_outliers" in line:
+                in_func = True
+            elif in_func:
+                if line and not line[0].isspace() and not line.startswith("#"):
+                    break
+                func_body.append(line)
+        body = "\n".join(func_body)
+        assert 'df = _segment_aware_cap(df,' not in body, "must use batched version"
+        assert "_batch_segment_aware_cap(df," in body
+        ast.parse(result)
+
+    def test_databricks_gold_encode_one_hot_single_collect(self, pipeline_config_minimal):
+        """_encode_one_hot must use a single .collect() not count() + collect()."""
+        pipeline_config_minimal.gold = GoldLayerConfig(encodings=[
+            TransformationStep(
+                type=PipelineTransformationType.ENCODE,
+                column="category_col", parameters={},
+                rationale="Encode categorical",
+            ),
+        ])
+        result = DatabricksCodeRenderer(catalog="c", schema="s").render_gold(
+            pipeline_config_minimal,
+        )
+        lines = result.split("\n")
+        func_body = []
+        in_func = False
+        for line in lines:
+            if "def _encode_one_hot" in line:
+                in_func = True
+            elif in_func:
+                if line.startswith("def "):
+                    break
+                func_body.append(line)
+        body = "\n".join(func_body)
+        assert ".distinct().count()" not in body, "double scan: use collect then len()"
+        ast.parse(result)
+
+    def test_databricks_gold_no_dead_per_column_scalers(self, pipeline_config_minimal):
+        """Per-column _scale_standard / _scale_minmax are dead code — only batch versions used."""
+        result = DatabricksCodeRenderer(catalog="c", schema="s").render_gold(
+            pipeline_config_minimal,
+        )
+        assert "def _scale_standard(" not in result, "dead per-column scaler"
+        assert "def _scale_minmax(" not in result, "dead per-column scaler"
+        assert "def _batch_scale_standard(" in result
+        assert "def _batch_scale_minmax(" in result
 
 
 # ======================================================================

@@ -1203,11 +1203,10 @@ def _encode_one_hot(df, col, max_categories=100):
     if col not in df.columns:
         print(f"WARNING: column '{col}' not in DataFrame, skipping one-hot encoding")
         return df
-    n_distinct = df.select(col).distinct().count()
-    if n_distinct > max_categories:
-        print(f"WARNING: column '{col}' has {n_distinct} categories (>{max_categories}), using label encoding instead")
-        return _label_encode(df, col)
     categories = [row[col] for row in df.select(col).distinct().collect() if row[col] is not None]
+    if len(categories) > max_categories:
+        print(f"WARNING: column '{col}' has {len(categories)} categories (>{max_categories}), using label encoding instead")
+        return _label_encode(df, col)
     for cat in sorted(categories):
         safe_name = f"{col}_{cat}".replace(" ", "_").replace("-", "_")
         df = df.withColumn(safe_name, F.when(F.col(col) == cat, 1).otherwise(0))
@@ -1222,25 +1221,6 @@ def _label_encode(df, col):
     indexer = StringIndexer(inputCol=col, outputCol=f"{col}_encoded", handleInvalid="keep")
     df = indexer.fit(df).transform(df)
     df = df.drop(col)
-    return df
-
-def _scale_standard(df, col):
-    stats = df.agg(F.mean(col).alias("mean_val"), F.stddev(col).alias("std_val")).collect()[0]
-    mean_val = stats["mean_val"] or 0
-    std_val = stats["std_val"] or 1
-    if std_val == 0:
-        std_val = 1
-    df = df.withColumn(col, (F.col(col) - mean_val) / std_val)
-    return df
-
-def _scale_minmax(df, col):
-    stats = df.agg(F.min(col).alias("min_val"), F.max(col).alias("max_val")).collect()[0]
-    min_val = stats["min_val"] or 0
-    max_val = stats["max_val"] or 1
-    range_val = max_val - min_val
-    if range_val == 0:
-        range_val = 1
-    df = df.withColumn(col, (F.col(col) - min_val) / range_val)
     return df
 
 def _batch_scale_standard(df, cols):
@@ -1276,25 +1256,33 @@ def _batch_scale_minmax(df, cols):
         df = df.withColumn(c, (F.col(c) - min_val) / range_val)
     return df
 
-def _segment_aware_cap(df, col, n_segments=2):
-    quantiles = df.approxQuantile(col, [0.25, 0.75], 0.01)
-    if len(quantiles) == 2:
-        q1, q3 = quantiles
-        iqr = q3 - q1
-        lower = q1 - 1.5 * iqr
-        upper = q3 + 1.5 * iqr
-        df = df.withColumn(col,
-            F.when(F.col(col) < lower, lower)
-            .when(F.col(col) > upper, upper)
-            .otherwise(F.col(col)))
+def _batch_segment_aware_cap(df, cols):
+    cols = [c for c in cols if c in df.columns]
+    if not cols:
+        return df
+    quantile_map = dict(zip(cols, df.approxQuantile(cols, [0.25, 0.75], 0.01)))
+    for c in cols:
+        qs = quantile_map[c]
+        if len(qs) == 2:
+            q1, q3 = qs
+            iqr = q3 - q1
+            lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+            df = df.withColumn(c,
+                F.when(F.col(c) < lower, lower)
+                .when(F.col(c) > upper, upper)
+                .otherwise(F.col(c)))
     return df
 
-def _cap_then_log(df, col):
-    quantiles = df.approxQuantile(col, [0.99], 0.01)
-    if not quantiles:
+def _batch_cap_then_log(df, cols):
+    cols = [c for c in cols if c in df.columns]
+    if not cols:
         return df
-    q99 = quantiles[0]
-    return df.withColumn(col, F.log1p(F.greatest(F.least(F.col(col), F.lit(q99)), F.lit(0)).cast("double")))
+    quantile_map = dict(zip(cols, df.approxQuantile(cols, [0.99], 0.01)))
+    for c in cols:
+        qs = quantile_map[c]
+        if qs:
+            df = df.withColumn(c, F.log1p(F.greatest(F.least(F.col(c), F.lit(qs[0])), F.lit(0)).cast("double")))
+    return df
 
 # COMMAND ----------
 
@@ -1341,10 +1329,16 @@ def {{ func_name }}(df):
 {%- if _prov %}
 {{ _prov }}
 {%- endif %}
+{%- if func_name == "apply_cap_then_log_transforms" %}
+    df = _batch_cap_then_log(df, [{% for t in steps %}"{{ t.column }}"{{ ", " if not loop.last }}{% endfor %}])
+{%- elif func_name == "cap_segment_aware_outliers" %}
+    df = _batch_segment_aware_cap(df, [{% for t in steps %}"{{ t.column }}"{{ ", " if not loop.last }}{% endfor %}])
+{%- else %}
 {%- for t in steps %}
     # {{ t.rationale }}
     df = {{ render_spark_step_call(t) }}
 {%- endfor %}
+{%- endif %}
     return df
 {% endfor %}
 
