@@ -1184,6 +1184,14 @@ def spark_checkpoint(df: Any) -> Any:
     return df
 
 
+def safe_fillna(df: Any, value: Any) -> Any:
+    if _is_spark_pandas(df):
+        spark_df = as_spark_df(df).fillna(value).localCheckpoint(eager=True)
+        from .spark_backend import _as_pandas_api
+        return _as_pandas_api(spark_df)
+    return df.fillna(value)
+
+
 def bulk_label_encode(df: Any, columns: list[str]) -> Any:
     valid = [c for c in columns if c in df.columns]
     if not valid:
@@ -1335,6 +1343,9 @@ def release_stage_memory() -> None:
     _stage_objects.clear()
     import gc
     gc.collect()
+    import os
+    if not (is_databricks() or os.environ.get("CR_SPARK_REMOTE")):
+        return
     session = get_spark_session()
     if session is None:
         return
@@ -1427,6 +1438,7 @@ __all__ = [
     "BulkEffectSizeResult",
     "temporal_quantile",
     "spark_checkpoint",
+    "safe_fillna",
     "bulk_label_encode",
     "bulk_median_impute",
     "bulk_zero_variance_cols",

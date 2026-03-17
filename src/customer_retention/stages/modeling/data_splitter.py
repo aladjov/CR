@@ -285,7 +285,7 @@ class DataSplitter:
             if f.name not in exclude and not isinstance(f.dataType, skip_types)
         ]
 
-        features = _as_pandas_api(spark_df.select(feature_cols))
+        features = _as_pandas_api(spark_df.select(feature_cols).localCheckpoint(eager=True))
         target = _as_pandas_api(spark_df.select(self.target_column))[self.target_column]
         metadata: Dict[str, Series] = {}
         if extract_metadata:
