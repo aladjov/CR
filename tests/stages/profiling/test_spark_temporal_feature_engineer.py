@@ -386,6 +386,178 @@ class TestSparkEngineerEdgeCases:
         assert len(result.features_df) == 2
 
 
+class TestSparkNativeInput:
+    """Verify distributed execution with native Spark DataFrame input."""
+
+    @pytest.fixture(scope="class")
+    def spark(self):
+        pyspark = pytest.importorskip("pyspark", reason="PySpark required")
+        from pyspark.sql import SparkSession
+        try:
+            return SparkSession.builder.master("local[1]").appName(
+                "test_temporal_spark").getOrCreate()
+        except RuntimeError:
+            pytest.skip("local Spark session not available")
+
+    def _compare(self, r_spark, r_pandas, cols, rtol=1e-4, atol=1e-2, label=""):
+        r_spark = _sort_result(r_spark)
+        r_pandas = _sort_result(r_pandas)
+        for col in cols:
+            sv = r_spark[col].to_numpy().astype(float)
+            pv = r_pandas[col].to_numpy().astype(float)
+            valid = ~np.isnan(sv) & ~np.isnan(pv)
+            if valid.any():
+                np.testing.assert_allclose(
+                    sv[valid], pv[valid], rtol=rtol, atol=atol,
+                    err_msg=f"{label} column {col} mismatch")
+
+    def test_spark_input_full_parity(self, spark, sample_events, reference_dates):
+        spark_events = spark.createDataFrame(sample_events)
+        spark_refs = spark.createDataFrame(reference_dates)
+        r_spark = SparkTemporalFeatureEngineer().compute(
+            events_df=spark_events, entity_col="customer_id",
+            time_col="event_date", value_cols=["amount"],
+            reference_dates=spark_refs, reference_col="reference_date",
+        ).features_df
+        r_pandas = TemporalFeatureEngineer().compute(
+            events_df=sample_events, entity_col="customer_id",
+            time_col="event_date", value_cols=["amount"],
+            reference_dates=reference_dates, reference_col="reference_date",
+        ).features_df
+        assert set(r_spark.columns) == set(r_pandas.columns)
+        numeric_cols = [c for c in r_spark.columns if c != "customer_id"]
+        self._compare(r_spark, r_pandas, numeric_cols, label="full")
+
+    def test_spark_lifecycle_parity(self, spark, sample_events, reference_dates):
+        config = TemporalAggregationConfig(min_history_days=30)
+        spark_events = spark.createDataFrame(sample_events)
+        spark_refs = spark.createDataFrame(reference_dates)
+        r_spark = SparkTemporalFeatureEngineer(config).compute(
+            events_df=spark_events, entity_col="customer_id",
+            time_col="event_date", value_cols=["amount"],
+            reference_dates=spark_refs, reference_col="reference_date",
+        ).features_df
+        r_pandas = TemporalFeatureEngineer(config).compute(
+            events_df=sample_events, entity_col="customer_id",
+            time_col="event_date", value_cols=["amount"],
+            reference_dates=reference_dates, reference_col="reference_date",
+        ).features_df
+        self._compare(r_spark, r_pandas,
+            ["amount_beginning", "amount_middle", "amount_end", "amount_trend_ratio"],
+            label="lifecycle")
+
+    def test_spark_regularity_parity(self, spark, sample_events, reference_dates):
+        spark_events = spark.createDataFrame(sample_events)
+        spark_refs = spark.createDataFrame(reference_dates)
+        r_spark = SparkTemporalFeatureEngineer().compute(
+            events_df=spark_events, entity_col="customer_id",
+            time_col="event_date", value_cols=["amount"],
+            reference_dates=spark_refs, reference_col="reference_date",
+        ).features_df
+        r_pandas = TemporalFeatureEngineer().compute(
+            events_df=sample_events, entity_col="customer_id",
+            time_col="event_date", value_cols=["amount"],
+            reference_dates=reference_dates, reference_col="reference_date",
+        ).features_df
+        self._compare(r_spark, r_pandas,
+            ["event_frequency", "inter_event_gap_mean", "inter_event_gap_std",
+             "inter_event_gap_max", "regularity_score"],
+            label="regularity")
+
+    def test_spark_seven_feature_groups(self, spark, sample_events, reference_dates):
+        spark_events = spark.createDataFrame(sample_events)
+        spark_refs = spark.createDataFrame(reference_dates)
+        result = SparkTemporalFeatureEngineer().compute(
+            events_df=spark_events, entity_col="customer_id",
+            time_col="event_date", value_cols=["amount"],
+            reference_dates=spark_refs, reference_col="reference_date",
+        )
+        assert len(result.feature_groups) == 7
+        assert {g.group for g in result.feature_groups} == {fg for fg in FeatureGroup}
+
+    def test_spark_disabled_groups(self, spark, sample_events, reference_dates):
+        config = TemporalAggregationConfig(
+            compute_velocity=False, compute_lifecycle=False,
+            compute_regularity=False, compute_cohort=False,
+        )
+        spark_events = spark.createDataFrame(sample_events)
+        spark_refs = spark.createDataFrame(reference_dates)
+        result = SparkTemporalFeatureEngineer(config).compute(
+            events_df=spark_events, entity_col="customer_id",
+            time_col="event_date", value_cols=["amount"],
+            reference_dates=spark_refs, reference_col="reference_date",
+        )
+        assert "amount_velocity" not in result.features_df.columns
+        assert "amount_beginning" not in result.features_df.columns
+        assert "regularity_score" not in result.features_df.columns
+
+    def test_spark_no_reference_dates(self, spark, sample_events):
+        spark_events = spark.createDataFrame(sample_events)
+        result = SparkTemporalFeatureEngineer().compute(
+            events_df=spark_events, entity_col="customer_id",
+            time_col="event_date", value_cols=["amount"],
+        )
+        assert isinstance(result, TemporalFeatureResult)
+        assert len(result.features_df) == sample_events["customer_id"].nunique()
+
+    def test_spark_single_entity(self, spark):
+        pdf = pd.DataFrame({
+            "customer_id": ["A"] * 5,
+            "event_date": pd.date_range("2023-01-01", periods=5, freq="3D"),
+            "amount": [10.0, 20.0, 30.0, 40.0, 50.0],
+        })
+        sdf = spark.createDataFrame(pdf)
+        result = SparkTemporalFeatureEngineer().compute(
+            events_df=sdf, entity_col="customer_id",
+            time_col="event_date", value_cols=["amount"],
+        )
+        assert len(result.features_df) == 1
+
+    def test_spark_lifecycle_short_history_nan(self, spark):
+        pdf = pd.DataFrame({
+            "customer_id": ["A"] * 5,
+            "event_date": pd.date_range("2023-01-01", periods=5, freq="3D"),
+            "amount": [10.0, 20.0, 30.0, 40.0, 50.0],
+        })
+        sdf = spark.createDataFrame(pdf)
+        config = TemporalAggregationConfig(min_history_days=60)
+        result = SparkTemporalFeatureEngineer(config).compute(
+            events_df=sdf, entity_col="customer_id",
+            time_col="event_date", value_cols=["amount"],
+        )
+        assert pd.isna(result.features_df.iloc[0]["amount_beginning"])
+
+    def test_spark_zero_beginning_no_trend(self, spark):
+        pdf = pd.DataFrame({
+            "customer_id": ["A"] * 30,
+            "event_date": pd.date_range("2023-01-01", periods=30, freq="5D"),
+            "amount": [0.0] * 10 + [50.0] * 10 + [100.0] * 10,
+        })
+        sdf = spark.createDataFrame(pdf)
+        config = TemporalAggregationConfig(min_history_days=30)
+        result = SparkTemporalFeatureEngineer(config).compute(
+            events_df=sdf, entity_col="customer_id",
+            time_col="event_date", value_cols=["amount"],
+        )
+        assert pd.isna(result.features_df.iloc[0]["amount_trend_ratio"])
+
+    def test_spark_multiple_value_columns(self, spark):
+        np.random.seed(99)
+        pdf = pd.DataFrame({
+            "customer_id": ["A"] * 10 + ["B"] * 10,
+            "event_date": list(pd.date_range("2023-08-01", periods=10, freq="7D")) * 2,
+            "amount": np.random.uniform(50, 150, 20),
+            "quantity": np.random.randint(1, 10, 20).astype(float),
+        })
+        sdf = spark.createDataFrame(pdf)
+        result = SparkTemporalFeatureEngineer().compute(
+            events_df=sdf, entity_col="customer_id",
+            time_col="event_date", value_cols=["amount", "quantity"],
+        )
+        assert "lag0_amount_sum" in result.features_df.columns
+        assert "lag0_quantity_sum" in result.features_df.columns
+
+
 class TestSparkEngineerCatalogAndMetadata:
 
     @pytest.mark.parametrize("cls", BOTH_ENGINEERS)

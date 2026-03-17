@@ -1,23 +1,225 @@
+"""SparkTemporalFeatureEngineer — distributed temporal feature engineering.
+
+When input is a native Spark DataFrame, all heavy computations (lagged windows,
+lifecycle, recency, regularity) run as bulk Spark SQL operations.  Only aggregated
+results (one row per entity) are collected to native pandas for the final merge.
+Velocity, acceleration, and cohort operate on already-aggregated lag features.
+
+When input is native pandas, delegates to TemporalFeatureEngineer (parent).
+"""
+
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, List, Optional
 
-import numpy as np
-
 from customer_retention.core.compat import (
+    _is_native_spark_df,
     _is_spark_pandas,
-    groupby_multi_agg,
-    pd,
-    timedelta_to_days,
-    to_pandas,
+    as_spark_df,
 )
 
 from .temporal_feature_engineer import (
     FeatureGroup,
     FeatureGroupResult,
+    ReferenceMode,
     TemporalFeatureEngineer,
     TemporalFeatureResult,
 )
+
+_SPARK_AGG = {"sum": "sum", "mean": "avg", "max": "max", "min": "min", "count": "count"}
+
+
+def _to_spark(obj: Any) -> Any:
+    if _is_native_spark_df(obj):
+        return obj
+    if _is_spark_pandas(obj):
+        return as_spark_df(obj)
+    return None
+
+
+def _epoch(col_expr):
+    import pyspark.sql.functions as F  # noqa: N812
+    return F.unix_timestamp(col_expr.cast("timestamp")).cast("double")
+
+
+def _disabled_group(group: FeatureGroup) -> FeatureGroupResult:
+    return FeatureGroupResult(
+        group=group, features=[],
+        rationale=TemporalFeatureEngineer.RATIONALES[group], enabled=False)
+
+
+def _lagged_windows_spark(spark_df, entity_col, time_col, value_cols, ref_spark, config):
+    import pyspark.sql.functions as F  # noqa: N812
+
+    df = spark_df.join(ref_spark, on=entity_col)
+    df = df.withColumn("_days_before_ref",
+        (_epoch(F.col("reference_date")) - _epoch(F.col(time_col))) / F.lit(86400.0))
+
+    agg_exprs: list = []
+    feature_names: list[str] = []
+
+    for lag in range(config.num_lags):
+        start, end = lag * config.lag_window_days, (lag + 1) * config.lag_window_days
+        mask = (F.col("_days_before_ref") >= start) & (F.col("_days_before_ref") < end)
+        for col in value_cols:
+            masked = F.when(mask, F.col(col))
+            for agg in config.lag_aggregations:
+                name = f"lag{lag}_{col}_{agg}"
+                feature_names.append(name)
+                spark_agg_name = _SPARK_AGG.get(agg)
+                if spark_agg_name is None:
+                    raise ValueError(f"Unsupported aggregation: {agg!r}")
+                spark_fn = getattr(F, spark_agg_name)
+                if agg == "count":
+                    agg_exprs.append(
+                        F.coalesce(spark_fn(masked), F.lit(0)).cast("int").alias(name))
+                else:
+                    agg_exprs.append(spark_fn(masked).alias(name))
+
+    agged = df.groupBy(entity_col).agg(*agg_exprs)
+    result = ref_spark.select(entity_col).join(agged, on=entity_col, how="left")
+
+    for lag in range(config.num_lags):
+        for col in value_cols:
+            if "count" in config.lag_aggregations:
+                cname = f"lag{lag}_{col}_count"
+                result = result.withColumn(
+                    cname, F.coalesce(F.col(cname), F.lit(0)).cast("int"))
+
+    return result, FeatureGroupResult(
+        group=FeatureGroup.LAGGED_WINDOWS, features=feature_names,
+        rationale=TemporalFeatureEngineer.RATIONALES[FeatureGroup.LAGGED_WINDOWS])
+
+
+def _lifecycle_spark(spark_df, entity_col, time_col, value_cols, ref_spark, config):
+    import pyspark.sql.functions as F  # noqa: N812
+
+    history = spark_df.groupBy(entity_col).agg(
+        F.min(time_col).alias("_first"), F.max(time_col).alias("_last"),
+    ).withColumn("_history_secs", _epoch(F.col("_last")) - _epoch(F.col("_first")))
+
+    eligible = history.filter(
+        F.col("_history_secs").isNotNull()
+        & (F.col("_history_secs") >= config.min_history_days * 86400))
+
+    df = spark_df.join(eligible, on=entity_col)
+    first_ep = _epoch(F.col("_first"))
+    time_ep = _epoch(F.col(time_col))
+    split1 = first_ep + F.col("_history_secs") * F.lit(config.lifecycle_splits[0])
+    split2 = first_ep + F.col("_history_secs") * F.lit(
+        config.lifecycle_splits[0] + config.lifecycle_splits[1])
+
+    df = df.withColumn("_phase",
+        F.when(time_ep < split1, "beginning")
+         .when(time_ep < split2, "middle")
+         .otherwise("end"))
+
+    feature_names: list[str] = []
+    result = ref_spark.select(entity_col)
+
+    for col in value_cols:
+        pivoted = (df.groupBy(entity_col)
+                   .pivot("_phase", ["beginning", "middle", "end"])
+                   .agg(F.sum(col)))
+        for phase in ["beginning", "middle", "end"]:
+            feat = f"{col}_{phase}"
+            feature_names.append(feat)
+            pivoted = pivoted.withColumnRenamed(phase, feat)
+
+        result = result.join(pivoted, on=entity_col, how="left")
+
+        trend = f"{col}_trend_ratio"
+        feature_names.append(trend)
+        beg = F.col(f"{col}_beginning")
+        result = result.withColumn(trend,
+            F.when(beg.isNotNull() & (beg > 0), F.col(f"{col}_end") / beg))
+
+    return result, FeatureGroupResult(
+        group=FeatureGroup.LIFECYCLE, features=feature_names,
+        rationale=TemporalFeatureEngineer.RATIONALES[FeatureGroup.LIFECYCLE])
+
+
+def _recency_spark(spark_df, entity_col, time_col, ref_spark):
+    import pyspark.sql.functions as F  # noqa: N812
+
+    stats = spark_df.groupBy(entity_col).agg(
+        F.min(time_col).alias("_first"), F.max(time_col).alias("_last"))
+
+    result = ref_spark.join(stats, on=entity_col, how="left")
+
+    ref_ep = _epoch(F.col("reference_date"))
+    days_since_last = (ref_ep - _epoch(F.col("_last"))) / F.lit(86400.0)
+    days_since_first = (ref_ep - _epoch(F.col("_first"))) / F.lit(86400.0)
+    active_span = (_epoch(F.col("_last")) - _epoch(F.col("_first"))) / F.lit(86400.0)
+
+    result = (result
+        .withColumn("days_since_last_event", days_since_last)
+        .withColumn("days_since_first_event", days_since_first)
+        .withColumn("active_span_days", active_span)
+        .withColumn("recency_ratio",
+            F.when(F.col("active_span_days") > 0,
+                F.col("days_since_last_event") /
+                (F.col("active_span_days") + F.col("days_since_last_event"))
+            ).otherwise(F.lit(0.0)))
+        .withColumn("recency_ratio",
+            F.greatest(F.lit(0.0), F.least(F.lit(1.0), F.col("recency_ratio"))))
+        .drop("_first", "_last", "reference_date"))
+
+    return result, FeatureGroupResult(
+        group=FeatureGroup.RECENCY,
+        features=["days_since_last_event", "days_since_first_event",
+                   "active_span_days", "recency_ratio"],
+        rationale=TemporalFeatureEngineer.RATIONALES[FeatureGroup.RECENCY])
+
+
+def _regularity_spark(spark_df, entity_col, time_col, ref_spark):
+    import pyspark.sql.functions as F  # noqa: N812
+    from pyspark.sql.window import Window
+
+    w = Window.partitionBy(entity_col).orderBy(time_col)
+    prev_ep = _epoch(F.lag(time_col).over(w))
+    cur_ep = _epoch(F.col(time_col))
+
+    gaps_df = (spark_df
+        .withColumn("_gap_days", (cur_ep - prev_ep) / F.lit(86400.0))
+        .filter(F.col("_gap_days").isNotNull()))
+
+    gap_stats = gaps_df.groupBy(entity_col).agg(
+        F.avg("_gap_days").alias("inter_event_gap_mean"),
+        F.stddev("_gap_days").alias("inter_event_gap_std"),
+        F.max("_gap_days").alias("inter_event_gap_max"))
+
+    event_stats = spark_df.groupBy(entity_col).agg(
+        _epoch(F.min(time_col)).alias("_first_ep"),
+        _epoch(F.max(time_col)).alias("_last_ep"),
+        F.count(time_col).alias("_cnt"),
+    ).withColumn("_total_days",
+        (F.col("_last_ep") - F.col("_first_ep")) / F.lit(86400.0))
+    event_stats = event_stats.withColumn("event_frequency",
+        F.when(F.col("_total_days") > 0,
+            F.col("_cnt") / F.col("_total_days") * F.lit(30.0))
+         .otherwise(F.col("_cnt").cast("double")))
+
+    result = ref_spark.select(entity_col)
+    result = result.join(gap_stats, on=entity_col, how="left")
+    result = result.join(
+        event_stats.select(entity_col, "event_frequency"),
+        on=entity_col, how="left")
+
+    gap_mean = F.col("inter_event_gap_mean")
+    gap_std = F.coalesce(F.col("inter_event_gap_std"), F.lit(0.0))
+    result = result.withColumn("regularity_score",
+        F.when(gap_mean.isNotNull() & (gap_mean > 0),
+            F.greatest(F.lit(0.0), F.lit(1.0) - gap_std / gap_mean))
+         .when(gap_mean.isNotNull() & (gap_mean == 0), F.lit(1.0)))
+
+    return result, FeatureGroupResult(
+        group=FeatureGroup.REGULARITY,
+        features=["event_frequency", "inter_event_gap_mean",
+                   "inter_event_gap_std", "inter_event_gap_max",
+                   "regularity_score"],
+        rationale=TemporalFeatureEngineer.RATIONALES[FeatureGroup.REGULARITY])
 
 
 class SparkTemporalFeatureEngineer(TemporalFeatureEngineer):
@@ -31,142 +233,111 @@ class SparkTemporalFeatureEngineer(TemporalFeatureEngineer):
         reference_dates: Optional[Any] = None,
         reference_col: Optional[str] = None,
     ) -> TemporalFeatureResult:
-        events_df = to_pandas(events_df)
-        if reference_dates is not None:
-            reference_dates = to_pandas(reference_dates)
-        return super().compute(
-            events_df, entity_col, time_col, value_cols, reference_dates, reference_col)
+        spark_df = _to_spark(events_df)
+        if spark_df is None:
+            return super().compute(
+                events_df, entity_col, time_col, value_cols,
+                reference_dates, reference_col)
 
-    def _compute_lifecycle(
-        self,
-        events_df: pd.DataFrame,
-        entity_col: str,
-        time_col: str,
-        value_cols: List[str],
-        ref_dates: pd.DataFrame,
-    ) -> tuple:
-        result = ref_dates[[entity_col]].copy()
-        feature_names = []
-        min_days = self.config.min_history_days
-        splits = self.config.lifecycle_splits
+        import pyspark.sql.functions as F  # noqa: N812
 
-        history_stats = groupby_multi_agg(events_df, entity_col, time_col, ["min", "max"])
-        history_stats.columns = [entity_col, "first_event", "last_event"]
-        history_stats["history_days"] = timedelta_to_days(
-            history_stats["last_event"] - history_stats["first_event"]
-        )
+        spark_df = spark_df.withColumn(time_col, F.to_timestamp(F.col(time_col)))
+        for vc in value_cols:
+            if vc in spark_df.columns:
+                spark_df = spark_df.withColumn(vc, F.col(vc).cast("double"))
 
-        eligible = history_stats[
-            history_stats["history_days"].notna() & (history_stats["history_days"] >= min_days)
-        ]
+        ref_spark = self._resolve_ref_dates_spark(
+            spark_df, entity_col, time_col, reference_dates, reference_col)
 
-        df = events_df.merge(eligible, on=entity_col)
-        df["_split1"] = df["first_event"] + pd.to_timedelta(df["history_days"] * splits[0], unit="D")
-        df["_split2"] = df["first_event"] + pd.to_timedelta(
-            df["history_days"] * (splits[0] + splits[1]), unit="D")
+        lag_spark, lag_group = _lagged_windows_spark(
+            spark_df, entity_col, time_col, value_cols, ref_spark, self.config)
+        lag_pd = lag_spark.toPandas()
 
-        is_beginning = df[time_col] < df["_split1"]
-        is_middle = (df[time_col] >= df["_split1"]) & (df[time_col] < df["_split2"])
-        phase = pd.Series("end", index=df.index)
-        phase = phase.where(~is_middle, "middle")
-        phase = phase.where(~is_beginning, "beginning")
-        df["_phase"] = phase
+        all_features: list = [lag_pd]
+        feature_groups: list[FeatureGroupResult] = [lag_group]
 
-        for col in value_cols:
-            for phase in ["beginning", "middle", "end"]:
-                feat_name = f"{col}_{phase}"
-                feature_names.append(feat_name)
-                phase_sums = (
-                    df[df["_phase"] == phase]
-                    .groupby(entity_col)[col]
-                    .sum()
-                    .reset_index(name=feat_name)
-                )
-                result = result.merge(phase_sums, on=entity_col, how="left")
+        self._append_velocity(all_features, feature_groups, lag_pd, value_cols, entity_col)
+        self._append_distributed_groups(
+            all_features, feature_groups,
+            spark_df, entity_col, time_col, value_cols, ref_spark)
+        self._append_cohort(all_features, feature_groups, lag_pd, value_cols, entity_col)
 
-            trend_name = f"{col}_trend_ratio"
-            feature_names.append(trend_name)
-            beg_col = f"{col}_beginning"
-            end_col = f"{col}_end"
-            valid_beg = result[beg_col].notna() & (result[beg_col] > 0)
-            result[trend_name] = (result[end_col] / result[beg_col]).where(valid_beg, np.nan)
+        result_df = all_features[0]
+        for df in all_features[1:]:
+            result_df = result_df.merge(df, on=entity_col, how="left")
 
-        return result, FeatureGroupResult(
-            group=FeatureGroup.LIFECYCLE,
-            features=feature_names,
-            rationale=self.RATIONALES[FeatureGroup.LIFECYCLE],
-        )
+        return TemporalFeatureResult(
+            features_df=result_df, feature_groups=feature_groups,
+            config=self.config, entity_col=entity_col, value_cols=value_cols)
 
-    def _compute_regularity(
-        self,
-        events_df: pd.DataFrame,
-        entity_col: str,
-        time_col: str,
-        ref_dates: pd.DataFrame,
-    ) -> tuple:
-        result = ref_dates[[entity_col]].copy()
-
-        sorted_events = events_df.sort_values([entity_col, time_col])
-        if _is_spark_pandas(sorted_events):
-            import pyspark.sql.functions as F  # noqa: N812
-            sorted_events["_ts_epoch"] = sorted_events[time_col].spark.transform(
-                lambda c: F.unix_timestamp(c.cast("timestamp")).cast("double"))
-            prev_epoch = sorted_events.groupby(entity_col)["_ts_epoch"].shift(1)
-            sorted_events["_gap_seconds"] = (sorted_events["_ts_epoch"] - prev_epoch) / 86400
-            sorted_events = sorted_events.drop(columns=["_ts_epoch"])
+    def _append_velocity(self, all_features, feature_groups, lag_pd, value_cols, entity_col):
+        if self.config.compute_velocity:
+            feat, grp = self._compute_velocity(lag_pd, value_cols)
+            all_features.append(feat)
+            feature_groups.append(grp)
         else:
-            sorted_events["_prev_time"] = sorted_events.groupby(entity_col)[time_col].shift(1)
-            sorted_events["_gap_seconds"] = timedelta_to_days(
-                sorted_events[time_col] - sorted_events["_prev_time"])
-        gaps = sorted_events.dropna(subset=["_gap_seconds"])
+            feature_groups.append(_disabled_group(FeatureGroup.VELOCITY))
 
-        if len(gaps) > 0:
-            grp = gaps.groupby(entity_col)["_gap_seconds"]
-            gap_mean = grp.mean().reset_index(name="inter_event_gap_mean")
-            gap_std = grp.std().reset_index(name="inter_event_gap_std")
-            gap_max = grp.max().reset_index(name="inter_event_gap_max")
-            gap_stats = gap_mean.merge(gap_std, on=entity_col).merge(gap_max, on=entity_col)
-            result = result.merge(gap_stats, on=entity_col, how="left")
+        if self.config.compute_acceleration and self.config.compute_velocity:
+            feat, grp = self._compute_acceleration(
+                all_features[1] if len(all_features) > 1 else lag_pd,
+                lag_pd, value_cols, entity_col)
+            all_features.append(feat)
+            feature_groups.append(grp)
         else:
-            result["inter_event_gap_mean"] = np.nan
-            result["inter_event_gap_std"] = np.nan
-            result["inter_event_gap_max"] = np.nan
+            feature_groups.append(_disabled_group(FeatureGroup.ACCELERATION))
 
-        event_stats = groupby_multi_agg(events_df, entity_col, time_col, ["min", "max", "count"])
-        event_stats.columns = [entity_col, "_first", "_last", "_count"]
-        event_stats["_total_days"] = timedelta_to_days(event_stats["_last"] - event_stats["_first"])
-
-        positive_days = event_stats["_total_days"] > 0
-        event_stats["event_frequency"] = (
-            (event_stats["_count"] / event_stats["_total_days"] * 30)
-            .where(positive_days, event_stats["_count"])
-        )
-        result = result.merge(
-            event_stats[[entity_col, "event_frequency"]], on=entity_col, how="left")
-
-        if "inter_event_gap_mean" in result.columns:
-            gap_mean = result["inter_event_gap_mean"]
-            gap_std = result["inter_event_gap_std"].fillna(0)
-            has_positive_mean = gap_mean.notna() & (gap_mean > 0)
-            has_zero_mean = gap_mean.notna() & (gap_mean == 0)
-            raw_score = (1 - gap_std / gap_mean).clip(lower=0)
-            regularity = raw_score.where(has_positive_mean, np.nan)
-            result["regularity_score"] = regularity.where(~has_zero_mean, 1.0)
+    def _append_distributed_groups(
+        self, all_features, feature_groups,
+        spark_df, entity_col, time_col, value_cols, ref_spark,
+    ):
+        if self.config.compute_lifecycle:
+            spark_result, grp = _lifecycle_spark(
+                spark_df, entity_col, time_col, value_cols, ref_spark, self.config)
+            all_features.append(spark_result.toPandas())
+            feature_groups.append(grp)
         else:
-            result["regularity_score"] = np.nan
+            feature_groups.append(_disabled_group(FeatureGroup.LIFECYCLE))
 
-        for col in ["event_frequency", "inter_event_gap_mean", "inter_event_gap_std",
-                     "inter_event_gap_max", "regularity_score"]:
-            if col not in result.columns:
-                result[col] = np.nan
+        if self.config.compute_recency:
+            spark_result, grp = _recency_spark(
+                spark_df, entity_col, time_col, ref_spark)
+            all_features.append(spark_result.toPandas())
+            feature_groups.append(grp)
+        else:
+            feature_groups.append(_disabled_group(FeatureGroup.RECENCY))
 
-        feature_names = [
-            "event_frequency", "inter_event_gap_mean", "inter_event_gap_std",
-            "inter_event_gap_max", "regularity_score"
-        ]
+        if self.config.compute_regularity:
+            spark_result, grp = _regularity_spark(
+                spark_df, entity_col, time_col, ref_spark)
+            all_features.append(spark_result.toPandas())
+            feature_groups.append(grp)
+        else:
+            feature_groups.append(_disabled_group(FeatureGroup.REGULARITY))
 
-        return result, FeatureGroupResult(
-            group=FeatureGroup.REGULARITY,
-            features=feature_names,
-            rationale=self.RATIONALES[FeatureGroup.REGULARITY],
-        )
+    def _append_cohort(self, all_features, feature_groups, lag_pd, value_cols, entity_col):
+        if self.config.compute_cohort:
+            feat, grp = self._compute_cohort_comparison(lag_pd, value_cols, entity_col)
+            all_features.append(feat)
+            feature_groups.append(grp)
+        else:
+            feature_groups.append(_disabled_group(FeatureGroup.COHORT_COMPARISON))
+
+    def _resolve_ref_dates_spark(self, spark_df, entity_col, time_col, reference_dates, reference_col):
+        import pyspark.sql.functions as F  # noqa: N812
+
+        if self.config.reference_mode == ReferenceMode.GLOBAL_DATE:
+            ref_date = self.config.global_reference_date or datetime.now()
+            return spark_df.select(entity_col).distinct().withColumn(
+                "reference_date", F.lit(ref_date).cast("timestamp"))
+
+        if reference_dates is not None and reference_col is not None:
+            ref_spark = _to_spark(reference_dates)
+            if ref_spark is None:
+                ref_spark = spark_df.sparkSession.createDataFrame(reference_dates)
+            return ref_spark.select(
+                F.col(entity_col),
+                F.to_timestamp(F.col(reference_col)).alias("reference_date"))
+
+        return spark_df.groupBy(entity_col).agg(
+            F.max(time_col).alias("reference_date"))
