@@ -1,9 +1,7 @@
-"""SparkTemporalFeatureEngineer — distributed temporal feature engineering.
+"""SparkTemporalFeatureEngineer — fully distributed temporal feature engineering.
 
-When input is a native Spark DataFrame, all heavy computations (lagged windows,
-lifecycle, recency, regularity) run as bulk Spark SQL operations.  Only aggregated
-results (one row per entity) are collected to native pandas for the final merge.
-Velocity, acceleration, and cohort operate on already-aggregated lag features.
+All 7 feature groups run as native Spark SQL operations. Results are joined in
+Spark and returned as pyspark.pandas — nothing is collected to the driver.
 
 When input is native pandas, delegates to TemporalFeatureEngineer (parent).
 """
@@ -16,6 +14,7 @@ from typing import Any, List, Optional
 from customer_retention.core.compat import (
     _is_native_spark_df,
     _is_spark_pandas,
+    as_pandas_api,
     as_spark_df,
 )
 
@@ -90,6 +89,55 @@ def _lagged_windows_spark(spark_df, entity_col, time_col, value_cols, ref_spark,
     return result, FeatureGroupResult(
         group=FeatureGroup.LAGGED_WINDOWS, features=feature_names,
         rationale=TemporalFeatureEngineer.RATIONALES[FeatureGroup.LAGGED_WINDOWS])
+
+
+def _velocity_acceleration_spark(lag_spark, entity_col, value_cols, config):
+    import pyspark.sql.functions as F  # noqa: N812
+
+    velocity_names: list[str] = []
+    accel_names: list[str] = []
+    result = lag_spark
+    cols = set(lag_spark.columns)
+
+    for col in value_cols:
+        lag0, lag1, lag2 = f"lag0_{col}_sum", f"lag1_{col}_sum", f"lag2_{col}_sum"
+
+        if config.compute_velocity and lag0 in cols and lag1 in cols:
+            v_name = f"{col}_velocity"
+            result = result.withColumn(v_name,
+                (F.col(lag0) - F.col(lag1)) / F.lit(float(config.lag_window_days)))
+            velocity_names.append(v_name)
+
+            vp_name = f"{col}_velocity_pct"
+            safe_lag1 = F.when(F.col(lag1) == 0, F.lit(None).cast("double")).otherwise(F.col(lag1))
+            result = result.withColumn(vp_name, (F.col(lag0) - safe_lag1) / safe_lag1)
+            velocity_names.append(vp_name)
+
+        if config.compute_acceleration and config.compute_velocity:
+            if lag1 in cols and lag2 in cols:
+                v01 = (F.col(lag0) - F.col(lag1)) / F.lit(float(config.lag_window_days))
+                v12 = (F.col(lag1) - F.col(lag2)) / F.lit(float(config.lag_window_days))
+                a_name = f"{col}_acceleration"
+                result = result.withColumn(a_name, v01 - v12)
+                accel_names.append(a_name)
+
+            v_name = f"{col}_velocity"
+            if v_name in velocity_names and lag0 in cols:
+                m_name = f"{col}_momentum"
+                result = result.withColumn(m_name, F.col(lag0) * F.col(v_name))
+                accel_names.append(m_name)
+
+    select_cols = [entity_col] + velocity_names + accel_names
+    velocity_group = FeatureGroupResult(
+        group=FeatureGroup.VELOCITY, features=velocity_names,
+        rationale=TemporalFeatureEngineer.RATIONALES[FeatureGroup.VELOCITY],
+        enabled=config.compute_velocity)
+    accel_group = FeatureGroupResult(
+        group=FeatureGroup.ACCELERATION, features=accel_names,
+        rationale=TemporalFeatureEngineer.RATIONALES[FeatureGroup.ACCELERATION],
+        enabled=config.compute_acceleration and config.compute_velocity)
+
+    return result.select(*select_cols), velocity_group, accel_group
 
 
 def _lifecycle_spark(spark_df, entity_col, time_col, value_cols, ref_spark, config):
@@ -222,6 +270,43 @@ def _regularity_spark(spark_df, entity_col, time_col, ref_spark):
         rationale=TemporalFeatureEngineer.RATIONALES[FeatureGroup.REGULARITY])
 
 
+def _cohort_spark(lag_spark, entity_col, value_cols):
+    import pyspark.sql.functions as F  # noqa: N812
+    from pyspark.sql.window import Window
+
+    w_global = Window.partitionBy()
+    result = lag_spark
+    feature_names: list[str] = []
+    cols = set(lag_spark.columns)
+
+    for col in value_cols:
+        lag0 = f"lag0_{col}_sum"
+        if lag0 not in cols:
+            continue
+
+        cohort_mean = F.avg(F.col(lag0)).over(w_global)
+        cohort_std = F.stddev(F.col(lag0)).over(w_global)
+
+        vs_mean = f"{col}_vs_cohort_mean"
+        result = result.withColumn(vs_mean, F.col(lag0) - cohort_mean)
+        feature_names.append(vs_mean)
+
+        vs_pct = f"{col}_vs_cohort_pct"
+        result = result.withColumn(vs_pct,
+            F.when(cohort_mean != 0, F.col(lag0) / cohort_mean))
+        feature_names.append(vs_pct)
+
+        z_name = f"{col}_cohort_zscore"
+        result = result.withColumn(z_name,
+            F.when(cohort_std.isNotNull() & (cohort_std > 0),
+                (F.col(lag0) - cohort_mean) / cohort_std))
+        feature_names.append(z_name)
+
+    return result.select(entity_col, *feature_names), FeatureGroupResult(
+        group=FeatureGroup.COHORT_COMPARISON, features=feature_names,
+        rationale=TemporalFeatureEngineer.RATIONALES[FeatureGroup.COHORT_COMPARISON])
+
+
 class SparkTemporalFeatureEngineer(TemporalFeatureEngineer):
 
     def compute(
@@ -251,50 +336,47 @@ class SparkTemporalFeatureEngineer(TemporalFeatureEngineer):
 
         lag_spark, lag_group = _lagged_windows_spark(
             spark_df, entity_col, time_col, value_cols, ref_spark, self.config)
-        lag_pd = lag_spark.toPandas()
 
-        all_features: list = [lag_pd]
+        spark_parts: list = [lag_spark]
         feature_groups: list[FeatureGroupResult] = [lag_group]
 
-        self._append_velocity(all_features, feature_groups, lag_pd, value_cols, entity_col)
+        self._append_velocity_acceleration(
+            spark_parts, feature_groups, lag_spark, entity_col, value_cols)
         self._append_distributed_groups(
-            all_features, feature_groups,
+            spark_parts, feature_groups,
             spark_df, entity_col, time_col, value_cols, ref_spark)
-        self._append_cohort(all_features, feature_groups, lag_pd, value_cols, entity_col)
+        self._append_cohort(
+            spark_parts, feature_groups, lag_spark, entity_col, value_cols)
 
-        result_df = all_features[0]
-        for df in all_features[1:]:
-            result_df = result_df.merge(df, on=entity_col, how="left")
+        merged = spark_parts[0]
+        for part in spark_parts[1:]:
+            merged = merged.join(part, on=entity_col, how="left")
 
         return TemporalFeatureResult(
-            features_df=result_df, feature_groups=feature_groups,
+            features_df=as_pandas_api(merged), feature_groups=feature_groups,
             config=self.config, entity_col=entity_col, value_cols=value_cols)
 
-    def _append_velocity(self, all_features, feature_groups, lag_pd, value_cols, entity_col):
+    def _append_velocity_acceleration(
+        self, spark_parts, feature_groups, lag_spark, entity_col, value_cols,
+    ):
         if self.config.compute_velocity:
-            feat, grp = self._compute_velocity(lag_pd, value_cols)
-            all_features.append(feat)
-            feature_groups.append(grp)
+            va_spark, v_grp, a_grp = _velocity_acceleration_spark(
+                lag_spark, entity_col, value_cols, self.config)
+            spark_parts.append(va_spark)
+            feature_groups.append(v_grp)
+            feature_groups.append(a_grp)
         else:
             feature_groups.append(_disabled_group(FeatureGroup.VELOCITY))
-
-        if self.config.compute_acceleration and self.config.compute_velocity:
-            feat, grp = self._compute_acceleration(
-                all_features[1] if len(all_features) > 1 else lag_pd,
-                lag_pd, value_cols, entity_col)
-            all_features.append(feat)
-            feature_groups.append(grp)
-        else:
             feature_groups.append(_disabled_group(FeatureGroup.ACCELERATION))
 
     def _append_distributed_groups(
-        self, all_features, feature_groups,
+        self, spark_parts, feature_groups,
         spark_df, entity_col, time_col, value_cols, ref_spark,
     ):
         if self.config.compute_lifecycle:
             spark_result, grp = _lifecycle_spark(
                 spark_df, entity_col, time_col, value_cols, ref_spark, self.config)
-            all_features.append(spark_result.toPandas())
+            spark_parts.append(spark_result)
             feature_groups.append(grp)
         else:
             feature_groups.append(_disabled_group(FeatureGroup.LIFECYCLE))
@@ -302,7 +384,7 @@ class SparkTemporalFeatureEngineer(TemporalFeatureEngineer):
         if self.config.compute_recency:
             spark_result, grp = _recency_spark(
                 spark_df, entity_col, time_col, ref_spark)
-            all_features.append(spark_result.toPandas())
+            spark_parts.append(spark_result)
             feature_groups.append(grp)
         else:
             feature_groups.append(_disabled_group(FeatureGroup.RECENCY))
@@ -310,15 +392,15 @@ class SparkTemporalFeatureEngineer(TemporalFeatureEngineer):
         if self.config.compute_regularity:
             spark_result, grp = _regularity_spark(
                 spark_df, entity_col, time_col, ref_spark)
-            all_features.append(spark_result.toPandas())
+            spark_parts.append(spark_result)
             feature_groups.append(grp)
         else:
             feature_groups.append(_disabled_group(FeatureGroup.REGULARITY))
 
-    def _append_cohort(self, all_features, feature_groups, lag_pd, value_cols, entity_col):
+    def _append_cohort(self, spark_parts, feature_groups, lag_spark, entity_col, value_cols):
         if self.config.compute_cohort:
-            feat, grp = self._compute_cohort_comparison(lag_pd, value_cols, entity_col)
-            all_features.append(feat)
+            spark_result, grp = _cohort_spark(lag_spark, entity_col, value_cols)
+            spark_parts.append(spark_result)
             feature_groups.append(grp)
         else:
             feature_groups.append(_disabled_group(FeatureGroup.COHORT_COMPARISON))
