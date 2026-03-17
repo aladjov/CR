@@ -1171,6 +1171,43 @@ class TestTemporalFeaturesRenderer:
         assert "compute_temporal_features" in result
         ast.parse(result)
 
+    def test_databricks_temporal_features_uses_spark_join_not_pandas_merge(self, databricks_renderer, event_source):
+        """SparkTemporalFeatureEngineer returns pyspark.pandas — merging with
+        native pandas .merge() raises TypeError. The template must stay in
+        Spark: convert temporal_df via .to_spark() and use .join()."""
+        config = BronzeEventConfig(
+            source=event_source,
+            entity_column="customer_id",
+            time_column="order_date",
+            aggregation=AggregationWindowConfig(
+                windows=["7d", "30d", "all_time"],
+                value_columns=["amount"],
+                agg_funcs=["sum", "mean"],
+            ),
+            temporal_features=TemporalFeatureConfig(
+                lag_window_days=14,
+                num_lags=3,
+                lag_columns=["amount"],
+            ),
+        )
+        result = databricks_renderer.render_bronze_event("orders", config)
+        # Extract compute_temporal_features function body
+        lines = result.split("\n")
+        in_func = False
+        func_body = []
+        for line in lines:
+            if "def compute_temporal_features" in line:
+                in_func = True
+            elif in_func:
+                if line and not line[0].isspace() and not line.startswith("#"):
+                    break
+                func_body.append(line)
+        body_text = "\n".join(func_body)
+        assert ".toPandas()" not in body_text, "temporal features must not collect to driver"
+        assert ".merge(" not in body_text, "must use Spark .join(), not pandas .merge()"
+        assert ".to_spark()" in body_text, "must convert pyspark.pandas to native Spark"
+        assert ".join(" in body_text, "must use Spark .join()"
+
     def test_databricks_bronze_event_no_temporal_when_absent(self, databricks_renderer, event_source):
         config = BronzeEventConfig(
             source=event_source,

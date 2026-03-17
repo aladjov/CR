@@ -687,10 +687,10 @@ def compute_temporal_features(agg_df, raw_df):
     engineer = SparkTemporalFeatureEngineer(eng_config)
     result = engineer.compute(raw_df, ENTITY_COLUMN, TIME_COLUMN, value_cols)
     temporal_df = result.features_df
+    if hasattr(temporal_df, "to_spark"):
+        temporal_df = temporal_df.to_spark()
     merge_cols = [c for c in temporal_df.columns if c != ENTITY_COLUMN]
-    agg_pdf = agg_df.toPandas() if hasattr(agg_df, "toPandas") else agg_df
-    merged = agg_pdf.merge(temporal_df[[ENTITY_COLUMN] + merge_cols], on=ENTITY_COLUMN, how="left")
-    return spark.createDataFrame(merged)
+    return agg_df.join(temporal_df.select(ENTITY_COLUMN, *merge_cols), on=ENTITY_COLUMN, how="left")
 {% endif %}
 
 {%- if config.text_features %}
