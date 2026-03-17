@@ -108,9 +108,10 @@ def apply_sqrt_transform(df: DataFrame, column: str) -> DataFrame:
 
 @_requires_column
 def apply_zero_inflation_handling(df: DataFrame, column: str) -> DataFrame:
-    df[f"{column}_is_zero"] = (df[column] == 0).astype(int)
-    is_zero = df[column] == 0
-    df[column] = df[column].where(is_zero, np.log1p(df[column].clip(lower=0)))
+    is_zero = (df[column] == 0).astype(int)
+    transformed = df[column].where(df[column] == 0, np.log1p(df[column].clip(lower=0)))
+    df[f"{column}_is_zero"] = is_zero
+    df[column] = transformed
     return df
 
 

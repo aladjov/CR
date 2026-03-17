@@ -6,6 +6,7 @@ from customer_retention.generators.pipeline_generator.models import (
     PipelineTransformationType,
     TransformationStep,
 )
+from customer_retention.transforms import ops
 from customer_retention.transforms.artifact_store import ArtifactStore
 from customer_retention.transforms.executor import TransformExecutor
 
@@ -219,19 +220,27 @@ class TestApplyAll:
         np.testing.assert_array_almost_equal(result["v"].to_numpy(), expected["v"].to_numpy())
 
     def test_checkpoint_interval_respected(self, executor, sample_df):
-        from unittest.mock import patch
+        from unittest.mock import MagicMock, patch
+
+        _MOD = "customer_retention.transforms.executor"
         steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "amount") for _ in range(25)]
-        with patch("customer_retention.transforms.executor._is_spark_pandas", return_value=True), \
-             patch("customer_retention.transforms.executor.spark_checkpoint", side_effect=lambda d: d) as mock_cp:
+        checkpoint_count = 0
+
+        mock_spark_df = MagicMock()
+        mock_spark_df.localCheckpoint = MagicMock(return_value=mock_spark_df)
+
+        with patch(f"{_MOD}._is_spark_pandas", return_value=True), \
+             patch(f"{_MOD}.as_spark_df", return_value=mock_spark_df), \
+             patch(f"{_MOD}._as_pandas_api", return_value=sample_df.copy()):
             executor.apply_all(sample_df.copy(), steps)
-        assert mock_cp.call_count == 2
+        assert mock_spark_df.localCheckpoint.call_count == 2
 
     def test_no_checkpoint_on_pandas(self, executor, sample_df):
         from unittest.mock import patch
         steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "amount") for _ in range(25)]
-        with patch("customer_retention.transforms.executor.spark_checkpoint") as mock_cp:
-            executor.apply_all(sample_df.copy(), steps)
-        mock_cp.assert_not_called()
+        with patch("customer_retention.transforms.executor._is_spark_pandas", return_value=False):
+            result = executor.apply_all(sample_df.copy(), steps)
+        assert len(result) == len(sample_df)
 
     def test_batch_quantiles_match_per_column(self, executor):
         np.random.seed(42)
@@ -258,47 +267,46 @@ class TestApplyAll:
             executor.apply(sample_df, step)
 
 
-class TestPsseriesInvalidation:
-    def test_apply_all_clears_psseries_after_column_adding_ops(self, executor):
-        df = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
-        df._psseries = {"stale": "cache"}
+class TestDistributedApplyAll:
+    _MOD = "customer_retention.transforms.executor"
 
-        steps = [
-            _step(PipelineTransformationType.DERIVED_COLUMN, "a_times_b",
-                  method="interaction", col_a="a", col_b="b"),
-        ]
+    def test_distributed_path_wraps_per_step(self, executor):
+        from unittest.mock import MagicMock, patch
 
-        from unittest.mock import patch
-        with patch("customer_retention.transforms.executor._is_spark_pandas", return_value=True):
-            with patch("customer_retention.transforms.executor.spark_checkpoint", side_effect=lambda x: x):
-                result = executor.apply_all(df, steps)
+        mock_spark_df = MagicMock()
+        mock_result_ps = MagicMock()
+        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "a")]
 
-        assert result._psseries is None
-        assert "a_times_b" in result.columns
+        with patch(f"{self._MOD}._is_spark_pandas", return_value=True), \
+             patch(f"{self._MOD}.as_spark_df", return_value=mock_spark_df) as mock_as, \
+             patch(f"{self._MOD}._as_pandas_api", return_value=mock_result_ps) as mock_api, \
+             patch.object(executor, "apply", return_value=mock_result_ps), \
+             patch.object(executor, "_precompute_quantiles"):
+            executor._apply_all_distributed(MagicMock(), steps)
 
-    def test_apply_all_invalidates_after_every_step(self, executor):
-        df = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
+        assert mock_api.call_count == 2
+        assert mock_as.call_count == 2
 
-        steps = [
-            _step(PipelineTransformationType.LOG_TRANSFORM, "a"),
-            _step(PipelineTransformationType.DERIVED_COLUMN, "a_times_b",
-                  method="interaction", col_a="a", col_b="b"),
-        ]
+    def test_clears_psseries_before_to_spark(self, executor):
+        from unittest.mock import MagicMock, patch
 
-        invalidation_count = 0
-        original_invalidate = __import__(
-            "customer_retention.transforms.executor", fromlist=["_invalidate_psseries"]
-        )._invalidate_psseries
+        mock_result = MagicMock()
+        mock_result._psseries = {"stale": "cache"}
+        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "a")]
 
-        def counting_invalidate(df):
-            nonlocal invalidation_count
-            invalidation_count += 1
-            original_invalidate(df)
+        with patch(f"{self._MOD}._is_spark_pandas", return_value=True), \
+             patch(f"{self._MOD}.as_spark_df"), \
+             patch(f"{self._MOD}._as_pandas_api", return_value=MagicMock()), \
+             patch.object(executor, "apply", return_value=mock_result), \
+             patch.object(executor, "_precompute_quantiles"):
+            executor._apply_all_distributed(MagicMock(), steps)
 
-        from unittest.mock import patch
-        with patch("customer_retention.transforms.executor._is_spark_pandas", return_value=True):
-            with patch("customer_retention.transforms.executor.spark_checkpoint", side_effect=lambda x: x):
-                with patch("customer_retention.transforms.executor._invalidate_psseries", counting_invalidate):
-                    executor.apply_all(df, steps)
+        assert mock_result._psseries is None
 
-        assert invalidation_count == 2
+    def test_zero_inflation_reads_before_writes(self):
+        df = pd.DataFrame({"amount": [0.0, 5.0, 0.0, 10.0]})
+        result = ops.apply_zero_inflation_handling(df.copy(), "amount")
+        assert "amount_is_zero" in result.columns
+        assert list(result["amount_is_zero"]) == [1, 0, 1, 0]
+        assert result.loc[0, "amount"] == 0.0
+        assert result.loc[1, "amount"] > 0.0

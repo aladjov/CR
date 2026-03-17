@@ -6,27 +6,14 @@ Maps :class:`TransformationStep` types to the appropriate function in
 
 from __future__ import annotations
 
-from customer_retention.core.compat import DataFrame, _is_spark_pandas, spark_checkpoint
+from customer_retention.core.compat import DataFrame, _is_spark_pandas, as_spark_df
+from customer_retention.core.compat.spark_backend import _as_pandas_api
 from customer_retention.generators.pipeline_generator.models import (
     PipelineTransformationType,
     TransformationStep,
 )
 
 _CHECKPOINT_INTERVAL = 10
-
-
-def _invalidate_psseries(df: DataFrame) -> None:
-    """Clear stale ``_psseries`` cache on pyspark.pandas DataFrames.
-
-    pyspark.pandas ``__setitem__`` calls ``_update_internal_frame`` which
-    updates ``_internal`` (column count changes) but does NOT reset the
-    ``_psseries`` dict.  The next column read hits an assertion comparing
-    ``len(column_labels)`` vs ``len(_psseries)``.  Clearing the cache
-    forces a correct rebuild on next access.
-    """
-    if hasattr(df, '_psseries'):
-        df._psseries = None
-
 
 from . import ops
 from .artifact_store import ArtifactStore
@@ -63,14 +50,23 @@ class TransformExecutor:
     ) -> DataFrame:
         distributed = _is_spark_pandas(df)
         if distributed:
-            self._precompute_quantiles(df, steps)
-        for i, step in enumerate(steps):
+            return self._apply_all_distributed(df, steps, fit_mode=fit_mode, artifact_store=artifact_store)
+        for step in steps:
             df = self.apply(df, step, fit_mode=fit_mode, artifact_store=artifact_store)
-            if distributed:
-                _invalidate_psseries(df)
-                if (i + 1) % _CHECKPOINT_INTERVAL == 0 and i + 1 < len(steps):
-                    df = spark_checkpoint(df)
         return df
+
+    def _apply_all_distributed(self, df: DataFrame, steps: list[TransformationStep], *, fit_mode: bool = False, artifact_store: ArtifactStore | None = None) -> DataFrame:
+        self._precompute_quantiles(df, steps)
+        spark_df = as_spark_df(df)
+        for i, step in enumerate(steps):
+            ps_df = _as_pandas_api(spark_df)
+            result = self.apply(ps_df, step, fit_mode=fit_mode, artifact_store=artifact_store)
+            if hasattr(result, '_psseries'):
+                result._psseries = None
+            spark_df = as_spark_df(result)
+            if (i + 1) % _CHECKPOINT_INTERVAL == 0 and i + 1 < len(steps):
+                spark_df = spark_df.localCheckpoint(eager=True)
+        return _as_pandas_api(spark_df)
 
     def _precompute_quantiles(self, df: DataFrame, steps: list[TransformationStep]) -> None:
         cap_steps = [
