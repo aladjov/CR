@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Strip cell outputs from Jupyter notebooks for clean git commits.
+"""Strip cell outputs and Papermill error cells from Jupyter notebooks.
 
-Removes all cell outputs and execution counts while preserving the
-notebook structure, cell source, and metadata.
+Removes all cell outputs, execution counts, and Papermill error-injection
+cells (injected when Papermill encounters an exception) while preserving
+the notebook structure, cell source, and metadata.
 
 Usage:
     python scripts/notebooks/clean_notebook_outputs.py
@@ -16,11 +17,25 @@ from typing import List
 
 import nbformat
 
+PAPERMILL_ERROR_TAG = "papermill-error-cell-tag"
+
+
+def _is_papermill_error_cell(cell) -> bool:
+    """Check if a cell was injected by Papermill on execution failure."""
+    return PAPERMILL_ERROR_TAG in cell.get("metadata", {}).get("tags", [])
+
 
 def clean_notebook(notebook_path: Path) -> bool:
-    """Strip outputs from a single notebook. Returns True if modified."""
+    """Strip outputs and Papermill error cells. Returns True if modified."""
     nb = nbformat.read(str(notebook_path), as_version=4)
     modified = False
+
+    # Remove Papermill error-injection cells
+    original_count = len(nb.cells)
+    nb.cells = [cell for cell in nb.cells if not _is_papermill_error_cell(cell)]
+    if len(nb.cells) < original_count:
+        modified = True
+
     for cell in nb.cells:
         if cell.cell_type == "code":
             if cell.outputs:
@@ -50,7 +65,10 @@ def clean_all(notebooks_dir: Path, dry_run: bool = False) -> List[str]:
             and (cell.outputs or cell.execution_count is not None)
             for cell in nb.cells
         )
-        if has_outputs:
+        has_papermill_errors = any(
+            _is_papermill_error_cell(cell) for cell in nb.cells
+        )
+        if has_outputs or has_papermill_errors:
             if dry_run:
                 print(f"  {nb_path.name} — would clean")
             else:
