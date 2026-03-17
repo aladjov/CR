@@ -742,6 +742,9 @@ def main():
             "SPARK_CONNECT_USER_AGENT",
             "DATABRICKS_METADATA_SERVICE_URL",
             "SPARK_REMOTE",
+            "DATABRICKS_HOST",
+            "DATABRICKS_CLUSTER_ID",
+            "DATABRICKS_AUTH_TYPE",
         ]
         for _var in _spark_connect_vars:
             os.environ.pop(_var, None)

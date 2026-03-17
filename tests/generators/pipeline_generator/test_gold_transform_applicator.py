@@ -293,3 +293,81 @@ class TestDerivedSourceColumns:
     def test_another_unknown_action(self):
         result = _derived_source_columns("custom_formula", {})
         assert result == set()
+
+
+# ---------------------------------------------------------------------------
+# Sequential silver + gold: no duplicate feature_cols
+# ---------------------------------------------------------------------------
+
+class TestSilverThenGoldNoDuplicateFeatures:
+    """Reproduce NB08 bug where _cols captured pre-silver caused
+    silver-derived columns to appear in _new_cols after gold,
+    duplicating entries in feature_cols."""
+
+    def test_feature_cols_no_duplicates_after_silver_and_gold(self):
+        import pandas as pd
+
+        from customer_retention.transforms import TransformExecutor
+
+        reg = RecommendationRegistry()
+        reg.init_silver("customer_id")
+        reg.add_silver_ratio("avg_order", "total_amount", "order_count", "ratio feature", "06")
+        reg.init_gold("churn")
+        reg.add_gold_transformation("total_amount", "log", {}, "log transform", "04")
+
+        df = pd.DataFrame({
+            "total_amount": [100.0, 200.0, 300.0],
+            "order_count": [1.0, 2.0, 3.0],
+        })
+        feature_cols = ["total_amount", "order_count"]
+        executor = TransformExecutor()
+
+        silver_steps = build_silver_derived_steps(reg, set(df.columns))
+        if silver_steps:
+            df = executor.apply_all(df, silver_steps)
+            feature_cols = [c for c in df.columns if c in set(feature_cols) | {s.column for s in silver_steps}]
+
+        pre_gold_cols = set(df.columns)
+        gold_steps = build_gold_steps(reg, pre_gold_cols)
+        if gold_steps:
+            df = executor.apply_all(df, gold_steps)
+            new_cols = [c for c in df.columns if c not in pre_gold_cols]
+            feature_cols = feature_cols + new_cols
+
+        assert len(feature_cols) == len(set(feature_cols)), (
+            f"Duplicate feature columns: {[c for c in feature_cols if feature_cols.count(c) > 1]}"
+        )
+
+    def test_pre_silver_cols_causes_duplicates(self):
+        """Verify that using pre-silver _cols for gold detection DOES produce duplicates."""
+        import pandas as pd
+
+        from customer_retention.transforms import TransformExecutor
+
+        reg = RecommendationRegistry()
+        reg.init_silver("customer_id")
+        reg.add_silver_ratio("avg_order", "total_amount", "order_count", "ratio feature", "06")
+        reg.init_gold("churn")
+        reg.add_gold_transformation("total_amount", "log", {}, "log transform", "04")
+
+        df = pd.DataFrame({
+            "total_amount": [100.0, 200.0, 300.0],
+            "order_count": [1.0, 2.0, 3.0],
+        })
+        feature_cols = ["total_amount", "order_count"]
+        executor = TransformExecutor()
+        pre_silver_cols = set(df.columns)
+
+        silver_steps = build_silver_derived_steps(reg, pre_silver_cols)
+        if silver_steps:
+            df = executor.apply_all(df, silver_steps)
+            feature_cols = [c for c in df.columns if c in set(feature_cols) | {s.column for s in silver_steps}]
+
+        gold_steps = build_gold_steps(reg, set(df.columns))
+        if gold_steps:
+            df = executor.apply_all(df, gold_steps)
+            new_cols = [c for c in df.columns if c not in pre_silver_cols]
+            feature_cols = feature_cols + new_cols
+
+        duplicates = [c for c in feature_cols if feature_cols.count(c) > 1]
+        assert len(duplicates) > 0, "Expected duplicates from pre-silver _cols bug"

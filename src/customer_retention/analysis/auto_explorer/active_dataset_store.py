@@ -4,7 +4,7 @@ import gc
 import logging
 import time
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 from customer_retention.core.compat import (
@@ -15,6 +15,9 @@ from customer_retention.core.compat import (
 from customer_retention.core.compat import to_pandas as _compat_to_pandas
 from customer_retention.core.config.column_config import DatasetGranularity
 from customer_retention.integrations.adapters.factory import get_delta
+
+if TYPE_CHECKING:
+    from customer_retention.analysis.auto_explorer.project_context import ProjectContext
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +151,50 @@ def load_active_dataset_distributed(namespace: RunNamespace, dataset_name: str) 
     if not dlt_path.is_dir():
         raise FileNotFoundError(f"Active dataset not found: {dlt_path}")
     return get_delta().read(str(dlt_path))
+
+
+def load_bridge_distributed(
+    namespace: RunNamespace,
+    dataset_name: str,
+    project_ctx: "Optional[ProjectContext]" = None,
+) -> Any:
+    dlt_path = namespace.landing_table_dir(dataset_name)
+    if dlt_path.is_dir():
+        return get_delta().read(str(dlt_path))
+    if project_ctx is None or dataset_name not in project_ctx.datasets:
+        raise FileNotFoundError(
+            f"Bridge dataset '{dataset_name}' not found in landing ({dlt_path}) "
+            f"and no raw source available. Ensure the bridge dataset's NB01 "
+            f"completes before datasets that depend on it for key resolution."
+        )
+    entry = project_ctx.datasets[dataset_name]
+    logger.info(
+        "Bridge '%s' not in landing yet — loading from raw source: %s",
+        dataset_name, entry.path,
+    )
+    return _load_raw_source(entry.path, entry.storage_format)
+
+
+def _load_raw_source(path: str, storage_format: str) -> Any:
+    from customer_retention.analysis.auto_explorer.dataset_fingerprinter import is_table_name
+    from customer_retention.core.compat import as_pandas_api, load_spark_table, native_pd
+    from customer_retention.core.compat.detection import get_spark_session
+
+    if is_table_name(path):
+        return as_pandas_api(load_spark_table(path))
+    spark = get_spark_session()
+    fmt = storage_format or "csv"
+    if spark:
+        if fmt == "parquet":
+            return as_pandas_api(spark.read.parquet(path))
+        if fmt == "delta":
+            return as_pandas_api(spark.read.format("delta").load(path))
+        return as_pandas_api(
+            spark.read.option("header", "true").option("inferSchema", "true").csv(path),
+        )
+    if fmt == "parquet":
+        return native_pd.read_parquet(path)
+    return native_pd.read_csv(path)
 
 
 def load_silver_merged_distributed(
