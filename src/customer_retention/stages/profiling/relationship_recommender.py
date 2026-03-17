@@ -6,7 +6,12 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import batched_corr_matrix, groupby_multi_agg, pd
+from customer_retention.core.compat import (
+    batched_corr_matrix,
+    bulk_corr_with_target,
+    groupby_multi_agg,
+    pd,
+)
 
 
 class RecommendationCategory(Enum):
@@ -216,13 +221,13 @@ class RelationshipRecommender:
 
         if correlation_matrix is not None and target_col in correlation_matrix.index:
             available = [c for c in feature_cols if c in correlation_matrix.index]
-            corr_with_target = correlation_matrix
+            target_corrs = {c: float(correlation_matrix.loc[c, target_col]) for c in available}
         else:
-            available = feature_cols
-            corr_with_target = batched_corr_matrix(df, feature_cols + [target_col])
+            target_corrs = bulk_corr_with_target(df, feature_cols, target_col)
+            available = list(target_corrs.keys())
 
         for col in available:
-            corr = corr_with_target.loc[col, target_col]
+            corr = target_corrs.get(col, 0.0)
             effect_size = effect_sizes.get(col, 0.0) if effect_sizes else 0.0
 
             predictor_info = {
@@ -276,32 +281,34 @@ class RelationshipRecommender:
 
         overall_rate = df[target_col].mean()
 
+        n_rows = len(df)
         for col in categorical_cols:
             if col not in df.columns:
                 continue
 
-            # Calculate retention rates by category (single Spark job per column)
             cat_stats = groupby_multi_agg(df, col, target_col, ["sum", "count", "mean"])
             cat_stats.columns = [col, "retained_count", "count", "retention_rate"]
             cat_stats["lift"] = cat_stats["retention_rate"] / overall_rate
 
-            # Derive Cramér's V from groupby stats (no extra Spark job)
-            cramers_v = self._cramers_v_from_stats(cat_stats, "retained_count", "count", len(df))
+            counts_arr = cat_stats["count"].to_numpy()
+            rates_arr = cat_stats["retention_rate"].to_numpy()
+            lifts_arr = cat_stats["lift"].to_numpy()
+            cat_names = cat_stats[col].to_numpy()
+
+            cramers_v = self._cramers_v_from_stats(cat_stats, "retained_count", "count", n_rows)
             associations.append({"feature": col, "cramers_v": cramers_v})
 
-            high_risk_mask = (cat_stats["count"] >= self.MIN_CATEGORY_SIZE) & (cat_stats["lift"] < self.HIGH_RISK_LIFT_THRESHOLD)
-            high_risk = cat_stats[high_risk_mask]
-            for i in range(len(high_risk)):
-                row = high_risk.iloc[i]
-                high_risk_segments.append({
-                    "feature": col, "segment": row[col],
-                    "retention_rate": float(row["retention_rate"]),
-                    "lift": float(row["lift"]), "count": int(row["count"]),
-                })
+            for idx in range(len(counts_arr)):
+                if counts_arr[idx] >= self.MIN_CATEGORY_SIZE and lifts_arr[idx] < self.HIGH_RISK_LIFT_THRESHOLD:
+                    high_risk_segments.append({
+                        "feature": col, "segment": cat_names[idx],
+                        "retention_rate": float(rates_arr[idx]),
+                        "lift": float(lifts_arr[idx]), "count": int(counts_arr[idx]),
+                    })
 
-            # Check if category sizes are imbalanced
-            size_ratio = cat_stats["count"].max() / cat_stats["count"].min() if cat_stats["count"].min() > 0 else float("inf")
-            rate_spread = cat_stats["retention_rate"].max() - cat_stats["retention_rate"].min()
+            min_count = float(counts_arr.min()) if len(counts_arr) > 0 else 0
+            size_ratio = float(counts_arr.max()) / min_count if min_count > 0 else float("inf")
+            rate_spread = float(rates_arr.max()) - float(rates_arr.min()) if len(rates_arr) > 0 else 0.0
 
             if rate_spread > 0.15 or size_ratio > 10:
                 recommendations.append(RelationshipRecommendation(

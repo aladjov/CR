@@ -3,7 +3,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, Timestamp, native_pd, to_datetime
+from customer_retention.core.compat import DataFrame, Timestamp, _is_spark_pandas, as_spark_df, native_pd, to_datetime
 from customer_retention.stages.profiling.stats_helpers import calculate_group_retention_stats
 
 
@@ -54,14 +54,8 @@ class TemporalTargetAnalyzer:
         if len(df_clean) == 0:
             return self._empty_result(datetime_col, target_col)
 
-        # Calculate overall retention rate
         overall_rate = df_clean[target_col].mean()
-
-        # Extract temporal components
-        df_clean['_year'] = df_clean[datetime_col].dt.year
-        df_clean['_month'] = df_clean[datetime_col].dt.month
-        df_clean['_quarter'] = df_clean[datetime_col].dt.quarter
-        df_clean['_dow'] = df_clean[datetime_col].dt.dayofweek
+        df_clean = self._extract_temporal_components(df_clean, datetime_col)
 
         # Calculate stats by time period
         yearly_stats = self._calculate_period_stats(df_clean, '_year', target_col, overall_rate)
@@ -91,6 +85,26 @@ class TemporalTargetAnalyzer:
             dow_stats=dow_stats,
             quarterly_stats=quarterly_stats
         )
+
+    @staticmethod
+    def _extract_temporal_components(df_clean: DataFrame, datetime_col: str) -> DataFrame:
+        if _is_spark_pandas(df_clean):
+            import pyspark.sql.functions as F  # noqa: N812
+            spark_df = as_spark_df(df_clean)
+            ts = F.col(datetime_col)
+            spark_df = spark_df.withColumns({
+                "_year": F.year(ts),
+                "_month": F.month(ts),
+                "_quarter": F.quarter(ts),
+                "_dow": F.dayofweek(ts) - 1,
+            })
+            from customer_retention.core.compat.spark_backend import _as_pandas_api
+            return _as_pandas_api(spark_df)
+        df_clean['_year'] = df_clean[datetime_col].dt.year
+        df_clean['_month'] = df_clean[datetime_col].dt.month
+        df_clean['_quarter'] = df_clean[datetime_col].dt.quarter
+        df_clean['_dow'] = df_clean[datetime_col].dt.dayofweek
+        return df_clean
 
     def _calculate_period_stats(
         self,
@@ -152,21 +166,16 @@ class TemporalTargetAnalyzer:
 
         return 'stable'
 
-    def _find_seasonal_extremes(
-        self,
-        monthly_stats: DataFrame
-    ) -> tuple:
+    @staticmethod
+    def _find_seasonal_extremes(monthly_stats: DataFrame) -> tuple:
         if len(monthly_stats) == 0:
             return None, None, 0.0
 
-        best_idx = monthly_stats['retention_rate'].idxmax()
-        worst_idx = monthly_stats['retention_rate'].idxmin()
-
-        best_month = monthly_stats.loc[best_idx, 'month_name']
-        worst_month = monthly_stats.loc[worst_idx, 'month_name']
-        spread = monthly_stats.loc[best_idx, 'retention_rate'] - monthly_stats.loc[worst_idx, 'retention_rate']
-
-        return best_month, worst_month, float(spread)
+        rates = monthly_stats['retention_rate'].to_numpy()
+        names = monthly_stats['month_name'].to_numpy()
+        best_pos = int(rates.argmax())
+        worst_pos = int(rates.argmin())
+        return str(names[best_pos]), str(names[worst_pos]), float(rates[best_pos] - rates[worst_pos])
 
     def _empty_result(self, datetime_col: str, target_col: str) -> TemporalTargetResult:
         empty_df = native_pd.DataFrame()

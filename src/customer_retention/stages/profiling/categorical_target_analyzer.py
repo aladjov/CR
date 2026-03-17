@@ -5,6 +5,7 @@ import numpy as np
 from scipy.stats import chi2_contingency
 
 from customer_retention.core.compat import DataFrame, head_as_list, is_datetime64_any_dtype, native_pd
+from customer_retention.core.compat.bulk_profiling import bulk_nunique
 from customer_retention.stages.profiling.stats_helpers import calculate_group_retention_stats
 
 CARDINALITY_THRESHOLD = 0.5
@@ -35,40 +36,46 @@ class CategoricalAnalysisResult:
     key_findings: List[str] = field(default_factory=list)
 
 
-def _validate_categorical_column(col: str, df: DataFrame, entity_column: str, target_column: str, n_entities: int, cardinality_threshold: float) -> tuple:
-    if col in [entity_column, target_column]:
-        return False, "entity or target column"
-    if is_datetime64_any_dtype(df[col]):
-        return False, "datetime column"
-    n_unique = df[col].nunique()
-    ratio = n_unique / n_entities
-    if ratio > cardinality_threshold:
-        return False, f"high cardinality identifier ({n_unique} unique values, {ratio:.0%} of entities)"
-    if n_unique < MIN_CATEGORIES_FOR_ANALYSIS:
-        return False, f"too few categories ({n_unique})"
-    if n_unique > MAX_CATEGORIES_FOR_ANALYSIS:
-        return False, f"too many categories ({n_unique})"
-    return True, None
+def _classify_categorical_columns(
+    df: DataFrame, entity_column: str, target_column: str, cardinality_threshold: float,
+) -> tuple:
+    cat_cols = list(df.select_dtypes(include=["object", "category"]).columns)
+    if not cat_cols:
+        return [], {}
+    nunique_cols = [c for c in cat_cols if c not in (entity_column, target_column)]
+    need_entity = entity_column in df.columns and entity_column in nunique_cols
+    all_nunique_cols = list({entity_column, *nunique_cols}) if need_entity else nunique_cols
+    counts = bulk_nunique(df, [c for c in all_nunique_cols if c in df.columns])
+    n_entities = counts.get(entity_column, len(df)) if entity_column in df.columns else len(df)
+    valid, reasons = [], {}
+    for col in cat_cols:
+        if col in (entity_column, target_column):
+            reasons[col] = "entity or target column"
+            continue
+        if is_datetime64_any_dtype(df[col]):
+            reasons[col] = "datetime column"
+            continue
+        n_unique = counts.get(col, 0)
+        ratio = n_unique / n_entities if n_entities > 0 else 0
+        if ratio > cardinality_threshold:
+            reasons[col] = f"high cardinality identifier ({n_unique} unique values, {ratio:.0%} of entities)"
+        elif n_unique < MIN_CATEGORIES_FOR_ANALYSIS:
+            reasons[col] = f"too few categories ({n_unique})"
+        elif n_unique > MAX_CATEGORIES_FOR_ANALYSIS:
+            reasons[col] = f"too many categories ({n_unique})"
+        else:
+            valid.append(col)
+    return valid, reasons
 
 
 def filter_categorical_columns(df: DataFrame, entity_column: str, target_column: str, cardinality_threshold: float = CARDINALITY_THRESHOLD) -> List[str]:
-    n_entities = df[entity_column].nunique() if entity_column in df.columns else len(df)
-    return [
-        col for col in df.select_dtypes(include=["object", "category"]).columns
-        if _validate_categorical_column(col, df, entity_column, target_column, n_entities, cardinality_threshold)[0]
-    ]
+    valid, _ = _classify_categorical_columns(df, entity_column, target_column, cardinality_threshold)
+    return valid
 
 
 def _get_filter_reasons(df: DataFrame, entity_column: str, target_column: str, cardinality_threshold: float = CARDINALITY_THRESHOLD) -> Dict[str, str]:
-    n_entities = df[entity_column].nunique() if entity_column in df.columns else len(df)
-    reasons = {}
-    for col in df.select_dtypes(include=["object", "category"]).columns:
-        is_valid, reason = _validate_categorical_column(
-            col, df, entity_column, target_column, n_entities, cardinality_threshold
-        )
-        if not is_valid and reason:
-            reasons[col] = reason
-    return reasons
+    _, reasons = _classify_categorical_columns(df, entity_column, target_column, cardinality_threshold)
+    return {col: r for col, r in reasons.items() if col not in (entity_column, target_column)}
 
 
 def _generate_interpretation(result: "CategoricalTargetResult") -> str:

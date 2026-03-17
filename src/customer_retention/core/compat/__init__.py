@@ -780,6 +780,9 @@ def _numeric_column_names(df: Any, columns: list[str]) -> set[str]:
     return set(df[columns].select_dtypes(include="number").columns)
 
 
+_ML_CORR_THRESHOLD = 100
+
+
 def batched_corr_matrix(df: Any, columns: list[str]) -> _pandas.DataFrame:
     import numpy as _np
     valid_cols = [c for c in columns if c in df.columns]
@@ -792,7 +795,46 @@ def batched_corr_matrix(df: Any, columns: list[str]) -> _pandas.DataFrame:
         full = _pandas.DataFrame(_np.nan, index=valid_cols, columns=valid_cols)
         full.loc[corr.index, corr.columns] = corr
         return full
+    if len(num_cols) > _ML_CORR_THRESHOLD:
+        return _spark_corr_matrix_ml(df, valid_cols, numeric)
     return _spark_pairwise_corr(df, valid_cols, numeric)
+
+
+def _spark_corr_matrix_ml(df: Any, cols: list[str], numeric: set[str]) -> _pandas.DataFrame:
+    import numpy as _np
+    import pyspark.sql.functions as F  # noqa: N812
+    from pyspark.ml.feature import Imputer, VectorAssembler
+    from pyspark.ml.stat import Correlation
+
+    num_cols = [c for c in cols if c in numeric]
+    if len(num_cols) < 2:
+        return _pandas.DataFrame(_np.nan, index=cols, columns=cols)
+    spark_df = as_spark_df(df[num_cols])
+    safe_names = {c: f"__f_{i}__" for i, c in enumerate(num_cols)}
+    spark_df = spark_df.select([F.col(c).cast("double").alias(safe_names[c]) for c in num_cols])
+    safe_cols = list(safe_names.values())
+    non_null_row = spark_df.agg(*[F.count(c).alias(c) for c in safe_cols]).head()
+    valid_safe = [c for c in safe_cols if non_null_row[c] > 0]
+    if len(valid_safe) < 2:
+        return _pandas.DataFrame(_np.nan, index=cols, columns=cols)
+    if len(valid_safe) < len(safe_cols):
+        spark_df = spark_df.select(valid_safe)
+    imputer = Imputer(inputCols=valid_safe, outputCols=valid_safe, strategy="median")
+    imputed_df = imputer.fit(spark_df).transform(spark_df)
+    assembler = VectorAssembler(inputCols=valid_safe, outputCol="__features__")
+    vec_df = assembler.transform(imputed_df).select("__features__")
+    corr_row = Correlation.corr(vec_df, "__features__", "pearson").head()
+    matrix = corr_row[0].toArray()
+    rev_names = {v: k for k, v in safe_names.items()}
+    valid_orig = [rev_names[s] for s in valid_safe]
+    n = len(cols)
+    full_matrix = _np.full((n, n), _np.nan)
+    for i_out, orig_i in enumerate(valid_orig):
+        i_full = cols.index(orig_i)
+        for j_out, orig_j in enumerate(valid_orig):
+            j_full = cols.index(orig_j)
+            full_matrix[i_full, j_full] = matrix[i_out, j_out]
+    return _pandas.DataFrame(full_matrix, columns=cols, index=cols)
 
 
 def _safe_corr_expr(col_a: str, col_b: str) -> Any:
@@ -869,6 +911,58 @@ def _spark_bulk_corr_with_target(df: Any, columns: list[str], target_column: str
         exprs = [_safe_corr_expr(c, target_column).alias(f"c_{i}") for i, c in enumerate(batch)]
         row = spark_df.select(*exprs).head()
         for i, c in enumerate(batch):
+            val = row[f"c_{i}"]
+            result[c] = float(val) if val is not None else math.nan
+    return result
+
+
+def bulk_null_corr_with_target(df: Any, columns: list[str], target_column: str) -> dict[str, float]:
+    if target_column not in df.columns:
+        return {}
+    valid = [c for c in columns if c in df.columns and c != target_column]
+    if not valid:
+        return {}
+    if _is_spark_pandas(df):
+        return _spark_null_corr_with_target(df, valid, target_column)
+    return _pandas_null_corr_with_target(df, valid, target_column)
+
+
+def _pandas_null_corr_with_target(df: Any, columns: list[str], target_column: str) -> dict[str, float]:
+    import math
+    target_float = df[target_column].astype(float)
+    result: dict[str, float] = {}
+    for c in columns:
+        indicator = df[c].isna().astype(float)
+        try:
+            result[c] = indicator.corr(target_float)
+        except (ValueError, TypeError):
+            result[c] = math.nan
+    return result
+
+
+def _spark_null_corr_with_target(df: Any, columns: list[str], target_column: str) -> dict[str, float]:
+    import math
+
+    import pyspark.sql.functions as F  # noqa: N812
+
+    spark_df = as_spark_df(df[columns + [target_column]])
+    null_exprs = [
+        F.when(F.col(c).isNull(), 1.0).otherwise(0.0).alias(f"__null_{c}")
+        for c in columns
+    ]
+    null_spark_df = spark_df.select(*null_exprs, F.col(target_column))
+    null_names = [f"__null_{c}" for c in columns]
+    _BATCH = 500
+    result: dict[str, float] = {}
+    for start in range(0, len(columns), _BATCH):
+        batch_cols = columns[start:start + _BATCH]
+        batch_nulls = null_names[start:start + _BATCH]
+        exprs = [
+            _safe_corr_expr(nn, target_column).alias(f"c_{i}")
+            for i, nn in enumerate(batch_nulls)
+        ]
+        row = null_spark_df.select(*exprs).head()
+        for i, c in enumerate(batch_cols):
             val = row[f"c_{i}"]
             result[c] = float(val) if val is not None else math.nan
     return result

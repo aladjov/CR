@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import FrozenSet, List, Optional, Set, Tuple
 
-from customer_retention.core.compat import DataFrame, Series, bulk_corr_with_target
+from customer_retention.core.compat import DataFrame, Series, bulk_corr_with_target, bulk_null_corr_with_target
 
 from ..components.enums import Severity
 
@@ -86,12 +86,8 @@ def _null_correlated_columns(
 ) -> List[str]:
     if not columns:
         return []
-    alias_map = {f"__null_{col}": col for col in columns}
-    null_df = df[[target_column]].copy()
-    for alias, col in alias_map.items():
-        null_df[alias] = df[col].isna().astype(float)
-    corrs = bulk_corr_with_target(null_df, list(alias_map.keys()), target_column)
-    return [alias_map[a] for a in alias_map if abs(corrs.get(a, 0.0)) >= threshold]
+    corrs = bulk_null_corr_with_target(df, columns, target_column)
+    return [c for c in columns if abs(corrs.get(c, 0.0)) >= threshold]
 
 
 def detect_target_leaking_datetime_columns(
