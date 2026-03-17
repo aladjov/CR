@@ -77,6 +77,8 @@ COLLECT_BOUNDARY_FILES = {
     "stages/validation/timeseries_detector.py",
     # Timestamp discovery — bounded .head() + collect
     "stages/temporal/timestamp_discovery.py",
+    # Native Spark transform ops — collect only for small aggregates (quantiles, categories)
+    "transforms/spark_ops.py",
 }
 
 # ── bare 'import pandas as pd' allowlist ────────────────────────────────

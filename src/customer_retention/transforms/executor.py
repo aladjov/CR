@@ -59,11 +59,16 @@ class TransformExecutor:
         self._precompute_quantiles(df, steps)
         spark_df = as_spark_df(df)
         for i, step in enumerate(steps):
-            ps_df = _as_pandas_api(spark_df)
-            result = self.apply(ps_df, step, fit_mode=fit_mode, artifact_store=artifact_store)
-            if hasattr(result, '_psseries'):
-                result._psseries = None
-            spark_df = as_spark_df(result)
+            handler = _SPARK_DISPATCH.get(step.type)
+            result = handler(spark_df, step) if handler is not None else None
+            if result is not None:
+                spark_df = result
+            else:
+                ps_df = _as_pandas_api(spark_df)
+                ps_result = self.apply(ps_df, step, fit_mode=fit_mode, artifact_store=artifact_store)
+                if hasattr(ps_result, '_psseries'):
+                    ps_result._psseries = None
+                spark_df = as_spark_df(ps_result)
             if (i + 1) % _CHECKPOINT_INTERVAL == 0 and i + 1 < len(steps):
                 spark_df = spark_df.localCheckpoint(eager=True)
         return _as_pandas_api(spark_df)
@@ -187,3 +192,40 @@ class TransformExecutor:
         PipelineTransformationType.FEATURE_SELECT: _handle_feature_select,
         PipelineTransformationType.DERIVED_COLUMN: _handle_derived_column,
     }
+
+
+def _spark_derived(spark_df, step: TransformationStep):
+    from . import spark_ops
+    method = step.parameters.get("method") or step.parameters.get("action")
+    if method == "ratio":
+        return spark_ops.spark_derived_ratio(spark_df, step.column, numerator=step.parameters.get("numerator", ""), denominator=step.parameters.get("denominator", ""))
+    if method == "interaction":
+        return spark_ops.spark_derived_interaction(spark_df, step.column, col_a=step.parameters.get("col_a", ""), col_b=step.parameters.get("col_b", ""))
+    if method == "composite":
+        return spark_ops.spark_derived_composite(spark_df, step.column, columns=step.parameters.get("columns", []))
+    return spark_df
+
+
+def _make_spark_dispatch():
+    from . import spark_ops
+    return {
+        PipelineTransformationType.IMPUTE_NULL: lambda df, s: spark_ops.spark_impute_null(df, s.column, value=s.parameters.get("value", 0)),
+        PipelineTransformationType.CAP_OUTLIER: lambda df, s: spark_ops.spark_cap_outlier(df, s.column, lower=s.parameters.get("lower", 0), upper=s.parameters.get("upper", 1_000_000)),
+        PipelineTransformationType.TYPE_CAST: lambda df, s: spark_ops.spark_type_cast(df, s.column, dtype=s.parameters.get("dtype", "float")),
+        PipelineTransformationType.DROP_COLUMN: lambda df, s: spark_ops.spark_drop_column(df, s.column),
+        PipelineTransformationType.WINSORIZE: lambda df, s: spark_ops.spark_winsorize(df, s.column, lower_bound=s.parameters.get("lower_bound", 0), upper_bound=s.parameters.get("upper_bound", 1_000_000)),
+        PipelineTransformationType.SEGMENT_AWARE_CAP: lambda df, s: spark_ops.spark_segment_aware_cap(df, s.column, n_segments=s.parameters.get("n_segments", 2)),
+        PipelineTransformationType.LOG_TRANSFORM: lambda df, s: spark_ops.spark_log_transform(df, s.column),
+        PipelineTransformationType.SQRT_TRANSFORM: lambda df, s: spark_ops.spark_sqrt_transform(df, s.column),
+        PipelineTransformationType.ZERO_INFLATION_HANDLING: lambda df, s: spark_ops.spark_zero_inflation(df, s.column),
+        PipelineTransformationType.CAP_THEN_LOG: lambda df, s: spark_ops.spark_cap_then_log(df, s.column, q99=s.parameters.get("_precomputed_q99")),
+        PipelineTransformationType.ENCODE: lambda df, s: spark_ops.spark_one_hot_encode(df, s.column) if s.parameters.get("method", "one_hot") == "one_hot" else None,
+        PipelineTransformationType.FEATURE_SELECT: lambda df, s: spark_ops.spark_feature_select(df, s.column),
+        PipelineTransformationType.DERIVED_COLUMN: _spark_derived,
+    }
+
+
+try:
+    _SPARK_DISPATCH = _make_spark_dispatch()
+except ImportError:
+    _SPARK_DISPATCH = {}

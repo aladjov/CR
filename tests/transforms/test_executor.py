@@ -270,38 +270,38 @@ class TestApplyAll:
 class TestDistributedApplyAll:
     _MOD = "customer_retention.transforms.executor"
 
-    def test_distributed_path_wraps_per_step(self, executor):
+    def test_distributed_uses_spark_dispatch(self, executor):
         from unittest.mock import MagicMock, patch
 
         mock_spark_df = MagicMock()
-        mock_result_ps = MagicMock()
+        mock_result = MagicMock()
         steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "a")]
+
+        with patch(f"{self._MOD}._is_spark_pandas", return_value=True), \
+             patch(f"{self._MOD}.as_spark_df", return_value=mock_spark_df), \
+             patch(f"{self._MOD}._as_pandas_api", return_value=MagicMock()) as mock_api, \
+             patch(f"{self._MOD}._SPARK_DISPATCH", {PipelineTransformationType.LOG_TRANSFORM: lambda df, s: mock_result}), \
+             patch.object(executor, "_precompute_quantiles"):
+            executor._apply_all_distributed(MagicMock(), steps)
+
+        mock_api.assert_called_once_with(mock_result)
+
+    def test_fallback_to_pyspark_pandas_for_unknown_types(self, executor):
+        from unittest.mock import MagicMock, patch
+
+        mock_spark_df = MagicMock()
+        mock_ps_result = MagicMock()
+        steps = [_step(PipelineTransformationType.SCALE, "a", method="standard")]
 
         with patch(f"{self._MOD}._is_spark_pandas", return_value=True), \
              patch(f"{self._MOD}.as_spark_df", return_value=mock_spark_df) as mock_as, \
-             patch(f"{self._MOD}._as_pandas_api", return_value=mock_result_ps) as mock_api, \
-             patch.object(executor, "apply", return_value=mock_result_ps), \
-             patch.object(executor, "_precompute_quantiles"):
-            executor._apply_all_distributed(MagicMock(), steps)
-
-        assert mock_api.call_count == 2
-        assert mock_as.call_count == 2
-
-    def test_clears_psseries_before_to_spark(self, executor):
-        from unittest.mock import MagicMock, patch
-
-        mock_result = MagicMock()
-        mock_result._psseries = {"stale": "cache"}
-        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "a")]
-
-        with patch(f"{self._MOD}._is_spark_pandas", return_value=True), \
-             patch(f"{self._MOD}.as_spark_df"), \
              patch(f"{self._MOD}._as_pandas_api", return_value=MagicMock()), \
-             patch.object(executor, "apply", return_value=mock_result), \
+             patch(f"{self._MOD}._SPARK_DISPATCH", {}), \
+             patch.object(executor, "apply", return_value=mock_ps_result), \
              patch.object(executor, "_precompute_quantiles"):
             executor._apply_all_distributed(MagicMock(), steps)
 
-        assert mock_result._psseries is None
+        assert mock_as.call_count == 2
 
     def test_zero_inflation_reads_before_writes(self):
         df = pd.DataFrame({"amount": [0.0, 5.0, 0.0, 10.0]})
