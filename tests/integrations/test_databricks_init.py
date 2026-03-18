@@ -141,17 +141,6 @@ class TestMakeAbsoluteExperimentPath:
 
 
 class TestDatabricksInitMLflowConfiguration:
-    @patch("customer_retention.integrations.databricks_init.mlflow", create=True)
-    def test_calls_mlflow_set_experiment(self, mock_mlflow_module, monkeypatch, databricks_env):
-        import customer_retention.integrations.databricks_init as mod
-
-        mock_mlflow = MagicMock()
-        monkeypatch.setattr(mod, "_configure_mlflow_experiment", lambda name: mock_mlflow.set_experiment(name))
-        from customer_retention.integrations.databricks_init import databricks_init
-
-        databricks_init(experiment_name="test_exp", copy_notebooks=False)
-        mock_mlflow.set_experiment.assert_called_once_with("test_exp")
-
     def test_custom_experiment_name_used(self, monkeypatch, databricks_env):
         from customer_retention.integrations.databricks_init import databricks_init
 
@@ -379,12 +368,6 @@ class TestDatabricksInitCellScenario:
         assert exp_module.FINDINGS_DIR == Path("/Volumes/churnkit/prod/experiments/findings")
         assert exp_module.CATALOG == "churnkit"
         assert exp_module.SCHEMA == "prod"
-
-    def test_mlflow_import_missing_does_not_raise(self, monkeypatch, databricks_env):
-        from customer_retention.integrations.databricks_init import _configure_mlflow_experiment
-
-        with patch.dict("sys.modules", {"mlflow": None}):
-            _configure_mlflow_experiment("test_exp")
 
     def test_display_summary_prints_output(self, monkeypatch, databricks_env, capsys):
         from customer_retention.integrations.databricks_init import databricks_init

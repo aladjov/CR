@@ -51,7 +51,6 @@ def databricks_init(
     _reload_config_constants()
     _ensure_experiments_volume_exists(catalog, schema)
     _setup_experiment_directories()
-    _configure_mlflow_experiment(resolved_experiment_name)
     notebooks_copied: list[str] = []
     notebooks_synced: list[str] = []
     if copy_notebooks and workspace_path:
@@ -153,15 +152,6 @@ def _make_absolute_experiment_path(experiment_name: str, workspace_path: str | N
     if not base.startswith("/"):
         base = f"/{base}"
     return f"{base}/{experiment_name}"
-
-
-def _configure_mlflow_experiment(experiment_name: str) -> None:
-    try:
-        import mlflow
-
-        mlflow.set_experiment(experiment_name)
-    except ImportError:
-        pass
 
 
 def _ensure_workspace_directory(workspace_path: str) -> None:
