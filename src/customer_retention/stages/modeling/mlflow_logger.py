@@ -1,5 +1,6 @@
 """MLflow integration for experiment tracking."""
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -93,3 +94,25 @@ class MLflowLogger:
     def log_figure(self, figure, artifact_file: str):
         if MLFLOW_AVAILABLE:
             mlflow.log_figure(figure, artifact_file)
+
+    @property
+    def run_id(self) -> Optional[str]:
+        if self._run is not None:
+            return self._run.info.run_id
+        return None
+
+    @contextmanager
+    def nested_run(self, run_name: str):
+        if not MLFLOW_AVAILABLE:
+            yield
+            return
+        with mlflow.start_run(run_name=run_name, nested=True):
+            yield
+
+    def disable_autolog(self):
+        if MLFLOW_AVAILABLE:
+            mlflow.autolog(disable=True)
+
+    def end_stale_runs(self):
+        if MLFLOW_AVAILABLE:
+            mlflow.end_run()

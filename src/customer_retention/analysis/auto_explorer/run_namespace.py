@@ -91,6 +91,10 @@ class RunNamespace:
     def training_metadata_path(self) -> Path:
         return self.run_dir / "training_metadata.json"
 
+    @property
+    def exploration_metadata_path(self) -> Path:
+        return self.run_dir / "exploration_metadata.json"
+
     def candidate_dir(self, name: str) -> Path:
         return self.merged_dir / name
 

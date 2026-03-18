@@ -199,3 +199,54 @@ class TestMLflowLoggerModel:
         call_args = mock_sklearn.log_model.call_args
         assert call_args[0][0] is mock_model
         assert call_args[0][1] == "model"
+
+
+class TestMLflowLoggerRunId:
+    def test_run_id_none_before_start(self):
+        logger = MLflowLogger(experiment_name="test")
+        assert logger.run_id is None
+
+    @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
+    def test_run_id_returns_id_after_start(self, mock_mlflow):
+        mock_run = MagicMock()
+        mock_run.info.run_id = "abc123"
+        mock_mlflow.start_run.return_value = mock_run
+        mock_mlflow.get_experiment_by_name.return_value = MagicMock(experiment_id="1")
+
+        logger = MLflowLogger(experiment_name="test")
+        logger.start_run()
+
+        assert logger.run_id == "abc123"
+
+
+class TestMLflowLoggerNestedRun:
+    @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
+    def test_nested_run_calls_start_run_with_nested_true(self, mock_mlflow):
+        logger = MLflowLogger(experiment_name="test")
+
+        with logger.nested_run("child_run"):
+            pass
+
+        mock_mlflow.start_run.assert_called_once_with(run_name="child_run", nested=True)
+
+    @patch("customer_retention.stages.modeling.mlflow_logger.MLFLOW_AVAILABLE", False)
+    def test_nested_run_noop_when_unavailable(self):
+        logger = MLflowLogger(experiment_name="test")
+        with logger.nested_run("child"):
+            pass  # should not raise
+
+
+class TestMLflowLoggerEndStaleRuns:
+    @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
+    def test_end_stale_runs_calls_end_run(self, mock_mlflow):
+        logger = MLflowLogger(experiment_name="test")
+        logger.end_stale_runs()
+        mock_mlflow.end_run.assert_called_once()
+
+
+class TestMLflowLoggerDisableAutolog:
+    @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
+    def test_disable_autolog_calls_autolog_disable(self, mock_mlflow):
+        logger = MLflowLogger(experiment_name="test")
+        logger.disable_autolog()
+        mock_mlflow.autolog.assert_called_once_with(disable=True)

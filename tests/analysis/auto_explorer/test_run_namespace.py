@@ -229,6 +229,11 @@ class TestFeatureProfilePaths:
         expected = tmp_path / "runs" / "proj-abc" / "training_metadata.json"
         assert ns.training_metadata_path == expected
 
+    def test_exploration_metadata_path(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="proj-abc")
+        expected = tmp_path / "runs" / "proj-abc" / "exploration_metadata.json"
+        assert ns.exploration_metadata_path == expected
+
 
 class TestDiscoverAllFindings:
     def test_empty_datasets_returns_empty(self, tmp_path):
