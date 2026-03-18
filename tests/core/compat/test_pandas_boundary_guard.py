@@ -55,6 +55,8 @@ TOPANDAS_BOUNDARY_FILES = {
     # sklearn interface — needs pandas/numpy arrays
     "stages/modeling/spark_classifier_wrapper.py",
     "stages/modeling/data_splitter.py",  # non-temporal strategies fall back to sklearn (pandas)
+    # Batch fitting — bounded sample (≤50K rows) for sklearn PowerTransformer
+    "transforms/executor.py",
     # Bounded sampling for type detection / fingerprinting
     "stages/temporal/timestamp_discovery.py",
     "stages/profiling/temporal_coverage.py",
@@ -79,6 +81,8 @@ COLLECT_BOUNDARY_FILES = {
     "stages/temporal/timestamp_discovery.py",
     # Native Spark transform ops — collect only for small aggregates (quantiles, categories)
     "transforms/spark_ops.py",
+    # Batch fitting — .agg().collect() for scaler stats (1 row), bounded sample for PowerTransform
+    "transforms/executor.py",
 }
 
 # ── bare 'import pandas as pd' allowlist ────────────────────────────────

@@ -56,17 +56,25 @@ class TransformExecutor:
         return df
 
     def _apply_all_distributed(self, df: DataFrame, steps: list[TransformationStep], *, fit_mode: bool = False, artifact_store: ArtifactStore | None = None) -> DataFrame:
-        self._precompute_quantiles(df, steps)
         spark_df = as_spark_df(df)
+        self._precompute_quantiles_distributed(spark_df, steps)
+        if fit_mode and artifact_store:
+            self._prefit_distributed(spark_df, steps, artifact_store)
+        roundtrip_count = 0
         for i, step in enumerate(steps):
             handler = _SPARK_DISPATCH.get(step.type)
             result = handler(spark_df, step) if handler is not None else None
             if result is not None:
                 spark_df = result
             else:
-                ps_df = _as_pandas_api(spark_df)
-                spark_df = as_spark_df(self.apply(ps_df, step, fit_mode=fit_mode, artifact_store=artifact_store))
-            if (i + 1) % _CHECKPOINT_INTERVAL == 0 and i + 1 < len(steps):
+                spark_result = self._apply_fitted_spark(spark_df, step, fit_mode, artifact_store)
+                if spark_result is not None:
+                    spark_df = spark_result
+                else:
+                    ps_df = _as_pandas_api(spark_df)
+                    spark_df = as_spark_df(self.apply(ps_df, step, fit_mode=fit_mode, artifact_store=artifact_store))
+                    roundtrip_count += 1
+            if roundtrip_count > 0 and roundtrip_count % _CHECKPOINT_INTERVAL == 0 and i + 1 < len(steps):
                 spark_df = spark_df.localCheckpoint(eager=True)
         return _as_pandas_api(spark_df)
 
@@ -77,9 +85,112 @@ class TransformExecutor:
         ]
         if not cap_steps:
             return
-        quantiles = {s.column: df[s.column].quantile(0.99) for s in cap_steps}
-        for step in cap_steps:
-            step.parameters["_precomputed_q99"] = float(quantiles[step.column])
+        if _is_spark_pandas(df):
+            self._precompute_quantiles_distributed(as_spark_df(df), cap_steps)
+        else:
+            for s in cap_steps:
+                s.parameters["_precomputed_q99"] = float(df[s.column].quantile(0.99))
+
+    def _precompute_quantiles_distributed(self, spark_df, steps: list[TransformationStep]) -> None:
+        spark_cols = set(spark_df.columns)
+        cap_steps = [
+            s for s in steps
+            if s.type == PipelineTransformationType.CAP_THEN_LOG and s.column in spark_cols
+        ]
+        if not cap_steps:
+            return
+        cols = [s.column for s in cap_steps]
+        quantile_lists = spark_df.approxQuantile(cols, [0.99], 0.01)
+        for step, qs in zip(cap_steps, quantile_lists):
+            step.parameters["_precomputed_q99"] = float(qs[0]) if qs else None
+
+    def _prefit_distributed(self, spark_df, steps: list[TransformationStep], artifact_store: ArtifactStore) -> None:
+        from pyspark.sql import functions as F  # noqa: N812
+        spark_cols = set(spark_df.columns)
+        self._batch_fit_scalers(spark_df, steps, artifact_store, spark_cols, F)
+        self._batch_fit_power_transforms(spark_df, steps, artifact_store, spark_cols)
+
+    def _batch_fit_scalers(self, spark_df, steps, artifact_store, spark_cols, F) -> None:
+        scale_steps = [s for s in steps if s.type == PipelineTransformationType.SCALE and s.column in spark_cols]
+        if not scale_steps:
+            return
+        standard = [s for s in scale_steps if s.parameters.get("method", "standard") == "standard"]
+        minmax = [s for s in scale_steps if s.parameters.get("method") == "minmax"]
+        if standard:
+            cols = [s.column for s in standard]
+            exprs = []
+            for c in cols:
+                exprs.extend([F.mean(c).alias(f"{c}__mean"), F.stddev_pop(c).alias(f"{c}__std"), F.count(c).alias(f"{c}__cnt")])
+            row = spark_df.agg(*exprs).collect()[0]
+            for s in standard:
+                c = s.column
+                mean = float(row[f"{c}__mean"] or 0)
+                std = float(row[f"{c}__std"] or 0)
+                count = int(row[f"{c}__cnt"] or 0)
+                scaler = FittedScaler("standard")
+                scaler.fit_from_precomputed(mean, std, count)
+                artifact_store.register("scaler", c, scaler._scaler)
+                scale = std if std > 0 else 1.0
+                s.parameters["_spark_fitted"] = {"kind": "standard", "mean": mean, "scale": scale}
+        if minmax:
+            cols = [s.column for s in minmax]
+            exprs = []
+            for c in cols:
+                exprs.extend([F.min(c).alias(f"{c}__min"), F.max(c).alias(f"{c}__max"), F.count(c).alias(f"{c}__cnt")])
+            row = spark_df.agg(*exprs).collect()[0]
+            for s in minmax:
+                c = s.column
+                col_min = float(row[f"{c}__min"] or 0)
+                col_max = float(row[f"{c}__max"] or 0)
+                count = int(row[f"{c}__cnt"] or 0)
+                scaler = FittedScaler("minmax")
+                scaler.fit_from_precomputed(0, 0, count, col_min, col_max)
+                artifact_store.register("scaler", c, scaler._scaler)
+                rng = col_max - col_min
+                scale = 1.0 / rng if rng > 0 else 1.0
+                offset = -col_min / rng if rng > 0 else -col_min
+                s.parameters["_spark_fitted"] = {"kind": "minmax", "scale": scale, "offset": offset}
+
+    def _batch_fit_power_transforms(self, spark_df, steps, artifact_store, spark_cols) -> None:
+        yj_steps = [s for s in steps if s.type == PipelineTransformationType.YEO_JOHNSON and s.column in spark_cols]
+        if not yj_steps:
+            return
+        columns = [s.column for s in yj_steps]
+        n = spark_df.count()
+        max_sample = FittedPowerTransform._MAX_FIT_SAMPLE
+        if n > max_sample:
+            from pyspark.sql import functions as F  # noqa: N812
+            frac = min(1.0, max_sample / max(1, n))
+            sample_pdf = spark_df.select([F.coalesce(F.col(c), F.lit(0.0)).alias(c) for c in columns]).sample(False, frac, seed=42).limit(max_sample).toPandas()
+        else:
+            from pyspark.sql import functions as F  # noqa: N812
+            sample_pdf = spark_df.select([F.coalesce(F.col(c), F.lit(0.0)).alias(c) for c in columns]).toPandas()
+        for s in yj_steps:
+            pt = FittedPowerTransform()
+            pt.fit_from_local(sample_pdf[s.column])
+            artifact_store.register("power_transformer", s.column, pt._pt)
+            lmbda = float(pt._pt.lambdas_[0])
+            std_mean = float(pt._pt._scaler.mean_[0]) if pt._pt.standardize else None
+            std_scale = float(pt._pt._scaler.scale_[0]) if pt._pt.standardize else None
+            s.parameters["_spark_fitted"] = {"lmbda": lmbda, "std_mean": std_mean, "std_scale": std_scale, "standardize": pt._pt.standardize}
+
+    @staticmethod
+    def _apply_fitted_spark(spark_df, step: TransformationStep, fit_mode: bool, artifact_store: ArtifactStore | None):
+        from . import spark_ops
+        params = step.parameters.get("_spark_fitted")
+        if step.type == PipelineTransformationType.SCALE:
+            if params:
+                if params["kind"] == "standard":
+                    return spark_ops.spark_standard_scale(spark_df, step.column, mean=params["mean"], scale=params["scale"])
+                return spark_ops.spark_minmax_scale(spark_df, step.column, scale=params["scale"], offset=params["offset"])
+            if not fit_mode and artifact_store and artifact_store.has(f"{step.column}_scaler"):
+                return _apply_scale_from_artifact(spark_df, step, artifact_store)
+        if step.type == PipelineTransformationType.YEO_JOHNSON:
+            if params:
+                return spark_ops.spark_yeo_johnson(spark_df, step.column, lmbda=params["lmbda"], std_mean=params.get("std_mean"), std_scale=params.get("std_scale"), standardize=params.get("standardize", True))
+            if not fit_mode and artifact_store and artifact_store.has(f"{step.column}_power_transformer"):
+                return _apply_yj_from_artifact(spark_df, step, artifact_store)
+        return None
 
     def _apply_fitted(self, fitted, df, step, *, fit_mode=False, artifact_store=None):
         if fit_mode:
@@ -220,6 +331,25 @@ def _make_spark_dispatch():
         PipelineTransformationType.FEATURE_SELECT: lambda df, s: spark_ops.spark_feature_select(df, s.column),
         PipelineTransformationType.DERIVED_COLUMN: _spark_derived,
     }
+
+
+def _apply_scale_from_artifact(spark_df, step, artifact_store):
+    from sklearn.preprocessing import StandardScaler
+
+    from . import spark_ops
+    scaler = artifact_store.load(f"{step.column}_scaler")
+    if isinstance(scaler, StandardScaler):
+        return spark_ops.spark_standard_scale(spark_df, step.column, mean=float(scaler.mean_[0]), scale=float(scaler.scale_[0]))
+    return spark_ops.spark_minmax_scale(spark_df, step.column, scale=float(scaler.scale_[0]), offset=float(scaler.min_[0]))
+
+
+def _apply_yj_from_artifact(spark_df, step, artifact_store):
+    from . import spark_ops
+    pt = artifact_store.load(f"{step.column}_power_transformer")
+    lmbda = float(pt.lambdas_[0])
+    std_mean = float(pt._scaler.mean_[0]) if pt.standardize else None
+    std_scale = float(pt._scaler.scale_[0]) if pt.standardize else None
+    return spark_ops.spark_yeo_johnson(spark_df, step.column, lmbda=lmbda, std_mean=std_mean, std_scale=std_scale, standardize=pt.standardize)
 
 
 try:

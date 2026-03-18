@@ -119,3 +119,33 @@ def spark_derived_composite(df: SparkDataFrame, column: str, *, columns: list[st
         return df
     avg_expr = sum(F.coalesce(F.col(c), F.lit(0.0)) for c in valid) / len(valid)
     return df.withColumn(column, avg_expr)
+
+
+def spark_standard_scale(df: SparkDataFrame, column: str, *, mean: float, scale: float) -> SparkDataFrame:
+    if column not in df.columns:
+        return df
+    return df.withColumn(column, (F.col(column) - mean) / scale)
+
+
+def spark_minmax_scale(df: SparkDataFrame, column: str, *, scale: float, offset: float) -> SparkDataFrame:
+    if column not in df.columns:
+        return df
+    return df.withColumn(column, F.col(column) * scale + offset)
+
+
+def spark_yeo_johnson(df: SparkDataFrame, column: str, *, lmbda: float, std_mean: float | None = None, std_scale: float | None = None, standardize: bool = True) -> SparkDataFrame:
+    if column not in df.columns:
+        return df
+    c = F.coalesce(F.col(column), F.lit(0.0))
+    if abs(lmbda) < 1e-12:
+        pos_expr = F.log1p(c)
+    else:
+        pos_expr = (F.pow(c + 1, lmbda) - 1) / lmbda
+    if abs(lmbda - 2) < 1e-12:
+        neg_expr = -F.log1p(-c)
+    else:
+        neg_expr = -(F.pow(-c + 1, 2 - lmbda) - 1) / (2 - lmbda)
+    yj = F.when(c >= 0, pos_expr).otherwise(neg_expr)
+    if standardize and std_mean is not None and std_scale is not None:
+        yj = (yj - std_mean) / std_scale
+    return df.withColumn(column, yj)

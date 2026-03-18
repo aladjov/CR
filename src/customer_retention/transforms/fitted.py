@@ -47,15 +47,19 @@ class FittedScaler:
             self._scaler.fit(series.to_numpy().reshape(-1, 1))
 
     def _fit_from_stats(self, series):
+        mean, std = float(series.mean()), float(series.std(ddof=0))
+        count = int(series.count())
+        col_min, col_max = float(series.min()), float(series.max())
+        self.fit_from_precomputed(mean, std, count, col_min, col_max)
+
+    def fit_from_precomputed(self, mean: float, std: float, count: int, col_min: float = 0.0, col_max: float = 0.0):
         if isinstance(self._scaler, StandardScaler):
-            mean, std = float(series.mean()), float(series.std(ddof=0))
             self._scaler.mean_ = np.array([mean])
             self._scaler.scale_ = np.array([std if std > 0 else 1.0])
             self._scaler.var_ = np.array([std ** 2])
             self._scaler.n_features_in_ = 1
-            self._scaler.n_samples_seen_ = int(series.count())
+            self._scaler.n_samples_seen_ = count
         else:
-            col_min, col_max = float(series.min()), float(series.max())
             rng = col_max - col_min
             self._scaler.data_min_ = np.array([col_min])
             self._scaler.data_max_ = np.array([col_max])
@@ -67,7 +71,7 @@ class FittedScaler:
                 self._scaler.scale_ = np.array([1.0])
                 self._scaler.min_ = np.array([-col_min])
             self._scaler.n_features_in_ = 1
-            self._scaler.n_samples_seen_ = int(series.count())
+            self._scaler.n_samples_seen_ = count
 
     def _apply(self, series):
         if isinstance(self._scaler, StandardScaler):
@@ -132,7 +136,10 @@ class FittedPowerTransform:
         else:
             sampled = series
         collected = collect_for_sklearn(sampled)
-        self._pt.fit(collected.to_numpy().reshape(-1, 1))
+        self.fit_from_local(collected)
+
+    def fit_from_local(self, pandas_series):
+        self._pt.fit(pandas_series.to_numpy().reshape(-1, 1))
 
     def transform(self, df: DataFrame, column: str, artifact_store) -> DataFrame:
         if column not in df.columns:

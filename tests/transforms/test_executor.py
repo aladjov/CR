@@ -219,12 +219,11 @@ class TestApplyAll:
             expected["v"] = np.log1p(expected["v"].clip(lower=0))
         np.testing.assert_array_almost_equal(result["v"].to_numpy(), expected["v"].to_numpy())
 
-    def test_checkpoint_interval_respected(self, executor, sample_df):
+    def test_no_checkpoint_for_pure_spark_chain(self, executor, sample_df):
         from unittest.mock import MagicMock, patch
 
         _MOD = "customer_retention.transforms.executor"
         steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "amount") for _ in range(25)]
-        checkpoint_count = 0
 
         mock_spark_df = MagicMock()
         mock_spark_df.localCheckpoint = MagicMock(return_value=mock_spark_df)
@@ -232,6 +231,25 @@ class TestApplyAll:
         with patch(f"{_MOD}._is_spark_pandas", return_value=True), \
              patch(f"{_MOD}.as_spark_df", return_value=mock_spark_df), \
              patch(f"{_MOD}._as_pandas_api", return_value=sample_df.copy()):
+            executor.apply_all(sample_df.copy(), steps)
+        assert mock_spark_df.localCheckpoint.call_count == 0
+
+    def test_checkpoint_after_roundtrips(self, executor, sample_df):
+        from unittest.mock import MagicMock, patch
+
+        _MOD = "customer_retention.transforms.executor"
+        steps = [_step(PipelineTransformationType.SCALE, "amount", method="standard") for _ in range(25)]
+
+        mock_spark_df = MagicMock()
+        mock_spark_df.localCheckpoint = MagicMock(return_value=mock_spark_df)
+
+        with patch(f"{_MOD}._is_spark_pandas", return_value=True), \
+             patch(f"{_MOD}.as_spark_df", return_value=mock_spark_df), \
+             patch(f"{_MOD}._as_pandas_api", return_value=sample_df.copy()), \
+             patch(f"{_MOD}._SPARK_DISPATCH", {}), \
+             patch.object(executor, "_apply_fitted_spark", return_value=None), \
+             patch.object(executor, "apply", return_value=sample_df.copy()), \
+             patch.object(executor, "_precompute_quantiles_distributed"):
             executor.apply_all(sample_df.copy(), steps)
         assert mock_spark_df.localCheckpoint.call_count == 2
 
@@ -281,7 +299,7 @@ class TestDistributedApplyAll:
              patch(f"{self._MOD}.as_spark_df", return_value=mock_spark_df), \
              patch(f"{self._MOD}._as_pandas_api", return_value=MagicMock()) as mock_api, \
              patch(f"{self._MOD}._SPARK_DISPATCH", {PipelineTransformationType.LOG_TRANSFORM: lambda df, s: mock_result}), \
-             patch.object(executor, "_precompute_quantiles"):
+             patch.object(executor, "_precompute_quantiles_distributed"):
             executor._apply_all_distributed(MagicMock(), steps)
 
         mock_api.assert_called_once_with(mock_result)
@@ -298,7 +316,8 @@ class TestDistributedApplyAll:
              patch(f"{self._MOD}._as_pandas_api", return_value=MagicMock()), \
              patch(f"{self._MOD}._SPARK_DISPATCH", {}), \
              patch.object(executor, "apply", return_value=mock_ps_result), \
-             patch.object(executor, "_precompute_quantiles"):
+             patch.object(executor, "_apply_fitted_spark", return_value=None), \
+             patch.object(executor, "_precompute_quantiles_distributed"):
             executor._apply_all_distributed(MagicMock(), steps)
 
         assert mock_as.call_count == 2
@@ -310,3 +329,120 @@ class TestDistributedApplyAll:
         assert list(result["amount_is_zero"]) == [1, 0, 1, 0]
         assert result.loc[0, "amount"] == 0.0
         assert result.loc[1, "amount"] > 0.0
+
+    def test_fitted_spark_uses_precomputed_standard_scale(self, executor):
+        from unittest.mock import MagicMock, patch
+        step = _step(PipelineTransformationType.SCALE, "a", method="standard")
+        step.parameters["_spark_fitted"] = {"kind": "standard", "mean": 5.0, "scale": 2.0}
+        mock_spark_df = MagicMock()
+        mock_result = MagicMock()
+        with patch("customer_retention.transforms.spark_ops.spark_standard_scale", return_value=mock_result) as mock_fn:
+            result = TransformExecutor._apply_fitted_spark(mock_spark_df, step, True, None)
+        mock_fn.assert_called_once_with(mock_spark_df, "a", mean=5.0, scale=2.0)
+        assert result is mock_result
+
+    def test_fitted_spark_uses_precomputed_yeo_johnson(self, executor):
+        from unittest.mock import MagicMock, patch
+        step = _step(PipelineTransformationType.YEO_JOHNSON, "a")
+        step.parameters["_spark_fitted"] = {"lmbda": 0.5, "std_mean": 1.0, "std_scale": 0.5, "standardize": True}
+        mock_spark_df = MagicMock()
+        with patch("customer_retention.transforms.spark_ops.spark_yeo_johnson", return_value=MagicMock()) as mock_fn:
+            TransformExecutor._apply_fitted_spark(mock_spark_df, step, True, None)
+        mock_fn.assert_called_once_with(mock_spark_df, "a", lmbda=0.5, std_mean=1.0, std_scale=0.5, standardize=True)
+
+    def test_fitted_spark_returns_none_for_unhandled(self, executor):
+        from unittest.mock import MagicMock
+        step = _step(PipelineTransformationType.LOG_TRANSFORM, "a")
+        result = TransformExecutor._apply_fitted_spark(MagicMock(), step, False, None)
+        assert result is None
+
+    def test_apply_fitted_spark_loads_from_artifact(self, executor, artifact_store):
+        np.random.seed(42)
+        from customer_retention.transforms.fitted import FittedScaler
+        scaler = FittedScaler("standard")
+        df = pd.DataFrame({"v": np.random.randn(50) * 10 + 50})
+        scaler.fit_transform(df.copy(), "v", artifact_store)
+        step = _step(PipelineTransformationType.SCALE, "v", method="standard")
+        from unittest.mock import MagicMock, patch
+        mock_spark_df = MagicMock()
+        with patch("customer_retention.transforms.spark_ops.spark_standard_scale", return_value=MagicMock()) as mock_fn:
+            result = TransformExecutor._apply_fitted_spark(mock_spark_df, step, False, artifact_store)
+        assert result is not None
+        mock_fn.assert_called_once()
+
+
+class TestBatchFitScalers:
+    def test_batch_fit_standard_matches_per_column(self):
+        np.random.seed(42)
+        df = pd.DataFrame({
+            "a": np.random.randn(100) * 10 + 50,
+            "b": np.random.exponential(5, 100),
+        })
+        import tempfile
+
+        from customer_retention.transforms.artifact_store import ArtifactStore
+        from customer_retention.transforms.fitted import FittedScaler
+
+        store1 = ArtifactStore(tempfile.mkdtemp())
+        s1 = FittedScaler("standard")
+        s1.fit_transform(df.copy(), "a", store1)
+        s2 = FittedScaler("standard")
+        s2.fit_transform(df.copy(), "b", store1)
+
+        store2 = ArtifactStore(tempfile.mkdtemp())
+        mean_a, std_a = float(df["a"].mean()), float(df["a"].std(ddof=0))
+        mean_b, std_b = float(df["b"].mean()), float(df["b"].std(ddof=0))
+        s3 = FittedScaler("standard")
+        s3.fit_from_precomputed(mean_a, std_a, len(df))
+        store2.register("scaler", "a", s3._scaler)
+        s4 = FittedScaler("standard")
+        s4.fit_from_precomputed(mean_b, std_b, len(df))
+        store2.register("scaler", "b", s4._scaler)
+
+        scaler_a1 = store1.load("a_scaler")
+        scaler_a2 = store2.load("a_scaler")
+        np.testing.assert_array_almost_equal(scaler_a1.mean_, scaler_a2.mean_)
+        np.testing.assert_array_almost_equal(scaler_a1.scale_, scaler_a2.scale_)
+
+    def test_batch_fit_minmax_matches_per_column(self):
+        np.random.seed(42)
+        df = pd.DataFrame({"v": np.random.randn(100)})
+        import tempfile
+
+        from customer_retention.transforms.artifact_store import ArtifactStore
+        from customer_retention.transforms.fitted import FittedScaler
+
+        store1 = ArtifactStore(tempfile.mkdtemp())
+        s1 = FittedScaler("minmax")
+        s1.fit_transform(df.copy(), "v", store1)
+
+        store2 = ArtifactStore(tempfile.mkdtemp())
+        s2 = FittedScaler("minmax")
+        s2.fit_from_precomputed(0, 0, len(df), float(df["v"].min()), float(df["v"].max()))
+        store2.register("scaler", "v", s2._scaler)
+
+        scaler1 = store1.load("v_scaler")
+        scaler2 = store2.load("v_scaler")
+        np.testing.assert_array_almost_equal(scaler1.scale_, scaler2.scale_)
+        np.testing.assert_array_almost_equal(scaler1.min_, scaler2.min_)
+
+
+class TestBatchFitPowerTransform:
+    def test_fit_from_local_matches_direct(self):
+        np.random.seed(42)
+        data = pd.Series(np.random.exponential(5, 200))
+        from customer_retention.transforms.fitted import FittedPowerTransform
+        pt1 = FittedPowerTransform()
+        pt1._pt.fit(data.to_numpy().reshape(-1, 1))
+        pt2 = FittedPowerTransform()
+        pt2.fit_from_local(data)
+        np.testing.assert_array_almost_equal(pt1._pt.lambdas_, pt2._pt.lambdas_)
+
+    def test_yj_transform_parity(self):
+        np.random.seed(42)
+        data = pd.Series(np.random.randn(100) * 5)
+        from customer_retention.transforms.fitted import FittedPowerTransform
+        pt = FittedPowerTransform()
+        pt.fit_from_local(data.fillna(0))
+        pandas_result = pt._apply_yj(data.fillna(0))
+        assert not pandas_result.isna().any()

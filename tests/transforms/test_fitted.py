@@ -186,6 +186,68 @@ class TestFittedPowerTransform:
         assert abs(pt_sample._pt.lambdas_[0] - full_lambda) < 0.2
 
 
+class TestFittedScalerPrecomputed:
+    def test_standard_precomputed_matches_fit(self, numeric_df, artifact_store):
+        scaler1 = FittedScaler("standard")
+        scaler1.fit_transform(numeric_df.copy(), "val", artifact_store)
+        mean = float(numeric_df["val"].mean())
+        std = float(numeric_df["val"].std(ddof=0))
+        count = len(numeric_df)
+        scaler2 = FittedScaler("standard")
+        scaler2.fit_from_precomputed(mean, std, count)
+        np.testing.assert_array_almost_equal(scaler1._scaler.mean_, scaler2._scaler.mean_)
+        np.testing.assert_array_almost_equal(scaler1._scaler.scale_, scaler2._scaler.scale_)
+
+    def test_minmax_precomputed_matches_fit(self, numeric_df, artifact_store):
+        scaler1 = FittedScaler("minmax")
+        scaler1.fit_transform(numeric_df.copy(), "val", artifact_store)
+        col_min, col_max = float(numeric_df["val"].min()), float(numeric_df["val"].max())
+        scaler2 = FittedScaler("minmax")
+        scaler2.fit_from_precomputed(0, 0, len(numeric_df), col_min, col_max)
+        np.testing.assert_array_almost_equal(scaler1._scaler.scale_, scaler2._scaler.scale_)
+        np.testing.assert_array_almost_equal(scaler1._scaler.min_, scaler2._scaler.min_)
+
+    def test_precomputed_zero_std(self, artifact_store):
+        scaler = FittedScaler("standard")
+        scaler.fit_from_precomputed(5.0, 0.0, 20)
+        assert scaler._scaler.scale_[0] == 1.0
+
+    def test_precomputed_zero_range_minmax(self, artifact_store):
+        scaler = FittedScaler("minmax")
+        scaler.fit_from_precomputed(0, 0, 20, 5.0, 5.0)
+        assert scaler._scaler.scale_[0] == 1.0
+        assert scaler._scaler.data_range_[0] == 0.0
+
+    def test_precomputed_transform_matches(self, numeric_df, artifact_store):
+        scaler1 = FittedScaler("standard")
+        r1 = scaler1.fit_transform(numeric_df.copy(), "val", artifact_store)
+        mean = float(numeric_df["val"].mean())
+        std = float(numeric_df["val"].std(ddof=0))
+        scaler2 = FittedScaler("standard")
+        scaler2.fit_from_precomputed(mean, std, len(numeric_df))
+        r2 = numeric_df.copy()
+        r2["val"] = scaler2._apply(r2["val"])
+        np.testing.assert_array_almost_equal(r1["val"].to_numpy(), r2["val"].to_numpy())
+
+
+class TestFittedPowerTransformLocal:
+    def test_fit_from_local_matches_direct_fit(self, numeric_df, artifact_store):
+        pt1 = FittedPowerTransform()
+        pt1._pt.fit(numeric_df["val"].to_numpy().reshape(-1, 1))
+        pt2 = FittedPowerTransform()
+        pt2.fit_from_local(numeric_df["val"])
+        np.testing.assert_array_almost_equal(pt1._pt.lambdas_, pt2._pt.lambdas_)
+        np.testing.assert_array_almost_equal(pt1._pt._scaler.mean_, pt2._pt._scaler.mean_)
+
+    def test_fit_from_local_transform_parity(self, numeric_df, artifact_store):
+        pt = FittedPowerTransform()
+        fit_result = pt.fit_transform(numeric_df.copy(), "val", artifact_store)
+        pt2 = FittedPowerTransform()
+        pt2.fit_from_local(numeric_df["val"])
+        transform_result = pt2._apply_yj(numeric_df["val"])
+        np.testing.assert_array_almost_equal(fit_result["val"].to_numpy(), transform_result.to_numpy())
+
+
 class TestFittedScalerSparkPath:
     """Cover _fit_from_stats (Spark path) for StandardScaler and MinMaxScaler."""
 
