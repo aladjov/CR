@@ -219,11 +219,11 @@ class TestApplyAll:
             expected["v"] = np.log1p(expected["v"].clip(lower=0))
         np.testing.assert_array_almost_equal(result["v"].to_numpy(), expected["v"].to_numpy())
 
-    def test_no_checkpoint_for_pure_spark_chain(self, executor, sample_df):
+    def test_plan_truncation_for_pure_spark_chain(self, executor, sample_df):
         from unittest.mock import MagicMock, patch
 
         _MOD = "customer_retention.transforms.executor"
-        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "amount") for _ in range(25)]
+        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "amount") for _ in range(65)]
 
         mock_spark_df = MagicMock()
         mock_spark_df.localCheckpoint = MagicMock(return_value=mock_spark_df)
@@ -232,7 +232,7 @@ class TestApplyAll:
              patch(f"{_MOD}.as_spark_df", return_value=mock_spark_df), \
              patch(f"{_MOD}._as_pandas_api", return_value=sample_df.copy()):
             executor.apply_all(sample_df.copy(), steps)
-        assert mock_spark_df.localCheckpoint.call_count == 0
+        assert mock_spark_df.localCheckpoint.call_count == 2
 
     def test_checkpoint_after_roundtrips(self, executor, sample_df):
         from unittest.mock import MagicMock, patch

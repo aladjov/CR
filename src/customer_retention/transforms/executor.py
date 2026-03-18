@@ -14,6 +14,7 @@ from customer_retention.generators.pipeline_generator.models import (
 )
 
 _CHECKPOINT_INTERVAL = 10
+_PLAN_TRUNCATION_INTERVAL = 30
 
 from . import ops
 from .artifact_store import ArtifactStore
@@ -61,6 +62,7 @@ class TransformExecutor:
         if fit_mode and artifact_store:
             self._prefit_distributed(spark_df, steps, artifact_store)
         roundtrip_count = 0
+        since_checkpoint = 0
         for i, step in enumerate(steps):
             handler = _SPARK_DISPATCH.get(step.type)
             result = handler(spark_df, step) if handler is not None else None
@@ -74,8 +76,14 @@ class TransformExecutor:
                     ps_df = _as_pandas_api(spark_df)
                     spark_df = as_spark_df(self.apply(ps_df, step, fit_mode=fit_mode, artifact_store=artifact_store))
                     roundtrip_count += 1
-            if roundtrip_count > 0 and roundtrip_count % _CHECKPOINT_INTERVAL == 0 and i + 1 < len(steps):
+            since_checkpoint += 1
+            needs_checkpoint = (
+                (roundtrip_count > 0 and roundtrip_count % _CHECKPOINT_INTERVAL == 0)
+                or since_checkpoint >= _PLAN_TRUNCATION_INTERVAL
+            )
+            if needs_checkpoint and i + 1 < len(steps):
                 spark_df = spark_df.localCheckpoint(eager=True)
+                since_checkpoint = 0
         return _as_pandas_api(spark_df)
 
     def _precompute_quantiles(self, df: DataFrame, steps: list[TransformationStep]) -> None:
