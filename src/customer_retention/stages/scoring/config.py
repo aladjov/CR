@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 from customer_retention.core.config.experiments import get_catalog, get_experiment_name, get_experiments_dir, get_schema
 
@@ -71,14 +73,19 @@ class ScoringConfig:
     def from_databricks(cls) -> ScoringConfig:
         catalog = get_catalog()
         schema = get_schema()
-        experiment_name = get_experiment_name()
         experiments_dir = get_experiments_dir()
+        ns = _discover_namespace()
+        meta = _load_training_metadata(ns) if ns else None
+        experiment_name = meta["mlflow_experiment_name"] if meta else get_experiment_name()
         client = MlflowClient()
         experiment = client.get_experiment_by_name(experiment_name)
+        if not experiment and not meta:
+            training_name = f"/Shared/training_{experiment_name}"
+            experiment = client.get_experiment_by_name(training_name)
         if not experiment:
             experiment = _search_experiment_by_suffix(client, experiment_name)
         if not experiment:
-            tried = [experiment_name, f"*{experiment_name}* (search)"]
+            tried = [experiment_name, f"/Shared/training_{experiment_name}", f"*{experiment_name}* (search)"]
             raise ValueError(
                 f"MLflow experiment not found. Tried: {tried}. "
                 "Set CR_EXPERIMENT_NAME to the full experiment path."
@@ -113,6 +120,18 @@ class ScoringConfig:
             catalog=catalog,
             schema=schema,
         )
+
+
+def _discover_namespace() -> Optional["RunNamespace"]:  # noqa: F821
+    from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+    return RunNamespace.from_env_or_latest()
+
+
+def _load_training_metadata(ns) -> Optional[dict]:
+    try:
+        return json.loads(ns.training_metadata_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def _search_experiment_by_suffix(client, experiment_name: str):

@@ -223,6 +223,8 @@ COMPOSITE_NAME = "{{ config.composite_name or config.name }}"
 TARGET_COLUMN = "{{ config.target_column }}"
 TIMESTAMP_COLUMN = "event_timestamp"
 FIT_MODE = {{ 'True' if config.fit_mode else 'False' }}
+RECOMMENDATIONS_HASH = {{ '"%s"' % config.recommendations_hash if config.recommendations_hash else 'None' }}
+FEAST_ENTITY_KEY = "{{ config.feast.entity_key if config.feast else 'entity_id' }}"
 
 CATALOG = "{{ catalog }}"
 SCHEMA = "{{ schema }}"
@@ -1410,6 +1412,7 @@ dbutils.notebook.exit(_summary)
 
 # COMMAND ----------
 
+import json
 import logging
 import tempfile
 import csv
@@ -1650,6 +1653,8 @@ def train_and_evaluate():
     if len(label_dist) < 2:
         raise ValueError(f"[TRAINING] Only {len(label_dist)} class(es) — Need at least 2 for binary classification")
 
+    mlflow.autolog(disable=True)
+    mlflow.end_run()
     mlflow.set_experiment(f"/Shared/training_{COMPOSITE_NAME}")
 
 {% if config.training and config.training.imbalance_strategy == "class_weight" %}
@@ -1685,10 +1690,17 @@ def train_and_evaluate():
     best_model_name = None
     best_auc = -1.0
     best_model = None
+    best_metrics = {}
 
-    with mlflow.start_run(run_name=f"training_{COMPOSITE_NAME}"):
+    _experiment_name = f"/Shared/training_{COMPOSITE_NAME}"
+    with mlflow.start_run(run_name=f"training_{COMPOSITE_NAME}") as _parent_run:
         mlflow.set_tag("composite_name", COMPOSITE_NAME)
         mlflow.set_tag("pipeline_name", PIPELINE_NAME)
+        mlflow.set_tag("target_column", TARGET)
+        mlflow.set_tag("entity_key", "entity_id")
+        mlflow.set_tag("timestamp_column", TIMESTAMP_COLUMN)
+        if RECOMMENDATIONS_HASH:
+            mlflow.set_tag("recommendations_hash", RECOMMENDATIONS_HASH)
         mlflow.log_params({"train_samples": train_count, "test_samples": test_count, "n_features": len(feature_cols)})
 
         for name, model in models.items():
@@ -1709,10 +1721,28 @@ def train_and_evaluate():
                     best_auc = metrics["roc_auc"]
                     best_model_name = name
                     best_model = fitted
+                    best_metrics = metrics
 
         mlflow.set_tag("best_model", best_model_name)
-        mlflow.log_metric("best_auc", best_auc)
+        mlflow.log_metric("best_roc_auc", best_auc)
+        mlflow.log_metrics({f"best_{k}": v for k, v in best_metrics.items()})
         _log_best_model(best_model, df, feature_cols)
+
+    if _NAMESPACE is not None:
+        _training_meta = {
+            "mlflow_experiment_name": _experiment_name,
+            "mlflow_run_id": _parent_run.info.run_id,
+            "composite_name": COMPOSITE_NAME,
+            "target_column": TARGET,
+            "entity_key": "entity_id",
+            "timestamp_column": TIMESTAMP_COLUMN,
+            "recommendations_hash": RECOMMENDATIONS_HASH or "",
+            "best_model_name": best_model_name,
+            "best_roc_auc": best_auc,
+        }
+        _NAMESPACE.training_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        _NAMESPACE.training_metadata_path.write_text(json.dumps(_training_meta))
+        print(f"[TRAINING] Metadata saved to {_NAMESPACE.training_metadata_path}")
 
     return best_model_name, best_auc
 

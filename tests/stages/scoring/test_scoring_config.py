@@ -212,6 +212,28 @@ class TestFromDatabricks:
             with pytest.raises(ValueError, match="No runs found"):
                 ScoringConfig.from_databricks()
 
+    def test_tries_training_prefix_pattern(self, databricks_env):
+        client = MagicMock()
+        client.get_experiment_by_name.side_effect = [None, MagicMock(experiment_id="999")]
+        client.search_experiments.return_value = []
+        run = MagicMock()
+        run.data.tags = {"composite_name": "test__abc1234", "target_column": "churned"}
+        run.data.params = {}
+        client.search_runs.return_value = [run]
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=client):
+            config = ScoringConfig.from_databricks()
+        assert client.get_experiment_by_name.call_count == 2
+        second_call = client.get_experiment_by_name.call_args_list[1]
+        assert second_call[0][0] == "/Shared/training_customer_churn"
+        assert config.composite_name == "test__abc1234"
+
+    def test_orders_by_best_roc_auc(self, databricks_env, mock_mlflow_client):
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=mock_mlflow_client):
+            ScoringConfig.from_databricks()
+        mock_mlflow_client.search_runs.assert_called_once()
+        call_kwargs = mock_mlflow_client.search_runs.call_args
+        assert "metrics.best_roc_auc DESC" in call_kwargs.kwargs.get("order_by", call_kwargs[1].get("order_by", []))
+
     def test_defaults_for_missing_tags(self, databricks_env):
         client = MagicMock()
         experiment = MagicMock()
@@ -248,6 +270,94 @@ class TestFromDatabricks:
             config = ScoringConfig.from_databricks()
         assert config.feast_repo_path == ""
         assert config.feast_feature_view == ""
+
+
+class TestFromNamespace:
+    def test_reads_training_metadata_from_namespace(self, databricks_env, tmp_path):
+        import json
+
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        ns = RunNamespace(root=tmp_path, run_id="test-run-123")
+        ns.setup()
+        metadata = {
+            "mlflow_experiment_name": "/Shared/training_cust__abc1234",
+            "mlflow_run_id": "run_abc",
+            "composite_name": "cust__abc1234",
+            "target_column": "churned",
+            "entity_key": "entity_id",
+            "timestamp_column": "event_timestamp",
+            "recommendations_hash": "hash123",
+            "best_model_name": "GBTClassifier",
+            "best_roc_auc": 0.85,
+        }
+        ns.training_metadata_path.write_text(json.dumps(metadata))
+        client = MagicMock()
+        experiment = MagicMock()
+        experiment.experiment_id = "999"
+        client.get_experiment_by_name.return_value = experiment
+        run = MagicMock()
+        run.data.tags = {"composite_name": "cust__abc1234", "target_column": "churned",
+                         "entity_key": "entity_id", "timestamp_column": "event_timestamp",
+                         "recommendations_hash": "hash123"}
+        run.data.params = {}
+        client.search_runs.return_value = [run]
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=client):
+            with patch("customer_retention.stages.scoring.config._discover_namespace", return_value=ns):
+                config = ScoringConfig.from_databricks()
+        client.get_experiment_by_name.assert_called_with("/Shared/training_cust__abc1234")
+        assert config.composite_name == "cust__abc1234"
+        assert config.target_column == "churned"
+        assert config.recommendations_hash == "hash123"
+
+    def test_falls_back_to_mlflow_search_without_namespace(self, databricks_env, mock_mlflow_client):
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=mock_mlflow_client):
+            with patch("customer_retention.stages.scoring.config._discover_namespace", return_value=None):
+                config = ScoringConfig.from_databricks()
+        assert config.target_column == "unsubscribed"
+
+    def test_falls_back_when_metadata_file_missing(self, databricks_env, mock_mlflow_client, tmp_path):
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        ns = RunNamespace(root=tmp_path, run_id="test-run-123")
+        ns.setup()
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=mock_mlflow_client):
+            with patch("customer_retention.stages.scoring.config._discover_namespace", return_value=ns):
+                config = ScoringConfig.from_databricks()
+        assert config.target_column == "unsubscribed"
+
+    def test_falls_back_when_metadata_corrupt_json(self, databricks_env, mock_mlflow_client, tmp_path):
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        ns = RunNamespace(root=tmp_path, run_id="test-run-123")
+        ns.setup()
+        ns.training_metadata_path.write_text("not valid json{{{")
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=mock_mlflow_client):
+            with patch("customer_retention.stages.scoring.config._discover_namespace", return_value=ns):
+                config = ScoringConfig.from_databricks()
+        assert config.target_column == "unsubscribed"
+
+    def test_namespace_experiment_name_takes_priority_over_env(self, databricks_env, tmp_path):
+        import json
+
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        ns = RunNamespace(root=tmp_path, run_id="test-run-123")
+        ns.setup()
+        metadata = {
+            "mlflow_experiment_name": "/Shared/training_from_namespace",
+            "mlflow_run_id": "run_abc",
+            "composite_name": "ns_cn",
+        }
+        ns.training_metadata_path.write_text(json.dumps(metadata))
+        client = MagicMock()
+        experiment = MagicMock()
+        experiment.experiment_id = "999"
+        client.get_experiment_by_name.return_value = experiment
+        run = MagicMock()
+        run.data.tags = {"composite_name": "ns_cn"}
+        run.data.params = {}
+        client.search_runs.return_value = [run]
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=client):
+            with patch("customer_retention.stages.scoring.config._discover_namespace", return_value=ns):
+                ScoringConfig.from_databricks()
+        client.get_experiment_by_name.assert_called_with("/Shared/training_from_namespace")
 
 
 class TestScoringConfigProperties:

@@ -355,6 +355,24 @@ class TestDatabricksRenderConfig:
         result = renderer.render_config(sample_pipeline_config)
         assert "FIT_MODE = False" in result
 
+    def test_render_config_includes_recommendations_hash(self, renderer, sample_pipeline_config):
+        sample_pipeline_config.recommendations_hash = "abc123"
+        result = renderer.render_config(sample_pipeline_config)
+        assert 'RECOMMENDATIONS_HASH = "abc123"' in result
+
+    def test_render_config_recommendations_hash_none(self, renderer, sample_pipeline_config):
+        sample_pipeline_config.recommendations_hash = None
+        result = renderer.render_config(sample_pipeline_config)
+        assert "RECOMMENDATIONS_HASH = None" in result
+
+    def test_render_config_includes_feast_entity_key(self, renderer, sample_pipeline_config):
+        result = renderer.render_config(sample_pipeline_config)
+        assert "FEAST_ENTITY_KEY" in result
+
+    def test_render_config_feast_entity_key_defaults_to_entity_id(self, renderer, sample_pipeline_config):
+        result = renderer.render_config(sample_pipeline_config)
+        assert 'FEAST_ENTITY_KEY = "entity_id"' in result
+
 
 class TestDatabricksConfigRunPath:
     def test_bronze_entity_uses_parent_config_path(self, renderer, sample_pipeline_config):
@@ -3066,7 +3084,47 @@ class TestDatabricksTrainingMlflowNesting:
         result = renderer.render_training(sample_pipeline_config)
         fn = result[result.index("def train_and_evaluate"):]
         assert 'mlflow.set_tag("best_model"' in fn
-        assert 'mlflow.log_metric("best_auc"' in fn
+        assert 'mlflow.log_metric("best_roc_auc"' in fn
+
+    def test_parent_run_logs_best_model_full_metrics(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def train_and_evaluate"):]
+        assert "best_metrics" in fn
+        assert 'mlflow.log_metrics({f"best_{k}"' in fn or "best_metrics" in fn
+
+    def test_parent_run_tags_target_column(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def train_and_evaluate"):]
+        assert 'mlflow.set_tag("target_column", TARGET)' in fn
+
+    def test_parent_run_tags_entity_key(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def train_and_evaluate"):]
+        assert 'mlflow.set_tag("entity_key", "entity_id")' in fn
+
+    def test_parent_run_tags_timestamp_column(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def train_and_evaluate"):]
+        assert 'mlflow.set_tag("timestamp_column", TIMESTAMP_COLUMN)' in fn
+
+    def test_parent_run_tags_recommendations_hash(self, renderer, sample_pipeline_config):
+        sample_pipeline_config.recommendations_hash = "abc123"
+        result = renderer.render_training(sample_pipeline_config)
+        assert 'mlflow.set_tag("recommendations_hash", RECOMMENDATIONS_HASH)' in result
+
+    def test_disables_autolog_before_explicit_tracking(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def train_and_evaluate"):]
+        autolog_pos = fn.index("mlflow.autolog(disable=True)")
+        start_run_pos = fn.index("mlflow.start_run(")
+        assert autolog_pos < start_run_pos
+
+    def test_ends_stale_active_run(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def train_and_evaluate"):]
+        end_run_pos = fn.index("mlflow.end_run()")
+        start_run_pos = fn.index("mlflow.start_run(")
+        assert end_run_pos < start_run_pos
 
     def test_experiment_name_uses_composite_name(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
@@ -3080,3 +3138,32 @@ class TestDatabricksTrainingMlflowNesting:
     def test_pipeline_name_tagged(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
         assert 'mlflow.set_tag("pipeline_name", PIPELINE_NAME)' in result
+
+
+class TestDatabricksTrainingMetadataPersistence:
+    def test_writes_training_metadata_to_namespace(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "training_metadata_path" in result
+        assert "json.dumps" in result or "json.dump" in result
+
+    def test_metadata_includes_experiment_name(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert '"mlflow_experiment_name"' in result
+
+    def test_metadata_includes_run_id(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert '"mlflow_run_id"' in result
+
+    def test_metadata_includes_scoring_fields(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def train_and_evaluate"):]
+        for field in ("composite_name", "target_column", "timestamp_column", "best_model_name"):
+            assert field in fn
+
+    def test_imports_json(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "import json" in result
+
+    def test_metadata_write_is_valid_python(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        ast.parse(result)
