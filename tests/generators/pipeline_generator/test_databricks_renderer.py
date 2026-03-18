@@ -3140,6 +3140,32 @@ class TestDatabricksTrainingMlflowNesting:
         assert 'mlflow.set_tag("pipeline_name", PIPELINE_NAME)' in result
 
 
+class TestDatabricksTrainingFeatureListLogging:
+    def test_logs_feature_list_artifact(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "features.json" in result
+
+    def test_feature_list_contains_column_names(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "feature_cols" in result
+        assert "json.dumps" in result
+
+    def test_feature_list_logged_on_parent_run(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def train_and_evaluate"):]
+        parent_block = fn[fn.index("with mlflow.start_run("):fn.index("return best_model_name")]
+        assert "features.json" in parent_block
+
+    def test_feature_list_is_valid_python(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        ast.parse(result)
+
+    def test_feature_list_in_namespace_metadata(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("_training_meta"):]
+        assert '"feature_columns"' in fn
+
+
 class TestDatabricksTrainingMetadataPersistence:
     def test_writes_training_metadata_to_namespace(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)

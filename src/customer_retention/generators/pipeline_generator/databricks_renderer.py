@@ -1726,6 +1726,10 @@ def train_and_evaluate():
         mlflow.set_tag("best_model", best_model_name)
         mlflow.log_metric("best_roc_auc", best_auc)
         mlflow.log_metrics({f"best_{k}": v for k, v in best_metrics.items()})
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"feature_columns": feature_cols, "count": len(feature_cols)}, f)
+            _features_path = f.name
+        mlflow.log_artifact(_features_path, "features.json")
         _log_best_model(best_model, df, feature_cols)
 
     if _NAMESPACE is not None:
@@ -1739,6 +1743,7 @@ def train_and_evaluate():
             "recommendations_hash": RECOMMENDATIONS_HASH or "",
             "best_model_name": best_model_name,
             "best_roc_auc": best_auc,
+            "feature_columns": feature_cols,
         }
         _NAMESPACE.training_metadata_path.parent.mkdir(parents=True, exist_ok=True)
         _NAMESPACE.training_metadata_path.write_text(json.dumps(_training_meta))
