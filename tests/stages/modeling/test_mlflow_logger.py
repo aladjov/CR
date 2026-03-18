@@ -218,6 +218,20 @@ class TestMLflowLoggerRunId:
 
         assert logger.run_id == "abc123"
 
+    @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
+    def test_last_run_id_survives_end_run(self, mock_mlflow):
+        mock_run = MagicMock()
+        mock_run.info.run_id = "abc123"
+        mock_mlflow.start_run.return_value = mock_run
+        mock_mlflow.get_experiment_by_name.return_value = MagicMock(experiment_id="1")
+
+        logger = MLflowLogger(experiment_name="test")
+        logger.start_run()
+        logger.end_run()
+
+        assert logger.run_id is None
+        assert logger.last_run_id == "abc123"
+
 
 class TestMLflowLoggerNestedRun:
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")

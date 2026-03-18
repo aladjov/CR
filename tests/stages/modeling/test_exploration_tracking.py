@@ -43,7 +43,7 @@ class TestExplorationMetadataSchema:
     def test_exploration_metadata_has_all_expected_keys(self):
         """Validate that the metadata dict we plan to write has all required keys."""
         metadata = {
-            "mlflow_experiment_name": "training_test__abc1234",
+            "mlflow_experiment_name": "/Shared/training_test__abc1234",
             "mlflow_run_id": "fake-run-id",
             "composite_name": "test__abc1234",
             "target_column": "churned",
@@ -76,11 +76,17 @@ class TestFeaturesJsonFormat:
 
 
 class TestExperimentNameMatchesProductionPattern:
-    def test_experiment_name_uses_training_cn_pattern(self):
+    def test_experiment_name_local(self):
         cn = "cust_emai__abc1234"
         experiment_name = f"training_{cn}"
-        assert experiment_name.startswith("training_")
-        assert cn in experiment_name
+        assert experiment_name == "training_cust_emai__abc1234"
+
+    def test_experiment_name_databricks(self):
+        """On Databricks, production uses /Shared/training_{CN}."""
+        cn = "cust_emai__abc1234"
+        on_databricks = True
+        experiment_name = f"/Shared/training_{cn}" if on_databricks else f"training_{cn}"
+        assert experiment_name == "/Shared/training_cust_emai__abc1234"
 
 
 class TestGracefulWhenMlflowUnavailable:

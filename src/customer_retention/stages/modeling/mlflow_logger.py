@@ -31,6 +31,7 @@ class MLflowLogger:
         self.run_name = run_name
         self.tracking_uri = tracking_uri
         self._run = None
+        self._last_run_id: Optional[str] = None
 
     def __enter__(self):
         self.start_run()
@@ -57,11 +58,17 @@ class MLflowLogger:
             experiment_id=experiment_id,
             run_name=run_name or self.run_name,
         )
+        self._last_run_id = self._run.info.run_id
 
     def end_run(self):
         if MLFLOW_AVAILABLE:
             mlflow.end_run()
         self._run = None
+
+    @property
+    def last_run_id(self) -> Optional[str]:
+        """Return run_id even after end_run() — set during start_run()."""
+        return self._last_run_id
 
     def log_params(self, params: Dict[str, Any]):
         if MLFLOW_AVAILABLE:
