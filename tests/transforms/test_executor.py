@@ -1,3 +1,6 @@
+import sys
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -10,6 +13,8 @@ from customer_retention.transforms import ops
 from customer_retention.transforms.artifact_store import ArtifactStore
 from customer_retention.transforms.executor import TransformExecutor
 
+_MOD = "customer_retention.transforms.executor"
+
 
 @pytest.fixture
 def executor():
@@ -19,6 +24,15 @@ def executor():
 @pytest.fixture
 def artifact_store(tmp_path):
     return ArtifactStore(str(tmp_path / "artifacts"))
+
+
+@pytest.fixture
+def mock_spark_ops(monkeypatch):
+    mock = MagicMock()
+    import customer_retention.transforms as _pkg
+    monkeypatch.setitem(sys.modules, "customer_retention.transforms.spark_ops", mock)
+    monkeypatch.setattr(_pkg, "spark_ops", mock, raising=False)
+    return mock
 
 
 @pytest.fixture
@@ -220,26 +234,20 @@ class TestApplyAll:
         np.testing.assert_array_almost_equal(result["v"].to_numpy(), expected["v"].to_numpy())
 
     def test_plan_truncation_for_pure_spark_chain(self, executor, sample_df):
-        from unittest.mock import MagicMock, patch
-
-        _MOD = "customer_retention.transforms.executor"
         steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "amount") for _ in range(65)]
-
         mock_spark_df = MagicMock()
         mock_spark_df.localCheckpoint = MagicMock(return_value=mock_spark_df)
 
         with patch(f"{_MOD}._is_spark_pandas", return_value=True), \
              patch(f"{_MOD}.as_spark_df", return_value=mock_spark_df), \
-             patch(f"{_MOD}._as_pandas_api", return_value=sample_df.copy()):
+             patch(f"{_MOD}._as_pandas_api", return_value=sample_df.copy()), \
+             patch(f"{_MOD}._SPARK_DISPATCH", {PipelineTransformationType.LOG_TRANSFORM: lambda df, s: df}), \
+             patch.object(executor, "_precompute_quantiles_distributed"):
             executor.apply_all(sample_df.copy(), steps)
         assert mock_spark_df.localCheckpoint.call_count == 2
 
     def test_checkpoint_after_roundtrips(self, executor, sample_df):
-        from unittest.mock import MagicMock, patch
-
-        _MOD = "customer_retention.transforms.executor"
         steps = [_step(PipelineTransformationType.SCALE, "amount", method="standard") for _ in range(25)]
-
         mock_spark_df = MagicMock()
         mock_spark_df.localCheckpoint = MagicMock(return_value=mock_spark_df)
 
@@ -254,9 +262,8 @@ class TestApplyAll:
         assert mock_spark_df.localCheckpoint.call_count == 2
 
     def test_no_checkpoint_on_pandas(self, executor, sample_df):
-        from unittest.mock import patch
         steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "amount") for _ in range(25)]
-        with patch("customer_retention.transforms.executor._is_spark_pandas", return_value=False):
+        with patch(f"{_MOD}._is_spark_pandas", return_value=False):
             result = executor.apply_all(sample_df.copy(), steps)
         assert len(result) == len(sample_df)
 
@@ -286,40 +293,32 @@ class TestApplyAll:
 
 
 class TestDistributedApplyAll:
-    _MOD = "customer_retention.transforms.executor"
-
     def test_distributed_uses_spark_dispatch(self, executor):
-        from unittest.mock import MagicMock, patch
-
         mock_spark_df = MagicMock()
         mock_result = MagicMock()
         steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "a")]
 
-        with patch(f"{self._MOD}._is_spark_pandas", return_value=True), \
-             patch(f"{self._MOD}.as_spark_df", return_value=mock_spark_df), \
-             patch(f"{self._MOD}._as_pandas_api", return_value=MagicMock()) as mock_api, \
-             patch(f"{self._MOD}._SPARK_DISPATCH", {PipelineTransformationType.LOG_TRANSFORM: lambda df, s: mock_result}), \
+        with patch(f"{_MOD}._is_spark_pandas", return_value=True), \
+             patch(f"{_MOD}.as_spark_df", return_value=mock_spark_df), \
+             patch(f"{_MOD}._as_pandas_api", return_value=MagicMock()) as mock_api, \
+             patch(f"{_MOD}._SPARK_DISPATCH", {PipelineTransformationType.LOG_TRANSFORM: lambda df, s: mock_result}), \
              patch.object(executor, "_precompute_quantiles_distributed"):
             executor._apply_all_distributed(MagicMock(), steps)
-
         mock_api.assert_called_once_with(mock_result)
 
     def test_fallback_to_pyspark_pandas_for_unknown_types(self, executor):
-        from unittest.mock import MagicMock, patch
-
         mock_spark_df = MagicMock()
         mock_ps_result = MagicMock()
         steps = [_step(PipelineTransformationType.SCALE, "a", method="standard")]
 
-        with patch(f"{self._MOD}._is_spark_pandas", return_value=True), \
-             patch(f"{self._MOD}.as_spark_df", return_value=mock_spark_df) as mock_as, \
-             patch(f"{self._MOD}._as_pandas_api", return_value=MagicMock()), \
-             patch(f"{self._MOD}._SPARK_DISPATCH", {}), \
+        with patch(f"{_MOD}._is_spark_pandas", return_value=True), \
+             patch(f"{_MOD}.as_spark_df", return_value=mock_spark_df) as mock_as, \
+             patch(f"{_MOD}._as_pandas_api", return_value=MagicMock()), \
+             patch(f"{_MOD}._SPARK_DISPATCH", {}), \
              patch.object(executor, "apply", return_value=mock_ps_result), \
              patch.object(executor, "_apply_fitted_spark", return_value=None), \
              patch.object(executor, "_precompute_quantiles_distributed"):
             executor._apply_all_distributed(MagicMock(), steps)
-
         assert mock_as.call_count == 2
 
     def test_zero_inflation_reads_before_writes(self):
@@ -330,45 +329,110 @@ class TestDistributedApplyAll:
         assert result.loc[0, "amount"] == 0.0
         assert result.loc[1, "amount"] > 0.0
 
-    def test_fitted_spark_uses_precomputed_standard_scale(self, executor):
-        from unittest.mock import MagicMock, patch
+    def test_fitted_spark_uses_precomputed_standard_scale(self, mock_spark_ops):
         step = _step(PipelineTransformationType.SCALE, "a", method="standard")
         step.parameters["_spark_fitted"] = {"kind": "standard", "mean": 5.0, "scale": 2.0}
         mock_spark_df = MagicMock()
         mock_result = MagicMock()
-        with patch("customer_retention.transforms.spark_ops.spark_standard_scale", return_value=mock_result) as mock_fn:
-            result = TransformExecutor._apply_fitted_spark(mock_spark_df, step, True, None)
-        mock_fn.assert_called_once_with(mock_spark_df, "a", mean=5.0, scale=2.0)
+        mock_spark_ops.spark_standard_scale.return_value = mock_result
+        result = TransformExecutor._apply_fitted_spark(mock_spark_df, step, True, None)
+        mock_spark_ops.spark_standard_scale.assert_called_once_with(mock_spark_df, "a", mean=5.0, scale=2.0)
         assert result is mock_result
 
-    def test_fitted_spark_uses_precomputed_yeo_johnson(self, executor):
-        from unittest.mock import MagicMock, patch
+    def test_fitted_spark_uses_precomputed_minmax_scale(self, mock_spark_ops):
+        step = _step(PipelineTransformationType.SCALE, "a", method="minmax")
+        step.parameters["_spark_fitted"] = {"kind": "minmax", "scale": 0.5, "offset": -0.25}
+        mock_spark_df = MagicMock()
+        mock_result = MagicMock()
+        mock_spark_ops.spark_minmax_scale.return_value = mock_result
+        result = TransformExecutor._apply_fitted_spark(mock_spark_df, step, True, None)
+        mock_spark_ops.spark_minmax_scale.assert_called_once_with(mock_spark_df, "a", scale=0.5, offset=-0.25)
+        assert result is mock_result
+
+    def test_fitted_spark_uses_precomputed_yeo_johnson(self, mock_spark_ops):
         step = _step(PipelineTransformationType.YEO_JOHNSON, "a")
         step.parameters["_spark_fitted"] = {"lmbda": 0.5, "std_mean": 1.0, "std_scale": 0.5, "standardize": True}
         mock_spark_df = MagicMock()
-        with patch("customer_retention.transforms.spark_ops.spark_yeo_johnson", return_value=MagicMock()) as mock_fn:
-            TransformExecutor._apply_fitted_spark(mock_spark_df, step, True, None)
-        mock_fn.assert_called_once_with(mock_spark_df, "a", lmbda=0.5, std_mean=1.0, std_scale=0.5, standardize=True)
+        mock_spark_ops.spark_yeo_johnson.return_value = MagicMock()
+        TransformExecutor._apply_fitted_spark(mock_spark_df, step, True, None)
+        mock_spark_ops.spark_yeo_johnson.assert_called_once_with(
+            mock_spark_df, "a", lmbda=0.5, std_mean=1.0, std_scale=0.5, standardize=True,
+        )
 
-    def test_fitted_spark_returns_none_for_unhandled(self, executor):
-        from unittest.mock import MagicMock
+    def test_fitted_spark_returns_none_for_unhandled(self, mock_spark_ops):
         step = _step(PipelineTransformationType.LOG_TRANSFORM, "a")
         result = TransformExecutor._apply_fitted_spark(MagicMock(), step, False, None)
         assert result is None
 
-    def test_apply_fitted_spark_loads_from_artifact(self, executor, artifact_store):
+    def test_fitted_spark_scale_no_params_no_artifact_returns_none(self, mock_spark_ops):
+        step = _step(PipelineTransformationType.SCALE, "a", method="standard")
+        result = TransformExecutor._apply_fitted_spark(MagicMock(), step, True, None)
+        assert result is None
+
+    def test_fitted_spark_yj_no_params_no_artifact_returns_none(self, mock_spark_ops):
+        step = _step(PipelineTransformationType.YEO_JOHNSON, "a")
+        result = TransformExecutor._apply_fitted_spark(MagicMock(), step, True, None)
+        assert result is None
+
+    def test_apply_fitted_spark_loads_standard_from_artifact(self, mock_spark_ops, artifact_store):
         np.random.seed(42)
         from customer_retention.transforms.fitted import FittedScaler
         scaler = FittedScaler("standard")
         df = pd.DataFrame({"v": np.random.randn(50) * 10 + 50})
         scaler.fit_transform(df.copy(), "v", artifact_store)
         step = _step(PipelineTransformationType.SCALE, "v", method="standard")
-        from unittest.mock import MagicMock, patch
         mock_spark_df = MagicMock()
-        with patch("customer_retention.transforms.spark_ops.spark_standard_scale", return_value=MagicMock()) as mock_fn:
-            result = TransformExecutor._apply_fitted_spark(mock_spark_df, step, False, artifact_store)
+        mock_spark_ops.spark_standard_scale.return_value = MagicMock()
+        result = TransformExecutor._apply_fitted_spark(mock_spark_df, step, False, artifact_store)
         assert result is not None
-        mock_fn.assert_called_once()
+        mock_spark_ops.spark_standard_scale.assert_called_once()
+
+    def test_apply_fitted_spark_loads_minmax_from_artifact(self, mock_spark_ops, artifact_store):
+        np.random.seed(42)
+        from customer_retention.transforms.fitted import FittedScaler
+        scaler = FittedScaler("minmax")
+        df = pd.DataFrame({"v": np.random.randn(50) * 10 + 50})
+        scaler.fit_transform(df.copy(), "v", artifact_store)
+        step = _step(PipelineTransformationType.SCALE, "v", method="minmax")
+        mock_spark_df = MagicMock()
+        mock_spark_ops.spark_minmax_scale.return_value = MagicMock()
+        result = TransformExecutor._apply_fitted_spark(mock_spark_df, step, False, artifact_store)
+        assert result is not None
+        mock_spark_ops.spark_minmax_scale.assert_called_once()
+
+    def test_apply_fitted_spark_loads_yj_from_artifact(self, mock_spark_ops, artifact_store):
+        np.random.seed(42)
+        from customer_retention.transforms.fitted import FittedPowerTransform
+        pt = FittedPowerTransform()
+        df = pd.DataFrame({"v": np.random.exponential(5, 100)})
+        pt.fit_transform(df.copy(), "v", artifact_store)
+        step = _step(PipelineTransformationType.YEO_JOHNSON, "v")
+        mock_spark_df = MagicMock()
+        mock_spark_ops.spark_yeo_johnson.return_value = MagicMock()
+        result = TransformExecutor._apply_fitted_spark(mock_spark_df, step, False, artifact_store)
+        assert result is not None
+        mock_spark_ops.spark_yeo_johnson.assert_called_once()
+        call_kwargs = mock_spark_ops.spark_yeo_johnson.call_args
+        assert "lmbda" in call_kwargs.kwargs
+
+    def test_distributed_prefit_calls_both_batch_fitters(self, executor):
+        mock_spark_df = MagicMock()
+        steps = [
+            _step(PipelineTransformationType.SCALE, "a", method="standard"),
+            _step(PipelineTransformationType.YEO_JOHNSON, "b"),
+        ]
+        store = MagicMock()
+        with patch.object(executor, "_batch_fit_scalers") as mock_scalers, \
+             patch.object(executor, "_batch_fit_power_transforms") as mock_pt, \
+             patch(f"{_MOD}.as_spark_df", return_value=mock_spark_df), \
+             patch(f"{_MOD}._as_pandas_api", return_value=pd.DataFrame()), \
+             patch(f"{_MOD}._SPARK_DISPATCH", {}), \
+             patch.object(executor, "_apply_fitted_spark", return_value=None), \
+             patch.object(executor, "apply", return_value=pd.DataFrame()), \
+             patch.object(executor, "_precompute_quantiles_distributed"):
+            executor._apply_all_distributed(MagicMock(), steps, fit_mode=True, artifact_store=store)
+        mock_scalers.assert_called_once()
+        mock_pt.assert_called_once()
 
 
 class TestBatchFitScalers:
@@ -489,9 +553,6 @@ class TestOnStepDoneCallback:
         assert result["amount"].max() < 50000
 
     def test_callback_on_distributed_path(self, executor, sample_df):
-        from unittest.mock import MagicMock, patch
-
-        _MOD = "customer_retention.transforms.executor"
         steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "amount")]
         mock_spark_df = MagicMock()
         calls = []
@@ -546,3 +607,364 @@ class TestFormatStepProgress:
         captured = capsys.readouterr()
         assert "LOG_TRANSFORM" in captured.out
         assert "amount" in captured.out
+
+
+class TestPrecomputeQuantilesDistributed:
+    def test_sets_precomputed_q99_from_approx_quantile(self, executor):
+        mock_spark_df = MagicMock()
+        mock_spark_df.columns = ["a", "b", "other"]
+        mock_spark_df.approxQuantile.return_value = [[42.0], [99.0]]
+        steps = [
+            _step(PipelineTransformationType.CAP_THEN_LOG, "a"),
+            _step(PipelineTransformationType.CAP_THEN_LOG, "b"),
+        ]
+        executor._precompute_quantiles_distributed(mock_spark_df, steps)
+        assert steps[0].parameters["_precomputed_q99"] == 42.0
+        assert steps[1].parameters["_precomputed_q99"] == 99.0
+        mock_spark_df.approxQuantile.assert_called_once_with(["a", "b"], [0.99], 0.01)
+
+    def test_skips_columns_not_in_spark_df(self, executor):
+        mock_spark_df = MagicMock()
+        mock_spark_df.columns = ["a"]
+        mock_spark_df.approxQuantile.return_value = [[10.0]]
+        steps = [
+            _step(PipelineTransformationType.CAP_THEN_LOG, "a"),
+            _step(PipelineTransformationType.CAP_THEN_LOG, "missing"),
+        ]
+        executor._precompute_quantiles_distributed(mock_spark_df, steps)
+        assert steps[0].parameters["_precomputed_q99"] == 10.0
+        assert "_precomputed_q99" not in steps[1].parameters
+
+    def test_noop_when_no_cap_then_log_steps(self, executor):
+        mock_spark_df = MagicMock()
+        mock_spark_df.columns = ["a"]
+        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "a")]
+        executor._precompute_quantiles_distributed(mock_spark_df, steps)
+        mock_spark_df.approxQuantile.assert_not_called()
+
+    def test_handles_empty_quantile_list(self, executor):
+        mock_spark_df = MagicMock()
+        mock_spark_df.columns = ["a"]
+        mock_spark_df.approxQuantile.return_value = [[]]
+        steps = [_step(PipelineTransformationType.CAP_THEN_LOG, "a")]
+        executor._precompute_quantiles_distributed(mock_spark_df, steps)
+        assert steps[0].parameters["_precomputed_q99"] is None
+
+
+class TestPrecomputeQuantilesPandas:
+    def test_pandas_path_sets_q99(self, executor):
+        np.random.seed(42)
+        df = pd.DataFrame({"v": np.random.randn(200)})
+        steps = [_step(PipelineTransformationType.CAP_THEN_LOG, "v")]
+        executor._precompute_quantiles(df, steps)
+        assert "_precomputed_q99" in steps[0].parameters
+        assert steps[0].parameters["_precomputed_q99"] == pytest.approx(float(df["v"].quantile(0.99)))
+
+    def test_pandas_path_skips_missing_column(self, executor):
+        df = pd.DataFrame({"v": [1.0, 2.0]})
+        steps = [_step(PipelineTransformationType.CAP_THEN_LOG, "missing")]
+        executor._precompute_quantiles(df, steps)
+        assert "_precomputed_q99" not in steps[0].parameters
+
+    def test_noop_when_no_cap_then_log(self, executor):
+        df = pd.DataFrame({"v": [1.0]})
+        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "v")]
+        executor._precompute_quantiles(df, steps)
+
+
+class TestSparkDerived:
+    def test_ratio_dispatches_to_spark_ops(self, mock_spark_ops):
+        from customer_retention.transforms.executor import _spark_derived
+        step = _step(PipelineTransformationType.DERIVED_COLUMN, "r", method="ratio", numerator="a", denominator="b")
+        mock_spark_df = MagicMock()
+        _spark_derived(mock_spark_df, step)
+        mock_spark_ops.spark_derived_ratio.assert_called_once_with(
+            mock_spark_df, "r", numerator="a", denominator="b",
+        )
+
+    def test_interaction_dispatches_to_spark_ops(self, mock_spark_ops):
+        from customer_retention.transforms.executor import _spark_derived
+        step = _step(PipelineTransformationType.DERIVED_COLUMN, "ab", method="interaction", col_a="a", col_b="b")
+        mock_spark_df = MagicMock()
+        _spark_derived(mock_spark_df, step)
+        mock_spark_ops.spark_derived_interaction.assert_called_once_with(
+            mock_spark_df, "ab", col_a="a", col_b="b",
+        )
+
+    def test_composite_dispatches_to_spark_ops(self, mock_spark_ops):
+        from customer_retention.transforms.executor import _spark_derived
+        step = _step(PipelineTransformationType.DERIVED_COLUMN, "c", method="composite", columns=["a", "b"])
+        mock_spark_df = MagicMock()
+        _spark_derived(mock_spark_df, step)
+        mock_spark_ops.spark_derived_composite.assert_called_once_with(
+            mock_spark_df, "c", columns=["a", "b"],
+        )
+
+    def test_unknown_method_returns_df_unchanged(self, mock_spark_ops):
+        from customer_retention.transforms.executor import _spark_derived
+        step = _step(PipelineTransformationType.DERIVED_COLUMN, "x", method="nonexistent")
+        mock_spark_df = MagicMock()
+        result = _spark_derived(mock_spark_df, step)
+        assert result is mock_spark_df
+
+    def test_action_key_also_recognized(self, mock_spark_ops):
+        from customer_retention.transforms.executor import _spark_derived
+        step = _step(PipelineTransformationType.DERIVED_COLUMN, "r", action="ratio", numerator="a", denominator="b")
+        mock_spark_df = MagicMock()
+        _spark_derived(mock_spark_df, step)
+        mock_spark_ops.spark_derived_ratio.assert_called_once()
+
+
+class TestApplyScaleFromArtifact:
+    def test_standard_scaler_from_artifact(self, mock_spark_ops, artifact_store):
+        from customer_retention.transforms.executor import _apply_scale_from_artifact
+        from customer_retention.transforms.fitted import FittedScaler
+        np.random.seed(42)
+        df = pd.DataFrame({"v": np.random.randn(50) * 10 + 50})
+        scaler = FittedScaler("standard")
+        scaler.fit_transform(df.copy(), "v", artifact_store)
+        step = _step(PipelineTransformationType.SCALE, "v", method="standard")
+        mock_spark_df = MagicMock()
+        mock_spark_ops.spark_standard_scale.return_value = MagicMock()
+        _apply_scale_from_artifact(mock_spark_df, step, artifact_store)
+        call_kwargs = mock_spark_ops.spark_standard_scale.call_args
+        assert call_kwargs.kwargs["mean"] == pytest.approx(float(scaler._scaler.mean_[0]))
+        assert call_kwargs.kwargs["scale"] == pytest.approx(float(scaler._scaler.scale_[0]))
+
+    def test_minmax_scaler_from_artifact(self, mock_spark_ops, artifact_store):
+        from customer_retention.transforms.executor import _apply_scale_from_artifact
+        from customer_retention.transforms.fitted import FittedScaler
+        np.random.seed(42)
+        df = pd.DataFrame({"v": np.random.randn(50) * 10 + 50})
+        scaler = FittedScaler("minmax")
+        scaler.fit_transform(df.copy(), "v", artifact_store)
+        step = _step(PipelineTransformationType.SCALE, "v", method="minmax")
+        mock_spark_df = MagicMock()
+        mock_spark_ops.spark_minmax_scale.return_value = MagicMock()
+        _apply_scale_from_artifact(mock_spark_df, step, artifact_store)
+        mock_spark_ops.spark_minmax_scale.assert_called_once()
+        call_kwargs = mock_spark_ops.spark_minmax_scale.call_args
+        assert call_kwargs.kwargs["scale"] == pytest.approx(float(scaler._scaler.scale_[0]))
+        assert call_kwargs.kwargs["offset"] == pytest.approx(float(scaler._scaler.min_[0]))
+
+
+class TestApplyYjFromArtifact:
+    def test_yj_from_artifact_passes_correct_params(self, mock_spark_ops, artifact_store):
+        from customer_retention.transforms.executor import _apply_yj_from_artifact
+        from customer_retention.transforms.fitted import FittedPowerTransform
+        np.random.seed(42)
+        df = pd.DataFrame({"v": np.random.exponential(5, 100)})
+        pt = FittedPowerTransform()
+        pt.fit_transform(df.copy(), "v", artifact_store)
+        step = _step(PipelineTransformationType.YEO_JOHNSON, "v")
+        mock_spark_df = MagicMock()
+        mock_spark_ops.spark_yeo_johnson.return_value = MagicMock()
+        _apply_yj_from_artifact(mock_spark_df, step, artifact_store)
+        call_kwargs = mock_spark_ops.spark_yeo_johnson.call_args
+        assert call_kwargs.kwargs["lmbda"] == pytest.approx(float(pt._pt.lambdas_[0]))
+        assert call_kwargs.kwargs["std_mean"] == pytest.approx(float(pt._pt._scaler.mean_[0]))
+        assert call_kwargs.kwargs["std_scale"] == pytest.approx(float(pt._pt._scaler.scale_[0]))
+        assert call_kwargs.kwargs["standardize"] is True
+
+
+class TestBatchFitScalersDistributed:
+    def _mock_spark_row(self, values):
+        row = MagicMock()
+        row.__getitem__ = lambda _, k: values[k]
+        return row
+
+    def test_standard_scaler_prefit_stores_params_in_step(self, executor, artifact_store):
+        mock_spark_df = MagicMock()
+        mock_F = MagicMock()
+        row_vals = {"a__mean": 50.0, "a__std": 10.0, "a__cnt": 100}
+        mock_spark_df.agg.return_value.collect.return_value = [self._mock_spark_row(row_vals)]
+        steps = [_step(PipelineTransformationType.SCALE, "a", method="standard")]
+        mock_spark_df.columns = ["a", "b"]
+        executor._batch_fit_scalers(mock_spark_df, steps, artifact_store, {"a", "b"}, mock_F)
+        assert steps[0].parameters["_spark_fitted"]["kind"] == "standard"
+        assert steps[0].parameters["_spark_fitted"]["mean"] == 50.0
+        assert steps[0].parameters["_spark_fitted"]["scale"] == 10.0
+        assert artifact_store.has("a_scaler")
+
+    def test_minmax_scaler_prefit_stores_params_in_step(self, executor, artifact_store):
+        mock_spark_df = MagicMock()
+        mock_F = MagicMock()
+        row_vals = {"v__min": 10.0, "v__max": 110.0, "v__cnt": 100}
+        mock_spark_df.agg.return_value.collect.return_value = [self._mock_spark_row(row_vals)]
+        steps = [_step(PipelineTransformationType.SCALE, "v", method="minmax")]
+        executor._batch_fit_scalers(mock_spark_df, steps, artifact_store, {"v"}, mock_F)
+        assert steps[0].parameters["_spark_fitted"]["kind"] == "minmax"
+        assert steps[0].parameters["_spark_fitted"]["scale"] == pytest.approx(1.0 / 100.0)
+        assert artifact_store.has("v_scaler")
+
+    def test_standard_scaler_zero_std_uses_unit_scale(self, executor, artifact_store):
+        mock_spark_df = MagicMock()
+        mock_F = MagicMock()
+        row_vals = {"a__mean": 5.0, "a__std": 0.0, "a__cnt": 50}
+        mock_spark_df.agg.return_value.collect.return_value = [self._mock_spark_row(row_vals)]
+        steps = [_step(PipelineTransformationType.SCALE, "a", method="standard")]
+        executor._batch_fit_scalers(mock_spark_df, steps, artifact_store, {"a"}, mock_F)
+        assert steps[0].parameters["_spark_fitted"]["scale"] == 1.0
+
+    def test_minmax_scaler_zero_range_uses_unit_scale(self, executor, artifact_store):
+        mock_spark_df = MagicMock()
+        mock_F = MagicMock()
+        row_vals = {"v__min": 5.0, "v__max": 5.0, "v__cnt": 10}
+        mock_spark_df.agg.return_value.collect.return_value = [self._mock_spark_row(row_vals)]
+        steps = [_step(PipelineTransformationType.SCALE, "v", method="minmax")]
+        executor._batch_fit_scalers(mock_spark_df, steps, artifact_store, {"v"}, mock_F)
+        assert steps[0].parameters["_spark_fitted"]["scale"] == 1.0
+
+    def test_skips_columns_not_in_spark_df(self, executor, artifact_store):
+        mock_spark_df = MagicMock()
+        mock_F = MagicMock()
+        steps = [_step(PipelineTransformationType.SCALE, "missing", method="standard")]
+        executor._batch_fit_scalers(mock_spark_df, steps, artifact_store, {"a"}, mock_F)
+        mock_spark_df.agg.assert_not_called()
+
+    def test_noop_when_no_scale_steps(self, executor, artifact_store):
+        mock_spark_df = MagicMock()
+        mock_F = MagicMock()
+        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "a")]
+        executor._batch_fit_scalers(mock_spark_df, steps, artifact_store, {"a"}, mock_F)
+        mock_spark_df.agg.assert_not_called()
+
+    def test_mixed_standard_and_minmax_in_single_call(self, executor, artifact_store):
+        mock_spark_df = MagicMock()
+        mock_F = MagicMock()
+        std_row = {"a__mean": 10.0, "a__std": 5.0, "a__cnt": 50}
+        mm_row = {"b__min": 0.0, "b__max": 100.0, "b__cnt": 50}
+        mock_spark_df.agg.return_value.collect.side_effect = [
+            [self._mock_spark_row(std_row)],
+            [self._mock_spark_row(mm_row)],
+        ]
+        steps = [
+            _step(PipelineTransformationType.SCALE, "a", method="standard"),
+            _step(PipelineTransformationType.SCALE, "b", method="minmax"),
+        ]
+        executor._batch_fit_scalers(mock_spark_df, steps, artifact_store, {"a", "b"}, mock_F)
+        assert steps[0].parameters["_spark_fitted"]["kind"] == "standard"
+        assert steps[1].parameters["_spark_fitted"]["kind"] == "minmax"
+
+    def test_null_aggregate_values_default_to_zero(self, executor, artifact_store):
+        mock_spark_df = MagicMock()
+        mock_F = MagicMock()
+        row_vals = {"a__mean": None, "a__std": None, "a__cnt": None}
+        mock_spark_df.agg.return_value.collect.return_value = [self._mock_spark_row(row_vals)]
+        steps = [_step(PipelineTransformationType.SCALE, "a", method="standard")]
+        executor._batch_fit_scalers(mock_spark_df, steps, artifact_store, {"a"}, mock_F)
+        assert steps[0].parameters["_spark_fitted"]["mean"] == 0.0
+        assert steps[0].parameters["_spark_fitted"]["scale"] == 1.0
+
+
+class TestBatchFitPowerTransformsDistributed:
+    def test_yj_prefit_stores_params_in_step(self, executor):
+        np.random.seed(42)
+        sample_pdf = pd.DataFrame({"v": np.random.exponential(5, 50)})
+        mock_spark_df = MagicMock()
+        mock_spark_df.count.return_value = 50
+        mock_store = MagicMock()
+        with patch("customer_retention.transforms.executor.FittedPowerTransform") as MockPT:
+            instance = MockPT.return_value
+            instance._MAX_FIT_SAMPLE = 50_000
+            MockPT._MAX_FIT_SAMPLE = 50_000
+            instance._pt = MagicMock()
+            instance._pt.lambdas_ = np.array([0.5])
+            instance._pt.standardize = True
+            instance._pt._scaler = MagicMock()
+            instance._pt._scaler.mean_ = np.array([1.0])
+            instance._pt._scaler.scale_ = np.array([0.5])
+            mock_spark_df.select.return_value.toPandas.return_value = sample_pdf
+            steps = [_step(PipelineTransformationType.YEO_JOHNSON, "v")]
+            executor._batch_fit_power_transforms(mock_spark_df, steps, mock_store, {"v"})
+        assert steps[0].parameters["_spark_fitted"]["lmbda"] == pytest.approx(0.5)
+        assert steps[0].parameters["_spark_fitted"]["std_mean"] == pytest.approx(1.0)
+        assert steps[0].parameters["_spark_fitted"]["std_scale"] == pytest.approx(0.5)
+        mock_store.register.assert_called_once()
+
+    def test_yj_prefit_samples_large_datasets(self, executor):
+        np.random.seed(42)
+        sample_pdf = pd.DataFrame({"v": np.random.exponential(5, 100)})
+        mock_spark_df = MagicMock()
+        mock_spark_df.count.return_value = 100_000
+        mock_store = MagicMock()
+        with patch("customer_retention.transforms.executor.FittedPowerTransform") as MockPT:
+            instance = MockPT.return_value
+            instance._MAX_FIT_SAMPLE = 50_000
+            MockPT._MAX_FIT_SAMPLE = 50_000
+            instance._pt = MagicMock()
+            instance._pt.lambdas_ = np.array([1.0])
+            instance._pt.standardize = False
+            instance._pt._scaler = MagicMock()
+            mock_spark_df.select.return_value.sample.return_value.limit.return_value.toPandas.return_value = sample_pdf
+            steps = [_step(PipelineTransformationType.YEO_JOHNSON, "v")]
+            executor._batch_fit_power_transforms(mock_spark_df, steps, mock_store, {"v"})
+        mock_spark_df.select.return_value.sample.assert_called_once()
+        assert steps[0].parameters["_spark_fitted"]["standardize"] is False
+        assert steps[0].parameters["_spark_fitted"]["std_mean"] is None
+
+    def test_skips_columns_not_in_spark_df(self, executor):
+        mock_spark_df = MagicMock()
+        steps = [_step(PipelineTransformationType.YEO_JOHNSON, "missing")]
+        executor._batch_fit_power_transforms(mock_spark_df, steps, MagicMock(), {"a"})
+        mock_spark_df.count.assert_not_called()
+
+    def test_noop_when_no_yj_steps(self, executor):
+        mock_spark_df = MagicMock()
+        steps = [_step(PipelineTransformationType.SCALE, "a", method="standard")]
+        executor._batch_fit_power_transforms(mock_spark_df, steps, MagicMock(), {"a"})
+        mock_spark_df.count.assert_not_called()
+
+
+class TestMakeSparkDispatch:
+    def test_dispatch_table_has_all_stateless_types(self, mock_spark_ops):
+        from customer_retention.transforms.executor import _make_spark_dispatch
+        dispatch = _make_spark_dispatch()
+        expected_types = {
+            PipelineTransformationType.IMPUTE_NULL,
+            PipelineTransformationType.CAP_OUTLIER,
+            PipelineTransformationType.TYPE_CAST,
+            PipelineTransformationType.DROP_COLUMN,
+            PipelineTransformationType.WINSORIZE,
+            PipelineTransformationType.SEGMENT_AWARE_CAP,
+            PipelineTransformationType.LOG_TRANSFORM,
+            PipelineTransformationType.SQRT_TRANSFORM,
+            PipelineTransformationType.ZERO_INFLATION_HANDLING,
+            PipelineTransformationType.CAP_THEN_LOG,
+            PipelineTransformationType.ENCODE,
+            PipelineTransformationType.FEATURE_SELECT,
+            PipelineTransformationType.DERIVED_COLUMN,
+        }
+        assert set(dispatch.keys()) == expected_types
+
+    def test_dispatch_log_transform_calls_spark_ops(self, mock_spark_ops):
+        from customer_retention.transforms.executor import _make_spark_dispatch
+        dispatch = _make_spark_dispatch()
+        mock_df = MagicMock()
+        step = _step(PipelineTransformationType.LOG_TRANSFORM, "v")
+        dispatch[PipelineTransformationType.LOG_TRANSFORM](mock_df, step)
+        mock_spark_ops.spark_log_transform.assert_called_once_with(mock_df, "v")
+
+    def test_dispatch_encode_one_hot_calls_spark_ops(self, mock_spark_ops):
+        from customer_retention.transforms.executor import _make_spark_dispatch
+        dispatch = _make_spark_dispatch()
+        mock_df = MagicMock()
+        step = _step(PipelineTransformationType.ENCODE, "cat", method="one_hot")
+        dispatch[PipelineTransformationType.ENCODE](mock_df, step)
+        mock_spark_ops.spark_one_hot_encode.assert_called_once_with(mock_df, "cat")
+
+    def test_dispatch_encode_label_returns_none(self, mock_spark_ops):
+        from customer_retention.transforms.executor import _make_spark_dispatch
+        dispatch = _make_spark_dispatch()
+        mock_df = MagicMock()
+        step = _step(PipelineTransformationType.ENCODE, "cat", method="label")
+        result = dispatch[PipelineTransformationType.ENCODE](mock_df, step)
+        assert result is None
+
+    def test_dispatch_cap_then_log_passes_precomputed_q99(self, mock_spark_ops):
+        from customer_retention.transforms.executor import _make_spark_dispatch
+        dispatch = _make_spark_dispatch()
+        mock_df = MagicMock()
+        step = _step(PipelineTransformationType.CAP_THEN_LOG, "v", _precomputed_q99=42.0)
+        dispatch[PipelineTransformationType.CAP_THEN_LOG](mock_df, step)
+        mock_spark_ops.spark_cap_then_log.assert_called_once_with(mock_df, "v", q99=42.0)
