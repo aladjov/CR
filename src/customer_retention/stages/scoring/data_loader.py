@@ -54,12 +54,12 @@ class ScoringDataLoader:
             raise ValueError(f"Experiment '{self.config.pipeline_name}' not found")
         parent_run = self._find_best_parent_run(client, experiment.experiment_id)
         best_model_tag = parent_run.data.tags.get("best_model", "random_forest")
-        model_name = f"model_{best_model_tag}"
-        if self.config.recommendations_hash:
-            model_name = f"{model_name}_{self.config.recommendations_hash}"
+        model_name = self._model_artifact_name(best_model_tag)
         model_run = self._find_model_run(client, experiment.experiment_id, parent_run, best_model_tag)
-        loader_module = mlflow.xgboost if best_model_tag == "xgboost" else mlflow.sklearn
         model_uri = f"runs:/{model_run.info.run_id}/{model_name}"
+        if self.config.is_databricks:
+            return mlflow.spark.load_model(model_uri), model_uri
+        loader_module = mlflow.xgboost if best_model_tag == "xgboost" else mlflow.sklearn
         try:
             return loader_module.load_model(model_uri), model_uri
         except Exception:
@@ -68,6 +68,14 @@ class ScoringDataLoader:
                 if lm.name == model_name and lm.source_run_id == model_run.info.run_id:
                     return loader_module.load_model(lm.model_uri), lm.model_uri
             raise
+
+    def _model_artifact_name(self, model_tag: str) -> str:
+        base = f"model_{model_tag}"
+        if self.config.is_databricks:
+            return base
+        if self.config.recommendations_hash:
+            return f"{base}_{self.config.recommendations_hash}"
+        return base
 
     def load_transforms(self) -> Tuple[list, list]:
         gold_module = self._load_gold_module()

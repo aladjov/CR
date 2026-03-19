@@ -105,7 +105,10 @@ class ScoringConfig:
         timestamp_column = tags.get("timestamp_column", params.get("timestamp_column", "event_timestamp"))
         recommendations_hash = tags.get("recommendations_hash", "")
         cn = tags.get("composite_name", experiment_name)
-        artifacts_subdir = recommendations_hash or "default"
+        if ns:
+            artifacts_path = ns.artifacts_dir(recommendations_hash)
+        else:
+            artifacts_path = experiments_dir / "artifacts" / (recommendations_hash or "default")
         return cls(
             pipeline_name=experiment_name,
             composite_name=cn,
@@ -114,7 +117,7 @@ class ScoringConfig:
             timestamp_column=timestamp_column,
             recommendations_hash=recommendations_hash,
             experiments_dir=experiments_dir,
-            artifacts_path=experiments_dir / "artifacts" / artifacts_subdir,
+            artifacts_path=artifacts_path,
             mlflow_tracking_uri="databricks",
             production_dir=experiments_dir,
             catalog=catalog,
@@ -128,10 +131,12 @@ def _discover_namespace() -> Optional["RunNamespace"]:  # noqa: F821
 
 
 def _load_training_metadata(ns) -> Optional[dict]:
-    try:
-        return json.loads(ns.training_metadata_path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
+    for path in (ns.training_metadata_path, ns.exploration_metadata_path):
+        try:
+            return json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+    return None
 
 
 def _search_experiment_by_suffix(client, experiment_name: str):

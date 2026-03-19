@@ -254,6 +254,41 @@ class TestLoadModel:
         assert "child_1" in uri
 
 
+    def test_loads_spark_model_on_databricks(self, databricks_config, mock_mlflow_client):
+        mock_spark_model = MagicMock()
+        with (
+            patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow,
+            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
+        ):
+            mock_mlflow.spark.load_model.return_value = mock_spark_model
+            loader = ScoringDataLoader(databricks_config)
+            model, uri = loader.load_model()
+        assert model is mock_spark_model
+        mock_mlflow.spark.load_model.assert_called_once()
+        mock_mlflow.sklearn.load_model.assert_not_called()
+
+    def test_databricks_model_name_has_no_hash(self, databricks_config, mock_mlflow_client):
+        with (
+            patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow,
+            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
+        ):
+            mock_mlflow.spark.load_model.return_value = MagicMock()
+            loader = ScoringDataLoader(databricks_config)
+            _, uri = loader.load_model()
+        assert "model_random_forest" in uri
+        assert "abc123" not in uri
+
+    def test_local_model_name_includes_hash(self, local_config, mock_mlflow_client):
+        with (
+            patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow,
+            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
+        ):
+            mock_mlflow.sklearn.load_model.return_value = MagicMock()
+            loader = ScoringDataLoader(local_config)
+            _, uri = loader.load_model()
+        assert "model_random_forest_abc123" in uri
+
+
 class TestLoadScoringFeatures:
     def test_feast_missing_repo_falls_back_to_scoring_df(self, local_config, sample_gold_df):
         local_config.feast_repo_path = "/nonexistent/feast"

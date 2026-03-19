@@ -95,6 +95,9 @@ class RunNamespace:
     def exploration_metadata_path(self) -> Path:
         return self.run_dir / "exploration_metadata.json"
 
+    def artifacts_dir(self, recommendations_hash: str | None) -> Path:
+        return self.root / "artifacts" / (recommendations_hash or "default")
+
     def candidate_dir(self, name: str) -> Path:
         return self.merged_dir / name
 

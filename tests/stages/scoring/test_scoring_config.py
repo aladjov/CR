@@ -359,6 +359,87 @@ class TestFromNamespace:
                 ScoringConfig.from_databricks()
         client.get_experiment_by_name.assert_called_with("/Shared/training_from_namespace")
 
+    def test_reads_exploration_metadata_when_training_missing(self, databricks_env, tmp_path):
+        import json
+
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        ns = RunNamespace(root=tmp_path, run_id="test-run-123")
+        ns.setup()
+        metadata = {
+            "mlflow_experiment_name": "/Users/me/exploration_exp",
+            "mlflow_run_id": "run_expl",
+            "composite_name": "expl_cn",
+            "target_column": "churned",
+            "entity_key": "entity_id",
+            "timestamp_column": "as_of_date",
+            "recommendations_hash": "expl_hash",
+        }
+        ns.exploration_metadata_path.write_text(json.dumps(metadata))
+        client = MagicMock()
+        experiment = MagicMock()
+        experiment.experiment_id = "999"
+        client.get_experiment_by_name.return_value = experiment
+        run = MagicMock()
+        run.data.tags = {"composite_name": "expl_cn", "target_column": "churned",
+                         "recommendations_hash": "expl_hash"}
+        run.data.params = {}
+        client.search_runs.return_value = [run]
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=client):
+            with patch("customer_retention.stages.scoring.config._discover_namespace", return_value=ns):
+                config = ScoringConfig.from_databricks()
+        client.get_experiment_by_name.assert_called_with("/Users/me/exploration_exp")
+        assert config.composite_name == "expl_cn"
+
+    def test_training_metadata_takes_priority_over_exploration(self, databricks_env, tmp_path):
+        import json
+
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        ns = RunNamespace(root=tmp_path, run_id="test-run-123")
+        ns.setup()
+        ns.training_metadata_path.write_text(json.dumps({
+            "mlflow_experiment_name": "/Shared/training_exp",
+            "composite_name": "train_cn",
+        }))
+        ns.exploration_metadata_path.write_text(json.dumps({
+            "mlflow_experiment_name": "/Users/me/exploration_exp",
+            "composite_name": "expl_cn",
+        }))
+        client = MagicMock()
+        experiment = MagicMock()
+        experiment.experiment_id = "999"
+        client.get_experiment_by_name.return_value = experiment
+        run = MagicMock()
+        run.data.tags = {"composite_name": "train_cn"}
+        run.data.params = {}
+        client.search_runs.return_value = [run]
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=client):
+            with patch("customer_retention.stages.scoring.config._discover_namespace", return_value=ns):
+                config = ScoringConfig.from_databricks()
+        client.get_experiment_by_name.assert_called_with("/Shared/training_exp")
+
+    def test_artifacts_path_from_namespace(self, databricks_env, tmp_path):
+        import json
+
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        ns = RunNamespace(root=tmp_path, run_id="test-run-123")
+        ns.setup()
+        ns.training_metadata_path.write_text(json.dumps({
+            "mlflow_experiment_name": "exp1",
+            "recommendations_hash": "hash789",
+        }))
+        client = MagicMock()
+        experiment = MagicMock()
+        experiment.experiment_id = "999"
+        client.get_experiment_by_name.return_value = experiment
+        run = MagicMock()
+        run.data.tags = {"recommendations_hash": "hash789"}
+        run.data.params = {}
+        client.search_runs.return_value = [run]
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=client):
+            with patch("customer_retention.stages.scoring.config._discover_namespace", return_value=ns):
+                config = ScoringConfig.from_databricks()
+        assert config.artifacts_path == ns.artifacts_dir("hash789")
+
 
 class TestScoringConfigProperties:
     def test_original_column(self, local_pipeline_dir):
@@ -380,8 +461,8 @@ class TestScoringConfigProperties:
 
 
 class TestArtifactPathContract:
-    """NB08 saves artifacts to namespace.root / 'artifacts' / hash.
-    NB11 resolves via ScoringConfig.artifacts_path = experiments_dir / 'artifacts' / hash.
+    """NB08 saves artifacts via namespace.artifacts_dir(hash).
+    NB11 resolves via ScoringConfig.artifacts_path which uses namespace.artifacts_dir(hash).
     These must match."""
 
     def test_databricks_artifacts_path_matches_namespace_root(self, databricks_env, mock_mlflow_client):
@@ -390,7 +471,7 @@ class TestArtifactPathContract:
         expected = Path("/Volumes/analytics/churn/experiments") / "artifacts" / "abc123"
         assert config.artifacts_path == expected
 
-    def test_artifacts_roundtrip_via_namespace_path(self, tmp_path):
+    def test_artifacts_roundtrip_via_namespace(self, tmp_path):
         from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
         from customer_retention.transforms.artifact_store import ArtifactStore
 
@@ -398,12 +479,11 @@ class TestArtifactPathContract:
         ns.setup()
         recs_hash = "abc12345"
 
-        artifacts_dir = ns.root / "artifacts" / recs_hash
-        store = ArtifactStore(artifacts_dir)
+        store = ArtifactStore(ns.artifacts_dir(recs_hash))
         store.register("scaler", "amount", {"mean": 100})
         store.save_manifest()
 
-        scoring_artifacts_path = tmp_path / "artifacts" / recs_hash
+        scoring_artifacts_path = ns.artifacts_dir(recs_hash)
         loaded = ArtifactStore.from_manifest(scoring_artifacts_path / "manifest.yaml")
         assert loaded.has("amount_scaler")
         assert loaded.load("amount_scaler") == {"mean": 100}
