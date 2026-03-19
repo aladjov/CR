@@ -348,7 +348,7 @@ class TestScoringValidationNotebook:
         with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
             content = f.read()
         assert 'TransformExecutor' in content
-        assert 'ArtifactStore' in content
+        assert 'load_artifact_store' in content
         assert 'LabelEncoder().fit_transform' not in content
 
     def test_notebook_has_no_jinja2(self):
