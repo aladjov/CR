@@ -42,7 +42,17 @@ def accept_workflow_params() -> None:
         print(f"[CR] workflow params: {resolved}")
 
 
+def _disable_mlflow_autolog() -> None:
+    """Suppress MLflow autologging so profiling sklearn calls don't create noise runs."""
+    try:
+        import mlflow
+        mlflow.autolog(disable=True)
+    except ImportError:
+        pass
+
+
 def track_and_export_previous(current_notebook: str) -> None:
+    _disable_mlflow_autolog()
     _ensure_databricks_config_loaded()
     from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
     from customer_retention.analysis.auto_explorer.session import (
