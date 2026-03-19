@@ -329,15 +329,33 @@ class TestLoadScoringFeatures:
         assert len(result) == len(holdout)
 
 
-class TestLoadTransforms:
-    def test_loads_from_manifest(self, local_config, tmp_path):
+class TestLoadArtifactStore:
+    def test_loads_from_manifest_on_local(self, local_config, tmp_path):
         artifacts_dir = tmp_path / "artifacts"
         artifacts_dir.mkdir()
-        manifest = {"col_a_scaler": {"type": "scaler", "column": "col_a", "path": str(artifacts_dir / "col_a.joblib")}}
         import yaml
 
+        manifest = {"col_a_scaler": {"type": "scaler", "column": "col_a", "path": str(artifacts_dir / "col_a.joblib")}}
         (artifacts_dir / "manifest.yaml").write_text(yaml.dump(manifest))
         local_config.artifacts_path = artifacts_dir
+        loader = ScoringDataLoader(local_config)
+        store = loader.load_artifact_store()
+        assert store is not None
+        assert store.has("col_a_scaler")
+
+    def test_returns_none_on_databricks(self, databricks_config):
+        loader = ScoringDataLoader(databricks_config)
+        assert loader.load_artifact_store() is None
+
+    def test_missing_manifest_raises_on_local(self, local_config, tmp_path):
+        local_config.artifacts_path = tmp_path / "nonexistent"
+        loader = ScoringDataLoader(local_config)
+        with pytest.raises(FileNotFoundError):
+            loader.load_artifact_store()
+
+
+class TestLoadTransforms:
+    def test_loads_from_gold_module_on_local(self, local_config, tmp_path):
         mock_gold_module = MagicMock()
         mock_gold_module.ENCODINGS = [MagicMock()]
         mock_gold_module.SCALINGS = [MagicMock()]
@@ -350,7 +368,13 @@ class TestLoadTransforms:
         assert len(encodings) == 1
         assert len(scalings) == 1
 
-    def test_missing_manifest_raises(self, local_config, tmp_path):
+    def test_returns_empty_on_databricks(self, databricks_config):
+        loader = ScoringDataLoader(databricks_config)
+        encodings, scalings = loader.load_transforms()
+        assert encodings == []
+        assert scalings == []
+
+    def test_missing_gold_module_raises_on_local(self, local_config, tmp_path):
         local_config.artifacts_path = tmp_path / "nonexistent"
         with patch(
             "customer_retention.stages.scoring.data_loader.ScoringDataLoader._load_gold_module",
@@ -373,6 +397,15 @@ class TestPrepareFeatures:
         assert "event_timestamp" not in result.columns
         assert "original_unsubscribed" not in result.columns
         assert "unsubscribed" not in result.columns
+
+    def test_works_with_none_artifact_store(self, local_config, sample_gold_df):
+        loader = ScoringDataLoader(local_config)
+        mock_executor = MagicMock()
+        mock_executor.apply_all.side_effect = lambda df, *a, **kw: df
+        holdout = sample_gold_df[sample_gold_df["unsubscribed"].isna()].copy()
+        result = loader.prepare_features(holdout, [], mock_executor, None)
+        assert "feature_a" in result.columns
+        assert "feature_b" in result.columns
 
     def test_selects_numeric_dtypes(self, local_config):
         loader = ScoringDataLoader(local_config)

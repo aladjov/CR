@@ -77,7 +77,14 @@ class ScoringDataLoader:
             return f"{base}_{self.config.recommendations_hash}"
         return base
 
+    def load_artifact_store(self) -> ArtifactStore | None:
+        if self.config.is_databricks:
+            return None
+        return ArtifactStore.from_manifest(self.config.artifacts_path / "manifest.yaml")
+
     def load_transforms(self) -> Tuple[list, list]:
+        if self.config.is_databricks:
+            return [], []
         gold_module = self._load_gold_module()
         return gold_module.ENCODINGS, gold_module.SCALINGS
 
@@ -86,7 +93,7 @@ class ScoringDataLoader:
         df: Any,
         transforms: list,
         executor: TransformExecutor,
-        artifact_store: ArtifactStore,
+        artifact_store: ArtifactStore | None,
     ) -> Any:
         df = df.copy()
         drop_cols = [
