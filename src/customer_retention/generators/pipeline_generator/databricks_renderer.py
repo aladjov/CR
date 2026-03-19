@@ -1378,27 +1378,43 @@ def _register_feature_table(table_name, df):
         print(f"[GOLD] Feature table {table_name} already registered")
 
 def run_gold():
+    import time as _time
+    _t0 = _time.monotonic()
     df = spark.table(silver_table())
+    print(f"  load_silver: {_time.monotonic() - _t0:.1f}s")
+    _t1 = _time.monotonic()
     df = apply_transformations(df)
+    print(f"  transformations: {_time.monotonic() - _t1:.1f}s")
+    _t2 = _time.monotonic()
     df = apply_encodings(df)
+    print(f"  encodings: {_time.monotonic() - _t2:.1f}s")
+    _t3 = _time.monotonic()
     df = apply_scalings(df)
+    print(f"  scalings: {_time.monotonic() - _t3:.1f}s")
+    _t4 = _time.monotonic()
     df = apply_feature_selection(df)
+    print(f"  feature_selection: {_time.monotonic() - _t4:.1f}s")
     if "as_of_date" in df.columns:
         df = df.withColumnRenamed("as_of_date", TIMESTAMP_COLUMN)
     elif "feature_timestamp" in df.columns:
         df = df.withColumnRenamed("feature_timestamp", TIMESTAMP_COLUMN)
     df = _cast_timestamp_ntz_to_timestamp(df)
     output_table = gold_table()
+    _t5 = _time.monotonic()
     df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
+    print(f"  delta_write: {_time.monotonic() - _t5:.1f}s")
     del df
     from delta.tables import DeltaTable
     saved = spark.table(output_table)
+    _t6 = _time.monotonic()
     _z_cols = [c for c in ["entity_id", TIMESTAMP_COLUMN] if c in saved.columns]
     if _z_cols:
         DeltaTable.forName(spark, output_table).optimize().executeZOrderBy(_z_cols)
     else:
         DeltaTable.forName(spark, output_table).optimize().executeCompaction()
+    print(f"  optimize: {_time.monotonic() - _t6:.1f}s")
     _register_feature_table(output_table, saved)
+    print(f"  gold_total: {_time.monotonic() - _t0:.1f}s")
     return saved
 
 result = run_gold()
@@ -1580,6 +1596,7 @@ def _log_best_model(model, df, feature_cols):
         mlflow.spark.log_model(model, "best_model")
 
 def train_and_evaluate():
+    _results = {"models": {}, "feature_profile": {}}
     with log_timing("load_gold_table", logger):
         df = load_training_data()
     raw_count = _assert_rows(df.count(), "gold_table")
@@ -1589,6 +1606,7 @@ def train_and_evaluate():
     type_summary = {t: len(cols) for t, cols in sorted(col_types.items())}
     print(f"[TRAINING] Gold table: {raw_count:,} rows, {len(df.columns)} columns")
     print(f"[TRAINING] Column types: {type_summary}")
+    _results["gold_data"] = {"rows": raw_count, "columns": len(df.columns), "column_types": type_summary}
 
 {% if config.training and config.training.recommended_training_start %}
     if TIMESTAMP_COLUMN in df.columns:
@@ -1609,6 +1627,8 @@ def train_and_evaluate():
         assembled, feature_cols = prepare_features(df)
     assembled_count = _assert_rows(assembled.count(), "after_assembly")
     print(f"[TRAINING] Assembled: {assembled_count:,} rows, {len(feature_cols)} features")
+    _results["feature_count"] = len(feature_cols)
+    _results["filtered_rows"] = filtered_count
 
     with log_timing("feature_profile", logger):
         null_exprs = [F.sum(F.when(F.col(c).isNull(), 1).otherwise(0)).alias(c) for c in feature_cols]
@@ -1628,9 +1648,13 @@ def train_and_evaluate():
         if _NAMESPACE is not None:
             prod_profile.save(_NAMESPACE.production_feature_profile_path)
             print(f"[TRAINING] Production profile saved to {_NAMESPACE.production_feature_profile_path}")
+        _results["feature_profile"]["production_features"] = prod_profile.feature_count
+        _results["feature_profile"]["production_rows"] = filtered_count
         if _EXPLORATION_PROFILE is not None:
             exp_profile = FeatureProfile.from_dict(_EXPLORATION_PROFILE)
             discrepancies = compare_feature_profiles(exp_profile, prod_profile)
+            _results["feature_profile"]["exploration_features"] = exp_profile.feature_count
+            _results["feature_profile"]["discrepancies"] = discrepancies
             if discrepancies:
                 print(f"[TRAINING] WARNING: {len(discrepancies)} feature discrepancies vs exploration:")
                 for d in discrepancies:
@@ -1647,9 +1671,11 @@ def train_and_evaluate():
     print(f"[TRAINING] Split: train={train_count:,}, test={test_count:,}")
     split_info = {"cutoff_date": str(cutoff_date), "train_count": train_count, "test_count": test_count}
     print(f"[TRAINING] Split info: {split_info}")
+    _results["split"] = split_info
 
     label_dist = {float(row["label"]): row["count"] for row in train_df.groupBy("label").count().collect()}
     print(f"[TRAINING] Label distribution: {label_dist}")
+    _results["label_distribution"] = label_dist
     if len(label_dist) < 2:
         raise ValueError(f"[TRAINING] Only {len(label_dist)} class(es) — Need at least 2 for binary classification")
 
@@ -1711,6 +1737,7 @@ def train_and_evaluate():
                 predictions = fitted.transform(test_df)
                 metrics = _evaluate_model(predictions)
                 print(f"[TRAINING] {name}: AUC={metrics['roc_auc']:.4f}, PR-AUC={metrics['pr_auc']:.4f}, F1={metrics['f1']:.4f}")
+                _results["models"][name] = metrics
                 mlflow.log_param("model_type", name)
                 mlflow.log_param("num_features", len(feature_cols))
                 mlflow.spark.log_model(fitted, f"model_{name}")
@@ -1732,6 +1759,9 @@ def train_and_evaluate():
         mlflow.log_artifact(_features_path, "features.json")
         _log_best_model(best_model, df, feature_cols)
 
+    _results["best_model"] = best_model_name
+    _results["best_roc_auc"] = best_auc
+
     if _NAMESPACE is not None:
         _training_meta = {
             "mlflow_experiment_name": _experiment_name,
@@ -1749,14 +1779,16 @@ def train_and_evaluate():
         _NAMESPACE.training_metadata_path.write_text(json.dumps(_training_meta))
         print(f"[TRAINING] Metadata saved to {_NAMESPACE.training_metadata_path}")
 
-    return best_model_name, best_auc
+    return _results
 
 # COMMAND ----------
 
-best_name, best_auc = train_and_evaluate()
-_summary = f"Best model: {best_name} (AUC={best_auc:.4f})"
-print(_summary)
-dbutils.notebook.exit(_summary)
+_training_results = train_and_evaluate()
+print("\\n" + "=" * 60)
+print("TRAINING RESULTS")
+print("=" * 60)
+print(json.dumps(_training_results, indent=2, default=str))
+dbutils.notebook.exit(json.dumps(_training_results, default=str))
 """,
     "databricks_landing.py.j2": """# Databricks notebook source
 # MAGIC %md

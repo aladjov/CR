@@ -539,7 +539,9 @@ def run_bronze_entity_{{ source }}():
 if __name__ == "__main__":
     run_bronze_entity_{{ source }}()
 """,
-    "silver.py.j2": '''import pandas as pd
+    "silver.py.j2": '''import time
+
+import pandas as pd
 from pathlib import Path
 {% set ops, fitted = collect_imports(config.silver.derived_columns, False) %}
 {% if ops %}
@@ -705,17 +707,26 @@ def {{ func_name }}(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def run_silver_merge(create_holdout: bool = True, holdout_fraction: float = 0.1):
+    _t0 = time.perf_counter()
     bronze_outputs = load_bronze_outputs()
+    _t_load = time.perf_counter() - _t0
+    print(f"  Load bronze outputs: {_t_load:.1f}s")
     ref_date = next(
         (v.attrs["aggregation_reference_date"] for v in bronze_outputs.values()
          if "aggregation_reference_date" in v.attrs),
         None,
     )
+    _t1 = time.perf_counter()
     silver = merge_sources(bronze_outputs)
+    print(f"  Merge sources: {time.perf_counter() - _t1:.1f}s")
+    _t2 = time.perf_counter()
     silver = create_derived_columns(silver)
+    print(f"  Derived columns: {time.perf_counter() - _t2:.1f}s")
 
     if create_holdout:
+        _t3 = time.perf_counter()
         silver = create_holdout_mask(silver, holdout_fraction=holdout_fraction)
+        print(f"  Create holdout: {time.perf_counter() - _t3:.1f}s")
 
     if ref_date:
         silver.attrs["aggregation_reference_date"] = ref_date
@@ -724,21 +735,27 @@ def run_silver_merge(create_holdout: bool = True, holdout_fraction: float = 0.1)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     from customer_retention.integrations.adapters.factory import get_delta
     _delta = get_delta(force_local=True)
+    _t4 = time.perf_counter()
     _delta.write(silver, str(output_path))
     _z_cols = [c for c in ["entity_id", "as_of_date"] if c in silver.columns]
     if _z_cols:
         _delta.optimize(str(output_path), _z_cols)
     else:
         _delta.optimize(str(output_path))
+    print(f"  Write + optimize: {time.perf_counter() - _t4:.1f}s")
     if ref_date:
         Path(str(output_path) + ".reference_date").write_text(ref_date)
+    _silver_elapsed = time.perf_counter() - _t0
+    print(f"Silver total: {_silver_elapsed:.1f}s")
     return silver
 
 
 if __name__ == "__main__":
     run_silver_merge()
 ''',
-    "gold.py.j2": """import pandas as pd
+    "gold.py.j2": """import time
+
+import pandas as pd
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -930,13 +947,25 @@ def add_feast_timestamp(df: pd.DataFrame, reference_date=None) -> pd.DataFrame:
 
 
 def run_gold_features():
+    _t0 = time.perf_counter()
     silver = load_silver()
+    print(f"  Load silver: {time.perf_counter() - _t0:.1f}s")
+    _t1 = time.perf_counter()
     gold = apply_gold_transformations(silver)
+    print(f"  Gold transformations: {time.perf_counter() - _t1:.1f}s")
+    _t2 = time.perf_counter()
     gold = apply_encodings(gold)
+    print(f"  Encodings: {time.perf_counter() - _t2:.1f}s")
+    _t3 = time.perf_counter()
     gold = apply_scaling(gold)
+    print(f"  Scaling: {time.perf_counter() - _t3:.1f}s")
+    _t4 = time.perf_counter()
     gold = apply_feature_selection(gold)
+    print(f"  Feature selection: {time.perf_counter() - _t4:.1f}s")
 {% if fitted_steps %}
+    _t5 = time.perf_counter()
     gold = apply_fitted_transforms(gold)
+    print(f"  Fitted transforms: {time.perf_counter() - _t5:.1f}s")
 {% endif %}
     gold = add_feast_timestamp(gold)
 {% if not fitted_steps and config.fit_mode %}
@@ -949,12 +978,16 @@ def run_gold_features():
     gold.attrs["feature_version"] = get_feature_version_tag()
     from customer_retention.integrations.adapters.factory import get_delta
     _delta = get_delta(force_local=True)
+    _t6 = time.perf_counter()
     _delta.write(gold, str(output_path))
     _z_cols = [c for c in ["entity_id", TIMESTAMP_COLUMN] if c in gold.columns]
     if _z_cols:
         _delta.optimize(str(output_path), _z_cols)
     else:
         _delta.optimize(str(output_path))
+    print(f"  Write + optimize: {time.perf_counter() - _t6:.1f}s")
+    _gold_elapsed = time.perf_counter() - _t0
+    print(f"Gold total: {_gold_elapsed:.1f}s")
     print(f"Gold features saved with version: {get_feature_version_tag()}")
     return gold
 
@@ -1129,6 +1162,7 @@ def run_experiment():
     mlflow.set_experiment(_experiment_name)
     print(f"MLflow tracking: {MLFLOW_TRACKING_URI}")
     print(f"Artifacts: {MLFLOW_ARTIFACT_ROOT}")
+    _results = {"models": {}, "feature_profile": {}}
 
     with log_timing("load_gold_data", logger):
         training_data = get_training_data_from_feast()
@@ -1136,16 +1170,19 @@ def run_experiment():
     type_summary = dict(training_data.dtypes.value_counts())
     print(f"[TRAINING] Gold data: {raw_count:,} rows, {len(training_data.columns)} columns")
     print(f"[TRAINING] Column types: {type_summary}")
+    _results["gold_data"] = {"rows": raw_count, "columns": len(training_data.columns), "column_types": {str(k): v for k, v in type_summary.items()}}
 
     with log_timing("prepare_features", logger):
         y = training_data[TARGET_COLUMN]
         X = prepare_features(training_data.drop(columns=[TARGET_COLUMN]))
         feature_names = list(X.columns)
     print(f"[TRAINING] Features: {len(feature_names)} columns after preparation")
+    _results["feature_count"] = len(feature_names)
     train_mask = y.notna()
     X, y = X.loc[train_mask], y.loc[train_mask]
     filtered_count = _assert_rows(len(X), "after_null_label_filter")
     print(f"[TRAINING] After null-label filter: {filtered_count:,} rows")
+    _results["filtered_rows"] = filtered_count
 
     with log_timing("feature_profile", logger):
         excluded_cols = {}
@@ -1163,9 +1200,13 @@ def run_experiment():
         if _NAMESPACE is not None:
             prod_profile.save(_NAMESPACE.production_feature_profile_path)
             print(f"[TRAINING] Production profile saved to {_NAMESPACE.production_feature_profile_path}")
+        _results["feature_profile"]["production_features"] = prod_profile.feature_count
+        _results["feature_profile"]["production_rows"] = filtered_count
         if _EXPLORATION_PROFILE is not None:
             exp_profile = FeatureProfile.from_dict(_EXPLORATION_PROFILE)
             discrepancies = compare_feature_profiles(exp_profile, prod_profile)
+            _results["feature_profile"]["exploration_features"] = exp_profile.feature_count
+            _results["feature_profile"]["discrepancies"] = discrepancies
             if discrepancies:
                 print(f"[TRAINING] WARNING: {len(discrepancies)} feature discrepancies vs exploration:")
                 for d in discrepancies:
@@ -1205,8 +1246,10 @@ def run_experiment():
     _assert_rows(len(X_test), "test_set_after_split")
     print(f"[TRAINING] Split: train={len(X_train):,}, test={len(X_test):,}")
     print(f"[TRAINING] Split info: {splits.split_info}")
+    _results["split"] = {"train": len(X_train), "test": len(X_test), **splits.split_info}
     label_dist = dict(y_train.value_counts())
     print(f"[TRAINING] Label distribution: {label_dist}")
+    _results["label_distribution"] = {str(k): int(v) for k, v in label_dist.items()}
     if y_train.nunique() < 2:
         raise ValueError(f"[TRAINING] Only {y_train.nunique()} class(es) — Need at least 2 for binary classification")
 {% if config.training and config.training.imbalance_strategy == "smote" %}
@@ -1250,6 +1293,7 @@ def run_experiment():
                 mlflow.log_metrics({**metrics, "cv_mean": _cv_result.cv_mean, "cv_std": _cv_result.cv_std})
                 log_feature_importance(model, feature_names)
                 print(f"{name}: ROC-AUC={metrics['roc_auc']:.4f}, PR-AUC={metrics['pr_auc']:.4f}, F1={metrics['f1']:.4f}", flush=True)
+                _results["models"][name] = {**metrics, "cv_mean": _cv_result.cv_mean, "cv_std": _cv_result.cv_std}
                 if metrics["roc_auc"] > best_auc:
                     best_auc, best_model = metrics["roc_auc"], name
 
@@ -1271,6 +1315,7 @@ def run_experiment():
             fi.to_csv("feature_importance.csv", index=False)
             mlflow.log_artifact("feature_importance.csv")
             print(f"xgboost: ROC-AUC={metrics['roc_auc']:.4f}, PR-AUC={metrics['pr_auc']:.4f}, F1={metrics['f1']:.4f}")
+            _results["models"]["xgboost"] = metrics
             if metrics["roc_auc"] > best_auc:
                 best_auc, best_model = metrics["roc_auc"], "xgboost"
 
@@ -1278,9 +1323,18 @@ def run_experiment():
         mlflow.log_metric("best_roc_auc", best_auc)
         print(f"Best: {best_model} (ROC-AUC={best_auc:.4f})")
 
+    _results["best_model"] = best_model
+    _results["best_roc_auc"] = best_auc
+    return _results
+
 
 if __name__ == "__main__":
-    run_experiment()
+    import json as _json
+    _training_results = run_experiment()
+    print("\\n" + "=" * 60)
+    print("TRAINING RESULTS")
+    print("=" * 60)
+    print(_json.dumps(_training_results, indent=2, default=str))
 ''',
     "runner.py.j2": """import argparse
 import sys
@@ -1368,8 +1422,13 @@ def run_pipeline(validate=False):
         validate_gold()
 
     print("\\n[{{ '6/6' if config.landing else '4/4' }}] Training...")
-    run_experiment()
+    import json as _json
+    _training_results = run_experiment()
     print("Training complete")
+    print("\\n" + "=" * 60)
+    print("TRAINING RESULTS")
+    print("=" * 60)
+    print(_json.dumps(_training_results, indent=2, default=str))
     if validate:
         from validation.validate_pipeline import validate_training
         validate_training()
@@ -1519,8 +1578,14 @@ def run_pipeline():
     print("Gold complete")
 
     print("\\n[{{ '6/6' if config.landing else '5/4' }}] Training...")
-    run_experiment()
+    import json as _json
+    _training_results = run_experiment()
     print("Training complete")
+
+    print("\\n" + "=" * 60)
+    print("TRAINING RESULTS")
+    print("=" * 60)
+    print(_json.dumps(_training_results, indent=2, default=str))
 
     print("\\n" + "=" * 50)
     print("Pipeline finished!")

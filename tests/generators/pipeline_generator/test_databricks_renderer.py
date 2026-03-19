@@ -890,8 +890,8 @@ class TestDatabricksNotebookExitSummary:
 
     def test_training_exits_with_summary(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        assert "dbutils.notebook.exit(_summary)" in result
-        assert "Best model" in result
+        assert "dbutils.notebook.exit(json.dumps(_training_results" in result
+        assert "TRAINING RESULTS" in result
 
     def test_landing_exits_with_summary(self, renderer):
         source = SourceConfig(name="t", path="t.csv", format="csv", entity_key="id")
@@ -3153,7 +3153,7 @@ class TestDatabricksTrainingFeatureListLogging:
     def test_feature_list_logged_on_parent_run(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
         fn = result[result.index("def train_and_evaluate"):]
-        parent_block = fn[fn.index("with mlflow.start_run("):fn.index("return best_model_name")]
+        parent_block = fn[fn.index("with mlflow.start_run("):fn.index("return _results")]
         assert "features.json" in parent_block
 
     def test_feature_list_is_valid_python(self, renderer, sample_pipeline_config):
