@@ -1,15 +1,137 @@
 import math
+from datetime import timedelta
 
 import pandas as pd
 import pytest
 
+from customer_retention.analysis.auto_explorer.project_context import CadenceInterval, IntentConfig
 from customer_retention.analysis.auto_explorer.sampling import (
     _compute_group_budget,
     apply_sample_filters,
+    apply_temporal_lookback,
     estimate_sampling_accuracy,
     resolve_segment_entity_ids,
     stratified_entity_sample,
 )
+
+
+def _make_intent(lookback_periods=None, cadence=CadenceInterval.WEEKLY, upper_limit=None):
+    return IntentConfig(
+        lookback_periods=lookback_periods,
+        cadence_interval=cadence,
+        history_upper_limit=upper_limit,
+    )
+
+
+class TestApplyTemporalLookback:
+    def test_no_lookback_returns_unchanged(self):
+        df = pd.DataFrame({"ts": pd.date_range("2020-01-01", periods=100, freq="D"), "v": range(100)})
+        result = apply_temporal_lookback(df, "ts", _make_intent(lookback_periods=None))
+        assert len(result) == 100
+
+    def test_filters_to_lookback_window(self):
+        dates = pd.date_range("2020-01-01", periods=365 * 5, freq="D")
+        df = pd.DataFrame({"ts": dates, "v": range(len(dates))})
+        intent = _make_intent(lookback_periods=156, cadence=CadenceInterval.WEEKLY)
+        result = apply_temporal_lookback(df, "ts", intent)
+        lookback_days = 156 * 7
+        expected_lower = dates.max() - timedelta(days=lookback_days)
+        assert len(result) < len(df)
+        assert result["ts"].min() >= expected_lower
+
+    def test_all_data_within_window_returns_full(self):
+        dates = pd.date_range("2024-01-01", periods=30, freq="D")
+        df = pd.DataFrame({"ts": dates, "v": range(30)})
+        intent = _make_intent(lookback_periods=156, cadence=CadenceInterval.WEEKLY)
+        result = apply_temporal_lookback(df, "ts", intent)
+        assert len(result) == 30
+
+    def test_history_upper_limit_caps_upper_bound(self):
+        dates = pd.date_range("2020-01-01", periods=365 * 5, freq="D")
+        df = pd.DataFrame({"ts": dates, "v": range(len(dates))})
+        intent = _make_intent(
+            lookback_periods=52, cadence=CadenceInterval.WEEKLY,
+            upper_limit="2023-06-30",
+        )
+        result = apply_temporal_lookback(df, "ts", intent)
+        assert result["ts"].max() <= pd.Timestamp("2023-06-30")
+        lookback_days = 52 * 7
+        expected_lower = pd.Timestamp("2023-06-30") - timedelta(days=lookback_days)
+        assert result["ts"].min() >= expected_lower
+
+    def test_all_nat_returns_unchanged(self):
+        df = pd.DataFrame({"ts": [pd.NaT, pd.NaT, pd.NaT], "v": [1, 2, 3]})
+        intent = _make_intent(lookback_periods=52)
+        result = apply_temporal_lookback(df, "ts", intent)
+        assert len(result) == 3
+
+    def test_monthly_cadence(self):
+        dates = pd.date_range("2018-01-01", periods=365 * 5, freq="D")
+        df = pd.DataFrame({"ts": dates, "v": range(len(dates))})
+        intent = _make_intent(lookback_periods=36, cadence=CadenceInterval.MONTHLY)
+        result = apply_temporal_lookback(df, "ts", intent)
+        lookback_days = 36 * 30
+        expected_lower = dates.max() - timedelta(days=lookback_days)
+        assert result["ts"].min() >= expected_lower
+        assert len(result) < len(df)
+
+    def test_daily_cadence(self):
+        dates = pd.date_range("2020-01-01", periods=1000, freq="D")
+        df = pd.DataFrame({"ts": dates, "v": range(len(dates))})
+        intent = _make_intent(lookback_periods=365, cadence=CadenceInterval.DAILY)
+        result = apply_temporal_lookback(df, "ts", intent)
+        assert len(result) == 365 + 1  # inclusive boundary
+
+    def test_preserves_non_time_columns(self):
+        dates = pd.date_range("2020-01-01", periods=100, freq="D")
+        df = pd.DataFrame({"ts": dates, "v": range(100), "cat": ["a"] * 100})
+        intent = _make_intent(lookback_periods=4, cadence=CadenceInterval.WEEKLY)
+        result = apply_temporal_lookback(df, "ts", intent)
+        assert list(result.columns) == ["ts", "v", "cat"]
+
+    def test_boundary_row_included(self):
+        dates = pd.to_datetime(["2024-01-01", "2024-01-08", "2024-01-15"])
+        df = pd.DataFrame({"ts": dates, "v": [1, 2, 3]})
+        intent = _make_intent(lookback_periods=1, cadence=CadenceInterval.WEEKLY)
+        result = apply_temporal_lookback(df, "ts", intent)
+        expected_lower = pd.Timestamp("2024-01-15") - timedelta(days=7)
+        assert result["ts"].min() == expected_lower
+
+    def test_upper_limit_beyond_data_has_no_effect(self):
+        dates = pd.date_range("2023-01-01", periods=365, freq="D")
+        df = pd.DataFrame({"ts": dates, "v": range(365)})
+        intent_with = _make_intent(lookback_periods=26, cadence=CadenceInterval.WEEKLY, upper_limit="2030-01-01")
+        intent_without = _make_intent(lookback_periods=26, cadence=CadenceInterval.WEEKLY)
+        result_with = apply_temporal_lookback(df, "ts", intent_with)
+        result_without = apply_temporal_lookback(df, "ts", intent_without)
+        assert len(result_with) == len(result_without)
+
+    def test_string_timestamps_parsed(self):
+        df = pd.DataFrame({
+            "ts": ["2020-01-01", "2022-06-15", "2024-12-31"],
+            "v": [1, 2, 3],
+        })
+        intent = _make_intent(lookback_periods=52, cadence=CadenceInterval.WEEKLY)
+        result = apply_temporal_lookback(df, "ts", intent)
+        assert len(result) < 3
+
+    def test_mixed_nat_preserves_valid_rows(self):
+        df = pd.DataFrame({
+            "ts": pd.to_datetime(["2020-01-01", pd.NaT, "2024-12-01", "2024-12-15"]),
+            "v": [1, 2, 3, 4],
+        })
+        intent = _make_intent(lookback_periods=4, cadence=CadenceInterval.WEEKLY)
+        result = apply_temporal_lookback(df, "ts", intent)
+        assert 1 not in result["v"].values
+        assert 3 in result["v"].values
+        assert 4 in result["v"].values
+
+    def test_upper_limit_before_all_data_returns_empty(self):
+        dates = pd.date_range("2024-01-01", periods=30, freq="D")
+        df = pd.DataFrame({"ts": dates, "v": range(30)})
+        intent = _make_intent(lookback_periods=1, cadence=CadenceInterval.WEEKLY, upper_limit="2020-01-01")
+        result = apply_temporal_lookback(df, "ts", intent)
+        assert len(result) == 0
 
 
 class TestApplySampleFilters:

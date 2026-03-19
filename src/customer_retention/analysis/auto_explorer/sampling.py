@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Optional
+from datetime import timedelta
+from typing import TYPE_CHECKING, Any, Optional
 
 from customer_retention.core.compat import (
     _is_spark_pandas,
@@ -9,6 +10,7 @@ from customer_retention.core.compat import (
     concat,
     head_as_list,
     is_numeric_dtype,
+    native_pd,
     pd,
     qcut,
     safe_isin,
@@ -16,6 +18,29 @@ from customer_retention.core.compat import (
     safe_sample,
     safe_to_datetime,
 )
+
+if TYPE_CHECKING:
+    from customer_retention.analysis.auto_explorer.project_context import IntentConfig
+
+
+def apply_temporal_lookback(df: Any, time_col: str, intent: IntentConfig) -> Any:
+    if intent.lookback_periods is None:
+        return df
+    from customer_retention.analysis.auto_explorer.snapshot_grid import CADENCE_DAYS
+
+    ts = safe_to_datetime(df[time_col], errors="coerce")
+    upper = ts.max()
+    if native_pd.isna(upper):
+        return df
+    cap = native_pd.Timestamp(intent.history_upper_limit) if intent.history_upper_limit else None
+    if cap is not None and cap < upper:
+        upper = cap
+    lookback_days = intent.lookback_periods * CADENCE_DAYS[intent.cadence_interval]
+    lower = upper - timedelta(days=lookback_days)
+    mask = ts >= lower
+    if cap is not None:
+        mask = mask & (ts <= upper)
+    return df[mask]
 
 
 def _spark_passing_entities(df: Any, query_expr: str, entity_col: str) -> set:
