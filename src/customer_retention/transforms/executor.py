@@ -353,15 +353,11 @@ class TransformExecutor:
         else:
             from pyspark.sql import functions as F  # noqa: N812
             sample_pdf = spark_df.select([F.coalesce(F.col(c), F.lit(0.0)).alias(c) for c in columns]).toPandas()
-        def _fit_one(col_data):
+        fitted = []
+        for s in yj_steps:
             pt = FittedPowerTransform()
-            pt.fit_from_local(col_data)
-            return pt._pt
-
-        from joblib import Parallel, delayed
-        fitted = Parallel(n_jobs=-1, prefer="threads")(
-            delayed(_fit_one)(sample_pdf[s.column]) for s in yj_steps
-        )
+            pt.fit_from_local(sample_pdf[s.column])
+            fitted.append(pt._pt)
         for s, pt_obj in zip(yj_steps, fitted):
             artifact_store.register("power_transformer", s.column, pt_obj)
             lmbda = float(pt_obj.lambdas_[0])
