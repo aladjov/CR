@@ -149,3 +149,50 @@ def spark_yeo_johnson(df: SparkDataFrame, column: str, *, lmbda: float, std_mean
     if standardize and std_mean is not None and std_scale is not None:
         yj = (yj - std_mean) / std_scale
     return df.withColumn(column, yj)
+
+
+# ── Batch ops (single select instead of N withColumn) ─────────────
+
+
+def spark_batch_log_transform(df: SparkDataFrame, columns: list[str]) -> SparkDataFrame:
+    valid = set(columns) & set(df.columns)
+    if not valid:
+        return df
+    return df.select(*[
+        F.log1p(F.greatest(F.col(c), F.lit(0)).cast("double")).alias(c) if c in valid else F.col(c)
+        for c in df.columns
+    ])
+
+
+def spark_batch_sqrt_transform(df: SparkDataFrame, columns: list[str]) -> SparkDataFrame:
+    valid = set(columns) & set(df.columns)
+    if not valid:
+        return df
+    return df.select(*[
+        F.sqrt(F.abs(F.col(c))).alias(c) if c in valid else F.col(c)
+        for c in df.columns
+    ])
+
+
+def spark_batch_zero_inflation(df: SparkDataFrame, columns: list[str]) -> SparkDataFrame:
+    valid = set(columns) & set(df.columns)
+    if not valid:
+        return df
+    existing = [
+        F.when(F.col(c) > 0, F.log1p(F.col(c).cast("double"))).otherwise(F.lit(0.0)).alias(c)
+        if c in valid else F.col(c)
+        for c in df.columns
+    ]
+    flags = [F.when(F.col(c) == 0, 1).otherwise(0).alias(f"{c}_is_zero") for c in columns if c in valid]
+    return df.select(*existing, *flags)
+
+
+def spark_batch_cap_then_log(df: SparkDataFrame, columns_q99: list[tuple[str, float | None]]) -> SparkDataFrame:
+    valid_map = {c: q for c, q in columns_q99 if c in df.columns and q is not None}
+    if not valid_map:
+        return df
+    return df.select(*[
+        F.log1p(F.greatest(F.least(F.col(c), F.lit(valid_map[c])), F.lit(0)).cast("double")).alias(c)
+        if c in valid_map else F.col(c)
+        for c in df.columns
+    ])

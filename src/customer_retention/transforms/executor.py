@@ -17,6 +17,7 @@ from customer_retention.generators.pipeline_generator.models import (
 )
 
 StepDoneCallback = Callable[[int, int, TransformationStep, float, float], None]
+BatchDoneCallback = Callable[[int, int, int, PipelineTransformationType, float, float], None]
 
 
 def format_step_progress(step_idx: int, total: int, step: TransformationStep, step_seconds: float, total_seconds: float) -> str:
@@ -28,12 +29,106 @@ def format_step_progress(step_idx: int, total: int, step: TransformationStep, st
 def print_step_progress(step_idx: int, total: int, step: TransformationStep, step_seconds: float, total_seconds: float) -> None:
     print(format_step_progress(step_idx, total, step, step_seconds, total_seconds))
 
+
+def format_batch_progress(start_idx: int, end_idx: int, total: int, transform_type: PipelineTransformationType, batch_seconds: float, total_seconds: float) -> str:
+    done = end_idx + 1
+    count = done - start_idx
+    remaining = (total_seconds / done) * (total - done) if done < total else 0.0
+    return f"  [{start_idx + 1}-{done}/{total}] {transform_type.name} \u00d7 {count} columns ({batch_seconds:.1f}s, ~{remaining:.0f}s left)"
+
+
+def print_batch_progress(start_idx: int, end_idx: int, total: int, transform_type: PipelineTransformationType, batch_seconds: float, total_seconds: float) -> None:
+    print(format_batch_progress(start_idx, end_idx, total, transform_type, batch_seconds, total_seconds))
+
+
 _CHECKPOINT_INTERVAL = 10
 _PLAN_TRUNCATION_INTERVAL = 30
+_BATCH_CHUNK_SIZE = 500
 
 from . import ops
 from .artifact_store import ArtifactStore
 from .fitted import FittedEncoder, FittedPowerTransform, FittedScaler
+
+# ── Batch grouping ────────────────────────────────────────────────
+
+
+def _decompose_into_waves(steps: list[TransformationStep]) -> list[list[TransformationStep]]:
+    waves: list[list[TransformationStep]] = []
+    current: list[TransformationStep] = []
+    seen: set[str] = set()
+    for step in steps:
+        if step.column in seen:
+            waves.append(current)
+            current = []
+            seen = set()
+        current.append(step)
+        seen.add(step.column)
+        if step.type == PipelineTransformationType.ZERO_INFLATION_HANDLING:
+            seen.add(f"{step.column}_is_zero")
+    if current:
+        waves.append(current)
+    return waves
+
+
+def _sort_wave_by_type(wave: list[TransformationStep], batchable_types: frozenset) -> list[TransformationStep]:
+    type_buckets: dict[PipelineTransformationType, list[TransformationStep]] = {}
+    non_batchable: list[TransformationStep] = []
+    for step in wave:
+        if step.type in batchable_types:
+            type_buckets.setdefault(step.type, []).append(step)
+        else:
+            non_batchable.append(step)
+    result: list[TransformationStep] = []
+    for typ in type_buckets:
+        result.extend(type_buckets[typ])
+    result.extend(non_batchable)
+    return result
+
+
+def _chunk_list(items: list, chunk_size: int) -> list[list]:
+    if len(items) <= chunk_size:
+        return [items]
+    return [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
+
+
+def _group_batchable_runs(steps: list[TransformationStep], batchable_types: frozenset) -> list[list[TransformationStep]]:
+    result: list[list[TransformationStep]] = []
+    for wave in _decompose_into_waves(steps):
+        sorted_wave = _sort_wave_by_type(wave, batchable_types)
+        i = 0
+        while i < len(sorted_wave):
+            step = sorted_wave[i]
+            if step.type in batchable_types:
+                batch = [step]
+                j = i + 1
+                while j < len(sorted_wave) and sorted_wave[j].type == step.type:
+                    batch.append(sorted_wave[j])
+                    j += 1
+                for chunk in _chunk_list(batch, _BATCH_CHUNK_SIZE):
+                    result.append(chunk)
+                i = j
+            else:
+                result.append([step])
+                i += 1
+    return result
+
+
+_PANDAS_BATCH = {
+    PipelineTransformationType.LOG_TRANSFORM: lambda df, steps: ops.apply_batch_log_transform(df, [s.column for s in steps]),
+    PipelineTransformationType.SQRT_TRANSFORM: lambda df, steps: ops.apply_batch_sqrt_transform(df, [s.column for s in steps]),
+    PipelineTransformationType.ZERO_INFLATION_HANDLING: lambda df, steps: ops.apply_batch_zero_inflation(df, [s.column for s in steps]),
+    PipelineTransformationType.CAP_THEN_LOG: lambda df, steps: ops.apply_batch_cap_then_log(df, [(s.column, s.parameters.get("_precomputed_q99")) for s in steps]),
+}
+
+_PANDAS_BATCHABLE_TYPES = frozenset(_PANDAS_BATCH)
+
+
+def _resolve_batch_reporter(on_step_done, on_batch_done):
+    if on_batch_done is not None:
+        return on_batch_done
+    if on_step_done is print_step_progress:
+        return print_batch_progress
+    return None
 
 
 class TransformExecutor:
@@ -64,50 +159,82 @@ class TransformExecutor:
         fit_mode: bool = False,
         artifact_store: ArtifactStore | None = None,
         on_step_done: Optional[StepDoneCallback] = None,
+        on_batch_done: Optional[BatchDoneCallback] = None,
     ) -> DataFrame:
         distributed = _is_spark_pandas(df)
         if distributed:
-            return self._apply_all_distributed(df, steps, fit_mode=fit_mode, artifact_store=artifact_store, on_step_done=on_step_done)
+            return self._apply_all_distributed(df, steps, fit_mode=fit_mode, artifact_store=artifact_store, on_step_done=on_step_done, on_batch_done=on_batch_done)
+        batch_reporter = _resolve_batch_reporter(on_step_done, on_batch_done)
         t0 = time.perf_counter()
-        for i, step in enumerate(steps):
-            t_step = time.perf_counter()
-            df = self.apply(df, step, fit_mode=fit_mode, artifact_store=artifact_store)
-            if on_step_done:
+        step_idx = 0
+        for batch in _group_batchable_runs(steps, _PANDAS_BATCHABLE_TYPES):
+            batch_handler = _PANDAS_BATCH.get(batch[0].type) if len(batch) > 1 else None
+            if batch_handler:
+                t_batch = time.perf_counter()
+                df = batch_handler(df, batch)
                 now = time.perf_counter()
-                on_step_done(i, len(steps), step, now - t_step, now - t0)
+                if batch_reporter:
+                    batch_reporter(step_idx, step_idx + len(batch) - 1, len(steps), batch[0].type, now - t_batch, now - t0)
+                elif on_step_done:
+                    on_step_done(step_idx + len(batch) - 1, len(steps), batch[-1], now - t_batch, now - t0)
+                step_idx += len(batch)
+            else:
+                for step in batch:
+                    t_step = time.perf_counter()
+                    df = self.apply(df, step, fit_mode=fit_mode, artifact_store=artifact_store)
+                    if on_step_done:
+                        now = time.perf_counter()
+                        on_step_done(step_idx, len(steps), step, now - t_step, now - t0)
+                    step_idx += 1
         return df
 
-    def _apply_all_distributed(self, df: DataFrame, steps: list[TransformationStep], *, fit_mode: bool = False, artifact_store: ArtifactStore | None = None, on_step_done: Optional[StepDoneCallback] = None) -> DataFrame:
+    def _apply_all_distributed(self, df: DataFrame, steps: list[TransformationStep], *, fit_mode: bool = False, artifact_store: ArtifactStore | None = None, on_step_done: Optional[StepDoneCallback] = None, on_batch_done: Optional[BatchDoneCallback] = None) -> DataFrame:
         spark_df = as_spark_df(df)
         self._precompute_quantiles_distributed(spark_df, steps)
         if fit_mode and artifact_store:
             self._prefit_distributed(spark_df, steps, artifact_store)
+        batch_reporter = _resolve_batch_reporter(on_step_done, on_batch_done)
         roundtrip_count = 0
         since_checkpoint = 0
         t0 = time.perf_counter()
-        for i, step in enumerate(steps):
-            t_step = time.perf_counter()
-            handler = _SPARK_DISPATCH.get(step.type)
-            result = handler(spark_df, step) if handler is not None else None
-            if result is not None:
-                spark_df = result
-            else:
-                spark_result = self._apply_fitted_spark(spark_df, step, fit_mode, artifact_store)
-                if spark_result is not None:
-                    spark_df = spark_result
-                else:
-                    ps_df = _as_pandas_api(spark_df)
-                    spark_df = as_spark_df(self.apply(ps_df, step, fit_mode=fit_mode, artifact_store=artifact_store))
-                    roundtrip_count += 1
-            if on_step_done:
+        step_idx = 0
+        for batch in _group_batchable_runs(steps, _SPARK_BATCHABLE_TYPES):
+            batch_handler = _SPARK_BATCH_DISPATCH.get(batch[0].type) if len(batch) > 1 else None
+            if batch_handler:
+                t_batch = time.perf_counter()
+                spark_df = batch_handler(spark_df, batch)
+                since_checkpoint += 1
                 now = time.perf_counter()
-                on_step_done(i, len(steps), step, now - t_step, now - t0)
-            since_checkpoint += 1
+                if batch_reporter:
+                    batch_reporter(step_idx, step_idx + len(batch) - 1, len(steps), batch[0].type, now - t_batch, now - t0)
+                elif on_step_done:
+                    on_step_done(step_idx + len(batch) - 1, len(steps), batch[-1], now - t_batch, now - t0)
+                step_idx += len(batch)
+            else:
+                for step in batch:
+                    t_step = time.perf_counter()
+                    handler = _SPARK_DISPATCH.get(step.type)
+                    result = handler(spark_df, step) if handler is not None else None
+                    if result is not None:
+                        spark_df = result
+                    else:
+                        spark_result = self._apply_fitted_spark(spark_df, step, fit_mode, artifact_store)
+                        if spark_result is not None:
+                            spark_df = spark_result
+                        else:
+                            ps_df = _as_pandas_api(spark_df)
+                            spark_df = as_spark_df(self.apply(ps_df, step, fit_mode=fit_mode, artifact_store=artifact_store))
+                            roundtrip_count += 1
+                    if on_step_done:
+                        now = time.perf_counter()
+                        on_step_done(step_idx, len(steps), step, now - t_step, now - t0)
+                    since_checkpoint += 1
+                    step_idx += 1
             needs_checkpoint = (
                 (roundtrip_count > 0 and roundtrip_count % _CHECKPOINT_INTERVAL == 0)
                 or since_checkpoint >= _PLAN_TRUNCATION_INTERVAL
             )
-            if needs_checkpoint and i + 1 < len(steps):
+            if needs_checkpoint and step_idx < len(steps):
                 spark_df = spark_df.localCheckpoint(eager=True)
                 since_checkpoint = 0
         return _as_pandas_api(spark_df)
@@ -367,6 +494,16 @@ def _make_spark_dispatch():
     }
 
 
+def _make_spark_batch_dispatch():
+    from . import spark_ops
+    return {
+        PipelineTransformationType.LOG_TRANSFORM: lambda df, steps: spark_ops.spark_batch_log_transform(df, [s.column for s in steps]),
+        PipelineTransformationType.SQRT_TRANSFORM: lambda df, steps: spark_ops.spark_batch_sqrt_transform(df, [s.column for s in steps]),
+        PipelineTransformationType.ZERO_INFLATION_HANDLING: lambda df, steps: spark_ops.spark_batch_zero_inflation(df, [s.column for s in steps]),
+        PipelineTransformationType.CAP_THEN_LOG: lambda df, steps: spark_ops.spark_batch_cap_then_log(df, [(s.column, s.parameters.get("_precomputed_q99")) for s in steps]),
+    }
+
+
 def _apply_scale_from_artifact(spark_df, step, artifact_store):
     from sklearn.preprocessing import StandardScaler
 
@@ -388,5 +525,9 @@ def _apply_yj_from_artifact(spark_df, step, artifact_store):
 
 try:
     _SPARK_DISPATCH = _make_spark_dispatch()
+    _SPARK_BATCH_DISPATCH = _make_spark_batch_dispatch()
+    _SPARK_BATCHABLE_TYPES = frozenset(_SPARK_BATCH_DISPATCH)
 except ImportError:
     _SPARK_DISPATCH = {}
+    _SPARK_BATCH_DISPATCH = {}
+    _SPARK_BATCHABLE_TYPES = frozenset()

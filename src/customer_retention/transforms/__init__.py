@@ -7,7 +7,13 @@ This module is safe to import from generated pipelines — it depends only on
 """
 
 from .artifact_store import ArtifactStore
-from .executor import TransformExecutor, format_step_progress, print_step_progress
+from .executor import (
+    TransformExecutor,
+    format_batch_progress,
+    format_step_progress,
+    print_batch_progress,
+    print_step_progress,
+)
 from .ops import (
     apply_cap_outlier,
     apply_cap_then_log,
@@ -30,7 +36,9 @@ __all__ = [
     "TransformExecutor",
     "ArtifactStore",
     "format_step_progress",
+    "format_batch_progress",
     "print_step_progress",
+    "print_batch_progress",
     "apply_impute_null",
     "apply_cap_outlier",
     "apply_type_cast",

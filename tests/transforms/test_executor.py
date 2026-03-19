@@ -533,7 +533,7 @@ class TestOnStepDoneCallback:
         for i, (idx, total, step, step_s, total_s) in enumerate(calls):
             assert idx == i
             assert total == 3
-            assert step is steps[i]
+        assert {id(c[2]) for c in calls} == {id(s) for s in steps}
 
     def test_callback_timing_values_are_positive(self, executor, sample_df):
         steps = [
@@ -968,3 +968,358 @@ class TestMakeSparkDispatch:
         step = _step(PipelineTransformationType.CAP_THEN_LOG, "v", _precomputed_q99=42.0)
         dispatch[PipelineTransformationType.CAP_THEN_LOG](mock_df, step)
         mock_spark_ops.spark_cap_then_log.assert_called_once_with(mock_df, "v", q99=42.0)
+
+
+# ── Batch grouping ────────────────────────────────────────────────
+
+
+class TestDecomposeIntoWaves:
+    def test_unique_columns_single_wave(self):
+        from customer_retention.transforms.executor import _decompose_into_waves
+        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, c) for c in "abcd"]
+        waves = _decompose_into_waves(steps)
+        assert len(waves) == 1
+        assert len(waves[0]) == 4
+
+    def test_repeated_column_splits_wave(self):
+        from customer_retention.transforms.executor import _decompose_into_waves
+        steps = [
+            _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "a"),
+            _step(PipelineTransformationType.SQRT_TRANSFORM, "b"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "a"),
+        ]
+        waves = _decompose_into_waves(steps)
+        assert len(waves) == 2
+        assert len(waves[0]) == 2
+        assert len(waves[1]) == 1
+
+    def test_zero_inflation_reserves_is_zero_column(self):
+        from customer_retention.transforms.executor import _decompose_into_waves
+        steps = [
+            _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "x"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "x_is_zero"),
+        ]
+        waves = _decompose_into_waves(steps)
+        assert len(waves) == 2
+
+    def test_empty(self):
+        from customer_retention.transforms.executor import _decompose_into_waves
+        assert _decompose_into_waves([]) == []
+
+
+class TestGroupBatchableRuns:
+    def test_consecutive_same_batchable_type_grouped(self):
+        from customer_retention.transforms.executor import _PANDAS_BATCHABLE_TYPES, _group_batchable_runs
+        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, c) for c in "abc"]
+        groups = _group_batchable_runs(steps, _PANDAS_BATCHABLE_TYPES)
+        assert len(groups) == 1
+        assert len(groups[0]) == 3
+
+    def test_non_batchable_types_stay_individual(self):
+        from customer_retention.transforms.executor import _PANDAS_BATCHABLE_TYPES, _group_batchable_runs
+        steps = [
+            _step(PipelineTransformationType.IMPUTE_NULL, "a", value=0),
+            _step(PipelineTransformationType.IMPUTE_NULL, "b", value=0),
+        ]
+        groups = _group_batchable_runs(steps, _PANDAS_BATCHABLE_TYPES)
+        assert len(groups) == 2
+        assert all(len(g) == 1 for g in groups)
+
+    def test_interleaved_batchable_types_merged_within_wave(self):
+        from customer_retention.transforms.executor import _PANDAS_BATCHABLE_TYPES, _group_batchable_runs
+        steps = [
+            _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "a"),
+            _step(PipelineTransformationType.CAP_THEN_LOG, "b"),
+            _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "c"),
+            _step(PipelineTransformationType.SQRT_TRANSFORM, "d"),
+        ]
+        groups = _group_batchable_runs(steps, _PANDAS_BATCHABLE_TYPES)
+        batchable_groups = [g for g in groups if len(g) > 1 or g[0].type in _PANDAS_BATCHABLE_TYPES]
+        zi_groups = [g for g in batchable_groups if g[0].type == PipelineTransformationType.ZERO_INFLATION_HANDLING]
+        assert len(zi_groups) == 1
+        assert len(zi_groups[0]) == 2
+
+    def test_duplicate_column_creates_new_wave(self):
+        from customer_retention.transforms.executor import _PANDAS_BATCHABLE_TYPES, _group_batchable_runs
+        steps = [
+            _step(PipelineTransformationType.LOG_TRANSFORM, "a"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "b"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "a"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "c"),
+        ]
+        groups = _group_batchable_runs(steps, _PANDAS_BATCHABLE_TYPES)
+        assert len(groups) == 2
+        assert set(s.column for s in groups[0]) == {"a", "b"}
+        assert set(s.column for s in groups[1]) == {"a", "c"}
+
+    def test_all_same_column_stays_individual(self):
+        from customer_retention.transforms.executor import _PANDAS_BATCHABLE_TYPES, _group_batchable_runs
+        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "v") for _ in range(3)]
+        groups = _group_batchable_runs(steps, _PANDAS_BATCHABLE_TYPES)
+        assert len(groups) == 3
+        assert all(len(g) == 1 for g in groups)
+
+    def test_empty_steps(self):
+        from customer_retention.transforms.executor import _PANDAS_BATCHABLE_TYPES, _group_batchable_runs
+        assert _group_batchable_runs([], _PANDAS_BATCHABLE_TYPES) == []
+
+    def test_chunking_large_batch(self):
+        from customer_retention.transforms.executor import (
+            _BATCH_CHUNK_SIZE,
+            _PANDAS_BATCHABLE_TYPES,
+            _group_batchable_runs,
+        )
+        n = _BATCH_CHUNK_SIZE + 10
+        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, f"c{i}") for i in range(n)]
+        groups = _group_batchable_runs(steps, _PANDAS_BATCHABLE_TYPES)
+        assert len(groups) == 2
+        assert len(groups[0]) == _BATCH_CHUNK_SIZE
+        assert len(groups[1]) == 10
+
+    def test_batchable_between_non_batchable(self):
+        from customer_retention.transforms.executor import _PANDAS_BATCHABLE_TYPES, _group_batchable_runs
+        steps = [
+            _step(PipelineTransformationType.IMPUTE_NULL, "a", value=0),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "b"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "c"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "d"),
+            _step(PipelineTransformationType.IMPUTE_NULL, "e", value=0),
+        ]
+        groups = _group_batchable_runs(steps, _PANDAS_BATCHABLE_TYPES)
+        log_groups = [g for g in groups if g[0].type == PipelineTransformationType.LOG_TRANSFORM]
+        assert len(log_groups) == 1
+        assert len(log_groups[0]) == 3
+
+
+# ── Batched apply_all ─────────────────────────────────────────────
+
+
+class TestBatchedApplyAll:
+    def test_consecutive_log_transforms_match_sequential(self, executor):
+        df = pd.DataFrame({"a": [1.0, 2.0, 3.0], "b": [4.0, 5.0, 6.0], "c": [7.0, 8.0, 9.0]})
+        steps = [
+            _step(PipelineTransformationType.LOG_TRANSFORM, "a"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "b"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "c"),
+        ]
+        expected = df.copy()
+        for s in steps:
+            expected = executor.apply(expected, s)
+        result = executor.apply_all(df.copy(), steps)
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_consecutive_sqrt_transforms_match_sequential(self, executor):
+        df = pd.DataFrame({"a": [4.0, 9.0], "b": [16.0, 25.0]})
+        steps = [
+            _step(PipelineTransformationType.SQRT_TRANSFORM, "a"),
+            _step(PipelineTransformationType.SQRT_TRANSFORM, "b"),
+        ]
+        expected = df.copy()
+        for s in steps:
+            expected = executor.apply(expected, s)
+        result = executor.apply_all(df.copy(), steps)
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_consecutive_zero_inflation_match_sequential(self, executor):
+        df = pd.DataFrame({"a": [0.0, 1.0, 5.0], "b": [3.0, 0.0, 0.0], "c": [0.0, 0.0, 7.0]})
+        steps = [
+            _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "a"),
+            _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "b"),
+            _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "c"),
+        ]
+        expected = df.copy()
+        for s in steps:
+            expected = executor.apply(expected, s)
+        result = executor.apply_all(df.copy(), steps)
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_cross_type_ordering_preserved(self, executor):
+        df = pd.DataFrame({"a": [0.0, 1.0, 2.0, 3.0], "b": [5.0, 6.0, 7.0, 8.0]})
+        steps = [
+            _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "a"),
+            _step(PipelineTransformationType.SQRT_TRANSFORM, "b"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "a"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "b"),
+        ]
+        expected = df.copy()
+        for s in steps:
+            expected = executor.apply(expected, s)
+        result = executor.apply_all(df.copy(), steps)
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_single_batchable_step_not_batched(self, executor):
+        df = pd.DataFrame({"a": [1.0, 2.0, 3.0]})
+        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "a")]
+        expected = executor.apply(df.copy(), steps[0])
+        result = executor.apply_all(df.copy(), steps)
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_callback_called_for_batched_steps(self, executor):
+        df = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0], "c": [5.0, 6.0]})
+        steps = [
+            _step(PipelineTransformationType.LOG_TRANSFORM, "a"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "b"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "c"),
+        ]
+        calls = []
+        executor.apply_all(df.copy(), steps, on_step_done=lambda *args: calls.append(args))
+        assert len(calls) >= 1
+        last_idx, total = calls[-1][0], calls[-1][1]
+        assert last_idx == 2
+        assert total == 3
+
+    def test_mixed_batchable_and_nonbatchable(self, executor):
+        df = pd.DataFrame({
+            "a": [1.0, 2.0, None, 4.0],
+            "b": [5.0, 6.0, 7.0, 8.0],
+            "c": [9.0, 10.0, 11.0, 12.0],
+        })
+        steps = [
+            _step(PipelineTransformationType.IMPUTE_NULL, "a", value=0),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "b"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "c"),
+        ]
+        expected = df.copy()
+        for s in steps:
+            expected = executor.apply(expected, s)
+        result = executor.apply_all(df.copy(), steps)
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_many_log_transforms_faster_than_sequential(self, executor):
+        np.random.seed(42)
+        n_cols = 50
+        cols = {f"col_{i}": np.random.rand(1000) for i in range(n_cols)}
+        df = pd.DataFrame(cols)
+        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, f"col_{i}") for i in range(n_cols)]
+        import time
+        t0 = time.perf_counter()
+        result_batch = executor.apply_all(df.copy(), steps)
+        t_batch = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        result_seq = df.copy()
+        for s in steps:
+            result_seq = executor.apply(result_seq, s)
+        t_seq = time.perf_counter() - t0
+        pd.testing.assert_frame_equal(result_batch, result_seq)
+        assert t_batch < t_seq or t_batch < 0.1
+
+    def test_realistic_transform_pipeline(self, executor):
+        np.random.seed(42)
+        df = pd.DataFrame({
+            "event_count_180d": np.random.randint(0, 100, 200).astype(float),
+            "event_count_365d": np.random.randint(0, 200, 200).astype(float),
+            "send_hour_sum": np.random.rand(200) * 1000,
+            "time_to_open": np.random.rand(200) * 500,
+        })
+        steps = [
+            _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "event_count_180d"),
+            _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "event_count_365d"),
+            _step(PipelineTransformationType.CAP_THEN_LOG, "send_hour_sum"),
+            _step(PipelineTransformationType.SQRT_TRANSFORM, "time_to_open"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "event_count_180d"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "event_count_365d"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "send_hour_sum"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "time_to_open"),
+        ]
+        expected = df.copy()
+        for s in steps:
+            expected = executor.apply(expected, s)
+        result = executor.apply_all(df.copy(), steps)
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_cap_then_log_batch_matches_sequential(self, executor):
+        np.random.seed(42)
+        df = pd.DataFrame({
+            "a": np.random.rand(100) * 1000,
+            "b": np.random.rand(100) * 500,
+            "c": np.random.rand(100) * 200,
+        })
+        steps = [
+            _step(PipelineTransformationType.CAP_THEN_LOG, "a"),
+            _step(PipelineTransformationType.CAP_THEN_LOG, "b"),
+            _step(PipelineTransformationType.CAP_THEN_LOG, "c"),
+        ]
+        expected = df.copy()
+        for s in steps:
+            expected = executor.apply(expected, s)
+        result = executor.apply_all(df.copy(), steps)
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_batch_reporter_auto_upgrades_for_print_step_progress(self, executor):
+        from customer_retention.transforms.executor import print_step_progress
+        df = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
+        steps = [
+            _step(PipelineTransformationType.LOG_TRANSFORM, "a"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "b"),
+        ]
+        output = []
+        with patch("customer_retention.transforms.executor.print_batch_progress", side_effect=lambda *a: output.append(a)):
+            executor.apply_all(df.copy(), steps, on_step_done=print_step_progress)
+        assert len(output) == 1
+        start_idx, end_idx, total = output[0][0], output[0][1], output[0][2]
+        assert start_idx == 0
+        assert end_idx == 1
+        assert total == 2
+
+    def test_explicit_on_batch_done_overrides(self, executor):
+        df = pd.DataFrame({"a": [1.0], "b": [2.0], "c": [3.0]})
+        steps = [
+            _step(PipelineTransformationType.LOG_TRANSFORM, "a"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "b"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "c"),
+        ]
+        batch_calls = []
+        step_calls = []
+        executor.apply_all(
+            df.copy(), steps,
+            on_step_done=lambda *a: step_calls.append(a),
+            on_batch_done=lambda *a: batch_calls.append(a),
+        )
+        assert len(batch_calls) == 1
+        assert len(step_calls) == 0
+
+
+class TestSparkBatchDispatch:
+    def test_spark_batch_dispatch_log_calls_batch_fn(self, mock_spark_ops):
+        from customer_retention.transforms.executor import _make_spark_batch_dispatch
+        dispatch = _make_spark_batch_dispatch()
+        mock_df = MagicMock()
+        steps = [
+            _step(PipelineTransformationType.LOG_TRANSFORM, "a"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "b"),
+        ]
+        dispatch[PipelineTransformationType.LOG_TRANSFORM](mock_df, steps)
+        mock_spark_ops.spark_batch_log_transform.assert_called_once_with(mock_df, ["a", "b"])
+
+    def test_spark_batch_dispatch_sqrt_calls_batch_fn(self, mock_spark_ops):
+        from customer_retention.transforms.executor import _make_spark_batch_dispatch
+        dispatch = _make_spark_batch_dispatch()
+        mock_df = MagicMock()
+        steps = [
+            _step(PipelineTransformationType.SQRT_TRANSFORM, "x"),
+            _step(PipelineTransformationType.SQRT_TRANSFORM, "y"),
+        ]
+        dispatch[PipelineTransformationType.SQRT_TRANSFORM](mock_df, steps)
+        mock_spark_ops.spark_batch_sqrt_transform.assert_called_once_with(mock_df, ["x", "y"])
+
+    def test_spark_batch_dispatch_zero_inflation_calls_batch_fn(self, mock_spark_ops):
+        from customer_retention.transforms.executor import _make_spark_batch_dispatch
+        dispatch = _make_spark_batch_dispatch()
+        mock_df = MagicMock()
+        steps = [
+            _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "a"),
+            _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "b"),
+        ]
+        dispatch[PipelineTransformationType.ZERO_INFLATION_HANDLING](mock_df, steps)
+        mock_spark_ops.spark_batch_zero_inflation.assert_called_once_with(mock_df, ["a", "b"])
+
+    def test_spark_batch_dispatch_cap_then_log(self, mock_spark_ops):
+        from customer_retention.transforms.executor import _make_spark_batch_dispatch
+        dispatch = _make_spark_batch_dispatch()
+        mock_df = MagicMock()
+        steps = [
+            _step(PipelineTransformationType.CAP_THEN_LOG, "a", _precomputed_q99=10.0),
+            _step(PipelineTransformationType.CAP_THEN_LOG, "b", _precomputed_q99=20.0),
+        ]
+        dispatch[PipelineTransformationType.CAP_THEN_LOG](mock_df, steps)
+        mock_spark_ops.spark_batch_cap_then_log.assert_called_once_with(mock_df, [("a", 10.0), ("b", 20.0)])

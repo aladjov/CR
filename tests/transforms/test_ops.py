@@ -229,3 +229,148 @@ class TestDerivedComposite:
     def test_no_valid_columns_noop(self, sample_df):
         result = apply_derived_composite(sample_df, "comp", columns=["x", "y"])
         assert "comp" not in result.columns
+
+
+# ── Batch ops ──────────────────────────────────────────────────────
+
+
+class TestBatchLogTransform:
+    def test_matches_sequential(self):
+        df = pd.DataFrame({"a": [1.0, 2.0, 3.0], "b": [4.0, 5.0, 6.0], "c": [7.0, 8.0, 9.0]})
+        expected = df.copy()
+        for c in ["a", "b", "c"]:
+            expected = apply_log_transform(expected, c)
+        from customer_retention.transforms.ops import apply_batch_log_transform
+        result = apply_batch_log_transform(df.copy(), ["a", "b", "c"])
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_skips_missing_columns(self):
+        df = pd.DataFrame({"a": [1.0, 2.0]})
+        from customer_retention.transforms.ops import apply_batch_log_transform
+        result = apply_batch_log_transform(df.copy(), ["a", "missing"])
+        expected = apply_log_transform(df.copy(), "a")
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_empty_columns_noop(self):
+        df = pd.DataFrame({"a": [1.0]})
+        from customer_retention.transforms.ops import apply_batch_log_transform
+        result = apply_batch_log_transform(df.copy(), [])
+        pd.testing.assert_frame_equal(result, df)
+
+    def test_negative_values_clipped(self):
+        df = pd.DataFrame({"a": [-5.0, 0.0, 3.0], "b": [-1.0, 2.0, 4.0]})
+        from customer_retention.transforms.ops import apply_batch_log_transform
+        result = apply_batch_log_transform(df.copy(), ["a", "b"])
+        expected = df.copy()
+        for c in ["a", "b"]:
+            expected = apply_log_transform(expected, c)
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_preserves_nan(self):
+        df = pd.DataFrame({"a": [1.0, np.nan, 3.0], "b": [np.nan, 2.0, 4.0]})
+        from customer_retention.transforms.ops import apply_batch_log_transform
+        result = apply_batch_log_transform(df.copy(), ["a", "b"])
+        expected = df.copy()
+        for c in ["a", "b"]:
+            expected = apply_log_transform(expected, c)
+        pd.testing.assert_frame_equal(result, expected)
+
+
+class TestBatchSqrtTransform:
+    def test_matches_sequential(self):
+        df = pd.DataFrame({"a": [1.0, 4.0, 9.0], "b": [16.0, 25.0, 36.0]})
+        expected = df.copy()
+        for c in ["a", "b"]:
+            expected = apply_sqrt_transform(expected, c)
+        from customer_retention.transforms.ops import apply_batch_sqrt_transform
+        result = apply_batch_sqrt_transform(df.copy(), ["a", "b"])
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_skips_missing_columns(self):
+        df = pd.DataFrame({"a": [4.0, 9.0]})
+        from customer_retention.transforms.ops import apply_batch_sqrt_transform
+        result = apply_batch_sqrt_transform(df.copy(), ["a", "gone"])
+        expected = apply_sqrt_transform(df.copy(), "a")
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_empty_columns_noop(self):
+        df = pd.DataFrame({"a": [4.0]})
+        from customer_retention.transforms.ops import apply_batch_sqrt_transform
+        result = apply_batch_sqrt_transform(df.copy(), [])
+        pd.testing.assert_frame_equal(result, df)
+
+
+class TestBatchZeroInflation:
+    def test_matches_sequential(self):
+        df = pd.DataFrame({"a": [0.0, 1.0, 5.0], "b": [3.0, 0.0, 0.0]})
+        expected = df.copy()
+        for c in ["a", "b"]:
+            expected = apply_zero_inflation_handling(expected, c)
+        from customer_retention.transforms.ops import apply_batch_zero_inflation
+        result = apply_batch_zero_inflation(df.copy(), ["a", "b"])
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_creates_all_flags(self):
+        df = pd.DataFrame({"x": [0.0, 1.0], "y": [2.0, 0.0], "z": [0.0, 0.0]})
+        from customer_retention.transforms.ops import apply_batch_zero_inflation
+        result = apply_batch_zero_inflation(df.copy(), ["x", "y", "z"])
+        assert "x_is_zero" in result.columns
+        assert "y_is_zero" in result.columns
+        assert "z_is_zero" in result.columns
+        assert result["x_is_zero"].sum() == 1
+        assert result["y_is_zero"].sum() == 1
+        assert result["z_is_zero"].sum() == 2
+
+    def test_preserves_nan(self):
+        df = pd.DataFrame({"a": [0.0, np.nan, 5.0], "b": [np.nan, 0.0, 3.0]})
+        expected = df.copy()
+        for c in ["a", "b"]:
+            expected = apply_zero_inflation_handling(expected, c)
+        from customer_retention.transforms.ops import apply_batch_zero_inflation
+        result = apply_batch_zero_inflation(df.copy(), ["a", "b"])
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_skips_missing_columns(self):
+        df = pd.DataFrame({"a": [0.0, 5.0]})
+        from customer_retention.transforms.ops import apply_batch_zero_inflation
+        result = apply_batch_zero_inflation(df.copy(), ["a", "nope"])
+        expected = apply_zero_inflation_handling(df.copy(), "a")
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_empty_columns_noop(self):
+        df = pd.DataFrame({"a": [1.0]})
+        from customer_retention.transforms.ops import apply_batch_zero_inflation
+        result = apply_batch_zero_inflation(df.copy(), [])
+        pd.testing.assert_frame_equal(result, df)
+
+
+class TestBatchCapThenLog:
+    def test_matches_sequential(self):
+        df = pd.DataFrame({"a": list(range(100)) + [10000.0], "b": list(range(50)) + [5000.0] * 51})
+        expected = df.copy()
+        expected = apply_cap_then_log(expected, "a")
+        expected = apply_cap_then_log(expected, "b")
+        from customer_retention.transforms.ops import apply_batch_cap_then_log
+        result = apply_batch_cap_then_log(df.copy(), [("a", None), ("b", None)])
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_precomputed_q99_used(self):
+        df = pd.DataFrame({"a": list(range(100)) + [10000.0]})
+        q99 = df["a"].quantile(0.99)
+        from customer_retention.transforms.ops import apply_batch_cap_then_log
+        result = apply_batch_cap_then_log(df.copy(), [("a", q99)])
+        expected = apply_cap_then_log(df.copy(), "a")
+        np.testing.assert_array_almost_equal(result["a"].to_numpy(), expected["a"].to_numpy())
+
+    def test_skips_missing_columns(self):
+        df = pd.DataFrame({"a": [1.0, 2.0, 3.0]})
+        from customer_retention.transforms.ops import apply_batch_cap_then_log
+        result = apply_batch_cap_then_log(df.copy(), [("a", None), ("missing", None)])
+        expected = apply_cap_then_log(df.copy(), "a")
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_empty_noop(self):
+        df = pd.DataFrame({"a": [1.0]})
+        from customer_retention.transforms.ops import apply_batch_cap_then_log
+        result = apply_batch_cap_then_log(df.copy(), [])
+        pd.testing.assert_frame_equal(result, df)

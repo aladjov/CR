@@ -157,3 +157,47 @@ def apply_derived_composite(
         return df
     df[column] = df[valid].mean(axis=1)
     return df
+
+
+# ── Batch ops (multi-column vectorized) ───────────────────────────
+
+
+def apply_batch_log_transform(df: DataFrame, columns: list[str]) -> DataFrame:
+    valid = [c for c in columns if c in df.columns]
+    if valid:
+        df[valid] = np.log1p(df[valid].clip(lower=0))
+    return df
+
+
+def apply_batch_sqrt_transform(df: DataFrame, columns: list[str]) -> DataFrame:
+    valid = [c for c in columns if c in df.columns]
+    if valid:
+        df[valid] = np.sqrt(df[valid].clip(lower=0))
+    return df
+
+
+def apply_batch_zero_inflation(df: DataFrame, columns: list[str]) -> DataFrame:
+    valid = [c for c in columns if c in df.columns]
+    if not valid:
+        return df
+    for c in valid:
+        df[f"{c}_is_zero"] = (df[c] == 0).astype(int)
+    mask = df[valid] == 0
+    df[valid] = df[valid].where(mask, np.log1p(df[valid].clip(lower=0)))
+    return df
+
+
+def apply_batch_cap_then_log(df: DataFrame, columns_q99: list[tuple[str, float | None]]) -> DataFrame:
+    valid = [(c, q) for c, q in columns_q99 if c in df.columns]
+    if not valid:
+        return df
+    need_q99 = [c for c, q in valid if q is None]
+    q99_map = {}
+    if need_q99:
+        q99s = df[need_q99].quantile(0.99)
+        q99_map = {c: float(q99s[c]) for c in need_q99}
+    for col, q99 in valid:
+        q = q99 if q99 is not None else q99_map.get(col)
+        if q is not None:
+            df[col] = np.log1p(df[col].clip(upper=q).clip(lower=0))
+    return df
