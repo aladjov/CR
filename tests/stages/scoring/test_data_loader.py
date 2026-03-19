@@ -637,3 +637,58 @@ class TestLoadGoldModule:
         loader = ScoringDataLoader(config)
         with pytest.raises(FileNotFoundError, match="config.py"):
             loader._load_gold_module()
+
+
+class TestPredictSparkMl:
+    def test_assembles_features_and_returns_probabilities(self, databricks_config):
+        mock_spark = MagicMock()
+        mock_spark_df = MagicMock()
+        mock_spark.createDataFrame.return_value = mock_spark_df
+
+        mock_assembler = MagicMock()
+        mock_assembled = MagicMock()
+        mock_assembler.transform.return_value = mock_assembled
+
+        mock_model = MagicMock()
+        mock_predictions = MagicMock()
+        mock_model.transform.return_value = mock_predictions
+
+        proba_values = np.array([0.2, 0.8, 0.5])
+        mock_predictions.select.return_value.toPandas.return_value = pd.DataFrame({"prob": proba_values})
+
+        X = pd.DataFrame({"feat_a": [1.0, 2.0, 3.0], "feat_b": [4.0, 5.0, 6.0]})
+
+        with (
+            patch("customer_retention.stages.scoring.data_loader.get_spark_session", return_value=mock_spark),
+            patch("customer_retention.stages.scoring.data_loader._VectorAssembler", return_value=mock_assembler),
+            patch("customer_retention.stages.scoring.data_loader._vector_to_array") as mock_v2a,
+        ):
+            loader = ScoringDataLoader(databricks_config)
+            result = loader.predict_spark_ml(mock_model, X)
+
+        mock_assembler.transform.assert_called_once_with(mock_spark_df)
+        mock_model.transform.assert_called_once_with(mock_assembled)
+        np.testing.assert_array_equal(result, proba_values)
+
+    def test_assembler_uses_feature_columns(self, databricks_config):
+        mock_spark = MagicMock()
+        mock_assembler = MagicMock()
+        mock_assembled = MagicMock()
+        mock_assembler.transform.return_value = mock_assembled
+
+        mock_model = MagicMock()
+        mock_predictions = MagicMock()
+        mock_model.transform.return_value = mock_predictions
+        mock_predictions.select.return_value.toPandas.return_value = pd.DataFrame({"prob": [0.5]})
+
+        X = pd.DataFrame({"col_x": [1.0], "col_y": [2.0]})
+
+        with (
+            patch("customer_retention.stages.scoring.data_loader.get_spark_session", return_value=mock_spark),
+            patch("customer_retention.stages.scoring.data_loader._VectorAssembler", return_value=mock_assembler) as mock_va_cls,
+            patch("customer_retention.stages.scoring.data_loader._vector_to_array"),
+        ):
+            loader = ScoringDataLoader(databricks_config)
+            loader.predict_spark_ml(mock_model, X)
+
+        mock_va_cls.assert_called_once_with(inputCols=["col_x", "col_y"], outputCol="features", handleInvalid="keep")

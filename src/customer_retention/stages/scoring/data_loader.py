@@ -23,6 +23,13 @@ try:
 except ImportError:
     FeatureStore = None  # type: ignore[assignment,misc]
 
+try:
+    from pyspark.ml.feature import VectorAssembler as _VectorAssembler
+    from pyspark.ml.functions import vector_to_array as _vector_to_array
+except ImportError:  # pragma: no cover
+    _VectorAssembler = None  # type: ignore[assignment,misc]
+    _vector_to_array = None  # type: ignore[assignment]
+
 
 class ScoringDataLoader:
     def __init__(self, config: ScoringConfig):
@@ -114,6 +121,22 @@ class ScoringDataLoader:
                     if ptypes.is_numeric_dtype(dt) or ptypes.is_bool_dtype(dt)]
             return df[keep].fillna(0)
         return df.select_dtypes(include=["number", "bool"]).fillna(0)
+
+    def predict_spark_ml(self, model: Any, X: Any) -> Any:
+        from pyspark.sql import functions as F  # noqa: N812
+
+        from customer_retention.core.compat import normalize_timestamps, pandas_dtype_to_spark_schema
+
+        spark = get_spark_session()
+        normalized = normalize_timestamps(X)
+        schema = pandas_dtype_to_spark_schema(normalized)
+        spark_df = spark.createDataFrame(normalized, schema=schema)
+        assembler = _VectorAssembler(inputCols=list(X.columns), outputCol="features", handleInvalid="keep")
+        assembled = assembler.transform(spark_df)
+        predictions = model.transform(assembled)
+        return predictions.select(
+            _vector_to_array(F.col("probability")).getItem(1).alias("prob")
+        ).toPandas()["prob"].to_numpy()
 
     def align_features_to_model(
         self,
