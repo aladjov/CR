@@ -1209,22 +1209,38 @@ def _pandas_bulk_label_encode(df: Any, columns: list[str]) -> Any:
     return df
 
 
+_MAX_LABEL_CARDINALITY = 10_000
+
+
 def _spark_bulk_label_encode(df: Any, columns: list[str]) -> Any:
     import pyspark.sql.functions as F  # noqa: N812
 
     spark_df = as_spark_df(df)
-    exprs = [F.sort_array(F.collect_set(F.col(c).cast("string"))).alias(c) for c in columns]
-    sets_row = spark_df.agg(*exprs).collect()[0]
-    col_set = set(columns)
+    card_exprs = [F.countDistinct(F.col(c)).alias(c) for c in columns]
+    card_row = spark_df.agg(*card_exprs).collect()[0]
+    low_card = [c for c in columns if (card_row[c] or 0) <= _MAX_LABEL_CARDINALITY]
+    high_card = [c for c in columns if (card_row[c] or 0) > _MAX_LABEL_CARDINALITY]
+    if high_card:
+        print(f"Hash-encoding {len(high_card)} high-cardinality columns "
+              f"(>{_MAX_LABEL_CARDINALITY:,} unique): "
+              f"{high_card[:5]}{'...' if len(high_card) > 5 else ''}")
+    vocab: dict[str, list[str]] = {}
+    if low_card:
+        set_exprs = [F.sort_array(F.collect_set(F.col(c).cast("string"))).alias(c) for c in low_card]
+        sets_row = spark_df.agg(*set_exprs).collect()[0]
+        vocab = {c: [v for v in (sets_row[c] or []) if v is not None] for c in low_card}
+    low_set, high_set = set(low_card), set(high_card)
     select_exprs = []
     for c in spark_df.columns:
-        if c in col_set:
-            distinct = [v for v in (sets_row[c] or []) if v is not None]
+        if c in low_set:
+            distinct = vocab.get(c, [])
             if distinct:
                 arr = F.array([F.lit(v) for v in distinct])
                 select_exprs.append(F.coalesce(F.array_position(arr, F.col(c).cast("string")) - 1, F.lit(-1)).cast("int").alias(c))
             else:
                 select_exprs.append(F.lit(0).cast("int").alias(c))
+        elif c in high_set:
+            select_exprs.append(F.hash(F.col(c).cast("string")).alias(c))
         else:
             select_exprs.append(F.col(c))
     from .spark_backend import _as_pandas_api

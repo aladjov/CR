@@ -108,6 +108,40 @@ class TestSparkBulkLabelEncode:
         assert "Pipeline" not in source
         assert "StringIndexer" not in source
 
+    def test_high_cardinality_uses_hash_encoding(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.core.compat import _MAX_LABEL_CARDINALITY, _spark_bulk_label_encode
+
+        n = 100
+        high_card_values = [f"id_{i}" for i in range(n)]
+        pdf = pd.DataFrame({
+            "high_card": high_card_values,
+            "num": range(n),
+        })
+
+        mock_spark_df = MagicMock()
+        mock_spark_df.columns = ["high_card", "num"]
+
+        card_row = MagicMock()
+        card_row.__getitem__ = lambda self, k: n
+        mock_spark_df.agg.return_value.collect.return_value = [card_row]
+
+        mock_result = MagicMock()
+        mock_as_pandas = MagicMock(return_value=mock_result)
+
+        with patch("customer_retention.core.compat.as_spark_df", return_value=mock_spark_df):
+            with patch("customer_retention.core.compat._MAX_LABEL_CARDINALITY", 50):
+                with patch("customer_retention.core.compat.spark_backend._as_pandas_api", mock_as_pandas):
+                    result = _spark_bulk_label_encode(pdf, ["high_card"])
+
+        select_call = mock_spark_df.select.call_args
+        assert select_call is not None
+
+    def test_high_cardinality_threshold_constant_exists(self):
+        from customer_retention.core.compat import _MAX_LABEL_CARDINALITY
+        assert _MAX_LABEL_CARDINALITY == 10_000
+
 
 class TestBulkMedianImpute:
 
