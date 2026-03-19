@@ -201,3 +201,22 @@ def apply_batch_cap_then_log(df: DataFrame, columns_q99: list[tuple[str, float |
         if q is not None:
             df[col] = np.log1p(df[col].clip(upper=q).clip(lower=0))
     return df
+
+
+def _apply_yj_column(series, lmbda: float, std_mean: float | None, std_scale: float | None, standardize: bool):
+    filled = series.fillna(0)
+    pos = filled >= 0
+    with np.errstate(invalid="ignore"):
+        pos_vals = np.log1p(filled) if abs(lmbda) < 1e-12 else ((filled + 1) ** lmbda - 1) / lmbda
+        neg_vals = -np.log1p(-filled) if abs(lmbda - 2) < 1e-12 else -((-filled + 1) ** (2 - lmbda) - 1) / (2 - lmbda)
+    result = pos_vals.where(pos, neg_vals)
+    if standardize and std_mean is not None and std_scale is not None:
+        result = (result - std_mean) / std_scale
+    return result
+
+
+def apply_batch_yeo_johnson(df: DataFrame, params_list: list[tuple[str, float, float | None, float | None, bool]]) -> DataFrame:
+    for col, lmbda, std_mean, std_scale, standardize in params_list:
+        if col in df.columns:
+            df[col] = _apply_yj_column(df[col], lmbda, std_mean, std_scale, standardize)
+    return df

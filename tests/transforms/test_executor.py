@@ -351,7 +351,7 @@ class TestDistributedApplyAll:
 
     def test_fitted_spark_uses_precomputed_yeo_johnson(self, mock_spark_ops):
         step = _step(PipelineTransformationType.YEO_JOHNSON, "a")
-        step.parameters["_spark_fitted"] = {"lmbda": 0.5, "std_mean": 1.0, "std_scale": 0.5, "standardize": True}
+        step.parameters["_fitted_yj"] = {"lmbda": 0.5, "std_mean": 1.0, "std_scale": 0.5, "standardize": True}
         mock_spark_df = MagicMock()
         mock_spark_ops.spark_yeo_johnson.return_value = MagicMock()
         TransformExecutor._apply_fitted_spark(mock_spark_df, step, True, None)
@@ -877,9 +877,9 @@ class TestBatchFitPowerTransformsDistributed:
             mock_spark_df.select.return_value.toPandas.return_value = sample_pdf
             steps = [_step(PipelineTransformationType.YEO_JOHNSON, "v")]
             executor._batch_fit_power_transforms(mock_spark_df, steps, mock_store, {"v"})
-        assert steps[0].parameters["_spark_fitted"]["lmbda"] == pytest.approx(0.5)
-        assert steps[0].parameters["_spark_fitted"]["std_mean"] == pytest.approx(1.0)
-        assert steps[0].parameters["_spark_fitted"]["std_scale"] == pytest.approx(0.5)
+        assert steps[0].parameters["_fitted_yj"]["lmbda"] == pytest.approx(0.5)
+        assert steps[0].parameters["_fitted_yj"]["std_mean"] == pytest.approx(1.0)
+        assert steps[0].parameters["_fitted_yj"]["std_scale"] == pytest.approx(0.5)
         mock_store.register.assert_called_once()
 
     def test_yj_prefit_samples_large_datasets(self, executor):
@@ -900,8 +900,8 @@ class TestBatchFitPowerTransformsDistributed:
             steps = [_step(PipelineTransformationType.YEO_JOHNSON, "v")]
             executor._batch_fit_power_transforms(mock_spark_df, steps, mock_store, {"v"})
         mock_spark_df.select.return_value.sample.assert_called_once()
-        assert steps[0].parameters["_spark_fitted"]["standardize"] is False
-        assert steps[0].parameters["_spark_fitted"]["std_mean"] is None
+        assert steps[0].parameters["_fitted_yj"]["standardize"] is False
+        assert steps[0].parameters["_fitted_yj"]["std_mean"] is None
 
     def test_skips_columns_not_in_spark_df(self, executor):
         mock_spark_df = MagicMock()

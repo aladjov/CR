@@ -196,3 +196,23 @@ def spark_batch_cap_then_log(df: SparkDataFrame, columns_q99: list[tuple[str, fl
         if c in valid_map else F.col(c)
         for c in df.columns
     ])
+
+
+def _spark_yj_expr(col_name: str, lmbda: float, std_mean: float | None, std_scale: float | None, standardize: bool):
+    c = F.coalesce(F.col(col_name), F.lit(0.0))
+    pos_expr = F.log1p(c) if abs(lmbda) < 1e-12 else (F.pow(c + 1, lmbda) - 1) / lmbda
+    neg_expr = -F.log1p(-c) if abs(lmbda - 2) < 1e-12 else -(F.pow(-c + 1, 2 - lmbda) - 1) / (2 - lmbda)
+    yj = F.when(c >= 0, pos_expr).otherwise(neg_expr)
+    if standardize and std_mean is not None and std_scale is not None:
+        yj = (yj - std_mean) / std_scale
+    return yj.alias(col_name)
+
+
+def spark_batch_yeo_johnson(df: SparkDataFrame, params_list: list[tuple[str, float, float | None, float | None, bool]]) -> SparkDataFrame:
+    param_map = {col: (lmbda, mean, scale, std) for col, lmbda, mean, scale, std in params_list if col in df.columns}
+    if not param_map:
+        return df
+    return df.select(*[
+        _spark_yj_expr(c, *param_map[c]) if c in param_map else F.col(c)
+        for c in df.columns
+    ])

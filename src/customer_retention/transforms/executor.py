@@ -113,14 +113,37 @@ def _group_batchable_runs(steps: list[TransformationStep], batchable_types: froz
     return result
 
 
+def _yj_params_from_steps(steps):
+    return [
+        (s.column, s.parameters["_fitted_yj"]["lmbda"], s.parameters["_fitted_yj"].get("std_mean"),
+         s.parameters["_fitted_yj"].get("std_scale"), s.parameters["_fitted_yj"].get("standardize", True))
+        for s in steps if "_fitted_yj" in s.parameters
+    ]
+
+
 _PANDAS_BATCH = {
     PipelineTransformationType.LOG_TRANSFORM: lambda df, steps: ops.apply_batch_log_transform(df, [s.column for s in steps]),
     PipelineTransformationType.SQRT_TRANSFORM: lambda df, steps: ops.apply_batch_sqrt_transform(df, [s.column for s in steps]),
     PipelineTransformationType.ZERO_INFLATION_HANDLING: lambda df, steps: ops.apply_batch_zero_inflation(df, [s.column for s in steps]),
     PipelineTransformationType.CAP_THEN_LOG: lambda df, steps: ops.apply_batch_cap_then_log(df, [(s.column, s.parameters.get("_precomputed_q99")) for s in steps]),
+    PipelineTransformationType.YEO_JOHNSON: lambda df, steps: ops.apply_batch_yeo_johnson(df, _yj_params_from_steps(steps)),
 }
 
 _PANDAS_BATCHABLE_TYPES = frozenset(_PANDAS_BATCH)
+
+
+def _preload_yj_params(steps: list, artifact_store) -> None:
+    for s in steps:
+        if s.type == PipelineTransformationType.YEO_JOHNSON and "_fitted_yj" not in s.parameters:
+            aid = f"{s.column}_power_transformer"
+            if artifact_store.has(aid):
+                pt = artifact_store.load(aid)
+                s.parameters["_fitted_yj"] = {
+                    "lmbda": float(pt.lambdas_[0]),
+                    "std_mean": float(pt._scaler.mean_[0]) if pt.standardize else None,
+                    "std_scale": float(pt._scaler.scale_[0]) if pt.standardize else None,
+                    "standardize": pt.standardize,
+                }
 
 
 def _resolve_batch_reporter(on_step_done, on_batch_done):
@@ -164,6 +187,8 @@ class TransformExecutor:
         distributed = _is_spark_pandas(df)
         if distributed:
             return self._apply_all_distributed(df, steps, fit_mode=fit_mode, artifact_store=artifact_store, on_step_done=on_step_done, on_batch_done=on_batch_done)
+        if not fit_mode and artifact_store:
+            _preload_yj_params(steps, artifact_store)
         batch_reporter = _resolve_batch_reporter(on_step_done, on_batch_done)
         t0 = time.perf_counter()
         step_idx = 0
@@ -193,6 +218,8 @@ class TransformExecutor:
         self._precompute_quantiles_distributed(spark_df, steps)
         if fit_mode and artifact_store:
             self._prefit_distributed(spark_df, steps, artifact_store)
+        elif not fit_mode and artifact_store:
+            _preload_yj_params(steps, artifact_store)
         batch_reporter = _resolve_batch_reporter(on_step_done, on_batch_done)
         roundtrip_count = 0
         since_checkpoint = 0
@@ -326,14 +353,21 @@ class TransformExecutor:
         else:
             from pyspark.sql import functions as F  # noqa: N812
             sample_pdf = spark_df.select([F.coalesce(F.col(c), F.lit(0.0)).alias(c) for c in columns]).toPandas()
-        for s in yj_steps:
+        def _fit_one(col_data):
             pt = FittedPowerTransform()
-            pt.fit_from_local(sample_pdf[s.column])
-            artifact_store.register("power_transformer", s.column, pt._pt)
-            lmbda = float(pt._pt.lambdas_[0])
-            std_mean = float(pt._pt._scaler.mean_[0]) if pt._pt.standardize else None
-            std_scale = float(pt._pt._scaler.scale_[0]) if pt._pt.standardize else None
-            s.parameters["_spark_fitted"] = {"lmbda": lmbda, "std_mean": std_mean, "std_scale": std_scale, "standardize": pt._pt.standardize}
+            pt.fit_from_local(col_data)
+            return pt._pt
+
+        from joblib import Parallel, delayed
+        fitted = Parallel(n_jobs=-1, prefer="threads")(
+            delayed(_fit_one)(sample_pdf[s.column]) for s in yj_steps
+        )
+        for s, pt_obj in zip(yj_steps, fitted):
+            artifact_store.register("power_transformer", s.column, pt_obj)
+            lmbda = float(pt_obj.lambdas_[0])
+            std_mean = float(pt_obj._scaler.mean_[0]) if pt_obj.standardize else None
+            std_scale = float(pt_obj._scaler.scale_[0]) if pt_obj.standardize else None
+            s.parameters["_fitted_yj"] = {"lmbda": lmbda, "std_mean": std_mean, "std_scale": std_scale, "standardize": pt_obj.standardize}
 
     @staticmethod
     def _apply_fitted_spark(spark_df, step: TransformationStep, fit_mode: bool, artifact_store: ArtifactStore | None):
@@ -347,8 +381,9 @@ class TransformExecutor:
             if not fit_mode and artifact_store and artifact_store.has(f"{step.column}_scaler"):
                 return _apply_scale_from_artifact(spark_df, step, artifact_store)
         if step.type == PipelineTransformationType.YEO_JOHNSON:
-            if params:
-                return spark_ops.spark_yeo_johnson(spark_df, step.column, lmbda=params["lmbda"], std_mean=params.get("std_mean"), std_scale=params.get("std_scale"), standardize=params.get("standardize", True))
+            yj_params = step.parameters.get("_fitted_yj") or params
+            if yj_params:
+                return spark_ops.spark_yeo_johnson(spark_df, step.column, lmbda=yj_params["lmbda"], std_mean=yj_params.get("std_mean"), std_scale=yj_params.get("std_scale"), standardize=yj_params.get("standardize", True))
             if not fit_mode and artifact_store and artifact_store.has(f"{step.column}_power_transformer"):
                 return _apply_yj_from_artifact(spark_df, step, artifact_store)
         return None
@@ -501,6 +536,7 @@ def _make_spark_batch_dispatch():
         PipelineTransformationType.SQRT_TRANSFORM: lambda df, steps: spark_ops.spark_batch_sqrt_transform(df, [s.column for s in steps]),
         PipelineTransformationType.ZERO_INFLATION_HANDLING: lambda df, steps: spark_ops.spark_batch_zero_inflation(df, [s.column for s in steps]),
         PipelineTransformationType.CAP_THEN_LOG: lambda df, steps: spark_ops.spark_batch_cap_then_log(df, [(s.column, s.parameters.get("_precomputed_q99")) for s in steps]),
+        PipelineTransformationType.YEO_JOHNSON: lambda df, steps: spark_ops.spark_batch_yeo_johnson(df, _yj_params_from_steps(steps)),
     }
 
 
