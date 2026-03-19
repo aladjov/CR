@@ -25,6 +25,7 @@ omit =
     */stages/profiling/spark_time_window_aggregator.py
     */stages/temporal/spark_temporal_merger.py
     */core/compat/spark_backend.py
+    */transforms/spark_ops.py
 
 [report]
 precision = 2
