@@ -446,3 +446,103 @@ class TestBatchFitPowerTransform:
         pt.fit_from_local(data.fillna(0))
         pandas_result = pt._apply_yj(data.fillna(0))
         assert not pandas_result.isna().any()
+
+
+class TestOnStepDoneCallback:
+    def test_callback_invoked_per_step(self, executor, sample_df):
+        steps = [
+            _step(PipelineTransformationType.IMPUTE_NULL, "age", value=0),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "amount"),
+        ]
+        calls = []
+        executor.apply_all(sample_df, steps, on_step_done=lambda *args: calls.append(args))
+        assert len(calls) == 2
+
+    def test_callback_receives_correct_index_and_total(self, executor, sample_df):
+        steps = [
+            _step(PipelineTransformationType.IMPUTE_NULL, "age", value=0),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "amount"),
+            _step(PipelineTransformationType.CAP_OUTLIER, "age", lower=0, upper=100),
+        ]
+        calls = []
+        executor.apply_all(sample_df, steps, on_step_done=lambda *args: calls.append(args))
+        for i, (idx, total, step, step_s, total_s) in enumerate(calls):
+            assert idx == i
+            assert total == 3
+            assert step is steps[i]
+
+    def test_callback_timing_values_are_positive(self, executor, sample_df):
+        steps = [
+            _step(PipelineTransformationType.IMPUTE_NULL, "age", value=0),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "amount"),
+        ]
+        calls = []
+        executor.apply_all(sample_df, steps, on_step_done=lambda *args: calls.append(args))
+        for _, _, _, step_s, total_s in calls:
+            assert step_s >= 0
+            assert total_s >= 0
+        assert calls[1][4] >= calls[0][4]
+
+    def test_callback_none_by_default(self, executor, sample_df):
+        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "amount")]
+        result = executor.apply_all(sample_df, steps)
+        assert result["amount"].max() < 50000
+
+    def test_callback_on_distributed_path(self, executor, sample_df):
+        from unittest.mock import MagicMock, patch
+
+        _MOD = "customer_retention.transforms.executor"
+        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "amount")]
+        mock_spark_df = MagicMock()
+        calls = []
+
+        with patch(f"{_MOD}._is_spark_pandas", return_value=True), \
+             patch(f"{_MOD}.as_spark_df", return_value=mock_spark_df), \
+             patch(f"{_MOD}._as_pandas_api", return_value=sample_df.copy()), \
+             patch(f"{_MOD}._SPARK_DISPATCH", {PipelineTransformationType.LOG_TRANSFORM: lambda df, s: mock_spark_df}), \
+             patch.object(executor, "_precompute_quantiles_distributed"):
+            executor.apply_all(sample_df.copy(), steps, on_step_done=lambda *args: calls.append(args))
+        assert len(calls) == 1
+        assert calls[0][0] == 0
+        assert calls[0][1] == 1
+
+    def test_result_unchanged_with_callback(self, executor, sample_df):
+        steps = [
+            _step(PipelineTransformationType.IMPUTE_NULL, "age", value=0),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "amount"),
+        ]
+        result_no_cb = executor.apply_all(sample_df.copy(), steps)
+        result_cb = executor.apply_all(sample_df.copy(), steps, on_step_done=lambda *a: None)
+        pd.testing.assert_frame_equal(result_no_cb, result_cb)
+
+
+class TestFormatStepProgress:
+    def test_format_includes_step_info(self):
+        from customer_retention.transforms.executor import format_step_progress
+        step = _step(PipelineTransformationType.LOG_TRANSFORM, "amount")
+        result = format_step_progress(0, 5, step, 0.5, 0.5)
+        assert "LOG_TRANSFORM" in result
+        assert "amount" in result
+        assert "1/5" in result
+
+    def test_format_eta_decreases_as_steps_complete(self):
+        from customer_retention.transforms.executor import format_step_progress
+        step = _step(PipelineTransformationType.LOG_TRANSFORM, "v")
+        early = format_step_progress(0, 10, step, 1.0, 1.0)
+        late = format_step_progress(8, 10, step, 1.0, 9.0)
+        assert "left" in early
+        assert "left" in late
+
+    def test_format_last_step_shows_zero_eta(self):
+        from customer_retention.transforms.executor import format_step_progress
+        step = _step(PipelineTransformationType.LOG_TRANSFORM, "v")
+        result = format_step_progress(4, 5, step, 0.3, 1.5)
+        assert "0s left" in result or "0.0s left" in result
+
+    def test_print_step_progress_writes_to_stdout(self, capsys):
+        from customer_retention.transforms.executor import print_step_progress
+        step = _step(PipelineTransformationType.LOG_TRANSFORM, "amount")
+        print_step_progress(0, 3, step, 0.1, 0.1)
+        captured = capsys.readouterr()
+        assert "LOG_TRANSFORM" in captured.out
+        assert "amount" in captured.out

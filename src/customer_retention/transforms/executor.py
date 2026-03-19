@@ -6,12 +6,27 @@ Maps :class:`TransformationStep` types to the appropriate function in
 
 from __future__ import annotations
 
+import time
+from typing import Callable, Optional
+
 from customer_retention.core.compat import DataFrame, _is_spark_pandas, as_spark_df
 from customer_retention.core.compat.spark_backend import _as_pandas_api
 from customer_retention.generators.pipeline_generator.models import (
     PipelineTransformationType,
     TransformationStep,
 )
+
+StepDoneCallback = Callable[[int, int, TransformationStep, float, float], None]
+
+
+def format_step_progress(step_idx: int, total: int, step: TransformationStep, step_seconds: float, total_seconds: float) -> str:
+    done = step_idx + 1
+    remaining = (total_seconds / done) * (total - done) if done < total else 0.0
+    return f"  [{done}/{total}] {step.type.name} \u2192 {step.column} ({step_seconds:.1f}s, ~{remaining:.0f}s left)"
+
+
+def print_step_progress(step_idx: int, total: int, step: TransformationStep, step_seconds: float, total_seconds: float) -> None:
+    print(format_step_progress(step_idx, total, step, step_seconds, total_seconds))
 
 _CHECKPOINT_INTERVAL = 10
 _PLAN_TRUNCATION_INTERVAL = 30
@@ -48,22 +63,30 @@ class TransformExecutor:
         *,
         fit_mode: bool = False,
         artifact_store: ArtifactStore | None = None,
+        on_step_done: Optional[StepDoneCallback] = None,
     ) -> DataFrame:
         distributed = _is_spark_pandas(df)
         if distributed:
-            return self._apply_all_distributed(df, steps, fit_mode=fit_mode, artifact_store=artifact_store)
-        for step in steps:
+            return self._apply_all_distributed(df, steps, fit_mode=fit_mode, artifact_store=artifact_store, on_step_done=on_step_done)
+        t0 = time.perf_counter()
+        for i, step in enumerate(steps):
+            t_step = time.perf_counter()
             df = self.apply(df, step, fit_mode=fit_mode, artifact_store=artifact_store)
+            if on_step_done:
+                now = time.perf_counter()
+                on_step_done(i, len(steps), step, now - t_step, now - t0)
         return df
 
-    def _apply_all_distributed(self, df: DataFrame, steps: list[TransformationStep], *, fit_mode: bool = False, artifact_store: ArtifactStore | None = None) -> DataFrame:
+    def _apply_all_distributed(self, df: DataFrame, steps: list[TransformationStep], *, fit_mode: bool = False, artifact_store: ArtifactStore | None = None, on_step_done: Optional[StepDoneCallback] = None) -> DataFrame:
         spark_df = as_spark_df(df)
         self._precompute_quantiles_distributed(spark_df, steps)
         if fit_mode and artifact_store:
             self._prefit_distributed(spark_df, steps, artifact_store)
         roundtrip_count = 0
         since_checkpoint = 0
+        t0 = time.perf_counter()
         for i, step in enumerate(steps):
+            t_step = time.perf_counter()
             handler = _SPARK_DISPATCH.get(step.type)
             result = handler(spark_df, step) if handler is not None else None
             if result is not None:
@@ -76,6 +99,9 @@ class TransformExecutor:
                     ps_df = _as_pandas_api(spark_df)
                     spark_df = as_spark_df(self.apply(ps_df, step, fit_mode=fit_mode, artifact_store=artifact_store))
                     roundtrip_count += 1
+            if on_step_done:
+                now = time.perf_counter()
+                on_step_done(i, len(steps), step, now - t_step, now - t0)
             since_checkpoint += 1
             needs_checkpoint = (
                 (roundtrip_count > 0 and roundtrip_count % _CHECKPOINT_INTERVAL == 0)

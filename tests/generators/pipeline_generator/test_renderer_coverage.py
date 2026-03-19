@@ -310,6 +310,17 @@ class TestCodeRendererSilver:
         assert 'entity_ids = df["entity_id"].drop_duplicates()' in result
         assert "df.sample(n=n_holdout" not in result
 
+    def test_render_silver_has_timing(self, renderer, sample_pipeline_config):
+        result = renderer.render_silver(sample_pipeline_config)
+        assert "import time" in result
+        assert "perf_counter" in result
+        assert "_silver_elapsed" in result
+
+    def test_render_silver_timing_is_valid_python(self, renderer, sample_pipeline_config):
+        import ast
+        result = renderer.render_silver(sample_pipeline_config)
+        ast.parse(result)
+
 
 class TestCodeRendererGold:
     def test_render_gold_with_encodings_and_scalings(self, renderer, sample_pipeline_config):
@@ -342,6 +353,17 @@ class TestCodeRendererGold:
         assert "def load_gold" in result
         assert "get_gold_path" in result
         assert "get_delta" in result
+
+    def test_render_gold_has_timing(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "import time" in result
+        assert "perf_counter" in result
+        assert "_gold_elapsed" in result
+
+    def test_render_gold_timing_is_valid_python(self, renderer, sample_pipeline_config):
+        import ast
+        result = renderer.render_gold(sample_pipeline_config)
+        ast.parse(result)
 
     def test_render_gold_train_subset_fitting(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
