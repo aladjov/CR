@@ -1323,3 +1323,179 @@ class TestSparkBatchDispatch:
         ]
         dispatch[PipelineTransformationType.CAP_THEN_LOG](mock_df, steps)
         mock_spark_ops.spark_batch_cap_then_log.assert_called_once_with(mock_df, [("a", 10.0), ("b", 20.0)])
+
+    def test_spark_batch_dispatch_yeo_johnson(self, mock_spark_ops):
+        from customer_retention.transforms.executor import _make_spark_batch_dispatch
+        dispatch = _make_spark_batch_dispatch()
+        mock_df = MagicMock()
+        steps = [
+            _step(PipelineTransformationType.YEO_JOHNSON, "a", _fitted_yj={"lmbda": 0.5, "std_mean": 1.0, "std_scale": 0.5, "standardize": True}),
+            _step(PipelineTransformationType.YEO_JOHNSON, "b", _fitted_yj={"lmbda": 1.0, "std_mean": None, "std_scale": None, "standardize": False}),
+        ]
+        dispatch[PipelineTransformationType.YEO_JOHNSON](mock_df, steps)
+        mock_spark_ops.spark_batch_yeo_johnson.assert_called_once()
+        args = mock_spark_ops.spark_batch_yeo_johnson.call_args[0]
+        assert args[0] is mock_df
+        assert len(args[1]) == 2
+        assert args[1][0][0] == "a"
+        assert args[1][0][1] == 0.5
+
+
+class TestPreloadYjParams:
+    def test_loads_params_from_artifact_store(self, artifact_store):
+        from customer_retention.transforms.executor import _preload_yj_params
+        from customer_retention.transforms.fitted import FittedPowerTransform
+        np.random.seed(42)
+        df = pd.DataFrame({"v": np.random.exponential(5, 100)})
+        pt = FittedPowerTransform()
+        pt.fit_transform(df.copy(), "v", artifact_store)
+        steps = [_step(PipelineTransformationType.YEO_JOHNSON, "v")]
+        _preload_yj_params(steps, artifact_store)
+        assert "_fitted_yj" in steps[0].parameters
+        assert "lmbda" in steps[0].parameters["_fitted_yj"]
+        assert "std_mean" in steps[0].parameters["_fitted_yj"]
+        assert "std_scale" in steps[0].parameters["_fitted_yj"]
+        assert steps[0].parameters["_fitted_yj"]["standardize"] is True
+
+    def test_skips_when_already_loaded(self, artifact_store):
+        from customer_retention.transforms.executor import _preload_yj_params
+        steps = [_step(PipelineTransformationType.YEO_JOHNSON, "v", _fitted_yj={"lmbda": 0.5})]
+        _preload_yj_params(steps, artifact_store)
+        assert steps[0].parameters["_fitted_yj"]["lmbda"] == 0.5
+
+    def test_skips_non_yj_steps(self, artifact_store):
+        from customer_retention.transforms.executor import _preload_yj_params
+        steps = [_step(PipelineTransformationType.LOG_TRANSFORM, "v")]
+        _preload_yj_params(steps, artifact_store)
+        assert "_fitted_yj" not in steps[0].parameters
+
+    def test_skips_when_artifact_not_found(self):
+        from customer_retention.transforms.executor import _preload_yj_params
+        mock_store = MagicMock()
+        mock_store.has.return_value = False
+        steps = [_step(PipelineTransformationType.YEO_JOHNSON, "v")]
+        _preload_yj_params(steps, mock_store)
+        assert "_fitted_yj" not in steps[0].parameters
+
+
+class TestYjParamsFromSteps:
+    def test_extracts_params(self):
+        from customer_retention.transforms.executor import _yj_params_from_steps
+        steps = [
+            _step(PipelineTransformationType.YEO_JOHNSON, "a", _fitted_yj={"lmbda": 0.5, "std_mean": 1.0, "std_scale": 2.0, "standardize": True}),
+            _step(PipelineTransformationType.YEO_JOHNSON, "b", _fitted_yj={"lmbda": 1.0}),
+        ]
+        result = _yj_params_from_steps(steps)
+        assert len(result) == 2
+        assert result[0] == ("a", 0.5, 1.0, 2.0, True)
+        assert result[1][0] == "b"
+        assert result[1][1] == 1.0
+
+    def test_skips_steps_without_fitted_yj(self):
+        from customer_retention.transforms.executor import _yj_params_from_steps
+        steps = [
+            _step(PipelineTransformationType.YEO_JOHNSON, "a", _fitted_yj={"lmbda": 0.5, "std_mean": 1.0, "std_scale": 2.0}),
+            _step(PipelineTransformationType.YEO_JOHNSON, "b"),
+        ]
+        result = _yj_params_from_steps(steps)
+        assert len(result) == 1
+        assert result[0][0] == "a"
+
+
+class TestBatchedYeoJohnsonApplyAll:
+    def test_consecutive_yj_batch_matches_sequential(self, executor, artifact_store):
+        np.random.seed(42)
+        df = pd.DataFrame({
+            "a": np.random.exponential(5, 100),
+            "b": np.random.exponential(3, 100),
+            "c": np.random.exponential(8, 100),
+        })
+        steps_fit = [
+            _step(PipelineTransformationType.YEO_JOHNSON, "a"),
+            _step(PipelineTransformationType.YEO_JOHNSON, "b"),
+            _step(PipelineTransformationType.YEO_JOHNSON, "c"),
+        ]
+        executor.apply_all(df.copy(), steps_fit, fit_mode=True, artifact_store=artifact_store)
+        steps_seq = [
+            _step(PipelineTransformationType.YEO_JOHNSON, "a"),
+            _step(PipelineTransformationType.YEO_JOHNSON, "b"),
+            _step(PipelineTransformationType.YEO_JOHNSON, "c"),
+        ]
+        expected = df.copy()
+        for s in steps_seq:
+            expected = executor.apply(expected, s, fit_mode=False, artifact_store=artifact_store)
+        steps_batch = [
+            _step(PipelineTransformationType.YEO_JOHNSON, "a"),
+            _step(PipelineTransformationType.YEO_JOHNSON, "b"),
+            _step(PipelineTransformationType.YEO_JOHNSON, "c"),
+        ]
+        result = executor.apply_all(df.copy(), steps_batch, fit_mode=False, artifact_store=artifact_store)
+        pd.testing.assert_frame_equal(result, expected)
+
+    def test_preload_yj_params_used_in_apply_all(self, executor, artifact_store):
+        np.random.seed(42)
+        df = pd.DataFrame({"v": np.random.exponential(5, 100)})
+        step_fit = _step(PipelineTransformationType.YEO_JOHNSON, "v")
+        executor.apply(df.copy(), step_fit, fit_mode=True, artifact_store=artifact_store)
+        step_apply = _step(PipelineTransformationType.YEO_JOHNSON, "v")
+        result = executor.apply_all(df.copy(), [step_apply], fit_mode=False, artifact_store=artifact_store)
+        assert not result["v"].isna().any()
+
+
+class TestDistributedBatchApply:
+    def test_distributed_batch_handler_used_for_multi_step(self, executor):
+        mock_spark_df = MagicMock()
+        mock_batch_result = MagicMock()
+        steps = [
+            _step(PipelineTransformationType.LOG_TRANSFORM, "a"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "b"),
+        ]
+        with patch(f"{_MOD}._is_spark_pandas", return_value=True), \
+             patch(f"{_MOD}.as_spark_df", return_value=mock_spark_df), \
+             patch(f"{_MOD}._as_pandas_api", return_value=MagicMock()), \
+             patch(f"{_MOD}._SPARK_BATCH_DISPATCH", {PipelineTransformationType.LOG_TRANSFORM: lambda df, s: mock_batch_result}), \
+             patch(f"{_MOD}._SPARK_BATCHABLE_TYPES", frozenset({PipelineTransformationType.LOG_TRANSFORM})), \
+             patch(f"{_MOD}._SPARK_DISPATCH", {}), \
+             patch.object(executor, "_precompute_quantiles_distributed"):
+            executor._apply_all_distributed(MagicMock(), steps)
+
+    def test_distributed_preload_yj_on_score_mode(self, executor):
+        mock_spark_df = MagicMock()
+        mock_store = MagicMock()
+        mock_store.has.return_value = False
+        steps = [_step(PipelineTransformationType.YEO_JOHNSON, "v")]
+        with patch(f"{_MOD}._is_spark_pandas", return_value=True), \
+             patch(f"{_MOD}.as_spark_df", return_value=mock_spark_df), \
+             patch(f"{_MOD}._as_pandas_api", return_value=MagicMock()), \
+             patch(f"{_MOD}._SPARK_DISPATCH", {}), \
+             patch(f"{_MOD}._SPARK_BATCH_DISPATCH", {}), \
+             patch(f"{_MOD}._SPARK_BATCHABLE_TYPES", frozenset()), \
+             patch.object(executor, "_apply_fitted_spark", return_value=None), \
+             patch.object(executor, "apply", return_value=MagicMock()), \
+             patch.object(executor, "_precompute_quantiles_distributed"), \
+             patch(f"{_MOD}._preload_yj_params") as mock_preload:
+            executor._apply_all_distributed(MagicMock(), steps, fit_mode=False, artifact_store=mock_store)
+        mock_preload.assert_called_once_with(steps, mock_store)
+
+    def test_distributed_batch_reporter_called(self, executor):
+        mock_spark_df = MagicMock()
+        steps = [
+            _step(PipelineTransformationType.LOG_TRANSFORM, "a"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "b"),
+        ]
+        batch_calls = []
+        with patch(f"{_MOD}._is_spark_pandas", return_value=True), \
+             patch(f"{_MOD}.as_spark_df", return_value=mock_spark_df), \
+             patch(f"{_MOD}._as_pandas_api", return_value=MagicMock()), \
+             patch(f"{_MOD}._SPARK_BATCH_DISPATCH", {PipelineTransformationType.LOG_TRANSFORM: lambda df, s: mock_spark_df}), \
+             patch(f"{_MOD}._SPARK_BATCHABLE_TYPES", frozenset({PipelineTransformationType.LOG_TRANSFORM})), \
+             patch(f"{_MOD}._SPARK_DISPATCH", {}), \
+             patch.object(executor, "_precompute_quantiles_distributed"):
+            executor._apply_all_distributed(
+                MagicMock(), steps,
+                on_batch_done=lambda *a: batch_calls.append(a),
+            )
+        assert len(batch_calls) == 1
+        assert batch_calls[0][0] == 0
+        assert batch_calls[0][1] == 1
+        assert batch_calls[0][2] == 2

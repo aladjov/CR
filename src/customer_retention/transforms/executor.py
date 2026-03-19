@@ -190,9 +190,10 @@ class TransformExecutor:
         if not fit_mode and artifact_store:
             _preload_yj_params(steps, artifact_store)
         batch_reporter = _resolve_batch_reporter(on_step_done, on_batch_done)
+        batchable = _PANDAS_BATCHABLE_TYPES - {PipelineTransformationType.YEO_JOHNSON} if fit_mode else _PANDAS_BATCHABLE_TYPES
         t0 = time.perf_counter()
         step_idx = 0
-        for batch in _group_batchable_runs(steps, _PANDAS_BATCHABLE_TYPES):
+        for batch in _group_batchable_runs(steps, batchable):
             batch_handler = _PANDAS_BATCH.get(batch[0].type) if len(batch) > 1 else None
             if batch_handler:
                 t_batch = time.perf_counter()
