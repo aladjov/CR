@@ -655,6 +655,66 @@ class TestSplitSparkDispatch:
         assert len(wrappers) == 3, "each projection (features, target, metadata) gets its own wrapper"
 
 
+class TestTemporalSplitFailFast:
+    def test_raises_on_all_nat_temporal_column(self):
+        n = 100
+        df = pd.DataFrame({
+            "feature1": np.random.randn(n),
+            "target": np.random.choice([0, 1], n),
+            "as_of_date": [pd.NaT] * n,
+        })
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", test_size=0.2,
+        )
+        with pytest.raises(ValueError, match="no valid dates"):
+            splitter.split(df)
+
+    def test_raises_on_empty_dataframe(self):
+        df = pd.DataFrame({
+            "feature1": pd.Series(dtype=float),
+            "target": pd.Series(dtype=int),
+            "as_of_date": pd.Series(dtype="datetime64[ns]"),
+        })
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", test_size=0.2,
+        )
+        with pytest.raises(ValueError, match="no valid dates"):
+            splitter.split(df)
+
+    def test_raises_on_all_nat_with_purge_gap(self):
+        n = 50
+        df = pd.DataFrame({
+            "feature1": np.random.randn(n),
+            "target": np.random.choice([0, 1], n),
+            "as_of_date": [pd.NaT] * n,
+        })
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", test_size=0.2, purge_gap_days=30,
+        )
+        with pytest.raises(ValueError, match="no valid dates"):
+            splitter.split(df)
+
+    def test_distributed_path_raises_on_nat_cutoff(self):
+        from unittest.mock import MagicMock, patch
+
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", test_size=0.2, purge_gap_days=30,
+        )
+        mock_spark_df = MagicMock()
+        mock_spark_df.columns = ["feature1", "target", "as_of_date"]
+        mock_agg_row = {"cutoff": None, "total": 0}
+        mock_spark_df.agg.return_value.head.return_value = mock_agg_row
+        mock_spark_df.drop.return_value = mock_spark_df
+
+        with patch("customer_retention.stages.modeling.data_splitter.as_spark_df", return_value=mock_spark_df):
+            with pytest.raises(ValueError, match="no valid dates"):
+                splitter._distributed_temporal_split(mock_spark_df)
+
+
 class TestTemporalPurgeGap:
     @pytest.fixture
     def temporal_df(self):

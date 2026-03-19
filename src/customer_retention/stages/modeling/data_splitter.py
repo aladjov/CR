@@ -11,6 +11,7 @@ from customer_retention.core.compat import (
     Series,
     _is_spark_pandas,
     as_spark_df,
+    native_pd,
     temporal_quantile,
     to_pandas,
 )
@@ -179,6 +180,11 @@ class DataSplitter:
 
         col = self.temporal_column
         cutoff_date = temporal_quantile(df[col], 1 - self.test_size)
+        if native_pd.isna(cutoff_date):
+            raise ValueError(
+                f"Temporal column '{col}' has no valid dates — cannot compute split cutoff. "
+                f"Check that the column is not all-null and that rows remain after target filtering."
+            )
 
         purge_gap_rows = 0
         if self.purge_gap_days and self.purge_gap_days > 0:
@@ -216,8 +222,6 @@ class DataSplitter:
     def _distributed_temporal_split(self, df: DataFrame) -> SplitResult:
         from pyspark.sql import functions as F  # noqa: N812
 
-        from customer_retention.core.compat import as_spark_df, native_pd
-
         col = self.temporal_column
         spark_df = as_spark_df(df)
         idx_cols = [c for c in spark_df.columns if c.startswith("__index_level_")]
@@ -230,6 +234,11 @@ class DataSplitter:
         ).head()
         cutoff_date = native_pd.Timestamp(agg_row["cutoff"], unit="s")
         total_rows = int(agg_row["total"])
+        if native_pd.isna(cutoff_date):
+            raise ValueError(
+                f"Temporal column '{col}' has no valid dates — cannot compute split cutoff. "
+                f"Check that the column is not all-null and that rows remain after target filtering."
+            )
 
         if self.purge_gap_days and self.purge_gap_days > 0:
             purge_start = cutoff_date - timedelta(days=self.purge_gap_days)
