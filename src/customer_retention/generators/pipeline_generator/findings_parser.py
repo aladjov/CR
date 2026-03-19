@@ -375,9 +375,13 @@ class FindingsParser:
 
         entity_key = None
         key_resolutions: Dict[str, list] = {}
+        entity_asof_ts: Dict[str, str] = {}
         ctx_path = self._namespace.project_context_path
         if ctx_path.exists():
-            from customer_retention.analysis.auto_explorer.project_context import ProjectContext
+            from customer_retention.analysis.auto_explorer.project_context import (
+                ProjectContext,
+                RawTimeColumnRole,
+            )
 
             ctx = ProjectContext.load(ctx_path)
             entity_key = ctx.entity_column
@@ -392,6 +396,9 @@ class FindingsParser:
                         )
                         for step in ds_entry.key_resolution
                     ]
+                if (ds_entry.time_column
+                        and ds_entry.raw_time_column_role != RawTimeColumnRole.ENTITY_UPDATE_TIME):
+                    entity_asof_ts[ds_name] = ds_entry.time_column
 
         from customer_retention.core.config.column_config import DatasetGranularity
 
@@ -410,6 +417,8 @@ class FindingsParser:
                     findings = sources.get(name)
                     if findings and findings.time_series_metadata:
                         ts_col = findings.time_series_metadata.time_column
+            else:
+                ts_col = entity_asof_ts.get(name)
             merge_srcs.append(TemporalMergeSourceConfig(
                 name=name,
                 granularity=granularity,

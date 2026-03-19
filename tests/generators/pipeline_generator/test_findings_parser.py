@@ -4192,6 +4192,199 @@ class TestTemporalMergeMetadata:
         assert ch_src.key_resolution_steps[0].bridge_dataset == "case"
         assert ch_src.key_resolution_steps[1].bridge_dataset == "customers"
 
+    def _make_namespace_with_entity_time_role(self, tmp_path, grid_dates, datasets_config):
+        from customer_retention.analysis.auto_explorer.project_context import (
+            DatasetRegistryEntry,
+            ObjectivePriority,
+            ObjectiveSpec,
+            PredictionObjective,
+            ProjectContext,
+            RawTimeColumnRole,
+        )
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        from customer_retention.analysis.auto_explorer.snapshot_grid import SnapshotGrid
+        from customer_retention.core.config.column_config import DatasetGranularity
+
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        grid = SnapshotGrid(cadence_interval="weekly", observation_window_days=90, grid_dates=grid_dates)
+        grid.save(ns.snapshot_grid_path)
+
+        datasets = {}
+        for name, cfg in datasets_config.items():
+            datasets[name] = DatasetRegistryEntry(
+                name=name,
+                path=f"/data/{name}.csv",
+                entity_column="customer_id",
+                time_column=cfg.get("time_column"),
+                raw_time_column_role=(
+                    RawTimeColumnRole(cfg["raw_time_column_role"])
+                    if cfg.get("raw_time_column_role") else None
+                ),
+                granularity=(
+                    DatasetGranularity(cfg["granularity"])
+                    if cfg.get("granularity") else None
+                ),
+            )
+
+        ctx = ProjectContext(
+            entity_column="customer_id",
+            datasets=datasets,
+            objectives=[ObjectiveSpec(
+                objective=PredictionObjective.IMMEDIATE_RISK,
+                priority=ObjectivePriority.PRIMARY,
+            )],
+        )
+        ctx.save(ns.project_context_path)
+        return ns
+
+    def test_entity_update_time_uses_broadcast(self, tmp_path):
+        """Entity-level dataset with ENTITY_UPDATE_TIME should NOT get feature_timestamp_column."""
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        ns = self._make_namespace_with_entity_time_role(tmp_path, ["2024-01-01"], {
+            "account": {
+                "time_column": "LAST_MODIFIED_DATE",
+                "raw_time_column_role": "entity_update_time",
+                "granularity": "entity_level",
+            },
+            "orders": {
+                "time_column": "order_date",
+                "raw_time_column_role": "event_time",
+                "granularity": "event_level",
+            },
+        })
+        findings_dir = ns.multi_dataset_findings_path.parent
+        self._write_entity_time_role_findings(findings_dir, ns)
+
+        parser = FindingsParser(str(findings_dir), namespace=ns)
+        config = parser.parse()
+
+        acct_src = next(s for s in config.silver.merge_sources if s.name == "account")
+        assert acct_src.feature_timestamp_column is None
+        assert acct_src.granularity == "entity_level"
+
+    def test_entity_non_update_time_uses_asof(self, tmp_path):
+        """Entity-level dataset with EVENT_TIME should get feature_timestamp_column for as-of join."""
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        ns = self._make_namespace_with_entity_time_role(tmp_path, ["2024-01-01"], {
+            "segment_history": {
+                "time_column": "effective_date",
+                "raw_time_column_role": "event_time",
+                "granularity": "entity_level",
+            },
+            "orders": {
+                "time_column": "order_date",
+                "raw_time_column_role": "event_time",
+                "granularity": "event_level",
+            },
+        })
+        findings_dir = ns.multi_dataset_findings_path.parent
+        self._write_entity_time_role_findings(findings_dir, ns, entity_name="segment_history")
+
+        parser = FindingsParser(str(findings_dir), namespace=ns)
+        config = parser.parse()
+
+        seg_src = next(s for s in config.silver.merge_sources if s.name == "segment_history")
+        assert seg_src.feature_timestamp_column == "effective_date"
+        assert seg_src.granularity == "entity_level"
+
+    def test_entity_no_time_column_uses_broadcast(self, tmp_path):
+        """Entity-level dataset without time_column should always broadcast."""
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        ns = self._make_namespace_with_entity_time_role(tmp_path, ["2024-01-01"], {
+            "account": {"granularity": "entity_level"},
+            "orders": {
+                "time_column": "order_date",
+                "raw_time_column_role": "event_time",
+                "granularity": "event_level",
+            },
+        })
+        findings_dir = ns.multi_dataset_findings_path.parent
+        self._write_entity_time_role_findings(findings_dir, ns)
+
+        parser = FindingsParser(str(findings_dir), namespace=ns)
+        config = parser.parse()
+
+        acct_src = next(s for s in config.silver.merge_sources if s.name == "account")
+        assert acct_src.feature_timestamp_column is None
+
+    def _write_entity_time_role_findings(self, findings_dir, ns, entity_name="account"):
+        multi_dataset = {
+            "datasets": {
+                entity_name: {
+                    "name": entity_name,
+                    "findings_path": str(findings_dir / f"{entity_name}_findings.yaml"),
+                    "source_path": f"/data/{entity_name}.csv",
+                    "granularity": "entity_level",
+                    "row_count": 1000,
+                    "column_count": 3,
+                    "entity_column": "customer_id",
+                },
+                "orders": {
+                    "name": "orders",
+                    "findings_path": str(findings_dir / "orders_findings.yaml"),
+                    "source_path": "/data/orders.parquet",
+                    "granularity": "event_level",
+                    "row_count": 5000,
+                    "column_count": 4,
+                    "entity_column": "customer_id",
+                    "time_column": "order_date",
+                },
+            },
+            "relationships": [{
+                "left_dataset": entity_name, "right_dataset": "orders",
+                "left_column": "customer_id", "right_column": "customer_id",
+                "relationship_type": "one_to_many", "confidence": 1.0,
+            }],
+            "primary_entity_dataset": entity_name,
+            "event_datasets": ["orders"],
+        }
+        findings_dir.mkdir(parents=True, exist_ok=True)
+        ns.multi_dataset_findings_path.parent.mkdir(parents=True, exist_ok=True)
+        ns.multi_dataset_findings_path.write_text(yaml.dump(multi_dataset))
+
+        entity_findings = {
+            "source_path": f"/data/{entity_name}.csv", "source_format": "csv",
+            "row_count": 1000, "column_count": 3,
+            "columns": {
+                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
+                                "confidence": 0.95, "evidence": [], "quality_score": 100,
+                                "cleaning_needed": False, "cleaning_recommendations": []},
+                "churn": {"name": "churn", "inferred_type": "binary",
+                          "confidence": 0.99, "evidence": [], "quality_score": 100,
+                          "cleaning_needed": False, "cleaning_recommendations": []},
+            },
+            "target_column": "churn",
+            "identifier_columns": ["customer_id"],
+        }
+        (findings_dir / f"{entity_name}_findings.yaml").write_text(yaml.dump(entity_findings))
+
+        orders_findings = {
+            "source_path": "/data/orders.parquet", "source_format": "parquet",
+            "row_count": 5000, "column_count": 4,
+            "columns": {
+                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
+                                "confidence": 0.95, "evidence": [], "quality_score": 100,
+                                "cleaning_needed": False, "cleaning_recommendations": []},
+                "amount": {"name": "amount", "inferred_type": "numeric_continuous",
+                           "confidence": 0.9, "evidence": [], "quality_score": 90,
+                           "cleaning_needed": False, "cleaning_recommendations": []},
+                "order_date": {"name": "order_date", "inferred_type": "datetime",
+                               "confidence": 0.95, "evidence": [], "quality_score": 100,
+                               "cleaning_needed": False, "cleaning_recommendations": []},
+            },
+            "identifier_columns": ["customer_id"],
+            "datetime_columns": ["order_date"],
+            "time_series_metadata": {
+                "granularity": "event_level",
+                "entity_column": "customer_id",
+                "time_column": "order_date",
+            },
+        }
+        (findings_dir / "orders_findings.yaml").write_text(yaml.dump(orders_findings))
+
 
 class TestBuildGoldConfigColumnTypes:
     def _make_findings_with_types(self, col_types: dict):

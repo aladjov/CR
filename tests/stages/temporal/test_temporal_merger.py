@@ -682,3 +682,41 @@ class TestMergeAllEdgeCases:
         assert report.spine_rows == 1
         assert report.spine_entities == 1
         assert report.spine_dates == 1
+
+
+class TestEntityUpdateTimeBroadcastVsAsof:
+    """Entity-level datasets with update timestamps (e.g. LAST_MODIFIED_DATE)
+    should use broadcast join, not as-of join. When the update timestamp is
+    after all grid dates, as-of join produces NaN for every row."""
+
+    def test_asof_with_future_timestamp_produces_nan(self):
+        merger = TemporalMerger()
+        spine = _spine(["A", "B"], ["2024-01-01", "2024-06-01"])
+        entity_df = pd.DataFrame({
+            "entity_id": ["A", "B"],
+            "last_modified": pd.to_datetime(["2026-03-05", "2026-03-05"]),
+            "churned": [0, 1],
+        })
+        ds = _merge_input("account", entity_df, DatasetGranularity.ENTITY_LEVEL, feature_ts="last_modified")
+        result, _ = merger.merge_all(spine, [ds])
+        assert result["churned"].isna().all(), (
+            "as-of join with future timestamp should produce NaN (this is the bug)"
+        )
+
+    def test_broadcast_preserves_target_values(self):
+        merger = TemporalMerger()
+        spine = _spine(["A", "B"], ["2024-01-01", "2024-06-01"])
+        entity_df = pd.DataFrame({
+            "entity_id": ["A", "B"],
+            "last_modified": pd.to_datetime(["2026-03-05", "2026-03-05"]),
+            "churned": [0, 1],
+        })
+        ds = _merge_input("account", entity_df, DatasetGranularity.ENTITY_LEVEL, feature_ts=None)
+        result, _ = merger.merge_all(spine, [ds])
+        assert not result["churned"].isna().any(), (
+            "broadcast join should preserve target values regardless of timestamp"
+        )
+        a_rows = result[result["entity_id"] == "A"]
+        assert (a_rows["churned"] == 0).all()
+        b_rows = result[result["entity_id"] == "B"]
+        assert (b_rows["churned"] == 1).all()
