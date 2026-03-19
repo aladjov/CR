@@ -76,6 +76,39 @@ class TestBulkLabelEncode:
         assert result["a"].dtype in (np.int64, np.int32, int)
 
 
+class TestSparkBulkLabelEncode:
+
+    def test_pandas_spark_parity_single_column(self):
+        pdf = pd.DataFrame({"fruit": ["cherry", "apple", "banana", "apple"]})
+        pandas_result = bulk_label_encode(pdf.copy(), ["fruit"])
+        assert pandas_result["fruit"].tolist() == [2, 0, 1, 0]
+
+    def test_pandas_spark_parity_multiple_columns(self):
+        pdf = pd.DataFrame({
+            "color": ["red", "blue", "green"],
+            "size": ["L", "M", "S"],
+            "value": [1.0, 2.0, 3.0],
+        })
+        result = bulk_label_encode(pdf.copy(), ["color", "size"])
+        assert result["color"].tolist() == [2, 0, 1]
+        assert result["size"].tolist() == [0, 1, 2]
+        assert result["value"].dtype == np.float64
+
+    def test_none_becomes_string_none(self):
+        pdf = pd.DataFrame({"cat": ["a", None, "b", "a"]})
+        result = bulk_label_encode(pdf.copy(), ["cat"])
+        # None → "None" via astype(str), sorts before "a"
+        assert result["cat"].tolist() == [1, 0, 2, 1]
+
+    def test_no_ml_pipeline_import_in_spark_path(self):
+        import inspect
+
+        from customer_retention.core.compat import _spark_bulk_label_encode
+        source = inspect.getsource(_spark_bulk_label_encode)
+        assert "Pipeline" not in source
+        assert "StringIndexer" not in source
+
+
 class TestBulkMedianImpute:
 
     def test_fills_nan_with_median(self):

@@ -1211,26 +1211,24 @@ def _pandas_bulk_label_encode(df: Any, columns: list[str]) -> Any:
 
 def _spark_bulk_label_encode(df: Any, columns: list[str]) -> Any:
     import pyspark.sql.functions as F  # noqa: N812
-    from pyspark.ml import Pipeline
-    from pyspark.ml.feature import StringIndexer
 
     spark_df = as_spark_df(df)
-    indexed_names = [f"__idx_{c}__" for c in columns]
-    indexers = [
-        StringIndexer(
-            inputCol=c, outputCol=idx,
-            handleInvalid="keep", stringOrderType="alphabetAsc",
-        )
-        for c, idx in zip(columns, indexed_names)
-    ]
-    pipeline = Pipeline(stages=indexers)
-    fitted = pipeline.fit(spark_df)
-    result = fitted.transform(spark_df)
-    for c, idx in zip(columns, indexed_names):
-        result = result.drop(c).withColumnRenamed(idx, c)
-        result = result.withColumn(c, F.col(c).cast("int"))
+    exprs = [F.sort_array(F.collect_set(F.col(c).cast("string"))).alias(c) for c in columns]
+    sets_row = spark_df.agg(*exprs).collect()[0]
+    col_set = set(columns)
+    select_exprs = []
+    for c in spark_df.columns:
+        if c in col_set:
+            distinct = [v for v in (sets_row[c] or []) if v is not None]
+            if distinct:
+                arr = F.array([F.lit(v) for v in distinct])
+                select_exprs.append(F.coalesce(F.array_position(arr, F.col(c).cast("string")) - 1, F.lit(-1)).cast("int").alias(c))
+            else:
+                select_exprs.append(F.lit(0).cast("int").alias(c))
+        else:
+            select_exprs.append(F.col(c))
     from .spark_backend import _as_pandas_api
-    return _as_pandas_api(result)
+    return _as_pandas_api(spark_df.select(*select_exprs))
 
 
 def bulk_median_impute(df: Any, columns: list[str] | None = None) -> Any:
