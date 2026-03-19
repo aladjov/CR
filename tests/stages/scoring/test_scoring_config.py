@@ -377,3 +377,47 @@ class TestScoringConfigProperties:
     def test_scoring_output_dir(self, local_pipeline_dir):
         config = ScoringConfig.from_local_config(local_pipeline_dir)
         assert config.scoring_output_dir == Path("/tmp/experiments/data/scoring")
+
+
+class TestArtifactPathContract:
+    """NB08 saves artifacts to namespace.root / 'artifacts' / hash.
+    NB11 resolves via ScoringConfig.artifacts_path = experiments_dir / 'artifacts' / hash.
+    These must match."""
+
+    def test_databricks_artifacts_path_matches_namespace_root(self, databricks_env, mock_mlflow_client):
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=mock_mlflow_client):
+            config = ScoringConfig.from_databricks()
+        expected = Path("/Volumes/analytics/churn/experiments") / "artifacts" / "abc123"
+        assert config.artifacts_path == expected
+
+    def test_artifacts_roundtrip_via_namespace_path(self, tmp_path):
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        from customer_retention.transforms.artifact_store import ArtifactStore
+
+        ns = RunNamespace(root=tmp_path, run_id="test-run")
+        ns.setup()
+        recs_hash = "abc12345"
+
+        artifacts_dir = ns.root / "artifacts" / recs_hash
+        store = ArtifactStore(artifacts_dir)
+        store.register("scaler", "amount", {"mean": 100})
+        store.save_manifest()
+
+        scoring_artifacts_path = tmp_path / "artifacts" / recs_hash
+        loaded = ArtifactStore.from_manifest(scoring_artifacts_path / "manifest.yaml")
+        assert loaded.has("amount_scaler")
+        assert loaded.load("amount_scaler") == {"mean": 100}
+
+    def test_default_subdir_when_no_hash(self, databricks_env):
+        client = MagicMock()
+        experiment = MagicMock()
+        experiment.experiment_id = "123"
+        client.get_experiment_by_name.return_value = experiment
+        run = MagicMock()
+        run.data.tags = {}
+        run.data.params = {}
+        client.search_runs.return_value = [run]
+        with patch("customer_retention.stages.scoring.config.MlflowClient", return_value=client):
+            config = ScoringConfig.from_databricks()
+        expected = Path("/Volumes/analytics/churn/experiments") / "artifacts" / "default"
+        assert config.artifacts_path == expected
