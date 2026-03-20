@@ -80,6 +80,7 @@ class RelationshipRecommender:
         target_col: Optional[str] = None,
         correlation_matrix: Optional[pd.DataFrame] = None,
         effect_sizes: Optional[Dict[str, float]] = None,
+        categorical_results: Optional[Dict[str, Any]] = None,
     ) -> RelationshipAnalysisSummary:
         numeric_cols = numeric_cols or []
         categorical_cols = categorical_cols or []
@@ -113,7 +114,9 @@ class RelationshipRecommender:
 
         # Analyze categorical features
         if categorical_cols and target_col:
-            cat_results = self._analyze_categorical_relationships(df, categorical_cols, target_col)
+            cat_results = self._analyze_categorical_relationships(
+                df, categorical_cols, target_col, precomputed=categorical_results,
+            )
             high_risk_segments = cat_results["high_risk_segments"]
             categorical_associations = cat_results["associations"]
             recommendations.extend(cat_results["recommendations"])
@@ -270,32 +273,43 @@ class RelationshipRecommender:
         return {"strong": strong, "weak": weak, "recommendations": recommendations}
 
     def _analyze_categorical_relationships(
-        self, df: pd.DataFrame, categorical_cols: List[str], target_col: str
+        self, df: pd.DataFrame, categorical_cols: List[str], target_col: str,
+        precomputed: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         recommendations = []
         high_risk_segments = []
         associations = []
 
-        if target_col not in df.columns:
+        if not precomputed and target_col not in df.columns:
             return {"high_risk_segments": [], "associations": [], "recommendations": []}
 
-        overall_rate = df[target_col].mean()
+        overall_rate = None
+        n_rows = None
 
-        n_rows = len(df)
         for col in categorical_cols:
-            if col not in df.columns:
+            if precomputed and col in precomputed:
+                r = precomputed[col]
+                cramers_v = r.cramers_v
+                cs = r.category_stats
+                counts_arr = cs["total_count"].to_numpy()
+                rates_arr = cs["retention_rate"].to_numpy()
+                lifts_arr = cs["lift"].to_numpy()
+                cat_names = cs["category"].to_numpy()
+            elif col in df.columns:
+                if overall_rate is None:
+                    overall_rate = float(df[target_col].mean())
+                    n_rows = len(df)
+                cs = groupby_multi_agg(df, col, target_col, ["sum", "count", "mean"])
+                cs.columns = [col, "retained_count", "count", "retention_rate"]
+                cs["lift"] = cs["retention_rate"] / overall_rate
+                cramers_v = self._cramers_v_from_stats(cs, "retained_count", "count", n_rows)
+                counts_arr = cs["count"].to_numpy()
+                rates_arr = cs["retention_rate"].to_numpy()
+                lifts_arr = cs["lift"].to_numpy()
+                cat_names = cs[col].to_numpy()
+            else:
                 continue
 
-            cat_stats = groupby_multi_agg(df, col, target_col, ["sum", "count", "mean"])
-            cat_stats.columns = [col, "retained_count", "count", "retention_rate"]
-            cat_stats["lift"] = cat_stats["retention_rate"] / overall_rate
-
-            counts_arr = cat_stats["count"].to_numpy()
-            rates_arr = cat_stats["retention_rate"].to_numpy()
-            lifts_arr = cat_stats["lift"].to_numpy()
-            cat_names = cat_stats[col].to_numpy()
-
-            cramers_v = self._cramers_v_from_stats(cat_stats, "retained_count", "count", n_rows)
             associations.append({"feature": col, "cramers_v": cramers_v})
 
             for idx in range(len(counts_arr)):
@@ -321,7 +335,6 @@ class RelationshipRecommender:
                     evidence={"rate_spread": rate_spread, "size_ratio": size_ratio, "cramers_v": cramers_v},
                 ))
 
-        # High risk segment recommendations
         if high_risk_segments:
             segment_names = list(set(s["segment"] for s in high_risk_segments[:3]))
             recommendations.append(RelationshipRecommendation(

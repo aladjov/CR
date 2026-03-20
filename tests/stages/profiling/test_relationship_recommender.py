@@ -302,6 +302,110 @@ class TestPrecomputedInputs:
         assert isinstance(summary, RelationshipAnalysisSummary)
         assert summary.correlation_matrix is not None
 
+    def test_precomputed_categorical_produces_recommendations(self):
+        from customer_retention.stages.profiling.categorical_target_analyzer import (
+            CategoricalTargetAnalyzer,
+        )
+        np.random.seed(42)
+        n = 1000
+        region = np.random.choice(["North", "South", "East", "West"], n)
+        retention_map = {"North": 0.9, "South": 0.85, "East": 0.5, "West": 0.3}
+        target = [np.random.binomial(1, retention_map[r]) for r in region]
+        df = pd.DataFrame({"region": region, "retained": target})
+
+        analyzer = CategoricalTargetAnalyzer(min_samples_per_category=10)
+        precomputed = {"region": analyzer.analyze(df, "region", "retained")}
+        recommender = RelationshipRecommender()
+        summary = recommender.analyze(
+            df, categorical_cols=["region"], target_col="retained",
+            categorical_results=precomputed,
+        )
+        assert len(summary.categorical_associations) == 1
+        assert len(summary.high_risk_segments) > 0
+
+    def test_precomputed_categorical_avoids_df_computation(self):
+        from customer_retention.stages.profiling.categorical_target_analyzer import (
+            CategoricalTargetResult,
+        )
+        minimal_df = pd.DataFrame({"x": [1, 2, 3]})
+        stats = pd.DataFrame({
+            "category": ["A", "B"], "total_count": [100, 100],
+            "retained_count": [80, 40], "retention_rate": [0.8, 0.4],
+            "lift": [1.33, 0.67], "churned_count": [20, 60], "pct_of_total": [0.5, 0.5],
+        })
+        precomputed = {
+            "segment": CategoricalTargetResult(
+                categorical_col="segment", target_col="retained",
+                n_categories=2, cramers_v=0.4, chi2_statistic=10.0, p_value=0.001,
+                effect_strength="moderate", category_stats=stats,
+                high_risk_categories=["B"], low_risk_categories=["A"],
+                overall_rate=0.6,
+            ),
+        }
+        recommender = RelationshipRecommender()
+        summary = recommender.analyze(
+            minimal_df, categorical_cols=["segment"], target_col="retained",
+            categorical_results=precomputed,
+        )
+        assert len(summary.categorical_associations) == 1
+        assert summary.categorical_associations[0]["cramers_v"] == 0.4
+
+    def test_precomputed_categorical_identifies_high_risk_from_stats(self):
+        from customer_retention.stages.profiling.categorical_target_analyzer import (
+            CategoricalTargetResult,
+        )
+        minimal_df = pd.DataFrame({"x": [1]})
+        stats = pd.DataFrame({
+            "category": ["Good", "Bad"], "total_count": [500, 500],
+            "retained_count": [450, 100], "retention_rate": [0.9, 0.2],
+            "lift": [1.5, 0.33], "churned_count": [50, 400], "pct_of_total": [0.5, 0.5],
+        })
+        precomputed = {
+            "tier": CategoricalTargetResult(
+                categorical_col="tier", target_col="retained",
+                n_categories=2, cramers_v=0.6, chi2_statistic=50.0, p_value=0.0001,
+                effect_strength="strong", category_stats=stats,
+                high_risk_categories=["Bad"], low_risk_categories=["Good"],
+                overall_rate=0.55,
+            ),
+        }
+        recommender = RelationshipRecommender()
+        summary = recommender.analyze(
+            minimal_df, categorical_cols=["tier"], target_col="retained",
+            categorical_results=precomputed,
+        )
+        assert any(s["segment"] == "Bad" for s in summary.high_risk_segments)
+        strat_recs = [r for r in summary.recommendations if r.category == RecommendationCategory.STRATIFICATION]
+        assert len(strat_recs) >= 1
+
+    def test_precomputed_categorical_stratification_from_rate_spread(self):
+        from customer_retention.stages.profiling.categorical_target_analyzer import (
+            CategoricalTargetResult,
+        )
+        minimal_df = pd.DataFrame({"x": [1]})
+        stats = pd.DataFrame({
+            "category": ["X", "Y", "Z"], "total_count": [200, 200, 200],
+            "retained_count": [180, 100, 60], "retention_rate": [0.9, 0.5, 0.3],
+            "lift": [1.5, 0.83, 0.5], "churned_count": [20, 100, 140],
+            "pct_of_total": [0.33, 0.33, 0.33],
+        })
+        precomputed = {
+            "group": CategoricalTargetResult(
+                categorical_col="group", target_col="retained",
+                n_categories=3, cramers_v=0.5, chi2_statistic=30.0, p_value=0.001,
+                effect_strength="strong", category_stats=stats,
+                high_risk_categories=["Z"], low_risk_categories=["X"],
+                overall_rate=0.6,
+            ),
+        }
+        recommender = RelationshipRecommender()
+        summary = recommender.analyze(
+            minimal_df, categorical_cols=["group"], target_col="retained",
+            categorical_results=precomputed,
+        )
+        strat_recs = [r for r in summary.recommendations if r.category == RecommendationCategory.STRATIFICATION]
+        assert any("Stratify" in r.title or "stratif" in r.action.lower() for r in strat_recs)
+
 
 class TestHighRiskSegmentRecommendations:
     @pytest.fixture
