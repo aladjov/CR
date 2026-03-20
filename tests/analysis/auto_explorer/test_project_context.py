@@ -188,6 +188,12 @@ class TestEnumValues:
     def test_raw_time_column_role_values(self):
         assert RawTimeColumnRole.EVENT_TIME == "event_time"
         assert RawTimeColumnRole.ENTITY_UPDATE_TIME == "entity_update_time"
+        assert RawTimeColumnRole.INTERVAL_START_TIME == "interval_start_time"
+
+    def test_interval_start_time_skips_lookback(self):
+        assert RawTimeColumnRole.EVENT_TIME.should_apply_lookback is True
+        assert RawTimeColumnRole.ENTITY_UPDATE_TIME.should_apply_lookback is True
+        assert RawTimeColumnRole.INTERVAL_START_TIME.should_apply_lookback is False
 
     def test_enum_from_string(self):
         assert PredictionObjective("immediate_risk") is PredictionObjective.IMMEDIATE_RISK

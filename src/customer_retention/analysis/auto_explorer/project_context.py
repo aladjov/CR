@@ -59,6 +59,11 @@ class SplitStrategy(str, Enum):
 class RawTimeColumnRole(str, Enum):
     EVENT_TIME = "event_time"
     ENTITY_UPDATE_TIME = "entity_update_time"
+    INTERVAL_START_TIME = "interval_start_time"
+
+    @property
+    def should_apply_lookback(self) -> bool:
+        return self != RawTimeColumnRole.INTERVAL_START_TIME
 
 
 class ObjectiveAssessment(BaseModel):
