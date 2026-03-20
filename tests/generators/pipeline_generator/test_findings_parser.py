@@ -5659,3 +5659,200 @@ class TestFeatureSelectionDropSkipsTarget:
         parser._apply_gold_recommendations(config, registry)
         assert "age" not in config.gold.feature_selections
         assert "region" in config.gold.feature_selections
+
+
+class TestAggregationFeatureExclusions:
+    @staticmethod
+    def _make_parser():
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        parser = FindingsParser.__new__(FindingsParser)
+        return parser
+
+    @staticmethod
+    def _make_findings(**overrides):
+        from customer_retention.analysis.auto_explorer.findings import (
+            ColumnFinding,
+            ExplorationFindings,
+            TimeSeriesMetadata,
+        )
+        defaults = dict(
+            source_path="/data/events.csv",
+            source_format="csv",
+            columns={
+                "customer_id": ColumnFinding(
+                    name="customer_id", inferred_type="identifier", confidence=0.95, evidence=[]
+                ),
+                "sent_date": ColumnFinding(
+                    name="sent_date", inferred_type="datetime", confidence=0.95, evidence=[]
+                ),
+                "amount": ColumnFinding(
+                    name="amount", inferred_type="numeric_continuous", confidence=0.9, evidence=[]
+                ),
+                "count_col": ColumnFinding(
+                    name="count_col", inferred_type="numeric_discrete", confidence=0.9, evidence=[]
+                ),
+                "direction": ColumnFinding(
+                    name="direction", inferred_type="categorical_nominal", confidence=0.9, evidence=[]
+                ),
+                "status": ColumnFinding(
+                    name="status", inferred_type="categorical_ordinal", confidence=0.9, evidence=[]
+                ),
+                "opened": ColumnFinding(
+                    name="opened", inferred_type="binary", confidence=0.9, evidence=[]
+                ),
+            },
+            time_series_metadata=TimeSeriesMetadata(
+                granularity="event_level",
+                entity_column="customer_id",
+                time_column="sent_date",
+            ),
+            identifier_columns=["customer_id"],
+            datetime_columns=["sent_date"],
+        )
+        defaults.update(overrides)
+        return ExplorationFindings(**defaults)
+
+    @staticmethod
+    def _make_multi(feature_exclusions=None):
+        from customer_retention.analysis.auto_explorer.exploration_manager import (
+            DatasetInfo,
+            MultiDatasetFindings,
+        )
+        from customer_retention.core.config.column_config import DatasetGranularity
+        from customer_retention.generators.pipeline_generator.models import FeatureExclusion
+
+        excl = []
+        if feature_exclusions:
+            excl = [FeatureExclusion(**e) for e in feature_exclusions]
+        return MultiDatasetFindings(
+            datasets={
+                "events": DatasetInfo(
+                    name="events",
+                    findings_path="/tmp/events_findings.yaml",
+                    source_path="/data/events.csv",
+                    granularity=DatasetGranularity.EVENT_LEVEL,
+                    row_count=1000,
+                    column_count=7,
+                    entity_column="customer_id",
+                    time_column="sent_date",
+                    feature_exclusions=excl,
+                ),
+            },
+            aggregation_windows=["7d", "30d"],
+            event_datasets=["events"],
+        )
+
+    def test_blocked_category_aggregation(self):
+        parser = self._make_parser()
+        findings = self._make_findings()
+        multi = self._make_multi(feature_exclusions=[
+            {"column": "amount", "blocked_categories": ["aggregation"]},
+        ])
+        result = parser._build_aggregation_config(multi, findings, "events")
+        assert "amount" not in result.value_columns
+        assert "count_col" in result.value_columns
+
+    def test_blocked_category_categorical(self):
+        parser = self._make_parser()
+        findings = self._make_findings()
+        multi = self._make_multi(feature_exclusions=[
+            {"column": "direction", "blocked_categories": ["categorical"]},
+        ])
+        result = parser._build_aggregation_config(multi, findings, "events")
+        assert "direction" not in result.categorical_columns
+        assert "status" in result.categorical_columns
+
+    def test_blocked_category_binary(self):
+        parser = self._make_parser()
+        findings = self._make_findings()
+        multi = self._make_multi(feature_exclusions=[
+            {"column": "opened", "blocked_categories": ["binary"]},
+        ])
+        result = parser._build_aggregation_config(multi, findings, "events")
+        assert "opened" not in result.binary_columns
+
+    def test_blocked_category_does_not_affect_lifecycle(self):
+        parser = self._make_parser()
+        findings = self._make_findings()
+        multi = self._make_multi(feature_exclusions=[
+            {"column": "amount", "blocked_categories": ["aggregation"]},
+        ])
+        result = parser._build_aggregation_config(multi, findings, "events")
+        assert result.windows == ["7d", "30d"]
+
+    def test_blocked_funcs_populates_column_blocked_funcs(self):
+        parser = self._make_parser()
+        findings = self._make_findings()
+        multi = self._make_multi(feature_exclusions=[
+            {"column": "status", "blocked_funcs": ["mode"]},
+        ])
+        result = parser._build_aggregation_config(multi, findings, "events")
+        assert result.column_blocked_funcs == {"status": ["mode"]}
+
+    def test_multiple_exclusions_combined(self):
+        parser = self._make_parser()
+        findings = self._make_findings()
+        multi = self._make_multi(feature_exclusions=[
+            {"column": "amount", "blocked_categories": ["aggregation"]},
+            {"column": "status", "blocked_funcs": ["mode"]},
+        ])
+        result = parser._build_aggregation_config(multi, findings, "events")
+        assert "amount" not in result.value_columns
+        assert result.column_blocked_funcs == {"status": ["mode"]}
+
+    def test_no_exclusions_empty_blocked_funcs(self):
+        parser = self._make_parser()
+        findings = self._make_findings()
+        multi = self._make_multi()
+        result = parser._build_aggregation_config(multi, findings, "events")
+        assert result.column_blocked_funcs == {}
+
+    def test_unknown_column_ignored(self):
+        parser = self._make_parser()
+        findings = self._make_findings()
+        multi = self._make_multi(feature_exclusions=[
+            {"column": "nonexistent", "blocked_categories": ["aggregation"]},
+        ])
+        result = parser._build_aggregation_config(multi, findings, "events")
+        assert "amount" in result.value_columns
+        assert "count_col" in result.value_columns
+
+
+class TestEventAggregatedColumnsWithExclusions:
+    @staticmethod
+    def _make_event_cfg(**overrides):
+        from customer_retention.generators.pipeline_generator.models import BronzeEventConfig, SourceConfig
+        src = SourceConfig(name="events", path="events.csv", format="csv",
+                           entity_key="cid", raw_source_path="/data/events.csv")
+        defaults = dict(source=src, entity_column="cid", time_column="ts")
+        defaults.update(overrides)
+        return BronzeEventConfig(**defaults)
+
+    def test_blocked_funcs_excluded_from_output_columns(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import AggregationWindowConfig
+        agg = AggregationWindowConfig(
+            windows=["7d"], value_columns=["amount"],
+            agg_funcs=["sum", "mean"],
+            categorical_columns=["status"], categorical_agg_funcs=["nunique", "mode"],
+            column_blocked_funcs={"status": ["mode"]},
+        )
+        cols = FindingsParser._event_aggregated_columns(self._make_event_cfg(aggregation=agg))
+        assert "status_nunique_7d" in cols
+        assert "status_mode_7d" not in cols
+        assert "amount_sum_7d" in cols
+
+    def test_blocked_category_columns_excluded(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import AggregationWindowConfig
+        agg = AggregationWindowConfig(
+            windows=["7d"], value_columns=["amount"],
+            agg_funcs=["sum", "mean"],
+            binary_columns=["opened"], binary_agg_funcs=["rate", "count", "any"],
+            column_blocked_funcs={"opened": ["rate", "count", "any"]},
+        )
+        cols = FindingsParser._event_aggregated_columns(self._make_event_cfg(aggregation=agg))
+        assert "opened_rate_7d" not in cols
+        assert "opened_count_7d" not in cols
+        assert "opened_any_7d" not in cols
+        assert "amount_sum_7d" in cols

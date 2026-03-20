@@ -1,3 +1,4 @@
+import pytest
 
 
 class TestPipelineTransformationType:
@@ -426,3 +427,43 @@ class TestKeyResolutionStepConfig:
         from customer_retention.generators.pipeline_generator.models import TemporalMergeSourceConfig
         src = TemporalMergeSourceConfig(name="customers", granularity="entity_level")
         assert src.key_resolution_steps == []
+
+
+class TestFeatureExclusion:
+    def test_defaults(self):
+        from customer_retention.generators.pipeline_generator.models import FeatureExclusion
+        exc = FeatureExclusion(column="status")
+        assert exc.column == "status"
+        assert exc.blocked_categories == []
+        assert exc.blocked_funcs == []
+        assert exc.rationale == ""
+
+    def test_all_fields(self):
+        from customer_retention.generators.pipeline_generator.models import FeatureExclusion
+        exc = FeatureExclusion(
+            column="status",
+            blocked_categories=["aggregation", "categorical"],
+            blocked_funcs=["mode", "nunique"],
+            rationale="Leaks target",
+        )
+        assert exc.column == "status"
+        assert exc.blocked_categories == ["aggregation", "categorical"]
+        assert exc.blocked_funcs == ["mode", "nunique"]
+        assert exc.rationale == "Leaks target"
+
+    def test_empty_column_raises(self):
+        from customer_retention.generators.pipeline_generator.models import FeatureExclusion
+        with pytest.raises(ValueError, match="must not be empty"):
+            FeatureExclusion(column="")
+
+
+class TestAggregationWindowConfigBlockedFuncs:
+    def test_default_empty(self):
+        from customer_retention.generators.pipeline_generator.models import AggregationWindowConfig
+        agg = AggregationWindowConfig()
+        assert agg.column_blocked_funcs == {}
+
+    def test_set_and_access(self):
+        from customer_retention.generators.pipeline_generator.models import AggregationWindowConfig
+        agg = AggregationWindowConfig(column_blocked_funcs={"status": ["mode"]})
+        assert agg.column_blocked_funcs == {"status": ["mode"]}

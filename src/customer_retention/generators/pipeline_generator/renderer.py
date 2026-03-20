@@ -2005,6 +2005,7 @@ AGG_FUNCS = {{ config.aggregation.agg_funcs | reject("equalto", "count") | list 
 CATEGORICAL_COLUMNS = {{ config.aggregation.categorical_columns }}
 CATEGORICAL_AGG_FUNCS = {{ config.aggregation.categorical_agg_funcs }}
 BINARY_COLUMNS = {{ config.aggregation.binary_columns }}
+COLUMN_BLOCKED_FUNCS = {{ config.aggregation.column_blocked_funcs }}
 {% endif %}
 
 
@@ -2022,17 +2023,26 @@ def apply_event_aggregation(df: pd.DataFrame) -> pd.DataFrame:
         td = _parse_window(window)
         window_df = df if td is None else df[df[TIME_COLUMN] >= (reference_date - td)]
         for col in numeric_value_columns:
+            _blocked = COLUMN_BLOCKED_FUNCS.get(col, [])
             for func in AGG_FUNCS:
-                parts.append(window_df.groupby(ENTITY_COLUMN)[col].agg(func).rename(f"{col}_{func}_{window}"))
+                if func not in _blocked:
+                    parts.append(window_df.groupby(ENTITY_COLUMN)[col].agg(func).rename(f"{col}_{func}_{window}"))
         for col in CATEGORICAL_COLUMNS:
             if col in window_df.columns:
-                parts.append(window_df.groupby(ENTITY_COLUMN)[col].nunique().rename(f"{col}_nunique_{window}"))
-                parts.append(window_df.groupby(ENTITY_COLUMN)[col].agg(_safe_mode).rename(f"{col}_mode_{window}"))
+                _blocked = COLUMN_BLOCKED_FUNCS.get(col, [])
+                if "nunique" not in _blocked:
+                    parts.append(window_df.groupby(ENTITY_COLUMN)[col].nunique().rename(f"{col}_nunique_{window}"))
+                if "mode" not in _blocked:
+                    parts.append(window_df.groupby(ENTITY_COLUMN)[col].agg(_safe_mode).rename(f"{col}_mode_{window}"))
         for col in BINARY_COLUMNS:
             if col in window_df.columns:
-                parts.append(window_df.groupby(ENTITY_COLUMN)[col].mean().rename(f"{col}_rate_{window}"))
-                parts.append(window_df.groupby(ENTITY_COLUMN)[col].sum().rename(f"{col}_count_{window}"))
-                parts.append(window_df.groupby(ENTITY_COLUMN)[col].max().rename(f"{col}_any_{window}"))
+                _blocked = COLUMN_BLOCKED_FUNCS.get(col, [])
+                if "rate" not in _blocked:
+                    parts.append(window_df.groupby(ENTITY_COLUMN)[col].mean().rename(f"{col}_rate_{window}"))
+                if "count" not in _blocked:
+                    parts.append(window_df.groupby(ENTITY_COLUMN)[col].sum().rename(f"{col}_count_{window}"))
+                if "any" not in _blocked:
+                    parts.append(window_df.groupby(ENTITY_COLUMN)[col].max().rename(f"{col}_any_{window}"))
         parts.append(window_df.groupby(ENTITY_COLUMN).size().rename(f"event_count_{window}"))
     if "feature_timestamp" in df.columns:
         parts.append(df.groupby(ENTITY_COLUMN)["feature_timestamp"].max().rename("feature_timestamp"))

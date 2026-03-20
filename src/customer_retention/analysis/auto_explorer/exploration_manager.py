@@ -7,6 +7,7 @@ Provides functionality for:
 - Detecting relationships between datasets
 - Planning aggregations for multi-dataset analysis
 """
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +20,8 @@ from customer_retention.core.config.column_config import DatasetGranularity
 from .findings import ExplorationFindings
 
 if TYPE_CHECKING:
+    from customer_retention.generators.pipeline_generator.models import FeatureExclusion
+
     from .layered_recommendations import RecommendationRegistry
 
 
@@ -37,6 +40,7 @@ class DatasetInfo:
     target_column: Optional[str] = None
     raw_source_path: Optional[str] = None
     excluded: bool = False
+    feature_exclusions: List[FeatureExclusion] = field(default_factory=list)
 
 
 @dataclass
@@ -202,6 +206,15 @@ class MultiDatasetFindings:
                     "target_column": info.target_column,
                     "raw_source_path": info.raw_source_path,
                     "excluded": info.excluded,
+                    "feature_exclusions": [
+                        {
+                            "column": e.column,
+                            "blocked_categories": e.blocked_categories,
+                            "blocked_funcs": e.blocked_funcs,
+                            "rationale": e.rationale,
+                        }
+                        for e in info.feature_exclusions
+                    ],
                 }
                 for name, info in self.datasets.items()
             },
@@ -231,8 +244,10 @@ class MultiDatasetFindings:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
     @classmethod
-    def load(cls, path) -> "MultiDatasetFindings":
+    def load(cls, path) -> MultiDatasetFindings:
         """Load multi-dataset findings from YAML."""
+        from customer_retention.generators.pipeline_generator.models import FeatureExclusion
+
         p = path if isinstance(path, Path) else Path(str(path))
         with p.open("r") as f:
             data = yaml.safe_load(f)
@@ -251,6 +266,15 @@ class MultiDatasetFindings:
                 target_column=info.get("target_column"),
                 raw_source_path=info.get("raw_source_path"),
                 excluded=info.get("excluded", False),
+                feature_exclusions=[
+                    FeatureExclusion(
+                        column=e["column"],
+                        blocked_categories=e.get("blocked_categories", []),
+                        blocked_funcs=e.get("blocked_funcs", []),
+                        rationale=e.get("rationale", ""),
+                    )
+                    for e in info.get("feature_exclusions", [])
+                ],
             )
 
         relationships = [

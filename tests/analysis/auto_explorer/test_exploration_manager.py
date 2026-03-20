@@ -699,3 +699,74 @@ class TestRelationshipInfoCompositeKeys:
         loaded = MultiDatasetFindings.load(str(path))
         assert loaded.relationships[0].left_columns == ["id"]
         assert loaded.relationships[0].right_columns == ["id"]
+
+
+class TestFeatureExclusionSerialization:
+    def test_dataset_info_default_empty(self):
+        info = DatasetInfo(
+            name="orders",
+            findings_path="/tmp/orders_findings.yaml",
+            source_path="/data/orders.csv",
+            granularity=DatasetGranularity.EVENT_LEVEL,
+            row_count=100,
+            column_count=5,
+        )
+        assert info.feature_exclusions == []
+
+    def test_save_load_roundtrip(self, temp_explorations_dir):
+        from customer_retention.generators.pipeline_generator.models import FeatureExclusion
+
+        multi = MultiDatasetFindings(
+            datasets={
+                "orders": DatasetInfo(
+                    name="orders",
+                    findings_path="/tmp/orders_findings.yaml",
+                    source_path="/data/orders.csv",
+                    granularity=DatasetGranularity.EVENT_LEVEL,
+                    row_count=100,
+                    column_count=5,
+                    feature_exclusions=[
+                        FeatureExclusion(
+                            column="status",
+                            blocked_categories=["aggregation"],
+                            blocked_funcs=["mode"],
+                            rationale="Leaks target",
+                        ),
+                    ],
+                ),
+            },
+        )
+        path = temp_explorations_dir / "multi_dataset_findings.yaml"
+        multi.save(path)
+        loaded = MultiDatasetFindings.load(path)
+
+        assert len(loaded.datasets["orders"].feature_exclusions) == 1
+        exc = loaded.datasets["orders"].feature_exclusions[0]
+        assert exc.column == "status"
+        assert exc.blocked_categories == ["aggregation"]
+        assert exc.blocked_funcs == ["mode"]
+        assert exc.rationale == "Leaks target"
+
+    def test_load_without_key_backward_compat(self, temp_explorations_dir):
+        import yaml
+
+        data = {
+            "datasets": {
+                "orders": {
+                    "name": "orders",
+                    "findings_path": "/tmp/orders_findings.yaml",
+                    "source_path": "/data/orders.csv",
+                    "granularity": "event_level",
+                    "row_count": 100,
+                    "column_count": 5,
+                },
+            },
+            "relationships": [],
+            "primary_entity_dataset": None,
+            "event_datasets": [],
+            "excluded_datasets": [],
+        }
+        path = temp_explorations_dir / "multi_dataset_findings.yaml"
+        path.write_text(yaml.dump(data))
+        loaded = MultiDatasetFindings.load(path)
+        assert loaded.datasets["orders"].feature_exclusions == []

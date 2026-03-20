@@ -626,6 +626,7 @@ def _window_to_days(window_str):
 
 CATEGORICAL_COLUMNS = {{ config.aggregation.categorical_columns }}
 BINARY_COLUMNS = {{ config.aggregation.binary_columns }}
+COLUMN_BLOCKED_FUNCS = {{ config.aggregation.column_blocked_funcs }}
 
 def _get_numeric_columns(df, value_columns):
     numeric_cols = set()
@@ -649,18 +650,27 @@ def apply_event_aggregation(df):
 {%- endif %}
     agg_exprs = [F.count("*").alias("event_count_{{ window }}")]
     for col in numeric_columns:
+        _blocked = COLUMN_BLOCKED_FUNCS.get(col, [])
 {%- for agg_func in config.aggregation.agg_funcs if agg_func != "count" %}
-        agg_exprs.append(F.{{ agg_func }}(col).alias(f"{col}_{{ agg_func }}_{{ window }}"))
+        if "{{ agg_func }}" not in _blocked:
+            agg_exprs.append(F.{{ agg_func }}(col).alias(f"{col}_{{ agg_func }}_{{ window }}"))
 {%- endfor %}
     for col in CATEGORICAL_COLUMNS:
         if col in [f.name for f in window_df.schema.fields]:
-            agg_exprs.append(F.countDistinct(col).alias(f"{col}_nunique_{{ window }}"))
-            agg_exprs.append(F.first(col).alias(f"{col}_mode_{{ window }}"))
+            _blocked = COLUMN_BLOCKED_FUNCS.get(col, [])
+            if "nunique" not in _blocked:
+                agg_exprs.append(F.countDistinct(col).alias(f"{col}_nunique_{{ window }}"))
+            if "mode" not in _blocked:
+                agg_exprs.append(F.first(col).alias(f"{col}_mode_{{ window }}"))
     for col in BINARY_COLUMNS:
         if col in [f.name for f in window_df.schema.fields]:
-            agg_exprs.append(F.mean(col).alias(f"{col}_rate_{{ window }}"))
-            agg_exprs.append(F.sum(col).alias(f"{col}_count_{{ window }}"))
-            agg_exprs.append(F.max(col).alias(f"{col}_any_{{ window }}"))
+            _blocked = COLUMN_BLOCKED_FUNCS.get(col, [])
+            if "rate" not in _blocked:
+                agg_exprs.append(F.mean(col).alias(f"{col}_rate_{{ window }}"))
+            if "count" not in _blocked:
+                agg_exprs.append(F.sum(col).alias(f"{col}_count_{{ window }}"))
+            if "any" not in _blocked:
+                agg_exprs.append(F.max(col).alias(f"{col}_any_{{ window }}"))
     window_agg = window_df.groupBy(ENTITY_COLUMN).agg(*agg_exprs)
     results.append(window_agg)
 {% endfor %}

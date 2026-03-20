@@ -741,17 +741,25 @@ class FindingsParser:
         columns: Set[str] = set()
         agg = event_cfg.aggregation
         if agg:
+            blocked = agg.column_blocked_funcs if agg else {}
             for window in agg.windows:
                 for col in agg.value_columns:
+                    col_blocked = set(blocked.get(col, []))
                     for func in agg.agg_funcs:
-                        if func == "count":
+                        if func == "count" or func in col_blocked:
                             continue
                         columns.add(f"{col}_{func}_{window}")
                 for col in agg.categorical_columns:
+                    col_blocked = set(blocked.get(col, []))
                     for func in agg.categorical_agg_funcs:
+                        if func in col_blocked:
+                            continue
                         columns.add(f"{col}_{func}_{window}")
                 for col in agg.binary_columns:
+                    col_blocked = set(blocked.get(col, []))
                     for func in agg.binary_agg_funcs:
+                        if func in col_blocked:
+                            continue
                         columns.add(f"{col}_{func}_{window}")
                 columns.add(f"event_count_{window}")
         lc = event_cfg.lifecycle
@@ -1088,7 +1096,7 @@ class FindingsParser:
         return None
 
     def _build_aggregation_config(
-        self, multi: MultiDatasetFindings, findings: ExplorationFindings
+        self, multi: MultiDatasetFindings, findings: ExplorationFindings, dataset_name: str = ""
     ) -> Optional[AggregationWindowConfig]:
         windows = getattr(multi, "aggregation_windows", None) or []
         if not windows and findings.time_series_metadata:
@@ -1119,6 +1127,21 @@ class FindingsParser:
                 if derived not in value_columns:
                     value_columns.append(derived)
 
+        dataset_info = multi.datasets.get(dataset_name) if dataset_name else None
+        exclusions = dataset_info.feature_exclusions if dataset_info else []
+        column_blocked_funcs: Dict[str, List[str]] = {}
+        for exc in exclusions:
+            col = exc.column
+            for cat in exc.blocked_categories:
+                if cat == "aggregation" and col in value_columns:
+                    value_columns.remove(col)
+                if cat == "categorical" and col in categorical_columns:
+                    categorical_columns.remove(col)
+                if cat == "binary" and col in binary_columns:
+                    binary_columns.remove(col)
+            if exc.blocked_funcs:
+                column_blocked_funcs[col] = exc.blocked_funcs
+
         return AggregationWindowConfig(
             windows=windows,
             value_columns=value_columns,
@@ -1127,6 +1150,7 @@ class FindingsParser:
             categorical_agg_funcs=["nunique", "mode"],
             binary_columns=binary_columns,
             binary_agg_funcs=["rate", "count", "any"],
+            column_blocked_funcs=column_blocked_funcs,
         )
 
     def _build_lifecycle_config(
@@ -1365,7 +1389,7 @@ class FindingsParser:
                 time_column=time_col,
                 deduplicate=True,
                 pre_shaping=self._extract_transformations(findings),
-                aggregation=self._build_aggregation_config(multi, findings),
+                aggregation=self._build_aggregation_config(multi, findings, event_name),
                 lifecycle=self._build_lifecycle_config(multi, findings),
                 raw_time_column=raw_time_col if raw_time_col and raw_time_col != time_col else None,
                 datetime_derivation=self._build_datetime_derivation_config(
@@ -1392,7 +1416,7 @@ class FindingsParser:
                 time_column=time_col,
                 deduplicate=True,
                 pre_shaping=self._extract_transformations(preagg),
-                aggregation=self._build_aggregation_config(multi, preagg),
+                aggregation=self._build_aggregation_config(multi, preagg, agg_name),
                 lifecycle=self._build_lifecycle_config(multi, preagg),
                 raw_time_column=raw_time_col if raw_time_col and raw_time_col != time_col else None,
                 datetime_derivation=self._build_datetime_derivation_config(

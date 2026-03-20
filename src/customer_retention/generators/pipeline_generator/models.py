@@ -120,6 +120,7 @@ class AggregationWindowConfig:
     binary_columns: List[str] = field(default_factory=list)
     binary_agg_funcs: List[str] = field(default_factory=lambda: ["rate", "count", "any"])
     reference_date: Optional[str] = None
+    column_blocked_funcs: Dict[str, List[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -187,6 +188,18 @@ class DatetimeDerivationConfig:
     source_columns: List[str]
     reference_column: str
     mask_future_columns: List[str] = field(default_factory=list)
+
+
+@dataclass
+class FeatureExclusion:
+    column: str
+    blocked_categories: List[str] = field(default_factory=list)
+    blocked_funcs: List[str] = field(default_factory=list)
+    rationale: str = ""
+
+    def __post_init__(self):
+        if not self.column:
+            raise ValueError("FeatureExclusion.column must not be empty")
 
 
 @dataclass

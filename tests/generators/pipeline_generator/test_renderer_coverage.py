@@ -2225,6 +2225,8 @@ class TestBronzeEventCategoricalAggregation:
                 extracted_lines.append(line)
             if line.startswith("BINARY_COLUMNS"):
                 extracted_lines.append(line)
+            if line.startswith("COLUMN_BLOCKED_FUNCS"):
+                extracted_lines.append(line)
             if line.startswith("def apply_event_aggregation("):
                 capture = True
                 extracted_lines.append(line)
@@ -2294,6 +2296,8 @@ class TestBronzeEventCategoricalAggregation:
             if line.startswith("CATEGORICAL_COLUMNS") or line.startswith("CATEGORICAL_AGG_FUNCS"):
                 extracted_lines.append(line)
             if line.startswith("BINARY_COLUMNS"):
+                extracted_lines.append(line)
+            if line.startswith("COLUMN_BLOCKED_FUNCS"):
                 extracted_lines.append(line)
             if line.startswith("def apply_event_aggregation("):
                 capture = True
@@ -2587,3 +2591,54 @@ class TestLandingHistoryWindow:
         code = renderer.render_landing("orders", config)
         assert "apply_history_window" not in code
         compile(code, "landing_orders.py", "exec")
+
+
+class TestBronzeEventColumnBlockedFuncs:
+    def _make_bronze_event_config(self, column_blocked_funcs=None):
+        source = SourceConfig(
+            name="emails",
+            path="data/emails.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="sent_date",
+            is_event_level=True,
+        )
+        return BronzeEventConfig(
+            source=source,
+            entity_column="customer_id",
+            time_column="sent_date",
+            deduplicate=True,
+            aggregation=AggregationWindowConfig(
+                windows=["7d", "30d"],
+                value_columns=["send_hour"],
+                agg_funcs=["sum", "mean"],
+                categorical_columns=["direction", "status"],
+                categorical_agg_funcs=["nunique", "mode"],
+                binary_columns=["opened"],
+                binary_agg_funcs=["rate", "count", "any"],
+                column_blocked_funcs=column_blocked_funcs or {},
+            ),
+        )
+
+    def test_blocked_funcs_dict_rendered(self, renderer):
+        config = self._make_bronze_event_config(column_blocked_funcs={"status": ["mode"]})
+        result = renderer.render_bronze_event("emails", config)
+        assert "COLUMN_BLOCKED_FUNCS" in result
+        assert "'status'" in result
+
+    def test_empty_dict_rendered(self, renderer):
+        config = self._make_bronze_event_config()
+        result = renderer.render_bronze_event("emails", config)
+        assert "COLUMN_BLOCKED_FUNCS = {}" in result
+
+    def test_guard_in_categorical_loop(self, renderer):
+        config = self._make_bronze_event_config(column_blocked_funcs={"status": ["mode"]})
+        result = renderer.render_bronze_event("emails", config)
+        assert "_blocked = COLUMN_BLOCKED_FUNCS.get(col, [])" in result
+        assert '"nunique" not in _blocked' in result
+        assert '"mode" not in _blocked' in result
+
+    def test_rendered_template_valid_python(self, renderer):
+        config = self._make_bronze_event_config(column_blocked_funcs={"status": ["mode"]})
+        result = renderer.render_bronze_event("emails", config)
+        compile(result, "bronze_event_emails.py", "exec")
