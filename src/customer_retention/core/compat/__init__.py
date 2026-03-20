@@ -1281,9 +1281,14 @@ def _spark_bulk_median_impute(df: Any, columns: list[str] | None = None) -> Any:
     if not num_cols:
         from .spark_backend import _as_pandas_api
         return _as_pandas_api(spark_df)
-    exprs = [F.percentile_approx(F.col(c), 0.5).alias(c) for c in num_cols]
-    row = spark_df.agg(*exprs).head()
-    fill_dict = {c: (float(row[c]) if row[c] is not None else 0) for c in num_cols}
+    _BATCH = 500
+    fill_dict: dict[str, float] = {}
+    for start in range(0, len(num_cols), _BATCH):
+        batch = num_cols[start:start + _BATCH]
+        exprs = [F.percentile_approx(F.col(c), 0.5).alias(c) for c in batch]
+        row = spark_df.agg(*exprs).head()
+        for c in batch:
+            fill_dict[c] = float(row[c]) if row[c] is not None else 0
     result = spark_df.fillna(fill_dict)
     from .spark_backend import _as_pandas_api
     return _as_pandas_api(result)
@@ -1306,9 +1311,14 @@ def _spark_bulk_zero_variance_cols(df: Any) -> list[str]:
     num_cols = _spark_numeric_cols(spark_df)
     if not num_cols:
         return []
-    exprs = [F.stddev(F.col(c)).alias(c) for c in num_cols]
-    row = spark_df.agg(*exprs).head()
-    return [c for c in num_cols if row[c] is None or float(row[c]) == 0]
+    _BATCH = 500
+    zero_var: list[str] = []
+    for start in range(0, len(num_cols), _BATCH):
+        batch = num_cols[start:start + _BATCH]
+        exprs = [F.stddev(F.col(c)).alias(c) for c in batch]
+        row = spark_df.agg(*exprs).head()
+        zero_var.extend(c for c in batch if row[c] is None or float(row[c]) == 0)
+    return zero_var
 
 
 def collect_for_sklearn(obj: Any) -> Any:

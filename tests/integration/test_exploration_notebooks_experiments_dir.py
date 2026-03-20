@@ -520,7 +520,9 @@ class TestNotebook08Architecture:
 
     def test_nb08_uses_temporal_split_always(self):
         content = self._read_content()
-        assert "SplitStrategy.TEMPORAL" in content, "NB08 must use SplitStrategy.TEMPORAL"
+        assert "SplitStrategy.TEMPORAL" in content or "TrainingPreparator" in content, (
+            "NB08 must use SplitStrategy.TEMPORAL or TrainingPreparator (which enforces temporal)"
+        )
         assert "RANDOM_STRATIFIED" not in content, "NB08 must not use RANDOM_STRATIFIED"
 
     def test_nb08_uses_temporal_cv_always(self):
