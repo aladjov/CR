@@ -347,13 +347,32 @@ class FindingsParser:
                 }
             )
         grid_dates, entity_key, merge_sources = self._build_temporal_merge_metadata(multi, sources)
+        holdout_ids = self._load_holdout_entity_ids()
         return SilverLayerConfig(
             joins=joins,
             aggregations=[],
             grid_dates=grid_dates,
             entity_key=entity_key,
             merge_sources=merge_sources,
+            holdout_entity_ids=holdout_ids,
         )
+
+    def _load_holdout_entity_ids(self) -> Optional[list]:
+        """Load pre-computed holdout entity IDs from namespace or findings dir."""
+        import json
+
+        path = None
+        if self._namespace is not None:
+            ns_path = self._namespace.holdout_entity_ids_path
+            if ns_path.exists():
+                path = ns_path
+        if path is None:
+            fallback = self._findings_dir / "holdout_entity_ids.json"
+            if fallback.exists():
+                path = fallback
+        if path is None:
+            return None
+        return json.loads(path.read_text())
 
     def _build_temporal_merge_metadata(
         self,

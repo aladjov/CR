@@ -290,3 +290,82 @@ def stratified_entity_sample(
         )
 
     return rare_ids + sampled_ids
+
+
+def stratified_holdout_split(
+    entity_df: pd.DataFrame,
+    entity_ids: list,
+    holdout_fraction: float,
+    entity_col: str,
+    target_col: Optional[str] = None,
+    time_col: Optional[str] = None,
+    extra_strat_cols: Optional[list[str]] = None,
+    random_state: int = 42,
+) -> tuple[list, list]:
+    """Split pre-sampled entity IDs into train/holdout preserving strata proportions.
+
+    Returns (train_ids, holdout_ids).
+    """
+    if holdout_fraction <= 0.0:
+        return list(entity_ids), []
+    if holdout_fraction >= 1.0:
+        return [], list(entity_ids)
+
+    id_set = set(entity_ids)
+    deduped = entity_df.drop_duplicates(subset=[entity_col])
+    deduped = deduped[deduped[entity_col].isin(id_set)].copy()
+
+    n_holdout = max(1, int(len(id_set) * holdout_fraction))
+
+    # Build strata keys — same logic as stratified_entity_sample
+    strat_parts: list = []
+
+    if target_col and target_col in deduped.columns:
+        strat_parts.append(deduped[target_col].astype(str))
+
+    if time_col and time_col in deduped.columns:
+        ts = safe_to_datetime(deduped[time_col], errors="coerce")
+        cohort_key = ts.dt.year.astype(str) + "-Q" + ts.dt.quarter.astype(str)
+        cohort_key = cohort_key.fillna("unknown")
+        strat_parts.append(cohort_key)
+
+    for col in (extra_strat_cols or []):
+        if col not in deduped.columns:
+            continue
+        series = deduped[col]
+        if is_numeric_dtype(series):
+            try:
+                binned = qcut(series, q=4, labels=False, duplicates="drop").astype(str)
+            except (ValueError, TypeError):
+                binned = series.astype(str)
+            strat_parts.append(binned)
+        else:
+            strat_parts.append(series.astype(str))
+
+    if strat_parts:
+        strat_key = strat_parts[0]
+        for part in strat_parts[1:]:
+            strat_key = strat_key + "|" + part
+        deduped["_strat_key"] = strat_key
+    else:
+        deduped["_strat_key"] = "all"
+
+    # Proportional holdout per stratum
+    group_counts = deduped["_strat_key"].value_counts().to_dict()
+    total = sum(group_counts.values())
+
+    holdout_budget = _compute_group_budget(group_counts, n_holdout, total)
+
+    # Sample holdout from each stratum using a shifted random state
+    holdout_ids_list: list = []
+    for key, n_take in holdout_budget.items():
+        if n_take <= 0:
+            continue
+        group_df = deduped[deduped["_strat_key"] == key]
+        sampled = safe_sample(group_df, n_take, random_state=random_state + 1)
+        holdout_ids_list.extend(head_as_list(sampled[entity_col], n_take))
+
+    holdout_set = set(holdout_ids_list)
+    train_ids = [eid for eid in entity_ids if eid not in holdout_set]
+
+    return train_ids, holdout_ids_list

@@ -80,6 +80,7 @@ class SilverLayerConfig:
     grid_dates: List[str] = field(default_factory=list)
     entity_key: Optional[str] = None
     merge_sources: List[TemporalMergeSourceConfig] = field(default_factory=list)
+    holdout_entity_ids: Optional[List] = None
 
 
 @dataclass

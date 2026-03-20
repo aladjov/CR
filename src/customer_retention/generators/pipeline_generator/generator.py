@@ -25,6 +25,7 @@ class PipelineGenerator(PipelineGeneratorBase):
         self._pipeline_name = pipeline_name
         self._experiments_dir = experiments_dir
         self._production_dir = production_dir
+        self._namespace = namespace
         self._parser = FindingsParser(findings_dir, namespace=namespace, intent=intent)
         self._renderer = CodeRenderer()
 
@@ -47,7 +48,23 @@ class PipelineGenerator(PipelineGeneratorBase):
             self._write_exploration_report(config),
             self._write_manifest(config),
         ]
+        self._copy_holdout_ids()
         return generated_files
+
+    def _copy_holdout_ids(self) -> None:
+        """Copy holdout_entity_ids.json into the generated pipeline's findings dir."""
+        import shutil
+
+        src = None
+        if self._namespace is not None and self._namespace.holdout_entity_ids_path.exists():
+            src = self._namespace.holdout_entity_ids_path
+        elif (self._findings_dir / "holdout_entity_ids.json").exists():
+            src = self._findings_dir / "holdout_entity_ids.json"
+        if src is None:
+            return
+        dst_dir = self._output_dir / "findings"
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst_dir / "holdout_entity_ids.json")
 
     def _write_manifest(self, config: PipelineConfig) -> Path:
         source_names = [s.name for s in config.sources if not s.excluded]

@@ -644,13 +644,15 @@ def merge_sources(bronze_outputs: dict) -> pd.DataFrame:
 def create_holdout_mask(df: pd.DataFrame, holdout_fraction: float = 0.1, random_state: int = 42) -> pd.DataFrame:
     """Create entity-level holdout by masking target for a fraction of entities.
 
-    Samples entities (not rows) to avoid capturing nearly all entities when
-    temporal data has multiple rows per entity. All rows for holdout entities
-    get their target masked. This is entity-aware per Architecture Decision #6.
+    If a pre-computed holdout_entity_ids.json exists in FINDINGS_DIR, those IDs
+    are used (preserving the same stratification/filters as the exploration sample).
+    Otherwise falls back to random entity sampling.
 
     IMPORTANT: This must happen in the silver layer (BEFORE gold layer feature
     computation) to prevent temporal leakage.
     """
+    import json as _json
+
     ORIGINAL_COLUMN = f"original_{TARGET_COLUMN}"
 
     if ORIGINAL_COLUMN in df.columns:
@@ -661,12 +663,20 @@ def create_holdout_mask(df: pd.DataFrame, holdout_fraction: float = 0.1, random_
         print(f"  Warning: TARGET_COLUMN \\'{TARGET_COLUMN}\\' not found, skipping holdout creation")
         return df
 
-    print(f"Creating holdout set ({holdout_fraction:.0%} of entities)...")
     df = df.copy()
-
     entity_ids = df["entity_id"].drop_duplicates()
-    n_holdout_entities = max(1, int(len(entity_ids) * holdout_fraction))
-    holdout_entities = entity_ids.sample(n=n_holdout_entities, random_state=random_state)
+
+    _holdout_ids_path = FINDINGS_DIR / "holdout_entity_ids.json"
+    if _holdout_ids_path.exists():
+        _saved_holdout = _json.loads(_holdout_ids_path.read_text())
+        holdout_entities = entity_ids[entity_ids.isin(_saved_holdout)]
+        n_holdout_entities = len(holdout_entities)
+        print(f"Creating holdout set from pre-computed IDs ({n_holdout_entities:,} entities)...")
+    else:
+        n_holdout_entities = max(1, int(len(entity_ids) * holdout_fraction))
+        holdout_entities = entity_ids.sample(n=n_holdout_entities, random_state=random_state)
+        print(f"Creating holdout set ({holdout_fraction:.0%} of entities)...")
+
     holdout_mask = df["entity_id"].isin(holdout_entities)
 
     df[ORIGINAL_COLUMN] = pd.NA
@@ -674,7 +684,7 @@ def create_holdout_mask(df: pd.DataFrame, holdout_fraction: float = 0.1, random_
     df.loc[holdout_mask, TARGET_COLUMN] = pd.NA
 
     n_holdout_rows = int(holdout_mask.sum())
-    print(f"  Holdout entities: {n_holdout_entities:,} / {len(entity_ids):,} ({holdout_fraction:.0%})")
+    print(f"  Holdout entities: {n_holdout_entities:,} / {len(entity_ids):,}")
     print(f"  Holdout rows: {n_holdout_rows:,}, Training rows: {len(df) - n_holdout_rows:,}")
 
     return df

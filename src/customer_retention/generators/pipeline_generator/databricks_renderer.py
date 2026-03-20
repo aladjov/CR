@@ -225,6 +225,11 @@ TIMESTAMP_COLUMN = "event_timestamp"
 FIT_MODE = {{ 'True' if config.fit_mode else 'False' }}
 RECOMMENDATIONS_HASH = {{ '"%s"' % config.recommendations_hash if config.recommendations_hash else 'None' }}
 FEAST_ENTITY_KEY = "{{ config.feast.entity_key if config.feast else 'entity_id' }}"
+{% if config.silver.holdout_entity_ids %}
+HOLDOUT_ENTITY_IDS = {{ config.silver.holdout_entity_ids }}
+{% else %}
+HOLDOUT_ENTITY_IDS = None
+{% endif %}
 
 CATALOG = "{{ catalog }}"
 SCHEMA = "{{ schema }}"
@@ -1133,10 +1138,22 @@ def create_holdout_mask(df, holdout_fraction=0.1, random_state=42):
         return df
     if TARGET_COLUMN not in [f.name for f in df.schema.fields]:
         return df
-    frac = min(1.0, max(0.0, holdout_fraction))
-    holdout_ids = df.select("entity_id").distinct().sample(
-        withReplacement=False, fraction=frac, seed=random_state
-    )
+    if HOLDOUT_ENTITY_IDS is not None:
+        from pyspark.sql.types import StringType, StructField, StructType
+        spark = df.sparkSession
+        holdout_ids = spark.createDataFrame(
+            [(str(eid),) for eid in HOLDOUT_ENTITY_IDS],
+            StructType([StructField("entity_id", StringType(), True)]),
+        )
+        holdout_ids = holdout_ids.withColumn(
+            "entity_id", F.col("entity_id").cast(df.schema["entity_id"].dataType)
+        )
+        print(f"  Using {holdout_ids.count():,} pre-computed holdout entity IDs")
+    else:
+        frac = min(1.0, max(0.0, holdout_fraction))
+        holdout_ids = df.select("entity_id").distinct().sample(
+            withReplacement=False, fraction=frac, seed=random_state
+        )
     df = df.join(holdout_ids, on="entity_id", how="left_semi").withColumn(
         original_col, F.col(TARGET_COLUMN)
     ).withColumn(

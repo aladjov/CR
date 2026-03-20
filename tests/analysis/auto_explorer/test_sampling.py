@@ -12,6 +12,7 @@ from customer_retention.analysis.auto_explorer.sampling import (
     estimate_sampling_accuracy,
     resolve_segment_entity_ids,
     stratified_entity_sample,
+    stratified_holdout_split,
 )
 
 
@@ -585,3 +586,109 @@ class TestComputeGroupBudget:
         ids = stratified_entity_sample(df, 20, "entity_id", "target", time_col="ts")
         assert len(ids) == 20
         assert all(isinstance(i, int) for i in ids)
+
+
+class TestStratifiedHoldoutSplit:
+    def _make_df(self, n=100):
+        return pd.DataFrame({
+            "entity_id": list(range(n)),
+            "target": [1] * (n // 5) + [0] * (n - n // 5),
+            "ts": pd.date_range("2022-01-01", periods=n, freq="D"),
+        })
+
+    def test_basic_split_sizes(self):
+        df = self._make_df(100)
+        all_ids = list(range(100))
+        train, holdout = stratified_holdout_split(
+            df, all_ids, holdout_fraction=0.2, entity_col="entity_id",
+        )
+        assert len(holdout) == 20
+        assert len(train) == 80
+        assert set(train) | set(holdout) == set(all_ids)
+        assert set(train) & set(holdout) == set()
+
+    def test_no_overlap(self):
+        df = self._make_df(200)
+        all_ids = list(range(200))
+        train, holdout = stratified_holdout_split(
+            df, all_ids, holdout_fraction=0.1, entity_col="entity_id",
+            target_col="target",
+        )
+        assert set(train).isdisjoint(set(holdout))
+        assert len(train) + len(holdout) == 200
+
+    def test_zero_fraction_returns_all_train(self):
+        df = self._make_df(50)
+        all_ids = list(range(50))
+        train, holdout = stratified_holdout_split(
+            df, all_ids, holdout_fraction=0.0, entity_col="entity_id",
+        )
+        assert len(train) == 50
+        assert len(holdout) == 0
+
+    def test_full_fraction_returns_all_holdout(self):
+        df = self._make_df(50)
+        all_ids = list(range(50))
+        train, holdout = stratified_holdout_split(
+            df, all_ids, holdout_fraction=1.0, entity_col="entity_id",
+        )
+        assert len(train) == 0
+        assert len(holdout) == 50
+
+    def test_preserves_target_distribution(self):
+        n = 500
+        df = pd.DataFrame({
+            "entity_id": list(range(n)),
+            "target": [1] * 100 + [0] * 400,
+        })
+        all_ids = list(range(n))
+        train, holdout = stratified_holdout_split(
+            df, all_ids, holdout_fraction=0.2, entity_col="entity_id",
+            target_col="target",
+        )
+        train_set = set(train)
+        holdout_set = set(holdout)
+        train_rate = sum(1 for i in train if df.loc[df["entity_id"] == i, "target"].iloc[0] == 1) / len(train)
+        holdout_rate = sum(1 for i in holdout if df.loc[df["entity_id"] == i, "target"].iloc[0] == 1) / len(holdout)
+        # Both should be close to 0.2 (100/500)
+        assert abs(train_rate - 0.2) < 0.05
+        assert abs(holdout_rate - 0.2) < 0.05
+
+    def test_with_time_and_extra_cols(self):
+        n = 200
+        df = pd.DataFrame({
+            "entity_id": list(range(n)),
+            "target": [1] * 40 + [0] * 160,
+            "ts": pd.date_range("2022-01-01", periods=n, freq="D"),
+            "region": (["east", "west"] * 100)[:n],
+        })
+        all_ids = list(range(n))
+        train, holdout = stratified_holdout_split(
+            df, all_ids, holdout_fraction=0.15, entity_col="entity_id",
+            target_col="target", time_col="ts", extra_strat_cols=["region"],
+        )
+        assert len(train) + len(holdout) == n
+        assert set(train).isdisjoint(set(holdout))
+
+    def test_small_dataset(self):
+        df = pd.DataFrame({"entity_id": [1, 2, 3], "target": [1, 0, 0]})
+        train, holdout = stratified_holdout_split(
+            df, [1, 2, 3], holdout_fraction=0.3, entity_col="entity_id",
+            target_col="target",
+        )
+        assert len(train) + len(holdout) == 3
+        assert len(holdout) >= 1
+
+    def test_reproducible(self):
+        df = self._make_df(100)
+        all_ids = list(range(100))
+        t1, h1 = stratified_holdout_split(
+            df, all_ids, holdout_fraction=0.2, entity_col="entity_id",
+            target_col="target", random_state=42,
+        )
+        t2, h2 = stratified_holdout_split(
+            df, all_ids, holdout_fraction=0.2, entity_col="entity_id",
+            target_col="target", random_state=42,
+        )
+        assert t1 == t2
+        assert h1 == h2
