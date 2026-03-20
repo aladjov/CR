@@ -264,3 +264,73 @@ class TestAdversarialScoringValidatorEdgeCases:
         recomputed = sample_gold_features.copy()
         result = validator.validate_features(recomputed)
         assert result.passed
+
+
+class TestAdversarialValidatorDistributedDispatch:
+    def test_dispatches_to_local_for_pandas(self, sample_gold_features):
+        validator = AdversarialScoringValidator(
+            gold_features=sample_gold_features,
+            entity_column="customer_id", target_column="target",
+        )
+        recomputed = sample_gold_features.copy()
+        result = validator.validate_features(recomputed)
+        assert result.passed
+
+    def test_dispatches_to_distributed_for_spark_pandas(self, sample_gold_features, monkeypatch):
+        called = {}
+
+        def mock_distributed(self_inner, recomputed):
+            called["distributed"] = True
+            return AdversarialValidationResult(passed=True, entities_validated=10)
+
+        monkeypatch.setattr(
+            "customer_retention.stages.validation.adversarial_scoring_validator._is_spark_pandas",
+            lambda obj: True,
+        )
+        monkeypatch.setattr(
+            AdversarialScoringValidator, "_validate_features_distributed", mock_distributed,
+        )
+        validator = AdversarialScoringValidator(
+            gold_features=sample_gold_features,
+            entity_column="customer_id", target_column="target",
+        )
+        result = validator.validate_features(sample_gold_features.copy())
+        assert called.get("distributed")
+        assert result.passed
+        assert result.entities_validated == 10
+
+
+class TestValidateFeatureTransformationGoldFeatures:
+    def test_gold_features_splits_and_validates(self):
+        from customer_retention.stages.validation import validate_feature_transformation
+
+        np.random.seed(42)
+        n = 200
+        gold = pd.DataFrame({
+            "customer_id": [f"c{i}" for i in range(n)],
+            "feature_a": np.random.randn(n),
+            "target": np.random.randint(0, 2, n),
+            "original_target": pd.NA,
+        })
+        holdout_mask = np.random.rand(n) < 0.2
+        gold.loc[holdout_mask, "original_target"] = gold.loc[holdout_mask, "target"]
+        gold.loc[holdout_mask, "target"] = pd.NA
+
+        report = validate_feature_transformation(
+            transform_fn=lambda df: df[["customer_id", "feature_a"]],
+            entity_column="customer_id", verbose=False,
+            gold_features=gold, holdout_column="original_target",
+            target_column="target",
+        )
+        assert report.features_validated
+
+    def test_gold_features_backward_compatible(self):
+        from customer_retention.stages.validation import validate_feature_transformation
+
+        train = pd.DataFrame({"customer_id": ["c1", "c2"], "f": [1.0, 2.0]})
+        score = pd.DataFrame({"customer_id": ["c3", "c4"], "f": [3.0, 4.0]})
+        report = validate_feature_transformation(
+            training_df=train, scoring_df=score,
+            transform_fn=lambda df: df, entity_column="customer_id", verbose=False,
+        )
+        assert report.features_validated

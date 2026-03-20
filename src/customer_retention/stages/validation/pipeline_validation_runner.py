@@ -215,10 +215,18 @@ def _build_predictions_df(df: Any, entity_column: str, y_pred, y_proba) -> Any:
 
 
 def validate_feature_transformation(
-    training_df: Any, scoring_df: Any,
-    transform_fn: Callable[[Any], Any],
+    training_df: Any = None, scoring_df: Any = None,
+    transform_fn: Callable[[Any], Any] = None,
     entity_column: str = "customer_id", verbose: bool = True,
+    *, gold_features: Any = None, holdout_column: Optional[str] = None,
+    target_column: Optional[str] = None, max_sample: int = 50_000,
 ) -> ValidationReport:
+    if gold_features is not None:
+        training_df, scoring_df = _split_and_sample_gold(
+            gold_features, target_column or "target",
+            holdout_column or f"original_{target_column or 'target'}",
+            max_sample, verbose,
+        )
     _log(verbose, "Validating transformation consistency...")
     training_transformed = transform_fn(training_df)
     scoring_transformed = transform_fn(scoring_df)
@@ -232,6 +240,34 @@ def validate_feature_transformation(
         if not report.passed:
             print(f"  Mismatched features: {len(report.feature_mismatches)}")
     return report
+
+
+def _split_and_sample_gold(
+    gold_features: Any, target_column: str, holdout_column: str,
+    max_sample: int, verbose: bool,
+) -> tuple:
+    from customer_retention.core.compat import _is_spark_pandas, safe_sample
+
+    if _is_spark_pandas(gold_features):
+        import pyspark.sql.functions as F  # noqa: N812
+
+        from customer_retention.core.compat import as_spark_df
+
+        gold_spark = as_spark_df(gold_features)
+        training_spark = gold_spark.filter(F.col(holdout_column).isNull())
+        _train_count = training_spark.count()
+        _frac = min(1.0, max_sample / max(1, _train_count))
+        training_df = training_spark.sample(fraction=_frac, seed=42).limit(max_sample).toPandas()
+        scoring_df = gold_spark.filter(F.col(holdout_column).isNotNull()).limit(max_sample).toPandas()
+    else:
+        is_holdout = gold_features[holdout_column].notna() if holdout_column in gold_features.columns else (
+            gold_features[target_column].isna()
+        )
+        training_df = safe_sample(gold_features[~is_holdout], max_sample)
+        scoring_df = gold_features[is_holdout].copy()
+
+    _log(verbose, f"Validation split: {len(training_df):,} training, {len(scoring_df):,} scoring rows")
+    return training_df, scoring_df
 
 
 def compare_pipeline_outputs(
