@@ -1199,6 +1199,10 @@ class TestBulkDatetimeAnalysisStats:
 
 
 class TestBatchAdversarialDiffs:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def test_identical_features_no_drifts(self):
         from customer_retention.core.compat.bulk_profiling import batch_adversarial_diffs
 
