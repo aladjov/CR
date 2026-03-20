@@ -27,11 +27,11 @@ from .cross_validator import _CV_DATE_COL, _CV_ENTITY_COL
 from .data_splitter import DataSplitter, SplitStrategy
 from .feature_scaler import FeatureScaler, ScalerType
 
-ProgressCallback = Optional["Callable[[str, float], None]"]
+ProgressCallback = Optional["Callable[[int, int, str, float], None]"]
 
 
-def print_preparation_progress(label: str, elapsed: float) -> None:
-    print(f"  {label}: {elapsed:.1f}s")
+def print_preparation_progress(step: int, total: int, label: str, elapsed: float) -> None:
+    print(f"  [{step}/{total}] {label}: {elapsed:.1f}s")
 
 
 @dataclass
@@ -73,52 +73,64 @@ class TrainingPreparator:
         self._use_float32 = use_float32
         self._on_progress = on_progress
 
-    def _report(self, label: str, elapsed: float) -> None:
+    _TOTAL_STEPS = 10
+
+    def _report(self, step: int, label: str, elapsed: float) -> None:
         if self._on_progress:
-            self._on_progress(label, elapsed)
+            self._on_progress(step, self._TOTAL_STEPS, label, elapsed)
 
     def prepare(self, df: DataFrame) -> TrainingPreparationResult:
         start_collecting()
+        _s = 0
 
+        _s += 1
         with log_timing("classify_columns") as _t:
             feature_cols, obj_cols = self._classify_columns(df, self._feature_columns)
-        self._report(_t.label, _t.elapsed)
+        self._report(_s, _t.label, _t.elapsed)
 
+        _s += 1
         with log_timing("drop_missing_target") as _t:
             df, _nan_count = self._drop_missing_target(df)
-        self._report(_t.label, _t.elapsed)
+        self._report(_s, _t.label, _t.elapsed)
 
+        _s += 1
         with log_timing("encode_object_columns") as _t:
             if obj_cols:
                 df = bulk_label_encode(df, obj_cols)
-        self._report(_t.label, _t.elapsed)
+        self._report(_s, _t.label, _t.elapsed)
 
+        _s += 1
         with log_timing("checkpoint") as _t:
             df = spark_checkpoint(df)
-        self._report(_t.label, _t.elapsed)
+        self._report(_s, _t.label, _t.elapsed)
 
+        _s += 1
         with log_timing("median_impute") as _t:
             df = bulk_median_impute(df, columns=feature_cols)
-        self._report(_t.label, _t.elapsed)
+        self._report(_s, _t.label, _t.elapsed)
 
+        _s += 1
         with log_timing("sample_entities") as _t:
             df = self._sample_entities(df)
-        self._report(_t.label, _t.elapsed)
+        self._report(_s, _t.label, _t.elapsed)
 
+        _s += 1
         with log_timing("temporal_split") as _t:
             split_result = self._temporal_split(df, feature_cols)
-        self._report(_t.label, _t.elapsed)
+        self._report(_s, _t.label, _t.elapsed)
 
         X_train, X_test = split_result.X_train, split_result.X_test
         y_train, y_test = split_result.y_train, split_result.y_test
         train_entities, train_dates = self._extract_train_metadata(split_result, df)
 
+        _s += 1
         with log_timing("fillna_and_drop_zero_variance") as _t:
             X_train, X_test, zero_var = self._fillna_and_drop_zero_variance(X_train, X_test)
-        self._report(_t.label, _t.elapsed)
+        self._report(_s, _t.label, _t.elapsed)
 
         feature_cols = [c for c in X_train.columns if c not in {_CV_ENTITY_COL, _CV_DATE_COL}]
 
+        _s += 1
         distributed = _is_spark_pandas(X_train)
         with log_timing("scale_features") as _t:
             if distributed:
@@ -131,9 +143,13 @@ class TrainingPreparator:
                     X_train, X_test, y_train, y_test,
                     train_entities, train_dates, feature_cols,
                 )
-        self._report(_t.label, _t.elapsed)
+        self._report(_s, _t.label, _t.elapsed)
 
-        class_dist = self._class_distribution(result.y_train)
+        _s += 1
+        with log_timing("class_distribution") as _t:
+            class_dist = self._class_distribution(result.y_train)
+        self._report(_s, _t.label, _t.elapsed)
+
         timing_entries = stop_collecting()
 
         return TrainingPreparationResult(

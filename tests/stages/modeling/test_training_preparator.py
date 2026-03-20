@@ -313,7 +313,8 @@ class TestTimingProfiling:
         expected = {
             "classify_columns", "drop_missing_target",
             "encode_object_columns", "checkpoint", "median_impute",
-            "temporal_split", "fillna_and_drop_zero_variance", "scale_features",
+            "temporal_split", "fillna_and_drop_zero_variance",
+            "scale_features", "class_distribution",
         }
         assert expected.issubset(labels), f"Missing: {expected - labels}"
 
@@ -330,13 +331,28 @@ class TestProgressCallback:
         prep = TrainingPreparator(
             target_column="target", feature_columns=feature_cols,
             purge_gap_days=30, test_size=0.2,
-            on_progress=lambda label, elapsed: invocations.append((label, elapsed)),
+            on_progress=lambda s, t, label, elapsed: invocations.append((s, t, label, elapsed)),
         )
         prep.prepare(base_df)
-        labels = [label for label, _ in invocations]
+        labels = [label for _, _, label, _ in invocations]
         assert "temporal_split" in labels
         assert "scale_features" in labels
-        assert all(elapsed >= 0 for _, elapsed in invocations)
+        assert all(elapsed >= 0 for _, _, _, elapsed in invocations)
+
+    def test_callback_reports_step_numbers(self, feature_cols, base_df):
+        from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
+        invocations = []
+        prep = TrainingPreparator(
+            target_column="target", feature_columns=feature_cols,
+            purge_gap_days=30, test_size=0.2,
+            on_progress=lambda s, t, label, elapsed: invocations.append((s, t)),
+        )
+        prep.prepare(base_df)
+        steps = [s for s, _ in invocations]
+        totals = [t for _, t in invocations]
+        assert steps == list(range(1, len(invocations) + 1))
+        assert all(t == totals[0] for t in totals)
 
     def test_callback_none_is_noop(self, feature_cols, base_df):
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
@@ -351,9 +367,9 @@ class TestProgressCallback:
     def test_print_preparation_progress_format(self, capsys):
         from customer_retention.stages.modeling.training_preparator import print_preparation_progress
 
-        print_preparation_progress("temporal_split", 1.234)
+        print_preparation_progress(3, 10, "temporal_split", 1.234)
         captured = capsys.readouterr()
-        assert "temporal_split: 1.2s" in captured.out
+        assert "[3/10] temporal_split: 1.2s" in captured.out
 
     def test_callback_receives_labels_in_order(self, feature_cols, base_df):
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
@@ -362,12 +378,11 @@ class TestProgressCallback:
         prep = TrainingPreparator(
             target_column="target", feature_columns=feature_cols,
             purge_gap_days=30, test_size=0.2,
-            on_progress=lambda label, elapsed: labels.append(label),
+            on_progress=lambda s, t, label, elapsed: labels.append(label),
         )
         prep.prepare(base_df)
-        # First step should be classify_columns, last should be scale_features
         assert labels[0] == "classify_columns"
-        assert labels[-1] == "scale_features"
+        assert labels[-1] == "class_distribution"
 
 
 # ---------------------------------------------------------------------------
