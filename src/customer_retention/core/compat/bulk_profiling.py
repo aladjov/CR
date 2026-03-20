@@ -1937,6 +1937,112 @@ def _spark_bulk_datetime_analysis(
     return result
 
 
+def batch_adversarial_diffs(
+    gold_df: Any, score_df: Any, entity_column: str,
+    target_column: str, holdout_column: str, tolerance: float = 1e-6,
+) -> tuple[int, dict[str, tuple[float, float, int]]]:
+    from customer_retention.core.compat import _is_native_spark_df, _is_spark_pandas
+
+    if _is_spark_pandas(gold_df) or _is_native_spark_df(gold_df):
+        return _spark_adversarial_diffs(gold_df, score_df, entity_column, target_column, holdout_column, tolerance)
+    return _pandas_adversarial_diffs(gold_df, score_df, entity_column, target_column, holdout_column, tolerance)
+
+
+def _pandas_adversarial_diffs(
+    gold_df: Any, score_df: Any, entity_column: str,
+    target_column: str, holdout_column: str, tolerance: float,
+) -> tuple[int, dict[str, tuple[float, float, int]]]:
+    is_holdout = gold_df[target_column].isna() & gold_df[holdout_column].notna()
+    gold_holdout = gold_df[is_holdout]
+    if gold_holdout.empty:
+        return 0, {}
+    exclude = {entity_column, target_column, holdout_column}
+    feature_cols = [
+        c for c in gold_holdout.columns
+        if c not in exclude and not c.startswith("original_") and c in score_df.columns
+    ]
+    gold_keyed = gold_holdout.set_index(entity_column)[feature_cols]
+    score_keyed = score_df.set_index(entity_column).reindex(columns=feature_cols)
+    common = gold_keyed.index.intersection(score_keyed.index)
+    if common.empty:
+        return 0, {}
+    ga, sa = gold_keyed.loc[common], score_keyed.loc[common]
+    n = len(common)
+    result: dict[str, tuple[float, float, int]] = {}
+    for c in feature_cols:
+        if c not in sa.columns:
+            continue
+        gc, sc = ga[c], sa[c]
+        if _pandas.api.types.is_numeric_dtype(gc):
+            diff = np.abs(gc.fillna(0).to_numpy(dtype=float) - sc.fillna(0).to_numpy(dtype=float))
+            affected = int(np.sum(diff > tolerance))
+            if affected > 0:
+                result[c] = (float(np.max(diff)), float(np.mean(diff[diff > tolerance])), affected)
+        else:
+            affected = int((gc.astype(str) != sc.astype(str)).sum())
+            if affected > 0:
+                result[c] = (1.0, 1.0, affected)
+    return n, result
+
+
+def _spark_adversarial_diffs(
+    gold_df: Any, score_df: Any, entity_column: str,
+    target_column: str, holdout_column: str, tolerance: float,
+) -> tuple[int, dict[str, tuple[float, float, int]]]:
+    import pyspark.sql.functions as F  # noqa: N812
+    from pyspark.sql.types import NumericType
+
+    from customer_retention.core.compat import normalize_timestamps, pandas_dtype_to_spark_schema
+    from customer_retention.core.compat.detection import get_spark_session
+
+    spark = get_spark_session()
+    gold_spark = as_spark_df(gold_df).filter(
+        F.col(target_column).isNull() & F.col(holdout_column).isNotNull()
+    )
+    exclude = {entity_column, target_column, holdout_column}
+    feature_cols = [
+        c for c in gold_spark.columns
+        if c not in exclude and not c.startswith("original_") and c in score_df.columns
+    ]
+    if not feature_cols:
+        return 0, {}
+
+    score_pd = normalize_timestamps(score_df)
+    score_spark = spark.createDataFrame(score_pd, schema=pandas_dtype_to_spark_schema(score_pd))
+
+    gold_schema = {f.name: f.dataType for f in gold_spark.schema.fields}
+    numeric_cols = [c for c in feature_cols if isinstance(gold_schema.get(c), NumericType)]
+    categorical_cols = [c for c in feature_cols if c not in numeric_cols]
+
+    gold_sel = gold_spark.select(F.col(entity_column), *[F.col(c).alias(f"g_{c}") for c in feature_cols])
+    score_sel = score_spark.select(F.col(entity_column), *[F.col(c).alias(f"s_{c}") for c in feature_cols])
+    joined = gold_sel.join(F.broadcast(score_sel), entity_column, "inner")
+
+    agg_exprs: list[Any] = [F.count("*").alias("_n")]
+    for c in numeric_cols:
+        diff = F.abs(F.col(f"g_{c}").cast("double") - F.col(f"s_{c}").cast("double"))
+        agg_exprs.append(F.max(diff).alias(f"max_{c}"))
+        agg_exprs.append(F.avg(F.when(diff > tolerance, diff)).alias(f"mean_{c}"))
+        agg_exprs.append(F.sum(F.when(diff > tolerance, F.lit(1)).otherwise(F.lit(0))).alias(f"cnt_{c}"))
+    for c in categorical_cols:
+        mismatch = F.when(F.col(f"g_{c}").cast("string") != F.col(f"s_{c}").cast("string"), F.lit(1)).otherwise(F.lit(0))
+        agg_exprs.append(F.sum(mismatch).alias(f"cat_{c}"))
+
+    summary = joined.agg(*agg_exprs).collect()[0]
+    n = _safe_int(summary["_n"])
+    result: dict[str, tuple[float, float, int]] = {}
+    for c in numeric_cols:
+        max_val = _safe_float(summary[f"max_{c}"])
+        if max_val is None or max_val <= tolerance:
+            continue
+        result[c] = (max_val, float(summary[f"mean_{c}"] or 0), _safe_int(summary[f"cnt_{c}"]))
+    for c in categorical_cols:
+        affected = _safe_int(summary[f"cat_{c}"])
+        if affected > 0:
+            result[c] = (1.0, 1.0, affected)
+    return n, result
+
+
 def _safe_float(val: Any) -> Optional[float]:
     if val is None:
         return None

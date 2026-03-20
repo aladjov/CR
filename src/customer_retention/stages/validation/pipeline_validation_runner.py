@@ -246,7 +246,7 @@ def _split_and_sample_gold(
     gold_features: Any, target_column: str, holdout_column: str,
     max_sample: int, verbose: bool,
 ) -> tuple:
-    from customer_retention.core.compat import _is_spark_pandas, safe_sample
+    from customer_retention.core.compat import _is_spark_pandas, safe_sample, to_pandas
 
     if _is_spark_pandas(gold_features):
         import pyspark.sql.functions as F  # noqa: N812
@@ -257,8 +257,8 @@ def _split_and_sample_gold(
         training_spark = gold_spark.filter(F.col(holdout_column).isNull())
         _train_count = training_spark.count()
         _frac = min(1.0, max_sample / max(1, _train_count))
-        training_df = training_spark.sample(fraction=_frac, seed=42).limit(max_sample).toPandas()
-        scoring_df = gold_spark.filter(F.col(holdout_column).isNotNull()).limit(max_sample).toPandas()
+        training_df = to_pandas(training_spark.sample(fraction=_frac, seed=42).limit(max_sample))
+        scoring_df = to_pandas(gold_spark.filter(F.col(holdout_column).isNotNull()).limit(max_sample))
     else:
         is_holdout = gold_features[holdout_column].notna() if holdout_column in gold_features.columns else (
             gold_features[target_column].isna()

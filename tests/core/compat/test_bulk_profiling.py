@@ -1196,3 +1196,86 @@ class TestBulkDatetimeAnalysisStats:
             result = bulk_datetime_analysis_stats(mock_df, ["dt"])
             mock_spark.assert_called_once()
             assert result["dt"].total_count == 100
+
+
+class TestBatchAdversarialDiffs:
+    def test_identical_features_no_drifts(self):
+        from customer_retention.core.compat.bulk_profiling import batch_adversarial_diffs
+
+        gold = pd.DataFrame({
+            "eid": ["a", "b", "c", "d"],
+            "f1": [1.0, 2.0, 3.0, 4.0],
+            "f2": [10.0, 20.0, 30.0, 40.0],
+            "target": [1, 0, pd.NA, pd.NA],
+            "original_target": [pd.NA, pd.NA, 1, 0],
+        })
+        score = gold[gold["original_target"].notna()].copy()
+        n, diffs = batch_adversarial_diffs(gold, score, "eid", "target", "original_target")
+        assert n == 2
+        assert len(diffs) == 0
+
+    def test_detects_numeric_drift(self):
+        from customer_retention.core.compat.bulk_profiling import batch_adversarial_diffs
+
+        gold = pd.DataFrame({
+            "eid": ["a", "b", "c"],
+            "f1": [1.0, 2.0, 3.0],
+            "target": [1, pd.NA, pd.NA],
+            "original_target": [pd.NA, 0, 1],
+        })
+        score = pd.DataFrame({
+            "eid": ["b", "c"],
+            "f1": [2.5, 3.0],
+            "target": [pd.NA, pd.NA],
+            "original_target": [0, 1],
+        })
+        n, diffs = batch_adversarial_diffs(gold, score, "eid", "target", "original_target")
+        assert n == 2
+        assert "f1" in diffs
+        assert diffs["f1"][0] == pytest.approx(0.5)
+
+    def test_detects_categorical_drift(self):
+        from customer_retention.core.compat.bulk_profiling import batch_adversarial_diffs
+
+        gold = pd.DataFrame({
+            "eid": ["a", "b"],
+            "cat": ["x", "y"],
+            "target": [pd.NA, pd.NA],
+            "original_target": [0, 1],
+        })
+        score = pd.DataFrame({
+            "eid": ["a", "b"],
+            "cat": ["x", "CHANGED"],
+            "target": [pd.NA, pd.NA],
+            "original_target": [0, 1],
+        })
+        n, diffs = batch_adversarial_diffs(gold, score, "eid", "target", "original_target")
+        assert n == 2
+        assert "cat" in diffs
+        assert diffs["cat"][2] == 1
+
+    def test_empty_holdout(self):
+        from customer_retention.core.compat.bulk_profiling import batch_adversarial_diffs
+
+        gold = pd.DataFrame({
+            "eid": ["a", "b"],
+            "f1": [1.0, 2.0],
+            "target": [0, 1],
+            "original_target": [pd.NA, pd.NA],
+        })
+        n, diffs = batch_adversarial_diffs(gold, gold, "eid", "target", "original_target")
+        assert n == 0
+        assert len(diffs) == 0
+
+    def test_spark_dispatch(self):
+        from customer_retention.core.compat.bulk_profiling import batch_adversarial_diffs
+
+        mock_df = MagicMock()
+        mock_df.to_spark = MagicMock()
+
+        with patch("customer_retention.core.compat.bulk_profiling._spark_adversarial_diffs") as mock_spark:
+            mock_spark.return_value = (5, {"f1": (0.1, 0.05, 3)})
+            n, diffs = batch_adversarial_diffs(mock_df, pd.DataFrame(), "eid", "target", "orig")
+            mock_spark.assert_called_once()
+            assert n == 5
+            assert "f1" in diffs

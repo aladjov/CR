@@ -126,72 +126,16 @@ class AdversarialScoringValidator:
         )
 
     def _validate_features_distributed(self, recomputed_features: Any) -> AdversarialValidationResult:
-        import pyspark.sql.functions as F  # noqa: N812
-        from pyspark.sql.types import NumericType
+        from customer_retention.core.compat.bulk_profiling import batch_adversarial_diffs
 
-        from customer_retention.core.compat import as_spark_df, normalize_timestamps, pandas_dtype_to_spark_schema
-        from customer_retention.core.compat.detection import get_spark_session
-
-        spark = get_spark_session()
-        ek = self.entity_column
-        holdout_col = self._holdout_column
-        gold_holdout = as_spark_df(self.gold_features).filter(
-            F.col(self.target_column).isNull() & F.col(holdout_col).isNotNull()
+        n_entities, col_diffs = batch_adversarial_diffs(
+            self.gold_features, recomputed_features,
+            self.entity_column, self.target_column, self._holdout_column, self.tolerance,
         )
-        exclude = {ek, self.target_column, holdout_col}
-        feature_cols = [
-            c for c in gold_holdout.columns
-            if c not in exclude and not c.startswith("original_") and c in recomputed_features.columns
+        drifts = [
+            FeatureDrift(col, max_d, mean_d, cnt, self._compute_severity(max_d, cnt, n_entities))
+            for col, (max_d, mean_d, cnt) in col_diffs.items()
         ]
-        if not feature_cols:
-            return AdversarialValidationResult(passed=True, entities_validated=0)
-
-        score_pd = normalize_timestamps(recomputed_features)
-        score_spark = spark.createDataFrame(score_pd, schema=pandas_dtype_to_spark_schema(score_pd))
-
-        gold_schema = {f.name: f.dataType for f in gold_holdout.schema.fields}
-        numeric_cols = [c for c in feature_cols if isinstance(gold_schema.get(c), NumericType)]
-        categorical_cols = [c for c in feature_cols if c not in numeric_cols]
-
-        gold_sel = gold_holdout.select(F.col(ek), *[F.col(c).alias(f"g_{c}") for c in feature_cols])
-        score_sel = score_spark.select(F.col(ek), *[F.col(c).alias(f"s_{c}") for c in feature_cols])
-        joined = gold_sel.join(F.broadcast(score_sel), ek, "inner")
-
-        agg_exprs = [F.count("*").alias("_n")]
-        for c in numeric_cols:
-            diff = F.abs(F.col(f"g_{c}").cast("double") - F.col(f"s_{c}").cast("double"))
-            agg_exprs.append(F.max(diff).alias(f"max_{c}"))
-            agg_exprs.append(F.avg(F.when(diff > self.tolerance, diff)).alias(f"mean_{c}"))
-            agg_exprs.append(F.sum(F.when(diff > self.tolerance, F.lit(1)).otherwise(F.lit(0))).alias(f"cnt_{c}"))
-        for c in categorical_cols:
-            mismatch = F.when(F.col(f"g_{c}").cast("string") != F.col(f"s_{c}").cast("string"), F.lit(1)).otherwise(F.lit(0))
-            agg_exprs.append(F.sum(mismatch).alias(f"cat_{c}"))
-
-        summary = joined.agg(*agg_exprs).collect()[0]
-        n_entities = int(summary["_n"])
-
-        drifts = []
-        for c in numeric_cols:
-            max_val = summary[f"max_{c}"]
-            if max_val is None or float(max_val) <= self.tolerance:
-                continue
-            affected = int(summary[f"cnt_{c}"] or 0)
-            drifts.append(FeatureDrift(
-                feature_name=c, max_absolute_diff=float(max_val),
-                mean_absolute_diff=float(summary[f"mean_{c}"] or 0),
-                affected_entities=affected,
-                severity=self._compute_severity(float(max_val), affected, n_entities),
-            ))
-        for c in categorical_cols:
-            affected = int(summary[f"cat_{c}"] or 0)
-            if affected == 0:
-                continue
-            drifts.append(FeatureDrift(
-                feature_name=c, max_absolute_diff=1.0, mean_absolute_diff=1.0,
-                affected_entities=affected,
-                severity=self._compute_severity(1.0, affected, n_entities),
-            ))
-
         return AdversarialValidationResult(
             passed=len(drifts) == 0, entities_validated=n_entities, feature_drifts=drifts,
         )
