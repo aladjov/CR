@@ -58,7 +58,39 @@ class TestSafeFillna:
         assert result is not df
 
 
+class TestLazyFillna:
+    def test_fills_nan_without_checkpoint(self):
+        from customer_retention.core.compat import lazy_fillna
+        df = pd.DataFrame({"a": [1.0, np.nan, 3.0], "b": [np.nan, 2.0, np.nan]})
+        result = lazy_fillna(df, 0)
+        assert result["a"].tolist() == [1.0, 0.0, 3.0]
+        assert result["b"].tolist() == [0.0, 2.0, 0.0]
+
+    def test_preserves_columns(self):
+        from customer_retention.core.compat import lazy_fillna
+        df = pd.DataFrame({"x": [np.nan], "y": [1.0]})
+        result = lazy_fillna(df, 0)
+        assert list(result.columns) == ["x", "y"]
+
+    def test_no_nans_is_noop(self):
+        from customer_retention.core.compat import lazy_fillna
+        df = pd.DataFrame({"a": [1, 2, 3]})
+        result = lazy_fillna(df, 0)
+        pd.testing.assert_frame_equal(result, df)
+
+    def test_same_result_as_safe_fillna_on_pandas(self):
+        from customer_retention.core.compat import lazy_fillna, safe_fillna
+        df = pd.DataFrame({"a": [1.0, np.nan, 3.0], "b": [np.nan, 2.0, np.nan]})
+        result_lazy = lazy_fillna(df, 0)
+        result_safe = safe_fillna(df, 0)
+        pd.testing.assert_frame_equal(result_lazy, result_safe)
+
+
 class TestSafeFillnaExport:
     def test_safe_fillna_in_compat(self):
         from customer_retention.core import compat
         assert hasattr(compat, "safe_fillna")
+
+    def test_lazy_fillna_in_compat(self):
+        from customer_retention.core import compat
+        assert hasattr(compat, "lazy_fillna")

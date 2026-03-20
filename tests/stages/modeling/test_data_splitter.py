@@ -655,6 +655,82 @@ class TestSplitSparkDispatch:
         assert len(wrappers) == 3, "each projection (features, target, metadata) gets its own wrapper"
 
 
+class TestDistributedSplitSingleCheckpoint:
+    """Tests for the improved _distributed_temporal_split that checkpoints once."""
+
+    def test_no_redundant_select_in_distributed_split(self):
+        """_distributed_temporal_split should not call _spark_select_features_target."""
+        import inspect
+
+        from customer_retention.stages.modeling.data_splitter import DataSplitter
+
+        source = inspect.getsource(DataSplitter._distributed_temporal_split)
+        assert "_spark_select_features_target" not in source, (
+            "_distributed_temporal_split should use _select_features_target_from_ps, "
+            "not _spark_select_features_target"
+        )
+
+    def test_uses_single_as_pandas_api_per_partition(self):
+        """Each partition (train/test) gets exactly one _as_pandas_api call (plus import + val)."""
+        import inspect
+
+        from customer_retention.stages.modeling.data_splitter import DataSplitter
+
+        source = inspect.getsource(DataSplitter._distributed_temporal_split)
+        # import (1) + val (1) + train (1) + test (1) = 4 non-checkpoint usages
+        # Previously: _spark_select_features_target called _as_pandas_api 3x per partition
+        call_count = source.count("_as_pandas_api(")
+        assert call_count <= 4, f"Expected at most 4 _as_pandas_api calls, got {call_count}"
+
+    def test_select_features_target_from_ps_excludes_correct_cols(self):
+        """_select_features_target_from_ps correctly excludes target and excluded columns."""
+        try:
+            from pyspark.sql.types import (
+                DoubleType,
+                IntegerType,
+                StringType,
+                StructField,
+                StructType,
+                TimestampNTZType,
+            )
+        except ImportError:
+            pytest.skip("PySpark not installed")
+
+        from unittest.mock import MagicMock
+
+        schema = StructType([
+            StructField("feature1", DoubleType()),
+            StructField("feature2", IntegerType()),
+            StructField("target", IntegerType()),
+            StructField("as_of_date", TimestampNTZType()),
+            StructField("entity_id", StringType()),
+        ])
+        mock_ps = MagicMock()
+        mock_ps.__getitem__ = MagicMock(side_effect=lambda key: f"col:{key}")
+
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", test_size=0.2,
+            exclude_columns=["as_of_date", "entity_id"],
+        )
+        features, target = splitter._select_features_target_from_ps(mock_ps, schema)
+
+        # features should select ["feature1", "feature2"] (no target, no excluded, no timestamp)
+        mock_ps.__getitem__.assert_any_call(["feature1", "feature2"])
+        # target should select "target"
+        mock_ps.__getitem__.assert_any_call("target")
+
+    def test_distributed_split_metadata_from_same_wrapper(self):
+        """Train metadata comes from the same _as_pandas_api wrapper as features."""
+        import inspect
+
+        from customer_retention.stages.modeling.data_splitter import DataSplitter
+
+        source = inspect.getsource(DataSplitter._distributed_temporal_split)
+        # Metadata should be extracted from train_ps, not a separate spark_df.select()
+        assert "train_ps[c]" in source, "metadata should come from train_ps, not a separate wrapper"
+
+
 class TestTemporalSplitFailFast:
     def test_raises_on_all_nat_temporal_column(self):
         n = 100

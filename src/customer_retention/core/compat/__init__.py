@@ -1192,6 +1192,14 @@ def safe_fillna(df: Any, value: Any) -> Any:
     return df.fillna(value)
 
 
+def lazy_fillna(df: Any, value: Any) -> Any:
+    """fillna without checkpoint — use when a downstream checkpoint will materialize."""
+    if _is_spark_pandas(df):
+        from .spark_backend import _as_pandas_api
+        return _as_pandas_api(as_spark_df(df).fillna(value))
+    return df.fillna(value)
+
+
 def bulk_label_encode(df: Any, columns: list[str]) -> Any:
     valid = [c for c in columns if c in df.columns]
     if not valid:
@@ -1453,6 +1461,7 @@ __all__ = [
     "temporal_quantile",
     "spark_checkpoint",
     "safe_fillna",
+    "lazy_fillna",
     "bulk_label_encode",
     "bulk_median_impute",
     "bulk_zero_variance_cols",

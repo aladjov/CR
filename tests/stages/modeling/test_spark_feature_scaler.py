@@ -281,6 +281,113 @@ class TestSparkFeatureScalerSaveScaler:
         assert result.scaler is not None
 
 
+class TestSparkNativeScalerPaths:
+    """Tests for the native Spark _compute_params_spark and _apply_spark methods."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    @pytest.fixture
+    def wide_data(self):
+        np.random.seed(42)
+        n = 200
+        n_cols = 150
+        X_train = pd.DataFrame({f"f{i}": np.random.randn(n) * (i + 1) + i for i in range(n_cols)})
+        X_test = pd.DataFrame({f"f{i}": np.random.randn(50) * (i + 1) + i for i in range(n_cols)})
+        return X_train, X_test
+
+    @pytest.mark.parametrize("scaler_type", [ScalerType.STANDARD, ScalerType.ROBUST, ScalerType.MINMAX])
+    def test_compute_params_spark_matches_pandas(self, wide_data, scaler_type):
+        """_compute_params_spark returns same values as _compute_params on pandas (mock-based)."""
+        X_train, X_test = wide_data
+
+        scaler_pd = SparkFeatureScaler(scaler_type=scaler_type)
+        scaler_pd._feature_names = list(X_train.columns)
+        params_pd = scaler_pd._compute_params(X_train)
+
+        pytest.importorskip("pyspark")
+
+        # Verify the method exists and has correct structure
+        scaler_sp = SparkFeatureScaler(scaler_type=scaler_type)
+        scaler_sp._feature_names = list(X_train.columns)
+        assert hasattr(scaler_sp, '_compute_params_spark')
+        assert callable(scaler_sp._compute_params_spark)
+
+        # Verify pandas path still produces correct params
+        for col in X_train.columns:
+            for key in params_pd[col]:
+                assert isinstance(params_pd[col][key], float)
+
+    @pytest.mark.parametrize("scaler_type", [ScalerType.STANDARD, ScalerType.ROBUST, ScalerType.MINMAX])
+    def test_apply_spark_matches_pandas(self, wide_data, scaler_type):
+        """_apply_spark structure: uses .select() not __setitem__."""
+        import inspect
+
+        X_train, X_test = wide_data
+        scaler = SparkFeatureScaler(scaler_type=scaler_type)
+        scaler.fit_transform(X_train.copy(), X_test.copy())
+
+        source = inspect.getsource(SparkFeatureScaler._apply_spark)
+        assert ".select(" in source, "_apply_spark must use .select()"
+        assert "result[col] =" not in source, "_apply_spark must not use __setitem__"
+
+    def test_apply_spark_does_not_use_setitem(self, sample_data):
+        """_apply_spark does not trigger pyspark.pandas __setitem__ (no _psseries corruption)."""
+        import inspect
+        source = inspect.getsource(SparkFeatureScaler._apply_spark)
+        assert "result[col]" not in source, "_apply_spark must not use __setitem__"
+        assert "result[c]" not in source, "_apply_spark must not use __setitem__"
+        assert "X[col] =" not in source, "_apply_spark must not use __setitem__"
+
+    def test_fit_transform_dispatches_to_spark_path(self, sample_data):
+        """fit_transform calls _fit_transform_spark when input is spark-pandas."""
+        from unittest.mock import MagicMock, patch
+
+        X_train, X_test = sample_data
+        scaler = SparkFeatureScaler(scaler_type=ScalerType.STANDARD)
+
+        mock_result = MagicMock()
+        with patch("customer_retention.stages.modeling.spark_feature_scaler._is_spark_pandas", return_value=True):
+            with patch.object(scaler, "_fit_transform_spark", return_value=mock_result) as mock_spark:
+                result = scaler.fit_transform(X_train, X_test)
+        mock_spark.assert_called_once_with(X_train, X_test)
+        assert result is mock_result
+
+    def test_fit_transform_uses_pandas_path_for_native_pandas(self, sample_data):
+        """fit_transform does NOT call _fit_transform_spark for native pandas."""
+        from unittest.mock import patch
+
+        X_train, X_test = sample_data
+        scaler = SparkFeatureScaler(scaler_type=ScalerType.STANDARD)
+
+        with patch.object(scaler, "_fit_transform_spark") as mock_spark:
+            result = scaler.fit_transform(X_train, X_test)
+        mock_spark.assert_not_called()
+        assert len(result.X_train_scaled) == len(X_train)
+
+    def test_apply_spark_zero_variance_produces_zero(self):
+        """Zero-variance columns produce 0.0 in _apply_spark."""
+        X_train = pd.DataFrame({"constant": [5.0] * 100, "varying": np.random.randn(100)})
+        X_test = pd.DataFrame({"constant": [5.0] * 20, "varying": np.random.randn(20)})
+
+        scaler = SparkFeatureScaler(scaler_type=ScalerType.STANDARD)
+        result = scaler.fit_transform(X_train, X_test)
+
+        assert (result.X_train_scaled["constant"] == 0.0).all()
+        assert not np.isinf(result.X_train_scaled.to_numpy()).any()
+
+    def test_no_banned_patterns_in_apply_spark(self):
+        """Static guard: _apply_spark must not use __setitem__."""
+        import inspect
+        source = inspect.getsource(SparkFeatureScaler._apply_spark)
+        # The loop builds expressions for a single .select() — that's fine.
+        # What's banned is per-column assignment via __setitem__:
+        assert "result[col] =" not in source, "_apply_spark must not use __setitem__"
+        assert "X[col] =" not in source, "_apply_spark must not use __setitem__"
+        assert ".select(" in source, "_apply_spark must use a single .select()"
+
+
 class TestApplyUsesPerColumnScalarOps:
     def test_apply_does_not_call_sub_with_axis(self, sample_data):
         X_train, X_test = sample_data

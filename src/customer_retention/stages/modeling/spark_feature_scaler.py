@@ -2,9 +2,11 @@ from typing import Any, Dict, Tuple
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame
+from customer_retention.core.compat import DataFrame, _is_spark_pandas, as_spark_df
 
 from .feature_scaler import FeatureScaler, ScalerType, ScalingResult
+
+_AGG_BATCH_SIZE = 2000
 
 
 class SparkFeatureScaler(FeatureScaler):
@@ -37,6 +39,9 @@ class SparkFeatureScaler(FeatureScaler):
                 scaling_params={},
             )
 
+        if _is_spark_pandas(X_train):
+            return self._fit_transform_spark(X_train, X_test)
+
         self._params = self._compute_params(X_train)
         X_train_scaled = self._apply(X_train)
         X_test_scaled = self._apply(X_test)
@@ -50,10 +55,125 @@ class SparkFeatureScaler(FeatureScaler):
             scaling_params=scaling_params,
         )
 
+    def _fit_transform_spark(
+        self,
+        X_train: DataFrame,
+        X_test: DataFrame,
+    ) -> ScalingResult:
+        from customer_retention.core.compat.spark_backend import _as_pandas_api
+
+        train_spark = as_spark_df(X_train)
+        test_spark = as_spark_df(X_test)
+
+        self._params = self._compute_params_spark(train_spark)
+
+        X_train_scaled = _as_pandas_api(self._apply_spark(train_spark))
+        X_test_scaled = _as_pandas_api(self._apply_spark(test_spark))
+
+        scaling_params = self._extract_params()
+
+        return ScalingResult(
+            scaler=self._params if self.save_scaler else None,
+            X_train_scaled=X_train_scaled,
+            X_test_scaled=X_test_scaled,
+            scaling_params=scaling_params,
+        )
+
     def transform(self, X: DataFrame) -> DataFrame:
         if not self._params:
             return X
+        if _is_spark_pandas(X):
+            from customer_retention.core.compat.spark_backend import _as_pandas_api
+
+            return _as_pandas_api(self._apply_spark(as_spark_df(X)))
         return self._apply(X)
+
+    def _compute_params_spark(self, spark_df: Any) -> Dict[str, Dict[str, float]]:
+        """Compute scaling parameters via batched native Spark .agg() calls."""
+        from pyspark.sql import functions as F  # noqa: N812
+
+        params: Dict[str, Dict[str, float]] = {}
+        cols = self._feature_names
+
+        if self.scaler_type == ScalerType.STANDARD:
+            for start in range(0, len(cols), _AGG_BATCH_SIZE):
+                batch = cols[start:start + _AGG_BATCH_SIZE]
+                exprs = []
+                for c in batch:
+                    exprs.append(F.mean(F.col(c)).alias(f"{c}__m"))
+                    exprs.append(F.stddev_pop(F.col(c)).alias(f"{c}__s"))
+                row = spark_df.agg(*exprs).head()
+                for c in batch:
+                    m = row[f"{c}__m"]
+                    s = row[f"{c}__s"]
+                    params[c] = {
+                        "mean": float(m) if m is not None else float("nan"),
+                        "std": float(s) if s is not None else 0.0,
+                    }
+
+        elif self.scaler_type == ScalerType.ROBUST:
+            for start in range(0, len(cols), _AGG_BATCH_SIZE):
+                batch = cols[start:start + _AGG_BATCH_SIZE]
+                exprs = []
+                for c in batch:
+                    exprs.append(F.percentile_approx(F.col(c), 0.5).alias(f"{c}__med"))
+                    exprs.append(F.percentile_approx(F.col(c), 0.25).alias(f"{c}__q25"))
+                    exprs.append(F.percentile_approx(F.col(c), 0.75).alias(f"{c}__q75"))
+                row = spark_df.agg(*exprs).head()
+                for c in batch:
+                    med = row[f"{c}__med"]
+                    q25 = row[f"{c}__q25"]
+                    q75 = row[f"{c}__q75"]
+                    params[c] = {
+                        "center": float(med) if med is not None else float("nan"),
+                        "iqr": (float(q75) - float(q25)) if q75 is not None and q25 is not None else 0.0,
+                    }
+
+        elif self.scaler_type == ScalerType.MINMAX:
+            for start in range(0, len(cols), _AGG_BATCH_SIZE):
+                batch = cols[start:start + _AGG_BATCH_SIZE]
+                exprs = []
+                for c in batch:
+                    exprs.append(F.min(F.col(c)).alias(f"{c}__min"))
+                    exprs.append(F.max(F.col(c)).alias(f"{c}__max"))
+                row = spark_df.agg(*exprs).head()
+                for c in batch:
+                    mn = row[f"{c}__min"]
+                    mx = row[f"{c}__max"]
+                    params[c] = {
+                        "min": float(mn) if mn is not None else float("nan"),
+                        "max": float(mx) if mx is not None else float("nan"),
+                    }
+
+        return params
+
+    def _apply_spark(self, spark_df: Any) -> Any:
+        """Apply scaling via a single native Spark .select() — no per-column __setitem__."""
+        from pyspark.sql import functions as F  # noqa: N812
+
+        offsets, scales = self._as_vectors()
+        zero_mask = scales == 0
+        safe_scales = np.array([1.0 if z else s for z, s in zip(zero_mask, scales)])
+
+        all_spark_cols = set(spark_df.columns)
+        exprs = []
+        for i, col in enumerate(self._feature_names):
+            if col not in all_spark_cols:
+                continue
+            if zero_mask[i]:
+                exprs.append(F.lit(0.0).cast("double").alias(col))
+            else:
+                exprs.append(
+                    ((F.col(col) - float(offsets[i])) / float(safe_scales[i])).alias(col)
+                )
+
+        # Include any columns not in feature_names (passthrough)
+        feature_set = set(self._feature_names)
+        for col in spark_df.columns:
+            if col not in feature_set:
+                exprs.append(F.col(col))
+
+        return spark_df.select(exprs)
 
     def _compute_params(self, X: DataFrame) -> Dict[str, Dict[str, float]]:
         params: Dict[str, Dict[str, float]] = {}

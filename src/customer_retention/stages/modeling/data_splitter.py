@@ -222,6 +222,8 @@ class DataSplitter:
     def _distributed_temporal_split(self, df: DataFrame) -> SplitResult:
         from pyspark.sql import functions as F  # noqa: N812
 
+        from customer_retention.core.compat.spark_backend import _as_pandas_api
+
         col = self.temporal_column
         spark_df = as_spark_df(df)
         idx_cols = [c for c in spark_df.columns if c.startswith("__index_level_")]
@@ -258,12 +260,27 @@ class DataSplitter:
             val_cutoff = native_pd.Timestamp(val_row["v"], unit="s")
             val_spark = train_spark.filter(F.col(col) >= F.lit(val_cutoff))
             train_spark = train_spark.filter(F.col(col) < F.lit(val_cutoff))
-            X_val, y_val, _ = self._spark_select_features_target(val_spark)
+            val_spark = val_spark.localCheckpoint(eager=True)
+            val_ps = _as_pandas_api(val_spark)
+            X_val, y_val = self._select_features_target_from_ps(val_ps, val_spark.schema)
 
-        X_train, y_train, train_meta = self._spark_select_features_target(
-            train_spark, extract_metadata=True,
-        )
-        X_test, y_test, _ = self._spark_select_features_target(test_spark)
+        # Checkpoint once per partition — single materialization
+        train_spark = train_spark.localCheckpoint(eager=True)
+        test_spark = test_spark.localCheckpoint(eager=True)
+
+        # Wrap each in a single _as_pandas_api call
+        train_ps = _as_pandas_api(train_spark)
+        test_ps = _as_pandas_api(test_spark)
+
+        X_train, y_train = self._select_features_target_from_ps(train_ps, train_spark.schema)
+        X_test, y_test = self._select_features_target_from_ps(test_ps, test_spark.schema)
+
+        # Extract metadata from the already-wrapped train pyspark.pandas frame
+        train_meta: Dict[str, Series] = {}
+        all_fields = {f.name for f in train_spark.schema.fields}
+        meta_cols = [c for c in self.exclude_columns if c in all_fields]
+        if meta_cols:
+            train_meta = {c: train_ps[c] for c in meta_cols}
 
         split_info = self._build_split_info(X_train, X_test, X_val)
         split_info["cutoff_date"] = str(cutoff_date)
@@ -281,7 +298,23 @@ class DataSplitter:
             train_metadata=train_meta,
         )
 
-    def _spark_select_features_target(self, spark_df, extract_metadata: bool = False) -> tuple[DataFrame, Series, Dict[str, Series]]:
+    def _select_features_target_from_ps(self, ps_df: DataFrame, schema: Any) -> tuple[DataFrame, Series]:
+        """Select feature columns and target from a pyspark.pandas DataFrame.
+
+        Uses the Spark schema to identify and exclude non-numeric types.
+        No checkpoint or re-read — operates on already-materialized data.
+        """
+        from pyspark.sql.types import DateType, DayTimeIntervalType, TimestampNTZType, TimestampType
+
+        exclude = {self.target_column} | set(self.exclude_columns)
+        skip_types = (TimestampType, TimestampNTZType, DateType, DayTimeIntervalType)
+        feature_cols = [
+            f.name for f in schema.fields
+            if f.name not in exclude and not isinstance(f.dataType, skip_types)
+        ]
+        return ps_df[feature_cols], ps_df[self.target_column]
+
+    def _spark_select_features_target(self, spark_df: Any, extract_metadata: bool = False) -> tuple[DataFrame, Series, Dict[str, Series]]:
         from pyspark.sql.types import DateType, DayTimeIntervalType, TimestampNTZType, TimestampType
 
         from customer_retention.core.compat.spark_backend import _as_pandas_api
