@@ -1301,7 +1301,9 @@ def _spark_bulk_median_impute(df: Any, columns: list[str] | None = None) -> Any:
     if not num_cols:
         from .spark_backend import _as_pandas_api
         return _as_pandas_api(spark_df)
-    _BATCH = 500
+    # percentile_approx uses fixed-size T-digest sketches (~100 centroids each),
+    # so large batches are memory-safe; 2000 keeps Catalyst plan manageable
+    _BATCH = 2000
     fill_dict: dict[str, float] = {}
     for start in range(0, len(num_cols), _BATCH):
         batch = num_cols[start:start + _BATCH]

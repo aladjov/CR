@@ -93,8 +93,12 @@ class TrainingPreparator:
                 df = bulk_label_encode(df, obj_cols)
         self._report(_t.label, _t.elapsed)
 
-        with log_timing("impute_and_checkpoint") as _t:
-            df = self._impute_and_checkpoint(df, feature_cols)
+        with log_timing("checkpoint") as _t:
+            df = spark_checkpoint(df)
+        self._report(_t.label, _t.elapsed)
+
+        with log_timing("median_impute") as _t:
+            df = bulk_median_impute(df, columns=feature_cols)
         self._report(_t.label, _t.elapsed)
 
         with log_timing("sample_entities") as _t:
@@ -200,10 +204,6 @@ class TrainingPreparator:
             spark_df = spark_df.filter(F.col(self._target).isNotNull())
             return _as_pandas_api(spark_df), nan_count
         return df, 0
-
-    def _impute_and_checkpoint(self, df: DataFrame, feature_cols: list[str]) -> DataFrame:
-        df = spark_checkpoint(df)
-        return bulk_median_impute(df, columns=feature_cols)
 
     def _sample_entities(self, df: DataFrame) -> DataFrame:
         if self._max_rows is None:
