@@ -46,38 +46,41 @@ def preparator(feature_cols):
 
 
 # ---------------------------------------------------------------------------
-# TestFilterDatetimeFeatures
+# TestClassifyColumns
 # ---------------------------------------------------------------------------
 
-class TestFilterDatetimeFeatures:
-    def test_removes_datetime_columns(self, preparator, base_df):
-        result = preparator._filter_datetime_features(
-            ["feat_a", "feat_d", "feat_e"], base_df.dtypes,
-        )
-        assert "feat_d" not in result
-        assert "feat_a" in result
-        assert "feat_e" in result
+class TestClassifyColumns:
+    def test_excludes_datetime_columns(self, preparator, base_df):
+        non_dt, _ = preparator._classify_columns(base_df, ["feat_a", "feat_d", "feat_e"])
+        assert "feat_d" not in non_dt
+        assert "feat_a" in non_dt
+        assert "feat_e" in non_dt
 
-    def test_removes_timedelta_columns(self, preparator):
-        dtypes = pd.DataFrame({
-            "a": [1.0], "b": [pd.Timedelta("1 day")],
-        }).dtypes
-        result = preparator._filter_datetime_features(["a", "b"], dtypes)
-        assert result == ["a"]
+    def test_excludes_timedelta_columns(self, preparator):
+        df = pd.DataFrame({"a": [1.0], "b": [pd.Timedelta("1 day")]})
+        non_dt, _ = preparator._classify_columns(df, ["a", "b"])
+        assert non_dt == ["a"]
 
     def test_keeps_numeric_and_object(self, preparator, base_df):
-        result = preparator._filter_datetime_features(
-            ["feat_a", "feat_b", "feat_c"], base_df.dtypes,
-        )
-        assert result == ["feat_a", "feat_b", "feat_c"]
+        non_dt, _ = preparator._classify_columns(base_df, ["feat_a", "feat_b", "feat_c"])
+        assert non_dt == ["feat_a", "feat_b", "feat_c"]
 
     def test_returns_empty_when_all_datetime(self, preparator):
-        dtypes = pd.DataFrame({
-            "a": pd.to_datetime(["2023-01-01"]),
-            "b": pd.to_datetime(["2023-01-01"]),
-        }).dtypes
-        result = preparator._filter_datetime_features(["a", "b"], dtypes)
-        assert result == []
+        df = pd.DataFrame({"a": pd.to_datetime(["2023-01-01"]), "b": pd.to_datetime(["2023-01-01"])})
+        non_dt, _ = preparator._classify_columns(df, ["a", "b"])
+        assert non_dt == []
+
+    def test_detects_object_columns(self, preparator, base_df):
+        _, obj_cols = preparator._classify_columns(base_df, ["feat_a", "feat_b", "feat_c"])
+        assert "feat_c" in obj_cols
+        assert "feat_a" not in obj_cols
+
+    def test_object_columns_are_subset_of_non_dt(self, preparator, base_df):
+        non_dt, obj_cols = preparator._classify_columns(
+            base_df, ["feat_a", "feat_b", "feat_c", "feat_d"],
+        )
+        assert set(obj_cols).issubset(set(non_dt))
+        assert "feat_d" not in non_dt  # datetime excluded
 
 
 # ---------------------------------------------------------------------------
@@ -113,27 +116,32 @@ class TestDropMissingTarget:
 # ---------------------------------------------------------------------------
 
 class TestEncodeObjectColumns:
-    def test_encodes_object_columns(self, preparator):
+    def test_classify_detects_object_columns_for_encoding(self, preparator):
+        from customer_retention.core.compat import bulk_label_encode
+
         df = pd.DataFrame({
             "feat_c": ["cat", "dog", "cat", "fish"],
             "feat_a": [1.0, 2.0, 3.0, 4.0],
         })
-        result = preparator._encode_object_columns(df, ["feat_c", "feat_a"])
+        _, obj_cols = preparator._classify_columns(df, ["feat_c", "feat_a"])
+        assert obj_cols == ["feat_c"]
+        result = bulk_label_encode(df, obj_cols)
         assert result["feat_c"].dtype in (np.int64, np.int32, int)
 
-    def test_noop_when_no_object_cols(self, preparator):
+    def test_no_object_cols_returns_empty_list(self, preparator):
         df = pd.DataFrame({"feat_a": [1.0, 2.0], "feat_b": [3.0, 4.0]})
-        result = preparator._encode_object_columns(df, ["feat_a", "feat_b"])
-        pd.testing.assert_frame_equal(result, df)
+        _, obj_cols = preparator._classify_columns(df, ["feat_a", "feat_b"])
+        assert obj_cols == []
 
-    def test_only_encodes_feature_cols(self, preparator):
+    def test_only_feature_cols_checked_for_object(self, preparator):
         df = pd.DataFrame({
             "feat_c": ["cat", "dog"],
             "other_obj": ["x", "y"],
             "feat_a": [1.0, 2.0],
         })
-        result = preparator._encode_object_columns(df, ["feat_c", "feat_a"])
-        assert result["other_obj"].dtype == object
+        _, obj_cols = preparator._classify_columns(df, ["feat_c", "feat_a"])
+        assert "other_obj" not in obj_cols
+        assert "feat_c" in obj_cols
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +311,7 @@ class TestTimingProfiling:
         result = preparator.prepare(base_df)
         labels = {e.label for e in result.timing_entries}
         expected = {
-            "filter_datetime_features", "drop_missing_target",
+            "classify_columns", "drop_missing_target",
             "encode_object_columns", "temporal_split",
             "fillna_and_drop_zero_variance", "scale_features",
         }
@@ -357,8 +365,8 @@ class TestProgressCallback:
             on_progress=lambda label, elapsed: labels.append(label),
         )
         prep.prepare(base_df)
-        # First step should be filter_datetime_features, last should be scale_features
-        assert labels[0] == "filter_datetime_features"
+        # First step should be classify_columns, last should be scale_features
+        assert labels[0] == "classify_columns"
         assert labels[-1] == "scale_features"
 
 

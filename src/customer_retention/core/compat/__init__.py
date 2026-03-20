@@ -1218,41 +1218,61 @@ def _pandas_bulk_label_encode(df: Any, columns: list[str]) -> Any:
 
 
 _MAX_LABEL_CARDINALITY = 10_000
+_ENCODE_BATCH = 200
 
 
 def _spark_bulk_label_encode(df: Any, columns: list[str]) -> Any:
     import pyspark.sql.functions as F  # noqa: N812
 
     spark_df = as_spark_df(df)
-    card_exprs = [F.countDistinct(F.col(c)).alias(c) for c in columns]
-    card_row = spark_df.agg(*card_exprs).collect()[0]
-    low_card = [c for c in columns if (card_row[c] or 0) <= _MAX_LABEL_CARDINALITY]
-    high_card = [c for c in columns if (card_row[c] or 0) > _MAX_LABEL_CARDINALITY]
+
+    # --- Step 1: batched countDistinct ---
+    cardinality: dict[str, int] = {}
+    for start in range(0, len(columns), _ENCODE_BATCH):
+        batch = columns[start:start + _ENCODE_BATCH]
+        card_exprs = [F.countDistinct(F.col(c)).alias(c) for c in batch]
+        row = spark_df.agg(*card_exprs).collect()[0]
+        for c in batch:
+            cardinality[c] = row[c] or 0
+
+    low_card = [c for c in columns if cardinality[c] <= _MAX_LABEL_CARDINALITY]
+    high_card = [c for c in columns if cardinality[c] > _MAX_LABEL_CARDINALITY]
     if high_card:
         print(f"Hash-encoding {len(high_card)} high-cardinality columns "
               f"(>{_MAX_LABEL_CARDINALITY:,} unique): "
               f"{high_card[:5]}{'...' if len(high_card) > 5 else ''}")
+
+    # --- Step 2: batched collect_set for vocab ---
     vocab: dict[str, list[str]] = {}
-    if low_card:
-        set_exprs = [F.sort_array(F.collect_set(F.col(c).cast("string"))).alias(c) for c in low_card]
-        sets_row = spark_df.agg(*set_exprs).collect()[0]
-        vocab = {c: [v for v in (sets_row[c] or []) if v is not None] for c in low_card}
+    for start in range(0, len(low_card), _ENCODE_BATCH):
+        batch = low_card[start:start + _ENCODE_BATCH]
+        set_exprs = [F.sort_array(F.collect_set(F.col(c).cast("string"))).alias(c) for c in batch]
+        row = spark_df.agg(*set_exprs).collect()[0]
+        for c in batch:
+            vocab[c] = [v for v in (row[c] or []) if v is not None]
+
+    # --- Step 3: batched select (avoids Catalyst plan explosion) ---
     low_set, high_set = set(low_card), set(high_card)
-    select_exprs = []
-    for c in spark_df.columns:
-        if c in low_set:
-            distinct = vocab.get(c, [])
-            if distinct:
-                arr = F.array([F.lit(v) for v in distinct])
-                select_exprs.append(F.coalesce(F.array_position(arr, F.col(c).cast("string")) - 1, F.lit(-1)).cast("int").alias(c))
+    encode_cols = list(low_set | high_set)
+    for start in range(0, len(encode_cols), _ENCODE_BATCH):
+        batch_set = set(encode_cols[start:start + _ENCODE_BATCH])
+        select_exprs = []
+        for c in spark_df.columns:
+            if c not in batch_set:
+                select_exprs.append(F.col(c))
+            elif c in high_set:
+                select_exprs.append(F.hash(F.col(c).cast("string")).alias(c))
             else:
-                select_exprs.append(F.lit(0).cast("int").alias(c))
-        elif c in high_set:
-            select_exprs.append(F.hash(F.col(c).cast("string")).alias(c))
-        else:
-            select_exprs.append(F.col(c))
+                distinct = vocab.get(c, [])
+                if distinct:
+                    mapping = F.create_map(*[x for i, v in enumerate(distinct) for x in (F.lit(v), F.lit(i))])
+                    select_exprs.append(F.coalesce(mapping[F.col(c).cast("string")], F.lit(-1)).cast("int").alias(c))
+                else:
+                    select_exprs.append(F.lit(0).cast("int").alias(c))
+        spark_df = spark_df.select(*select_exprs)
+
     from .spark_backend import _as_pandas_api
-    return _as_pandas_api(spark_df.select(*select_exprs))
+    return _as_pandas_api(spark_df)
 
 
 def bulk_median_impute(df: Any, columns: list[str] | None = None) -> Any:

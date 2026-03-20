@@ -10,6 +10,7 @@ from customer_retention.core.compat import (
     DataFrame,
     Series,
     _is_spark_pandas,
+    as_spark_df,
     bulk_label_encode,
     bulk_median_impute,
     bulk_zero_variance_cols,
@@ -79,8 +80,8 @@ class TrainingPreparator:
     def prepare(self, df: DataFrame) -> TrainingPreparationResult:
         start_collecting()
 
-        with log_timing("filter_datetime_features") as _t:
-            feature_cols = self._filter_datetime_features(self._feature_columns, df.dtypes)
+        with log_timing("classify_columns") as _t:
+            feature_cols, obj_cols = self._classify_columns(df, self._feature_columns)
         self._report(_t.label, _t.elapsed)
 
         with log_timing("drop_missing_target") as _t:
@@ -88,7 +89,8 @@ class TrainingPreparator:
         self._report(_t.label, _t.elapsed)
 
         with log_timing("encode_object_columns") as _t:
-            df = self._encode_object_columns(df, feature_cols)
+            if obj_cols:
+                df = bulk_label_encode(df, obj_cols)
         self._report(_t.label, _t.elapsed)
 
         with log_timing("impute_and_checkpoint") as _t:
@@ -147,10 +149,31 @@ class TrainingPreparator:
             timing_entries=timing_entries,
         )
 
-    def _filter_datetime_features(self, feature_cols: list[str], dtypes: Any) -> list[str]:
-        return [c for c in feature_cols if not str(dtypes.get(c, "")).startswith(("datetime", "timedelta"))]
+    def _classify_columns(self, df: DataFrame, feature_cols: list[str]) -> tuple[list[str], list[str]]:
+        """Classify feature columns by type. Returns (non-datetime features, string features).
+
+        On distributed DataFrames uses Spark schema (metadata-only, no plan analysis).
+        """
+        if _is_spark_pandas(df):
+            return self._classify_via_schema(as_spark_df(df), feature_cols)
+        dtypes = df.dtypes
+        non_dt = [c for c in feature_cols if not str(dtypes.get(c, "")).startswith(("datetime", "timedelta"))]
+        string_cols = [c for c in non_dt if str(dtypes.get(c, "")).startswith("object")]
+        return non_dt, string_cols
+
+    @staticmethod
+    def _classify_via_schema(spark_df: Any, feature_cols: list[str]) -> tuple[list[str], list[str]]:
+        from pyspark.sql.types import DateType, DayTimeIntervalType, StringType, TimestampNTZType, TimestampType
+
+        type_map = {f.name: f.dataType for f in spark_df.schema.fields}
+        skip = (TimestampType, TimestampNTZType, DateType, DayTimeIntervalType)
+        non_dt = [c for c in feature_cols if c in type_map and not isinstance(type_map[c], skip)]
+        string_cols = [c for c in non_dt if isinstance(type_map.get(c), StringType)]
+        return non_dt, string_cols
 
     def _drop_missing_target(self, df: DataFrame) -> tuple[DataFrame, int]:
+        if _is_spark_pandas(df):
+            return self._drop_missing_target_spark(df)
         mask = df[self._target].isna()
         nan_count = int(mask.sum())
         if nan_count == len(df):
@@ -159,21 +182,56 @@ class TrainingPreparator:
             df = df[~mask]
         return df, nan_count
 
-    def _encode_object_columns(self, df: DataFrame, feature_cols: list[str]) -> DataFrame:
-        obj_cols = [c for c in feature_cols if str(df.dtypes.get(c, "")).startswith("object")]
-        if not obj_cols:
-            return df
-        return bulk_label_encode(df, obj_cols)
+    def _drop_missing_target_spark(self, df: DataFrame) -> tuple[DataFrame, int]:
+        """Single Spark agg job instead of separate sum() + len()."""
+        from pyspark.sql import functions as F  # noqa: N812
+
+        from customer_retention.core.compat.spark_backend import _as_pandas_api
+
+        spark_df = as_spark_df(df)
+        row = spark_df.agg(
+            F.count("*").alias("total"),
+            F.sum(F.when(F.col(self._target).isNull(), 1).otherwise(0)).alias("nulls"),
+        ).head()
+        nan_count, total = int(row["nulls"] or 0), int(row["total"])
+        if nan_count == total:
+            raise ValueError(f"Cannot proceed: all target values are NaN in column '{self._target}'")
+        if nan_count > 0:
+            spark_df = spark_df.filter(F.col(self._target).isNotNull())
+            return _as_pandas_api(spark_df), nan_count
+        return df, 0
 
     def _impute_and_checkpoint(self, df: DataFrame, feature_cols: list[str]) -> DataFrame:
         df = spark_checkpoint(df)
         return bulk_median_impute(df, columns=feature_cols)
 
     def _sample_entities(self, df: DataFrame) -> DataFrame:
-        if self._max_rows is None or len(df) <= self._max_rows:
+        if self._max_rows is None:
+            return df
+        if _is_spark_pandas(df):
+            return self._sample_entities_spark(df)
+        if len(df) <= self._max_rows:
             return df
         n_entities = df["entity_id"].nunique()
         rows_per_entity = len(df) / max(1, n_entities)
+        target_entities = max(100, int(self._max_rows / rows_per_entity))
+        entity_df = df[["entity_id"]].drop_duplicates()
+        sampled_entity_df = safe_sample(entity_df, n=target_entities)
+        return df.merge(sampled_entity_df, on="entity_id", how="inner")
+
+    def _sample_entities_spark(self, df: DataFrame) -> DataFrame:
+        """Single agg job for row count + entity count instead of separate len() + nunique()."""
+        from pyspark.sql import functions as F  # noqa: N812
+
+        spark_df = as_spark_df(df)
+        row = spark_df.agg(
+            F.count("*").alias("total"),
+            F.countDistinct(F.col("entity_id")).alias("n_entities"),
+        ).head()
+        total, n_entities = int(row["total"]), int(row["n_entities"])
+        if total <= self._max_rows:
+            return df
+        rows_per_entity = total / max(1, n_entities)
         target_entities = max(100, int(self._max_rows / rows_per_entity))
         entity_df = df[["entity_id"]].drop_duplicates()
         sampled_entity_df = safe_sample(entity_df, n=target_entities)
@@ -218,16 +276,16 @@ class TrainingPreparator:
     ) -> TrainingPreparationResult:
         from .spark_feature_scaler import SparkFeatureScaler
 
+        # Bundle train: features + y + entity + date → one checkpoint
         train_bundle = concat([
             X_train, y_train.rename("__y__"),
             train_entities.rename(_CV_ENTITY_COL),
             train_dates.rename(_CV_DATE_COL),
         ], axis=1)
         train_bundle = spark_checkpoint(train_bundle)
-        X_train = train_bundle.drop(columns=["__y__", _CV_ENTITY_COL, _CV_DATE_COL])
+        # Extract all columns from the single checkpointed wrapper (no __setitem__)
+        X_train = train_bundle[feature_cols + [_CV_ENTITY_COL, _CV_DATE_COL]]
         y_train = train_bundle["__y__"]
-        cv_entity = train_bundle[_CV_ENTITY_COL]
-        cv_date = train_bundle[_CV_DATE_COL]
 
         test_bundle = concat([X_test, y_test.rename("__y__")], axis=1)
         test_bundle = spark_checkpoint(test_bundle)
@@ -236,13 +294,14 @@ class TrainingPreparator:
 
         scaler = SparkFeatureScaler(scaler_type=self._scaler_type)
         scaling_result = scaler.fit_transform(X_train[feature_cols], X_test[feature_cols])
-        X_train_scaled = scaling_result.X_train_scaled
-        X_test_scaled = scaling_result.X_test_scaled
-
-        X_train[_CV_ENTITY_COL] = cv_entity
-        X_train[_CV_DATE_COL] = cv_date
-        X_train_scaled[_CV_ENTITY_COL] = cv_entity
-        X_train_scaled[_CV_DATE_COL] = cv_date
+        # _apply_spark passes through non-feature columns, so CV cols survive if present.
+        # But scaler input was X_train[feature_cols] only. Re-attach CV cols from train_bundle.
+        X_train_scaled = concat([
+            scaling_result.X_train_scaled,
+            train_bundle[_CV_ENTITY_COL].rename(_CV_ENTITY_COL),
+            train_bundle[_CV_DATE_COL].rename(_CV_DATE_COL),
+        ], axis=1)
+        X_train_scaled = spark_checkpoint(X_train_scaled)
 
         y_test_np = collect_for_sklearn(y_test).to_numpy()
         train_entities = collect_for_sklearn(train_entities)
@@ -250,7 +309,7 @@ class TrainingPreparator:
 
         return TrainingPreparationResult(
             X_train=X_train, X_test=X_test,
-            X_train_scaled=X_train_scaled, X_test_scaled=X_test_scaled,
+            X_train_scaled=X_train_scaled, X_test_scaled=scaling_result.X_test_scaled,
             y_train=y_train, y_test=y_test,
             y_test_np=y_test_np, feature_names=feature_cols,
             train_entities=train_entities, train_dates=train_dates,
