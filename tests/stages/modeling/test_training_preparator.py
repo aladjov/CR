@@ -305,9 +305,61 @@ class TestTimingProfiling:
         expected = {
             "filter_datetime_features", "drop_missing_target",
             "encode_object_columns", "temporal_split",
-            "fillna_and_drop_zero_variance",
+            "fillna_and_drop_zero_variance", "scale_features",
         }
         assert expected.issubset(labels), f"Missing: {expected - labels}"
+
+
+# ---------------------------------------------------------------------------
+# TestProgressCallback
+# ---------------------------------------------------------------------------
+
+class TestProgressCallback:
+    def test_callback_invoked_for_each_step(self, feature_cols, base_df):
+        from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
+        invocations = []
+        prep = TrainingPreparator(
+            target_column="target", feature_columns=feature_cols,
+            purge_gap_days=30, test_size=0.2,
+            on_progress=lambda label, elapsed: invocations.append((label, elapsed)),
+        )
+        prep.prepare(base_df)
+        labels = [label for label, _ in invocations]
+        assert "temporal_split" in labels
+        assert "scale_features" in labels
+        assert all(elapsed >= 0 for _, elapsed in invocations)
+
+    def test_callback_none_is_noop(self, feature_cols, base_df):
+        from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
+        prep = TrainingPreparator(
+            target_column="target", feature_columns=feature_cols,
+            purge_gap_days=30, test_size=0.2, on_progress=None,
+        )
+        result = prep.prepare(base_df)
+        assert len(result.X_train) > 0
+
+    def test_print_preparation_progress_format(self, capsys):
+        from customer_retention.stages.modeling.training_preparator import print_preparation_progress
+
+        print_preparation_progress("temporal_split", 1.234)
+        captured = capsys.readouterr()
+        assert "temporal_split: 1.2s" in captured.out
+
+    def test_callback_receives_labels_in_order(self, feature_cols, base_df):
+        from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
+        labels = []
+        prep = TrainingPreparator(
+            target_column="target", feature_columns=feature_cols,
+            purge_gap_days=30, test_size=0.2,
+            on_progress=lambda label, elapsed: labels.append(label),
+        )
+        prep.prepare(base_df)
+        # First step should be filter_datetime_features, last should be scale_features
+        assert labels[0] == "filter_datetime_features"
+        assert labels[-1] == "scale_features"
 
 
 # ---------------------------------------------------------------------------

@@ -121,3 +121,34 @@ def test_log_timing_rejects_non_logger_as_logger():
     with pytest.raises(AttributeError, match="log"):
         with log_timing("label", "not_a_logger"):
             pass
+
+
+def test_log_timing_yields_timing_entry():
+    import time
+
+    from customer_retention.core.compat.timing import TimingEntry
+
+    with log_timing("yielded_block") as entry:
+        assert isinstance(entry, TimingEntry)
+        assert entry.label == "yielded_block"
+        time.sleep(0.01)
+    assert entry.elapsed >= 0.01
+
+
+def test_log_timing_yields_entry_when_disabled():
+    from customer_retention.core.compat.timing import TimingEntry
+
+    set_timing_enabled(False)
+    try:
+        with log_timing("disabled_block") as entry:
+            assert isinstance(entry, TimingEntry)
+        assert entry.elapsed == 0.0
+    finally:
+        set_timing_enabled(True)
+
+
+def test_log_timing_entry_extra_fields():
+    with log_timing("extra_block", cols=10) as entry:
+        pass
+    assert entry.extra == {"cols": 10}
+    assert entry.elapsed >= 0

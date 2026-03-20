@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 
@@ -25,6 +25,12 @@ from customer_retention.core.compat.timing import TimingEntry, log_timing, start
 from .cross_validator import _CV_DATE_COL, _CV_ENTITY_COL
 from .data_splitter import DataSplitter, SplitStrategy
 from .feature_scaler import FeatureScaler, ScalerType
+
+ProgressCallback = Optional["Callable[[str, float], None]"]
+
+
+def print_preparation_progress(label: str, elapsed: float) -> None:
+    print(f"  {label}: {elapsed:.1f}s")
 
 
 @dataclass
@@ -55,6 +61,7 @@ class TrainingPreparator:
         scaler_type: ScalerType = ScalerType.STANDARD,
         max_rows: Optional[int] = None,
         use_float32: bool = True,
+        on_progress: ProgressCallback = None,
     ):
         self._target = target_column
         self._feature_columns = list(feature_columns)
@@ -63,48 +70,62 @@ class TrainingPreparator:
         self._scaler_type = scaler_type
         self._max_rows = max_rows
         self._use_float32 = use_float32
+        self._on_progress = on_progress
+
+    def _report(self, label: str, elapsed: float) -> None:
+        if self._on_progress:
+            self._on_progress(label, elapsed)
 
     def prepare(self, df: DataFrame) -> TrainingPreparationResult:
         start_collecting()
 
-        with log_timing("filter_datetime_features"):
+        with log_timing("filter_datetime_features") as _t:
             feature_cols = self._filter_datetime_features(self._feature_columns, df.dtypes)
+        self._report(_t.label, _t.elapsed)
 
-        with log_timing("drop_missing_target"):
+        with log_timing("drop_missing_target") as _t:
             df, _nan_count = self._drop_missing_target(df)
+        self._report(_t.label, _t.elapsed)
 
-        with log_timing("encode_object_columns"):
+        with log_timing("encode_object_columns") as _t:
             df = self._encode_object_columns(df, feature_cols)
+        self._report(_t.label, _t.elapsed)
 
-        with log_timing("impute_and_checkpoint"):
+        with log_timing("impute_and_checkpoint") as _t:
             df = self._impute_and_checkpoint(df, feature_cols)
+        self._report(_t.label, _t.elapsed)
 
-        with log_timing("sample_entities"):
+        with log_timing("sample_entities") as _t:
             df = self._sample_entities(df)
+        self._report(_t.label, _t.elapsed)
 
-        with log_timing("temporal_split"):
+        with log_timing("temporal_split") as _t:
             split_result = self._temporal_split(df, feature_cols)
+        self._report(_t.label, _t.elapsed)
 
         X_train, X_test = split_result.X_train, split_result.X_test
         y_train, y_test = split_result.y_train, split_result.y_test
         train_entities, train_dates = self._extract_train_metadata(split_result, df)
 
-        with log_timing("fillna_and_drop_zero_variance"):
+        with log_timing("fillna_and_drop_zero_variance") as _t:
             X_train, X_test, zero_var = self._fillna_and_drop_zero_variance(X_train, X_test)
+        self._report(_t.label, _t.elapsed)
 
         feature_cols = [c for c in X_train.columns if c not in {_CV_ENTITY_COL, _CV_DATE_COL}]
 
         distributed = _is_spark_pandas(X_train)
-        if distributed:
-            result = self._finalize_distributed(
-                X_train, X_test, y_train, y_test,
-                train_entities, train_dates, feature_cols,
-            )
-        else:
-            result = self._finalize_local(
-                X_train, X_test, y_train, y_test,
-                train_entities, train_dates, feature_cols,
-            )
+        with log_timing("scale_features") as _t:
+            if distributed:
+                result = self._finalize_distributed(
+                    X_train, X_test, y_train, y_test,
+                    train_entities, train_dates, feature_cols,
+                )
+            else:
+                result = self._finalize_local(
+                    X_train, X_test, y_train, y_test,
+                    train_entities, train_dates, feature_cols,
+                )
+        self._report(_t.label, _t.elapsed)
 
         class_dist = self._class_distribution(result.y_train)
         timing_entries = stop_collecting()

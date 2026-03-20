@@ -14,7 +14,7 @@ _collector: TimingCollector | None = None
 @dataclass
 class TimingEntry:
     label: str
-    elapsed: float
+    elapsed: float = 0.0
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -62,17 +62,18 @@ def log_timing(
     level: int = logging.INFO,
     **extra_fields: Any,
 ):
+    entry = TimingEntry(label=label, extra=extra_fields)
     if not _ENABLED:
-        yield
+        yield entry
         return
     t0 = time.monotonic()
-    yield
-    elapsed = time.monotonic() - t0
+    yield entry
+    entry.elapsed = time.monotonic() - t0
     _log = logger or logging.getLogger(__name__)
     suffix = "".join(f", {k}={v}" for k, v in extra_fields.items())
-    _log.log(level, "[TIMING] %s: %.2fs%s", label, elapsed, suffix)
+    _log.log(level, "[TIMING] %s: %.2fs%s", label, entry.elapsed, suffix)
     if _collector is not None:
-        _collector.record(label, elapsed, **extra_fields)
+        _collector.record(label, entry.elapsed, **extra_fields)
 
 
 def timed(
