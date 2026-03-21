@@ -416,6 +416,7 @@ class TestDistributedApplyAll:
         assert "lmbda" in call_kwargs.kwargs
 
     def test_distributed_prefit_calls_both_batch_fitters(self, executor):
+        pytest.importorskip("pyspark")
         mock_spark_df = MagicMock()
         steps = [
             _step(PipelineTransformationType.SCALE, "a", method="standard"),
@@ -859,6 +860,7 @@ class TestBatchFitScalersDistributed:
 
 class TestBatchFitPowerTransformsDistributed:
     def test_yj_prefit_stores_params_in_step(self, executor):
+        pytest.importorskip("pyspark")
         np.random.seed(42)
         sample_pdf = pd.DataFrame({"v": np.random.exponential(5, 50)})
         mock_spark_df = MagicMock()
@@ -883,6 +885,7 @@ class TestBatchFitPowerTransformsDistributed:
         mock_store.register.assert_called_once()
 
     def test_yj_prefit_samples_large_datasets(self, executor):
+        pytest.importorskip("pyspark")
         np.random.seed(42)
         sample_pdf = pd.DataFrame({"v": np.random.exponential(5, 100)})
         mock_spark_df = MagicMock()

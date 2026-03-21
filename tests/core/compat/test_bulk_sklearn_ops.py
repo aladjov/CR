@@ -109,6 +109,7 @@ class TestSparkBulkLabelEncode:
         assert "StringIndexer" not in source
 
     def test_high_cardinality_uses_hash_encoding(self):
+        pytest.importorskip("pyspark")
         from unittest.mock import MagicMock, patch
 
         from customer_retention.core.compat import _MAX_LABEL_CARDINALITY, _spark_bulk_label_encode

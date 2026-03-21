@@ -83,6 +83,8 @@ COLLECT_BOUNDARY_FILES = {
     "transforms/spark_ops.py",
     # Batch fitting — .agg().collect() for scaler stats (1 row), bounded sample for PowerTransform
     "transforms/executor.py",
+    # Training prep — .agg().collect() for batched null counts + stddev (1 row per split)
+    "stages/modeling/training_preparator.py",
 }
 
 # ── bare 'import pandas as pd' allowlist ────────────────────────────────
@@ -336,4 +338,82 @@ def test_compat_no_pandas_only_public_exports():
         f"Compat __init__.py exports these private names: {unexpected_private}\n"
         f"Per Coding_Practices.md, only dual-backend dispatchers should be public.\n"
         f"Keep single-environment implementations private (prefix _)."
+    )
+
+
+# ── Test: test files importing pyspark must have importorskip guard ───
+# CI runs without PySpark. Tests that import it (directly or via module-level
+# imports in source) must call pytest.importorskip("pyspark") so they skip
+# gracefully instead of raising ModuleNotFoundError.
+
+_TESTS_ROOT = Path(__file__).resolve().parents[2]
+
+_PYSPARK_IMPORT_IN_TEST = re.compile(
+    r"(?:from\s+pyspark|import\s+pyspark)"
+)
+
+_IMPORTORSKIP_GUARD = re.compile(
+    r'pytest\.importorskip\(\s*["\']pyspark["\']'
+)
+
+_TRY_EXCEPT_IMPORT_GUARD = re.compile(
+    r"try:\s*\n\s*(?:from\s+pyspark|import\s+pyspark)[^\n]*\n(?:[^\n]*\n)*?\s*except\s+ImportError"
+)
+
+_PYTESTMARK_SPARK = re.compile(
+    r"pytestmark\s*=.*pytest\.mark\.spark"
+)
+
+# Test files that are entirely guarded at module level (importorskip at top
+# or pytestmark = pytest.mark.spark) — no per-method check needed.
+_MODULE_LEVEL_GUARDED_TEST_FILES = {
+    "transforms/test_spark_ops.py",
+    "stages/modeling/test_spark_baseline_trainer.py",
+    "stages/modeling/test_spark_classifier_wrapper.py",
+    "stages/profiling/test_spark_segment_analyzer.py",
+    "stages/profiling/test_spark_temporal_feature_analyzer.py",
+    "stages/profiling/test_spark_temporal_feature_engineer.py",
+    "stages/profiling/test_spark_time_window_aggregator.py",
+    "stages/temporal/test_spark_temporal_merger.py",
+    "generators/pipeline_generator/test_databricks_renderer.py",
+    "generators/pipeline_generator/test_databricks_renderer_optimize.py",
+    "generators/pipeline_generator/test_databricks_generator.py",
+    "generators/pipeline_generator/test_pipeline_parity.py",
+    "generators/orchestration/test_databricks_exporter.py",
+    "integrations/test_databricks_init.py",
+    "core/compat/test_spark_backend.py",
+}
+
+
+def _test_rel(p: Path) -> str:
+    return str(p.relative_to(_TESTS_ROOT))
+
+
+def _test_files_with_pyspark_import() -> list[Path]:
+    result = []
+    for p in sorted(_TESTS_ROOT.rglob("test_*.py")):
+        if "__pycache__" in str(p):
+            continue
+        rel = _test_rel(p)
+        if rel in _MODULE_LEVEL_GUARDED_TEST_FILES:
+            continue
+        source = p.read_text()
+        cleaned = _strip_strings(source)
+        if _PYSPARK_IMPORT_IN_TEST.search(cleaned):
+            if not _IMPORTORSKIP_GUARD.search(source) and not _PYTESTMARK_SPARK.search(source) and not _TRY_EXCEPT_IMPORT_GUARD.search(source):
+                result.append(p)
+    return result
+
+
+@pytest.mark.parametrize(
+    "test_file", _test_files_with_pyspark_import(), ids=_test_rel
+)
+def test_pyspark_imports_guarded_in_tests(test_file: Path):
+    rel = _test_rel(test_file)
+    pytest.fail(
+        f"\n{rel} imports pyspark but has no pytest.importorskip('pyspark') guard.\n"
+        f"CI runs without PySpark — unguarded imports cause ModuleNotFoundError.\n"
+        f"Add pytest.importorskip('pyspark') at the start of each test method that\n"
+        f"needs pyspark, or add the file to _MODULE_LEVEL_GUARDED_TEST_FILES if it\n"
+        f"has a module-level guard (pytestmark = pytest.mark.spark or importorskip at top)."
     )

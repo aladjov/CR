@@ -641,6 +641,7 @@ class TestLoadGoldModule:
 
 class TestPredictSparkMl:
     def test_assembles_features_and_returns_probabilities(self, databricks_config):
+        pytest.importorskip("pyspark")
         mock_spark = MagicMock()
         mock_spark_df = MagicMock()
         mock_spark.createDataFrame.return_value = mock_spark_df
@@ -671,6 +672,7 @@ class TestPredictSparkMl:
         np.testing.assert_array_equal(result, proba_values)
 
     def test_assembler_uses_feature_columns(self, databricks_config):
+        pytest.importorskip("pyspark")
         mock_spark = MagicMock()
         mock_assembler = MagicMock()
         mock_assembled = MagicMock()

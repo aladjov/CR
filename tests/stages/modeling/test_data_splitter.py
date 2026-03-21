@@ -774,6 +774,7 @@ class TestTemporalSplitFailFast:
             splitter.split(df)
 
     def test_distributed_path_raises_on_nat_cutoff(self):
+        pytest.importorskip("pyspark")
         from unittest.mock import MagicMock, patch
 
         splitter = DataSplitter(
