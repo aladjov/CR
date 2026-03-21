@@ -398,6 +398,46 @@ class TestProgressCallback:
         captured = capsys.readouterr()
         assert "[3/10] temporal_split: 1.2s" in captured.out
 
+    def test_progress_tracker_includes_wall_time(self, capsys):
+        from customer_retention.stages.modeling.training_preparator import PreparationProgressTracker
+
+        tracker = PreparationProgressTracker()
+        tracker(1, 10, "classify_columns", 4.7)
+        captured = capsys.readouterr()
+        assert "[1/10] classify_columns: 4.7s" in captured.out
+        assert "wall:" in captured.out
+        assert "ETA" in captured.out
+
+    def test_progress_tracker_no_eta_on_last_step(self, capsys):
+        from customer_retention.stages.modeling.training_preparator import PreparationProgressTracker
+
+        tracker = PreparationProgressTracker()
+        tracker(10, 10, "class_distribution", 0.1)
+        captured = capsys.readouterr()
+        assert "ETA" not in captured.out
+
+    def test_log_sub_prints_when_progress_enabled(self, capsys):
+        from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
+        prep = TrainingPreparator(
+            target_column="target", feature_columns=["a"],
+            on_progress=lambda s, t, label, e: None,
+        )
+        prep._log_sub("test substep: 1.2s")
+        captured = capsys.readouterr()
+        assert "→ test substep: 1.2s" in captured.out
+
+    def test_log_sub_silent_when_progress_disabled(self, capsys):
+        from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
+        prep = TrainingPreparator(
+            target_column="target", feature_columns=["a"],
+            on_progress=None,
+        )
+        prep._log_sub("test substep: 1.2s")
+        captured = capsys.readouterr()
+        assert captured.out == ""
+
     def test_callback_receives_labels_in_order(self, feature_cols, base_df):
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
 

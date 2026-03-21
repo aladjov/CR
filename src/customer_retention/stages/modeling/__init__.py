@@ -18,7 +18,7 @@ from .spark_baseline_trainer import SparkBaselineTrainer, create_distributed_mod
 from .spark_classifier_wrapper import SparkClassifierWrapper
 from .spark_feature_scaler import SparkFeatureScaler
 from .threshold_optimizer import OptimizationObjective, ThresholdOptimizer, ThresholdResult
-from .training_preparator import TrainingPreparationResult, TrainingPreparator
+from .training_preparator import PreparationProgressTracker, TrainingPreparationResult, TrainingPreparator
 
 __all__ = [
     "DataSplitter", "SplitStrategy", "SplitResult", "SplitConfig",
@@ -34,5 +34,5 @@ __all__ = [
     "SparkFeatureScaler",
     "SparkBaselineTrainer", "SparkClassifierWrapper", "create_distributed_models",
     "MLflowLogger", "ExperimentConfig",
-    "TrainingPreparator", "TrainingPreparationResult",
+    "TrainingPreparator", "TrainingPreparationResult", "PreparationProgressTracker",
 ]

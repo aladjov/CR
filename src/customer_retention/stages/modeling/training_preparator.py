@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any, Callable, Optional
@@ -28,8 +29,29 @@ from .feature_scaler import FeatureScaler, ScalerType
 ProgressCallback = Optional["Callable[[int, int, str, float], None]"]
 
 
+def _fmt_duration(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m{int(seconds % 60):02d}s"
+    return f"{int(seconds // 3600)}h{int((seconds % 3600) // 60):02d}m"
+
+
 def print_preparation_progress(step: int, total: int, label: str, elapsed: float) -> None:
     print(f"  [{step}/{total}] {label}: {elapsed:.1f}s")
+
+
+class PreparationProgressTracker:
+    """Progress callback with wall-time tracking and ETA."""
+
+    def __init__(self) -> None:
+        self._start = time.monotonic()
+
+    def __call__(self, step: int, total: int, label: str, elapsed: float) -> None:
+        wall = time.monotonic() - self._start
+        remaining = (wall / step) * (total - step) if step > 0 else 0
+        eta = f", ETA ~{_fmt_duration(remaining)}" if step < total else ""
+        print(f"  [{step}/{total}] {label}: {elapsed:.1f}s (wall: {_fmt_duration(wall)}{eta})")
 
 
 @dataclass
@@ -77,6 +99,10 @@ class TrainingPreparator:
     def _report(self, step: int, label: str, elapsed: float) -> None:
         if self._on_progress:
             self._on_progress(step, self._TOTAL_STEPS, label, elapsed)
+
+    def _log_sub(self, msg: str) -> None:
+        if self._on_progress:
+            print(f"      → {msg}")
 
     def prepare(self, df: DataFrame) -> TrainingPreparationResult:
         start_collecting()
@@ -290,9 +316,8 @@ class TrainingPreparator:
                 combined_nulls.pop(c, None)
         return X_train, X_test, zero_var, combined_nulls
 
-    @staticmethod
     def _spark_nulls_and_zero_var(
-        X_train: DataFrame, X_test: DataFrame,
+        self, X_train: DataFrame, X_test: DataFrame,
     ) -> tuple[dict[str, int], list[str]]:
         import pyspark.sql.functions as F  # noqa: N812
         from pyspark.sql.types import NumericType
@@ -302,13 +327,17 @@ class TrainingPreparator:
         all_cols = list(train_spark.columns)
         num_cols = [f.name for f in train_spark.schema.fields if isinstance(f.dataType, NumericType)]
 
+        t0 = time.monotonic()
         train_exprs = [F.coalesce(F.sum(F.isnull(F.col(c)).cast("int")), F.lit(0)).alias(f"__null__{c}") for c in all_cols]
         for c in num_cols:
             train_exprs.append(F.stddev(F.coalesce(F.col(c), F.lit(0))).alias(f"__std__{c}"))
         train_row = train_spark.agg(*train_exprs).collect()[0]
+        self._log_sub(f"agg train ({len(all_cols)} cols, {len(train_exprs)} exprs): {time.monotonic() - t0:.1f}s")
 
+        t1 = time.monotonic()
         test_exprs = [F.coalesce(F.sum(F.isnull(F.col(c)).cast("int")), F.lit(0)).alias(f"__null__{c}") for c in all_cols]
         test_row = test_spark.agg(*test_exprs).collect()[0]
+        self._log_sub(f"agg test ({len(all_cols)} cols): {time.monotonic() - t1:.1f}s")
 
         combined_nulls = {c: int(train_row[f"__null__{c}"] or 0) + int(test_row[f"__null__{c}"] or 0) for c in all_cols}
         zero_var = [c for c in num_cols if train_row[f"__std__{c}"] is None or float(train_row[f"__std__{c}"]) == 0]
@@ -340,30 +369,32 @@ class TrainingPreparator:
 
         from .spark_feature_scaler import SparkFeatureScaler
 
-        # Bundle train — all objects share same pyspark.pandas index → cheap concat
+        t0 = time.monotonic()
         train_bundle = concat([
             X_train, y_train.rename("__y__"),
             train_entities.rename(_CV_ENTITY_COL),
             train_dates.rename(_CV_DATE_COL),
         ], axis=1)
         train_bundle = spark_checkpoint(train_bundle)
+        self._log_sub(f"checkpoint train ({len(train_bundle.columns)} cols): {time.monotonic() - t0:.1f}s")
 
+        t1 = time.monotonic()
         test_bundle = concat([X_test, y_test.rename("__y__")], axis=1)
         test_bundle = spark_checkpoint(test_bundle)
+        self._log_sub(f"checkpoint test: {time.monotonic() - t1:.1f}s")
 
-        # Scale entirely on native Spark — _apply_spark passes through
-        # non-feature columns (__y__, CV cols), so no concat needed after scaling
+        t2 = time.monotonic()
         train_spark = as_spark_df(train_bundle)
         test_spark = as_spark_df(test_bundle)
-
         scaler = SparkFeatureScaler(scaler_type=self._scaler_type)
         scaler._feature_names = feature_cols
         scaler._params = scaler._compute_params_spark(train_spark)
+        self._log_sub(f"scaler params ({len(feature_cols)} features): {time.monotonic() - t2:.1f}s")
 
+        t3 = time.monotonic()
         train_scaled_spark = scaler._apply_spark(train_spark)
         test_scaled_spark = scaler._apply_spark(test_spark)
 
-        # Wrap each output ONCE — no concat across different wrappers
         non_y_cols = [c for c in train_spark.columns if c != "__y__"]
         test_non_y = [c for c in test_spark.columns if c != "__y__"]
         X_train = _as_pandas_api(train_spark.select(non_y_cols))
@@ -376,6 +407,7 @@ class TrainingPreparator:
         y_test_np = collect_for_sklearn(y_test).to_numpy()
         train_entities = collect_for_sklearn(train_entities)
         train_dates = collect_for_sklearn(train_dates)
+        self._log_sub(f"scale + wrap + collect: {time.monotonic() - t3:.1f}s")
 
         return TrainingPreparationResult(
             X_train=X_train, X_test=X_test,
