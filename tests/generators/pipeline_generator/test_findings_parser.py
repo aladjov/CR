@@ -4386,6 +4386,128 @@ class TestTemporalMergeMetadata:
         (findings_dir / "orders_findings.yaml").write_text(yaml.dump(orders_findings))
 
 
+class TestDiscoveredEventMergeSourcesReconciliation:
+    """When _build_discovered_landing_configs promotes a source to event-level,
+    the corresponding merge_sources entry must be updated to EVENT_LEVEL granularity."""
+
+    def test_discovered_event_merge_source_granularity(self, tmp_path):
+        from customer_retention.analysis.auto_explorer.project_context import (
+            ObjectivePriority,
+            ObjectiveSpec,
+            PredictionObjective,
+            ProjectContext,
+        )
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        from customer_retention.analysis.auto_explorer.snapshot_grid import SnapshotGrid
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        SnapshotGrid(
+            cadence_interval="weekly", observation_window_days=90,
+            grid_dates=["2024-01-01", "2024-01-08"],
+        ).save(ns.snapshot_grid_path)
+        ProjectContext(
+            entity_column="customer_id",
+            objectives=[ObjectiveSpec(
+                objective=PredictionObjective.IMMEDIATE_RISK,
+                priority=ObjectivePriority.PRIMARY,
+            )],
+        ).save(ns.project_context_path)
+
+        # Write findings into per-dataset namespace dirs so discover_all_findings sees them
+        cust_dir = ns.dataset_findings_dir("customers")
+        cust_dir.mkdir(parents=True, exist_ok=True)
+        agg_dir = ns.dataset_findings_dir("orders_agg")
+        agg_dir.mkdir(parents=True, exist_ok=True)
+        raw_dir = ns.dataset_findings_dir("orders_raw")
+        raw_dir.mkdir(parents=True, exist_ok=True)
+
+        agg_findings_path = agg_dir / "orders_agg_findings.yaml"
+        agg_parquet = str(agg_dir / "orders_agg.parquet")
+
+        findings_dir = ns.multi_dataset_findings_path.parent
+        findings_dir.mkdir(parents=True, exist_ok=True)
+
+        multi_dataset = {
+            "datasets": {
+                "customers": {
+                    "name": "customers",
+                    "findings_path": str(cust_dir / "customers_findings.yaml"),
+                    "source_path": "/data/customers.csv",
+                    "granularity": "entity_level",
+                    "row_count": 1000, "column_count": 3,
+                    "entity_column": "customer_id",
+                },
+                "orders_agg": {
+                    "name": "orders_agg",
+                    "findings_path": str(agg_findings_path),
+                    "source_path": agg_parquet,
+                    "granularity": "entity_level",
+                    "row_count": 500, "column_count": 6,
+                },
+            },
+            "relationships": [{
+                "left_dataset": "customers", "right_dataset": "orders_agg",
+                "left_column": "customer_id", "right_column": "customer_id",
+                "relationship_type": "one_to_one", "confidence": 1.0,
+            }],
+            "primary_entity_dataset": "customers",
+            "event_datasets": [],
+            "excluded_datasets": [],
+        }
+        ns.multi_dataset_findings_path.write_text(yaml.dump(multi_dataset))
+
+        def _col(name, typ):
+            return {"name": name, "inferred_type": typ, "confidence": 0.95,
+                    "evidence": [], "quality_score": 100,
+                    "cleaning_needed": False, "cleaning_recommendations": []}
+        (cust_dir / "customers_findings.yaml").write_text(yaml.dump({
+            "source_path": "/data/customers.csv", "source_format": "csv",
+            "row_count": 1000, "column_count": 3,
+            "columns": {"customer_id": _col("customer_id", "identifier"),
+                        "churn": _col("churn", "binary")},
+            "target_column": "churn", "identifier_columns": ["customer_id"],
+        }))
+        agg_findings_path.write_text(yaml.dump({
+            "source_path": agg_parquet, "source_format": "parquet",
+            "row_count": 500, "column_count": 6,
+            "columns": {"customer_id": _col("customer_id", "identifier"),
+                        "total_amount": _col("total_amount", "numeric_continuous")},
+            "identifier_columns": ["customer_id"],
+        }))
+        (raw_dir / "orders_raw_findings.yaml").write_text(yaml.dump({
+            "source_path": "/data/raw/orders.csv", "source_format": "csv",
+            "row_count": 5000, "column_count": 4,
+            "columns": {"customer_id": _col("customer_id", "identifier"),
+                        "amount": _col("amount", "numeric_continuous"),
+                        "order_date": _col("order_date", "datetime")},
+            "identifier_columns": ["customer_id"],
+            "datetime_columns": ["order_date"],
+            "time_series_metadata": {
+                "granularity": "event_level", "entity_column": "customer_id",
+                "time_column": "order_date", "aggregation_executed": True,
+                "aggregated_findings_path": str(agg_findings_path),
+                "suggested_aggregations": ["7d", "30d"],
+            },
+        }))
+
+        parser = FindingsParser(str(findings_dir), namespace=ns)
+        config = parser.parse()
+
+        source = next(s for s in config.sources if s.name == "orders_agg")
+        assert source.is_event_level is True
+
+        merge_src = next(
+            (s for s in config.silver.merge_sources if s.name == "orders_agg"), None,
+        )
+        assert merge_src is not None
+        assert merge_src.granularity == "event_level", (
+            "Discovered event source must have event_level granularity in merge_sources "
+            "to match SOURCES.is_event_level — otherwise silver loads the aggregated "
+            "bronze table but tries an as-of join with a nonexistent timestamp column"
+        )
+
+
 class TestBuildGoldConfigColumnTypes:
     def _make_findings_with_types(self, col_types: dict):
         from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings

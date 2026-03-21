@@ -1477,6 +1477,8 @@ class FindingsParser:
         discovered: Dict[str, ExplorationFindings],
         multi: MultiDatasetFindings,
     ) -> None:
+        from customer_retention.core.config.column_config import DatasetGranularity
+
         for agg_name, preagg in discovered.items():
             if agg_name in config.landing:
                 continue
@@ -1490,6 +1492,10 @@ class FindingsParser:
             source_cfg.is_event_level = True
             source_cfg.time_column = time_col
             source_cfg.entity_key = entity_col
+            for ms in config.silver.merge_sources:
+                if ms.name == agg_name:
+                    ms.granularity = DatasetGranularity.EVENT_LEVEL.value
+                    break
             raw_source = str(Path(preagg.source_path).resolve())
             original_target = self._resolve_original_target(preagg, config.target_column)
             config.landing[agg_name] = LandingLayerConfig(

@@ -83,11 +83,17 @@ class SparkTemporalMerger(TemporalMerger):
             merged_sdf = self._spark_join_event(
                 merged_sdf, right_sdf, ds, existing_cols,
             )
-        elif ds.feature_timestamp_column:
+        elif ds.feature_timestamp_column and ds.feature_timestamp_column in set(right_sdf.columns):
             merged_sdf = self._spark_join_asof(
                 merged_sdf, right_sdf, ds, existing_cols,
             )
         else:
+            if ds.feature_timestamp_column:
+                logger.warning(
+                    "Dataset '%s': feature_timestamp_column '%s' not in columns, "
+                    "using broadcast join",
+                    ds.name, ds.feature_timestamp_column,
+                )
             merged_sdf = self._spark_join_broadcast(
                 merged_sdf, right_sdf, ds, existing_cols,
             )

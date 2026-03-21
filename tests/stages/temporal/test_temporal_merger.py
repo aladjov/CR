@@ -684,6 +684,50 @@ class TestMergeAllEdgeCases:
         assert report.spine_dates == 1
 
 
+class TestAsofFallbackWhenTimestampMissing:
+    """When feature_timestamp_column is set but not in the DataFrame, fall back to broadcast."""
+
+    def test_missing_timestamp_falls_back_to_broadcast(self):
+        merger = TemporalMerger()
+        spine = _spine(["A", "B"], ["2024-01-01"])
+        entity_df = _entity_df("entity_id", {
+            "entity_id": ["A", "B"],
+            "dow_cos": [0.5, 0.7],
+        })
+        ds = _merge_input(
+            "emails", entity_df, DatasetGranularity.ENTITY_LEVEL,
+            feature_ts="nonexistent_timestamp",
+        )
+        result, report = merger.merge_all(spine, [ds])
+        assert len(result) == 2
+        assert "dow_cos" in result.columns
+        assert report.datasets_merged == ["emails"]
+
+    def test_missing_timestamp_in_mixed_datasets(self):
+        merger = TemporalMerger()
+        spine = _spine(["A", "B"], ["2024-01-01"])
+        good_df = _entity_df("entity_id", {
+            "entity_id": ["A", "B"],
+            "tier": ["gold", "silver"],
+        })
+        bad_df = _entity_df("entity_id", {
+            "entity_id": ["A", "B"],
+            "score": [10, 20],
+        })
+        datasets = [
+            _merge_input("accounts", good_df, DatasetGranularity.ENTITY_LEVEL),
+            _merge_input(
+                "credit", bad_df, DatasetGranularity.ENTITY_LEVEL,
+                feature_ts="missing_ts",
+            ),
+        ]
+        result, report = merger.merge_all(spine, datasets)
+        assert len(result) == 2
+        assert "tier" in result.columns
+        assert "score" in result.columns
+        assert report.datasets_merged == ["accounts", "credit"]
+
+
 class TestEntityUpdateTimeBroadcastVsAsof:
     """Entity-level datasets with update timestamps (e.g. LAST_MODIFIED_DATE)
     should use broadcast join, not as-of join. When the update timestamp is

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 from customer_retention.core.compat import Timedelta, as_tz_naive, native_pd, safe_drop_duplicates, to_datetime
 from customer_retention.core.config.column_config import DatasetGranularity
 from customer_retention.stages.temporal.point_in_time_join import PointInTimeJoiner
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -77,9 +80,15 @@ class TemporalMerger:
 
             if ds.granularity == DatasetGranularity.EVENT_LEVEL:
                 merged = self._merge_event_snapshot(merged, ds, existing_cols)
-            elif ds.feature_timestamp_column:
+            elif ds.feature_timestamp_column and ds.feature_timestamp_column in set(ds.df.columns):
                 merged = self._merge_entity_asof(merged, ds, existing_cols)
             else:
+                if ds.feature_timestamp_column:
+                    logger.warning(
+                        "Dataset '%s': feature_timestamp_column '%s' not in columns, "
+                        "using broadcast join",
+                        ds.name, ds.feature_timestamp_column,
+                    )
                 merged = self._merge_entity_broadcast(merged, ds, existing_cols)
 
             new_cols = set(merged.columns) - before_cols

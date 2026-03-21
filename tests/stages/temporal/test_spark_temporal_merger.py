@@ -1112,6 +1112,63 @@ class TestNativeSparkMergeAll:
         merger.merge_all(spine, [ds])
         assert list(ds.df.columns) == original_cols
 
+    def test_asof_fallback_to_broadcast_when_timestamp_missing(self, monkeypatch):
+        """When feature_timestamp_column is set but missing from DataFrame, fall back to broadcast."""
+        _patch_native_spark(monkeypatch)
+        merger = SparkTemporalMerger(config=MergeConfig(validate_temporal=False))
+        spine = _spine(["A", "B"], ["2024-01-01"])
+
+        entity_df = _entity_df("entity_id", {
+            "entity_id": ["A", "B"],
+            "dow_cos": [0.5, 0.7],
+            "dow_sin": [0.3, 0.4],
+        })
+        datasets = [
+            _merge_input(
+                "emails", entity_df, DatasetGranularity.ENTITY_LEVEL,
+                feature_ts="nonexistent_timestamp",
+            ),
+        ]
+        result, report = merger.merge_all(spine, datasets)
+        assert len(result) == 2
+        assert "dow_cos" in result.columns
+        assert report.datasets_merged == ["emails"]
+
+    def test_asof_fallback_logs_warning_when_timestamp_missing(self, monkeypatch, caplog):
+        """When falling back from asof to broadcast, a warning is logged."""
+        _patch_native_spark(monkeypatch)
+        merger = SparkTemporalMerger(config=MergeConfig(validate_temporal=False))
+        spine = _spine(["A"], ["2024-01-01"])
+
+        entity_df = _entity_df("entity_id", {"entity_id": ["A"], "score": [10]})
+        datasets = [
+            _merge_input(
+                "credit", entity_df, DatasetGranularity.ENTITY_LEVEL,
+                feature_ts="missing_ts",
+            ),
+        ]
+        with caplog.at_level(logging.WARNING, logger="customer_retention.stages.temporal.spark_temporal_merger"):
+            merger.merge_all(spine, datasets)
+        assert any("missing_ts" in msg and "credit" in msg for msg in caplog.messages)
+
+    def test_merge_one_asof_fallback_when_timestamp_missing(self, monkeypatch):
+        """merge_one also falls back to broadcast when timestamp column is missing."""
+        _patch_native_spark(monkeypatch)
+        merger = SparkTemporalMerger(config=MergeConfig(validate_temporal=False))
+        spine_sdf = FakeSparkDF(_spine(["A", "B"], ["2024-01-01"]))
+
+        entity_df = _entity_df("entity_id", {
+            "entity_id": ["A", "B"],
+            "tier": ["gold", "silver"],
+        })
+        ds = _merge_input(
+            "customers", entity_df, DatasetGranularity.ENTITY_LEVEL,
+            feature_ts="no_such_column",
+        )
+        result_sdf, new_cols = merger.merge_one(spine_sdf, ds)
+        assert "tier" in new_cols
+        assert result_sdf.count() == 2
+
     def test_fallback_to_parent_without_spark(self, monkeypatch):
         """When get_spark_session returns None, merge_all falls back to parent."""
         monkeypatch.setattr(
