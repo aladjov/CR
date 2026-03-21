@@ -20,6 +20,7 @@ from customer_retention.core.compat import (
     safe_sample,
     spark_checkpoint,
 )
+from customer_retention.core.compat.bulk_profiling import bulk_null_counts
 from customer_retention.core.compat.timing import TimingEntry, log_timing, start_collecting, stop_collecting
 
 from .cross_validator import _CV_DATE_COL, _CV_ENTITY_COL
@@ -48,6 +49,7 @@ class TrainingPreparationResult:
     split_info: dict[str, Any]
     class_distribution: dict[int, int]
     zero_variance_dropped: list[str]
+    null_counts: dict[str, int] = field(default_factory=dict)
     timing_entries: list[TimingEntry] = field(default_factory=list)
 
 
@@ -125,7 +127,7 @@ class TrainingPreparator:
 
         _s += 1
         with log_timing("fillna_and_drop_zero_variance") as _t:
-            X_train, X_test, zero_var = self._fillna_and_drop_zero_variance(X_train, X_test)
+            X_train, X_test, zero_var, null_counts_map = self._fillna_and_drop_zero_variance(X_train, X_test)
         self._report(_s, _t.label, _t.elapsed)
 
         feature_cols = [c for c in X_train.columns if c not in {_CV_ENTITY_COL, _CV_DATE_COL}]
@@ -166,6 +168,7 @@ class TrainingPreparator:
             split_info=split_result.split_info,
             class_distribution=class_dist,
             zero_variance_dropped=zero_var,
+            null_counts=null_counts_map,
             timing_entries=timing_entries,
         )
 
@@ -273,7 +276,10 @@ class TrainingPreparator:
 
     def _fillna_and_drop_zero_variance(
         self, X_train: DataFrame, X_test: DataFrame,
-    ) -> tuple[DataFrame, DataFrame, list[str]]:
+    ) -> tuple[DataFrame, DataFrame, list[str], dict[str, int]]:
+        train_nulls = bulk_null_counts(X_train)
+        test_nulls = bulk_null_counts(X_test)
+        combined_nulls = {c: train_nulls.get(c, 0) + test_nulls.get(c, 0) for c in train_nulls}
         # Use native .fillna(0) — NOT lazy_fillna which creates a new _as_pandas_api
         # wrapper and breaks pyspark.pandas index alignment (Coding_Practices.md line 94)
         X_train = X_train.fillna(0)
@@ -282,7 +288,9 @@ class TrainingPreparator:
         if zero_var:
             X_train = X_train.drop(columns=zero_var)
             X_test = X_test.drop(columns=zero_var)
-        return X_train, X_test, zero_var
+            for c in zero_var:
+                combined_nulls.pop(c, None)
+        return X_train, X_test, zero_var, combined_nulls
 
     def _finalize_distributed(
         self,

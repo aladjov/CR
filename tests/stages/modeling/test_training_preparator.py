@@ -218,7 +218,7 @@ class TestFillnaAndZeroVariance:
     def test_drops_constant_columns(self, preparator):
         X_train = pd.DataFrame({"a": [1.0, 1.0, 1.0], "b": [1.0, 2.0, 3.0]})
         X_test = pd.DataFrame({"a": [1.0, 1.0, 1.0], "b": [4.0, 5.0, 6.0]})
-        Xtr, Xte, dropped = preparator._fillna_and_drop_zero_variance(X_train, X_test)
+        Xtr, Xte, dropped, _nulls = preparator._fillna_and_drop_zero_variance(X_train, X_test)
         assert "a" not in Xtr.columns
         assert "a" not in Xte.columns
         assert "a" in dropped
@@ -226,21 +226,41 @@ class TestFillnaAndZeroVariance:
     def test_reports_dropped_names(self, preparator):
         X_train = pd.DataFrame({"a": [5.0, 5.0], "b": [1.0, 2.0], "c": [3.0, 3.0]})
         X_test = pd.DataFrame({"a": [5.0, 5.0], "b": [3.0, 4.0], "c": [3.0, 3.0]})
-        _, _, dropped = preparator._fillna_and_drop_zero_variance(X_train, X_test)
+        _, _, dropped, _nulls = preparator._fillna_and_drop_zero_variance(X_train, X_test)
         assert set(dropped) == {"a", "c"}
 
     def test_fillna_before_variance_check(self, preparator):
         X_train = pd.DataFrame({"a": [np.nan, np.nan, np.nan], "b": [1.0, 2.0, 3.0]})
         X_test = pd.DataFrame({"a": [np.nan, np.nan, np.nan], "b": [4.0, 5.0, 6.0]})
-        Xtr, Xte, dropped = preparator._fillna_and_drop_zero_variance(X_train, X_test)
+        Xtr, Xte, dropped, _nulls = preparator._fillna_and_drop_zero_variance(X_train, X_test)
         assert "a" in dropped
 
     def test_no_columns_dropped_when_all_vary(self, preparator):
         X_train = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
         X_test = pd.DataFrame({"a": [5.0, 6.0], "b": [7.0, 8.0]})
-        Xtr, Xte, dropped = preparator._fillna_and_drop_zero_variance(X_train, X_test)
+        Xtr, Xte, dropped, _nulls = preparator._fillna_and_drop_zero_variance(X_train, X_test)
         assert dropped == []
         assert list(Xtr.columns) == ["a", "b"]
+
+    def test_null_counts_computed_before_fillna(self, preparator):
+        X_train = pd.DataFrame({"a": [np.nan, 1.0, 2.0], "b": [1.0, 2.0, 3.0]})
+        X_test = pd.DataFrame({"a": [np.nan, np.nan, 5.0], "b": [4.0, np.nan, 6.0]})
+        _, _, _, nulls = preparator._fillna_and_drop_zero_variance(X_train, X_test)
+        assert nulls == {"a": 3, "b": 1}
+
+    def test_null_counts_excludes_dropped_zero_variance(self, preparator):
+        X_train = pd.DataFrame({"const": [np.nan, np.nan, np.nan], "vary": [1.0, np.nan, 3.0]})
+        X_test = pd.DataFrame({"const": [np.nan, np.nan, np.nan], "vary": [4.0, 5.0, 6.0]})
+        _, _, dropped, nulls = preparator._fillna_and_drop_zero_variance(X_train, X_test)
+        assert "const" in dropped
+        assert "const" not in nulls
+        assert nulls == {"vary": 1}
+
+    def test_null_counts_zero_when_no_nulls(self, preparator):
+        X_train = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
+        X_test = pd.DataFrame({"a": [5.0, 6.0], "b": [7.0, 8.0]})
+        _, _, _, nulls = preparator._fillna_and_drop_zero_variance(X_train, X_test)
+        assert nulls == {"a": 0, "b": 0}
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +315,13 @@ class TestPrepareLocalEndToEnd:
         result = preparator.prepare(base_df)
         assert isinstance(result.train_entities, pd.Series)
         assert isinstance(result.train_dates, pd.Series)
+
+    def test_null_counts_populated(self, preparator, base_df):
+        result = preparator.prepare(base_df)
+        assert isinstance(result.null_counts, dict)
+        for feat in result.feature_names:
+            assert feat in result.null_counts
+            assert isinstance(result.null_counts[feat], int)
 
 
 # ---------------------------------------------------------------------------

@@ -366,6 +366,25 @@ def _spark_bulk_nunique(df: Any, columns: list[str]) -> dict[str, int]:
     return {c: int(row[f"__dist__{c}"]) for c in columns}
 
 
+def bulk_null_counts(df: Any, columns: list[str] | None = None) -> dict[str, int]:
+    valid = list(df.columns) if columns is None else [c for c in columns if c in df.columns]
+    if not valid:
+        return {}
+    if hasattr(df, "to_spark"):
+        return _spark_bulk_null_counts(df, valid)
+    null_series = df[valid].isnull().sum()
+    return {c: int(null_series[c]) for c in valid}
+
+
+def _spark_bulk_null_counts(df: Any, columns: list[str]) -> dict[str, int]:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    spark_df = as_spark_df(df)
+    exprs = [F.coalesce(F.sum(F.isnull(F.col(c)).cast("int")), F.lit(0)).alias(f"__null__{c}") for c in columns]
+    row = spark_df.agg(*exprs).collect()[0]
+    return {c: _safe_int(row[f"__null__{c}"]) for c in columns}
+
+
 @timed(label="compute_bulk_stats")
 def compute_bulk_stats(df: Any) -> BulkStats:
     if hasattr(df, "to_spark"):
