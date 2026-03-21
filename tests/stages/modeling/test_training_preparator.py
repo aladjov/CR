@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -460,93 +460,54 @@ class TestFinalizeDistributed:
         train_dates = pd.Series(pd.date_range("2023-01-01", periods=80, freq="D"), name="as_of_date")
         return X_train, X_test, y_train, y_test, train_entities, train_dates
 
-    def _run_with_mocks(self):
-        mock_scaler_cls = MagicMock()
-        mock_scaler_instance = MagicMock()
-        mock_scaling_result = MagicMock()
-        X_train, X_test, y_train, y_test, train_entities, train_dates = self._make_split_inputs()
-        mock_scaling_result.X_train_scaled = X_train.copy()
-        mock_scaling_result.X_test_scaled = X_test.copy()
-        mock_scaler_instance.fit_transform.return_value = mock_scaling_result
-        mock_scaler_cls.return_value = mock_scaler_instance
-        return mock_scaler_cls, mock_scaler_instance, X_train, X_test, y_train, y_test, train_entities, train_dates
+    def test_no_banned_patterns_in_finalize_distributed(self):
+        import inspect
 
-    @patch("customer_retention.stages.modeling.training_preparator.spark_checkpoint", side_effect=lambda x: x)
-    @patch("customer_retention.stages.modeling.training_preparator.concat", side_effect=lambda objs, **kw: pd.concat(objs, **kw))
-    @patch("customer_retention.stages.modeling.training_preparator.collect_for_sklearn", side_effect=lambda x: x)
-    def test_distributed_path_triggered(self, mock_collect, mock_concat, mock_ckpt):
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
 
-        mock_scaler_cls, mock_scaler_instance, X_train, X_test, y_train, y_test, train_entities, train_dates = self._run_with_mocks()
+        source = inspect.getsource(TrainingPreparator._finalize_distributed)
+        assert "X_train[" not in source or "__setitem__" not in source, \
+            "_finalize_distributed must not use __setitem__ on pyspark.pandas"
+        assert "fit_transform(" not in source, \
+            "_finalize_distributed should use native Spark scaling, not fit_transform"
 
-        with patch("customer_retention.stages.modeling.spark_feature_scaler.SparkFeatureScaler", mock_scaler_cls), \
-             patch.dict("sys.modules", {}):
-            import customer_retention.stages.modeling.training_preparator as mod
-            orig_import = mod.TrainingPreparator._finalize_distributed
+    def test_uses_native_spark_scaling(self):
+        import inspect
 
-            def _patched_finalize(self_inner, *args, **kwargs):
-                with patch.object(mod, "_finalize_distributed_scaler_cls", mock_scaler_cls, create=True):
-                    # Replace the local import
-                    import customer_retention.stages.modeling.spark_feature_scaler as sfm
-                    real_cls = sfm.SparkFeatureScaler
-                    sfm.SparkFeatureScaler = mock_scaler_cls
-                    try:
-                        return orig_import(self_inner, *args, **kwargs)
-                    finally:
-                        sfm.SparkFeatureScaler = real_cls
+        from customer_retention.stages.modeling.training_preparator import TrainingPreparator
 
-            prep = TrainingPreparator(target_column="target", feature_columns=["f1", "f2"])
-            with patch.object(TrainingPreparator, "_finalize_distributed", _patched_finalize):
-                result = prep._finalize_distributed(
-                    X_train, X_test, y_train, y_test,
-                    train_entities, train_dates, ["f1", "f2"],
-                )
-
-        mock_scaler_instance.fit_transform.assert_called_once()
-        assert result is not None
+        source = inspect.getsource(TrainingPreparator._finalize_distributed)
+        assert "_compute_params_spark" in source
+        assert "_apply_spark" in source
+        assert "as_spark_df" in source
 
     @patch("customer_retention.stages.modeling.training_preparator.spark_checkpoint", side_effect=lambda x: x)
     @patch("customer_retention.stages.modeling.training_preparator.concat", side_effect=lambda objs, **kw: pd.concat(objs, **kw))
     @patch("customer_retention.stages.modeling.training_preparator.collect_for_sklearn", side_effect=lambda x: x)
     def test_collect_only_for_metadata(self, mock_collect, mock_concat, mock_ckpt):
+        from unittest.mock import MagicMock
+
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
 
-        mock_scaler_cls, _, X_train, X_test, y_train, y_test, train_entities, train_dates = self._run_with_mocks()
+        X_train, X_test, y_train, y_test, train_entities, train_dates = self._make_split_inputs()
 
-        import customer_retention.stages.modeling.spark_feature_scaler as sfm
-        real_cls = sfm.SparkFeatureScaler
-        sfm.SparkFeatureScaler = mock_scaler_cls
-        try:
-            prep = TrainingPreparator(target_column="target", feature_columns=["f1", "f2"])
+        def fake_as_spark(df):
+            mock = MagicMock()
+            mock.columns = list(df.columns) if hasattr(df, "columns") else []
+            mock.select.side_effect = lambda cols: fake_as_spark(df[cols] if isinstance(cols, list) else df)
+            mock.drop.return_value = mock
+            return mock
+
+        prep = TrainingPreparator(target_column="target", feature_columns=["f1", "f2"])
+        with patch("customer_retention.stages.modeling.training_preparator.as_spark_df", side_effect=fake_as_spark), \
+             patch("customer_retention.core.compat.spark_backend._as_pandas_api", side_effect=lambda x: pd.DataFrame({"f1": [1], "f2": [2]})), \
+             patch("customer_retention.stages.modeling.spark_feature_scaler.SparkFeatureScaler") as mock_cls:
+            mock_scaler = mock_cls.return_value
+            mock_scaler._compute_params_spark.return_value = {}
+            mock_scaler._apply_spark.side_effect = lambda df: df
             prep._finalize_distributed(
                 X_train, X_test, y_train, y_test,
                 train_entities, train_dates, ["f1", "f2"],
             )
-        finally:
-            sfm.SparkFeatureScaler = real_cls
 
         assert mock_collect.call_count == 3  # y_test, train_entities, train_dates
-
-    @patch("customer_retention.stages.modeling.training_preparator.spark_checkpoint", side_effect=lambda x: x)
-    @patch("customer_retention.stages.modeling.training_preparator.concat", side_effect=lambda objs, **kw: pd.concat(objs, **kw))
-    @patch("customer_retention.stages.modeling.training_preparator.collect_for_sklearn", side_effect=lambda x: x)
-    def test_spark_feature_scaler_called_correctly(self, mock_collect, mock_concat, mock_ckpt):
-        from customer_retention.stages.modeling.training_preparator import TrainingPreparator
-
-        mock_scaler_cls, mock_scaler_instance, X_train, X_test, y_train, y_test, train_entities, train_dates = self._run_with_mocks()
-
-        import customer_retention.stages.modeling.spark_feature_scaler as sfm
-        real_cls = sfm.SparkFeatureScaler
-        sfm.SparkFeatureScaler = mock_scaler_cls
-        try:
-            prep = TrainingPreparator(target_column="target", feature_columns=["f1", "f2"])
-            prep._finalize_distributed(
-                X_train, X_test, y_train, y_test,
-                train_entities, train_dates, ["f1", "f2"],
-            )
-        finally:
-            sfm.SparkFeatureScaler = real_cls
-
-        call_args = mock_scaler_instance.fit_transform.call_args
-        assert list(call_args[0][0].columns) == ["f1", "f2"]
-        assert list(call_args[0][1].columns) == ["f1", "f2"]

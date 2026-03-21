@@ -16,7 +16,6 @@ from customer_retention.core.compat import (
     bulk_zero_variance_cols,
     collect_for_sklearn,
     concat,
-    lazy_fillna,
     native_pd,
     safe_sample,
     spark_checkpoint,
@@ -107,6 +106,7 @@ class TrainingPreparator:
         _s += 1
         with log_timing("median_impute") as _t:
             df = bulk_median_impute(df, columns=feature_cols)
+            df = spark_checkpoint(df)
         self._report(_s, _t.label, _t.elapsed)
 
         _s += 1
@@ -256,7 +256,6 @@ class TrainingPreparator:
     def _temporal_split(self, df: DataFrame, feature_cols: list[str]) -> Any:
         exclude = ["as_of_date", "entity_id"]
         split_df = df[feature_cols + [self._target, "as_of_date", "entity_id"]]
-        split_df = spark_checkpoint(split_df)
         splitter = DataSplitter(
             target_column=self._target, strategy=SplitStrategy.TEMPORAL,
             temporal_column="as_of_date", test_size=self._test_size,
@@ -275,8 +274,10 @@ class TrainingPreparator:
     def _fillna_and_drop_zero_variance(
         self, X_train: DataFrame, X_test: DataFrame,
     ) -> tuple[DataFrame, DataFrame, list[str]]:
-        X_train = lazy_fillna(X_train, 0)
-        X_test = lazy_fillna(X_test, 0)
+        # Use native .fillna(0) — NOT lazy_fillna which creates a new _as_pandas_api
+        # wrapper and breaks pyspark.pandas index alignment (Coding_Practices.md line 94)
+        X_train = X_train.fillna(0)
+        X_test = X_test.fillna(0)
         zero_var = bulk_zero_variance_cols(X_train)
         if zero_var:
             X_train = X_train.drop(columns=zero_var)
@@ -290,34 +291,42 @@ class TrainingPreparator:
         train_entities: Series, train_dates: Series,
         feature_cols: list[str],
     ) -> TrainingPreparationResult:
+        from customer_retention.core.compat.spark_backend import _as_pandas_api
+
         from .spark_feature_scaler import SparkFeatureScaler
 
-        # Bundle train: features + y + entity + date → one checkpoint
+        # Bundle train — all objects share same pyspark.pandas index → cheap concat
         train_bundle = concat([
             X_train, y_train.rename("__y__"),
             train_entities.rename(_CV_ENTITY_COL),
             train_dates.rename(_CV_DATE_COL),
         ], axis=1)
         train_bundle = spark_checkpoint(train_bundle)
-        # Extract all columns from the single checkpointed wrapper (no __setitem__)
-        X_train = train_bundle[feature_cols + [_CV_ENTITY_COL, _CV_DATE_COL]]
-        y_train = train_bundle["__y__"]
 
         test_bundle = concat([X_test, y_test.rename("__y__")], axis=1)
         test_bundle = spark_checkpoint(test_bundle)
-        X_test = test_bundle.drop(columns=["__y__"])
-        y_test = test_bundle["__y__"]
+
+        # Scale entirely on native Spark — _apply_spark passes through
+        # non-feature columns (__y__, CV cols), so no concat needed after scaling
+        train_spark = as_spark_df(train_bundle)
+        test_spark = as_spark_df(test_bundle)
 
         scaler = SparkFeatureScaler(scaler_type=self._scaler_type)
-        scaling_result = scaler.fit_transform(X_train[feature_cols], X_test[feature_cols])
-        # _apply_spark passes through non-feature columns, so CV cols survive if present.
-        # But scaler input was X_train[feature_cols] only. Re-attach CV cols from train_bundle.
-        X_train_scaled = concat([
-            scaling_result.X_train_scaled,
-            train_bundle[_CV_ENTITY_COL].rename(_CV_ENTITY_COL),
-            train_bundle[_CV_DATE_COL].rename(_CV_DATE_COL),
-        ], axis=1)
-        X_train_scaled = spark_checkpoint(X_train_scaled)
+        scaler._feature_names = feature_cols
+        scaler._params = scaler._compute_params_spark(train_spark)
+
+        train_scaled_spark = scaler._apply_spark(train_spark)
+        test_scaled_spark = scaler._apply_spark(test_spark)
+
+        # Wrap each output ONCE — no concat across different wrappers
+        non_y_cols = [c for c in train_spark.columns if c != "__y__"]
+        test_non_y = [c for c in test_spark.columns if c != "__y__"]
+        X_train = _as_pandas_api(train_spark.select(non_y_cols))
+        X_train_scaled = _as_pandas_api(train_scaled_spark.select(non_y_cols))
+        X_test = _as_pandas_api(test_spark.select(test_non_y))
+        X_test_scaled = _as_pandas_api(test_scaled_spark.select(test_non_y))
+        y_train = train_bundle["__y__"]
+        y_test = test_bundle["__y__"]
 
         y_test_np = collect_for_sklearn(y_test).to_numpy()
         train_entities = collect_for_sklearn(train_entities)
@@ -325,7 +334,7 @@ class TrainingPreparator:
 
         return TrainingPreparationResult(
             X_train=X_train, X_test=X_test,
-            X_train_scaled=X_train_scaled, X_test_scaled=scaling_result.X_test_scaled,
+            X_train_scaled=X_train_scaled, X_test_scaled=X_test_scaled,
             y_train=y_train, y_test=y_test,
             y_test_np=y_test_np, feature_names=feature_cols,
             train_entities=train_entities, train_dates=train_dates,

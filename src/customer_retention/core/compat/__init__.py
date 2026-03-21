@@ -1333,7 +1333,8 @@ def _spark_bulk_zero_variance_cols(df: Any) -> list[str]:
     num_cols = _spark_numeric_cols(spark_df)
     if not num_cols:
         return []
-    _BATCH = 500
+    # stddev uses O(1) memory per column (running sum, sum-of-squares, count)
+    _BATCH = 2000
     zero_var: list[str] = []
     for start in range(0, len(num_cols), _BATCH):
         batch = num_cols[start:start + _BATCH]
