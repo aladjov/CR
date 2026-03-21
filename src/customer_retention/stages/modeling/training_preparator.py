@@ -13,14 +13,12 @@ from customer_retention.core.compat import (
     as_spark_df,
     bulk_label_encode,
     bulk_median_impute,
-    bulk_zero_variance_cols,
     collect_for_sklearn,
     concat,
     native_pd,
     safe_sample,
     spark_checkpoint,
 )
-from customer_retention.core.compat.bulk_profiling import bulk_null_counts
 from customer_retention.core.compat.timing import TimingEntry, log_timing, start_collecting, stop_collecting
 
 from .cross_validator import _CV_DATE_COL, _CV_ENTITY_COL
@@ -277,20 +275,59 @@ class TrainingPreparator:
     def _fillna_and_drop_zero_variance(
         self, X_train: DataFrame, X_test: DataFrame,
     ) -> tuple[DataFrame, DataFrame, list[str], dict[str, int]]:
-        train_nulls = bulk_null_counts(X_train)
-        test_nulls = bulk_null_counts(X_test)
-        combined_nulls = {c: train_nulls.get(c, 0) + test_nulls.get(c, 0) for c in train_nulls}
+        if _is_spark_pandas(X_train):
+            combined_nulls, zero_var = self._spark_nulls_and_zero_var(X_train, X_test)
+        else:
+            combined_nulls, zero_var = self._pandas_nulls_and_zero_var(X_train, X_test)
         # Use native .fillna(0) — NOT lazy_fillna which creates a new _as_pandas_api
         # wrapper and breaks pyspark.pandas index alignment (Coding_Practices.md line 94)
         X_train = X_train.fillna(0)
         X_test = X_test.fillna(0)
-        zero_var = bulk_zero_variance_cols(X_train)
         if zero_var:
             X_train = X_train.drop(columns=zero_var)
             X_test = X_test.drop(columns=zero_var)
             for c in zero_var:
                 combined_nulls.pop(c, None)
         return X_train, X_test, zero_var, combined_nulls
+
+    @staticmethod
+    def _spark_nulls_and_zero_var(
+        X_train: DataFrame, X_test: DataFrame,
+    ) -> tuple[dict[str, int], list[str]]:
+        import pyspark.sql.functions as F  # noqa: N812
+        from pyspark.sql.types import NumericType
+
+        train_spark = as_spark_df(X_train)
+        test_spark = as_spark_df(X_test)
+        all_cols = list(train_spark.columns)
+        num_cols = [f.name for f in train_spark.schema.fields if isinstance(f.dataType, NumericType)]
+
+        train_exprs = [F.coalesce(F.sum(F.isnull(F.col(c)).cast("int")), F.lit(0)).alias(f"__null__{c}") for c in all_cols]
+        for c in num_cols:
+            train_exprs.append(F.stddev(F.coalesce(F.col(c), F.lit(0))).alias(f"__std__{c}"))
+        train_row = train_spark.agg(*train_exprs).collect()[0]
+
+        test_exprs = [F.coalesce(F.sum(F.isnull(F.col(c)).cast("int")), F.lit(0)).alias(f"__null__{c}") for c in all_cols]
+        test_row = test_spark.agg(*test_exprs).collect()[0]
+
+        combined_nulls = {c: int(train_row[f"__null__{c}"] or 0) + int(test_row[f"__null__{c}"] or 0) for c in all_cols}
+        zero_var = [c for c in num_cols if train_row[f"__std__{c}"] is None or float(train_row[f"__std__{c}"]) == 0]
+        return combined_nulls, zero_var
+
+    @staticmethod
+    def _pandas_nulls_and_zero_var(
+        X_train: DataFrame, X_test: DataFrame,
+    ) -> tuple[dict[str, int], list[str]]:
+        train_nulls = X_train.isnull().sum()
+        test_nulls = X_test.isnull().sum()
+        combined_nulls = {c: int(train_nulls[c]) + int(test_nulls[c]) for c in X_train.columns}
+        filled = X_train.fillna(0)
+        num = filled.select_dtypes(include="number")
+        if num.empty:
+            return combined_nulls, []
+        stds = num.std()
+        zero_var = stds[(stds == 0) | stds.isna()].index.tolist()
+        return combined_nulls, zero_var
 
     def _finalize_distributed(
         self,
