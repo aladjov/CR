@@ -302,11 +302,13 @@ class TrainingPreparator:
         self, X_train: DataFrame, X_test: DataFrame,
     ) -> tuple[DataFrame, DataFrame, list[str], dict[str, int]]:
         if _is_spark_pandas(X_train):
+            t0 = time.monotonic()
+            X_train = spark_checkpoint(X_train)
+            X_test = spark_checkpoint(X_test)
+            self._log_sub(f"re-checkpoint: {time.monotonic() - t0:.1f}s")
             combined_nulls, zero_var = self._spark_nulls_and_zero_var(X_train, X_test)
         else:
             combined_nulls, zero_var = self._pandas_nulls_and_zero_var(X_train, X_test)
-        # Use native .fillna(0) — NOT lazy_fillna which creates a new _as_pandas_api
-        # wrapper and breaks pyspark.pandas index alignment (Coding_Practices.md line 94)
         X_train = X_train.fillna(0)
         X_test = X_test.fillna(0)
         if zero_var:
