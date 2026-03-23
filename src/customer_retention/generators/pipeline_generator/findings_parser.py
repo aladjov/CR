@@ -915,7 +915,7 @@ class FindingsParser:
             if step:
                 config.gold.transformations.append(step)
         prioritized_columns = self._collect_prioritized_columns(gold)
-        drop_columns = self._collect_feature_selection_drops(gold, prioritized_columns, config.target_column)
+        drop_columns = self._collect_feature_selection_drops(gold, prioritized_columns, config.target_column, pipeline_columns)
         config.gold.feature_selections = list(drop_columns)
 
     def _map_gold_transformation(self, rec) -> Optional[TransformationStep]:
@@ -955,11 +955,14 @@ class FindingsParser:
                 prioritized.add(rec.target_column)
         return prioritized
 
-    def _collect_feature_selection_drops(self, gold, prioritized: Set[str], target_column: str) -> Set[str]:
+    def _collect_feature_selection_drops(self, gold, prioritized: Set[str], target_column: str, pipeline_columns: Optional[Set[str]] = None) -> Set[str]:
         drops = set()
         for rec in getattr(gold, "feature_selection", []):
             if rec.action in ("drop_multicollinear", "drop_weak", "drop_l1_zero"):
                 if rec.target_column not in prioritized and rec.target_column != target_column:
+                    if pipeline_columns is not None and rec.target_column not in pipeline_columns:
+                        logger.warning("Skipping feature selection drop '%s': column not in pipeline", rec.target_column)
+                        continue
                     drops.add(rec.target_column)
         return drops
 
@@ -1548,6 +1551,11 @@ class FindingsParser:
         config.gold.transformations = self._filter_gold_steps(
             config.gold.transformations, pipeline_columns, "transformation",
         )
+        before = len(config.gold.feature_selections)
+        config.gold.feature_selections = [c for c in config.gold.feature_selections if c in pipeline_columns]
+        removed = before - len(config.gold.feature_selections)
+        if removed:
+            logger.warning("Removed %d feature selection drop(s): column(s) not in pipeline", removed)
 
     @staticmethod
     def _filter_gold_steps(steps, pipeline_columns, label):

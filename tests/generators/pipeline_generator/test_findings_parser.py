@@ -6012,6 +6012,40 @@ class TestDropL1ZeroAction(TestFeatureSelectionDropSkipsTarget):
         assert "region" in config.gold.feature_selections
 
 
+class TestFeatureSelectionDropSkipsNonPipelineColumns(TestFeatureSelectionDropSkipsTarget):
+    def test_drop_skips_column_not_in_pipeline(self):
+        parser = self._make_parser()
+        config = self._make_config()
+        registry = self._make_registry(feature_selection=[
+            self._make_rec("nonexistent_col", "drop_weak"),
+            self._make_rec("age", "drop_weak"),
+        ])
+        parser._apply_gold_recommendations(config, registry)
+        assert "nonexistent_col" not in config.gold.feature_selections
+        assert "age" in config.gold.feature_selections
+
+    def test_reconcile_removes_stale_feature_selections(self):
+        parser = self._make_parser()
+        config = self._make_config()
+        config.gold.feature_selections = ["age", "gone_column", "region"]
+        parser._reconcile_gold_columns(config)
+        assert "age" in config.gold.feature_selections
+        assert "region" in config.gold.feature_selections
+        assert "gone_column" not in config.gold.feature_selections
+
+    def test_all_drop_actions_skip_nonexistent(self):
+        parser = self._make_parser()
+        config = self._make_config()
+        registry = self._make_registry(feature_selection=[
+            self._make_rec("phantom_a", "drop_weak"),
+            self._make_rec("phantom_b", "drop_multicollinear"),
+            self._make_rec("phantom_c", "drop_l1_zero"),
+            self._make_rec("region", "drop_l1_zero"),
+        ])
+        parser._apply_gold_recommendations(config, registry)
+        assert config.gold.feature_selections == ["region"]
+
+
 class TestLeakageExclusionPrefixes:
     @staticmethod
     def _make_findings(**kwargs):
