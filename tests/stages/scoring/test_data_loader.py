@@ -288,6 +288,141 @@ class TestLoadModel:
             _, uri = loader.load_model()
         assert "model_random_forest_abc123" in uri
 
+    def test_explicit_model_tag_overrides_best(self, local_config, mock_mlflow_client):
+        with (
+            patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow,
+            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
+        ):
+            mock_mlflow.sklearn.load_model.return_value = MagicMock()
+            loader = ScoringDataLoader(local_config)
+            _, uri = loader.load_model(model_tag="logistic_regression")
+        assert "model_logistic_regression_abc123" in uri
+
+    def test_explicit_xgboost_tag_uses_xgboost_loader(self, local_config, mock_mlflow_client):
+        with (
+            patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow,
+            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
+        ):
+            mock_mlflow.xgboost.load_model.return_value = MagicMock()
+            loader = ScoringDataLoader(local_config)
+            loader.load_model(model_tag="xgboost")
+        mock_mlflow.xgboost.load_model.assert_called_once()
+        mock_mlflow.sklearn.load_model.assert_not_called()
+
+    def test_explicit_tag_on_databricks_uses_spark(self, databricks_config, mock_mlflow_client):
+        with (
+            patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow,
+            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
+        ):
+            mock_mlflow.spark.load_model.return_value = MagicMock()
+            loader = ScoringDataLoader(databricks_config)
+            _, uri = loader.load_model(model_tag="RandomForestClassifier")
+        mock_mlflow.spark.load_model.assert_called_once()
+        assert "model_RandomForestClassifier" in uri
+
+    def test_explicit_tag_databricks_no_hash(self, databricks_config, mock_mlflow_client):
+        with (
+            patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow,
+            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
+        ):
+            mock_mlflow.spark.load_model.return_value = MagicMock()
+            loader = ScoringDataLoader(databricks_config)
+            _, uri = loader.load_model(model_tag="RandomForestClassifier")
+        assert "abc123" not in uri
+
+    def test_explicit_tag_finds_matching_child_run(self, local_config, mock_mlflow_client):
+        child_lr = MagicMock()
+        child_lr.info.run_id = "child_lr"
+        child_lr.info.run_name = "logistic_regression"
+        child_rf = MagicMock()
+        child_rf.info.run_id = "child_rf"
+        child_rf.info.run_name = "random_forest"
+
+        def side_effect(experiment_ids, filter_string="", order_by=None, max_results=None):
+            if "parentRunId" in filter_string:
+                return [child_lr, child_rf]
+            return mock_mlflow_client.search_runs.return_value
+
+        mock_mlflow_client.search_runs.side_effect = side_effect
+        with (
+            patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow,
+            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
+        ):
+            mock_mlflow.sklearn.load_model.return_value = MagicMock()
+            loader = ScoringDataLoader(local_config)
+            _, uri = loader.load_model(model_tag="logistic_regression")
+        assert "child_lr" in uri
+
+
+class TestListTrainedModelTags:
+    def test_returns_child_run_names(self, local_config, mock_mlflow_client):
+        child_lr = MagicMock()
+        child_lr.info.run_name = "logistic_regression"
+        child_rf = MagicMock()
+        child_rf.info.run_name = "random_forest"
+
+        def side_effect(experiment_ids, filter_string="", order_by=None, max_results=None):
+            if "parentRunId" in filter_string:
+                return [child_lr, child_rf]
+            return mock_mlflow_client.search_runs.return_value
+
+        mock_mlflow_client.search_runs.side_effect = side_effect
+        with (
+            patch("customer_retention.stages.scoring.data_loader.mlflow"),
+            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
+        ):
+            loader = ScoringDataLoader(local_config)
+            tags = loader.list_trained_model_tags()
+        assert tags == ["logistic_regression", "random_forest"]
+
+    def test_returns_best_model_when_no_children(self, local_config, mock_mlflow_client):
+        mock_mlflow_client.search_runs.side_effect = None
+
+        def side_effect(experiment_ids, filter_string="", order_by=None, max_results=None):
+            if "parentRunId" in filter_string:
+                return []
+            return mock_mlflow_client.search_runs.return_value
+
+        mock_mlflow_client.search_runs.side_effect = side_effect
+        with (
+            patch("customer_retention.stages.scoring.data_loader.mlflow"),
+            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
+        ):
+            loader = ScoringDataLoader(local_config)
+            tags = loader.list_trained_model_tags()
+        assert tags == ["random_forest"]
+
+    def test_returns_empty_when_no_experiment(self, local_config):
+        client = MagicMock()
+        client.get_experiment_by_name.return_value = None
+        with (
+            patch("customer_retention.stages.scoring.data_loader.mlflow"),
+            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=client),
+        ):
+            loader = ScoringDataLoader(local_config)
+            tags = loader.list_trained_model_tags()
+        assert tags == []
+
+    def test_databricks_returns_spark_model_names(self, databricks_config, mock_mlflow_client):
+        child_rf = MagicMock()
+        child_rf.info.run_name = "RandomForestClassifier"
+        child_gbt = MagicMock()
+        child_gbt.info.run_name = "GBTClassifier"
+
+        def side_effect(experiment_ids, filter_string="", order_by=None, max_results=None):
+            if "parentRunId" in filter_string:
+                return [child_rf, child_gbt]
+            return mock_mlflow_client.search_runs.return_value
+
+        mock_mlflow_client.search_runs.side_effect = side_effect
+        with (
+            patch("customer_retention.stages.scoring.data_loader.mlflow"),
+            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
+        ):
+            loader = ScoringDataLoader(databricks_config)
+            tags = loader.list_trained_model_tags()
+        assert tags == ["RandomForestClassifier", "GBTClassifier"]
+
 
 class TestLoadScoringFeatures:
     def test_feast_missing_repo_falls_back_to_scoring_df(self, local_config, sample_gold_df):

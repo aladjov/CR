@@ -53,20 +53,20 @@ class ScoringDataLoader:
             return scoring_df
         return self._load_feast_features(scoring_df)
 
-    def load_model(self) -> Tuple[Any, str]:
+    def load_model(self, model_tag: str | None = None) -> Tuple[Any, str]:
         mlflow.set_tracking_uri(self.config.mlflow_tracking_uri)
         client = MlflowClient()
         experiment = client.get_experiment_by_name(self.config.pipeline_name)
         if not experiment:
             raise ValueError(f"Experiment '{self.config.pipeline_name}' not found")
         parent_run = self._find_best_parent_run(client, experiment.experiment_id)
-        best_model_tag = parent_run.data.tags.get("best_model", "random_forest")
-        model_name = self._model_artifact_name(best_model_tag)
-        model_run = self._find_model_run(client, experiment.experiment_id, parent_run, best_model_tag)
+        tag = model_tag or parent_run.data.tags.get("best_model", "random_forest")
+        model_name = self._model_artifact_name(tag)
+        model_run = self._find_model_run(client, experiment.experiment_id, parent_run, tag)
         model_uri = f"runs:/{model_run.info.run_id}/{model_name}"
         if self.config.is_databricks:
             return mlflow.spark.load_model(model_uri), model_uri
-        loader_module = mlflow.xgboost if best_model_tag == "xgboost" else mlflow.sklearn
+        loader_module = mlflow.xgboost if tag == "xgboost" else mlflow.sklearn
         try:
             return loader_module.load_model(model_uri), model_uri
         except Exception:
@@ -75,6 +75,21 @@ class ScoringDataLoader:
                 if lm.name == model_name and lm.source_run_id == model_run.info.run_id:
                     return loader_module.load_model(lm.model_uri), lm.model_uri
             raise
+
+    def list_trained_model_tags(self) -> List[str]:
+        mlflow.set_tracking_uri(self.config.mlflow_tracking_uri)
+        client = MlflowClient()
+        experiment = client.get_experiment_by_name(self.config.pipeline_name)
+        if not experiment:
+            return []
+        parent_run = self._find_best_parent_run(client, experiment.experiment_id)
+        child_runs = client.search_runs(
+            experiment_ids=[experiment.experiment_id],
+            filter_string=f"tags.mlflow.parentRunId = '{parent_run.info.run_id}'",
+        )
+        if child_runs:
+            return [c.info.run_name for c in child_runs]
+        return [parent_run.data.tags.get("best_model", "random_forest")]
 
     def _model_artifact_name(self, model_tag: str) -> str:
         base = f"model_{model_tag}"
