@@ -1,10 +1,16 @@
+import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, batched_corr_matrix, is_numeric_dtype, isna
+from customer_retention.core.compat import (
+    DataFrame,
+    _numeric_column_names,
+    batched_corr_matrix,
+    isna,
+)
 
 if TYPE_CHECKING:
     from customer_retention.analysis.auto_explorer.findings import FeatureAvailabilityMetadata
@@ -64,34 +70,33 @@ class FeatureSelector:
         self.drop_reasons: Dict[str, str] = {}
         self.importance_scores: Optional[Dict[str, float]] = None
         self._is_fitted = False
+        self._cached_variances: Optional[Any] = None
 
     def fit(self, df: DataFrame) -> "FeatureSelector":
         feature_cols = [c for c in df.columns if c != self.target_column]
+        numeric_set = _numeric_column_names(df, feature_cols)
 
         self.selected_features = feature_cols.copy()
         self.dropped_features = []
         self.drop_reasons = {}
 
         if self.method == SelectionMethod.VARIANCE:
-            self._apply_variance_selection(df, feature_cols)
+            self._apply_variance_selection(df, feature_cols, numeric_set)
         elif self.method == SelectionMethod.CORRELATION:
-            self._apply_correlation_selection(df, feature_cols)
+            self._apply_correlation_selection(df, feature_cols, numeric_set)
         elif self.method == SelectionMethod.L1_SELECTION:
-            self._apply_l1_selection(df, feature_cols)
+            self._apply_l1_selection(df, feature_cols, numeric_set)
 
         if self.apply_correlation_filter and self.method != SelectionMethod.CORRELATION:
-            self._apply_correlation_selection(df, self.selected_features.copy())
+            self._apply_correlation_selection(df, self.selected_features.copy(), numeric_set)
 
         if self.max_features and len(self.selected_features) > self.max_features:
-            feature_df = df[self.selected_features]
-            variances = feature_df.var().sort_values(ascending=False)
-            to_keep = variances.head(self.max_features).index.tolist()
-            to_drop = [f for f in self.selected_features if f not in to_keep]
-            for feature in to_drop:
-                if feature not in self.preserve_features:
-                    self.selected_features.remove(feature)
-                    self.dropped_features.append(feature)
-                    self.drop_reasons[feature] = "max_features limit"
+            variances = self._get_variances(df, self.selected_features, numeric_set)
+            to_keep = set(variances.sort_values(ascending=False).head(self.max_features).index.tolist())
+            for feature in [f for f in self.selected_features if f not in to_keep and f not in self.preserve_features]:
+                self.selected_features.remove(feature)
+                self.dropped_features.append(feature)
+                self.drop_reasons[feature] = "max_features limit"
 
         self._is_fitted = True
         return self
@@ -120,16 +125,25 @@ class FeatureSelector:
         self.fit(df)
         return self.transform(df)
 
-    def _apply_variance_selection(self, df: DataFrame, features: List[str]) -> None:
-        numeric_features = [
-            f for f in features
-            if f not in self.preserve_features and is_numeric_dtype(df[f])
-        ]
+    def _get_variances(self, df: DataFrame, features: List[str], numeric_set: set) -> Any:
+        numeric_features = [f for f in features if f in numeric_set]
         if not numeric_features:
-            return
+            import pandas as _pd
+            return _pd.Series(dtype=float)
+        if self._cached_variances is not None:
+            cached_cols = set(self._cached_variances.index)
+            missing = [f for f in numeric_features if f not in cached_cols]
+            if not missing:
+                return self._cached_variances[numeric_features]
+        self._cached_variances = df[numeric_features].var()
+        return self._cached_variances
 
-        variances = df[numeric_features].var()
-        for feature in numeric_features:
+    def _apply_variance_selection(self, df: DataFrame, features: List[str], numeric_set: set) -> None:
+        candidates = [f for f in features if f not in self.preserve_features and f in numeric_set]
+        if not candidates:
+            return
+        variances = self._get_variances(df, candidates, numeric_set)
+        for feature in candidates:
             variance = variances[feature]
             if isna(variance) or variance < self.variance_threshold:
                 if feature in self.selected_features:
@@ -137,15 +151,14 @@ class FeatureSelector:
                     self.dropped_features.append(feature)
                     self.drop_reasons[feature] = f"low variance ({variance:.6f})"
 
-    def _apply_correlation_selection(self, df: DataFrame, features: List[str]) -> None:
-        numeric_features = [f for f in features if f in df.columns and is_numeric_dtype(df[f]) and f in self.selected_features]
-
+    def _apply_correlation_selection(self, df: DataFrame, features: List[str], numeric_set: set) -> None:
+        numeric_features = [f for f in features if f in numeric_set and f in self.selected_features]
         if len(numeric_features) < 2:
             return
 
         corr_matrix = batched_corr_matrix(df, numeric_features).abs()
-
         upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+        variances = self._get_variances(df, numeric_features, numeric_set)
 
         to_drop = set()
         for column in upper.columns:
@@ -157,9 +170,7 @@ class FeatureSelector:
                 elif column in self.preserve_features:
                     to_drop.add(corr_feature)
                 else:
-                    var1 = df[column].var()
-                    var2 = df[corr_feature].var()
-                    if var1 >= var2:
+                    if variances[column] >= variances[corr_feature]:
                         to_drop.add(corr_feature)
                     else:
                         to_drop.add(column)
@@ -170,16 +181,13 @@ class FeatureSelector:
                 self.dropped_features.append(feature)
                 self.drop_reasons[feature] = f"high correlation (> {self.correlation_threshold})"
 
-    def _apply_l1_selection(self, df: DataFrame, features: List[str]) -> None:
+    def _apply_l1_selection(self, df: DataFrame, features: List[str], numeric_set: set) -> None:
         if not self.target_column:
             raise ValueError("target_column is required for L1_SELECTION")
         if self.target_column not in df.columns:
             raise ValueError(f"target_column '{self.target_column}' not in DataFrame")
 
-        numeric_features = [
-            f for f in features
-            if f not in self.preserve_features and f in df.columns and is_numeric_dtype(df[f])
-        ]
+        numeric_features = [f for f in features if f not in self.preserve_features and f in numeric_set]
         if not numeric_features:
             return
 
@@ -210,10 +218,7 @@ class FeatureSelector:
         model.fit(X_scaled, y)
 
         coefs = np.abs(model.coef_)
-        if coefs.ndim == 2:
-            max_coefs = coefs.max(axis=0)
-        else:
-            max_coefs = coefs
+        max_coefs = coefs.max(axis=0) if coefs.ndim == 2 else coefs
 
         self.importance_scores = {numeric_features[i]: float(max_coefs[i]) for i in range(len(numeric_features))}
         for i, feature in enumerate(numeric_features):
@@ -296,18 +301,35 @@ class FeatureSelector:
         return options
 
 
+def _format_elapsed(seconds: float) -> str:
+    m, s = divmod(int(seconds), 60)
+    return f"{m}m{s:02d}s" if m else f"{s}s"
+
+
 def run_selection_pipeline(
     df: DataFrame, target_column: str,
     variance_threshold: float = 0.01, correlation_threshold: float = 0.95,
     l1_enabled: bool = False, max_features: Optional[int] = None,
     preserve_features: Optional[List[str]] = None,
+    progress_fn: Optional[Callable[[str], None]] = None,
 ) -> FeatureSelectionResult:
+    log = progress_fn or (lambda msg: print(msg))
     all_dropped: List[str] = []
     all_reasons: Dict[str, str] = {}
     importance_scores: Optional[Dict[str, float]] = None
     current_df = df
-    last_method = SelectionMethod.VARIANCE
+    pipeline_start = time.monotonic()
+    n_features_initial = len([c for c in df.columns if c != target_column])
 
+    stages = ["variance", "correlation"]
+    if l1_enabled:
+        stages.append("L1")
+    total_stages = len(stages)
+
+    log(f"Feature selection pipeline: {n_features_initial} features, {total_stages} stages")
+
+    t0 = time.monotonic()
+    log(f"  [1/{total_stages}] Variance filter (threshold={variance_threshold})...")
     result_var = FeatureSelector(
         method=SelectionMethod.VARIANCE, variance_threshold=variance_threshold,
         target_column=target_column, preserve_features=preserve_features,
@@ -315,7 +337,12 @@ def run_selection_pipeline(
     current_df = result_var.df
     all_dropped.extend(result_var.dropped_features)
     all_reasons.update(result_var.drop_reasons)
+    elapsed = time.monotonic() - t0
+    remaining = len(result_var.selected_features)
+    log(f"    {_format_elapsed(elapsed)} — dropped {len(result_var.dropped_features)}, remaining {remaining}")
 
+    t0 = time.monotonic()
+    log(f"  [2/{total_stages}] Correlation filter (threshold={correlation_threshold}, {remaining} features)...")
     last_method = SelectionMethod.CORRELATION
     result_corr = FeatureSelector(
         method=SelectionMethod.CORRELATION, correlation_threshold=correlation_threshold,
@@ -324,8 +351,13 @@ def run_selection_pipeline(
     current_df = result_corr.df
     all_dropped.extend(result_corr.dropped_features)
     all_reasons.update(result_corr.drop_reasons)
+    elapsed = time.monotonic() - t0
+    remaining = len(result_corr.selected_features)
+    log(f"    {_format_elapsed(elapsed)} — dropped {len(result_corr.dropped_features)}, remaining {remaining}")
 
     if l1_enabled:
+        t0 = time.monotonic()
+        log(f"  [3/{total_stages}] L1 selection ({remaining} features, max_features={max_features})...")
         last_method = SelectionMethod.L1_SELECTION
         result_l1 = FeatureSelector(
             method=SelectionMethod.L1_SELECTION, target_column=target_column,
@@ -335,8 +367,14 @@ def run_selection_pipeline(
         all_dropped.extend(result_l1.dropped_features)
         all_reasons.update(result_l1.drop_reasons)
         importance_scores = result_l1.importance_scores
+        elapsed = time.monotonic() - t0
+        remaining = len(result_l1.selected_features)
+        log(f"    {_format_elapsed(elapsed)} — dropped {len(result_l1.dropped_features)}, remaining {remaining}")
 
+    total_elapsed = time.monotonic() - pipeline_start
     selected = [c for c in current_df.columns if c != target_column]
+    log(f"  Done: {n_features_initial} -> {len(selected)} features ({len(all_dropped)} dropped) in {_format_elapsed(total_elapsed)}")
+
     return FeatureSelectionResult(
         df=current_df, selected_features=selected, dropped_features=all_dropped,
         drop_reasons=all_reasons, method_used=last_method, importance_scores=importance_scores,
