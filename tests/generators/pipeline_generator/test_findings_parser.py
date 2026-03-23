@@ -5978,3 +5978,66 @@ class TestEventAggregatedColumnsWithExclusions:
         assert "opened_count_7d" not in cols
         assert "opened_any_7d" not in cols
         assert "amount_sum_7d" in cols
+
+
+class TestDropL1ZeroAction(TestFeatureSelectionDropSkipsTarget):
+    def test_drop_l1_zero_collected(self):
+        parser = self._make_parser()
+        config = self._make_config()
+        registry = self._make_registry(feature_selection=[
+            self._make_rec("age", "drop_l1_zero"),
+        ])
+        parser._apply_gold_recommendations(config, registry)
+        assert "age" in config.gold.feature_selections
+
+    def test_drop_l1_zero_skips_target(self):
+        parser = self._make_parser()
+        config = self._make_config()
+        registry = self._make_registry(feature_selection=[
+            self._make_rec("unsubscribed", "drop_l1_zero"),
+        ])
+        parser._apply_gold_recommendations(config, registry)
+        assert "unsubscribed" not in config.gold.feature_selections
+
+    def test_drop_l1_zero_skips_prioritized(self):
+        parser = self._make_parser()
+        config = self._make_config()
+        registry = self._make_registry(feature_selection=[
+            self._make_rec("age", "prioritize"),
+            self._make_rec("age", "drop_l1_zero"),
+            self._make_rec("region", "drop_l1_zero"),
+        ])
+        parser._apply_gold_recommendations(config, registry)
+        assert "age" not in config.gold.feature_selections
+        assert "region" in config.gold.feature_selections
+
+
+class TestLeakageExclusionPrefixes:
+    @staticmethod
+    def _make_findings(**kwargs):
+        from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
+        kwargs.setdefault("source_path", "/tmp/test.csv")
+        kwargs.setdefault("source_format", "csv")
+        return ExplorationFindings(**kwargs)
+
+    def test_collects_prefixes_from_source_findings(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        findings_a = self._make_findings(excluded_leaking_features=["BILLING_TERMINATION_DATE"])
+        findings_b = self._make_findings(excluded_leaking_features=["CONTRACT_END_DATE"])
+        result = FindingsParser._collect_leakage_exclusion_prefixes({"a": findings_a, "b": findings_b})
+        assert "BILLING_TERMINATION_DATE_" in result
+        assert "CONTRACT_END_DATE_" in result
+
+    def test_empty_when_no_leaking_features(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        findings = self._make_findings()
+        result = FindingsParser._collect_leakage_exclusion_prefixes({"a": findings})
+        assert result == []
+
+    def test_deduplicates_prefixes(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        findings_a = self._make_findings(excluded_leaking_features=["COL_A"])
+        findings_b = self._make_findings(excluded_leaking_features=["COL_A", "COL_B"])
+        result = FindingsParser._collect_leakage_exclusion_prefixes({"a": findings_a, "b": findings_b})
+        assert result.count("COL_A_") == 1
+        assert "COL_B_" in result

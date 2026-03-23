@@ -88,6 +88,7 @@ class GoldLayerConfig:
     encodings: List[TransformationStep] = field(default_factory=list)
     scalings: List[TransformationStep] = field(default_factory=list)
     feature_selections: List[str] = field(default_factory=list)
+    feature_exclusion_prefixes: List[str] = field(default_factory=list)
     transformations: List[TransformationStep] = field(default_factory=list)
 
 

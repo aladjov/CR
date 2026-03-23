@@ -354,6 +354,25 @@ class TestCodeRendererGold:
         assert "get_gold_path" in result
         assert "get_delta" in result
 
+    def test_render_gold_feature_selection_before_encodings(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        fs_pos = result.find("apply_feature_selection(gold)")
+        enc_pos = result.find("apply_encodings(gold)")
+        assert fs_pos > 0
+        assert enc_pos > 0
+        assert fs_pos < enc_pos
+
+    def test_render_gold_prefix_exclusion(self, renderer, sample_pipeline_config):
+        sample_pipeline_config.gold.feature_exclusion_prefixes = ["BILLING_TERMINATION_DATE_"]
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "_exclusion_prefixes" in result
+        assert "BILLING_TERMINATION_DATE_" in result
+
+    def test_render_gold_no_prefix_exclusion_when_empty(self, renderer, sample_pipeline_config):
+        sample_pipeline_config.gold.feature_exclusion_prefixes = []
+        result = renderer.render_gold(sample_pipeline_config)
+        assert "_exclusion_prefixes" not in result
+
     def test_render_gold_has_timing(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
         assert "import time" in result

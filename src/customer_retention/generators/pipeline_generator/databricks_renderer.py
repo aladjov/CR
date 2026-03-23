@@ -1372,6 +1372,13 @@ def {{ func_name }}(df):
 {% endfor %}
 
 def apply_feature_selection(df):
+{%- if config.gold.feature_exclusion_prefixes %}
+    _exclusion_prefixes = {{ config.gold.feature_exclusion_prefixes }}
+    _prefix_drops = [c for c in df.columns if any(c.startswith(p) for p in _exclusion_prefixes)]
+    if _prefix_drops:
+        df = df.drop(*_prefix_drops)
+        print(f"  Dropped {len(_prefix_drops)} leakage-excluded columns")
+{%- endif %}
 {%- if config.gold.feature_selections %}
     drop_cols = {{ config.gold.feature_selections }}
     df = df.drop(*[c for c in drop_cols if c in df.columns])
@@ -1413,14 +1420,14 @@ def run_gold():
     df = apply_transformations(df)
     print(f"  transformations: {_time.monotonic() - _t1:.1f}s")
     _t2 = _time.monotonic()
-    df = apply_encodings(df)
-    print(f"  encodings: {_time.monotonic() - _t2:.1f}s")
-    _t3 = _time.monotonic()
-    df = apply_scalings(df)
-    print(f"  scalings: {_time.monotonic() - _t3:.1f}s")
-    _t4 = _time.monotonic()
     df = apply_feature_selection(df)
-    print(f"  feature_selection: {_time.monotonic() - _t4:.1f}s")
+    print(f"  feature_selection: {_time.monotonic() - _t2:.1f}s")
+    _t3 = _time.monotonic()
+    df = apply_encodings(df)
+    print(f"  encodings: {_time.monotonic() - _t3:.1f}s")
+    _t4 = _time.monotonic()
+    df = apply_scalings(df)
+    print(f"  scalings: {_time.monotonic() - _t4:.1f}s")
     if "as_of_date" in df.columns:
         df = df.withColumnRenamed("as_of_date", TIMESTAMP_COLUMN)
     elif "feature_timestamp" in df.columns:

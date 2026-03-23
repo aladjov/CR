@@ -55,6 +55,7 @@ TOPANDAS_BOUNDARY_FILES = {
     # sklearn interface — needs pandas/numpy arrays
     "stages/modeling/spark_classifier_wrapper.py",
     "stages/modeling/data_splitter.py",  # non-temporal strategies fall back to sklearn (pandas)
+    "stages/features/feature_selector.py",  # L1 selection collects to pandas for sklearn LogisticRegression
     # Batch fitting — bounded sample (≤50K rows) for sklearn PowerTransformer
     "transforms/executor.py",
     # Bounded sampling for type detection / fingerprinting

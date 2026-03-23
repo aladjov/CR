@@ -75,6 +75,7 @@ class FindingsParser:
         if recommendations_registry:
             self._apply_recommendations_to_config(config, recommendations_registry, multi_dataset)
             self._apply_event_recommendations(config, recommendations_registry)
+        config.gold.feature_exclusion_prefixes = self._collect_leakage_exclusion_prefixes(source_findings)
         self._reconcile_discovered_event_transforms(config, discovered_events)
         self._reconcile_event_post_shaping(config)
         self._reconcile_gold_columns(config)
@@ -939,6 +940,14 @@ class FindingsParser:
             source_notebook=rec.source_notebook,
         )
 
+    @staticmethod
+    def _collect_leakage_exclusion_prefixes(source_findings: Dict[str, "ExplorationFindings"]) -> List[str]:
+        prefixes: Set[str] = set()
+        for findings in source_findings.values():
+            for col in getattr(findings, "excluded_leaking_features", []):
+                prefixes.add(f"{col}_")
+        return sorted(prefixes)
+
     def _collect_prioritized_columns(self, gold) -> Set[str]:
         prioritized = set()
         for rec in getattr(gold, "feature_selection", []):
@@ -949,7 +958,7 @@ class FindingsParser:
     def _collect_feature_selection_drops(self, gold, prioritized: Set[str], target_column: str) -> Set[str]:
         drops = set()
         for rec in getattr(gold, "feature_selection", []):
-            if rec.action in ("drop_multicollinear", "drop_weak"):
+            if rec.action in ("drop_multicollinear", "drop_weak", "drop_l1_zero"):
                 if rec.target_column not in prioritized and rec.target_column != target_column:
                     drops.add(rec.target_column)
         return drops

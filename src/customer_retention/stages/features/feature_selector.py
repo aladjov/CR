@@ -62,6 +62,7 @@ class FeatureSelector:
         self.selected_features: List[str] = []
         self.dropped_features: List[str] = []
         self.drop_reasons: Dict[str, str] = {}
+        self.importance_scores: Optional[Dict[str, float]] = None
         self._is_fitted = False
 
     def fit(self, df: DataFrame) -> "FeatureSelector":
@@ -75,6 +76,8 @@ class FeatureSelector:
             self._apply_variance_selection(df, feature_cols)
         elif self.method == SelectionMethod.CORRELATION:
             self._apply_correlation_selection(df, feature_cols)
+        elif self.method == SelectionMethod.L1_SELECTION:
+            self._apply_l1_selection(df, feature_cols)
 
         if self.apply_correlation_filter and self.method != SelectionMethod.CORRELATION:
             self._apply_correlation_selection(df, self.selected_features.copy())
@@ -110,6 +113,7 @@ class FeatureSelector:
             dropped_features=self.dropped_features.copy(),
             drop_reasons=self.drop_reasons.copy(),
             method_used=self.method,
+            importance_scores=dict(self.importance_scores) if self.importance_scores else None,
         )
 
     def fit_transform(self, df: DataFrame) -> FeatureSelectionResult:
@@ -165,6 +169,58 @@ class FeatureSelector:
                 self.selected_features.remove(feature)
                 self.dropped_features.append(feature)
                 self.drop_reasons[feature] = f"high correlation (> {self.correlation_threshold})"
+
+    def _apply_l1_selection(self, df: DataFrame, features: List[str]) -> None:
+        if not self.target_column:
+            raise ValueError("target_column is required for L1_SELECTION")
+        if self.target_column not in df.columns:
+            raise ValueError(f"target_column '{self.target_column}' not in DataFrame")
+
+        numeric_features = [
+            f for f in features
+            if f not in self.preserve_features and f in df.columns and is_numeric_dtype(df[f])
+        ]
+        if not numeric_features:
+            return
+
+        from customer_retention.core.compat import _is_spark_pandas
+        work_df = df[numeric_features + [self.target_column]]
+        if _is_spark_pandas(work_df):
+            work_df = work_df.to_pandas()
+
+        work_df = work_df.dropna(subset=[self.target_column])
+        if len(work_df) < 10:
+            raise ValueError(
+                f"L1_SELECTION requires at least 10 rows with non-null target; "
+                f"got {len(work_df)} after dropping NaN targets"
+            )
+
+        X = work_df[numeric_features].fillna(0).to_numpy()
+        y = work_df[self.target_column].to_numpy()
+
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.preprocessing import StandardScaler
+
+        X_scaled = StandardScaler().fit_transform(X)
+        n_classes = len(np.unique(y))
+        if n_classes > 2:
+            model = LogisticRegression(solver="saga", C=1.0, max_iter=2000, l1_ratio=1.0, penalty="elasticnet")
+        else:
+            model = LogisticRegression(solver="saga", C=1.0, max_iter=2000, l1_ratio=1.0)
+        model.fit(X_scaled, y)
+
+        coefs = np.abs(model.coef_)
+        if coefs.ndim == 2:
+            max_coefs = coefs.max(axis=0)
+        else:
+            max_coefs = coefs
+
+        self.importance_scores = {numeric_features[i]: float(max_coefs[i]) for i in range(len(numeric_features))}
+        for i, feature in enumerate(numeric_features):
+            if max_coefs[i] == 0.0 and feature in self.selected_features:
+                self.selected_features.remove(feature)
+                self.dropped_features.append(feature)
+                self.drop_reasons[feature] = "L1 zero coefficient"
 
     def get_availability_recommendations(self, availability: Optional["FeatureAvailabilityMetadata"]) -> List[AvailabilityRecommendation]:
         if availability is None:
@@ -238,3 +294,50 @@ class FeatureSelector:
                 "preserves_data": True,
             })
         return options
+
+
+def run_selection_pipeline(
+    df: DataFrame, target_column: str,
+    variance_threshold: float = 0.01, correlation_threshold: float = 0.95,
+    l1_enabled: bool = False, max_features: Optional[int] = None,
+    preserve_features: Optional[List[str]] = None,
+) -> FeatureSelectionResult:
+    all_dropped: List[str] = []
+    all_reasons: Dict[str, str] = {}
+    importance_scores: Optional[Dict[str, float]] = None
+    current_df = df
+    last_method = SelectionMethod.VARIANCE
+
+    result_var = FeatureSelector(
+        method=SelectionMethod.VARIANCE, variance_threshold=variance_threshold,
+        target_column=target_column, preserve_features=preserve_features,
+    ).fit_transform(current_df)
+    current_df = result_var.df
+    all_dropped.extend(result_var.dropped_features)
+    all_reasons.update(result_var.drop_reasons)
+
+    last_method = SelectionMethod.CORRELATION
+    result_corr = FeatureSelector(
+        method=SelectionMethod.CORRELATION, correlation_threshold=correlation_threshold,
+        target_column=target_column, preserve_features=preserve_features,
+    ).fit_transform(current_df)
+    current_df = result_corr.df
+    all_dropped.extend(result_corr.dropped_features)
+    all_reasons.update(result_corr.drop_reasons)
+
+    if l1_enabled:
+        last_method = SelectionMethod.L1_SELECTION
+        result_l1 = FeatureSelector(
+            method=SelectionMethod.L1_SELECTION, target_column=target_column,
+            preserve_features=preserve_features, max_features=max_features,
+        ).fit_transform(current_df)
+        current_df = result_l1.df
+        all_dropped.extend(result_l1.dropped_features)
+        all_reasons.update(result_l1.drop_reasons)
+        importance_scores = result_l1.importance_scores
+
+    selected = [c for c in current_df.columns if c != target_column]
+    return FeatureSelectionResult(
+        df=current_df, selected_features=selected, dropped_features=all_dropped,
+        drop_reasons=all_reasons, method_used=last_method, importance_scores=importance_scores,
+    )

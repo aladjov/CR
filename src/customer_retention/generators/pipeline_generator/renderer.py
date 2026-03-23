@@ -871,6 +871,13 @@ def apply_scaling(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def apply_feature_selection(df: pd.DataFrame) -> pd.DataFrame:
+{% if config.gold.feature_exclusion_prefixes %}
+    _exclusion_prefixes = {{ config.gold.feature_exclusion_prefixes }}
+    _prefix_drops = [c for c in df.columns if any(c.startswith(p) for p in _exclusion_prefixes)]
+    if _prefix_drops:
+        df = df.drop(columns=_prefix_drops)
+        print(f"  Dropped {len(_prefix_drops)} leakage-excluded columns")
+{% endif %}
 {% if config.gold.feature_selections %}
 {% for fs in config.gold.feature_selections %}
     df = apply_feature_select(df, '{{ fs }}')
@@ -964,14 +971,14 @@ def run_gold_features():
     gold = apply_gold_transformations(silver)
     print(f"  Gold transformations: {time.perf_counter() - _t1:.1f}s")
     _t2 = time.perf_counter()
-    gold = apply_encodings(gold)
-    print(f"  Encodings: {time.perf_counter() - _t2:.1f}s")
-    _t3 = time.perf_counter()
-    gold = apply_scaling(gold)
-    print(f"  Scaling: {time.perf_counter() - _t3:.1f}s")
-    _t4 = time.perf_counter()
     gold = apply_feature_selection(gold)
-    print(f"  Feature selection: {time.perf_counter() - _t4:.1f}s")
+    print(f"  Feature selection: {time.perf_counter() - _t2:.1f}s")
+    _t3 = time.perf_counter()
+    gold = apply_encodings(gold)
+    print(f"  Encodings: {time.perf_counter() - _t3:.1f}s")
+    _t4 = time.perf_counter()
+    gold = apply_scaling(gold)
+    print(f"  Scaling: {time.perf_counter() - _t4:.1f}s")
 {% if fitted_steps %}
     _t5 = time.perf_counter()
     gold = apply_fitted_transforms(gold)

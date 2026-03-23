@@ -34,6 +34,7 @@ from customer_retention.stages.features.feature_selector import (
     FeatureSelectionResult,
     FeatureSelector,
     SelectionMethod,
+    run_selection_pipeline,
 )
 from customer_retention.stages.features.interaction_features import (
     InteractionFeatureGenerator,
@@ -63,6 +64,7 @@ __all__ = [
     "FeatureSelector",
     "SelectionMethod",
     "FeatureSelectionResult",
+    "run_selection_pipeline",
     "FeatureManifest",
     "FeatureSet",
     "FeatureSetRegistry",

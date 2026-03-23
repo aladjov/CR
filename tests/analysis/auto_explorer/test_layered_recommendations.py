@@ -812,6 +812,19 @@ class TestGoldFeatureSelectionRecommendations:
         assert rec.action == "prioritize"
         assert rec.parameters["effect_size"] == 2.5
 
+    def test_adds_drop_l1_zero_to_gold(self):
+        registry = RecommendationRegistry()
+        registry.init_gold("churned")
+        registry.add_gold_drop_l1_zero(
+            column="noise_feature", l1_coefficient=0.0,
+            rationale="L1 zero coefficient", source_notebook="08"
+        )
+        assert len(registry.gold.feature_selection) == 1
+        rec = registry.gold.feature_selection[0]
+        assert rec.target_column == "noise_feature"
+        assert rec.action == "drop_l1_zero"
+        assert rec.parameters["l1_coefficient"] == 0.0
+
     def test_feature_selection_in_all_recommendations(self):
         registry = RecommendationRegistry()
         registry.init_gold("churned")

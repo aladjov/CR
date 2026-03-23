@@ -339,6 +339,200 @@ class TestBatchedVarianceSelection:
         assert "normal" in result.selected_features
 
 
+class TestL1Selection:
+    @pytest.fixture
+    def df_with_target_signal(self):
+        np.random.seed(42)
+        n = 200
+        target = np.random.choice([0, 1], n)
+        return pd.DataFrame({
+            "relevant1": target * 2.0 + np.random.randn(n) * 0.1,
+            "relevant2": target * 1.5 + np.random.randn(n) * 0.3,
+            "noise1": np.random.randn(n),
+            "noise2": np.random.randn(n),
+            "noise3": np.random.randn(n),
+            "target": target,
+        })
+
+    def test_l1_drops_irrelevant_features(self, df_with_target_signal):
+        selector = FeatureSelector(
+            method=SelectionMethod.L1_SELECTION,
+            target_column="target",
+        )
+        result = selector.fit_transform(df_with_target_signal)
+        assert len(result.dropped_features) > 0
+        relevant_kept = {"relevant1", "relevant2"} & set(result.selected_features)
+        assert len(relevant_kept) >= 1
+
+    def test_l1_keeps_strongest_signal(self, df_with_target_signal):
+        selector = FeatureSelector(
+            method=SelectionMethod.L1_SELECTION,
+            target_column="target",
+        )
+        result = selector.fit_transform(df_with_target_signal)
+        assert "relevant1" in result.selected_features
+
+    def test_l1_populates_importance_scores(self, df_with_target_signal):
+        selector = FeatureSelector(
+            method=SelectionMethod.L1_SELECTION,
+            target_column="target",
+        )
+        result = selector.fit_transform(df_with_target_signal)
+        assert result.importance_scores is not None
+        assert isinstance(result.importance_scores, dict)
+        assert "relevant1" in result.importance_scores
+        assert result.importance_scores["relevant1"] > 0
+
+    def test_l1_preserves_preserved_features(self, df_with_target_signal):
+        selector = FeatureSelector(
+            method=SelectionMethod.L1_SELECTION,
+            target_column="target",
+            preserve_features=["noise1"],
+        )
+        result = selector.fit_transform(df_with_target_signal)
+        assert "noise1" in result.selected_features
+
+    def test_l1_handles_multiclass(self):
+        np.random.seed(42)
+        n = 500
+        target = np.random.choice([0, 1, 2], n)
+        df = pd.DataFrame({
+            "signal": target * 3.0 + np.random.randn(n) * 0.1,
+            "noise": np.random.randn(n),
+            "target": target,
+        })
+        selector = FeatureSelector(
+            method=SelectionMethod.L1_SELECTION,
+            target_column="target",
+        )
+        result = selector.fit_transform(df)
+        assert "signal" in result.selected_features
+        assert result.importance_scores is not None
+        assert result.importance_scores["signal"] > result.importance_scores.get("noise", 0)
+
+    def test_l1_requires_target_column(self):
+        df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+        selector = FeatureSelector(method=SelectionMethod.L1_SELECTION)
+        with pytest.raises(ValueError, match="target_column"):
+            selector.fit(df)
+
+    def test_l1_handles_nan_in_features(self):
+        np.random.seed(42)
+        n = 200
+        target = np.random.choice([0, 1], n)
+        df = pd.DataFrame({
+            "signal": target * 2.0 + np.random.randn(n) * 0.1,
+            "with_nan": np.random.randn(n),
+            "target": target,
+        })
+        df.loc[0:5, "with_nan"] = np.nan
+        selector = FeatureSelector(
+            method=SelectionMethod.L1_SELECTION,
+            target_column="target",
+        )
+        result = selector.fit_transform(df)
+        assert result.df is not None
+
+    def test_l1_raises_on_insufficient_rows(self):
+        df = pd.DataFrame({
+            "a": [1.0, 2.0, 3.0],
+            "target": [0, 1, 0],
+        })
+        selector = FeatureSelector(
+            method=SelectionMethod.L1_SELECTION,
+            target_column="target",
+        )
+        with pytest.raises(ValueError, match="at least 10 rows"):
+            selector.fit(df)
+
+    def test_l1_drop_reasons_mention_l1(self, df_with_target_signal):
+        selector = FeatureSelector(
+            method=SelectionMethod.L1_SELECTION,
+            target_column="target",
+        )
+        result = selector.fit_transform(df_with_target_signal)
+        for reason in result.drop_reasons.values():
+            assert "l1" in reason.lower() or "zero" in reason.lower()
+
+
+class TestRunSelectionPipeline:
+    @pytest.fixture
+    def df_mixed(self):
+        np.random.seed(42)
+        n = 200
+        target = np.random.choice([0, 1], n)
+        base = np.random.randn(n)
+        return pd.DataFrame({
+            "constant": [1.0] * n,
+            "signal": target * 2.0 + np.random.randn(n) * 0.1,
+            "corr1": base,
+            "corr2": base + np.random.randn(n) * 0.01,
+            "noise1": np.random.randn(n),
+            "noise2": np.random.randn(n),
+            "target": target,
+        })
+
+    def test_variance_and_correlation_only(self, df_mixed):
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        result = run_selection_pipeline(
+            df_mixed, target_column="target",
+            variance_threshold=0.01, correlation_threshold=0.95,
+            l1_enabled=False,
+        )
+        assert "constant" in result.dropped_features
+        corr_pair = {"corr1", "corr2"}
+        assert len(corr_pair - set(result.selected_features)) >= 1
+        assert result.method_used == SelectionMethod.CORRELATION
+
+    def test_full_pipeline_with_l1(self, df_mixed):
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        result = run_selection_pipeline(
+            df_mixed, target_column="target",
+            variance_threshold=0.01, correlation_threshold=0.95,
+            l1_enabled=True,
+        )
+        assert "constant" in result.dropped_features
+        assert "signal" in result.selected_features
+        assert result.method_used == SelectionMethod.L1_SELECTION
+
+    def test_merges_drop_reasons_across_stages(self, df_mixed):
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        result = run_selection_pipeline(
+            df_mixed, target_column="target",
+            variance_threshold=0.01, correlation_threshold=0.95,
+            l1_enabled=True,
+        )
+        reasons = set(result.drop_reasons.values())
+        has_variance = any("variance" in r.lower() for r in reasons)
+        assert has_variance
+        assert len(result.drop_reasons) == len(result.dropped_features)
+
+    def test_max_features_respected(self):
+        np.random.seed(42)
+        n = 200
+        target = np.random.choice([0, 1], n)
+        df = pd.DataFrame({
+            f"f{i}": target * (i + 1) + np.random.randn(n) * 0.5
+            for i in range(20)
+        })
+        df["target"] = target
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        result = run_selection_pipeline(
+            df, target_column="target",
+            l1_enabled=True, max_features=5,
+        )
+        assert len(result.selected_features) <= 5
+
+    def test_preserves_target_column_in_output(self, df_mixed):
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        result = run_selection_pipeline(
+            df_mixed, target_column="target",
+            l1_enabled=True,
+        )
+        assert "target" in result.df.columns
+        assert "target" not in result.dropped_features
+
+
 class TestCombinedSelection:
     def test_variance_then_correlation(self):
         np.random.seed(42)

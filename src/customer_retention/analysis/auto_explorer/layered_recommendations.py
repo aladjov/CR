@@ -294,6 +294,13 @@ class RecommendationRegistry:
                                           params, rationale, source_notebook)
         self.gold.feature_selection.append(rec)
 
+    def add_gold_drop_l1_zero(self, column: str, l1_coefficient: float,
+                               rationale: str, source_notebook: str) -> None:
+        params = {"l1_coefficient": l1_coefficient}
+        rec = self._create_recommendation("gold", "feature_selection", "drop_l1_zero", column,
+                                          params, rationale, source_notebook)
+        self.gold.feature_selection.append(rec)
+
     def add_silver_ratio(self, column: str, numerator: str, denominator: str,
                          rationale: str, source_notebook: str) -> None:
         params = {"feature_type": "ratio", "numerator": numerator, "denominator": denominator,
