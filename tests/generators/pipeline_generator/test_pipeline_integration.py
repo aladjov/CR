@@ -162,7 +162,7 @@ def full_findings_setup(tmp_path):
             ],
             "feature_selection": [
                 {"id": "gold_drop_amount", "layer": "gold", "category": "feature_selection",
-                 "action": "drop_multicollinear", "target_column": "amount",
+                 "action": "drop_multicollinear", "target_column": "amount_sum_7d",
                  "parameters": {"correlated_with": "age", "correlation": 0.85},
                  "rationale": "High corr", "source_notebook": "04", "priority": 1, "dependencies": [], "fit_artifact_id": None},
             ],
@@ -239,7 +239,7 @@ class TestRecommendationCoverage:
         parser = FindingsParser(str(findings_dir))
         config = parser.parse()
         assert len(config.gold.feature_selections) >= 1
-        assert "amount" in config.gold.feature_selections
+        assert "amount_sum_7d" in config.gold.feature_selections
 
     def test_gold_has_recommendation_encodings(self, full_findings_setup):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
@@ -282,6 +282,7 @@ class TestMultiDatasetGeneration:
             "from customer_retention.stages.modeling.cross_validator",
             "from customer_retention.stages.modeling.feature_profile",
             "from customer_retention.analysis.auto_explorer.run_namespace",
+            "from customer_retention.analysis.auto_explorer.layered_recommendations",
         }
         for f in generated_output.rglob("*.py"):
             if f.stat().st_size > 0:

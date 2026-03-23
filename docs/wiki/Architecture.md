@@ -340,6 +340,10 @@ Notebook 10 generates deterministic production pipelines in two tracks:
 
 Both generators read from `FindingsParser` (with optional `RunNamespace` integration) and produce parallel Bronze notebooks that merge in Silver, then flow through Gold. The Databricks track uses `dbutils.notebook.run()` for orchestration and `format("delta").saveAsTable()` for storage.
 
+### Framework Imports in Generated Code
+
+Generated pipeline code should minimize dependencies on the exploration framework. Allowed imports are limited to modules that provide runtime functionality the pipeline genuinely needs (transforms, storage adapters, compat layer, data splitting, feature profiling, run namespace). When a framework import is necessary to ensure parity between exploration and production — for example, reading the canonical recommendations at runtime so drop reasons stay in sync — it is acceptable. The test `test_no_framework_imports` enforces the allowlist; add new entries only when the import is required for exploration/production parity and cannot be replaced by data emitted at generation time without risking drift.
+
 ### Naming Convention
 
 - **Composite Name (CN)**: `{readable_prefix}__{7char_hash}` derived from sorted source names
