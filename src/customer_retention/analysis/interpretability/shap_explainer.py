@@ -10,6 +10,51 @@ from sklearn.inspection import permutation_importance
 from customer_retention.core.compat import DataFrame, Series
 
 
+def select_risk_stratified_sample(
+    probabilities: np.ndarray, n_samples: int = 200,
+    n_bins: int = 5, priority_mask: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Return sorted indices for risk-stratified SHAP sampling.
+
+    Bins entities by predicted probability quantiles and samples proportionally
+    from each bin. Priority entities (via boolean mask) are always included.
+    """
+    n_total = len(probabilities)
+    if n_total <= n_samples:
+        return np.arange(n_total)
+
+    rng = np.random.default_rng(42)
+    priority_idx = np.where(priority_mask)[0] if priority_mask is not None else np.array([], dtype=int)
+
+    if len(priority_idx) >= n_samples:
+        return np.sort(rng.choice(priority_idx, n_samples, replace=False))
+
+    selected = set(priority_idx.tolist())
+    remaining_budget = n_samples - len(selected)
+    candidates = np.array([i for i in range(n_total) if i not in selected])
+
+    bin_edges = np.quantile(probabilities[candidates], np.linspace(0, 1, n_bins + 1))
+    bin_edges[-1] += 1e-9
+    bin_ids = np.digitize(probabilities[candidates], bin_edges[1:-1])
+
+    bins: dict[int, list[int]] = {}
+    for pos, idx in enumerate(candidates):
+        bins.setdefault(bin_ids[pos], []).append(idx)
+
+    n_active_bins = len(bins)
+    per_bin = remaining_budget // max(n_active_bins, 1)
+    extra = remaining_budget - per_bin * n_active_bins
+
+    for i, b in enumerate(sorted(bins)):
+        members = np.array(bins[b])
+        alloc = per_bin + (1 if i < extra else 0)
+        take = min(alloc, len(members))
+        if take > 0:
+            selected.update(rng.choice(members, take, replace=False).tolist())
+
+    return np.sort(np.array(list(selected), dtype=int))
+
+
 @dataclass
 class FeatureImportance:
     feature_name: str

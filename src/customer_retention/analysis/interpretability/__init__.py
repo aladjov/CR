@@ -2,10 +2,10 @@ from .cohort_analyzer import CohortAnalysisResult, CohortAnalyzer, CohortCompari
 from .counterfactual import Counterfactual, CounterfactualChange, CounterfactualGenerator
 from .individual_explainer import Confidence, IndividualExplainer, IndividualExplanation, RiskContribution
 from .pdp_generator import InteractionResult, PDPGenerator, PDPResult
-from .shap_explainer import FeatureImportance, GlobalExplanation, ShapExplainer
+from .shap_explainer import FeatureImportance, GlobalExplanation, ShapExplainer, select_risk_stratified_sample
 
 __all__ = [
-    "ShapExplainer", "GlobalExplanation", "FeatureImportance",
+    "ShapExplainer", "GlobalExplanation", "FeatureImportance", "select_risk_stratified_sample",
     "PDPGenerator", "PDPResult", "InteractionResult",
     "CohortAnalyzer", "CohortInsight", "CohortComparison", "CohortAnalysisResult",
     "IndividualExplainer", "IndividualExplanation", "RiskContribution", "Confidence",

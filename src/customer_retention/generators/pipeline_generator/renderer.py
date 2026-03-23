@@ -775,7 +775,7 @@ def run_silver_merge(create_holdout: bool = True, holdout_fraction: float = 0.1)
 if __name__ == "__main__":
     run_silver_merge()
 ''',
-    "gold.py.j2": """import time
+    "gold.py.j2": r"""import time
 
 import pandas as pd
 import warnings
@@ -887,8 +887,18 @@ def apply_scaling(df: pd.DataFrame) -> pd.DataFrame:
 
 def apply_feature_selection(df: pd.DataFrame) -> pd.DataFrame:
 {% if config.gold.feature_exclusion_prefixes %}
+    import re as _re
     _exclusion_prefixes = {{ config.gold.feature_exclusion_prefixes }}
-    _prefix_drops = [c for c in df.columns if any(c.startswith(p) for p in _exclusion_prefixes)]
+    _lag_re = _re.compile(r"^(?:lag\d+|velocity)_")
+    def _is_excluded(col):
+        if any(col.startswith(p) for p in _exclusion_prefixes):
+            return True
+        m = _lag_re.match(col)
+        if m:
+            remainder = col[m.end():]
+            return any(remainder.startswith(p) for p in _exclusion_prefixes)
+        return False
+    _prefix_drops = [c for c in df.columns if _is_excluded(c)]
     if _prefix_drops:
         df = df.drop(columns=_prefix_drops)
         print(f"  Dropped {len(_prefix_drops)} leakage-excluded columns")

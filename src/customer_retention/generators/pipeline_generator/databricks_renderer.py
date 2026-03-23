@@ -1231,7 +1231,7 @@ if _NAMESPACE is not None:
 display(_result)
 dbutils.notebook.exit(_summary)
 """,
-    "databricks_gold.py.j2": """# Databricks notebook source
+    "databricks_gold.py.j2": r"""# Databricks notebook source
 # MAGIC %md
 # MAGIC # Gold: Features {{ config.composite_name or config.name }}
 
@@ -1390,8 +1390,18 @@ def {{ func_name }}(df):
 
 def apply_feature_selection(df):
 {%- if config.gold.feature_exclusion_prefixes %}
+    import re as _re
     _exclusion_prefixes = {{ config.gold.feature_exclusion_prefixes }}
-    _prefix_drops = [c for c in df.columns if any(c.startswith(p) for p in _exclusion_prefixes)]
+    _lag_re = _re.compile(r"^(?:lag\d+|velocity)_")
+    def _is_excluded(col):
+        if any(col.startswith(p) for p in _exclusion_prefixes):
+            return True
+        m = _lag_re.match(col)
+        if m:
+            remainder = col[m.end():]
+            return any(remainder.startswith(p) for p in _exclusion_prefixes)
+        return False
+    _prefix_drops = [c for c in df.columns if _is_excluded(c)]
     if _prefix_drops:
         df = df.drop(*_prefix_drops)
         print(f"  Dropped {len(_prefix_drops)} leakage-excluded columns")

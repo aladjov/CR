@@ -4,7 +4,12 @@ import pytest
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 
-from customer_retention.analysis.interpretability import FeatureImportance, GlobalExplanation, ShapExplainer
+from customer_retention.analysis.interpretability import (
+    FeatureImportance,
+    GlobalExplanation,
+    ShapExplainer,
+    select_risk_stratified_sample,
+)
 
 
 @pytest.fixture
@@ -137,3 +142,87 @@ class TestPermutationImportance:
         assert len(result) == X.shape[1]
         for feature, importance in result.items():
             assert feature in X.columns
+
+
+class TestSelectRiskStratifiedSample:
+    def test_returns_all_when_n_samples_exceeds_total(self):
+        probs = np.array([0.1, 0.5, 0.9])
+        result = select_risk_stratified_sample(probs, n_samples=10)
+        np.testing.assert_array_equal(result, np.arange(3))
+
+    def test_returns_exact_n_samples(self):
+        rng = np.random.default_rng(0)
+        probs = rng.uniform(0, 1, 1000)
+        result = select_risk_stratified_sample(probs, n_samples=200)
+        assert len(result) == 200
+
+    def test_indices_are_valid(self):
+        rng = np.random.default_rng(0)
+        probs = rng.uniform(0, 1, 500)
+        result = select_risk_stratified_sample(probs, n_samples=100)
+        assert all(0 <= i < 500 for i in result)
+
+    def test_no_duplicate_indices(self):
+        rng = np.random.default_rng(0)
+        probs = rng.uniform(0, 1, 500)
+        result = select_risk_stratified_sample(probs, n_samples=100)
+        assert len(result) == len(set(result))
+
+    def test_covers_all_risk_bins(self):
+        probs = np.concatenate([
+            np.full(200, 0.1),
+            np.full(200, 0.3),
+            np.full(200, 0.5),
+            np.full(200, 0.7),
+            np.full(200, 0.9),
+        ])
+        result = select_risk_stratified_sample(probs, n_samples=50, n_bins=5)
+        selected_probs = probs[result]
+        unique_values = set(selected_probs)
+        assert len(unique_values) == 5
+
+    def test_priority_mask_entities_always_included(self):
+        probs = np.linspace(0, 1, 100)
+        priority = np.zeros(100, dtype=bool)
+        priority[[0, 50, 99]] = True
+        result = select_risk_stratified_sample(probs, n_samples=20, priority_mask=priority)
+        assert 0 in result
+        assert 50 in result
+        assert 99 in result
+
+    def test_priority_exceeds_budget_caps_to_n_samples(self):
+        probs = np.linspace(0, 1, 100)
+        priority = np.ones(100, dtype=bool)
+        result = select_risk_stratified_sample(probs, n_samples=10, priority_mask=priority)
+        assert len(result) == 10
+
+    def test_deterministic_with_same_inputs(self):
+        probs = np.random.default_rng(0).uniform(0, 1, 500)
+        r1 = select_risk_stratified_sample(probs, n_samples=50)
+        r2 = select_risk_stratified_sample(probs, n_samples=50)
+        np.testing.assert_array_equal(r1, r2)
+
+    def test_sorted_output(self):
+        probs = np.random.default_rng(0).uniform(0, 1, 500)
+        result = select_risk_stratified_sample(probs, n_samples=100)
+        np.testing.assert_array_equal(result, np.sort(result))
+
+    def test_extreme_single_bin(self):
+        probs = np.full(100, 0.5)
+        result = select_risk_stratified_sample(probs, n_samples=20, n_bins=5)
+        assert len(result) == 20
+
+    def test_skewed_distribution_still_samples_tails(self):
+        probs = np.concatenate([np.full(950, 0.1), np.full(50, 0.9)])
+        result = select_risk_stratified_sample(probs, n_samples=100, n_bins=5)
+        selected_probs = probs[result]
+        assert np.any(selected_probs > 0.5)
+        assert np.any(selected_probs < 0.5)
+
+    def test_priority_plus_stratified_fill(self):
+        probs = np.linspace(0, 1, 200)
+        priority = np.zeros(200, dtype=bool)
+        priority[[0, 1, 2]] = True
+        result = select_risk_stratified_sample(probs, n_samples=50, priority_mask=priority)
+        assert len(result) == 50
+        assert all(i in result for i in [0, 1, 2])
