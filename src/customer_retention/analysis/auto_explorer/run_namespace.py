@@ -92,6 +92,18 @@ class RunNamespace:
         return self.run_dir / "training_metadata.json"
 
     @property
+    def bronze_metadata_path(self) -> Path:
+        return self.run_dir / "bronze_metadata.json"
+
+    @property
+    def silver_metadata_path(self) -> Path:
+        return self.run_dir / "silver_metadata.json"
+
+    @property
+    def gold_metadata_path(self) -> Path:
+        return self.run_dir / "gold_metadata.json"
+
+    @property
     def exploration_metadata_path(self) -> Path:
         return self.run_dir / "exploration_metadata.json"
 

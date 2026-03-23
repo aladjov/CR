@@ -229,6 +229,18 @@ class TestFeatureProfilePaths:
         expected = tmp_path / "runs" / "proj-abc" / "training_metadata.json"
         assert ns.training_metadata_path == expected
 
+    def test_bronze_metadata_path(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="proj-abc")
+        assert ns.bronze_metadata_path == tmp_path / "runs" / "proj-abc" / "bronze_metadata.json"
+
+    def test_silver_metadata_path(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="proj-abc")
+        assert ns.silver_metadata_path == tmp_path / "runs" / "proj-abc" / "silver_metadata.json"
+
+    def test_gold_metadata_path(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="proj-abc")
+        assert ns.gold_metadata_path == tmp_path / "runs" / "proj-abc" / "gold_metadata.json"
+
     def test_exploration_metadata_path(self, tmp_path):
         ns = RunNamespace(root=tmp_path, run_id="proj-abc")
         expected = tmp_path / "runs" / "proj-abc" / "exploration_metadata.json"

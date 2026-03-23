@@ -556,7 +556,10 @@ from customer_retention.core.config.column_config import DatasetGranularity
 from customer_retention.analysis.auto_explorer.key_resolver import resolve_entity_keys
 from customer_retention.analysis.auto_explorer.project_context import KeyResolutionStep
 {% endif %}
-from config import SOURCES, get_bronze_path, get_silver_path, TARGET_COLUMN
+from config import SOURCES, get_bronze_path, get_silver_path, TARGET_COLUMN, EXPERIMENTS_DIR
+from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+
+_NAMESPACE = RunNamespace.from_env_or_latest(EXPERIMENTS_DIR)
 
 {% if config.silver.grid_dates %}
 GRID_DATES = {{ config.silver.grid_dates }}
@@ -757,6 +760,15 @@ def run_silver_merge(create_holdout: bool = True, holdout_fraction: float = 0.1)
         Path(str(output_path) + ".reference_date").write_text(ref_date)
     _silver_elapsed = time.perf_counter() - _t0
     print(f"Silver total: {_silver_elapsed:.1f}s")
+    if _NAMESPACE is not None:
+        import json as _json
+        _silver_meta = {
+            "rows": len(silver), "columns": len(silver.columns),
+            "column_list": list(silver.columns), "elapsed_seconds": round(_silver_elapsed, 1),
+            "source_count": len(bronze_outputs), "sources": list(bronze_outputs.keys()),
+        }
+        _NAMESPACE.silver_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        _NAMESPACE.silver_metadata_path.write_text(_json.dumps(_silver_meta))
     return silver
 
 
@@ -783,6 +795,9 @@ from config import (get_silver_path, get_gold_path, get_feast_data_path,
                     TARGET_COLUMN, TIMESTAMP_COLUMN, RECOMMENDATIONS_HASH, FEAST_REPO_PATH,
                     FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL, EXPERIMENTS_DIR,
                     ARTIFACTS_PATH, FIT_MODE)
+from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+
+_NAMESPACE = RunNamespace.from_env_or_latest(EXPERIMENTS_DIR)
 
 {% if not fitted_steps %}
 {% if config.fit_mode %}
@@ -1006,6 +1021,17 @@ def run_gold_features():
     _gold_elapsed = time.perf_counter() - _t0
     print(f"Gold total: {_gold_elapsed:.1f}s")
     print(f"Gold features saved with version: {get_feature_version_tag()}")
+    if _NAMESPACE is not None:
+        import json as _json
+        _meta_cols = {TARGET_COLUMN, FEAST_TIMESTAMP_COL, FEAST_ENTITY_KEY, "as_of_date", "feature_timestamp"}
+        _gold_meta = {
+            "rows": len(gold), "columns": len(gold.columns),
+            "feature_count": len([c for c in gold.columns if c not in _meta_cols]),
+            "feature_version": get_feature_version_tag(),
+            "elapsed_seconds": round(_gold_elapsed, 1),
+        }
+        _NAMESPACE.gold_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        _NAMESPACE.gold_metadata_path.write_text(_json.dumps(_gold_meta))
     return gold
 
 
@@ -1342,6 +1368,10 @@ def run_experiment():
 
     _results["best_model"] = best_model
     _results["best_roc_auc"] = best_auc
+    if _NAMESPACE is not None:
+        import json as _json
+        _NAMESPACE.training_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        _NAMESPACE.training_metadata_path.write_text(_json.dumps(_results, default=str))
     return _results
 
 
@@ -1361,6 +1391,7 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import PIPELINE_NAME, COMPOSITE_NAME, EXPERIMENTS_DIR, PRODUCTION_DIR
+from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 {% for name in sorted_landing_names(config.landing) %}
 from landing.landing_{{ name }} import run_landing_{{ name }}
 {% endfor %}
@@ -1387,8 +1418,10 @@ def setup_experiments_dir():
 
 
 def run_pipeline(validate=False):
+    import json as _json
     print(f"Starting pipeline: {PIPELINE_NAME}")
     setup_experiments_dir()
+    _ns = RunNamespace.from_env_or_latest(EXPERIMENTS_DIR)
 {% if config.landing %}
 
     print("\\n[1/6] Landing (event sources)...")
@@ -1401,45 +1434,52 @@ def run_pipeline(validate=False):
         validate_landing()
 {% endif %}
 
+    _bronze_results = {}
     print("\\n[{{ '2/6' if config.landing else '1/4' }}] Bronze event...")
 {% for name in config.bronze_event %}
-    run_bronze_event_{{ name }}()
+    _df = run_bronze_event_{{ name }}()
+    _bronze_results["event_{{ name }}"] = {"rows": len(_df), "columns": len(_df.columns)}
 {% endfor %}
-    print("Bronze event complete")
 
     print("\\n[{{ '3/6' if config.landing else '2/4' }}] Bronze entity (parallel)...")
     with ThreadPoolExecutor(max_workers={{ (config.bronze | length) + (config.bronze_event | length) }}) as executor:
-        bronze_futures = [
+        _futures = {
 {% for name in config.bronze %}
-            executor.submit(run_bronze_entity_{{ name }}),
+            "{{ name }}": executor.submit(run_bronze_entity_{{ name }}),
 {% endfor %}
 {% for name in config.bronze_event %}
-            executor.submit(run_bronze_entity_{{ name }}_aggregated),
+            "{{ name }}_aggregated": executor.submit(run_bronze_entity_{{ name }}_aggregated),
 {% endfor %}
-        ]
-        for f in bronze_futures:
-            f.result()
-    print("Bronze entity complete")
+        }
+        for _name, _fut in _futures.items():
+            _df = _fut.result()
+            _bronze_results[_name] = {"rows": len(_df), "columns": len(_df.columns)}
+    _bronze_meta = {"sources": _bronze_results, "total_sources": len(_bronze_results)}
+    if _ns is not None:
+        _ns.bronze_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        _ns.bronze_metadata_path.write_text(_json.dumps(_bronze_meta))
+    print("Bronze complete")
+    for _src, _info in _bronze_results.items():
+        print(f"  {_src}: {_info['rows']:,} rows, {_info['columns']} columns")
     if validate:
         from validation.validate_pipeline import validate_bronze
         validate_bronze()
 
     print("\\n[{{ '4/6' if config.landing else '3/4' }}] Silver...")
-    run_silver_merge()
-    print("Silver complete")
+    _silver_df = run_silver_merge()
+    print(f"Silver complete: {len(_silver_df):,} rows, {len(_silver_df.columns)} columns")
     if validate:
         from validation.validate_pipeline import validate_silver
         validate_silver()
 
     print("\\n[{{ '5/6' if config.landing else '4/4' }}] Gold...")
-    run_gold_features()
-    print("Gold complete")
+    _gold_df = run_gold_features()
+    print(f"Gold complete: {len(_gold_df):,} rows, {len(_gold_df.columns)} columns")
     if validate:
         from validation.validate_pipeline import validate_gold
         validate_gold()
 
     print("\\n[{{ '6/6' if config.landing else '4/4' }}] Training...")
-    import json as _json
     _training_results = run_experiment()
     print("Training complete")
     print("\\n" + "=" * 60)
@@ -1473,6 +1513,7 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import PIPELINE_NAME, COMPOSITE_NAME, SOURCES, MLFLOW_TRACKING_URI, EXPERIMENTS_DIR, PRODUCTION_DIR, FINDINGS_DIR
+from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 {% for name in sorted_landing_names(config.landing) %}
 from landing.landing_{{ name }} import run_landing_{{ name }}
 {% endfor %}
@@ -1510,23 +1551,30 @@ def run_landing():
 
 
 def run_bronze_event():
+    _results = {}
 {% for name in config.bronze_event %}
-    run_bronze_event_{{ name }}()
+    _df = run_bronze_event_{{ name }}()
+    _results["event_{{ name }}"] = {"rows": len(_df), "columns": len(_df.columns)}
 {% endfor %}
-    pass
+    return _results
 
 
 def run_bronze_entity_parallel():
-    bronze_funcs = [
+    bronze_funcs = {
 {% for name in config.bronze %}
-        run_bronze_entity_{{ name }},
+        "{{ name }}": run_bronze_entity_{{ name }},
 {% endfor %}
 {% for name in config.bronze_event %}
-        run_bronze_entity_{{ name }}_aggregated,
+        "{{ name }}_aggregated": run_bronze_entity_{{ name }}_aggregated,
 {% endfor %}
-    ]
+    }
+    _results = {}
     with ThreadPoolExecutor(max_workers={{ (config.bronze | length) + (config.bronze_event | length) }}) as ex:
-        list(ex.map(lambda f: f(), bronze_funcs))
+        futures = {name: ex.submit(fn) for name, fn in bronze_funcs.items()}
+        for name, fut in futures.items():
+            _df = fut.result()
+            _results[name] = {"rows": len(_df), "columns": len(_df.columns)}
+    return _results
 
 
 def is_port_in_use(port):
@@ -1567,10 +1615,12 @@ def start_mlflow_ui():
 
 
 def run_pipeline():
+    import json as _json
     print(f"Running {PIPELINE_NAME}")
     print("=" * 50)
 
     setup_experiments_dir()
+    _ns = RunNamespace.from_env_or_latest(EXPERIMENTS_DIR)
 {% if config.landing %}
 
     print("\\n[1/6] Landing (event sources)...")
@@ -1579,23 +1629,28 @@ def run_pipeline():
 {% endif %}
 
     print("\\n[{{ '2/6' if config.landing else '1/4' }}] Bronze event...")
-    run_bronze_event()
-    print("Bronze event complete")
+    _bronze_event_results = run_bronze_event()
 
     print("\\n[{{ '3/6' if config.landing else '2/4' }}] Bronze entity (parallel)...")
-    run_bronze_entity_parallel()
-    print("Bronze entity complete")
+    _bronze_entity_results = run_bronze_entity_parallel()
+
+    _bronze_meta = {"sources": {**_bronze_event_results, **_bronze_entity_results}, "total_sources": len(_bronze_event_results) + len(_bronze_entity_results)}
+    if _ns is not None:
+        _ns.bronze_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        _ns.bronze_metadata_path.write_text(_json.dumps(_bronze_meta))
+    print("Bronze complete")
+    for _src, _info in _bronze_meta["sources"].items():
+        print(f"  {_src}: {_info['rows']:,} rows, {_info['columns']} columns")
 
     print("\\n[{{ '4/6' if config.landing else '3/4' }}] Silver...")
-    run_silver_merge()
-    print("Silver complete")
+    _silver_df = run_silver_merge()
+    print(f"Silver complete: {len(_silver_df):,} rows, {len(_silver_df.columns)} columns")
 
     print("\\n[{{ '5/6' if config.landing else '4/4' }}] Gold...")
-    run_gold_features()
-    print("Gold complete")
+    _gold_df = run_gold_features()
+    print(f"Gold complete: {len(_gold_df):,} rows, {len(_gold_df.columns)} columns")
 
     print("\\n[{{ '6/6' if config.landing else '5/4' }}] Training...")
-    import json as _json
     _training_results = run_experiment()
     print("Training complete")
 

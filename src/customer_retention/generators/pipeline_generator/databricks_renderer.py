@@ -1210,7 +1210,24 @@ def run_silver():
 
 _output_table = run_silver()
 _result = spark.table(_output_table)
-_summary = f"{_result.count():,} rows, {len(_result.columns)} columns"
+_row_count = _result.count()
+_col_count = len(_result.columns)
+_summary = f"{_row_count:,} rows, {_col_count} columns"
+
+from pathlib import Path
+from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+try:
+    _exp_dir = dbutils.widgets.get("experiments_dir")
+    _run_id = dbutils.widgets.get("run_id")
+    _NAMESPACE = RunNamespace(root=Path(_exp_dir), run_id=_run_id) if _exp_dir and _run_id else None
+except Exception:
+    _NAMESPACE = RunNamespace.from_env_or_latest()
+if _NAMESPACE is not None:
+    import json
+    _silver_meta = {"rows": _row_count, "columns": _col_count, "column_list": _result.columns}
+    _NAMESPACE.silver_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    _NAMESPACE.silver_metadata_path.write_text(json.dumps(_silver_meta))
+
 display(_result)
 dbutils.notebook.exit(_summary)
 """,
@@ -1452,7 +1469,29 @@ def run_gold():
     return saved
 
 result = run_gold()
-_summary = f"{result.count():,} rows, {len(result.columns)} columns"
+_row_count = result.count()
+_col_count = len(result.columns)
+_summary = f"{_row_count:,} rows, {_col_count} columns"
+
+from pathlib import Path
+from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+try:
+    _exp_dir = dbutils.widgets.get("experiments_dir")
+    _run_id = dbutils.widgets.get("run_id")
+    _NAMESPACE = RunNamespace(root=Path(_exp_dir), run_id=_run_id) if _exp_dir and _run_id else None
+except Exception:
+    _NAMESPACE = RunNamespace.from_env_or_latest()
+if _NAMESPACE is not None:
+    import json
+    _meta_cols = {TARGET, TIMESTAMP_COLUMN, "entity_id", "as_of_date", "feature_timestamp"}
+    _gold_meta = {
+        "rows": _row_count, "columns": _col_count,
+        "feature_count": len([c for c in result.columns if c not in _meta_cols]),
+        "feature_version": f"v1.0.0_{RECOMMENDATIONS_HASH}" if RECOMMENDATIONS_HASH else "v1.0.0",
+    }
+    _NAMESPACE.gold_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    _NAMESPACE.gold_metadata_path.write_text(json.dumps(_gold_meta))
+
 display(result.limit(1000))
 dbutils.notebook.exit(_summary)
 """,
@@ -2053,13 +2092,27 @@ run_notebook("landing/landing_{{ name }}")
 
 # COMMAND ----------
 
+_bronze_results = {}
 {% for source_name in config.bronze %}
-run_notebook("bronze/bronze_entity_{{ source_name }}")
+_bronze_results["{{ source_name }}"] = run_notebook("bronze/bronze_entity_{{ source_name }}")
 {% endfor %}
 {% for source_name in config.bronze_event %}
-run_notebook("bronze/bronze_event_{{ source_name }}")
-run_notebook("bronze/bronze_entity_{{ source_name }}_aggregated")
+_bronze_results["event_{{ source_name }}"] = run_notebook("bronze/bronze_event_{{ source_name }}")
+_bronze_results["{{ source_name }}_aggregated"] = run_notebook("bronze/bronze_entity_{{ source_name }}_aggregated")
 {% endfor %}
+
+from pathlib import Path
+from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+try:
+    _exp_dir = dbutils.widgets.get("experiments_dir")
+    _run_id = dbutils.widgets.get("run_id")
+    _NAMESPACE = RunNamespace(root=Path(_exp_dir), run_id=_run_id) if _exp_dir and _run_id else None
+except Exception:
+    _NAMESPACE = RunNamespace.from_env_or_latest()
+if _NAMESPACE is not None:
+    import json
+    _NAMESPACE.bronze_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    _NAMESPACE.bronze_metadata_path.write_text(json.dumps({"sources": _bronze_results, "total_sources": len(_bronze_results)}))
 
 # COMMAND ----------
 
