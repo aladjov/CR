@@ -68,11 +68,11 @@ Notebook 02 runs source-level integrity checks (duplicates, missingness, date lo
 
 Notebook 03 merges all Bronze outputs on `(entity_id, as_of_date)` into a unified feature matrix using the `TemporalMerger`. Event-level datasets join on both keys; entity-level datasets either broadcast or use as-of joins depending on whether they have a feature timestamp.
 
-Notebooks 04-05 run on the merged dataset: column deep dive (type validation, skewness, encoding hints) and relationship analysis (correlations, redundancy, feature-target associations, interaction opportunities).
+Notebooks 04-05 run on the merged dataset: column deep dive (type validation, skewness, encoding hints) and relationship analysis (correlations, redundancy, feature-target associations, interaction opportunities). Notebook 05 concludes with **statistical feature selection** -- variance and pairwise-correlation filters that produce `drop_weak` and `drop_multicollinear` recommendations persisted to `merged/recommendations.yaml`.
 
 ### Phase III -- Gold: Modeling and Production
 
-Notebooks 06-07 consolidate feature opportunities and formalize the training setup (grid selection, split policy, label horizon). Notebook 08 trains baseline models with **entity-grouped temporal cross-validation** (`TemporalEntitySplit`) to prevent entity information leakage.
+Notebooks 06-07 consolidate feature opportunities and formalize the training setup (grid selection, split policy, label horizon). Notebook 08 prepares data for modelling in five stages -- prerequisite validation, feature availability filtering, gold-layer transforms (fitted on train only), entity-aware temporal split with purge gap, and **L1-regularised feature selection** that complements the NB05 statistical drops. It then trains baseline models with **entity-grouped temporal cross-validation** (`TemporalEntitySplit`) to prevent entity information leakage.
 
 Notebook 09 aligns model output with business objectives. Notebook 10 generates production pipeline code for both local and Databricks execution. Notebook 11 validates that scoring reproduces training features identically.
 
@@ -105,10 +105,10 @@ Notebook 09 aligns model output with business objectives. Notebook 10 generates 
 | 03 | Dataset Merge | Temporal merge into unified feature matrix |
 | 04 | Column Deep Dive | Column-level analysis on merged data |
 | 04a | Text Columns Deep Dive | NLP analysis (conditional) |
-| 05 | Relationship Analysis | Correlations, redundancy, interactions |
+| 05 | Relationship Analysis | Correlations, redundancy, interactions, statistical feature selection |
 | 06 | Feature Opportunities | Transformation and encoding candidates |
 | 07 | Modeling Readiness | Training grid, split policy, label horizon |
-| 08 | Baseline Experiments | Model training with entity-grouped temporal CV |
+| 08 | Baseline Experiments | L1 feature selection, gold transforms, model training with temporal CV |
 | 09 | Business Alignment | Intervention strategies, risk thresholds, ROI |
 | 10 | Spec Generation | Production pipeline code generation |
 | 11 | Scoring Validation | Train/serve skew validation |
@@ -159,6 +159,28 @@ On the pandas path, `normalize_timestamps()` delegates to the internal `_normali
 Additional safety nets exist at the write boundary (`clamp_distributed_timestamps` in `_write_delta`, `clamp_spark_timestamps` in `DatabricksDelta.write()`), but these are defense-in-depth — the primary sanitization happens at the input boundary.
 
 All downstream stages (Bronze through Gold) operate exclusively on tz-naive timestamps.
+
+### Two-Step Feature Selection (Notebooks 05 and 08)
+
+Feature selection is split across two notebooks because each step requires different inputs and serves a different purpose.
+
+**Step 1 -- Statistical Filters (NB05):** Runs on the merged silver feature matrix *before* any train/test split. Identifies features to drop based on properties intrinsic to the data:
+
+| Filter | What it catches | Threshold |
+|--------|----------------|-----------|
+| **Variance** | Near-constant features that carry no signal | Configurable (`VARIANCE_THRESHOLD`, default 0.01) |
+| **Pairwise correlation** | Redundant pairs where the weaker predictor is dropped | Configurable (`CORRELATION_THRESHOLD`, default 0.95) |
+
+Results are persisted as `drop_multicollinear` and `drop_weak` recommendations in `merged/recommendations.yaml`.
+
+**Step 2 -- L1-Regularised Selection (NB08):** Runs *after* the temporal train/test split, on training data only. Fits a logistic regression with L1 penalty -- features whose coefficients shrink to zero under regularisation have no marginal predictive value after accounting for inter-feature correlations. This catches features that passed the NB05 filters individually but add nothing in the presence of other features.
+
+The two steps are deliberately separated:
+
+- NB05 filters are **data-intrinsic** (variance, redundancy) and do not require a target split. They run early so that downstream analysis (NB06-07) and gold-layer transforms operate on a cleaner feature set.
+- NB08 L1 selection is **model-aware** and must run after the temporal split to avoid target leakage from the test set into the selection process.
+
+Both steps write their results to `merged/recommendations.yaml`. NB08 gates NB05 drops behind `APPLY_NB05_DROPS` and its own L1 pass behind `L1_FEATURE_SELECTION_ENABLED`, so either step can be toggled independently.
 
 ### Entity-Aware Temporal Cross-Validation
 
@@ -442,6 +464,8 @@ tests/                              # Test suite (7900+ tests, 91%+ coverage)
 6. **Train/test split is entity-aware and temporally purged.** Never row-random. `TemporalEntitySplit` ensures all rows of an entity stay together, with optional purge gap.
 
 7. **Each notebook produces something that is not re-evaluated later.** Temporal evidence drives grid design. Aggregation happens once. Cleanup happens before merge. Production faithfully replicates exploration.
+
+8. **Feature selection is two-step: data-intrinsic (NB05) then model-aware (NB08).** NB05 removes variance-dead and pairwise-redundant features before any split. NB08 applies L1-regularised selection on training data only, catching features that are individually plausible but collectively redundant. Splitting the steps avoids target leakage from the test set into the selection process while still cleaning the feature set early for downstream analysis.
 
 ## Next Steps
 
