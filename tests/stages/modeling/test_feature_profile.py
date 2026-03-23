@@ -120,3 +120,81 @@ class TestCompareFeatureProfiles:
         prod = self._make("production", {"a": ColumnProfile("double", 920, 80)})
         discrepancies = compare_feature_profiles(exp, prod)
         assert not any("NULL DRIFT" in d for d in discrepancies)
+
+    def test_feature_dropped_in_exploration_not_flagged_as_extra(self):
+        exp = FeatureProfile(
+            stage="exploration", created_at="2024-01-01", row_count=1000,
+            target_column="churn",
+            features={"a": ColumnProfile("double", 1000, 0)},
+            excluded={"b": "drop_multicollinear"},
+        )
+        prod = FeatureProfile(
+            stage="production", created_at="2024-01-01", row_count=1000,
+            target_column="churn",
+            features={"a": ColumnProfile("double", 1000, 0)},
+            excluded={"b": "drop_multicollinear"},
+        )
+        assert compare_feature_profiles(exp, prod) == []
+
+    def test_feature_dropped_in_exploration_but_present_in_production(self):
+        exp = FeatureProfile(
+            stage="exploration", created_at="2024-01-01", row_count=1000,
+            target_column="churn",
+            features={"a": ColumnProfile("double", 1000, 0)},
+            excluded={"b": "drop_l1_zero"},
+        )
+        prod = FeatureProfile(
+            stage="production", created_at="2024-01-01", row_count=1000,
+            target_column="churn",
+            features={"a": ColumnProfile("double", 1000, 0), "b": ColumnProfile("double", 1000, 0)},
+        )
+        discrepancies = compare_feature_profiles(exp, prod)
+        assert any("SELECTION DRIFT" in d and "b" in d and "drop_l1_zero" in d for d in discrepancies)
+
+    def test_feature_dropped_in_production_but_present_in_exploration(self):
+        exp = FeatureProfile(
+            stage="exploration", created_at="2024-01-01", row_count=1000,
+            target_column="churn",
+            features={"a": ColumnProfile("double", 1000, 0), "b": ColumnProfile("double", 1000, 0)},
+        )
+        prod = FeatureProfile(
+            stage="production", created_at="2024-01-01", row_count=1000,
+            target_column="churn",
+            features={"a": ColumnProfile("double", 1000, 0)},
+            excluded={"b": "drop_weak"},
+        )
+        discrepancies = compare_feature_profiles(exp, prod)
+        assert any("SELECTION DRIFT" in d and "b" in d and "drop_weak" in d for d in discrepancies)
+
+    def test_matching_excluded_not_reported_as_missing_or_extra(self):
+        exp = FeatureProfile(
+            stage="exploration", created_at="2024-01-01", row_count=1000,
+            target_column="churn",
+            features={"a": ColumnProfile("double", 1000, 0)},
+            excluded={"b": "drop_multicollinear", "c": "drop_l1_zero"},
+        )
+        prod = FeatureProfile(
+            stage="production", created_at="2024-01-01", row_count=1000,
+            target_column="churn",
+            features={"a": ColumnProfile("double", 1000, 0)},
+            excluded={"b": "drop_multicollinear", "c": "drop_l1_zero"},
+        )
+        discrepancies = compare_feature_profiles(exp, prod)
+        assert not any("MISSING" in d for d in discrepancies)
+        assert not any("EXTRA" in d for d in discrepancies)
+
+    def test_excluded_reason_mismatch_reported(self):
+        exp = FeatureProfile(
+            stage="exploration", created_at="2024-01-01", row_count=1000,
+            target_column="churn",
+            features={"a": ColumnProfile("double", 1000, 0)},
+            excluded={"b": "drop_weak"},
+        )
+        prod = FeatureProfile(
+            stage="production", created_at="2024-01-01", row_count=1000,
+            target_column="churn",
+            features={"a": ColumnProfile("double", 1000, 0)},
+            excluded={"b": "drop_l1_zero"},
+        )
+        discrepancies = compare_feature_profiles(exp, prod)
+        assert any("EXCLUSION REASON" in d and "b" in d for d in discrepancies)

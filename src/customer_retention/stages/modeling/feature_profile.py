@@ -83,13 +83,29 @@ def compare_feature_profiles(exploration: FeatureProfile, production: FeaturePro
     discrepancies: List[str] = []
     exp_names = set(exploration.features.keys())
     prod_names = set(production.features.keys())
+    exp_excluded = exploration.excluded or {}
+    prod_excluded = production.excluded or {}
 
     missing = sorted(exp_names - prod_names)
     extra = sorted(prod_names - exp_names)
-    if missing:
-        discrepancies.append(f"MISSING in production ({len(missing)}): {missing}")
-    if extra:
-        discrepancies.append(f"EXTRA in production ({len(extra)}): {extra}")
+    genuinely_missing = [m for m in missing if m not in prod_excluded]
+    genuinely_extra = [e for e in extra if e not in exp_excluded]
+    if genuinely_missing:
+        discrepancies.append(f"MISSING in production ({len(genuinely_missing)}): {genuinely_missing}")
+    if genuinely_extra:
+        discrepancies.append(f"EXTRA in production ({len(genuinely_extra)}): {genuinely_extra}")
+
+    for name in missing:
+        if name in prod_excluded:
+            discrepancies.append(f"SELECTION DRIFT {name}: in exploration features but excluded in production ({prod_excluded[name]})")
+    for name in extra:
+        if name in exp_excluded:
+            discrepancies.append(f"SELECTION DRIFT {name}: excluded in exploration ({exp_excluded[name]}) but present in production features")
+
+    all_excluded = set(exp_excluded) | set(prod_excluded)
+    for name in sorted(all_excluded):
+        if name in exp_excluded and name in prod_excluded and exp_excluded[name] != prod_excluded[name]:
+            discrepancies.append(f"EXCLUSION REASON {name}: exploration={exp_excluded[name]}, production={prod_excluded[name]}")
 
     for name in sorted(exp_names & prod_names):
         exp_col, prod_col = exploration.features[name], production.features[name]

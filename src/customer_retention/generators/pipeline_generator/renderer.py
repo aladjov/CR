@@ -1244,6 +1244,20 @@ def run_experiment():
                 excluded_cols[c] = "metadata"
             elif c.startswith("original_"):
                 excluded_cols[c] = "original_prefix"
+{% if config.gold.feature_selections %}
+        for _fs_col in {{ config.gold.feature_selections }}:
+            excluded_cols[_fs_col] = "feature_selection"
+{% endif %}
+        if _NAMESPACE is not None:
+            _rec_path = _NAMESPACE.merged_recommendations_path
+            if _rec_path.exists():
+                import yaml as _rec_yaml
+                from customer_retention.analysis.auto_explorer.layered_recommendations import RecommendationRegistry
+                with _rec_path.open() as _rf:
+                    _drop_recs = RecommendationRegistry.from_dict(_rec_yaml.safe_load(_rf))
+                for _rec in getattr(getattr(_drop_recs, 'gold', None), 'feature_selection', []):
+                    if _rec.action in ('drop_multicollinear', 'drop_weak', 'drop_l1_zero'):
+                        excluded_cols[_rec.target_column] = _rec.action
         feature_stats = {}
         for c in feature_names:
             null_count = int(X[c].isna().sum())
