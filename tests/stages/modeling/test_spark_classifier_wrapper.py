@@ -400,6 +400,23 @@ class TestPredictIntegration:
         mock_transformed.select.assert_called_once_with("probability")
 
 
+class TestFitFailsFastOnStaleFeatures:
+    @patch(f"{_MOD}._get_spark_session")
+    def test_fit_raises_on_missing_feature(self, mock_get_spark):
+        X = pd.DataFrame({"f1": [1.0, 2.0], "f2": [3.0, 4.0]})
+        y = pd.Series([0, 1], name="target")
+
+        mock_get_spark.return_value = MagicMock()
+
+        wrapper = SparkClassifierWrapper(
+            spark_model_class="LogisticRegression",
+            spark_model_params={"maxIter": 10},
+            feature_names=["f1", "f2", "event_count_180d"],
+        )
+        with pytest.raises(KeyError):
+            wrapper.fit(X, y)
+
+
 class TestToSparkDfAlignment:
     @patch(f"{_MOD}._make_assembler")
     @patch(f"{_MOD}._get_spark_session")

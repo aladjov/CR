@@ -1735,7 +1735,7 @@ def train_and_evaluate():
                 with _rec_path.open() as _rf:
                     _drop_recs = RecommendationRegistry.from_dict(_rec_yaml.safe_load(_rf))
                 for _rec in getattr(getattr(_drop_recs, 'gold', None), 'feature_selection', []):
-                    if _rec.action in ('drop_multicollinear', 'drop_weak', 'drop_l1_zero'):
+                    if _rec.action in ('drop_multicollinear', 'drop_weak', 'drop_l1_zero', 'drop_availability', 'drop_zero_variance'):
                         excluded_cols[_rec.target_column] = _rec.action
         for c in feature_cols:
             null_count = int(null_row[c])

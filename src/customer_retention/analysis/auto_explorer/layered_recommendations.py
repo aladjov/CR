@@ -301,6 +301,20 @@ class RecommendationRegistry:
                                           params, rationale, source_notebook)
         self.gold.feature_selection.append(rec)
 
+    def add_gold_drop_availability(self, column: str, issue_type: str, coverage_pct: float,
+                                    rationale: str, source_notebook: str) -> None:
+        params = {"issue_type": issue_type, "coverage_pct": coverage_pct}
+        rec = self._create_recommendation("gold", "feature_selection", "drop_availability", column,
+                                          params, rationale, source_notebook)
+        self.gold.feature_selection.append(rec)
+
+    def add_gold_drop_zero_variance(self, column: str, variance: float,
+                                     rationale: str, source_notebook: str) -> None:
+        params = {"variance": variance}
+        rec = self._create_recommendation("gold", "feature_selection", "drop_zero_variance", column,
+                                          params, rationale, source_notebook)
+        self.gold.feature_selection.append(rec)
+
     def add_silver_ratio(self, column: str, numerator: str, denominator: str,
                          rationale: str, source_notebook: str) -> None:
         params = {"feature_type": "ratio", "numerator": numerator, "denominator": denominator,

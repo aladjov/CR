@@ -183,6 +183,23 @@ class TestCompareFeatureProfiles:
         assert not any("MISSING" in d for d in discrepancies)
         assert not any("EXTRA" in d for d in discrepancies)
 
+    def test_matching_excluded_availability_and_zero_var_not_flagged(self):
+        exp = FeatureProfile(
+            stage="exploration", created_at="2024-01-01", row_count=1000,
+            target_column="churn",
+            features={"a": ColumnProfile("double", 1000, 0)},
+            excluded={"b": "drop_availability", "c": "drop_zero_variance"},
+        )
+        prod = FeatureProfile(
+            stage="production", created_at="2024-01-01", row_count=1000,
+            target_column="churn",
+            features={"a": ColumnProfile("double", 1000, 0)},
+            excluded={"b": "drop_availability", "c": "drop_zero_variance"},
+        )
+        discrepancies = compare_feature_profiles(exp, prod)
+        assert not any("MISSING" in d for d in discrepancies)
+        assert not any("EXTRA" in d for d in discrepancies)
+
     def test_excluded_reason_mismatch_reported(self):
         exp = FeatureProfile(
             stage="exploration", created_at="2024-01-01", row_count=1000,

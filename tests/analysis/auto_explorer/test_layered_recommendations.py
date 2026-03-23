@@ -825,6 +825,33 @@ class TestGoldFeatureSelectionRecommendations:
         assert rec.action == "drop_l1_zero"
         assert rec.parameters["l1_coefficient"] == 0.0
 
+    def test_adds_drop_availability_to_gold(self):
+        registry = RecommendationRegistry()
+        registry.init_gold("churned")
+        registry.add_gold_drop_availability(
+            column="new_feature", issue_type="new_tracking", coverage_pct=42.5,
+            rationale="Insufficient temporal coverage", source_notebook="08"
+        )
+        assert len(registry.gold.feature_selection) == 1
+        rec = registry.gold.feature_selection[0]
+        assert rec.target_column == "new_feature"
+        assert rec.action == "drop_availability"
+        assert rec.parameters["issue_type"] == "new_tracking"
+        assert rec.parameters["coverage_pct"] == 42.5
+
+    def test_adds_drop_zero_variance_to_gold(self):
+        registry = RecommendationRegistry()
+        registry.init_gold("churned")
+        registry.add_gold_drop_zero_variance(
+            column="constant_col", variance=0.0,
+            rationale="Zero variance in training data", source_notebook="08"
+        )
+        assert len(registry.gold.feature_selection) == 1
+        rec = registry.gold.feature_selection[0]
+        assert rec.target_column == "constant_col"
+        assert rec.action == "drop_zero_variance"
+        assert rec.parameters["variance"] == 0.0
+
     def test_feature_selection_in_all_recommendations(self):
         registry = RecommendationRegistry()
         registry.init_gold("churned")
@@ -832,6 +859,18 @@ class TestGoldFeatureSelectionRecommendations:
         registry.add_gold_drop_weak("c", 0.01, 0.01, "", "")
         registry.add_gold_encoding("category", "one_hot", "", "")
         assert len(registry.all_recommendations) == 3
+
+    def test_serializes_new_drop_types_roundtrip(self):
+        registry = RecommendationRegistry()
+        registry.init_gold("churned")
+        registry.add_gold_drop_availability("feat_a", "retired_tracking", 30.0, "retired", "08")
+        registry.add_gold_drop_zero_variance("feat_b", 0.0, "constant", "08")
+        d = registry.to_dict()
+        restored = RecommendationRegistry.from_dict(d)
+        actions = {r.target_column: r.action for r in restored.gold.feature_selection}
+        assert actions == {"feat_a": "drop_availability", "feat_b": "drop_zero_variance"}
+        assert restored.gold.feature_selection[0].parameters["issue_type"] == "retired_tracking"
+        assert restored.gold.feature_selection[1].parameters["variance"] == 0.0
 
     def test_serializes_feature_selection(self):
         registry = RecommendationRegistry()
