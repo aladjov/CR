@@ -110,3 +110,15 @@ class TestBulkNullCorrWithTarget:
         result = bulk_null_corr_with_target(df, ["a", "t"], "t")
         assert "t" not in result
         assert "a" in result
+
+    def test_mostly_complete_columns_return_nan_without_correlation(self):
+        n = 200
+        cols_with_nulls = {"leaker": [np.nan] * 100 + [1.0] * 100}
+        cols_without_nulls = {f"clean_{i}": list(range(n)) for i in range(50)}
+        data = {**cols_with_nulls, **cols_without_nulls, "t": [0] * 100 + [1] * 100}
+        df = pd.DataFrame(data)
+        all_cols = ["leaker"] + [f"clean_{i}" for i in range(50)]
+        result = bulk_null_corr_with_target(df, all_cols, "t")
+        assert abs(result["leaker"]) >= 0.8
+        for i in range(50):
+            assert math.isnan(result[f"clean_{i}"])

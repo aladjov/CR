@@ -946,23 +946,28 @@ def _spark_null_corr_with_target(df: Any, columns: list[str], target_column: str
     import pyspark.sql.functions as F  # noqa: N812
 
     spark_df = as_spark_df(df[columns + [target_column]])
-    null_exprs = [
-        F.when(F.col(c).isNull(), 1.0).otherwise(0.0).alias(f"__null_{c}")
-        for c in columns
-    ]
-    null_spark_df = spark_df.select(*null_exprs, F.col(target_column))
-    null_names = [f"__null_{c}" for c in columns]
-    _BATCH = 500
     result: dict[str, float] = {}
+    _BATCH = 2000
+    has_nulls: list[str] = []
     for start in range(0, len(columns), _BATCH):
-        batch_cols = columns[start:start + _BATCH]
-        batch_nulls = null_names[start:start + _BATCH]
-        exprs = [
-            _safe_corr_expr(nn, target_column).alias(f"c_{i}")
-            for i, nn in enumerate(batch_nulls)
-        ]
-        row = null_spark_df.select(*exprs).head()
-        for i, c in enumerate(batch_cols):
+        batch = columns[start:start + _BATCH]
+        exprs = [F.sum(F.col(c).isNull().cast("long")).alias(c) for c in batch]
+        row = spark_df.agg(*exprs).head()
+        for c in batch:
+            if (row[c] or 0) > 0:
+                has_nulls.append(c)
+            else:
+                result[c] = math.nan
+    if not has_nulls:
+        return result
+    _CORR_BATCH = 500
+    for start in range(0, len(has_nulls), _CORR_BATCH):
+        batch = has_nulls[start:start + _CORR_BATCH]
+        null_exprs = [F.when(F.col(c).isNull(), 1.0).otherwise(0.0).alias(f"__null_{c}") for c in batch]
+        batch_df = spark_df.select(*null_exprs, F.col(target_column))
+        corr_exprs = [_safe_corr_expr(f"__null_{c}", target_column).alias(f"c_{i}") for i, c in enumerate(batch)]
+        row = batch_df.select(*corr_exprs).head()
+        for i, c in enumerate(batch):
             val = row[f"c_{i}"]
             result[c] = float(val) if val is not None else math.nan
     return result
