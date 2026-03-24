@@ -224,7 +224,7 @@ TARGET_COLUMN = "{{ config.target_column }}"
 TIMESTAMP_COLUMN = "event_timestamp"
 FIT_MODE = {{ 'True' if config.fit_mode else 'False' }}
 RECOMMENDATIONS_HASH = {{ '"%s"' % config.recommendations_hash if config.recommendations_hash else 'None' }}
-FEAST_ENTITY_KEY = "{{ config.feast.entity_key if config.feast else 'entity_id' }}"
+ENTITY_KEY = "{{ config.feast.entity_key if config.feast else 'entity_id' }}"
 {% if config.silver.holdout_entity_ids %}
 HOLDOUT_ENTITY_IDS = {{ config.silver.holdout_entity_ids }}
 {% else %}
@@ -1542,7 +1542,7 @@ logger = logging.getLogger("training")
 
 TARGET = TARGET_COLUMN
 _NUMERIC_TYPES = ("double", "float", "integer", "long", "short", "boolean", "byte", "decimal")
-_EXCLUDE_COLS = {TARGET, TIMESTAMP_COLUMN, "entity_id", "as_of_date", "feature_timestamp", "label_timestamp", "label_available_flag"}
+_EXCLUDE_COLS = {TARGET, TIMESTAMP_COLUMN, ENTITY_KEY, "as_of_date", "feature_timestamp", "label_timestamp", "label_available_flag"}
 _vector_schema = StructType([
     StructField("features", VectorUDT(), True),
     StructField("label", DoubleType(), True),

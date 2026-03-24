@@ -738,6 +738,14 @@ class FindingsParser:
         return columns
 
     @staticmethod
+    def _predict_gold_generated_columns(config: "PipelineConfig") -> Set[str]:
+        generated: Set[str] = set()
+        for step in config.gold.transformations:
+            if step.type in (PipelineTransformationType.ZERO_INFLATION_HANDLING, PipelineTransformationType.CAP_THEN_LOG):
+                generated.add(f"{step.column}_is_zero")
+        return generated
+
+    @staticmethod
     def _event_aggregated_columns(event_cfg: "BronzeEventConfig") -> Set[str]:
         columns: Set[str] = set()
         agg = event_cfg.aggregation
@@ -857,6 +865,7 @@ class FindingsParser:
         pipeline_columns = self._collect_pipeline_columns(config)
         for step in config.silver.derived_columns:
             pipeline_columns.add(step.column)
+        pipeline_columns |= self._predict_gold_generated_columns(config)
         seen_encoding_columns: Set[str] = {e.column for e in config.gold.encodings}
         for rec in getattr(gold, "encoding", []):
             if rec.target_column == config.target_column:
@@ -1550,6 +1559,7 @@ class FindingsParser:
         pipeline_columns = self._collect_pipeline_columns(config)
         for step in config.silver.derived_columns:
             pipeline_columns.add(step.column)
+        pipeline_columns |= self._predict_gold_generated_columns(config)
         config.gold.scalings = self._filter_gold_steps(config.gold.scalings, pipeline_columns, "scaling")
         config.gold.encodings = self._filter_gold_steps(config.gold.encodings, pipeline_columns, "encoding")
         config.gold.transformations = self._filter_gold_steps(

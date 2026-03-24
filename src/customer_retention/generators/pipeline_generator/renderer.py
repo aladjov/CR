@@ -219,7 +219,7 @@ MLFLOW_ARTIFACT_ROOT = str(EXPERIMENTS_DIR / "mlruns" / "artifacts")
 FEAST_REPO_PATH = str(PRODUCTION_DIR / "feature_repo")
 FEAST_FEATURE_VIEW = "{{ config.feast.feature_view_name if config.feast else 'featureset_' + (config.composite_name or config.name) }}"
 FEAST_ENTITY_NAME = "{{ config.feast.entity_name if config.feast else 'customer' }}"
-FEAST_ENTITY_KEY = "{{ config.feast.entity_key if config.feast else 'entity_id' }}"
+ENTITY_KEY = "{{ config.feast.entity_key if config.feast else 'entity_id' }}"
 FEAST_TIMESTAMP_COL = "{{ config.feast.timestamp_column if config.feast else 'event_timestamp' }}"
 FEAST_TTL_DAYS = {{ config.feast.ttl_days if config.feast else 365 }}
 
@@ -786,14 +786,13 @@ from pathlib import Path
 {% set stateless_steps = parts['stateless_transforms'] + parts['stateless_encodings'] %}
 {% set all_gold_steps = config.gold.transformations + config.gold.encodings + config.gold.scalings %}
 {% set ops, fitted = collect_imports(all_gold_steps, True) %}
-{% set fs_ops = ['apply_feature_select'] if config.gold.feature_selections else [] %}
-from customer_retention.transforms import ArtifactStore{{ (', ' + (ops | sort | join(', '))) if ops }}{{ (', ' + (fs_ops | join(', '))) if fs_ops and 'apply_feature_select' not in ops }}
+from customer_retention.transforms import ArtifactStore{{ (', ' + (ops | sort | join(', '))) if ops }}
 {% if fitted %}
 from customer_retention.transforms.fitted import {{ fitted | sort | join(', ') }}
 {% endif %}
 from config import (get_silver_path, get_gold_path, get_feast_data_path,
                     TARGET_COLUMN, TIMESTAMP_COLUMN, RECOMMENDATIONS_HASH, FEAST_REPO_PATH,
-                    FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL, EXPERIMENTS_DIR,
+                    FEAST_FEATURE_VIEW, ENTITY_KEY, FEAST_TIMESTAMP_COL, EXPERIMENTS_DIR,
                     ARTIFACTS_PATH, FIT_MODE)
 from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 
@@ -904,9 +903,8 @@ def apply_feature_selection(df: pd.DataFrame) -> pd.DataFrame:
         print(f"  Dropped {len(_prefix_drops)} leakage-excluded columns")
 {% endif %}
 {% if config.gold.feature_selections %}
-{% for fs in config.gold.feature_selections %}
-    df = apply_feature_select(df, '{{ fs }}')
-{% endfor %}
+    _drop_cols = {{ config.gold.feature_selections }}
+    df = df.drop(columns=[c for c in _drop_cols if c in df.columns])
 {% endif %}
     return df
 
@@ -1033,7 +1031,7 @@ def run_gold_features():
     print(f"Gold features saved with version: {get_feature_version_tag()}")
     if _NAMESPACE is not None:
         import json as _json
-        _meta_cols = {TARGET_COLUMN, FEAST_TIMESTAMP_COL, FEAST_ENTITY_KEY, "as_of_date", "feature_timestamp"}
+        _meta_cols = {TARGET_COLUMN, FEAST_TIMESTAMP_COL, ENTITY_KEY, "as_of_date", "feature_timestamp"}
         _gold_meta = {
             "rows": len(gold), "columns": len(gold.columns),
             "feature_count": len([c for c in gold.columns if c not in _meta_cols]),
@@ -1072,12 +1070,12 @@ from customer_retention.core.compat.timing import log_timing
 from customer_retention.stages.modeling.imbalance_handler import ImbalanceHandler, ImbalanceStrategy
 {% endif %}
 from config import (TARGET_COLUMN, PIPELINE_NAME, COMPOSITE_NAME, RECOMMENDATIONS_HASH, MLFLOW_TRACKING_URI,
-                    MLFLOW_ARTIFACT_ROOT, FEAST_REPO_PATH, FEAST_FEATURE_VIEW, FEAST_ENTITY_KEY,
+                    MLFLOW_ARTIFACT_ROOT, FEAST_REPO_PATH, FEAST_FEATURE_VIEW, ENTITY_KEY,
                     FEAST_TIMESTAMP_COL, EXPERIMENTS_DIR, get_feast_data_path)
 
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 logger = logging.getLogger("training")
-_EXCLUDE_COLS = {TARGET_COLUMN, FEAST_TIMESTAMP_COL, FEAST_ENTITY_KEY, "as_of_date", "feature_timestamp", "label_timestamp", "label_available_flag"}
+_EXCLUDE_COLS = {TARGET_COLUMN, FEAST_TIMESTAMP_COL, ENTITY_KEY, "as_of_date", "feature_timestamp", "label_timestamp", "label_available_flag"}
 {% if config.training and config.training.exploration_feature_profile %}
 _EXPLORATION_PROFILE = {{ config.training.exploration_feature_profile }}
 {% else %}
@@ -1113,9 +1111,9 @@ def get_training_data_from_feast() -> pd.DataFrame:
 
         features_df = _load_feast_data()
 
-        entity_df = features_df[[FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL]].copy()
+        entity_df = features_df[[ENTITY_KEY, FEAST_TIMESTAMP_COL]].copy()
 
-        exclude_cols = {FEAST_ENTITY_KEY, FEAST_TIMESTAMP_COL, TARGET_COLUMN}
+        exclude_cols = {ENTITY_KEY, FEAST_TIMESTAMP_COL, TARGET_COLUMN}
         feature_cols = [c for c in features_df.columns
                         if c not in exclude_cols and not c.startswith("original_")]
 
@@ -1123,7 +1121,7 @@ def get_training_data_from_feast() -> pd.DataFrame:
 
         print(f"Retrieving {len(feature_refs)} features from Feast...")
         print(f"  Feature view: {FEAST_FEATURE_VIEW}")
-        print(f"  Entity key: {FEAST_ENTITY_KEY}")
+        print(f"  Entity key: {ENTITY_KEY}")
 
         training_df = store.get_historical_features(
             entity_df=entity_df,
@@ -1131,8 +1129,8 @@ def get_training_data_from_feast() -> pd.DataFrame:
         ).to_df()
 
         training_df = training_df.merge(
-            features_df[[FEAST_ENTITY_KEY, TARGET_COLUMN]],
-            on=FEAST_ENTITY_KEY,
+            features_df[[ENTITY_KEY, TARGET_COLUMN]],
+            on=ENTITY_KEY,
             how="left"
         )
 
@@ -1269,6 +1267,7 @@ def run_experiment():
             print(f"[TRAINING] Production profile saved to {_NAMESPACE.production_feature_profile_path}")
         _results["feature_profile"]["production_features"] = prod_profile.feature_count
         _results["feature_profile"]["production_rows"] = filtered_count
+        _results["feature_profile"]["excluded_details"] = excluded_cols
         if _EXPLORATION_PROFILE is not None:
             exp_profile = FeatureProfile.from_dict(_EXPLORATION_PROFILE)
             discrepancies = compare_feature_profiles(exp_profile, prod_profile)

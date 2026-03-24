@@ -57,7 +57,7 @@ class ScoringConfig:
             pipeline_name=module.PIPELINE_NAME,
             composite_name=cn,
             target_column=module.TARGET_COLUMN,
-            entity_key=module.FEAST_ENTITY_KEY,
+            entity_key=getattr(module, "ENTITY_KEY", getattr(module, "FEAST_ENTITY_KEY", "entity_id")),
             timestamp_column=module.FEAST_TIMESTAMP_COL,
             recommendations_hash=module.RECOMMENDATIONS_HASH,
             experiments_dir=Path(module.EXPERIMENTS_DIR),

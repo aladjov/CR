@@ -6107,6 +6107,56 @@ class TestFeatureSelectionDropSkipsNonPipelineColumns(TestFeatureSelectionDropSk
         assert config.gold.feature_selections == ["age"]
 
 
+class TestPredictGoldGeneratedColumns(TestFeatureSelectionDropSkipsTarget):
+    def _make_gold_step(self, column, step_type):
+        from customer_retention.generators.pipeline_generator.models import (
+            TransformationStep,
+        )
+        return TransformationStep(type=step_type, column=column, parameters={}, rationale="test", source_notebook="05")
+
+    def test_zero_inflation_predicts_is_zero(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import PipelineTransformationType
+        config = self._make_config()
+        config.gold.transformations = [self._make_gold_step("amount", PipelineTransformationType.ZERO_INFLATION_HANDLING)]
+        result = FindingsParser._predict_gold_generated_columns(config)
+        assert "amount_is_zero" in result
+
+    def test_cap_then_log_predicts_is_zero(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import PipelineTransformationType
+        config = self._make_config()
+        config.gold.transformations = [self._make_gold_step("price", PipelineTransformationType.CAP_THEN_LOG)]
+        result = FindingsParser._predict_gold_generated_columns(config)
+        assert "price_is_zero" in result
+
+    def test_empty_when_no_transforms(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        config = self._make_config()
+        config.gold.transformations = []
+        assert FindingsParser._predict_gold_generated_columns(config) == set()
+
+    def test_reconcile_preserves_drops_for_gold_generated_columns(self):
+        from customer_retention.generators.pipeline_generator.models import PipelineTransformationType
+        parser = self._make_parser()
+        config = self._make_config()
+        config.gold.transformations = [self._make_gold_step("amount", PipelineTransformationType.ZERO_INFLATION_HANDLING)]
+        config.gold.feature_selections = ["amount_is_zero"]
+        parser._reconcile_gold_columns(config)
+        assert "amount_is_zero" in config.gold.feature_selections
+
+    def test_apply_gold_preserves_is_zero_drop(self):
+        from customer_retention.generators.pipeline_generator.models import PipelineTransformationType
+        parser = self._make_parser()
+        config = self._make_config()
+        config.gold.transformations = [self._make_gold_step("age", PipelineTransformationType.ZERO_INFLATION_HANDLING)]
+        registry = self._make_registry(feature_selection=[
+            self._make_rec("age_is_zero", "drop_weak"),
+        ])
+        parser._apply_gold_recommendations(config, registry)
+        assert "age_is_zero" in config.gold.feature_selections
+
+
 class TestLeakageExclusionPrefixes:
     @staticmethod
     def _make_findings(**kwargs):

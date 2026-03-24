@@ -365,13 +365,13 @@ class TestDatabricksRenderConfig:
         result = renderer.render_config(sample_pipeline_config)
         assert "RECOMMENDATIONS_HASH = None" in result
 
-    def test_render_config_includes_feast_entity_key(self, renderer, sample_pipeline_config):
+    def test_render_config_includes_entity_key(self, renderer, sample_pipeline_config):
         result = renderer.render_config(sample_pipeline_config)
-        assert "FEAST_ENTITY_KEY" in result
+        assert "ENTITY_KEY" in result
 
-    def test_render_config_feast_entity_key_defaults_to_entity_id(self, renderer, sample_pipeline_config):
+    def test_render_config_entity_key_defaults_to_entity_id(self, renderer, sample_pipeline_config):
         result = renderer.render_config(sample_pipeline_config)
-        assert 'FEAST_ENTITY_KEY = "entity_id"' in result
+        assert 'ENTITY_KEY = "entity_id"' in result
 
 
 class TestDatabricksConfigRunPath:
