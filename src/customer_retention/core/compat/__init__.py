@@ -877,7 +877,7 @@ def _spark_pairwise_corr(df: Any, cols: list[str], numeric: set[str]) -> _pandas
     return _pandas.DataFrame(matrix, columns=cols, index=cols)
 
 
-def bulk_corr_with_target(df: Any, columns: list[str], target_column: str) -> dict[str, float]:
+def bulk_corr_with_target(df: Any, columns: list[str], target_column: str, progress_fn: Any = None) -> dict[str, float]:
     import math
     if target_column not in df.columns:
         return {}
@@ -893,11 +893,13 @@ def bulk_corr_with_target(df: Any, columns: list[str], target_column: str) -> di
             except (ValueError, TypeError):
                 result[c] = math.nan
         return result
-    return _spark_bulk_corr_with_target(df, valid, target_column)
+    return _spark_bulk_corr_with_target(df, valid, target_column, progress_fn)
 
 
-def _spark_bulk_corr_with_target(df: Any, columns: list[str], target_column: str) -> dict[str, float]:
+def _spark_bulk_corr_with_target(df: Any, columns: list[str], target_column: str, progress_fn: Any = None) -> dict[str, float]:
     import math
+    import time as _time
+    log = progress_fn or (lambda msg: None)
     numeric = _numeric_column_names(df, columns + [target_column])
     num_cols = [c for c in columns if c in numeric]
     result: dict[str, float] = {c: math.nan for c in columns if c not in numeric}
@@ -906,24 +908,27 @@ def _spark_bulk_corr_with_target(df: Any, columns: list[str], target_column: str
         return result
     spark_df = as_spark_df(df[num_cols + [target_column]])
     _BATCH = 500
-    for start in range(0, len(num_cols), _BATCH):
+    total_batches = (len(num_cols) + _BATCH - 1) // _BATCH
+    for batch_idx, start in enumerate(range(0, len(num_cols), _BATCH)):
         batch = num_cols[start:start + _BATCH]
+        t0 = _time.monotonic()
         exprs = [_safe_corr_expr(c, target_column).alias(f"c_{i}") for i, c in enumerate(batch)]
         row = spark_df.select(*exprs).head()
         for i, c in enumerate(batch):
             val = row[f"c_{i}"]
             result[c] = float(val) if val is not None else math.nan
+        log(f"    batch {batch_idx + 1}/{total_batches} ({len(batch)} cols, {_time.monotonic() - t0:.0f}s)")
     return result
 
 
-def bulk_null_corr_with_target(df: Any, columns: list[str], target_column: str) -> dict[str, float]:
+def bulk_null_corr_with_target(df: Any, columns: list[str], target_column: str, progress_fn: Any = None) -> dict[str, float]:
     if target_column not in df.columns:
         return {}
     valid = [c for c in columns if c in df.columns and c != target_column]
     if not valid:
         return {}
     if _is_spark_pandas(df):
-        return _spark_null_corr_with_target(df, valid, target_column)
+        return _spark_null_corr_with_target(df, valid, target_column, progress_fn)
     return _pandas_null_corr_with_target(df, valid, target_column)
 
 
@@ -940,15 +945,18 @@ def _pandas_null_corr_with_target(df: Any, columns: list[str], target_column: st
     return result
 
 
-def _spark_null_corr_with_target(df: Any, columns: list[str], target_column: str) -> dict[str, float]:
+def _spark_null_corr_with_target(df: Any, columns: list[str], target_column: str, progress_fn: Any = None) -> dict[str, float]:
     import math
+    import time as _time
 
     import pyspark.sql.functions as F  # noqa: N812
 
+    log = progress_fn or (lambda msg: None)
     spark_df = as_spark_df(df[columns + [target_column]])
     result: dict[str, float] = {}
     _BATCH = 2000
     has_nulls: list[str] = []
+    t0 = _time.monotonic()
     for start in range(0, len(columns), _BATCH):
         batch = columns[start:start + _BATCH]
         exprs = [F.sum(F.col(c).isNull().cast("long")).alias(c) for c in batch]
@@ -958,11 +966,14 @@ def _spark_null_corr_with_target(df: Any, columns: list[str], target_column: str
                 has_nulls.append(c)
             else:
                 result[c] = math.nan
+    log(f"    pre-filter: {len(has_nulls)}/{len(columns)} columns have nulls ({_time.monotonic() - t0:.0f}s)")
     if not has_nulls:
         return result
     _CORR_BATCH = 500
-    for start in range(0, len(has_nulls), _CORR_BATCH):
+    total_batches = (len(has_nulls) + _CORR_BATCH - 1) // _CORR_BATCH
+    for batch_idx, start in enumerate(range(0, len(has_nulls), _CORR_BATCH)):
         batch = has_nulls[start:start + _CORR_BATCH]
+        t1 = _time.monotonic()
         null_exprs = [F.when(F.col(c).isNull(), 1.0).otherwise(0.0).alias(f"__null_{c}") for c in batch]
         batch_df = spark_df.select(*null_exprs, F.col(target_column))
         corr_exprs = [_safe_corr_expr(f"__null_{c}", target_column).alias(f"c_{i}") for i, c in enumerate(batch)]
@@ -970,6 +981,7 @@ def _spark_null_corr_with_target(df: Any, columns: list[str], target_column: str
         for i, c in enumerate(batch):
             val = row[f"c_{i}"]
             result[c] = float(val) if val is not None else math.nan
+        log(f"    null-corr batch {batch_idx + 1}/{total_batches} ({len(batch)} cols, {_time.monotonic() - t1:.0f}s)")
     return result
 
 

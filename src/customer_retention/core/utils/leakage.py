@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import FrozenSet, List, Optional, Set, Tuple
+from typing import Callable, FrozenSet, List, Optional, Set, Tuple
 
 from customer_retention.core.compat import DataFrame, Series, bulk_corr_with_target, bulk_null_corr_with_target
 
@@ -107,7 +107,10 @@ def detect_leaking_features(
     target_column: Optional[str],
     null_correlation_threshold: float = 0.8,
     value_correlation_threshold: float = 0.95,
+    progress_fn: Optional[Callable[[str], None]] = None,
 ) -> List[str]:
+    import time
+    log = progress_fn or (lambda msg: None)
     if not target_column or not feature_columns:
         return []
     if target_column not in df.columns:
@@ -115,15 +118,21 @@ def detect_leaking_features(
     available = [c for c in feature_columns if c in df.columns]
     if not available:
         return []
+    log(f"Leakage check: {len(available)} columns")
+    t0 = time.monotonic()
     null_leakers = set(
         _null_correlated_columns(df, available, target_column, null_correlation_threshold),
     )
+    log(f"  [1/2] Null-pattern check: {len(null_leakers)} leaker(s) found ({time.monotonic() - t0:.0f}s)")
     value_candidates = [c for c in available if c not in null_leakers]
     if not value_candidates:
         return [col for col in feature_columns if col in null_leakers]
+    t1 = time.monotonic()
     corrs = bulk_corr_with_target(df, value_candidates, target_column)
     value_leakers = {col for col, val in corrs.items() if abs(val) >= value_correlation_threshold}
+    log(f"  [2/2] Value correlation: {len(value_leakers)} leaker(s) found ({time.monotonic() - t1:.0f}s)")
     combined = null_leakers | value_leakers
+    log(f"  Done: {len(combined)} total leaker(s) in {time.monotonic() - t0:.0f}s")
     return [col for col in feature_columns if col in combined]
 
 
