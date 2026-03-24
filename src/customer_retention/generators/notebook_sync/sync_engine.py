@@ -19,12 +19,16 @@ def _sources_equal(a, b) -> bool:
     return "".join(_source_lines(a)) == "".join(_source_lines(b))
 
 
+def _is_placeholder_id(value: str) -> bool:
+    return value.startswith("<") or value.startswith("{")
+
+
 def apply_embedded_ids(nb: nbformat.NotebookNode) -> None:
     for cell in nb.get("cells", []):
         embedded = extract_embedded_id(_source_lines(cell))
-        if embedded:
+        if embedded and not _is_placeholder_id(embedded):
             cell["id"] = embedded
-        elif "id" not in cell:
+        elif "id" not in cell or (embedded and _is_placeholder_id(embedded)):
             cell["id"] = str(uuid.uuid4())[:8]
 
 

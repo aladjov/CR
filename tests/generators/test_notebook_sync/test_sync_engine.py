@@ -341,6 +341,39 @@ class TestNotebookSyncEngine:
         assert ids.index("user-custom") < ids.index("e5f6a7b8")
 
 
+class TestPlaceholderIdReplacement:
+
+    def test_placeholder_id_replaced_with_uuid(self):
+        from customer_retention.generators.notebook_sync.sync_engine import apply_embedded_ids
+        cell = _code_cell("temp", ["# @cr:user_code name='derive' id=<generate-uuid>\n", "x = 1\n"])
+        nb = _make_nb([cell])
+        apply_embedded_ids(nb)
+        assert nb.cells[0].id != "<generate-uuid>"
+        assert len(nb.cells[0].id) == 8
+
+    def test_curly_brace_placeholder_replaced(self):
+        from customer_retention.generators.notebook_sync.sync_engine import apply_embedded_ids
+        cell = _code_cell("temp", ["# @cr:user_code name='x' id={PLACEHOLDER}\n", "x = 1\n"])
+        nb = _make_nb([cell])
+        apply_embedded_ids(nb)
+        assert nb.cells[0].id != "{PLACEHOLDER}"
+
+    def test_two_placeholder_cells_get_different_ids(self):
+        from customer_retention.generators.notebook_sync.sync_engine import apply_embedded_ids
+        c1 = _code_cell("t1", ["# @cr:user_code name='a' id=<generate-uuid>\n", "a = 1\n"])
+        c2 = _code_cell("t2", ["# @cr:user_code name='b' id=<generate-uuid>\n", "b = 2\n"])
+        nb = _make_nb([c1, c2])
+        apply_embedded_ids(nb)
+        assert nb.cells[0].id != nb.cells[1].id
+
+    def test_valid_hex_id_not_replaced(self):
+        from customer_retention.generators.notebook_sync.sync_engine import apply_embedded_ids
+        cell = _code_cell("temp", ["# @cr:user_code name='x' id=a1b2c3d4\n", "x = 1\n"])
+        nb = _make_nb([cell])
+        apply_embedded_ids(nb)
+        assert nb.cells[0].id == "a1b2c3d4"
+
+
 class TestDocTaggedMarkdownSync:
 
     def setup_method(self):
