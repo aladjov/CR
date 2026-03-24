@@ -2085,11 +2085,23 @@ spark.sql(f"CREATE SCHEMA IF NOT EXISTS {CATALOG}.{SCHEMA}")
 
 # COMMAND ----------
 
+from pathlib import Path
+from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+try:
+    _exp_dir = dbutils.widgets.get("experiments_dir")
+    _run_id = dbutils.widgets.get("run_id")
+    _NAMESPACE = RunNamespace(root=Path(_exp_dir), run_id=_run_id) if _exp_dir and _run_id else None
+except Exception:
+    _NAMESPACE = RunNamespace.from_env_or_latest()
+_ns_params = {"experiments_dir": str(_NAMESPACE.root), "run_id": _NAMESPACE.run_id} if _NAMESPACE else {}
+
+# COMMAND ----------
+
 _log = []
 
 def run_notebook(path, timeout=3600):
     start = time.time()
-    result = dbutils.notebook.run(path, timeout)
+    result = dbutils.notebook.run(path, timeout, _ns_params)
     elapsed = time.time() - start
     line = f"{path}: {result} ({elapsed:.1f}s)"
     print(line)
@@ -2125,14 +2137,6 @@ _bronze_results["event_{{ source_name }}"] = run_notebook("bronze/bronze_event_{
 _bronze_results["{{ source_name }}_aggregated"] = run_notebook("bronze/bronze_entity_{{ source_name }}_aggregated")
 {% endfor %}
 
-from pathlib import Path
-from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
-try:
-    _exp_dir = dbutils.widgets.get("experiments_dir")
-    _run_id = dbutils.widgets.get("run_id")
-    _NAMESPACE = RunNamespace(root=Path(_exp_dir), run_id=_run_id) if _exp_dir and _run_id else None
-except Exception:
-    _NAMESPACE = RunNamespace.from_env_or_latest()
 if _NAMESPACE is not None:
     import json
     _NAMESPACE.bronze_metadata_path.parent.mkdir(parents=True, exist_ok=True)
