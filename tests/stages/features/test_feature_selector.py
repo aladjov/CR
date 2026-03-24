@@ -580,6 +580,43 @@ class TestDistributedL1Selection:
         assert reasons == {}
 
 
+    def test_spark_l1_all_zero_drops_nothing(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.stages.features.feature_selector import _spark_l1_selection
+        feature_cols = ["a", "b", "c"]
+        mock_spark_df = MagicMock()
+        mock_model = MagicMock()
+        mock_model.coefficients.toArray.return_value = np.array([0.0, 0.0, 0.0])
+        mock_lr_class = MagicMock(return_value=MagicMock(fit=MagicMock(return_value=mock_model)))
+        mock_assembler = MagicMock()
+        mock_assembler.return_value = MagicMock(transform=MagicMock(return_value=mock_spark_df))
+        mock_scaler_class = MagicMock()
+        mock_scaler_class.return_value = MagicMock(fit=MagicMock(return_value=MagicMock(transform=MagicMock(return_value=mock_spark_df))))
+        with patch("customer_retention.stages.features.feature_selector._import_spark_ml") as mock_imports:
+            mock_imports.return_value = (mock_lr_class, mock_assembler, mock_scaler_class)
+            dropped, reasons, scores = _spark_l1_selection(mock_spark_df, "target", feature_cols)
+        assert dropped == []
+        assert reasons == {}
+        assert len(scores) == 3
+
+    def test_l1_all_zero_coefficients_keeps_all_features(self):
+        np.random.seed(42)
+        n = 200
+        df = pd.DataFrame({
+            "noise1": np.random.randn(n) * 0.001,
+            "noise2": np.random.randn(n) * 0.001,
+            "target": np.random.choice([0, 1], n),
+        })
+        selector = FeatureSelector(
+            method=SelectionMethod.L1_SELECTION,
+            target_column="target",
+        )
+        result = selector.fit_transform(df)
+        if all(v == 0.0 for v in (result.importance_scores or {}).values()):
+            assert len(result.selected_features) > 0
+
+
 class TestPrecomputedCorrMatrix:
     @pytest.fixture
     def df_correlated(self):

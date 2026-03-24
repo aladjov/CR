@@ -47,6 +47,8 @@ class SparkClassifierWrapper:
         feature_names: List[str],
         class_weight: Optional[str] = None,
     ):
+        if not feature_names:
+            raise ValueError("SparkClassifierWrapper requires at least one feature column")
         self.spark_model_class = spark_model_class
         self.spark_model_params = dict(spark_model_params)
         self.feature_names = list(feature_names)

@@ -224,19 +224,18 @@ class FeatureSelector:
         from sklearn.preprocessing import StandardScaler
 
         X_scaled = StandardScaler().fit_transform(X)
-        n_classes = len(np.unique(y))
-        if n_classes > 2:
-            model = LogisticRegression(solver="saga", C=1.0, max_iter=2000, l1_ratio=1.0, penalty="elasticnet")
-        else:
-            model = LogisticRegression(solver="saga", C=1.0, max_iter=2000, l1_ratio=1.0)
+        model = LogisticRegression(solver="saga", C=1.0, max_iter=2000, l1_ratio=1.0)
         model.fit(X_scaled, y)
 
         coefs = np.abs(model.coef_)
         max_coefs = coefs.max(axis=0) if coefs.ndim == 2 else coefs
 
         self.importance_scores = {numeric_features[i]: float(max_coefs[i]) for i in range(len(numeric_features))}
-        for i, feature in enumerate(numeric_features):
-            if max_coefs[i] == 0.0 and feature in self.selected_features:
+        zero_features = [numeric_features[i] for i in range(len(numeric_features)) if max_coefs[i] == 0.0]
+        if len(zero_features) == len(numeric_features):
+            return
+        for feature in zero_features:
+            if feature in self.selected_features:
                 self.selected_features.remove(feature)
                 self.dropped_features.append(feature)
                 self.drop_reasons[feature] = "L1 zero coefficient"
@@ -337,14 +336,15 @@ def _spark_l1_selection(
     lr = LR(featuresCol="__scaled__", labelCol=target_column, elasticNetParam=1.0, regParam=reg_param, maxIter=max_iter)
     model = lr.fit(scaled)
     coefs = np.abs(model.coefficients.toArray())
+    scores: Dict[str, float] = {col: float(coefs[i]) for i, col in enumerate(feature_columns)}
+    zero_cols = [col for i, col in enumerate(feature_columns) if coefs[i] == 0.0]
+    if len(zero_cols) == len(feature_columns):
+        return [], {}, scores
     dropped: List[str] = []
     reasons: Dict[str, str] = {}
-    scores: Dict[str, float] = {}
-    for i, col in enumerate(feature_columns):
-        scores[col] = float(coefs[i])
-        if coefs[i] == 0.0:
-            dropped.append(col)
-            reasons[col] = "L1 zero coefficient"
+    for col in zero_cols:
+        dropped.append(col)
+        reasons[col] = "L1 zero coefficient"
     return dropped, reasons, scores
 
 
