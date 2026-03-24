@@ -215,3 +215,38 @@ class TestCompareFeatureProfiles:
         )
         discrepancies = compare_feature_profiles(exp, prod)
         assert any("EXCLUSION REASON" in d and "b" in d for d in discrepancies)
+
+    def test_float64_vs_double_not_type_mismatch(self):
+        exp = self._make("exploration", {"a": ColumnProfile("float64", 100, 0)})
+        prod = self._make("production", {"a": ColumnProfile("double", 100, 0)})
+        assert not any("TYPE MISMATCH" in d for d in compare_feature_profiles(exp, prod))
+
+    def test_int32_vs_integer_not_type_mismatch(self):
+        exp = self._make("exploration", {"a": ColumnProfile("int32", 100, 0)})
+        prod = self._make("production", {"a": ColumnProfile("integer", 100, 0)})
+        assert not any("TYPE MISMATCH" in d for d in compare_feature_profiles(exp, prod))
+
+    def test_int64_vs_long_not_type_mismatch(self):
+        exp = self._make("exploration", {"a": ColumnProfile("int64", 100, 0)})
+        prod = self._make("production", {"a": ColumnProfile("long", 100, 0)})
+        assert not any("TYPE MISMATCH" in d for d in compare_feature_profiles(exp, prod))
+
+    def test_float32_vs_float_not_type_mismatch(self):
+        exp = self._make("exploration", {"a": ColumnProfile("float32", 100, 0)})
+        prod = self._make("production", {"a": ColumnProfile("float", 100, 0)})
+        assert not any("TYPE MISMATCH" in d for d in compare_feature_profiles(exp, prod))
+
+    def test_bool_vs_boolean_not_type_mismatch(self):
+        exp = self._make("exploration", {"a": ColumnProfile("bool", 100, 0)})
+        prod = self._make("production", {"a": ColumnProfile("boolean", 100, 0)})
+        assert not any("TYPE MISMATCH" in d for d in compare_feature_profiles(exp, prod))
+
+    def test_genuine_type_mismatch_still_reported(self):
+        exp = self._make("exploration", {"a": ColumnProfile("float64", 100, 0)})
+        prod = self._make("production", {"a": ColumnProfile("string", 100, 0)})
+        assert any("TYPE MISMATCH" in d for d in compare_feature_profiles(exp, prod))
+
+    def test_normalization_is_symmetric(self):
+        exp = self._make("exploration", {"a": ColumnProfile("double", 100, 0)})
+        prod = self._make("production", {"a": ColumnProfile("float64", 100, 0)})
+        assert not any("TYPE MISMATCH" in d for d in compare_feature_profiles(exp, prod))

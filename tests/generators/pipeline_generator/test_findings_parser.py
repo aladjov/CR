@@ -138,6 +138,7 @@ def sample_findings_dir(tmp_path):
             "granularity": "event_level",
             "entity_column": "customer_id",
             "time_column": "order_date",
+            "aggregation_windows_used": ["7d", "30d", "90d"],
         },
     }
     (findings_dir / "orders_findings.yaml").write_text(yaml.dump(orders_findings))
@@ -333,6 +334,7 @@ class TestFindingsParserBuildPipelineConfig:
                 "granularity": "event_level",
                 "entity_column": "customer_id",
                 "time_column": "event_timestamp",
+                "aggregation_windows_used": ["7d", "30d", "90d"],
             },
         }
         (findings_dir / "transactions_findings.yaml").write_text(yaml.dump(txn_findings))
@@ -528,6 +530,7 @@ def aggregated_event_setup(tmp_path):
             "aggregation_executed": True,
             "aggregated_findings_path": str(findings_dir / "orders_agg_findings.yaml"),
             "suggested_aggregations": ["7d", "30d", "90d"],
+            "aggregation_windows_used": ["7d", "30d", "90d"],
         },
     }
     (findings_dir / "orders_raw_findings.yaml").write_text(yaml.dump(preagg_findings))
@@ -820,6 +823,7 @@ class TestEventSourceDiscovery:
                 "aggregation_executed": True,
                 "aggregated_findings_path": str(findings_dir / "emails_agg_findings.yaml"),
                 "suggested_aggregations": ["7d", "30d"],
+                "aggregation_windows_used": ["7d", "30d"],
             },
         }
         (findings_dir / "emails_raw_findings.yaml").write_text(yaml.dump(preagg_findings))
@@ -922,6 +926,7 @@ class TestEventSourceDiscovery:
                 "time_column": "event_date",
                 "aggregation_executed": True,
                 "aggregated_findings_path": str(findings_dir / "clean_agg_findings.yaml"),
+                "aggregation_windows_used": ["7d", "30d", "90d"],
             },
         }
         (findings_dir / "clean_raw_findings.yaml").write_text(yaml.dump(preagg_findings))
@@ -1035,6 +1040,7 @@ class TestEventSourceDiscovery:
                 "time_column": "event_date",
                 "aggregation_executed": True,
                 "aggregated_findings_path": str(findings_dir / "events_agg_findings.yaml"),
+                "aggregation_windows_used": ["7d", "30d", "90d"],
             },
         }
         (findings_dir / "events_raw_findings.yaml").write_text(yaml.dump(preagg_findings))
@@ -1564,6 +1570,7 @@ class TestRawTimeColumnResolution:
                 "aggregation_executed": True,
                 "aggregated_findings_path": str(findings_dir / "emails_agg_findings.yaml"),
                 "suggested_aggregations": ["7d", "30d"],
+                "aggregation_windows_used": ["7d", "30d"],
             },
         }
         (findings_dir / "emails_raw_findings.yaml").write_text(yaml.dump(preagg_findings))
@@ -1823,6 +1830,7 @@ class TestTimestampCoalesceGuard:
                 "time_column": "feature_timestamp",
                 "aggregation_executed": True,
                 "aggregated_findings_path": str(findings_dir / "emails_agg_findings.yaml"),
+                "aggregation_windows_used": ["7d", "30d", "90d"],
             },
         }
         (findings_dir / "emails_raw_findings.yaml").write_text(yaml.dump(preagg_findings))
@@ -1919,6 +1927,7 @@ class TestBronzeEventRawTimeColumnAttachment:
                 "aggregation_executed": True,
                 "aggregated_findings_path": str(findings_dir / "emails_agg_findings.yaml"),
                 "suggested_aggregations": ["7d", "30d"],
+                "aggregation_windows_used": ["7d", "30d"],
             },
         }
         (findings_dir / "emails_raw_findings.yaml").write_text(yaml.dump(preagg_findings))
@@ -2079,6 +2088,7 @@ class TestLifecycleMetadataFallback:
                 "time_column": "event_date",
                 "aggregation_executed": True,
                 "aggregated_findings_path": str(findings_dir / "events_agg_findings.yaml"),
+                "aggregation_windows_used": ["7d", "30d", "90d"],
             },
         }
         if event_metadata is not None:
@@ -2306,6 +2316,7 @@ class TestFindingsParserWithNamespace:
                 "granularity": "event_level",
                 "entity_column": "customer_id",
                 "time_column": "order_date",
+                "aggregation_windows_used": ["7d", "30d", "90d"],
             },
         }
         (orders_fd / "orders_findings.yaml").write_text(yaml.dump(orders_findings))
@@ -2745,6 +2756,7 @@ class TestAggregationConfigSeparatesNumericAndCategorical:
                 granularity="event_level",
                 entity_column="customer_id",
                 time_column="sent_date",
+                aggregation_windows_used=["7d", "30d"],
             ),
             identifier_columns=["customer_id"],
             datetime_columns=["sent_date"],
@@ -2795,6 +2807,7 @@ class TestAggregationConfigSeparatesNumericAndCategorical:
                 granularity="event_level",
                 entity_column="customer_id",
                 time_column="sent_date",
+                aggregation_windows_used=["7d"],
             ),
             identifier_columns=["customer_id"],
             datetime_columns=["sent_date"],
@@ -2837,6 +2850,7 @@ class TestAggregationConfigSeparatesNumericAndCategorical:
                 granularity="event_level",
                 entity_column="customer_id",
                 time_column="event_date",
+                aggregation_windows_used=["7d"],
             ),
             identifier_columns=["customer_id"],
             datetime_columns=["event_date"],
@@ -3033,6 +3047,7 @@ class TestDatetimeDerivationConfig:
                 "granularity": "event_level",
                 "entity_column": "customer_id",
                 "time_column": "event_date",
+                "aggregation_windows_used": ["7d", "30d", "90d"],
             },
         }
         if event_derivation_sources is not None:
@@ -3388,6 +3403,7 @@ class TestDeduplicationFromRegistry:
             "time_series_metadata": {
                 "time_column": "event_date",
                 "entity_column": "customer_id",
+                "aggregation_windows_used": ["7d", "30d", "90d"],
             },
         }
         (findings_dir / "events_findings.yaml").write_text(yaml.dump(events_findings))
@@ -3513,6 +3529,7 @@ class TestDeduplicationFromRegistry:
             "time_series_metadata": {
                 "time_column": "event_date",
                 "entity_column": "customer_id",
+                "aggregation_windows_used": ["7d", "30d", "90d"],
             },
         }
         (findings_dir / "events_findings.yaml").write_text(yaml.dump(events_findings))
@@ -3577,6 +3594,7 @@ class TestFilteringFromRegistry:
             "time_series_metadata": {
                 "time_column": "event_date",
                 "entity_column": "customer_id",
+                "aggregation_windows_used": ["7d", "30d", "90d"],
             },
         }
         (findings_dir / "events_findings.yaml").write_text(yaml.dump(events_findings))
@@ -3700,6 +3718,7 @@ class TestFilteringFromRegistry:
             "time_series_metadata": {
                 "time_column": "event_date",
                 "entity_column": "customer_id",
+                "aggregation_windows_used": ["7d", "30d", "90d"],
             },
         }
         (findings_dir / "events_findings.yaml").write_text(yaml.dump(events_findings))
@@ -3844,6 +3863,7 @@ class TestTemporalMergeMetadata:
                 "granularity": "event_level",
                 "entity_column": "customer_id",
                 "time_column": "order_date",
+                "aggregation_windows_used": ["7d", "30d", "90d"],
             },
         }
         (findings_dir / "orders_findings.yaml").write_text(yaml.dump(orders_findings))
@@ -4128,6 +4148,7 @@ class TestTemporalMergeMetadata:
                             "granularity": "event_level",
                             "entity_column": "CASE_ID",
                             "time_column": "created_date",
+                            "aggregation_windows_used": ["7d", "30d", "90d"],
                         }}
         findings_dir.mkdir(parents=True, exist_ok=True)
         (findings_dir / "customers_findings.yaml").write_text(yaml.dump(customers))
@@ -4381,6 +4402,7 @@ class TestTemporalMergeMetadata:
                 "granularity": "event_level",
                 "entity_column": "customer_id",
                 "time_column": "order_date",
+                "aggregation_windows_used": ["7d", "30d", "90d"],
             },
         }
         (findings_dir / "orders_findings.yaml").write_text(yaml.dump(orders_findings))
@@ -4488,6 +4510,7 @@ class TestDiscoveredEventMergeSourcesReconciliation:
                 "time_column": "order_date", "aggregation_executed": True,
                 "aggregated_findings_path": str(agg_findings_path),
                 "suggested_aggregations": ["7d", "30d"],
+                "aggregation_windows_used": ["7d", "30d"],
             },
         }))
 
@@ -5827,6 +5850,7 @@ class TestAggregationFeatureExclusions:
                 granularity="event_level",
                 entity_column="customer_id",
                 time_column="sent_date",
+                aggregation_windows_used=["7d", "30d"],
             ),
             identifier_columns=["customer_id"],
             datetime_columns=["sent_date"],
@@ -6112,3 +6136,81 @@ class TestLeakageExclusionPrefixes:
         result = FindingsParser._collect_leakage_exclusion_prefixes({"a": findings_a, "b": findings_b})
         assert result.count("COL_A_") == 1
         assert "COL_B_" in result
+
+
+class TestAggregationWindowsPriority:
+
+    def _make_findings_with_windows(self, windows_used):
+        from customer_retention.analysis.auto_explorer import ExplorationFindings
+        from customer_retention.analysis.auto_explorer.findings import ColumnFinding, TimeSeriesMetadata
+        from customer_retention.core.config.column_config import ColumnType, DatasetGranularity
+
+        return ExplorationFindings(
+            source_path="/data/events.csv", source_format="csv",
+            row_count=1000, column_count=3,
+            columns={
+                "customer_id": ColumnFinding("customer_id", ColumnType.IDENTIFIER, 0.95, []),
+                "amount": ColumnFinding("amount", ColumnType.NUMERIC_CONTINUOUS, 0.9, []),
+                "event_date": ColumnFinding("event_date", ColumnType.DATETIME, 0.9, []),
+            },
+            time_series_metadata=TimeSeriesMetadata(
+                granularity=DatasetGranularity.EVENT_LEVEL,
+                entity_column="customer_id", time_column="event_date",
+                aggregation_windows_used=windows_used,
+            ),
+        )
+
+    def test_prefers_per_dataset_aggregation_windows_used(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings = self._make_findings_with_windows(["180d", "365d", "all_time"])
+
+        class FakeMulti:
+            aggregation_windows = ["24h", "7d", "30d", "90d", "180d", "365d", "all_time"]
+
+        parser = FindingsParser.__new__(FindingsParser)
+        result = parser._build_aggregation_config(FakeMulti(), findings)
+        assert result is not None
+        assert result.windows == ["180d", "365d", "all_time"]
+
+    def test_raises_when_no_aggregation_windows_available(self):
+        from customer_retention.analysis.auto_explorer import ExplorationFindings
+        from customer_retention.analysis.auto_explorer.findings import ColumnFinding, TimeSeriesMetadata
+        from customer_retention.core.config.column_config import ColumnType, DatasetGranularity
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings = ExplorationFindings(
+            source_path="/data/events.csv", source_format="csv",
+            row_count=1000, column_count=2,
+            columns={
+                "customer_id": ColumnFinding("customer_id", ColumnType.IDENTIFIER, 0.95, []),
+                "event_date": ColumnFinding("event_date", ColumnType.DATETIME, 0.9, []),
+            },
+            time_series_metadata=TimeSeriesMetadata(
+                granularity=DatasetGranularity.EVENT_LEVEL,
+                entity_column="customer_id", time_column="event_date",
+            ),
+        )
+
+        class FakeMulti:
+            aggregation_windows = []
+
+        parser = FindingsParser.__new__(FindingsParser)
+        with pytest.raises(ValueError, match="aggregation_windows_used"):
+            parser._build_aggregation_config(FakeMulti(), findings)
+
+    def test_returns_none_for_non_event_without_any_windows(self):
+        from customer_retention.analysis.auto_explorer import ExplorationFindings
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings = ExplorationFindings(
+            source_path="/data/customers.csv", source_format="csv",
+            row_count=100, column_count=2, columns={},
+        )
+
+        class FakeMulti:
+            aggregation_windows = []
+
+        parser = FindingsParser.__new__(FindingsParser)
+        result = parser._build_aggregation_config(FakeMulti(), findings)
+        assert result is None

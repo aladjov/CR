@@ -315,17 +315,17 @@ class FeatureSelector:
 
 
 def _import_spark_ml():
+    import pyspark.sql.functions as F  # noqa: N812
     from pyspark.ml.classification import LogisticRegression
     from pyspark.ml.feature import StandardScaler, VectorAssembler
-    return LogisticRegression, VectorAssembler, StandardScaler
+    return LogisticRegression, VectorAssembler, StandardScaler, F
 
 
 def _spark_l1_selection(
     spark_df: Any, target_column: str, feature_columns: List[str],
     reg_param: float = 1.0, max_iter: int = 2000,
 ) -> tuple:
-    LR, VectorAssembler, StandardScaler = _import_spark_ml()
-    import pyspark.sql.functions as F  # noqa: N812
+    LR, VectorAssembler, StandardScaler, F = _import_spark_ml()
 
     work_df = spark_df.select([F.col(c).cast("double").alias(c) for c in feature_columns] + [F.col(target_column).cast("double").alias(target_column)])
     work_df = work_df.na.drop(subset=[target_column]).na.fill(0.0, subset=feature_columns)

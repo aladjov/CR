@@ -79,6 +79,16 @@ def build_feature_profile(stage: str, target_column: str, row_count: int, featur
     )
 
 
+_DTYPE_CANONICAL = {
+    "float64": "double", "float32": "float", "int32": "integer",
+    "int64": "long", "int16": "short", "int8": "byte", "bool": "boolean",
+}
+
+
+def _canonical_dtype(dtype: str) -> str:
+    return _DTYPE_CANONICAL.get(dtype, dtype)
+
+
 def compare_feature_profiles(exploration: FeatureProfile, production: FeatureProfile) -> List[str]:
     discrepancies: List[str] = []
     exp_names = set(exploration.features.keys())
@@ -109,7 +119,7 @@ def compare_feature_profiles(exploration: FeatureProfile, production: FeaturePro
 
     for name in sorted(exp_names & prod_names):
         exp_col, prod_col = exploration.features[name], production.features[name]
-        if exp_col.dtype != prod_col.dtype:
+        if _canonical_dtype(exp_col.dtype) != _canonical_dtype(prod_col.dtype):
             discrepancies.append(f"TYPE MISMATCH {name}: exploration={exp_col.dtype}, production={prod_col.dtype}")
         if exp_col.null_count == 0 and prod_col.null_count > 0:
             discrepancies.append(f"NEW NULLS {name}: production has {prod_col.null_count} nulls (exploration had 0)")

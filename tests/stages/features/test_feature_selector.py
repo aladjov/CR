@@ -552,7 +552,7 @@ class TestDistributedL1Selection:
         mock_scaler_model.transform.return_value = mock_spark_df
         mock_scaler_class.return_value = MagicMock(fit=MagicMock(return_value=mock_scaler_model))
         with patch("customer_retention.stages.features.feature_selector._import_spark_ml") as mock_imports:
-            mock_imports.return_value = (mock_lr_class, mock_assembler, mock_scaler_class)
+            mock_imports.return_value = (mock_lr_class, mock_assembler, mock_scaler_class, MagicMock())
             dropped, reasons, scores = _spark_l1_selection(mock_spark_df, "target", feature_cols)
         assert "f2" in dropped
         assert "f1" not in dropped
@@ -574,7 +574,7 @@ class TestDistributedL1Selection:
         mock_scaler_class = MagicMock()
         mock_scaler_class.return_value = MagicMock(fit=MagicMock(return_value=MagicMock(transform=MagicMock(return_value=mock_spark_df))))
         with patch("customer_retention.stages.features.feature_selector._import_spark_ml") as mock_imports:
-            mock_imports.return_value = (mock_lr_class, mock_assembler, mock_scaler_class)
+            mock_imports.return_value = (mock_lr_class, mock_assembler, mock_scaler_class, MagicMock())
             dropped, reasons, scores = _spark_l1_selection(mock_spark_df, "target", feature_cols)
         assert dropped == []
         assert reasons == {}
@@ -594,7 +594,7 @@ class TestDistributedL1Selection:
         mock_scaler_class = MagicMock()
         mock_scaler_class.return_value = MagicMock(fit=MagicMock(return_value=MagicMock(transform=MagicMock(return_value=mock_spark_df))))
         with patch("customer_retention.stages.features.feature_selector._import_spark_ml") as mock_imports:
-            mock_imports.return_value = (mock_lr_class, mock_assembler, mock_scaler_class)
+            mock_imports.return_value = (mock_lr_class, mock_assembler, mock_scaler_class, MagicMock())
             dropped, reasons, scores = _spark_l1_selection(mock_spark_df, "target", feature_cols)
         assert dropped == []
         assert reasons == {}

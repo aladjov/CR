@@ -1110,11 +1110,15 @@ class FindingsParser:
     def _build_aggregation_config(
         self, multi: MultiDatasetFindings, findings: ExplorationFindings, dataset_name: str = ""
     ) -> Optional[AggregationWindowConfig]:
-        windows = getattr(multi, "aggregation_windows", None) or []
-        if not windows and findings.time_series_metadata:
-            windows = getattr(findings.time_series_metadata, "suggested_aggregations", []) or []
+        ts = findings.time_series_metadata
+        windows = getattr(ts, "aggregation_windows_used", None) or [] if ts else []
         if not windows:
-            return None
+            if not ts:
+                return None
+            raise ValueError(
+                f"No aggregation_windows_used in findings for '{dataset_name}'. "
+                "NB01d must run before pipeline generation to record actual aggregation windows."
+            )
         target = findings.target_column or ""
         entity_col = (findings.time_series_metadata.entity_column if findings.time_series_metadata else None) or ""
         time_col = (findings.time_series_metadata.time_column if findings.time_series_metadata else None) or ""
