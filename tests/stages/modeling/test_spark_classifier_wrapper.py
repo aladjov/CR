@@ -40,6 +40,14 @@ def imbalanced_data():
 
 
 class TestSparkClassifierWrapperInit:
+    def test_rejects_empty_feature_names(self):
+        with pytest.raises(ValueError, match="at least one feature"):
+            SparkClassifierWrapper(
+                spark_model_class="LogisticRegression",
+                spark_model_params={},
+                feature_names=[],
+            )
+
     def test_stores_feature_names(self):
         wrapper = SparkClassifierWrapper(
             spark_model_class="LogisticRegression",

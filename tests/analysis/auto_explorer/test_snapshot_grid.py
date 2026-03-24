@@ -1008,6 +1008,39 @@ class TestFromIntentHistoryWindow:
         assert grid.grid_start is None
         assert grid.grid_end is None
 
+    def test_lookback_persisted_in_grid(self):
+        intent = self._intent(lookback_periods=12)
+        grid = SnapshotGrid.from_intent(intent, self._datasets(), fingerprints=self._fps())
+        assert grid.lookback_periods == 12
+
+    def test_lock_preserves_lookback_constraint(self):
+        intent = self._intent(lookback_periods=12)
+        grid = SnapshotGrid.from_intent(intent, self._datasets(), fingerprints=self._fps())
+        start_before = grid.grid_start
+        for v in grid.dataset_votes.values():
+            v.voted = True
+            v.data_span_start = "2020-01-01"
+            v.data_span_end = "2024-12-31"
+        grid.lock(purge_gap_days=104, label_window_days=90)
+        assert grid.grid_start >= start_before
+
+    def test_lock_without_lookback_uses_full_range(self):
+        intent = self._intent()
+        grid = SnapshotGrid.from_intent(intent, self._datasets(), fingerprints=self._fps())
+        for v in grid.dataset_votes.values():
+            v.voted = True
+            v.data_span_start = "2006-01-01"
+            v.data_span_end = "2024-12-31"
+        grid.lock(purge_gap_days=104, label_window_days=90)
+        assert grid.grid_start is not None
+
+    def test_lookback_survives_save_load_roundtrip(self, tmp_path):
+        intent = self._intent(lookback_periods=36)
+        grid = SnapshotGrid.from_intent(intent, self._datasets(), fingerprints=self._fps())
+        grid.save(tmp_path / "grid.yaml")
+        loaded = SnapshotGrid.load(tmp_path / "grid.yaml")
+        assert loaded.lookback_periods == 36
+
 
 class TestPerDatasetVoteFiles:
     def test_save_vote_creates_file(self, tmp_path):

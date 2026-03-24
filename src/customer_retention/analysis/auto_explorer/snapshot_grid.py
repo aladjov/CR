@@ -103,6 +103,7 @@ class SnapshotGrid(BaseModel):
     dataset_votes: dict[str, DatasetGridVote] = Field(default_factory=dict)
     locked: bool = False
     max_grid_dates: Optional[int] = None
+    lookback_periods: Optional[int] = None
 
     @classmethod
     def from_intent(
@@ -156,6 +157,7 @@ class SnapshotGrid(BaseModel):
             dataset_votes=votes,
             grid_start=grid_start,
             grid_end=grid_end,
+            lookback_periods=intent.lookback_periods,
         )
         grid.generate_grid_dates()
         return grid
@@ -221,6 +223,10 @@ class SnapshotGrid(BaseModel):
         if start is not None and end is not None:
             self.grid_start = start
             self.grid_end = end
+        if self.lookback_periods is not None and self.grid_end is not None:
+            lookback_total = self.lookback_periods * self.cadence_to_days()
+            earliest = (_dt.date.fromisoformat(self.grid_end) - _dt.timedelta(days=lookback_total)).isoformat()
+            self.grid_start = max(self.grid_start, earliest) if self.grid_start is not None else earliest
         self.generate_grid_dates()
         self.locked = True
 
