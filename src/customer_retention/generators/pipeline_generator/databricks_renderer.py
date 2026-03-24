@@ -1493,7 +1493,7 @@ except Exception:
     _NAMESPACE = RunNamespace.from_env_or_latest()
 if _NAMESPACE is not None:
     import json
-    _meta_cols = {TARGET, TIMESTAMP_COLUMN, "entity_id", "as_of_date", "feature_timestamp"}
+    _meta_cols = {TARGET_COLUMN, TIMESTAMP_COLUMN, "entity_id", "as_of_date", "feature_timestamp"}
     _gold_meta = {
         "rows": _row_count, "columns": _col_count,
         "feature_count": len([c for c in result.columns if c not in _meta_cols]),

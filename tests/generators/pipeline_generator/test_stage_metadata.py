@@ -165,6 +165,19 @@ class TestDatabricksGoldMetadata:
         result = dbx_renderer.render_gold(pipeline_config)
         ast.parse(result)
 
+    def test_gold_meta_cols_uses_config_variables(self, dbx_renderer, pipeline_config):
+        result = dbx_renderer.render_gold(pipeline_config)
+        tree = ast.parse(result)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Set) and any(
+                isinstance(e, ast.Name) and e.id == "TARGET_COLUMN" for e in node.elts
+            ):
+                names = [e.id for e in node.elts if isinstance(e, ast.Name)]
+                assert "TARGET" not in names, "_meta_cols must use TARGET_COLUMN, not TARGET"
+                assert "TARGET_COLUMN" in names
+                return
+        pytest.fail("_meta_cols set with TARGET_COLUMN not found in gold template")
+
 
 class TestDatabricksRunnerBronzeMetadata:
     def test_runner_writes_bronze_metadata(self, dbx_renderer, pipeline_config):
