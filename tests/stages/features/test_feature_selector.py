@@ -533,6 +533,58 @@ class TestRunSelectionPipeline:
         assert "target" not in result.dropped_features
 
 
+class TestPrecomputedCorrMatrix:
+    @pytest.fixture
+    def df_correlated(self):
+        np.random.seed(42)
+        base = np.random.randn(200)
+        return pd.DataFrame({
+            "f1": base,
+            "f2": base + np.random.randn(200) * 0.01,
+            "f3": np.random.randn(200),
+            "target": np.random.choice([0, 1], 200),
+        })
+
+    def test_selector_uses_precomputed_corr(self, df_correlated):
+        precomputed = df_correlated[["f1", "f2", "f3"]].corr()
+        selector = FeatureSelector(
+            method=SelectionMethod.CORRELATION, correlation_threshold=0.95,
+            target_column="target", precomputed_corr_matrix=precomputed,
+        )
+        result = selector.fit_transform(df_correlated)
+        assert len({"f1", "f2"} - set(result.selected_features)) >= 1
+
+    def test_pipeline_uses_precomputed_corr(self, df_correlated):
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        precomputed = df_correlated[["f1", "f2", "f3"]].corr()
+        result = run_selection_pipeline(
+            df_correlated, target_column="target",
+            correlation_threshold=0.95, l1_enabled=False,
+            precomputed_corr_matrix=precomputed,
+        )
+        assert len({"f1", "f2"} - set(result.selected_features)) >= 1
+
+    def test_precomputed_corr_skips_recomputation(self, df_correlated):
+        precomputed = df_correlated[["f1", "f2", "f3"]].corr()
+        selector = FeatureSelector(
+            method=SelectionMethod.CORRELATION, correlation_threshold=0.95,
+            target_column="target", precomputed_corr_matrix=precomputed,
+        )
+        selector.fit(df_correlated)
+        dropped = set(selector.dropped_features)
+        assert len({"f1", "f2"} & dropped) >= 1
+        assert "f3" not in dropped
+
+    def test_partial_precomputed_falls_back(self, df_correlated):
+        partial = df_correlated[["f1", "f3"]].corr()
+        selector = FeatureSelector(
+            method=SelectionMethod.CORRELATION, correlation_threshold=0.95,
+            target_column="target", precomputed_corr_matrix=partial,
+        )
+        result = selector.fit_transform(df_correlated)
+        assert len({"f1", "f2"} - set(result.selected_features)) >= 1
+
+
 class TestCombinedSelection:
     def test_variance_then_correlation(self):
         np.random.seed(42)

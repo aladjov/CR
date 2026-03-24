@@ -56,7 +56,7 @@ class AvailabilityRecommendation:
 
 
 class FeatureSelector:
-    def __init__(self, method: SelectionMethod = SelectionMethod.VARIANCE, variance_threshold: float = 0.01, correlation_threshold: float = 0.95, target_column: Optional[str] = None, preserve_features: Optional[List[str]] = None, max_features: Optional[int] = None, apply_correlation_filter: bool = False):
+    def __init__(self, method: SelectionMethod = SelectionMethod.VARIANCE, variance_threshold: float = 0.01, correlation_threshold: float = 0.95, target_column: Optional[str] = None, preserve_features: Optional[List[str]] = None, max_features: Optional[int] = None, apply_correlation_filter: bool = False, precomputed_corr_matrix: Optional[Any] = None):
         self.method = method
         self.variance_threshold = variance_threshold
         self.correlation_threshold = correlation_threshold
@@ -64,6 +64,7 @@ class FeatureSelector:
         self.preserve_features = preserve_features or []
         self.max_features = max_features
         self.apply_correlation_filter = apply_correlation_filter
+        self._precomputed_corr_matrix = precomputed_corr_matrix
 
         self.selected_features: List[str] = []
         self.dropped_features: List[str] = []
@@ -156,7 +157,11 @@ class FeatureSelector:
         if len(numeric_features) < 2:
             return
 
-        corr_matrix = batched_corr_matrix(df, numeric_features).abs()
+        pre = self._precomputed_corr_matrix
+        if pre is not None and set(numeric_features).issubset(pre.columns):
+            corr_matrix = pre.loc[numeric_features, numeric_features].abs()
+        else:
+            corr_matrix = batched_corr_matrix(df, numeric_features).abs()
         upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
         variances = self._get_variances(df, numeric_features, numeric_set)
 
@@ -312,6 +317,7 @@ def run_selection_pipeline(
     l1_enabled: bool = False, max_features: Optional[int] = None,
     preserve_features: Optional[List[str]] = None,
     progress_fn: Optional[Callable[[str], None]] = None,
+    precomputed_corr_matrix: Optional[Any] = None,
 ) -> FeatureSelectionResult:
     log = progress_fn or (lambda msg: print(msg))
     all_dropped: List[str] = []
@@ -347,6 +353,7 @@ def run_selection_pipeline(
     result_corr = FeatureSelector(
         method=SelectionMethod.CORRELATION, correlation_threshold=correlation_threshold,
         target_column=target_column, preserve_features=preserve_features,
+        precomputed_corr_matrix=precomputed_corr_matrix,
     ).fit_transform(current_df)
     current_df = result_corr.df
     all_dropped.extend(result_corr.dropped_features)
