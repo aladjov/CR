@@ -533,6 +533,53 @@ class TestRunSelectionPipeline:
         assert "target" not in result.dropped_features
 
 
+class TestDistributedL1Selection:
+    def test_spark_l1_returns_feature_selection_result(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.stages.features.feature_selector import _spark_l1_selection
+        feature_cols = ["f1", "f2", "f3"]
+        mock_spark_df = MagicMock()
+        mock_model = MagicMock()
+        mock_model.coefficients.toArray.return_value = np.array([0.5, 0.0, 0.3])
+        mock_lr_class = MagicMock(return_value=MagicMock(fit=MagicMock(return_value=mock_model)))
+        mock_assembler = MagicMock()
+        mock_assembler_inst = MagicMock()
+        mock_assembler_inst.transform.return_value = mock_spark_df
+        mock_assembler.return_value = mock_assembler_inst
+        mock_scaler_class = MagicMock()
+        mock_scaler_model = MagicMock()
+        mock_scaler_model.transform.return_value = mock_spark_df
+        mock_scaler_class.return_value = MagicMock(fit=MagicMock(return_value=mock_scaler_model))
+        with patch("customer_retention.stages.features.feature_selector._import_spark_ml") as mock_imports:
+            mock_imports.return_value = (mock_lr_class, mock_assembler, mock_scaler_class)
+            dropped, reasons, scores = _spark_l1_selection(mock_spark_df, "target", feature_cols)
+        assert "f2" in dropped
+        assert "f1" not in dropped
+        assert "f3" not in dropped
+        assert reasons["f2"] == "L1 zero coefficient"
+        assert scores["f1"] == 0.5
+
+    def test_spark_l1_all_nonzero_drops_nothing(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.stages.features.feature_selector import _spark_l1_selection
+        feature_cols = ["a", "b"]
+        mock_spark_df = MagicMock()
+        mock_model = MagicMock()
+        mock_model.coefficients.toArray.return_value = np.array([1.0, 0.5])
+        mock_lr_class = MagicMock(return_value=MagicMock(fit=MagicMock(return_value=mock_model)))
+        mock_assembler = MagicMock()
+        mock_assembler.return_value = MagicMock(transform=MagicMock(return_value=mock_spark_df))
+        mock_scaler_class = MagicMock()
+        mock_scaler_class.return_value = MagicMock(fit=MagicMock(return_value=MagicMock(transform=MagicMock(return_value=mock_spark_df))))
+        with patch("customer_retention.stages.features.feature_selector._import_spark_ml") as mock_imports:
+            mock_imports.return_value = (mock_lr_class, mock_assembler, mock_scaler_class)
+            dropped, reasons, scores = _spark_l1_selection(mock_spark_df, "target", feature_cols)
+        assert dropped == []
+        assert reasons == {}
+
+
 class TestPrecomputedCorrMatrix:
     @pytest.fixture
     def df_correlated(self):

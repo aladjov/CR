@@ -197,10 +197,19 @@ class FeatureSelector:
             return
 
         from customer_retention.core.compat import _is_spark_pandas
-        work_df = df[numeric_features + [self.target_column]]
-        if _is_spark_pandas(work_df):
-            work_df = work_df.to_pandas()
+        if _is_spark_pandas(df):
+            from customer_retention.core.compat import as_spark_df
+            spark_df = as_spark_df(df[numeric_features + [self.target_column]])
+            dropped, reasons, scores = _spark_l1_selection(spark_df, self.target_column, numeric_features)
+            self.importance_scores = scores
+            for feature in dropped:
+                if feature in self.selected_features:
+                    self.selected_features.remove(feature)
+                    self.dropped_features.append(feature)
+                    self.drop_reasons[feature] = reasons[feature]
+            return
 
+        work_df = df[numeric_features + [self.target_column]]
         work_df = work_df.dropna(subset=[self.target_column])
         if len(work_df) < 10:
             raise ValueError(
@@ -304,6 +313,39 @@ class FeatureSelector:
                 "preserves_data": True,
             })
         return options
+
+
+def _import_spark_ml():
+    from pyspark.ml.classification import LogisticRegression
+    from pyspark.ml.feature import StandardScaler, VectorAssembler
+    return LogisticRegression, VectorAssembler, StandardScaler
+
+
+def _spark_l1_selection(
+    spark_df: Any, target_column: str, feature_columns: List[str],
+    reg_param: float = 1.0, max_iter: int = 2000,
+) -> tuple:
+    LR, VectorAssembler, StandardScaler = _import_spark_ml()
+    import pyspark.sql.functions as F  # noqa: N812
+
+    work_df = spark_df.select([F.col(c).cast("double").alias(c) for c in feature_columns] + [F.col(target_column).cast("double").alias(target_column)])
+    work_df = work_df.na.drop(subset=[target_column]).na.fill(0.0, subset=feature_columns)
+    assembler = VectorAssembler(inputCols=feature_columns, outputCol="__raw__", handleInvalid="keep")
+    assembled = assembler.transform(work_df)
+    scaler = StandardScaler(inputCol="__raw__", outputCol="__scaled__", withStd=True, withMean=True)
+    scaled = scaler.fit(assembled).transform(assembled)
+    lr = LR(featuresCol="__scaled__", labelCol=target_column, elasticNetParam=1.0, regParam=reg_param, maxIter=max_iter)
+    model = lr.fit(scaled)
+    coefs = np.abs(model.coefficients.toArray())
+    dropped: List[str] = []
+    reasons: Dict[str, str] = {}
+    scores: Dict[str, float] = {}
+    for i, col in enumerate(feature_columns):
+        scores[col] = float(coefs[i])
+        if coefs[i] == 0.0:
+            dropped.append(col)
+            reasons[col] = "L1 zero coefficient"
+    return dropped, reasons, scores
 
 
 def _format_elapsed(seconds: float) -> str:
