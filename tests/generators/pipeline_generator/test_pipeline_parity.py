@@ -233,6 +233,7 @@ class TestLifecycleFeatureGroupsMapping:
             "time_series_metadata": {
                 "time_column": "order_date",
                 "entity_column": "customer_id",
+                "aggregation_windows_used": ["7d", "30d", "90d"],
             },
             "metadata": metadata,
         }
@@ -483,7 +484,7 @@ class TestRecencyBucketsFindingsParser:
             },
             "target_column": "churn",
             "identifier_columns": ["customer_id"],
-            "time_series_metadata": {"time_column": "order_date", "entity_column": "customer_id"},
+            "time_series_metadata": {"time_column": "order_date", "entity_column": "customer_id", "aggregation_windows_used": ["7d", "30d", "90d"]},
         }
         (findings_dir / "orders_findings.yaml").write_text(yaml.dump(orders))
         parser = FindingsParser(str(findings_dir))
@@ -636,7 +637,7 @@ class TestTemporalFeaturesParser:
             },
             "target_column": "churn",
             "identifier_columns": ["customer_id"],
-            "time_series_metadata": {"time_column": "order_date", "entity_column": "customer_id"},
+            "time_series_metadata": {"time_column": "order_date", "entity_column": "customer_id", "aggregation_windows_used": ["7d", "30d", "90d"]},
         }
         (findings_dir / "orders_findings.yaml").write_text(yaml.dump(orders))
         parser = FindingsParser(str(findings_dir))
@@ -704,7 +705,7 @@ class TestTemporalFeaturesParser:
             },
             "target_column": "churn",
             "identifier_columns": ["customer_id"],
-            "time_series_metadata": {"time_column": "order_date", "entity_column": "customer_id"},
+            "time_series_metadata": {"time_column": "order_date", "entity_column": "customer_id", "aggregation_windows_used": ["7d", "30d", "90d"]},
         }
         (findings_dir / "orders_findings.yaml").write_text(yaml.dump(orders))
         parser = FindingsParser(str(findings_dir))

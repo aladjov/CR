@@ -1747,6 +1747,7 @@ def train_and_evaluate():
             print(f"[TRAINING] Production profile saved to {_NAMESPACE.production_feature_profile_path}")
         _results["feature_profile"]["production_features"] = prod_profile.feature_count
         _results["feature_profile"]["production_rows"] = filtered_count
+        _results["feature_profile"]["excluded_details"] = excluded_cols
         if _EXPLORATION_PROFILE is not None:
             exp_profile = FeatureProfile.from_dict(_EXPLORATION_PROFILE)
             discrepancies = compare_feature_profiles(exp_profile, prod_profile)

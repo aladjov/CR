@@ -57,7 +57,8 @@ def _make_event_findings(source_path="/data/orders.parquet"):
         },
         time_series_metadata={"granularity": "event_level", "entity_column": "customer_id",
                               "time_column": "order_date", "unique_entities": 500,
-                              "avg_events_per_entity": 10.0, "time_span_days": 365},
+                              "avg_events_per_entity": 10.0, "time_span_days": 365,
+                              "aggregation_windows_used": ["7d", "30d", "90d"]},
         source_format="parquet", row_count=5000, column_count=4,
     )
 

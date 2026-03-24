@@ -107,6 +107,7 @@ def full_findings_setup(tmp_path):
                 "granularity": "event_level",
                 "entity_column": "customer_id",
                 "time_column": "order_date",
+                "aggregation_windows_used": ["7d", "30d", "90d"],
             }
         (findings_dir / f"{name}_findings.yaml").write_text(yaml.dump(findings))
 

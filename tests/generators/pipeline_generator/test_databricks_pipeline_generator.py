@@ -143,6 +143,7 @@ def sample_findings_dir(tmp_path):
             "granularity": "event_level",
             "entity_column": "customer_id",
             "time_column": "order_date",
+            "aggregation_windows_used": ["7d", "30d", "90d"],
         },
     }
     (findings_dir / "orders_findings.yaml").write_text(yaml.dump(orders_findings))

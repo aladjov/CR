@@ -216,6 +216,7 @@ class TestBinaryColumnAggregation:
                 "aggregation_executed": True,
                 "aggregated_findings_path": str(findings_dir / "emails_agg_findings.yaml"),
                 "suggested_aggregations": ["7d", "30d"],
+                "aggregation_windows_used": ["7d", "30d"],
             },
         }
         (findings_dir / "emails_raw_findings.yaml").write_text(yaml.dump(preagg_findings))
@@ -374,6 +375,7 @@ class TestTemporalMetadataRoundTrip:
                 "aggregation_executed": True,
                 "aggregated_findings_path": str(findings_dir / "orders_agg_findings.yaml"),
                 "suggested_aggregations": ["7d", "30d"],
+                "aggregation_windows_used": ["7d", "30d"],
             },
         }
         if temporal_patterns is not None:
