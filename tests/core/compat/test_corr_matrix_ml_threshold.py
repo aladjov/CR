@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import inspect
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -41,3 +44,28 @@ class TestCorrMatrixMLThreshold:
         result = batched_corr_matrix(df, list(df.columns))
         for col in df.columns:
             assert result.loc[col, col] == pytest.approx(1.0)
+
+
+class TestNoImputerInCorrML:
+    """Imputer.fit() serializes an ML model that exceeds Spark Connect's 1 GB
+    limit with many columns (MODEL_SIZE_OVERFLOW_EXCEPTION).  Null handling
+    must use SQL-based percentile_approx + fillna instead."""
+
+    def test_spark_corr_matrix_ml_does_not_import_imputer(self):
+        from customer_retention.core.compat import _spark_corr_matrix_ml
+        source = inspect.getsource(_spark_corr_matrix_ml)
+        assert "Imputer" not in source, (
+            "_spark_corr_matrix_ml must not use pyspark.ml.feature.Imputer — "
+            "use F.percentile_approx + fillna to avoid MODEL_SIZE_OVERFLOW"
+        )
+
+    def test_compat_init_has_no_imputer_import(self):
+        compat_init = (
+            Path(__file__).resolve().parents[3]
+            / "src" / "customer_retention" / "core" / "compat" / "__init__.py"
+        )
+        source = compat_init.read_text()
+        assert "from pyspark.ml.feature import Imputer" not in source, (
+            "core/compat/__init__.py must not import Imputer — "
+            "use F.percentile_approx + fillna for null handling before correlation"
+        )

@@ -803,7 +803,7 @@ def batched_corr_matrix(df: Any, columns: list[str]) -> _pandas.DataFrame:
 def _spark_corr_matrix_ml(df: Any, cols: list[str], numeric: set[str]) -> _pandas.DataFrame:
     import numpy as _np
     import pyspark.sql.functions as F  # noqa: N812
-    from pyspark.ml.feature import Imputer, VectorAssembler
+    from pyspark.ml.feature import VectorAssembler
     from pyspark.ml.stat import Correlation
 
     num_cols = [c for c in cols if c in numeric]
@@ -819,8 +819,9 @@ def _spark_corr_matrix_ml(df: Any, cols: list[str], numeric: set[str]) -> _panda
         return _pandas.DataFrame(_np.nan, index=cols, columns=cols)
     if len(valid_safe) < len(safe_cols):
         spark_df = spark_df.select(valid_safe)
-    imputer = Imputer(inputCols=valid_safe, outputCols=valid_safe, strategy="median")
-    imputed_df = imputer.fit(spark_df).transform(spark_df)
+    median_row = spark_df.agg(*[F.percentile_approx(c, 0.5).alias(c) for c in valid_safe]).head()
+    fill_map = {c: float(median_row[c]) for c in valid_safe if median_row[c] is not None}
+    imputed_df = spark_df.fillna(fill_map)
     assembler = VectorAssembler(inputCols=valid_safe, outputCol="__features__")
     vec_df = assembler.transform(imputed_df).select("__features__")
     corr_row = Correlation.corr(vec_df, "__features__", "pearson").head()
