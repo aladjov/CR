@@ -454,6 +454,28 @@ class TestL1Selection:
         for reason in result.drop_reasons.values():
             assert "l1" in reason.lower() or "zero" in reason.lower()
 
+    def test_l1_high_c_keeps_more_features(self, df_with_target_signal):
+        strict = FeatureSelector(
+            method=SelectionMethod.L1_SELECTION, target_column="target", l1_C=0.1,
+        ).fit_transform(df_with_target_signal)
+        lenient = FeatureSelector(
+            method=SelectionMethod.L1_SELECTION, target_column="target", l1_C=100.0,
+        ).fit_transform(df_with_target_signal)
+        assert len(lenient.selected_features) >= len(strict.selected_features)
+
+    def test_l1_ratio_below_one_uses_elasticnet(self, df_with_target_signal):
+        result = FeatureSelector(
+            method=SelectionMethod.L1_SELECTION, target_column="target",
+            l1_C=1.0, l1_ratio=0.5,
+        ).fit_transform(df_with_target_signal)
+        assert "relevant1" in result.selected_features
+        assert result.importance_scores is not None
+
+    def test_l1_defaults_unchanged(self):
+        sel = FeatureSelector(method=SelectionMethod.L1_SELECTION, target_column="t")
+        assert sel.l1_C == 1.0
+        assert sel.l1_ratio == 1.0
+
 
 class TestRunSelectionPipeline:
     @pytest.fixture
@@ -532,6 +554,36 @@ class TestRunSelectionPipeline:
         assert "target" in result.df.columns
         assert "target" not in result.dropped_features
 
+    def test_pipeline_l1_c_passed_through(self):
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        np.random.seed(42)
+        n = 1000
+        target = np.random.choice([0, 1], n)
+        df = pd.DataFrame({
+            "strong": target * 3.0 + np.random.randn(n) * 0.1,
+            "medium": target * 1.5 + np.random.randn(n) * 0.5,
+            "weak": target * 0.3 + np.random.randn(n),
+            "noise1": np.random.randn(n),
+            "noise2": np.random.randn(n),
+            "target": target,
+        })
+        strict = run_selection_pipeline(
+            df, target_column="target", variance_threshold=0.0,
+            correlation_threshold=1.0, l1_enabled=True, l1_C=0.01,
+        )
+        lenient = run_selection_pipeline(
+            df, target_column="target", variance_threshold=0.0,
+            correlation_threshold=1.0, l1_enabled=True, l1_C=1000.0,
+        )
+        assert len(lenient.selected_features) >= len(strict.selected_features)
+
+    def test_pipeline_l1_ratio_passed_through(self, df_mixed):
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        result = run_selection_pipeline(
+            df_mixed, target_column="target", l1_enabled=True, l1_C=1.0, l1_ratio=0.7,
+        )
+        assert "signal" in result.selected_features
+
 
 class TestDistributedL1Selection:
     def test_spark_l1_returns_feature_selection_result(self):
@@ -579,6 +631,27 @@ class TestDistributedL1Selection:
         assert dropped == []
         assert reasons == {}
 
+
+    def test_spark_l1_custom_reg_param_and_elastic_net(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.stages.features.feature_selector import _spark_l1_selection
+        feature_cols = ["f1", "f2"]
+        mock_spark_df = MagicMock()
+        mock_model = MagicMock()
+        mock_model.coefficients.toArray.return_value = np.array([0.5, 0.3])
+        mock_lr_class = MagicMock(return_value=MagicMock(fit=MagicMock(return_value=mock_model)))
+        mock_assembler = MagicMock()
+        mock_assembler.return_value = MagicMock(transform=MagicMock(return_value=mock_spark_df))
+        mock_scaler_class = MagicMock()
+        mock_scaler_class.return_value = MagicMock(fit=MagicMock(return_value=MagicMock(transform=MagicMock(return_value=mock_spark_df))))
+        with patch("customer_retention.stages.features.feature_selector._import_spark_ml") as mock_imports:
+            mock_imports.return_value = (mock_lr_class, mock_assembler, mock_scaler_class, MagicMock())
+            _spark_l1_selection(mock_spark_df, "target", feature_cols, reg_param=0.1, elastic_net_param=0.7)
+        mock_lr_class.assert_called_once_with(
+            featuresCol="__scaled__", labelCol="target",
+            elasticNetParam=0.7, regParam=0.1, maxIter=2000,
+        )
 
     def test_spark_l1_all_zero_drops_nothing(self):
         from unittest.mock import MagicMock, patch

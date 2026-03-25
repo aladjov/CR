@@ -56,7 +56,7 @@ class AvailabilityRecommendation:
 
 
 class FeatureSelector:
-    def __init__(self, method: SelectionMethod = SelectionMethod.VARIANCE, variance_threshold: float = 0.01, correlation_threshold: float = 0.95, target_column: Optional[str] = None, preserve_features: Optional[List[str]] = None, max_features: Optional[int] = None, apply_correlation_filter: bool = False, precomputed_corr_matrix: Optional[Any] = None):
+    def __init__(self, method: SelectionMethod = SelectionMethod.VARIANCE, variance_threshold: float = 0.01, correlation_threshold: float = 0.95, target_column: Optional[str] = None, preserve_features: Optional[List[str]] = None, max_features: Optional[int] = None, apply_correlation_filter: bool = False, precomputed_corr_matrix: Optional[Any] = None, l1_C: float = 1.0, l1_ratio: float = 1.0):
         self.method = method
         self.variance_threshold = variance_threshold
         self.correlation_threshold = correlation_threshold
@@ -65,6 +65,8 @@ class FeatureSelector:
         self.max_features = max_features
         self.apply_correlation_filter = apply_correlation_filter
         self._precomputed_corr_matrix = precomputed_corr_matrix
+        self.l1_C = l1_C
+        self.l1_ratio = l1_ratio
 
         self.selected_features: List[str] = []
         self.dropped_features: List[str] = []
@@ -200,7 +202,7 @@ class FeatureSelector:
         if _is_spark_pandas(df):
             from customer_retention.core.compat import as_spark_df
             spark_df = as_spark_df(df[numeric_features + [self.target_column]])
-            dropped, reasons, scores = _spark_l1_selection(spark_df, self.target_column, numeric_features)
+            dropped, reasons, scores = _spark_l1_selection(spark_df, self.target_column, numeric_features, reg_param=1.0 / self.l1_C, elastic_net_param=self.l1_ratio)
             self.importance_scores = scores
             for feature in dropped:
                 if feature in self.selected_features:
@@ -224,7 +226,7 @@ class FeatureSelector:
         from sklearn.preprocessing import StandardScaler
 
         X_scaled = StandardScaler().fit_transform(X)
-        model = LogisticRegression(solver="saga", C=1.0, max_iter=2000, l1_ratio=1.0)
+        model = LogisticRegression(solver="saga", C=self.l1_C, max_iter=2000, l1_ratio=self.l1_ratio)
         model.fit(X_scaled, y)
 
         coefs = np.abs(model.coef_)
@@ -323,7 +325,7 @@ def _import_spark_ml():
 
 def _spark_l1_selection(
     spark_df: Any, target_column: str, feature_columns: List[str],
-    reg_param: float = 1.0, max_iter: int = 2000,
+    reg_param: float = 1.0, max_iter: int = 2000, elastic_net_param: float = 1.0,
 ) -> tuple:
     LR, VectorAssembler, StandardScaler, F = _import_spark_ml()
 
@@ -333,7 +335,7 @@ def _spark_l1_selection(
     assembled = assembler.transform(work_df)
     scaler = StandardScaler(inputCol="__raw__", outputCol="__scaled__", withStd=True, withMean=True)
     scaled = scaler.fit(assembled).transform(assembled)
-    lr = LR(featuresCol="__scaled__", labelCol=target_column, elasticNetParam=1.0, regParam=reg_param, maxIter=max_iter)
+    lr = LR(featuresCol="__scaled__", labelCol=target_column, elasticNetParam=elastic_net_param, regParam=reg_param, maxIter=max_iter)
     model = lr.fit(scaled)
     coefs = np.abs(model.coefficients.toArray())
     scores: Dict[str, float] = {col: float(coefs[i]) for i, col in enumerate(feature_columns)}
@@ -360,6 +362,7 @@ def run_selection_pipeline(
     preserve_features: Optional[List[str]] = None,
     progress_fn: Optional[Callable[[str], None]] = None,
     precomputed_corr_matrix: Optional[Any] = None,
+    l1_C: float = 1.0, l1_ratio: float = 1.0,
 ) -> FeatureSelectionResult:
     log = progress_fn or (lambda msg: print(msg))
     all_dropped: List[str] = []
@@ -411,6 +414,7 @@ def run_selection_pipeline(
         result_l1 = FeatureSelector(
             method=SelectionMethod.L1_SELECTION, target_column=target_column,
             preserve_features=preserve_features, max_features=max_features,
+            l1_C=l1_C, l1_ratio=l1_ratio,
         ).fit_transform(current_df)
         current_df = result_l1.df
         all_dropped.extend(result_l1.dropped_features)
