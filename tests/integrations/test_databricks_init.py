@@ -9,7 +9,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _clean_env_vars(monkeypatch):
-    for var in ("CR_CATALOG", "CR_SCHEMA", "CR_WORKSPACE_PATH", "CR_EXPERIMENT_NAME", "CR_EXPERIMENTS_DIR"):
+    for var in ("CR_CATALOG", "CR_SCHEMA", "CR_WORKSPACE_PATH", "CR_EXPERIMENT_NAME", "CR_EXPERIMENTS_DIR", "CR_FRAMEWORK_REPO_PATH"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -573,7 +573,7 @@ class TestDatabricksInitNotebookSync:
 
         return source_dir, dest_dir
 
-    def _run_sync(self, monkeypatch, source_dir, dest_dir):
+    def _run_sync(self, monkeypatch, source_dir, dest_dir, framework_repo_path=None):
         mock_cls = MagicMock()
         mock_cls.return_value._get_exploration_source_dir.return_value = source_dir
 
@@ -591,7 +591,9 @@ class TestDatabricksInitNotebookSync:
             "customer_retention.generators.notebook_generator.project_init.ProjectInitializer",
             mock_cls,
         ):
-            return mod._sync_exploration_notebooks("Users/me/project")
+            return mod._sync_exploration_notebooks(
+                "Users/me/project", framework_repo_path=framework_repo_path,
+            )
 
     def test_updates_code_cells(self, monkeypatch, databricks_env, tmp_path):
         repo_cells = [("cell1", "code", "# @cr:code\nnew_code()")]
@@ -795,3 +797,303 @@ class TestDatabricksInitNotebookSync:
 
         assert copied == []
         assert synced == []
+
+
+class TestFrameworkRepoPathIntegration:
+
+    def _mock_copy_notebooks(self, source_dir):
+        mock_cls = MagicMock()
+        mock_cls.return_value._get_exploration_source_dir.return_value = source_dir
+        return mock_cls
+
+    def test_new_copy_injects_system_cell(self, monkeypatch, databricks_env, tmp_path):
+        repo_nb = _make_test_notebook([("c1", "code", "# @cr:code\nrun()")])
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        _write_notebook(source_dir / "nb.ipynb", repo_nb)
+
+        dest_dir = tmp_path / "dest"
+        dest_dir.mkdir(parents=True)
+
+        mock_cls = self._mock_copy_notebooks(source_dir)
+
+        import customer_retention.integrations.databricks_init as mod
+
+        real_path = mod.Path
+
+        def redirect_path(p):
+            if "/Workspace/" in str(p):
+                return dest_dir
+            return real_path(p)
+
+        monkeypatch.setattr(mod, "Path", redirect_path)
+        with patch(
+            "customer_retention.generators.notebook_generator.project_init.ProjectInitializer",
+            mock_cls,
+        ):
+            copied, synced = mod._sync_exploration_notebooks(
+                "Users/me/project", framework_repo_path="/Workspace/Repos/me/churnkit",
+            )
+
+        assert len(copied) == 1
+        result_nb = _read_notebook(dest_dir / "nb.ipynb")
+        assert result_nb.cells[0].source.startswith("# @cr:code_system")
+        assert "/Workspace/Repos/me/churnkit" in result_nb.cells[0].source
+
+    def test_new_copy_no_system_cell_when_repo_path_none(self, monkeypatch, databricks_env, tmp_path):
+        repo_nb = _make_test_notebook([("c1", "code", "# @cr:code\nrun()")])
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        _write_notebook(source_dir / "nb.ipynb", repo_nb)
+
+        dest_dir = tmp_path / "dest"
+        dest_dir.mkdir(parents=True)
+
+        mock_cls = self._mock_copy_notebooks(source_dir)
+
+        import customer_retention.integrations.databricks_init as mod
+
+        real_path = mod.Path
+
+        def redirect_path(p):
+            if "/Workspace/" in str(p):
+                return dest_dir
+            return real_path(p)
+
+        monkeypatch.setattr(mod, "Path", redirect_path)
+        with patch(
+            "customer_retention.generators.notebook_generator.project_init.ProjectInitializer",
+            mock_cls,
+        ):
+            copied, synced = mod._sync_exploration_notebooks(
+                "Users/me/project", framework_repo_path=None,
+            )
+
+        result_nb = _read_notebook(dest_dir / "nb.ipynb")
+        assert len(result_nb.cells) == 1
+        assert "code_system" not in result_nb.cells[0].source
+
+    def test_sync_preserves_existing_system_cell(self, monkeypatch, databricks_env, tmp_path):
+        repo_nb = _make_test_notebook([
+            ("c1", "code", "# @cr:code\nnew_code()"),
+        ])
+        user_nb = _make_test_notebook([
+            ("cr-syspath", "code", (
+                "# @cr:code_system name='framework_path' id=cr-syspath\n"
+                "import sys\n"
+                "\n"
+                'FRAMEWORK_REPO_ROOT = "/Workspace/Repos/me/churnkit"\n'
+                "if FRAMEWORK_REPO_ROOT not in sys.path:\n"
+                "    sys.path.insert(0, FRAMEWORK_REPO_ROOT)\n"
+            )),
+            ("c1", "code", "# @cr:code\nold_code()"),
+        ])
+
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        _write_notebook(source_dir / "test.ipynb", repo_nb)
+        dest_dir = tmp_path / "dest"
+        dest_dir.mkdir(parents=True)
+        _write_notebook(dest_dir / "test.ipynb", user_nb)
+
+        mock_cls = self._mock_copy_notebooks(source_dir)
+
+        import customer_retention.integrations.databricks_init as mod
+
+        real_path = mod.Path
+
+        def redirect_path(p):
+            if "/Workspace/" in str(p):
+                return dest_dir
+            return real_path(p)
+
+        monkeypatch.setattr(mod, "Path", redirect_path)
+        with patch(
+            "customer_retention.generators.notebook_generator.project_init.ProjectInitializer",
+            mock_cls,
+        ):
+            copied, synced = mod._sync_exploration_notebooks(
+                "Users/me/project", framework_repo_path="/Workspace/Repos/me/churnkit",
+            )
+
+        assert len(synced) == 1
+        result_nb = _read_notebook(dest_dir / "test.ipynb")
+        sys_cells = [c for c in result_nb.cells if "code_system" in c.source]
+        assert len(sys_cells) == 1
+        assert "/Workspace/Repos/me/churnkit" in sys_cells[0].source
+        assert "new_code()" in result_nb.cells[-1].source
+
+    def test_sync_reinserts_missing_system_cell(self, monkeypatch, databricks_env, tmp_path):
+        repo_nb = _make_test_notebook([
+            ("c1", "code", "# @cr:code\nnew_code()"),
+        ])
+        user_nb = _make_test_notebook([
+            ("c1", "code", "# @cr:code\nold_code()"),
+        ])
+
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        _write_notebook(source_dir / "test.ipynb", repo_nb)
+        dest_dir = tmp_path / "dest"
+        dest_dir.mkdir(parents=True)
+        _write_notebook(dest_dir / "test.ipynb", user_nb)
+
+        mock_cls = self._mock_copy_notebooks(source_dir)
+
+        import customer_retention.integrations.databricks_init as mod
+
+        real_path = mod.Path
+
+        def redirect_path(p):
+            if "/Workspace/" in str(p):
+                return dest_dir
+            return real_path(p)
+
+        monkeypatch.setattr(mod, "Path", redirect_path)
+        with patch(
+            "customer_retention.generators.notebook_generator.project_init.ProjectInitializer",
+            mock_cls,
+        ):
+            copied, synced = mod._sync_exploration_notebooks(
+                "Users/me/project", framework_repo_path="/Workspace/Repos/me/churnkit",
+            )
+
+        assert len(synced) == 1
+        result_nb = _read_notebook(dest_dir / "test.ipynb")
+        assert result_nb.cells[0].source.startswith("# @cr:code_system")
+        assert "/Workspace/Repos/me/churnkit" in result_nb.cells[0].source
+        assert "new_code()" in result_nb.cells[1].source
+
+    def test_user_modified_path_survives_sync(self, monkeypatch, databricks_env, tmp_path):
+        repo_nb = _make_test_notebook([("c1", "code", "# @cr:code\nrun()")])
+        user_nb = _make_test_notebook([
+            ("cr-syspath", "code", (
+                "# @cr:code_system name='framework_path' id=cr-syspath\n"
+                "import sys\n"
+                "\n"
+                'FRAMEWORK_REPO_ROOT = "/Workspace/Repos/other_user/my_fork"\n'
+                "if FRAMEWORK_REPO_ROOT not in sys.path:\n"
+                "    sys.path.insert(0, FRAMEWORK_REPO_ROOT)\n"
+            )),
+            ("c1", "code", "# @cr:code\nrun()"),
+        ])
+
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        _write_notebook(source_dir / "test.ipynb", repo_nb)
+        dest_dir = tmp_path / "dest"
+        dest_dir.mkdir(parents=True)
+        _write_notebook(dest_dir / "test.ipynb", user_nb)
+
+        mock_cls = self._mock_copy_notebooks(source_dir)
+
+        import customer_retention.integrations.databricks_init as mod
+
+        real_path = mod.Path
+
+        def redirect_path(p):
+            if "/Workspace/" in str(p):
+                return dest_dir
+            return real_path(p)
+
+        monkeypatch.setattr(mod, "Path", redirect_path)
+        with patch(
+            "customer_retention.generators.notebook_generator.project_init.ProjectInitializer",
+            mock_cls,
+        ):
+            mod._sync_exploration_notebooks(
+                "Users/me/project", framework_repo_path="/Workspace/Repos/me/churnkit",
+            )
+
+        result_nb = _read_notebook(dest_dir / "test.ipynb")
+        sys_cell = next(c for c in result_nb.cells if "code_system" in c.source)
+        assert "other_user/my_fork" in sys_cell.source
+
+    def test_system_cell_survives_repeated_syncs(self, monkeypatch, databricks_env, tmp_path):
+        repo_nb = _make_test_notebook([("c1", "code", "# @cr:code\nrun()")])
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        _write_notebook(source_dir / "nb.ipynb", repo_nb)
+
+        dest_dir = tmp_path / "dest"
+        dest_dir.mkdir(parents=True)
+
+        mock_cls = self._mock_copy_notebooks(source_dir)
+
+        import customer_retention.integrations.databricks_init as mod
+
+        real_path = mod.Path
+
+        def redirect_path(p):
+            if "/Workspace/" in str(p):
+                return dest_dir
+            return real_path(p)
+
+        monkeypatch.setattr(mod, "Path", redirect_path)
+        repo_path = "/Workspace/Repos/me/churnkit"
+
+        with patch(
+            "customer_retention.generators.notebook_generator.project_init.ProjectInitializer",
+            mock_cls,
+        ):
+            mod._sync_exploration_notebooks("Users/me/project", framework_repo_path=repo_path)
+
+        for _ in range(3):
+            with patch(
+                "customer_retention.generators.notebook_generator.project_init.ProjectInitializer",
+                mock_cls,
+            ):
+                mod._sync_exploration_notebooks("Users/me/project", framework_repo_path=repo_path)
+
+        result_nb = _read_notebook(dest_dir / "nb.ipynb")
+        sys_cells = [c for c in result_nb.cells if "code_system" in c.source]
+        assert len(sys_cells) == 1
+        assert repo_path in sys_cells[0].source
+
+
+class TestFrameworkRepoPathEnvVarAndResult:
+
+    def test_sets_env_var(self, monkeypatch, databricks_env):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        result = databricks_init(
+            framework_repo_path="/Workspace/Repos/me/churnkit", copy_notebooks=False,
+        )
+        assert os.environ["CR_FRAMEWORK_REPO_PATH"] == "/Workspace/Repos/me/churnkit"
+        assert result.framework_repo_path == "/Workspace/Repos/me/churnkit"
+
+    def test_env_var_not_set_when_none(self, monkeypatch, databricks_env):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        databricks_init(copy_notebooks=False)
+        assert "CR_FRAMEWORK_REPO_PATH" not in os.environ
+
+    def test_result_env_vars_include_repo_path(self, monkeypatch, databricks_env):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        result = databricks_init(
+            framework_repo_path="/Workspace/Repos/me/churnkit", copy_notebooks=False,
+        )
+        assert result.environment_variables["CR_FRAMEWORK_REPO_PATH"] == "/Workspace/Repos/me/churnkit"
+
+    def test_result_env_vars_exclude_repo_path_when_none(self, monkeypatch, databricks_env):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        result = databricks_init(copy_notebooks=False)
+        assert "CR_FRAMEWORK_REPO_PATH" not in result.environment_variables
+
+    def test_display_summary_shows_repo_path(self, monkeypatch, databricks_env, capsys):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        databricks_init(
+            framework_repo_path="/Workspace/Repos/me/churnkit", copy_notebooks=False,
+        )
+        captured = capsys.readouterr()
+        assert "/Workspace/Repos/me/churnkit" in captured.out
+
+    def test_display_summary_shows_pypi_when_no_repo_path(self, monkeypatch, databricks_env, capsys):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        databricks_init(copy_notebooks=False)
+        captured = capsys.readouterr()
+        assert "PyPI" in captured.out

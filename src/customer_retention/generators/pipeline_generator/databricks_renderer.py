@@ -2442,9 +2442,10 @@ class DatabricksCodeRenderer:
         "for_each_workflow": "databricks_for_each_workflow.yaml.j2",
     }
 
-    def __init__(self, catalog: str = "main", schema: str = "default"):
+    def __init__(self, catalog: str = "main", schema: str = "default", framework_repo_path: str | None = None):
         self._catalog = catalog
         self._schema = schema
+        self._framework_repo_path = framework_repo_path
         self._env = Environment(loader=InlineLoader(DATABRICKS_TEMPLATES))
         self._env.globals["render_spark_step_call"] = render_spark_step_call
         self._env.globals["group_steps"] = group_steps
@@ -2455,7 +2456,19 @@ class DatabricksCodeRenderer:
         return self._env.get_template(self._TEMPLATE_MAP[template_key]).render(**context)
 
     def render_config(self, config: PipelineConfig) -> str:
-        return self._render("config", config=config, catalog=self._catalog, schema=self._schema)
+        rendered = self._render("config", config=config, catalog=self._catalog, schema=self._schema)
+        if self._framework_repo_path:
+            sys_path_block = (
+                "# Databricks notebook source\n"
+                "import sys\n"
+                "\n"
+                f'FRAMEWORK_REPO_ROOT = "{self._framework_repo_path}"\n'
+                "if FRAMEWORK_REPO_ROOT not in sys.path:\n"
+                "    sys.path.insert(0, FRAMEWORK_REPO_ROOT)\n"
+                "\n# COMMAND ----------\n\n"
+            )
+            rendered = rendered.replace("# Databricks notebook source\n", sys_path_block, 1)
+        return rendered
 
     def render_landing(self, name: str, config) -> str:
         return self._render("landing", name=name, config=config)
@@ -2490,7 +2503,8 @@ class DatabricksCodeRenderer:
         return self._render("runner", config=config)
 
     def render_exploration_runner(
-        self, project_name: str, datasets, notebooks_base_path: str, findings_base_path: str
+        self, project_name: str, datasets, notebooks_base_path: str, findings_base_path: str,
+        framework_repo_path: str | None = None,
     ) -> str:
         ds_list = []
         target_dataset = ""
@@ -2505,7 +2519,8 @@ class DatabricksCodeRenderer:
                 target_dataset = name
         if not target_dataset and ds_list:
             target_dataset = ds_list[0]["name"]
-        return self._render(
+        repo_path = framework_repo_path or self._framework_repo_path
+        rendered = self._render(
             "exploration_runner",
             project_name=project_name,
             datasets=ds_list,
@@ -2513,6 +2528,18 @@ class DatabricksCodeRenderer:
             notebooks_base_path=notebooks_base_path,
             findings_base_path=findings_base_path,
         )
+        if repo_path:
+            sys_path_block = (
+                "# Databricks notebook source\n"
+                "import sys\n"
+                "\n"
+                f'FRAMEWORK_REPO_ROOT = "{repo_path}"\n'
+                "if FRAMEWORK_REPO_ROOT not in sys.path:\n"
+                "    sys.path.insert(0, FRAMEWORK_REPO_ROOT)\n"
+                "\n# COMMAND ----------\n\n"
+            )
+            rendered = rendered.replace("# Databricks notebook source\n", sys_path_block, 1)
+        return rendered
 
     _PER_DATASET_NOTEBOOKS = [
         ("01_Data_Discovery", "01_data_discovery", "run_01", "00_Setup"),

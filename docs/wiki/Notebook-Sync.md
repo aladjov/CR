@@ -4,12 +4,13 @@ Exploration notebooks ship with ChurnKit and get cloned into user projects via `
 
 ## How It Works
 
-Every cell in an exploration notebook is classified into one of four types, identified by a tag on line 1:
+Every cell in an exploration notebook is classified into one of five types, identified by a tag on line 1:
 
 | Tag | Cell type | Meaning | On sync |
 |-----|-----------|---------|---------|
 | `# @cr:config` | Code | User configuration (ALL_CAPS variables) | **Preserved** -- your values stay |
 | `# @cr:user_code` | Code | User-written logic (target derivation, business context) | **Preserved** -- your code stays |
+| `# @cr:code_system` | Code | System path setup for framework repo (auto-injected) | **Preserved** -- always kept as first cell |
 | `# @cr:code` | Code | Repo framework code | **Overwritten** from the new release |
 | `[//]: # (cr:doc ...)` | Markdown | Documentation / section headings | **Overwritten** from the new release |
 
@@ -31,7 +32,7 @@ Markdown cells use an invisible markdown link-reference tag on line 1:
 
 | Attribute | Purpose | Example |
 |-----------|---------|---------|
-| `TYPE` | Cell sync behavior (`config`, `user_code`, `code`, `doc`) | `config` |
+| `TYPE` | Cell sync behavior (`config`, `user_code`, `code_system`, `code`, `doc`) | `config` |
 | `name` | Human-readable label describing the cell's purpose | `project_settings` |
 | `id` | Stable 8-character hex UUID for cell matching | `846f56cb` |
 
@@ -70,6 +71,19 @@ from customer_retention.analysis.auto_explorer import DatasetFingerprinter
 fingerprinter = DatasetFingerprinter()
 results = fingerprinter.profile_all(datasets)
 ```
+
+**System cell** -- auto-injected `sys.path` setup for Databricks repo clone:
+
+```python
+# @cr:code_system name='framework_path' id=cr-syspath
+import sys
+
+FRAMEWORK_REPO_ROOT = "/Workspace/Repos/user/churnkit"
+if FRAMEWORK_REPO_ROOT not in sys.path:
+    sys.path.insert(0, FRAMEWORK_REPO_ROOT)
+```
+
+This cell is automatically injected as the first cell when `databricks_init(framework_repo_path=...)` is used. It survives sync like a `config` cell, and if accidentally deleted, is re-inserted on the next sync. Users can modify the path -- changes are preserved.
 
 **Doc cell** -- markdown documentation maintained by the package:
 
@@ -162,11 +176,12 @@ On Databricks, `databricks_init()` automatically syncs exploration notebooks whe
 
 The sync engine walks cells in **repo order** (canonical ordering) and applies these rules:
 
-1. **Cell exists in both repo and user, tagged `config` or `user_code`** -- keep user's version (source, outputs, execution count all preserved)
+1. **Cell exists in both repo and user, tagged `config`, `user_code`, or `code_system`** -- keep user's version (source, outputs, execution count all preserved)
 2. **Cell exists in both, tagged `code` or untagged** -- overwrite from repo (outputs stripped)
 3. **Cell in repo but not in user** -- insert from repo (new cell added in the update)
-4. **Cell in user but not in repo, tagged `config`/`user_code` or markdown** -- keep near its original position
+4. **Cell in user but not in repo, tagged `config`/`user_code`/`code_system` or markdown** -- keep near its original position
 5. **Cell in user but not in repo, untagged code** -- drop after confirmation (orphaned or user-created without tag)
+6. **`code_system` cell not at position 0** -- moved to first position after merge (must execute before any imports)
 
 Cell matching is by embedded `id=` attribute, not by position or sequential numbering.
 
@@ -182,7 +197,7 @@ When sync detects cells that will be removed, it pauses and shows a preview of e
 
 | Cell type | Outputs | Execution count |
 |-----------|---------|-----------------|
-| `config` / `user_code` | Preserved | Preserved |
+| `config` / `user_code` / `code_system` | Preserved | Preserved |
 | `code` / untagged | Cleared | Cleared |
 | Markdown | N/A | N/A |
 
@@ -196,14 +211,28 @@ Put the call in its own notebook -- `00_databricks_setup.ipynb` -- inside your `
 
 ```python
 # @cr:config name='databricks_setup' id=<your-uuid>
+import sys
+
 from customer_retention.integrations.databricks_init import databricks_init
 
 result = databricks_init(
-    catalog="my_existing_catalog",
-    schema="my_existing_schema",
+    catalog="my_catalog",
+    schema="my_schema",
     workspace_path="Users/user@example.com/customer_retention",
     model_name="customer_retention",
+    # framework_repo_path="/Workspace/Repos/user/churnkit",  # uncomment to use local repo instead of PyPI
 )
+```
+
+When `framework_repo_path` is set, `databricks_init` injects a `code_system` cell into every exploration notebook. This cell adds the repo to `sys.path` so that `customer_retention` is importable without a PyPI install. The init notebook itself must also set up `sys.path` **before** importing `databricks_init`:
+
+```python
+# @cr:code_system name='framework_path' id=cr-syspath
+import sys
+
+FRAMEWORK_REPO_ROOT = "/Workspace/Repos/user/churnkit"
+if FRAMEWORK_REPO_ROOT not in sys.path:
+    sys.path.insert(0, FRAMEWORK_REPO_ROOT)
 ```
 
 Run this notebook once. The result is persisted and all downstream notebooks pick it up via `CR_CATALOG` / `CR_SCHEMA` env vars automatically.

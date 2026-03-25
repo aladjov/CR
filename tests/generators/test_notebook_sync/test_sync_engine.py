@@ -1,6 +1,7 @@
 import nbformat
 
-from customer_retention.generators.notebook_sync.sync_engine import NotebookSyncEngine
+from customer_retention.generators.notebook_sync.cell_types import CellSyncType, detect_cell_sync_type
+from customer_retention.generators.notebook_sync.sync_engine import _SYSTEM_CELL_ID, NotebookSyncEngine
 from customer_retention.generators.notebook_sync.sync_report import SyncAction
 
 
@@ -459,3 +460,123 @@ class TestDocTaggedMarkdownSync:
         assert "run()" in "".join(merged.cells[3].source)
         assert report.counts[SyncAction.PRESERVED] == 1
         assert report.counts[SyncAction.UPDATED] == 2
+
+
+class TestCodeSystemCellSync:
+
+    def setup_method(self):
+        self.engine = NotebookSyncEngine()
+
+    def test_code_system_cell_preserved_during_sync(self):
+        repo = _make_nb([_code_cell("c1", ["# @cr:code\n", "import os\n"])])
+        user = _make_nb([
+            _code_cell("cr-syspath", [
+                "# @cr:code_system name='framework_path' id=cr-syspath\n",
+                "import sys\n",
+                "\n",
+                'FRAMEWORK_REPO_ROOT = "/Workspace/Repos/me/churnkit"\n',
+                "if FRAMEWORK_REPO_ROOT not in sys.path:\n",
+                "    sys.path.insert(0, FRAMEWORK_REPO_ROOT)\n",
+            ]),
+            _code_cell("c1", ["# @cr:code\n", "import os\n"]),
+        ])
+        merged, report = self.engine.sync(repo, user)
+        assert len(merged.cells) == 2
+        ids = [c.id for c in merged.cells]
+        assert "cr-syspath" in ids
+        sys_cell = next(c for c in merged.cells if c.id == "cr-syspath")
+        assert "FRAMEWORK_REPO_ROOT" in "".join(sys_cell.source)
+        assert report.counts[SyncAction.USER_ADDED_KEPT] == 1
+
+    def test_code_system_cell_not_overwritten_when_user_modifies_path(self):
+        repo = _make_nb([_code_cell("c1", ["# @cr:code\n", "run()\n"])])
+        user = _make_nb([
+            _code_cell("cr-syspath", [
+                "# @cr:code_system name='framework_path' id=cr-syspath\n",
+                "import sys\n",
+                "\n",
+                'FRAMEWORK_REPO_ROOT = "/Workspace/Repos/other_user/my_fork"\n',
+                "if FRAMEWORK_REPO_ROOT not in sys.path:\n",
+                "    sys.path.insert(0, FRAMEWORK_REPO_ROOT)\n",
+            ]),
+            _code_cell("c1", ["# @cr:code\n", "run()\n"]),
+        ])
+        merged, _ = self.engine.sync(repo, user)
+        sys_cell = next(c for c in merged.cells if c.id == "cr-syspath")
+        assert "other_user/my_fork" in "".join(sys_cell.source)
+
+    def test_code_system_survives_multiple_syncs(self):
+        repo = _make_nb([_code_cell("c1", ["# @cr:code\n", "run()\n"])])
+        user = _make_nb([
+            _code_cell("cr-syspath", [
+                "# @cr:code_system name='framework_path' id=cr-syspath\n",
+                "import sys\n",
+            ]),
+            _code_cell("c1", ["# @cr:code\n", "run()\n"]),
+        ])
+        merged1, _ = self.engine.sync(repo, user)
+        merged2, _ = self.engine.sync(repo, merged1)
+        merged3, report = self.engine.sync(repo, merged2)
+        assert any(c.id == "cr-syspath" for c in merged3.cells)
+        sys_cells = [c for c in merged3.cells
+                     if detect_cell_sync_type(c.source if isinstance(c.source, list) else c.source.splitlines(keepends=True)) == CellSyncType.CODE_SYSTEM]
+        assert len(sys_cells) == 1
+
+
+class TestBuildSystemCell:
+
+    def test_builds_valid_cell(self):
+        cell = NotebookSyncEngine.build_system_cell("/Workspace/Repos/me/churnkit")
+        assert cell.cell_type == "code"
+        assert cell.id == _SYSTEM_CELL_ID
+        lines = cell.source if isinstance(cell.source, list) else cell.source.splitlines(keepends=True)
+        assert detect_cell_sync_type(lines) == CellSyncType.CODE_SYSTEM
+        assert "/Workspace/Repos/me/churnkit" in cell.source
+
+    def test_custom_cell_id(self):
+        cell = NotebookSyncEngine.build_system_cell("/path", cell_id="custom-id")
+        assert cell.id == "custom-id"
+        assert "custom-id" in cell.source
+
+
+class TestEnsureSystemCell:
+
+    def test_inserts_when_missing_and_repo_path_set(self):
+        nb = _make_nb([_code_cell("c1", ["# @cr:code\n", "run()\n"])])
+        inserted = NotebookSyncEngine.ensure_system_cell(nb, "/Workspace/Repos/me/churnkit")
+        assert inserted is True
+        assert len(nb.cells) == 2
+        assert nb.cells[0].id == _SYSTEM_CELL_ID
+        assert "FRAMEWORK_REPO_ROOT" in nb.cells[0].source
+
+    def test_does_not_insert_when_already_present(self):
+        nb = _make_nb([
+            _code_cell("cr-syspath", ["# @cr:code_system name='framework_path' id=cr-syspath\n", "import sys\n"]),
+            _code_cell("c1", ["# @cr:code\n", "run()\n"]),
+        ])
+        inserted = NotebookSyncEngine.ensure_system_cell(nb, "/Workspace/Repos/me/churnkit")
+        assert inserted is False
+        assert len(nb.cells) == 2
+
+    def test_no_insert_when_repo_path_is_none(self):
+        nb = _make_nb([_code_cell("c1", ["# @cr:code\n", "run()\n"])])
+        inserted = NotebookSyncEngine.ensure_system_cell(nb, None)
+        assert inserted is False
+        assert len(nb.cells) == 1
+
+    def test_no_insert_when_repo_path_is_empty(self):
+        nb = _make_nb([_code_cell("c1", ["# @cr:code\n", "run()\n"])])
+        inserted = NotebookSyncEngine.ensure_system_cell(nb, "")
+        assert inserted is False
+        assert len(nb.cells) == 1
+
+    def test_moves_system_cell_to_first_position(self):
+        nb = _make_nb([
+            _code_cell("c1", ["# @cr:code\n", "run()\n"]),
+            _code_cell("cr-syspath", ["# @cr:code_system\n", "import sys\n"]),
+        ])
+        moved = NotebookSyncEngine.ensure_system_cell(nb, "/path")
+        assert moved is True
+        assert nb.cells[0].id == "cr-syspath"
+        assert nb.cells[1].id == "c1"
+        assert len(nb.cells) == 2

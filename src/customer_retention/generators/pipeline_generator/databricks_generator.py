@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pathlib import Path
 from typing import List
 
@@ -17,6 +19,7 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
         experiments_dir: str = None,
         namespace=None,
         intent=None,
+        framework_repo_path: str | None = None,
     ):
         self._findings_dir = Path(findings_dir)
         self._output_dir = Path(output_dir)
@@ -25,7 +28,9 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
         self._schema = schema
         self._experiments_dir = experiments_dir
         self._parser = FindingsParser(findings_dir, namespace=namespace, intent=intent)
-        self._renderer = DatabricksCodeRenderer(catalog=catalog, schema=schema)
+        self._renderer = DatabricksCodeRenderer(
+            catalog=catalog, schema=schema, framework_repo_path=framework_repo_path,
+        )
 
     def _bronze_entity_input_name(self, source_name: str, agg_name: str) -> str:
         return source_name

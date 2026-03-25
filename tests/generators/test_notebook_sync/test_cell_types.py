@@ -16,6 +16,7 @@ class TestCellSyncType:
         assert CellSyncType.CONFIG.value == "config"
         assert CellSyncType.USER_CODE.value == "user_code"
         assert CellSyncType.CODE.value == "code"
+        assert CellSyncType.CODE_SYSTEM.value == "code_system"
         assert CellSyncType.DOC.value == "doc"
 
 
@@ -267,3 +268,32 @@ class TestDocTag:
 
     def test_doc_tag_whitespace_before_rejected(self):
         assert detect_cell_sync_type(["  [//]: # (cr:doc)\n"]) == CellSyncType.CODE
+
+
+class TestCodeSystemTag:
+
+    def test_detect_code_system(self):
+        assert detect_cell_sync_type(["# @cr:code_system\n", "import sys\n"]) == CellSyncType.CODE_SYSTEM
+
+    def test_detect_with_name_and_id(self):
+        line = "# @cr:code_system name='framework_path' id=cr-syspath\n"
+        assert detect_cell_sync_type([line, "import sys\n"]) == CellSyncType.CODE_SYSTEM
+
+    def test_extract_id(self):
+        line = "# @cr:code_system name='framework_path' id=cr-syspath\n"
+        assert extract_embedded_id([line]) == "cr-syspath"
+
+    def test_extract_name(self):
+        line = "# @cr:code_system name='framework_path' id=cr-syspath\n"
+        assert extract_tag_name([line]) == "framework_path"
+
+    def test_has_magic_comment(self):
+        assert has_magic_comment(["# @cr:code_system\n"]) is True
+
+    def test_strip_magic_comment(self):
+        result = strip_magic_comment(["# @cr:code_system\n", "import sys\n"])
+        assert result == ["import sys\n"]
+
+    def test_prepend_magic_comment(self):
+        result = prepend_magic_comment(["import sys\n"], CellSyncType.CODE_SYSTEM)
+        assert result == ["# @cr:code_system\n", "import sys\n"]

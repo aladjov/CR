@@ -6,34 +6,73 @@
 - DBR **17.x ML runtime** (ships with MLflow 3.0+, SHAP, and PySpark pre-installed)
 - A cluster with compute access
 
-## Quick Start
+## Installation Options
 
-Two cells in any Databricks notebook:
+### Option A: PyPI / Wheel (recommended for production)
+
+Install ChurnKit as a cluster library or via `%pip install`. The package is importable directly.
 
 **Cell 1** — install ChurnKit (one-time, re-runs are harmless):
 
 ```python
-%pip install /Volumes/main/default/wheels/churnkit-0.75.1a3-py3-none-any.whl
+%pip install /Volumes/main/default/wheels/churnkit-0.99.6a4-py3-none-any.whl
 ```
 
-**Cell 2** — initialize everything:
+**Cell 2** — initialize:
 
 ```python
-from customer_retention import databricks_init
+from customer_retention.integrations.databricks_init import databricks_init
 
 result = databricks_init(
-    catalog="analytics",
-    schema="churnkit",
-    workspace_path="Users/your_email/customer_retention",
-    model_name="customer_retention",
+    catalog="my_catalog",                                        # Unity Catalog catalog name
+    schema="my_schema",                                          # Unity Catalog schema name
+    workspace_path="Users/user@example.com/customer_retention",  # Workspace path for notebooks
+    model_name="customer_retention",                             # Registered model name
+    # experiment_name="my_experiment",                           # MLflow experiment (auto-detected if omitted)
+    # copy_notebooks=True,                                      # Copy exploration notebooks to workspace
 )
 ```
 
-That single call sets all `CR_*` environment variables, configures MLflow, and copies exploration notebooks to your workspace. You are ready to go.
-
 > **Note:** `%pip install` restarts the Python process. Place the install and `databricks_init()` in **separate cells**.
 
-## Persistent Install (teams)
+### Option B: Workspace Repo (development / latest code)
+
+Clone the framework repo into Databricks Workspace Repos. This avoids building and uploading wheels — code changes are available immediately.
+
+**Cell 1** — add the repo to Python path:
+
+```python
+import sys
+
+FRAMEWORK_REPO_ROOT = "/Workspace/Repos/user@example.com/churnkit"
+if FRAMEWORK_REPO_ROOT not in sys.path:
+    sys.path.insert(0, FRAMEWORK_REPO_ROOT)
+```
+
+**Cell 2** — initialize with `framework_repo_path`:
+
+```python
+from customer_retention.integrations.databricks_init import databricks_init
+
+result = databricks_init(
+    catalog="my_catalog",                                                  # Unity Catalog catalog name
+    schema="my_schema",                                                    # Unity Catalog schema name
+    workspace_path="Users/user@example.com/customer_retention",            # Workspace path for notebooks
+    model_name="customer_retention",                                       # Registered model name
+    framework_repo_path="/Workspace/Repos/user@example.com/churnkit",      # Local repo path (enables sys.path injection)
+    # experiment_name="my_experiment",                                     # MLflow experiment (auto-detected if omitted)
+    # copy_notebooks=True,                                                 # Copy exploration notebooks to workspace
+)
+```
+
+When `framework_repo_path` is set, `databricks_init` automatically:
+- Injects a `code_system` cell at the top of each exploration notebook that adds the repo to `sys.path`
+- Copies `requirements-databricks.txt` to the workspace for compute-scoped library installation
+- Sets `CR_FRAMEWORK_REPO_PATH` environment variable for downstream use
+
+**Dependencies:** attach `requirements-databricks.txt` (in the repo root) to your cluster as compute-scoped init libraries. This file excludes packages already pre-installed in the Databricks ML Runtime.
+
+### Persistent Install (teams)
 
 For shared clusters where every notebook should have ChurnKit available without `%pip install` cells:
 
@@ -48,7 +87,7 @@ The library is installed on every cluster start. Notebooks only need the `databr
 DBR 17.x ML runtime includes SHAP pre-installed. If you use a non-ML runtime, install the `[ml-shap]` extra:
 
 ```python
-%pip install "/Volumes/main/default/wheels/churnkit-0.75.1a3-py3-none-any.whl[ml-shap]"
+%pip install "/Volumes/main/default/wheels/churnkit-0.99.6a4-py3-none-any.whl[ml-shap]"
 ```
 
 ## Parameters
@@ -61,6 +100,7 @@ DBR 17.x ML runtime includes SHAP pre-installed. If you use a non-ML runtime, in
 | `workspace_path` | `None` | Workspace path for notebooks and experiments |
 | `copy_notebooks` | `True` | Whether to copy exploration notebooks to workspace |
 | `model_name` | `"customer_retention"` | Registered model name in Unity Catalog |
+| `framework_repo_path` | `None` | Path to cloned framework repo in Workspace Repos. When set, injects `sys.path` setup into notebooks |
 
 After `databricks_init()`, these environment variables are available:
 
@@ -71,6 +111,7 @@ After `databricks_init()`, these environment variables are available:
 | `CR_WORKSPACE_PATH` | `Users/me/project` | Workspace base path |
 | `CR_EXPERIMENT_NAME` | `churn_analysis` | MLflow experiment name |
 | `CR_EXPERIMENTS_DIR` | `/Volumes/analytics/churn/experiments` | Experiments output directory (Unity Catalog Volume) |
+| `CR_FRAMEWORK_REPO_PATH` | `/Workspace/Repos/me/churnkit` | Framework repo path (only when using repo clone) |
 
 All subsequent ChurnKit calls (feature store, MLflow, data loading) automatically use these values.
 

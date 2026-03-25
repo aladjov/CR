@@ -3243,3 +3243,31 @@ class TestDatabricksBronzeEventColumnBlockedFuncs:
         config = self._make_bronze_event_config(column_blocked_funcs={"status": ["mode"]})
         result = renderer.render_bronze_event("emails", config)
         ast.parse(result)
+
+
+class TestFrameworkRepoPathInRenderer:
+
+    def test_config_includes_sys_path_when_repo_path_set(self, sample_pipeline_config):
+        renderer = DatabricksCodeRenderer(
+            catalog="ml_catalog", schema="retention",
+            framework_repo_path="/Workspace/Repos/me/churnkit",
+        )
+        result = renderer.render_config(sample_pipeline_config)
+        assert "import sys" in result
+        assert 'FRAMEWORK_REPO_ROOT = "/Workspace/Repos/me/churnkit"' in result
+        assert "sys.path.insert(0, FRAMEWORK_REPO_ROOT)" in result
+        ast.parse(result)
+
+    def test_config_no_sys_path_when_repo_path_none(self, renderer, sample_pipeline_config):
+        result = renderer.render_config(sample_pipeline_config)
+        assert "FRAMEWORK_REPO_ROOT" not in result
+
+    def test_sys_path_is_first_code_cell(self, sample_pipeline_config):
+        renderer = DatabricksCodeRenderer(
+            catalog="ml_catalog", schema="retention",
+            framework_repo_path="/Workspace/Repos/me/churnkit",
+        )
+        result = renderer.render_config(sample_pipeline_config)
+        lines = result.splitlines()
+        code_start = next(i for i, line in enumerate(lines) if line.strip() and not line.startswith("#") and "MAGIC" not in line)
+        assert lines[code_start] == "import sys"

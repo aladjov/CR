@@ -1,11 +1,21 @@
 import copy
 import uuid
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import nbformat
 
 from .cell_types import CellSyncType, detect_cell_sync_type, extract_embedded_id
 from .sync_report import CellSyncEntry, SyncAction, SyncReport
+
+_SYSTEM_CELL_ID = "cr-syspath"
+_SYSTEM_CELL_TEMPLATE = (
+    "# @cr:code_system name='framework_path' id={cell_id}\n"
+    "import sys\n"
+    "\n"
+    'FRAMEWORK_REPO_ROOT = "{repo_path}"\n'
+    "if FRAMEWORK_REPO_ROOT not in sys.path:\n"
+    "    sys.path.insert(0, FRAMEWORK_REPO_ROOT)\n"
+)
 
 
 def _source_lines(cell) -> List[str]:
@@ -72,7 +82,7 @@ class NotebookSyncEngine:
         if repo_cell.cell_type == "markdown":
             return self._take_repo_markdown(repo_cell, user_cell)
         cell_type = detect_cell_sync_type(_source_lines(user_cell))
-        if cell_type in (CellSyncType.CONFIG, CellSyncType.USER_CODE):
+        if cell_type in (CellSyncType.CONFIG, CellSyncType.USER_CODE, CellSyncType.CODE_SYSTEM):
             return self._preserve_user_cell(repo_cell, user_cell, cid)
         return self._overwrite_code_cell(repo_cell, user_cell, cid)
 
@@ -117,7 +127,7 @@ class NotebookSyncEngine:
         if cell.cell_type == "markdown":
             return True
         cell_type = detect_cell_sync_type(_source_lines(cell))
-        return cell_type in (CellSyncType.CONFIG, CellSyncType.USER_CODE)
+        return cell_type in (CellSyncType.CONFIG, CellSyncType.USER_CODE, CellSyncType.CODE_SYSTEM)
 
     def _insert_user_only_cells_after(self, anchor_id, user_positions, merged_cells, entries):
         for cell in user_positions.pop(anchor_id, []):
@@ -147,3 +157,31 @@ class NotebookSyncEngine:
                     cid, SyncAction.REMOVED, "orphaned cell removed",
                     source_preview=preview,
                 ))
+
+    @staticmethod
+    def build_system_cell(
+        framework_repo_path: str, cell_id: str = _SYSTEM_CELL_ID,
+    ) -> nbformat.NotebookNode:
+        source = _SYSTEM_CELL_TEMPLATE.format(repo_path=framework_repo_path, cell_id=cell_id)
+        cell = nbformat.v4.new_code_cell(source=source)
+        cell.id = cell_id
+        return cell
+
+    @staticmethod
+    def ensure_system_cell(
+        nb: nbformat.NotebookNode,
+        framework_repo_path: Optional[str],
+    ) -> bool:
+        if not framework_repo_path:
+            return False
+        cells = nb.get("cells", [])
+        for i, cell in enumerate(cells):
+            cell_type = detect_cell_sync_type(_source_lines(cell))
+            if cell_type == CellSyncType.CODE_SYSTEM:
+                if i == 0:
+                    return False
+                cells.insert(0, cells.pop(i))
+                return True
+        system_cell = NotebookSyncEngine.build_system_cell(framework_repo_path)
+        nb.cells.insert(0, system_cell)
+        return True

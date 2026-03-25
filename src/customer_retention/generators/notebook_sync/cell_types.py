@@ -7,6 +7,7 @@ class CellSyncType(str, Enum):
     CONFIG = "config"
     USER_CODE = "user_code"
     CODE = "code"
+    CODE_SYSTEM = "code_system"
     DOC = "doc"
 
 

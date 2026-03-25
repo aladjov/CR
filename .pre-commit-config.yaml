@@ -63,6 +63,16 @@ repos:
         language: system
         types: [python]
 
+      # Pre-push hook: Regenerate requirements.txt files from pyproject.toml
+      - id: generate-requirements
+        name: generate requirements.txt from pyproject.toml
+        entry: python scripts/generate_requirements.py
+        language: system
+        pass_filenames: false
+        files: 'pyproject\.toml$'
+        stages: [pre-push]
+        verbose: true
+
       # Reminder about --no-verify
       - id: no-verify-warning
         name: coverage enforcement reminder
