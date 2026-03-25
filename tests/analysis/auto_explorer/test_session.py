@@ -439,6 +439,7 @@ class TestLoadNotebookFindings:
             monkeypatch.setenv("CR_RUN_ID", ns.run_id)
             monkeypatch.setenv("CR_EXPERIMENTS_DIR", str(tmp_path))
             monkeypatch.setenv("CR_USERNAME", "testuser")
+            monkeypatch.delenv("CR_DATASET_ID", raising=False)
         return ns
 
     def test_load_notebook_findings_from_namespace(self, tmp_path, monkeypatch):
