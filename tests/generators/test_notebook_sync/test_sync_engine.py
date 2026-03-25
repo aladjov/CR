@@ -532,6 +532,7 @@ class TestBuildSystemCell:
         lines = cell.source if isinstance(cell.source, list) else cell.source.splitlines(keepends=True)
         assert detect_cell_sync_type(lines) == CellSyncType.CODE_SYSTEM
         assert "/Workspace/Repos/me/churnkit" in cell.source
+        assert '{FRAMEWORK_REPO_ROOT}/src' in cell.source
 
     def test_custom_cell_id(self):
         cell = NotebookSyncEngine.build_system_cell("/path", cell_id="custom-id")

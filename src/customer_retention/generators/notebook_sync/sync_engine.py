@@ -13,8 +13,9 @@ _SYSTEM_CELL_TEMPLATE = (
     "import sys\n"
     "\n"
     'FRAMEWORK_REPO_ROOT = "{repo_path}"\n'
-    "if FRAMEWORK_REPO_ROOT not in sys.path:\n"
-    "    sys.path.insert(0, FRAMEWORK_REPO_ROOT)\n"
+    "_src = f\"{{FRAMEWORK_REPO_ROOT}}/src\"\n"
+    "if _src not in sys.path:\n"
+    "    sys.path.insert(0, _src)\n"
 )
 
 

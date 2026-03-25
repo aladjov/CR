@@ -45,8 +45,9 @@ Clone the framework repo into Databricks Workspace Repos. This avoids building a
 import sys
 
 FRAMEWORK_REPO_ROOT = "/Workspace/Repos/user@example.com/churnkit"
-if FRAMEWORK_REPO_ROOT not in sys.path:
-    sys.path.insert(0, FRAMEWORK_REPO_ROOT)
+_src = f"{FRAMEWORK_REPO_ROOT}/src"
+if _src not in sys.path:
+    sys.path.insert(0, _src)
 ```
 
 **Cell 2** — initialize with `framework_repo_path`:
