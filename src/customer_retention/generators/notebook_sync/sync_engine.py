@@ -4,10 +4,11 @@ from typing import Dict, List, Optional, Tuple
 
 import nbformat
 
-from .cell_types import CellSyncType, detect_cell_sync_type, extract_embedded_id
+from .cell_types import CellSyncType, detect_cell_sync_type, extract_embedded_id, extract_tag_name
 from .sync_report import CellSyncEntry, SyncAction, SyncReport
 
 _SYSTEM_CELL_ID = "cr-syspath"
+_SYSTEM_CELL_NAME = "framework_path"
 _SYSTEM_CELL_TEMPLATE = (
     "# @cr:code_system name='framework_path' id={cell_id}\n"
     "import sys\n"
@@ -173,9 +174,9 @@ class NotebookSyncEngine:
         nb: nbformat.NotebookNode,
         framework_repo_path: Optional[str],
     ) -> bool:
-        if not framework_repo_path:
-            return False
         cells = nb.get("cells", [])
+        if not framework_repo_path:
+            return NotebookSyncEngine._remove_system_cells(cells)
         for i, cell in enumerate(cells):
             cell_type = detect_cell_sync_type(_source_lines(cell))
             if cell_type == CellSyncType.CODE_SYSTEM:
@@ -186,3 +187,16 @@ class NotebookSyncEngine:
         system_cell = NotebookSyncEngine.build_system_cell(framework_repo_path)
         nb.cells.insert(0, system_cell)
         return True
+
+    @staticmethod
+    def _is_framework_path_cell(cell: nbformat.NotebookNode) -> bool:
+        lines = _source_lines(cell)
+        return (detect_cell_sync_type(lines) == CellSyncType.CODE_SYSTEM
+                and extract_tag_name(lines) == _SYSTEM_CELL_NAME)
+
+    @staticmethod
+    def _remove_system_cells(cells: List[nbformat.NotebookNode]) -> bool:
+        removed = [c for c in cells if NotebookSyncEngine._is_framework_path_cell(c)]
+        for c in removed:
+            cells.remove(c)
+        return len(removed) > 0

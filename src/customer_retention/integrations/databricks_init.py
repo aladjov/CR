@@ -223,9 +223,9 @@ def _sync_notebook(
     engine = NotebookSyncEngine()
     merged, report = engine.sync(repo_nb, user_nb)
 
-    system_cell_inserted = engine.ensure_system_cell(merged, framework_repo_path)
+    system_cell_changed = engine.ensure_system_cell(merged, framework_repo_path)
 
-    if not report.has_changes and not system_cell_inserted:
+    if not report.has_changes and not system_cell_changed:
         return False
 
     nbformat.write(merged, str(user_path))

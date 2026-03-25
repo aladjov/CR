@@ -1051,6 +1051,53 @@ class TestFrameworkRepoPathIntegration:
         assert repo_path in sys_cells[0].source
 
 
+    def test_sync_removes_system_cell_when_repo_path_none(self, monkeypatch, databricks_env, tmp_path):
+        repo_nb = _make_test_notebook([("c1", "code", "# @cr:code\nnew_code()")])
+        user_nb = _make_test_notebook([
+            ("cr-syspath", "code", (
+                "# @cr:code_system name='framework_path' id=cr-syspath\n"
+                "import sys\n"
+                "\n"
+                'FRAMEWORK_REPO_ROOT = "/Workspace/Repos/me/churnkit"\n'
+                "if FRAMEWORK_REPO_ROOT not in sys.path:\n"
+                "    sys.path.insert(0, FRAMEWORK_REPO_ROOT)\n"
+            )),
+            ("c1", "code", "# @cr:code\nold_code()"),
+        ])
+
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        _write_notebook(source_dir / "test.ipynb", repo_nb)
+        dest_dir = tmp_path / "dest"
+        dest_dir.mkdir(parents=True)
+        _write_notebook(dest_dir / "test.ipynb", user_nb)
+
+        mock_cls = self._mock_copy_notebooks(source_dir)
+
+        import customer_retention.integrations.databricks_init as mod
+
+        real_path = mod.Path
+
+        def redirect_path(p):
+            if "/Workspace/" in str(p):
+                return dest_dir
+            return real_path(p)
+
+        monkeypatch.setattr(mod, "Path", redirect_path)
+        with patch(
+            "customer_retention.generators.notebook_generator.project_init.ProjectInitializer",
+            mock_cls,
+        ):
+            copied, synced = mod._sync_exploration_notebooks(
+                "Users/me/project", framework_repo_path=None,
+            )
+
+        assert len(synced) == 1
+        result_nb = _read_notebook(dest_dir / "test.ipynb")
+        assert not any("code_system" in c.source for c in result_nb.cells)
+        assert "new_code()" in result_nb.cells[0].source
+
+
 class TestFrameworkRepoPathEnvVarAndResult:
 
     def test_sets_env_var(self, monkeypatch, databricks_env):

@@ -571,6 +571,38 @@ class TestEnsureSystemCell:
         assert inserted is False
         assert len(nb.cells) == 1
 
+    def test_removes_system_cell_when_repo_path_is_none(self):
+        nb = _make_nb([
+            _code_cell("cr-syspath", ["# @cr:code_system name='framework_path' id=cr-syspath\n", "import sys\n"]),
+            _code_cell("c1", ["# @cr:code\n", "run()\n"]),
+        ])
+        removed = NotebookSyncEngine.ensure_system_cell(nb, None)
+        assert removed is True
+        assert len(nb.cells) == 1
+        assert nb.cells[0].id == "c1"
+
+    def test_removes_system_cell_when_repo_path_is_empty(self):
+        nb = _make_nb([
+            _code_cell("cr-syspath", ["# @cr:code_system name='framework_path' id=cr-syspath\n", "import sys\n"]),
+            _code_cell("c1", ["# @cr:code\n", "run()\n"]),
+        ])
+        removed = NotebookSyncEngine.ensure_system_cell(nb, "")
+        assert removed is True
+        assert len(nb.cells) == 1
+        assert nb.cells[0].id == "c1"
+
+    def test_removal_preserves_other_system_cells(self):
+        nb = _make_nb([
+            _code_cell("cr-syspath", ["# @cr:code_system name='framework_path' id=cr-syspath\n", "import sys\n"]),
+            _code_cell("cr-other", ["# @cr:code_system name='env_setup' id=cr-other\n", "import os\n"]),
+            _code_cell("c1", ["# @cr:code\n", "run()\n"]),
+        ])
+        removed = NotebookSyncEngine.ensure_system_cell(nb, None)
+        assert removed is True
+        assert len(nb.cells) == 2
+        assert nb.cells[0].id == "cr-other"
+        assert nb.cells[1].id == "c1"
+
     def test_moves_system_cell_to_first_position(self):
         nb = _make_nb([
             _code_cell("c1", ["# @cr:code\n", "run()\n"]),
