@@ -781,9 +781,37 @@ def _numeric_column_names(df: Any, columns: list[str]) -> set[str]:
 
 
 _ML_CORR_THRESHOLD = 100
+_CORR_BLOCK_SIZE = 500
+_AGG_BATCH_SIZE = 500
+_CORR_SAMPLE_ROWS = 50_000
 
 
-def batched_corr_matrix(df: Any, columns: list[str]) -> _pandas.DataFrame:
+def bulk_variance(df: Any, columns: list[str]) -> _pandas.Series:
+    """Compute variance per column. Batched Spark SQL on Databricks."""
+    if not columns:
+        return _pandas.Series(dtype=float)
+    if not _is_spark_pandas(df):
+        return df[columns].var()
+    import pyspark.sql.functions as F  # noqa: N812
+    spark_df = as_spark_df(df[columns])
+    safe = {c: f"__v{i}__" for i, c in enumerate(columns)}
+    spark_df = spark_df.toDF(*[safe[c] for c in columns])
+    result: dict[str, float] = {}
+    for start in range(0, len(columns), _AGG_BATCH_SIZE):
+        batch = columns[start:start + _AGG_BATCH_SIZE]
+        safe_batch = [safe[c] for c in batch]
+        row = spark_df.agg(*[F.variance(F.col(s).cast("double")).alias(s) for s in safe_batch]).head()
+        for c, s in zip(batch, safe_batch):
+            val = row[s]
+            result[c] = float(val) if val is not None else float('nan')
+    return _pandas.Series(result)
+
+
+def batched_corr_matrix(
+    df: Any, columns: list[str], progress_fn: Any = None,
+    precomputed_medians: dict[str, float] | None = None,
+    precomputed_non_null: dict[str, int] | None = None,
+) -> _pandas.DataFrame:
     import numpy as _np
     valid_cols = [c for c in columns if c in df.columns]
     if len(valid_cols) < 2:
@@ -796,46 +824,128 @@ def batched_corr_matrix(df: Any, columns: list[str]) -> _pandas.DataFrame:
         full.loc[corr.index, corr.columns] = corr
         return full
     if len(num_cols) > _ML_CORR_THRESHOLD:
-        return _spark_corr_matrix_ml(df, valid_cols, numeric)
+        return _spark_corr_matrix_ml(df, valid_cols, numeric, progress_fn, precomputed_medians, precomputed_non_null)
     return _spark_pairwise_corr(df, valid_cols, numeric)
 
 
-def _spark_corr_matrix_ml(df: Any, cols: list[str], numeric: set[str]) -> _pandas.DataFrame:
+def _spark_corr_matrix_ml(
+    df: Any, cols: list[str], numeric: set[str], progress_fn: Any = None,
+    precomputed_medians: dict[str, float] | None = None,
+    precomputed_non_null: dict[str, int] | None = None,
+) -> _pandas.DataFrame:
+    import time as _time
+
     import numpy as _np
     import pyspark.sql.functions as F  # noqa: N812
     from pyspark.ml.feature import VectorAssembler
     from pyspark.ml.stat import Correlation
 
+    log = progress_fn or (lambda msg: None)
     num_cols = [c for c in cols if c in numeric]
     if len(num_cols) < 2:
         return _pandas.DataFrame(_np.nan, index=cols, columns=cols)
+
     spark_df = as_spark_df(df[num_cols])
-    safe_names = {c: f"__f_{i}__" for i, c in enumerate(num_cols)}
-    spark_df = spark_df.select([F.col(c).cast("double").alias(safe_names[c]) for c in num_cols])
-    safe_cols = list(safe_names.values())
-    non_null_row = spark_df.agg(*[F.count(c).alias(c) for c in safe_cols]).head()
-    valid_safe = [c for c in safe_cols if non_null_row[c] > 0]
+    safe = {c: f"__f_{i}__" for i, c in enumerate(num_cols)}
+    spark_df = spark_df.select([F.col(f"`{c}`").cast("double").alias(safe[c]) for c in num_cols])
+    safe_cols = list(safe.values())
+
+    # Non-null counts — use precomputed if available
+    rev = {v: k for k, v in safe.items()}
+    if precomputed_non_null and all(rev[s] in precomputed_non_null for s in safe_cols):
+        log(f"    Using precomputed non-null counts ({len(safe_cols)} columns)")
+        non_null = {s: precomputed_non_null[rev[s]] for s in safe_cols}
+    else:
+        log(f"    Counting non-nulls ({len(safe_cols)} columns)...")
+        non_null = {}
+        for start in range(0, len(safe_cols), _AGG_BATCH_SIZE):
+            batch = safe_cols[start:start + _AGG_BATCH_SIZE]
+            row = spark_df.agg(*[F.count(c).alias(c) for c in batch]).head()
+            for c in batch:
+                non_null[c] = row[c]
+    valid_safe = [c for c in safe_cols if non_null.get(c, 0) > 0]
     if len(valid_safe) < 2:
         return _pandas.DataFrame(_np.nan, index=cols, columns=cols)
     if len(valid_safe) < len(safe_cols):
         spark_df = spark_df.select(valid_safe)
-    median_row = spark_df.agg(*[F.percentile_approx(c, 0.5).alias(c) for c in valid_safe]).head()
-    fill_map = {c: float(median_row[c]) for c in valid_safe if median_row[c] is not None}
+
+    # Sample large datasets to bound O(rows × features²) time
+    total_rows = spark_df.count()
+    if total_rows > _CORR_SAMPLE_ROWS:
+        fraction = _CORR_SAMPLE_ROWS / total_rows
+        spark_df = spark_df.sample(fraction=fraction, seed=42)
+        log(f"    Sampled ~{_CORR_SAMPLE_ROWS:,} of {total_rows:,} rows")
+
+    # Medians for imputation — use precomputed if available
+    fill_map: dict[str, float] = {}
+    if precomputed_medians:
+        covered = {s for s in valid_safe if rev[s] in precomputed_medians}
+        missing = [s for s in valid_safe if s not in covered]
+        for s in covered:
+            fill_map[s] = precomputed_medians[rev[s]]
+        if missing:
+            log(f"    Computing medians for {len(missing)} columns not in precomputed...")
+            for start in range(0, len(missing), _AGG_BATCH_SIZE):
+                batch = missing[start:start + _AGG_BATCH_SIZE]
+                row = spark_df.agg(*[F.percentile_approx(c, 0.5).alias(c) for c in batch]).head()
+                for c in batch:
+                    if row[c] is not None:
+                        fill_map[c] = float(row[c])
+        else:
+            log(f"    Using precomputed medians ({len(valid_safe)} columns)")
+    else:
+        log(f"    Computing medians ({len(valid_safe)} columns)...")
+        for start in range(0, len(valid_safe), _AGG_BATCH_SIZE):
+            batch = valid_safe[start:start + _AGG_BATCH_SIZE]
+            row = spark_df.agg(*[F.percentile_approx(c, 0.5).alias(c) for c in batch]).head()
+            for c in batch:
+                if row[c] is not None:
+                    fill_map[c] = float(row[c])
     imputed_df = spark_df.fillna(fill_map)
-    assembler = VectorAssembler(inputCols=valid_safe, outputCol="__features__")
-    vec_df = assembler.transform(imputed_df).select("__features__")
-    corr_row = Correlation.corr(vec_df, "__features__", "pearson").head()
-    matrix = corr_row[0].toArray()
-    rev_names = {v: k for k, v in safe_names.items()}
-    valid_orig = [rev_names[s] for s in valid_safe]
+
+    # Block-wise correlation
+    blocks = [valid_safe[i:i + _CORR_BLOCK_SIZE] for i in range(0, len(valid_safe), _CORR_BLOCK_SIZE)]
+    n_blocks = len(blocks)
+    n_valid = len(valid_safe)
+
+    if n_blocks <= 1:
+        assembler = VectorAssembler(inputCols=valid_safe, outputCol="__features__")
+        vec_df = assembler.transform(imputed_df).select("__features__")
+        corr_values = Correlation.corr(vec_df, "__features__", "pearson").head()[0].toArray()
+    else:
+        imputed_df.cache()
+        cached_rows = imputed_df.count()
+        block_pairs = [(i, j) for i in range(n_blocks) for j in range(i, n_blocks)]
+        total_pairs = len(block_pairs)
+        log(f"    Correlation: {n_valid} features, {n_blocks} blocks, {total_pairs} pairs ({cached_rows:,} rows)")
+        pos = {c: i for i, c in enumerate(valid_safe)}
+        corr_values = _np.full((n_valid, n_valid), _np.nan)
+        _np.fill_diagonal(corr_values, 1.0)
+        for pair_idx, (bi, bj) in enumerate(block_pairs):
+            t0 = _time.monotonic()
+            block_cols = list(dict.fromkeys(blocks[bi] + blocks[bj]))
+            asm = VectorAssembler(inputCols=block_cols, outputCol="__features__")
+            vec_df = asm.transform(imputed_df.select(block_cols)).select("__features__")
+            sub = Correlation.corr(vec_df, "__features__", "pearson").head()[0].toArray()
+            if bi == bj:
+                idx = _np.array([pos[c] for c in blocks[bi]])
+                corr_values[_np.ix_(idx, idx)] = sub
+            else:
+                n_i = len(blocks[bi])
+                idx_i = _np.array([pos[c] for c in blocks[bi]])
+                idx_j = _np.array([pos[c] for c in blocks[bj]])
+                corr_values[_np.ix_(idx_i, idx_j)] = sub[:n_i, n_i:]
+                corr_values[_np.ix_(idx_j, idx_i)] = sub[:n_i, n_i:].T
+            elapsed = _time.monotonic() - t0
+            log(f"      Block [{pair_idx + 1}/{total_pairs}] ({len(block_cols)} cols) — {elapsed:.0f}s")
+        imputed_df.unpersist()
+
+    # Map back to original column names via vectorized numpy indexing
+    full_idx = _np.array([cols.index(rev[s]) for s in valid_safe])
     n = len(cols)
-    full_matrix = _np.full((n, n), _np.nan)
-    for i_out, orig_i in enumerate(valid_orig):
-        i_full = cols.index(orig_i)
-        for j_out, orig_j in enumerate(valid_orig):
-            j_full = cols.index(orig_j)
-            full_matrix[i_full, j_full] = matrix[i_out, j_out]
-    return _pandas.DataFrame(full_matrix, columns=cols, index=cols)
+    full = _np.full((n, n), _np.nan)
+    full[_np.ix_(full_idx, full_idx)] = corr_values
+    return _pandas.DataFrame(full, columns=cols, index=cols)
 
 
 def _safe_corr_expr(col_a: str, col_b: str) -> Any:

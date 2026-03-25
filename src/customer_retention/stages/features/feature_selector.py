@@ -9,6 +9,7 @@ from customer_retention.core.compat import (
     DataFrame,
     _numeric_column_names,
     batched_corr_matrix,
+    bulk_variance,
     isna,
 )
 
@@ -56,7 +57,7 @@ class AvailabilityRecommendation:
 
 
 class FeatureSelector:
-    def __init__(self, method: SelectionMethod = SelectionMethod.VARIANCE, variance_threshold: float = 0.01, correlation_threshold: float = 0.95, target_column: Optional[str] = None, preserve_features: Optional[List[str]] = None, max_features: Optional[int] = None, apply_correlation_filter: bool = False, precomputed_corr_matrix: Optional[Any] = None, l1_C: float = 1.0, l1_ratio: float = 1.0):
+    def __init__(self, method: SelectionMethod = SelectionMethod.VARIANCE, variance_threshold: float = 0.01, correlation_threshold: float = 0.95, target_column: Optional[str] = None, preserve_features: Optional[List[str]] = None, max_features: Optional[int] = None, apply_correlation_filter: bool = False, precomputed_corr_matrix: Optional[Any] = None, l1_C: float = 1.0, l1_ratio: float = 1.0, progress_fn: Optional[Callable[[str], None]] = None, precomputed_variances: Optional[Any] = None, precomputed_medians: Optional[Dict[str, float]] = None, precomputed_non_null: Optional[Dict[str, int]] = None):
         self.method = method
         self.variance_threshold = variance_threshold
         self.correlation_threshold = correlation_threshold
@@ -67,13 +68,16 @@ class FeatureSelector:
         self._precomputed_corr_matrix = precomputed_corr_matrix
         self.l1_C = l1_C
         self.l1_ratio = l1_ratio
+        self._progress_fn = progress_fn
+        self._precomputed_medians = precomputed_medians
+        self._precomputed_non_null = precomputed_non_null
 
         self.selected_features: List[str] = []
         self.dropped_features: List[str] = []
         self.drop_reasons: Dict[str, str] = {}
         self.importance_scores: Optional[Dict[str, float]] = None
         self._is_fitted = False
-        self._cached_variances: Optional[Any] = None
+        self._cached_variances: Optional[Any] = precomputed_variances
 
     def fit(self, df: DataFrame) -> "FeatureSelector":
         feature_cols = [c for c in df.columns if c != self.target_column]
@@ -138,7 +142,7 @@ class FeatureSelector:
             missing = [f for f in numeric_features if f not in cached_cols]
             if not missing:
                 return self._cached_variances[numeric_features]
-        self._cached_variances = df[numeric_features].var()
+        self._cached_variances = bulk_variance(df, numeric_features)
         return self._cached_variances
 
     def _apply_variance_selection(self, df: DataFrame, features: List[str], numeric_set: set) -> None:
@@ -163,7 +167,11 @@ class FeatureSelector:
         if pre is not None and set(numeric_features).issubset(pre.columns):
             corr_matrix = pre.loc[numeric_features, numeric_features].abs()
         else:
-            corr_matrix = batched_corr_matrix(df, numeric_features).abs()
+            corr_matrix = batched_corr_matrix(
+                df, numeric_features, progress_fn=self._progress_fn,
+                precomputed_medians=self._precomputed_medians,
+                precomputed_non_null=self._precomputed_non_null,
+            ).abs()
         upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
         variances = self._get_variances(df, numeric_features, numeric_set)
 
@@ -350,6 +358,37 @@ def _spark_l1_selection(
     return dropped, reasons, scores
 
 
+def extract_precomputed_stats(findings: Any) -> Dict[str, Any]:
+    """Extract medians, non-null counts, and variances from ExplorationFindings.
+
+    Returns dict with keys 'medians', 'non_null', 'variances' — pass as
+    ``**extract_precomputed_stats(findings)``-style kwargs or individually
+    to ``run_selection_pipeline``.
+    """
+    medians: Dict[str, float] = {}
+    non_null: Dict[str, int] = {}
+    variances: Dict[str, float] = {}
+    total = getattr(findings, "row_count", 0) or 0
+    for name, col in getattr(findings, "columns", {}).items():
+        um = getattr(col, "universal_metrics", {})
+        tm = getattr(col, "type_metrics", {})
+        nc = um.get("null_count", 0)
+        if total > 0:
+            non_null[name] = total - int(nc)
+        std = tm.get("std")
+        if std is not None:
+            variances[name] = float(std) ** 2
+        med = tm.get("median")
+        if med is not None:
+            medians[name] = float(med)
+    import pandas as _pd
+    return {
+        "precomputed_medians": medians or None,
+        "precomputed_non_null": non_null or None,
+        "precomputed_variances": _pd.Series(variances) if variances else None,
+    }
+
+
 def _format_elapsed(seconds: float) -> str:
     m, s = divmod(int(seconds), 60)
     return f"{m}m{s:02d}s" if m else f"{s}s"
@@ -363,6 +402,9 @@ def run_selection_pipeline(
     progress_fn: Optional[Callable[[str], None]] = None,
     precomputed_corr_matrix: Optional[Any] = None,
     l1_C: float = 1.0, l1_ratio: float = 1.0,
+    precomputed_variances: Optional[Any] = None,
+    precomputed_medians: Optional[Dict[str, float]] = None,
+    precomputed_non_null: Optional[Dict[str, int]] = None,
 ) -> FeatureSelectionResult:
     log = progress_fn or (lambda msg: print(msg))
     all_dropped: List[str] = []
@@ -381,10 +423,14 @@ def run_selection_pipeline(
 
     t0 = time.monotonic()
     log(f"  [1/{total_stages}] Variance filter (threshold={variance_threshold})...")
-    result_var = FeatureSelector(
+    var_selector = FeatureSelector(
         method=SelectionMethod.VARIANCE, variance_threshold=variance_threshold,
         target_column=target_column, preserve_features=preserve_features,
-    ).fit_transform(current_df)
+        precomputed_variances=precomputed_variances,
+    )
+    result_var = var_selector.fit_transform(current_df)
+    # Share cached variances with subsequent stages to avoid recomputation
+    shared_variances = var_selector._cached_variances
     current_df = result_var.df
     all_dropped.extend(result_var.dropped_features)
     all_reasons.update(result_var.drop_reasons)
@@ -398,7 +444,10 @@ def run_selection_pipeline(
     result_corr = FeatureSelector(
         method=SelectionMethod.CORRELATION, correlation_threshold=correlation_threshold,
         target_column=target_column, preserve_features=preserve_features,
-        precomputed_corr_matrix=precomputed_corr_matrix,
+        precomputed_corr_matrix=precomputed_corr_matrix, progress_fn=log,
+        precomputed_variances=shared_variances,
+        precomputed_medians=precomputed_medians,
+        precomputed_non_null=precomputed_non_null,
     ).fit_transform(current_df)
     current_df = result_corr.df
     all_dropped.extend(result_corr.dropped_features)
