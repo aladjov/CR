@@ -805,14 +805,28 @@ class FindingsParser:
                     columns.add(f"{text_cfg.column}_emb_{i}")
         tf = event_cfg.temporal_features
         if tf and tf.lag_columns:
+            groups = set(tf.feature_groups or [])
             for lag_idx in range(tf.num_lags):
                 for col in tf.lag_columns:
                     for fn in tf.lag_agg_funcs:
                         columns.add(f"lag{lag_idx}_{col}_{fn}")
-            if "velocity" in (tf.feature_groups or []):
+            if "velocity" in groups:
                 for col in tf.lag_columns:
                     for fn in tf.lag_agg_funcs:
                         columns.add(f"velocity_{col}_{fn}")
+            if "acceleration" in groups:
+                for col in tf.lag_columns:
+                    columns |= {f"{col}_acceleration", f"{col}_momentum"}
+            if "lifecycle" in groups:
+                for col in tf.lag_columns:
+                    columns |= {f"{col}_beginning", f"{col}_middle", f"{col}_end", f"{col}_trend_ratio"}
+            if "recency" in groups:
+                columns |= {"days_since_last_event", "days_since_first_event", "active_span_days", "recency_ratio"}
+            if "regularity" in groups:
+                columns |= {"event_frequency", "inter_event_gap_mean", "inter_event_gap_std", "inter_event_gap_max", "regularity_score"}
+            if "cohort_comparison" in groups:
+                for col in tf.lag_columns:
+                    columns |= {f"{col}_vs_cohort_mean", f"{col}_vs_cohort_pct", f"{col}_cohort_zscore"}
         return columns
 
     def _reconcile_event_post_shaping(self, config: "PipelineConfig") -> None:
@@ -1276,7 +1290,7 @@ class FindingsParser:
                 num_lags=temporal_config.get("num_lags", len(lag_windows)),
                 lag_columns=temporal_config.get("columns", []),
                 lag_agg_funcs=temporal_config.get("lag_agg_funcs", ["sum", "mean", "count", "max"]),
-                feature_groups=temporal_config.get("temporal_feature_groups", ["lagged_windows", "velocity"]),
+                feature_groups=temporal_config.get("temporal_feature_groups", TemporalFeatureConfig().feature_groups),
             )
         if findings is not None:
             meta = getattr(findings, "metadata", None) or {}
@@ -1287,7 +1301,7 @@ class FindingsParser:
                     num_lags=tp.get("num_lags", 4),
                     lag_columns=tp.get("lag_columns", []),
                     lag_agg_funcs=tp.get("lag_agg_funcs", ["sum", "mean", "count", "max"]),
-                    feature_groups=tp.get("feature_groups", ["lagged_windows", "velocity"]),
+                    feature_groups=tp.get("feature_groups", TemporalFeatureConfig().feature_groups),
                 )
         return None
 

@@ -5271,6 +5271,66 @@ class TestCollectPipelineColumnsLagFeatures:
         assert "velocity_amount_sum" not in cols
 
 
+class TestTemporalFeatureGroupPrediction:
+    @staticmethod
+    def _cols_for_groups(feature_groups, lag_columns=None):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeEventConfig,
+            BronzeLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+            TemporalFeatureConfig,
+        )
+        entity_src = SourceConfig(name="cust", path="c.csv", format="csv", entity_key="cid", raw_source_path="/c.csv")
+        event_src = SourceConfig(name="evt", path="e.csv", format="csv", entity_key="cid", raw_source_path="/e.csv", is_event_level=True, time_column="ts")
+        config = PipelineConfig(name="t", target_column="churn", sources=[entity_src, event_src],
+                                bronze={"cust": BronzeLayerConfig(source=entity_src)}, silver=SilverLayerConfig(), gold=None, output_dir=".")
+        config.bronze_event["evt"] = BronzeEventConfig(
+            source=event_src, entity_column="cid", time_column="ts",
+            temporal_features=TemporalFeatureConfig(lag_columns=lag_columns or ["amt"], num_lags=2, lag_agg_funcs=["sum"], feature_groups=feature_groups),
+        )
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {"cust": {"cid"}}
+        parser._source_findings_paths = {}
+        return parser._collect_pipeline_columns(config)
+
+    def test_acceleration_columns_predicted(self):
+        cols = self._cols_for_groups(["lagged_windows", "acceleration"])
+        assert "amt_acceleration" in cols
+        assert "amt_momentum" in cols
+
+    def test_lifecycle_columns_predicted(self):
+        cols = self._cols_for_groups(["lagged_windows", "lifecycle"])
+        for suffix in ("_beginning", "_middle", "_end", "_trend_ratio"):
+            assert f"amt{suffix}" in cols
+
+    def test_recency_columns_predicted(self):
+        cols = self._cols_for_groups(["lagged_windows", "recency"])
+        for name in ("days_since_last_event", "days_since_first_event", "active_span_days", "recency_ratio"):
+            assert name in cols
+
+    def test_regularity_columns_predicted(self):
+        cols = self._cols_for_groups(["lagged_windows", "regularity"])
+        for name in ("event_frequency", "inter_event_gap_mean", "inter_event_gap_std", "inter_event_gap_max", "regularity_score"):
+            assert name in cols
+
+    def test_cohort_columns_predicted(self):
+        cols = self._cols_for_groups(["lagged_windows", "cohort_comparison"])
+        assert "amt_vs_cohort_mean" in cols
+        assert "amt_vs_cohort_pct" in cols
+        assert "amt_cohort_zscore" in cols
+
+    def test_disabled_group_not_predicted(self):
+        cols = self._cols_for_groups(["lagged_windows"])
+        assert "amt_acceleration" not in cols
+        assert "amt_momentum" not in cols
+        assert "amt_vs_cohort_mean" not in cols
+        assert "event_frequency" not in cols
+        assert "regularity_score" not in cols
+
+
 class TestGoldRecommendationFiltering:
     @staticmethod
     def _make_config_with_columns(pipeline_columns):

@@ -539,7 +539,10 @@ class TestTemporalFeatureConfig:
         assert config.num_lags == 4
         assert config.lag_columns == []
         assert config.lag_agg_funcs == ["sum", "mean", "count", "max"]
-        assert config.feature_groups == ["lagged_windows", "velocity"]
+        assert config.feature_groups == [
+            "lagged_windows", "velocity", "acceleration", "lifecycle",
+            "recency", "regularity", "cohort_comparison",
+        ]
 
     def test_custom_values(self):
         config = TemporalFeatureConfig(

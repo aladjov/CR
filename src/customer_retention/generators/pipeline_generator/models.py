@@ -146,7 +146,10 @@ class TemporalFeatureConfig:
     num_lags: int = 4
     lag_columns: List[str] = field(default_factory=list)
     lag_agg_funcs: List[str] = field(default_factory=lambda: ["sum", "mean", "count", "max"])
-    feature_groups: List[str] = field(default_factory=lambda: ["lagged_windows", "velocity"])
+    feature_groups: List[str] = field(default_factory=lambda: [
+        "lagged_windows", "velocity", "acceleration", "lifecycle",
+        "recency", "regularity", "cohort_comparison",
+    ])
 
 
 @dataclass
