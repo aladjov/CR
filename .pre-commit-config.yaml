@@ -39,7 +39,7 @@ repos:
       # Pre-push hook: Lint check (mirrors CI lint job)
       - id: ruff-check
         name: ruff lint check (mirrors CI)
-        entry: python -m ruff check src/ tests/
+        entry: .venv/bin/python -m ruff check src/ tests/
         language: system
         pass_filenames: false
         always_run: true
@@ -49,7 +49,7 @@ repos:
       # Pre-push hook: Run tests with coverage enforcement (75% minimum)
       - id: pytest-coverage
         name: pytest with coverage (75% minimum required)
-        entry: python -m pytest tests/ --cov=customer_retention --cov-fail-under=75 -q --tb=short
+        entry: .venv/bin/python -m pytest tests/ --cov=customer_retention --cov-fail-under=75 -q --tb=short
         language: system
         pass_filenames: false
         always_run: true
@@ -59,14 +59,14 @@ repos:
       # Pre-commit hook: Quick syntax and import check on changed files
       - id: python-check
         name: python syntax check
-        entry: python -m py_compile
+        entry: .venv/bin/python -m py_compile
         language: system
         types: [python]
 
       # Pre-push hook: Regenerate requirements.txt files from pyproject.toml
       - id: generate-requirements
         name: generate requirements.txt from pyproject.toml
-        entry: python scripts/generate_requirements.py
+        entry: .venv/bin/python scripts/generate_requirements.py
         language: system
         pass_filenames: false
         files: 'pyproject\.toml$'
@@ -76,7 +76,7 @@ repos:
       # Reminder about --no-verify
       - id: no-verify-warning
         name: coverage enforcement reminder
-        entry: "python -c \"print('\\nRemember - CI enforces 75% coverage. PRs bypassing pre-push hooks will be rejected.\\n')\""
+        entry: ".venv/bin/python -c \"print('\\nRemember - CI enforces 75% coverage. PRs bypassing pre-push hooks will be rejected.\\n')\""
         language: system
         pass_filenames: false
         always_run: true

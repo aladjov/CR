@@ -612,13 +612,15 @@ class TestResolveDataPath:
             datasets=datasets,
         )
 
-    def test_explicit_path_returns_path_and_stem(self, tmp_path):
+    def test_explicit_path_returns_path_and_stem(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
         ns = RunNamespace.create(root=tmp_path, project_name="test")
         path, name = resolve_data_path("data/orders.csv", ns)
         assert path == "data/orders.csv"
         assert name == "orders"
 
-    def test_explicit_path_resolves_name_from_context(self, tmp_path):
+    def test_explicit_path_resolves_name_from_context(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
         ns = RunNamespace.create(root=tmp_path, project_name="test")
         ctx = self._make_project_ctx(tmp_path)
         csv_path = str(tmp_path / "customers.csv")
