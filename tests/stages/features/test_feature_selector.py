@@ -343,11 +343,11 @@ class TestL1Selection:
     @pytest.fixture
     def df_with_target_signal(self):
         np.random.seed(42)
-        n = 200
+        n = 1000
         target = np.random.choice([0, 1], n)
         return pd.DataFrame({
-            "relevant1": target * 2.0 + np.random.randn(n) * 0.1,
-            "relevant2": target * 1.5 + np.random.randn(n) * 0.3,
+            "relevant1": target * 3.0 + np.random.randn(n) * 0.1,
+            "relevant2": target * 2.0 + np.random.randn(n) * 0.2,
             "noise1": np.random.randn(n),
             "noise2": np.random.randn(n),
             "noise3": np.random.randn(n),
