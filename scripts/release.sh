@@ -43,7 +43,7 @@ echo "    Tagged: ${TAG}"
 # --- 5. Build -----------------------------------------------------------
 echo "==> Building sdist + wheel"
 rm -rf "$REPO_ROOT/dist"
-uvx --from build pyproject-build "$REPO_ROOT" --outdir "$REPO_ROOT/dist"
+uv build "$REPO_ROOT" --out-dir "$REPO_ROOT/dist"
 
 # --- 6. Publish to PyPI -------------------------------------------------
 echo "==> Uploading to PyPI"
