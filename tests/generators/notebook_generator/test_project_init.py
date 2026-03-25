@@ -132,6 +132,25 @@ class TestExplorationNotebookCopyEdgeCases:
         result = init._get_exploration_source_dir()
         assert result is None or result.exists()
 
+    def test_get_exploration_source_dir_finds_src_layout(self, tmp_path, monkeypatch):
+        repo_root = tmp_path / "repo"
+        src_pkg = repo_root / "src" / "customer_retention" / "generators" / "notebook_generator"
+        src_pkg.mkdir(parents=True)
+        nb_dir = repo_root / "exploration_notebooks"
+        nb_dir.mkdir()
+        (nb_dir / "00_start_here.ipynb").touch()
+
+        from customer_retention.generators.notebook_generator.project_init import ProjectInitializer
+        init = ProjectInitializer(project_name="test")
+        fake_file = src_pkg / "project_init.py"
+        fake_file.touch()
+        monkeypatch.setattr(
+            "customer_retention.generators.notebook_generator.project_init.__file__",
+            str(fake_file),
+        )
+        result = init._get_exploration_source_dir()
+        assert result == nb_dir
+
     def test_copy_exploration_handles_no_source_dir(self, tmp_path):
         from customer_retention.generators.notebook_generator.project_init import ProjectInitializer
         init = ProjectInitializer(project_name="test")

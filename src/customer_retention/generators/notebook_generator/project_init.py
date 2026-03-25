@@ -145,9 +145,11 @@ dev = [
 
     def _get_exploration_source_dir(self) -> Optional[Path]:
         # 1. Development / editable install: notebooks live in the source tree
-        dev_path = Path(__file__).parent.parent.parent.parent / "exploration_notebooks"
-        if dev_path.is_dir():
-            return dev_path
+        pkg_root = Path(__file__).parent.parent.parent.parent
+        for candidate in (pkg_root, pkg_root.parent):
+            dev_path = candidate / "exploration_notebooks"
+            if dev_path.is_dir():
+                return dev_path
 
         # 2. Installed package: resolve from package metadata RECORD.
         #    Works across pip, conda, uv, pipx — any PEP 376 compliant installer.

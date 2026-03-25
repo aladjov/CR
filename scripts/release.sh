@@ -4,17 +4,28 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PYPROJECT="$REPO_ROOT/pyproject.toml"
 INIT_PY="$REPO_ROOT/src/customer_retention/__init__.py"
+REMOTE="${CR_GIT_REMOTE:-origin}"
+BRANCH="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)"
 
 usage() {
-    echo "Usage: $0 <version>"
-    echo "  e.g.  $0 0.75.1a2"
-    echo "        $0 v0.75.1a2   (leading 'v' is stripped for file versions)"
+    echo "Usage: $0 [--push] <version>"
+    echo ""
+    echo "  $0 0.99.7a1          Build, publish to PyPI, push commit + tag"
+    echo "  $0 --push            Push current branch (no version bump, no release)"
+    echo "  $0 v0.99.7a1         Leading 'v' is stripped for file versions"
     exit 1
 }
 
-[[ $# -ne 1 ]] && usage
+push_only() {
+    echo "==> Pushing ${BRANCH} to ${REMOTE}"
+    git -C "$REPO_ROOT" push "$REMOTE" "$BRANCH"
+    echo "==> Done."
+    exit 0
+}
 
-# Strip leading 'v' for the version string used in files
+[[ $# -lt 1 ]] && usage
+[[ "$1" == "--push" ]] && push_only
+
 VERSION="${1#v}"
 TAG="v${VERSION}"
 
@@ -32,21 +43,34 @@ sed -i '' "s/^__version__ = \".*\"/__version__ = \"${VERSION}\"/" "$INIT_PY"
 echo "    pyproject.toml  -> $(grep '^version' "$PYPROJECT")"
 echo "    __init__.py     -> $(grep '^__version__' "$INIT_PY")"
 
-# --- 3. Commit the version bump ----------------------------------------
+# --- 3. Run tests on bumped version before committing ------------------
+echo "==> Running tests"
+python -m pytest "$REPO_ROOT/tests" -x -q --timeout=120 || {
+    echo "!!! Tests failed — reverting version bump"
+    git -C "$REPO_ROOT" checkout -- "$PYPROJECT" "$INIT_PY"
+    exit 1
+}
+
+# --- 4. Commit the version bump ----------------------------------------
 git -C "$REPO_ROOT" add "$PYPROJECT" "$INIT_PY" "$REPO_ROOT/exploration_notebooks/"
 git -C "$REPO_ROOT" commit -m "Bump version to ${VERSION}"
 
-# --- 4. Tag the commit --------------------------------------------------
+# --- 5. Tag the commit --------------------------------------------------
 git -C "$REPO_ROOT" tag -a "$TAG" -m "Release ${TAG}"
 echo "    Tagged: ${TAG}"
 
-# --- 5. Build -----------------------------------------------------------
+# --- 6. Build -----------------------------------------------------------
 echo "==> Building sdist + wheel"
 rm -rf "$REPO_ROOT/dist"
 uv build "$REPO_ROOT" --out-dir "$REPO_ROOT/dist"
 
-# --- 6. Publish to PyPI -------------------------------------------------
+# --- 7. Publish to PyPI -------------------------------------------------
 echo "==> Uploading to PyPI"
 uvx twine upload "$REPO_ROOT/dist/"*
 
-echo "==> Done. ${TAG} published to PyPI."
+# --- 8. Push commit + tag -----------------------------------------------
+echo "==> Pushing ${BRANCH} and ${TAG} to ${REMOTE}"
+git -C "$REPO_ROOT" push "$REMOTE" "$BRANCH"
+git -C "$REPO_ROOT" push "$REMOTE" "$TAG"
+
+echo "==> Done. ${TAG} published to PyPI and pushed to ${REMOTE}."
