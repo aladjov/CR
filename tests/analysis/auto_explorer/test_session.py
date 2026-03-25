@@ -539,6 +539,7 @@ class TestLoadNotebookFindings:
 class TestLoadNotebookFindingsDatabricksGuard:
     def test_databricks_finds_namespace_via_sentinel(self, tmp_path, monkeypatch):
         monkeypatch.delenv("CR_RUN_ID", raising=False)
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
         monkeypatch.setenv("CR_USERNAME", "testuser")
         ns = RunNamespace.create(root=tmp_path, project_name="test")
@@ -558,6 +559,7 @@ class TestLoadNotebookFindingsDatabricksGuard:
 
     def test_databricks_finds_namespace_via_from_latest(self, tmp_path, monkeypatch):
         monkeypatch.delenv("CR_RUN_ID", raising=False)
+        monkeypatch.delenv("CR_DATASET_ID", raising=False)
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "14.3")
         monkeypatch.setenv("CR_USERNAME", "testuser")
         ns = RunNamespace.create(root=tmp_path, project_name="test")
