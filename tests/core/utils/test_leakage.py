@@ -402,6 +402,38 @@ class TestDetectLeakingFeatures:
         assert "null_leaker" in result
         assert "clean" not in result
 
+    def test_combined_path_matches_two_pass_path(self):
+        df = pd.DataFrame({
+            "null_leaker": [np.nan, np.nan, np.nan, 1.0, 2.0, 3.0],
+            "value_leaker": [1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            "clean": [10, 20, 30, 10, 20, 30],
+            "churned": [0, 0, 0, 1, 1, 1],
+        })
+        cols = ["null_leaker", "value_leaker", "clean"]
+        result_two_pass = detect_leaking_features(df, cols, "churned")
+        from customer_retention.core.compat import leakage_corr_combined
+        null_corrs, value_corrs = leakage_corr_combined(df, cols, "churned")
+        assert isinstance(null_corrs, dict)
+        assert isinstance(value_corrs, dict)
+        assert set(null_corrs.keys()) == set(cols)
+        assert set(value_corrs.keys()) == set(cols)
+        result_combined = detect_leaking_features(df, cols, "churned")
+        assert result_two_pass == result_combined
+
+    def test_combined_path_detects_null_and_value_leakers(self):
+        df = pd.DataFrame({
+            "null_leaker": [np.nan, np.nan, np.nan, 1.0, 2.0, 3.0],
+            "value_leaker": [1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            "clean": [10, 20, 30, 10, 20, 30],
+            "churned": [0, 0, 0, 1, 1, 1],
+        })
+        result = detect_leaking_features(
+            df, ["null_leaker", "value_leaker", "clean"], "churned",
+        )
+        assert "null_leaker" in result
+        assert "value_leaker" in result
+        assert "clean" not in result
+
     def test_both_precomputed_params_produce_identical_results(self):
         df = pd.DataFrame({
             "null_leaker": [np.nan, np.nan, np.nan, 1.0, 2.0, 3.0],

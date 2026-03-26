@@ -71,11 +71,17 @@ class SparkClassifierWrapper:
         return pdf["prediction"].to_numpy().astype(float)
 
     def predict_proba(self, X: Any) -> np.ndarray:
+        import pyspark.sql.functions as F  # noqa: N812
+        from pyspark.ml.functions import vector_to_array
+
         assembled = self._assemble_features(X)
         predictions = self._fitted_model.transform(assembled)
         enable_arrow_optimization()
-        pdf = predictions.select("probability").toPandas()
-        return np.array([row.toArray() for row in pdf["probability"]])
+        prob_array = vector_to_array(F.col("probability"))
+        pdf = predictions.select(
+            prob_array[0].alias("p0"), prob_array[1].alias("p1"),
+        ).toPandas()
+        return pdf.to_numpy()
 
     def clone(self) -> SparkClassifierWrapper:
         return SparkClassifierWrapper(

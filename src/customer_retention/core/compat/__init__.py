@@ -1114,6 +1114,54 @@ def bulk_null_counts(df: Any, columns: list[str] | None = None) -> dict[str, int
     return _bulk_null_counts(df, columns)
 
 
+def _spark_leakage_corr_combined(
+    df: Any, columns: list[str], target_column: str, progress_fn: Any = None,
+) -> tuple[dict[str, float], dict[str, float]]:
+    import math
+    import time as _time
+
+    import pyspark.sql.functions as F  # noqa: N812
+
+    log = progress_fn or (lambda msg: None)
+    spark_df = as_spark_df(df[columns + [target_column]])
+    null_corrs: dict[str, float] = {}
+    value_corrs: dict[str, float] = {}
+    _BATCH = 250
+    total_batches = (len(columns) + _BATCH - 1) // _BATCH
+    for batch_idx, start in enumerate(range(0, len(columns), _BATCH)):
+        batch = columns[start:start + _BATCH]
+        t0 = _time.monotonic()
+        null_indicator_exprs = [
+            F.when(F.col(c).isNull(), 1.0).otherwise(0.0).alias(f"__null_{c}")
+            for c in batch
+        ]
+        batch_df = spark_df.select(
+            *null_indicator_exprs,
+            *[F.col(c) for c in batch],
+            F.col(target_column),
+        )
+        corr_exprs = [
+            *[_safe_corr_expr(f"__null_{c}", target_column).alias(f"n_{i}") for i, c in enumerate(batch)],
+            *[_safe_corr_expr(c, target_column).alias(f"v_{i}") for i, c in enumerate(batch)],
+        ]
+        row = batch_df.select(*corr_exprs).head()
+        for i, c in enumerate(batch):
+            null_corrs[c] = float(row[f"n_{i}"]) if row[f"n_{i}"] is not None else math.nan
+            value_corrs[c] = float(row[f"v_{i}"]) if row[f"v_{i}"] is not None else math.nan
+        log(f"    combined-corr batch {batch_idx + 1}/{total_batches} ({len(batch)} cols, {_time.monotonic() - t0:.0f}s)")
+    return null_corrs, value_corrs
+
+
+def leakage_corr_combined(
+    df: Any, columns: list[str], target_column: str, progress_fn: Any = None,
+) -> tuple[dict[str, float], dict[str, float]]:
+    if _is_spark_pandas(df):
+        return _spark_leakage_corr_combined(df, columns, target_column, progress_fn)
+    null_corrs = bulk_null_corr_with_target(df, columns, target_column, progress_fn)
+    value_corrs = bulk_corr_with_target(df, columns, target_column, progress_fn)
+    return null_corrs, value_corrs
+
+
 def bulk_skew(df: Any, columns: list[str]) -> dict[str, float]:
     import math
     valid = [c for c in columns if c in df.columns]
@@ -1447,19 +1495,24 @@ def _spark_bulk_median_impute(df: Any, columns: list[str] | None = None) -> Any:
     if not num_cols:
         from .spark_backend import _as_pandas_api
         return _as_pandas_api(spark_df)
-    # percentile_approx uses fixed-size T-digest sketches (~100 centroids each),
-    # so large batches are memory-safe; 2000 keeps Catalyst plan manageable
     _BATCH = 2000
-    fill_dict: dict[str, float] = {}
+    cols_with_nulls: list[str] = []
     for start in range(0, len(num_cols), _BATCH):
         batch = num_cols[start:start + _BATCH]
+        exprs = [F.sum(F.col(c).isNull().cast("long")).alias(c) for c in batch]
+        row = spark_df.agg(*exprs).head()
+        cols_with_nulls.extend(c for c in batch if (row[c] or 0) > 0)
+    from .spark_backend import _as_pandas_api
+    if not cols_with_nulls:
+        return _as_pandas_api(spark_df)
+    fill_dict: dict[str, float] = {}
+    for start in range(0, len(cols_with_nulls), _BATCH):
+        batch = cols_with_nulls[start:start + _BATCH]
         exprs = [F.percentile_approx(F.col(c), 0.5).alias(c) for c in batch]
         row = spark_df.agg(*exprs).head()
         for c in batch:
             fill_dict[c] = float(row[c]) if row[c] is not None else 0
-    result = spark_df.fillna(fill_dict)
-    from .spark_backend import _as_pandas_api
-    return _as_pandas_api(result)
+    return _as_pandas_api(spark_df.fillna(fill_dict))
 
 
 def bulk_zero_variance_cols(df: Any) -> list[str]:
@@ -1635,6 +1688,7 @@ __all__ = [
     "batched_corr_matrix",
     "bulk_corr_with_target",
     "bulk_null_counts",
+    "leakage_corr_combined",
     "bulk_class_overlap",
     "bulk_effect_sizes",
     "BulkEffectSizeResult",

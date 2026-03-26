@@ -1,5 +1,6 @@
 """Cross-validation strategies for model evaluation."""
 
+import gc
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -219,6 +220,7 @@ class CrossValidator:
                 detail["test_entities"] = int(groups.iloc[test_idx].nunique())
             fold_details.append(detail)
             del fold_model, y_proba, y_fold_test
+            gc.collect()
 
             if on_fold_complete is not None:
                 on_fold_complete(detail, fold_idx + 1, total_folds)
@@ -254,6 +256,7 @@ class CrossValidator:
                 detail["test_entities"] = int(groups_pd.iloc[test_idx].nunique())
             fold_details.append(detail)
             del fold_model, y_proba, y_fold_test
+            gc.collect()
 
             if on_fold_complete is not None:
                 on_fold_complete(detail, fold_idx + 1, total_folds)
@@ -310,6 +313,7 @@ class CrossValidator:
             fold_details.append(detail)
 
             del fold_model, train_fold, test_fold, y_proba, y_fold_test
+            gc.collect()
 
             if on_fold_complete is not None:
                 on_fold_complete(detail, fold_idx + 1, total_folds)

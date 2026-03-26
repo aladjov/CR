@@ -88,6 +88,8 @@ COLLECT_BOUNDARY_FILES = {
     "stages/modeling/training_preparator.py",
     # Field availability audit — .agg().collect() for batched population-rate stats (1 row)
     "analysis/auto_explorer/field_availability_audit.py",
+    # CV folds — gc.collect() for memory reclamation between folds (not Spark .collect())
+    "stages/modeling/cross_validator.py",
 }
 
 # ── bare 'import pandas as pd' allowlist ────────────────────────────────

@@ -188,6 +188,29 @@ class TestBulkMedianImpute:
         assert result["num"].iloc[1] == pytest.approx(2.0)
         assert result["cat"].tolist() == ["a", "b", "c"]
 
+    def test_mixed_null_and_null_free_columns(self):
+        df = pd.DataFrame({
+            "has_nulls": [1.0, np.nan, 3.0, np.nan, 5.0],
+            "no_nulls_a": [10.0, 20.0, 30.0, 40.0, 50.0],
+            "no_nulls_b": [2.0, 4.0, 6.0, 8.0, 10.0],
+            "also_nulls": [np.nan, 2.0, np.nan, 4.0, 5.0],
+        })
+        result = bulk_median_impute(df)
+        assert not result.isna().any().any()
+        assert result["has_nulls"].iloc[1] == pytest.approx(3.0)
+        assert result["also_nulls"].iloc[0] == pytest.approx(4.0)
+        pd.testing.assert_series_equal(result["no_nulls_a"], df["no_nulls_a"])
+        pd.testing.assert_series_equal(result["no_nulls_b"], df["no_nulls_b"])
+
+    def test_all_columns_null_free(self):
+        df = pd.DataFrame({
+            "a": [1.0, 2.0, 3.0],
+            "b": [4.0, 5.0, 6.0],
+            "c": [7.0, 8.0, 9.0],
+        })
+        result = bulk_median_impute(df)
+        pd.testing.assert_frame_equal(result, df)
+
 
 class TestBulkZeroVarianceCols:
 

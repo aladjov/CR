@@ -4,8 +4,8 @@ from typing import Callable, FrozenSet, List, Optional, Set, Tuple
 from customer_retention.core.compat import (
     DataFrame,
     Series,
-    bulk_corr_with_target,
     bulk_null_corr_with_target,
+    leakage_corr_combined,
 )
 
 from ..components.enums import Severity
@@ -130,23 +130,31 @@ def detect_leaking_features(
         return []
     log(f"Leakage check: {len(available)} columns")
     t0 = time.monotonic()
-    null_leakers = set(
-        _null_correlated_columns(
-            df, available, target_column, null_correlation_threshold,
-            precomputed_null_counts=precomputed_null_counts,
-        ),
-    )
-    log(f"  [1/2] Null-pattern check: {len(null_leakers)} leaker(s) found ({time.monotonic() - t0:.0f}s)")
-    value_candidates = [c for c in available if c not in null_leakers]
-    if not value_candidates:
-        return [col for col in feature_columns if col in null_leakers]
-    t1 = time.monotonic()
     if precomputed_value_corrs is not None:
+        null_leakers = set(
+            _null_correlated_columns(
+                df, available, target_column, null_correlation_threshold,
+                precomputed_null_counts=precomputed_null_counts,
+            ),
+        )
+        log(f"  [1/2] Null-pattern check: {len(null_leakers)} leaker(s) found ({time.monotonic() - t0:.0f}s)")
+        value_candidates = [c for c in available if c not in null_leakers]
+        if not value_candidates:
+            return [col for col in feature_columns if col in null_leakers]
+        t1 = time.monotonic()
         corrs = {c: precomputed_value_corrs[c] for c in value_candidates if c in precomputed_value_corrs}
+        value_leakers = {col for col, val in corrs.items() if abs(val) >= value_correlation_threshold}
+        log(f"  [2/2] Value correlation: {len(value_leakers)} leaker(s) found ({time.monotonic() - t1:.0f}s)")
     else:
-        corrs = bulk_corr_with_target(df, value_candidates, target_column)
-    value_leakers = {col for col, val in corrs.items() if abs(val) >= value_correlation_threshold}
-    log(f"  [2/2] Value correlation: {len(value_leakers)} leaker(s) found ({time.monotonic() - t1:.0f}s)")
+        null_corrs, value_corrs = leakage_corr_combined(df, available, target_column, progress_fn)
+        log(f"  [1/2+2/2] Combined correlation pass ({time.monotonic() - t0:.0f}s)")
+        null_leakers = {c for c in available if abs(null_corrs.get(c, 0.0)) >= null_correlation_threshold}
+        value_candidates = [c for c in available if c not in null_leakers]
+        value_leakers = {
+            c for c in value_candidates
+            if abs(value_corrs.get(c, 0.0)) >= value_correlation_threshold
+        }
+        log(f"    null-pattern: {len(null_leakers)}, value: {len(value_leakers)}")
     combined = null_leakers | value_leakers
     log(f"  Done: {len(combined)} total leaker(s) in {time.monotonic() - t0:.0f}s")
     return [col for col in feature_columns if col in combined]

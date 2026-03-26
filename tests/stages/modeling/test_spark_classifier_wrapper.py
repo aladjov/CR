@@ -376,7 +376,7 @@ class TestPredictIntegration:
 
     @patch(f"{_MOD}._make_assembler")
     @patch(f"{_MOD}._get_spark_session")
-    def test_predict_proba_collects_probability_only(self, mock_get_spark, mock_make_asm, binary_data):
+    def test_predict_proba_uses_vector_to_array(self, mock_get_spark, mock_make_asm, binary_data):
         X, _ = binary_data
         mock_spark = MagicMock()
         mock_get_spark.return_value = mock_spark
@@ -387,11 +387,9 @@ class TestPredictIntegration:
         mock_transformed = MagicMock()
         mock_fitted.transform.return_value = mock_transformed
 
-        mock_dense_vectors = [MagicMock() for _ in range(len(X))]
-        for v in mock_dense_vectors:
-            v.toArray.return_value = np.array([0.3, 0.7])
+        n = len(X)
         mock_transformed.select.return_value.toPandas.return_value = pd.DataFrame(
-            {"probability": mock_dense_vectors}
+            {"p0": np.full(n, 0.3), "p1": np.full(n, 0.7)}
         )
 
         wrapper = SparkClassifierWrapper(
@@ -404,8 +402,10 @@ class TestPredictIntegration:
             proba = wrapper.predict_proba(X)
 
         assert isinstance(proba, np.ndarray)
-        assert proba.shape == (len(X), 2)
-        mock_transformed.select.assert_called_once_with("probability")
+        assert proba.shape == (n, 2)
+        np.testing.assert_allclose(proba[:, 0], 0.3)
+        np.testing.assert_allclose(proba[:, 1], 0.7)
+        mock_transformed.select.assert_called_once()
 
 
 class TestFitFailsFastOnStaleFeatures:

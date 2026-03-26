@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import time
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -437,6 +438,7 @@ class TrainingPreparator:
         y_test = collect_for_sklearn(y_test)
         train_entities = collect_for_sklearn(train_entities)
         train_dates = collect_for_sklearn(train_dates)
+        gc.collect()
 
         if self._use_float32:
             X_train = X_train.astype("float32")
