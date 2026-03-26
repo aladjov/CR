@@ -392,13 +392,23 @@ class TestPredictIntegration:
             {"p0": np.full(n, 0.3), "p1": np.full(n, 0.7)}
         )
 
+        # Mock pyspark imports used inside predict_proba
+        mock_F = MagicMock()
+        mock_vector_to_array = MagicMock()
+        mock_prob_array = MagicMock()
+        mock_vector_to_array.return_value = mock_prob_array
+
         wrapper = SparkClassifierWrapper(
             spark_model_class="LogisticRegression",
             spark_model_params={"maxIter": 10},
             feature_names=X.columns.tolist(),
         )
         wrapper._fitted_model = mock_fitted
-        with patch(f"{_MOD}.enable_arrow_optimization"):
+        with patch(f"{_MOD}.enable_arrow_optimization"), \
+             patch.dict("sys.modules", {
+                 "pyspark.sql.functions": mock_F,
+                 "pyspark.ml.functions": MagicMock(vector_to_array=mock_vector_to_array),
+             }):
             proba = wrapper.predict_proba(X)
 
         assert isinstance(proba, np.ndarray)
