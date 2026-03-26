@@ -404,7 +404,7 @@ class TestPersistence:
         paths = result.save(tmp_path / "audit")
         assert (tmp_path / "audit" / "audit_config.yaml").exists()
         assert (tmp_path / "audit" / "column_profiles.yaml").exists()
-        assert (tmp_path / "audit" / "recommendations.yaml").exists()
+        assert (tmp_path / "audit" / "audit_suggestions.yaml").exists()
         assert len(paths) == 3
 
     def test_load_roundtrip(self, tmp_path):
@@ -445,7 +445,7 @@ class TestPersistence:
         assert loaded.field_profiles[0].suspicion_score == 0.95
         assert "Only populated for terminated" in loaded.field_profiles[0].evidence
 
-    def test_recommendations_yaml_structure(self, tmp_path):
+    def test_suggestions_yaml_structure(self, tmp_path):
         import yaml
 
         su_cfg = _su_config()
@@ -473,7 +473,7 @@ class TestPersistence:
             ],
         )
         result.save(tmp_path / "audit")
-        recs = yaml.safe_load((tmp_path / "audit" / "recommendations.yaml").read_text())
+        recs = yaml.safe_load((tmp_path / "audit" / "audit_suggestions.yaml").read_text())
         assert len(recs["recommended_exclusions"]) == 1
         assert recs["recommended_exclusions"][0]["field_name"] == "F1"
         assert "Bad field" in recs["recommended_exclusions"][0]["rationale"]

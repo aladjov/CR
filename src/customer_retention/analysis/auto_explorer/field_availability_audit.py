@@ -77,14 +77,14 @@ class FieldAvailabilityAuditResult:
         paths: dict[str, Path] = {}
         paths["audit_config"] = _save_yaml(output_dir / "audit_config.yaml", self._build_config_dict())
         paths["column_profiles"] = _save_yaml(output_dir / "column_profiles.yaml", self._build_profiles_dict())
-        paths["recommendations"] = _save_yaml(output_dir / "recommendations.yaml", self._build_recommendations_dict())
+        paths["audit_suggestions"] = _save_yaml(output_dir / "audit_suggestions.yaml", self._build_suggestions_dict())
         return paths
 
     @classmethod
     def load(cls, output_dir: Path) -> FieldAvailabilityAuditResult:
         config_data = _load_yaml(output_dir / "audit_config.yaml")
         profiles_data = _load_yaml(output_dir / "column_profiles.yaml")
-        recs_data = _load_yaml(output_dir / "recommendations.yaml")
+        recs_data = _load_yaml(output_dir / "audit_suggestions.yaml")
 
         su = ServiceUnitConfig(**config_data["service_unit"])
         audit_cfg = FieldAvailabilityAuditConfig(
@@ -131,7 +131,7 @@ class FieldAvailabilityAuditResult:
     def _build_profiles_dict(self) -> dict:
         return {"columns": [_profile_to_dict(p) for p in self.field_profiles]}
 
-    def _build_recommendations_dict(self) -> dict:
+    def _build_suggestions_dict(self) -> dict:
         excludes = [p for p in self.field_profiles if p.recommendation == "exclude"]
         investigates = [p for p in self.field_profiles if p.recommendation == "investigate"]
         return {
