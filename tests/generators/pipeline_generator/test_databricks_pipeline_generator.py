@@ -391,7 +391,7 @@ class TestDatabricksE2E:
     def test_all_notebooks_have_sys_path_when_persisted(self, sample_findings_dir, tmp_path, monkeypatch):
         monkeypatch.setattr(
             "customer_retention.generators.pipeline_generator.databricks_generator.get_framework_repo_path",
-            lambda: "/Workspace/Repos/team/churnkit/src",
+            lambda: "/Workspace/Repos/team/churnkit",
         )
         generator = DatabricksPipelineGenerator(
             str(sample_findings_dir), str(tmp_path), "repo_test",
@@ -402,7 +402,8 @@ class TestDatabricksE2E:
                 continue
             content = file_path.read_text()
             assert "import sys" in content, f"{file_path.name} missing sys.path setup"
-            assert "/Workspace/Repos/team/churnkit/src" in content, f"{file_path.name} missing repo path"
+            assert 'FRAMEWORK_REPO_ROOT = "/Workspace/Repos/team/churnkit"' in content
+            assert '{FRAMEWORK_REPO_ROOT}/src' in content, f"{file_path.name} missing /src suffix"
 
     def test_no_sys_path_when_not_persisted(self, sample_findings_dir, tmp_path, monkeypatch):
         monkeypatch.delenv("CR_FRAMEWORK_REPO_PATH", raising=False)

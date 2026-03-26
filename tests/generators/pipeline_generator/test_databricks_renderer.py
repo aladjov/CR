@@ -3255,7 +3255,8 @@ class TestFrameworkRepoPathInRenderer:
         result = renderer.render_config(sample_pipeline_config)
         assert "import sys" in result
         assert 'FRAMEWORK_REPO_ROOT = "/Workspace/Repos/me/churnkit"' in result
-        assert "sys.path.insert(0, FRAMEWORK_REPO_ROOT)" in result
+        assert '{FRAMEWORK_REPO_ROOT}/src' in result
+        assert "sys.path.insert(0, _src)" in result
         ast.parse(result)
 
     def test_config_no_sys_path_when_repo_path_none(self, renderer, sample_pipeline_config):

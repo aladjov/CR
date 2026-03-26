@@ -2464,8 +2464,9 @@ class DatabricksCodeRenderer:
             "import sys\n"
             "\n"
             f'FRAMEWORK_REPO_ROOT = "{self._framework_repo_path}"\n'
-            "if FRAMEWORK_REPO_ROOT not in sys.path:\n"
-            "    sys.path.insert(0, FRAMEWORK_REPO_ROOT)\n"
+            '_src = f"{FRAMEWORK_REPO_ROOT}/src"\n'
+            "if _src not in sys.path:\n"
+            "    sys.path.insert(0, _src)\n"
             "\n# COMMAND ----------\n\n"
         )
         return rendered.replace(self._NOTEBOOK_HEADER, sys_path_block, 1)
