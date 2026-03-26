@@ -1,8 +1,9 @@
 from customer_retention.integrations.requirements_generator import (
+    DATABRICKS_INCOMPATIBLE_PACKAGES,
     DATABRICKS_RUNTIME_PACKAGES,
     _collect_unique_deps,
     _extract_package_name,
-    _is_databricks_provided,
+    _is_databricks_excluded,
     _is_self_referential,
     _normalize_name,
     generate_requirements,
@@ -68,20 +69,23 @@ class TestIsSelfReferential:
         assert _is_self_referential("my_package[ml]", "my-package") is True
 
 
-class TestIsDatabricksProvided:
-    def test_known_packages(self):
-        assert _is_databricks_provided("pandas>=2.0.0") is True
-        assert _is_databricks_provided("scikit-learn>=1.3.0") is True
-        assert _is_databricks_provided("matplotlib>=3.7.0") is True
-        assert _is_databricks_provided("mlflow>=2.10.0") is True
+class TestIsDatabricksExcluded:
+    def test_runtime_packages(self):
+        assert _is_databricks_excluded("pandas>=2.0.0") is True
+        assert _is_databricks_excluded("scikit-learn>=1.3.0") is True
+        assert _is_databricks_excluded("matplotlib>=3.7.0") is True
+        assert _is_databricks_excluded("mlflow>=2.10.0") is True
 
-    def test_not_provided(self):
-        assert _is_databricks_provided("pydantic>=2.0.0") is False
-        assert _is_databricks_provided("feast>=0.40.0") is False
-        assert _is_databricks_provided("rich>=13.0.0") is False
+    def test_incompatible_packages(self):
+        assert _is_databricks_excluded("deltalake>=0.17.0") is True
+
+    def test_not_excluded(self):
+        assert _is_databricks_excluded("pydantic>=2.0.0") is False
+        assert _is_databricks_excluded("feast>=0.40.0") is False
+        assert _is_databricks_excluded("rich>=13.0.0") is False
 
     def test_underscore_variant(self):
-        assert _is_databricks_provided("scikit_learn>=1.3.0") is True
+        assert _is_databricks_excluded("scikit_learn>=1.3.0") is True
 
 
 class TestCollectUniqueDeps:
@@ -115,6 +119,11 @@ class TestGenerateRequirements:
         assert "feast>=0.40.0" in req_dbr
         assert "pandas" not in req_dbr
         assert "scikit-learn" not in req_dbr
+
+    def test_databricks_excludes_deltalake(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text(MINIMAL_PYPROJECT)
+        _, req_dbr = generate_requirements(tmp_path / "pyproject.toml")
+        assert "deltalake" not in req_dbr
 
     def test_excludes_self_referential(self, tmp_path):
         (tmp_path / "pyproject.toml").write_text(MINIMAL_PYPROJECT)
@@ -152,3 +161,6 @@ class TestDatabricksRuntimePackages:
                     "catboost", "hyperopt", "shap", "torch", "torchvision", "tensorflow",
                     "matplotlib", "seaborn", "plotly", "ipykernel", "ipywidgets"}
         assert DATABRICKS_RUNTIME_PACKAGES == expected
+
+    def test_incompatible_set_includes_deltalake(self):
+        assert "deltalake" in DATABRICKS_INCOMPATIBLE_PACKAGES

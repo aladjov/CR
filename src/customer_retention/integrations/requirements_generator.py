@@ -19,6 +19,10 @@ DATABRICKS_RUNTIME_PACKAGES = frozenset({
     "ipykernel", "ipywidgets",
 })
 
+DATABRICKS_INCOMPATIBLE_PACKAGES = frozenset({
+    "deltalake",
+})
+
 _DEP_NAME_RE = re.compile(r"^([a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?)")
 
 
@@ -39,9 +43,12 @@ def _is_self_referential(dep: str, project_name: str) -> bool:
     return name is not None and _normalize_name(name) == _normalize_name(project_name)
 
 
-def _is_databricks_provided(dep: str) -> bool:
+def _is_databricks_excluded(dep: str) -> bool:
     name = _extract_package_name(dep)
-    return name is not None and _normalize_name(name) in DATABRICKS_RUNTIME_PACKAGES
+    if name is None:
+        return False
+    norm = _normalize_name(name)
+    return norm in DATABRICKS_RUNTIME_PACKAGES or norm in DATABRICKS_INCOMPATIBLE_PACKAGES
 
 
 def _collect_unique_deps(all_deps: list[str]) -> list[str]:
@@ -75,7 +82,7 @@ def generate_requirements(pyproject_path: Path) -> tuple[str, str]:
     header = "# Auto-generated from pyproject.toml — do not edit manually\n# Regenerate: python scripts/generate_requirements.py\n"
     req_all = header + "\n".join(unique_deps) + "\n"
 
-    dbr_deps = [d for d in unique_deps if not _is_databricks_provided(d)]
+    dbr_deps = [d for d in unique_deps if not _is_databricks_excluded(d)]
     dbr_header = (
         "# Auto-generated from pyproject.toml — do not edit manually\n"
         "# Excludes packages pre-installed in Databricks ML Runtime\n"
