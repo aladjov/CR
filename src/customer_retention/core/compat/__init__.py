@@ -1390,6 +1390,26 @@ def spark_persist(df: Any) -> Any:
     return _as_pandas_api(spark_df)
 
 
+def spark_cast_float32(df: Any) -> Any:
+    """Cast all numeric columns to float32. Works on both pandas and pyspark.pandas."""
+    if not _is_spark_pandas(df):
+        numeric = df.select_dtypes(include=["number"]).columns
+        if len(numeric) == 0:
+            return df
+        return df.astype({c: "float32" for c in numeric})
+    import pyspark.sql.functions as F  # noqa: N812
+    from pyspark.sql.types import DoubleType, IntegerType, LongType, ShortType
+    spark_df = as_spark_df(df)
+    _NUMERIC = (DoubleType, LongType, IntegerType, ShortType)
+    select_exprs = [
+        F.col(c).cast("float").alias(c) if isinstance(spark_df.schema[c].dataType, _NUMERIC)
+        else F.col(c)
+        for c in spark_df.columns
+    ]
+    from .spark_backend import _as_pandas_api
+    return _as_pandas_api(spark_df.select(*select_exprs))
+
+
 def safe_fillna(df: Any, value: Any) -> Any:
     if _is_spark_pandas(df):
         spark_df = as_spark_df(df).fillna(value).localCheckpoint(eager=True)
@@ -1705,6 +1725,7 @@ __all__ = [
     "bulk_effect_sizes",
     "BulkEffectSizeResult",
     "temporal_quantile",
+    "spark_cast_float32",
     "spark_checkpoint",
     "spark_persist",
     "safe_fillna",

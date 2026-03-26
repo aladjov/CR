@@ -19,6 +19,7 @@ from customer_retention.core.compat import (
     concat,
     native_pd,
     safe_sample,
+    spark_cast_float32,
     spark_checkpoint,
     spark_persist,
 )
@@ -410,6 +411,11 @@ class TrainingPreparator:
         X_train_scaled = _as_pandas_api(train_scaled_spark.select(non_y_cols))
         X_test = _as_pandas_api(test_spark.select(test_non_y))
         X_test_scaled = _as_pandas_api(test_scaled_spark.select(test_non_y))
+        if self._use_float32:
+            X_train = spark_cast_float32(X_train)
+            X_train_scaled = spark_cast_float32(X_train_scaled)
+            X_test = spark_cast_float32(X_test)
+            X_test_scaled = spark_cast_float32(X_test_scaled)
         y_train = train_bundle["__y__"]
         y_test = test_bundle["__y__"]
 
@@ -438,6 +444,10 @@ class TrainingPreparator:
         X_train = spark_checkpoint(X_train)
         X_test = spark_checkpoint(X_test)
 
+        if self._use_float32:
+            X_train = spark_cast_float32(X_train)
+            X_test = spark_cast_float32(X_test)
+
         X_train = collect_for_sklearn(X_train)
         X_test = collect_for_sklearn(X_test)
         y_train = collect_for_sklearn(y_train)
@@ -445,10 +455,6 @@ class TrainingPreparator:
         train_entities = collect_for_sklearn(train_entities)
         train_dates = collect_for_sklearn(train_dates)
         gc.collect()
-
-        if self._use_float32:
-            X_train = X_train.astype("float32")
-            X_test = X_test.astype("float32")
 
         scaler = FeatureScaler(scaler_type=self._scaler_type)
         scaling_result = scaler.fit_transform(X_train, X_test)

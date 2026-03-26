@@ -9,6 +9,7 @@ from customer_retention.core.compat import (
     bulk_median_impute,
     bulk_zero_variance_cols,
     collect_for_sklearn,
+    spark_cast_float32,
     spark_checkpoint,
     spark_persist,
 )
@@ -42,6 +43,51 @@ class TestSparkPersist:
         result = spark_persist(df)
         assert result["a"].tolist() == [1.0, 2.0, 3.0]
         assert result["b"].tolist() == [4.0, 5.0, 6.0]
+
+
+class TestSparkCastFloat32:
+
+    def test_casts_numeric_columns_to_float32(self):
+        df = pd.DataFrame({"a": [1.0, 2.0, 3.0], "b": [4, 5, 6], "c": [7.0, 8.0, 9.0]})
+        result = spark_cast_float32(df)
+        assert result["a"].dtype == np.float32
+        assert result["b"].dtype == np.float32
+        assert result["c"].dtype == np.float32
+
+    def test_preserves_non_numeric_columns(self):
+        df = pd.DataFrame({
+            "num": [1.0, 2.0, 3.0],
+            "cat": ["a", "b", "c"],
+            "dt": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
+        })
+        result = spark_cast_float32(df)
+        assert result["num"].dtype == np.float32
+        assert result["cat"].dtype == object
+        assert pd.api.types.is_datetime64_any_dtype(result["dt"])
+
+    def test_values_match_pandas_astype(self):
+        rng = np.random.default_rng(42)
+        df = pd.DataFrame({
+            "x": rng.normal(0, 100, 50),
+            "y": rng.integers(0, 1000, 50).astype(float),
+        })
+        result = spark_cast_float32(df)
+        expected = df.astype("float32")
+        np.testing.assert_array_equal(result["x"].to_numpy(), expected["x"].to_numpy())
+        np.testing.assert_array_equal(result["y"].to_numpy(), expected["y"].to_numpy())
+
+    def test_handles_nan_values(self):
+        df = pd.DataFrame({"a": [1.0, np.nan, 3.0], "b": [np.nan, 5.0, np.nan]})
+        result = spark_cast_float32(df)
+        assert result["a"].dtype == np.float32
+        assert np.isnan(result["a"].iloc[1])
+        assert result["b"].iloc[1] == np.float32(5.0)
+
+    def test_empty_dataframe(self):
+        df = pd.DataFrame({"a": pd.Series(dtype="float64"), "b": pd.Series(dtype="int64")})
+        result = spark_cast_float32(df)
+        assert result["a"].dtype == np.float32
+        assert result["b"].dtype == np.float32
 
 
 class TestBulkLabelEncode:

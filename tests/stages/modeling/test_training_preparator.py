@@ -323,6 +323,27 @@ class TestPrepareLocalEndToEnd:
             assert feat in result.null_counts
             assert isinstance(result.null_counts[feat], int)
 
+    def test_float32_applied_pre_collect(self, base_df, feature_cols):
+        from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+        prep = TrainingPreparator(
+            target_column="target", feature_columns=feature_cols, use_float32=True,
+        )
+        result = prep.prepare(base_df)
+        for col in result.feature_names:
+            assert result.X_train[col].dtype == np.float32, f"{col} not float32"
+            assert result.X_train_scaled[col].dtype == np.float32, f"{col} scaled not float32"
+
+    def test_float32_off_preserves_original_dtypes(self, base_df, feature_cols):
+        from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+        prep = TrainingPreparator(
+            target_column="target", feature_columns=feature_cols, use_float32=False,
+        )
+        result = prep.prepare(base_df)
+        float_cols = [c for c in result.feature_names if result.X_train[c].dtype.kind == "f"]
+        assert len(float_cols) > 0, "Expected at least one float column"
+        for col in float_cols:
+            assert result.X_train[col].dtype == np.float64, f"{col} not float64"
+
 
 # ---------------------------------------------------------------------------
 # TestTimingProfiling
