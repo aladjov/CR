@@ -53,11 +53,19 @@ python -m pytest "$REPO_ROOT/tests" -x -q --timeout=120 || {
 
 # --- 4. Commit the version bump ----------------------------------------
 git -C "$REPO_ROOT" add "$PYPROJECT" "$INIT_PY" "$REPO_ROOT/exploration_notebooks/"
-git -C "$REPO_ROOT" commit -m "Bump version to ${VERSION}"
+if git -C "$REPO_ROOT" diff --cached --quiet; then
+    echo "    No changes to commit (version already at ${VERSION})"
+else
+    git -C "$REPO_ROOT" commit -m "Bump version to ${VERSION}"
+fi
 
 # --- 5. Tag the commit --------------------------------------------------
-git -C "$REPO_ROOT" tag -a "$TAG" -m "Release ${TAG}"
-echo "    Tagged: ${TAG}"
+if git -C "$REPO_ROOT" rev-parse "$TAG" >/dev/null 2>&1; then
+    echo "    Tag ${TAG} already exists — skipping"
+else
+    git -C "$REPO_ROOT" tag -a "$TAG" -m "Release ${TAG}"
+    echo "    Tagged: ${TAG}"
+fi
 
 # --- 6. Build -----------------------------------------------------------
 echo "==> Building sdist + wheel"
