@@ -937,8 +937,8 @@ class FindingsParser:
             step = self._map_gold_transformation(rec)
             if step:
                 config.gold.transformations.append(step)
-        prioritized_columns = self._collect_prioritized_columns(gold)
-        drop_columns = self._collect_feature_selection_drops(gold, prioritized_columns, config.target_column, pipeline_columns)
+        pipeline_columns |= self._predict_gold_generated_columns(config)
+        drop_columns = self._collect_feature_selection_drops(gold, set(), config.target_column, pipeline_columns)
         config.gold.feature_selections = list(drop_columns)
 
     def _map_gold_transformation(self, rec) -> Optional[TransformationStep]:

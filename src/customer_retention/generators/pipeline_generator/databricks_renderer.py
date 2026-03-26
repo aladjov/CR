@@ -1734,9 +1734,17 @@ def train_and_evaluate():
                 from customer_retention.analysis.auto_explorer.layered_recommendations import RecommendationRegistry
                 with _rec_path.open() as _rf:
                     _drop_recs = RecommendationRegistry.from_dict(_rec_yaml.safe_load(_rf))
+                _runtime_drops = set()
                 for _rec in getattr(getattr(_drop_recs, 'gold', None), 'feature_selection', []):
                     if _rec.action in ('drop_multicollinear', 'drop_weak', 'drop_l1_zero', 'drop_availability', 'drop_zero_variance'):
                         excluded_cols[_rec.target_column] = _rec.action
+                    if _rec.action in ('drop_l1_zero', 'drop_zero_variance'):
+                        _runtime_drops.add(_rec.target_column)
+                _actual_runtime = [c for c in _runtime_drops if c in feature_cols]
+                if _actual_runtime:
+                    df = df.drop(*_actual_runtime)
+                    feature_cols = [c for c in feature_cols if c not in _runtime_drops]
+                    print(f"[TRAINING] Runtime L1/variance drops: {len(_actual_runtime)} features")
         for c in feature_cols:
             null_count = int(null_row[c])
             feature_stats[c] = ColumnProfile(dtype=df.schema[c].dataType.typeName(), non_null_count=filtered_count - null_count, null_count=null_count)
@@ -1761,6 +1769,21 @@ def train_and_evaluate():
                 print("[TRAINING] Feature profile matches exploration")
         else:
             print("[TRAINING] WARNING: No exploration feature profile available for comparison")
+        if _NAMESPACE is not None and '_drop_recs' in dir():
+            _gold_fs = getattr(getattr(_drop_recs, 'gold', None), 'feature_selection', [])
+            _prioritized_rationales = {r.target_column: r.rationale for r in _gold_fs if r.action == 'prioritize'}
+            _correlated_map = {}
+            for _r in _gold_fs:
+                if _r.action == 'drop_multicollinear' and _r.parameters:
+                    _correlated_map.setdefault(_r.target_column, []).append(
+                        (_r.parameters.get('correlated_with', ''), _r.parameters.get('correlation', 0)))
+            _dropped_strong = {c: _prioritized_rationales[c] for c in _prioritized_rationales if c in excluded_cols}
+            if _dropped_strong:
+                print(f"[TRAINING] NOTE: {len(_dropped_strong)} strong predictors dropped (signal preserved via correlated survivors):")
+                for _c in sorted(_dropped_strong):
+                    _survivors = [f"{p} (r={r:.2f})" for p, r in _correlated_map.get(_c, []) if p not in excluded_cols]
+                    _surv_str = ", ".join(_survivors[:3]) if _survivors else "none found"
+                    print(f"[TRAINING]   {_c}: {_dropped_strong[_c]} -> survived by: {_surv_str}")
 
     with log_timing("temporal_split", logger):
         train_df, test_df, cutoff_date = _temporal_split(assembled, {{ config.training.test_size if config.training else 0.2 }})

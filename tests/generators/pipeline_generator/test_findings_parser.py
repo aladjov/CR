@@ -5876,7 +5876,7 @@ class TestFeatureSelectionDropSkipsTarget:
         assert "unsubscribed" not in config.gold.feature_selections
         assert "region" in config.gold.feature_selections
 
-    def test_prioritized_column_still_excluded(self):
+    def test_prioritized_column_still_dropped(self):
         parser = self._make_parser()
         config = self._make_config()
         registry = self._make_registry(feature_selection=[
@@ -5885,7 +5885,7 @@ class TestFeatureSelectionDropSkipsTarget:
             self._make_rec("region", "drop_weak"),
         ])
         parser._apply_gold_recommendations(config, registry)
-        assert "age" not in config.gold.feature_selections
+        assert "age" in config.gold.feature_selections
         assert "region" in config.gold.feature_selections
 
 
@@ -6106,7 +6106,7 @@ class TestDropL1ZeroAction(TestFeatureSelectionDropSkipsTarget):
         parser._apply_gold_recommendations(config, registry)
         assert "unsubscribed" not in config.gold.feature_selections
 
-    def test_drop_l1_zero_skips_prioritized(self):
+    def test_drop_l1_zero_ignores_prioritize(self):
         parser = self._make_parser()
         config = self._make_config()
         registry = self._make_registry(feature_selection=[
@@ -6115,8 +6115,38 @@ class TestDropL1ZeroAction(TestFeatureSelectionDropSkipsTarget):
             self._make_rec("region", "drop_l1_zero"),
         ])
         parser._apply_gold_recommendations(config, registry)
-        assert "age" not in config.gold.feature_selections
+        assert "age" in config.gold.feature_selections
         assert "region" in config.gold.feature_selections
+
+    def test_prioritize_does_not_override_drop_multicollinear(self):
+        parser = self._make_parser()
+        config = self._make_config()
+        registry = self._make_registry(feature_selection=[
+            self._make_rec("age", "prioritize"),
+            self._make_rec("age", "drop_multicollinear"),
+        ])
+        parser._apply_gold_recommendations(config, registry)
+        assert "age" in config.gold.feature_selections
+
+    def test_gold_generated_column_drops_survive_after_transform_loop(self):
+        parser = self._make_parser()
+        config = self._make_config()
+        rec_transform = self._make_rec("age", "zero_inflation_handling")
+        rec_drop_is_zero = self._make_rec("age_is_zero", "drop_l1_zero")
+        rec_drop_log = self._make_rec("age_log", "drop_l1_zero")
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            GoldRecommendations,
+            RecommendationRegistry,
+        )
+        registry = RecommendationRegistry()
+        registry.gold = GoldRecommendations(
+            target_column="unsubscribed",
+            feature_selection=[rec_drop_is_zero, rec_drop_log],
+            transformations=[rec_transform],
+        )
+        parser._apply_gold_recommendations(config, registry)
+        assert "age_is_zero" in config.gold.feature_selections
+        assert "age_log" in config.gold.feature_selections
 
 
 class TestFeatureSelectionDropSkipsNonPipelineColumns(TestFeatureSelectionDropSkipsTarget):
