@@ -79,8 +79,9 @@ results = fingerprinter.profile_all(datasets)
 import sys
 
 FRAMEWORK_REPO_ROOT = "/Workspace/Repos/user/churnkit"
-if FRAMEWORK_REPO_ROOT not in sys.path:
-    sys.path.insert(0, FRAMEWORK_REPO_ROOT)
+_src = f"{FRAMEWORK_REPO_ROOT}/src"
+if _src not in sys.path:
+    sys.path.insert(0, _src)
 ```
 
 This cell is automatically injected as the first cell when `databricks_init(framework_repo_path=...)` is used. It survives sync like a `config` cell, and if accidentally deleted, is re-inserted on the next sync. Users can modify the path -- changes are preserved.
@@ -231,8 +232,9 @@ When `framework_repo_path` is set, `databricks_init` injects a `code_system` cel
 import sys
 
 FRAMEWORK_REPO_ROOT = "/Workspace/Repos/user/churnkit"
-if FRAMEWORK_REPO_ROOT not in sys.path:
-    sys.path.insert(0, FRAMEWORK_REPO_ROOT)
+_src = f"{FRAMEWORK_REPO_ROOT}/src"
+if _src not in sys.path:
+    sys.path.insert(0, _src)
 ```
 
 Run this notebook once. The result is persisted and all downstream notebooks pick it up via `CR_CATALOG` / `CR_SCHEMA` env vars automatically.
