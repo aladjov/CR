@@ -94,10 +94,9 @@ def _match_all_columns(columns: list[str], patterns: list[re.Pattern]) -> list[s
 
 
 def _detect_terminated_statuses(df: pd.DataFrame, status_col: str) -> list[str]:
-    try:
-        unique_vals = head_as_list(df[status_col].dropna().unique(), 200)
-    except Exception:
+    if status_col not in df.columns:
         return []
+    unique_vals = head_as_list(df[status_col].dropna().unique(), 200)
     return [str(v) for v in unique_vals if any(p.search(str(v)) for p in _TERMINATED_VALUE_PATTERNS)]
 
 

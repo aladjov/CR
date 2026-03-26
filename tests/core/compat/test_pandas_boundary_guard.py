@@ -86,6 +86,8 @@ COLLECT_BOUNDARY_FILES = {
     "transforms/executor.py",
     # Training prep — .agg().collect() for batched null counts + stddev (1 row per split)
     "stages/modeling/training_preparator.py",
+    # Field availability audit — .agg().collect() for batched population-rate stats (1 row)
+    "analysis/auto_explorer/field_availability_audit.py",
 }
 
 # ── bare 'import pandas as pd' allowlist ────────────────────────────────

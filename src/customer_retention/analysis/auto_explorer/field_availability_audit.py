@@ -190,7 +190,7 @@ def _load_yaml(path: Path) -> dict:
 
 def build_account_anchors(
     service_unit_df: DataFrame, config: ServiceUnitConfig
-) -> native_pd.DataFrame:
+) -> DataFrame:
     if _is_spark_pandas(service_unit_df):
         return _build_account_anchors_spark(service_unit_df, config)
     return _build_account_anchors_pandas(service_unit_df, config)
@@ -198,7 +198,7 @@ def build_account_anchors(
 
 def _build_account_anchors_pandas(
     su_df: DataFrame, cfg: ServiceUnitConfig
-) -> native_pd.DataFrame:
+) -> DataFrame:
     entity_col, anchor_col, status_col = cfg.entity_column, cfg.anchor_date_column, cfg.status_column
 
     total_per_account = su_df.groupby(entity_col).size().reset_index(name="total_units")
@@ -220,16 +220,16 @@ def _build_account_anchors_pandas(
         terminated_units=(anchor_col, "count"),
     ).reset_index()
 
-    result = native_pd.DataFrame(term_agg).merge(native_pd.DataFrame(total_per_account), on=entity_col, how="left")
+    result = term_agg.merge(total_per_account, on=entity_col, how="left")
     result["is_fully_terminated"] = result["terminated_units"] == result["total_units"]
     result.loc[~result["is_fully_terminated"], "full_termination_date"] = None
     return result
 
 
-def _build_account_anchors_spark(su_df: DataFrame, cfg: ServiceUnitConfig) -> native_pd.DataFrame:
+def _build_account_anchors_spark(su_df: DataFrame, cfg: ServiceUnitConfig) -> DataFrame:
     import pyspark.sql.functions as F  # noqa: N812
 
-    from customer_retention.core.compat import as_spark_df
+    from customer_retention.core.compat import _as_pandas_api, as_spark_df
 
     spark_df = as_spark_df(su_df)
     entity_col, anchor_col, status_col = cfg.entity_column, cfg.anchor_date_column, cfg.status_column
@@ -253,7 +253,7 @@ def _build_account_anchors_spark(su_df: DataFrame, cfg: ServiceUnitConfig) -> na
         "full_termination_date",
         F.when(F.col("is_fully_terminated"), F.col("full_termination_date")).otherwise(F.lit(None)),
     )
-    return joined.toPandas()
+    return _as_pandas_api(joined)
 
 
 # ---------------------------------------------------------------------------
@@ -292,12 +292,7 @@ class FieldAvailabilityAuditor:
 
         fully_terminated = int(anchors["is_fully_terminated"].sum())
         partially_terminated = int((~anchors["is_fully_terminated"]).sum())
-        all_entity_ids = set()
-        for ds_name, df in probe_dfs.items():
-            entity_col = su_cfg.entity_column
-            if entity_col in df.columns:
-                all_entity_ids.update(native_pd.DataFrame(df[[entity_col]].head(100_000))[entity_col].tolist())
-        active_accounts = max(0, len(all_entity_ids) - len(anchors))
+        active_accounts = 0
 
         profiles: list[FieldLeadLagProfile] = []
 
@@ -391,8 +386,8 @@ class FieldAvailabilityAuditor:
         else:
             is_term = su_df[cfg.anchor_date_column].notna()
 
-        term_df = native_pd.DataFrame(su_df[is_term])
-        active_df = native_pd.DataFrame(su_df[~is_term])
+        term_df = su_df[is_term]
+        active_df = su_df[~is_term]
         n_term = len(term_df)
         n_active = len(active_df)
 
@@ -461,7 +456,7 @@ class FieldAvailabilityAuditor:
         return profiles
 
     def _probe_entity_dataset(
-        self, df: DataFrame, ds_name: str, anchors: native_pd.DataFrame, su_cfg: ServiceUnitConfig,
+        self, df: DataFrame, ds_name: str, anchors: DataFrame, su_cfg: ServiceUnitConfig,
     ) -> list[FieldLeadLagProfile]:
         entity_col = su_cfg.entity_column
         if entity_col not in df.columns:
@@ -472,16 +467,15 @@ class FieldAvailabilityAuditor:
         if not probe_cols:
             return []
 
-        if _is_spark_pandas(df):
+        if _is_spark_pandas(df) or _is_spark_pandas(anchors):
             return self._probe_entity_spark(df, ds_name, probe_cols, anchors, entity_col)
         return self._probe_entity_pandas(df, ds_name, probe_cols, anchors, entity_col)
 
     def _probe_entity_pandas(
         self, df: DataFrame, ds_name: str, probe_cols: list[str],
-        anchors: native_pd.DataFrame, entity_col: str,
+        anchors: DataFrame, entity_col: str,
     ) -> list[FieldLeadLagProfile]:
-        df_pd = native_pd.DataFrame(df)
-        merged = df_pd.merge(anchors[[entity_col, "is_fully_terminated"]], on=entity_col, how="left")
+        merged = df.merge(anchors[[entity_col, "is_fully_terminated"]], on=entity_col, how="left")
         fully_term = merged[merged["is_fully_terminated"] == True]  # noqa: E712
         active = merged[merged["is_fully_terminated"].isna()]
         n_term = len(fully_term)
@@ -508,16 +502,14 @@ class FieldAvailabilityAuditor:
 
     def _probe_entity_spark(
         self, df: DataFrame, ds_name: str, probe_cols: list[str],
-        anchors: native_pd.DataFrame, entity_col: str,
+        anchors: DataFrame, entity_col: str,
     ) -> list[FieldLeadLagProfile]:
         import pyspark.sql.functions as F  # noqa: N812
-        from pyspark.sql import SparkSession
 
         from customer_retention.core.compat import as_spark_df
 
-        spark = SparkSession.getActiveSession()
         spark_df = as_spark_df(df)
-        anchors_spark = F.broadcast(spark.createDataFrame(anchors[[entity_col, "is_fully_terminated"]]))
+        anchors_spark = F.broadcast(as_spark_df(anchors[[entity_col, "is_fully_terminated"]]))
         joined = spark_df.join(anchors_spark, on=entity_col, how="left")
 
         is_term = F.col("is_fully_terminated") == True  # noqa: E712
@@ -558,7 +550,7 @@ class FieldAvailabilityAuditor:
 
     def _probe_event_dataset(
         self, df: DataFrame, ds_name: str, time_col: str,
-        anchors: native_pd.DataFrame, su_cfg: ServiceUnitConfig,
+        anchors: DataFrame, su_cfg: ServiceUnitConfig,
         linkage: DatasetLinkage,
     ) -> list[FieldLeadLagProfile]:
         entity_col = su_cfg.entity_column
@@ -570,17 +562,18 @@ class FieldAvailabilityAuditor:
             return []
 
         anchor_col_name = "full_termination_date"
-        if _is_spark_pandas(df):
+        if _is_spark_pandas(df) or _is_spark_pandas(anchors):
             return self._probe_event_spark(df, ds_name, probe_cols, time_col, anchors, entity_col, anchor_col_name)
         return self._probe_event_pandas(df, ds_name, probe_cols, time_col, anchors, entity_col, anchor_col_name)
 
     def _probe_event_pandas(
         self, df: DataFrame, ds_name: str, probe_cols: list[str], time_col: str,
-        anchors: native_pd.DataFrame, entity_col: str, anchor_col_name: str,
+        anchors: DataFrame, entity_col: str, anchor_col_name: str,
     ) -> list[FieldLeadLagProfile]:
-        df_pd = native_pd.DataFrame(df)
+        from customer_retention.core.compat import safe_to_datetime, timedelta_to_days
+
         anchor_subset = anchors[anchors[anchor_col_name].notna()][[entity_col, anchor_col_name]]
-        merged = df_pd.merge(anchor_subset, on=entity_col, how="inner")
+        merged = df.merge(anchor_subset, on=entity_col, how="inner")
         if len(merged) == 0:
             return []
 
@@ -594,25 +587,23 @@ class FieldAvailabilityAuditor:
             first_pop = non_null.groupby(entity_col)[time_col].min().reset_index()
             first_pop.columns = [entity_col, "first_pop_date"]
             with_anchor = first_pop.merge(anchor_subset, on=entity_col, how="left")
-            with_anchor["first_pop_date"] = native_pd.to_datetime(with_anchor["first_pop_date"])
-            with_anchor[anchor_col_name] = native_pd.to_datetime(with_anchor[anchor_col_name])
-            lead = (with_anchor[anchor_col_name] - with_anchor["first_pop_date"]).dt.days
+            with_anchor["first_pop_date"] = safe_to_datetime(with_anchor["first_pop_date"])
+            with_anchor[anchor_col_name] = safe_to_datetime(with_anchor[anchor_col_name])
+            lead = timedelta_to_days(with_anchor[anchor_col_name] - with_anchor["first_pop_date"])
             profiles.append(self._build_event_profile(col, ds_name, anchor_col_name, lead, n_entities))
         return profiles
 
     def _probe_event_spark(
         self, df: DataFrame, ds_name: str, probe_cols: list[str], time_col: str,
-        anchors: native_pd.DataFrame, entity_col: str, anchor_col_name: str,
+        anchors: DataFrame, entity_col: str, anchor_col_name: str,
     ) -> list[FieldLeadLagProfile]:
         import pyspark.sql.functions as F  # noqa: N812
-        from pyspark.sql import SparkSession
 
         from customer_retention.core.compat import as_spark_df
 
-        spark = SparkSession.getActiveSession()
         spark_df = as_spark_df(df)
         anchor_subset = anchors[anchors[anchor_col_name].notna()][[entity_col, anchor_col_name]]
-        anchors_spark = F.broadcast(spark.createDataFrame(anchor_subset))
+        anchors_spark = F.broadcast(as_spark_df(anchor_subset))
 
         joined = spark_df.join(anchors_spark, on=entity_col, how="inner")
         n_entities = int(anchor_subset[entity_col].nunique())
