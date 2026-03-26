@@ -1032,14 +1032,17 @@ def _spark_bulk_corr_with_target(df: Any, columns: list[str], target_column: str
     return result
 
 
-def bulk_null_corr_with_target(df: Any, columns: list[str], target_column: str, progress_fn: Any = None) -> dict[str, float]:
+def bulk_null_corr_with_target(
+    df: Any, columns: list[str], target_column: str, progress_fn: Any = None,
+    precomputed_null_counts: dict[str, int] | None = None,
+) -> dict[str, float]:
     if target_column not in df.columns:
         return {}
     valid = [c for c in columns if c in df.columns and c != target_column]
     if not valid:
         return {}
     if _is_spark_pandas(df):
-        return _spark_null_corr_with_target(df, valid, target_column, progress_fn)
+        return _spark_null_corr_with_target(df, valid, target_column, progress_fn, precomputed_null_counts)
     return _pandas_null_corr_with_target(df, valid, target_column)
 
 
@@ -1056,7 +1059,10 @@ def _pandas_null_corr_with_target(df: Any, columns: list[str], target_column: st
     return result
 
 
-def _spark_null_corr_with_target(df: Any, columns: list[str], target_column: str, progress_fn: Any = None) -> dict[str, float]:
+def _spark_null_corr_with_target(
+    df: Any, columns: list[str], target_column: str, progress_fn: Any = None,
+    precomputed_null_counts: dict[str, int] | None = None,
+) -> dict[str, float]:
     import math
     import time as _time
 
@@ -1065,18 +1071,25 @@ def _spark_null_corr_with_target(df: Any, columns: list[str], target_column: str
     log = progress_fn or (lambda msg: None)
     spark_df = as_spark_df(df[columns + [target_column]])
     result: dict[str, float] = {}
-    _BATCH = 2000
     has_nulls: list[str] = []
     t0 = _time.monotonic()
-    for start in range(0, len(columns), _BATCH):
-        batch = columns[start:start + _BATCH]
-        exprs = [F.sum(F.col(c).isNull().cast("long")).alias(c) for c in batch]
-        row = spark_df.agg(*exprs).head()
-        for c in batch:
-            if (row[c] or 0) > 0:
+    if precomputed_null_counts is not None and all(c in precomputed_null_counts for c in columns):
+        for c in columns:
+            if precomputed_null_counts[c] > 0:
                 has_nulls.append(c)
             else:
                 result[c] = math.nan
+    else:
+        _BATCH = 2000
+        for start in range(0, len(columns), _BATCH):
+            batch = columns[start:start + _BATCH]
+            exprs = [F.sum(F.col(c).isNull().cast("long")).alias(c) for c in batch]
+            row = spark_df.agg(*exprs).head()
+            for c in batch:
+                if (row[c] or 0) > 0:
+                    has_nulls.append(c)
+                else:
+                    result[c] = math.nan
     log(f"    pre-filter: {len(has_nulls)}/{len(columns)} columns have nulls ({_time.monotonic() - t0:.0f}s)")
     if not has_nulls:
         return result
@@ -1094,6 +1107,11 @@ def _spark_null_corr_with_target(df: Any, columns: list[str], target_column: str
             result[c] = float(val) if val is not None else math.nan
         log(f"    null-corr batch {batch_idx + 1}/{total_batches} ({len(batch)} cols, {_time.monotonic() - t1:.0f}s)")
     return result
+
+
+def bulk_null_counts(df: Any, columns: list[str] | None = None) -> dict[str, int]:
+    from .bulk_profiling import bulk_null_counts as _bulk_null_counts
+    return _bulk_null_counts(df, columns)
 
 
 def bulk_skew(df: Any, columns: list[str]) -> dict[str, float]:
@@ -1616,6 +1634,7 @@ __all__ = [
     "safe_describe",
     "batched_corr_matrix",
     "bulk_corr_with_target",
+    "bulk_null_counts",
     "bulk_class_overlap",
     "bulk_effect_sizes",
     "BulkEffectSizeResult",

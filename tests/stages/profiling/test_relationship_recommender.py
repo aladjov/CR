@@ -291,16 +291,39 @@ class TestPrecomputedInputs:
         for p in summary.strong_predictors:
             assert p["effect_size"] == 0.0
 
-    def test_partial_correlation_matrix_triggers_recompute(self, recommender, sample_df):
+    def test_partial_correlation_matrix_subsets_to_available(self, recommender, sample_df):
         partial_corr = sample_df[["feature_a", "feature_b"]].corr()
         summary = recommender.analyze(
             sample_df,
-            numeric_cols=["feature_a", "feature_b", "feature_c"],
+            numeric_cols=["feature_a", "feature_b"],
             target_col="retained",
             correlation_matrix=partial_corr,
         )
         assert isinstance(summary, RelationshipAnalysisSummary)
         assert summary.correlation_matrix is not None
+
+    def test_precomputed_matrix_too_few_columns_raises(self, recommender, sample_df):
+        partial_corr = sample_df[["feature_a"]].corr()
+        with pytest.raises(ValueError, match="covers 1 of"):
+            recommender.analyze(
+                sample_df,
+                numeric_cols=["feature_a", "feature_b", "feature_c"],
+                target_col="retained",
+                correlation_matrix=partial_corr,
+            )
+
+    def test_precomputed_matrix_zero_overlap_raises(self, recommender, sample_df):
+        unrelated_corr = pd.DataFrame(
+            [[1.0, 0.5], [0.5, 1.0]],
+            index=["x", "y"], columns=["x", "y"],
+        )
+        with pytest.raises(ValueError, match="covers 0 of"):
+            recommender.analyze(
+                sample_df,
+                numeric_cols=["feature_a", "feature_b", "feature_c"],
+                target_col="retained",
+                correlation_matrix=unrelated_corr,
+            )
 
     def test_precomputed_categorical_produces_recommendations(self):
         from customer_retention.stages.profiling.categorical_target_analyzer import (

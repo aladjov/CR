@@ -353,3 +353,70 @@ class TestDetectLeakingFeatures:
         assert "partial" in result
         assert "complete_a" not in result
         assert "complete_b" not in result
+
+    def test_precomputed_value_corrs_skips_recomputation(self):
+        df = pd.DataFrame({
+            "leaker": [1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            "clean": [0.5, 0.3, 0.5, 0.3, 0.5, 0.3],
+            "churned": [1, 1, 1, 0, 0, 0],
+        })
+        precomputed = {"leaker": 1.0, "clean": 0.02}
+        result = detect_leaking_features(
+            df, ["leaker", "clean"], "churned",
+            precomputed_value_corrs=precomputed,
+        )
+        assert result == ["leaker"]
+
+    def test_precomputed_value_corrs_matches_live_computation(self):
+        rng = np.random.default_rng(42)
+        df = pd.DataFrame({
+            "value_leaker": [1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            "clean_a": rng.normal(0, 1, 6),
+            "clean_b": rng.normal(0, 1, 6),
+            "churned": [1, 1, 1, 0, 0, 0],
+        })
+        from customer_retention.core.compat import bulk_corr_with_target
+        precomputed = bulk_corr_with_target(
+            df, ["value_leaker", "clean_a", "clean_b"], "churned",
+        )
+        result_live = detect_leaking_features(
+            df, ["value_leaker", "clean_a", "clean_b"], "churned",
+        )
+        result_pre = detect_leaking_features(
+            df, ["value_leaker", "clean_a", "clean_b"], "churned",
+            precomputed_value_corrs=precomputed,
+        )
+        assert result_live == result_pre
+
+    def test_precomputed_null_counts_skips_null_scan(self):
+        df = pd.DataFrame({
+            "null_leaker": [np.nan, np.nan, np.nan, 1.0, 2.0, 3.0],
+            "clean": [10, 20, 30, 10, 20, 30],
+            "churned": [0, 0, 0, 1, 1, 1],
+        })
+        null_counts = {"null_leaker": 3, "clean": 0}
+        result = detect_leaking_features(
+            df, ["null_leaker", "clean"], "churned",
+            precomputed_null_counts=null_counts,
+        )
+        assert "null_leaker" in result
+        assert "clean" not in result
+
+    def test_both_precomputed_params_produce_identical_results(self):
+        df = pd.DataFrame({
+            "null_leaker": [np.nan, np.nan, np.nan, 1.0, 2.0, 3.0],
+            "value_leaker": [1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            "clean": [10, 20, 30, 10, 20, 30],
+            "churned": [0, 0, 0, 1, 1, 1],
+        })
+        from customer_retention.core.compat import bulk_corr_with_target, bulk_null_counts
+        cols = ["null_leaker", "value_leaker", "clean"]
+        pre_corrs = bulk_corr_with_target(df, cols, "churned")
+        pre_nulls = bulk_null_counts(df, cols)
+        result_live = detect_leaking_features(df, cols, "churned")
+        result_pre = detect_leaking_features(
+            df, cols, "churned",
+            precomputed_value_corrs=pre_corrs,
+            precomputed_null_counts=pre_nulls,
+        )
+        assert result_live == result_pre

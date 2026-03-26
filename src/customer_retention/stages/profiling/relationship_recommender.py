@@ -163,11 +163,13 @@ class RelationshipRecommender:
 
         if correlation_matrix is not None:
             available = [c for c in cols_to_analyze if c in correlation_matrix.index]
-            if len(available) >= 2:
-                correlation_matrix = correlation_matrix.loc[available, available]
-                cols_to_analyze = available
-            else:
-                correlation_matrix = batched_corr_matrix(df, cols_to_analyze)
+            if len(available) < 2:
+                raise ValueError(
+                    f"Precomputed correlation_matrix covers {len(available)} of "
+                    f"{len(cols_to_analyze)} requested columns — cannot analyze"
+                )
+            correlation_matrix = correlation_matrix.loc[available, available]
+            cols_to_analyze = available
         else:
             correlation_matrix = batched_corr_matrix(df, cols_to_analyze)
 
@@ -458,11 +460,13 @@ class RelationshipRecommender:
         if len(cols_in_df) >= 2:
             if correlation_matrix is not None:
                 available = [c for c in cols_in_df if c in correlation_matrix.index]
-                if len(available) >= 2:
-                    corr_matrix = correlation_matrix.loc[available, available]
-                    cols_in_df = available
-                else:
-                    corr_matrix = batched_corr_matrix(df, cols_in_df)
+                if len(available) < 2:
+                    raise ValueError(
+                        f"Precomputed correlation_matrix covers {len(available)} of "
+                        f"{len(cols_in_df)} requested columns — cannot analyze"
+                    )
+                corr_matrix = correlation_matrix.loc[available, available]
+                cols_in_df = available
             else:
                 corr_matrix = batched_corr_matrix(df, cols_in_df)
             moderate_pairs = []

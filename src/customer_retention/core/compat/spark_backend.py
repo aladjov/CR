@@ -19,7 +19,10 @@ def _is_native_spark(obj: Any) -> bool:
 def _get_spark() -> Any:
     if not SPARK_AVAILABLE:
         raise ImportError("pyspark required for Spark backend")
-    return SparkSession.getActiveSession() or SparkSession.builder.getOrCreate()
+    spark = SparkSession.getActiveSession() or SparkSession.builder.getOrCreate()
+    spark.conf.set("spark.sql.execution.arrow.pyspark.enabled", "true")
+    spark.conf.set("spark.sql.execution.arrow.pyspark.fallback.enabled", "true")
+    return spark
 
 
 def read_csv(path: str, **kwargs: Any) -> Any:
