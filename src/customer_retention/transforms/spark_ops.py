@@ -72,7 +72,7 @@ def spark_zero_inflation(df: SparkDataFrame, column: str) -> SparkDataFrame:
         return df
     return (
         df.withColumn(f"{column}_is_zero", F.when(F.col(column) == 0, 1).otherwise(0))
-          .withColumn(column, F.when(F.col(column) > 0, F.log1p(F.col(column).cast("double"))).otherwise(F.lit(0.0)))
+          .withColumn(f"{column}_log", F.when(F.col(column) > 0, F.log1p(F.col(column).cast("double"))).otherwise(F.lit(0.0)))
     )
 
 
@@ -178,13 +178,13 @@ def spark_batch_zero_inflation(df: SparkDataFrame, columns: list[str]) -> SparkD
     valid = set(columns) & set(df.columns)
     if not valid:
         return df
-    existing = [
-        F.when(F.col(c) > 0, F.log1p(F.col(c).cast("double"))).otherwise(F.lit(0.0)).alias(c)
-        if c in valid else F.col(c)
-        for c in df.columns
+    existing = [F.col(c) for c in df.columns]
+    log_cols = [
+        F.when(F.col(c) > 0, F.log1p(F.col(c).cast("double"))).otherwise(F.lit(0.0)).alias(f"{c}_log")
+        for c in columns if c in valid
     ]
     flags = [F.when(F.col(c) == 0, 1).otherwise(0).alias(f"{c}_is_zero") for c in columns if c in valid]
-    return df.select(*existing, *flags)
+    return df.select(*existing, *log_cols, *flags)
 
 
 def spark_batch_cap_then_log(df: SparkDataFrame, columns_q99: list[tuple[str, float | None]]) -> SparkDataFrame:

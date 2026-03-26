@@ -65,6 +65,7 @@ def _decompose_into_waves(steps: list[TransformationStep]) -> list[list[Transfor
         seen.add(step.column)
         if step.type == PipelineTransformationType.ZERO_INFLATION_HANDLING:
             seen.add(f"{step.column}_is_zero")
+            seen.add(f"{step.column}_log")
     if current:
         waves.append(current)
     return waves

@@ -741,8 +741,9 @@ class FindingsParser:
     def _predict_gold_generated_columns(config: "PipelineConfig") -> Set[str]:
         generated: Set[str] = set()
         for step in config.gold.transformations:
-            if step.type in (PipelineTransformationType.ZERO_INFLATION_HANDLING, PipelineTransformationType.CAP_THEN_LOG):
+            if step.type == PipelineTransformationType.ZERO_INFLATION_HANDLING:
                 generated.add(f"{step.column}_is_zero")
+                generated.add(f"{step.column}_log")
         return generated
 
     @staticmethod
@@ -812,8 +813,7 @@ class FindingsParser:
                         columns.add(f"lag{lag_idx}_{col}_{fn}")
             if "velocity" in groups:
                 for col in tf.lag_columns:
-                    for fn in tf.lag_agg_funcs:
-                        columns.add(f"velocity_{col}_{fn}")
+                    columns |= {f"{col}_velocity", f"{col}_velocity_pct"}
             if "acceleration" in groups:
                 for col in tf.lag_columns:
                     columns |= {f"{col}_acceleration", f"{col}_momentum"}

@@ -109,8 +109,11 @@ class TestGoldStatelessDispatch:
 
     def test_zero_inflation(self, executor, sample_df):
         step = _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "amount")
+        original_amount = sample_df["amount"].copy()
         result = executor.apply(sample_df, step)
         assert "amount_is_zero" in result.columns
+        assert "amount_log" in result.columns
+        pd.testing.assert_series_equal(result["amount"], original_amount)
 
     def test_cap_then_log(self, executor, sample_df):
         step = _step(PipelineTransformationType.CAP_THEN_LOG, "amount")
@@ -323,11 +326,14 @@ class TestDistributedApplyAll:
 
     def test_zero_inflation_reads_before_writes(self):
         df = pd.DataFrame({"amount": [0.0, 5.0, 0.0, 10.0]})
+        original = df["amount"].copy()
         result = ops.apply_zero_inflation_handling(df.copy(), "amount")
         assert "amount_is_zero" in result.columns
+        assert "amount_log" in result.columns
         assert list(result["amount_is_zero"]) == [1, 0, 1, 0]
-        assert result.loc[0, "amount"] == 0.0
-        assert result.loc[1, "amount"] > 0.0
+        assert result.loc[0, "amount_log"] == 0.0
+        assert result.loc[1, "amount_log"] > 0.0
+        pd.testing.assert_series_equal(result["amount"], original)
 
     def test_fitted_spark_uses_precomputed_standard_scale(self, mock_spark_ops):
         step = _step(PipelineTransformationType.SCALE, "a", method="standard")
@@ -1001,6 +1007,15 @@ class TestDecomposeIntoWaves:
         steps = [
             _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "x"),
             _step(PipelineTransformationType.LOG_TRANSFORM, "x_is_zero"),
+        ]
+        waves = _decompose_into_waves(steps)
+        assert len(waves) == 2
+
+    def test_zero_inflation_reserves_log_column(self):
+        from customer_retention.transforms.executor import _decompose_into_waves
+        steps = [
+            _step(PipelineTransformationType.ZERO_INFLATION_HANDLING, "x"),
+            _step(PipelineTransformationType.LOG_TRANSFORM, "x_log"),
         ]
         waves = _decompose_into_waves(steps)
         assert len(waves) == 2

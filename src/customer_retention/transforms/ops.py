@@ -108,10 +108,8 @@ def apply_sqrt_transform(df: DataFrame, column: str) -> DataFrame:
 
 @_requires_column
 def apply_zero_inflation_handling(df: DataFrame, column: str) -> DataFrame:
-    is_zero = (df[column] == 0).astype(int)
-    transformed = df[column].where(df[column] == 0, np.log1p(df[column].clip(lower=0)))
-    df[f"{column}_is_zero"] = is_zero
-    df[column] = transformed
+    df[f"{column}_is_zero"] = (df[column] == 0).astype(int)
+    df[f"{column}_log"] = df[column].where(df[column] == 0, np.log1p(df[column].clip(lower=0)))
     return df
 
 
@@ -180,10 +178,11 @@ def apply_batch_zero_inflation(df: DataFrame, columns: list[str]) -> DataFrame:
     valid = [c for c in columns if c in df.columns]
     if not valid:
         return df
+    mask = df[valid] == 0
+    log_values = df[valid].where(mask, np.log1p(df[valid].clip(lower=0)))
     for c in valid:
         df[f"{c}_is_zero"] = (df[c] == 0).astype(int)
-    mask = df[valid] == 0
-    df[valid] = df[valid].where(mask, np.log1p(df[valid].clip(lower=0)))
+        df[f"{c}_log"] = log_values[c]
     return df
 
 

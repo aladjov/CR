@@ -5226,8 +5226,8 @@ class TestCollectPipelineColumnsLagFeatures:
         parser._raw_source_columns = {"customers": {"customer_id"}}
         parser._source_findings_paths = {}
         cols = parser._collect_pipeline_columns(config)
-        assert "velocity_amount_sum" in cols
-        assert "velocity_amount_mean" in cols
+        assert "amount_velocity" in cols
+        assert "amount_velocity_pct" in cols
 
     def test_pipeline_columns_no_velocity_without_feature_group(self):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
@@ -5268,7 +5268,7 @@ class TestCollectPipelineColumnsLagFeatures:
         parser._raw_source_columns = {"customers": {"customer_id"}}
         parser._source_findings_paths = {}
         cols = parser._collect_pipeline_columns(config)
-        assert "velocity_amount_sum" not in cols
+        assert "amount_velocity" not in cols
 
 
 class TestTemporalFeatureGroupPrediction:
@@ -5295,6 +5295,29 @@ class TestTemporalFeatureGroupPrediction:
         parser._raw_source_columns = {"cust": {"cid"}}
         parser._source_findings_paths = {}
         return parser._collect_pipeline_columns(config)
+
+    def test_velocity_columns_predicted(self):
+        cols = self._cols_for_groups(["lagged_windows", "velocity"])
+        assert "amt_velocity" in cols
+        assert "amt_velocity_pct" in cols
+
+    def test_velocity_naming_matches_temporal_feature_engineer(self):
+        import pandas as pd
+
+        from customer_retention.stages.profiling.temporal_feature_engineer import (
+            TemporalAggregationConfig,
+            TemporalFeatureEngineer,
+        )
+        raw = pd.DataFrame({
+            "cid": ["a"] * 120, "ts": pd.date_range("2020-01-01", periods=120, freq="D"),
+            "amt": range(120),
+        })
+        eng = TemporalFeatureEngineer(TemporalAggregationConfig(lag_window_days=30, num_lags=2, lag_aggregations=["sum"]))
+        result = eng.compute(raw, "cid", "ts", ["amt"])
+        actual_velocity_cols = {c for c in result.features_df.columns if "velocity" in c.lower()}
+        predicted_cols = self._cols_for_groups(["lagged_windows", "velocity"])
+        predicted_velocity_cols = {c for c in predicted_cols if "velocity" in c.lower()}
+        assert actual_velocity_cols == predicted_velocity_cols
 
     def test_acceleration_columns_predicted(self):
         cols = self._cols_for_groups(["lagged_windows", "acceleration"])
@@ -6174,21 +6197,22 @@ class TestPredictGoldGeneratedColumns(TestFeatureSelectionDropSkipsTarget):
         )
         return TransformationStep(type=step_type, column=column, parameters={}, rationale="test", source_notebook="05")
 
-    def test_zero_inflation_predicts_is_zero(self):
+    def test_zero_inflation_predicts_is_zero_and_log(self):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
         from customer_retention.generators.pipeline_generator.models import PipelineTransformationType
         config = self._make_config()
         config.gold.transformations = [self._make_gold_step("amount", PipelineTransformationType.ZERO_INFLATION_HANDLING)]
         result = FindingsParser._predict_gold_generated_columns(config)
         assert "amount_is_zero" in result
+        assert "amount_log" in result
 
-    def test_cap_then_log_predicts_is_zero(self):
+    def test_cap_then_log_predicts_nothing(self):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
         from customer_retention.generators.pipeline_generator.models import PipelineTransformationType
         config = self._make_config()
         config.gold.transformations = [self._make_gold_step("price", PipelineTransformationType.CAP_THEN_LOG)]
         result = FindingsParser._predict_gold_generated_columns(config)
-        assert "price_is_zero" in result
+        assert result == set()
 
     def test_empty_when_no_transforms(self):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
@@ -6201,20 +6225,23 @@ class TestPredictGoldGeneratedColumns(TestFeatureSelectionDropSkipsTarget):
         parser = self._make_parser()
         config = self._make_config()
         config.gold.transformations = [self._make_gold_step("amount", PipelineTransformationType.ZERO_INFLATION_HANDLING)]
-        config.gold.feature_selections = ["amount_is_zero"]
+        config.gold.feature_selections = ["amount_is_zero", "amount_log"]
         parser._reconcile_gold_columns(config)
         assert "amount_is_zero" in config.gold.feature_selections
+        assert "amount_log" in config.gold.feature_selections
 
-    def test_apply_gold_preserves_is_zero_drop(self):
+    def test_apply_gold_preserves_is_zero_and_log_drop(self):
         from customer_retention.generators.pipeline_generator.models import PipelineTransformationType
         parser = self._make_parser()
         config = self._make_config()
         config.gold.transformations = [self._make_gold_step("age", PipelineTransformationType.ZERO_INFLATION_HANDLING)]
         registry = self._make_registry(feature_selection=[
             self._make_rec("age_is_zero", "drop_weak"),
+            self._make_rec("age_log", "drop_weak"),
         ])
         parser._apply_gold_recommendations(config, registry)
         assert "age_is_zero" in config.gold.feature_selections
+        assert "age_log" in config.gold.feature_selections
 
 
 class TestLeakageExclusionPrefixes:

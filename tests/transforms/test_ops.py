@@ -133,27 +133,39 @@ class TestSqrtTransform:
 
 
 class TestZeroInflationHandling:
-    def test_creates_indicator_and_logs(self):
+    def test_creates_indicator_and_log_column(self):
         df = pd.DataFrame({"v": [0, 0, 5, 10, 0]})
         result = apply_zero_inflation_handling(df, "v")
         assert "v_is_zero" in result.columns
+        assert "v_log" in result.columns
         assert result["v_is_zero"].sum() == 3
-        assert result.loc[2, "v"] == pytest.approx(np.log1p(5))
+        assert result.loc[2, "v_log"] == pytest.approx(np.log1p(5))
+        assert result.loc[3, "v_log"] == pytest.approx(np.log1p(10))
 
-    def test_nan_values_preserved(self):
+    def test_original_column_preserved(self):
+        df = pd.DataFrame({"v": [0, 0, 5, 10, 0]})
+        original = df["v"].copy()
+        result = apply_zero_inflation_handling(df, "v")
+        pd.testing.assert_series_equal(result["v"], original, check_names=False)
+
+    def test_nan_values_preserved_in_log(self):
         df = pd.DataFrame({"v": [0, np.nan, 5, 10, 0]})
+        original = df["v"].copy()
         result = apply_zero_inflation_handling(df, "v")
-        assert pd.isna(result["v"].iloc[1])
+        assert pd.isna(result["v_log"].iloc[1])
         assert result["v_is_zero"].iloc[1] == 0
-        assert result["v"].iloc[0] == 0
-        assert result["v"].iloc[2] == pytest.approx(np.log1p(5))
+        assert result["v_log"].iloc[0] == 0
+        assert result["v_log"].iloc[2] == pytest.approx(np.log1p(5))
+        pd.testing.assert_series_equal(result["v"], original, check_names=False)
 
-    def test_negative_values_clipped(self):
+    def test_negative_values_clipped_in_log(self):
         df = pd.DataFrame({"v": [0, -3, 5, 10]})
+        original = df["v"].copy()
         result = apply_zero_inflation_handling(df, "v")
-        assert result["v"].iloc[0] == 0
-        assert result["v"].iloc[1] == pytest.approx(np.log1p(0))
-        assert result["v"].iloc[2] == pytest.approx(np.log1p(5))
+        assert result["v_log"].iloc[0] == 0
+        assert result["v_log"].iloc[1] == pytest.approx(np.log1p(0))
+        assert result["v_log"].iloc[2] == pytest.approx(np.log1p(5))
+        pd.testing.assert_series_equal(result["v"], original, check_names=False)
 
     def test_missing_column_noop(self, sample_df):
         result = apply_zero_inflation_handling(sample_df, "nonexistent")
@@ -310,16 +322,24 @@ class TestBatchZeroInflation:
         result = apply_batch_zero_inflation(df.copy(), ["a", "b"])
         pd.testing.assert_frame_equal(result, expected)
 
-    def test_creates_all_flags(self):
+    def test_creates_all_flags_and_log_columns(self):
         df = pd.DataFrame({"x": [0.0, 1.0], "y": [2.0, 0.0], "z": [0.0, 0.0]})
         from customer_retention.transforms.ops import apply_batch_zero_inflation
         result = apply_batch_zero_inflation(df.copy(), ["x", "y", "z"])
-        assert "x_is_zero" in result.columns
-        assert "y_is_zero" in result.columns
-        assert "z_is_zero" in result.columns
+        for c in ["x", "y", "z"]:
+            assert f"{c}_is_zero" in result.columns
+            assert f"{c}_log" in result.columns
         assert result["x_is_zero"].sum() == 1
         assert result["y_is_zero"].sum() == 1
         assert result["z_is_zero"].sum() == 2
+
+    def test_originals_preserved(self):
+        df = pd.DataFrame({"x": [0.0, 1.0], "y": [2.0, 0.0]})
+        original = df.copy()
+        from customer_retention.transforms.ops import apply_batch_zero_inflation
+        result = apply_batch_zero_inflation(df.copy(), ["x", "y"])
+        pd.testing.assert_series_equal(result["x"], original["x"])
+        pd.testing.assert_series_equal(result["y"], original["y"])
 
     def test_preserves_nan(self):
         df = pd.DataFrame({"a": [0.0, np.nan, 5.0], "b": [np.nan, 0.0, 3.0]})
