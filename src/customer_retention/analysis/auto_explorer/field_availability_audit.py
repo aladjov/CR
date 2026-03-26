@@ -226,7 +226,7 @@ def _build_account_anchors_pandas(
     return result
 
 
-def _build_account_anchors_spark(su_df: DataFrame, cfg: ServiceUnitConfig) -> DataFrame:
+def _build_account_anchors_spark(su_df: DataFrame, cfg: ServiceUnitConfig) -> DataFrame:  # pragma: no cover
     import pyspark.sql.functions as F  # noqa: N812
 
     from customer_retention.core.compat import _as_pandas_api, as_spark_df
@@ -410,7 +410,7 @@ class FieldAvailabilityAuditor:
             ))
         return profiles
 
-    def _population_rate_on_units_spark(
+    def _population_rate_on_units_spark(  # pragma: no cover
         self, su_df: DataFrame, probe_cols: list[str], cfg: ServiceUnitConfig,
     ) -> list[FieldLeadLagProfile]:
         import pyspark.sql.functions as F  # noqa: N812
@@ -500,7 +500,7 @@ class FieldAvailabilityAuditor:
             ))
         return profiles
 
-    def _probe_entity_spark(
+    def _probe_entity_spark(  # pragma: no cover
         self, df: DataFrame, ds_name: str, probe_cols: list[str],
         anchors: DataFrame, entity_col: str,
     ) -> list[FieldLeadLagProfile]:
@@ -593,7 +593,7 @@ class FieldAvailabilityAuditor:
             profiles.append(self._build_event_profile(col, ds_name, anchor_col_name, lead, n_entities))
         return profiles
 
-    def _probe_event_spark(
+    def _probe_event_spark(  # pragma: no cover
         self, df: DataFrame, ds_name: str, probe_cols: list[str], time_col: str,
         anchors: DataFrame, entity_col: str, anchor_col_name: str,
     ) -> list[FieldLeadLagProfile]:

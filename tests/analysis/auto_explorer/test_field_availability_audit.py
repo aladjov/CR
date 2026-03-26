@@ -7,8 +7,10 @@ from customer_retention.analysis.auto_explorer.field_availability_audit import (
     FieldAvailabilityAuditor,
     FieldAvailabilityAuditResult,
     FieldLeadLagProfile,
+    _display_audit_results,
     _population_suspicion_score,
     build_account_anchors,
+    run_field_availability_audit,
 )
 from customer_retention.analysis.auto_explorer.service_unit_detector import (
     DatasetLinkage,
@@ -525,3 +527,178 @@ class TestScoringHelpers:
     def test_low_ratio(self):
         score = _population_suspicion_score(0.5, 0.3, 0.6)
         assert score == 0.0
+
+
+class TestDisplayResults:
+    def test_display_with_profiles(self, capsys):
+        su_cfg = _su_config()
+        cfg = FieldAvailabilityAuditConfig(service_unit=su_cfg, min_terminated_units=1)
+        result = FieldAvailabilityAuditResult(
+            config=cfg, total_accounts=100, fully_terminated_accounts=20,
+            partially_terminated_accounts=10, active_accounts=70,
+            total_terminated_units=30,
+            field_profiles=[
+                FieldLeadLagProfile(
+                    field_name="F1", source_dataset="d1",
+                    analysis_tier="contract_level", anchor_type="b",
+                    suspicion_score=0.9, recommendation="exclude",
+                ),
+                FieldLeadLagProfile(
+                    field_name="F2", source_dataset="d1",
+                    analysis_tier="account_level", anchor_type="b",
+                    suspicion_score=0.1, recommendation="safe",
+                ),
+            ],
+            recommended_exclusions=["F1"],
+            suspicious_fields=["F1"],
+        )
+        _display_audit_results(result)
+        out = capsys.readouterr().out
+        assert "F1" in out
+        assert "exclude" in out
+        assert "100" in out
+
+    def test_display_empty(self, capsys):
+        su_cfg = _su_config()
+        cfg = FieldAvailabilityAuditConfig(service_unit=su_cfg, min_terminated_units=1)
+        result = FieldAvailabilityAuditResult(config=cfg)
+        _display_audit_results(result)
+        assert "No fields audited" in capsys.readouterr().out
+
+    def test_display_investigate_only(self, capsys):
+        su_cfg = _su_config()
+        cfg = FieldAvailabilityAuditConfig(service_unit=su_cfg, min_terminated_units=1)
+        result = FieldAvailabilityAuditResult(
+            config=cfg,
+            field_profiles=[
+                FieldLeadLagProfile(
+                    field_name="F1", source_dataset="d1",
+                    analysis_tier="a", anchor_type="b",
+                    suspicion_score=0.6, recommendation="investigate",
+                ),
+            ],
+            suspicious_fields=["F1"],
+        )
+        _display_audit_results(result)
+        assert "investigate" in capsys.readouterr().out.lower()
+
+
+class TestFacade:
+    def test_auto_detect_and_run(self, tmp_path):
+        from customer_retention.analysis.auto_explorer.project_context import (
+            DatasetRegistryEntry,
+            ObjectivePriority,
+            ObjectiveSpec,
+            PredictionObjective,
+            ProjectContext,
+        )
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+
+        ctx = ProjectContext(
+            project_name="test", entity_column="ACCOUNT_ID",
+            datasets={
+                "account": DatasetRegistryEntry(name="account", path="/tmp/a"),
+                "contract": DatasetRegistryEntry(name="contract", path="/tmp/c"),
+            },
+            objectives=[ObjectiveSpec(
+                objective=PredictionObjective.IMMEDIATE_RISK,
+                priority=ObjectivePriority.PRIMARY,
+            )],
+            primary_objective=PredictionObjective.IMMEDIATE_RISK,
+        )
+        frames = {
+            "account": pd.DataFrame({
+                "ACCOUNT_ID": ["A1", "A2", "A3"],
+                "INDUSTRY": ["Tech", "Retail", "Finance"],
+            }),
+            "contract": _contract_df(),
+        }
+        ns = RunNamespace(root=tmp_path, run_id="test_run")
+        ns.run_dir.mkdir(parents=True, exist_ok=True)
+        ns.merged_dir.mkdir(parents=True, exist_ok=True)
+
+        result = run_field_availability_audit(
+            context=ctx, loaded_frames=frames, namespace=ns,
+            min_terminated_units=1,
+        )
+        assert len(result.field_profiles) > 0
+        assert (ns.field_availability_audit_dir / "audit_config.yaml").exists()
+        assert (ns.field_availability_audit_dir / "column_profiles.yaml").exists()
+        assert (ns.field_availability_audit_dir / "audit_suggestions.yaml").exists()
+
+    def test_explicit_overrides(self):
+        from customer_retention.analysis.auto_explorer.project_context import (
+            DatasetRegistryEntry,
+            ObjectivePriority,
+            ObjectiveSpec,
+            PredictionObjective,
+            ProjectContext,
+        )
+
+        ctx = ProjectContext(
+            project_name="test", entity_column="ACCOUNT_ID",
+            datasets={"contract": DatasetRegistryEntry(name="contract", path="/tmp/c")},
+            objectives=[ObjectiveSpec(
+                objective=PredictionObjective.IMMEDIATE_RISK,
+                priority=ObjectivePriority.PRIMARY,
+            )],
+            primary_objective=PredictionObjective.IMMEDIATE_RISK,
+        )
+        result = run_field_availability_audit(
+            context=ctx, loaded_frames={"contract": _contract_df()},
+            service_unit_dataset="contract",
+            service_unit_id_column="CONTRACT_ID",
+            service_unit_anchor_column="CONTRACT_END_DATE",
+            service_unit_status_column="CONTRACT_STATUS",
+            service_unit_terminated_statuses=["Cancelled", "Terminated"],
+            min_terminated_units=1,
+        )
+        assert result.config.service_unit.dataset_name == "contract"
+        assert len(result.field_profiles) > 0
+
+    def test_no_service_unit_raises(self):
+        from customer_retention.analysis.auto_explorer.project_context import (
+            DatasetRegistryEntry,
+            ObjectivePriority,
+            ObjectiveSpec,
+            PredictionObjective,
+            ProjectContext,
+        )
+
+        ctx = ProjectContext(
+            project_name="test", entity_column="USER_ID",
+            datasets={"users": DatasetRegistryEntry(name="users", path="/tmp/u")},
+            objectives=[ObjectiveSpec(
+                objective=PredictionObjective.IMMEDIATE_RISK,
+                priority=ObjectivePriority.PRIMARY,
+            )],
+            primary_objective=PredictionObjective.IMMEDIATE_RISK,
+        )
+        frames = {"users": pd.DataFrame({"USER_ID": ["U1"], "NAME": ["Foo"]})}
+        with pytest.raises(ValueError, match="No service unit"):
+            run_field_availability_audit(context=ctx, loaded_frames=frames)
+
+    def test_additional_exclusions_merged(self):
+        from customer_retention.analysis.auto_explorer.project_context import (
+            DatasetRegistryEntry,
+            ObjectivePriority,
+            ObjectiveSpec,
+            PredictionObjective,
+            ProjectContext,
+        )
+
+        ctx = ProjectContext(
+            project_name="test", entity_column="ACCOUNT_ID",
+            datasets={"contract": DatasetRegistryEntry(name="contract", path="/tmp/c")},
+            objectives=[ObjectiveSpec(
+                objective=PredictionObjective.IMMEDIATE_RISK,
+                priority=ObjectivePriority.PRIMARY,
+            )],
+            primary_objective=PredictionObjective.IMMEDIATE_RISK,
+        )
+        result = run_field_availability_audit(
+            context=ctx, loaded_frames={"contract": _contract_df()},
+            min_terminated_units=1,
+            additional_exclusions=["MANUAL_EXCLUDE"],
+        )
+        assert "MANUAL_EXCLUDE" in result.recommended_exclusions
