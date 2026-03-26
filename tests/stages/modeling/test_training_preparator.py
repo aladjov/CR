@@ -339,7 +339,7 @@ class TestTimingProfiling:
         labels = {e.label for e in result.timing_entries}
         expected = {
             "classify_columns", "drop_missing_target",
-            "encode_object_columns", "checkpoint", "median_impute",
+            "encode_object_columns", "persist", "median_impute",
             "temporal_split", "fillna_and_drop_zero_variance",
             "scale_features", "class_distribution",
         }

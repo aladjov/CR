@@ -20,6 +20,7 @@ from customer_retention.core.compat import (
     native_pd,
     safe_sample,
     spark_checkpoint,
+    spark_persist,
 )
 from customer_retention.core.compat.timing import TimingEntry, log_timing, start_collecting, stop_collecting
 
@@ -126,8 +127,8 @@ class TrainingPreparator:
         self._report(_s, _t.label, _t.elapsed)
 
         _s += 1
-        with log_timing("checkpoint") as _t:
-            df = spark_checkpoint(df)
+        with log_timing("persist") as _t:
+            df = spark_persist(df)
         self._report(_s, _t.label, _t.elapsed)
 
         _s += 1
@@ -159,6 +160,11 @@ class TrainingPreparator:
 
         _s += 1
         distributed = _is_spark_pandas(X_train)
+        self._log_sub(
+            f"finalize: {'distributed' if distributed else 'local'}, "
+            f"type={type(X_train).__module__}.{type(X_train).__name__}, "
+            f"shape={X_train.shape}"
+        )
         with log_timing("scale_features") as _t:
             if distributed:
                 result = self._finalize_distributed(

@@ -10,6 +10,7 @@ from customer_retention.core.compat import (
     bulk_zero_variance_cols,
     collect_for_sklearn,
     spark_checkpoint,
+    spark_persist,
 )
 
 
@@ -23,6 +24,24 @@ class TestSparkCheckpoint:
     def test_returns_same_object_on_pandas(self):
         df = pd.DataFrame({"x": [10]})
         assert spark_checkpoint(df) is df
+
+
+class TestSparkPersist:
+
+    def test_noop_on_pandas(self):
+        df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+        result = spark_persist(df)
+        pd.testing.assert_frame_equal(result, df)
+
+    def test_returns_same_object_on_pandas(self):
+        df = pd.DataFrame({"x": [10]})
+        assert spark_persist(df) is df
+
+    def test_preserves_data(self):
+        df = pd.DataFrame({"a": [1.0, 2.0, 3.0], "b": [4.0, 5.0, 6.0]})
+        result = spark_persist(df)
+        assert result["a"].tolist() == [1.0, 2.0, 3.0]
+        assert result["b"].tolist() == [4.0, 5.0, 6.0]
 
 
 class TestBulkLabelEncode:

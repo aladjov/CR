@@ -1378,6 +1378,18 @@ def spark_checkpoint(df: Any) -> Any:
     return df
 
 
+def spark_persist(df: Any) -> Any:
+    """Persist distributed DataFrame to memory+disk. No-op on pandas."""
+    if not _is_spark_pandas(df):
+        return df
+    from pyspark import StorageLevel
+    spark_df = as_spark_df(df)
+    spark_df.persist(StorageLevel.MEMORY_AND_DISK)
+    spark_df.count()
+    from .spark_backend import _as_pandas_api
+    return _as_pandas_api(spark_df)
+
+
 def safe_fillna(df: Any, value: Any) -> Any:
     if _is_spark_pandas(df):
         spark_df = as_spark_df(df).fillna(value).localCheckpoint(eager=True)
@@ -1694,6 +1706,7 @@ __all__ = [
     "BulkEffectSizeResult",
     "temporal_quantile",
     "spark_checkpoint",
+    "spark_persist",
     "safe_fillna",
     "lazy_fillna",
     "bulk_label_encode",
