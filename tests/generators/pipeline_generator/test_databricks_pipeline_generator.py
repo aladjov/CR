@@ -179,6 +179,46 @@ class TestDatabricksPipelineGeneratorInit:
         assert generator._catalog == "main"
         assert generator._schema == "default"
 
+    def test_explicit_framework_repo_path_passed_to_renderer(self, sample_findings_dir, tmp_path):
+        generator = DatabricksPipelineGenerator(
+            str(sample_findings_dir), str(tmp_path), "test_pipeline",
+            framework_repo_path="/Workspace/Repos/me/churnkit",
+        )
+        assert generator._renderer._framework_repo_path == "/Workspace/Repos/me/churnkit"
+
+    def test_framework_repo_path_from_persisted_config(self, sample_findings_dir, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_FRAMEWORK_REPO_PATH", raising=False)
+        monkeypatch.setattr(
+            "customer_retention.generators.pipeline_generator.databricks_generator.get_framework_repo_path",
+            lambda: "/Workspace/Repos/team/framework",
+        )
+        generator = DatabricksPipelineGenerator(
+            str(sample_findings_dir), str(tmp_path), "test_pipeline",
+        )
+        assert generator._renderer._framework_repo_path == "/Workspace/Repos/team/framework"
+
+    def test_explicit_framework_repo_path_overrides_persisted(self, sample_findings_dir, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "customer_retention.generators.pipeline_generator.databricks_generator.get_framework_repo_path",
+            lambda: "/Workspace/Repos/team/old",
+        )
+        generator = DatabricksPipelineGenerator(
+            str(sample_findings_dir), str(tmp_path), "test_pipeline",
+            framework_repo_path="/Workspace/Repos/me/new",
+        )
+        assert generator._renderer._framework_repo_path == "/Workspace/Repos/me/new"
+
+    def test_no_framework_repo_path_when_unset(self, sample_findings_dir, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_FRAMEWORK_REPO_PATH", raising=False)
+        monkeypatch.setattr(
+            "customer_retention.generators.pipeline_generator.databricks_generator.get_framework_repo_path",
+            lambda: None,
+        )
+        generator = DatabricksPipelineGenerator(
+            str(sample_findings_dir), str(tmp_path), "test_pipeline",
+        )
+        assert generator._renderer._framework_repo_path is None
+
 
 class TestDatabricksPipelineGeneratorGenerate:
     def test_generate_creates_all_required_files(self, sample_findings_dir, tmp_path):
@@ -347,6 +387,38 @@ class TestDatabricksE2E:
         config_content = (tmp_path / "config.py").read_text()
         assert "my_catalog" in config_content
         assert "my_schema" in config_content
+
+    def test_all_notebooks_have_sys_path_when_persisted(self, sample_findings_dir, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "customer_retention.generators.pipeline_generator.databricks_generator.get_framework_repo_path",
+            lambda: "/Workspace/Repos/team/churnkit/src",
+        )
+        generator = DatabricksPipelineGenerator(
+            str(sample_findings_dir), str(tmp_path), "repo_test",
+        )
+        files = generator.generate()
+        for file_path in files:
+            if file_path.suffix != ".py":
+                continue
+            content = file_path.read_text()
+            assert "import sys" in content, f"{file_path.name} missing sys.path setup"
+            assert "/Workspace/Repos/team/churnkit/src" in content, f"{file_path.name} missing repo path"
+
+    def test_no_sys_path_when_not_persisted(self, sample_findings_dir, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_FRAMEWORK_REPO_PATH", raising=False)
+        monkeypatch.setattr(
+            "customer_retention.generators.pipeline_generator.databricks_generator.get_framework_repo_path",
+            lambda: None,
+        )
+        generator = DatabricksPipelineGenerator(
+            str(sample_findings_dir), str(tmp_path), "no_repo_test",
+        )
+        files = generator.generate()
+        for file_path in files:
+            if file_path.suffix != ".py":
+                continue
+            content = file_path.read_text()
+            assert "FRAMEWORK_REPO_ROOT" not in content, f"{file_path.name} has unexpected sys.path"
 
     def test_aggregated_entity_reads_from_event_table(self, sample_findings_dir, tmp_path):
         generator = DatabricksPipelineGenerator(

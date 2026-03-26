@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
+from customer_retention.core.config.experiments import get_framework_repo_path
+
 from .databricks_renderer import DatabricksCodeRenderer
 from .findings_parser import FindingsParser
 from .protocols import PipelineGeneratorBase
@@ -29,7 +31,8 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
         self._experiments_dir = experiments_dir
         self._parser = FindingsParser(findings_dir, namespace=namespace, intent=intent)
         self._renderer = DatabricksCodeRenderer(
-            catalog=catalog, schema=schema, framework_repo_path=framework_repo_path,
+            catalog=catalog, schema=schema,
+            framework_repo_path=framework_repo_path or get_framework_repo_path(),
         )
 
     def _bronze_entity_input_name(self, source_name: str, agg_name: str) -> str:

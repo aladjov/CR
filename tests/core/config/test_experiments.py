@@ -19,6 +19,7 @@ from customer_retention.core.config.experiments import (
     get_experiments_dir,
     get_feature_store_dir,
     get_findings_dir,
+    get_framework_repo_path,
     get_mlruns_dir,
     get_runs_dir,
     persist_databricks_config,
@@ -402,6 +403,29 @@ class TestPersistedDatabricksConfig:
         data = json.loads(config_file.read_text())
         assert "experiment_name" not in data
 
+    def test_persist_writes_framework_repo_path(self, tmp_path, monkeypatch):
+        config_file = tmp_path / ".churnkit_config.json"
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        persist_databricks_config(
+            "/Volumes/c/s/experiments", "c", "s", "Users/me",
+            framework_repo_path="/Workspace/Repos/me/churnkit/src",
+        )
+        data = json.loads(config_file.read_text())
+        assert data["framework_repo_path"] == "/Workspace/Repos/me/churnkit/src"
+
+    def test_persist_omits_framework_repo_path_when_not_provided(self, tmp_path, monkeypatch):
+        config_file = tmp_path / ".churnkit_config.json"
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        persist_databricks_config("/Volumes/c/s/experiments", "c", "s", "Users/me")
+        data = json.loads(config_file.read_text())
+        assert "framework_repo_path" not in data
+
     def test_persist_skips_without_workspace_path(self, tmp_path, monkeypatch):
         config_file = tmp_path / ".churnkit_config.json"
         monkeypatch.setattr(
@@ -532,6 +556,49 @@ class TestGetExperimentsDirWithPersistedConfig:
         monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
         result = get_experiments_dir()
         assert result.name == "experiments"
+
+
+class TestGetFrameworkRepoPath:
+    def test_returns_none_when_unset(self, monkeypatch):
+        monkeypatch.delenv("CR_FRAMEWORK_REPO_PATH", raising=False)
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        assert get_framework_repo_path() is None
+
+    def test_env_var_takes_precedence(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CR_FRAMEWORK_REPO_PATH", "/Workspace/Repos/me/from_env")
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "17.3")
+        monkeypatch.setenv("CR_WORKSPACE_PATH", "Users/me")
+        config_file = tmp_path / ".churnkit_config.json"
+        config_file.write_text(json.dumps({"framework_repo_path": "/Workspace/Repos/me/from_file"}))
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        assert get_framework_repo_path() == "/Workspace/Repos/me/from_env"
+
+    def test_reads_from_persisted_config(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_FRAMEWORK_REPO_PATH", raising=False)
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "17.3")
+        monkeypatch.setenv("CR_WORKSPACE_PATH", "Users/me")
+        config_file = tmp_path / ".churnkit_config.json"
+        config_file.write_text(json.dumps({"framework_repo_path": "/Workspace/Repos/team/churnkit/src"}))
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        assert get_framework_repo_path() == "/Workspace/Repos/team/churnkit/src"
+
+    def test_returns_none_when_not_in_config(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_FRAMEWORK_REPO_PATH", raising=False)
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "17.3")
+        monkeypatch.setenv("CR_WORKSPACE_PATH", "Users/me")
+        config_file = tmp_path / ".churnkit_config.json"
+        config_file.write_text(json.dumps({"catalog": "main"}))
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        assert get_framework_repo_path() is None
 
 
 class TestGetRunsDir:

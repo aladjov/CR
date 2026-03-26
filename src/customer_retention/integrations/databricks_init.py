@@ -51,7 +51,7 @@ def databricks_init(
     resolved_experiment_name = experiment_name or _resolve_experiment_name_from_notebook_path()
     resolved_experiment_name = _make_absolute_experiment_path(resolved_experiment_name, workspace_path)
     _set_experiment_name_env_var(resolved_experiment_name)
-    _persist_config(catalog, schema, workspace_path, resolved_experiment_name)
+    _persist_config(catalog, schema, workspace_path, resolved_experiment_name, framework_repo_path)
     _reload_config_constants()
     _ensure_experiments_volume_exists(catalog, schema)
     _setup_experiment_directories()
@@ -101,11 +101,15 @@ def _set_experiment_name_env_var(experiment_name: str) -> None:
     os.environ["CR_EXPERIMENT_NAME"] = experiment_name
 
 
-def _persist_config(catalog: str, schema: str, workspace_path: str | None, experiment_name: str | None = None) -> None:
+def _persist_config(
+    catalog: str, schema: str, workspace_path: str | None,
+    experiment_name: str | None = None, framework_repo_path: str | None = None,
+) -> None:
     from customer_retention.core.config.experiments import persist_databricks_config
 
     persist_databricks_config(
-        f"/Volumes/{catalog}/{schema}/experiments", catalog, schema, workspace_path, experiment_name,
+        f"/Volumes/{catalog}/{schema}/experiments", catalog, schema, workspace_path,
+        experiment_name, framework_repo_path=framework_repo_path,
     )
 
 

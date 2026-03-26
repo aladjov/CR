@@ -2452,23 +2452,30 @@ class DatabricksCodeRenderer:
         self._env.globals["spark_provenance_block"] = spark_provenance_block
         self._env.globals["sorted_landing_names"] = _sorted_landing_names
 
+    _NOTEBOOK_HEADER = "# Databricks notebook source\n"
+
+    def _inject_sys_path(self, rendered: str) -> str:
+        if not self._framework_repo_path:
+            return rendered
+        if not rendered.startswith(self._NOTEBOOK_HEADER):
+            return rendered
+        sys_path_block = (
+            self._NOTEBOOK_HEADER +
+            "import sys\n"
+            "\n"
+            f'FRAMEWORK_REPO_ROOT = "{self._framework_repo_path}"\n'
+            "if FRAMEWORK_REPO_ROOT not in sys.path:\n"
+            "    sys.path.insert(0, FRAMEWORK_REPO_ROOT)\n"
+            "\n# COMMAND ----------\n\n"
+        )
+        return rendered.replace(self._NOTEBOOK_HEADER, sys_path_block, 1)
+
     def _render(self, template_key: str, **context) -> str:
-        return self._env.get_template(self._TEMPLATE_MAP[template_key]).render(**context)
+        rendered = self._env.get_template(self._TEMPLATE_MAP[template_key]).render(**context)
+        return self._inject_sys_path(rendered)
 
     def render_config(self, config: PipelineConfig) -> str:
-        rendered = self._render("config", config=config, catalog=self._catalog, schema=self._schema)
-        if self._framework_repo_path:
-            sys_path_block = (
-                "# Databricks notebook source\n"
-                "import sys\n"
-                "\n"
-                f'FRAMEWORK_REPO_ROOT = "{self._framework_repo_path}"\n'
-                "if FRAMEWORK_REPO_ROOT not in sys.path:\n"
-                "    sys.path.insert(0, FRAMEWORK_REPO_ROOT)\n"
-                "\n# COMMAND ----------\n\n"
-            )
-            rendered = rendered.replace("# Databricks notebook source\n", sys_path_block, 1)
-        return rendered
+        return self._render("config", config=config, catalog=self._catalog, schema=self._schema)
 
     def render_landing(self, name: str, config) -> str:
         return self._render("landing", name=name, config=config)
@@ -2519,7 +2526,8 @@ class DatabricksCodeRenderer:
                 target_dataset = name
         if not target_dataset and ds_list:
             target_dataset = ds_list[0]["name"]
-        repo_path = framework_repo_path or self._framework_repo_path
+        saved = self._framework_repo_path
+        self._framework_repo_path = framework_repo_path or saved
         rendered = self._render(
             "exploration_runner",
             project_name=project_name,
@@ -2528,17 +2536,7 @@ class DatabricksCodeRenderer:
             notebooks_base_path=notebooks_base_path,
             findings_base_path=findings_base_path,
         )
-        if repo_path:
-            sys_path_block = (
-                "# Databricks notebook source\n"
-                "import sys\n"
-                "\n"
-                f'FRAMEWORK_REPO_ROOT = "{repo_path}"\n'
-                "if FRAMEWORK_REPO_ROOT not in sys.path:\n"
-                "    sys.path.insert(0, FRAMEWORK_REPO_ROOT)\n"
-                "\n# COMMAND ----------\n\n"
-            )
-            rendered = rendered.replace("# Databricks notebook source\n", sys_path_block, 1)
+        self._framework_repo_path = saved
         return rendered
 
     _PER_DATASET_NOTEBOOKS = [

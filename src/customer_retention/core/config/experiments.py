@@ -39,12 +39,15 @@ def _load_persisted_databricks_config() -> dict | None:
 def persist_databricks_config(
     experiments_dir: str, catalog: str, schema: str,
     workspace_path: str | None = None, experiment_name: str | None = None,
+    framework_repo_path: str | None = None,
 ) -> None:
     if not workspace_path:
         return
     data: dict = {"experiments_dir": experiments_dir, "catalog": catalog, "schema": schema}
     if experiment_name:
         data["experiment_name"] = experiment_name
+    if framework_repo_path:
+        data["framework_repo_path"] = framework_repo_path
     try:
         _workspace_config_path(workspace_path).write_text(json.dumps(data))
     except OSError:
@@ -116,6 +119,15 @@ def get_experiment_name(default: str = "customer_retention") -> str:
     if persisted and "experiment_name" in persisted:
         return persisted["experiment_name"]
     return default
+
+
+def get_framework_repo_path() -> str | None:
+    if "CR_FRAMEWORK_REPO_PATH" in os.environ:
+        return os.environ["CR_FRAMEWORK_REPO_PATH"]
+    persisted = _load_persisted_databricks_config()
+    if persisted and "framework_repo_path" in persisted:
+        return persisted["framework_repo_path"]
+    return None
 
 
 EXPERIMENTS_DIR = get_experiments_dir()
