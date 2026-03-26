@@ -22,6 +22,13 @@ from .exploration_manager import (
     MultiDatasetFindings,
 )
 from .explorer import DataExplorer
+from .field_availability_audit import (
+    FieldAvailabilityAuditConfig,
+    FieldAvailabilityAuditor,
+    FieldAvailabilityAuditResult,
+    FieldLeadLagProfile,
+    run_field_availability_audit,
+)
 from .findings import ColumnFinding, ExplorationFindings, TextProcessingMetadata, TimeSeriesMetadata
 from .intent_defaults import IntentDefaultsEngine, IntentSuggestion
 from .key_resolver import resolve_entity_keys, resolve_sample_ids_via_bridge, suggest_key_resolutions
@@ -85,6 +92,12 @@ from .recommendations import (
     TransformRecommendation,
 )
 from .run_namespace import RunNamespace
+from .service_unit_detector import (
+    DatasetLinkage,
+    ServiceUnitConfig,
+    classify_dataset_linkage,
+    detect_service_unit,
+)
 from .session import (
     SessionState,
     get_current_username,
@@ -219,4 +232,13 @@ __all__ = [
     "has_text_columns_for_dataset",
     "detect_skip_set_for_dataset",
     "detect_global_skip_set",
+    "FieldAvailabilityAuditConfig",
+    "FieldAvailabilityAuditResult",
+    "FieldAvailabilityAuditor",
+    "FieldLeadLagProfile",
+    "run_field_availability_audit",
+    "ServiceUnitConfig",
+    "DatasetLinkage",
+    "detect_service_unit",
+    "classify_dataset_linkage",
 ]

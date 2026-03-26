@@ -84,7 +84,8 @@ class LeakageGate:
             pass
 
     def run(
-        self, df: DataFrame, feature_availability: Optional["FeatureAvailabilityMetadata"] = None
+        self, df: DataFrame, feature_availability: Optional["FeatureAvailabilityMetadata"] = None,
+        field_availability_audit: Optional[Dict[str, Any]] = None,
     ) -> LeakageCheckResult:
         self._resolve_columns(df)
         critical_issues: List[LeakageIssue] = []
@@ -124,6 +125,11 @@ class LeakageGate:
         if feature_availability is not None:
             avail_issues = self._check_feature_availability(df, feature_cols, feature_availability)
             high_issues.extend(avail_issues)
+
+        if field_availability_audit is not None:
+            audit_issues = self._check_field_availability_audit(feature_cols, field_availability_audit)
+            critical_issues.extend([i for i in audit_issues if i.severity == Severity.CRITICAL])
+            high_issues.extend([i for i in audit_issues if i.severity == Severity.HIGH])
 
         for issue in critical_issues + high_issues:
             if issue.feature not in suspicious_features:
@@ -368,4 +374,23 @@ class LeakageGate:
                     value=feat_info.coverage_pct,
                 ))
 
+        return issues
+
+    def _check_field_availability_audit(
+        self, feature_cols: List[str], audit_data: Dict[str, Any],
+    ) -> List[LeakageIssue]:
+        issues: List[LeakageIssue] = []
+        exclude_set = set(audit_data.get("exclude_fields", []))
+        investigate_set = set(audit_data.get("investigate_fields", []))
+        for col in feature_cols:
+            if col in exclude_set:
+                issues.append(LeakageIssue(
+                    check_id="LK013", severity=Severity.CRITICAL, feature=col,
+                    description=f"Field availability audit recommends excluding '{col}' — populated primarily around termination",
+                ))
+            elif col in investigate_set:
+                issues.append(LeakageIssue(
+                    check_id="LK013", severity=Severity.HIGH, feature=col,
+                    description=f"Field availability audit flagged '{col}' for investigation — suspicious population pattern near termination",
+                ))
         return issues
