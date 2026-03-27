@@ -1114,6 +1114,71 @@ def bulk_null_counts(df: Any, columns: list[str] | None = None) -> dict[str, int
     return _bulk_null_counts(df, columns)
 
 
+def _spark_unpivot_corr_with_target(
+    df: Any, columns: list[str], target_column: str, progress_fn: Any = None,
+) -> dict[str, float]:
+    import math
+    import time as _time
+
+    import pyspark.sql.functions as F  # noqa: N812
+
+    log = progress_fn or (lambda msg: None)
+    numeric = _numeric_column_names(df, columns + [target_column])
+    num_cols = [c for c in columns if c in numeric]
+    result: dict[str, float] = {c: math.nan for c in columns if c not in numeric}
+    if not num_cols or target_column not in numeric:
+        result.update({c: math.nan for c in num_cols})
+        return result
+    spark_df = as_spark_df(df[num_cols + [target_column]])
+    t0 = _time.monotonic()
+    stack_args = ", ".join(f"'{c}', cast(`{c}` as double)" for c in num_cols)
+    stacked = spark_df.selectExpr(
+        f"cast(`{target_column}` as double) as `{target_column}`",
+        f"stack({len(num_cols)}, {stack_args}) as (__col_name, __col_value)",
+    )
+    rows = stacked.groupBy("__col_name").agg(
+        F.corr("__col_value", target_column).alias("__corr"),
+    ).collect()
+    for row in rows:
+        val = row["__corr"]
+        result[row["__col_name"]] = float(val) if val is not None else math.nan
+    log(f"    unpivot corr: {len(num_cols)} cols in {_time.monotonic() - t0:.0f}s")
+    return result
+
+
+def _spark_unpivot_leakage_corr_combined(
+    df: Any, columns: list[str], target_column: str, progress_fn: Any = None,
+) -> tuple[dict[str, float], dict[str, float]]:
+    import math
+    import time as _time
+
+    import pyspark.sql.functions as F  # noqa: N812
+
+    log = progress_fn or (lambda msg: None)
+    spark_df = as_spark_df(df[columns + [target_column]])
+    t0 = _time.monotonic()
+    stack_args = ", ".join(f"'{c}', cast(`{c}` as double)" for c in columns)
+    stacked = spark_df.selectExpr(
+        f"cast(`{target_column}` as double) as `{target_column}`",
+        f"stack({len(columns)}, {stack_args}) as (__col_name, __col_value)",
+    )
+    rows = stacked.groupBy("__col_name").agg(
+        F.corr("__col_value", F.col(target_column)).alias("__value_corr"),
+        F.corr(
+            F.when(F.col("__col_value").isNull(), 1.0).otherwise(0.0),
+            F.col(target_column),
+        ).alias("__null_corr"),
+    ).collect()
+    null_corrs: dict[str, float] = {}
+    value_corrs: dict[str, float] = {}
+    for row in rows:
+        c = row["__col_name"]
+        value_corrs[c] = float(row["__value_corr"]) if row["__value_corr"] is not None else math.nan
+        null_corrs[c] = float(row["__null_corr"]) if row["__null_corr"] is not None else math.nan
+    log(f"    unpivot leakage corr: {len(columns)} cols in {_time.monotonic() - t0:.0f}s")
+    return null_corrs, value_corrs
+
+
 def _spark_leakage_corr_combined(
     df: Any, columns: list[str], target_column: str, progress_fn: Any = None,
 ) -> tuple[dict[str, float], dict[str, float]]:

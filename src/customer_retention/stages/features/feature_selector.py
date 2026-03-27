@@ -327,8 +327,8 @@ class FeatureSelector:
 def _import_spark_ml():
     import pyspark.sql.functions as F  # noqa: N812
     from pyspark.ml.classification import LogisticRegression
-    from pyspark.ml.feature import StandardScaler, VectorAssembler
-    return LogisticRegression, VectorAssembler, StandardScaler, F
+    from pyspark.ml.feature import VectorAssembler
+    return LogisticRegression, VectorAssembler, F
 
 
 def _spark_l1_selection(
