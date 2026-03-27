@@ -9,20 +9,18 @@ class TestVarianceSelection:
     @pytest.fixture
     def df_with_low_variance(self):
         np.random.seed(42)
-        return pd.DataFrame({
-            "constant": [1.0] * 100,
-            "near_constant": [1.0] * 99 + [2.0],
-            "normal_var": np.random.randn(100),
-            "high_var": np.random.randn(100) * 10,
-            "target": np.random.choice([0, 1], 100)
-        })
+        return pd.DataFrame(
+            {
+                "constant": [1.0] * 100,
+                "near_constant": [1.0] * 99 + [2.0],
+                "normal_var": np.random.randn(100),
+                "high_var": np.random.randn(100) * 10,
+                "target": np.random.choice([0, 1], 100),
+            }
+        )
 
     def test_removes_constant_features(self, df_with_low_variance):
-        selector = FeatureSelector(
-            method=SelectionMethod.VARIANCE,
-            variance_threshold=0.01,
-            target_column="target"
-        )
+        selector = FeatureSelector(method=SelectionMethod.VARIANCE, variance_threshold=0.01, target_column="target")
         result = selector.fit_transform(df_with_low_variance)
 
         assert "constant" not in result.selected_features
@@ -30,11 +28,7 @@ class TestVarianceSelection:
         assert "high_var" in result.selected_features
 
     def test_variance_threshold_configurable(self, df_with_low_variance):
-        selector = FeatureSelector(
-            method=SelectionMethod.VARIANCE,
-            variance_threshold=0.5,
-            target_column="target"
-        )
+        selector = FeatureSelector(method=SelectionMethod.VARIANCE, variance_threshold=0.5, target_column="target")
         result = selector.fit_transform(df_with_low_variance)
 
         assert "constant" not in result.selected_features
@@ -46,19 +40,19 @@ class TestCorrelationSelection:
     def df_with_correlation(self):
         np.random.seed(42)
         base = np.random.randn(100)
-        return pd.DataFrame({
-            "feature1": base,
-            "feature2": base + np.random.randn(100) * 0.01,  # highly correlated
-            "feature3": base + np.random.randn(100) * 0.1,   # correlated
-            "feature4": np.random.randn(100),  # independent
-            "target": np.random.choice([0, 1], 100)
-        })
+        return pd.DataFrame(
+            {
+                "feature1": base,
+                "feature2": base + np.random.randn(100) * 0.01,  # highly correlated
+                "feature3": base + np.random.randn(100) * 0.1,  # correlated
+                "feature4": np.random.randn(100),  # independent
+                "target": np.random.choice([0, 1], 100),
+            }
+        )
 
     def test_removes_highly_correlated_features(self, df_with_correlation):
         selector = FeatureSelector(
-            method=SelectionMethod.CORRELATION,
-            correlation_threshold=0.95,
-            target_column="target"
+            method=SelectionMethod.CORRELATION, correlation_threshold=0.95, target_column="target"
         )
         result = selector.fit_transform(df_with_correlation)
 
@@ -71,9 +65,7 @@ class TestCorrelationSelection:
 
     def test_correlation_threshold_configurable(self, df_with_correlation):
         selector = FeatureSelector(
-            method=SelectionMethod.CORRELATION,
-            correlation_threshold=0.80,
-            target_column="target"
+            method=SelectionMethod.CORRELATION, correlation_threshold=0.80, target_column="target"
         )
         result = selector.fit_transform(df_with_correlation)
 
@@ -85,19 +77,21 @@ class TestPreserveFeatures:
     @pytest.fixture
     def sample_df(self):
         np.random.seed(42)
-        return pd.DataFrame({
-            "constant": [1.0] * 100,
-            "important": np.random.randn(100),
-            "normal": np.random.randn(100),
-            "target": np.random.choice([0, 1], 100)
-        })
+        return pd.DataFrame(
+            {
+                "constant": [1.0] * 100,
+                "important": np.random.randn(100),
+                "normal": np.random.randn(100),
+                "target": np.random.choice([0, 1], 100),
+            }
+        )
 
     def test_preserves_specified_features(self, sample_df):
         selector = FeatureSelector(
             method=SelectionMethod.VARIANCE,
             variance_threshold=0.01,
             target_column="target",
-            preserve_features=["constant"]
+            preserve_features=["constant"],
         )
         result = selector.fit_transform(sample_df)
 
@@ -109,52 +103,38 @@ class TestSelectionResult:
     @pytest.fixture
     def sample_df(self):
         np.random.seed(42)
-        return pd.DataFrame({
-            "constant": [1.0] * 100,
-            "feature1": np.random.randn(100),
-            "feature2": np.random.randn(100),
-            "target": np.random.choice([0, 1], 100)
-        })
+        return pd.DataFrame(
+            {
+                "constant": [1.0] * 100,
+                "feature1": np.random.randn(100),
+                "feature2": np.random.randn(100),
+                "target": np.random.choice([0, 1], 100),
+            }
+        )
 
     def test_result_contains_selected_features(self, sample_df):
-        selector = FeatureSelector(
-            method=SelectionMethod.VARIANCE,
-            variance_threshold=0.01,
-            target_column="target"
-        )
+        selector = FeatureSelector(method=SelectionMethod.VARIANCE, variance_threshold=0.01, target_column="target")
         result = selector.fit_transform(sample_df)
 
         assert hasattr(result, "selected_features")
         assert isinstance(result.selected_features, list)
 
     def test_result_contains_dropped_features(self, sample_df):
-        selector = FeatureSelector(
-            method=SelectionMethod.VARIANCE,
-            variance_threshold=0.01,
-            target_column="target"
-        )
+        selector = FeatureSelector(method=SelectionMethod.VARIANCE, variance_threshold=0.01, target_column="target")
         result = selector.fit_transform(sample_df)
 
         assert hasattr(result, "dropped_features")
         assert "constant" in result.dropped_features
 
     def test_result_contains_drop_reasons(self, sample_df):
-        selector = FeatureSelector(
-            method=SelectionMethod.VARIANCE,
-            variance_threshold=0.01,
-            target_column="target"
-        )
+        selector = FeatureSelector(method=SelectionMethod.VARIANCE, variance_threshold=0.01, target_column="target")
         result = selector.fit_transform(sample_df)
 
         assert hasattr(result, "drop_reasons")
         assert "constant" in result.drop_reasons
 
     def test_result_contains_dataframe(self, sample_df):
-        selector = FeatureSelector(
-            method=SelectionMethod.VARIANCE,
-            variance_threshold=0.01,
-            target_column="target"
-        )
+        selector = FeatureSelector(method=SelectionMethod.VARIANCE, variance_threshold=0.01, target_column="target")
         result = selector.fit_transform(sample_df)
 
         assert hasattr(result, "df")
@@ -165,22 +145,14 @@ class TestSelectionResult:
 class TestFitTransformSeparation:
     def test_fit_then_transform(self):
         np.random.seed(42)
-        train = pd.DataFrame({
-            "constant": [1.0] * 100,
-            "feature1": np.random.randn(100),
-            "target": np.random.choice([0, 1], 100)
-        })
-        test = pd.DataFrame({
-            "constant": [1.0] * 50,
-            "feature1": np.random.randn(50),
-            "target": np.random.choice([0, 1], 50)
-        })
-
-        selector = FeatureSelector(
-            method=SelectionMethod.VARIANCE,
-            variance_threshold=0.01,
-            target_column="target"
+        train = pd.DataFrame(
+            {"constant": [1.0] * 100, "feature1": np.random.randn(100), "target": np.random.choice([0, 1], 100)}
         )
+        test = pd.DataFrame(
+            {"constant": [1.0] * 50, "feature1": np.random.randn(50), "target": np.random.choice([0, 1], 50)}
+        )
+
+        selector = FeatureSelector(method=SelectionMethod.VARIANCE, variance_threshold=0.01, target_column="target")
         selector.fit(train)
         result = selector.transform(test)
 
@@ -191,17 +163,11 @@ class TestFitTransformSeparation:
 class TestMaxFeatures:
     def test_max_features_limits_output(self):
         np.random.seed(42)
-        df = pd.DataFrame({
-            f"feature{i}": np.random.randn(100) * (i + 1)
-            for i in range(10)
-        })
+        df = pd.DataFrame({f"feature{i}": np.random.randn(100) * (i + 1) for i in range(10)})
         df["target"] = np.random.choice([0, 1], 100)
 
         selector = FeatureSelector(
-            method=SelectionMethod.VARIANCE,
-            variance_threshold=0.0,
-            target_column="target",
-            max_features=5
+            method=SelectionMethod.VARIANCE, variance_threshold=0.0, target_column="target", max_features=5
         )
         result = selector.fit_transform(df)
 
@@ -210,60 +176,40 @@ class TestMaxFeatures:
 
 class TestSelectionMethod:
     def test_all_methods_exist(self):
-        expected_methods = [
-            "VARIANCE", "CORRELATION", "MUTUAL_INFO",
-            "IMPORTANCE", "RECURSIVE", "L1_SELECTION"
-        ]
+        expected_methods = ["VARIANCE", "CORRELATION", "MUTUAL_INFO", "IMPORTANCE", "RECURSIVE", "L1_SELECTION"]
         for method in expected_methods:
             assert hasattr(SelectionMethod, method)
 
 
 class TestEdgeCases:
     def test_handles_single_feature(self):
-        df = pd.DataFrame({
-            "feature1": np.random.randn(100),
-            "target": np.random.choice([0, 1], 100)
-        })
+        df = pd.DataFrame({"feature1": np.random.randn(100), "target": np.random.choice([0, 1], 100)})
 
-        selector = FeatureSelector(
-            method=SelectionMethod.VARIANCE,
-            variance_threshold=0.01,
-            target_column="target"
-        )
+        selector = FeatureSelector(method=SelectionMethod.VARIANCE, variance_threshold=0.01, target_column="target")
         result = selector.fit_transform(df)
 
         assert "feature1" in result.selected_features
 
     def test_handles_all_constant_features(self):
-        df = pd.DataFrame({
-            "const1": [1.0] * 100,
-            "const2": [2.0] * 100,
-            "target": np.random.choice([0, 1], 100)
-        })
+        df = pd.DataFrame({"const1": [1.0] * 100, "const2": [2.0] * 100, "target": np.random.choice([0, 1], 100)})
 
-        selector = FeatureSelector(
-            method=SelectionMethod.VARIANCE,
-            variance_threshold=0.01,
-            target_column="target"
-        )
+        selector = FeatureSelector(method=SelectionMethod.VARIANCE, variance_threshold=0.01, target_column="target")
         result = selector.fit_transform(df)
 
         assert len(result.selected_features) == 0
 
     def test_handles_null_values(self):
         np.random.seed(42)
-        df = pd.DataFrame({
-            "feature1": np.random.randn(100),
-            "feature2": np.random.randn(100),
-            "target": np.random.choice([0, 1], 100)
-        })
+        df = pd.DataFrame(
+            {
+                "feature1": np.random.randn(100),
+                "feature2": np.random.randn(100),
+                "target": np.random.choice([0, 1], 100),
+            }
+        )
         df.loc[0, "feature1"] = np.nan
 
-        selector = FeatureSelector(
-            method=SelectionMethod.VARIANCE,
-            variance_threshold=0.01,
-            target_column="target"
-        )
+        selector = FeatureSelector(method=SelectionMethod.VARIANCE, variance_threshold=0.01, target_column="target")
         # Should not raise error
         result = selector.fit_transform(df)
         assert result.df is not None
@@ -273,17 +219,20 @@ class TestBatchedCorrelationSelection:
     def test_correlation_selection_uses_batched_corr(self, monkeypatch):
         np.random.seed(42)
         base = np.random.randn(100)
-        df = pd.DataFrame({
-            "feature1": base,
-            "feature2": base + np.random.randn(100) * 0.01,
-            "feature3": np.random.randn(100),
-            "target": np.random.choice([0, 1], 100),
-        })
+        df = pd.DataFrame(
+            {
+                "feature1": base,
+                "feature2": base + np.random.randn(100) * 0.01,
+                "feature3": np.random.randn(100),
+                "target": np.random.choice([0, 1], 100),
+            }
+        )
 
         calls = []
         original_batched = None
 
         import customer_retention.stages.features.feature_selector as fs_mod
+
         original_batched = fs_mod.batched_corr_matrix
 
         def tracking_batched(*args, **kwargs):
@@ -303,12 +252,14 @@ class TestBatchedCorrelationSelection:
     def test_correlation_selection_drops_same_features(self):
         np.random.seed(42)
         base = np.random.randn(100)
-        df = pd.DataFrame({
-            "feature1": base,
-            "feature2": base + np.random.randn(100) * 0.01,
-            "feature3": np.random.randn(100),
-            "target": np.random.choice([0, 1], 100),
-        })
+        df = pd.DataFrame(
+            {
+                "feature1": base,
+                "feature2": base + np.random.randn(100) * 0.01,
+                "feature3": np.random.randn(100),
+                "target": np.random.choice([0, 1], 100),
+            }
+        )
         selector = FeatureSelector(
             method=SelectionMethod.CORRELATION,
             correlation_threshold=0.95,
@@ -322,12 +273,14 @@ class TestBatchedCorrelationSelection:
 class TestBatchedVarianceSelection:
     def test_variance_selection_batched(self):
         np.random.seed(42)
-        df = pd.DataFrame({
-            "constant": [1.0] * 100,
-            "low_var": [1.0] * 99 + [1.001],
-            "normal": np.random.randn(100),
-            "target": np.random.choice([0, 1], 100),
-        })
+        df = pd.DataFrame(
+            {
+                "constant": [1.0] * 100,
+                "low_var": [1.0] * 99 + [1.001],
+                "normal": np.random.randn(100),
+                "target": np.random.choice([0, 1], 100),
+            }
+        )
         selector = FeatureSelector(
             method=SelectionMethod.VARIANCE,
             variance_threshold=0.01,
@@ -345,14 +298,16 @@ class TestL1Selection:
         np.random.seed(42)
         n = 1000
         target = np.random.choice([0, 1], n)
-        return pd.DataFrame({
-            "relevant1": target * 3.0 + np.random.randn(n) * 0.1,
-            "relevant2": target * 2.0 + np.random.randn(n) * 0.2,
-            "noise1": np.random.randn(n),
-            "noise2": np.random.randn(n),
-            "noise3": np.random.randn(n),
-            "target": target,
-        })
+        return pd.DataFrame(
+            {
+                "relevant1": target * 3.0 + np.random.randn(n) * 0.1,
+                "relevant2": target * 2.0 + np.random.randn(n) * 0.2,
+                "noise1": np.random.randn(n),
+                "noise2": np.random.randn(n),
+                "noise3": np.random.randn(n),
+                "target": target,
+            }
+        )
 
     def test_l1_drops_irrelevant_features(self, df_with_target_signal):
         selector = FeatureSelector(
@@ -396,11 +351,13 @@ class TestL1Selection:
         np.random.seed(42)
         n = 500
         target = np.random.choice([0, 1, 2], n)
-        df = pd.DataFrame({
-            "signal": target * 3.0 + np.random.randn(n) * 0.1,
-            "noise": np.random.randn(n),
-            "target": target,
-        })
+        df = pd.DataFrame(
+            {
+                "signal": target * 3.0 + np.random.randn(n) * 0.1,
+                "noise": np.random.randn(n),
+                "target": target,
+            }
+        )
         selector = FeatureSelector(
             method=SelectionMethod.L1_SELECTION,
             target_column="target",
@@ -420,11 +377,13 @@ class TestL1Selection:
         np.random.seed(42)
         n = 200
         target = np.random.choice([0, 1], n)
-        df = pd.DataFrame({
-            "signal": target * 2.0 + np.random.randn(n) * 0.1,
-            "with_nan": np.random.randn(n),
-            "target": target,
-        })
+        df = pd.DataFrame(
+            {
+                "signal": target * 2.0 + np.random.randn(n) * 0.1,
+                "with_nan": np.random.randn(n),
+                "target": target,
+            }
+        )
         df.loc[0:5, "with_nan"] = np.nan
         selector = FeatureSelector(
             method=SelectionMethod.L1_SELECTION,
@@ -434,10 +393,12 @@ class TestL1Selection:
         assert result.df is not None
 
     def test_l1_raises_on_insufficient_rows(self):
-        df = pd.DataFrame({
-            "a": [1.0, 2.0, 3.0],
-            "target": [0, 1, 0],
-        })
+        df = pd.DataFrame(
+            {
+                "a": [1.0, 2.0, 3.0],
+                "target": [0, 1, 0],
+            }
+        )
         selector = FeatureSelector(
             method=SelectionMethod.L1_SELECTION,
             target_column="target",
@@ -456,17 +417,23 @@ class TestL1Selection:
 
     def test_l1_high_c_keeps_more_features(self, df_with_target_signal):
         strict = FeatureSelector(
-            method=SelectionMethod.L1_SELECTION, target_column="target", l1_C=0.1,
+            method=SelectionMethod.L1_SELECTION,
+            target_column="target",
+            l1_C=0.1,
         ).fit_transform(df_with_target_signal)
         lenient = FeatureSelector(
-            method=SelectionMethod.L1_SELECTION, target_column="target", l1_C=100.0,
+            method=SelectionMethod.L1_SELECTION,
+            target_column="target",
+            l1_C=100.0,
         ).fit_transform(df_with_target_signal)
         assert len(lenient.selected_features) >= len(strict.selected_features)
 
     def test_l1_ratio_below_one_uses_elasticnet(self, df_with_target_signal):
         result = FeatureSelector(
-            method=SelectionMethod.L1_SELECTION, target_column="target",
-            l1_C=1.0, l1_ratio=0.5,
+            method=SelectionMethod.L1_SELECTION,
+            target_column="target",
+            l1_C=1.0,
+            l1_ratio=0.5,
         ).fit_transform(df_with_target_signal)
         assert "relevant1" in result.selected_features
         assert result.importance_scores is not None
@@ -484,21 +451,26 @@ class TestRunSelectionPipeline:
         n = 200
         target = np.random.choice([0, 1], n)
         base = np.random.randn(n)
-        return pd.DataFrame({
-            "constant": [1.0] * n,
-            "signal": target * 2.0 + np.random.randn(n) * 0.1,
-            "corr1": base,
-            "corr2": base + np.random.randn(n) * 0.01,
-            "noise1": np.random.randn(n),
-            "noise2": np.random.randn(n),
-            "target": target,
-        })
+        return pd.DataFrame(
+            {
+                "constant": [1.0] * n,
+                "signal": target * 2.0 + np.random.randn(n) * 0.1,
+                "corr1": base,
+                "corr2": base + np.random.randn(n) * 0.01,
+                "noise1": np.random.randn(n),
+                "noise2": np.random.randn(n),
+                "target": target,
+            }
+        )
 
     def test_variance_and_correlation_only(self, df_mixed):
         from customer_retention.stages.features.feature_selector import run_selection_pipeline
+
         result = run_selection_pipeline(
-            df_mixed, target_column="target",
-            variance_threshold=0.01, correlation_threshold=0.95,
+            df_mixed,
+            target_column="target",
+            variance_threshold=0.01,
+            correlation_threshold=0.95,
             l1_enabled=False,
         )
         assert "constant" in result.dropped_features
@@ -508,9 +480,12 @@ class TestRunSelectionPipeline:
 
     def test_full_pipeline_with_l1(self, df_mixed):
         from customer_retention.stages.features.feature_selector import run_selection_pipeline
+
         result = run_selection_pipeline(
-            df_mixed, target_column="target",
-            variance_threshold=0.01, correlation_threshold=0.95,
+            df_mixed,
+            target_column="target",
+            variance_threshold=0.01,
+            correlation_threshold=0.95,
             l1_enabled=True,
         )
         assert "constant" in result.dropped_features
@@ -519,9 +494,12 @@ class TestRunSelectionPipeline:
 
     def test_merges_drop_reasons_across_stages(self, df_mixed):
         from customer_retention.stages.features.feature_selector import run_selection_pipeline
+
         result = run_selection_pipeline(
-            df_mixed, target_column="target",
-            variance_threshold=0.01, correlation_threshold=0.95,
+            df_mixed,
+            target_column="target",
+            variance_threshold=0.01,
+            correlation_threshold=0.95,
             l1_enabled=True,
         )
         reasons = set(result.drop_reasons.values())
@@ -533,22 +511,24 @@ class TestRunSelectionPipeline:
         np.random.seed(42)
         n = 200
         target = np.random.choice([0, 1], n)
-        df = pd.DataFrame({
-            f"f{i}": target * (i + 1) + np.random.randn(n) * 0.5
-            for i in range(20)
-        })
+        df = pd.DataFrame({f"f{i}": target * (i + 1) + np.random.randn(n) * 0.5 for i in range(20)})
         df["target"] = target
         from customer_retention.stages.features.feature_selector import run_selection_pipeline
+
         result = run_selection_pipeline(
-            df, target_column="target",
-            l1_enabled=True, max_features=5,
+            df,
+            target_column="target",
+            l1_enabled=True,
+            max_features=5,
         )
         assert len(result.selected_features) <= 5
 
     def test_preserves_target_column_in_output(self, df_mixed):
         from customer_retention.stages.features.feature_selector import run_selection_pipeline
+
         result = run_selection_pipeline(
-            df_mixed, target_column="target",
+            df_mixed,
+            target_column="target",
             l1_enabled=True,
         )
         assert "target" in result.df.columns
@@ -556,55 +536,78 @@ class TestRunSelectionPipeline:
 
     def test_pipeline_l1_c_passed_through(self):
         from customer_retention.stages.features.feature_selector import run_selection_pipeline
+
         np.random.seed(42)
         n = 1000
         target = np.random.choice([0, 1], n)
-        df = pd.DataFrame({
-            "strong": target * 3.0 + np.random.randn(n) * 0.1,
-            "medium": target * 1.5 + np.random.randn(n) * 0.5,
-            "weak": target * 0.3 + np.random.randn(n),
-            "noise1": np.random.randn(n),
-            "noise2": np.random.randn(n),
-            "target": target,
-        })
+        df = pd.DataFrame(
+            {
+                "strong": target * 3.0 + np.random.randn(n) * 0.1,
+                "medium": target * 1.5 + np.random.randn(n) * 0.5,
+                "weak": target * 0.3 + np.random.randn(n),
+                "noise1": np.random.randn(n),
+                "noise2": np.random.randn(n),
+                "target": target,
+            }
+        )
         strict = run_selection_pipeline(
-            df, target_column="target", variance_threshold=0.0,
-            correlation_threshold=1.0, l1_enabled=True, l1_C=0.01,
+            df,
+            target_column="target",
+            variance_threshold=0.0,
+            correlation_threshold=1.0,
+            l1_enabled=True,
+            l1_C=0.01,
         )
         lenient = run_selection_pipeline(
-            df, target_column="target", variance_threshold=0.0,
-            correlation_threshold=1.0, l1_enabled=True, l1_C=1000.0,
+            df,
+            target_column="target",
+            variance_threshold=0.0,
+            correlation_threshold=1.0,
+            l1_enabled=True,
+            l1_C=1000.0,
         )
         assert len(lenient.selected_features) >= len(strict.selected_features)
 
     def test_pipeline_l1_ratio_passed_through(self, df_mixed):
         from customer_retention.stages.features.feature_selector import run_selection_pipeline
+
         result = run_selection_pipeline(
-            df_mixed, target_column="target", l1_enabled=True, l1_C=1.0, l1_ratio=0.7,
+            df_mixed,
+            target_column="target",
+            l1_enabled=True,
+            l1_C=1.0,
+            l1_ratio=0.7,
         )
         assert "signal" in result.selected_features
 
 
+def _mock_spark_l1_env(feature_cols, coefs_array):
+    from unittest.mock import MagicMock
+
+    mock_spark_df = MagicMock()
+    mock_model = MagicMock()
+    mock_model.coefficients.toArray.return_value = coefs_array
+    mock_lr_class = MagicMock(return_value=MagicMock(fit=MagicMock(return_value=mock_model)))
+    mock_assembler = MagicMock()
+    mock_assembler.return_value = MagicMock(transform=MagicMock(return_value=mock_spark_df))
+    mock_F = MagicMock()
+    stats_dict = {f"__mean__{c}": 0.0 for c in feature_cols}
+    stats_dict.update({f"__std__{c}": 1.0 for c in feature_cols})
+    work_df = mock_spark_df.select.return_value.na.drop.return_value.na.fill.return_value
+    work_df.agg.return_value.head.return_value = stats_dict
+    return mock_spark_df, mock_lr_class, mock_assembler, mock_F
+
+
 class TestDistributedL1Selection:
     def test_spark_l1_returns_feature_selection_result(self):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         from customer_retention.stages.features.feature_selector import _spark_l1_selection
+
         feature_cols = ["f1", "f2", "f3"]
-        mock_spark_df = MagicMock()
-        mock_model = MagicMock()
-        mock_model.coefficients.toArray.return_value = np.array([0.5, 0.0, 0.3])
-        mock_lr_class = MagicMock(return_value=MagicMock(fit=MagicMock(return_value=mock_model)))
-        mock_assembler = MagicMock()
-        mock_assembler_inst = MagicMock()
-        mock_assembler_inst.transform.return_value = mock_spark_df
-        mock_assembler.return_value = mock_assembler_inst
-        mock_scaler_class = MagicMock()
-        mock_scaler_model = MagicMock()
-        mock_scaler_model.transform.return_value = mock_spark_df
-        mock_scaler_class.return_value = MagicMock(fit=MagicMock(return_value=mock_scaler_model))
+        mock_spark_df, mock_lr, mock_asm, mock_F = _mock_spark_l1_env(feature_cols, np.array([0.5, 0.0, 0.3]))
         with patch("customer_retention.stages.features.feature_selector._import_spark_ml") as mock_imports:
-            mock_imports.return_value = (mock_lr_class, mock_assembler, mock_scaler_class, MagicMock())
+            mock_imports.return_value = (mock_lr, mock_asm, mock_F)
             dropped, reasons, scores = _spark_l1_selection(mock_spark_df, "target", feature_cols)
         assert "f2" in dropped
         assert "f1" not in dropped
@@ -613,74 +616,94 @@ class TestDistributedL1Selection:
         assert scores["f1"] == 0.5
 
     def test_spark_l1_all_nonzero_drops_nothing(self):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         from customer_retention.stages.features.feature_selector import _spark_l1_selection
+
         feature_cols = ["a", "b"]
-        mock_spark_df = MagicMock()
-        mock_model = MagicMock()
-        mock_model.coefficients.toArray.return_value = np.array([1.0, 0.5])
-        mock_lr_class = MagicMock(return_value=MagicMock(fit=MagicMock(return_value=mock_model)))
-        mock_assembler = MagicMock()
-        mock_assembler.return_value = MagicMock(transform=MagicMock(return_value=mock_spark_df))
-        mock_scaler_class = MagicMock()
-        mock_scaler_class.return_value = MagicMock(fit=MagicMock(return_value=MagicMock(transform=MagicMock(return_value=mock_spark_df))))
+        mock_spark_df, mock_lr, mock_asm, mock_F = _mock_spark_l1_env(feature_cols, np.array([1.0, 0.5]))
         with patch("customer_retention.stages.features.feature_selector._import_spark_ml") as mock_imports:
-            mock_imports.return_value = (mock_lr_class, mock_assembler, mock_scaler_class, MagicMock())
+            mock_imports.return_value = (mock_lr, mock_asm, mock_F)
             dropped, reasons, scores = _spark_l1_selection(mock_spark_df, "target", feature_cols)
         assert dropped == []
         assert reasons == {}
 
-
     def test_spark_l1_custom_reg_param_and_elastic_net(self):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         from customer_retention.stages.features.feature_selector import _spark_l1_selection
+
         feature_cols = ["f1", "f2"]
-        mock_spark_df = MagicMock()
-        mock_model = MagicMock()
-        mock_model.coefficients.toArray.return_value = np.array([0.5, 0.3])
-        mock_lr_class = MagicMock(return_value=MagicMock(fit=MagicMock(return_value=mock_model)))
-        mock_assembler = MagicMock()
-        mock_assembler.return_value = MagicMock(transform=MagicMock(return_value=mock_spark_df))
-        mock_scaler_class = MagicMock()
-        mock_scaler_class.return_value = MagicMock(fit=MagicMock(return_value=MagicMock(transform=MagicMock(return_value=mock_spark_df))))
+        mock_spark_df, mock_lr, mock_asm, mock_F = _mock_spark_l1_env(feature_cols, np.array([0.5, 0.3]))
         with patch("customer_retention.stages.features.feature_selector._import_spark_ml") as mock_imports:
-            mock_imports.return_value = (mock_lr_class, mock_assembler, mock_scaler_class, MagicMock())
+            mock_imports.return_value = (mock_lr, mock_asm, mock_F)
             _spark_l1_selection(mock_spark_df, "target", feature_cols, reg_param=0.1, elastic_net_param=0.7)
-        mock_lr_class.assert_called_once_with(
-            featuresCol="__scaled__", labelCol="target",
-            elasticNetParam=0.7, regParam=0.1, maxIter=2000,
+        mock_lr.assert_called_once_with(
+            featuresCol="__scaled__",
+            labelCol="target",
+            elasticNetParam=0.7,
+            regParam=0.1,
+            maxIter=2000,
         )
 
     def test_spark_l1_all_zero_drops_nothing(self):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         from customer_retention.stages.features.feature_selector import _spark_l1_selection
+
         feature_cols = ["a", "b", "c"]
-        mock_spark_df = MagicMock()
-        mock_model = MagicMock()
-        mock_model.coefficients.toArray.return_value = np.array([0.0, 0.0, 0.0])
-        mock_lr_class = MagicMock(return_value=MagicMock(fit=MagicMock(return_value=mock_model)))
-        mock_assembler = MagicMock()
-        mock_assembler.return_value = MagicMock(transform=MagicMock(return_value=mock_spark_df))
-        mock_scaler_class = MagicMock()
-        mock_scaler_class.return_value = MagicMock(fit=MagicMock(return_value=MagicMock(transform=MagicMock(return_value=mock_spark_df))))
+        mock_spark_df, mock_lr, mock_asm, mock_F = _mock_spark_l1_env(feature_cols, np.array([0.0, 0.0, 0.0]))
         with patch("customer_retention.stages.features.feature_selector._import_spark_ml") as mock_imports:
-            mock_imports.return_value = (mock_lr_class, mock_assembler, mock_scaler_class, MagicMock())
+            mock_imports.return_value = (mock_lr, mock_asm, mock_F)
             dropped, reasons, scores = _spark_l1_selection(mock_spark_df, "target", feature_cols)
         assert dropped == []
         assert reasons == {}
         assert len(scores) == 3
 
+    def test_spark_l1_uses_sql_standardization_not_ml_scaler(self):
+        from unittest.mock import patch
+
+        from customer_retention.stages.features.feature_selector import _spark_l1_selection
+
+        feature_cols = ["f1", "f2"]
+        mock_spark_df, mock_lr, mock_asm, mock_F = _mock_spark_l1_env(feature_cols, np.array([0.5, 0.3]))
+        with patch("customer_retention.stages.features.feature_selector._import_spark_ml") as mock_imports:
+            mock_imports.return_value = (mock_lr, mock_asm, mock_F)
+            _spark_l1_selection(mock_spark_df, "target", feature_cols)
+        work_df = mock_spark_df.select.return_value.na.drop.return_value.na.fill.return_value
+        work_df.agg.assert_called_once()
+        work_df.agg.return_value.head.assert_called_once()
+
+    def test_spark_l1_handles_zero_stddev(self):
+        from unittest.mock import patch
+
+        from customer_retention.stages.features.feature_selector import _spark_l1_selection
+
+        feature_cols = ["const", "normal"]
+        mock_spark_df, mock_lr, mock_asm, mock_F = _mock_spark_l1_env(feature_cols, np.array([0.0, 0.5]))
+        work_df = mock_spark_df.select.return_value.na.drop.return_value.na.fill.return_value
+        work_df.agg.return_value.head.return_value = {
+            "__mean__const": 5.0,
+            "__std__const": 0.0,
+            "__mean__normal": 1.0,
+            "__std__normal": 2.0,
+        }
+        with patch("customer_retention.stages.features.feature_selector._import_spark_ml") as mock_imports:
+            mock_imports.return_value = (mock_lr, mock_asm, mock_F)
+            dropped, _, scores = _spark_l1_selection(mock_spark_df, "target", feature_cols)
+        assert "const" in dropped
+        assert scores["normal"] == 0.5
+
     def test_l1_all_zero_coefficients_keeps_all_features(self):
         np.random.seed(42)
         n = 200
-        df = pd.DataFrame({
-            "noise1": np.random.randn(n) * 0.001,
-            "noise2": np.random.randn(n) * 0.001,
-            "target": np.random.choice([0, 1], n),
-        })
+        df = pd.DataFrame(
+            {
+                "noise1": np.random.randn(n) * 0.001,
+                "noise2": np.random.randn(n) * 0.001,
+                "target": np.random.choice([0, 1], n),
+            }
+        )
         selector = FeatureSelector(
             method=SelectionMethod.L1_SELECTION,
             target_column="target",
@@ -695,28 +718,35 @@ class TestPrecomputedCorrMatrix:
     def df_correlated(self):
         np.random.seed(42)
         base = np.random.randn(200)
-        return pd.DataFrame({
-            "f1": base,
-            "f2": base + np.random.randn(200) * 0.01,
-            "f3": np.random.randn(200),
-            "target": np.random.choice([0, 1], 200),
-        })
+        return pd.DataFrame(
+            {
+                "f1": base,
+                "f2": base + np.random.randn(200) * 0.01,
+                "f3": np.random.randn(200),
+                "target": np.random.choice([0, 1], 200),
+            }
+        )
 
     def test_selector_uses_precomputed_corr(self, df_correlated):
         precomputed = df_correlated[["f1", "f2", "f3"]].corr()
         selector = FeatureSelector(
-            method=SelectionMethod.CORRELATION, correlation_threshold=0.95,
-            target_column="target", precomputed_corr_matrix=precomputed,
+            method=SelectionMethod.CORRELATION,
+            correlation_threshold=0.95,
+            target_column="target",
+            precomputed_corr_matrix=precomputed,
         )
         result = selector.fit_transform(df_correlated)
         assert len({"f1", "f2"} - set(result.selected_features)) >= 1
 
     def test_pipeline_uses_precomputed_corr(self, df_correlated):
         from customer_retention.stages.features.feature_selector import run_selection_pipeline
+
         precomputed = df_correlated[["f1", "f2", "f3"]].corr()
         result = run_selection_pipeline(
-            df_correlated, target_column="target",
-            correlation_threshold=0.95, l1_enabled=False,
+            df_correlated,
+            target_column="target",
+            correlation_threshold=0.95,
+            l1_enabled=False,
             precomputed_corr_matrix=precomputed,
         )
         assert len({"f1", "f2"} - set(result.selected_features)) >= 1
@@ -724,8 +754,10 @@ class TestPrecomputedCorrMatrix:
     def test_precomputed_corr_skips_recomputation(self, df_correlated):
         precomputed = df_correlated[["f1", "f2", "f3"]].corr()
         selector = FeatureSelector(
-            method=SelectionMethod.CORRELATION, correlation_threshold=0.95,
-            target_column="target", precomputed_corr_matrix=precomputed,
+            method=SelectionMethod.CORRELATION,
+            correlation_threshold=0.95,
+            target_column="target",
+            precomputed_corr_matrix=precomputed,
         )
         selector.fit(df_correlated)
         dropped = set(selector.dropped_features)
@@ -735,8 +767,10 @@ class TestPrecomputedCorrMatrix:
     def test_partial_precomputed_falls_back(self, df_correlated):
         partial = df_correlated[["f1", "f3"]].corr()
         selector = FeatureSelector(
-            method=SelectionMethod.CORRELATION, correlation_threshold=0.95,
-            target_column="target", precomputed_corr_matrix=partial,
+            method=SelectionMethod.CORRELATION,
+            correlation_threshold=0.95,
+            target_column="target",
+            precomputed_corr_matrix=partial,
         )
         result = selector.fit_transform(df_correlated)
         assert len({"f1", "f2"} - set(result.selected_features)) >= 1
@@ -746,20 +780,22 @@ class TestCombinedSelection:
     def test_variance_then_correlation(self):
         np.random.seed(42)
         base = np.random.randn(100)
-        df = pd.DataFrame({
-            "constant": [1.0] * 100,
-            "feature1": base,
-            "feature2": base + np.random.randn(100) * 0.01,
-            "feature3": np.random.randn(100),
-            "target": np.random.choice([0, 1], 100)
-        })
+        df = pd.DataFrame(
+            {
+                "constant": [1.0] * 100,
+                "feature1": base,
+                "feature2": base + np.random.randn(100) * 0.01,
+                "feature3": np.random.randn(100),
+                "target": np.random.choice([0, 1], 100),
+            }
+        )
 
         selector = FeatureSelector(
             method=SelectionMethod.VARIANCE,
             variance_threshold=0.01,
             correlation_threshold=0.95,
             target_column="target",
-            apply_correlation_filter=True
+            apply_correlation_filter=True,
         )
         result = selector.fit_transform(df)
 

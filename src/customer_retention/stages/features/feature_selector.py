@@ -335,17 +335,32 @@ def _spark_l1_selection(
     spark_df: Any, target_column: str, feature_columns: List[str],
     reg_param: float = 1.0, max_iter: int = 2000, elastic_net_param: float = 1.0,
 ) -> tuple:
-    LR, VectorAssembler, StandardScaler, F = _import_spark_ml()
+    LR, VectorAssembler, F = _import_spark_ml()
 
     work_df = spark_df.select([F.col(c).cast("double").alias(c) for c in feature_columns] + [F.col(target_column).cast("double").alias(target_column)])
     work_df = work_df.na.drop(subset=[target_column]).na.fill(0.0, subset=feature_columns)
-    assembler = VectorAssembler(inputCols=feature_columns, outputCol="__raw__", handleInvalid="keep")
+
+    stats_exprs = []
+    for c in feature_columns:
+        stats_exprs.extend([F.mean(c).alias(f"__mean__{c}"), F.stddev(c).alias(f"__std__{c}")])
+    stats_row = work_df.agg(*stats_exprs).head()
+
+    scaled_cols = []
+    for c in feature_columns:
+        mean_val = float(stats_row[f"__mean__{c}"] or 0.0)
+        std_val = float(stats_row[f"__std__{c}"] or 1.0)
+        if std_val == 0.0:
+            std_val = 1.0
+        scaled_cols.append(((F.col(c) - F.lit(mean_val)) / F.lit(std_val)).alias(c))
+    scaled_cols.append(F.col(target_column))
+    work_df = work_df.select(scaled_cols)
+
+    assembler = VectorAssembler(inputCols=feature_columns, outputCol="__scaled__", handleInvalid="keep")
     assembled = assembler.transform(work_df)
-    scaler = StandardScaler(inputCol="__raw__", outputCol="__scaled__", withStd=True, withMean=True)
-    scaled = scaler.fit(assembled).transform(assembled)
     lr = LR(featuresCol="__scaled__", labelCol=target_column, elasticNetParam=elastic_net_param, regParam=reg_param, maxIter=max_iter)
-    model = lr.fit(scaled)
+    model = lr.fit(assembled)
     coefs = np.abs(model.coefficients.toArray())
+    del model
     scores: Dict[str, float] = {col: float(coefs[i]) for i, col in enumerate(feature_columns)}
     zero_cols = [col for i, col in enumerate(feature_columns) if coefs[i] == 0.0]
     if len(zero_cols) == len(feature_columns):
