@@ -332,25 +332,41 @@ class TrainingPreparator:
         import pyspark.sql.functions as F  # noqa: N812
         from pyspark.sql.types import NumericType
 
+        from customer_retention.core.compat import _spark_stacked
+
         train_spark = as_spark_df(X_train)
         test_spark = as_spark_df(X_test)
         all_cols = list(train_spark.columns)
         num_cols = [f.name for f in train_spark.schema.fields if isinstance(f.dataType, NumericType)]
 
         t0 = time.monotonic()
-        train_exprs = [F.coalesce(F.sum(F.isnull(F.col(c)).cast("int")), F.lit(0)).alias(f"__null__{c}") for c in all_cols]
-        for c in num_cols:
-            train_exprs.append(F.stddev(F.coalesce(F.col(c), F.lit(0))).alias(f"__std__{c}"))
-        train_row = train_spark.agg(*train_exprs).collect()[0]
-        self._log_sub(f"agg train ({len(all_cols)} cols, {len(train_exprs)} exprs): {time.monotonic() - t0:.1f}s")
+        train_rows = _spark_stacked(train_spark, all_cols).groupBy("__col_name").agg(
+            F.sum(F.col("__col_value").isNull().cast("int")).alias("__null_count"),
+            F.stddev(F.coalesce(F.col("__col_value"), F.lit(0))).alias("__stddev"),
+        ).collect()
+        train_map = {row["__col_name"]: row for row in train_rows}
+        self._log_sub(f"unpivot-agg train ({len(all_cols)} cols): {time.monotonic() - t0:.1f}s")
 
         t1 = time.monotonic()
-        test_exprs = [F.coalesce(F.sum(F.isnull(F.col(c)).cast("int")), F.lit(0)).alias(f"__null__{c}") for c in all_cols]
-        test_row = test_spark.agg(*test_exprs).collect()[0]
-        self._log_sub(f"agg test ({len(all_cols)} cols): {time.monotonic() - t1:.1f}s")
+        test_rows = _spark_stacked(test_spark, all_cols).groupBy("__col_name").agg(
+            F.sum(F.col("__col_value").isNull().cast("int")).alias("__null_count"),
+        ).collect()
+        test_map = {row["__col_name"]: row for row in test_rows}
+        self._log_sub(f"unpivot-agg test ({len(all_cols)} cols): {time.monotonic() - t1:.1f}s")
 
-        combined_nulls = {c: int(train_row[f"__null__{c}"] or 0) + int(test_row[f"__null__{c}"] or 0) for c in all_cols}
-        zero_var = [c for c in num_cols if train_row[f"__std__{c}"] is None or float(train_row[f"__std__{c}"]) == 0]
+        combined_nulls = {
+            c: int(train_map[c]["__null_count"] or 0) + int(test_map[c]["__null_count"] or 0)
+            for c in all_cols
+        }
+        num_set = set(num_cols)
+        zero_var = [
+            c for c in all_cols
+            if c in num_set and (
+                c not in train_map
+                or train_map[c]["__stddev"] is None
+                or float(train_map[c]["__stddev"]) == 0
+            )
+        ]
         return combined_nulls, zero_var
 
     @staticmethod

@@ -84,8 +84,10 @@ COLLECT_BOUNDARY_FILES = {
     "transforms/spark_ops.py",
     # Batch fitting — .agg().collect() for scaler stats (1 row), bounded sample for PowerTransform
     "transforms/executor.py",
-    # Training prep — .agg().collect() for batched null counts + stddev (1 row per split)
+    # Training prep — groupBy().agg().collect() for unpivoted null counts + stddev
     "stages/modeling/training_preparator.py",
+    # Feature scaler — groupBy().agg().collect() for unpivoted scaler params (1 row per feature)
+    "stages/modeling/spark_feature_scaler.py",
     # Field availability audit — .agg().collect() for batched population-rate stats (1 row)
     "analysis/auto_explorer/field_availability_audit.py",
     # CV folds — gc.collect() for memory reclamation between folds (not Spark .collect())

@@ -774,6 +774,34 @@ def _spark_numeric_cols(spark_df: Any, columns: list[str] | None = None) -> list
     ]
 
 
+_STACK_CHUNK = 2000
+
+
+def _spark_stacked(spark_df: Any, columns: list[str]) -> Any:
+    from functools import reduce
+    chunks = []
+    for start in range(0, len(columns), _STACK_CHUNK):
+        batch = columns[start:start + _STACK_CHUNK]
+        stack_args = ", ".join(f"'{c}', cast(`{c}` as double)" for c in batch)
+        chunks.append(spark_df.selectExpr(
+            f"stack({len(batch)}, {stack_args}) as (__col_name, __col_value)",
+        ))
+    return reduce(lambda a, b: a.unionAll(b), chunks)
+
+
+def _spark_stacked_with_extra(spark_df: Any, columns: list[str], extra_col: str) -> Any:
+    from functools import reduce
+    chunks = []
+    for start in range(0, len(columns), _STACK_CHUNK):
+        batch = columns[start:start + _STACK_CHUNK]
+        stack_args = ", ".join(f"'{c}', cast(`{c}` as double)" for c in batch)
+        chunks.append(spark_df.selectExpr(
+            f"cast(`{extra_col}` as double) as `{extra_col}`",
+            f"stack({len(batch)}, {stack_args}) as (__col_name, __col_value)",
+        ))
+    return reduce(lambda a, b: a.unionAll(b), chunks)
+
+
 def _numeric_column_names(df: Any, columns: list[str]) -> set[str]:
     if _is_spark_pandas(df):
         return set(_spark_numeric_cols(as_spark_df(df), columns))
@@ -1004,7 +1032,7 @@ def bulk_corr_with_target(df: Any, columns: list[str], target_column: str, progr
             except (ValueError, TypeError):
                 result[c] = math.nan
         return result
-    return _spark_bulk_corr_with_target(df, valid, target_column, progress_fn)
+    return _spark_unpivot_corr_with_target(df, valid, target_column, progress_fn)
 
 
 def _spark_bulk_corr_with_target(df: Any, columns: list[str], target_column: str, progress_fn: Any = None) -> dict[str, float]:
@@ -1131,11 +1159,7 @@ def _spark_unpivot_corr_with_target(
         return result
     spark_df = as_spark_df(df[num_cols + [target_column]])
     t0 = _time.monotonic()
-    stack_args = ", ".join(f"'{c}', cast(`{c}` as double)" for c in num_cols)
-    stacked = spark_df.selectExpr(
-        f"cast(`{target_column}` as double) as `{target_column}`",
-        f"stack({len(num_cols)}, {stack_args}) as (__col_name, __col_value)",
-    )
+    stacked = _spark_stacked_with_extra(spark_df, num_cols, target_column)
     rows = stacked.groupBy("__col_name").agg(
         F.corr("__col_value", target_column).alias("__corr"),
     ).collect()
@@ -1157,11 +1181,7 @@ def _spark_unpivot_leakage_corr_combined(
     log = progress_fn or (lambda msg: None)
     spark_df = as_spark_df(df[columns + [target_column]])
     t0 = _time.monotonic()
-    stack_args = ", ".join(f"'{c}', cast(`{c}` as double)" for c in columns)
-    stacked = spark_df.selectExpr(
-        f"cast(`{target_column}` as double) as `{target_column}`",
-        f"stack({len(columns)}, {stack_args}) as (__col_name, __col_value)",
-    )
+    stacked = _spark_stacked_with_extra(spark_df, columns, target_column)
     rows = stacked.groupBy("__col_name").agg(
         F.corr("__col_value", F.col(target_column)).alias("__value_corr"),
         F.corr(
@@ -1221,7 +1241,7 @@ def leakage_corr_combined(
     df: Any, columns: list[str], target_column: str, progress_fn: Any = None,
 ) -> tuple[dict[str, float], dict[str, float]]:
     if _is_spark_pandas(df):
-        return _spark_leakage_corr_combined(df, columns, target_column, progress_fn)
+        return _spark_unpivot_leakage_corr_combined(df, columns, target_column, progress_fn)
     null_corrs = bulk_null_corr_with_target(df, columns, target_column, progress_fn)
     value_corrs = bulk_corr_with_target(df, columns, target_column, progress_fn)
     return null_corrs, value_corrs
@@ -1589,26 +1609,25 @@ def _spark_bulk_median_impute(df: Any, columns: list[str] | None = None) -> Any:
 
     spark_df = as_spark_df(df)
     num_cols = _spark_numeric_cols(spark_df, columns)
-    if not num_cols:
-        from .spark_backend import _as_pandas_api
-        return _as_pandas_api(spark_df)
-    _BATCH = 2000
-    cols_with_nulls: list[str] = []
-    for start in range(0, len(num_cols), _BATCH):
-        batch = num_cols[start:start + _BATCH]
-        exprs = [F.sum(F.col(c).isNull().cast("long")).alias(c) for c in batch]
-        row = spark_df.agg(*exprs).head()
-        cols_with_nulls.extend(c for c in batch if (row[c] or 0) > 0)
     from .spark_backend import _as_pandas_api
+    if not num_cols:
+        return _as_pandas_api(spark_df)
+    stacked = _spark_stacked(spark_df, num_cols)
+    rows = stacked.where(F.col("__col_value").isNull()).groupBy("__col_name").agg(
+        F.lit(True).alias("__has_null"),
+    ).collect()
+    cols_with_nulls = {row["__col_name"] for row in rows}
     if not cols_with_nulls:
         return _as_pandas_api(spark_df)
-    fill_dict: dict[str, float] = {}
-    for start in range(0, len(cols_with_nulls), _BATCH):
-        batch = cols_with_nulls[start:start + _BATCH]
-        exprs = [F.percentile_approx(F.col(c), 0.5).alias(c) for c in batch]
-        row = spark_df.agg(*exprs).head()
-        for c in batch:
-            fill_dict[c] = float(row[c]) if row[c] is not None else 0
+    null_cols = [c for c in num_cols if c in cols_with_nulls]
+    stacked_null = _spark_stacked(spark_df, null_cols)
+    median_rows = stacked_null.groupBy("__col_name").agg(
+        F.percentile_approx("__col_value", 0.5).alias("__median"),
+    ).collect()
+    fill_dict = {
+        row["__col_name"]: float(row["__median"]) if row["__median"] is not None else 0
+        for row in median_rows
+    }
     return _as_pandas_api(spark_df.fillna(fill_dict))
 
 

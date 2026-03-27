@@ -6,8 +6,6 @@ from customer_retention.core.compat import DataFrame, _is_spark_pandas, as_spark
 
 from .feature_scaler import FeatureScaler, ScalerType, ScalingResult
 
-_AGG_BATCH_SIZE = 2000
-
 
 class SparkFeatureScaler(FeatureScaler):
 
@@ -89,61 +87,52 @@ class SparkFeatureScaler(FeatureScaler):
         return self._apply(X)
 
     def _compute_params_spark(self, spark_df: Any) -> Dict[str, Dict[str, float]]:
-        """Compute scaling parameters via batched native Spark .agg() calls."""
+        """Compute scaling parameters via unpivot + groupBy — one Spark job."""
         from pyspark.sql import functions as F  # noqa: N812
 
-        params: Dict[str, Dict[str, float]] = {}
+        from customer_retention.core.compat import _spark_stacked
+
         cols = self._feature_names
+        if not cols:
+            return {}
+        stacked = _spark_stacked(spark_df, cols)
+
+        params: Dict[str, Dict[str, float]] = {}
 
         if self.scaler_type == ScalerType.STANDARD:
-            for start in range(0, len(cols), _AGG_BATCH_SIZE):
-                batch = cols[start:start + _AGG_BATCH_SIZE]
-                exprs = []
-                for c in batch:
-                    exprs.append(F.mean(F.col(c)).alias(f"{c}__m"))
-                    exprs.append(F.stddev_pop(F.col(c)).alias(f"{c}__s"))
-                row = spark_df.agg(*exprs).head()
-                for c in batch:
-                    m = row[f"{c}__m"]
-                    s = row[f"{c}__s"]
-                    params[c] = {
-                        "mean": float(m) if m is not None else float("nan"),
-                        "std": float(s) if s is not None else 0.0,
-                    }
+            rows = stacked.groupBy("__col_name").agg(
+                F.mean("__col_value").alias("__m"),
+                F.stddev_pop("__col_value").alias("__s"),
+            ).collect()
+            for row in rows:
+                params[row["__col_name"]] = {
+                    "mean": float(row["__m"]) if row["__m"] is not None else float("nan"),
+                    "std": float(row["__s"]) if row["__s"] is not None else 0.0,
+                }
 
         elif self.scaler_type == ScalerType.ROBUST:
-            for start in range(0, len(cols), _AGG_BATCH_SIZE):
-                batch = cols[start:start + _AGG_BATCH_SIZE]
-                exprs = []
-                for c in batch:
-                    exprs.append(F.percentile_approx(F.col(c), 0.5).alias(f"{c}__med"))
-                    exprs.append(F.percentile_approx(F.col(c), 0.25).alias(f"{c}__q25"))
-                    exprs.append(F.percentile_approx(F.col(c), 0.75).alias(f"{c}__q75"))
-                row = spark_df.agg(*exprs).head()
-                for c in batch:
-                    med = row[f"{c}__med"]
-                    q25 = row[f"{c}__q25"]
-                    q75 = row[f"{c}__q75"]
-                    params[c] = {
-                        "center": float(med) if med is not None else float("nan"),
-                        "iqr": (float(q75) - float(q25)) if q75 is not None and q25 is not None else 0.0,
-                    }
+            rows = stacked.groupBy("__col_name").agg(
+                F.percentile_approx("__col_value", 0.5).alias("__med"),
+                F.percentile_approx("__col_value", 0.25).alias("__q25"),
+                F.percentile_approx("__col_value", 0.75).alias("__q75"),
+            ).collect()
+            for row in rows:
+                med, q25, q75 = row["__med"], row["__q25"], row["__q75"]
+                params[row["__col_name"]] = {
+                    "center": float(med) if med is not None else float("nan"),
+                    "iqr": (float(q75) - float(q25)) if q75 is not None and q25 is not None else 0.0,
+                }
 
         elif self.scaler_type == ScalerType.MINMAX:
-            for start in range(0, len(cols), _AGG_BATCH_SIZE):
-                batch = cols[start:start + _AGG_BATCH_SIZE]
-                exprs = []
-                for c in batch:
-                    exprs.append(F.min(F.col(c)).alias(f"{c}__min"))
-                    exprs.append(F.max(F.col(c)).alias(f"{c}__max"))
-                row = spark_df.agg(*exprs).head()
-                for c in batch:
-                    mn = row[f"{c}__min"]
-                    mx = row[f"{c}__max"]
-                    params[c] = {
-                        "min": float(mn) if mn is not None else float("nan"),
-                        "max": float(mx) if mx is not None else float("nan"),
-                    }
+            rows = stacked.groupBy("__col_name").agg(
+                F.min("__col_value").alias("__min"),
+                F.max("__col_value").alias("__max"),
+            ).collect()
+            for row in rows:
+                params[row["__col_name"]] = {
+                    "min": float(row["__min"]) if row["__min"] is not None else float("nan"),
+                    "max": float(row["__max"]) if row["__max"] is not None else float("nan"),
+                }
 
         return params
 
