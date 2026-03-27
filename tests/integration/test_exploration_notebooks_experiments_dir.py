@@ -143,6 +143,7 @@ class TestExperimentsConfigModule:
 
 class TestNotebookImportExecution:
 
+    @pytest.mark.timeout(180)
     def test_first_code_cell_imports_work(self, notebook_list, tmp_path):
         for nb_path in notebook_list:
             with open(nb_path, 'r', encoding='utf-8') as f:
