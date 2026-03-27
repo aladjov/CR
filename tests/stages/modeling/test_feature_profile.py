@@ -91,6 +91,20 @@ class TestCompareFeatureProfiles:
         discrepancies = compare_feature_profiles(exp, prod)
         assert any("MISSING" in d and "b" in d for d in discrepancies)
 
+    def test_each_missing_column_is_separate_discrepancy(self):
+        exp = self._make("exploration", {"a": ColumnProfile("double", 100, 0), "b": ColumnProfile("double", 100, 0), "c": ColumnProfile("double", 100, 0)})
+        prod = self._make("production", {"a": ColumnProfile("double", 100, 0)})
+        discrepancies = compare_feature_profiles(exp, prod)
+        missing_lines = [d for d in discrepancies if "MISSING" in d]
+        assert len(missing_lines) == 2
+
+    def test_each_extra_column_is_separate_discrepancy(self):
+        exp = self._make("exploration", {"a": ColumnProfile("double", 100, 0)})
+        prod = self._make("production", {"a": ColumnProfile("double", 100, 0), "x": ColumnProfile("double", 100, 0), "y": ColumnProfile("double", 100, 0)})
+        discrepancies = compare_feature_profiles(exp, prod)
+        extra_lines = [d for d in discrepancies if "EXTRA" in d]
+        assert len(extra_lines) == 2
+
     def test_extra_in_production(self):
         exp = self._make("exploration", {"a": ColumnProfile("double", 100, 0)})
         prod = self._make("production", {"a": ColumnProfile("double", 100, 0), "new_col": ColumnProfile("double", 100, 0)})

@@ -100,10 +100,10 @@ def compare_feature_profiles(exploration: FeatureProfile, production: FeaturePro
     extra = sorted(prod_names - exp_names)
     genuinely_missing = [m for m in missing if m not in prod_excluded]
     genuinely_extra = [e for e in extra if e not in exp_excluded]
-    if genuinely_missing:
-        discrepancies.append(f"MISSING in production ({len(genuinely_missing)}): {genuinely_missing}")
-    if genuinely_extra:
-        discrepancies.append(f"EXTRA in production ({len(genuinely_extra)}): {genuinely_extra}")
+    for m in genuinely_missing:
+        discrepancies.append(f"MISSING in production: {m}")
+    for e in genuinely_extra:
+        discrepancies.append(f"EXTRA in production: {e}")
 
     for name in missing:
         if name in prod_excluded:
