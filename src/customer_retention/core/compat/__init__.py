@@ -29,6 +29,7 @@ _DATAFRAME_TYPES: tuple[type, ...] = (_pandas.DataFrame,)
 if _SPARK_PANDAS_AVAILABLE:
     try:
         import pyspark.pandas as ps
+
         pd = ps
         DataFrame = Union[ps.DataFrame, _pandas.DataFrame]
         Series = Union[ps.Series, _pandas.Series]
@@ -36,6 +37,7 @@ if _SPARK_PANDAS_AVAILABLE:
     except Exception:
         try:
             import databricks.koalas as ps
+
             pd = ps
             DataFrame = Union[ps.DataFrame, _pandas.DataFrame]
             Series = Union[ps.Series, _pandas.Series]
@@ -53,6 +55,7 @@ else:
 _SparkDF: type | None = None
 try:
     from pyspark.sql import DataFrame as _SparkDF
+
     _DATAFRAME_TYPES = (*_DATAFRAME_TYPES, _SparkDF)
 except ImportError:
     pass
@@ -61,8 +64,10 @@ except ImportError:
 def _activate_spark_pandas() -> None:
     global pd, DataFrame, Series, _SPARK_PANDAS_AVAILABLE, _DATAFRAME_TYPES
     import sys
+
     try:
         import pyspark.pandas as _ps
+
         pd = _ps
         DataFrame = Union[_ps.DataFrame, _pandas.DataFrame]
         Series = Union[_ps.Series, _pandas.Series]
@@ -72,6 +77,7 @@ def _activate_spark_pandas() -> None:
         return
     try:
         from pyspark.sql import DataFrame as _SparkDF
+
         _DATAFRAME_TYPES = (*_DATAFRAME_TYPES, _SparkDF)
     except ImportError:
         pass
@@ -92,6 +98,7 @@ def to_pandas(df: Any) -> Any:
         return df.to_pandas()
     try:
         from pyspark.sql import DataFrame as NativeSparkDF
+
         if isinstance(df, NativeSparkDF):
             return df.toPandas()
     except ImportError:
@@ -169,6 +176,7 @@ def qcut(x: Any, q: Any, **kwargs: Any) -> Any:
         return _pandas.qcut(_collect(x), q, **kwargs)
     return _pandas.qcut(x, q, **kwargs)
 
+
 api_types = _pandas.api.types
 
 
@@ -230,7 +238,7 @@ def safe_memory_usage_bytes(obj: Any) -> int:
     """Return memory usage in bytes, returning 0 when unsupported (e.g. PySpark)."""
     try:
         usage = obj.memory_usage(deep=True)
-        return int(usage.sum()) if hasattr(usage, 'sum') else int(usage)
+        return int(usage.sum()) if hasattr(usage, "sum") else int(usage)
     except Exception:
         return 0
 
@@ -238,6 +246,7 @@ def safe_memory_usage_bytes(obj: Any) -> int:
 def safe_to_datetime(series: Any, **kwargs: Any) -> Any:
     if _is_spark_pandas(series):
         import pyspark.sql.functions as F  # noqa: N812
+
         dtype_str = str(series.dtype).lower()
         if "timestamp" in dtype_str or "datetime" in dtype_str:
             return series
@@ -246,9 +255,9 @@ def safe_to_datetime(series: Any, **kwargs: Any) -> Any:
         return series.spark.transform(lambda c: F.to_timestamp(c))
     if _pandas.api.types.is_datetime64_any_dtype(series):
         return as_tz_naive(series if isinstance(series, _pandas.Series) else _pandas.Series(series))
-    arr = series.to_numpy() if hasattr(series, 'to_numpy') else _pandas.array(series)
+    arr = series.to_numpy() if hasattr(series, "to_numpy") else _pandas.array(series)
     if _pandas.api.types.is_integer_dtype(arr) or _pandas.api.types.is_integer_dtype(series):
-        arr = _pandas.to_numeric(arr, errors='coerce')
+        arr = _pandas.to_numeric(arr, errors="coerce")
         non_null = arr[~_pandas.isna(arr)]
         if len(non_null) > 0:
             unit = _infer_epoch_unit(non_null[0])
@@ -269,6 +278,7 @@ def ensure_datetime_column(df: _pandas.DataFrame, column: str) -> _pandas.DataFr
 def ensure_timestamp(df: Any, column: str) -> Any:
     if _is_spark_pandas(df):
         import pyspark.sql.functions as F  # noqa: N812
+
         dtype_str = str(df[column].dtype).lower()
         if "timestamp" in dtype_str or "datetime" in dtype_str:
             return df
@@ -342,20 +352,17 @@ def _normalize_decimal_distributed(df: Any) -> Any:
     from pyspark.sql.types import DecimalType
 
     spark_df = as_spark_df(df)
-    decimal_cols = {
-        f.name for f in spark_df.schema.fields
-        if isinstance(f.dataType, DecimalType)
-    }
+    decimal_cols = {f.name for f in spark_df.schema.fields if isinstance(f.dataType, DecimalType)}
     if not decimal_cols:
         return df
     from pyspark.sql.functions import col as spark_col
+
     casts = [
-        spark_col(f.name).cast("double").alias(f.name)
-        if f.name in decimal_cols
-        else spark_col(f.name)
+        spark_col(f.name).cast("double").alias(f.name) if f.name in decimal_cols else spark_col(f.name)
         for f in spark_df.schema.fields
     ]
     from .spark_backend import _as_pandas_api
+
     return _as_pandas_api(spark_df.select(casts))
 
 
@@ -369,12 +376,11 @@ def clamp_distributed_timestamps(df: Any) -> Any:
     if not _is_spark_pandas(df):
         return df
     import pyspark.sql.functions as F  # noqa: N812
+
     for col_name in list(df.columns):
         dtype_str = str(df[col_name].dtype).lower()
         if "datetime" in dtype_str or "timestamp" in dtype_str:
-            df[col_name] = df[col_name].spark.transform(
-                lambda c: F.when(F.year(c).between(1678, 2261), c)
-            )
+            df[col_name] = df[col_name].spark.transform(lambda c: F.when(F.year(c).between(1678, 2261), c))
     return df
 
 
@@ -410,8 +416,7 @@ def clamp_spark_timestamps(spark_df: Any) -> Any:
     from pyspark.sql.functions import when, year
     from pyspark.sql.types import TimestampNTZType, TimestampType
 
-    ts_names = {f.name for f in spark_df.schema.fields
-                if isinstance(f.dataType, (TimestampType, TimestampNTZType))}
+    ts_names = {f.name for f in spark_df.schema.fields if isinstance(f.dataType, (TimestampType, TimestampNTZType))}
     if not ts_names:
         return spark_df
     cols = [
@@ -419,7 +424,8 @@ def clamp_spark_timestamps(spark_df: Any) -> Any:
             year(spark_col(f.name)).between(1678, 2261),
             spark_col(f.name).cast("timestamp_ntz"),
         ).alias(f.name)
-        if f.name in ts_names else spark_col(f.name)
+        if f.name in ts_names
+        else spark_col(f.name)
         for f in spark_df.schema.fields
     ]
     return spark_df.select(cols)
@@ -436,12 +442,16 @@ def _normalize_timestamps_distributed(df: Any) -> Any:
 
 def _infer_object_column_spark_type(series: _pandas.Series) -> "Any":
     from pyspark.sql.types import BooleanType, DoubleType, LongType, StringType, TimestampNTZType
+
     inferred = _pandas.api.types.infer_dtype(series, skipna=True)
     _INFERRED_MAP = {
-        "floating": DoubleType(), "mixed-integer-float": DoubleType(),
-        "decimal": DoubleType(), "integer": LongType(),
+        "floating": DoubleType(),
+        "mixed-integer-float": DoubleType(),
+        "decimal": DoubleType(),
+        "integer": LongType(),
         "boolean": BooleanType(),
-        "datetime64": TimestampNTZType(), "datetime": TimestampNTZType(),
+        "datetime64": TimestampNTZType(),
+        "datetime": TimestampNTZType(),
     }
     return _INFERRED_MAP.get(inferred, StringType())
 
@@ -505,7 +515,7 @@ def timedelta_to_seconds(series: Any) -> Any:
 
 
 def _is_spark_pandas(obj: Any) -> bool:
-    return hasattr(obj, 'spark') or hasattr(obj, 'to_spark')
+    return hasattr(obj, "spark") or hasattr(obj, "to_spark")
 
 
 def _is_native_spark_df(obj: Any) -> bool:
@@ -513,9 +523,10 @@ def _is_native_spark_df(obj: Any) -> bool:
 
 
 def as_spark_df(df: Any) -> Any:
-    if not hasattr(df, 'to_spark'):
+    if not hasattr(df, "to_spark"):
         return df
     import warnings
+
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message=".*index_col.*")
         return df.to_spark()
@@ -524,6 +535,7 @@ def as_spark_df(df: Any) -> Any:
 def timestamp_diff_seconds(a: Any, b: Any) -> Any:
     if _is_spark_pandas(a):
         import pyspark.sql.functions as F  # noqa: N812
+
         a_epoch = a.spark.transform(lambda c: F.unix_timestamp(c.cast("timestamp")).cast("double"))
         b_epoch = b.spark.transform(lambda c: F.unix_timestamp(c.cast("timestamp")).cast("double"))
         return a_epoch - b_epoch
@@ -537,32 +549,43 @@ def timestamp_diff_days(a: Any, b: Any) -> Any:
 def timestamp_diffs_seconds(series: Any) -> Any:
     if _is_spark_pandas(series):
         import pyspark.sql.functions as F  # noqa: N812
+
         epoch = series.spark.transform(lambda c: F.unix_timestamp(c.cast("timestamp")).cast("double"))
         return epoch - epoch.shift(1)
     return timedelta_to_seconds(series - series.shift(1))
 
 
 _FREQ_TO_SPARK: dict[str, str] = {
-    "D": "day", "W": "week", "M": "month", "ME": "month",
-    "MS": "month", "Q": "quarter", "QS": "quarter", "Y": "year", "YS": "year",
+    "D": "day",
+    "W": "week",
+    "M": "month",
+    "ME": "month",
+    "MS": "month",
+    "Q": "quarter",
+    "QS": "quarter",
+    "Y": "year",
+    "YS": "year",
 }
 
 
 def period_start_time(series: Any, freq: str) -> Any:
     if _is_spark_pandas(series):
         import pyspark.sql.functions as F  # noqa: N812
+
         spark_freq = _FREQ_TO_SPARK.get(freq, freq.lower())
         return series.spark.transform(lambda c: F.date_trunc(spark_freq, c))
     return series.dt.to_period(freq).dt.start_time
 
 
 def groupby_multi_agg(df: Any, group_col: str, agg_col: str, agg_funcs: list) -> Any:
-    if hasattr(df, 'to_spark'):
+    if hasattr(df, "to_spark"):
         import pyspark.sql.functions as F  # noqa: N812
+
         spark_df = as_spark_df(df)
         exprs = [getattr(F, fn)(agg_col).alias(fn) for fn in agg_funcs]
         result = spark_df.groupBy(group_col).agg(*exprs)
         from .spark_backend import _as_pandas_api
+
         return _as_pandas_api(result)
     return df.groupby(group_col)[agg_col].agg(agg_funcs).reset_index()
 
@@ -597,9 +620,9 @@ def head_as_list(obj: Any, n: int) -> list:
     if _is_spark_pandas(series_obj):
         return _spark_head_values(series_obj, n)
 
-    if hasattr(obj, 'head'):
+    if hasattr(obj, "head"):
         bounded = obj.head(n)
-    elif hasattr(obj, 'to_series'):
+    elif hasattr(obj, "to_series"):
         bounded = obj.to_series().head(n)
     else:
         bounded = obj[:n]
@@ -617,12 +640,8 @@ def unique_overlap_counts(series_a: Any, series_b: Any) -> tuple[int, int, int]:
 def _spark_unique_overlap(series_a: Any, series_b: Any) -> tuple[int, int, int]:
     col_a = series_a.name or "__a__"
     col_b = series_b.name or "__b__"
-    spark_a = as_spark_df(series_a.dropna().to_frame()).select(
-        _spark_col(col_a).alias("__key__")
-    ).distinct()
-    spark_b = as_spark_df(series_b.dropna().to_frame()).select(
-        _spark_col(col_b).alias("__key__")
-    ).distinct()
+    spark_a = as_spark_df(series_a.dropna().to_frame()).select(_spark_col(col_a).alias("__key__")).distinct()
+    spark_b = as_spark_df(series_b.dropna().to_frame()).select(_spark_col(col_b).alias("__key__")).distinct()
     left_count = spark_a.count()
     right_count = spark_b.count()
     overlap_count = spark_a.join(spark_b, on="__key__", how="inner").count()
@@ -631,6 +650,7 @@ def _spark_unique_overlap(series_a: Any, series_b: Any) -> tuple[int, int, int]:
 
 def _spark_col(name: str) -> Any:
     import pyspark.sql.functions as F  # noqa: N812
+
     return F.col(name)
 
 
@@ -659,8 +679,7 @@ def _spark_case_variations(str_series: Any, max_results: int) -> list[str]:
     spark_df = as_spark_df(str_series.astype(str).to_frame())
     col_name = spark_df.columns[0]
     grouped = (
-        spark_df
-        .groupBy(F.lower(F.col(col_name)).alias("__lower__"))
+        spark_df.groupBy(F.lower(F.col(col_name)).alias("__lower__"))
         .agg(F.collect_set(F.col(col_name)).alias("__variants__"))
         .filter(F.size(F.col("__variants__")) > 1)
         .limit(max_results)
@@ -671,7 +690,8 @@ def _spark_case_variations(str_series: Any, max_results: int) -> list[str]:
 
 def _spark_safe_query_expr(expr: str) -> str:
     import re
-    return re.sub(r'\bin\s*\[([^\]]*)\]', r'in (\1)', expr)
+
+    return re.sub(r"\bin\s*\[([^\]]*)\]", r"in (\1)", expr)
 
 
 def safe_query(df: Any, expr: str) -> Any:
@@ -690,7 +710,8 @@ def safe_isin(df: Any, column: str, values: Any, negate: bool = False) -> Any:
         return df[~mask] if negate else df[mask]
     spark_df = as_spark_df(df)
     values_df = spark_df.sparkSession.createDataFrame(
-        [(v,) for v in values_list], [column],
+        [(v,) for v in values_list],
+        [column],
     )
     join_type = "left_anti" if negate else "left_semi"
     result = spark_df.join(values_df, on=column, how=join_type)
@@ -698,7 +719,7 @@ def safe_isin(df: Any, column: str, values: Any, negate: bool = False) -> Any:
 
 
 def safe_isinf(series: Any) -> Any:
-    return (series == float('inf')) | (series == float('-inf'))
+    return (series == float("inf")) | (series == float("-inf"))
 
 
 def safe_isfinite(series: Any) -> Any:
@@ -728,9 +749,11 @@ def safe_sample(df: Any, n: int, random_state: int = 42) -> Any:
 
 def safe_select(conditions: list, choices: list, default: Any = "") -> Any:
     import numpy as np
+
     if not conditions or not any(_is_spark_pandas(c) for c in conditions):
         return np.select(conditions, choices, default=default)
     from pyspark.sql import functions as F  # noqa: N812
+
     expr = F.lit(default)
     for cond, label in reversed(list(zip(conditions, choices))):
         expr = F.when(cond.spark.column, F.lit(label)).otherwise(expr)
@@ -767,9 +790,11 @@ def _spark_temporal_quantile(series: Any, q: float) -> _pandas.Timestamp:
 
 def _spark_numeric_cols(spark_df: Any, columns: list[str] | None = None) -> list[str]:
     from pyspark.sql.types import NumericType
+
     allowed = set(columns) if columns is not None else None
     return [
-        f.name for f in spark_df.schema.fields
+        f.name
+        for f in spark_df.schema.fields
         if isinstance(f.dataType, NumericType) and (allowed is None or f.name in allowed)
     ]
 
@@ -779,26 +804,32 @@ _STACK_CHUNK = 2000
 
 def _spark_stacked(spark_df: Any, columns: list[str]) -> Any:
     from functools import reduce
+
     chunks = []
     for start in range(0, len(columns), _STACK_CHUNK):
-        batch = columns[start:start + _STACK_CHUNK]
+        batch = columns[start : start + _STACK_CHUNK]
         stack_args = ", ".join(f"'{c}', cast(`{c}` as double)" for c in batch)
-        chunks.append(spark_df.selectExpr(
-            f"stack({len(batch)}, {stack_args}) as (__col_name, __col_value)",
-        ))
+        chunks.append(
+            spark_df.selectExpr(
+                f"stack({len(batch)}, {stack_args}) as (__col_name, __col_value)",
+            )
+        )
     return reduce(lambda a, b: a.unionAll(b), chunks)
 
 
 def _spark_stacked_with_extra(spark_df: Any, columns: list[str], extra_col: str) -> Any:
     from functools import reduce
+
     chunks = []
     for start in range(0, len(columns), _STACK_CHUNK):
-        batch = columns[start:start + _STACK_CHUNK]
+        batch = columns[start : start + _STACK_CHUNK]
         stack_args = ", ".join(f"'{c}', cast(`{c}` as double)" for c in batch)
-        chunks.append(spark_df.selectExpr(
-            f"cast(`{extra_col}` as double) as `{extra_col}`",
-            f"stack({len(batch)}, {stack_args}) as (__col_name, __col_value)",
-        ))
+        chunks.append(
+            spark_df.selectExpr(
+                f"cast(`{extra_col}` as double) as `{extra_col}`",
+                f"stack({len(batch)}, {stack_args}) as (__col_name, __col_value)",
+            )
+        )
     return reduce(lambda a, b: a.unionAll(b), chunks)
 
 
@@ -821,26 +852,30 @@ def bulk_variance(df: Any, columns: list[str]) -> _pandas.Series:
     if not _is_spark_pandas(df):
         return df[columns].var()
     import pyspark.sql.functions as F  # noqa: N812
+
     spark_df = as_spark_df(df[columns])
     safe = {c: f"__v{i}__" for i, c in enumerate(columns)}
     spark_df = spark_df.toDF(*[safe[c] for c in columns])
     result: dict[str, float] = {}
     for start in range(0, len(columns), _AGG_BATCH_SIZE):
-        batch = columns[start:start + _AGG_BATCH_SIZE]
+        batch = columns[start : start + _AGG_BATCH_SIZE]
         safe_batch = [safe[c] for c in batch]
         row = spark_df.agg(*[F.variance(F.col(s).cast("double")).alias(s) for s in safe_batch]).head()
         for c, s in zip(batch, safe_batch):
             val = row[s]
-            result[c] = float(val) if val is not None else float('nan')
+            result[c] = float(val) if val is not None else float("nan")
     return _pandas.Series(result)
 
 
 def batched_corr_matrix(
-    df: Any, columns: list[str], progress_fn: Any = None,
+    df: Any,
+    columns: list[str],
+    progress_fn: Any = None,
     precomputed_medians: dict[str, float] | None = None,
     precomputed_non_null: dict[str, int] | None = None,
 ) -> _pandas.DataFrame:
     import numpy as _np
+
     valid_cols = [c for c in columns if c in df.columns]
     if len(valid_cols) < 2:
         return _pandas.DataFrame(index=valid_cols, columns=valid_cols)
@@ -857,7 +892,10 @@ def batched_corr_matrix(
 
 
 def _spark_corr_matrix_ml(
-    df: Any, cols: list[str], numeric: set[str], progress_fn: Any = None,
+    df: Any,
+    cols: list[str],
+    numeric: set[str],
+    progress_fn: Any = None,
     precomputed_medians: dict[str, float] | None = None,
     precomputed_non_null: dict[str, int] | None = None,
 ) -> _pandas.DataFrame:
@@ -887,7 +925,7 @@ def _spark_corr_matrix_ml(
         log(f"    Counting non-nulls ({len(safe_cols)} columns)...")
         non_null = {}
         for start in range(0, len(safe_cols), _AGG_BATCH_SIZE):
-            batch = safe_cols[start:start + _AGG_BATCH_SIZE]
+            batch = safe_cols[start : start + _AGG_BATCH_SIZE]
             row = spark_df.agg(*[F.count(c).alias(c) for c in batch]).head()
             for c in batch:
                 non_null[c] = row[c]
@@ -914,7 +952,7 @@ def _spark_corr_matrix_ml(
         if missing:
             log(f"    Computing medians for {len(missing)} columns not in precomputed...")
             for start in range(0, len(missing), _AGG_BATCH_SIZE):
-                batch = missing[start:start + _AGG_BATCH_SIZE]
+                batch = missing[start : start + _AGG_BATCH_SIZE]
                 row = spark_df.agg(*[F.percentile_approx(c, 0.5).alias(c) for c in batch]).head()
                 for c in batch:
                     if row[c] is not None:
@@ -924,7 +962,7 @@ def _spark_corr_matrix_ml(
     else:
         log(f"    Computing medians ({len(valid_safe)} columns)...")
         for start in range(0, len(valid_safe), _AGG_BATCH_SIZE):
-            batch = valid_safe[start:start + _AGG_BATCH_SIZE]
+            batch = valid_safe[start : start + _AGG_BATCH_SIZE]
             row = spark_df.agg(*[F.percentile_approx(c, 0.5).alias(c) for c in batch]).head()
             for c in batch:
                 if row[c] is not None:
@@ -932,7 +970,7 @@ def _spark_corr_matrix_ml(
     imputed_df = spark_df.fillna(fill_map)
 
     # Block-wise correlation
-    blocks = [valid_safe[i:i + _CORR_BLOCK_SIZE] for i in range(0, len(valid_safe), _CORR_BLOCK_SIZE)]
+    blocks = [valid_safe[i : i + _CORR_BLOCK_SIZE] for i in range(0, len(valid_safe), _CORR_BLOCK_SIZE)]
     n_blocks = len(blocks)
     n_valid = len(valid_safe)
 
@@ -978,6 +1016,7 @@ def _spark_corr_matrix_ml(
 
 def _safe_corr_expr(col_a: Any, col_b: Any) -> Any:
     import pyspark.sql.functions as F  # noqa: N812
+
     denom = F.stddev_samp(col_a) * F.stddev_samp(col_b)
     return F.covar_samp(col_a, col_b) / F.when(denom > 0, denom)
 
@@ -1004,7 +1043,7 @@ def _spark_pairwise_corr(df: Any, cols: list[str], numeric: set[str]) -> _pandas
     pairs = [(i, j) for i in has_variance for j in has_variance if i < j]
     _BATCH = 500
     for start in range(0, len(pairs), _BATCH):
-        batch = pairs[start:start + _BATCH]
+        batch = pairs[start : start + _BATCH]
         exprs = [_safe_corr_expr(cols[i], cols[j]).alias(f"c_{i}_{j}") for i, j in batch]
         row = spark_df.select(*exprs).head()
         for i, j in batch:
@@ -1018,6 +1057,7 @@ def _spark_pairwise_corr(df: Any, cols: list[str], numeric: set[str]) -> _pandas
 
 def bulk_corr_with_target(df: Any, columns: list[str], target_column: str, progress_fn: Any = None) -> dict[str, float]:
     import math
+
     if target_column not in df.columns:
         return {}
     valid = [c for c in columns if c in df.columns and c != target_column]
@@ -1035,9 +1075,12 @@ def bulk_corr_with_target(df: Any, columns: list[str], target_column: str, progr
     return _spark_unpivot_corr_with_target(df, valid, target_column, progress_fn)
 
 
-def _spark_bulk_corr_with_target(df: Any, columns: list[str], target_column: str, progress_fn: Any = None) -> dict[str, float]:
+def _spark_bulk_corr_with_target(
+    df: Any, columns: list[str], target_column: str, progress_fn: Any = None
+) -> dict[str, float]:
     import math
     import time as _time
+
     log = progress_fn or (lambda msg: None)
     numeric = _numeric_column_names(df, columns + [target_column])
     num_cols = [c for c in columns if c in numeric]
@@ -1049,7 +1092,7 @@ def _spark_bulk_corr_with_target(df: Any, columns: list[str], target_column: str
     _BATCH = 500
     total_batches = (len(num_cols) + _BATCH - 1) // _BATCH
     for batch_idx, start in enumerate(range(0, len(num_cols), _BATCH)):
-        batch = num_cols[start:start + _BATCH]
+        batch = num_cols[start : start + _BATCH]
         t0 = _time.monotonic()
         exprs = [_safe_corr_expr(c, target_column).alias(f"c_{i}") for i, c in enumerate(batch)]
         row = spark_df.select(*exprs).head()
@@ -1061,7 +1104,10 @@ def _spark_bulk_corr_with_target(df: Any, columns: list[str], target_column: str
 
 
 def bulk_null_corr_with_target(
-    df: Any, columns: list[str], target_column: str, progress_fn: Any = None,
+    df: Any,
+    columns: list[str],
+    target_column: str,
+    progress_fn: Any = None,
     precomputed_null_counts: dict[str, int] | None = None,
 ) -> dict[str, float]:
     if target_column not in df.columns:
@@ -1076,6 +1122,7 @@ def bulk_null_corr_with_target(
 
 def _pandas_null_corr_with_target(df: Any, columns: list[str], target_column: str) -> dict[str, float]:
     import math
+
     target_float = df[target_column].astype(float)
     result: dict[str, float] = {}
     for c in columns:
@@ -1088,7 +1135,10 @@ def _pandas_null_corr_with_target(df: Any, columns: list[str], target_column: st
 
 
 def _spark_null_corr_with_target(
-    df: Any, columns: list[str], target_column: str, progress_fn: Any = None,
+    df: Any,
+    columns: list[str],
+    target_column: str,
+    progress_fn: Any = None,
     precomputed_null_counts: dict[str, int] | None = None,
 ) -> dict[str, float]:
     import math
@@ -1110,7 +1160,7 @@ def _spark_null_corr_with_target(
     else:
         _BATCH = 2000
         for start in range(0, len(columns), _BATCH):
-            batch = columns[start:start + _BATCH]
+            batch = columns[start : start + _BATCH]
             exprs = [F.sum(F.col(c).isNull().cast("long")).alias(c) for c in batch]
             row = spark_df.agg(*exprs).head()
             for c in batch:
@@ -1124,7 +1174,7 @@ def _spark_null_corr_with_target(
     _CORR_BATCH = 500
     total_batches = (len(has_nulls) + _CORR_BATCH - 1) // _CORR_BATCH
     for batch_idx, start in enumerate(range(0, len(has_nulls), _CORR_BATCH)):
-        batch = has_nulls[start:start + _CORR_BATCH]
+        batch = has_nulls[start : start + _CORR_BATCH]
         t1 = _time.monotonic()
         null_exprs = [F.when(F.col(c).isNull(), 1.0).otherwise(0.0).alias(f"__null_{c}") for c in batch]
         batch_df = spark_df.select(*null_exprs, F.col(target_column))
@@ -1139,11 +1189,15 @@ def _spark_null_corr_with_target(
 
 def bulk_null_counts(df: Any, columns: list[str] | None = None) -> dict[str, int]:
     from .bulk_profiling import bulk_null_counts as _bulk_null_counts
+
     return _bulk_null_counts(df, columns)
 
 
 def _spark_unpivot_corr_with_target(
-    df: Any, columns: list[str], target_column: str, progress_fn: Any = None,
+    df: Any,
+    columns: list[str],
+    target_column: str,
+    progress_fn: Any = None,
 ) -> dict[str, float]:
     import math
     import time as _time
@@ -1160,9 +1214,13 @@ def _spark_unpivot_corr_with_target(
     spark_df = as_spark_df(df[num_cols + [target_column]])
     t0 = _time.monotonic()
     stacked = _spark_stacked_with_extra(spark_df, num_cols, target_column)
-    rows = stacked.groupBy("__col_name").agg(
-        _safe_corr_expr("__col_value", target_column).alias("__corr"),
-    ).collect()
+    rows = (
+        stacked.groupBy("__col_name")
+        .agg(
+            _safe_corr_expr("__col_value", target_column).alias("__corr"),
+        )
+        .collect()
+    )
     for row in rows:
         val = row["__corr"]
         result[row["__col_name"]] = float(val) if val is not None else math.nan
@@ -1171,7 +1229,10 @@ def _spark_unpivot_corr_with_target(
 
 
 def _spark_unpivot_leakage_corr_combined(
-    df: Any, columns: list[str], target_column: str, progress_fn: Any = None,
+    df: Any,
+    columns: list[str],
+    target_column: str,
+    progress_fn: Any = None,
 ) -> tuple[dict[str, float], dict[str, float]]:
     import math
     import time as _time
@@ -1183,10 +1244,14 @@ def _spark_unpivot_leakage_corr_combined(
     t0 = _time.monotonic()
     stacked = _spark_stacked_with_extra(spark_df, columns, target_column)
     null_ind = F.when(F.col("__col_value").isNull(), 1.0).otherwise(0.0)
-    rows = stacked.groupBy("__col_name").agg(
-        _safe_corr_expr("__col_value", F.col(target_column)).alias("__value_corr"),
-        _safe_corr_expr(null_ind, F.col(target_column)).alias("__null_corr"),
-    ).collect()
+    rows = (
+        stacked.groupBy("__col_name")
+        .agg(
+            _safe_corr_expr("__col_value", F.col(target_column)).alias("__value_corr"),
+            _safe_corr_expr(null_ind, F.col(target_column)).alias("__null_corr"),
+        )
+        .collect()
+    )
     null_corrs: dict[str, float] = {}
     value_corrs: dict[str, float] = {}
     for row in rows:
@@ -1198,7 +1263,10 @@ def _spark_unpivot_leakage_corr_combined(
 
 
 def _spark_leakage_corr_combined(
-    df: Any, columns: list[str], target_column: str, progress_fn: Any = None,
+    df: Any,
+    columns: list[str],
+    target_column: str,
+    progress_fn: Any = None,
 ) -> tuple[dict[str, float], dict[str, float]]:
     import math
     import time as _time
@@ -1212,12 +1280,9 @@ def _spark_leakage_corr_combined(
     _BATCH = 250
     total_batches = (len(columns) + _BATCH - 1) // _BATCH
     for batch_idx, start in enumerate(range(0, len(columns), _BATCH)):
-        batch = columns[start:start + _BATCH]
+        batch = columns[start : start + _BATCH]
         t0 = _time.monotonic()
-        null_indicator_exprs = [
-            F.when(F.col(c).isNull(), 1.0).otherwise(0.0).alias(f"__null_{c}")
-            for c in batch
-        ]
+        null_indicator_exprs = [F.when(F.col(c).isNull(), 1.0).otherwise(0.0).alias(f"__null_{c}") for c in batch]
         batch_df = spark_df.select(
             *null_indicator_exprs,
             *[F.col(c) for c in batch],
@@ -1231,12 +1296,17 @@ def _spark_leakage_corr_combined(
         for i, c in enumerate(batch):
             null_corrs[c] = float(row[f"n_{i}"]) if row[f"n_{i}"] is not None else math.nan
             value_corrs[c] = float(row[f"v_{i}"]) if row[f"v_{i}"] is not None else math.nan
-        log(f"    combined-corr batch {batch_idx + 1}/{total_batches} ({len(batch)} cols, {_time.monotonic() - t0:.0f}s)")
+        log(
+            f"    combined-corr batch {batch_idx + 1}/{total_batches} ({len(batch)} cols, {_time.monotonic() - t0:.0f}s)"
+        )
     return null_corrs, value_corrs
 
 
 def leakage_corr_combined(
-    df: Any, columns: list[str], target_column: str, progress_fn: Any = None,
+    df: Any,
+    columns: list[str],
+    target_column: str,
+    progress_fn: Any = None,
 ) -> tuple[dict[str, float], dict[str, float]]:
     if _is_spark_pandas(df):
         return _spark_unpivot_leakage_corr_combined(df, columns, target_column, progress_fn)
@@ -1247,6 +1317,7 @@ def leakage_corr_combined(
 
 def bulk_skew(df: Any, columns: list[str]) -> dict[str, float]:
     import math
+
     valid = [c for c in columns if c in df.columns]
     if not valid:
         return {}
@@ -1274,7 +1345,7 @@ def _spark_bulk_skew(df: Any, columns: list[str]) -> dict[str, float]:
     spark_df = as_spark_df(df[num_cols])
     _BATCH = 500
     for start in range(0, len(num_cols), _BATCH):
-        batch = num_cols[start:start + _BATCH]
+        batch = num_cols[start : start + _BATCH]
         exprs = [F.skewness(F.col(c)).alias(f"s_{i}") for i, c in enumerate(batch)]
         row = spark_df.select(*exprs).head()
         for i, c in enumerate(batch):
@@ -1290,6 +1361,7 @@ def bulk_max(df: Any, columns: list[str]) -> dict[str, Any]:
     if not _is_spark_pandas(df):
         return {c: df[c].max() for c in valid}
     import pyspark.sql.functions as F  # noqa: N812
+
     spark_df = as_spark_df(df[valid])
     row = spark_df.agg(*[F.max(F.col(c)).alias(c) for c in valid]).head()
     return {c: row[c] for c in valid if row[c] is not None}
@@ -1301,6 +1373,7 @@ def bulk_class_overlap(df: Any, columns: list[str], target: Any) -> dict[str, fl
         return {}
     if not _is_spark_pandas(df):
         from customer_retention.core.utils.leakage import calculate_class_overlap
+
         return {c: calculate_class_overlap(df[c], target) for c in valid}
     return _spark_bulk_class_overlap(df, valid, target)
 
@@ -1315,15 +1388,17 @@ def _spark_bulk_class_overlap(df: Any, columns: list[str], target: Any) -> dict[
     _BATCH = 200
     result: dict[str, float] = {}
     for start in range(0, len(columns), _BATCH):
-        batch = columns[start:start + _BATCH]
+        batch = columns[start : start + _BATCH]
         exprs: list[Any] = []
         for c in batch:
-            exprs.extend([
-                F.min(F.when(F.col(_TARGET) == 0, F.col(c))).alias(f"{c}__min0"),
-                F.max(F.when(F.col(_TARGET) == 0, F.col(c))).alias(f"{c}__max0"),
-                F.min(F.when(F.col(_TARGET) == 1, F.col(c))).alias(f"{c}__min1"),
-                F.max(F.when(F.col(_TARGET) == 1, F.col(c))).alias(f"{c}__max1"),
-            ])
+            exprs.extend(
+                [
+                    F.min(F.when(F.col(_TARGET) == 0, F.col(c))).alias(f"{c}__min0"),
+                    F.max(F.when(F.col(_TARGET) == 0, F.col(c))).alias(f"{c}__max0"),
+                    F.min(F.when(F.col(_TARGET) == 1, F.col(c))).alias(f"{c}__min1"),
+                    F.max(F.when(F.col(_TARGET) == 1, F.col(c))).alias(f"{c}__max1"),
+                ]
+            )
         row = spark_df.agg(*exprs).collect()[0]
         for c in batch:
             vals = [row[f"{c}__{k}"] for k in ("min0", "max0", "min1", "max1")]
@@ -1358,7 +1433,9 @@ def bulk_effect_sizes(df: Any, columns: list[str], target_column: str) -> BulkEf
 
 
 def _pandas_bulk_effect_sizes(
-    df: Any, columns: list[str], target_column: str,
+    df: Any,
+    columns: list[str],
+    target_column: str,
 ) -> BulkEffectSizeResult:
     import numpy as _np
 
@@ -1386,10 +1463,7 @@ def _pandas_bulk_effect_sizes(
         if n0 < 2 or n1 < 2:
             effect_sizes[col] = 0.0
             continue
-        pooled_std = _np.sqrt(
-            ((n0 - 1) * stats["std_0"] ** 2 + (n1 - 1) * stats["std_1"] ** 2)
-            / (n0 + n1 - 2)
-        )
+        pooled_std = _np.sqrt(((n0 - 1) * stats["std_0"] ** 2 + (n1 - 1) * stats["std_1"] ** 2) / (n0 + n1 - 2))
         if pooled_std == 0:
             effect_sizes[col] = 0.0
         else:
@@ -1399,7 +1473,9 @@ def _pandas_bulk_effect_sizes(
 
 
 def _spark_bulk_effect_sizes(
-    df: Any, columns: list[str], target_column: str,
+    df: Any,
+    columns: list[str],
+    target_column: str,
 ) -> BulkEffectSizeResult:
     import numpy as _np
     import pyspark.sql.functions as F  # noqa: N812
@@ -1410,18 +1486,20 @@ def _spark_bulk_effect_sizes(
     class_stats: dict[str, dict] = {}
 
     for start in range(0, len(columns), _BATCH):
-        batch = columns[start:start + _BATCH]
+        batch = columns[start : start + _BATCH]
         exprs: list[Any] = []
         for c in batch:
             for cls in (0, 1):
                 cond = F.col(target_column) == cls
                 filtered = F.when(cond, F.col(c))
-                exprs.extend([
-                    F.mean(filtered).alias(f"{c}__mean_{cls}"),
-                    F.stddev(filtered).alias(f"{c}__std_{cls}"),
-                    F.count(filtered).alias(f"{c}__count_{cls}"),
-                    F.percentile_approx(filtered, 0.5).alias(f"{c}__median_{cls}"),
-                ])
+                exprs.extend(
+                    [
+                        F.mean(filtered).alias(f"{c}__mean_{cls}"),
+                        F.stddev(filtered).alias(f"{c}__std_{cls}"),
+                        F.count(filtered).alias(f"{c}__count_{cls}"),
+                        F.percentile_approx(filtered, 0.5).alias(f"{c}__median_{cls}"),
+                    ]
+                )
         row = spark_df.agg(*exprs).collect()[0]
 
         for c in batch:
@@ -1441,10 +1519,7 @@ def _spark_bulk_effect_sizes(
             if n0 < 2 or n1 < 2:
                 effect_sizes[c] = 0.0
                 continue
-            pooled_std = _np.sqrt(
-                ((n0 - 1) * stats["std_0"] ** 2 + (n1 - 1) * stats["std_1"] ** 2)
-                / (n0 + n1 - 2)
-            )
+            pooled_std = _np.sqrt(((n0 - 1) * stats["std_0"] ** 2 + (n1 - 1) * stats["std_1"] ** 2) / (n0 + n1 - 2))
             if pooled_std == 0:
                 effect_sizes[c] = 0.0
             else:
@@ -1457,6 +1532,7 @@ def spark_checkpoint(df: Any) -> Any:
     if _is_spark_pandas(df):
         spark_df = as_spark_df(df).localCheckpoint(eager=True)
         from .spark_backend import _as_pandas_api
+
         return _as_pandas_api(spark_df)
     return df
 
@@ -1466,10 +1542,12 @@ def spark_persist(df: Any) -> Any:
     if not _is_spark_pandas(df):
         return df
     from pyspark import StorageLevel
+
     spark_df = as_spark_df(df)
     spark_df.persist(StorageLevel.MEMORY_AND_DISK)
     spark_df.count()
     from .spark_backend import _as_pandas_api
+
     return _as_pandas_api(spark_df)
 
 
@@ -1482,14 +1560,15 @@ def spark_cast_float32(df: Any) -> Any:
         return df.astype({c: "float32" for c in numeric})
     import pyspark.sql.functions as F  # noqa: N812
     from pyspark.sql.types import DoubleType, IntegerType, LongType, ShortType
+
     spark_df = as_spark_df(df)
     _NUMERIC = (DoubleType, LongType, IntegerType, ShortType)
     select_exprs = [
-        F.col(c).cast("float").alias(c) if isinstance(spark_df.schema[c].dataType, _NUMERIC)
-        else F.col(c)
+        F.col(c).cast("float").alias(c) if isinstance(spark_df.schema[c].dataType, _NUMERIC) else F.col(c)
         for c in spark_df.columns
     ]
     from .spark_backend import _as_pandas_api
+
     return _as_pandas_api(spark_df.select(*select_exprs))
 
 
@@ -1497,6 +1576,7 @@ def safe_fillna(df: Any, value: Any) -> Any:
     if _is_spark_pandas(df):
         spark_df = as_spark_df(df).fillna(value).localCheckpoint(eager=True)
         from .spark_backend import _as_pandas_api
+
         return _as_pandas_api(spark_df)
     return df.fillna(value)
 
@@ -1505,6 +1585,7 @@ def lazy_fillna(df: Any, value: Any) -> Any:
     """fillna without checkpoint — use when a downstream checkpoint will materialize."""
     if _is_spark_pandas(df):
         from .spark_backend import _as_pandas_api
+
         return _as_pandas_api(as_spark_df(df).fillna(value))
     return df.fillna(value)
 
@@ -1538,7 +1619,7 @@ def _spark_bulk_label_encode(df: Any, columns: list[str]) -> Any:
     # --- Step 1: batched countDistinct ---
     cardinality: dict[str, int] = {}
     for start in range(0, len(columns), _ENCODE_BATCH):
-        batch = columns[start:start + _ENCODE_BATCH]
+        batch = columns[start : start + _ENCODE_BATCH]
         card_exprs = [F.countDistinct(F.col(c)).alias(c) for c in batch]
         row = spark_df.agg(*card_exprs).collect()[0]
         for c in batch:
@@ -1547,14 +1628,16 @@ def _spark_bulk_label_encode(df: Any, columns: list[str]) -> Any:
     low_card = [c for c in columns if cardinality[c] <= _MAX_LABEL_CARDINALITY]
     high_card = [c for c in columns if cardinality[c] > _MAX_LABEL_CARDINALITY]
     if high_card:
-        print(f"Hash-encoding {len(high_card)} high-cardinality columns "
-              f"(>{_MAX_LABEL_CARDINALITY:,} unique): "
-              f"{high_card[:5]}{'...' if len(high_card) > 5 else ''}")
+        print(
+            f"Hash-encoding {len(high_card)} high-cardinality columns "
+            f"(>{_MAX_LABEL_CARDINALITY:,} unique): "
+            f"{high_card[:5]}{'...' if len(high_card) > 5 else ''}"
+        )
 
     # --- Step 2: batched collect_set for vocab ---
     vocab: dict[str, list[str]] = {}
     for start in range(0, len(low_card), _ENCODE_BATCH):
-        batch = low_card[start:start + _ENCODE_BATCH]
+        batch = low_card[start : start + _ENCODE_BATCH]
         set_exprs = [F.sort_array(F.collect_set(F.col(c).cast("string"))).alias(c) for c in batch]
         row = spark_df.agg(*set_exprs).collect()[0]
         for c in batch:
@@ -1564,7 +1647,7 @@ def _spark_bulk_label_encode(df: Any, columns: list[str]) -> Any:
     low_set, high_set = set(low_card), set(high_card)
     encode_cols = list(low_set | high_set)
     for start in range(0, len(encode_cols), _ENCODE_BATCH):
-        batch_set = set(encode_cols[start:start + _ENCODE_BATCH])
+        batch_set = set(encode_cols[start : start + _ENCODE_BATCH])
         select_exprs = []
         for c in spark_df.columns:
             if c not in batch_set:
@@ -1581,6 +1664,7 @@ def _spark_bulk_label_encode(df: Any, columns: list[str]) -> Any:
         spark_df = spark_df.select(*select_exprs)
 
     from .spark_backend import _as_pandas_api
+
     return _as_pandas_api(spark_df)
 
 
@@ -1608,24 +1692,32 @@ def _spark_bulk_median_impute(df: Any, columns: list[str] | None = None) -> Any:
     spark_df = as_spark_df(df)
     num_cols = _spark_numeric_cols(spark_df, columns)
     from .spark_backend import _as_pandas_api
+
     if not num_cols:
         return _as_pandas_api(spark_df)
-    stacked = _spark_stacked(spark_df, num_cols)
-    rows = stacked.where(F.col("__col_value").isNull()).groupBy("__col_name").agg(
-        F.lit(True).alias("__has_null"),
-    ).collect()
-    cols_with_nulls = {row["__col_name"] for row in rows}
+    safe = {c: f"__m{i}__" for i, c in enumerate(num_cols)}
+    work_df = spark_df.toDF(*[safe.get(c, c) for c in spark_df.columns])
+    cols_with_nulls: list[str] = []
+    for start in range(0, len(num_cols), _AGG_BATCH_SIZE):
+        batch = num_cols[start : start + _AGG_BATCH_SIZE]
+        safe_batch = [safe[c] for c in batch]
+        exprs = [F.sum(F.when(F.col(s).isNull(), F.lit(1)).otherwise(F.lit(0))).alias(s) for s in safe_batch]
+        row = work_df.agg(*exprs).head()
+        for c, s in zip(batch, safe_batch):
+            val = row[s]
+            if val is not None and val > 0:
+                cols_with_nulls.append(c)
     if not cols_with_nulls:
         return _as_pandas_api(spark_df)
-    null_cols = [c for c in num_cols if c in cols_with_nulls]
-    stacked_null = _spark_stacked(spark_df, null_cols)
-    median_rows = stacked_null.groupBy("__col_name").agg(
-        F.percentile_approx("__col_value", 0.5).alias("__median"),
-    ).collect()
-    fill_dict = {
-        row["__col_name"]: float(row["__median"]) if row["__median"] is not None else 0
-        for row in median_rows
-    }
+    fill_dict: dict[str, float] = {}
+    for start in range(0, len(cols_with_nulls), _AGG_BATCH_SIZE):
+        batch = cols_with_nulls[start : start + _AGG_BATCH_SIZE]
+        safe_batch = [safe[c] for c in batch]
+        exprs = [F.percentile_approx(F.col(s).cast("double"), 0.5).alias(s) for s in safe_batch]
+        row = work_df.agg(*exprs).head()
+        for c, s in zip(batch, safe_batch):
+            val = row[s]
+            fill_dict[c] = float(val) if val is not None else 0.0
     return _as_pandas_api(spark_df.fillna(fill_dict))
 
 
@@ -1650,7 +1742,7 @@ def _spark_bulk_zero_variance_cols(df: Any) -> list[str]:
     _BATCH = 2000
     zero_var: list[str] = []
     for start in range(0, len(num_cols), _BATCH):
-        batch = num_cols[start:start + _BATCH]
+        batch = num_cols[start : start + _BATCH]
         exprs = [F.stddev(F.col(c)).alias(c) for c in batch]
         row = spark_df.agg(*exprs).head()
         zero_var.extend(c for c in batch if row[c] is None or float(row[c]) == 0)
@@ -1671,6 +1763,7 @@ def collect_for_sklearn(obj: Any) -> Any:
 
 def as_pandas_api(spark_df: Any) -> Any:
     from .spark_backend import _as_pandas_api
+
     return _as_pandas_api(sanitize_spark_timestamps(spark_df))
 
 
@@ -1695,9 +1788,9 @@ def track_stage_object(*objects: Any) -> None:
 
 
 def _try_unpersist(obj: Any) -> None:
-    if hasattr(obj, 'unpersist') and hasattr(obj, 'to_spark'):
+    if hasattr(obj, "unpersist") and hasattr(obj, "to_spark"):
         obj.unpersist()
-    elif hasattr(obj, 'spark') and hasattr(obj.spark, 'unpersist'):
+    elif hasattr(obj, "spark") and hasattr(obj.spark, "unpersist"):
         obj.spark.unpersist()
 
 
@@ -1710,8 +1803,10 @@ def release_stage_memory() -> None:
             pass
     _stage_objects.clear()
     import gc
+
     gc.collect()
     import os
+
     if not (is_databricks() or os.environ.get("CR_SPARK_REMOTE")):
         return
     session = get_spark_session()

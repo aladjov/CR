@@ -16,7 +16,6 @@ from customer_retention.core.compat import (
 
 
 class TestSparkCheckpoint:
-
     def test_noop_on_pandas(self):
         df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
         result = spark_checkpoint(df)
@@ -28,7 +27,6 @@ class TestSparkCheckpoint:
 
 
 class TestSparkPersist:
-
     def test_noop_on_pandas(self):
         df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
         result = spark_persist(df)
@@ -46,7 +44,6 @@ class TestSparkPersist:
 
 
 class TestSparkCastFloat32:
-
     def test_casts_numeric_columns_to_float32(self):
         df = pd.DataFrame({"a": [1.0, 2.0, 3.0], "b": [4, 5, 6], "c": [7.0, 8.0, 9.0]})
         result = spark_cast_float32(df)
@@ -55,11 +52,13 @@ class TestSparkCastFloat32:
         assert result["c"].dtype == np.float32
 
     def test_preserves_non_numeric_columns(self):
-        df = pd.DataFrame({
-            "num": [1.0, 2.0, 3.0],
-            "cat": ["a", "b", "c"],
-            "dt": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
-        })
+        df = pd.DataFrame(
+            {
+                "num": [1.0, 2.0, 3.0],
+                "cat": ["a", "b", "c"],
+                "dt": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
+            }
+        )
         result = spark_cast_float32(df)
         assert result["num"].dtype == np.float32
         assert result["cat"].dtype == object
@@ -67,10 +66,12 @@ class TestSparkCastFloat32:
 
     def test_values_match_pandas_astype(self):
         rng = np.random.default_rng(42)
-        df = pd.DataFrame({
-            "x": rng.normal(0, 100, 50),
-            "y": rng.integers(0, 1000, 50).astype(float),
-        })
+        df = pd.DataFrame(
+            {
+                "x": rng.normal(0, 100, 50),
+                "y": rng.integers(0, 1000, 50).astype(float),
+            }
+        )
         result = spark_cast_float32(df)
         expected = df.astype("float32")
         np.testing.assert_array_equal(result["x"].to_numpy(), expected["x"].to_numpy())
@@ -91,7 +92,6 @@ class TestSparkCastFloat32:
 
 
 class TestBulkLabelEncode:
-
     def test_encodes_single_column(self):
         df = pd.DataFrame({"color": ["red", "blue", "green", "red"]})
         result = bulk_label_encode(df, ["color"])
@@ -105,11 +105,13 @@ class TestBulkLabelEncode:
         assert result["fruit"].tolist() == [2, 0, 1, 0]
 
     def test_multiple_columns(self):
-        df = pd.DataFrame({
-            "color": ["red", "blue", "green"],
-            "size": ["L", "M", "S"],
-            "value": [1.0, 2.0, 3.0],
-        })
+        df = pd.DataFrame(
+            {
+                "color": ["red", "blue", "green"],
+                "size": ["L", "M", "S"],
+                "value": [1.0, 2.0, 3.0],
+            }
+        )
         result = bulk_label_encode(df, ["color", "size"])
         assert result["color"].dtype in (np.int64, np.int32, int)
         assert result["size"].dtype in (np.int64, np.int32, int)
@@ -122,10 +124,12 @@ class TestBulkLabelEncode:
         assert len(result) == 4
 
     def test_preserves_non_target_columns(self):
-        df = pd.DataFrame({
-            "cat": ["x", "y", "z"],
-            "num": [10, 20, 30],
-        })
+        df = pd.DataFrame(
+            {
+                "cat": ["x", "y", "z"],
+                "num": [10, 20, 30],
+            }
+        )
         result = bulk_label_encode(df, ["cat"])
         assert result["num"].tolist() == [10, 20, 30]
 
@@ -142,18 +146,19 @@ class TestBulkLabelEncode:
 
 
 class TestSparkBulkLabelEncode:
-
     def test_pandas_spark_parity_single_column(self):
         pdf = pd.DataFrame({"fruit": ["cherry", "apple", "banana", "apple"]})
         pandas_result = bulk_label_encode(pdf.copy(), ["fruit"])
         assert pandas_result["fruit"].tolist() == [2, 0, 1, 0]
 
     def test_pandas_spark_parity_multiple_columns(self):
-        pdf = pd.DataFrame({
-            "color": ["red", "blue", "green"],
-            "size": ["L", "M", "S"],
-            "value": [1.0, 2.0, 3.0],
-        })
+        pdf = pd.DataFrame(
+            {
+                "color": ["red", "blue", "green"],
+                "size": ["L", "M", "S"],
+                "value": [1.0, 2.0, 3.0],
+            }
+        )
         result = bulk_label_encode(pdf.copy(), ["color", "size"])
         assert result["color"].tolist() == [2, 0, 1]
         assert result["size"].tolist() == [0, 1, 2]
@@ -169,6 +174,7 @@ class TestSparkBulkLabelEncode:
         import inspect
 
         from customer_retention.core.compat import _spark_bulk_label_encode
+
         source = inspect.getsource(_spark_bulk_label_encode)
         assert "Pipeline" not in source
         assert "StringIndexer" not in source
@@ -181,10 +187,12 @@ class TestSparkBulkLabelEncode:
 
         n = 100
         high_card_values = [f"id_{i}" for i in range(n)]
-        pdf = pd.DataFrame({
-            "high_card": high_card_values,
-            "num": range(n),
-        })
+        pdf = pd.DataFrame(
+            {
+                "high_card": high_card_values,
+                "num": range(n),
+            }
+        )
 
         mock_spark_df = MagicMock()
         mock_spark_df.columns = ["high_card", "num"]
@@ -206,26 +214,30 @@ class TestSparkBulkLabelEncode:
 
     def test_high_cardinality_threshold_constant_exists(self):
         from customer_retention.core.compat import _MAX_LABEL_CARDINALITY
+
         assert _MAX_LABEL_CARDINALITY == 10_000
 
 
 class TestBulkMedianImpute:
-
     def test_fills_nan_with_median(self):
-        df = pd.DataFrame({
-            "a": [1.0, np.nan, 3.0, np.nan, 5.0],
-            "b": [10.0, 20.0, np.nan, 40.0, 50.0],
-        })
+        df = pd.DataFrame(
+            {
+                "a": [1.0, np.nan, 3.0, np.nan, 5.0],
+                "b": [10.0, 20.0, np.nan, 40.0, 50.0],
+            }
+        )
         result = bulk_median_impute(df)
         assert not result.isna().any().any()
         assert result["a"].iloc[1] == pytest.approx(3.0)
         assert result["b"].iloc[2] == pytest.approx(30.0)
 
     def test_all_nan_column_fills_with_zero(self):
-        df = pd.DataFrame({
-            "good": [1.0, 2.0, 3.0],
-            "bad": [np.nan, np.nan, np.nan],
-        })
+        df = pd.DataFrame(
+            {
+                "good": [1.0, 2.0, 3.0],
+                "bad": [np.nan, np.nan, np.nan],
+            }
+        )
         result = bulk_median_impute(df)
         assert result["bad"].tolist() == [0.0, 0.0, 0.0]
         assert result["good"].tolist() == [1.0, 2.0, 3.0]
@@ -236,30 +248,36 @@ class TestBulkMedianImpute:
         pd.testing.assert_frame_equal(result, df)
 
     def test_specific_columns(self):
-        df = pd.DataFrame({
-            "a": [1.0, np.nan, 3.0],
-            "b": [np.nan, 20.0, np.nan],
-        })
+        df = pd.DataFrame(
+            {
+                "a": [1.0, np.nan, 3.0],
+                "b": [np.nan, 20.0, np.nan],
+            }
+        )
         result = bulk_median_impute(df, columns=["a"])
         assert not result["a"].isna().any()
         assert result["b"].isna().sum() == 2
 
     def test_non_numeric_columns_ignored(self):
-        df = pd.DataFrame({
-            "num": [1.0, np.nan, 3.0],
-            "cat": ["a", "b", "c"],
-        })
+        df = pd.DataFrame(
+            {
+                "num": [1.0, np.nan, 3.0],
+                "cat": ["a", "b", "c"],
+            }
+        )
         result = bulk_median_impute(df)
         assert result["num"].iloc[1] == pytest.approx(2.0)
         assert result["cat"].tolist() == ["a", "b", "c"]
 
     def test_mixed_null_and_null_free_columns(self):
-        df = pd.DataFrame({
-            "has_nulls": [1.0, np.nan, 3.0, np.nan, 5.0],
-            "no_nulls_a": [10.0, 20.0, 30.0, 40.0, 50.0],
-            "no_nulls_b": [2.0, 4.0, 6.0, 8.0, 10.0],
-            "also_nulls": [np.nan, 2.0, np.nan, 4.0, 5.0],
-        })
+        df = pd.DataFrame(
+            {
+                "has_nulls": [1.0, np.nan, 3.0, np.nan, 5.0],
+                "no_nulls_a": [10.0, 20.0, 30.0, 40.0, 50.0],
+                "no_nulls_b": [2.0, 4.0, 6.0, 8.0, 10.0],
+                "also_nulls": [np.nan, 2.0, np.nan, 4.0, 5.0],
+            }
+        )
         result = bulk_median_impute(df)
         assert not result.isna().any().any()
         assert result["has_nulls"].iloc[1] == pytest.approx(3.0)
@@ -268,22 +286,76 @@ class TestBulkMedianImpute:
         pd.testing.assert_series_equal(result["no_nulls_b"], df["no_nulls_b"])
 
     def test_all_columns_null_free(self):
-        df = pd.DataFrame({
-            "a": [1.0, 2.0, 3.0],
-            "b": [4.0, 5.0, 6.0],
-            "c": [7.0, 8.0, 9.0],
-        })
+        df = pd.DataFrame(
+            {
+                "a": [1.0, 2.0, 3.0],
+                "b": [4.0, 5.0, 6.0],
+                "c": [7.0, 8.0, 9.0],
+            }
+        )
         result = bulk_median_impute(df)
         pd.testing.assert_frame_equal(result, df)
 
 
-class TestBulkZeroVarianceCols:
+class TestSparkBulkMedianImpute:
+    def test_uses_batched_agg_not_stacking(self):
+        from unittest.mock import MagicMock, patch
 
+        from customer_retention.core.compat import _spark_bulk_median_impute
+
+        mock_spark_df = MagicMock()
+        mock_spark_df.columns = ["a", "b"]
+        mock_spark_df.schema.fields = [
+            MagicMock(name="a", dataType=MagicMock(spec_set=["__class__"])),
+            MagicMock(name="b", dataType=MagicMock(spec_set=["__class__"])),
+        ]
+        mock_work = MagicMock()
+        null_row = MagicMock()
+        null_row.__getitem__ = lambda _, k: 3 if "a" in k else 0
+        mock_work.agg.return_value.head.return_value = null_row
+        mock_spark_df.toDF.return_value = mock_work
+
+        median_row = MagicMock()
+        median_row.__getitem__ = lambda _, k: 2.5
+        with (
+            patch("customer_retention.core.compat._spark_numeric_cols", return_value=["a", "b"]),
+            patch("customer_retention.core.compat._spark_stacked") as mock_stacked,
+            patch("customer_retention.core.compat.as_spark_df", return_value=mock_spark_df),
+            patch("customer_retention.core.compat.spark_backend._as_pandas_api", return_value=MagicMock()),
+        ):
+            _spark_bulk_median_impute(MagicMock(), columns=["a", "b"])
+            mock_stacked.assert_not_called()
+
+    def test_no_nulls_skips_median_computation(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.core.compat import _spark_bulk_median_impute
+
+        mock_spark_df = MagicMock()
+        mock_spark_df.columns = ["a", "b"]
+        mock_work = MagicMock()
+        zero_row = MagicMock()
+        zero_row.__getitem__ = lambda _, k: 0
+        mock_work.agg.return_value.head.return_value = zero_row
+        mock_spark_df.toDF.return_value = mock_work
+
+        with (
+            patch("customer_retention.core.compat._spark_numeric_cols", return_value=["a", "b"]),
+            patch("customer_retention.core.compat.as_spark_df", return_value=mock_spark_df),
+            patch("customer_retention.core.compat.spark_backend._as_pandas_api", return_value=MagicMock()),
+        ):
+            _spark_bulk_median_impute(MagicMock(), columns=["a", "b"])
+        mock_spark_df.fillna.assert_not_called()
+
+
+class TestBulkZeroVarianceCols:
     def test_detects_constant_column(self):
-        df = pd.DataFrame({
-            "const": [5.0, 5.0, 5.0, 5.0],
-            "varies": [1.0, 2.0, 3.0, 4.0],
-        })
+        df = pd.DataFrame(
+            {
+                "const": [5.0, 5.0, 5.0, 5.0],
+                "varies": [1.0, 2.0, 3.0, 4.0],
+            }
+        )
         result = bulk_zero_variance_cols(df)
         assert "const" in result
         assert "varies" not in result
@@ -304,25 +376,28 @@ class TestBulkZeroVarianceCols:
         assert result == []
 
     def test_all_nan_column_detected(self):
-        df = pd.DataFrame({
-            "ok": [1.0, 2.0, 3.0],
-            "all_nan": [np.nan, np.nan, np.nan],
-        })
+        df = pd.DataFrame(
+            {
+                "ok": [1.0, 2.0, 3.0],
+                "all_nan": [np.nan, np.nan, np.nan],
+            }
+        )
         result = bulk_zero_variance_cols(df)
         assert "all_nan" in result
 
     def test_ignores_non_numeric(self):
-        df = pd.DataFrame({
-            "num_const": [5.0, 5.0, 5.0],
-            "cat": ["a", "a", "a"],
-        })
+        df = pd.DataFrame(
+            {
+                "num_const": [5.0, 5.0, 5.0],
+                "cat": ["a", "a", "a"],
+            }
+        )
         result = bulk_zero_variance_cols(df)
         assert "num_const" in result
         assert "cat" not in result
 
 
 class TestCollectForSklearn:
-
     def test_noop_on_pandas(self):
         df = pd.DataFrame({"a": [1, 2, 3]})
         result = collect_for_sklearn(df)
@@ -352,6 +427,7 @@ class TestCollectForSklearn:
         class FakeSparkPandasSeries:
             spark = True
             ndim = 1
+
             def to_frame(self):
                 return FakeFrame()
 
@@ -369,6 +445,7 @@ class TestCollectForSklearn:
         class FakeSparkPandasDF:
             spark = True
             ndim = 2
+
             def to_spark(self):
                 return FakeSparkDF()
 
