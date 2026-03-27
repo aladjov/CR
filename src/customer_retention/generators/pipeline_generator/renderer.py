@@ -1016,6 +1016,9 @@ def run_gold_features():
     output_path.parent.mkdir(parents=True, exist_ok=True)
     gold.attrs["recommendations_hash"] = RECOMMENDATIONS_HASH
     gold.attrs["feature_version"] = get_feature_version_tag()
+    _numeric = gold.select_dtypes(include=["number"]).columns
+    if len(_numeric) > 0:
+        gold[_numeric] = gold[_numeric].astype("float32")
     from customer_retention.integrations.adapters.factory import get_delta
     _delta = get_delta(force_local=True)
     _t6 = time.perf_counter()

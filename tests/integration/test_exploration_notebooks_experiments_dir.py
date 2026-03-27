@@ -11,26 +11,26 @@ NOTEBOOKS_DIR = Path(__file__).parent.parent.parent / "exploration_notebooks"
 
 
 def _read_notebook_cells(path):
-    with open(path, 'r', encoding='utf-8') as f:
+    with open(path, "r", encoding="utf-8") as f:
         nb = json.load(f)
     return [
-        (i, ''.join(cell.get('source', [])))
-        for i, cell in enumerate(nb.get('cells', []))
-        if cell.get('cell_type') == 'code'
+        (i, "".join(cell.get("source", [])))
+        for i, cell in enumerate(nb.get("cells", []))
+        if cell.get("cell_type") == "code"
     ]
 
 
 def _is_hardcoded_path_assignment(line):
     stripped = line.strip()
-    if stripped.startswith('#'):
+    if stripped.startswith("#"):
         return False
-    if 'print(' in line or 'console.' in line:
+    if "print(" in line or "console." in line:
         return False
-    if 'raise ' in line:
+    if "raise " in line:
         return False
     if 'Path("../experiments' not in line and "Path('../experiments" not in line:
         return False
-    if '=' in line and 'Path("../experiments' in line.split('=')[1]:
+    if "=" in line and 'Path("../experiments' in line.split("=")[1]:
         return True
     return False
 
@@ -41,54 +41,51 @@ def notebook_list():
 
 
 class TestNotebookStructure:
-
     def test_all_notebooks_are_valid_json(self, notebook_list):
         for nb_path in notebook_list:
-            with open(nb_path, 'r', encoding='utf-8') as f:
+            with open(nb_path, "r", encoding="utf-8") as f:
                 nb = json.load(f)
-            assert 'cells' in nb, f"{nb_path.name} missing 'cells' key"
+            assert "cells" in nb, f"{nb_path.name} missing 'cells' key"
 
     def test_all_notebooks_have_experiments_import(self, notebook_list):
         for nb_path in notebook_list:
-            with open(nb_path, 'r', encoding='utf-8') as f:
+            with open(nb_path, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            assert 'customer_retention.core.config.experiments' in content, \
+            assert "customer_retention.core.config.experiments" in content, (
                 f"{nb_path.name} missing experiments config import"
+            )
 
     def test_no_hardcoded_experiments_paths(self, notebook_list):
         for nb_path in notebook_list:
             for i, source in _read_notebook_cells(nb_path):
-                lines = source.split('\n')
+                lines = source.split("\n")
                 for line in lines:
                     if _is_hardcoded_path_assignment(line):
-                        pytest.fail(
-                            f"{nb_path.name} cell {i} has hardcoded path: {line.strip()}"
-                        )
+                        pytest.fail(f"{nb_path.name} cell {i} has hardcoded path: {line.strip()}")
 
 
 class TestNotebookCodeValidity:
-
     def test_all_notebook_code_is_valid_python(self, notebook_list):
         for nb_path in notebook_list:
             for i, source in _read_notebook_cells(nb_path):
-                if not source.strip() or source.strip().startswith('%') or source.strip().startswith('!'):
+                if not source.strip() or source.strip().startswith("%") or source.strip().startswith("!"):
                     continue
 
                 try:
-                    compile(source, f"{nb_path.name}:cell_{i}", 'exec')
+                    compile(source, f"{nb_path.name}:cell_{i}", "exec")
                 except SyntaxError as e:
                     pytest.fail(f"{nb_path.name} cell {i} has syntax error: {e}")
 
 
 class TestExperimentsConfigModule:
-
     def test_experiments_module_imports(self):
         from customer_retention.core.config.experiments import (
             EXPERIMENTS_DIR,
             FINDINGS_DIR,
             OUTPUT_DIR,
         )
+
         assert EXPERIMENTS_DIR is not None
         assert FINDINGS_DIR is not None
         assert OUTPUT_DIR is not None
@@ -106,6 +103,7 @@ class TestExperimentsConfigModule:
         import importlib
 
         import customer_retention.core.config.experiments as exp_module
+
         importlib.reload(exp_module)
 
         assert str(exp_module.EXPERIMENTS_DIR) == custom_path
@@ -121,6 +119,7 @@ class TestExperimentsConfigModule:
         import importlib
 
         import customer_retention.core.config.experiments as exp_module
+
         importlib.reload(exp_module)
 
         exp_module.setup_experiments_structure()
@@ -142,71 +141,73 @@ class TestExperimentsConfigModule:
 
 
 class TestNotebookImportExecution:
-
-    @pytest.mark.timeout(180)
     def test_first_code_cell_imports_work(self, notebook_list, tmp_path):
+        imports_by_notebook: dict[str, str] = {}
         for nb_path in notebook_list:
-            with open(nb_path, 'r', encoding='utf-8') as f:
+            with open(nb_path, "r", encoding="utf-8") as f:
                 nb = json.load(f)
-
-            for cell in nb.get('cells', []):
-                if cell.get('cell_type') != 'code':
+            for cell in nb.get("cells", []):
+                if cell.get("cell_type") != "code":
                     continue
-
-                source = ''.join(cell.get('source', []))
+                source = "".join(cell.get("source", []))
                 if not source.strip():
                     continue
-
-                lines = source.split('\n')
+                lines = source.split("\n")
                 import_statements = []
                 i = 0
                 while i < len(lines):
                     line = lines[i].strip()
-                    if line.startswith('import ') or line.startswith('from '):
-                        if '(' in line and ')' not in line:
+                    if line.startswith("import ") or line.startswith("from "):
+                        if "(" in line and ")" not in line:
                             statement_lines = [line]
                             i += 1
-                            while i < len(lines) and ')' not in lines[i]:
+                            while i < len(lines) and ")" not in lines[i]:
                                 statement_lines.append(lines[i].strip())
                                 i += 1
                             if i < len(lines):
                                 statement_lines.append(lines[i].strip())
-                            import_statements.append('\n'.join(statement_lines))
+                            import_statements.append("\n".join(statement_lines))
                         else:
                             import_statements.append(line)
                     i += 1
-
                 if import_statements:
-                    import_code = '\n'.join(import_statements)
-
-                    result = subprocess.run(
-                        [sys.executable, "-c", import_code],
-                        capture_output=True,
-                        text=True,
-                        env={**os.environ, "CR_EXPERIMENTS_DIR": str(tmp_path)},
-                        timeout=30
-                    )
-
-                    assert result.returncode == 0, \
-                        f"{nb_path.name} import failed:\n{result.stderr}"
+                    imports_by_notebook[nb_path.name] = "\n".join(import_statements)
                 break
+
+        script_lines = ["import sys", "failures = []"]
+        for nb_name, code in imports_by_notebook.items():
+            script_lines.append(
+                f'try:\n    exec({code!r}, {{}})\nexcept Exception as e:\n    failures.append(f"{nb_name}: {{e}}")'
+            )
+        script_lines.append("if failures:\n    print('\\n'.join(failures), file=sys.stderr)\n    sys.exit(1)")
+        result = subprocess.run(
+            [sys.executable, "-c", "\n".join(script_lines)],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "CR_EXPERIMENTS_DIR": str(tmp_path)},
+            timeout=60,
+        )
+        assert result.returncode == 0, f"Notebook imports failed:\n{result.stderr}"
 
 
 class TestNotebookWithCustomExperimentsDir:
-
     def test_findings_dir_resolves_to_custom_path(self, tmp_path):
         custom_exp = tmp_path / "my_experiments"
         custom_exp.mkdir()
         (custom_exp / "findings").mkdir()
 
         result = subprocess.run(
-            [sys.executable, "-c", """
+            [
+                sys.executable,
+                "-c",
+                """
 import os
 os.environ['CR_EXPERIMENTS_DIR'] = os.environ.get('TEST_EXP_DIR')
 
 from customer_retention.core.config.experiments import FINDINGS_DIR
 print(f"FINDINGS_DIR: {FINDINGS_DIR}")
-"""],
+""",
+            ],
             capture_output=True,
             text=True,
             env={**os.environ, "TEST_EXP_DIR": str(custom_exp)},
@@ -219,7 +220,10 @@ print(f"FINDINGS_DIR: {FINDINGS_DIR}")
         dbfs_path = "/dbfs/mnt/catalog/experiments"
 
         result = subprocess.run(
-            [sys.executable, "-c", f"""
+            [
+                sys.executable,
+                "-c",
+                f"""
 import os
 os.environ['CR_EXPERIMENTS_DIR'] = '{dbfs_path}'
 
@@ -230,7 +234,8 @@ from customer_retention.core.config.experiments import (
 print(f"EXPERIMENTS_DIR: {{EXPERIMENTS_DIR}}")
 print(f"FINDINGS_DIR: {{FINDINGS_DIR}}")
 print(f"get_experiments_dir(): {{get_experiments_dir()}}")
-"""],
+""",
+            ],
             capture_output=True,
             text=True,
         )
@@ -241,7 +246,6 @@ print(f"get_experiments_dir(): {{get_experiments_dir()}}")
 
 
 class TestNotebookFindingsDiscovery:
-
     def test_notebook_finds_findings_with_custom_dir(self, tmp_path):
         custom_exp = tmp_path / "experiments"
         findings_dir = custom_exp / "findings"
@@ -254,14 +258,18 @@ class TestNotebookFindingsDiscovery:
             "column_count": 5,
             "columns": {},
             "target_column": "target",
-            "identifier_columns": ["id"]
+            "identifier_columns": ["id"],
         }
 
         import yaml
+
         (findings_dir / "test_dataset_findings.yaml").write_text(yaml.dump(mock_findings))
 
         result = subprocess.run(
-            [sys.executable, "-c", f"""
+            [
+                sys.executable,
+                "-c",
+                f"""
 import os
 os.environ['CR_EXPERIMENTS_DIR'] = '{custom_exp}'
 
@@ -276,7 +284,8 @@ print(f"FINDINGS_DIR: {{FINDINGS_DIR}}")
 print(f"Found {{len(findings_files)}} findings files")
 for f in findings_files:
     print(f"  - {{f.name}}")
-"""],
+""",
+            ],
             capture_output=True,
             text=True,
         )
@@ -287,43 +296,45 @@ for f in findings_files:
 
 
 class TestSpecificNotebooks:
-
-    @pytest.mark.parametrize("notebook_name", [
-        "01_data_discovery.ipynb",
-        "04_column_deep_dive.ipynb",
-        "03_dataset_merge.ipynb",
-        "10_spec_generation.ipynb",
-    ])
+    @pytest.mark.parametrize(
+        "notebook_name",
+        [
+            "01_data_discovery.ipynb",
+            "04_column_deep_dive.ipynb",
+            "03_dataset_merge.ipynb",
+            "10_spec_generation.ipynb",
+        ],
+    )
     def test_key_notebooks_have_correct_config(self, notebook_name):
         nb_path = NOTEBOOKS_DIR / notebook_name
         if not nb_path.exists():
             pytest.skip(f"{notebook_name} not found")
 
         for _, source in _read_notebook_cells(nb_path):
-            if 'customer_retention.core.config.experiments' in source:
-                assert 'import' in source and 'FINDINGS_DIR' in source, \
+            if "customer_retention.core.config.experiments" in source:
+                assert "import" in source and "FINDINGS_DIR" in source, (
                     f"{notebook_name}: FINDINGS_DIR should be imported, not defined"
+                )
                 return
 
         pytest.fail(f"{notebook_name}: Missing experiments config import")
 
 
 class TestScoringValidationNotebook:
-
     NOTEBOOK_PATH = NOTEBOOKS_DIR / "11_scoring_validation.ipynb"
 
     def test_notebook_exists(self):
         assert self.NOTEBOOK_PATH.exists(), "11_scoring_validation.ipynb not found"
 
     def test_notebook_is_valid_json(self):
-        with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
+        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
             nb = json.load(f)
-        assert 'cells' in nb
-        assert 'metadata' in nb
-        assert nb['nbformat'] >= 4
+        assert "cells" in nb
+        assert "metadata" in nb
+        assert nb["nbformat"] >= 4
 
     def test_notebook_has_expected_sections(self):
-        with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
+        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
             content = f.read()
 
         expected_sections = [
@@ -341,40 +352,39 @@ class TestScoringValidationNotebook:
             assert section in content, f"Missing section: {section}"
 
     def test_notebook_imports_experiments_config(self):
-        with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
+        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
             content = f.read()
-        assert 'customer_retention.core.config.experiments' in content
+        assert "customer_retention.core.config.experiments" in content
 
     def test_notebook_uses_transform_executor(self):
-        with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
+        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
             content = f.read()
-        assert 'TransformExecutor' in content
-        assert 'load_artifact_store' in content
-        assert 'LabelEncoder().fit_transform' not in content
+        assert "TransformExecutor" in content
+        assert "load_artifact_store" in content
+        assert "LabelEncoder().fit_transform" not in content
 
     def test_notebook_has_no_jinja2(self):
-        with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
+        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
             content = f.read()
-        assert '{{ ' not in content
-        assert '{% ' not in content
+        assert "{{ " not in content
+        assert "{% " not in content
 
     def test_notebook_code_cells_are_valid_python(self):
         for i, source in _read_notebook_cells(self.NOTEBOOK_PATH):
             if not source.strip():
                 continue
             try:
-                compile(source, f"11_scoring_validation.ipynb:cell_{i}", 'exec')
+                compile(source, f"11_scoring_validation.ipynb:cell_{i}", "exec")
             except SyntaxError as e:
                 pytest.fail(f"Cell {i} has syntax error: {e}")
 
     def test_notebook_has_validation_import(self):
-        with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
+        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
             content = f.read()
-        assert 'validate_feature_transformation' in content
+        assert "validate_feature_transformation" in content
 
 
 class TestNotebook03Architecture:
-
     NOTEBOOK_PATH = NOTEBOOKS_DIR / "03_dataset_merge.ipynb"
 
     def _all_code(self):
@@ -382,8 +392,7 @@ class TestNotebook03Architecture:
 
     def test_nb03_standardizes_entity_column(self):
         code = self._all_code()
-        assert 'MergeConfig(entity_key="entity_id")' in code, \
-            "NB03 must always use MergeConfig(entity_key='entity_id')"
+        assert 'MergeConfig(entity_key="entity_id")' in code, "NB03 must always use MergeConfig(entity_key='entity_id')"
 
     def test_nb03_renames_entity_column(self):
         code = self._all_code()
@@ -392,11 +401,10 @@ class TestNotebook03Architecture:
 
 
 class TestNotebook04Architecture:
-
     NOTEBOOK_PATH = NOTEBOOKS_DIR / "04_column_deep_dive.ipynb"
 
     def _read_content(self):
-        with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
+        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
             return f.read()
 
     def test_nb04_uses_distributed_on_databricks(self):
@@ -408,11 +416,10 @@ class TestNotebook04Architecture:
 
 
 class TestNotebook05Architecture:
-
     NOTEBOOK_PATH = NOTEBOOKS_DIR / "05_relationship_analysis.ipynb"
 
     def _read_content(self):
-        with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
+        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
             return f.read()
 
     def test_nb05_uses_distributed_on_databricks(self):
@@ -424,11 +431,10 @@ class TestNotebook05Architecture:
 
 
 class TestNotebook06Architecture:
-
     NOTEBOOK_PATH = NOTEBOOKS_DIR / "06_feature_opportunities.ipynb"
 
     def _read_content(self):
-        with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
+        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
             return f.read()
 
     def test_nb06_uses_prefer_merged(self):
@@ -453,11 +459,10 @@ class TestNotebook06Architecture:
 
 
 class TestNotebook07Architecture:
-
     NOTEBOOK_PATH = NOTEBOOKS_DIR / "07_modeling_readiness.ipynb"
 
     def _read_content(self):
-        with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
+        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
             return f.read()
 
     def test_nb07_uses_prefer_merged(self):
@@ -478,11 +483,10 @@ class TestNotebook07Architecture:
 
 
 class TestNotebook10Architecture:
-
     NOTEBOOK_PATH = NOTEBOOKS_DIR / "10_spec_generation.ipynb"
 
     def _read_content(self):
-        with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
+        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
             return f.read()
 
     def test_nb10_uses_namespace_discovery(self):
@@ -502,11 +506,10 @@ class TestNotebook10Architecture:
 
 
 class TestNotebook08Architecture:
-
     NOTEBOOK_PATH = NOTEBOOKS_DIR / "08_baseline_experiments.ipynb"
 
     def _read_content(self):
-        with open(self.NOTEBOOK_PATH, 'r', encoding='utf-8') as f:
+        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
             return f.read()
 
     def test_nb08_uses_prefer_merged(self):
@@ -537,7 +540,8 @@ class TestNotebook08Architecture:
         with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
             nb = json.load(f)
         config_cells = [
-            c for c in nb["cells"]
+            c
+            for c in nb["cells"]
             if c["cell_type"] == "code"
             and c["source"]
             and "@cr:config" in c["source"][0]
@@ -551,10 +555,7 @@ class TestNotebook08Architecture:
         with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
             nb = json.load(f)
         train_cell = next(
-            c for c in nb["cells"]
-            if c["cell_type"] == "code"
-            and c["source"]
-            and "train_models" in c["source"][0]
+            c for c in nb["cells"] if c["cell_type"] == "code" and c["source"] and "train_models" in c["source"][0]
         )
         source = "".join(train_cell["source"])
         assert "n_splits=CV_FOLDS" in source, "train_models must use CV_FOLDS variable for n_splits"
@@ -572,36 +573,29 @@ _CELL_ID_PATTERN = re.compile(r"^[a-f0-9]{8}$")
 
 
 class TestCellIdStandardization:
-
     def test_all_cells_have_standardized_ids(self, notebook_list):
         for nb_path in notebook_list:
-            with open(nb_path, 'r', encoding='utf-8') as f:
+            with open(nb_path, "r", encoding="utf-8") as f:
                 nb = json.load(f)
-            for i, cell in enumerate(nb.get('cells', [])):
-                cell_id = cell.get('id', '')
-                assert _CELL_ID_PATTERN.match(cell_id), (
-                    f"{nb_path.name} cell {i} has non-standard ID: {cell_id!r}"
-                )
+            for i, cell in enumerate(nb.get("cells", [])):
+                cell_id = cell.get("id", "")
+                assert _CELL_ID_PATTERN.match(cell_id), f"{nb_path.name} cell {i} has non-standard ID: {cell_id!r}"
 
     def test_no_duplicate_ids_within_notebook(self, notebook_list):
         for nb_path in notebook_list:
-            with open(nb_path, 'r', encoding='utf-8') as f:
+            with open(nb_path, "r", encoding="utf-8") as f:
                 nb = json.load(f)
-            ids = [cell.get('id') for cell in nb.get('cells', [])]
-            assert len(ids) == len(set(ids)), (
-                f"{nb_path.name} has duplicate cell IDs"
-            )
+            ids = [cell.get("id") for cell in nb.get("cells", [])]
+            assert len(ids) == len(set(ids)), f"{nb_path.name} has duplicate cell IDs"
 
     def test_cell_ids_are_valid_format(self, notebook_list):
         for nb_path in notebook_list:
-            with open(nb_path, 'r', encoding='utf-8') as f:
+            with open(nb_path, "r", encoding="utf-8") as f:
                 nb = json.load(f)
-            for cell in nb.get('cells', []):
-                cell_id = cell.get('id', '')
+            for cell in nb.get("cells", []):
+                cell_id = cell.get("id", "")
                 assert cell_id, f"{nb_path.name}: cell missing ID"
-                assert len(cell_id) <= 20, (
-                    f"{nb_path.name}: cell ID too long: {cell_id!r}"
-                )
+                assert len(cell_id) <= 20, f"{nb_path.name}: cell ID too long: {cell_id!r}"
 
     def test_all_code_cells_have_explicit_tags(self, notebook_list):
         tag_re = re.compile(
@@ -610,37 +604,35 @@ class TestCellIdStandardization:
             r" id=[a-f0-9]{8}$"
         )
         for nb_path in notebook_list:
-            with open(nb_path, 'r', encoding='utf-8') as f:
+            with open(nb_path, "r", encoding="utf-8") as f:
                 nb = json.load(f)
-            for i, cell in enumerate(nb.get('cells', [])):
-                if cell.get('cell_type') != 'code':
+            for i, cell in enumerate(nb.get("cells", [])):
+                if cell.get("cell_type") != "code":
                     continue
-                source = ''.join(cell.get('source', []))
-                first_line = source.split('\n')[0].rstrip() if source else ''
+                source = "".join(cell.get("source", []))
+                first_line = source.split("\n")[0].rstrip() if source else ""
                 assert tag_re.match(first_line), (
-                    f"{nb_path.name} cell {i} ({cell.get('id')}): "
-                    f"code cell missing valid tag (got {first_line!r})"
+                    f"{nb_path.name} cell {i} ({cell.get('id')}): code cell missing valid tag (got {first_line!r})"
                 )
 
     def test_embedded_id_matches_cell_id(self, notebook_list):
         _code_id_re = re.compile(r"id=([a-f0-9]{8})")
         _doc_id_re = re.compile(r"\[//\]: # \(cr:doc\s.*?id=([a-f0-9]{8})\)")
         for nb_path in notebook_list:
-            with open(nb_path, 'r', encoding='utf-8') as f:
+            with open(nb_path, "r", encoding="utf-8") as f:
                 nb = json.load(f)
-            for i, cell in enumerate(nb.get('cells', [])):
-                source = ''.join(cell.get('source', []))
-                first_line = source.split('\n')[0].rstrip() if source else ''
-                if cell.get('cell_type') == 'code':
+            for i, cell in enumerate(nb.get("cells", [])):
+                source = "".join(cell.get("source", []))
+                first_line = source.split("\n")[0].rstrip() if source else ""
+                if cell.get("cell_type") == "code":
                     m = _code_id_re.search(first_line)
-                elif cell.get('cell_type') == 'markdown':
+                elif cell.get("cell_type") == "markdown":
                     m = _doc_id_re.match(first_line)
                 else:
                     continue
                 if m:
-                    assert cell.get('id') == m.group(1), (
-                        f"{nb_path.name} cell {i}: embedded id={m.group(1)} "
-                        f"does not match cell.id={cell.get('id')!r}"
+                    assert cell.get("id") == m.group(1), (
+                        f"{nb_path.name} cell {i}: embedded id={m.group(1)} does not match cell.id={cell.get('id')!r}"
                     )
 
     def test_all_markdown_cells_have_doc_tags(self, notebook_list):
@@ -651,13 +643,13 @@ class TestCellIdStandardization:
             r"\)$"
         )
         for nb_path in notebook_list:
-            with open(nb_path, 'r', encoding='utf-8') as f:
+            with open(nb_path, "r", encoding="utf-8") as f:
                 nb = json.load(f)
-            for i, cell in enumerate(nb.get('cells', [])):
-                if cell.get('cell_type') != 'markdown':
+            for i, cell in enumerate(nb.get("cells", [])):
+                if cell.get("cell_type") != "markdown":
                     continue
-                source = ''.join(cell.get('source', []))
-                first_line = source.split('\n')[0].rstrip() if source else ''
+                source = "".join(cell.get("source", []))
+                first_line = source.split("\n")[0].rstrip() if source else ""
                 assert doc_tag_re.match(first_line), (
                     f"{nb_path.name} cell {i} ({cell.get('id')}): "
                     f"markdown cell missing valid doc tag (got {first_line!r})"
@@ -665,43 +657,40 @@ class TestCellIdStandardization:
 
     def test_config_cells_have_magic_comments(self, notebook_list):
         for nb_path in notebook_list:
-            with open(nb_path, 'r', encoding='utf-8') as f:
+            with open(nb_path, "r", encoding="utf-8") as f:
                 nb = json.load(f)
-            for i, cell in enumerate(nb.get('cells', [])):
-                if cell.get('cell_type') != 'code':
+            for i, cell in enumerate(nb.get("cells", [])):
+                if cell.get("cell_type") != "code":
                     continue
-                source = ''.join(cell.get('source', []))
-                lines = source.split('\n')
+                source = "".join(cell.get("source", []))
+                lines = source.split("\n")
                 all_caps_assignments = [
-                    line for line in lines
-                    if re.match(r'^[A-Z][A-Z_0-9]+ *= *', line)
-                    and not line.startswith('#')
+                    line for line in lines if re.match(r"^[A-Z][A-Z_0-9]+ *= *", line) and not line.startswith("#")
                 ]
                 has_non_config = any(
-                    line.strip() and not line.startswith('#')
-                    and not re.match(r'^[A-Z][A-Z_0-9]+ *= *', line)
+                    line.strip()
+                    and not line.startswith("#")
+                    and not re.match(r"^[A-Z][A-Z_0-9]+ *= *", line)
                     and not line.strip().startswith('"')
                     and not line.strip().startswith("'")
-                    and not line.strip().startswith('{')
-                    and not line.strip().startswith('[')
-                    and not line.strip().startswith('(')
-                    and not line.strip().startswith(')')
-                    and not line.strip().startswith(']')
-                    and not line.strip().startswith('}')
-                    and not line.strip() == ''
+                    and not line.strip().startswith("{")
+                    and not line.strip().startswith("[")
+                    and not line.strip().startswith("(")
+                    and not line.strip().startswith(")")
+                    and not line.strip().startswith("]")
+                    and not line.strip().startswith("}")
+                    and not line.strip() == ""
                     for line in lines
                 )
                 if all_caps_assignments and not has_non_config:
-                    first_line = lines[0].rstrip() if lines else ''
-                    if not (first_line.startswith('# @cr:config') or first_line.startswith('# @cr:user_code')):
+                    first_line = lines[0].rstrip() if lines else ""
+                    if not (first_line.startswith("# @cr:config") or first_line.startswith("# @cr:user_code")):
                         pytest.fail(
-                            f"{nb_path.name} cell {i} ({cell.get('id')}): "
-                            f"pure config cell missing magic comment"
+                            f"{nb_path.name} cell {i} ({cell.get('id')}): pure config cell missing magic comment"
                         )
 
 
 class TestReleaseStageMemoryGuard:
-
     EXPECTED_NOTEBOOKS = [
         "00_start_here.ipynb",
         "01_data_discovery.ipynb",
@@ -729,12 +718,8 @@ class TestReleaseStageMemoryGuard:
             nb_path = NOTEBOOKS_DIR / nb_name
             assert nb_path.exists(), f"{nb_name} not found"
             code_cells = _read_notebook_cells(nb_path)
-            has_release = any(
-                "release_stage_memory" in src for _, src in code_cells
-            )
-            assert has_release, (
-                f"{nb_name} missing release_stage_memory cleanup cell"
-            )
+            has_release = any("release_stage_memory" in src for _, src in code_cells)
+            assert has_release, f"{nb_name} missing release_stage_memory cleanup cell"
 
     def test_release_stage_memory_is_last_code_cell(self):
         for nb_name in self.EXPECTED_NOTEBOOKS:
@@ -749,7 +734,6 @@ class TestReleaseStageMemoryGuard:
 
 
 class TestNoBareExceptInCoreMetadata:
-
     CORE_FILES = [
         Path("src/customer_retention/analysis/auto_explorer/session.py"),
         Path("src/customer_retention/core/config/experiments.py"),
@@ -771,7 +755,7 @@ class TestNoBareExceptInCoreMetadata:
                 continue
             content = full_path.read_text()
             for match in self._PATTERN.finditer(content):
-                line_no = content[:match.start()].count("\n") + 1
+                line_no = content[: match.start()].count("\n") + 1
                 violations.append(f"{rel_path}:{line_no}")
         if violations:
             pytest.fail(

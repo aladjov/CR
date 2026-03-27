@@ -5353,6 +5353,26 @@ class TestTemporalFeatureGroupPrediction:
         assert "event_frequency" not in cols
         assert "regularity_score" not in cols
 
+    def test_build_temporal_config_uses_all_default_groups(self):
+        from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import TemporalFeatureConfig
+        findings = ExplorationFindings(source_path="/tmp/test.csv", source_format="csv")
+        findings.metadata = {"temporal_patterns": {
+            "lag_features_computed": True,
+            "lag_window_days": 30,
+            "num_lags": 4,
+            "lag_columns": ["amt"],
+            "feature_groups": ["lagged_windows", "velocity"],
+        }}
+        parser = FindingsParser.__new__(FindingsParser)
+        from customer_retention.analysis.auto_explorer.exploration_manager import MultiDatasetFindings
+        multi = MultiDatasetFindings.__new__(MultiDatasetFindings)
+        multi.notes = {}
+        result = parser._build_temporal_feature_config(multi, findings)
+        assert result is not None
+        assert set(result.feature_groups) == set(TemporalFeatureConfig().feature_groups)
+
 
 class TestGoldRecommendationFiltering:
     @staticmethod

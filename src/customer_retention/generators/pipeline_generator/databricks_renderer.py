@@ -1460,6 +1460,14 @@ def run_gold():
     elif "feature_timestamp" in df.columns:
         df = df.withColumnRenamed("feature_timestamp", TIMESTAMP_COLUMN)
     df = _cast_timestamp_ntz_to_timestamp(df)
+    from pyspark.sql.types import DoubleType, LongType, IntegerType, ShortType
+    _NUMERIC_TYPES = (DoubleType, LongType, IntegerType, ShortType)
+    _f32_exprs = [
+        F.col(c).cast("float").alias(c) if isinstance(df.schema[c].dataType, _NUMERIC_TYPES)
+        else F.col(c)
+        for c in df.columns
+    ]
+    df = df.select(*_f32_exprs)
     output_table = gold_table()
     _t5 = _time.monotonic()
     df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)

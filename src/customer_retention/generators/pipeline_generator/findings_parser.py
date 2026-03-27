@@ -1301,7 +1301,6 @@ class FindingsParser:
                     num_lags=tp.get("num_lags", 4),
                     lag_columns=tp.get("lag_columns", []),
                     lag_agg_funcs=tp.get("lag_agg_funcs", ["sum", "mean", "count", "max"]),
-                    feature_groups=tp.get("feature_groups", TemporalFeatureConfig().feature_groups),
                 )
         return None
 
