@@ -979,7 +979,7 @@ def _spark_corr_matrix_ml(
 def _safe_corr_expr(col_a: Any, col_b: Any) -> Any:
     import pyspark.sql.functions as F  # noqa: N812
     denom = F.stddev_samp(col_a) * F.stddev_samp(col_b)
-    return F.when(denom > 0, F.covar_samp(col_a, col_b) / denom)
+    return F.covar_samp(col_a, col_b) / F.when(denom > 0, denom)
 
 
 def _spark_pairwise_corr(df: Any, cols: list[str], numeric: set[str]) -> _pandas.DataFrame:
