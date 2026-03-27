@@ -976,7 +976,7 @@ def _spark_corr_matrix_ml(
     return _pandas.DataFrame(full, columns=cols, index=cols)
 
 
-def _safe_corr_expr(col_a: str, col_b: str) -> Any:
+def _safe_corr_expr(col_a: Any, col_b: Any) -> Any:
     import pyspark.sql.functions as F  # noqa: N812
     denom = F.stddev_samp(col_a) * F.stddev_samp(col_b)
     return F.when(denom > 0, F.covar_samp(col_a, col_b) / denom)
@@ -1161,7 +1161,7 @@ def _spark_unpivot_corr_with_target(
     t0 = _time.monotonic()
     stacked = _spark_stacked_with_extra(spark_df, num_cols, target_column)
     rows = stacked.groupBy("__col_name").agg(
-        F.corr("__col_value", target_column).alias("__corr"),
+        _safe_corr_expr("__col_value", target_column).alias("__corr"),
     ).collect()
     for row in rows:
         val = row["__corr"]
@@ -1182,12 +1182,10 @@ def _spark_unpivot_leakage_corr_combined(
     spark_df = as_spark_df(df[columns + [target_column]])
     t0 = _time.monotonic()
     stacked = _spark_stacked_with_extra(spark_df, columns, target_column)
+    null_ind = F.when(F.col("__col_value").isNull(), 1.0).otherwise(0.0)
     rows = stacked.groupBy("__col_name").agg(
-        F.corr("__col_value", F.col(target_column)).alias("__value_corr"),
-        F.corr(
-            F.when(F.col("__col_value").isNull(), 1.0).otherwise(0.0),
-            F.col(target_column),
-        ).alias("__null_corr"),
+        _safe_corr_expr("__col_value", F.col(target_column)).alias("__value_corr"),
+        _safe_corr_expr(null_ind, F.col(target_column)).alias("__null_corr"),
     ).collect()
     null_corrs: dict[str, float] = {}
     value_corrs: dict[str, float] = {}
