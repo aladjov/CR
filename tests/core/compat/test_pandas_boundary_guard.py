@@ -92,6 +92,8 @@ COLLECT_BOUNDARY_FILES = {
     "analysis/auto_explorer/field_availability_audit.py",
     # CV folds — gc.collect() for memory reclamation between folds (not Spark .collect())
     "stages/modeling/cross_validator.py",
+    # L1 thinning — .distinct().collect() for snapshot dates (small: ~100 dates max)
+    "stages/features/feature_selector.py",
 }
 
 # ── bare 'import pandas as pd' allowlist ────────────────────────────────
