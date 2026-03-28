@@ -803,3 +803,88 @@ class TestCombinedSelection:
         assert "constant" not in result.selected_features
         # One of feature1/feature2 should be dropped (correlation)
         assert len(set(result.selected_features) & {"feature1", "feature2"}) <= 1
+
+
+class TestTemporalThinning:
+    def _make_temporal_df(self, n_entities=100, n_dates=40, n_features=10):
+        rng = np.random.default_rng(42)
+        dates = pd.date_range("2024-01-01", periods=n_dates, freq="7D")
+        rows = []
+        for eid in range(n_entities):
+            for d in dates:
+                row = {"entity_id": eid, "__cv_date__": d}
+                for f in range(n_features):
+                    row[f"f{f}"] = rng.standard_normal()
+                row["target"] = rng.choice([0, 1])
+                rows.append(row)
+        return pd.DataFrame(rows)
+
+    def test_no_thinning_below_target(self):
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        df = self._make_temporal_df(n_entities=10, n_dates=5)
+        result = run_selection_pipeline(
+            df, target_column="target", l1_enabled=True,
+            temporal_column="__cv_date__", l1_sample_rows=10_000,
+        )
+        assert "target" in result.df.columns
+        assert result.method_used == SelectionMethod.L1_SELECTION
+
+    def test_pipeline_with_temporal_column_on_pandas(self):
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        df = self._make_temporal_df(n_entities=50, n_dates=20)
+        result = run_selection_pipeline(
+            df, target_column="target", l1_enabled=True,
+            temporal_column="__cv_date__", l1_sample_rows=100,
+        )
+        assert result.method_used == SelectionMethod.L1_SELECTION
+        assert "__cv_date__" not in result.df.columns
+
+    def test_temporal_column_excluded_from_all_stages(self):
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        df = self._make_temporal_df(n_entities=20, n_dates=10)
+        result = run_selection_pipeline(
+            df, target_column="target", l1_enabled=True,
+            temporal_column="__cv_date__",
+        )
+        assert "__cv_date__" not in result.dropped_features
+        assert "__cv_date__" not in result.selected_features
+        assert "__cv_date__" not in result.df.columns
+
+    def test_entity_id_never_enters_pipeline(self):
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        df = self._make_temporal_df(n_entities=20, n_dates=10)
+        df_no_entity = df.drop(columns=["entity_id"])
+        result = run_selection_pipeline(
+            df_no_entity, target_column="target", l1_enabled=True,
+            temporal_column="__cv_date__",
+        )
+        assert "entity_id" not in result.selected_features
+        assert "entity_id" not in result.df.columns
+
+    def test_stride_always_includes_last_date(self):
+        dates = pd.date_range("2024-01-01", periods=40, freq="7D")
+        indices = list(range(len(dates) - 1, -1, -max(1, 40 // 10)))
+        kept = [dates[i] for i in indices]
+        assert dates[-1] in kept
+
+    def test_stride_calculation_targets_row_budget(self):
+        n_dates = 40
+        total_rows = 1_600_000
+        target_rows = 400_000
+        rows_per_date = total_rows / n_dates
+        target_dates = max(4, int(target_rows / rows_per_date))
+        stride = max(1, n_dates // target_dates)
+        kept_count = len(list(range(n_dates - 1, -1, -stride)))
+        estimated_rows = kept_count * rows_per_date
+        assert estimated_rows <= target_rows * 1.5
+        assert estimated_rows >= target_rows * 0.5
+        assert stride == 4
+
+    def test_stride_preserves_last_date_with_various_counts(self):
+        for n_dates in [5, 10, 20, 50, 100]:
+            dates = list(range(n_dates))
+            target_dates = max(4, n_dates // 4)
+            stride = max(1, n_dates // target_dates)
+            kept = [dates[i] for i in range(n_dates - 1, -1, -stride)]
+            assert dates[-1] in kept, f"Last date missing for n_dates={n_dates}"
+            assert len(kept) >= 4 or n_dates <= 4

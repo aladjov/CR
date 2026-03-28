@@ -356,11 +356,12 @@ def _spark_l1_selection(
     work_df = work_df.select(scaled_cols)
 
     assembler = VectorAssembler(inputCols=feature_columns, outputCol="__scaled__", handleInvalid="keep")
-    assembled = assembler.transform(work_df)
+    assembled = assembler.transform(work_df).select("__scaled__", target_column)
+    del work_df
     lr = LR(featuresCol="__scaled__", labelCol=target_column, elasticNetParam=elastic_net_param, regParam=reg_param, maxIter=max_iter)
     model = lr.fit(assembled)
     coefs = np.abs(model.coefficients.toArray())
-    del model
+    del model, assembled
     scores: Dict[str, float] = {col: float(coefs[i]) for i, col in enumerate(feature_columns)}
     zero_cols = [col for i, col in enumerate(feature_columns) if coefs[i] == 0.0]
     if len(zero_cols) == len(feature_columns):
@@ -404,6 +405,36 @@ def extract_precomputed_stats(findings: Any) -> Dict[str, Any]:
     }
 
 
+_L1_SAMPLE_ROWS = 400_000
+
+
+def _thin_by_temporal_stride(ps_df: Any, temporal_column: str, target_rows: int, log: Any) -> Any:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    from customer_retention.core.compat import as_spark_df
+    from customer_retention.core.compat.spark_backend import _as_pandas_api
+
+    spark_df = as_spark_df(ps_df)
+    total = spark_df.count()
+    if total <= target_rows:
+        return ps_df
+
+    dates = [row[0] for row in spark_df.select(temporal_column).distinct().orderBy(temporal_column).collect()]
+    n_dates = len(dates)
+    if n_dates <= 4:
+        return ps_df
+
+    rows_per_date = total / n_dates
+    target_dates = max(4, int(target_rows / rows_per_date))
+    stride = max(1, n_dates // target_dates)
+    kept = [dates[i] for i in range(n_dates - 1, -1, -stride)]
+
+    thinned = spark_df.filter(F.col(temporal_column).isin(kept)).localCheckpoint(eager=True)
+    log(f"    L1 temporal thinning: {total:,} -> ~{len(kept) * int(rows_per_date):,} rows "
+        f"({n_dates} -> {len(kept)} dates, stride {stride})")
+    return _as_pandas_api(thinned)
+
+
 def _format_elapsed(seconds: float) -> str:
     m, s = divmod(int(seconds), 60)
     return f"{m}m{s:02d}s" if m else f"{s}s"
@@ -420,6 +451,8 @@ def run_selection_pipeline(
     precomputed_variances: Optional[Any] = None,
     precomputed_medians: Optional[Dict[str, float]] = None,
     precomputed_non_null: Optional[Dict[str, int]] = None,
+    temporal_column: Optional[str] = None,
+    l1_sample_rows: int = _L1_SAMPLE_ROWS,
 ) -> FeatureSelectionResult:
     log = progress_fn or (lambda msg: print(msg))
     all_dropped: List[str] = []
@@ -472,6 +505,16 @@ def run_selection_pipeline(
     log(f"    {_format_elapsed(elapsed)} — dropped {len(result_corr.dropped_features)}, remaining {remaining}")
 
     if l1_enabled:
+        import gc
+        del result_var, result_corr, shared_variances
+        gc.collect()
+
+        from customer_retention.core.compat import _is_spark_pandas
+        if temporal_column and temporal_column in current_df.columns:
+            if _is_spark_pandas(current_df):
+                current_df = _thin_by_temporal_stride(current_df, temporal_column, l1_sample_rows, log)
+            current_df = current_df.drop(columns=[temporal_column])
+
         t0 = time.monotonic()
         log(f"  [3/{total_stages}] L1 selection ({remaining} features, max_features={max_features})...")
         last_method = SelectionMethod.L1_SELECTION
