@@ -21,7 +21,6 @@ from customer_retention.core.compat import (
     safe_sample,
     spark_cast_float32,
     spark_checkpoint,
-    spark_persist,
 )
 from customer_retention.core.compat.timing import TimingEntry, log_timing, start_collecting, stop_collecting
 
@@ -128,8 +127,8 @@ class TrainingPreparator:
         self._report(_s, _t.label, _t.elapsed)
 
         _s += 1
-        with log_timing("persist") as _t:
-            df = spark_persist(df)
+        with log_timing("checkpoint") as _t:
+            df = spark_checkpoint(df)
         self._report(_s, _t.label, _t.elapsed)
 
         _s += 1
@@ -169,13 +168,23 @@ class TrainingPreparator:
         with log_timing("scale_features") as _t:
             if distributed:
                 result = self._finalize_distributed(
-                    X_train, X_test, y_train, y_test,
-                    train_entities, train_dates, feature_cols,
+                    X_train,
+                    X_test,
+                    y_train,
+                    y_test,
+                    train_entities,
+                    train_dates,
+                    feature_cols,
                 )
             else:
                 result = self._finalize_local(
-                    X_train, X_test, y_train, y_test,
-                    train_entities, train_dates, feature_cols,
+                    X_train,
+                    X_test,
+                    y_train,
+                    y_test,
+                    train_entities,
+                    train_dates,
+                    feature_cols,
                 )
         self._report(_s, _t.label, _t.elapsed)
 
@@ -292,9 +301,12 @@ class TrainingPreparator:
         exclude = ["as_of_date", "entity_id"]
         split_df = df[feature_cols + [self._target, "as_of_date", "entity_id"]]
         splitter = DataSplitter(
-            target_column=self._target, strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date", test_size=self._test_size,
-            purge_gap_days=self._purge_gap_days, exclude_columns=exclude,
+            target_column=self._target,
+            strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date",
+            test_size=self._test_size,
+            purge_gap_days=self._purge_gap_days,
+            exclude_columns=exclude,
         )
         return splitter.split(split_df)
 
@@ -307,16 +319,13 @@ class TrainingPreparator:
         return train_rows["entity_id"], train_rows["as_of_date"]
 
     def _fillna_and_drop_zero_variance(
-        self, X_train: DataFrame, X_test: DataFrame,
+        self,
+        X_train: DataFrame,
+        X_test: DataFrame,
     ) -> tuple[DataFrame, DataFrame, list[str], dict[str, int]]:
         if _is_spark_pandas(X_train):
-            t0 = time.monotonic()
-            X_train = spark_checkpoint(X_train)
-            X_test = spark_checkpoint(X_test)
-            self._log_sub(f"re-checkpoint: {time.monotonic() - t0:.1f}s")
-            combined_nulls, zero_var = self._spark_nulls_and_zero_var(X_train, X_test)
-        else:
-            combined_nulls, zero_var = self._pandas_nulls_and_zero_var(X_train, X_test)
+            return self._spark_fillna_and_drop(X_train, X_test)
+        combined_nulls, zero_var = self._pandas_nulls_and_zero_var(X_train, X_test)
         X_train = X_train.fillna(0)
         X_test = X_test.fillna(0)
         if zero_var:
@@ -326,52 +335,92 @@ class TrainingPreparator:
                 combined_nulls.pop(c, None)
         return X_train, X_test, zero_var, combined_nulls
 
+    def _spark_fillna_and_drop(
+        self,
+        X_train: DataFrame,
+        X_test: DataFrame,
+    ) -> tuple[DataFrame, DataFrame, list[str], dict[str, int]]:
+        from customer_retention.core.compat.spark_backend import _as_pandas_api
+
+        t0 = time.monotonic()
+        train_spark = as_spark_df(X_train)
+        test_spark = as_spark_df(X_test)
+        self._log_sub(f"to spark: {time.monotonic() - t0:.1f}s")
+
+        t1 = time.monotonic()
+        combined_nulls, zero_var = self._spark_nulls_and_zero_var(X_train, X_test)
+        self._log_sub(f"nulls+zerovar: {time.monotonic() - t1:.1f}s")
+
+        t2 = time.monotonic()
+        zero_set = set(zero_var)
+        keep_cols = [c for c in train_spark.columns if c not in zero_set]
+        train_spark = train_spark.select(keep_cols).na.fill(0.0)
+        test_spark = test_spark.select(keep_cols).na.fill(0.0)
+        train_spark = train_spark.localCheckpoint(eager=True)
+        test_spark = test_spark.localCheckpoint(eager=True)
+        self._log_sub(f"fillna+drop+checkpoint: {time.monotonic() - t2:.1f}s")
+
+        for c in zero_var:
+            combined_nulls.pop(c, None)
+        return _as_pandas_api(train_spark), _as_pandas_api(test_spark), zero_var, combined_nulls
+
+    _AGG_BATCH = 500
+
     def _spark_nulls_and_zero_var(
-        self, X_train: DataFrame, X_test: DataFrame,
+        self,
+        X_train: DataFrame,
+        X_test: DataFrame,
     ) -> tuple[dict[str, int], list[str]]:
         import pyspark.sql.functions as F  # noqa: N812
         from pyspark.sql.types import NumericType
 
-        from customer_retention.core.compat import _spark_stacked
-
         train_spark = as_spark_df(X_train)
         test_spark = as_spark_df(X_test)
         all_cols = list(train_spark.columns)
-        num_cols = [f.name for f in train_spark.schema.fields if isinstance(f.dataType, NumericType)]
+        num_set = {f.name for f in train_spark.schema.fields if isinstance(f.dataType, NumericType)}
+
+        safe = {c: f"__a{i}__" for i, c in enumerate(all_cols)}
+        train_work = train_spark.toDF(*[safe[c] for c in all_cols])
+        test_work = test_spark.toDF(*[safe[c] for c in all_cols])
+
+        train_nulls: dict[str, int] = {}
+        train_std: dict[str, float | None] = {}
+        test_nulls: dict[str, int] = {}
 
         t0 = time.monotonic()
-        train_rows = _spark_stacked(train_spark, all_cols).groupBy("__col_name").agg(
-            F.sum(F.col("__col_value").isNull().cast("int")).alias("__null_count"),
-            F.stddev(F.coalesce(F.col("__col_value"), F.lit(0))).alias("__stddev"),
-        ).collect()
-        train_map = {row["__col_name"]: row for row in train_rows}
-        self._log_sub(f"unpivot-agg train ({len(all_cols)} cols): {time.monotonic() - t0:.1f}s")
+        for start in range(0, len(all_cols), self._AGG_BATCH):
+            batch = all_cols[start : start + self._AGG_BATCH]
+            sb = [safe[c] for c in batch]
+            exprs = []
+            for c, s in zip(batch, sb):
+                exprs.append(F.sum(F.when(F.col(s).isNull(), F.lit(1)).otherwise(F.lit(0))).alias(f"{s}__n"))
+                if c in num_set:
+                    exprs.append(F.stddev(F.coalesce(F.col(s).cast("double"), F.lit(0))).alias(f"{s}__s"))
+            row = train_work.agg(*exprs).head()
+            for c, s in zip(batch, sb):
+                train_nulls[c] = int(row[f"{s}__n"] or 0)
+                if c in num_set:
+                    train_std[c] = row[f"{s}__s"]
+        self._log_sub(f"agg train ({len(all_cols)} cols): {time.monotonic() - t0:.1f}s")
 
         t1 = time.monotonic()
-        test_rows = _spark_stacked(test_spark, all_cols).groupBy("__col_name").agg(
-            F.sum(F.col("__col_value").isNull().cast("int")).alias("__null_count"),
-        ).collect()
-        test_map = {row["__col_name"]: row for row in test_rows}
-        self._log_sub(f"unpivot-agg test ({len(all_cols)} cols): {time.monotonic() - t1:.1f}s")
+        for start in range(0, len(all_cols), self._AGG_BATCH):
+            batch = all_cols[start : start + self._AGG_BATCH]
+            sb = [safe[c] for c in batch]
+            exprs = [F.sum(F.when(F.col(s).isNull(), F.lit(1)).otherwise(F.lit(0))).alias(f"{s}__n") for s in sb]
+            row = test_work.agg(*exprs).head()
+            for c, s in zip(batch, sb):
+                test_nulls[c] = int(row[f"{s}__n"] or 0)
+        self._log_sub(f"agg test ({len(all_cols)} cols): {time.monotonic() - t1:.1f}s")
 
-        combined_nulls = {
-            c: int(train_map[c]["__null_count"] or 0) + int(test_map[c]["__null_count"] or 0)
-            for c in all_cols
-        }
-        num_set = set(num_cols)
-        zero_var = [
-            c for c in all_cols
-            if c in num_set and (
-                c not in train_map
-                or train_map[c]["__stddev"] is None
-                or float(train_map[c]["__stddev"]) == 0
-            )
-        ]
+        combined_nulls = {c: train_nulls[c] + test_nulls[c] for c in all_cols}
+        zero_var = [c for c in all_cols if c in num_set and (train_std.get(c) is None or train_std[c] == 0)]
         return combined_nulls, zero_var
 
     @staticmethod
     def _pandas_nulls_and_zero_var(
-        X_train: DataFrame, X_test: DataFrame,
+        X_train: DataFrame,
+        X_test: DataFrame,
     ) -> tuple[dict[str, int], list[str]]:
         train_nulls = X_train.isnull().sum()
         test_nulls = X_test.isnull().sum()
@@ -386,9 +435,12 @@ class TrainingPreparator:
 
     def _finalize_distributed(
         self,
-        X_train: DataFrame, X_test: DataFrame,
-        y_train: Series, y_test: Series,
-        train_entities: Series, train_dates: Series,
+        X_train: DataFrame,
+        X_test: DataFrame,
+        y_train: Series,
+        y_test: Series,
+        train_entities: Series,
+        train_dates: Series,
         feature_cols: list[str],
     ) -> TrainingPreparationResult:
         from customer_retention.core.compat.spark_backend import _as_pandas_api
@@ -396,11 +448,15 @@ class TrainingPreparator:
         from .spark_feature_scaler import SparkFeatureScaler
 
         t0 = time.monotonic()
-        train_bundle = concat([
-            X_train, y_train.rename("__y__"),
-            train_entities.rename(_CV_ENTITY_COL),
-            train_dates.rename(_CV_DATE_COL),
-        ], axis=1)
+        train_bundle = concat(
+            [
+                X_train,
+                y_train.rename("__y__"),
+                train_entities.rename(_CV_ENTITY_COL),
+                train_dates.rename(_CV_DATE_COL),
+            ],
+            axis=1,
+        )
         train_bundle = spark_checkpoint(train_bundle)
         self._log_sub(f"checkpoint train ({len(train_bundle.columns)} cols): {time.monotonic() - t0:.1f}s")
 
@@ -441,20 +497,29 @@ class TrainingPreparator:
         self._log_sub(f"scale + wrap + collect: {time.monotonic() - t3:.1f}s")
 
         return TrainingPreparationResult(
-            X_train=X_train, X_test=X_test,
-            X_train_scaled=X_train_scaled, X_test_scaled=X_test_scaled,
-            y_train=y_train, y_test=y_test,
-            y_test_np=y_test_np, feature_names=feature_cols,
-            train_entities=train_entities, train_dates=train_dates,
-            split_info={}, class_distribution={},
+            X_train=X_train,
+            X_test=X_test,
+            X_train_scaled=X_train_scaled,
+            X_test_scaled=X_test_scaled,
+            y_train=y_train,
+            y_test=y_test,
+            y_test_np=y_test_np,
+            feature_names=feature_cols,
+            train_entities=train_entities,
+            train_dates=train_dates,
+            split_info={},
+            class_distribution={},
             zero_variance_dropped=[],
         )
 
     def _finalize_local(
         self,
-        X_train: DataFrame, X_test: DataFrame,
-        y_train: Series, y_test: Series,
-        train_entities: Series, train_dates: Series,
+        X_train: DataFrame,
+        X_test: DataFrame,
+        y_train: Series,
+        y_test: Series,
+        train_entities: Series,
+        train_dates: Series,
         feature_cols: list[str],
     ) -> TrainingPreparationResult:
         X_train = spark_checkpoint(X_train)
@@ -484,12 +549,18 @@ class TrainingPreparator:
         X_test_scaled = X_test_scaled.fillna(0)
 
         return TrainingPreparationResult(
-            X_train=X_train, X_test=X_test,
-            X_train_scaled=X_train_scaled, X_test_scaled=X_test_scaled,
-            y_train=y_train, y_test=y_test,
-            y_test_np=y_test.to_numpy(), feature_names=feature_cols,
-            train_entities=train_entities, train_dates=train_dates,
-            split_info={}, class_distribution={},
+            X_train=X_train,
+            X_test=X_test,
+            X_train_scaled=X_train_scaled,
+            X_test_scaled=X_test_scaled,
+            y_train=y_train,
+            y_test=y_test,
+            y_test_np=y_test.to_numpy(),
+            feature_names=feature_cols,
+            train_entities=train_entities,
+            train_dates=train_dates,
+            split_info={},
+            class_distribution={},
             zero_variance_dropped=[],
         )
 

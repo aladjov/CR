@@ -12,21 +12,24 @@ from customer_retention.core.compat.timing import TimingEntry
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def base_df():
     np.random.seed(42)
     n = 200
     dates = pd.date_range("2023-01-01", periods=n, freq="D")
-    return pd.DataFrame({
-        "entity_id": [f"e{i % 30}" for i in range(n)],
-        "as_of_date": dates,
-        "feat_a": np.random.randn(n) * 10 + 50,
-        "feat_b": np.random.randn(n) * 5 + 20,
-        "feat_c": np.random.choice(["cat", "dog", "fish"], n),
-        "feat_d": pd.date_range("2020-01-01", periods=n, freq="h"),
-        "feat_e": np.random.randn(n),
-        "target": np.random.choice([0, 1], n, p=[0.3, 0.7]),
-    })
+    return pd.DataFrame(
+        {
+            "entity_id": [f"e{i % 30}" for i in range(n)],
+            "as_of_date": dates,
+            "feat_a": np.random.randn(n) * 10 + 50,
+            "feat_b": np.random.randn(n) * 5 + 20,
+            "feat_c": np.random.choice(["cat", "dog", "fish"], n),
+            "feat_d": pd.date_range("2020-01-01", periods=n, freq="h"),
+            "feat_e": np.random.randn(n),
+            "target": np.random.choice([0, 1], n, p=[0.3, 0.7]),
+        }
+    )
 
 
 @pytest.fixture
@@ -37,6 +40,7 @@ def feature_cols():
 @pytest.fixture
 def preparator(feature_cols):
     from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
     return TrainingPreparator(
         target_column="target",
         feature_columns=feature_cols,
@@ -48,6 +52,7 @@ def preparator(feature_cols):
 # ---------------------------------------------------------------------------
 # TestClassifyColumns
 # ---------------------------------------------------------------------------
+
 
 class TestClassifyColumns:
     def test_excludes_datetime_columns(self, preparator, base_df):
@@ -77,7 +82,8 @@ class TestClassifyColumns:
 
     def test_object_columns_are_subset_of_non_dt(self, preparator, base_df):
         non_dt, obj_cols = preparator._classify_columns(
-            base_df, ["feat_a", "feat_b", "feat_c", "feat_d"],
+            base_df,
+            ["feat_a", "feat_b", "feat_c", "feat_d"],
         )
         assert set(obj_cols).issubset(set(non_dt))
         assert "feat_d" not in non_dt  # datetime excluded
@@ -86,6 +92,7 @@ class TestClassifyColumns:
 # ---------------------------------------------------------------------------
 # TestDropMissingTarget
 # ---------------------------------------------------------------------------
+
 
 class TestDropMissingTarget:
     def test_drops_nan_target_rows(self, preparator):
@@ -115,14 +122,17 @@ class TestDropMissingTarget:
 # TestEncodeObjectColumns
 # ---------------------------------------------------------------------------
 
+
 class TestEncodeObjectColumns:
     def test_classify_detects_object_columns_for_encoding(self, preparator):
         from customer_retention.core.compat import bulk_label_encode
 
-        df = pd.DataFrame({
-            "feat_c": ["cat", "dog", "cat", "fish"],
-            "feat_a": [1.0, 2.0, 3.0, 4.0],
-        })
+        df = pd.DataFrame(
+            {
+                "feat_c": ["cat", "dog", "cat", "fish"],
+                "feat_a": [1.0, 2.0, 3.0, 4.0],
+            }
+        )
         _, obj_cols = preparator._classify_columns(df, ["feat_c", "feat_a"])
         assert obj_cols == ["feat_c"]
         result = bulk_label_encode(df, obj_cols)
@@ -134,11 +144,13 @@ class TestEncodeObjectColumns:
         assert obj_cols == []
 
     def test_only_feature_cols_checked_for_object(self, preparator):
-        df = pd.DataFrame({
-            "feat_c": ["cat", "dog"],
-            "other_obj": ["x", "y"],
-            "feat_a": [1.0, 2.0],
-        })
+        df = pd.DataFrame(
+            {
+                "feat_c": ["cat", "dog"],
+                "other_obj": ["x", "y"],
+                "feat_a": [1.0, 2.0],
+            }
+        )
         _, obj_cols = preparator._classify_columns(df, ["feat_c", "feat_a"])
         assert "other_obj" not in obj_cols
         assert "feat_c" in obj_cols
@@ -148,21 +160,26 @@ class TestEncodeObjectColumns:
 # TestSampleEntities
 # ---------------------------------------------------------------------------
 
+
 class TestSampleEntities:
     def test_samples_when_exceeds_max_rows(self, feature_cols):
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
         prep = TrainingPreparator(
-            target_column="target", feature_columns=feature_cols,
+            target_column="target",
+            feature_columns=feature_cols,
             max_rows=500,
         )
         np.random.seed(42)
         n = 2000
-        df = pd.DataFrame({
-            "entity_id": [f"e{i % 200}" for i in range(n)],
-            "as_of_date": pd.date_range("2023-01-01", periods=n, freq="h"),
-            "feat_a": np.random.randn(n),
-            "target": np.random.choice([0, 1], n),
-        })
+        df = pd.DataFrame(
+            {
+                "entity_id": [f"e{i % 200}" for i in range(n)],
+                "as_of_date": pd.date_range("2023-01-01", periods=n, freq="h"),
+                "feat_a": np.random.randn(n),
+                "target": np.random.choice([0, 1], n),
+            }
+        )
         result = prep._sample_entities(df)
         assert len(result) < len(df)
         sampled_entities = result["entity_id"].unique()
@@ -173,39 +190,49 @@ class TestSampleEntities:
 
     def test_noop_when_below_max_rows(self, feature_cols):
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
         prep = TrainingPreparator(
-            target_column="target", feature_columns=feature_cols,
+            target_column="target",
+            feature_columns=feature_cols,
             max_rows=1000,
         )
-        df = pd.DataFrame({
-            "entity_id": ["e1"] * 10,
-            "feat_a": range(10),
-            "target": [0] * 10,
-        })
+        df = pd.DataFrame(
+            {
+                "entity_id": ["e1"] * 10,
+                "feat_a": range(10),
+                "target": [0] * 10,
+            }
+        )
         result = prep._sample_entities(df)
         assert len(result) == 10
 
     def test_noop_when_max_rows_none(self, preparator):
-        df = pd.DataFrame({
-            "entity_id": ["e1"] * 100,
-            "feat_a": range(100),
-            "target": [0] * 100,
-        })
+        df = pd.DataFrame(
+            {
+                "entity_id": ["e1"] * 100,
+                "feat_a": range(100),
+                "target": [0] * 100,
+            }
+        )
         result = preparator._sample_entities(df)
         assert len(result) == 100
 
     def test_rows_per_entity_estimation(self, feature_cols):
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
         prep = TrainingPreparator(
-            target_column="target", feature_columns=feature_cols,
+            target_column="target",
+            feature_columns=feature_cols,
             max_rows=500,
         )
         n = 2000
-        df = pd.DataFrame({
-            "entity_id": [f"e{i % 200}" for i in range(n)],
-            "feat_a": range(n),
-            "target": [0] * n,
-        })
+        df = pd.DataFrame(
+            {
+                "entity_id": [f"e{i % 200}" for i in range(n)],
+                "feat_a": range(n),
+                "target": [0] * n,
+            }
+        )
         result = prep._sample_entities(df)
         assert len(result) < n
 
@@ -213,6 +240,7 @@ class TestSampleEntities:
 # ---------------------------------------------------------------------------
 # TestFillnaAndZeroVariance
 # ---------------------------------------------------------------------------
+
 
 class TestFillnaAndZeroVariance:
     def test_drops_constant_columns(self, preparator):
@@ -267,6 +295,7 @@ class TestFillnaAndZeroVariance:
 # TestClassDistribution
 # ---------------------------------------------------------------------------
 
+
 class TestClassDistribution:
     def test_binary_target(self, preparator):
         y = pd.Series([0, 0, 1, 1, 1])
@@ -283,9 +312,11 @@ class TestClassDistribution:
 # Integration: TestPrepareLocalEndToEnd
 # ---------------------------------------------------------------------------
 
+
 class TestPrepareLocalEndToEnd:
     def test_full_pipeline_produces_result(self, preparator, base_df):
         from customer_retention.stages.modeling.training_preparator import TrainingPreparationResult
+
         result = preparator.prepare(base_df)
         assert isinstance(result, TrainingPreparationResult)
         assert len(result.X_train) > 0
@@ -295,6 +326,7 @@ class TestPrepareLocalEndToEnd:
 
     def test_feature_names_exclude_metadata(self, preparator, base_df):
         from customer_retention.stages.modeling.cross_validator import _CV_DATE_COL, _CV_ENTITY_COL
+
         result = preparator.prepare(base_df)
         assert "target" not in result.feature_names
         assert "as_of_date" not in result.feature_names
@@ -325,8 +357,11 @@ class TestPrepareLocalEndToEnd:
 
     def test_float32_applied_pre_collect(self, base_df, feature_cols):
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
         prep = TrainingPreparator(
-            target_column="target", feature_columns=feature_cols, use_float32=True,
+            target_column="target",
+            feature_columns=feature_cols,
+            use_float32=True,
         )
         result = prep.prepare(base_df)
         for col in result.feature_names:
@@ -335,8 +370,11 @@ class TestPrepareLocalEndToEnd:
 
     def test_float32_off_preserves_original_dtypes(self, base_df, feature_cols):
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
         prep = TrainingPreparator(
-            target_column="target", feature_columns=feature_cols, use_float32=False,
+            target_column="target",
+            feature_columns=feature_cols,
+            use_float32=False,
         )
         result = prep.prepare(base_df)
         float_cols = [c for c in result.feature_names if result.X_train[c].dtype.kind == "f"]
@@ -349,6 +387,7 @@ class TestPrepareLocalEndToEnd:
 # TestTimingProfiling
 # ---------------------------------------------------------------------------
 
+
 class TestTimingProfiling:
     def test_timing_entries_produced(self, preparator, base_df):
         result = preparator.prepare(base_df)
@@ -359,10 +398,15 @@ class TestTimingProfiling:
         result = preparator.prepare(base_df)
         labels = {e.label for e in result.timing_entries}
         expected = {
-            "classify_columns", "drop_missing_target",
-            "encode_object_columns", "persist", "median_impute",
-            "temporal_split", "fillna_and_drop_zero_variance",
-            "scale_features", "class_distribution",
+            "classify_columns",
+            "drop_missing_target",
+            "encode_object_columns",
+            "checkpoint",
+            "median_impute",
+            "temporal_split",
+            "fillna_and_drop_zero_variance",
+            "scale_features",
+            "class_distribution",
         }
         assert expected.issubset(labels), f"Missing: {expected - labels}"
 
@@ -371,14 +415,17 @@ class TestTimingProfiling:
 # TestProgressCallback
 # ---------------------------------------------------------------------------
 
+
 class TestProgressCallback:
     def test_callback_invoked_for_each_step(self, feature_cols, base_df):
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
 
         invocations = []
         prep = TrainingPreparator(
-            target_column="target", feature_columns=feature_cols,
-            purge_gap_days=30, test_size=0.2,
+            target_column="target",
+            feature_columns=feature_cols,
+            purge_gap_days=30,
+            test_size=0.2,
             on_progress=lambda s, t, label, elapsed: invocations.append((s, t, label, elapsed)),
         )
         prep.prepare(base_df)
@@ -392,8 +439,10 @@ class TestProgressCallback:
 
         invocations = []
         prep = TrainingPreparator(
-            target_column="target", feature_columns=feature_cols,
-            purge_gap_days=30, test_size=0.2,
+            target_column="target",
+            feature_columns=feature_cols,
+            purge_gap_days=30,
+            test_size=0.2,
             on_progress=lambda s, t, label, elapsed: invocations.append((s, t)),
         )
         prep.prepare(base_df)
@@ -406,8 +455,11 @@ class TestProgressCallback:
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
 
         prep = TrainingPreparator(
-            target_column="target", feature_columns=feature_cols,
-            purge_gap_days=30, test_size=0.2, on_progress=None,
+            target_column="target",
+            feature_columns=feature_cols,
+            purge_gap_days=30,
+            test_size=0.2,
+            on_progress=None,
         )
         result = prep.prepare(base_df)
         assert len(result.X_train) > 0
@@ -441,7 +493,8 @@ class TestProgressCallback:
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
 
         prep = TrainingPreparator(
-            target_column="target", feature_columns=["a"],
+            target_column="target",
+            feature_columns=["a"],
             on_progress=lambda s, t, label, e: None,
         )
         prep._log_sub("test substep: 1.2s")
@@ -452,7 +505,8 @@ class TestProgressCallback:
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
 
         prep = TrainingPreparator(
-            target_column="target", feature_columns=["a"],
+            target_column="target",
+            feature_columns=["a"],
             on_progress=None,
         )
         prep._log_sub("test substep: 1.2s")
@@ -464,8 +518,10 @@ class TestProgressCallback:
 
         labels = []
         prep = TrainingPreparator(
-            target_column="target", feature_columns=feature_cols,
-            purge_gap_days=30, test_size=0.2,
+            target_column="target",
+            feature_columns=feature_cols,
+            purge_gap_days=30,
+            test_size=0.2,
             on_progress=lambda s, t, label, elapsed: labels.append(label),
         )
         prep.prepare(base_df)
@@ -477,56 +533,72 @@ class TestProgressCallback:
 # Edge Cases
 # ---------------------------------------------------------------------------
 
+
 class TestEdgeCases:
     def test_single_feature_column(self):
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
         np.random.seed(42)
         n = 100
-        df = pd.DataFrame({
-            "entity_id": [f"e{i % 10}" for i in range(n)],
-            "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
-            "feat_only": np.random.randn(n),
-            "target": np.random.choice([0, 1], n, p=[0.3, 0.7]),
-        })
+        df = pd.DataFrame(
+            {
+                "entity_id": [f"e{i % 10}" for i in range(n)],
+                "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
+                "feat_only": np.random.randn(n),
+                "target": np.random.choice([0, 1], n, p=[0.3, 0.7]),
+            }
+        )
         prep = TrainingPreparator(
-            target_column="target", feature_columns=["feat_only"],
-            purge_gap_days=10, test_size=0.2,
+            target_column="target",
+            feature_columns=["feat_only"],
+            purge_gap_days=10,
+            test_size=0.2,
         )
         result = prep.prepare(df)
         assert result.feature_names == ["feat_only"]
 
     def test_small_dataset(self):
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
         np.random.seed(42)
         n = 50
-        df = pd.DataFrame({
-            "entity_id": [f"e{i % 5}" for i in range(n)],
-            "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
-            "feat_a": np.random.randn(n),
-            "feat_b": np.random.randn(n),
-            "target": np.random.choice([0, 1], n, p=[0.4, 0.6]),
-        })
+        df = pd.DataFrame(
+            {
+                "entity_id": [f"e{i % 5}" for i in range(n)],
+                "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
+                "feat_a": np.random.randn(n),
+                "feat_b": np.random.randn(n),
+                "target": np.random.choice([0, 1], n, p=[0.4, 0.6]),
+            }
+        )
         prep = TrainingPreparator(
-            target_column="target", feature_columns=["feat_a", "feat_b"],
-            purge_gap_days=5, test_size=0.2,
+            target_column="target",
+            feature_columns=["feat_a", "feat_b"],
+            purge_gap_days=5,
+            test_size=0.2,
         )
         result = prep.prepare(df)
         assert len(result.X_train) + len(result.X_test) <= n
 
     def test_no_object_columns(self):
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
         np.random.seed(42)
         n = 100
-        df = pd.DataFrame({
-            "entity_id": [f"e{i % 10}" for i in range(n)],
-            "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
-            "feat_a": np.random.randn(n),
-            "feat_b": np.random.randn(n) * 2,
-            "target": np.random.choice([0, 1], n, p=[0.3, 0.7]),
-        })
+        df = pd.DataFrame(
+            {
+                "entity_id": [f"e{i % 10}" for i in range(n)],
+                "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
+                "feat_a": np.random.randn(n),
+                "feat_b": np.random.randn(n) * 2,
+                "target": np.random.choice([0, 1], n, p=[0.3, 0.7]),
+            }
+        )
         prep = TrainingPreparator(
-            target_column="target", feature_columns=["feat_a", "feat_b"],
-            purge_gap_days=10, test_size=0.2,
+            target_column="target",
+            feature_columns=["feat_a", "feat_b"],
+            purge_gap_days=10,
+            test_size=0.2,
         )
         result = prep.prepare(df)
         assert "feat_a" in result.feature_names
@@ -536,6 +608,7 @@ class TestEdgeCases:
 # ---------------------------------------------------------------------------
 # Distributed Path (mock-based)
 # ---------------------------------------------------------------------------
+
 
 class TestFinalizeDistributed:
     def _make_split_inputs(self):
@@ -554,10 +627,12 @@ class TestFinalizeDistributed:
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
 
         source = inspect.getsource(TrainingPreparator._finalize_distributed)
-        assert "X_train[" not in source or "__setitem__" not in source, \
+        assert "X_train[" not in source or "__setitem__" not in source, (
             "_finalize_distributed must not use __setitem__ on pyspark.pandas"
-        assert "fit_transform(" not in source, \
+        )
+        assert "fit_transform(" not in source, (
             "_finalize_distributed should use native Spark scaling, not fit_transform"
+        )
 
     def test_uses_native_spark_scaling(self):
         import inspect
@@ -570,7 +645,10 @@ class TestFinalizeDistributed:
         assert "as_spark_df" in source
 
     @patch("customer_retention.stages.modeling.training_preparator.spark_checkpoint", side_effect=lambda x: x)
-    @patch("customer_retention.stages.modeling.training_preparator.concat", side_effect=lambda objs, **kw: pd.concat(objs, **kw))
+    @patch(
+        "customer_retention.stages.modeling.training_preparator.concat",
+        side_effect=lambda objs, **kw: pd.concat(objs, **kw),
+    )
     @patch("customer_retention.stages.modeling.training_preparator.collect_for_sklearn", side_effect=lambda x: x)
     def test_collect_only_for_metadata(self, mock_collect, mock_concat, mock_ckpt):
         from unittest.mock import MagicMock
@@ -587,15 +665,25 @@ class TestFinalizeDistributed:
             return mock
 
         prep = TrainingPreparator(target_column="target", feature_columns=["f1", "f2"])
-        with patch("customer_retention.stages.modeling.training_preparator.as_spark_df", side_effect=fake_as_spark), \
-             patch("customer_retention.core.compat.spark_backend._as_pandas_api", side_effect=lambda x: pd.DataFrame({"f1": [1], "f2": [2]})), \
-             patch("customer_retention.stages.modeling.spark_feature_scaler.SparkFeatureScaler") as mock_cls:
+        with (
+            patch("customer_retention.stages.modeling.training_preparator.as_spark_df", side_effect=fake_as_spark),
+            patch(
+                "customer_retention.core.compat.spark_backend._as_pandas_api",
+                side_effect=lambda x: pd.DataFrame({"f1": [1], "f2": [2]}),
+            ),
+            patch("customer_retention.stages.modeling.spark_feature_scaler.SparkFeatureScaler") as mock_cls,
+        ):
             mock_scaler = mock_cls.return_value
             mock_scaler._compute_params_spark.return_value = {}
             mock_scaler._apply_spark.side_effect = lambda df: df
             prep._finalize_distributed(
-                X_train, X_test, y_train, y_test,
-                train_entities, train_dates, ["f1", "f2"],
+                X_train,
+                X_test,
+                y_train,
+                y_test,
+                train_entities,
+                train_dates,
+                ["f1", "f2"],
             )
 
         assert mock_collect.call_count == 3  # y_test, train_entities, train_dates

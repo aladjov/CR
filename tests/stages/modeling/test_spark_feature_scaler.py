@@ -10,16 +10,20 @@ from customer_retention.stages.modeling.spark_feature_scaler import SparkFeature
 def sample_data():
     np.random.seed(42)
     n = 500
-    X_train = pd.DataFrame({
-        "feature1": np.random.randn(n) * 10 + 50,
-        "feature2": np.random.randn(n) * 5 + 20,
-        "feature3": np.random.randn(n) * 100,
-    })
-    X_test = pd.DataFrame({
-        "feature1": np.random.randn(100) * 10 + 50,
-        "feature2": np.random.randn(100) * 5 + 20,
-        "feature3": np.random.randn(100) * 100,
-    })
+    X_train = pd.DataFrame(
+        {
+            "feature1": np.random.randn(n) * 10 + 50,
+            "feature2": np.random.randn(n) * 5 + 20,
+            "feature3": np.random.randn(n) * 100,
+        }
+    )
+    X_test = pd.DataFrame(
+        {
+            "feature1": np.random.randn(100) * 10 + 50,
+            "feature2": np.random.randn(100) * 5 + 20,
+            "feature3": np.random.randn(100) * 100,
+        }
+    )
     return X_train, X_test
 
 
@@ -40,14 +44,18 @@ def zero_variance_data():
 
 @pytest.fixture
 def all_null_data():
-    X_train = pd.DataFrame({
-        "null_col": [np.nan] * 100,
-        "valid_col": np.random.randn(100),
-    })
-    X_test = pd.DataFrame({
-        "null_col": [np.nan] * 20,
-        "valid_col": np.random.randn(20),
-    })
+    X_train = pd.DataFrame(
+        {
+            "null_col": [np.nan] * 100,
+            "valid_col": np.random.randn(100),
+        }
+    )
+    X_test = pd.DataFrame(
+        {
+            "null_col": [np.nan] * 20,
+            "valid_col": np.random.randn(20),
+        }
+    )
     return X_train, X_test
 
 
@@ -70,7 +78,9 @@ class TestSparkFeatureScalerEquivalence:
         spark_result = spark.fit_transform(X_train, X_test)
 
         pd.testing.assert_frame_equal(
-            spark_result.X_train_scaled, base_result.X_train_scaled, atol=1e-10,
+            spark_result.X_train_scaled,
+            base_result.X_train_scaled,
+            atol=1e-10,
         )
 
     @pytest.mark.parametrize("scaler_type", [ScalerType.STANDARD, ScalerType.ROBUST, ScalerType.MINMAX])
@@ -84,7 +94,9 @@ class TestSparkFeatureScalerEquivalence:
         spark_result = spark.fit_transform(X_train, X_test)
 
         pd.testing.assert_frame_equal(
-            spark_result.X_test_scaled, base_result.X_test_scaled, atol=1e-10,
+            spark_result.X_test_scaled,
+            base_result.X_test_scaled,
+            atol=1e-10,
         )
 
     def test_none_scaler_returns_unchanged(self, sample_data):
@@ -161,11 +173,13 @@ class TestSparkFeatureScalerTransform:
         scaler = SparkFeatureScaler(scaler_type=scaler_type)
         scaler.fit_transform(X_train, X_test)
 
-        new_data = pd.DataFrame({
-            "feature1": [55.0, 60.0],
-            "feature2": [22.0, 25.0],
-            "feature3": [10.0, 20.0],
-        })
+        new_data = pd.DataFrame(
+            {
+                "feature1": [55.0, 60.0],
+                "feature2": [22.0, 25.0],
+                "feature3": [10.0, 20.0],
+            }
+        )
         transformed = scaler.transform(new_data)
         assert len(transformed) == 2
         assert list(transformed.columns) == ["feature1", "feature2", "feature3"]
@@ -180,11 +194,13 @@ class TestSparkFeatureScalerTransform:
         spark = SparkFeatureScaler(scaler_type=scaler_type)
         spark.fit_transform(X_train, X_test)
 
-        new_data = pd.DataFrame({
-            "feature1": [55.0, 60.0, 45.0],
-            "feature2": [22.0, 25.0, 15.0],
-            "feature3": [10.0, 20.0, -50.0],
-        })
+        new_data = pd.DataFrame(
+            {
+                "feature1": [55.0, 60.0, 45.0],
+                "feature2": [22.0, 25.0, 15.0],
+                "feature3": [10.0, 20.0, -50.0],
+            }
+        )
 
         base_out = base.transform(new_data)
         spark_out = spark.transform(new_data)
@@ -311,7 +327,7 @@ class TestSparkNativeScalerPaths:
         # Verify the method exists and has correct structure
         scaler_sp = SparkFeatureScaler(scaler_type=scaler_type)
         scaler_sp._feature_names = list(X_train.columns)
-        assert hasattr(scaler_sp, '_compute_params_spark')
+        assert hasattr(scaler_sp, "_compute_params_spark")
         assert callable(scaler_sp._compute_params_spark)
 
         # Verify pandas path still produces correct params
@@ -335,6 +351,7 @@ class TestSparkNativeScalerPaths:
     def test_apply_spark_does_not_use_setitem(self, sample_data):
         """_apply_spark does not trigger pyspark.pandas __setitem__ (no _psseries corruption)."""
         import inspect
+
         source = inspect.getsource(SparkFeatureScaler._apply_spark)
         assert "result[col]" not in source, "_apply_spark must not use __setitem__"
         assert "result[c]" not in source, "_apply_spark must not use __setitem__"
@@ -380,6 +397,7 @@ class TestSparkNativeScalerPaths:
     def test_no_banned_patterns_in_apply_spark(self):
         """Static guard: _apply_spark must not use __setitem__."""
         import inspect
+
         source = inspect.getsource(SparkFeatureScaler._apply_spark)
         # The loop builds expressions for a single .select() — that's fine.
         # What's banned is per-column assignment via __setitem__:
@@ -422,6 +440,7 @@ class TestApplyUsesPerColumnScalarOps:
 class TestToPandasGuardsUnchanged:
     def test_baseline_trainer_accepts_native_pandas(self):
         from customer_retention.stages.modeling import BaselineTrainer, ModelType
+
         np.random.seed(42)
         X = pd.DataFrame({"f1": np.random.randn(100), "f2": np.random.randn(100)})
         y = pd.Series(np.random.choice([0, 1], 100, p=[0.3, 0.7]))
@@ -432,12 +451,15 @@ class TestToPandasGuardsUnchanged:
 
     def test_data_splitter_accepts_native_pandas(self):
         from customer_retention.stages.modeling import DataSplitter, SplitStrategy
+
         np.random.seed(42)
-        df = pd.DataFrame({
-            "f1": np.random.randn(200),
-            "f2": np.random.randn(200),
-            "target": np.random.choice([0, 1], 200, p=[0.3, 0.7]),
-        })
+        df = pd.DataFrame(
+            {
+                "f1": np.random.randn(200),
+                "f2": np.random.randn(200),
+                "target": np.random.choice([0, 1], 200, p=[0.3, 0.7]),
+            }
+        )
         splitter = DataSplitter(target_column="target", strategy=SplitStrategy.RANDOM_STRATIFIED)
         result = splitter.split(df)
         assert len(result.X_train) > 0
@@ -446,6 +468,7 @@ class TestToPandasGuardsUnchanged:
         from sklearn.linear_model import LogisticRegression
 
         from customer_retention.stages.modeling import CrossValidator, CVStrategy
+
         np.random.seed(42)
         X = pd.DataFrame({"f1": np.random.randn(200), "f2": np.random.randn(200)})
         y = pd.Series(np.random.choice([0, 1], 200, p=[0.3, 0.7]))

@@ -8,7 +8,6 @@ from .feature_scaler import FeatureScaler, ScalerType, ScalingResult
 
 
 class SparkFeatureScaler(FeatureScaler):
-
     def __init__(
         self,
         scaler_type: ScalerType = ScalerType.ROBUST,
@@ -86,53 +85,67 @@ class SparkFeatureScaler(FeatureScaler):
             return _as_pandas_api(self._apply_spark(as_spark_df(X)))
         return self._apply(X)
 
-    def _compute_params_spark(self, spark_df: Any) -> Dict[str, Dict[str, float]]:
-        """Compute scaling parameters via unpivot + groupBy — one Spark job."""
-        from pyspark.sql import functions as F  # noqa: N812
+    _BATCH = 500
 
-        from customer_retention.core.compat import _spark_stacked
+    def _compute_params_spark(self, spark_df: Any) -> Dict[str, Dict[str, float]]:
+        """Compute scaling parameters via batched .agg() — no row amplification."""
+        from pyspark.sql import functions as F  # noqa: N812
 
         cols = self._feature_names
         if not cols:
             return {}
-        stacked = _spark_stacked(spark_df, cols)
+        safe = {c: f"__s{i}__" for i, c in enumerate(cols)}
+        work = spark_df.toDF(*[safe.get(c, c) for c in spark_df.columns])
 
         params: Dict[str, Dict[str, float]] = {}
 
-        if self.scaler_type == ScalerType.STANDARD:
-            rows = stacked.groupBy("__col_name").agg(
-                F.mean("__col_value").alias("__m"),
-                F.stddev_pop("__col_value").alias("__s"),
-            ).collect()
-            for row in rows:
-                params[row["__col_name"]] = {
-                    "mean": float(row["__m"]) if row["__m"] is not None else float("nan"),
-                    "std": float(row["__s"]) if row["__s"] is not None else 0.0,
-                }
-
-        elif self.scaler_type == ScalerType.ROBUST:
-            rows = stacked.groupBy("__col_name").agg(
-                F.percentile_approx("__col_value", 0.5).alias("__med"),
-                F.percentile_approx("__col_value", 0.25).alias("__q25"),
-                F.percentile_approx("__col_value", 0.75).alias("__q75"),
-            ).collect()
-            for row in rows:
-                med, q25, q75 = row["__med"], row["__q25"], row["__q75"]
-                params[row["__col_name"]] = {
-                    "center": float(med) if med is not None else float("nan"),
-                    "iqr": (float(q75) - float(q25)) if q75 is not None and q25 is not None else 0.0,
-                }
-
-        elif self.scaler_type == ScalerType.MINMAX:
-            rows = stacked.groupBy("__col_name").agg(
-                F.min("__col_value").alias("__min"),
-                F.max("__col_value").alias("__max"),
-            ).collect()
-            for row in rows:
-                params[row["__col_name"]] = {
-                    "min": float(row["__min"]) if row["__min"] is not None else float("nan"),
-                    "max": float(row["__max"]) if row["__max"] is not None else float("nan"),
-                }
+        for start in range(0, len(cols), self._BATCH):
+            batch = cols[start : start + self._BATCH]
+            sb = [safe[c] for c in batch]
+            if self.scaler_type == ScalerType.STANDARD:
+                exprs = []
+                for s in sb:
+                    exprs.extend(
+                        [
+                            F.mean(F.col(s).cast("double")).alias(f"{s}__m"),
+                            F.stddev_pop(F.col(s).cast("double")).alias(f"{s}__s"),
+                        ]
+                    )
+                row = work.agg(*exprs).head()
+                for c, s in zip(batch, sb):
+                    params[c] = {
+                        "mean": float(row[f"{s}__m"]) if row[f"{s}__m"] is not None else float("nan"),
+                        "std": float(row[f"{s}__s"]) if row[f"{s}__s"] is not None else 0.0,
+                    }
+            elif self.scaler_type == ScalerType.ROBUST:
+                exprs = []
+                for s in sb:
+                    dc = F.col(s).cast("double")
+                    exprs.extend(
+                        [
+                            F.percentile_approx(dc, 0.5).alias(f"{s}__med"),
+                            F.percentile_approx(dc, 0.25).alias(f"{s}__q25"),
+                            F.percentile_approx(dc, 0.75).alias(f"{s}__q75"),
+                        ]
+                    )
+                row = work.agg(*exprs).head()
+                for c, s in zip(batch, sb):
+                    med, q25, q75 = row[f"{s}__med"], row[f"{s}__q25"], row[f"{s}__q75"]
+                    params[c] = {
+                        "center": float(med) if med is not None else float("nan"),
+                        "iqr": (float(q75) - float(q25)) if q75 is not None and q25 is not None else 0.0,
+                    }
+            elif self.scaler_type == ScalerType.MINMAX:
+                exprs = []
+                for s in sb:
+                    dc = F.col(s).cast("double")
+                    exprs.extend([F.min(dc).alias(f"{s}__min"), F.max(dc).alias(f"{s}__max")])
+                row = work.agg(*exprs).head()
+                for c, s in zip(batch, sb):
+                    params[c] = {
+                        "min": float(row[f"{s}__min"]) if row[f"{s}__min"] is not None else float("nan"),
+                        "max": float(row[f"{s}__max"]) if row[f"{s}__max"] is not None else float("nan"),
+                    }
 
         return params
 
@@ -152,9 +165,7 @@ class SparkFeatureScaler(FeatureScaler):
             if zero_mask[i]:
                 exprs.append(F.lit(0.0).cast("double").alias(col))
             else:
-                exprs.append(
-                    ((F.col(col) - float(offsets[i])) / float(safe_scales[i])).alias(col)
-                )
+                exprs.append(((F.col(col) - float(offsets[i])) / float(safe_scales[i])).alias(col))
 
         # Include any columns not in feature_names (passthrough)
         feature_set = set(self._feature_names)
