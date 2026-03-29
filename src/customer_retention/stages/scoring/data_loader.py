@@ -161,7 +161,9 @@ class ScoringDataLoader:
             raise ValueError(f"Experiment '{self.config.pipeline_name}' not found in MLflow")
         parent_run = self._find_best_parent_run(client, experiment.experiment_id)
         import json as _json
-        local_path = client.download_artifacts(parent_run.info.run_id, "features.json")
+        local_path = Path(client.download_artifacts(parent_run.info.run_id, "features.json"))
+        if local_path.is_dir():
+            local_path = local_path / "features.json"
         with open(local_path) as f:
             data = _json.load(f)
         features = data.get("feature_columns")
