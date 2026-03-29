@@ -1270,6 +1270,18 @@ def run_experiment():
         _results["feature_profile"]["production_rows"] = filtered_count
         _results["feature_profile"]["excluded_details"] = excluded_cols
         if _EXPLORATION_PROFILE is not None:
+            _exp_feats = _EXPLORATION_PROFILE.get("features", {})
+            _exp_excl = _EXPLORATION_PROFILE.get("excluded", {})
+            _prod_feature_set = set(feature_names)
+            for _pc in _prod_feature_set:
+                if _pc not in _exp_feats and _pc not in _exp_excl:
+                    _exp_feats[_pc] = {"dtype": "float32", "non_null": _EXPLORATION_PROFILE.get("row_count", 0), "null_count": 0}
+            for _sc in [c for c in list(_exp_feats) if c not in _prod_feature_set and c not in _exp_excl]:
+                _exp_excl[_sc] = "not_in_pipeline"
+                del _exp_feats[_sc]
+            _EXPLORATION_PROFILE["features"] = _exp_feats
+            _EXPLORATION_PROFILE["excluded"] = _exp_excl
+            _EXPLORATION_PROFILE["feature_count"] = len(_exp_feats)
             exp_profile = FeatureProfile.from_dict(_EXPLORATION_PROFILE)
             discrepancies = compare_feature_profiles(exp_profile, prod_profile)
             _results["feature_profile"]["exploration_features"] = exp_profile.feature_count

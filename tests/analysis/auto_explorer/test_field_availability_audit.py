@@ -3,12 +3,15 @@ from __future__ import annotations
 import pytest
 
 from customer_retention.analysis.auto_explorer.field_availability_audit import (
+    DatasetDateInfo,
     FieldAvailabilityAuditConfig,
     FieldAvailabilityAuditor,
     FieldAvailabilityAuditResult,
     FieldLeadLagProfile,
+    _compute_date_range,
     _display_audit_results,
     _population_suspicion_score,
+    _value_distribution_score,
     build_account_anchors,
     run_field_availability_audit,
 )
@@ -702,3 +705,269 @@ class TestFacade:
             additional_exclusions=["MANUAL_EXCLUDE"],
         )
         assert "MANUAL_EXCLUDE" in result.recommended_exclusions
+
+
+# ---------------------------------------------------------------------------
+# Value-distribution scoring tests
+# ---------------------------------------------------------------------------
+
+
+class TestValueDistributionScore:
+    def test_terminated_exclusive_value_high_coverage(self):
+        term = {"Cancelled": 80, "Active": 20}
+        active = {"Active": 100}
+        excl, score, evidence = _value_distribution_score("STATUS", term, active, 100, 100)
+        assert "Cancelled" in excl
+        assert score >= 0.5
+        assert any("terminated-exclusive" in e for e in evidence)
+
+    def test_terminated_exclusive_value_low_coverage(self):
+        term = {"Cancelled": 15, "Active": 85}
+        active = {"Active": 100}
+        excl, score, _ = _value_distribution_score("STATUS", term, active, 100, 100)
+        assert "Cancelled" in excl
+        assert score >= 0.5  # any exclusive value above min_count flags
+
+    def test_no_exclusive_values_skewed(self):
+        term = {"Cancelled": 90, "Active": 10}
+        active = {"Cancelled": 10, "Active": 90}
+        excl, score, _ = _value_distribution_score("STATUS", term, active, 100, 100)
+        assert excl == []
+        assert score > 0.0  # skew detected
+
+    def test_balanced_values_safe(self):
+        term = {"A": 50, "B": 50}
+        active = {"A": 50, "B": 50}
+        excl, score, evidence = _value_distribution_score("COL", term, active, 100, 100)
+        assert excl == []
+        assert score == 0.0
+        assert evidence == []
+
+    def test_rare_values_below_min_count_ignored(self):
+        term = {"Cancelled": 3, "Active": 97}
+        active = {"Active": 100}
+        excl, score, _ = _value_distribution_score("STATUS", term, active, 100, 100, min_count=10)
+        assert excl == []
+        assert score == 0.0
+
+    def test_empty_counts_safe(self):
+        excl, score, evidence = _value_distribution_score("X", {}, {}, 0, 0)
+        assert excl == []
+        assert score == 0.0
+
+    def test_all_terminated_no_active(self):
+        excl, score, _ = _value_distribution_score("X", {"A": 50}, {}, 100, 0)
+        assert score > 0.0
+
+
+class TestValueDistributionAugmentation:
+    def test_augmentation_sets_cardinality(self):
+        su_cfg = _su_config()
+        cfg = FieldAvailabilityAuditConfig(service_unit=su_cfg, min_terminated_units=1)
+        auditor = FieldAvailabilityAuditor(cfg)
+        linkage = {
+            "contract": DatasetLinkage(tier="contract_linked", link_method="self"),
+            "account": DatasetLinkage(tier="account_only", link_method="entity_column"),
+        }
+        result = auditor.run(
+            service_unit_df=_contract_df(),
+            probe_dfs={"contract": _contract_df(), "account": _account_df()},
+            dataset_linkage=linkage,
+        )
+        profiled_with_card = [p for p in result.field_profiles if p.cardinality is not None]
+        assert len(profiled_with_card) > 0
+
+    def test_terminated_exclusive_values_detected_in_full_run(self):
+        contract_df = _contract_df()
+        account_df = pd.DataFrame({
+            "ACCOUNT_ID": ["A1", "A2", "A3", "A4"],
+            "ACCOUNT_NAME": ["Foo", "Bar", "Baz", "Qux"],
+            "CHURN_TAG": ["churned", None, "churned", None],
+        })
+        su_cfg = _su_config()
+        cfg = FieldAvailabilityAuditConfig(service_unit=su_cfg, min_terminated_units=1)
+        auditor = FieldAvailabilityAuditor(cfg)
+        anchors = build_account_anchors(contract_df, su_cfg)
+        profiles = auditor._probe_entity_dataset(account_df, "account", anchors, su_cfg)
+        auditor._augment_with_value_distributions(
+            profiles, contract_df, {"account": account_df}, anchors, su_cfg,
+        )
+        churn_tag = next(p for p in profiles if p.field_name == "CHURN_TAG")
+        assert churn_tag.cardinality == 1  # only "churned" (non-null unique)
+        assert churn_tag.value_suspicion_score is not None
+
+    def test_value_dist_bumps_score_for_leaky_categorical(self):
+        """A field always populated but with a terminated-exclusive value."""
+        n = 200
+        contract_df = pd.DataFrame({
+            "CONTRACT_ID": [f"C{i}" for i in range(n)],
+            "ACCOUNT_ID": [f"A{i}" for i in range(n)],
+            "CONTRACT_END_DATE": [pd.Timestamp("2024-01-01")] * (n // 2) + [None] * (n // 2),
+            "CONTRACT_STATUS": ["Cancelled"] * (n // 2) + ["Active"] * (n // 2),
+            "CONTRACT_START_DATE": [pd.Timestamp("2023-01-01")] * n,
+            "PLAN": (
+                ["churned_plan"] * (n // 2)
+                + ["active_plan"] * (n // 2)
+            ),
+        })
+        su_cfg = _su_config()
+        cfg = FieldAvailabilityAuditConfig(service_unit=su_cfg, min_terminated_units=1)
+        auditor = FieldAvailabilityAuditor(cfg)
+        linkage = {"contract": DatasetLinkage(tier="contract_linked", link_method="self")}
+        result = auditor.run(
+            service_unit_df=contract_df, probe_dfs={"contract": contract_df},
+            dataset_linkage=linkage,
+        )
+        plan_profile = next(p for p in result.field_profiles if p.field_name == "PLAN")
+        # Null-rate alone: both groups 100% populated -> score ~0
+        # Value-distribution: "churned_plan" only for terminated -> bumped
+        assert plan_profile.value_suspicion_score is not None
+        assert plan_profile.value_suspicion_score > 0.5
+        assert plan_profile.suspicion_score > 0.5
+        assert "churned_plan" in plan_profile.terminated_exclusive_values
+
+
+# ---------------------------------------------------------------------------
+# Date info tests
+# ---------------------------------------------------------------------------
+
+
+class TestDateInfo:
+    def test_compute_date_range_datetime(self):
+        df = pd.DataFrame({"dt": pd.to_datetime(["2023-01-15", "2024-06-30", None])})
+        lo, hi = _compute_date_range(df, "dt")
+        assert lo == "2023-01-15"
+        assert hi == "2024-06-30"
+
+    def test_compute_date_range_all_null(self):
+        df = pd.DataFrame({"dt": [None, None]})
+        lo, hi = _compute_date_range(df, "dt")
+        assert lo is None and hi is None
+
+    def test_compute_date_range_non_date_column(self):
+        df = pd.DataFrame({"x": ["a", "b"]})
+        lo, hi = _compute_date_range(df, "x")
+        # Should not crash; returns string representation
+        assert lo is not None or hi is not None or (lo is None and hi is None)
+
+    def test_facade_populates_date_info(self):
+        from customer_retention.analysis.auto_explorer.project_context import (
+            DatasetRegistryEntry,
+            ObjectivePriority,
+            ObjectiveSpec,
+            PredictionObjective,
+            ProjectContext,
+        )
+
+        ctx = ProjectContext(
+            project_name="test", entity_column="ACCOUNT_ID",
+            datasets={"contract": DatasetRegistryEntry(name="contract", path="/tmp/c")},
+            objectives=[ObjectiveSpec(
+                objective=PredictionObjective.IMMEDIATE_RISK,
+                priority=ObjectivePriority.PRIMARY,
+            )],
+            primary_objective=PredictionObjective.IMMEDIATE_RISK,
+        )
+        result = run_field_availability_audit(
+            context=ctx, loaded_frames={"contract": _contract_df()},
+            min_terminated_units=1,
+        )
+        assert len(result.dataset_date_info) == 1
+        di = result.dataset_date_info[0]
+        assert di.dataset_name == "contract"
+        assert di.time_column == "CONTRACT_END_DATE"
+        assert di.min_date is not None
+        assert di.record_count == 5
+
+    def test_display_shows_date_info(self, capsys):
+        su_cfg = _su_config()
+        cfg = FieldAvailabilityAuditConfig(service_unit=su_cfg, min_terminated_units=1)
+        result = FieldAvailabilityAuditResult(
+            config=cfg, total_accounts=10,
+            field_profiles=[],
+            dataset_date_info=[
+                DatasetDateInfo(
+                    dataset_name="contract", time_column="END_DATE",
+                    min_date="2023-01-01", max_date="2024-12-31",
+                    linkage_tier="self", record_count=100,
+                ),
+            ],
+        )
+        _display_audit_results(result)
+        out = capsys.readouterr().out
+        assert "Dataset date columns:" in out
+        assert "contract" in out
+        assert "END_DATE" in out
+        assert "2023-01-01" in out
+
+    def test_display_shows_methodology(self, capsys):
+        su_cfg = _su_config()
+        cfg = FieldAvailabilityAuditConfig(service_unit=su_cfg, min_terminated_units=1)
+        result = FieldAvailabilityAuditResult(
+            config=cfg,
+            field_profiles=[
+                FieldLeadLagProfile(
+                    field_name="F1", source_dataset="d1",
+                    analysis_tier="a", anchor_type="b",
+                    suspicion_score=0.1, recommendation="safe",
+                    value_suspicion_score=0.0, cardinality=3,
+                ),
+            ],
+        )
+        _display_audit_results(result)
+        out = capsys.readouterr().out
+        assert "Methodology:" in out
+        assert "Null-rate analysis:" in out
+        assert "Value-distribution:" in out
+
+    def test_display_shows_value_dist_flags(self, capsys):
+        su_cfg = _su_config()
+        cfg = FieldAvailabilityAuditConfig(service_unit=su_cfg, min_terminated_units=1)
+        result = FieldAvailabilityAuditResult(
+            config=cfg,
+            field_profiles=[
+                FieldLeadLagProfile(
+                    field_name="STATUS", source_dataset="ds",
+                    analysis_tier="a", anchor_type="b",
+                    suspicion_score=0.65, recommendation="investigate",
+                    value_suspicion_score=0.65, cardinality=5,
+                    terminated_exclusive_values=["Cancelled"],
+                ),
+            ],
+        )
+        _display_audit_results(result)
+        out = capsys.readouterr().out
+        assert "Value-distribution flags" in out
+        assert "Cancelled" in out
+
+
+class TestPersistenceNewFields:
+    def test_roundtrip_with_value_dist_fields(self, tmp_path):
+        su_cfg = _su_config()
+        cfg = FieldAvailabilityAuditConfig(service_unit=su_cfg, min_terminated_units=1)
+        result = FieldAvailabilityAuditResult(
+            config=cfg, total_accounts=50,
+            field_profiles=[
+                FieldLeadLagProfile(
+                    field_name="STATUS", source_dataset="contract",
+                    analysis_tier="contract_level", anchor_type="b",
+                    suspicion_score=0.65, recommendation="investigate",
+                    cardinality=5, value_suspicion_score=0.65,
+                    terminated_exclusive_values=["Cancelled"],
+                    evidence=["STATUS: 1 terminated-exclusive value(s): Cancelled"],
+                ),
+            ],
+            dataset_date_info=[
+                DatasetDateInfo(
+                    dataset_name="contract", time_column="END_DATE",
+                    min_date="2023-01-01", max_date="2024-12-31",
+                    linkage_tier="self", record_count=100,
+                ),
+            ],
+        )
+        result.save(tmp_path / "audit")
+        loaded = FieldAvailabilityAuditResult.load(tmp_path / "audit")
+        p = loaded.field_profiles[0]
+        assert p.cardinality == 5
+        assert p.value_suspicion_score == 0.65
+        assert "Cancelled" in p.terminated_exclusive_values

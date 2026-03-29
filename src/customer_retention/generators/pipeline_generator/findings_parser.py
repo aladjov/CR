@@ -79,7 +79,6 @@ class FindingsParser:
         self._reconcile_discovered_event_transforms(config, discovered_events)
         self._reconcile_event_post_shaping(config)
         self._reconcile_gold_columns(config)
-        self._reconcile_exploration_profile(config)
         return config
 
     def _index_raw_source_columns(self, discovered_events: Dict[str, ExplorationFindings]) -> None:
@@ -1611,30 +1610,6 @@ class FindingsParser:
         removed = before - len(config.gold.feature_selections)
         if removed:
             logger.warning("Removed %d feature selection drop(s): column(s) not in pipeline", removed)
-
-    def _reconcile_exploration_profile(self, config: "PipelineConfig") -> None:
-        if config.training is None or config.training.exploration_feature_profile is None:
-            return
-        profile = config.training.exploration_feature_profile
-        pipeline_columns = self._collect_pipeline_columns(config)
-        for step in config.silver.derived_columns:
-            pipeline_columns.add(step.column)
-        pipeline_columns |= self._predict_gold_generated_columns(config)
-        dropped = set(config.gold.feature_selections) if config.gold else set()
-        metadata_cols = {config.target_column, "entity_id", "as_of_date", "feature_timestamp", "event_timestamp"}
-        surviving = pipeline_columns - dropped - metadata_cols
-        exp_features = profile.get("features", {})
-        exp_excluded = profile.get("excluded", {})
-        for col in sorted(surviving):
-            if col not in exp_features and col not in exp_excluded:
-                exp_features[col] = {"dtype": "float32", "non_null": profile.get("row_count", 0), "null_count": 0}
-        stale = [c for c in list(exp_features) if c not in surviving and c not in exp_excluded]
-        for col in stale:
-            exp_excluded[col] = "not_in_pipeline"
-            del exp_features[col]
-        profile["features"] = exp_features
-        profile["excluded"] = exp_excluded
-        profile["feature_count"] = len(exp_features)
 
     @staticmethod
     def _filter_gold_steps(steps, pipeline_columns, label):
