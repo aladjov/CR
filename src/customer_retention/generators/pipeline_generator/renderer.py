@@ -886,18 +886,8 @@ def apply_scaling(df: pd.DataFrame) -> pd.DataFrame:
 
 def apply_feature_selection(df: pd.DataFrame) -> pd.DataFrame:
 {% if config.gold.feature_exclusion_prefixes %}
-    import re as _re
-    _exclusion_prefixes = {{ config.gold.feature_exclusion_prefixes }}
-    _lag_re = _re.compile(r"^(?:lag\d+|velocity)_")
-    def _is_excluded(col):
-        if any(col.startswith(p) for p in _exclusion_prefixes):
-            return True
-        m = _lag_re.match(col)
-        if m:
-            remainder = col[m.end():]
-            return any(remainder.startswith(p) for p in _exclusion_prefixes)
-        return False
-    _prefix_drops = [c for c in df.columns if _is_excluded(c)]
+    from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+    _prefix_drops = FindingsParser.find_leakage_excluded_columns(df.columns, {{ config.gold.feature_exclusion_prefixes }})
     if _prefix_drops:
         df = df.drop(columns=_prefix_drops)
         print(f"  Dropped {len(_prefix_drops)} leakage-excluded columns")

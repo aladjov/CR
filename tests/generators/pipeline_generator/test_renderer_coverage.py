@@ -365,13 +365,13 @@ class TestCodeRendererGold:
     def test_render_gold_prefix_exclusion(self, renderer, sample_pipeline_config):
         sample_pipeline_config.gold.feature_exclusion_prefixes = ["BILLING_TERMINATION_DATE_"]
         result = renderer.render_gold(sample_pipeline_config)
-        assert "_exclusion_prefixes" in result
+        assert "find_leakage_excluded_columns" in result
         assert "BILLING_TERMINATION_DATE_" in result
 
     def test_render_gold_no_prefix_exclusion_when_empty(self, renderer, sample_pipeline_config):
         sample_pipeline_config.gold.feature_exclusion_prefixes = []
         result = renderer.render_gold(sample_pipeline_config)
-        assert "_exclusion_prefixes" not in result
+        assert "find_leakage_excluded_columns" not in result
 
     def test_render_gold_has_timing(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)

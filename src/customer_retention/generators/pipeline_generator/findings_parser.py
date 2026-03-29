@@ -980,6 +980,25 @@ class FindingsParser:
                     prefixes.add(f"{col}_")
         return sorted(prefixes)
 
+    @staticmethod
+    def find_leakage_excluded_columns(columns, prefixes: List[str]) -> List[str]:
+        """Return column names matching leakage exclusion prefixes (including lag/velocity variants).
+
+        Pure matching logic shared by NB08, local and Databricks gold templates.
+        """
+        if not prefixes:
+            return []
+        import re
+        lag_re = re.compile(r"^(?:lag\d+|velocity)_")
+
+        def matches(col: str) -> bool:
+            if any(col.startswith(p) for p in prefixes):
+                return True
+            m = lag_re.match(col)
+            return bool(m and any(col[m.end():].startswith(p) for p in prefixes))
+
+        return [c for c in columns if matches(c)]
+
     def _collect_prioritized_columns(self, gold) -> Set[str]:
         prioritized = set()
         for rec in getattr(gold, "feature_selection", []):

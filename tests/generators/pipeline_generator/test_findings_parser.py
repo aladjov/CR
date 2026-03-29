@@ -6382,6 +6382,27 @@ class TestLeakageExclusionPrefixes:
         assert "BILLING_TERMINATION_DATE_" in result
 
 
+class TestFindLeakageExcludedColumns:
+
+    def test_matches_direct_prefixes(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        columns = ["SUBSCRIPTION_END_DATE_delta_hours_sum", "NET_PRICE_mean", "entity_id"]
+        result = FindingsParser.find_leakage_excluded_columns(columns, ["SUBSCRIPTION_END_DATE_"])
+        assert result == ["SUBSCRIPTION_END_DATE_delta_hours_sum"]
+
+    def test_matches_lag_and_velocity_variants(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        columns = ["lag1_SUBSCRIPTION_END_DATE_mean", "velocity_SUBSCRIPTION_END_DATE_sum", "lag2_safe_col"]
+        result = FindingsParser.find_leakage_excluded_columns(columns, ["SUBSCRIPTION_END_DATE_"])
+        assert "lag1_SUBSCRIPTION_END_DATE_mean" in result
+        assert "velocity_SUBSCRIPTION_END_DATE_sum" in result
+        assert "lag2_safe_col" not in result
+
+    def test_empty_prefixes_returns_empty(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        assert FindingsParser.find_leakage_excluded_columns(["col_a", "col_b"], []) == []
+
+
 class TestAggregationWindowsPriority:
 
     def _make_findings_with_windows(self, windows_used):
