@@ -137,45 +137,37 @@ class ScoringDataLoader:
             return df[keep].fillna(0)
         return df.select_dtypes(include=["number", "bool"]).fillna(0)
 
-    def predict_spark_ml(self, model: Any, X: Any) -> Any:
+    def predict_spark_ml(self, model: Any, X: Any, feature_names: list[str]) -> Any:
         from pyspark.sql import functions as F  # noqa: N812
 
         from customer_retention.core.compat import normalize_timestamps, pandas_dtype_to_spark_schema
 
         spark = get_spark_session()
-        normalized = normalize_timestamps(X)
+        normalized = normalize_timestamps(X[feature_names])
         schema = pandas_dtype_to_spark_schema(normalized)
         spark_df = spark.createDataFrame(normalized, schema=schema)
-        assembler = _VectorAssembler(inputCols=list(X.columns), outputCol="features", handleInvalid="keep")
+        assembler = _VectorAssembler(inputCols=feature_names, outputCol="features", handleInvalid="keep")
         assembled = assembler.transform(spark_df)
         predictions = model.transform(assembled)
         return predictions.select(
             _vector_to_array(F.col("probability")).getItem(1).alias("prob")
         ).toPandas()["prob"].to_numpy()
 
-    def align_features_to_model(
-        self,
-        X: Any,
-        model: Any,
-    ) -> Tuple[Any, List[str], List[str]]:
-        expected = self._get_model_feature_names(model)
-        if expected is None:
-            return X, [], []
-        expected_set, current_set = set(expected), set(X.columns)
-        missing = [f for f in expected if f not in current_set]
-        extra = [f for f in X.columns if f not in expected_set]
-        aligned = X.copy()
-        for col in missing:
-            aligned[col] = 0.0
-        return aligned[list(expected)], missing, extra
-
-    @staticmethod
-    def _get_model_feature_names(model: Any) -> list | None:
-        if hasattr(model, "feature_names_in_"):
-            return list(model.feature_names_in_)
-        if hasattr(model, "feature_names"):
-            return list(model.feature_names)
-        return None
+    def load_training_feature_names(self) -> list[str]:
+        mlflow.set_tracking_uri(self.config.mlflow_tracking_uri)
+        client = MlflowClient()
+        experiment = client.get_experiment_by_name(self.config.pipeline_name)
+        if not experiment:
+            raise ValueError(f"Experiment '{self.config.pipeline_name}' not found in MLflow")
+        parent_run = self._find_best_parent_run(client, experiment.experiment_id)
+        import json as _json
+        local_path = client.download_artifacts(parent_run.info.run_id, "features.json")
+        with open(local_path) as f:
+            data = _json.load(f)
+        features = data.get("feature_columns")
+        if not features:
+            raise ValueError(f"features.json in run {parent_run.info.run_id} has no 'feature_columns'")
+        return features
 
     def _load_gold_from_spark(self) -> Any:
         spark = get_spark_session()

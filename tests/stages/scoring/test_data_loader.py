@@ -596,74 +596,6 @@ class TestPrepareFeatures:
         assert "val" in result.columns
 
 
-class TestAlignFeaturesToModel:
-    def test_returns_aligned_when_features_match(self, local_config):
-        loader = ScoringDataLoader(local_config)
-        X = pd.DataFrame({"a": [1.0], "b": [2.0]})
-        model = MagicMock()
-        model.feature_names_in_ = np.array(["a", "b"])
-        aligned, missing, extra = loader.align_features_to_model(X, model)
-        assert list(aligned.columns) == ["a", "b"]
-        assert missing == []
-        assert extra == []
-
-    def test_adds_missing_columns_as_zero(self, local_config):
-        loader = ScoringDataLoader(local_config)
-        X = pd.DataFrame({"a": [1.0, 2.0]})
-        model = MagicMock()
-        model.feature_names_in_ = np.array(["a", "b", "c"])
-        aligned, missing, extra = loader.align_features_to_model(X, model)
-        assert list(aligned.columns) == ["a", "b", "c"]
-        assert (aligned["b"] == 0.0).all()
-        assert (aligned["c"] == 0.0).all()
-        assert set(missing) == {"b", "c"}
-
-    def test_drops_extra_columns(self, local_config):
-        loader = ScoringDataLoader(local_config)
-        X = pd.DataFrame({"a": [1.0], "b": [2.0], "c": [3.0]})
-        model = MagicMock()
-        model.feature_names_in_ = np.array(["a", "b"])
-        aligned, missing, extra = loader.align_features_to_model(X, model)
-        assert list(aligned.columns) == ["a", "b"]
-        assert extra == ["c"]
-
-    def test_reorders_columns_to_match_model(self, local_config):
-        loader = ScoringDataLoader(local_config)
-        X = pd.DataFrame({"b": [2.0], "a": [1.0]})
-        model = MagicMock()
-        model.feature_names_in_ = np.array(["a", "b"])
-        aligned, _, _ = loader.align_features_to_model(X, model)
-        assert list(aligned.columns) == ["a", "b"]
-
-    def test_handles_xgboost_feature_names(self, local_config):
-        loader = ScoringDataLoader(local_config)
-        X = pd.DataFrame({"a": [1.0], "b": [2.0]})
-        model = MagicMock(spec=[])
-        model.feature_names = ["a", "b"]
-        aligned, missing, extra = loader.align_features_to_model(X, model)
-        assert list(aligned.columns) == ["a", "b"]
-
-    def test_returns_unmodified_when_no_feature_names(self, local_config):
-        loader = ScoringDataLoader(local_config)
-        X = pd.DataFrame({"a": [1.0], "b": [2.0]})
-        model = MagicMock(spec=[])
-        aligned, missing, extra = loader.align_features_to_model(X, model)
-        assert list(aligned.columns) == ["a", "b"]
-        assert missing == []
-        assert extra == []
-
-    def test_combined_missing_and_extra(self, local_config):
-        loader = ScoringDataLoader(local_config)
-        X = pd.DataFrame({"a": [1.0], "new_feat": [5.0]})
-        model = MagicMock()
-        model.feature_names_in_ = np.array(["a", "old_feat"])
-        aligned, missing, extra = loader.align_features_to_model(X, model)
-        assert list(aligned.columns) == ["a", "old_feat"]
-        assert missing == ["old_feat"]
-        assert extra == ["new_feat"]
-        assert (aligned["old_feat"] == 0.0).all()
-
-
 @pytest.fixture
 def local_pipeline_with_gold(tmp_path):
     pipeline_dir = tmp_path / "my_pipeline"
@@ -800,7 +732,7 @@ class TestPredictSparkMl:
             patch("customer_retention.stages.scoring.data_loader._vector_to_array") as mock_v2a,
         ):
             loader = ScoringDataLoader(databricks_config)
-            result = loader.predict_spark_ml(mock_model, X)
+            result = loader.predict_spark_ml(mock_model, X, feature_names=["feat_a", "feat_b"])
 
         mock_assembler.transform.assert_called_once_with(mock_spark_df)
         mock_model.transform.assert_called_once_with(mock_assembled)
@@ -826,6 +758,6 @@ class TestPredictSparkMl:
             patch("customer_retention.stages.scoring.data_loader._vector_to_array"),
         ):
             loader = ScoringDataLoader(databricks_config)
-            loader.predict_spark_ml(mock_model, X)
+            loader.predict_spark_ml(mock_model, X, feature_names=["col_x", "col_y"])
 
         mock_va_cls.assert_called_once_with(inputCols=["col_x", "col_y"], outputCol="features", handleInvalid="keep")
