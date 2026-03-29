@@ -75,7 +75,7 @@ class FindingsParser:
         if recommendations_registry:
             self._apply_recommendations_to_config(config, recommendations_registry, multi_dataset)
             self._apply_event_recommendations(config, recommendations_registry)
-        config.gold.feature_exclusion_prefixes = self._collect_leakage_exclusion_prefixes(source_findings)
+        config.gold.feature_exclusion_prefixes = self._collect_leakage_exclusion_prefixes(source_findings, multi_dataset)
         self._reconcile_discovered_event_transforms(config, discovered_events)
         self._reconcile_event_post_shaping(config)
         self._reconcile_gold_columns(config)
@@ -966,11 +966,18 @@ class FindingsParser:
         )
 
     @staticmethod
-    def _collect_leakage_exclusion_prefixes(source_findings: Dict[str, "ExplorationFindings"]) -> List[str]:
+    def _collect_leakage_exclusion_prefixes(
+        source_findings: Dict[str, "ExplorationFindings"],
+        multi_dataset: "MultiDatasetFindings | None" = None,
+    ) -> List[str]:
         prefixes: Set[str] = set()
         for findings in source_findings.values():
             for col in getattr(findings, "excluded_leaking_features", []):
                 prefixes.add(f"{col}_")
+        if multi_dataset is not None:
+            for ds_info in multi_dataset.datasets.values():
+                for col in getattr(ds_info, "excluded_leaking_features", []):
+                    prefixes.add(f"{col}_")
         return sorted(prefixes)
 
     def _collect_prioritized_columns(self, gold) -> Set[str]:

@@ -6324,6 +6324,63 @@ class TestLeakageExclusionPrefixes:
         assert result.count("COL_A_") == 1
         assert "COL_B_" in result
 
+    def test_collects_prefixes_from_multi_dataset(self):
+        from customer_retention.analysis.auto_explorer.exploration_manager import (
+            DatasetInfo,
+            MultiDatasetFindings,
+        )
+        from customer_retention.core.config.column_config import DatasetGranularity
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        multi = MultiDatasetFindings(
+            datasets={
+                "subscription": DatasetInfo(
+                    name="subscription",
+                    findings_path="/tmp/sub_findings.yaml",
+                    source_path="/tmp/sub.csv",
+                    granularity=DatasetGranularity.EVENT_LEVEL,
+                    row_count=100,
+                    column_count=10,
+                    excluded_leaking_features=["SUBSCRIPTION_END_DATE"],
+                ),
+            },
+        )
+        # Individual findings have no exclusions
+        findings = self._make_findings()
+        result = FindingsParser._collect_leakage_exclusion_prefixes(
+            {"subscription": findings}, multi
+        )
+        assert "SUBSCRIPTION_END_DATE_" in result
+
+    def test_merges_prefixes_from_both_sources(self):
+        from customer_retention.analysis.auto_explorer.exploration_manager import (
+            DatasetInfo,
+            MultiDatasetFindings,
+        )
+        from customer_retention.core.config.column_config import DatasetGranularity
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        multi = MultiDatasetFindings(
+            datasets={
+                "contract": DatasetInfo(
+                    name="contract",
+                    findings_path="/tmp/c_findings.yaml",
+                    source_path="/tmp/c.csv",
+                    granularity=DatasetGranularity.EVENT_LEVEL,
+                    row_count=100,
+                    column_count=10,
+                    excluded_leaking_features=["CONTRACT_END_DATE"],
+                ),
+            },
+        )
+        # Individual findings have a different exclusion
+        findings = self._make_findings(excluded_leaking_features=["BILLING_TERMINATION_DATE"])
+        result = FindingsParser._collect_leakage_exclusion_prefixes(
+            {"contract": findings}, multi
+        )
+        assert "CONTRACT_END_DATE_" in result
+        assert "BILLING_TERMINATION_DATE_" in result
+
 
 class TestAggregationWindowsPriority:
 

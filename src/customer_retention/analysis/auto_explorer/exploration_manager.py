@@ -41,6 +41,7 @@ class DatasetInfo:
     raw_source_path: Optional[str] = None
     excluded: bool = False
     feature_exclusions: List[FeatureExclusion] = field(default_factory=list)
+    excluded_leaking_features: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -215,6 +216,7 @@ class MultiDatasetFindings:
                         }
                         for e in info.feature_exclusions
                     ],
+                    "excluded_leaking_features": info.excluded_leaking_features,
                 }
                 for name, info in self.datasets.items()
             },
@@ -275,6 +277,7 @@ class MultiDatasetFindings:
                     )
                     for e in info.get("feature_exclusions", [])
                 ],
+                excluded_leaking_features=info.get("excluded_leaking_features", []),
             )
 
         relationships = [
