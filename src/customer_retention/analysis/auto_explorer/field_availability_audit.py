@@ -47,6 +47,21 @@ class FieldLeadLagProfile:
     suspicion_score: float = 0.0
     recommendation: str = "safe"
     evidence: list[str] = field(default_factory=list)
+    cardinality: Optional[int] = None
+    value_suspicion_score: Optional[float] = None
+    terminated_exclusive_values: list[str] = field(default_factory=list)
+
+
+@dataclass
+class DatasetDateInfo:
+    """Date column and range info for a single dataset."""
+
+    dataset_name: str
+    time_column: Optional[str] = None
+    min_date: Optional[str] = None
+    max_date: Optional[str] = None
+    linkage_tier: str = ""
+    record_count: int = 0
 
 
 @dataclass
@@ -70,6 +85,7 @@ class FieldAvailabilityAuditResult:
     suspicious_fields: list[str] = field(default_factory=list)
     recommended_exclusions: list[str] = field(default_factory=list)
     dataset_linkage: dict[str, Any] = field(default_factory=dict)
+    dataset_date_info: list[DatasetDateInfo] = field(default_factory=list)
     audit_timestamp: str = field(default_factory=lambda: _dt.datetime.now(_dt.timezone.utc).isoformat())
 
     def save(self, output_dir: Path) -> dict[str, Path]:
@@ -126,6 +142,7 @@ class FieldAvailabilityAuditResult:
                 "active_accounts": self.active_accounts,
                 "terminated_service_units": self.total_terminated_units,
             },
+            "dataset_dates": [asdict(d) for d in self.dataset_date_info],
         }
 
     def _build_profiles_dict(self) -> dict:
@@ -261,6 +278,7 @@ def _build_account_anchors_spark(su_df: DataFrame, cfg: ServiceUnitConfig) -> Da
 # ---------------------------------------------------------------------------
 
 _SKIP_COLUMNS = frozenset({"entity_id"})
+_MAX_VALUE_DISTRIBUTION_CARDINALITY = 50
 
 
 class FieldAvailabilityAuditor:
@@ -317,6 +335,10 @@ class FieldAvailabilityAuditor:
             else:
                 ds_profiles = self._probe_entity_dataset(df, ds_name, anchors, su_cfg)
             profiles.extend(ds_profiles)
+
+        self._augment_with_value_distributions(
+            profiles, service_unit_df, probe_dfs, anchors, su_cfg, progress_fn,
+        )
 
         for p in profiles:
             p.recommendation = self._classify(p)
@@ -693,6 +715,200 @@ class FieldAvailabilityAuditor:
             evidence=[f"{col}: no non-null values found for terminated entities"],
         )
 
+    # -----------------------------------------------------------------------
+    # Second pass: value-distribution analysis for low-cardinality fields
+    # -----------------------------------------------------------------------
+
+    def _augment_with_value_distributions(
+        self,
+        profiles: list[FieldLeadLagProfile],
+        service_unit_df: DataFrame,
+        probe_dfs: dict[str, DataFrame],
+        anchors: DataFrame,
+        su_cfg: ServiceUnitConfig,
+        progress_fn: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        by_dataset: dict[str, list[FieldLeadLagProfile]] = {}
+        for p in profiles:
+            by_dataset.setdefault(p.source_dataset, []).append(p)
+
+        for ds_name, ds_profiles in by_dataset.items():
+            df = service_unit_df if ds_name == su_cfg.dataset_name else probe_dfs.get(ds_name)
+            if df is None:
+                continue
+            col_names = [p.field_name for p in ds_profiles if p.field_name in df.columns]
+            if not col_names:
+                continue
+            is_self = ds_name == su_cfg.dataset_name
+            if _is_spark_pandas(df):
+                self._value_dist_pass_spark(
+                    ds_profiles, df, anchors, su_cfg, is_self, col_names, ds_name, progress_fn,
+                )
+            else:
+                self._value_dist_pass_pandas(
+                    ds_profiles, df, anchors, su_cfg, is_self, col_names, ds_name, progress_fn,
+                )
+
+    def _value_dist_pass_pandas(
+        self,
+        ds_profiles: list[FieldLeadLagProfile],
+        df: DataFrame,
+        anchors: DataFrame,
+        su_cfg: ServiceUnitConfig,
+        is_self: bool,
+        col_names: list[str],
+        ds_name: str,
+        progress_fn: Optional[Callable[[str], None]],
+    ) -> None:
+        profile_map = {p.field_name: p for p in ds_profiles}
+
+        # Batch cardinality (single pass)
+        present = [c for c in col_names if c in df.columns]
+        cards = df[present].nunique().to_dict() if present else {}
+        cards = {c: int(n) for c, n in cards.items()}
+        for c, n in cards.items():
+            if c in profile_map:
+                profile_map[c].cardinality = n
+
+        low_card = [c for c, n in cards.items() if n <= _MAX_VALUE_DISTRIBUTION_CARDINALITY]
+        if not low_card:
+            return
+
+        if progress_fn:
+            progress_fn(
+                f"  Value-distribution: {ds_name} "
+                f"({len(low_card)} low-cardinality fields)"
+            )
+
+        # Split terminated / active
+        if is_self:
+            if su_cfg.status_column and su_cfg.terminated_statuses:
+                mask = df[su_cfg.status_column].isin(su_cfg.terminated_statuses)
+            else:
+                mask = df[su_cfg.anchor_date_column].notna()
+            term_df, active_df = df[mask], df[~mask]
+        else:
+            entity_col = su_cfg.entity_column
+            if entity_col not in df.columns:
+                return
+            merged = df.merge(
+                anchors[[entity_col, "is_fully_terminated"]], on=entity_col, how="left",
+            )
+            term_df = merged[merged["is_fully_terminated"] == True]  # noqa: E712
+            active_df = merged[merged["is_fully_terminated"].isna()]
+
+        n_term, n_active = len(term_df), len(active_df)
+        if n_term == 0:
+            return
+
+        for col in low_card:
+            p = profile_map.get(col)
+            if p is None:
+                continue
+            term_vc = term_df[col].value_counts(dropna=True).to_dict()
+            active_vc = active_df[col].value_counts(dropna=True).to_dict()
+            excl, score, evidence = _value_distribution_score(
+                col, term_vc, active_vc, n_term, n_active,
+            )
+            p.value_suspicion_score = round(score, 4)
+            p.terminated_exclusive_values = excl
+            p.evidence.extend(evidence)
+            if score > p.suspicion_score:
+                p.suspicion_score = round(score, 4)
+
+    def _value_dist_pass_spark(  # pragma: no cover
+        self,
+        ds_profiles: list[FieldLeadLagProfile],
+        df: DataFrame, anchors: DataFrame, su_cfg: ServiceUnitConfig,
+        is_self: bool, col_names: list[str], ds_name: str,
+        progress_fn: Optional[Callable[[str], None]],
+    ) -> None:
+        import pyspark.sql.functions as F  # noqa: N812
+
+        from customer_retention.core.compat import as_spark_df
+
+        spark_df = as_spark_df(df)
+        profile_map = {p.field_name: p for p in ds_profiles}
+        schema_cols = {f.name for f in spark_df.schema.fields}
+        present = [c for c in col_names if c in schema_cols]
+        if not present:
+            return
+
+        # Group marker: "T" = terminated, "A" = active, NULL = excluded
+        if is_self:
+            status_col = su_cfg.status_column
+            if status_col and su_cfg.terminated_statuses:
+                grp = F.when(F.col(status_col).isin(su_cfg.terminated_statuses), F.lit("T")).otherwise(F.lit("A"))
+            else:
+                grp = F.when(F.col(su_cfg.anchor_date_column).isNotNull(), F.lit("T")).otherwise(F.lit("A"))
+            base = spark_df.withColumn("_grp", grp)
+        else:
+            entity_col = su_cfg.entity_column
+            anchors_spark = F.broadcast(as_spark_df(anchors[[entity_col, "is_fully_terminated"]]))
+            base = spark_df.join(anchors_spark, on=entity_col, how="left").withColumn(
+                "_grp",
+                F.when(F.col("is_fully_terminated") == True, F.lit("T"))  # noqa: E712
+                .when(F.col("is_fully_terminated").isNull(), F.lit("A")),
+            )
+        base = base.filter(F.col("_grp").isNotNull()).cache()
+
+        # Batch cardinality via unpivot+groupBy (safe for 100+ columns)
+        stack_args = ", ".join(f"'{c}', cast(`{c}` as string)" for c in present)
+        stacked_all = base.select(F.expr(f"stack({len(present)}, {stack_args}) as (__cn, __cv)"))
+        cd_rows = stacked_all.groupBy("__cn").agg(
+            F.countDistinct("__cv").alias("cd"),
+        ).collect()
+        cards = {r["__cn"]: r["cd"] for r in cd_rows}
+        for c, n in cards.items():
+            if c in profile_map:
+                profile_map[c].cardinality = n
+
+        low_card = [c for c, n in cards.items() if n <= _MAX_VALUE_DISTRIBUTION_CARDINALITY]
+        if not low_card:
+            base.unpersist()
+            return
+
+        if progress_fn:
+            progress_fn(f"  Value-distribution: {ds_name} ({len(low_card)} low-cardinality fields)")
+
+        # Group counts (2 expressions — fine as wide agg)
+        counts_row = base.groupBy("_grp").count().collect()
+        grp_counts = {r["_grp"]: r["count"] for r in counts_row}
+        n_term, n_active = grp_counts.get("T", 0), grp_counts.get("A", 0)
+        if n_term == 0:
+            base.unpersist()
+            return
+
+        # Unpivot low-cardinality columns + single groupBy for all value distributions
+        lc_args = ", ".join(f"'{c}', cast(`{c}` as string)" for c in low_card)
+        stacked = base.select("_grp", F.expr(f"stack({len(low_card)}, {lc_args}) as (__cn, __cv)"))
+        rows = (
+            stacked.filter(F.col("__cv").isNotNull())
+            .groupBy("__cn", "__cv", "_grp").count()
+            .collect()
+        )
+        base.unpersist()
+
+        # Reconstruct per-column value counts
+        term_vcs: dict[str, dict] = {c: {} for c in low_card}
+        active_vcs: dict[str, dict] = {c: {} for c in low_card}
+        for row in rows:
+            target = term_vcs if row["_grp"] == "T" else active_vcs
+            target[row["__cn"]][row["__cv"]] = row["count"]
+
+        for col in low_card:
+            p = profile_map.get(col)
+            if p is None:
+                continue
+            excl, score, evidence = _value_distribution_score(
+                col, term_vcs[col], active_vcs[col], n_term, n_active,
+            )
+            p.value_suspicion_score = round(score, 4)
+            p.terminated_exclusive_values = excl
+            p.evidence.extend(evidence)
+            if score > p.suspicion_score:
+                p.suspicion_score = round(score, 4)
+
 
 # ---------------------------------------------------------------------------
 # Scoring helpers
@@ -744,6 +960,64 @@ def _event_evidence(
     return lines
 
 
+def _value_distribution_score(
+    col: str, term_counts: dict, active_counts: dict, n_term: int, n_active: int,
+    min_count: int = 10,
+) -> tuple[list[str], float, list[str]]:
+    """Score a field by value distribution between terminated and active groups.
+
+    Returns ``(terminated_exclusive_values, score, evidence_lines)``.
+    """
+    all_values = set(term_counts.keys()) | set(active_counts.keys())
+    if not all_values or n_term == 0:
+        return [], 0.0, []
+
+    total = n_term + n_active
+    base_rate = n_term / total if total > 0 else 0.5
+    terminated_exclusive: list[str] = []
+    max_excess = 0.0
+
+    for val in all_values:
+        ct, ca = term_counts.get(val, 0), active_counts.get(val, 0)
+        if ct + ca < min_count:
+            continue
+        term_share = ct / (ct + ca)
+        if ca == 0 and ct >= min_count:
+            terminated_exclusive.append(str(val))
+        if base_rate < 1.0:
+            max_excess = max(max_excess, max(0.0, (term_share - base_rate) / (1.0 - base_rate)))
+
+    if terminated_exclusive:
+        excl_coverage = sum(term_counts.get(v, 0) for v in terminated_exclusive) / n_term
+        score = min(1.0, 0.5 + excl_coverage)
+    elif max_excess > 0.3:
+        score = min(1.0, max_excess * 0.6)
+    else:
+        score = 0.0
+
+    evidence: list[str] = []
+    if terminated_exclusive:
+        vals_str = ", ".join(terminated_exclusive[:5])
+        if len(terminated_exclusive) > 5:
+            vals_str += f" (+{len(terminated_exclusive) - 5} more)"
+        evidence.append(f"{col}: {len(terminated_exclusive)} terminated-exclusive value(s): {vals_str}")
+    elif max_excess > 0.3:
+        evidence.append(f"{col}: value-distribution skew toward terminated = {max_excess:.2f}")
+    return terminated_exclusive, round(score, 4), evidence
+
+
+def _compute_date_range(df: DataFrame, col: str) -> tuple[Optional[str], Optional[str]]:
+    """Return (min_date_str, max_date_str) for a date/timestamp column."""
+    try:
+        s = df[col].dropna()
+        if len(s) == 0:
+            return None, None
+        lo, hi = s.min(), s.max()
+        return (str(lo)[:10] if lo is not None else None, str(hi)[:10] if hi is not None else None)
+    except Exception:
+        return None, None
+
+
 # ---------------------------------------------------------------------------
 # Display helpers
 # ---------------------------------------------------------------------------
@@ -758,6 +1032,28 @@ def _display_audit_results(result: FieldAvailabilityAuditResult) -> None:
           f"{result.partially_terminated_accounts} partially terminated | "
           f"{result.active_accounts} active")
     print(f"Service units terminated: {result.total_terminated_units}")
+
+    # Dataset date columns
+    if result.dataset_date_info:
+        print("\nDataset date columns:")
+        for d in result.dataset_date_info:
+            tc = d.time_column or "—"
+            dates = f"{d.min_date} -> {d.max_date}" if d.min_date else "—"
+            print(f"  {d.dataset_name:<24} {tc:<28} {dates:<26} {d.record_count:>8} rows  ({d.linkage_tier})")
+
+    # Methodology summary
+    if result.field_profiles:
+        total = len(result.field_profiles)
+        n_vd = sum(1 for p in result.field_profiles if p.value_suspicion_score is not None)
+        n_always_pop = sum(
+            1 for p in result.field_profiles
+            if (p.pct_non_null_terminated or 0) > 0.95 and (p.pct_non_null_active or 0) > 0.95
+        )
+        print("\nMethodology:")
+        print(f"  Null-rate analysis: {total} fields")
+        print(f"  Value-distribution: {n_vd} fields (cardinality <= {_MAX_VALUE_DISTRIBUTION_CARDINALITY})")
+        if n_always_pop > 0:
+            print(f"  Always-populated (>=95% both groups): {n_always_pop}")
     print()
 
     if not result.field_profiles:
@@ -771,6 +1067,21 @@ def _display_audit_results(result: FieldAvailabilityAuditResult) -> None:
     for p in sorted_profiles:
         print(f"{p.field_name:<35} {p.source_dataset:<20} {p.analysis_tier:<15} "
               f"{p.suspicion_score:>6.2f} {p.recommendation:<12}")
+
+    # Value-distribution flags
+    vd_flagged = [
+        p for p in result.field_profiles
+        if p.value_suspicion_score is not None
+        and p.value_suspicion_score > result.config.suspicion_threshold
+    ]
+    if vd_flagged:
+        print(f"\nValue-distribution flags ({len(vd_flagged)} fields with suspicious value patterns):")
+        for p in sorted(vd_flagged, key=lambda x: -(x.value_suspicion_score or 0)):
+            detail = ""
+            if p.terminated_exclusive_values:
+                vals = ", ".join(p.terminated_exclusive_values[:5])
+                detail = f" -- terminated-exclusive: {vals}"
+            print(f"  {p.field_name:<35} {p.source_dataset:<20} vd_score={p.value_suspicion_score:.2f}{detail}")
 
     if result.recommended_exclusions:
         print(f"\nRecommended exclusions ({len(result.recommended_exclusions)}):")
@@ -855,6 +1166,25 @@ def run_field_availability_audit(
         dataset_time_columns=time_columns,
         progress_fn=print,
     )
+
+    # Compute dataset date info
+    date_infos = []
+    for ds_name, df in loaded_frames.items():
+        lnk = linkage.get(ds_name)
+        tier = lnk.tier if lnk else ("self" if ds_name == su_config.dataset_name else "")
+        time_col = time_columns.get(ds_name)
+        if ds_name == su_config.dataset_name:
+            time_col = su_config.anchor_date_column
+        if time_col and time_col in df.columns:
+            min_d, max_d = _compute_date_range(df, time_col)
+        else:
+            time_col, min_d, max_d = None, None, None
+        date_infos.append(DatasetDateInfo(
+            dataset_name=ds_name, time_column=time_col,
+            min_date=min_d, max_date=max_d,
+            linkage_tier=tier, record_count=len(df),
+        ))
+    result.dataset_date_info = date_infos
 
     if additional_exclusions:
         for col in additional_exclusions:
