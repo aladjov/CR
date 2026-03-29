@@ -229,7 +229,7 @@ def _build_account_anchors_pandas(
 def _build_account_anchors_spark(su_df: DataFrame, cfg: ServiceUnitConfig) -> DataFrame:  # pragma: no cover
     import pyspark.sql.functions as F  # noqa: N812
 
-    from customer_retention.core.compat import _as_pandas_api, as_spark_df
+    from customer_retention.core.compat import as_pandas_api, as_spark_df
 
     spark_df = as_spark_df(su_df)
     entity_col, anchor_col, status_col = cfg.entity_column, cfg.anchor_date_column, cfg.status_column
@@ -253,7 +253,7 @@ def _build_account_anchors_spark(su_df: DataFrame, cfg: ServiceUnitConfig) -> Da
         "full_termination_date",
         F.when(F.col("is_fully_terminated"), F.col("full_termination_date")).otherwise(F.lit(None)),
     )
-    return _as_pandas_api(joined)
+    return as_pandas_api(joined)
 
 
 # ---------------------------------------------------------------------------
