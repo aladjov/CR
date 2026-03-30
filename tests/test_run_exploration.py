@@ -1548,3 +1548,91 @@ class TestProgressiveErrorLogHeader:
         assert "timeout:" in log_content and "300" in log_content
         assert "run_id:" in log_content and "test-run" in log_content
         assert "dry_run:" in log_content and "yes" in log_content
+
+
+class TestCrRunIdSetBeforeSetupNotebooks:
+    """CR_RUN_ID must be in env before NB00 runs so the kernel inherits it."""
+
+    def _make_notebooks(self, notebooks_dir):
+        from run_exploration import NOTEBOOKS_ORDER
+
+        nb_json = json.dumps({
+            "nbformat": 4, "nbformat_minor": 5,
+            "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
+            "cells": [],
+        })
+        for stem in NOTEBOOKS_ORDER:
+            (notebooks_dir / f"{stem}.ipynb").write_text(nb_json)
+
+    def test_cr_run_id_set_before_setup_notebooks(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        self._make_notebooks(notebooks_dir)
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+
+        captured_env = {}
+        original_execute = _execute_one.__wrapped__ if hasattr(_execute_one, "__wrapped__") else _execute_one
+
+        def spy_execute(nb_path, dataset, *args, **kwargs):
+            if nb_path.stem in SETUP_NOTEBOOKS:
+                captured_env["CR_RUN_ID"] = os.environ.get("CR_RUN_ID")
+            return original_execute(nb_path, dataset, *args, **kwargs)
+
+        monkeypatch.setattr("run_exploration._execute_one", spy_execute)
+        run_all(
+            notebooks_dir, findings_dir=findings_dir,
+            dry_run=True, run_id="comparison-abc1234",
+        )
+        assert captured_env.get("CR_RUN_ID") == "comparison-abc1234"
+
+    def test_cr_run_id_restored_after_run(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CR_RUN_ID", "previous-run")
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        self._make_notebooks(notebooks_dir)
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+
+        run_all(
+            notebooks_dir, findings_dir=findings_dir,
+            dry_run=True, run_id="comparison-abc1234",
+        )
+        assert os.environ.get("CR_RUN_ID") == "previous-run"
+
+    def test_cr_run_id_cleaned_when_no_prior_env(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        self._make_notebooks(notebooks_dir)
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+
+        run_all(
+            notebooks_dir, findings_dir=findings_dir,
+            dry_run=True, run_id="comparison-abc1234",
+        )
+        assert os.environ.get("CR_RUN_ID") is None
+
+    def test_no_run_id_arg_does_not_set_env(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        self._make_notebooks(notebooks_dir)
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+
+        captured_env = {}
+
+        def spy_execute(nb_path, dataset, *args, **kwargs):
+            if nb_path.stem in SETUP_NOTEBOOKS:
+                captured_env["CR_RUN_ID"] = os.environ.get("CR_RUN_ID")
+            return _execute_one(nb_path, dataset, *args, **kwargs)
+
+        monkeypatch.setattr("run_exploration._execute_one", spy_execute)
+        run_all(
+            notebooks_dir, findings_dir=findings_dir,
+            dry_run=True, run_id=None,
+        )
+        assert captured_env.get("CR_RUN_ID") is None

@@ -499,6 +499,10 @@ def run_all(
     }
     error_log = ProgressiveErrorLog(notebooks_dir, run_params=run_params)
 
+    prev_run_id = os.environ.get("CR_RUN_ID")
+    if run_id:
+        os.environ["CR_RUN_ID"] = run_id
+
     # Phase 1: Setup (00_start_here)
     setup_nbs = [nb for nb in notebooks if nb.stem in SETUP_NOTEBOOKS]
     for nb_path in setup_nbs:
@@ -510,9 +514,8 @@ def run_all(
 
     if not run_id:
         run_id = _detect_run_id_from_context(findings_dir)
-    prev_run_id = os.environ.get("CR_RUN_ID")
-    if run_id:
-        os.environ["CR_RUN_ID"] = run_id
+        if run_id:
+            os.environ["CR_RUN_ID"] = run_id
 
     namespace = _resolve_namespace(findings_dir, run_id)
 

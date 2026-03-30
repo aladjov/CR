@@ -313,14 +313,17 @@ class TestAutomatedPipelineSkipsSessionWrites:
 
 
 class TestInitializeRun:
+    @pytest.fixture(autouse=True)
+    def _clean_env(self, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+
     def test_creates_namespace_directories(self, tmp_path):
         ns = initialize_run(root=tmp_path, project_name="myproj")
         assert ns.datasets_dir.is_dir()
         assert ns.merged_dir.is_dir()
         assert ns.session_dir.is_dir()
 
-    def test_sets_cr_run_id_env_var(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("CR_RUN_ID", raising=False)
+    def test_sets_cr_run_id_env_var(self, tmp_path):
         ns = initialize_run(root=tmp_path, project_name="myproj")
         assert os.environ["CR_RUN_ID"] == ns.run_id
 
@@ -358,12 +361,62 @@ class TestInitializeRun:
         assert sentinel.exists()
         assert sentinel.read_text() == ns.run_id
 
-    def test_sentinel_updated_on_second_run(self, tmp_path):
+    def test_sentinel_updated_on_second_run(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
         ns1 = initialize_run(root=tmp_path, project_name="proj")
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
         ns2 = initialize_run(root=tmp_path, project_name="proj")
         sentinel = tmp_path / "runs" / ".active_run_id"
         assert sentinel.read_text() == ns2.run_id
         assert ns1.run_id != ns2.run_id
+
+    def test_rerun_in_same_kernel_reuses_namespace(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        ns1 = initialize_run(root=tmp_path, project_name="proj")
+        ns2 = initialize_run(root=tmp_path, project_name="proj")
+        assert ns1.run_id == ns2.run_id
+
+    def test_reuses_namespace_when_cr_run_id_set(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CR_RUN_ID", "orchestrated-run-001")
+        ns = initialize_run(root=tmp_path, project_name="ignored")
+        assert ns.run_id == "orchestrated-run-001"
+        assert ns.datasets_dir.is_dir()
+        assert ns.merged_dir.is_dir()
+
+    def test_reused_namespace_writes_sentinel(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CR_RUN_ID", "orchestrated-run-001")
+        ns = initialize_run(root=tmp_path, project_name="ignored")
+        sentinel = tmp_path / "runs" / ".active_run_id"
+        assert sentinel.read_text() == "orchestrated-run-001"
+        assert ns.run_id == "orchestrated-run-001"
+
+    def test_reused_namespace_creates_session_state(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CR_RUN_ID", "orchestrated-run-001")
+        monkeypatch.setenv("CR_USERNAME", "alice")
+        ns = initialize_run(root=tmp_path, project_name="ignored", username="alice")
+        state = SessionState.load(ns.user_session_path("alice"))
+        assert state is not None
+        assert state.active_run_id == "orchestrated-run-001"
+
+    def test_reused_namespace_does_not_overwrite_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CR_RUN_ID", "orchestrated-run-001")
+        initialize_run(root=tmp_path, project_name="ignored")
+        assert os.environ["CR_RUN_ID"] == "orchestrated-run-001"
+
+    def test_reused_namespace_with_preexisting_dirs(self, tmp_path, monkeypatch):
+        pre = RunNamespace(root=tmp_path, run_id="pre-existing")
+        pre.setup()
+        (pre.project_context_path).write_text("old: data")
+        monkeypatch.setenv("CR_RUN_ID", "pre-existing")
+        ns = initialize_run(root=tmp_path, project_name="ignored")
+        assert ns.run_id == "pre-existing"
+        assert ns.project_context_path.read_text() == "old: data"
+
+    def test_generates_new_when_cr_run_id_not_set(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        ns = initialize_run(root=tmp_path, project_name="myproj")
+        assert ns.run_id.startswith("myproj-")
+        assert os.environ["CR_RUN_ID"] == ns.run_id
 
 
 class TestResolveTargetColumn:

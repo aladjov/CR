@@ -192,11 +192,20 @@ def capture_notebook(nb_path: Path) -> Optional[str]:
             elif otype in ("execute_result", "display_data"):
                 data = output.get("data", {})
 
-                # Prefer text/html (DataFrame tables)
                 if "text/html" in data:
                     html = _join_text(data["text/html"])
                     html = _truncate(html.rstrip())
                     cell_parts.append(f"### Output (text/html)\n{html}")
+                elif "text/markdown" in data:
+                    md = _join_text(data["text/markdown"])
+                    md = _truncate(md.rstrip())
+                    if md:
+                        cell_parts.append(f"### Output (text/markdown)\n{md}")
+                    elif "text/plain" in data:
+                        text = _join_text(data["text/plain"])
+                        text = _truncate(text.rstrip())
+                        if text:
+                            cell_parts.append(f"### Output (text/plain)\n```\n{text}\n```")
                 elif "text/plain" in data:
                     text = _join_text(data["text/plain"])
                     text = _truncate(text.rstrip())

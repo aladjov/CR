@@ -111,9 +111,14 @@ def set_active_dataset(
 def initialize_run(
     root: Path, project_name: str, username: Optional[str] = None
 ) -> RunNamespace:
-    namespace = RunNamespace.create(root=root, project_name=project_name)
+    env_run_id = os.environ.get("CR_RUN_ID")
+    if env_run_id:
+        namespace = RunNamespace(root=root, run_id=env_run_id)
+        namespace.setup()
+    else:
+        namespace = RunNamespace.create(root=root, project_name=project_name)
+        os.environ["CR_RUN_ID"] = namespace.run_id
     namespace.write_sentinel()
-    os.environ["CR_RUN_ID"] = namespace.run_id
     if username is None:
         username = get_current_username()
     state = SessionState(active_dataset=None, active_run_id=namespace.run_id)
