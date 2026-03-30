@@ -27,7 +27,7 @@ set -euo pipefail
 
 # ---- Defaults ----
 OLD_COMMIT="6209ecd"
-TIMEOUT=900
+TIMEOUT=36000
 SPARK_REMOTE=""
 CAPTURE_ONLY=false
 DRY_RUN=false
@@ -55,7 +55,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --old-commit HASH   Baseline commit (default: 6209ecd = tutorial HTML)"
-            echo "  --timeout SECS      Per-notebook timeout (default: 900)"
+            echo "  --timeout SECS      Per-notebook timeout (default: 36000 = 10h)"
             echo "  --spark-remote      Enable Databricks Connect for new-code run"
             echo "  --capture-only      Skip execution, just re-capture and compare"
             echo "  --dry-run           Show what would be done without executing"
