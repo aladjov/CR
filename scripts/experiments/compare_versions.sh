@@ -36,6 +36,9 @@ LIST_CANDIDATES=false
 KEEP_WORKTREE=false
 CLEANUP=false
 DATASET="customer_retention_retail"
+RUN_OLD=true
+RUN_NEW=true
+START_NOTEBOOK=""
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPTS_DIR="$REPO_DIR/scripts/experiments"
@@ -51,6 +54,9 @@ while [[ $# -gt 0 ]]; do
         --dataset)      DATASET="$2"; shift 2 ;;
         --keep-worktree) KEEP_WORKTREE=true; shift ;;
         --cleanup)      CLEANUP=true; shift ;;
+        --old-only)     RUN_OLD=true; RUN_NEW=false; shift ;;
+        --new-only)     RUN_OLD=false; RUN_NEW=true; shift ;;
+        --start-notebook) START_NOTEBOOK="$2"; shift 2 ;;
         --list-candidates)
             LIST_CANDIDATES=true; shift ;;
         --help|-h)
@@ -63,6 +69,9 @@ while [[ $# -gt 0 ]]; do
             echo "  --capture-only      Skip execution, just re-capture and compare"
             echo "  --dry-run           Show what would be done without executing"
             echo "  --dataset NAME      Dataset to activate (default: customer_retention_retail)"
+            echo "  --old-only          Only run the old (baseline) side"
+            echo "  --new-only          Only run the new (HEAD) side"
+            echo "  --start-notebook NB Resume from this notebook (e.g. 03 or 08_baseline_experiments)"
             echo "  --keep-worktree     Keep the old-code worktree after completion"
             echo "  --cleanup           Remove comparison dir, worktree, and kernels for the given commits"
             echo "  --list-candidates   Show candidate commits near the tutorial date"
@@ -198,6 +207,9 @@ if $CAPTURE_ONLY; then
         echo "Error: comparison dir not found at $COMPARISON_DIR — run without --capture-only first" >&2
         exit 1
     fi
+elif ! $RUN_OLD; then
+    echo "[Step 1] SKIP — new-only mode"
+    mkdir -p "$COMPARISON_DIR"
 else
     echo "[Step 1] Creating git worktree for $OLD_COMMIT ..."
     if $DRY_RUN; then
@@ -206,11 +218,11 @@ else
     else
         mkdir -p "$COMPARISON_DIR"
         if [ -d "$OLD_DIR" ]; then
-            echo "  Worktree already exists — removing first"
-            git -C "$REPO_DIR" worktree remove "$OLD_DIR" --force 2>/dev/null || true
+            echo "  Worktree already exists — reusing"
+        else
+            git -C "$REPO_DIR" worktree add "$OLD_DIR" "$OLD_COMMIT" --detach
+            echo "  Created worktree at $OLD_DIR"
         fi
-        git -C "$REPO_DIR" worktree add "$OLD_DIR" "$OLD_COMMIT" --detach
-        echo "  Created worktree at $OLD_DIR"
     fi
 fi
 echo ""
@@ -236,38 +248,53 @@ setup_venv() {
 }
 
 if ! $CAPTURE_ONLY; then
-    setup_venv "$OLD_DIR" "cr-baseline"
-    # For new code: use existing venv or create
-    if [ ! -d "$REPO_DIR/.venv" ]; then
-        setup_venv "$REPO_DIR" "cr-current"
-    elif ! $DRY_RUN; then
-        echo "  Using existing venv in $REPO_DIR"
-        (cd "$REPO_DIR" && source .venv/bin/activate && \
-         python -m ipykernel install --user --name "cr-current" --display-name "CR current" 2>/dev/null || true)
+    if $RUN_OLD; then
+        setup_venv "$OLD_DIR" "cr-baseline"
+    fi
+    if $RUN_NEW; then
+        # For new code: use existing venv or create
+        if [ ! -d "$REPO_DIR/.venv" ]; then
+            setup_venv "$REPO_DIR" "cr-current"
+        elif ! $DRY_RUN; then
+            echo "  Using existing venv in $REPO_DIR"
+            (cd "$REPO_DIR" && source .venv/bin/activate && \
+             python -m ipykernel install --user --name "cr-current" --display-name "CR current" 2>/dev/null || true)
+        fi
     fi
 fi
 echo ""
 
 # ---- Step 3: Patch dataset in current NB00 ----
-echo "[Step 3] Patching dataset in current NB00 → $DATASET ..."
-if $DRY_RUN; then
-    echo "  DRY_RUN: python patch_dataset_config.py --activate $DATASET"
-else
-    if ! $CAPTURE_ONLY; then
+if $RUN_NEW && ! $CAPTURE_ONLY; then
+    echo "[Step 3] Patching dataset in current NB00 → $DATASET ..."
+    if $DRY_RUN; then
+        echo "  DRY_RUN: python patch_dataset_config.py --activate $DATASET"
+    else
         python "$SCRIPTS_DIR/patch_dataset_config.py" \
             --notebook "$REPO_DIR/$NB00" \
             --activate "$DATASET"
     fi
+else
+    echo "[Step 3] SKIP — not running new side"
 fi
 echo ""
 
+# Build --start-notebook arg if provided
+_START_NB_ARG=""
+if [ -n "$START_NOTEBOOK" ]; then
+    _START_NB_ARG="--start-notebook $START_NOTEBOOK"
+fi
+
 # ---- Step 4: Run old version ----
-echo "[Step 4] Running old version ($OLD_SHORT) ..."
-if $CAPTURE_ONLY; then
-    echo "  SKIP — capture-only mode"
+if ! $RUN_OLD; then
+    echo "[Step 4] SKIP — new-only mode"
+elif $CAPTURE_ONLY; then
+    echo "[Step 4] SKIP — capture-only mode"
 elif $DRY_RUN; then
-    echo "  DRY_RUN: run_exploration.py --run-id $OLD_RUN_ID --kernel cr-baseline"
+    echo "[Step 4] Running old version ($OLD_SHORT) ..."
+    echo "  DRY_RUN: run_exploration.py --run-id $OLD_RUN_ID --kernel cr-baseline $_START_NB_ARG"
 else
+    echo "[Step 4] Running old version ($OLD_SHORT) ..."
     (
         cd "$OLD_DIR"
         # shellcheck disable=SC1091
@@ -276,19 +303,23 @@ else
             --notebooks-dir exploration_notebooks \
             --run-id "$OLD_RUN_ID" \
             --kernel cr-baseline \
-            --timeout "$TIMEOUT"
+            --timeout "$TIMEOUT" \
+            $_START_NB_ARG
     ) || echo "  WARNING: Old run had failures (continuing anyway)"
     echo "  Old run complete."
 fi
 echo ""
 
 # ---- Step 5: Run new version ----
-echo "[Step 5] Running new version (HEAD) ..."
-if $CAPTURE_ONLY; then
-    echo "  SKIP — capture-only mode"
+if ! $RUN_NEW; then
+    echo "[Step 5] SKIP — old-only mode"
+elif $CAPTURE_ONLY; then
+    echo "[Step 5] SKIP — capture-only mode"
 elif $DRY_RUN; then
-    echo "  DRY_RUN: run_exploration.py --run-id $NEW_RUN_ID --kernel cr-current $SPARK_REMOTE"
+    echo "[Step 5] Running new version (HEAD) ..."
+    echo "  DRY_RUN: run_exploration.py --run-id $NEW_RUN_ID --kernel cr-current $SPARK_REMOTE $_START_NB_ARG"
 else
+    echo "[Step 5] Running new version (HEAD) ..."
     (
         cd "$REPO_DIR"
         # shellcheck disable=SC1091
@@ -298,7 +329,8 @@ else
             --run-id "$NEW_RUN_ID" \
             --kernel cr-current \
             --timeout "$TIMEOUT" \
-            $SPARK_REMOTE
+            $SPARK_REMOTE \
+            $_START_NB_ARG
     ) || echo "  WARNING: New run had failures (continuing anyway)"
     echo "  New run complete."
 fi
@@ -319,17 +351,18 @@ record_metadata() {
     git -C "$work_dir" log -1 --format='%ad' --date=format:'%b %d, %Y' "$sha" > "$output_dir/commit_date.txt"
     git -C "$work_dir" show "$sha":pyproject.toml 2>/dev/null \
         | grep '^version' | head -1 | sed 's/version = "//;s/"//' > "$output_dir/version.txt"
-    (cd "$work_dir" && source .venv/bin/activate && pip freeze > "$output_dir/pip_freeze.txt" && \
+    (cd "$work_dir" && source .venv/bin/activate && \
+     uv pip freeze > "$output_dir/pip_freeze.txt" 2>/dev/null || pip freeze > "$output_dir/pip_freeze.txt" && \
      python --version > "$output_dir/python_version.txt" 2>&1)
     echo "  Recorded: $(cut -c1-7 "$output_dir/git_sha.txt")  v$(cat "$output_dir/version.txt")  $(cat "$output_dir/commit_date.txt")"
 }
 
 if ! $CAPTURE_ONLY && ! $DRY_RUN; then
-    record_metadata "$OLD_OUTPUT_DIR" "$OLD_DIR" "$OLD_COMMIT"
-    record_metadata "$NEW_OUTPUT_DIR" "$REPO_DIR" "HEAD"
+    $RUN_OLD && record_metadata "$OLD_OUTPUT_DIR" "$OLD_DIR" "$OLD_COMMIT"
+    $RUN_NEW && record_metadata "$NEW_OUTPUT_DIR" "$REPO_DIR" "HEAD"
 elif $DRY_RUN; then
-    record_metadata "$OLD_OUTPUT_DIR" "$OLD_DIR" "$OLD_COMMIT"
-    record_metadata "$NEW_OUTPUT_DIR" "$REPO_DIR" "HEAD"
+    $RUN_OLD && record_metadata "$OLD_OUTPUT_DIR" "$OLD_DIR" "$OLD_COMMIT"
+    $RUN_NEW && record_metadata "$NEW_OUTPUT_DIR" "$REPO_DIR" "HEAD"
 fi
 
 # Copy run-level YAML artefacts into the comparison dir
@@ -357,60 +390,77 @@ copy_run_artefacts() {
 if ! $DRY_RUN; then
     OLD_RUN_DIR="$OLD_DIR/experiments/runs/$OLD_RUN_ID"
     NEW_RUN_DIR="$REPO_DIR/experiments/runs/$NEW_RUN_ID"
-    copy_run_artefacts "$OLD_RUN_DIR" "$OLD_OUTPUT_DIR"
-    copy_run_artefacts "$NEW_RUN_DIR" "$NEW_OUTPUT_DIR"
+    $RUN_OLD && copy_run_artefacts "$OLD_RUN_DIR" "$OLD_OUTPUT_DIR"
+    $RUN_NEW && copy_run_artefacts "$NEW_RUN_DIR" "$NEW_OUTPUT_DIR"
 fi
 echo ""
 
 # ---- Step 7: Capture outputs (newest script, both worktrees) ----
 echo "[Step 7] Capturing cell outputs ..."
 if $DRY_RUN; then
-    echo "  DRY_RUN: capture → $OLD_OUTPUT_DIR/cell_outputs.md"
-    echo "  DRY_RUN: capture → $NEW_OUTPUT_DIR/cell_outputs.md"
+    $RUN_OLD && echo "  DRY_RUN: capture → $OLD_OUTPUT_DIR/cell_outputs.md"
+    $RUN_NEW && echo "  DRY_RUN: capture → $NEW_OUTPUT_DIR/cell_outputs.md"
 else
-    python "$SCRIPTS_DIR/capture_notebook_outputs.py" \
-        --notebooks-dir "$OLD_DIR/exploration_notebooks" \
-        --output "$OLD_OUTPUT_DIR/cell_outputs.md"
-
-    python "$SCRIPTS_DIR/capture_notebook_outputs.py" \
-        --notebooks-dir "$REPO_DIR/exploration_notebooks" \
-        --output "$NEW_OUTPUT_DIR/cell_outputs.md"
+    if $RUN_OLD; then
+        python "$SCRIPTS_DIR/capture_notebook_outputs.py" \
+            --notebooks-dir "$OLD_DIR/exploration_notebooks" \
+            --output "$OLD_OUTPUT_DIR/cell_outputs.md"
+    fi
+    if $RUN_NEW; then
+        python "$SCRIPTS_DIR/capture_notebook_outputs.py" \
+            --notebooks-dir "$REPO_DIR/exploration_notebooks" \
+            --output "$NEW_OUTPUT_DIR/cell_outputs.md"
+    fi
 fi
 echo ""
 
 # ---- Step 8: Generate drift report ----
-echo "[Step 8] Generating drift report ..."
-if $DRY_RUN; then
-    echo "  DRY_RUN: compare → $REPORT_FILE"
+if $RUN_OLD && $RUN_NEW; then
+    echo "[Step 8] Generating drift report ..."
+    if $DRY_RUN; then
+        echo "  DRY_RUN: compare → $REPORT_FILE"
+    else
+        if [ -f "$OLD_OUTPUT_DIR/cell_outputs.md" ] && [ -f "$NEW_OUTPUT_DIR/cell_outputs.md" ]; then
+            python "$SCRIPTS_DIR/compare_exploration_runs.py" \
+                --old-manifest "$OLD_OUTPUT_DIR/cell_outputs.md" \
+                --new-manifest "$NEW_OUTPUT_DIR/cell_outputs.md" \
+                --old-run-dir "$OLD_OUTPUT_DIR" \
+                --new-run-dir "$NEW_OUTPUT_DIR" \
+                --output "$REPORT_FILE"
+            echo "  Report: $REPORT_FILE"
+        else
+            echo "  SKIP — one or both cell_outputs.md files missing"
+        fi
+    fi
 else
-    python "$SCRIPTS_DIR/compare_exploration_runs.py" \
-        --old-manifest "$OLD_OUTPUT_DIR/cell_outputs.md" \
-        --new-manifest "$NEW_OUTPUT_DIR/cell_outputs.md" \
-        --old-run-dir "$OLD_OUTPUT_DIR" \
-        --new-run-dir "$NEW_OUTPUT_DIR" \
-        --output "$REPORT_FILE"
-    echo "  Report: $REPORT_FILE"
+    echo "[Step 8] SKIP — need both sides for drift report (run the other side, then use --capture-only)"
 fi
 echo ""
 
 # ---- Step 9: Copy executed notebooks into comparison dir ----
 echo "[Step 9] Copying executed notebooks ..."
 if $DRY_RUN; then
-    echo "  DRY_RUN: copy notebooks → $OLD_OUTPUT_DIR/notebooks/"
-    echo "  DRY_RUN: copy notebooks → $NEW_OUTPUT_DIR/notebooks/"
+    $RUN_OLD && echo "  DRY_RUN: copy notebooks → $OLD_OUTPUT_DIR/notebooks/"
+    $RUN_NEW && echo "  DRY_RUN: copy notebooks → $NEW_OUTPUT_DIR/notebooks/"
 else
-    mkdir -p "$OLD_OUTPUT_DIR/notebooks" "$NEW_OUTPUT_DIR/notebooks"
-    cp "$OLD_DIR"/exploration_notebooks/*.ipynb "$OLD_OUTPUT_DIR/notebooks/" 2>/dev/null || true
-    cp "$REPO_DIR"/exploration_notebooks/*.ipynb "$NEW_OUTPUT_DIR/notebooks/" 2>/dev/null || true
-    _old_nb_count=$(ls "$OLD_OUTPUT_DIR/notebooks/"*.ipynb 2>/dev/null | wc -l | tr -d ' ')
-    _new_nb_count=$(ls "$NEW_OUTPUT_DIR/notebooks/"*.ipynb 2>/dev/null | wc -l | tr -d ' ')
-    echo "  Copied ${_old_nb_count} old + ${_new_nb_count} new notebooks"
+    if $RUN_OLD; then
+        mkdir -p "$OLD_OUTPUT_DIR/notebooks"
+        cp "$OLD_DIR"/exploration_notebooks/*.ipynb "$OLD_OUTPUT_DIR/notebooks/" 2>/dev/null || true
+        _old_nb_count=$(ls "$OLD_OUTPUT_DIR/notebooks/"*.ipynb 2>/dev/null | wc -l | tr -d ' ')
+        echo "  Copied ${_old_nb_count} old notebooks"
+    fi
+    if $RUN_NEW; then
+        mkdir -p "$NEW_OUTPUT_DIR/notebooks"
+        cp "$REPO_DIR"/exploration_notebooks/*.ipynb "$NEW_OUTPUT_DIR/notebooks/" 2>/dev/null || true
+        _new_nb_count=$(ls "$NEW_OUTPUT_DIR/notebooks/"*.ipynb 2>/dev/null | wc -l | tr -d ' ')
+        echo "  Copied ${_new_nb_count} new notebooks"
+    fi
 fi
 echo ""
 
 # ---- Step 10: Restore NB00 ----
 echo "[Step 10] Restoring NB00 ..."
-if ! $DRY_RUN && ! $CAPTURE_ONLY; then
+if $RUN_NEW && ! $DRY_RUN && ! $CAPTURE_ONLY; then
     python "$SCRIPTS_DIR/patch_dataset_config.py" \
         --notebook "$REPO_DIR/$NB00" \
         --restore 2>/dev/null || echo "  (no backup to restore)"
@@ -419,7 +469,9 @@ echo ""
 
 # ---- Step 11: Clean up worktree ----
 echo "[Step 11] Cleaning up ..."
-if $DRY_RUN; then
+if ! $RUN_OLD; then
+    echo "  SKIP — old side not run this invocation"
+elif $DRY_RUN; then
     if $KEEP_WORKTREE; then
         echo "  DRY_RUN: keeping worktree at $OLD_DIR"
     else
