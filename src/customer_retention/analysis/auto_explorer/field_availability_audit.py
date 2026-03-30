@@ -336,10 +336,6 @@ class FieldAvailabilityAuditor:
                 ds_profiles = self._probe_entity_dataset(df, ds_name, anchors, su_cfg)
             profiles.extend(ds_profiles)
 
-        self._augment_with_value_distributions(
-            profiles, service_unit_df, probe_dfs, anchors, su_cfg, progress_fn,
-        )
-
         for p in profiles:
             p.recommendation = self._classify(p)
 
@@ -369,6 +365,24 @@ class FieldAvailabilityAuditor:
         if p.suspicion_score > threshold:
             return "investigate"
         return "safe"
+
+    def run_value_distribution_pass(
+        self, result: FieldAvailabilityAuditResult,
+        service_unit_df: DataFrame, probe_dfs: dict[str, DataFrame],
+        progress_fn: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        """Second pass: value-distribution on low-cardinality fields. Updates result in-place."""
+        su_cfg = self.config.service_unit
+        anchors = build_account_anchors(service_unit_df, su_cfg)
+        self._augment_with_value_distributions(
+            result.field_profiles, service_unit_df, probe_dfs, anchors, su_cfg, progress_fn,
+        )
+        for p in result.field_profiles:
+            p.recommendation = self._classify(p)
+            if p.recommendation == "exclude" and p.field_name not in result.recommended_exclusions:
+                result.recommended_exclusions.append(p.field_name)
+            if p.recommendation in ("investigate", "exclude") and p.field_name not in result.suspicious_fields:
+                result.suspicious_fields.append(p.field_name)
 
     def _probe_self(
         self, su_df: DataFrame, cfg: ServiceUnitConfig, progress_fn: Optional[Callable] = None,
@@ -752,52 +766,47 @@ class FieldAvailabilityAuditor:
     def _value_dist_pass_pandas(
         self,
         ds_profiles: list[FieldLeadLagProfile],
-        df: DataFrame,
-        anchors: DataFrame,
-        su_cfg: ServiceUnitConfig,
-        is_self: bool,
-        col_names: list[str],
-        ds_name: str,
+        df: DataFrame, anchors: DataFrame, su_cfg: ServiceUnitConfig,
+        is_self: bool, col_names: list[str], ds_name: str,
         progress_fn: Optional[Callable[[str], None]],
     ) -> None:
         profile_map = {p.field_name: p for p in ds_profiles}
-
-        # Batch cardinality (single pass)
         present = [c for c in col_names if c in df.columns]
-        cards = df[present].nunique().to_dict() if present else {}
-        cards = {c: int(n) for c, n in cards.items()}
-        for c, n in cards.items():
+        if not present:
+            return
+
+        if progress_fn:
+            progress_fn(f"  Value-distribution: computing cardinality for {ds_name} ({len(present)} columns)...")
+        cards = df[present].nunique()
+        cards = {c: int(cards[c]) for c in present}
+        for c in present:
             if c in profile_map:
-                profile_map[c].cardinality = n
+                profile_map[c].cardinality = cards[c]
 
         low_card = [c for c, n in cards.items() if n <= _MAX_VALUE_DISTRIBUTION_CARDINALITY]
         if not low_card:
             return
-
         if progress_fn:
-            progress_fn(
-                f"  Value-distribution: {ds_name} "
-                f"({len(low_card)} low-cardinality fields)"
-            )
+            progress_fn(f"  Value-distribution: {ds_name} ({len(low_card)} low-cardinality fields)")
 
-        # Split terminated / active
         if is_self:
             if su_cfg.status_column and su_cfg.terminated_statuses:
-                mask = df[su_cfg.status_column].isin(su_cfg.terminated_statuses)
+                term_mask = df[su_cfg.status_column].isin(su_cfg.terminated_statuses)
             else:
-                mask = df[su_cfg.anchor_date_column].notna()
-            term_df, active_df = df[mask], df[~mask]
+                term_mask = df[su_cfg.anchor_date_column].notna()
+            active_mask = ~term_mask
+            src = df
         else:
             entity_col = su_cfg.entity_column
             if entity_col not in df.columns:
                 return
-            merged = df.merge(
+            src = df[[entity_col] + low_card].merge(
                 anchors[[entity_col, "is_fully_terminated"]], on=entity_col, how="left",
             )
-            term_df = merged[merged["is_fully_terminated"] == True]  # noqa: E712
-            active_df = merged[merged["is_fully_terminated"].isna()]
+            term_mask = src["is_fully_terminated"] == True  # noqa: E712
+            active_mask = src["is_fully_terminated"].isna()
 
-        n_term, n_active = len(term_df), len(active_df)
+        n_term, n_active = int(term_mask.sum()), int(active_mask.sum())
         if n_term == 0:
             return
 
@@ -805,8 +814,8 @@ class FieldAvailabilityAuditor:
             p = profile_map.get(col)
             if p is None:
                 continue
-            term_vc = term_df[col].value_counts(dropna=True).to_dict()
-            active_vc = active_df[col].value_counts(dropna=True).to_dict()
+            term_vc = src.loc[term_mask, col].value_counts(dropna=True).to_dict()
+            active_vc = src.loc[active_mask, col].value_counts(dropna=True).to_dict()
             excl, score, evidence = _value_distribution_score(
                 col, term_vc, active_vc, n_term, n_active,
             )
@@ -856,7 +865,7 @@ class FieldAvailabilityAuditor:
         stack_args = ", ".join(f"'{c}', cast(`{c}` as string)" for c in present)
         stacked_all = base.select(F.expr(f"stack({len(present)}, {stack_args}) as (__cn, __cv)"))
         cd_rows = stacked_all.groupBy("__cn").agg(
-            F.countDistinct("__cv").alias("cd"),
+            F.approx_count_distinct("__cv").alias("cd"),
         ).collect()
         cards = {r["__cn"]: r["cd"] for r in cd_rows}
         for c, n in cards.items():
@@ -1033,7 +1042,6 @@ def _display_audit_results(result: FieldAvailabilityAuditResult) -> None:
           f"{result.active_accounts} active")
     print(f"Service units terminated: {result.total_terminated_units}")
 
-    # Dataset date columns
     if result.dataset_date_info:
         print("\nDataset date columns:")
         for d in result.dataset_date_info:
@@ -1041,17 +1049,13 @@ def _display_audit_results(result: FieldAvailabilityAuditResult) -> None:
             dates = f"{d.min_date} -> {d.max_date}" if d.min_date else "—"
             print(f"  {d.dataset_name:<24} {tc:<28} {dates:<26} {d.record_count:>8} rows  ({d.linkage_tier})")
 
-    # Methodology summary
     if result.field_profiles:
         total = len(result.field_profiles)
-        n_vd = sum(1 for p in result.field_profiles if p.value_suspicion_score is not None)
         n_always_pop = sum(
             1 for p in result.field_profiles
             if (p.pct_non_null_terminated or 0) > 0.95 and (p.pct_non_null_active or 0) > 0.95
         )
-        print("\nMethodology:")
-        print(f"  Null-rate analysis: {total} fields")
-        print(f"  Value-distribution: {n_vd} fields (cardinality <= {_MAX_VALUE_DISTRIBUTION_CARDINALITY})")
+        print(f"\nNull-rate analysis: {total} fields")
         if n_always_pop > 0:
             print(f"  Always-populated (>=95% both groups): {n_always_pop}")
     print()
@@ -1068,21 +1072,6 @@ def _display_audit_results(result: FieldAvailabilityAuditResult) -> None:
         print(f"{p.field_name:<35} {p.source_dataset:<20} {p.analysis_tier:<15} "
               f"{p.suspicion_score:>6.2f} {p.recommendation:<12}")
 
-    # Value-distribution flags
-    vd_flagged = [
-        p for p in result.field_profiles
-        if p.value_suspicion_score is not None
-        and p.value_suspicion_score > result.config.suspicion_threshold
-    ]
-    if vd_flagged:
-        print(f"\nValue-distribution flags ({len(vd_flagged)} fields with suspicious value patterns):")
-        for p in sorted(vd_flagged, key=lambda x: -(x.value_suspicion_score or 0)):
-            detail = ""
-            if p.terminated_exclusive_values:
-                vals = ", ".join(p.terminated_exclusive_values[:5])
-                detail = f" -- terminated-exclusive: {vals}"
-            print(f"  {p.field_name:<35} {p.source_dataset:<20} vd_score={p.value_suspicion_score:.2f}{detail}")
-
     if result.recommended_exclusions:
         print(f"\nRecommended exclusions ({len(result.recommended_exclusions)}):")
         for f_name in result.recommended_exclusions:
@@ -1093,6 +1082,44 @@ def _display_audit_results(result: FieldAvailabilityAuditResult) -> None:
             print(f"\nFields to investigate ({len(investigate_only)}):")
             for f_name in investigate_only:
                 print(f"  - {f_name}")
+
+
+def _display_value_distribution_results(result: FieldAvailabilityAuditResult) -> None:
+    n_vd = sum(1 for p in result.field_profiles if p.value_suspicion_score is not None)
+    if n_vd == 0:
+        return
+
+    print(f"\n{'='*70}")
+    print("Value-Distribution Analysis")
+    print(f"{'='*70}")
+    print(f"Fields analyzed: {n_vd} (cardinality <= {_MAX_VALUE_DISTRIBUTION_CARDINALITY})")
+
+    vd_flagged = [
+        p for p in result.field_profiles
+        if p.value_suspicion_score is not None
+        and p.value_suspicion_score > result.config.suspicion_threshold
+    ]
+    if vd_flagged:
+        print(f"\nSuspicious value patterns ({len(vd_flagged)} fields):")
+        for p in sorted(vd_flagged, key=lambda x: -(x.value_suspicion_score or 0)):
+            detail = ""
+            if p.terminated_exclusive_values:
+                vals = ", ".join(p.terminated_exclusive_values[:5])
+                detail = f" -- terminated-exclusive: {vals}"
+            print(f"  {p.field_name:<35} {p.source_dataset:<20} "
+                  f"vd_score={p.value_suspicion_score:.2f} -> {p.recommendation}{detail}")
+    else:
+        print("\nNo suspicious value patterns found.")
+
+    if result.recommended_exclusions:
+        print(f"\nFinal exclusions ({len(result.recommended_exclusions)}):")
+        for f_name in result.recommended_exclusions:
+            print(f"  - {f_name}")
+    invest = [f for f in result.suspicious_fields if f not in result.recommended_exclusions]
+    if invest:
+        print(f"\nFinal investigation list ({len(invest)}):")
+        for f_name in invest:
+            print(f"  - {f_name}")
 
 
 # ---------------------------------------------------------------------------
@@ -1194,6 +1221,12 @@ def run_field_availability_audit(
                 result.suspicious_fields.append(col)
 
     _display_audit_results(result)
+
+    # Value-distribution pass (runs after main report is visible)
+    auditor.run_value_distribution_pass(
+        result, loaded_frames[su_config.dataset_name], loaded_frames, progress_fn=print,
+    )
+    _display_value_distribution_results(result)
 
     if namespace:
         output_dir = namespace.field_availability_audit_dir

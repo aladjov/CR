@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from customer_retention.analysis.auto_explorer.field_availability_audit import (
+    _MAX_VALUE_DISTRIBUTION_CARDINALITY,
     DatasetDateInfo,
     FieldAvailabilityAuditConfig,
     FieldAvailabilityAuditor,
@@ -765,15 +766,16 @@ class TestValueDistributionAugmentation:
         su_cfg = _su_config()
         cfg = FieldAvailabilityAuditConfig(service_unit=su_cfg, min_terminated_units=1)
         auditor = FieldAvailabilityAuditor(cfg)
+        contract_df = _contract_df()
+        probe_dfs = {"contract": contract_df, "account": _account_df()}
         linkage = {
             "contract": DatasetLinkage(tier="contract_linked", link_method="self"),
             "account": DatasetLinkage(tier="account_only", link_method="entity_column"),
         }
         result = auditor.run(
-            service_unit_df=_contract_df(),
-            probe_dfs={"contract": _contract_df(), "account": _account_df()},
-            dataset_linkage=linkage,
+            service_unit_df=contract_df, probe_dfs=probe_dfs, dataset_linkage=linkage,
         )
+        auditor.run_value_distribution_pass(result, contract_df, probe_dfs)
         profiled_with_card = [p for p in result.field_profiles if p.cardinality is not None]
         assert len(profiled_with_card) > 0
 
@@ -796,6 +798,30 @@ class TestValueDistributionAugmentation:
         assert churn_tag.cardinality == 1  # only "churned" (non-null unique)
         assert churn_tag.value_suspicion_score is not None
 
+    def test_two_phase_cardinality_skips_high_cardinality(self):
+        """High-cardinality columns are filtered out by sample phase."""
+        n = 200
+        contract_df = _contract_df()
+        account_df = pd.DataFrame({
+            "ACCOUNT_ID": [f"A{i % 4 + 1}" for i in range(n)],
+            "LOW_CARD": ["cat_a", "cat_b"] * (n // 2),
+            "HIGH_CARD": [f"unique_{i}" for i in range(n)],
+        })
+        su_cfg = _su_config()
+        cfg = FieldAvailabilityAuditConfig(service_unit=su_cfg, min_terminated_units=1)
+        auditor = FieldAvailabilityAuditor(cfg)
+        anchors = build_account_anchors(contract_df, su_cfg)
+        profiles = auditor._probe_entity_dataset(account_df, "account", anchors, su_cfg)
+        auditor._augment_with_value_distributions(
+            profiles, contract_df, {"account": account_df}, anchors, su_cfg,
+        )
+        low = next(p for p in profiles if p.field_name == "LOW_CARD")
+        high = next(p for p in profiles if p.field_name == "HIGH_CARD")
+        assert low.cardinality == 2
+        assert low.value_suspicion_score is not None
+        assert high.cardinality > _MAX_VALUE_DISTRIBUTION_CARDINALITY
+        assert high.value_suspicion_score is None
+
     def test_value_dist_bumps_score_for_leaky_categorical(self):
         """A field always populated but with a terminated-exclusive value."""
         n = 200
@@ -813,14 +839,13 @@ class TestValueDistributionAugmentation:
         su_cfg = _su_config()
         cfg = FieldAvailabilityAuditConfig(service_unit=su_cfg, min_terminated_units=1)
         auditor = FieldAvailabilityAuditor(cfg)
+        probe_dfs = {"contract": contract_df}
         linkage = {"contract": DatasetLinkage(tier="contract_linked", link_method="self")}
         result = auditor.run(
-            service_unit_df=contract_df, probe_dfs={"contract": contract_df},
-            dataset_linkage=linkage,
+            service_unit_df=contract_df, probe_dfs=probe_dfs, dataset_linkage=linkage,
         )
+        auditor.run_value_distribution_pass(result, contract_df, probe_dfs)
         plan_profile = next(p for p in result.field_profiles if p.field_name == "PLAN")
-        # Null-rate alone: both groups 100% populated -> score ~0
-        # Value-distribution: "churned_plan" only for terminated -> bumped
         assert plan_profile.value_suspicion_score is not None
         assert plan_profile.value_suspicion_score > 0.5
         assert plan_profile.suspicion_score > 0.5
@@ -916,11 +941,13 @@ class TestDateInfo:
         )
         _display_audit_results(result)
         out = capsys.readouterr().out
-        assert "Methodology:" in out
         assert "Null-rate analysis:" in out
-        assert "Value-distribution:" in out
 
     def test_display_shows_value_dist_flags(self, capsys):
+        from customer_retention.analysis.auto_explorer.field_availability_audit import (
+            _display_value_distribution_results,
+        )
+
         su_cfg = _su_config()
         cfg = FieldAvailabilityAuditConfig(service_unit=su_cfg, min_terminated_units=1)
         result = FieldAvailabilityAuditResult(
@@ -935,9 +962,9 @@ class TestDateInfo:
                 ),
             ],
         )
-        _display_audit_results(result)
+        _display_value_distribution_results(result)
         out = capsys.readouterr().out
-        assert "Value-distribution flags" in out
+        assert "Value-Distribution Analysis" in out
         assert "Cancelled" in out
 
 
