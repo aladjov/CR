@@ -65,6 +65,8 @@ tests/fixtures/netflix_customer_churn.csv
 
 # Experiments outputs (all generated data - gitignored)
 experiments/
+# But keep the experiment scripts (under scripts/, not experiments/)
+!scripts/experiments/
 
 # Generated pipelines (transient outputs, can be regenerated)
 generated_pipelines/
