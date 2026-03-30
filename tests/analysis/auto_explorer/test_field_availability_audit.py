@@ -363,6 +363,33 @@ class TestAuditorRun:
         assert "churn_date" not in field_names
         assert "INDUSTRY" in field_names
 
+    def test_lifecycle_end_date_pattern_boosted(self):
+        n = 100
+        contract_df = _contract_df()
+        sub_df = pd.DataFrame({
+            "ACCOUNT_ID": [f"A{i % 4 + 1}" for i in range(n)],
+            "SUBSCRIPTION_END_DATE": pd.to_datetime(["2024-06-01"] * n),
+            "SOME_OTHER_COL": ["x"] * n,
+        })
+        su_cfg = _su_config()
+        cfg = FieldAvailabilityAuditConfig(service_unit=su_cfg, min_terminated_units=1)
+        auditor = FieldAvailabilityAuditor(cfg)
+        probe_dfs = {"contract": contract_df, "subscription": sub_df}
+        linkage = {
+            "contract": DatasetLinkage(tier="contract_linked", link_method="self"),
+            "subscription": DatasetLinkage(tier="account_only", link_method="entity_column"),
+        }
+        result = auditor.run(
+            service_unit_df=contract_df, probe_dfs=probe_dfs, dataset_linkage=linkage,
+        )
+        sub_end = next(
+            (p for p in result.field_profiles if p.field_name == "SUBSCRIPTION_END_DATE"), None,
+        )
+        assert sub_end is not None
+        assert sub_end.suspicion_score > cfg.suspicion_threshold
+        assert sub_end.recommendation == "investigate"
+        assert any("lifecycle" in e for e in sub_end.evidence)
+
     def test_recommended_exclusions_populated(self):
         su_cfg = _su_config()
         cfg = FieldAvailabilityAuditConfig(service_unit=su_cfg, min_terminated_units=1, suspicion_threshold=0.5)

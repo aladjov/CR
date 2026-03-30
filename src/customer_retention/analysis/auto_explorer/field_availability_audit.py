@@ -284,6 +284,10 @@ _TARGET_LIKE_PATTERNS = frozenset({
     "churned", "churn_date", "is_churned", "churn_flag", "churn_label",
     "target", "label_timestamp",
 })
+_LIFECYCLE_END_SUFFIXES = (
+    "_end_date", "_termination_date", "_cancellation_date",
+    "_expiry_date", "_expiration_date",
+)
 
 
 class FieldAvailabilityAuditor:
@@ -341,6 +345,15 @@ class FieldAvailabilityAuditor:
             else:
                 ds_profiles = self._probe_entity_dataset(df, ds_name, anchors, su_cfg)
             profiles.extend(ds_profiles)
+
+        threshold = self.config.suspicion_threshold
+        for p in profiles:
+            if any(p.field_name.lower().endswith(s) for s in _LIFECYCLE_END_SUFFIXES):
+                if p.suspicion_score < threshold:
+                    p.suspicion_score = round(threshold + 0.01, 4)
+                    p.evidence.append(
+                        f"{p.field_name}: lifecycle end-date column (name pattern)"
+                    )
 
         for p in profiles:
             p.recommendation = self._classify(p)
