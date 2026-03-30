@@ -325,6 +325,44 @@ class TestAuditorRun:
         assert result.fully_terminated_accounts >= 1
         assert len(result.field_profiles) > 0
 
+    def test_active_accounts_counted(self):
+        su_cfg = _su_config()
+        cfg = FieldAvailabilityAuditConfig(service_unit=su_cfg, min_terminated_units=1)
+        auditor = FieldAvailabilityAuditor(cfg)
+        contract_df = pd.DataFrame({
+            "CONTRACT_ID": ["C1", "C2", "C3"],
+            "ACCOUNT_ID": ["A1", "A2", "A3"],
+            "CONTRACT_END_DATE": [pd.Timestamp("2024-01-01"), None, None],
+            "CONTRACT_STATUS": ["Cancelled", "Active", "Active"],
+            "CONTRACT_START_DATE": [pd.Timestamp("2023-01-01")] * 3,
+        })
+        result = auditor.run(
+            service_unit_df=contract_df, probe_dfs={"contract": contract_df},
+            dataset_linkage={"contract": DatasetLinkage(tier="contract_linked", link_method="self")},
+        )
+        assert result.fully_terminated_accounts == 1
+        assert result.active_accounts == 2
+
+    def test_target_columns_excluded_from_probe(self):
+        su_cfg = _su_config()
+        cfg = FieldAvailabilityAuditConfig(
+            service_unit=su_cfg, min_terminated_units=1,
+            target_columns=["churned", "churn_date"],
+        )
+        auditor = FieldAvailabilityAuditor(cfg)
+        account_df = pd.DataFrame({
+            "ACCOUNT_ID": ["A1", "A2", "A3", "A4"],
+            "churned": [True, True, False, False],
+            "churn_date": [pd.Timestamp("2024-01-01"), pd.Timestamp("2024-02-01"), None, None],
+            "INDUSTRY": ["Tech", "Retail", "Tech", "Finance"],
+        })
+        anchors = build_account_anchors(_contract_df(), su_cfg)
+        profiles = auditor._probe_entity_dataset(account_df, "account", anchors, su_cfg)
+        field_names = {p.field_name for p in profiles}
+        assert "churned" not in field_names
+        assert "churn_date" not in field_names
+        assert "INDUSTRY" in field_names
+
     def test_recommended_exclusions_populated(self):
         su_cfg = _su_config()
         cfg = FieldAvailabilityAuditConfig(service_unit=su_cfg, min_terminated_units=1, suspicion_threshold=0.5)

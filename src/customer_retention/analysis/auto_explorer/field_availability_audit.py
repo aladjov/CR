@@ -71,6 +71,7 @@ class FieldAvailabilityAuditConfig:
     lead_buckets_days: list[int] = field(default_factory=lambda: [0, 30, 90])
     min_terminated_units: int = 50
     suspicion_threshold: float = 0.5
+    target_columns: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -279,6 +280,10 @@ def _build_account_anchors_spark(su_df: DataFrame, cfg: ServiceUnitConfig) -> Da
 
 _SKIP_COLUMNS = frozenset({"entity_id"})
 _MAX_VALUE_DISTRIBUTION_CARDINALITY = 50
+_TARGET_LIKE_PATTERNS = frozenset({
+    "churned", "churn_date", "is_churned", "churn_flag", "churn_label",
+    "target", "label_timestamp",
+})
 
 
 class FieldAvailabilityAuditor:
@@ -310,7 +315,8 @@ class FieldAvailabilityAuditor:
 
         fully_terminated = int(anchors["is_fully_terminated"].sum())
         partially_terminated = int((~anchors["is_fully_terminated"]).sum())
-        active_accounts = 0
+        all_entities_in_su = int(service_unit_df[su_cfg.entity_column].nunique())
+        active_accounts = all_entities_in_su - len(anchors)
 
         profiles: list[FieldLeadLagProfile] = []
 
@@ -400,6 +406,7 @@ class FieldAvailabilityAuditor:
         for s in cfg.secondary_anchor_columns:
             skip.add(s.lower())
         skip.update(c.lower() for c in _SKIP_COLUMNS)
+        skip.update(c.lower() for c in self.config.target_columns)
 
         probe_cols = [c for c in su_df.columns if c.lower() not in skip]
         if not probe_cols:
@@ -499,6 +506,7 @@ class FieldAvailabilityAuditor:
             return []
 
         skip = {entity_col.lower()} | {c.lower() for c in _SKIP_COLUMNS}
+        skip.update(c.lower() for c in self.config.target_columns)
         probe_cols = [c for c in df.columns if c.lower() not in skip]
         if not probe_cols:
             return []
@@ -593,6 +601,7 @@ class FieldAvailabilityAuditor:
         if entity_col not in df.columns:
             return []
         skip = {entity_col.lower(), time_col.lower()} | {c.lower() for c in _SKIP_COLUMNS}
+        skip.update(c.lower() for c in self.config.target_columns)
         probe_cols = [c for c in df.columns if c.lower() not in skip]
         if not probe_cols:
             return []
@@ -1036,7 +1045,18 @@ def _display_audit_results(result: FieldAvailabilityAuditResult) -> None:
     print(f"\n{'='*70}")
     print("Field Availability Audit Results")
     print(f"{'='*70}")
-    print(f"Accounts: {result.total_accounts} total | "
+
+    su = result.config.service_unit
+    print(f"\nService unit: {su.dataset_name}")
+    print(f"  Anchor column: {su.anchor_date_column}")
+    if su.status_column:
+        print(f"  Status column: {su.status_column} (terminated: {', '.join(su.terminated_statuses)})")
+    if su.start_date_column:
+        print(f"  Start column:  {su.start_date_column}")
+    if result.config.target_columns:
+        print(f"  Target/label (excluded from audit): {', '.join(result.config.target_columns)}")
+
+    print(f"\nAccounts: {result.total_accounts} total | "
           f"{result.fully_terminated_accounts} fully terminated | "
           f"{result.partially_terminated_accounts} partially terminated | "
           f"{result.active_accounts} active")
@@ -1176,12 +1196,20 @@ def run_field_availability_audit(
         if entry.time_column:
             time_columns[ds_name] = entry.time_column
 
+    target_cols = sorted({
+        col for df in loaded_frames.values() for col in df.columns
+        if col.lower() in _TARGET_LIKE_PATTERNS
+    })
+    if target_cols:
+        print(f"Auto-detected target/label columns (excluded from audit): {', '.join(target_cols)}")
+
     audit_config = FieldAvailabilityAuditConfig(
         service_unit=su_config,
         probe_datasets=list(loaded_frames.keys()),
         lead_buckets_days=lead_buckets_days or [0, 30, 90],
         min_terminated_units=min_terminated_units,
         suspicion_threshold=suspicion_threshold,
+        target_columns=target_cols,
     )
 
     auditor = FieldAvailabilityAuditor(audit_config)
