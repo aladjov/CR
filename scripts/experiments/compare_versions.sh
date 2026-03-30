@@ -144,27 +144,42 @@ OLD_SHORT="$(echo "$OLD_COMMIT" | cut -c1-7)"
 NEW_SHORT="$(git -C "$REPO_DIR" rev-parse --short HEAD)"
 
 if $CLEANUP; then
-    COMPARISON_DIR="$REPO_DIR/experiments/comparisons/${OLD_SHORT}_vs_${NEW_SHORT}"
-    OLD_DIR="$COMPARISON_DIR/worktree"
     NB00="exploration_notebooks/00_start_here.ipynb"
-    echo "Cleaning up comparison: ${OLD_SHORT} vs ${NEW_SHORT}"
+    COMPARISONS_ROOT="$REPO_DIR/experiments/comparisons"
+
+    # Find all comparison dirs matching this old commit (HEAD may have moved since creation)
+    _found=()
+    if [ -d "$COMPARISONS_ROOT" ]; then
+        for d in "$COMPARISONS_ROOT"/${OLD_SHORT}_vs_*/; do
+            [ -d "$d" ] && _found+=("$d")
+        done
+    fi
+
+    if [ ${#_found[@]} -eq 0 ]; then
+        echo "Nothing to clean — no comparison dirs matching ${OLD_SHORT}_vs_* found."
+        exit 0
+    fi
+
     echo "  Restoring NB00 from backup ..."
     python "$SCRIPTS_DIR/patch_dataset_config.py" \
         --notebook "$REPO_DIR/$NB00" \
         --restore 2>/dev/null || echo "  (no backup to restore)"
-    if [ -d "$OLD_DIR" ]; then
-        echo "  Removing worktree $OLD_DIR ..."
-        git -C "$REPO_DIR" worktree remove "$OLD_DIR" --force 2>/dev/null || true
-    fi
-    jupyter kernelspec remove cr-baseline -y 2>/dev/null || true
-    jupyter kernelspec remove cr-current -y 2>/dev/null || true
-    if [ -d "$COMPARISON_DIR" ]; then
+
+    for COMPARISON_DIR in "${_found[@]}"; do
+        COMPARISON_DIR="${COMPARISON_DIR%/}"  # strip trailing slash
+        echo "Cleaning up: $(basename "$COMPARISON_DIR")"
+        OLD_DIR="$COMPARISON_DIR/worktree"
+        if [ -d "$OLD_DIR" ]; then
+            echo "  Removing worktree $OLD_DIR ..."
+            git -C "$REPO_DIR" worktree remove "$OLD_DIR" --force 2>/dev/null || true
+        fi
         echo "  Removing $COMPARISON_DIR ..."
         rm -rf "$COMPARISON_DIR"
-        echo "  Done."
-    else
-        echo "  Nothing to clean — $COMPARISON_DIR does not exist."
-    fi
+    done
+
+    jupyter kernelspec remove cr-baseline -y 2>/dev/null || true
+    jupyter kernelspec remove cr-current -y 2>/dev/null || true
+    echo "  Done."
     exit 0
 fi
 
