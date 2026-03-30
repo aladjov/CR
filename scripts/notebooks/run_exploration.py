@@ -295,8 +295,10 @@ def _execute_one(
 
 
 def _run_single_dataset_flow(
+    notebooks_dir: Path,
     notebooks: List[Path],
     findings_dir: Path,
+    context,
     results: Dict[str, str],
     timings: Dict[str, float],
     dry_run: bool,
@@ -304,12 +306,24 @@ def _run_single_dataset_flow(
     kernel: str,
     error_log: Optional[ProgressiveErrorLog] = None,
     namespace=None,
-    context=None,
 ) -> None:
-    """Original single-dataset sequential execution."""
+    """Single-dataset sequential execution.
+
+    Patches per-dataset notebooks with the project context dataset path
+    so hardcoded DATA_PATH values don't cause a mismatch.
+    """
     skip_set: Set[str] = set()
     skip_reasons: Dict[str, str] = {}
     skip_detected = False
+
+    # Patch per-dataset notebooks to match the project context (source of truth)
+    if context and context.datasets and not dry_run:
+        ds_name = next(iter(context.datasets))
+        ds_path = getattr(context.datasets[ds_name], "path", None)
+        if ds_path:
+            for nb in notebooks:
+                if nb.stem in PER_DATASET_STEMS:
+                    _set_data_path(nb, ds_path)
 
     print(f"Findings directory: {findings_dir}")
     print("(skip detection deferred until after data discovery)\n")
@@ -531,11 +545,10 @@ def run_all(
         )
     else:
         _run_single_dataset_flow(
-            notebooks, findings_dir, results, timings,
-            dry_run, timeout, kernel,
+            notebooks_dir, notebooks, findings_dir, context,
+            results, timings, dry_run, timeout, kernel,
             error_log=error_log,
             namespace=namespace,
-            context=context,
         )
 
     _print_summary(results, timings, time.time() - total_start)

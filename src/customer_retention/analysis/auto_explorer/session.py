@@ -263,6 +263,15 @@ def load_notebook_findings(
                     mark_notebook(namespace, notebook_name)
                     return str(resolved), namespace, dataset_name
 
+    if namespace is None:
+        raise FileNotFoundError(
+            "No run namespace found. Run notebook 00 first."
+        )
+    _active = resolve_active_dataset(namespace)
     raise FileNotFoundError(
-        "No run namespace found. Run notebook 00 first."
+        f"Run namespace '{namespace.run_id}' exists but no findings found. "
+        f"Active dataset: {_active!r}, "
+        f"datasets dir exists: {namespace.datasets_dir.is_dir()}, "
+        f"datasets: {namespace.list_datasets()}. "
+        "Run notebooks 01-05 first."
     )

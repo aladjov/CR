@@ -924,6 +924,110 @@ class TestMultiDatasetSetDataPath:
             assert "DATA_PATH" not in source
 
 
+class TestSingleDatasetSetDataPath:
+    """Single-dataset flow patches per-dataset notebooks from project context."""
+
+    def _make_notebook_with_data_path(self, path, default_path="../fixtures/default.csv"):
+        nb = {
+            "nbformat": 4, "nbformat_minor": 5,
+            "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
+            "cells": [{
+                "cell_type": "code", "metadata": {}, "outputs": [], "execution_count": None,
+                "source": [f'DATA_PATH = "{default_path}"\n'],
+            }],
+        }
+        path.write_text(json.dumps(nb, indent=1))
+
+    def _read_data_path(self, path):
+        nb = json.loads(path.read_text())
+        for cell in nb["cells"]:
+            for line in cell.get("source", []):
+                stripped = line.lstrip()
+                if stripped.startswith("DATA_PATH") and "=" in stripped and not stripped.startswith("#"):
+                    return stripped.split("=", 1)[1].strip().strip('"').strip("'")
+        return None
+
+    def test_single_dataset_patches_per_dataset_notebooks(self, tmp_path, single_context_yaml, monkeypatch):
+        from run_exploration import NOTEBOOKS_ORDER, PER_DATASET_STEMS
+
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        findings_dir = tmp_path / "findings"
+
+        nb_json = json.dumps({
+            "nbformat": 4, "nbformat_minor": 5,
+            "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
+            "cells": [],
+        })
+        for stem in NOTEBOOKS_ORDER:
+            nb_path = notebooks_dir / f"{stem}.ipynb"
+            if stem in PER_DATASET_STEMS:
+                self._make_notebook_with_data_path(nb_path, "../fixtures/WRONG.csv")
+            else:
+                nb_path.write_text(nb_json)
+
+        monkeypatch.setattr("run_exploration._run_notebook", lambda *a, **kw: (True, None))
+
+        run_all(notebooks_dir, findings_dir=findings_dir, dry_run=False, timeout=600)
+
+        for stem in PER_DATASET_STEMS:
+            nb_path = notebooks_dir / f"{stem}.ipynb"
+            assert self._read_data_path(nb_path) == "../fixtures/retail.csv", (
+                f"{stem} DATA_PATH not patched from project context"
+            )
+
+    def test_single_dataset_dry_run_does_not_patch(self, tmp_path, single_context_yaml):
+        from run_exploration import NOTEBOOKS_ORDER, PER_DATASET_STEMS
+
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        findings_dir = tmp_path / "findings"
+
+        nb_json = json.dumps({
+            "nbformat": 4, "nbformat_minor": 5,
+            "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
+            "cells": [],
+        })
+        for stem in NOTEBOOKS_ORDER:
+            nb_path = notebooks_dir / f"{stem}.ipynb"
+            if stem in PER_DATASET_STEMS:
+                self._make_notebook_with_data_path(nb_path, "../fixtures/WRONG.csv")
+            else:
+                nb_path.write_text(nb_json)
+
+        run_all(notebooks_dir, findings_dir=findings_dir, dry_run=True, timeout=600)
+
+        for stem in PER_DATASET_STEMS:
+            nb_path = notebooks_dir / f"{stem}.ipynb"
+            assert self._read_data_path(nb_path) == "../fixtures/WRONG.csv"
+
+    def test_no_context_does_not_patch(self, tmp_path):
+        from run_exploration import NOTEBOOKS_ORDER, PER_DATASET_STEMS
+
+        notebooks_dir = tmp_path / "notebooks"
+        notebooks_dir.mkdir()
+        findings_dir = tmp_path / "empty_findings"
+        findings_dir.mkdir()
+
+        nb_json = json.dumps({
+            "nbformat": 4, "nbformat_minor": 5,
+            "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
+            "cells": [],
+        })
+        for stem in NOTEBOOKS_ORDER:
+            nb_path = notebooks_dir / f"{stem}.ipynb"
+            if stem in PER_DATASET_STEMS:
+                self._make_notebook_with_data_path(nb_path, "../fixtures/original.csv")
+            else:
+                nb_path.write_text(nb_json)
+
+        run_all(notebooks_dir, findings_dir=findings_dir, dry_run=True, timeout=600)
+
+        for stem in PER_DATASET_STEMS:
+            nb_path = notebooks_dir / f"{stem}.ipynb"
+            assert self._read_data_path(nb_path) == "../fixtures/original.csv"
+
+
 # ---------------------------------------------------------------------------
 # _resolve_namespace
 # ---------------------------------------------------------------------------

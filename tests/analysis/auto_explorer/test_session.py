@@ -534,7 +534,7 @@ class TestLoadNotebookFindings:
         monkeypatch.setenv("CR_RUN_ID", ns.run_id)
         monkeypatch.setenv("CR_EXPERIMENTS_DIR", str(tmp_path))
         monkeypatch.setenv("CR_USERNAME", "testuser")
-        with pytest.raises(FileNotFoundError, match="No run namespace found"):
+        with pytest.raises(FileNotFoundError, match="exists but no findings found"):
             load_notebook_findings("04_column_deep_dive.ipynb", root=tmp_path)
 
     def test_load_notebook_findings_prefers_aggregated(self, tmp_path, monkeypatch):
