@@ -198,6 +198,9 @@ REPORT_FILE="$COMPARISON_DIR/drift_report.md"
 OLD_RUN_ID="baseline-${OLD_SHORT}"
 NEW_RUN_ID="current-${NEW_SHORT}"
 
+# The old side's actual run_id may differ (older initialize_run ignores CR_RUN_ID)
+OLD_ACTUAL_RUN_ID=""
+
 # Resolve human-readable info for both commits
 OLD_DATE="$(git -C "$REPO_DIR" log -1 --format='%ad' --date=format:'%b %d, %Y' "$OLD_COMMIT" 2>/dev/null || echo '?')"
 OLD_VERSION="$(git -C "$REPO_DIR" show "$OLD_COMMIT":pyproject.toml 2>/dev/null | grep '^version' | head -1 | sed 's/version = "//;s/"//' || echo '?')"
@@ -213,6 +216,23 @@ echo ""
 echo "  Dataset:   $DATASET"
 echo "  Output:    $COMPARISON_DIR/"
 echo "============================================================"
+echo ""
+
+# ---- Running error log ----
+# Mirror run_exploration.log behaviour: progressive log in the comparison dir
+# so failures can be diagnosed after the fact.
+mkdir -p "$COMPARISON_DIR"
+LOG_FILE="$COMPARISON_DIR/compare_versions.log"
+# Tee all subsequent stdout+stderr to the log file while keeping terminal output
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "compare_versions — $(date '+%Y-%m-%d %H:%M:%S')"
+echo ""
+echo "  old_commit:   $OLD_COMMIT ($OLD_SHORT, v$OLD_VERSION)"
+echo "  new_commit:   HEAD ($NEW_SHORT, v$NEW_VERSION)"
+echo "  dataset:      $DATASET"
+echo "  timeout:      $TIMEOUT"
+echo "  spark_remote: ${SPARK_REMOTE:-no}"
+echo "  start_nb:     ${START_NOTEBOOK:-<from beginning>}"
 echo ""
 
 # ---- Step 1: Create worktree ----
@@ -294,11 +314,55 @@ else
 fi
 echo ""
 
-# Build --start-notebook arg if provided
-_START_NB_ARG=""
+# ---------------------------------------------------------------------------
+# Build per-side CLI args, handling historical incompatibilities:
+#   - --start-notebook: added after 6209ecd; old run_exploration.py rejects it
+#   - --run-id:         old initialize_run ignores CR_RUN_ID env, creating its
+#                       own namespace; passing --run-id causes a name mismatch
+#                       (NB03 can't find project_context.yaml).  Detect by
+#                       checking whether the old session.py reads the env var.
+# ---------------------------------------------------------------------------
+_build_old_extra_args() {
+    local args=""
+    # Only pass --run-id if old initialize_run actually honours CR_RUN_ID
+    if grep -q 'os\.environ\.get.*CR_RUN_ID' \
+         "$OLD_DIR/src/customer_retention/analysis/auto_explorer/session.py" 2>/dev/null; then
+        args="--run-id $OLD_RUN_ID"
+    else
+        echo "  (old initialize_run does not honour CR_RUN_ID — omitting --run-id)" >&2
+    fi
+    # Only pass --start-notebook if the old script accepts it
+    if [ -n "$START_NOTEBOOK" ]; then
+        if grep -q 'start.notebook' "$OLD_DIR/scripts/notebooks/run_exploration.py" 2>/dev/null; then
+            args="$args --start-notebook $START_NOTEBOOK"
+        else
+            echo "  (old run_exploration.py does not support --start-notebook — skipping)" >&2
+        fi
+    fi
+    echo "$args"
+}
+
+# New side always gets the full arg set
+_NEW_START_NB_ARG=""
 if [ -n "$START_NOTEBOOK" ]; then
-    _START_NB_ARG="--start-notebook $START_NOTEBOOK"
+    _NEW_START_NB_ARG="--start-notebook $START_NOTEBOOK"
 fi
+
+# Helper: discover the actual run_id created by the old side
+_discover_old_run_id() {
+    local runs_dir="$OLD_DIR/experiments/runs"
+    # 1. sentinel file written by RunNamespace.write_sentinel()
+    if [ -f "$runs_dir/.active_run_id" ]; then
+        cat "$runs_dir/.active_run_id"
+        return
+    fi
+    # 2. most recently modified run directory
+    if [ -d "$runs_dir" ]; then
+        # shellcheck disable=SC2012
+        ls -1t "$runs_dir" 2>/dev/null | grep -v '^\.' | head -1
+        return
+    fi
+}
 
 # ---- Step 4: Run old version ----
 if ! $RUN_OLD; then
@@ -307,21 +371,29 @@ elif $CAPTURE_ONLY; then
     echo "[Step 4] SKIP — capture-only mode"
 elif $DRY_RUN; then
     echo "[Step 4] Running old version ($OLD_SHORT) ..."
-    echo "  DRY_RUN: run_exploration.py --run-id $OLD_RUN_ID --kernel cr-baseline $_START_NB_ARG"
+    _OLD_EXTRA_ARGS=$(_build_old_extra_args)
+    echo "  DRY_RUN: run_exploration.py --kernel cr-baseline $_OLD_EXTRA_ARGS"
 else
     echo "[Step 4] Running old version ($OLD_SHORT) ..."
+    _OLD_EXTRA_ARGS=$(_build_old_extra_args)
     (
         cd "$OLD_DIR"
         # shellcheck disable=SC1091
         source .venv/bin/activate
+        # shellcheck disable=SC2086
         python scripts/notebooks/run_exploration.py \
             --notebooks-dir exploration_notebooks \
-            --run-id "$OLD_RUN_ID" \
             --kernel cr-baseline \
             --timeout "$TIMEOUT" \
-            $_START_NB_ARG
+            $_OLD_EXTRA_ARGS
     ) || echo "  WARNING: Old run had failures (continuing anyway)"
-    echo "  Old run complete."
+
+    # Discover the actual run_id (may differ from OLD_RUN_ID for older code)
+    OLD_ACTUAL_RUN_ID=$(_discover_old_run_id)
+    if [ -z "$OLD_ACTUAL_RUN_ID" ]; then
+        OLD_ACTUAL_RUN_ID="$OLD_RUN_ID"
+    fi
+    echo "  Old run complete.  (run_id: $OLD_ACTUAL_RUN_ID)"
 fi
 echo ""
 
@@ -332,20 +404,21 @@ elif $CAPTURE_ONLY; then
     echo "[Step 5] SKIP — capture-only mode"
 elif $DRY_RUN; then
     echo "[Step 5] Running new version (HEAD) ..."
-    echo "  DRY_RUN: run_exploration.py --run-id $NEW_RUN_ID --kernel cr-current $SPARK_REMOTE $_START_NB_ARG"
+    echo "  DRY_RUN: run_exploration.py --run-id $NEW_RUN_ID --kernel cr-current $SPARK_REMOTE $_NEW_START_NB_ARG"
 else
     echo "[Step 5] Running new version (HEAD) ..."
     (
         cd "$REPO_DIR"
         # shellcheck disable=SC1091
         source .venv/bin/activate
+        # shellcheck disable=SC2086
         python scripts/notebooks/run_exploration.py \
             --notebooks-dir exploration_notebooks \
             --run-id "$NEW_RUN_ID" \
             --kernel cr-current \
             --timeout "$TIMEOUT" \
             $SPARK_REMOTE \
-            $_START_NB_ARG
+            $_NEW_START_NB_ARG
     ) || echo "  WARNING: New run had failures (continuing anyway)"
     echo "  New run complete."
 fi
@@ -403,10 +476,22 @@ copy_run_artefacts() {
 }
 
 if ! $DRY_RUN; then
-    OLD_RUN_DIR="$OLD_DIR/experiments/runs/$OLD_RUN_ID"
+    # Use discovered run_id for old side (may differ from OLD_RUN_ID for older code)
+    _old_rid="${OLD_ACTUAL_RUN_ID:-$OLD_RUN_ID}"
+    OLD_RUN_DIR="$OLD_DIR/experiments/runs/$_old_rid"
     NEW_RUN_DIR="$REPO_DIR/experiments/runs/$NEW_RUN_ID"
     $RUN_OLD && copy_run_artefacts "$OLD_RUN_DIR" "$OLD_OUTPUT_DIR"
     $RUN_NEW && copy_run_artefacts "$NEW_RUN_DIR" "$NEW_OUTPUT_DIR"
+
+    # Copy run_exploration.log from each side's notebooks dir for debugging
+    if $RUN_OLD && [ -f "$OLD_DIR/exploration_notebooks/run_exploration.log" ]; then
+        cp "$OLD_DIR/exploration_notebooks/run_exploration.log" "$OLD_OUTPUT_DIR/run_exploration.log"
+        echo "  Copied old run_exploration.log"
+    fi
+    if $RUN_NEW && [ -f "$REPO_DIR/exploration_notebooks/run_exploration.log" ]; then
+        cp "$REPO_DIR/exploration_notebooks/run_exploration.log" "$NEW_OUTPUT_DIR/run_exploration.log"
+        echo "  Copied new run_exploration.log"
+    fi
 fi
 echo ""
 
@@ -507,15 +592,18 @@ echo "============================================================"
 echo "  DONE"
 echo ""
 echo "  $COMPARISON_DIR/"
+echo "    compare_versions.log   ← full script output"
 echo "    drift_report.md"
 echo "    ${OLD_SHORT}/"
-echo "      notebooks/       ← executed .ipynb from old code (v$OLD_VERSION)"
+echo "      notebooks/           ← executed .ipynb from old code (v$OLD_VERSION)"
 echo "      cell_outputs.md"
+echo "      run_exploration.log  ← notebook error details"
 echo "    ${NEW_SHORT}/"
-echo "      notebooks/       ← executed .ipynb from new code (v$NEW_VERSION)"
+echo "      notebooks/           ← executed .ipynb from new code (v$NEW_VERSION)"
 echo "      cell_outputs.md"
+echo "      run_exploration.log  ← notebook error details"
 if $KEEP_WORKTREE; then
-echo "    worktree/          ← old code checkout + venv (--keep-worktree)"
+echo "    worktree/              ← old code checkout + venv (--keep-worktree)"
 fi
 echo ""
 if $KEEP_WORKTREE; then
