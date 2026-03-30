@@ -1884,10 +1884,11 @@ def train_and_evaluate():
         mlflow.set_tag("best_model", best_model_name)
         mlflow.log_metric("best_roc_auc", best_auc)
         mlflow.log_metrics({f"best_{k}": v for k, v in best_metrics.items()})
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump({"feature_columns": feature_cols, "count": len(feature_cols)}, f)
-            _features_path = f.name
-        mlflow.log_artifact(_features_path, "features.json")
+        with tempfile.TemporaryDirectory() as _tmp_dir:
+            _features_path = str(Path(_tmp_dir) / "features.json")
+            with open(_features_path, "w") as f:
+                json.dump({"feature_columns": feature_cols, "count": len(feature_cols)}, f)
+            mlflow.log_artifact(_features_path)
         _log_best_model(best_model, df, feature_cols)
 
     _results["best_model"] = best_model_name

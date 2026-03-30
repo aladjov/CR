@@ -163,7 +163,9 @@ class ScoringDataLoader:
         import json as _json
         local_path = Path(client.download_artifacts(parent_run.info.run_id, "features.json"))
         if local_path.is_dir():
-            local_path = local_path / "features.json"
+            children = list(local_path.iterdir())
+            json_files = [c for c in children if c.suffix == ".json"]
+            local_path = json_files[0] if json_files else children[0]
         with open(local_path) as f:
             data = _json.load(f)
         features = data.get("feature_columns")
