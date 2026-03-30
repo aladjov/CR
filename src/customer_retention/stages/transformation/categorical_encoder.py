@@ -4,7 +4,7 @@ from typing import Optional
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, Series, head_as_list, to_numeric
+from customer_retention.core.compat import DataFrame, Series, head_as_list, pd, to_numeric
 
 
 class EncodingStrategy(str, Enum):
@@ -184,7 +184,7 @@ class CategoricalEncoder:
                 unknown_mask = ~series.isin(known_cats) & series.notna()
                 cols[col] = cols[col].where(~unknown_mask, 0)
 
-        df = DataFrame(cols)
+        df = pd.DataFrame(cols)
 
         return CategoricalEncodeResult(
             df=df, strategy=self.strategy,
@@ -221,7 +221,7 @@ class CategoricalEncoder:
         sin_col = f"{col_name}_sin"
         cos_col = f"{col_name}_cos"
 
-        df = DataFrame({sin_col: sin_vals, cos_col: cos_vals})
+        df = pd.DataFrame({sin_col: sin_vals, cos_col: cos_vals})
 
         return CategoricalEncodeResult(
             df=df, strategy=self.strategy, columns_created=[sin_col, cos_col],

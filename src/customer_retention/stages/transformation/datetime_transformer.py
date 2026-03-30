@@ -8,6 +8,7 @@ from customer_retention.core.compat import (
     Series,
     Timestamp,
     is_datetime64_any_dtype,
+    pd,
     safe_to_datetime,
     timedelta_to_days,
 )
@@ -91,7 +92,7 @@ class DatetimeTransformer:
         if self.reference_date is not None:
             result_dict["days_since"] = timedelta_to_days(self.reference_date - dt_series)
 
-        df = DataFrame(result_dict)
+        df = pd.DataFrame(result_dict)
 
         return DatetimeTransformResult(
             df=df, extracted_features=extracted,

@@ -548,6 +548,9 @@ class TrainingPreparator:
         X_train_scaled = X_train_scaled.fillna(0)
         X_test_scaled = X_test_scaled.fillna(0)
 
+        X_train[_CV_ENTITY_COL] = train_entities.to_numpy()
+        X_train[_CV_DATE_COL] = train_dates.to_numpy()
+
         return TrainingPreparationResult(
             X_train=X_train,
             X_test=X_test,

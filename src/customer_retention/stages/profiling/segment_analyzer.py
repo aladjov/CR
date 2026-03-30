@@ -164,6 +164,8 @@ class FullSegmentationResult:
 
 class SegmentAnalyzer:
     SNAPSHOT_COLUMNS = ("as_of_date", "feature_timestamp")
+    _MAX_SAMPLE_SIZE = 10_000
+    _MAX_FEATURES_BEFORE_PCA = 50
 
     def __init__(self, default_method: SegmentationMethod = SegmentationMethod.KMEANS):
         self.default_method = default_method
@@ -201,17 +203,49 @@ class SegmentAnalyzer:
         if len(features_df) < 10:
             return self._single_segment_result(df, method, target_col)
 
-        scaled_features = self._scaler.fit_transform(features_df.to_numpy())
+        # Sample large datasets to keep KMeans tractable
+        if len(features_df) > self._MAX_SAMPLE_SIZE:
+            sample_idx = np.random.RandomState(42).choice(
+                len(features_df), self._MAX_SAMPLE_SIZE, replace=False,
+            )
+            sample_df = features_df.iloc[sample_idx]
+        else:
+            sample_df = features_df
+            sample_idx = None
+
+        raw = sample_df.to_numpy()
+        scaled_sample = self._scaler.fit_transform(raw)
+
+        # Reduce dimensions via PCA when feature count is high
+        if scaled_sample.shape[1] > self._MAX_FEATURES_BEFORE_PCA:
+            n_components = min(self._MAX_FEATURES_BEFORE_PCA, scaled_sample.shape[0])
+            pca = PCA(n_components=n_components, random_state=42)
+            scaled_sample = pca.fit_transform(scaled_sample)
+
         n_segments = self.find_optimal_segments(
-            df, feature_cols, max_k=max_segments, _prescaled=scaled_features
+            df, feature_cols, max_k=max_segments, _prescaled=scaled_sample
         )
 
-        labels = self._fit_clusters(scaled_features, n_segments, method)
+        labels_sample = self._fit_clusters(scaled_sample, n_segments, method)
+        quality_score = self._calculate_quality(scaled_sample, labels_sample)
+
+        # Assign labels to full dataset via nearest-centroid
+        if sample_idx is not None:
+            from sklearn.neighbors import NearestCentroid
+            clf = NearestCentroid()
+            clf.fit(scaled_sample, labels_sample)
+
+            # Transform entire features_df through same scaler (+ PCA if used)
+            full_scaled = self._scaler.transform(features_df.to_numpy())
+            if full_scaled.shape[1] > self._MAX_FEATURES_BEFORE_PCA:
+                full_scaled = pca.transform(full_scaled)  # noqa: F821 -- pca defined above when branch taken
+            labels_all = clf.predict(full_scaled)
+        else:
+            labels_all = labels_sample
 
         full_labels = np.full(len(df), -1)
-        full_labels[valid_indices] = labels
+        full_labels[valid_indices] = labels_all
 
-        quality_score = self._calculate_quality(scaled_features, labels)
         profiles = self.profile_segments(df, full_labels, feature_cols, target_col)
         target_variance = self._calculate_target_variance(df, full_labels, target_col)
         recommendation, confidence, rationale = self._make_recommendation(
@@ -281,34 +315,64 @@ class SegmentAnalyzer:
         feature_cols: List[str],
         target_col: Optional[str] = None,
     ) -> List[SegmentProfile]:
-        profiles = []
         unique_labels = sorted(set(labels[labels >= 0]))
-        total_valid = sum(labels >= 0)
+        total_valid = int((labels >= 0).sum())
+        if not unique_labels:
+            return []
 
+        # Attach labels as a column for vectorized groupby
+        label_col = "__seg_label__"
+        df_work = df.copy()
+        df_work[label_col] = labels
+
+        valid_mask = df_work[label_col] >= 0
+        df_valid = df_work.loc[valid_mask]
+
+        # Numeric feature columns that exist
+        num_feat = [c for c in feature_cols if c in df_valid.columns
+                    and np.issubdtype(df_valid[c].dtype, np.number)]
+
+        # Vectorized per-segment stats via groupby().agg()
+        if num_feat:
+            seg_stats = df_valid.groupby(label_col)[num_feat].agg(
+                ["mean", "std", "min", "max"]
+            )
+        else:
+            seg_stats = None
+
+        # Per-segment sizes
+        seg_sizes = df_valid.groupby(label_col).size()
+
+        # Per-segment target rate (if binary target)
+        seg_target_rates: Optional[Dict[int, float]] = None
+        if target_col and target_col in df_valid.columns:
+            tgt = df_valid[target_col]
+            if np.issubdtype(tgt.dtype, np.number):
+                uniq = tgt.dropna().unique()
+                if len(uniq) == 2 and set(uniq).issubset({0, 1, 0.0, 1.0}):
+                    seg_target_rates = df_valid.groupby(label_col)[target_col].mean().to_dict()
+
+        profiles: List[SegmentProfile] = []
         for seg_id in unique_labels:
-            mask = labels == seg_id
-            segment_df = df.loc[mask]
-            size = len(segment_df)
+            size = int(seg_sizes.get(seg_id, 0))
+
+            defining_features: Dict[str, Any] = {}
+            if seg_stats is not None and seg_id in seg_stats.index:
+                row = seg_stats.loc[seg_id]
+                for col in num_feat:
+                    mean_val = row[(col, "mean")]
+                    if np.isnan(mean_val):
+                        continue  # all-NaN group -- skip
+                    defining_features[col] = {
+                        "mean": float(mean_val),
+                        "std": float(row[(col, "std")]),
+                        "min": float(row[(col, "min")]),
+                        "max": float(row[(col, "max")]),
+                    }
 
             target_rate = None
-            if target_col and target_col in df.columns:
-                target_series = segment_df[target_col]
-                if target_series.dtype in [np.int64, np.float64, int, float]:
-                    unique_vals = target_series.dropna().unique()
-                    if len(unique_vals) == 2 and set(unique_vals).issubset({0, 1, 0.0, 1.0}):
-                        target_rate = float(target_series.mean())
-
-            defining_features = {}
-            for col in feature_cols:
-                if col in segment_df.columns:
-                    col_data = segment_df[col].dropna()
-                    if len(col_data) > 0 and np.issubdtype(col_data.dtype, np.number):
-                        defining_features[col] = {
-                            "mean": float(col_data.mean()),
-                            "std": float(col_data.std()),
-                            "min": float(col_data.min()),
-                            "max": float(col_data.max()),
-                        }
+            if seg_target_rates is not None:
+                target_rate = seg_target_rates.get(seg_id)
 
             profiles.append(SegmentProfile(
                 segment_id=int(seg_id),

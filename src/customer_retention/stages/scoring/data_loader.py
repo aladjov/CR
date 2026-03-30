@@ -53,10 +53,16 @@ class ScoringDataLoader:
             return scoring_df
         return self._load_feast_features(scoring_df)
 
+    def _resolve_experiment(self, client):
+        experiment = client.get_experiment_by_name(self.config.pipeline_name)
+        if not experiment:
+            experiment = client.get_experiment_by_name(f"training_{self.config.composite_name}")
+        return experiment
+
     def load_model(self, model_tag: str | None = None) -> Tuple[Any, str]:
         mlflow.set_tracking_uri(self.config.mlflow_tracking_uri)
         client = MlflowClient()
-        experiment = client.get_experiment_by_name(self.config.pipeline_name)
+        experiment = self._resolve_experiment(client)
         if not experiment:
             raise ValueError(f"Experiment '{self.config.pipeline_name}' not found")
         parent_run = self._find_best_parent_run(client, experiment.experiment_id)
@@ -79,7 +85,7 @@ class ScoringDataLoader:
     def list_trained_model_tags(self) -> List[str]:
         mlflow.set_tracking_uri(self.config.mlflow_tracking_uri)
         client = MlflowClient()
-        experiment = client.get_experiment_by_name(self.config.pipeline_name)
+        experiment = self._resolve_experiment(client)
         if not experiment:
             return []
         parent_run = self._find_best_parent_run(client, experiment.experiment_id)
@@ -156,7 +162,7 @@ class ScoringDataLoader:
     def load_training_feature_names(self) -> list[str]:
         mlflow.set_tracking_uri(self.config.mlflow_tracking_uri)
         client = MlflowClient()
-        experiment = client.get_experiment_by_name(self.config.pipeline_name)
+        experiment = self._resolve_experiment(client)
         if not experiment:
             raise ValueError(f"Experiment '{self.config.pipeline_name}' not found in MLflow")
         parent_run = self._find_best_parent_run(client, experiment.experiment_id)

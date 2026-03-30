@@ -388,6 +388,14 @@ class DistributionAnalyzer:
         zero_counts = to_pandas((numeric_df == 0).sum())
         neg_counts = to_pandas((numeric_df < 0).sum())
 
+        # Vectorized outlier counts across all columns at once
+        q1_all = desc.loc['25%']
+        q3_all = desc.loc['75%']
+        iqr_all = q3_all - q1_all
+        lower_bounds = q1_all - 1.5 * iqr_all
+        upper_bounds = q3_all + 1.5 * iqr_all
+        outlier_counts = ((numeric_df < lower_bounds) | (numeric_df > upper_bounds)).sum()
+
         results = {}
         for col in valid_cols:
             count = int(desc.loc['count', col])
@@ -400,9 +408,7 @@ class DistributionAnalyzer:
             iqr = q3 - q1
             zero_c = int(zero_counts[col])
             neg_c = int(neg_counts[col])
-            lower = q1 - 1.5 * iqr
-            upper = q3 + 1.5 * iqr
-            outlier_c = int(((numeric_df[col] < lower) | (numeric_df[col] > upper)).sum())
+            outlier_c = int(outlier_counts[col])
 
             results[col] = DistributionAnalysis(
                 column_name=col, count=count,

@@ -12,7 +12,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-from customer_retention.core.compat import DataFrame, Series
+from customer_retention.core.compat import DataFrame, Series, native_pd
 
 
 @dataclass
@@ -135,7 +135,7 @@ class ModelComparator:
                 "train_test_gap": metrics.train_test_gap,
             })
 
-        return DataFrame(rows).set_index("model")
+        return native_pd.DataFrame(rows).set_index("model")
 
     def _generate_selection_reason(
         self,

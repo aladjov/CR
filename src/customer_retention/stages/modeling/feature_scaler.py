@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
 
-from customer_retention.core.compat import DataFrame
+from customer_retention.core.compat import DataFrame, native_pd
 
 
 class ScalerType(Enum):
@@ -60,8 +60,8 @@ class FeatureScaler:
 
         return ScalingResult(
             scaler=self._scaler if self.save_scaler else None,
-            X_train_scaled=DataFrame(X_train_scaled, columns=self._feature_names, index=X_train.index),
-            X_test_scaled=DataFrame(X_test_scaled, columns=self._feature_names, index=X_test.index),
+            X_train_scaled=native_pd.DataFrame(X_train_scaled, columns=self._feature_names, index=X_train.index),
+            X_test_scaled=native_pd.DataFrame(X_test_scaled, columns=self._feature_names, index=X_test.index),
             scaling_params=scaling_params,
         )
 
@@ -69,7 +69,7 @@ class FeatureScaler:
         if self._scaler is None:
             return X
         X_scaled = self._scaler.transform(X)
-        return DataFrame(X_scaled, columns=self._feature_names, index=X.index)
+        return native_pd.DataFrame(X_scaled, columns=self._feature_names, index=X.index)
 
     def _create_scaler(self):
         if self.scaler_type == ScalerType.STANDARD:

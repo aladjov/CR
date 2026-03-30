@@ -6479,3 +6479,88 @@ class TestAggregationWindowsPriority:
         parser = FindingsParser.__new__(FindingsParser)
         result = parser._build_aggregation_config(FakeMulti(), findings)
         assert result is None
+
+
+class TestReconcileBronzeColumns:
+    @staticmethod
+    def _make_step(col, step_type):
+        from customer_retention.generators.pipeline_generator.models import (
+            PipelineTransformationType,
+            TransformationStep,
+        )
+        return TransformationStep(
+            type=PipelineTransformationType(step_type), column=col,
+            parameters={}, rationale="test",
+        )
+
+    @staticmethod
+    def _make_config(bronze_steps):
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeLayerConfig,
+            GoldLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
+        source = SourceConfig(name="data", path="data.csv", format="csv", entity_key="cid", raw_source_path="/data.csv")
+        return PipelineConfig(
+            name="test", target_column="target", sources=[source],
+            bronze={"data": BronzeLayerConfig(source=source, transformations=bronze_steps)},
+            silver=SilverLayerConfig(), gold=GoldLayerConfig(), output_dir=".",
+        )
+
+    def test_removes_filter_on_dropped_column(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        steps = [
+            self._make_step("bad_col", "drop_column"),
+            self._make_step("good_col", "winsorize"),
+            self._make_step("bad_col", "filter"),
+        ]
+        config = self._make_config(steps)
+        FindingsParser._reconcile_bronze_columns(config)
+        remaining = [(s.column, s.type.value) for s in config.bronze["data"].transformations]
+        assert ("bad_col", "drop_column") in remaining
+        assert ("good_col", "winsorize") in remaining
+        assert ("bad_col", "filter") not in remaining
+
+    def test_removes_winsorize_on_dropped_column(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        steps = [
+            self._make_step("col_a", "drop_column"),
+            self._make_step("col_a", "winsorize"),
+            self._make_step("col_b", "impute_null"),
+        ]
+        config = self._make_config(steps)
+        FindingsParser._reconcile_bronze_columns(config)
+        types = [(s.column, s.type.value) for s in config.bronze["data"].transformations]
+        assert ("col_a", "winsorize") not in types
+        assert ("col_a", "drop_column") in types
+        assert ("col_b", "impute_null") in types
+
+    def test_no_drops_preserves_all_steps(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        steps = [
+            self._make_step("x", "winsorize"),
+            self._make_step("y", "filter"),
+            self._make_step("z", "impute_null"),
+        ]
+        config = self._make_config(steps)
+        FindingsParser._reconcile_bronze_columns(config)
+        assert len(config.bronze["data"].transformations) == 3
+
+    def test_multiple_dropped_columns(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        steps = [
+            self._make_step("a", "drop_column"),
+            self._make_step("b", "drop_column"),
+            self._make_step("a", "cap_outlier"),
+            self._make_step("b", "filter"),
+            self._make_step("c", "winsorize"),
+        ]
+        config = self._make_config(steps)
+        FindingsParser._reconcile_bronze_columns(config)
+        remaining = [(s.column, s.type.value) for s in config.bronze["data"].transformations]
+        assert len(remaining) == 3
+        assert ("a", "drop_column") in remaining
+        assert ("b", "drop_column") in remaining
+        assert ("c", "winsorize") in remaining

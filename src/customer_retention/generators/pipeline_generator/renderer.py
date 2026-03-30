@@ -556,7 +556,7 @@ from customer_retention.core.config.column_config import DatasetGranularity
 from customer_retention.analysis.auto_explorer.key_resolver import resolve_entity_keys
 from customer_retention.analysis.auto_explorer.project_context import KeyResolutionStep
 {% endif %}
-from config import SOURCES, get_bronze_path, get_silver_path, TARGET_COLUMN, EXPERIMENTS_DIR
+from config import SOURCES, get_bronze_path, get_silver_path, TARGET_COLUMN, EXPERIMENTS_DIR, FINDINGS_DIR
 from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 
 _NAMESPACE = RunNamespace.from_env_or_latest(EXPERIMENTS_DIR)

@@ -78,6 +78,7 @@ class FindingsParser:
         config.gold.feature_exclusion_prefixes = self._collect_leakage_exclusion_prefixes(source_findings, multi_dataset)
         self._reconcile_discovered_event_transforms(config, discovered_events)
         self._reconcile_event_post_shaping(config)
+        self._reconcile_bronze_columns(config)
         self._reconcile_gold_columns(config)
         return config
 
@@ -828,6 +829,45 @@ class FindingsParser:
                 for col in tf.lag_columns:
                     columns |= {f"{col}_vs_cohort_mean", f"{col}_vs_cohort_pct", f"{col}_cohort_zscore"}
         return columns
+
+    @staticmethod
+    def _reconcile_bronze_columns(config: "PipelineConfig") -> None:
+        for bronze in config.bronze.values():
+            drop_targets = {
+                s.column for s in bronze.transformations
+                if s.type == PipelineTransformationType.DROP_COLUMN
+            }
+            if not drop_targets:
+                continue
+            before = len(bronze.transformations)
+            bronze.transformations = [
+                s for s in bronze.transformations
+                if s.type == PipelineTransformationType.DROP_COLUMN or s.column not in drop_targets
+            ]
+            removed = before - len(bronze.transformations)
+            if removed:
+                logger.warning(
+                    "Removed %d bronze step(s) targeting dropped columns in '%s': %s",
+                    removed, bronze.source.name, sorted(drop_targets),
+                )
+        for name, event_cfg in config.bronze_event.items():
+            drop_targets = {
+                s.column for s in event_cfg.pre_shaping
+                if s.type == PipelineTransformationType.DROP_COLUMN
+            }
+            if not drop_targets:
+                continue
+            before = len(event_cfg.pre_shaping)
+            event_cfg.pre_shaping = [
+                s for s in event_cfg.pre_shaping
+                if s.type == PipelineTransformationType.DROP_COLUMN or s.column not in drop_targets
+            ]
+            removed = before - len(event_cfg.pre_shaping)
+            if removed:
+                logger.warning(
+                    "Removed %d bronze event pre-shaping step(s) targeting dropped columns in '%s': %s",
+                    removed, name, sorted(drop_targets),
+                )
 
     def _reconcile_event_post_shaping(self, config: "PipelineConfig") -> None:
         for name, event_cfg in config.bronze_event.items():
