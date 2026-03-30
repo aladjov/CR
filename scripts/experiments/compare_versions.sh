@@ -221,7 +221,7 @@ echo "[Step 2] Setting up virtualenvs and Jupyter kernels ..."
 setup_venv() {
     local dir="$1" name="$2"
     if $DRY_RUN; then
-        echo "  DRY_RUN: uv venv + pip install -e '.[dev]' in $dir"
+        echo "  DRY_RUN: uv venv + pip install -e '.[dev,ml]' in $dir"
         echo "  DRY_RUN: ipykernel install --name $name"
         return
     fi
@@ -231,7 +231,7 @@ setup_venv() {
     fi
     echo "  Installing package in $dir ..."
     # shellcheck disable=SC1091
-    (cd "$dir" && source .venv/bin/activate && uv pip install -e ".[dev]" && \
+    (cd "$dir" && source .venv/bin/activate && uv pip install -e ".[dev,ml]" && \
      python -m ipykernel install --user --name "$name" --display-name "CR $name")
 }
 
@@ -240,7 +240,7 @@ if ! $CAPTURE_ONLY; then
     # For new code: use existing venv or create
     if [ ! -d "$REPO_DIR/.venv" ]; then
         setup_venv "$REPO_DIR" "cr-current"
-    else
+    elif ! $DRY_RUN; then
         echo "  Using existing venv in $REPO_DIR"
         (cd "$REPO_DIR" && source .venv/bin/activate && \
          python -m ipykernel install --user --name "cr-current" --display-name "CR current" 2>/dev/null || true)
@@ -277,7 +277,7 @@ else
             --run-id "$OLD_RUN_ID" \
             --kernel cr-baseline \
             --timeout "$TIMEOUT"
-    )
+    ) || echo "  WARNING: Old run had failures (continuing anyway)"
     echo "  Old run complete."
 fi
 echo ""
@@ -299,7 +299,7 @@ else
             --kernel cr-current \
             --timeout "$TIMEOUT" \
             $SPARK_REMOTE
-    )
+    ) || echo "  WARNING: New run had failures (continuing anyway)"
     echo "  New run complete."
 fi
 echo ""
@@ -325,10 +325,10 @@ record_metadata() {
 }
 
 if ! $CAPTURE_ONLY && ! $DRY_RUN; then
-    record_metadata "$OLD_OUTPUT_DIR" "$REPO_DIR" "$OLD_COMMIT"
+    record_metadata "$OLD_OUTPUT_DIR" "$OLD_DIR" "$OLD_COMMIT"
     record_metadata "$NEW_OUTPUT_DIR" "$REPO_DIR" "HEAD"
 elif $DRY_RUN; then
-    record_metadata "$OLD_OUTPUT_DIR" "$REPO_DIR" "$OLD_COMMIT"
+    record_metadata "$OLD_OUTPUT_DIR" "$OLD_DIR" "$OLD_COMMIT"
     record_metadata "$NEW_OUTPUT_DIR" "$REPO_DIR" "HEAD"
 fi
 
