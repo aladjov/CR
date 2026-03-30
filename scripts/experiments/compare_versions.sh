@@ -20,6 +20,7 @@
 #   bash scripts/experiments/compare_versions.sh --spark-remote
 #   bash scripts/experiments/compare_versions.sh --capture-only
 #   bash scripts/experiments/compare_versions.sh --dry-run
+#   bash scripts/experiments/compare_versions.sh --cleanup
 #   bash scripts/experiments/compare_versions.sh --list-candidates
 # ============================================================================
 
@@ -33,6 +34,7 @@ CAPTURE_ONLY=false
 DRY_RUN=false
 LIST_CANDIDATES=false
 KEEP_WORKTREE=false
+CLEANUP=false
 DATASET="customer_retention_retail"
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -48,6 +50,7 @@ while [[ $# -gt 0 ]]; do
         --dry-run)      DRY_RUN=true; shift ;;
         --dataset)      DATASET="$2"; shift 2 ;;
         --keep-worktree) KEEP_WORKTREE=true; shift ;;
+        --cleanup)      CLEANUP=true; shift ;;
         --list-candidates)
             LIST_CANDIDATES=true; shift ;;
         --help|-h)
@@ -61,6 +64,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --dry-run           Show what would be done without executing"
             echo "  --dataset NAME      Dataset to activate (default: customer_retention_retail)"
             echo "  --keep-worktree     Keep the old-code worktree after completion"
+            echo "  --cleanup           Remove comparison dir, worktree, and kernels for the given commits"
             echo "  --list-candidates   Show candidate commits near the tutorial date"
             exit 0 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -126,9 +130,36 @@ if $LIST_CANDIDATES; then
     exit 0
 fi
 
-# ---- Derived paths ----
+# ---- Cleanup mode ----
 OLD_SHORT="$(echo "$OLD_COMMIT" | cut -c1-7)"
 NEW_SHORT="$(git -C "$REPO_DIR" rev-parse --short HEAD)"
+
+if $CLEANUP; then
+    COMPARISON_DIR="$REPO_DIR/experiments/comparisons/${OLD_SHORT}_vs_${NEW_SHORT}"
+    OLD_DIR="$COMPARISON_DIR/worktree"
+    NB00="exploration_notebooks/00_start_here.ipynb"
+    echo "Cleaning up comparison: ${OLD_SHORT} vs ${NEW_SHORT}"
+    echo "  Restoring NB00 from backup ..."
+    python "$SCRIPTS_DIR/patch_dataset_config.py" \
+        --notebook "$REPO_DIR/$NB00" \
+        --restore 2>/dev/null || echo "  (no backup to restore)"
+    if [ -d "$OLD_DIR" ]; then
+        echo "  Removing worktree $OLD_DIR ..."
+        git -C "$REPO_DIR" worktree remove "$OLD_DIR" --force 2>/dev/null || true
+    fi
+    jupyter kernelspec remove cr-baseline -y 2>/dev/null || true
+    jupyter kernelspec remove cr-current -y 2>/dev/null || true
+    if [ -d "$COMPARISON_DIR" ]; then
+        echo "  Removing $COMPARISON_DIR ..."
+        rm -rf "$COMPARISON_DIR"
+        echo "  Done."
+    else
+        echo "  Nothing to clean — $COMPARISON_DIR does not exist."
+    fi
+    exit 0
+fi
+
+# ---- Derived paths ----
 NB00="exploration_notebooks/00_start_here.ipynb"
 
 # Everything lives under one comparison folder — easy cleanup with rm -rf
