@@ -25,13 +25,36 @@ except ImportError:
     HAS_WIDGETS = False
 
 
+def _is_headless_execution() -> bool:
+    """Detect papermill or other non-interactive batch execution."""
+    import os
+    if os.environ.get("PAPERMILL_OUTPUT_PATH"):
+        return True
+    try:
+        shell = detect_environment()
+        if shell != "jupyter":
+            return True
+        from IPython import get_ipython as _get_ipython
+        ip = _get_ipython()
+        if ip and not getattr(ip, "kernel", None):
+            return True
+        if ip and hasattr(ip, "kernel") and not getattr(ip.kernel, "comm_manager", None):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def has_interactive_widgets() -> bool:
-    """Return True only in Jupyter where ipywidgets work reliably.
+    """Return True only in interactive Jupyter where ipywidgets work reliably.
 
     Databricks ipywidgets are unreliable for complex plotly-heavy widgets
-    (widget loading timeout with many charts).  Use static page fallback.
+    (widget loading timeout with many charts). Papermill/headless Jupyter
+    causes ZMQ deadlocks with large widget output. Use static page fallback.
     """
     if not HAS_WIDGETS:
+        return False
+    if _is_headless_execution():
         return False
     return detect_environment() == "jupyter"
 
@@ -72,12 +95,14 @@ class ColumnPaginator:
         summary_callback: Callable,
         page_size: int = 10,
         title: str = "Column Analysis",
+        headless_top_n: int = 5,
         fallback_top_n: int = 20,  # kept for backward compat, ignored
     ):
         self._entries = sorted(entries, key=lambda e: e.attention_score.score, reverse=True)
         self._render_callback = render_callback
         self._summary_callback = summary_callback
         self._page_size = page_size
+        self._headless_top_n = headless_top_n
         self._title = title
 
         # Filter/sort state
@@ -212,15 +237,16 @@ class ColumnPaginator:
             print(f"\n{self._title}: no columns to display")
             return
 
-        total_pages = max(1, math.ceil(total / self._page_size))
+        render_limit = min(self._page_size, self._headless_top_n)
+        total_pages = max(1, math.ceil(total / render_limit))
         page = min(page, total_pages - 1)
-        start = page * self._page_size
-        end = start + self._page_size
+        start = page * render_limit
+        end = start + render_limit
         page_entries = self._filtered_entries[start:end]
 
-        print(f"\n{self._title}: page {page + 1} of {total_pages} ({total} columns)")
-        if total_pages > 1:
-            print("Re-run with .show(page=N) to see other pages")
+        print(f"\n{self._title}: showing top {len(page_entries)} of {total} columns (by attention score)")
+        if len(page_entries) < total:
+            print(f"  (remaining {total - len(page_entries)} columns in summary table above)")
 
         for entry in page_entries:
             self._render_callback(entry, None)

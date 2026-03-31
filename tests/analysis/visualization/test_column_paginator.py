@@ -226,10 +226,19 @@ class TestSummaryCallback:
 class TestStaticPageFallback:
     @patch("customer_retention.analysis.visualization.column_paginator.has_interactive_widgets", return_value=False)
     @patch("customer_retention.analysis.visualization.column_paginator.display_table")
-    def test_page_zero_renders_first_page_size_entries(self, mock_table, mock_widgets):
+    def test_page_zero_renders_headless_top_n_entries(self, mock_table, mock_widgets):
         entries = [_entry(f"c{i}", 100 - i) for i in range(30)]
         render_mock = MagicMock()
-        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10)
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10, headless_top_n=5)
+        p.show(page=0)
+        assert render_mock.call_count == 5
+
+    @patch("customer_retention.analysis.visualization.column_paginator.has_interactive_widgets", return_value=False)
+    @patch("customer_retention.analysis.visualization.column_paginator.display_table")
+    def test_page_zero_capped_by_page_size_when_headless_top_n_larger(self, mock_table, mock_widgets):
+        entries = [_entry(f"c{i}", 100 - i) for i in range(30)]
+        render_mock = MagicMock()
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10, headless_top_n=20)
         p.show(page=0)
         assert render_mock.call_count == 10
 
@@ -238,7 +247,7 @@ class TestStaticPageFallback:
     def test_page_one_renders_second_page(self, mock_table, mock_widgets):
         entries = [_entry(f"c{i}", 100 - i) for i in range(25)]
         render_mock = MagicMock()
-        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10)
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10, headless_top_n=10)
         p.show(page=1)
         assert render_mock.call_count == 10
         # Verify the entries rendered are from page 1 (indices 10-19)
@@ -289,31 +298,30 @@ class TestStaticPageFallback:
         p = ColumnPaginator(entries, _noop_render, _noop_summary, page_size=10, title="Test")
         p.show(page=0)
         captured = capsys.readouterr()
-        assert "page 1 of 3" in captured.out
         assert "25 columns" in captured.out
-        assert ".show(page=" in captured.out
+        assert "remaining" in captured.out
 
     @patch("customer_retention.analysis.visualization.column_paginator.has_interactive_widgets", return_value=False)
     @patch("customer_retention.analysis.visualization.column_paginator.display_table")
-    def test_no_navigation_hint_for_single_page(self, mock_table, mock_widgets, capsys):
+    def test_no_remaining_hint_when_all_fit(self, mock_table, mock_widgets, capsys):
         entries = [_entry(f"c{i}", 50) for i in range(3)]
         p = ColumnPaginator(entries, _noop_render, _noop_summary, page_size=10, title="Test")
         p.show()
         captured = capsys.readouterr()
-        assert "page 1 of 1" in captured.out
-        assert ".show(page=" not in captured.out
+        assert "3 of 3 columns" in captured.out
+        assert "remaining" not in captured.out
 
     @patch("customer_retention.analysis.visualization.column_paginator.has_interactive_widgets", return_value=False)
     @patch("customer_retention.analysis.visualization.column_paginator.display_table")
     def test_default_page_is_zero(self, mock_table, mock_widgets):
         entries = [_entry(f"c{i}", 100 - i) for i in range(25)]
         render_mock = MagicMock()
-        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10)
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10, headless_top_n=5)
         p.show()
-        # Default page=0 renders first 10
-        assert render_mock.call_count == 10
+        # Default page=0 renders top 5 (headless_top_n)
+        assert render_mock.call_count == 5
         rendered_names = [call.args[0].name for call in render_mock.call_args_list]
-        expected = [f"c{i}" for i in range(10)]
+        expected = [f"c{i}" for i in range(5)]
         assert rendered_names == expected
 
 
@@ -352,17 +360,15 @@ class TestShowStaticPageDirect:
     def test_static_page_multiple_pages(self, capsys):
         entries = [_entry(f"col_{i}", 100 - i) for i in range(25)]
         render_mock = MagicMock()
-        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10, title="Multi")
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10, headless_top_n=10, title="Multi")
         p._apply_filters()
         p._show_static_page(1)
 
         assert render_mock.call_count == 10
-        # Verify page 1 entries (indices 10-19 from sorted list)
         rendered_names = [call.args[0].name for call in render_mock.call_args_list]
         assert len(rendered_names) == 10
 
         captured = capsys.readouterr()
-        assert "page 2 of 3" in captured.out
         assert "25 columns" in captured.out
 
     def test_static_page_empty_filtered_list(self, capsys):

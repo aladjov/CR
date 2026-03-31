@@ -1543,28 +1543,26 @@ def _pandas_bulk_distribution_stats(
     zero_counts = (numeric_df == 0).sum()
     neg_counts = (numeric_df < 0).sum()
 
+    q1_all = desc.loc["25%"]
+    q3_all = desc.loc["75%"]
+    iqr_all = q3_all - q1_all
+    outlier_counts = ((numeric_df < (q1_all - 1.5 * iqr_all)) | (numeric_df > (q3_all + 1.5 * iqr_all))).sum()
+
     for col in columns:
         count = int(desc.loc["count", col])
         if count == 0:
             result[col] = DistributionBulkResult()
             continue
-        q1 = float(desc.loc["25%", col])
-        q3 = float(desc.loc["75%", col])
-        iqr = q3 - q1
-        lower = q1 - 1.5 * iqr
-        upper = q3 + 1.5 * iqr
-        outlier_c = int(((numeric_df[col] < lower) | (numeric_df[col] > upper)).sum())
+        q1 = float(q1_all[col])
+        q3 = float(q3_all[col])
 
-        pct = {}
+        pct = {"p25": q1, "p50": float(desc.loc["50%", col]), "p75": q3}
         for label, idx in [("p1", 0.01), ("p5", 0.05), ("p10", 0.10),
                            ("p90", 0.90), ("p95", 0.95), ("p99", 0.99)]:
             try:
                 pct[label] = float(extra_q.loc[idx, col])
             except Exception:
                 pct[label] = 0.0
-        pct["p25"] = q1
-        pct["p50"] = float(desc.loc["50%", col])
-        pct["p75"] = q3
 
         result[col] = DistributionBulkResult(
             non_null_count=count,
@@ -1572,14 +1570,12 @@ def _pandas_bulk_distribution_stats(
             std=float(desc.loc["std", col]),
             min_val=float(desc.loc["min", col]),
             max_val=float(desc.loc["max", col]),
-            q1=q1,
-            median=float(desc.loc["50%", col]),
-            q3=q3,
+            q1=q1, median=pct["p50"], q3=q3,
             skewness=float(skew_vals[col]),
             kurtosis=float(kurt_vals[col]),
             zero_count=int(zero_counts[col]),
             negative_count=int(neg_counts[col]),
-            outlier_count_iqr=outlier_c,
+            outlier_count_iqr=int(outlier_counts[col]),
             percentiles=pct,
         )
     return result
