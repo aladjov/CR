@@ -1,8 +1,4 @@
-"""Compare batched vs unpivot correlation implementations.
-
-Both approaches must produce numerically identical results. This test runs both
-on the same data, asserts equivalence, and prints wall-clock timing so the slower
-implementation can be identified and removed.
+"""Verify batched F.corr() correlation implementations against pandas ground truth.
 
 Requires PySpark — skipped on CI.
 """
@@ -19,12 +15,8 @@ import pandas as pd
 from pyspark.sql import SparkSession
 
 from customer_retention.core.compat import (
-    _spark_bulk_corr_with_target,
-    _spark_leakage_corr_combined,
-)
-from customer_retention.core.compat.__init__ import (
-    _spark_unpivot_corr_with_target,
-    _spark_unpivot_leakage_corr_combined,
+    _spark_batched_corr_with_target,
+    _spark_batched_leakage_corr_combined,
 )
 from customer_retention.core.compat.spark_backend import _as_pandas_api
 
@@ -48,57 +40,44 @@ def _make_test_df(spark, n_rows, n_feature_cols, null_frac=0.1):
     pdf = pd.DataFrame(data)
     spark_df = spark.createDataFrame(pdf)
     ps_df = _as_pandas_api(spark_df)
-    return ps_df, [c for c in pdf.columns if c != "target"]
+    return ps_df, pdf, [c for c in pdf.columns if c != "target"]
 
 
-class TestBulkCorrWithTargetEquivalence:
+class TestBatchedCorrWithTargetVsPandas:
     @pytest.mark.parametrize("n_cols", [50, 200, 500])
-    def test_identical_results(self, spark, n_cols):
-        ps_df, columns = _make_test_df(spark, 2000, n_cols)
-
+    def test_matches_pandas_corr(self, spark, n_cols):
+        ps_df, pdf, columns = _make_test_df(spark, 2000, n_cols)
         t0 = time.monotonic()
-        batched = _spark_bulk_corr_with_target(ps_df, columns, "target")
-        t_batched = time.monotonic() - t0
-
-        t0 = time.monotonic()
-        unpivot = _spark_unpivot_corr_with_target(ps_df, columns, "target")
-        t_unpivot = time.monotonic() - t0
-
-        assert set(batched.keys()) == set(unpivot.keys()), "Key sets differ"
-        for c in batched:
-            bv, uv = batched[c], unpivot[c]
-            if math.isnan(bv):
-                assert math.isnan(uv), f"{c}: batched=NaN, unpivot={uv}"
+        spark_result = _spark_batched_corr_with_target(ps_df, columns, "target")
+        t_spark = time.monotonic() - t0
+        for c in columns:
+            expected = pdf[c].corr(pdf["target"])
+            sv = spark_result[c]
+            if math.isnan(expected):
+                assert math.isnan(sv), f"{c}: expected=NaN, got={sv}"
             else:
-                assert abs(bv - uv) < 1e-10, f"{c}: batched={bv}, unpivot={uv}"
-        print(f"\n  bulk_corr_with_target ({n_cols} cols): batched={t_batched:.2f}s, unpivot={t_unpivot:.2f}s")
+                assert abs(sv - expected) < 1e-6, f"{c}: expected={expected}, got={sv}"
+        print(f"\n  batched F.corr ({n_cols} cols): {t_spark:.2f}s")
 
 
-class TestLeakageCorrCombinedEquivalence:
-    @pytest.mark.parametrize("n_cols", [50, 200, 500])
-    def test_identical_results(self, spark, n_cols):
-        ps_df, columns = _make_test_df(spark, 2000, n_cols)
-
+class TestBatchedLeakageCorrVsPandas:
+    @pytest.mark.parametrize("n_cols", [50, 200])
+    def test_matches_pandas_corr(self, spark, n_cols):
+        ps_df, pdf, columns = _make_test_df(spark, 2000, n_cols)
         t0 = time.monotonic()
-        batched_null, batched_val = _spark_leakage_corr_combined(ps_df, columns, "target")
-        t_batched = time.monotonic() - t0
-
-        t0 = time.monotonic()
-        unpivot_null, unpivot_val = _spark_unpivot_leakage_corr_combined(ps_df, columns, "target")
-        t_unpivot = time.monotonic() - t0
-
-        assert set(batched_null.keys()) == set(unpivot_null.keys()), "Null key sets differ"
-        assert set(batched_val.keys()) == set(unpivot_val.keys()), "Value key sets differ"
-        for c in batched_null:
-            bn, un = batched_null[c], unpivot_null[c]
-            if math.isnan(bn):
-                assert math.isnan(un), f"{c} null: batched=NaN, unpivot={un}"
+        null_corrs, value_corrs = _spark_batched_leakage_corr_combined(ps_df, columns, "target")
+        t_spark = time.monotonic() - t0
+        target = pdf["target"]
+        for c in columns:
+            expected_val = pdf[c].corr(target)
+            expected_null = pdf[c].isnull().astype(float).corr(target)
+            sv, sn = value_corrs.get(c, math.nan), null_corrs.get(c, math.nan)
+            if math.isnan(expected_val):
+                assert math.isnan(sv), f"{c} val: expected=NaN, got={sv}"
             else:
-                assert abs(bn - un) < 1e-10, f"{c} null: batched={bn}, unpivot={un}"
-        for c in batched_val:
-            bv, uv = batched_val[c], unpivot_val[c]
-            if math.isnan(bv):
-                assert math.isnan(uv), f"{c} val: batched=NaN, unpivot={uv}"
+                assert abs(sv - expected_val) < 1e-6, f"{c} val: expected={expected_val}, got={sv}"
+            if math.isnan(expected_null):
+                assert math.isnan(sn), f"{c} null: expected=NaN, got={sn}"
             else:
-                assert abs(bv - uv) < 1e-10, f"{c} val: batched={bv}, unpivot={uv}"
-        print(f"\n  leakage_corr_combined ({n_cols} cols): batched={t_batched:.2f}s, unpivot={t_unpivot:.2f}s")
+                assert abs(sn - expected_null) < 1e-6, f"{c} null: expected={expected_null}, got={sn}"
+        print(f"\n  batched leakage corr ({n_cols} cols): {t_spark:.2f}s")

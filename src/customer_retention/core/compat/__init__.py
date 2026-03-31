@@ -1064,22 +1064,39 @@ def bulk_corr_with_target(df: Any, columns: list[str], target_column: str, progr
     if not valid:
         return {}
     if not _is_spark_pandas(df):
-        target_float = df[target_column].astype(float)
-        result: dict[str, float] = {}
-        for c in valid:
-            try:
-                result[c] = df[c].astype(float).corr(target_float)
-            except (ValueError, TypeError):
-                result[c] = math.nan
+        return _pandas_corr_with_target(df, valid, target_column, progress_fn)
+    return _spark_batched_corr_with_target(df, valid, target_column, progress_fn)
+
+
+def _pandas_corr_with_target(
+    df: Any, columns: list[str], target_column: str, progress_fn: Any = None
+) -> dict[str, float]:
+    import math
+
+    log = progress_fn or (lambda msg: None)
+    numeric = set(df[columns].select_dtypes(include="number").columns)
+    num_cols = [c for c in columns if c in numeric]
+    result: dict[str, float] = {c: math.nan for c in columns if c not in numeric}
+    if not num_cols:
         return result
-    return _spark_unpivot_corr_with_target(df, valid, target_column, progress_fn)
+    target_float = df[target_column].astype(float)
+    _CHUNK = 500
+    total = (len(num_cols) + _CHUNK - 1) // _CHUNK
+    for i, start in enumerate(range(0, len(num_cols), _CHUNK)):
+        batch = num_cols[start : start + _CHUNK]
+        corrs = df[batch].corrwith(target_float)
+        result.update({c: float(v) if _pandas.notna(v) else math.nan for c, v in corrs.items()})
+        log(f"    pandas corr batch {i + 1}/{total} ({len(batch)} cols)")
+    return result
 
 
-def _spark_bulk_corr_with_target(
+def _spark_batched_corr_with_target(
     df: Any, columns: list[str], target_column: str, progress_fn: Any = None
 ) -> dict[str, float]:
     import math
     import time as _time
+
+    import pyspark.sql.functions as F  # noqa: N812
 
     log = progress_fn or (lambda msg: None)
     numeric = _numeric_column_names(df, columns + [target_column])
@@ -1089,17 +1106,20 @@ def _spark_bulk_corr_with_target(
         result.update({c: math.nan for c in num_cols})
         return result
     spark_df = as_spark_df(df[num_cols + [target_column]])
-    _BATCH = 500
+    _BATCH = 100
     total_batches = (len(num_cols) + _BATCH - 1) // _BATCH
+    t0 = _time.monotonic()
     for batch_idx, start in enumerate(range(0, len(num_cols), _BATCH)):
         batch = num_cols[start : start + _BATCH]
-        t0 = _time.monotonic()
-        exprs = [_safe_corr_expr(c, target_column).alias(f"c_{i}") for i, c in enumerate(batch)]
-        row = spark_df.select(*exprs).head()
+        exprs = [
+            F.corr(F.col(c).cast("double"), F.col(target_column).cast("double")).alias(f"c_{i}")
+            for i, c in enumerate(batch)
+        ]
+        row = spark_df.agg(*exprs).head()
         for i, c in enumerate(batch):
             val = row[f"c_{i}"]
             result[c] = float(val) if val is not None else math.nan
-        log(f"    batch {batch_idx + 1}/{total_batches} ({len(batch)} cols, {_time.monotonic() - t0:.0f}s)")
+        log(f"    corr batch {batch_idx + 1}/{total_batches} ({len(batch)} cols, {_time.monotonic() - t0:.0f}s)")
     return result
 
 
@@ -1124,14 +1144,9 @@ def _pandas_null_corr_with_target(df: Any, columns: list[str], target_column: st
     import math
 
     target_float = df[target_column].astype(float)
-    result: dict[str, float] = {}
-    for c in columns:
-        indicator = df[c].isna().astype(float)
-        try:
-            result[c] = indicator.corr(target_float)
-        except (ValueError, TypeError):
-            result[c] = math.nan
-    return result
+    null_indicators = df[columns].isnull().astype(float)
+    corrs = null_indicators.corrwith(target_float)
+    return {c: float(v) if _pandas.notna(v) else math.nan for c, v in corrs.items()}
 
 
 def _spark_null_corr_with_target(
@@ -1171,15 +1186,15 @@ def _spark_null_corr_with_target(
     log(f"    pre-filter: {len(has_nulls)}/{len(columns)} columns have nulls ({_time.monotonic() - t0:.0f}s)")
     if not has_nulls:
         return result
-    _CORR_BATCH = 500
+    _CORR_BATCH = 100
     total_batches = (len(has_nulls) + _CORR_BATCH - 1) // _CORR_BATCH
     for batch_idx, start in enumerate(range(0, len(has_nulls), _CORR_BATCH)):
         batch = has_nulls[start : start + _CORR_BATCH]
         t1 = _time.monotonic()
         null_exprs = [F.when(F.col(c).isNull(), 1.0).otherwise(0.0).alias(f"__null_{c}") for c in batch]
-        batch_df = spark_df.select(*null_exprs, F.col(target_column))
-        corr_exprs = [_safe_corr_expr(f"__null_{c}", target_column).alias(f"c_{i}") for i, c in enumerate(batch)]
-        row = batch_df.select(*corr_exprs).head()
+        batch_df = spark_df.select(*null_exprs, F.col(target_column).cast("double").alias(target_column))
+        corr_exprs = [F.corr(f"__null_{c}", target_column).alias(f"c_{i}") for i, c in enumerate(batch)]
+        row = batch_df.agg(*corr_exprs).head()
         for i, c in enumerate(batch):
             val = row[f"c_{i}"]
             result[c] = float(val) if val is not None else math.nan
@@ -1193,76 +1208,7 @@ def bulk_null_counts(df: Any, columns: list[str] | None = None) -> dict[str, int
     return _bulk_null_counts(df, columns)
 
 
-def _spark_unpivot_corr_with_target(
-    df: Any,
-    columns: list[str],
-    target_column: str,
-    progress_fn: Any = None,
-) -> dict[str, float]:
-    import math
-    import time as _time
-
-    import pyspark.sql.functions as F  # noqa: N812
-
-    log = progress_fn or (lambda msg: None)
-    numeric = _numeric_column_names(df, columns + [target_column])
-    num_cols = [c for c in columns if c in numeric]
-    result: dict[str, float] = {c: math.nan for c in columns if c not in numeric}
-    if not num_cols or target_column not in numeric:
-        result.update({c: math.nan for c in num_cols})
-        return result
-    spark_df = as_spark_df(df[num_cols + [target_column]])
-    t0 = _time.monotonic()
-    stacked = _spark_stacked_with_extra(spark_df, num_cols, target_column)
-    rows = (
-        stacked.groupBy("__col_name")
-        .agg(
-            _safe_corr_expr("__col_value", target_column).alias("__corr"),
-        )
-        .collect()
-    )
-    for row in rows:
-        val = row["__corr"]
-        result[row["__col_name"]] = float(val) if val is not None else math.nan
-    log(f"    unpivot corr: {len(num_cols)} cols in {_time.monotonic() - t0:.0f}s")
-    return result
-
-
-def _spark_unpivot_leakage_corr_combined(
-    df: Any,
-    columns: list[str],
-    target_column: str,
-    progress_fn: Any = None,
-) -> tuple[dict[str, float], dict[str, float]]:
-    import math
-    import time as _time
-
-    import pyspark.sql.functions as F  # noqa: N812
-
-    log = progress_fn or (lambda msg: None)
-    spark_df = as_spark_df(df[columns + [target_column]])
-    t0 = _time.monotonic()
-    stacked = _spark_stacked_with_extra(spark_df, columns, target_column)
-    null_ind = F.when(F.col("__col_value").isNull(), 1.0).otherwise(0.0)
-    rows = (
-        stacked.groupBy("__col_name")
-        .agg(
-            _safe_corr_expr("__col_value", F.col(target_column)).alias("__value_corr"),
-            _safe_corr_expr(null_ind, F.col(target_column)).alias("__null_corr"),
-        )
-        .collect()
-    )
-    null_corrs: dict[str, float] = {}
-    value_corrs: dict[str, float] = {}
-    for row in rows:
-        c = row["__col_name"]
-        value_corrs[c] = float(row["__value_corr"]) if row["__value_corr"] is not None else math.nan
-        null_corrs[c] = float(row["__null_corr"]) if row["__null_corr"] is not None else math.nan
-    log(f"    unpivot leakage corr: {len(columns)} cols in {_time.monotonic() - t0:.0f}s")
-    return null_corrs, value_corrs
-
-
-def _spark_leakage_corr_combined(
+def _spark_batched_leakage_corr_combined(
     df: Any,
     columns: list[str],
     target_column: str,
@@ -1277,22 +1223,19 @@ def _spark_leakage_corr_combined(
     spark_df = as_spark_df(df[columns + [target_column]])
     null_corrs: dict[str, float] = {}
     value_corrs: dict[str, float] = {}
-    _BATCH = 250
+    _BATCH = 50
     total_batches = (len(columns) + _BATCH - 1) // _BATCH
+    t0 = _time.monotonic()
     for batch_idx, start in enumerate(range(0, len(columns), _BATCH)):
         batch = columns[start : start + _BATCH]
-        t0 = _time.monotonic()
         null_indicator_exprs = [F.when(F.col(c).isNull(), 1.0).otherwise(0.0).alias(f"__null_{c}") for c in batch]
-        batch_df = spark_df.select(
-            *null_indicator_exprs,
-            *[F.col(c) for c in batch],
-            F.col(target_column),
-        )
+        target_expr = F.col(target_column).cast("double").alias(target_column)
+        batch_df = spark_df.select(*null_indicator_exprs, *[F.col(c).cast("double") for c in batch], target_expr)
         corr_exprs = [
-            *[_safe_corr_expr(f"__null_{c}", target_column).alias(f"n_{i}") for i, c in enumerate(batch)],
-            *[_safe_corr_expr(c, target_column).alias(f"v_{i}") for i, c in enumerate(batch)],
+            *[F.corr(f"__null_{c}", target_column).alias(f"n_{i}") for i, c in enumerate(batch)],
+            *[F.corr(c, target_column).alias(f"v_{i}") for i, c in enumerate(batch)],
         ]
-        row = batch_df.select(*corr_exprs).head()
+        row = batch_df.agg(*corr_exprs).head()
         for i, c in enumerate(batch):
             null_corrs[c] = float(row[f"n_{i}"]) if row[f"n_{i}"] is not None else math.nan
             value_corrs[c] = float(row[f"v_{i}"]) if row[f"v_{i}"] is not None else math.nan
@@ -1309,7 +1252,7 @@ def leakage_corr_combined(
     progress_fn: Any = None,
 ) -> tuple[dict[str, float], dict[str, float]]:
     if _is_spark_pandas(df):
-        return _spark_unpivot_leakage_corr_combined(df, columns, target_column, progress_fn)
+        return _spark_batched_leakage_corr_combined(df, columns, target_column, progress_fn)
     null_corrs = bulk_null_corr_with_target(df, columns, target_column, progress_fn)
     value_corrs = bulk_corr_with_target(df, columns, target_column, progress_fn)
     return null_corrs, value_corrs

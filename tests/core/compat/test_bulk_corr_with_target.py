@@ -144,3 +144,26 @@ class TestBulkCorrWithTarget:
         assert math.isnan(result["category"])
         assert math.isnan(result["label"])
         assert not math.isnan(result["value"])
+
+    def test_progress_fn_called(self):
+        rng = np.random.default_rng(42)
+        data = {f"col_{i}": rng.standard_normal(50) for i in range(10)}
+        data["t"] = rng.integers(0, 2, size=50).astype(float)
+        df = pd.DataFrame(data)
+        messages = []
+        bulk_corr_with_target(df, [f"col_{i}" for i in range(10)], "t", progress_fn=messages.append)
+        assert len(messages) > 0
+        assert any("batch" in m for m in messages)
+
+    def test_chunked_matches_single(self):
+        rng = np.random.default_rng(99)
+        n = 100
+        data = {f"col_{i}": rng.standard_normal(n) for i in range(600)}
+        data["target"] = rng.integers(0, 2, size=n).astype(float)
+        df = pd.DataFrame(data)
+        cols = [f"col_{i}" for i in range(600)]
+        result = bulk_corr_with_target(df, cols, "target")
+        assert len(result) == 600
+        for col in cols:
+            expected = df[col].corr(df["target"])
+            assert result[col] == pytest.approx(expected, abs=1e-10)

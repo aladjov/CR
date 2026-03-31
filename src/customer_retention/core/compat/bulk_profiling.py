@@ -380,9 +380,15 @@ def _spark_bulk_null_counts(df: Any, columns: list[str]) -> dict[str, int]:
     import pyspark.sql.functions as F  # noqa: N812
 
     spark_df = as_spark_df(df)
-    exprs = [F.coalesce(F.sum(F.isnull(F.col(c)).cast("int")), F.lit(0)).alias(f"__null__{c}") for c in columns]
-    row = spark_df.agg(*exprs).collect()[0]
-    return {c: _safe_int(row[f"__null__{c}"]) for c in columns}
+    result: dict[str, int] = {}
+    _BATCH = 200
+    for start in range(0, len(columns), _BATCH):
+        batch = columns[start : start + _BATCH]
+        exprs = [F.coalesce(F.sum(F.isnull(F.col(c)).cast("int")), F.lit(0)).alias(f"__null__{c}") for c in batch]
+        row = spark_df.agg(*exprs).collect()[0]
+        for c in batch:
+            result[c] = _safe_int(row[f"__null__{c}"])
+    return result
 
 
 @timed(label="compute_bulk_stats")
