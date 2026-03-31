@@ -1104,7 +1104,7 @@ def _spark_batched_corr_with_target(
         result.update({c: math.nan for c in num_cols})
         return result
     spark_df = as_spark_df(df[num_cols + [target_column]])
-    _BATCH = 100
+    _BATCH = 500
     total_batches = (len(num_cols) + _BATCH - 1) // _BATCH
     t0 = _time.monotonic()
     for batch_idx, start in enumerate(range(0, len(num_cols), _BATCH)):

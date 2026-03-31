@@ -162,11 +162,20 @@ def patch_notebook(
         print("Error: no dataset blocks found in cell", file=sys.stderr)
         sys.exit(1)
 
+    # When multiple blocks share the same dataset name (e.g. a single-line
+    # Databricks /Volumes/ path and a multi-line local fixture path), prefer
+    # the block whose values use relative paths (start with . or ..).
+    candidates = [b for b in blocks if target_dataset in b["name"]]
     target_block = None
-    for b in blocks:
-        if target_dataset in b["name"]:
-            target_block = b
-            break
+    if len(candidates) == 1:
+        target_block = candidates[0]
+    elif candidates:
+        def _block_paths(b):
+            text = "".join(lines[b["header_idx"]:b["end_idx"] + 1])
+            return re.findall(r':\s*"([^"]+)"', text)
+        local = [b for b in candidates
+                 if any(p.startswith(".") for p in _block_paths(b))]
+        target_block = local[0] if local else candidates[-1]
 
     if target_block is None:
         available = [b["name"] for b in blocks]
