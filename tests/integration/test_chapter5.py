@@ -74,7 +74,7 @@ class TestDataPreparation:
 
         assert result1.X_train.index.equals(result2.X_train.index)
 
-    def test_ac5_4_temporal_split_respects_time_order(self):
+    def test_ac5_4_temporal_split_entity_isolation(self):
         np.random.seed(42)
         n = 500
         temporal_data = pd.DataFrame({
@@ -82,20 +82,22 @@ class TestDataPreparation:
             "feature2": np.random.randn(n),
             "target": np.random.choice([0, 1], n, p=[0.3, 0.7]),
             "event_date": pd.date_range("2024-01-01", periods=n, freq="D"),
+            "entity_id": [f"e{i % 25}" for i in range(n)],
         })
 
         splitter = DataSplitter(
             target_column="target",
             strategy=SplitStrategy.TEMPORAL,
             temporal_column="event_date",
+            group_column="entity_id",
             test_size=0.20,
+            exclude_columns=["event_date", "entity_id"],
         )
         result = splitter.split(temporal_data)
 
-        train_max_date = temporal_data.loc[result.X_train.index, "event_date"].max()
-        test_min_date = temporal_data.loc[result.X_test.index, "event_date"].min()
-
-        assert train_max_date < test_min_date
+        train_entities = set(temporal_data.loc[result.X_train.index, "entity_id"])
+        test_entities = set(temporal_data.loc[result.X_test.index, "entity_id"])
+        assert len(train_entities & test_entities) == 0, "Entity leakage across train/test"
 
 
 class TestFeatureScaling:

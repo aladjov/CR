@@ -257,7 +257,7 @@ class DataSplitter:
         if idx_cols:
             spark_df = spark_df.drop(*idx_cols)
 
-        # Temporal cutoff (one Spark job) — used for purge, not for entity selection
+        # Temporal cutoff (one Spark job) — used for purge, not entity selection
         epoch = F.unix_timestamp(F.col(col).cast("timestamp"))
         agg_row = spark_df.agg(
             F.percentile_approx(epoch, float(1 - self.test_size)).alias("cutoff"),
@@ -271,22 +271,17 @@ class DataSplitter:
                 f"Check that the column is not all-null and that rows remain after target filtering."
             )
 
-        # Entity-grouped: collect distinct entities (small), split with
-        # GroupShuffleSplit, then semi-join back to keep data distributed.
-        entity_ids = [r[group_col] for r in spark_df.select(group_col).distinct().collect()]
-        entity_arr = native_pd.Series(range(len(entity_ids)))
-        group_arr = native_pd.Series(range(len(entity_ids)))
-        gss = GroupShuffleSplit(n_splits=1, test_size=self.test_size, random_state=self.random_state)
-        train_eidx, test_eidx = next(gss.split(entity_arr, groups=group_arr))
-        test_ent_set = [entity_ids[i] for i in test_eidx]
-        train_ent_set = [entity_ids[i] for i in train_eidx]
+        # Entity-grouped split — fully distributed via deterministic hash.
+        # hash(entity_id + seed) assigns each entity to a bucket 0..99;
+        # entities in buckets < test_pct go to test, rest to train.
+        # No .collect() — works with 400K+ entities without driver OOM.
+        test_pct = int(self.test_size * 100)
+        seed = F.lit(self.random_state)
+        bucket = F.abs(F.hash(F.col(group_col), seed)) % F.lit(100)
+        is_test_entity = bucket < F.lit(test_pct)
 
-        from pyspark.sql import Row
-        test_entity_df = spark_df.sparkSession.createDataFrame([Row(**{group_col: e}) for e in test_ent_set])
-        train_entity_df = spark_df.sparkSession.createDataFrame([Row(**{group_col: e}) for e in train_ent_set])
-
-        test_spark = spark_df.join(test_entity_df, on=group_col, how="inner")
-        train_spark = spark_df.join(train_entity_df, on=group_col, how="inner")
+        test_spark = spark_df.filter(is_test_entity)
+        train_spark = spark_df.filter(~is_test_entity)
 
         # Temporal purge on training side
         if self.purge_gap_days and self.purge_gap_days > 0:
@@ -295,14 +290,11 @@ class DataSplitter:
 
         X_val, y_val = None, None
         if self.include_validation:
-            val_frac = self.validation_size / (1 - self.test_size)
-            train_ents_pd = native_pd.Series(range(len(train_ent_set)))
-            gss_val = GroupShuffleSplit(n_splits=1, test_size=val_frac, random_state=self.random_state)
-            t_idx, v_idx = next(gss_val.split(train_ents_pd, groups=train_ents_pd))
-            val_ent_set = [train_ent_set[i] for i in v_idx]
-            val_entity_df = spark_df.sparkSession.createDataFrame([Row(**{group_col: e}) for e in val_ent_set])
-            val_spark = train_spark.join(val_entity_df, on=group_col, how="inner")
-            train_spark = train_spark.join(val_entity_df, on=group_col, how="left_anti")
+            # Sub-split train entities: hash to a second bucket for validation
+            val_pct = int(self.validation_size * 100 / (1 - self.test_size))
+            val_bucket = F.abs(F.hash(F.col(group_col), F.lit(self.random_state + 1))) % F.lit(100)
+            val_spark = train_spark.filter(val_bucket < F.lit(val_pct))
+            train_spark = train_spark.filter(val_bucket >= F.lit(val_pct))
             val_spark = val_spark.localCheckpoint(eager=True)
             val_ps = _as_pandas_api(val_spark)
             X_val, y_val = self._select_features_target_from_ps(val_ps, val_spark.schema)
@@ -324,8 +316,6 @@ class DataSplitter:
 
         split_info = self._build_split_info(X_train, X_test, X_val)
         split_info["cutoff_date"] = str(cutoff_date)
-        split_info["train_entities"] = len(train_ent_set)
-        split_info["test_entities"] = len(test_ent_set)
         if self.purge_gap_days and self.purge_gap_days > 0:
             split_info["purge_gap_days"] = self.purge_gap_days
             kept = split_info["train_size"] + split_info["test_size"]
