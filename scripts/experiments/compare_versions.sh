@@ -27,6 +27,7 @@ set -euo pipefail
 
 # ---- Defaults ----
 OLD_COMMIT="6209ecd"
+NEW_COMMIT=""  # empty = HEAD
 TIMEOUT=36000
 SPARK_REMOTE=""
 CAPTURE_ONLY=false
@@ -46,6 +47,7 @@ SCRIPTS_DIR="$REPO_DIR/scripts/experiments"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --old-commit)   OLD_COMMIT="$2"; shift 2 ;;
+        --new-commit)   NEW_COMMIT="$2"; shift 2 ;;
         --timeout)      TIMEOUT="$2"; shift 2 ;;
         --spark-remote) SPARK_REMOTE="--spark-remote"; shift ;;
         --capture-only) CAPTURE_ONLY=true; shift ;;
@@ -63,6 +65,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --old-commit HASH   Baseline commit (default: 6209ecd = tutorial HTML)"
+            echo "  --new-commit HASH   Comparison commit (default: HEAD)"
             echo "  --timeout SECS      Per-notebook timeout (default: 36000 = 10h)"
             echo "  --spark-remote      Enable Databricks Connect for new-code run"
             echo "  --capture-only      Skip execution, just re-capture and compare"
@@ -138,9 +141,16 @@ if $LIST_CANDIDATES; then
     exit 0
 fi
 
-# ---- Cleanup mode ----
+# ---- Resolve commits ----
 OLD_SHORT="$(echo "$OLD_COMMIT" | cut -c1-7)"
-NEW_SHORT="$(git -C "$REPO_DIR" rev-parse --short HEAD)"
+if [ -n "$NEW_COMMIT" ]; then
+    NEW_SHORT="$(echo "$NEW_COMMIT" | cut -c1-7)"
+    NEW_IS_HEAD=false
+else
+    NEW_COMMIT="HEAD"
+    NEW_SHORT="$(git -C "$REPO_DIR" rev-parse --short HEAD)"
+    NEW_IS_HEAD=true
+fi
 
 if $CLEANUP; then
     NB00="exploration_notebooks/00_start_here.ipynb"
@@ -162,6 +172,14 @@ if $CLEANUP; then
     for COMPARISON_DIR in "${_found[@]}"; do
         COMPARISON_DIR="${COMPARISON_DIR%/}"  # strip trailing slash
         echo "Cleaning up: $(basename "$COMPARISON_DIR")"
+        # Remove any worktrees (old side always has one; new side has one when --new-commit is used)
+        for wt in "$COMPARISON_DIR"/worktree-*; do
+            if [ -d "$wt" ]; then
+                echo "  Removing worktree $wt ..."
+                git -C "$REPO_DIR" worktree remove "$wt" --force 2>/dev/null || true
+            fi
+        done
+        # Legacy: single "worktree" dir from older runs
         OLD_DIR="$COMPARISON_DIR/worktree"
         if [ -d "$OLD_DIR" ]; then
             echo "  Removing worktree $OLD_DIR ..."
@@ -187,15 +205,21 @@ NB00="exploration_notebooks/00_start_here.ipynb"
 
 # Everything lives under one comparison folder — easy cleanup with rm -rf
 COMPARISON_DIR="$REPO_DIR/experiments/comparisons/${OLD_SHORT}_vs_${NEW_SHORT}"
-OLD_DIR="$COMPARISON_DIR/worktree"   # git worktree + venv (auto-removed unless --keep-worktree)
-OLD_OUTPUT_DIR="$COMPARISON_DIR/$OLD_SHORT"
-NEW_OUTPUT_DIR="$COMPARISON_DIR/$NEW_SHORT"
+OLD_DIR="$COMPARISON_DIR/worktree-old"    # git worktree for old commit
+NEW_DIR="$COMPARISON_DIR/worktree-new"    # git worktree for new commit (only when --new-commit)
+OLD_OUTPUT_DIR="$COMPARISON_DIR/old-$OLD_SHORT"
+NEW_OUTPUT_DIR="$COMPARISON_DIR/new-$NEW_SHORT"
 REPORT_FILE="$COMPARISON_DIR/drift_report.md"
 
-# run_exploration.py still writes into each worktree's experiments/runs/;
-# we use these as the run-ids so we know where to copy from
 OLD_RUN_ID="baseline-${OLD_SHORT}"
 NEW_RUN_ID="current-${NEW_SHORT}"
+
+# When --new-commit is HEAD, use the repo directly; otherwise use a worktree
+if $NEW_IS_HEAD; then
+    NEW_WORK_DIR="$REPO_DIR"
+else
+    NEW_WORK_DIR="$NEW_DIR"
+fi
 
 # The old side's actual run_id may differ (older initialize_run ignores CR_RUN_ID)
 OLD_ACTUAL_RUN_ID=""
@@ -203,8 +227,8 @@ OLD_ACTUAL_RUN_ID=""
 # Resolve human-readable info for both commits
 OLD_DATE="$(git -C "$REPO_DIR" log -1 --format='%ad' --date=format:'%b %d, %Y' "$OLD_COMMIT" 2>/dev/null || echo '?')"
 OLD_VERSION="$(git -C "$REPO_DIR" show "$OLD_COMMIT":pyproject.toml 2>/dev/null | grep '^version' | head -1 | sed 's/version = "//;s/"//' || echo '?')"
-NEW_DATE="$(git -C "$REPO_DIR" log -1 --format='%ad' --date=format:'%b %d, %Y' HEAD)"
-NEW_VERSION="$(grep '^version' "$REPO_DIR/pyproject.toml" | head -1 | sed 's/version = "//;s/"//')"
+NEW_DATE="$(git -C "$REPO_DIR" log -1 --format='%ad' --date=format:'%b %d, %Y' "$NEW_COMMIT" 2>/dev/null || echo '?')"
+NEW_VERSION="$(git -C "$REPO_DIR" show "$NEW_COMMIT":pyproject.toml 2>/dev/null | grep '^version' | head -1 | sed 's/version = "//;s/"//' || echo '?')"
 
 echo "============================================================"
 echo "  Exploration Drift Comparison"
@@ -237,30 +261,26 @@ _log "  spark_remote: ${SPARK_REMOTE:-no}"
 _log "  start_nb:     ${START_NOTEBOOK:-<from beginning>}"
 _log ""
 
-# ---- Step 1: Create worktree ----
-if $CAPTURE_ONLY; then
-    echo "[Step 1] SKIP — capture-only mode"
-    if [ ! -d "$OLD_OUTPUT_DIR" ]; then
-        echo "Error: comparison dir not found at $COMPARISON_DIR — run without --capture-only first" >&2
-        exit 1
-    fi
-elif ! $RUN_OLD; then
-    echo "[Step 1] SKIP — new-only mode"
-    mkdir -p "$COMPARISON_DIR"
-else
-    echo "[Step 1] Creating git worktree for $OLD_COMMIT ..."
+# ---- Step 1: Create worktrees ----
+_create_worktree() {
+    local dir="$1" commit="$2" label="$3"
     if $DRY_RUN; then
-        echo "  DRY_RUN: mkdir -p $COMPARISON_DIR"
-        echo "  DRY_RUN: git worktree add $OLD_DIR $OLD_COMMIT --detach"
+        echo "  DRY_RUN: git worktree add $dir $commit --detach"
+    elif [ -d "$dir" ]; then
+        echo "  $label worktree already exists — reusing"
     else
-        mkdir -p "$COMPARISON_DIR"
-        if [ -d "$OLD_DIR" ]; then
-            echo "  Worktree already exists — reusing"
-        else
-            git -C "$REPO_DIR" worktree add "$OLD_DIR" "$OLD_COMMIT" --detach
-            echo "  Created worktree at $OLD_DIR"
-        fi
+        git -C "$REPO_DIR" worktree add "$dir" "$commit" --detach
+        echo "  Created $label worktree at $dir"
     fi
+}
+
+mkdir -p "$COMPARISON_DIR"
+if ! $CAPTURE_ONLY; then
+    echo "[Step 1] Creating worktrees ..."
+    $RUN_OLD && _create_worktree "$OLD_DIR" "$OLD_COMMIT" "old"
+    $RUN_NEW && ! $NEW_IS_HEAD && _create_worktree "$NEW_DIR" "$NEW_COMMIT" "new"
+else
+    echo "[Step 1] SKIP — capture-only mode"
 fi
 echo ""
 
@@ -285,17 +305,16 @@ setup_venv() {
 }
 
 if ! $CAPTURE_ONLY; then
-    if $RUN_OLD; then
-        setup_venv "$OLD_DIR" "cr-baseline"
-    fi
+    $RUN_OLD && setup_venv "$OLD_DIR" "cr-baseline"
     if $RUN_NEW; then
-        # For new code: use existing venv or create
-        if [ ! -d "$REPO_DIR/.venv" ]; then
-            setup_venv "$REPO_DIR" "cr-current"
-        elif ! $DRY_RUN; then
-            echo "  Using existing venv in $REPO_DIR"
-            (cd "$REPO_DIR" && source .venv/bin/activate && \
-             python -m ipykernel install --user --name "cr-current" --display-name "CR current" 2>/dev/null || true)
+        if $NEW_IS_HEAD && [ -d "$REPO_DIR/.venv" ]; then
+            if ! $DRY_RUN; then
+                echo "  Using existing venv in $REPO_DIR"
+                (cd "$REPO_DIR" && source .venv/bin/activate && \
+                 python -m ipykernel install --user --name "cr-current" --display-name "CR current" 2>/dev/null || true)
+            fi
+        else
+            setup_venv "$NEW_WORK_DIR" "cr-current"
         fi
     fi
 fi
@@ -327,11 +346,11 @@ if $RUN_NEW && ! $CAPTURE_ONLY; then
         echo "  DRY_RUN: copy + patch_dataset_config.py --activate $DATASET"
     else
         mkdir -p "$NEW_NB_DIR"
-        cp "$REPO_DIR"/exploration_notebooks/*.ipynb "$NEW_NB_DIR/"
+        cp "$NEW_WORK_DIR"/exploration_notebooks/*.ipynb "$NEW_NB_DIR/"
         python "$SCRIPTS_DIR/patch_dataset_config.py" \
             --notebook "$NEW_NB_DIR/00_start_here.ipynb" \
             --activate "$DATASET" \
-            --fixture-root "$REPO_DIR/tests/fixtures"
+            --fixture-root "$NEW_WORK_DIR/tests/fixtures"
     fi
 else
     echo "[Step 3a] SKIP — not running new side"
@@ -448,28 +467,51 @@ fi
 echo ""
 
 # ---- Step 5: Run new version ----
+# When --new-commit is a non-HEAD commit, apply the same compatibility
+# detection as the old side (it may also lack --start-notebook / --run-id).
+_build_new_extra_args() {
+    local work_dir="$1" args=""
+    if grep -q 'os\.environ\.get.*CR_RUN_ID' \
+         "$work_dir/src/customer_retention/analysis/auto_explorer/session.py" 2>/dev/null; then
+        args="--run-id $NEW_RUN_ID"
+    else
+        echo "  (new initialize_run does not honour CR_RUN_ID — omitting --run-id)" >&2
+    fi
+    if [ -n "$START_NOTEBOOK" ]; then
+        if grep -q 'start.notebook' "$work_dir/scripts/notebooks/run_exploration.py" 2>/dev/null; then
+            args="$args --start-notebook $START_NOTEBOOK"
+        else
+            echo "  (new run_exploration.py does not support --start-notebook — skipping)" >&2
+        fi
+    fi
+    echo "$args"
+}
+
 if ! $RUN_NEW; then
     echo "[Step 5] SKIP — old-only mode"
 elif $CAPTURE_ONLY; then
     echo "[Step 5] SKIP — capture-only mode"
 elif $DRY_RUN; then
-    echo "[Step 5] Running new version (HEAD) ..."
+    echo "[Step 5] Running new version ($NEW_SHORT) ..."
     echo "  DRY_RUN: run_exploration.py --notebooks-dir $NEW_NB_DIR --run-id $NEW_RUN_ID --kernel cr-current $SPARK_REMOTE $_NEW_START_NB_ARG"
 else
-    echo "[Step 5] Running new version (HEAD) ..."
+    echo "[Step 5] Running new version ($NEW_SHORT) ..."
+    if $NEW_IS_HEAD; then
+        _NEW_EXTRA_ARGS="--run-id $NEW_RUN_ID $SPARK_REMOTE $_NEW_START_NB_ARG"
+    else
+        _NEW_EXTRA_ARGS="$(_build_new_extra_args "$NEW_WORK_DIR") $SPARK_REMOTE"
+    fi
     (
-        cd "$REPO_DIR"
+        cd "$NEW_WORK_DIR"
         # shellcheck disable=SC1091
         source .venv/bin/activate
         export CR_EXPERIMENTS_DIR="$NEW_OUTPUT_DIR/experiments"
         # shellcheck disable=SC2086
         python scripts/notebooks/run_exploration.py \
             --notebooks-dir "$NEW_NB_DIR" \
-            --run-id "$NEW_RUN_ID" \
             --kernel cr-current \
             --timeout "$TIMEOUT" \
-            $SPARK_REMOTE \
-            $_NEW_START_NB_ARG
+            $_NEW_EXTRA_ARGS
     ) || _log "  WARNING: New run had failures (continuing anyway)"
     _log "  New run complete."
 fi
@@ -498,10 +540,10 @@ record_metadata() {
 
 if ! $CAPTURE_ONLY && ! $DRY_RUN; then
     $RUN_OLD && record_metadata "$OLD_OUTPUT_DIR" "$OLD_DIR" "$OLD_COMMIT"
-    $RUN_NEW && record_metadata "$NEW_OUTPUT_DIR" "$REPO_DIR" "HEAD"
+    $RUN_NEW && record_metadata "$NEW_OUTPUT_DIR" "$NEW_WORK_DIR" "$NEW_COMMIT"
 elif $DRY_RUN; then
     $RUN_OLD && record_metadata "$OLD_OUTPUT_DIR" "$OLD_DIR" "$OLD_COMMIT"
-    $RUN_NEW && record_metadata "$NEW_OUTPUT_DIR" "$REPO_DIR" "HEAD"
+    $RUN_NEW && record_metadata "$NEW_OUTPUT_DIR" "$NEW_WORK_DIR" "$NEW_COMMIT"
 fi
 
 # Copy run-level YAML artefacts into the comparison dir
@@ -590,24 +632,18 @@ echo ""
 
 # (Steps 9-10 removed: notebooks already live in commit folders, no backup to restore)
 
-# ---- Step 9: Clean up worktree ----
+# ---- Step 9: Clean up worktrees ----
 echo "[Step 9] Cleaning up ..."
-if ! $RUN_OLD; then
-    echo "  SKIP — old side not run this invocation"
-elif $DRY_RUN; then
-    if $KEEP_WORKTREE; then
-        echo "  DRY_RUN: keeping worktree at $OLD_DIR"
-    else
-        echo "  DRY_RUN: git worktree remove $OLD_DIR"
-        echo "  DRY_RUN: jupyter kernelspec remove cr-baseline"
-    fi
-elif $KEEP_WORKTREE; then
-    echo "  Keeping worktree at $OLD_DIR (--keep-worktree)"
-else
-    echo "  Removing worktree $OLD_DIR ..."
-    git -C "$REPO_DIR" worktree remove "$OLD_DIR" --force 2>/dev/null || true
+if $KEEP_WORKTREE; then
+    echo "  Keeping worktrees (--keep-worktree)"
+elif ! $DRY_RUN; then
+    for _wt in "$OLD_DIR" "$NEW_DIR"; do
+        [ -d "$_wt" ] && git -C "$REPO_DIR" worktree remove "$_wt" --force 2>/dev/null && echo "  Removed $_wt"
+    done
     jupyter kernelspec remove cr-baseline -y 2>/dev/null || true
-    echo "  Cleaned up."
+    jupyter kernelspec remove cr-current -y 2>/dev/null || true
+else
+    echo "  DRY_RUN: would remove worktrees + kernels"
 fi
 
 echo ""
@@ -615,24 +651,20 @@ echo "============================================================"
 echo "  DONE"
 echo ""
 echo "  $COMPARISON_DIR/"
-echo "    compare_versions.log   ← full script output"
+echo "    compare_versions.log"
 echo "    drift_report.md"
-echo "    ${OLD_SHORT}/"
-echo "      notebooks/           ← executed .ipynb from old code (v$OLD_VERSION)"
+echo "    old-${OLD_SHORT}/        ← v$OLD_VERSION ($OLD_DATE)"
+echo "      notebooks/"
 echo "      cell_outputs.md"
-echo "      run_exploration.log  ← notebook error details"
-echo "    ${NEW_SHORT}/"
-echo "      notebooks/           ← executed .ipynb from new code (v$NEW_VERSION)"
+echo "      run_exploration.log"
+echo "    new-${NEW_SHORT}/        ← v$NEW_VERSION ($NEW_DATE)"
+echo "      notebooks/"
 echo "      cell_outputs.md"
-echo "      run_exploration.log  ← notebook error details"
+echo "      run_exploration.log"
 if $KEEP_WORKTREE; then
-echo "    worktree/              ← old code checkout + venv (--keep-worktree)"
+echo "    worktree-old/            ← old code checkout + venv"
+! $NEW_IS_HEAD && echo "    worktree-new/            ← new code checkout + venv"
 fi
 echo ""
-if $KEEP_WORKTREE; then
-echo "  Worktree kept. To clean up everything:"
-echo "    git worktree remove $OLD_DIR && rm -rf $COMPARISON_DIR"
-else
-echo "  To clean up: rm -rf $COMPARISON_DIR"
-fi
+echo "  To clean up: bash $0 --old-commit $OLD_COMMIT --cleanup"
 echo "============================================================"
