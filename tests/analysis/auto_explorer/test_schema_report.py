@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pandas as pd
 
 from customer_retention.analysis.auto_explorer.schema_report import (
+    build_schema_report,
     generate_schema_report,
     normalize_dtype_label,
 )
@@ -191,3 +194,128 @@ class TestGenerateSchemaReport:
         assert "A (bigint): First column" in result
         assert "B (string)" in result
         assert "B (string):" not in result
+
+
+# ---------------------------------------------------------------------------
+# build_schema_report
+# ---------------------------------------------------------------------------
+
+
+_MOCK_RESOLVE = patch(
+    "customer_retention.analysis.auto_explorer.column_describer.resolve_endpoint",
+    return_value="databricks-mock-model",
+)
+
+
+class TestBuildSchemaReport:
+    def test_returns_result_object(self):
+        df = pd.DataFrame({"A": [1], "B": ["x"]})
+        result = build_schema_report({"t": df}, {"t": "db.t"})
+        assert "Dataset Schema Report" in result.text
+        assert result.column_count == 2
+        assert result.dataset_count == 1
+        assert result.warnings == []
+        assert result.llm_endpoint_used is None
+
+    def test_llm_disabled_by_default(self):
+        df = pd.DataFrame({"A": [1]})
+        result = build_schema_report({"t": df}, {"t": "cat.sch.tbl"})
+        assert "A (bigint)" in result.text
+        assert result.warnings == []
+        assert result.llm_endpoint_used is None
+
+    @patch(
+        "customer_retention.analysis.auto_explorer.schema_report.is_databricks",
+        return_value=False,
+    )
+    def test_llm_skipped_when_not_databricks(self, _mock):
+        df = pd.DataFrame({"A": [1]})
+        result = build_schema_report(
+            {"t": df}, {"t": "cat.sch.tbl"}, llm_descriptions=True
+        )
+        assert any("skipped" in w for w in result.warnings)
+        assert "A (bigint)" in result.text
+        assert result.llm_endpoint_used is None
+
+    @_MOCK_RESOLVE
+    @patch(
+        "customer_retention.analysis.auto_explorer.schema_report.is_databricks",
+        return_value=True,
+    )
+    @patch(
+        "customer_retention.analysis.auto_explorer.column_describer.describe_datasets",
+    )
+    def test_llm_descriptions_merged_into_report(
+        self, mock_describe, _mock_db, _mock_resolve
+    ):
+        mock_describe.return_value = {"t": {"A": "The primary key."}}
+        df = pd.DataFrame({"A": [1], "B": ["x"]})
+        result = build_schema_report(
+            {"t": df}, {"t": "cat.sch.tbl"}, llm_descriptions=True
+        )
+        assert "A (bigint): The primary key." in result.text
+        assert "B (string)" in result.text
+        assert result.llm_endpoint_used == "databricks-mock-model"
+
+    @_MOCK_RESOLVE
+    @patch(
+        "customer_retention.analysis.auto_explorer.schema_report.is_databricks",
+        return_value=True,
+    )
+    @patch(
+        "customer_retention.analysis.auto_explorer.column_describer.describe_datasets",
+    )
+    def test_warns_on_missing_descriptions(
+        self, mock_describe, _mock_db, _mock_resolve
+    ):
+        mock_describe.return_value = {"t": {"A": "desc A"}}
+        df = pd.DataFrame({"A": [1], "B": ["x"], "C": [1.0]})
+        result = build_schema_report(
+            {"t": df}, {"t": "cat.sch.tbl"}, llm_descriptions=True
+        )
+        assert len(result.warnings) == 1
+        assert "2/3" in result.warnings[0]
+        assert "B" in result.warnings[0]
+        assert "C" in result.warnings[0]
+
+    @_MOCK_RESOLVE
+    @patch(
+        "customer_retention.analysis.auto_explorer.schema_report.is_databricks",
+        return_value=True,
+    )
+    @patch(
+        "customer_retention.analysis.auto_explorer.column_describer.describe_datasets",
+    )
+    def test_no_warning_when_all_described(
+        self, mock_describe, _mock_db, _mock_resolve
+    ):
+        mock_describe.return_value = {"t": {"A": "d1", "B": "d2"}}
+        df = pd.DataFrame({"A": [1], "B": ["x"]})
+        result = build_schema_report(
+            {"t": df}, {"t": "cat.sch.tbl"}, llm_descriptions=True
+        )
+        assert result.warnings == []
+
+    @patch(
+        "customer_retention.analysis.auto_explorer.schema_report.is_databricks",
+        return_value=True,
+    )
+    @patch(
+        "customer_retention.analysis.auto_explorer.column_describer.resolve_endpoint",
+        side_effect=RuntimeError(
+            "No Foundation Model chat endpoints available on this workspace."
+        ),
+    )
+    def test_endpoint_resolution_failure_becomes_warning(
+        self, _mock_resolve, _mock_db
+    ):
+        df = pd.DataFrame({"A": [1]})
+        result = build_schema_report(
+            {"t": df}, {"t": "cat.sch.tbl"}, llm_descriptions=True
+        )
+        assert len(result.warnings) == 1
+        assert "No Foundation Model" in result.warnings[0]
+        assert "LLM_ENDPOINT" in result.warnings[0]
+        assert result.llm_endpoint_used is None
+        # Report still generated, just without descriptions.
+        assert "A (bigint)" in result.text
