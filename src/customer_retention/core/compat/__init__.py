@@ -1096,8 +1096,6 @@ def _spark_batched_corr_with_target(
     import math
     import time as _time
 
-    import pyspark.sql.functions as F  # noqa: N812
-
     log = progress_fn or (lambda msg: None)
     numeric = _numeric_column_names(df, columns + [target_column])
     num_cols = [c for c in columns if c in numeric]
@@ -1111,10 +1109,7 @@ def _spark_batched_corr_with_target(
     t0 = _time.monotonic()
     for batch_idx, start in enumerate(range(0, len(num_cols), _BATCH)):
         batch = num_cols[start : start + _BATCH]
-        exprs = [
-            F.corr(F.col(c).cast("double"), F.col(target_column).cast("double")).alias(f"c_{i}")
-            for i, c in enumerate(batch)
-        ]
+        exprs = [_safe_corr_expr(c, target_column).alias(f"c_{i}") for i, c in enumerate(batch)]
         row = spark_df.agg(*exprs).head()
         for i, c in enumerate(batch):
             val = row[f"c_{i}"]
@@ -1192,8 +1187,8 @@ def _spark_null_corr_with_target(
         batch = has_nulls[start : start + _CORR_BATCH]
         t1 = _time.monotonic()
         null_exprs = [F.when(F.col(c).isNull(), 1.0).otherwise(0.0).alias(f"__null_{c}") for c in batch]
-        batch_df = spark_df.select(*null_exprs, F.col(target_column).cast("double").alias(target_column))
-        corr_exprs = [F.corr(f"__null_{c}", target_column).alias(f"c_{i}") for i, c in enumerate(batch)]
+        batch_df = spark_df.select(*null_exprs, F.col(target_column))
+        corr_exprs = [_safe_corr_expr(f"__null_{c}", target_column).alias(f"c_{i}") for i, c in enumerate(batch)]
         row = batch_df.agg(*corr_exprs).head()
         for i, c in enumerate(batch):
             val = row[f"c_{i}"]
@@ -1229,11 +1224,10 @@ def _spark_batched_leakage_corr_combined(
     for batch_idx, start in enumerate(range(0, len(columns), _BATCH)):
         batch = columns[start : start + _BATCH]
         null_indicator_exprs = [F.when(F.col(c).isNull(), 1.0).otherwise(0.0).alias(f"__null_{c}") for c in batch]
-        target_expr = F.col(target_column).cast("double").alias(target_column)
-        batch_df = spark_df.select(*null_indicator_exprs, *[F.col(c).cast("double") for c in batch], target_expr)
+        batch_df = spark_df.select(*null_indicator_exprs, *[F.col(c) for c in batch], F.col(target_column))
         corr_exprs = [
-            *[F.corr(f"__null_{c}", target_column).alias(f"n_{i}") for i, c in enumerate(batch)],
-            *[F.corr(c, target_column).alias(f"v_{i}") for i, c in enumerate(batch)],
+            *[_safe_corr_expr(f"__null_{c}", target_column).alias(f"n_{i}") for i, c in enumerate(batch)],
+            *[_safe_corr_expr(c, target_column).alias(f"v_{i}") for i, c in enumerate(batch)],
         ]
         row = batch_df.agg(*corr_exprs).head()
         for i, c in enumerate(batch):
