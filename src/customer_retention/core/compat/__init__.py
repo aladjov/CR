@@ -18,6 +18,7 @@ from .detection import (
     is_remote_spark,
     is_spark_available,
     set_spark_config,
+    use_distributed_processing,
 )
 from .ops import DataOps, ops
 from .remote_path import RemotePath, make_path
@@ -1776,6 +1777,7 @@ __all__ = [
     "is_spark_available",
     "is_pandas_api_on_spark",
     "is_remote_spark",
+    "use_distributed_processing",
     "connect_remote_spark",
     "to_pandas",
     "safe_isinf",

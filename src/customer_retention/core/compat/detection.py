@@ -97,6 +97,10 @@ def is_remote_spark() -> bool:
     return bool(os.environ.get("CR_SPARK_REMOTE"))
 
 
+def use_distributed_processing() -> bool:
+    return is_databricks() or is_remote_spark()
+
+
 def connect_remote_spark() -> Any:
     global _SPARK_PANDAS_AVAILABLE, _PANDAS_API_ON_SPARK
     if _SPARK_PANDAS_AVAILABLE:

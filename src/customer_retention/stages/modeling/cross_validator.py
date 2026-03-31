@@ -88,6 +88,14 @@ class CrossValidator:
         self.stability_threshold = stability_threshold
         self.purge_gap_days = purge_gap_days
 
+    @staticmethod
+    def _extract_importance(model, feature_names: List[str]) -> Optional[Dict[str, float]]:
+        if hasattr(model, 'feature_importances_'):
+            return dict(zip(feature_names, model.feature_importances_.tolist()))
+        if hasattr(model, 'coef_'):
+            return dict(zip(feature_names, np.abs(model.coef_).flatten().tolist()))
+        return None
+
     def run(
         self,
         model,
@@ -96,11 +104,15 @@ class CrossValidator:
         groups: Optional[Series] = None,
         temporal_values: Optional[Series] = None,
         on_fold_complete: Optional[Callable] = None,
+        capture_fold_importance: bool = False,
+        feature_names: Optional[List[str]] = None,
     ) -> CVResult:
+        _capture = capture_fold_importance and feature_names is not None
         if hasattr(model, "clone") and self.strategy == CVStrategy.TEMPORAL_ENTITY:
             return self._run_distributed(
                 model, X, y, groups=groups, temporal_values=temporal_values,
                 on_fold_complete=on_fold_complete,
+                capture_fold_importance=_capture, feature_names=feature_names,
             )
 
         X, y = collect_for_sklearn(X), collect_for_sklearn(y)
@@ -111,9 +123,10 @@ class CrossValidator:
         cv_splitter = self._create_cv_splitter(groups, temporal_values)
         fold_details = []
 
-        if self.strategy == CVStrategy.TEMPORAL_ENTITY or on_fold_complete is not None:
+        if self.strategy == CVStrategy.TEMPORAL_ENTITY or on_fold_complete is not None or _capture:
             scores, fold_details = self._run_manual_cv(
                 model, X, y, cv_splitter, groups=groups, on_fold_complete=on_fold_complete,
+                capture_fold_importance=_capture, feature_names=feature_names,
             )
         elif self.strategy == CVStrategy.GROUP_KFOLD:
             scores = cross_val_score(model, X, y, cv=cv_splitter, scoring=self.scoring, groups=groups)
@@ -143,6 +156,8 @@ class CrossValidator:
         groups: Optional[Series] = None,
         temporal_values: Optional[Series] = None,
         on_fold_complete: Optional[Callable] = None,
+        capture_fold_importance: bool = False,
+        feature_names: Optional[List[str]] = None,
     ) -> CVResult:
         from customer_retention.core.compat import _is_spark_pandas
 
@@ -161,6 +176,8 @@ class CrossValidator:
             return self._score_folds_spark(
                 model, X, y, groups_pd, temporal_pd, all_folds,
                 on_fold_complete=on_fold_complete,
+                capture_fold_importance=capture_fold_importance,
+                feature_names=feature_names,
             )
 
         X_pd = collect_for_sklearn(X)
@@ -168,6 +185,8 @@ class CrossValidator:
         return self._score_folds_pandas(
             model, X_pd, y_pd, groups_pd, all_folds,
             on_fold_complete=on_fold_complete,
+            capture_fold_importance=capture_fold_importance,
+            feature_names=feature_names,
         )
 
     def _score_fold(self, y_true: np.ndarray, y_proba: np.ndarray) -> float:
@@ -190,6 +209,8 @@ class CrossValidator:
         cv_splitter,
         groups: Optional[Series] = None,
         on_fold_complete: Optional[Callable] = None,
+        capture_fold_importance: bool = False,
+        feature_names: Optional[List[str]] = None,
     ) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
         from sklearn.base import clone
 
@@ -218,6 +239,10 @@ class CrossValidator:
             if groups is not None:
                 detail["train_entities"] = int(groups.iloc[train_idx].nunique())
                 detail["test_entities"] = int(groups.iloc[test_idx].nunique())
+            if capture_fold_importance and feature_names:
+                imp = self._extract_importance(fold_model, feature_names)
+                if imp is not None:
+                    detail["feature_importance"] = imp
             fold_details.append(detail)
             del fold_model, y_proba, y_fold_test
             gc.collect()
@@ -227,7 +252,9 @@ class CrossValidator:
 
         return np.array(scores), fold_details
 
-    def _score_folds_pandas(self, model, X_pd, y_pd, groups_pd, all_folds, on_fold_complete=None) -> CVResult:
+    def _score_folds_pandas(self, model, X_pd, y_pd, groups_pd, all_folds,
+                            on_fold_complete=None, capture_fold_importance=False,
+                            feature_names=None) -> CVResult:
         scores = []
         fold_details = []
         total_folds = len(all_folds)
@@ -254,6 +281,10 @@ class CrossValidator:
             if groups_pd is not None:
                 detail["train_entities"] = int(groups_pd.iloc[train_idx].nunique())
                 detail["test_entities"] = int(groups_pd.iloc[test_idx].nunique())
+            if capture_fold_importance and feature_names:
+                imp = self._extract_importance(fold_model, feature_names)
+                if imp is not None:
+                    detail["feature_importance"] = imp
             fold_details.append(detail)
             del fold_model, y_proba, y_fold_test
             gc.collect()
@@ -263,7 +294,9 @@ class CrossValidator:
 
         return self._build_cv_result(scores, fold_details)
 
-    def _score_folds_spark(self, model, X, y, groups_pd, temporal_pd, all_folds, on_fold_complete=None) -> CVResult:
+    def _score_folds_spark(self, model, X, y, groups_pd, temporal_pd, all_folds,
+                           on_fold_complete=None, capture_fold_importance=False,
+                           feature_names=None) -> CVResult:
         from customer_retention.core.compat import concat as compat_concat
 
         combined = compat_concat([X, y.rename("__y__")], axis=1)
@@ -310,6 +343,11 @@ class CrossValidator:
             if groups_pd is not None:
                 detail["train_entities"] = int(groups_pd.iloc[train_idx].nunique())
                 detail["test_entities"] = int(groups_pd.iloc[test_idx].nunique())
+            if capture_fold_importance:
+                _fn = feature_names or feature_cols
+                imp = self._extract_importance(fold_model, _fn)
+                if imp is not None:
+                    detail["feature_importance"] = imp
             fold_details.append(detail)
 
             del fold_model, train_fold, test_fold, y_proba, y_fold_test

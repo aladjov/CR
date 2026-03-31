@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from customer_retention.core.compat import _is_native_spark_df, pd
+from customer_retention.core.compat import pd
 
 from .base import DeltaStorage
 
@@ -54,7 +54,7 @@ class LocalDelta(DeltaStorage):
         partition_by: Optional[List[str]] = None,
         metadata: Optional[Dict[str, str]] = None,
     ) -> None:
-        if hasattr(df, "to_spark") or _is_native_spark_df(df):
+        if hasattr(df, "to_spark"):
             from .databricks import DatabricksDelta
 
             DatabricksDelta().write(df, path, mode, partition_by, metadata)
