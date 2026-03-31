@@ -761,3 +761,77 @@ class TestPredictSparkMl:
             loader.predict_spark_ml(mock_model, X, feature_names=["col_x", "col_y"])
 
         mock_va_cls.assert_called_once_with(inputCols=["col_x", "col_y"], outputCol="features", handleInvalid="keep")
+
+    def test_selects_only_feature_columns_from_wide_dataframe(self, databricks_config):
+        pytest.importorskip("pyspark")
+        mock_spark = MagicMock()
+        mock_spark_df = MagicMock()
+        mock_spark.createDataFrame.return_value = mock_spark_df
+        mock_assembler = MagicMock()
+        mock_assembler.transform.return_value = MagicMock()
+        mock_model = MagicMock()
+        mock_predictions = MagicMock()
+        mock_model.transform.return_value = mock_predictions
+        mock_predictions.select.return_value.toPandas.return_value = pd.DataFrame({"prob": [0.7, 0.3]})
+
+        X = pd.DataFrame({"f1": [1.0, 2.0], "f2": [3.0, 4.0], "extra": [5.0, 6.0]})
+        feature_names = ["f1", "f2"]
+
+        with (
+            patch("customer_retention.stages.scoring.data_loader.get_spark_session", return_value=mock_spark),
+            patch("customer_retention.stages.scoring.data_loader._VectorAssembler", return_value=mock_assembler),
+            patch("customer_retention.stages.scoring.data_loader._vector_to_array"),
+            patch("customer_retention.core.compat.normalize_timestamps", side_effect=lambda x: x) as mock_norm,
+            patch("customer_retention.core.compat.pandas_dtype_to_spark_schema", return_value=None),
+        ):
+            loader = ScoringDataLoader(databricks_config)
+            result = loader.predict_spark_ml(mock_model, X, feature_names=feature_names)
+
+        passed_df = mock_norm.call_args[0][0]
+        assert list(passed_df.columns) == ["f1", "f2"]
+        assert "extra" not in passed_df.columns
+        np.testing.assert_array_equal(result, [0.7, 0.3])
+
+    def test_feature_names_required(self, databricks_config):
+        """predict_spark_ml requires feature_names — callers must always pass it."""
+        pytest.importorskip("pyspark")
+        loader = ScoringDataLoader(databricks_config)
+        X = pd.DataFrame({"a": [1.0]})
+        mock_model = MagicMock()
+        with pytest.raises(TypeError, match="feature_names"):
+            loader.predict_spark_ml(mock_model, X)
+
+    def test_shap_predict_wrapper_passes_feature_names(self, databricks_config):
+        """Verify the SHAP _predict_fn pattern passes feature_names correctly."""
+        pytest.importorskip("pyspark")
+        mock_spark = MagicMock()
+        mock_spark_df = MagicMock()
+        mock_spark.createDataFrame.return_value = mock_spark_df
+        mock_assembler = MagicMock()
+        mock_assembler.transform.return_value = MagicMock()
+        mock_model = MagicMock()
+        mock_predictions = MagicMock()
+        mock_model.transform.return_value = mock_predictions
+        mock_predictions.select.return_value.toPandas.return_value = pd.DataFrame({"prob": [0.6, 0.4]})
+
+        feature_names = ["feat_a", "feat_b"]
+
+        with (
+            patch("customer_retention.stages.scoring.data_loader.get_spark_session", return_value=mock_spark),
+            patch("customer_retention.stages.scoring.data_loader._VectorAssembler", return_value=mock_assembler) as mock_va_cls,
+            patch("customer_retention.stages.scoring.data_loader._vector_to_array"),
+        ):
+            loader = ScoringDataLoader(databricks_config)
+
+            def _predict_fn(x):
+                return loader.predict_spark_ml(
+                    mock_model, pd.DataFrame(x, columns=feature_names), feature_names,
+                )
+
+            x_input = np.array([[1.0, 2.0], [3.0, 4.0]])
+            result = _predict_fn(x_input)
+
+        mock_va_cls.assert_called_once_with(
+            inputCols=["feat_a", "feat_b"], outputCol="features", handleInvalid="keep",
+        )
+        np.testing.assert_array_equal(result, [0.6, 0.4])
