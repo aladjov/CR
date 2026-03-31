@@ -173,6 +173,11 @@ if $CLEANUP; then
 
     jupyter kernelspec remove cr-baseline -y 2>/dev/null || true
     jupyter kernelspec remove cr-current -y 2>/dev/null || true
+
+    # Prune stale git worktree references left behind by removed dirs
+    echo "  Pruning stale git worktrees ..."
+    git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+
     echo "  Done."
     exit 0
 fi
