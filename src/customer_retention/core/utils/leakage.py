@@ -89,11 +89,13 @@ def _null_correlated_columns(
     target_column: str,
     threshold: float,
     precomputed_null_counts: Optional[dict] = None,
+    progress_fn: Optional[Callable[[str], None]] = None,
 ) -> List[str]:
     if not columns:
         return []
     corrs = bulk_null_corr_with_target(
-        df, columns, target_column, precomputed_null_counts=precomputed_null_counts,
+        df, columns, target_column,
+        progress_fn=progress_fn, precomputed_null_counts=precomputed_null_counts,
     )
     return [c for c in columns if abs(corrs.get(c, 0.0)) >= threshold]
 
@@ -134,7 +136,7 @@ def detect_leaking_features(
         null_leakers = set(
             _null_correlated_columns(
                 df, available, target_column, null_correlation_threshold,
-                precomputed_null_counts=precomputed_null_counts,
+                precomputed_null_counts=precomputed_null_counts, progress_fn=progress_fn,
             ),
         )
         log(f"  [1/2] Null-pattern check: {len(null_leakers)} leaker(s) found ({time.monotonic() - t0:.0f}s)")

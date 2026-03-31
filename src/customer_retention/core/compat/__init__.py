@@ -1197,10 +1197,10 @@ def _spark_null_corr_with_target(
     return result
 
 
-def bulk_null_counts(df: Any, columns: list[str] | None = None) -> dict[str, int]:
+def bulk_null_counts(df: Any, columns: list[str] | None = None, progress_fn: Any = None) -> dict[str, int]:
     from .bulk_profiling import bulk_null_counts as _bulk_null_counts
 
-    return _bulk_null_counts(df, columns)
+    return _bulk_null_counts(df, columns, progress_fn=progress_fn)
 
 
 def _spark_batched_leakage_corr_combined(

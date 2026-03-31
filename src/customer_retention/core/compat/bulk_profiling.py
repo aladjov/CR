@@ -366,28 +366,38 @@ def _spark_bulk_nunique(df: Any, columns: list[str]) -> dict[str, int]:
     return {c: int(row[f"__dist__{c}"]) for c in columns}
 
 
-def bulk_null_counts(df: Any, columns: list[str] | None = None) -> dict[str, int]:
+def bulk_null_counts(
+    df: Any, columns: list[str] | None = None, progress_fn: Any = None,
+) -> dict[str, int]:
     valid = list(df.columns) if columns is None else [c for c in columns if c in df.columns]
     if not valid:
         return {}
+    log = progress_fn or (lambda msg: None)
     if hasattr(df, "to_spark"):
-        return _spark_bulk_null_counts(df, valid)
-    null_series = df[valid].isnull().sum()
-    return {c: int(null_series[c]) for c in valid}
+        return _spark_bulk_null_counts(df, valid, log)
+    result = {c: int(v) for c, v in df[valid].isnull().sum().items()}
+    log(f"    null-count: {len(result)} columns (pandas)")
+    return result
 
 
-def _spark_bulk_null_counts(df: Any, columns: list[str]) -> dict[str, int]:
+def _spark_bulk_null_counts(df: Any, columns: list[str], log: Any = None) -> dict[str, int]:
+    import time as _time
+
     import pyspark.sql.functions as F  # noqa: N812
 
+    log = log or (lambda msg: None)
     spark_df = as_spark_df(df)
     result: dict[str, int] = {}
     _BATCH = 200
-    for start in range(0, len(columns), _BATCH):
+    total = (len(columns) + _BATCH - 1) // _BATCH
+    t0 = _time.monotonic()
+    for batch_idx, start in enumerate(range(0, len(columns), _BATCH)):
         batch = columns[start : start + _BATCH]
         exprs = [F.coalesce(F.sum(F.isnull(F.col(c)).cast("int")), F.lit(0)).alias(f"__null__{c}") for c in batch]
         row = spark_df.agg(*exprs).collect()[0]
         for c in batch:
             result[c] = _safe_int(row[f"__null__{c}"])
+        log(f"    null-count batch {batch_idx + 1}/{total} ({len(batch)} cols, {_time.monotonic() - t0:.0f}s)")
     return result
 
 

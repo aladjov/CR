@@ -72,3 +72,17 @@ class TestBulkNullCounts:
         })
         result = bulk_null_counts(df, ["num", "txt", "dt"])
         assert result == {"num": 1, "txt": 1, "dt": 1}
+
+    def test_progress_fn_called(self):
+        cols = [f"c{i}" for i in range(10)]
+        df = pd.DataFrame({c: [1.0, np.nan] for c in cols})
+        messages = []
+        bulk_null_counts(df, cols, progress_fn=messages.append)
+        assert len(messages) == 1
+        assert "null-count" in messages[0]
+        assert "10" in messages[0]
+
+    def test_progress_fn_none_is_silent(self):
+        df = pd.DataFrame({"a": [1.0, np.nan]})
+        result = bulk_null_counts(df, ["a"], progress_fn=None)
+        assert result == {"a": 1}

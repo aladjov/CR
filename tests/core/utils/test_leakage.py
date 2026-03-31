@@ -452,3 +452,22 @@ class TestDetectLeakingFeatures:
             precomputed_null_counts=pre_nulls,
         )
         assert result_live == result_pre
+
+    def test_progress_fn_forwarded_through_detect_leaking_features(self):
+        df = pd.DataFrame({
+            "null_leaker": [np.nan, np.nan, np.nan, 1.0, 2.0, 3.0],
+            "clean": [10, 20, 30, 10, 20, 30],
+            "churned": [0, 0, 0, 1, 1, 1],
+        })
+        from customer_retention.core.compat import bulk_corr_with_target, bulk_null_counts
+        cols = ["null_leaker", "clean"]
+        pre_corrs = bulk_corr_with_target(df, cols, "churned")
+        pre_nulls = bulk_null_counts(df, cols)
+        messages = []
+        detect_leaking_features(
+            df, cols, "churned", progress_fn=messages.append,
+            precomputed_value_corrs=pre_corrs, precomputed_null_counts=pre_nulls,
+        )
+        assert any("Leakage check" in m for m in messages)
+        assert any("[1/2]" in m for m in messages)
+        assert any("[2/2]" in m for m in messages)
