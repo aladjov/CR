@@ -5,10 +5,9 @@
 # Orchestrates:
 #   1. git worktree for the old commit
 #   2. Isolated virtualenvs with Jupyter kernels
-#   3. Dataset config patching (activate retail dataset in current NB00)
-#   4. run_exploration.py on both worktrees
-#   5. Cell-output capture (same newest script for both)
-#   6. Drift report generation
+#   3. Copy notebooks to comparison dir + patch dataset (absolute paths, no backup)
+#   4-5. run_exploration.py on copies (CR_EXPERIMENTS_DIR routes artefacts)
+#   6. Cell-output capture + drift report
 #   7. Cleanup
 #
 # The default old commit (6209ecd) is the one that generated the retail-churn
@@ -68,7 +67,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --spark-remote      Enable Databricks Connect for new-code run"
             echo "  --capture-only      Skip execution, just re-capture and compare"
             echo "  --dry-run           Show what would be done without executing"
-            echo "  --dataset NAME      Dataset to activate (default: customer_retention_retail)"
+            echo "  --dataset NAME      Dataset to activate (default: customer_emails)"
             echo "  --old-only          Only run the old (baseline) side"
             echo "  --new-only          Only run the new (HEAD) side"
             echo "  --start-notebook NB Resume from this notebook (e.g. 03 or 08_baseline_experiments)"
@@ -160,11 +159,6 @@ if $CLEANUP; then
         exit 0
     fi
 
-    echo "  Restoring NB00 from backup ..."
-    python "$SCRIPTS_DIR/patch_dataset_config.py" \
-        --notebook "$REPO_DIR/$NB00" \
-        --restore 2>/dev/null || echo "  (no backup to restore)"
-
     for COMPARISON_DIR in "${_found[@]}"; do
         COMPARISON_DIR="${COMPARISON_DIR%/}"  # strip trailing slash
         echo "Cleaning up: $(basename "$COMPARISON_DIR")"
@@ -219,21 +213,24 @@ echo "============================================================"
 echo ""
 
 # ---- Running error log ----
-# Mirror run_exploration.log behaviour: progressive log in the comparison dir
-# so failures can be diagnosed after the fact.
+# Write run parameters to the comparison dir log file.
+# NOTE: we do NOT use `exec > >(tee ...)` because process substitution pipes
+# break papermill's ZMQ kernel communication (hangs at 0% CPU).
+# Instead we append to the log explicitly; run_exploration.log from each side
+# captures per-notebook error details.
 mkdir -p "$COMPARISON_DIR"
 LOG_FILE="$COMPARISON_DIR/compare_versions.log"
-# Tee all subsequent stdout+stderr to the log file while keeping terminal output
-exec > >(tee -a "$LOG_FILE") 2>&1
-echo "compare_versions — $(date '+%Y-%m-%d %H:%M:%S')"
-echo ""
-echo "  old_commit:   $OLD_COMMIT ($OLD_SHORT, v$OLD_VERSION)"
-echo "  new_commit:   HEAD ($NEW_SHORT, v$NEW_VERSION)"
-echo "  dataset:      $DATASET"
-echo "  timeout:      $TIMEOUT"
-echo "  spark_remote: ${SPARK_REMOTE:-no}"
-echo "  start_nb:     ${START_NOTEBOOK:-<from beginning>}"
-echo ""
+_log() { echo "$*" | tee -a "$LOG_FILE"; }
+
+_log "compare_versions — $(date '+%Y-%m-%d %H:%M:%S')"
+_log ""
+_log "  old_commit:   $OLD_COMMIT ($OLD_SHORT, v$OLD_VERSION)"
+_log "  new_commit:   HEAD ($NEW_SHORT, v$NEW_VERSION)"
+_log "  dataset:      $DATASET"
+_log "  timeout:      $TIMEOUT"
+_log "  spark_remote: ${SPARK_REMOTE:-no}"
+_log "  start_nb:     ${START_NOTEBOOK:-<from beginning>}"
+_log ""
 
 # ---- Step 1: Create worktree ----
 if $CAPTURE_ONLY; then
@@ -299,18 +296,63 @@ if ! $CAPTURE_ONLY; then
 fi
 echo ""
 
-# ---- Step 3: Patch dataset in current NB00 ----
-if $RUN_NEW && ! $CAPTURE_ONLY; then
-    echo "[Step 3] Patching dataset in current NB00 → $DATASET ..."
-    if $DRY_RUN; then
-        echo "  DRY_RUN: python patch_dataset_config.py --activate $DATASET"
+# ---- Step 3: Copy notebooks to commit folders + patch ----
+# Running from copies in the comparison dir means:
+#   - no backup/restore dance for the repo's NB00
+#   - executed notebooks (with outputs) land directly in the comparison dir
+#   - everything under experiments/comparisons/ is gitignored already
+NB01="exploration_notebooks/01_data_discovery.ipynb"
+OLD_NB_DIR="$OLD_OUTPUT_DIR/notebooks"
+NEW_NB_DIR="$NEW_OUTPUT_DIR/notebooks"
+
+# Resolve absolute path for dataset fixtures (relative paths break from comparison dir)
+_abs_fixture_path() {
+    local dir="$1" dataset="$2"
+    local p="$dir/tests/fixtures/${dataset}.csv"
+    if [ -f "$p" ]; then
+        echo "$p"
     else
+        echo "$dir/tests/fixtures/${dataset}.csv"
+    fi
+}
+
+if $RUN_NEW && ! $CAPTURE_ONLY; then
+    echo "[Step 3a] Copying + patching new notebooks → $NEW_NB_DIR ..."
+    if $DRY_RUN; then
+        echo "  DRY_RUN: copy + patch_dataset_config.py --activate $DATASET"
+    else
+        mkdir -p "$NEW_NB_DIR"
+        cp "$REPO_DIR"/exploration_notebooks/*.ipynb "$NEW_NB_DIR/"
         python "$SCRIPTS_DIR/patch_dataset_config.py" \
-            --notebook "$REPO_DIR/$NB00" \
-            --activate "$DATASET"
+            --notebook "$NEW_NB_DIR/00_start_here.ipynb" \
+            --activate "$DATASET" \
+            --fixture-root "$REPO_DIR/tests/fixtures"
     fi
 else
-    echo "[Step 3] SKIP — not running new side"
+    echo "[Step 3a] SKIP — not running new side"
+fi
+
+if $RUN_OLD && ! $CAPTURE_ONLY; then
+    echo "[Step 3b] Copying + patching old notebooks → $OLD_NB_DIR ..."
+    if $DRY_RUN; then
+        echo "  DRY_RUN: copy + patch_dataset_config.py --activate $DATASET (old)"
+    else
+        mkdir -p "$OLD_NB_DIR"
+        cp "$OLD_DIR"/exploration_notebooks/*.ipynb "$OLD_NB_DIR/"
+        # Patch NB00 (datasets = {}) and NB01 (DATA_PATH = "..." in older format)
+        _OLD_ALSO_PATCH=""
+        if [ -f "$OLD_NB_DIR/01_data_discovery.ipynb" ]; then
+            _OLD_ALSO_PATCH="--also-patch $OLD_NB_DIR/01_data_discovery.ipynb"
+        fi
+        # shellcheck disable=SC2086
+        python "$SCRIPTS_DIR/patch_dataset_config.py" \
+            --notebook "$OLD_NB_DIR/00_start_here.ipynb" \
+            --activate "$DATASET" \
+            --fixture-root "$OLD_DIR/tests/fixtures" \
+            $_OLD_ALSO_PATCH
+    fi
+else
+    echo "[Step 3b] SKIP — not running old side"
 fi
 echo ""
 
@@ -350,7 +392,7 @@ fi
 
 # Helper: discover the actual run_id created by the old side
 _discover_old_run_id() {
-    local runs_dir="$OLD_DIR/experiments/runs"
+    local runs_dir="$OLD_OUTPUT_DIR/experiments/runs"
     # 1. sentinel file written by RunNamespace.write_sentinel()
     if [ -f "$runs_dir/.active_run_id" ]; then
         cat "$runs_dir/.active_run_id"
@@ -365,6 +407,8 @@ _discover_old_run_id() {
 }
 
 # ---- Step 4: Run old version ----
+# Notebooks run from the copy in $OLD_NB_DIR.
+# CR_EXPERIMENTS_DIR routes RunNamespace artefacts into the comparison dir.
 if ! $RUN_OLD; then
     echo "[Step 4] SKIP — new-only mode"
 elif $CAPTURE_ONLY; then
@@ -372,7 +416,7 @@ elif $CAPTURE_ONLY; then
 elif $DRY_RUN; then
     echo "[Step 4] Running old version ($OLD_SHORT) ..."
     _OLD_EXTRA_ARGS=$(_build_old_extra_args)
-    echo "  DRY_RUN: run_exploration.py --kernel cr-baseline $_OLD_EXTRA_ARGS"
+    echo "  DRY_RUN: run_exploration.py --notebooks-dir $OLD_NB_DIR --kernel cr-baseline $_OLD_EXTRA_ARGS"
 else
     echo "[Step 4] Running old version ($OLD_SHORT) ..."
     _OLD_EXTRA_ARGS=$(_build_old_extra_args)
@@ -380,20 +424,21 @@ else
         cd "$OLD_DIR"
         # shellcheck disable=SC1091
         source .venv/bin/activate
+        export CR_EXPERIMENTS_DIR="$OLD_OUTPUT_DIR/experiments"
         # shellcheck disable=SC2086
         python scripts/notebooks/run_exploration.py \
-            --notebooks-dir exploration_notebooks \
+            --notebooks-dir "$OLD_NB_DIR" \
             --kernel cr-baseline \
             --timeout "$TIMEOUT" \
             $_OLD_EXTRA_ARGS
-    ) || echo "  WARNING: Old run had failures (continuing anyway)"
+    ) || _log "  WARNING: Old run had failures (continuing anyway)"
 
     # Discover the actual run_id (may differ from OLD_RUN_ID for older code)
     OLD_ACTUAL_RUN_ID=$(_discover_old_run_id)
     if [ -z "$OLD_ACTUAL_RUN_ID" ]; then
         OLD_ACTUAL_RUN_ID="$OLD_RUN_ID"
     fi
-    echo "  Old run complete.  (run_id: $OLD_ACTUAL_RUN_ID)"
+    _log "  Old run complete.  (run_id: $OLD_ACTUAL_RUN_ID)"
 fi
 echo ""
 
@@ -404,23 +449,24 @@ elif $CAPTURE_ONLY; then
     echo "[Step 5] SKIP — capture-only mode"
 elif $DRY_RUN; then
     echo "[Step 5] Running new version (HEAD) ..."
-    echo "  DRY_RUN: run_exploration.py --run-id $NEW_RUN_ID --kernel cr-current $SPARK_REMOTE $_NEW_START_NB_ARG"
+    echo "  DRY_RUN: run_exploration.py --notebooks-dir $NEW_NB_DIR --run-id $NEW_RUN_ID --kernel cr-current $SPARK_REMOTE $_NEW_START_NB_ARG"
 else
     echo "[Step 5] Running new version (HEAD) ..."
     (
         cd "$REPO_DIR"
         # shellcheck disable=SC1091
         source .venv/bin/activate
+        export CR_EXPERIMENTS_DIR="$NEW_OUTPUT_DIR/experiments"
         # shellcheck disable=SC2086
         python scripts/notebooks/run_exploration.py \
-            --notebooks-dir exploration_notebooks \
+            --notebooks-dir "$NEW_NB_DIR" \
             --run-id "$NEW_RUN_ID" \
             --kernel cr-current \
             --timeout "$TIMEOUT" \
             $SPARK_REMOTE \
             $_NEW_START_NB_ARG
-    ) || echo "  WARNING: New run had failures (continuing anyway)"
-    echo "  New run complete."
+    ) || _log "  WARNING: New run had failures (continuing anyway)"
+    _log "  New run complete."
 fi
 echo ""
 
@@ -476,21 +522,21 @@ copy_run_artefacts() {
 }
 
 if ! $DRY_RUN; then
-    # Use discovered run_id for old side (may differ from OLD_RUN_ID for older code)
+    # Run artefacts are already in the comparison dir (via CR_EXPERIMENTS_DIR)
     _old_rid="${OLD_ACTUAL_RUN_ID:-$OLD_RUN_ID}"
-    OLD_RUN_DIR="$OLD_DIR/experiments/runs/$_old_rid"
-    NEW_RUN_DIR="$REPO_DIR/experiments/runs/$NEW_RUN_ID"
+    OLD_RUN_DIR="$OLD_OUTPUT_DIR/experiments/runs/$_old_rid"
+    NEW_RUN_DIR="$NEW_OUTPUT_DIR/experiments/runs/$NEW_RUN_ID"
     $RUN_OLD && copy_run_artefacts "$OLD_RUN_DIR" "$OLD_OUTPUT_DIR"
     $RUN_NEW && copy_run_artefacts "$NEW_RUN_DIR" "$NEW_OUTPUT_DIR"
 
-    # Copy run_exploration.log from each side's notebooks dir for debugging
-    if $RUN_OLD && [ -f "$OLD_DIR/exploration_notebooks/run_exploration.log" ]; then
-        cp "$OLD_DIR/exploration_notebooks/run_exploration.log" "$OLD_OUTPUT_DIR/run_exploration.log"
-        echo "  Copied old run_exploration.log"
+    # run_exploration.log is written to the notebooks dir (now in comparison dir)
+    if $RUN_OLD && [ -f "$OLD_NB_DIR/run_exploration.log" ]; then
+        cp "$OLD_NB_DIR/run_exploration.log" "$OLD_OUTPUT_DIR/run_exploration.log"
+        _log "  Old run_exploration.log available"
     fi
-    if $RUN_NEW && [ -f "$REPO_DIR/exploration_notebooks/run_exploration.log" ]; then
-        cp "$REPO_DIR/exploration_notebooks/run_exploration.log" "$NEW_OUTPUT_DIR/run_exploration.log"
-        echo "  Copied new run_exploration.log"
+    if $RUN_NEW && [ -f "$NEW_NB_DIR/run_exploration.log" ]; then
+        cp "$NEW_NB_DIR/run_exploration.log" "$NEW_OUTPUT_DIR/run_exploration.log"
+        _log "  New run_exploration.log available"
     fi
 fi
 echo ""
@@ -503,12 +549,12 @@ if $DRY_RUN; then
 else
     if $RUN_OLD; then
         python "$SCRIPTS_DIR/capture_notebook_outputs.py" \
-            --notebooks-dir "$OLD_DIR/exploration_notebooks" \
+            --notebooks-dir "$OLD_NB_DIR" \
             --output "$OLD_OUTPUT_DIR/cell_outputs.md"
     fi
     if $RUN_NEW; then
         python "$SCRIPTS_DIR/capture_notebook_outputs.py" \
-            --notebooks-dir "$REPO_DIR/exploration_notebooks" \
+            --notebooks-dir "$NEW_NB_DIR" \
             --output "$NEW_OUTPUT_DIR/cell_outputs.md"
     fi
 fi
@@ -537,38 +583,10 @@ else
 fi
 echo ""
 
-# ---- Step 9: Copy executed notebooks into comparison dir ----
-echo "[Step 9] Copying executed notebooks ..."
-if $DRY_RUN; then
-    $RUN_OLD && echo "  DRY_RUN: copy notebooks → $OLD_OUTPUT_DIR/notebooks/"
-    $RUN_NEW && echo "  DRY_RUN: copy notebooks → $NEW_OUTPUT_DIR/notebooks/"
-else
-    if $RUN_OLD; then
-        mkdir -p "$OLD_OUTPUT_DIR/notebooks"
-        cp "$OLD_DIR"/exploration_notebooks/*.ipynb "$OLD_OUTPUT_DIR/notebooks/" 2>/dev/null || true
-        _old_nb_count=$(ls "$OLD_OUTPUT_DIR/notebooks/"*.ipynb 2>/dev/null | wc -l | tr -d ' ')
-        echo "  Copied ${_old_nb_count} old notebooks"
-    fi
-    if $RUN_NEW; then
-        mkdir -p "$NEW_OUTPUT_DIR/notebooks"
-        cp "$REPO_DIR"/exploration_notebooks/*.ipynb "$NEW_OUTPUT_DIR/notebooks/" 2>/dev/null || true
-        _new_nb_count=$(ls "$NEW_OUTPUT_DIR/notebooks/"*.ipynb 2>/dev/null | wc -l | tr -d ' ')
-        echo "  Copied ${_new_nb_count} new notebooks"
-    fi
-fi
-echo ""
+# (Steps 9-10 removed: notebooks already live in commit folders, no backup to restore)
 
-# ---- Step 10: Restore NB00 ----
-echo "[Step 10] Restoring NB00 ..."
-if $RUN_NEW && ! $DRY_RUN && ! $CAPTURE_ONLY; then
-    python "$SCRIPTS_DIR/patch_dataset_config.py" \
-        --notebook "$REPO_DIR/$NB00" \
-        --restore 2>/dev/null || echo "  (no backup to restore)"
-fi
-echo ""
-
-# ---- Step 11: Clean up worktree ----
-echo "[Step 11] Cleaning up ..."
+# ---- Step 9: Clean up worktree ----
+echo "[Step 9] Cleaning up ..."
 if ! $RUN_OLD; then
     echo "  SKIP — old side not run this invocation"
 elif $DRY_RUN; then

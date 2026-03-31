@@ -10,10 +10,11 @@ Usage:
         --notebook exploration_notebooks/00_start_here.ipynb \
         --activate customer_retention_retail
 
-    # Restore from backup
+    # With absolute fixture paths (for running notebooks from a different dir)
     python scripts/experiments/patch_dataset_config.py \
-        --notebook exploration_notebooks/00_start_here.ipynb \
-        --restore
+        --notebook /path/to/copy/00_start_here.ipynb \
+        --activate customer_emails \
+        --fixture-root /abs/path/to/tests/fixtures
 """
 
 from __future__ import annotations
@@ -21,7 +22,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import shutil
 import sys
 from pathlib import Path
 
@@ -36,6 +36,14 @@ def _find_config_cell(nb: dict) -> int | None:
         src = cell.get("source", [])
         first_line = src[0] if src else ""
         if cid == _CELL_ID or _CELL_TAG in first_line:
+            return i
+    # Fallback: find the first code cell containing a `datasets = {` block
+    # (older notebooks lack the @cr:config tag)
+    for i, cell in enumerate(nb.get("cells", [])):
+        if cell.get("cell_type") != "code":
+            continue
+        text = "".join(cell.get("source", []))
+        if re.search(r"^#?\s*datasets\s*=\s*\{", text, re.MULTILINE):
             return i
     return None
 
@@ -119,13 +127,18 @@ def _toggle_block(
     return result
 
 
-def patch_notebook(nb_path: Path, target_dataset: str) -> None:
-    """Activate *target_dataset* in the notebook and comment out others."""
-    backup = nb_path.with_suffix(".ipynb.bak")
-    if not backup.exists():
-        shutil.copy2(nb_path, backup)
-        print(f"Backup saved to {backup}", file=sys.stderr)
+def _rewrite_relative_paths(lines: list[str], fixture_root: Path | None) -> list[str]:
+    """Replace ``../tests/fixtures/`` with an absolute *fixture_root* prefix."""
+    if fixture_root is None:
+        return lines
+    root_str = str(fixture_root).rstrip("/")
+    return [ln.replace("../tests/fixtures/", f"{root_str}/") for ln in lines]
 
+
+def patch_notebook(
+    nb_path: Path, target_dataset: str, *, fixture_root: Path | None = None
+) -> None:
+    """Activate *target_dataset* in the notebook and comment out others."""
     with open(nb_path, encoding="utf-8") as f:
         nb = json.load(f)
 
@@ -170,6 +183,7 @@ def patch_notebook(nb_path: Path, target_dataset: str) -> None:
     # Re-parse after commenting out all (indices are the same)
     # Now uncomment the target
     lines = _toggle_block(lines, target_block, activate=True)
+    lines = _rewrite_relative_paths(lines, fixture_root)
 
     cell["source"] = lines
     nb["cells"][cell_idx] = cell
@@ -181,15 +195,60 @@ def patch_notebook(nb_path: Path, target_dataset: str) -> None:
     print(f"Activated dataset '{target_dataset}' in {nb_path}", file=sys.stderr)
 
 
-def restore_notebook(nb_path: Path) -> None:
-    """Restore the notebook from its .bak backup."""
-    backup = nb_path.with_suffix(".ipynb.bak")
-    if not backup.exists():
-        print(f"No backup found at {backup}", file=sys.stderr)
-        sys.exit(1)
-    shutil.copy2(backup, nb_path)
-    backup.unlink()
-    print(f"Restored {nb_path} from backup", file=sys.stderr)
+def patch_data_path(
+    nb_path: Path, target_dataset: str, *, fixture_root: Path | None = None
+) -> None:
+    """Activate *target_dataset* DATA_PATH in older NB01 notebooks.
+
+    Older notebooks use a flat ``DATA_PATH = "..."`` line instead of the
+    ``datasets = {}`` block.  This function comments out all DATA_PATH lines
+    and uncomments the one whose path contains *target_dataset*.
+    """
+    with open(nb_path, encoding="utf-8") as f:
+        nb = json.load(f)
+
+    patched = False
+    for cell in nb.get("cells", []):
+        if cell.get("cell_type") != "code":
+            continue
+        src = cell.get("source", [])
+        text = "".join(src)
+        if "DATA_PATH" not in text:
+            continue
+        # Only the config cell (contains DATA_PATH and TARGET_COLUMN)
+        if "TARGET_COLUMN" not in text and "ENTITY_COLUMN" not in text:
+            continue
+
+        lines = list(src)
+        activated = False
+        for idx, line in enumerate(lines):
+            # Match DATA_PATH = "..." or #DATA_PATH = "..."
+            m = re.match(r"^(\s*)#?\s*(DATA_PATH\s*=\s*\"[^\"]+\")", line)
+            if not m:
+                continue
+            indent, assignment = m.group(1), m.group(2)
+            if target_dataset in line:
+                lines[idx] = f"{indent}{assignment}\n"
+                activated = True
+            else:
+                lines[idx] = f"{indent}#{assignment}\n"
+
+        if activated:
+            cell["source"] = _rewrite_relative_paths(lines, fixture_root)
+            patched = True
+            break
+
+    if not patched:
+        print(
+            f"Warning: no DATA_PATH matching '{target_dataset}' in {nb_path}",
+            file=sys.stderr,
+        )
+        return
+
+    with open(nb_path, "w", encoding="utf-8") as f:
+        json.dump(nb, f, indent=1, ensure_ascii=False)
+        f.write("\n")
+    print(f"Activated DATA_PATH for '{target_dataset}' in {nb_path}", file=sys.stderr)
 
 
 def main() -> None:
@@ -200,28 +259,38 @@ def main() -> None:
         default=Path("exploration_notebooks/00_start_here.ipynb"),
         help="Path to 00_start_here.ipynb",
     )
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
+    parser.add_argument(
         "--activate",
         type=str,
+        required=True,
         help="Dataset name to activate (e.g. customer_retention_retail)",
     )
-    group.add_argument(
-        "--restore",
-        action="store_true",
-        help="Restore notebook from .bak backup",
+    parser.add_argument(
+        "--also-patch",
+        type=Path,
+        action="append",
+        default=[],
+        help="Additional notebook whose DATA_PATH line to patch (repeatable)",
+    )
+    parser.add_argument(
+        "--fixture-root",
+        type=Path,
+        default=None,
+        help="Rewrite ../tests/fixtures/ to this absolute path (for running from a different dir)",
     )
     args = parser.parse_args()
 
+    fixture_root = args.fixture_root.resolve() if args.fixture_root else None
     nb_path = args.notebook.resolve()
     if not nb_path.exists():
         print(f"Error: {nb_path} not found", file=sys.stderr)
         sys.exit(1)
 
-    if args.restore:
-        restore_notebook(nb_path)
-    else:
-        patch_notebook(nb_path, args.activate)
+    patch_notebook(nb_path, args.activate, fixture_root=fixture_root)
+    for extra in args.also_patch:
+        p = extra.resolve()
+        if p.exists():
+            patch_data_path(p, args.activate, fixture_root=fixture_root)
 
 
 if __name__ == "__main__":
