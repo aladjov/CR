@@ -735,16 +735,29 @@ def safe_drop_duplicates(df: Any, subset: list[str], keep: str = "last") -> Any:
     return df.drop_duplicates(subset=subset, keep=keep)
 
 
+def safe_len(df: Any) -> int:
+    """Row count that does NOT trigger a per-call Spark action inside loops.
+
+    On pyspark.pandas ``len(df)`` calls ``.__len__()`` which fires a full
+    ``.count()`` Spark job every time.  This helper caches nothing but is
+    clearly named so callers store the result in a local variable.
+    """
+    if _is_spark_pandas(df):
+        return int(as_spark_df(df).count())
+    return len(df)
+
+
 def safe_sample(df: Any, n: int, random_state: int = 42) -> Any:
     if n <= 0:
         return df.head(0)
-    n = min(n, len(df))
+    total = safe_len(df)
+    n = min(n, total)
     if n == 0:
         return df.head(0)
     if _is_spark_pandas(df):
-        frac = min(1.0, n / max(1, len(df)))
+        frac = min(1.0, n / max(1, total))
         result = df.sample(frac=frac, random_state=random_state)
-        return result.head(n) if len(result) > n else result
+        return result.head(n) if safe_len(result) > n else result
     return df.sample(n=n, random_state=random_state)
 
 
@@ -1830,6 +1843,7 @@ __all__ = [
     "make_path",
     "safe_drop_duplicates",
     "safe_isin",
+    "safe_len",
     "safe_sample",
     "safe_select",
     "safe_describe",
