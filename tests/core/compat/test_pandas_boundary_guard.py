@@ -88,6 +88,8 @@ COLLECT_BOUNDARY_FILES = {
     "stages/modeling/training_preparator.py",
     # Feature scaler — groupBy().agg().collect() for unpivoted scaler params (1 row per feature)
     "stages/modeling/spark_feature_scaler.py",
+    # Entity-grouped temporal split — .agg().head() for cutoff percentile (1 row)
+    "stages/modeling/data_splitter.py",
     # Field availability audit — .agg().collect() for batched population-rate stats (1 row)
     "analysis/auto_explorer/field_availability_audit.py",
     # Column describer — information_schema query result (1 row per column, small)
