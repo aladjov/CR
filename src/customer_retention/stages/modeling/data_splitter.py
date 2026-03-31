@@ -83,6 +83,12 @@ class DataSplitter:
         availability_warnings = self.validate_feature_availability(df, feature_availability)
 
         if self.strategy == SplitStrategy.TEMPORAL:
+            if not self.group_column:
+                raise ValueError(
+                    "Temporal split requires group_column (entity column) to prevent "
+                    "entity leakage. Use group_column='entity_id' or switch to "
+                    "SplitStrategy.RANDOM_STRATIFIED."
+                )
             result = self._temporal_split(df)
         elif self.strategy == SplitStrategy.GROUP:
             result = self._group_split(to_pandas(df))
@@ -106,6 +112,12 @@ class DataSplitter:
         availability_warnings = self.validate_feature_availability(spark_df, feature_availability)
 
         if self.strategy == SplitStrategy.TEMPORAL:
+            if not self.group_column:
+                raise ValueError(
+                    "Temporal split requires group_column (entity column) to prevent "
+                    "entity leakage. Use group_column='entity_id' or switch to "
+                    "SplitStrategy.RANDOM_STRATIFIED."
+                )
             result = self._distributed_temporal_split(spark_df)
         elif self.strategy == SplitStrategy.GROUP:
             result = self._group_split(spark_df.toPandas())
