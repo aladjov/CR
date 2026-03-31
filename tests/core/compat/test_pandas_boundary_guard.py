@@ -90,6 +90,8 @@ COLLECT_BOUNDARY_FILES = {
     "stages/modeling/spark_feature_scaler.py",
     # Field availability audit — .agg().collect() for batched population-rate stats (1 row)
     "analysis/auto_explorer/field_availability_audit.py",
+    # Column describer — information_schema query result (1 row per column, small)
+    "analysis/auto_explorer/column_describer.py",
     # CV folds — gc.collect() for memory reclamation between folds (not Spark .collect())
     "stages/modeling/cross_validator.py",
     # L1 thinning — .distinct().collect() for snapshot dates (small: ~100 dates max)
