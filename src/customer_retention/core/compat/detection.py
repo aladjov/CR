@@ -92,7 +92,9 @@ def is_pandas_api_on_spark() -> bool:
 
 
 def is_remote_spark() -> bool:
-    return _SPARK_PANDAS_AVAILABLE and not bool(os.environ.get("DATABRICKS_RUNTIME_VERSION"))
+    if bool(os.environ.get("DATABRICKS_RUNTIME_VERSION")):
+        return False
+    return bool(os.environ.get("CR_SPARK_REMOTE"))
 
 
 def connect_remote_spark() -> Any:
