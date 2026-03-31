@@ -1584,18 +1584,33 @@ def prepare_features(df):
     return assembled, feature_cols
 
 def _temporal_split(assembled, test_size):
+    import datetime
+    from sklearn.model_selection import GroupShuffleSplit
+
     cutoff_ts = assembled.select(
         F.percentile_approx(F.unix_timestamp(F.col(TIMESTAMP_COLUMN)), 1.0 - test_size).alias("cutoff")
     ).collect()[0]["cutoff"]
-    import datetime
     cutoff_date = datetime.datetime.fromtimestamp(cutoff_ts)
+
+    # Entity-grouped: hold out entire entities via GroupShuffleSplit,
+    # then apply temporal purge on the training side.
+    entity_ids = [r[ENTITY_KEY] for r in assembled.select(ENTITY_KEY).distinct().collect()]
+    import numpy as np
+    idx = np.arange(len(entity_ids))
+    gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=42)
+    train_eidx, test_eidx = next(gss.split(idx, groups=idx))
+    test_ents = [entity_ids[i] for i in test_eidx]
+    train_ents = [entity_ids[i] for i in train_eidx]
+
+    test_ent_df = spark.createDataFrame([(e,) for e in test_ents], [ENTITY_KEY])
+    train_ent_df = spark.createDataFrame([(e,) for e in train_ents], [ENTITY_KEY])
+
+    test_df = assembled.join(test_ent_df, on=ENTITY_KEY, how="inner")
+    train_df = assembled.join(train_ent_df, on=ENTITY_KEY, how="inner")
 {% if config.training and config.training.purge_gap_days %}
     purge_gap_days = {{ config.training.purge_gap_days }}
-    train_df = assembled.filter(F.col(TIMESTAMP_COLUMN) < F.date_sub(F.lit(cutoff_date), purge_gap_days))
-{% else %}
-    train_df = assembled.filter(F.col(TIMESTAMP_COLUMN) < F.lit(cutoff_date))
+    train_df = train_df.filter(F.col(TIMESTAMP_COLUMN) < F.date_sub(F.lit(cutoff_date), purge_gap_days))
 {% endif %}
-    test_df = assembled.filter(F.col(TIMESTAMP_COLUMN) >= F.lit(cutoff_date))
     return train_df, test_df, cutoff_date
 
 def _extract_feature_importance(fitted, feature_cols):

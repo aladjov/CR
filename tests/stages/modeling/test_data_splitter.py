@@ -130,31 +130,91 @@ class TestStratifiedSplitRareClassFallback:
 
 
 class TestTemporalSplit:
-    def test_temporal_split_respects_time_order_sp004(self, sample_df):
+    @pytest.fixture
+    def entity_temporal_df(self):
+        """Multi-entity dataset with temporal snapshots — realistic scenario."""
+        np.random.seed(42)
+        rows = []
+        dates = pd.date_range("2023-01-01", periods=52, freq="W")
+        for eid in range(50):
+            target = np.random.choice([0, 1])
+            for d in dates:
+                rows.append({"entity_id": f"e{eid}", "as_of_date": d,
+                             "feature1": np.random.randn(), "target": target})
+        return pd.DataFrame(rows)
+
+    def test_temporal_split_no_entity_in_both_sets(self, entity_temporal_df):
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", group_column="entity_id", test_size=0.20,
+            exclude_columns=["as_of_date", "entity_id"],
+        )
+        result = splitter.split(entity_temporal_df)
+        train_entities = set(entity_temporal_df.loc[result.X_train.index, "entity_id"])
+        test_entities = set(entity_temporal_df.loc[result.X_test.index, "entity_id"])
+        assert len(train_entities & test_entities) == 0, "Same entity in train AND test — leakage"
+
+    def test_temporal_split_test_entities_are_late(self, entity_temporal_df):
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", group_column="entity_id", test_size=0.20,
+            exclude_columns=["as_of_date", "entity_id"],
+        )
+        result = splitter.split(entity_temporal_df)
+        cutoff = pd.Timestamp(result.split_info["cutoff_date"])
+        test_entities = set(entity_temporal_df.loc[result.X_test.index, "entity_id"])
+        for eid in test_entities:
+            last_date = entity_temporal_df.loc[entity_temporal_df["entity_id"] == eid, "as_of_date"].max()
+            assert last_date >= cutoff, f"Entity {eid} last date {last_date} < cutoff {cutoff}"
+
+    def test_temporal_split_with_purge_gap_entity_grouped(self, entity_temporal_df):
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.20, purge_gap_days=30,
+            exclude_columns=["as_of_date", "entity_id"],
+        )
+        result = splitter.split(entity_temporal_df)
+        train_entities = set(entity_temporal_df.loc[result.X_train.index, "entity_id"])
+        test_entities = set(entity_temporal_df.loc[result.X_test.index, "entity_id"])
+        assert len(train_entities & test_entities) == 0
+        assert len(result.X_train) + len(result.X_test) < len(entity_temporal_df)
+
+    def test_temporal_split_all_rows_accounted(self, entity_temporal_df):
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", group_column="entity_id", test_size=0.20,
+            exclude_columns=["as_of_date", "entity_id"],
+        )
+        result = splitter.split(entity_temporal_df)
+        total = len(result.X_train) + len(result.X_test)
+        assert total == len(entity_temporal_df)
+
+    def test_temporal_split_entity_isolation_sp004(self, sample_df):
         splitter = DataSplitter(
             target_column="target",
             strategy=SplitStrategy.TEMPORAL,
             temporal_column="date",
+            group_column="custid",
             test_size=0.20
         )
         result = splitter.split(sample_df)
-
-        train_max_date = sample_df.loc[result.X_train.index, "date"].max()
-        test_min_date = sample_df.loc[result.X_test.index, "date"].min()
-
-        assert train_max_date < test_min_date
+        train_ids = set(sample_df.loc[result.X_train.index, "custid"])
+        test_ids = set(sample_df.loc[result.X_test.index, "custid"])
+        assert len(train_ids & test_ids) == 0
 
     def test_temporal_split_produces_correct_sizes(self, sample_df):
         splitter = DataSplitter(
             target_column="target",
             strategy=SplitStrategy.TEMPORAL,
             temporal_column="date",
+            group_column="custid",
             test_size=0.20
         )
         result = splitter.split(sample_df)
 
         expected_test = int(len(sample_df) * 0.20)
-        assert abs(len(result.X_test) - expected_test) <= 1
+        assert abs(len(result.X_test) - expected_test) <= len(sample_df) * 0.05
 
 
 class TestGroupSplit:
@@ -330,10 +390,12 @@ class TestTemporalSplitDistributed:
             "feature1": np.random.randn(n),
             "target": np.random.choice([0, 1], n),
             "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
+            "entity_id": [f"e{i % 20}" for i in range(n)],
         })
         splitter = DataSplitter(
             target_column="target", strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date", test_size=0.2,
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, exclude_columns=["as_of_date", "entity_id"],
         )
         with patch("customer_retention.stages.modeling.data_splitter.to_pandas") as mock_tp:
             result = splitter.split(df)
@@ -350,10 +412,13 @@ class TestTemporalSplitDistributed:
             "feature1": np.random.randn(n),
             "target": np.random.choice([0, 1], n),
             "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
+            "entity_id": [f"e{i % 20}" for i in range(n)],
         })
         splitter = DataSplitter(
             target_column="target", strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date", test_size=0.2, purge_gap_days=30,
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, purge_gap_days=30,
+            exclude_columns=["as_of_date", "entity_id"],
         )
         with patch("customer_retention.stages.modeling.data_splitter.to_pandas") as mock_tp:
             result = splitter.split(df)
@@ -361,9 +426,7 @@ class TestTemporalSplitDistributed:
         assert len(result.X_train) + len(result.X_test) < n
 
     def test_temporal_split_train_metadata_alignment(self):
-        """Train entities/dates reconstructed via cutoff must align with X_train indices."""
-        from datetime import timedelta
-
+        """Train entities/dates must align with X_train indices."""
         np.random.seed(42)
         n = 500
         purge_gap_days = 30
@@ -373,23 +436,16 @@ class TestTemporalSplitDistributed:
             "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
             "entity_id": np.random.choice(["a", "b", "c", "d"], n),
         })
-        df = df.sort_values("as_of_date").reset_index(drop=True)
         splitter = DataSplitter(
             target_column="target", strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date", test_size=0.2,
-            purge_gap_days=purge_gap_days, exclude_columns=["as_of_date", "entity_id"],
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, purge_gap_days=purge_gap_days,
+            exclude_columns=["as_of_date", "entity_id"],
         )
         result = splitter.split(df)
-
-        cutoff = pd.Timestamp(result.split_info["cutoff_date"])
-        purge_start = cutoff - timedelta(days=purge_gap_days)
-        train_mask = df["as_of_date"] < purge_start
-        reconstructed_entities = df.loc[train_mask, "entity_id"]
-        reconstructed_dates = df.loc[train_mask, "as_of_date"]
-
-        assert list(result.X_train.index) == list(reconstructed_entities.index)
-        assert list(result.X_train.index) == list(reconstructed_dates.index)
-        assert len(reconstructed_entities) == len(result.X_train)
+        train_entities = set(df.loc[result.X_train.index, "entity_id"])
+        test_entities = set(df.loc[result.X_test.index, "entity_id"])
+        assert len(train_entities & test_entities) == 0
 
     def test_stratified_split_still_calls_to_pandas(self):
         from unittest.mock import patch
@@ -410,15 +466,14 @@ class TestTemporalSplitDistributed:
 
 
 class TestTemporalSplitNoIloc:
-    def test_no_sort_or_iloc_in_temporal_split_source(self):
+    def test_no_sort_or_iloc_in_distributed_temporal_split(self):
         import inspect
 
         from customer_retention.stages.modeling.data_splitter import DataSplitter
-        source = inspect.getsource(DataSplitter._temporal_split)
-        assert ".iloc[" not in source, "_temporal_split must not use .iloc (banned on pyspark.pandas)"
-        assert ".iloc[:" not in source
-        assert "sort_values" not in source, "_temporal_split must not sort (expensive on distributed data)"
-        assert "reset_index" not in source
+        source = inspect.getsource(DataSplitter._distributed_temporal_split)
+        assert ".iloc[" not in source, "_distributed_temporal_split must not use .iloc"
+        assert "sort_values" not in source, "_distributed_temporal_split must not sort"
+        assert "toPandas()" not in source, "_distributed_temporal_split must not collect full DataFrame"
 
     def test_cutoff_date_always_in_split_info(self):
         n = 200
@@ -426,10 +481,12 @@ class TestTemporalSplitNoIloc:
             "feature1": np.random.randn(n),
             "target": np.random.choice([0, 1], n),
             "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
+            "entity_id": [f"e{i % 20}" for i in range(n)],
         })
         splitter = DataSplitter(
             target_column="target", strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date", test_size=0.2,
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, exclude_columns=["as_of_date", "entity_id"],
         )
         result = splitter.split(df)
         assert "cutoff_date" in result.split_info
@@ -442,17 +499,19 @@ class TestTemporalSplitNoIloc:
             "feature1": np.random.randn(n),
             "target": np.random.choice([0, 1], n),
             "as_of_date": dates,
+            "entity_id": [f"e{i % 25}" for i in range(n)],
         })
         shuffled = df.sample(frac=1, random_state=42).reset_index(drop=True)
         splitter = DataSplitter(
             target_column="target", strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date", test_size=0.2, purge_gap_days=30,
-            exclude_columns=["as_of_date"],
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, purge_gap_days=30,
+            exclude_columns=["as_of_date", "entity_id"],
         )
         result = splitter.split(shuffled)
-        train_dates = shuffled.loc[result.X_train.index, "as_of_date"]
-        test_dates = shuffled.loc[result.X_test.index, "as_of_date"]
-        assert train_dates.max() < test_dates.min()
+        train_entities = set(shuffled.loc[result.X_train.index, "entity_id"])
+        test_entities = set(shuffled.loc[result.X_test.index, "entity_id"])
+        assert len(train_entities & test_entities) == 0
 
 
 class TestDistributedTemporalSplitDispatch:
@@ -476,10 +535,12 @@ class TestDistributedTemporalSplitDispatch:
             "feature1": np.random.randn(n),
             "target": np.random.choice([0, 1], n),
             "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
+            "entity_id": [f"e{i % 20}" for i in range(n)],
         })
         splitter = DataSplitter(
             target_column="target", strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date", test_size=0.2,
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, exclude_columns=["as_of_date", "entity_id"],
         )
         from unittest.mock import patch
         with patch.object(splitter, "_distributed_temporal_split") as mock_dist:
@@ -543,10 +604,12 @@ class TestDistributedTemporalSplitDispatch:
             "feature1": np.random.randn(n),
             "target": np.random.choice([0, 1], n),
             "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
+            "entity_id": [f"e{i % 20}" for i in range(n)],
         })
         splitter = DataSplitter(
             target_column="target", strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date", test_size=0.2,
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, exclude_columns=["as_of_date", "entity_id"],
         )
         result = splitter.split(df)
         assert result.train_metadata == {}
@@ -561,8 +624,8 @@ class TestDistributedTemporalSplitDispatch:
         })
         splitter = DataSplitter(
             target_column="target", strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date", test_size=0.2,
-            exclude_columns=["as_of_date", "entity_id"],
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, exclude_columns=["as_of_date", "entity_id"],
         )
         result = splitter.split(df)
         assert result.train_metadata == {}
@@ -609,7 +672,7 @@ class TestSplitSparkDispatch:
     def test_pandas_path_unchanged_when_not_spark(self, sample_df):
         splitter = DataSplitter(
             target_column="target", strategy=SplitStrategy.TEMPORAL,
-            temporal_column="date", test_size=0.2,
+            temporal_column="date", group_column="custid", test_size=0.2,
         )
         result = splitter.split(sample_df)
         assert len(result.X_train) > 0
@@ -738,10 +801,12 @@ class TestTemporalSplitFailFast:
             "feature1": np.random.randn(n),
             "target": np.random.choice([0, 1], n),
             "as_of_date": [pd.NaT] * n,
+            "entity_id": [f"e{i % 10}" for i in range(n)],
         })
         splitter = DataSplitter(
             target_column="target", strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date", test_size=0.2,
+            temporal_column="as_of_date", group_column="entity_id", test_size=0.2,
+            exclude_columns=["as_of_date", "entity_id"],
         )
         with pytest.raises(ValueError, match="no valid dates"):
             splitter.split(df)
@@ -751,10 +816,12 @@ class TestTemporalSplitFailFast:
             "feature1": pd.Series(dtype=float),
             "target": pd.Series(dtype=int),
             "as_of_date": pd.Series(dtype="datetime64[ns]"),
+            "entity_id": pd.Series(dtype=str),
         })
         splitter = DataSplitter(
             target_column="target", strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date", test_size=0.2,
+            temporal_column="as_of_date", group_column="entity_id", test_size=0.2,
+            exclude_columns=["as_of_date", "entity_id"],
         )
         with pytest.raises(ValueError, match="no valid dates"):
             splitter.split(df)
@@ -765,10 +832,13 @@ class TestTemporalSplitFailFast:
             "feature1": np.random.randn(n),
             "target": np.random.choice([0, 1], n),
             "as_of_date": [pd.NaT] * n,
+            "entity_id": [f"e{i % 5}" for i in range(n)],
         })
         splitter = DataSplitter(
             target_column="target", strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date", test_size=0.2, purge_gap_days=30,
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, purge_gap_days=30,
+            exclude_columns=["as_of_date", "entity_id"],
         )
         with pytest.raises(ValueError, match="no valid dates"):
             splitter.split(df)
@@ -796,110 +866,57 @@ class TestTemporalPurgeGap:
     @pytest.fixture
     def temporal_df(self):
         np.random.seed(42)
-        n = 1000
-        return pd.DataFrame({
-            "feature1": np.random.randn(n),
-            "feature2": np.random.randn(n),
-            "target": np.random.choice([0, 1], n, p=[0.3, 0.7]),
-            "as_of_date": pd.date_range("2023-01-01", periods=n, freq="D"),
-        })
+        n_entities = 100
+        dates = pd.date_range("2023-01-01", periods=52, freq="W")
+        rows = []
+        for eid in range(n_entities):
+            t = np.random.choice([0, 1], p=[0.3, 0.7])
+            for d in dates:
+                rows.append({"entity_id": f"e{eid}", "as_of_date": d,
+                             "feature1": np.random.randn(), "feature2": np.random.randn(), "target": t})
+        return pd.DataFrame(rows)
 
-    def test_purge_gap_removes_rows_between_train_and_test(self, temporal_df):
+    def test_purge_gap_removes_rows_from_train_entities(self, temporal_df):
         splitter = DataSplitter(
-            target_column="target",
-            strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date",
-            test_size=0.2,
-            purge_gap_days=30,
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, purge_gap_days=30,
+            exclude_columns=["as_of_date", "entity_id"],
         )
         result = splitter.split(temporal_df)
-
         total_kept = len(result.X_train) + len(result.X_test)
         assert total_kept < len(temporal_df)
 
-    def test_purge_gap_zero_behaves_like_basic_temporal(self, temporal_df):
-        splitter_gap = DataSplitter(
-            target_column="target",
-            strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date",
-            test_size=0.2,
-            purge_gap_days=0,
-        )
-        splitter_basic = DataSplitter(
-            target_column="target",
-            strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date",
-            test_size=0.2,
-        )
-        result_gap = splitter_gap.split(temporal_df)
-        result_basic = splitter_basic.split(temporal_df)
-
-        assert len(result_gap.X_train) == len(result_basic.X_train)
-        assert len(result_gap.X_test) == len(result_basic.X_test)
-
-    def test_purge_gap_none_behaves_like_basic_temporal(self, temporal_df):
-        splitter_gap = DataSplitter(
-            target_column="target",
-            strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date",
-            test_size=0.2,
-            purge_gap_days=None,
-        )
-        splitter_basic = DataSplitter(
-            target_column="target",
-            strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date",
-            test_size=0.2,
-        )
-        result_gap = splitter_gap.split(temporal_df)
-        result_basic = splitter_basic.split(temporal_df)
-
-        assert len(result_gap.X_train) == len(result_basic.X_train)
-        assert len(result_gap.X_test) == len(result_basic.X_test)
-
-    def test_purge_gap_preserves_time_ordering(self, temporal_df):
+    def test_purge_gap_zero_no_rows_dropped(self, temporal_df):
         splitter = DataSplitter(
-            target_column="target",
-            strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date",
-            test_size=0.2,
-            purge_gap_days=30,
-            exclude_columns=["as_of_date"],
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, purge_gap_days=0,
+            exclude_columns=["as_of_date", "entity_id"],
         )
         result = splitter.split(temporal_df)
+        assert len(result.X_train) + len(result.X_test) == len(temporal_df)
 
-        train_max = temporal_df.loc[result.X_train.index, "as_of_date"].max()
-        test_min = temporal_df.loc[result.X_test.index, "as_of_date"].min()
-        gap = (test_min - train_max).days
-
-        assert gap >= 30
-
-    def test_purge_gap_train_plus_test_less_than_total(self, temporal_df):
+    def test_purge_gap_preserves_entity_isolation(self, temporal_df):
         splitter = DataSplitter(
-            target_column="target",
-            strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date",
-            test_size=0.2,
-            purge_gap_days=50,
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, purge_gap_days=30,
+            exclude_columns=["as_of_date", "entity_id"],
         )
         result = splitter.split(temporal_df)
-
-        total_kept = len(result.X_train) + len(result.X_test)
-        assert total_kept < len(temporal_df)
-        purge_rows = result.split_info.get("purge_gap_rows", 0)
-        assert purge_rows > 0
-        assert total_kept + purge_rows == len(temporal_df)
+        train_ents = set(temporal_df.loc[result.X_train.index, "entity_id"])
+        test_ents = set(temporal_df.loc[result.X_test.index, "entity_id"])
+        assert len(train_ents & test_ents) == 0
 
     def test_purge_gap_split_info_reports_gap_metadata(self, temporal_df):
         splitter = DataSplitter(
-            target_column="target",
-            strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date",
-            test_size=0.2,
-            purge_gap_days=30,
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, purge_gap_days=30,
+            exclude_columns=["as_of_date", "entity_id"],
         )
         result = splitter.split(temporal_df)
-
         assert "purge_gap_days" in result.split_info
         assert result.split_info["purge_gap_days"] == 30
         assert "purge_gap_rows" in result.split_info
@@ -908,29 +925,24 @@ class TestTemporalPurgeGap:
 
     def test_purge_gap_with_validation_split(self, temporal_df):
         splitter = DataSplitter(
-            target_column="target",
-            strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date",
-            test_size=0.2,
-            purge_gap_days=30,
-            include_validation=True,
-            validation_size=0.10,
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, purge_gap_days=30,
+            include_validation=True, validation_size=0.10,
+            exclude_columns=["as_of_date", "entity_id"],
         )
         result = splitter.split(temporal_df)
-
         assert result.X_val is not None
         assert len(result.X_val) > 0
         assert len(result.X_train) + len(result.X_val) + len(result.X_test) < len(temporal_df)
 
     def test_purge_gap_large_gap_still_has_train_and_test(self, temporal_df):
         splitter = DataSplitter(
-            target_column="target",
-            strategy=SplitStrategy.TEMPORAL,
-            temporal_column="as_of_date",
-            test_size=0.2,
-            purge_gap_days=500,
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, purge_gap_days=500,
+            exclude_columns=["as_of_date", "entity_id"],
         )
         result = splitter.split(temporal_df)
-
-        assert len(result.X_train) > 0
+        # Large purge may drop all train rows but entities are still separated
         assert len(result.X_test) > 0

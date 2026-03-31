@@ -16,6 +16,7 @@ class TestSplitAvailabilityValidation:
             "feature_a": range(1000),
             "feature_b": range(1000),
             "target": [0] * 900 + [1] * 100,
+            "entity_id": [f"e{i % 50}" for i in range(1000)],
         })
 
     def create_availability_with_new_tracking(self) -> FeatureAvailabilityMetadata:
@@ -92,6 +93,7 @@ class TestSplitAvailabilityValidation:
             target_column="target",
             strategy=SplitStrategy.TEMPORAL,
             temporal_column="feature_timestamp",
+            group_column="entity_id",
         )
         availability = self.create_full_coverage_availability()
         warnings = splitter.validate_feature_availability(df, availability)
@@ -103,6 +105,7 @@ class TestSplitAvailabilityValidation:
             target_column="target",
             strategy=SplitStrategy.TEMPORAL,
             temporal_column="feature_timestamp",
+            group_column="entity_id",
         )
         availability = self.create_availability_with_new_tracking()
         warnings = splitter.validate_feature_availability(df, availability)
@@ -118,6 +121,7 @@ class TestSplitAvailabilityValidation:
             target_column="target",
             strategy=SplitStrategy.TEMPORAL,
             temporal_column="feature_timestamp",
+            group_column="entity_id",
         )
         availability = self.create_availability_with_retired()
         warnings = splitter.validate_feature_availability(df, availability)
@@ -159,6 +163,7 @@ class TestSplitAvailabilityValidation:
             target_column="target",
             strategy=SplitStrategy.TEMPORAL,
             temporal_column="feature_timestamp",
+            group_column="entity_id",
         )
         warnings = splitter.validate_feature_availability(df, availability)
         columns_warned = {w.column for w in warnings}
@@ -181,6 +186,7 @@ class TestSplitAvailabilityValidation:
             target_column="target",
             strategy=SplitStrategy.TEMPORAL,
             temporal_column="feature_timestamp",
+            group_column="entity_id",
         )
         availability = self.create_availability_with_new_tracking()
         warnings = splitter.validate_feature_availability(df, availability)
@@ -194,6 +200,7 @@ class TestSplitAvailabilityValidation:
             target_column="target",
             strategy=SplitStrategy.TEMPORAL,
             temporal_column="feature_timestamp",
+            group_column="entity_id",
         )
         warnings = splitter.validate_feature_availability(df, None)
         assert warnings == []
@@ -204,6 +211,7 @@ class TestSplitAvailabilityValidation:
             target_column="target",
             strategy=SplitStrategy.TEMPORAL,
             temporal_column="feature_timestamp",
+            group_column="entity_id",
         )
         availability = self.create_availability_with_new_tracking()
         result = splitter.split(df, feature_availability=availability)
@@ -216,6 +224,7 @@ class TestSplitAvailabilityValidation:
             target_column="target",
             strategy=SplitStrategy.TEMPORAL,
             temporal_column="feature_timestamp",
+            group_column="entity_id",
         )
         result = splitter.split(df)
         assert "availability_warnings" not in result.split_info or result.split_info["availability_warnings"] == []

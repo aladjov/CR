@@ -1324,10 +1324,12 @@ def run_experiment():
             target_column=TARGET_COLUMN,
             strategy=SplitStrategy.TEMPORAL,
             temporal_column=FEAST_TIMESTAMP_COL,
+            group_column=FEAST_ENTITY_KEY,
 {% if config.training and config.training.purge_gap_days %}
             purge_gap_days={{ config.training.purge_gap_days }},
 {% endif %}
             test_size={{ config.training.test_size if config.training else 0.2 }},
+            exclude_columns=[FEAST_TIMESTAMP_COL, FEAST_ENTITY_KEY],
         )
         split_df = training_data.loc[X.index].copy()
         split_df[TARGET_COLUMN] = y

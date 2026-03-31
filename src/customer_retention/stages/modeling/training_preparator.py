@@ -3,7 +3,6 @@ from __future__ import annotations
 import gc
 import time
 from dataclasses import dataclass, field
-from datetime import timedelta
 from typing import Any, Callable, Optional
 
 import numpy as np
@@ -17,7 +16,6 @@ from customer_retention.core.compat import (
     bulk_median_impute,
     collect_for_sklearn,
     concat,
-    native_pd,
     safe_sample,
     spark_cast_float32,
     spark_checkpoint,
@@ -304,6 +302,7 @@ class TrainingPreparator:
             target_column=self._target,
             strategy=SplitStrategy.TEMPORAL,
             temporal_column="as_of_date",
+            group_column="entity_id",
             test_size=self._test_size,
             purge_gap_days=self._purge_gap_days,
             exclude_columns=exclude,
@@ -313,10 +312,8 @@ class TrainingPreparator:
     def _extract_train_metadata(self, split_result: Any, df: DataFrame) -> tuple[Any, Any]:
         if split_result.train_metadata:
             return split_result.train_metadata["entity_id"], split_result.train_metadata["as_of_date"]
-        cutoff = native_pd.Timestamp(split_result.split_info["cutoff_date"])
-        purge_start = cutoff - timedelta(days=self._purge_gap_days)
-        train_rows = df[df["as_of_date"] < purge_start]
-        return train_rows["entity_id"], train_rows["as_of_date"]
+        train_idx = split_result.X_train.index
+        return df.loc[train_idx, "entity_id"], df.loc[train_idx, "as_of_date"]
 
     def _fillna_and_drop_zero_variance(
         self,

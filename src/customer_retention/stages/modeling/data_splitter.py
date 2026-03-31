@@ -179,6 +179,7 @@ class DataSplitter:
             return self._distributed_temporal_split(df)
 
         col = self.temporal_column
+        group_col = self.group_column
         cutoff_date = temporal_quantile(df[col], 1 - self.test_size)
         if native_pd.isna(cutoff_date):
             raise ValueError(
@@ -186,29 +187,42 @@ class DataSplitter:
                 f"Check that the column is not all-null and that rows remain after target filtering."
             )
 
+        # Entity-grouped temporal split: hold out entire entities so no entity
+        # appears in both train and test.  Entity selection uses GroupShuffleSplit
+        # which is robust to panel data (all entities spanning the full range).
+        # Temporal purge then removes late rows from train entities.
+        groups = df[group_col]
+        gss = GroupShuffleSplit(n_splits=1, test_size=self.test_size, random_state=self.random_state)
+        train_idx, test_idx = next(gss.split(df, groups=groups))
+
+        test_df = df.iloc[test_idx]
+        train_df = df.iloc[train_idx]
+
         purge_gap_rows = 0
         if self.purge_gap_days and self.purge_gap_days > 0:
             purge_start = cutoff_date - timedelta(days=self.purge_gap_days)
-            train_df = df[df[col] < purge_start]
-            test_df = df[df[col] >= cutoff_date]
-            purge_gap_rows = len(df) - len(train_df) - len(test_df)
-        else:
-            train_df = df[df[col] < cutoff_date]
-            test_df = df[df[col] >= cutoff_date]
+            pre_purge = len(train_df)
+            train_df = train_df[train_df[col] < purge_start]
+            purge_gap_rows = pre_purge - len(train_df)
 
         X_val, y_val = None, None
         if self.include_validation:
             val_frac = self.validation_size / (1 - self.test_size)
-            val_cutoff = temporal_quantile(train_df[col], 1 - val_frac)
-            val_df = train_df[train_df[col] >= val_cutoff]
-            train_df = train_df[train_df[col] < val_cutoff]
-            X_val, y_val = self._prepare_features_target(val_df)
+            train_groups = train_df[group_col]
+            gss_val = GroupShuffleSplit(n_splits=1, test_size=val_frac, random_state=self.random_state)
+            t_idx, v_idx = next(gss_val.split(train_df, groups=train_groups))
+            X_val, y_val = self._prepare_features_target(train_df.iloc[v_idx])
+            train_df = train_df.iloc[t_idx]
 
         X_train, y_train = self._prepare_features_target(train_df)
         X_test, y_test = self._prepare_features_target(test_df)
 
+        train_entities = groups.iloc[train_idx].nunique()
+        test_entities = groups.iloc[test_idx].nunique()
         split_info = self._build_split_info(X_train, X_test, X_val)
         split_info["cutoff_date"] = str(cutoff_date)
+        split_info["train_entities"] = int(train_entities)
+        split_info["test_entities"] = int(test_entities)
         if self.purge_gap_days and self.purge_gap_days > 0:
             split_info["purge_gap_days"] = self.purge_gap_days
             split_info["purge_gap_rows"] = purge_gap_rows
@@ -225,10 +239,13 @@ class DataSplitter:
         from customer_retention.core.compat.spark_backend import _as_pandas_api
 
         col = self.temporal_column
+        group_col = self.group_column
         spark_df = as_spark_df(df)
         idx_cols = [c for c in spark_df.columns if c.startswith("__index_level_")]
         if idx_cols:
             spark_df = spark_df.drop(*idx_cols)
+
+        # Temporal cutoff (one Spark job) — used for purge, not for entity selection
         epoch = F.unix_timestamp(F.col(col).cast("timestamp"))
         agg_row = spark_df.agg(
             F.percentile_approx(epoch, float(1 - self.test_size)).alias("cutoff"),
@@ -242,40 +259,51 @@ class DataSplitter:
                 f"Check that the column is not all-null and that rows remain after target filtering."
             )
 
+        # Entity-grouped: collect distinct entities (small), split with
+        # GroupShuffleSplit, then semi-join back to keep data distributed.
+        entity_ids = [r[group_col] for r in spark_df.select(group_col).distinct().collect()]
+        entity_arr = native_pd.Series(range(len(entity_ids)))
+        group_arr = native_pd.Series(range(len(entity_ids)))
+        gss = GroupShuffleSplit(n_splits=1, test_size=self.test_size, random_state=self.random_state)
+        train_eidx, test_eidx = next(gss.split(entity_arr, groups=group_arr))
+        test_ent_set = [entity_ids[i] for i in test_eidx]
+        train_ent_set = [entity_ids[i] for i in train_eidx]
+
+        from pyspark.sql import Row
+        test_entity_df = spark_df.sparkSession.createDataFrame([Row(**{group_col: e}) for e in test_ent_set])
+        train_entity_df = spark_df.sparkSession.createDataFrame([Row(**{group_col: e}) for e in train_ent_set])
+
+        test_spark = spark_df.join(test_entity_df, on=group_col, how="inner")
+        train_spark = spark_df.join(train_entity_df, on=group_col, how="inner")
+
+        # Temporal purge on training side
         if self.purge_gap_days and self.purge_gap_days > 0:
             purge_start = cutoff_date - timedelta(days=self.purge_gap_days)
-            train_spark = spark_df.filter(F.col(col) < F.lit(purge_start))
-            test_spark = spark_df.filter(F.col(col) >= F.lit(cutoff_date))
-        else:
-            train_spark = spark_df.filter(F.col(col) < F.lit(cutoff_date))
-            test_spark = spark_df.filter(F.col(col) >= F.lit(cutoff_date))
+            train_spark = train_spark.filter(F.col(col) < F.lit(purge_start))
 
         X_val, y_val = None, None
         if self.include_validation:
             val_frac = self.validation_size / (1 - self.test_size)
-            val_epoch = F.unix_timestamp(F.col(col).cast("timestamp"))
-            val_row = train_spark.select(
-                F.percentile_approx(val_epoch, float(1 - val_frac)).alias("v"),
-            ).head()
-            val_cutoff = native_pd.Timestamp(val_row["v"], unit="s")
-            val_spark = train_spark.filter(F.col(col) >= F.lit(val_cutoff))
-            train_spark = train_spark.filter(F.col(col) < F.lit(val_cutoff))
+            train_ents_pd = native_pd.Series(range(len(train_ent_set)))
+            gss_val = GroupShuffleSplit(n_splits=1, test_size=val_frac, random_state=self.random_state)
+            t_idx, v_idx = next(gss_val.split(train_ents_pd, groups=train_ents_pd))
+            val_ent_set = [train_ent_set[i] for i in v_idx]
+            val_entity_df = spark_df.sparkSession.createDataFrame([Row(**{group_col: e}) for e in val_ent_set])
+            val_spark = train_spark.join(val_entity_df, on=group_col, how="inner")
+            train_spark = train_spark.join(val_entity_df, on=group_col, how="left_anti")
             val_spark = val_spark.localCheckpoint(eager=True)
             val_ps = _as_pandas_api(val_spark)
             X_val, y_val = self._select_features_target_from_ps(val_ps, val_spark.schema)
 
-        # Checkpoint once per partition — single materialization
         train_spark = train_spark.localCheckpoint(eager=True)
         test_spark = test_spark.localCheckpoint(eager=True)
 
-        # Wrap each in a single _as_pandas_api call
         train_ps = _as_pandas_api(train_spark)
         test_ps = _as_pandas_api(test_spark)
 
         X_train, y_train = self._select_features_target_from_ps(train_ps, train_spark.schema)
         X_test, y_test = self._select_features_target_from_ps(test_ps, test_spark.schema)
 
-        # Extract metadata from the already-wrapped train pyspark.pandas frame
         train_meta: Dict[str, Series] = {}
         all_fields = {f.name for f in train_spark.schema.fields}
         meta_cols = [c for c in self.exclude_columns if c in all_fields]
@@ -284,6 +312,8 @@ class DataSplitter:
 
         split_info = self._build_split_info(X_train, X_test, X_val)
         split_info["cutoff_date"] = str(cutoff_date)
+        split_info["train_entities"] = len(train_ent_set)
+        split_info["test_entities"] = len(test_ent_set)
         if self.purge_gap_days and self.purge_gap_days > 0:
             split_info["purge_gap_days"] = self.purge_gap_days
             kept = split_info["train_size"] + split_info["test_size"]
