@@ -569,6 +569,23 @@ class TestNotebook08Architecture:
         assert "entity_id" in content and "missing" in content.lower(), "NB08 must validate entity_id column"
 
 
+class TestNotebook09Architecture:
+    NOTEBOOK_PATH = NOTEBOOKS_DIR / "09_business_alignment.ipynb"
+
+    def _read_content(self):
+        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
+            return f.read()
+
+    def test_nb09_sets_mlflow_tracking_uri(self):
+        content = self._read_content()
+        assert "set_tracking_uri" in content, "NB09 must set MLflow tracking URI before loading models"
+        assert "get_experiments_dir" in content, "NB09 must derive tracking URI from get_experiments_dir"
+
+    def test_nb09_checks_is_databricks_before_tracking_uri(self):
+        content = self._read_content()
+        assert "is_databricks" in content, "NB09 must check is_databricks() to select correct tracking URI"
+
+
 _CELL_ID_PATTERN = re.compile(r"^[a-f0-9]{8}$")
 
 
