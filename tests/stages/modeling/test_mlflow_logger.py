@@ -191,7 +191,7 @@ class TestMLflowLoggerModel:
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
     def test_logs_sklearn_model(self, mock_mlflow, mock_sklearn):
         logger = MLflowLogger(experiment_name="test")
-        mock_model = MagicMock()
+        mock_model = MagicMock(spec=[])
 
         logger.log_model(mock_model, "model")
 
@@ -199,6 +199,39 @@ class TestMLflowLoggerModel:
         call_args = mock_sklearn.log_model.call_args
         assert call_args[0][0] is mock_model
         assert call_args[0][1] == "model"
+
+    @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
+    def test_logs_spark_wrapper_uses_spark_flavor(self, mock_mlflow):
+        mock_spark_module = MagicMock()
+        mock_mlflow.spark = mock_spark_module
+        with patch.dict("sys.modules", {"mlflow.spark": mock_spark_module}):
+            logger = MLflowLogger(experiment_name="test")
+            mock_model = MagicMock()
+            mock_model.as_pipeline_model = MagicMock(return_value=MagicMock())
+            mock_model._fitted_model = MagicMock()
+            mock_model.spark_model_class = "LogisticRegression"
+            mock_model.spark_model_params = {"maxIter": 10}
+            mock_model.feature_names = ["f1", "f2"]
+            mock_model.class_weight = "balanced"
+
+            logger.log_model(mock_model, "logistic_regression")
+
+            mock_model.as_pipeline_model.assert_called_once()
+            mock_spark_module.log_model.assert_called_once()
+            mock_mlflow.set_tag.assert_called_with("logistic_regression.model_flavor", "spark")
+            mock_mlflow.log_dict.assert_called_once()
+
+    @patch("customer_retention.stages.modeling.mlflow_logger.mlflow.sklearn")
+    @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
+    def test_unfitted_spark_wrapper_uses_sklearn(self, mock_mlflow, mock_sklearn):
+        logger = MLflowLogger(experiment_name="test")
+        mock_model = MagicMock()
+        mock_model.as_pipeline_model = MagicMock()
+        mock_model._fitted_model = None
+
+        logger.log_model(mock_model, "model")
+
+        mock_sklearn.log_model.assert_called_once()
 
 
 class TestMLflowLoggerRunId:

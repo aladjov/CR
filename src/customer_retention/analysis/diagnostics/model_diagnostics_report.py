@@ -1,3 +1,4 @@
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Set
@@ -11,6 +12,10 @@ from customer_retention.analysis.diagnostics.leakage_detector import LeakageDete
 from customer_retention.analysis.diagnostics.overfitting_analyzer import OverfittingAnalyzer, OverfittingResult
 from customer_retention.core.components.enums import Severity
 from customer_retention.stages.validation.model_validity_gate import ModelValidityGate, ModelValidityResult
+
+
+def _is_spark_wrapper(model: Any) -> bool:
+    return type(model).__name__ == "SparkClassifierWrapper"
 
 
 @dataclass
@@ -55,25 +60,33 @@ class ModelDiagnosticsReportGenerator:
 
         leakage = LeakageDetector().run_all_checks(X_train, y_train, include_pit=False)
 
+        has_spark = any(_is_spark_wrapper(m) for m in models.values())
         summaries: Dict[str, ModelDiagnosticsSummary] = {}
-        with ThreadPoolExecutor(max_workers=min(len(models), 4)) as pool:
-            futures = {
-                pool.submit(
-                    self._run_per_model, name, model, X_train, y_test_np,
+        if has_spark:
+            for name, model in models.items():
+                summaries[name] = self._run_per_model(
+                    name, model, X_train, y_test_np,
                     cv_results.get(name, {}), train_metrics.get(name, {}),
                     test_metrics.get(name, {}), feature_names,
-                ): name
-                for name, model in models.items()
-            }
-            for future in as_completed(futures):
-                name = futures[future]
-                summaries[name] = future.result()
+                )
+        else:
+            max_workers = min(len(models), os.cpu_count() or 4)
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = {
+                    pool.submit(
+                        self._run_per_model, name, model, X_train, y_test_np,
+                        cv_results.get(name, {}), train_metrics.get(name, {}),
+                        test_metrics.get(name, {}), feature_names,
+                    ): name
+                    for name, model in models.items()
+                }
+                for future in as_completed(futures):
+                    summaries[futures[future]] = future.result()
 
         learning_curve = None
-        if best_model_name in models:
-            learning_curve = OverfittingAnalyzer().analyze_learning_curve(
-                models[best_model_name], X_train, y_train, cv=3,
-            )
+        best = models.get(best_model_name)
+        if best is not None and not _is_spark_wrapper(best):
+            learning_curve = OverfittingAnalyzer().analyze_learning_curve(best, X_train, y_train, cv=3)
 
         agreement = self._compute_cross_model_agreement(models, feature_names)
         verdict, critical_issues, recs = self._compute_verdict(summaries, leakage)

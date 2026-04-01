@@ -91,12 +91,24 @@ class MLflowLogger:
             mlflow.log_dict(dictionary, artifact_file)
 
     def log_model(self, model, artifact_path: str, registered_model_name: Optional[str] = None):
-        if MLFLOW_AVAILABLE:
-            mlflow.sklearn.log_model(
-                model,
-                artifact_path,
-                registered_model_name=registered_model_name,
-            )
+        if not MLFLOW_AVAILABLE:
+            return
+        if hasattr(model, "as_pipeline_model") and model._fitted_model is not None:
+            self._log_spark_model(model, artifact_path, registered_model_name)
+        else:
+            mlflow.sklearn.log_model(model, artifact_path, registered_model_name=registered_model_name)
+
+    def _log_spark_model(self, wrapper, artifact_path: str, registered_model_name: Optional[str] = None):
+        import mlflow.spark as mlflow_spark
+        pipeline_model = wrapper.as_pipeline_model()
+        mlflow_spark.log_model(pipeline_model, artifact_path, registered_model_name=registered_model_name)
+        mlflow.set_tag(f"{artifact_path}.model_flavor", "spark")
+        mlflow.log_dict({
+            "spark_model_class": wrapper.spark_model_class,
+            "spark_model_params": wrapper.spark_model_params,
+            "feature_names": wrapper.feature_names,
+            "class_weight": wrapper.class_weight,
+        }, f"{artifact_path}_wrapper_meta.json")
 
     def log_figure(self, figure, artifact_file: str):
         if MLFLOW_AVAILABLE:

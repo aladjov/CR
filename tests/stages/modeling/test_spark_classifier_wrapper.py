@@ -418,6 +418,69 @@ class TestPredictIntegration:
         mock_transformed.select.assert_called_once()
 
 
+class TestAsPipelineModel:
+    def test_unfitted_raises(self):
+        wrapper = SparkClassifierWrapper(
+            spark_model_class="LogisticRegression",
+            spark_model_params={},
+            feature_names=["f1", "f2"],
+        )
+        with pytest.raises(ValueError, match="unfitted"):
+            wrapper.as_pipeline_model()
+
+    @patch(f"{_MOD}._make_assembler")
+    def test_returns_pipeline_with_assembler_and_model(self, mock_make_asm):
+        mock_assembler = MagicMock()
+        mock_make_asm.return_value = mock_assembler
+        mock_pipeline_cls = MagicMock()
+
+        wrapper = SparkClassifierWrapper(
+            spark_model_class="LogisticRegression",
+            spark_model_params={"maxIter": 10},
+            feature_names=["f1", "f2"],
+        )
+        mock_fitted = MagicMock()
+        wrapper._fitted_model = mock_fitted
+
+        with patch("pyspark.ml.PipelineModel", mock_pipeline_cls):
+            wrapper.as_pipeline_model()
+
+        mock_pipeline_cls.assert_called_once()
+        stages = mock_pipeline_cls.call_args[1].get("stages") or mock_pipeline_cls.call_args[0][0]
+        assert stages[0] is mock_assembler
+        assert stages[1] is mock_fitted
+
+
+class TestFromPipelineModel:
+    def test_reconstructs_wrapper(self):
+        mock_pipeline = MagicMock()
+        mock_fitted = MagicMock()
+        mock_pipeline.stages = [MagicMock(), mock_fitted]
+
+        wrapper = SparkClassifierWrapper.from_pipeline_model(
+            mock_pipeline, "RandomForestClassifier",
+            {"numTrees": 100}, ["f1", "f2", "f3"], "balanced",
+        )
+
+        assert wrapper.spark_model_class == "RandomForestClassifier"
+        assert wrapper.spark_model_params == {"numTrees": 100}
+        assert wrapper.feature_names == ["f1", "f2", "f3"]
+        assert wrapper.class_weight == "balanced"
+        assert wrapper._fitted_model is mock_fitted
+        np.testing.assert_array_equal(wrapper._classes, np.array([0, 1]))
+
+    def test_reconstructed_has_predict_and_importances(self):
+        mock_pipeline = MagicMock()
+        mock_fitted = MagicMock()
+        mock_fitted.featureImportances.toArray.return_value = np.array([0.5, 0.5])
+        mock_pipeline.stages = [MagicMock(), mock_fitted]
+
+        wrapper = SparkClassifierWrapper.from_pipeline_model(
+            mock_pipeline, "RandomForestClassifier", {}, ["f1", "f2"],
+        )
+        np.testing.assert_array_equal(wrapper.feature_importances_, np.array([0.5, 0.5]))
+
+
 class TestFitFailsFastOnStaleFeatures:
     @patch(f"{_MOD}._get_spark_session")
     def test_fit_raises_on_missing_feature(self, mock_get_spark):

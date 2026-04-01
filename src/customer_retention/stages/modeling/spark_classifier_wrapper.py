@@ -154,6 +154,21 @@ class SparkClassifierWrapper:
 
         return _make_assembler(self.feature_names).transform(spark_df)
 
+    def as_pipeline_model(self) -> Any:
+        from pyspark.ml import PipelineModel
+        if self._fitted_model is None:
+            raise ValueError("Cannot create PipelineModel from unfitted wrapper")
+        return PipelineModel(stages=[_make_assembler(self.feature_names), self._fitted_model])
+
+    @staticmethod
+    def from_pipeline_model(pipeline_model: Any, spark_model_class: str,
+                            spark_model_params: Dict[str, Any], feature_names: List[str],
+                            class_weight: Optional[str] = None) -> SparkClassifierWrapper:
+        wrapper = SparkClassifierWrapper(spark_model_class, spark_model_params, feature_names, class_weight)
+        wrapper._fitted_model = pipeline_model.stages[-1]
+        wrapper._classes = np.array([0, 1])
+        return wrapper
+
     def _create_spark_model(self) -> Any:
         fqn = _MODEL_REGISTRY.get(self.spark_model_class)
         if fqn is None:

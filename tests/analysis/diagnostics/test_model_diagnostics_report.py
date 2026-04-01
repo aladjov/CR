@@ -12,6 +12,7 @@ from customer_retention.analysis.diagnostics.model_diagnostics_report import (
     ModelDiagnosticsSummary,
 )
 from customer_retention.core.components.enums import Severity
+from customer_retention.stages.modeling.spark_classifier_wrapper import SparkClassifierWrapper
 
 
 def _mock_cv_analysis(passed=True):
@@ -324,6 +325,80 @@ class TestSerialize:
         assert serialized["verdict"] == "solid"
         assert "summaries" in serialized
         assert "cross_model_agreement" in serialized
+
+
+def _make_spark_model(feature_names, importances=None):
+    wrapper = SparkClassifierWrapper(
+        spark_model_class="LogisticRegression",
+        spark_model_params={"maxIter": 10},
+        feature_names=feature_names,
+    )
+    mock_fitted = MagicMock()
+    if importances is not None:
+        mock_fitted.coefficients.toArray.return_value = np.array(importances)
+        del mock_fitted.featureImportances
+    wrapper._fitted_model = mock_fitted
+    wrapper._classes = np.array([0, 1])
+    return wrapper
+
+
+class TestDistributedSafety:
+    @patch("customer_retention.analysis.diagnostics.model_diagnostics_report.LeakageDetector")
+    @patch("customer_retention.analysis.diagnostics.model_diagnostics_report.CVAnalyzer")
+    @patch("customer_retention.analysis.diagnostics.model_diagnostics_report.OverfittingAnalyzer")
+    @patch("customer_retention.analysis.diagnostics.model_diagnostics_report.CalibrationAnalyzer")
+    @patch("customer_retention.analysis.diagnostics.model_diagnostics_report.ModelValidityGate")
+    def test_spark_models_skip_learning_curve(self, mock_gate, mock_cal, mock_of, mock_cv, mock_leak,
+                                               generator, sample_data, feature_names):
+        X_train, X_test, y_train, y_test = sample_data
+        mock_leak.return_value.run_all_checks.return_value = _mock_leakage()
+        mock_cv.return_value.run_all.return_value = _mock_cv_analysis()
+        mock_of.return_value.analyze_train_test_gap.return_value = _mock_overfitting()
+        mock_cal.return_value.analyze_calibration.return_value = _mock_calibration()
+        mock_gate.return_value.run.return_value = _mock_validity()
+
+        spark_model = _make_spark_model(feature_names, [0.5, 0.3, 0.2])
+        spark_model.predict_proba = MagicMock(return_value=np.column_stack([np.random.rand(50), np.random.rand(50)]))
+        models = {"RF": spark_model}
+        cv_results = {"RF": _make_cv_results()}
+        train_mets = {"RF": {"roc_auc": 0.85}}
+        test_mets = {"RF": {"roc_auc": 0.80}}
+
+        report = generator.generate(models, X_train, X_test, y_train, y_test,
+                                    cv_results, train_mets, test_mets, feature_names, "RF", 0.25)
+
+        mock_of.return_value.analyze_learning_curve.assert_not_called()
+        assert report.best_model_learning_curve is None
+
+    @patch("customer_retention.analysis.diagnostics.model_diagnostics_report.LeakageDetector")
+    @patch("customer_retention.analysis.diagnostics.model_diagnostics_report.CVAnalyzer")
+    @patch("customer_retention.analysis.diagnostics.model_diagnostics_report.OverfittingAnalyzer")
+    @patch("customer_retention.analysis.diagnostics.model_diagnostics_report.CalibrationAnalyzer")
+    @patch("customer_retention.analysis.diagnostics.model_diagnostics_report.ModelValidityGate")
+    def test_spark_models_run_sequentially(self, mock_gate, mock_cal, mock_of, mock_cv, mock_leak,
+                                            generator, sample_data, feature_names):
+        X_train, X_test, y_train, y_test = sample_data
+        mock_leak.return_value.run_all_checks.return_value = _mock_leakage()
+        mock_cv.return_value.run_all.return_value = _mock_cv_analysis()
+        mock_of.return_value.analyze_train_test_gap.return_value = _mock_overfitting()
+        mock_cal.return_value.analyze_calibration.return_value = _mock_calibration()
+        mock_gate.return_value.run.return_value = _mock_validity()
+
+        spark_a = _make_spark_model(feature_names, [0.5, 0.3, 0.2])
+        spark_a.predict_proba = MagicMock(return_value=np.column_stack([np.random.rand(50), np.random.rand(50)]))
+        spark_b = _make_spark_model(feature_names, [0.4, 0.4, 0.2])
+        spark_b.predict_proba = MagicMock(return_value=np.column_stack([np.random.rand(50), np.random.rand(50)]))
+        models = {"A": spark_a, "B": spark_b}
+        cv_results = {n: _make_cv_results() for n in models}
+        train_mets = {n: {"roc_auc": 0.85} for n in models}
+        test_mets = {n: {"roc_auc": 0.80} for n in models}
+
+        with patch("customer_retention.analysis.diagnostics.model_diagnostics_report.ThreadPoolExecutor") as mock_tpe:
+            report = generator.generate(models, X_train, X_test, y_train, y_test,
+                                        cv_results, train_mets, test_mets, feature_names, "A", 0.25)
+            mock_tpe.assert_not_called()
+
+        assert len(report.summaries) == 2
 
 
 class TestFeatureStabilityIntegration:
