@@ -418,6 +418,78 @@ class TestInitializeRun:
         assert ns.run_id.startswith("myproj-")
         assert os.environ["CR_RUN_ID"] == ns.run_id
 
+    def test_writes_run_pointer(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        ns = initialize_run(root=tmp_path, project_name="proj")
+        pointer = RunNamespace._project_pointer_path()
+        assert pointer.exists()
+        import json
+        data = json.loads(pointer.read_text())
+        assert data["run_id"] == ns.run_id
+        assert data["experiments_root"] == str(tmp_path)
+
+
+class TestRunPointer:
+    def test_from_run_pointer_resolves_namespace(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        ns.project_context_path.write_text("project_name: test\n")
+        ns.write_run_pointer()
+        resolved = RunNamespace.from_run_pointer()
+        assert resolved is not None
+        assert resolved.run_id == ns.run_id
+        assert str(resolved.root) == str(tmp_path)
+
+    def test_from_run_pointer_returns_none_when_missing(self, tmp_path):
+        pointer = RunNamespace._project_pointer_path()
+        if pointer.exists():
+            pointer.unlink()
+        assert RunNamespace.from_run_pointer() is None
+
+    def test_from_run_pointer_returns_none_when_run_dir_deleted(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        ns = RunNamespace.create(root=tmp_path, project_name="test")
+        ns.write_run_pointer()
+        import shutil
+        shutil.rmtree(ns.run_dir)
+        assert RunNamespace.from_run_pointer() is None
+
+    def test_from_env_or_latest_prefers_pointer_over_sentinel(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
+        old_ns = RunNamespace.create(root=tmp_path, project_name="old")
+        old_ns.write_sentinel()
+        alt_root = tmp_path / "alt_experiments"
+        new_ns = RunNamespace.create(root=alt_root, project_name="new")
+        new_ns.write_run_pointer()
+        resolved = RunNamespace.from_env_or_latest()
+        assert resolved is not None
+        assert resolved.run_id == new_ns.run_id
+        assert str(resolved.root) == str(alt_root)
+
+    def test_from_env_or_latest_env_overrides_pointer(self, tmp_path, monkeypatch):
+        ns_pointer = RunNamespace.create(root=tmp_path, project_name="pointer")
+        ns_pointer.write_run_pointer()
+        env_ns = RunNamespace.create(root=tmp_path, project_name="env")
+        monkeypatch.setenv("CR_RUN_ID", env_ns.run_id)
+        monkeypatch.setenv("CR_EXPERIMENTS_DIR", str(tmp_path))
+        resolved = RunNamespace.from_env_or_latest()
+        assert resolved is not None
+        assert resolved.run_id == env_ns.run_id
+
+    def test_pointer_with_different_experiments_root(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        comparison_root = tmp_path / "comparisons" / "v1_vs_v2" / "new" / "experiments"
+        ns = RunNamespace.create(root=comparison_root, project_name="compare")
+        findings_dir = ns.dataset_findings_dir("customers")
+        findings_dir.mkdir(parents=True)
+        (findings_dir / "customers_findings.yaml").write_text("source: customers\n")
+        ns.write_run_pointer()
+        resolved = RunNamespace.from_run_pointer()
+        assert resolved is not None
+        assert str(resolved.root) == str(comparison_root)
+        assert resolved.dataset_findings_dir("customers").is_dir()
+
 
 class TestResolveTargetColumn:
     @staticmethod
@@ -535,6 +607,29 @@ class TestLoadNotebookFindings:
         monkeypatch.setenv("CR_EXPERIMENTS_DIR", str(tmp_path))
         monkeypatch.setenv("CR_USERNAME", "testuser")
         with pytest.raises(FileNotFoundError, match="exists but no findings found"):
+            load_notebook_findings("04_column_deep_dive.ipynb", root=tmp_path)
+
+    def test_error_suggests_cr_run_id_when_other_run_has_findings(self, tmp_path, monkeypatch):
+        empty_ns = RunNamespace.create(root=tmp_path, project_name="empty")
+        other_ns = RunNamespace.create(root=tmp_path, project_name="good")
+        findings_dir = other_ns.dataset_findings_dir("customers")
+        findings_dir.mkdir(parents=True)
+        (findings_dir / "customers_findings.yaml").write_text("source: customers\n")
+        monkeypatch.setenv("CR_RUN_ID", empty_ns.run_id)
+        monkeypatch.setenv("CR_EXPERIMENTS_DIR", str(tmp_path))
+        monkeypatch.setenv("CR_USERNAME", "testuser")
+        with pytest.raises(FileNotFoundError, match="CR_RUN_ID"):
+            load_notebook_findings("04_column_deep_dive.ipynb", root=tmp_path)
+
+    def test_error_lists_runs_with_merged_findings(self, tmp_path, monkeypatch):
+        empty_ns = RunNamespace.create(root=tmp_path, project_name="empty")
+        other_ns = RunNamespace.create(root=tmp_path, project_name="full")
+        other_ns.merged_dir.mkdir(parents=True, exist_ok=True)
+        other_ns.merged_findings_path.write_text("source: merged\n")
+        monkeypatch.setenv("CR_RUN_ID", empty_ns.run_id)
+        monkeypatch.setenv("CR_EXPERIMENTS_DIR", str(tmp_path))
+        monkeypatch.setenv("CR_USERNAME", "testuser")
+        with pytest.raises(FileNotFoundError, match=other_ns.run_id):
             load_notebook_findings("04_column_deep_dive.ipynb", root=tmp_path)
 
     def test_load_notebook_findings_prefers_aggregated(self, tmp_path, monkeypatch):

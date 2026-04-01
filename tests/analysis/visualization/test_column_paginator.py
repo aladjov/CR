@@ -9,6 +9,7 @@ from customer_retention.analysis.visualization.attention_scorer import Attention
 from customer_retention.analysis.visualization.column_paginator import (
     ColumnEntry,
     ColumnPaginator,
+    _is_headless_execution,
     has_interactive_widgets,
 )
 
@@ -341,14 +342,56 @@ class TestHasInteractiveWidgets:
         assert has_interactive_widgets() is False
 
     @patch("customer_retention.analysis.visualization.column_paginator.HAS_WIDGETS", True)
+    @patch("customer_retention.analysis.visualization.column_paginator._is_headless_execution", return_value=False)
     @patch("customer_retention.analysis.visualization.column_paginator.detect_environment", return_value="jupyter")
-    def test_jupyter_environment(self, mock_env):
+    def test_jupyter_environment(self, mock_env, mock_headless):
         assert has_interactive_widgets() is True
 
     @patch("customer_retention.analysis.visualization.column_paginator.HAS_WIDGETS", True)
     @patch("customer_retention.analysis.visualization.column_paginator.detect_environment", return_value="databricks")
     def test_databricks_uses_static_pagination(self, mock_env):
         assert has_interactive_widgets() is False
+
+
+# ===================================================================
+# _is_headless_execution
+# ===================================================================
+
+
+class TestIsHeadlessExecution:
+    def test_detects_papermill_env_var(self, monkeypatch):
+        monkeypatch.setenv("PAPERMILL_OUTPUT_PATH", "/tmp/out.ipynb")
+        assert _is_headless_execution() is True
+
+    def test_detects_cr_batch_execution_env_var(self, monkeypatch):
+        monkeypatch.delenv("PAPERMILL_OUTPUT_PATH", raising=False)
+        monkeypatch.setenv("CR_BATCH_EXECUTION", "1")
+        assert _is_headless_execution() is True
+
+    @patch("customer_retention.analysis.visualization.column_paginator.detect_environment", return_value="jupyter")
+    def test_detects_papermill_kernel_namespace(self, mock_env, monkeypatch):
+        monkeypatch.delenv("PAPERMILL_OUTPUT_PATH", raising=False)
+        mock_ip = MagicMock()
+        mock_ip.kernel = MagicMock()
+        mock_ip.kernel.comm_manager = MagicMock()
+        mock_ip.user_ns = {"PAPERMILL_INPUT_PATH": "/in.ipynb", "PAPERMILL_OUTPUT_PATH": "/out.ipynb"}
+        with patch("IPython.get_ipython", return_value=mock_ip):
+            assert _is_headless_execution() is True
+
+    @patch("customer_retention.analysis.visualization.column_paginator.detect_environment", return_value="jupyter")
+    def test_not_headless_in_regular_jupyter(self, mock_env, monkeypatch):
+        monkeypatch.delenv("PAPERMILL_OUTPUT_PATH", raising=False)
+        mock_ip = MagicMock()
+        mock_ip.kernel = MagicMock()
+        mock_ip.kernel.comm_manager = MagicMock()
+        mock_ip.user_ns = {"In": [], "Out": {}}
+        with patch("IPython.get_ipython", return_value=mock_ip):
+            assert _is_headless_execution() is False
+
+    @patch("customer_retention.analysis.visualization.column_paginator.detect_environment", return_value="terminal")
+    def test_terminal_is_headless(self, mock_env, monkeypatch):
+        monkeypatch.delenv("PAPERMILL_OUTPUT_PATH", raising=False)
+        assert _is_headless_execution() is True
 
 
 # ===================================================================

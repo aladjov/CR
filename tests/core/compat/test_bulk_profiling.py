@@ -28,6 +28,7 @@ from customer_retention.core.compat.bulk_profiling import (
     bulk_distribution_stats,
     bulk_future_fractions,
     bulk_histogram,
+    bulk_histograms,
     bulk_monthly_counts,
     bulk_nunique,
     bulk_validate_ranges,
@@ -588,6 +589,53 @@ class TestBulkHistogram:
         hist = bulk_histogram(df, "x", nbins=20)
         assert len(hist.counts) == 20
         assert len(hist.bin_edges) == 21
+
+
+class TestBulkHistograms:
+    def test_multiple_columns(self):
+        df = pd.DataFrame({"a": np.arange(100, dtype=float), "b": np.arange(100, 200, dtype=float)})
+        result = bulk_histograms(df, ["a", "b"], nbins=10)
+        assert "a" in result and "b" in result
+        assert len(result["a"].counts) == 10
+        assert len(result["b"].counts) == 10
+        assert sum(result["a"].counts) == 100
+        assert sum(result["b"].counts) == 100
+
+    def test_empty_columns_list(self):
+        df = pd.DataFrame({"x": [1.0, 2.0]})
+        result = bulk_histograms(df, [], nbins=5)
+        assert result == {}
+
+    def test_missing_column_excluded(self):
+        df = pd.DataFrame({"x": np.arange(50, dtype=float)})
+        result = bulk_histograms(df, ["x", "missing"], nbins=5)
+        assert len(result["x"].counts) == 5
+        assert "missing" not in result
+
+    def test_constant_column_returns_empty(self):
+        df = pd.DataFrame({"a": np.arange(50, dtype=float), "const": [3.0] * 50})
+        result = bulk_histograms(df, ["a", "const"], nbins=5)
+        assert len(result["a"].counts) == 5
+        assert result["const"].counts == []
+
+    def test_all_null_column(self):
+        df = pd.DataFrame({"a": np.arange(50, dtype=float), "nul": [np.nan] * 50})
+        result = bulk_histograms(df, ["a", "nul"], nbins=5)
+        assert len(result["a"].counts) == 5
+        assert result["nul"].counts == []
+
+    def test_matches_single_column_bulk_histogram(self):
+        df = pd.DataFrame({"x": np.random.normal(0, 1, 500)})
+        single = bulk_histogram(df, "x", nbins=20)
+        batch = bulk_histograms(df, ["x"], nbins=20)
+        assert batch["x"].counts == single.counts
+        assert batch["x"].bin_edges == single.bin_edges
+
+    def test_non_numeric_column_returns_empty(self):
+        df = pd.DataFrame({"num": [1.0, 2.0, 3.0], "cat": ["a", "b", "c"]})
+        result = bulk_histograms(df, ["num", "cat"], nbins=5)
+        assert len(result["num"].counts) == 5
+        assert result["cat"].counts == []
 
 
 class TestBulkMonthlyCounts:

@@ -173,6 +173,8 @@ def _run_notebook(
     import papermill as pm
 
     stem = notebook_path.stem
+    prev_batch = os.environ.get("CR_BATCH_EXECUTION")
+    os.environ["CR_BATCH_EXECUTION"] = "1"
     try:
         pm.execute_notebook(
             str(notebook_path),
@@ -188,6 +190,11 @@ def _run_notebook(
         return False, traceback.format_exc()
     except Exception:
         return False, traceback.format_exc()
+    finally:
+        if prev_batch is None:
+            os.environ.pop("CR_BATCH_EXECUTION", None)
+        else:
+            os.environ["CR_BATCH_EXECUTION"] = prev_batch
 
 
 _CONNECTION_ERROR_PATTERNS = [
@@ -532,6 +539,8 @@ def run_all(
             os.environ["CR_RUN_ID"] = run_id
 
     namespace = _resolve_namespace(findings_dir, run_id)
+    if namespace and not dry_run:
+        namespace.write_run_pointer()
 
     context = _load_dataset_context(findings_dir, run_id=run_id)
     is_multi = context is not None and len(context.datasets) > 1

@@ -30,15 +30,26 @@ def _is_headless_execution() -> bool:
     import os
     if os.environ.get("PAPERMILL_OUTPUT_PATH"):
         return True
+    # CR_BATCH_EXECUTION is set by run_exploration.py before launching
+    # papermill.  The child kernel inherits it via os.environ.
+    if os.environ.get("CR_BATCH_EXECUTION"):
+        return True
     try:
         shell = detect_environment()
         if shell != "jupyter":
             return True
         from IPython import get_ipython as _get_ipython
         ip = _get_ipython()
-        if ip and not getattr(ip, "kernel", None):
+        if not ip:
             return True
-        if ip and hasattr(ip, "kernel") and not getattr(ip.kernel, "comm_manager", None):
+        if not getattr(ip, "kernel", None):
+            return True
+        # Papermill injects PAPERMILL_* as kernel-namespace variables when
+        # explicit parameters are passed.
+        ns = getattr(ip, "user_ns", {})
+        if any(k.startswith("PAPERMILL_") for k in ns):
+            return True
+        if not getattr(ip.kernel, "comm_manager", None):
             return True
     except Exception:
         pass

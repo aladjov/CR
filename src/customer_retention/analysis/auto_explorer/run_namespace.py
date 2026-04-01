@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
 
-from customer_retention.core.compat.remote_path import RemotePath
+from customer_retention.core.compat.remote_path import RemotePath, make_path
+
+_RUN_POINTER_FILENAME = ".cr_active_run.json"
 
 
 @dataclass
@@ -275,11 +278,52 @@ class RunNamespace:
         sentinel.parent.mkdir(parents=True, exist_ok=True)
         sentinel.write_text(self.run_id)
 
+    # ------------------------------------------------------------------
+    # Project-level run pointer (.cr_active_run.json at project root)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _project_pointer_path(cls) -> Path:
+        from customer_retention.core.config.experiments import _find_project_root
+        return _find_project_root() / _RUN_POINTER_FILENAME
+
+    def write_run_pointer(self) -> None:
+        pointer = self._project_pointer_path()
+        pointer.write_text(json.dumps({
+            "experiments_root": str(self.root),
+            "run_id": self.run_id,
+        }, indent=2))
+
+    @classmethod
+    def from_run_pointer(cls) -> Optional[RunNamespace]:
+        try:
+            data = json.loads(cls._project_pointer_path().read_text())
+        except (OSError, json.JSONDecodeError, ValueError):
+            return None
+        run_id = data.get("run_id")
+        root_str = data.get("experiments_root")
+        if not run_id or not root_str:
+            return None
+        root = make_path(root_str)
+        candidate = cls(root=root, run_id=run_id)
+        if not candidate.run_dir.is_dir():
+            return None
+        return candidate
+
+    # ------------------------------------------------------------------
+    # Unified discovery
+    # ------------------------------------------------------------------
+
     @classmethod
     def from_env_or_latest(cls, root: Optional[Path] = None) -> Optional[RunNamespace]:
         ns = cls.from_env(root=root)
         if ns is not None:
             return ns
+        # Project-level pointer (file-based, survives across sessions)
+        if root is None:
+            ns = cls.from_run_pointer()
+            if ns is not None:
+                return ns
         ns = cls.from_sentinel(root=root)
         if ns is not None:
             return ns

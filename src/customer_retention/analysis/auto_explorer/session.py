@@ -119,6 +119,7 @@ def initialize_run(
         namespace = RunNamespace.create(root=root, project_name=project_name)
         os.environ["CR_RUN_ID"] = namespace.run_id
     namespace.write_sentinel()
+    namespace.write_run_pointer()
     if username is None:
         username = get_current_username()
     state = SessionState(active_dataset=None, active_run_id=namespace.run_id)
@@ -220,6 +221,33 @@ def resolve_target_column(namespace: Optional[RunNamespace], findings) -> Option
     return findings.target_column
 
 
+def _suggest_runs_with_findings(
+    root: Path, dataset_name: Optional[str] = None,
+) -> str:
+    runs_dir = root / "runs"
+    if not runs_dir.is_dir():
+        return "Run notebooks 01-05 first."
+    candidates: list[str] = []
+    for run_dir in sorted(runs_dir.iterdir()):
+        if not run_dir.is_dir() or run_dir.name.startswith("."):
+            continue
+        ns = RunNamespace(root=root, run_id=run_dir.name)
+        if dataset_name and resolve_findings_path(ns, dataset_name):
+            candidates.append(run_dir.name)
+        elif ns.merged_findings_path.exists():
+            candidates.append(run_dir.name)
+        elif ns.discover_all_findings():
+            candidates.append(run_dir.name)
+    if not candidates:
+        return "Run notebooks 01-05 first, or set CR_RUN_ID to a run that has findings."
+    listing = ", ".join(candidates[:5])
+    return (
+        f"Other runs with findings: [{listing}]. "
+        f"Set CR_RUN_ID=<run_id> to use one, e.g.:\n"
+        f"  import os; os.environ['CR_RUN_ID'] = '{candidates[0]}'"
+    )
+
+
 def load_notebook_findings(
     notebook_name: str,
     *,
@@ -268,10 +296,11 @@ def load_notebook_findings(
             "No run namespace found. Run notebook 00 first."
         )
     _active = resolve_active_dataset(namespace)
+    hint = _suggest_runs_with_findings(namespace.root, _active)
     raise FileNotFoundError(
         f"Run namespace '{namespace.run_id}' exists but no findings found. "
         f"Active dataset: {_active!r}, "
         f"datasets dir exists: {namespace.datasets_dir.is_dir()}, "
-        f"datasets: {namespace.list_datasets()}. "
-        "Run notebooks 01-05 first."
+        f"datasets: {namespace.list_datasets()}.\n"
+        f"{hint}"
     )

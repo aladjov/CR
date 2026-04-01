@@ -27,6 +27,7 @@ set -euo pipefail
 
 # ---- Defaults ----
 OLD_COMMIT="6209ecd"
+
 NEW_COMMIT=""  # empty = HEAD
 TIMEOUT=36000
 SPARK_REMOTE=""

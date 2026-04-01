@@ -305,6 +305,95 @@ def _spark_bulk_histogram(
     )
 
 
+def bulk_histograms(
+    df: Any, columns: list[str], nbins: int = 20,
+) -> dict[str, HistogramData]:
+    valid = [c for c in columns if c in df.columns]
+    if not valid:
+        return {}
+    if hasattr(df, "to_spark"):
+        return _spark_bulk_histograms(df, valid, nbins)
+    return _pandas_bulk_histograms(df, valid, nbins)
+
+
+def _pandas_bulk_histograms(
+    df: Any, columns: list[str], nbins: int,
+) -> dict[str, HistogramData]:
+    result: dict[str, HistogramData] = {}
+    numeric = df[columns].select_dtypes(include=[np.number])
+    for col in columns:
+        if col not in numeric.columns:
+            result[col] = HistogramData()
+            continue
+        arr = numeric[col].dropna().to_numpy()
+        finite = arr[np.isfinite(arr)]
+        if len(finite) == 0 or float(finite.min()) >= float(finite.max()):
+            result[col] = HistogramData()
+            continue
+        lo, hi = float(finite.min()), float(finite.max())
+        counts_arr, edges_arr = np.histogram(finite, bins=nbins, range=(lo, hi))
+        result[col] = HistogramData(
+            bin_edges=[round(float(e), 6) for e in edges_arr],
+            counts=[int(c) for c in counts_arr],
+        )
+    return result
+
+
+def _spark_bulk_histograms(
+    df: Any, columns: list[str], nbins: int,
+) -> dict[str, HistogramData]:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    spark_df = as_spark_df(df)
+
+    # Batch 1: bounds for all columns in one Spark job
+    bound_exprs: list[Any] = []
+    for col in columns:
+        c = F.col(col)
+        fin = c.isNotNull() & (c != float("inf")) & (c != float("-inf"))
+        bound_exprs.append(F.min(F.when(fin, c)).alias(f"__lo__{col}"))
+        bound_exprs.append(F.max(F.when(fin, c)).alias(f"__hi__{col}"))
+    bounds_row = spark_df.agg(*bound_exprs).collect()[0]
+
+    # Build bin edges per column, skip degenerate
+    col_edges: dict[str, list[float]] = {}
+    result: dict[str, HistogramData] = {}
+    for col in columns:
+        lo_v, hi_v = bounds_row[f"__lo__{col}"], bounds_row[f"__hi__{col}"]
+        if lo_v is None or hi_v is None or float(lo_v) >= float(hi_v):
+            result[col] = HistogramData()
+            continue
+        lo, hi = float(lo_v), float(hi_v)
+        bw = (hi - lo) / nbins
+        col_edges[col] = [lo + i * bw for i in range(nbins)] + [hi]
+
+    if not col_edges:
+        return result
+
+    # Batch 2: histogram counts for all remaining columns in one Spark job
+    # Process in chunks to avoid excessively wide agg expressions
+    chunk_size = max(1, 200 // nbins)
+    edge_items = list(col_edges.items())
+    for chunk_start in range(0, len(edge_items), chunk_size):
+        chunk = edge_items[chunk_start:chunk_start + chunk_size]
+        hist_exprs: list[Any] = []
+        for col, edges in chunk:
+            c = F.col(col)
+            fin = c.isNotNull() & (c != float("inf")) & (c != float("-inf"))
+            for i in range(nbins):
+                b_lo, b_hi = edges[i], edges[i + 1]
+                cond = fin & (c >= b_lo) & (c <= b_hi if i == nbins - 1 else c < b_hi)
+                hist_exprs.append(F.sum(cond.cast("int")).alias(f"__hb_{col}_{i}__"))
+        row = spark_df.agg(*hist_exprs).collect()[0]
+        for col, edges in chunk:
+            counts = [_safe_int(row[f"__hb_{col}_{i}__"]) for i in range(nbins)]
+            result[col] = HistogramData(
+                bin_edges=[round(e, 6) for e in edges],
+                counts=counts,
+            )
+    return result
+
+
 def bulk_monthly_counts(
     df: Any, column: str,
 ) -> list[tuple[str, int]]:
