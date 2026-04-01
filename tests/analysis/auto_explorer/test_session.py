@@ -314,8 +314,10 @@ class TestAutomatedPipelineSkipsSessionWrites:
 
 class TestInitializeRun:
     @pytest.fixture(autouse=True)
-    def _clean_env(self, monkeypatch):
+    def _clean_env(self, monkeypatch, tmp_path):
         monkeypatch.delenv("CR_RUN_ID", raising=False)
+        monkeypatch.setattr(RunNamespace, "_project_pointer_path",
+                            classmethod(lambda cls: tmp_path / ".cr_active_run.json"))
 
     def test_creates_namespace_directories(self, tmp_path):
         ns = initialize_run(root=tmp_path, project_name="myproj")
@@ -420,8 +422,10 @@ class TestInitializeRun:
 
     def test_writes_run_pointer(self, tmp_path, monkeypatch):
         monkeypatch.delenv("CR_RUN_ID", raising=False)
+        monkeypatch.setattr(RunNamespace, "_project_pointer_path",
+                            classmethod(lambda cls: tmp_path / ".cr_active_run.json"))
         ns = initialize_run(root=tmp_path, project_name="proj")
-        pointer = RunNamespace._project_pointer_path()
+        pointer = tmp_path / ".cr_active_run.json"
         assert pointer.exists()
         import json
         data = json.loads(pointer.read_text())
@@ -430,6 +434,12 @@ class TestInitializeRun:
 
 
 class TestRunPointer:
+    @pytest.fixture(autouse=True)
+    def _isolate_pointer(self, tmp_path, monkeypatch):
+        pointer = tmp_path / ".cr_active_run.json"
+        monkeypatch.setattr(RunNamespace, "_project_pointer_path",
+                            classmethod(lambda cls: pointer))
+
     def test_from_run_pointer_resolves_namespace(self, tmp_path, monkeypatch):
         monkeypatch.delenv("CR_RUN_ID", raising=False)
         ns = RunNamespace.create(root=tmp_path, project_name="test")
@@ -441,9 +451,6 @@ class TestRunPointer:
         assert str(resolved.root) == str(tmp_path)
 
     def test_from_run_pointer_returns_none_when_missing(self, tmp_path):
-        pointer = RunNamespace._project_pointer_path()
-        if pointer.exists():
-            pointer.unlink()
         assert RunNamespace.from_run_pointer() is None
 
     def test_from_run_pointer_returns_none_when_run_dir_deleted(self, tmp_path, monkeypatch):
@@ -553,6 +560,11 @@ class TestResolveTargetColumn:
 
 
 class TestLoadNotebookFindings:
+    @pytest.fixture(autouse=True)
+    def _isolate_pointer(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(RunNamespace, "_project_pointer_path",
+                            classmethod(lambda cls: tmp_path / ".cr_active_run.json"))
+
     def _make_namespace_with_findings(self, tmp_path, dataset_name="customers", monkeypatch=None):
         ns = RunNamespace.create(root=tmp_path, project_name="test")
         findings_dir = ns.dataset_findings_dir(dataset_name)
@@ -685,6 +697,11 @@ class TestLoadNotebookFindings:
 
 
 class TestLoadNotebookFindingsDatabricksGuard:
+    @pytest.fixture(autouse=True)
+    def _isolate_pointer(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(RunNamespace, "_project_pointer_path",
+                            classmethod(lambda cls: tmp_path / ".cr_active_run.json"))
+
     def test_databricks_finds_namespace_via_sentinel(self, tmp_path, monkeypatch):
         monkeypatch.delenv("CR_RUN_ID", raising=False)
         monkeypatch.delenv("CR_DATASET_ID", raising=False)
