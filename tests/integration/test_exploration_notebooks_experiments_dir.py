@@ -579,11 +579,14 @@ class TestNotebook09Architecture:
     def test_nb09_sets_mlflow_tracking_uri(self):
         content = self._read_content()
         assert "set_tracking_uri" in content, "NB09 must set MLflow tracking URI before loading models"
-        assert "get_experiments_dir" in content, "NB09 must derive tracking URI from get_experiments_dir"
+        assert "mlflow_tracking_uri" in content, "NB09 must read mlflow_tracking_uri from exploration metadata"
 
-    def test_nb09_checks_is_databricks_before_tracking_uri(self):
-        content = self._read_content()
-        assert "is_databricks" in content, "NB09 must check is_databricks() to select correct tracking URI"
+    def test_nb08_persists_tracking_uri_in_metadata(self):
+        nb08 = NOTEBOOKS_DIR / "08_baseline_experiments.ipynb"
+        with open(nb08, "r", encoding="utf-8") as f:
+            content = f.read()
+        assert "mlflow_tracking_uri" in content, "NB08 must persist mlflow_tracking_uri in exploration metadata"
+        assert "get_tracking_uri" in content, "NB08 must capture the effective tracking URI via mlflow.get_tracking_uri()"
 
 
 _CELL_ID_PATTERN = re.compile(r"^[a-f0-9]{8}$")
