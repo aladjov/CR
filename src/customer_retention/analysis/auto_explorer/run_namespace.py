@@ -319,8 +319,9 @@ class RunNamespace:
         ns = cls.from_env(root=root)
         if ns is not None:
             return ns
-        # Project-level pointer (file-based, survives across sessions)
-        if root is None:
+        # Project-level pointer — only when neither root nor
+        # CR_EXPERIMENTS_DIR are set (explicit location takes priority).
+        if root is None and not os.environ.get("CR_EXPERIMENTS_DIR"):
             ns = cls.from_run_pointer()
             if ns is not None:
                 return ns
