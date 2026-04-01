@@ -128,6 +128,11 @@ class MLflowLogger:
         with mlflow.start_run(run_name=run_name, nested=True):
             yield
 
+    def get_tracking_uri(self) -> Optional[str]:
+        if MLFLOW_AVAILABLE:
+            return mlflow.get_tracking_uri()
+        return self.tracking_uri
+
     def disable_autolog(self):
         if MLFLOW_AVAILABLE:
             mlflow.autolog(disable=True)

@@ -291,6 +291,25 @@ class TestMLflowLoggerEndStaleRuns:
         mock_mlflow.end_run.assert_called_once()
 
 
+class TestMLflowLoggerTrackingUri:
+    @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
+    def test_get_tracking_uri_delegates_to_mlflow(self, mock_mlflow):
+        mock_mlflow.get_tracking_uri.return_value = "databricks"
+        logger = MLflowLogger(experiment_name="test")
+        assert logger.get_tracking_uri() == "databricks"
+        mock_mlflow.get_tracking_uri.assert_called_once()
+
+    @patch("customer_retention.stages.modeling.mlflow_logger.MLFLOW_AVAILABLE", False)
+    def test_get_tracking_uri_returns_configured_uri_when_unavailable(self):
+        logger = MLflowLogger(experiment_name="test", tracking_uri="http://local:5000")
+        assert logger.get_tracking_uri() == "http://local:5000"
+
+    @patch("customer_retention.stages.modeling.mlflow_logger.MLFLOW_AVAILABLE", False)
+    def test_get_tracking_uri_returns_none_when_unavailable_no_uri(self):
+        logger = MLflowLogger(experiment_name="test")
+        assert logger.get_tracking_uri() is None
+
+
 class TestMLflowLoggerDisableAutolog:
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
     def test_disable_autolog_calls_autolog_disable(self, mock_mlflow):
