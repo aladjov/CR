@@ -1,6 +1,9 @@
 # Run pointer (machine-local, written by initialize_run / run_exploration)
 .cr_active_run.json
 
+# Cell profiler sidecar files (generated during batch execution)
+.cr_cell_metrics_*.jsonl
+
 # Python
 __pycache__/
 *.py[cod]

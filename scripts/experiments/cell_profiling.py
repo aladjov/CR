@@ -54,9 +54,7 @@ _CR_CODE_RE = re.compile(
     r"^#\s*@cr:(?P<kind>code|config|user_code|code_system)"
     r"\s+name='(?P<name>[^']+)'\s+id=(?P<id>\w+)"
 )
-_CR_DOC_RE = re.compile(
-    r"\[//\]:\s*#\s*\(cr:(?:doc)\s+name='(?P<name>[^']+)'\s+id=(?P<id>\w+)\)"
-)
+_CR_DOC_RE = re.compile(r"\[//\]:\s*#\s*\(cr:(?:doc)\s+name='(?P<name>[^']+)'\s+id=(?P<id>\w+)\)")
 
 
 # ---------------------------------------------------------------------------
@@ -155,14 +153,16 @@ def extract_profiles_from_notebook(nb_path: Path) -> Optional[NotebookProfile]:
         cell_name = tag["name"] if tag else f"cell_{_cell_id(cell)}"
         cell_id_val = tag["id"] if tag else _cell_id(cell)
 
-        entries.append(CellProfileEntry(
-            cell_name=cell_name,
-            cell_id=cell_id_val,
-            elapsed_sec=round(duration, 6),
-            status=status,
-            start_time=start_time,
-            end_time=end_time,
-        ))
+        entries.append(
+            CellProfileEntry(
+                cell_name=cell_name,
+                cell_id=cell_id_val,
+                elapsed_sec=round(duration, 6),
+                status=status,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        )
         total_elapsed += duration
 
     if not has_papermill:
@@ -234,9 +234,7 @@ def load_cell_profiles(path: Path) -> Optional[CellProfileManifest]:
 # ---------------------------------------------------------------------------
 
 
-def merge_profiles(
-    a: CellProfileManifest, b: CellProfileManifest
-) -> CellProfileManifest:
+def merge_profiles(a: CellProfileManifest, b: CellProfileManifest) -> CellProfileManifest:
     """Merge two manifests, taking the entry with longer total_elapsed per notebook."""
     merged = CellProfileManifest(
         environment=a.environment or b.environment,
@@ -251,23 +249,66 @@ def merge_profiles(
 
 
 # ---------------------------------------------------------------------------
+# Sidecar merge — combine JSONL metrics (Spark jobs, memory) with timing
+# ---------------------------------------------------------------------------
+
+_SIDECAR_GLOB = ".cr_cell_metrics_*.jsonl"
+
+
+def _load_sidecar(path: Path) -> list[dict]:
+    entries = []
+    for line in path.read_text(encoding="utf-8").strip().split("\n"):
+        if line:
+            entries.append(json.loads(line))
+    return entries
+
+
+def merge_sidecar_metrics(
+    manifest: CellProfileManifest,
+    sidecar_dir: Path,
+) -> CellProfileManifest:
+    """Merge JSONL sidecar files into a profile manifest.
+
+    Sidecar files are named ``.cr_cell_metrics_{notebook_stem}.jsonl`` and
+    contain one JSON object per cell with ``spark_jobs`` and ``peak_memory_mb``.
+    Matching is by ``cell_id`` first, then ``cell_name``.
+    """
+    for sidecar_path in sorted(sidecar_dir.glob(_SIDECAR_GLOB)):
+        nb_name = sidecar_path.stem.removeprefix(".cr_cell_metrics_")
+        nb_profile = manifest.notebooks.get(nb_name)
+        if nb_profile is None:
+            continue
+        entries = _load_sidecar(sidecar_path)
+        by_id = {e["cell_id"]: e for e in entries if e.get("cell_id")}
+        by_name = {e["cell_name"]: e for e in entries if e.get("cell_name")}
+        for cell in nb_profile.cells:
+            match = by_id.get(cell.cell_id) or by_name.get(cell.cell_name)
+            if match:
+                cell.spark_jobs = match.get("spark_jobs")
+                cell.peak_memory_mb = match.get("peak_memory_mb")
+    return manifest
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Extract per-cell performance profiles from executed notebooks."
-    )
+    parser = argparse.ArgumentParser(description="Extract per-cell performance profiles from executed notebooks.")
     sub = parser.add_subparsers(dest="command")
 
     extract_p = sub.add_parser("extract", help="Extract profiles from executed .ipynb files")
     extract_p.add_argument(
-        "--notebooks-dir", type=Path, required=True,
+        "--notebooks-dir",
+        type=Path,
+        required=True,
         help="Directory containing executed .ipynb files",
     )
     extract_p.add_argument(
-        "--output", type=Path, required=True,
+        "--output",
+        type=Path,
+        required=True,
         help="Output path for cell_profiles.json",
     )
 

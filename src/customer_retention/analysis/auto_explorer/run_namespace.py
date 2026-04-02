@@ -118,6 +118,10 @@ class RunNamespace:
     def exploration_diagnostics_path(self) -> Path:
         return self.run_dir / "exploration_diagnostics.json"
 
+    @property
+    def cell_profiles_path(self) -> Path:
+        return self.run_dir / "cell_profiles.json"
+
     def artifacts_dir(self, recommendations_hash: str | None) -> Path:
         return self.root / "artifacts" / (recommendations_hash or "default")
 

@@ -40,6 +40,8 @@ DATASET="customer_emails"
 RUN_OLD=true
 RUN_NEW=true
 START_NOTEBOOK=""
+OLD_DATABRICKS_RUN=""
+NEW_DATABRICKS_RUN=""
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPTS_DIR="$REPO_DIR/scripts/experiments"
@@ -59,6 +61,8 @@ while [[ $# -gt 0 ]]; do
         --old-only)     RUN_OLD=true; RUN_NEW=false; shift ;;
         --new-only)     RUN_OLD=false; RUN_NEW=true; shift ;;
         --start-notebook) START_NOTEBOOK="$2"; shift 2 ;;
+        --old-databricks-run) OLD_DATABRICKS_RUN="$2"; shift 2 ;;
+        --new-databricks-run) NEW_DATABRICKS_RUN="$2"; shift 2 ;;
         --list-candidates)
             LIST_CANDIDATES=true; shift ;;
         --help|-h)
@@ -78,6 +82,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --keep-worktree     Keep the old-code worktree after completion"
             echo "  --cleanup           Remove comparison dir, worktree, and kernels for the given commits"
             echo "  --list-candidates   Show candidate commits near the tutorial date"
+            echo "  --old-databricks-run RUN_ID  Use Databricks job run for old side (skip local execution)"
+            echo "  --new-databricks-run RUN_ID  Use Databricks job run for new side (skip local execution)"
             exit 0 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
@@ -234,8 +240,16 @@ NEW_VERSION="$(git -C "$REPO_DIR" show "$NEW_COMMIT":pyproject.toml 2>/dev/null 
 echo "============================================================"
 echo "  Exploration Drift Comparison"
 echo ""
-echo "  Old: $OLD_SHORT  v$OLD_VERSION  ($OLD_DATE)"
-echo "  New: $NEW_SHORT  v$NEW_VERSION  ($NEW_DATE)"
+if [ -n "$OLD_DATABRICKS_RUN" ]; then
+    echo "  Old: Databricks run $OLD_DATABRICKS_RUN"
+else
+    echo "  Old: $OLD_SHORT  v$OLD_VERSION  ($OLD_DATE)"
+fi
+if [ -n "$NEW_DATABRICKS_RUN" ]; then
+    echo "  New: Databricks run $NEW_DATABRICKS_RUN"
+else
+    echo "  New: $NEW_SHORT  v$NEW_VERSION  ($NEW_DATE)"
+fi
 echo ""
 echo "  Dataset:   $DATASET"
 echo "  Output:    $COMPARISON_DIR/"
@@ -278,8 +292,8 @@ _create_worktree() {
 mkdir -p "$COMPARISON_DIR"
 if ! $CAPTURE_ONLY; then
     echo "[Step 1] Creating worktrees ..."
-    $RUN_OLD && _create_worktree "$OLD_DIR" "$OLD_COMMIT" "old"
-    $RUN_NEW && ! $NEW_IS_HEAD && _create_worktree "$NEW_DIR" "$NEW_COMMIT" "new"
+    $RUN_OLD && [ -z "$OLD_DATABRICKS_RUN" ] && _create_worktree "$OLD_DIR" "$OLD_COMMIT" "old"
+    $RUN_NEW && [ -z "$NEW_DATABRICKS_RUN" ] && ! $NEW_IS_HEAD && _create_worktree "$NEW_DIR" "$NEW_COMMIT" "new"
 else
     echo "[Step 1] SKIP — capture-only mode"
 fi
@@ -436,6 +450,8 @@ _discover_old_run_id() {
 # CR_EXPERIMENTS_DIR routes RunNamespace artefacts into the comparison dir.
 if ! $RUN_OLD; then
     echo "[Step 4] SKIP — new-only mode"
+elif [ -n "$OLD_DATABRICKS_RUN" ]; then
+    echo "[Step 4] SKIP — using Databricks run $OLD_DATABRICKS_RUN for old side"
 elif $CAPTURE_ONLY; then
     echo "[Step 4] SKIP — capture-only mode"
 elif $DRY_RUN; then
@@ -490,6 +506,8 @@ _build_new_extra_args() {
 
 if ! $RUN_NEW; then
     echo "[Step 5] SKIP — old-only mode"
+elif [ -n "$NEW_DATABRICKS_RUN" ]; then
+    echo "[Step 5] SKIP — using Databricks run $NEW_DATABRICKS_RUN for new side"
 elif $CAPTURE_ONLY; then
     echo "[Step 5] SKIP — capture-only mode"
 elif $DRY_RUN; then
@@ -591,27 +609,43 @@ echo ""
 
 # ---- Step 7: Capture outputs + cell profiles (newest script, both worktrees) ----
 echo "[Step 7] Capturing cell outputs and performance profiles ..."
+
+_capture_local() {
+    # Usage: _capture_local <notebooks_dir> <output_dir>
+    local nb_dir="$1" out_dir="$2"
+    python "$SCRIPTS_DIR/capture_notebook_outputs.py" \
+        --notebooks-dir "$nb_dir" --output "$out_dir/cell_outputs.md"
+    python "$SCRIPTS_DIR/cell_profiling.py" extract \
+        --notebooks-dir "$nb_dir" --output "$out_dir/cell_profiles.json"
+}
+
+_capture_databricks() {
+    # Usage: _capture_databricks <run_id> <output_dir>
+    local rid="$1" out_dir="$2"
+    mkdir -p "$out_dir"
+    python -m customer_retention.integrations.databricks_job_capture \
+        --run-id "$rid" \
+        --output "$out_dir/cell_outputs.md" \
+        --profiles "$out_dir/cell_profiles.json"
+}
+
 if $DRY_RUN; then
-    $RUN_OLD && echo "  DRY_RUN: capture → $OLD_OUTPUT_DIR/cell_outputs.md"
-    $RUN_OLD && echo "  DRY_RUN: profile → $OLD_OUTPUT_DIR/cell_profiles.json"
-    $RUN_NEW && echo "  DRY_RUN: capture → $NEW_OUTPUT_DIR/cell_outputs.md"
-    $RUN_NEW && echo "  DRY_RUN: profile → $NEW_OUTPUT_DIR/cell_profiles.json"
+    $RUN_OLD && echo "  DRY_RUN: capture old → $OLD_OUTPUT_DIR/ (${OLD_DATABRICKS_RUN:+databricks run $OLD_DATABRICKS_RUN}${OLD_DATABRICKS_RUN:-local})"
+    $RUN_NEW && echo "  DRY_RUN: capture new → $NEW_OUTPUT_DIR/ (${NEW_DATABRICKS_RUN:+databricks run $NEW_DATABRICKS_RUN}${NEW_DATABRICKS_RUN:-local})"
 else
     if $RUN_OLD; then
-        python "$SCRIPTS_DIR/capture_notebook_outputs.py" \
-            --notebooks-dir "$OLD_NB_DIR" \
-            --output "$OLD_OUTPUT_DIR/cell_outputs.md"
-        python "$SCRIPTS_DIR/cell_profiling.py" extract \
-            --notebooks-dir "$OLD_NB_DIR" \
-            --output "$OLD_OUTPUT_DIR/cell_profiles.json"
+        if [ -n "$OLD_DATABRICKS_RUN" ]; then
+            _capture_databricks "$OLD_DATABRICKS_RUN" "$OLD_OUTPUT_DIR"
+        else
+            _capture_local "$OLD_NB_DIR" "$OLD_OUTPUT_DIR"
+        fi
     fi
     if $RUN_NEW; then
-        python "$SCRIPTS_DIR/capture_notebook_outputs.py" \
-            --notebooks-dir "$NEW_NB_DIR" \
-            --output "$NEW_OUTPUT_DIR/cell_outputs.md"
-        python "$SCRIPTS_DIR/cell_profiling.py" extract \
-            --notebooks-dir "$NEW_NB_DIR" \
-            --output "$NEW_OUTPUT_DIR/cell_profiles.json"
+        if [ -n "$NEW_DATABRICKS_RUN" ]; then
+            _capture_databricks "$NEW_DATABRICKS_RUN" "$NEW_OUTPUT_DIR"
+        else
+            _capture_local "$NEW_NB_DIR" "$NEW_OUTPUT_DIR"
+        fi
     fi
 fi
 echo ""

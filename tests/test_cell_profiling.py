@@ -1,4 +1,5 @@
 """Tests for scripts/experiments/cell_profiling.py — per-cell performance profile extraction."""
+
 import json
 import sys
 from pathlib import Path
@@ -15,12 +16,14 @@ from cell_profiling import (
     extract_profiles_from_notebooks,
     load_cell_profiles,
     merge_profiles,
+    merge_sidecar_metrics,
     write_cell_profiles,
 )
 
 # ---------------------------------------------------------------------------
 # Helpers — create mock notebook JSON
 # ---------------------------------------------------------------------------
+
 
 def _make_notebook(cells: list[dict]) -> dict:
     """Build a minimal nbformat-like notebook dict."""
@@ -101,11 +104,13 @@ def _code_cell_no_cr_tag(cell_id: str, duration: float = 0.5) -> dict:
 
 class TestExtractProfilesFromNotebook:
     def test_basic_extraction(self, tmp_path):
-        nb = _make_notebook([
-            _markdown_cell(),
-            _code_cell("load_data", "abc123", duration=3.21),
-            _code_cell("validate", "def456", duration=1.05),
-        ])
+        nb = _make_notebook(
+            [
+                _markdown_cell(),
+                _code_cell("load_data", "abc123", duration=3.21),
+                _code_cell("validate", "def456", duration=1.05),
+            ]
+        )
         nb_path = tmp_path / "test.ipynb"
         nb_path.write_text(json.dumps(nb))
         result = extract_profiles_from_notebook(nb_path)
@@ -119,11 +124,13 @@ class TestExtractProfilesFromNotebook:
         assert result.total_elapsed == pytest.approx(4.26, abs=0.01)
 
     def test_skips_markdown_cells(self, tmp_path):
-        nb = _make_notebook([
-            _markdown_cell(),
-            _markdown_cell("md002"),
-            _code_cell("code1", "aaa111", duration=1.0),
-        ])
+        nb = _make_notebook(
+            [
+                _markdown_cell(),
+                _markdown_cell("md002"),
+                _code_cell("code1", "aaa111", duration=1.0),
+            ]
+        )
         nb_path = tmp_path / "test.ipynb"
         nb_path.write_text(json.dumps(nb))
         result = extract_profiles_from_notebook(nb_path)
@@ -133,10 +140,12 @@ class TestExtractProfilesFromNotebook:
         assert result.cells[0].cell_name == "code1"
 
     def test_handles_failed_cells(self, tmp_path):
-        nb = _make_notebook([
-            _code_cell("ok_cell", "ok1", duration=1.0),
-            _code_cell("bad_cell", "bad1", duration=0.5, exception=True),
-        ])
+        nb = _make_notebook(
+            [
+                _code_cell("ok_cell", "ok1", duration=1.0),
+                _code_cell("bad_cell", "bad1", duration=0.5, exception=True),
+            ]
+        )
         nb_path = tmp_path / "test.ipynb"
         nb_path.write_text(json.dumps(nb))
         result = extract_profiles_from_notebook(nb_path)
@@ -146,9 +155,11 @@ class TestExtractProfilesFromNotebook:
         assert result.cells[1].status == "failed"
 
     def test_fallback_cell_name_without_cr_tag(self, tmp_path):
-        nb = _make_notebook([
-            _code_cell_no_cr_tag("xyz789", duration=0.5),
-        ])
+        nb = _make_notebook(
+            [
+                _code_cell_no_cr_tag("xyz789", duration=0.5),
+            ]
+        )
         nb_path = tmp_path / "test.ipynb"
         nb_path.write_text(json.dumps(nb))
         result = extract_profiles_from_notebook(nb_path)
@@ -158,9 +169,11 @@ class TestExtractProfilesFromNotebook:
         assert result.cells[0].cell_id == "xyz789"
 
     def test_returns_none_for_unexecuted_notebook(self, tmp_path):
-        nb = _make_notebook([
-            {"cell_type": "code", "id": "nopm", "source": ["x=1"], "metadata": {}, "outputs": []},
-        ])
+        nb = _make_notebook(
+            [
+                {"cell_type": "code", "id": "nopm", "source": ["x=1"], "metadata": {}, "outputs": []},
+            ]
+        )
         nb_path = tmp_path / "test.ipynb"
         nb_path.write_text(json.dumps(nb))
         result = extract_profiles_from_notebook(nb_path)
@@ -168,9 +181,11 @@ class TestExtractProfilesFromNotebook:
         assert result is None
 
     def test_null_duration_treated_as_zero(self, tmp_path):
-        nb = _make_notebook([
-            _code_cell("cell1", "c1", duration=None),
-        ])
+        nb = _make_notebook(
+            [
+                _code_cell("cell1", "c1", duration=None),
+            ]
+        )
         # Manually patch duration to None
         nb["cells"][0]["metadata"]["papermill"]["duration"] = None
         nb_path = tmp_path / "test.ipynb"
@@ -181,9 +196,11 @@ class TestExtractProfilesFromNotebook:
         assert result.cells[0].elapsed_sec == 0.0
 
     def test_config_kind_cells_extracted(self, tmp_path):
-        nb = _make_notebook([
-            _code_cell("discovery_config", "cfg1", duration=0.01, kind="config"),
-        ])
+        nb = _make_notebook(
+            [
+                _code_cell("discovery_config", "cfg1", duration=0.01, kind="config"),
+            ]
+        )
         nb_path = tmp_path / "test.ipynb"
         nb_path.write_text(json.dumps(nb))
         result = extract_profiles_from_notebook(nb_path)
@@ -226,10 +243,14 @@ class TestExtractProfilesFromNotebooks:
 class TestSerialisation:
     def test_write_and_load_round_trip(self, tmp_path):
         entry = CellProfileEntry(
-            cell_name="load_data", cell_id="abc123",
-            elapsed_sec=3.21, status="completed",
-            start_time="2026-04-01T10:00:00", end_time="2026-04-01T10:00:03",
-            spark_jobs=5, peak_memory_mb=12.4,
+            cell_name="load_data",
+            cell_id="abc123",
+            elapsed_sec=3.21,
+            status="completed",
+            start_time="2026-04-01T10:00:00",
+            end_time="2026-04-01T10:00:03",
+            spark_jobs=5,
+            peak_memory_mb=12.4,
         )
         manifest = CellProfileManifest(
             environment="local",
@@ -259,8 +280,10 @@ class TestSerialisation:
 
     def test_json_structure(self, tmp_path):
         entry = CellProfileEntry(
-            cell_name="test", cell_id="id1",
-            elapsed_sec=1.0, status="completed",
+            cell_name="test",
+            cell_id="id1",
+            elapsed_sec=1.0,
+            status="completed",
         )
         manifest = CellProfileManifest(
             notebooks={"nb1": NotebookProfile(total_elapsed=1.0, cells=[entry])},
@@ -287,25 +310,121 @@ class TestMerge:
         a = CellProfileManifest(
             environment="local",
             notebooks={
-                "nb1": NotebookProfile(total_elapsed=10.0, cells=[
-                    CellProfileEntry("c1", "id1", 10.0, "completed"),
-                ]),
+                "nb1": NotebookProfile(
+                    total_elapsed=10.0,
+                    cells=[
+                        CellProfileEntry("c1", "id1", 10.0, "completed"),
+                    ],
+                ),
             },
         )
         b = CellProfileManifest(
             environment="local",
             notebooks={
-                "nb1": NotebookProfile(total_elapsed=20.0, cells=[
-                    CellProfileEntry("c1", "id1", 20.0, "completed"),
-                ]),
-                "nb2": NotebookProfile(total_elapsed=5.0, cells=[
-                    CellProfileEntry("c2", "id2", 5.0, "completed"),
-                ]),
+                "nb1": NotebookProfile(
+                    total_elapsed=20.0,
+                    cells=[
+                        CellProfileEntry("c1", "id1", 20.0, "completed"),
+                    ],
+                ),
+                "nb2": NotebookProfile(
+                    total_elapsed=5.0,
+                    cells=[
+                        CellProfileEntry("c2", "id2", 5.0, "completed"),
+                    ],
+                ),
             },
         )
         merged = merge_profiles(a, b)
         assert merged.notebooks["nb1"].total_elapsed == 20.0
         assert "nb2" in merged.notebooks
+
+
+# ---------------------------------------------------------------------------
+# Tests — sidecar merge
+# ---------------------------------------------------------------------------
+
+
+class TestMergeSidecarMetrics:
+    def test_merges_spark_jobs_and_memory(self, tmp_path):
+        manifest = CellProfileManifest(
+            environment="local",
+            notebooks={
+                "nb1": NotebookProfile(
+                    total_elapsed=5.0,
+                    cells=[
+                        CellProfileEntry("load", "id1", 3.0, "completed"),
+                        CellProfileEntry("validate", "id2", 2.0, "completed"),
+                    ],
+                ),
+            },
+        )
+        sidecar = tmp_path / ".cr_cell_metrics_nb1.jsonl"
+        sidecar.write_text(
+            json.dumps({"cell_name": "load", "cell_id": "id1", "spark_jobs": 3, "peak_memory_mb": 12.4})
+            + "\n"
+            + json.dumps({"cell_name": "validate", "cell_id": "id2", "spark_jobs": 0, "peak_memory_mb": 1.1})
+            + "\n"
+        )
+        result = merge_sidecar_metrics(manifest, tmp_path)
+        c1 = result.notebooks["nb1"].cells[0]
+        assert c1.spark_jobs == 3
+        assert c1.peak_memory_mb == pytest.approx(12.4)
+        c2 = result.notebooks["nb1"].cells[1]
+        assert c2.spark_jobs == 0
+
+    def test_unmatched_sidecar_entries_ignored(self, tmp_path):
+        manifest = CellProfileManifest(
+            environment="local",
+            notebooks={
+                "nb1": NotebookProfile(
+                    total_elapsed=1.0,
+                    cells=[
+                        CellProfileEntry("c1", "id1", 1.0, "completed"),
+                    ],
+                )
+            },
+        )
+        sidecar = tmp_path / ".cr_cell_metrics_nb1.jsonl"
+        sidecar.write_text(
+            json.dumps({"cell_name": "unknown", "cell_id": "xxx", "spark_jobs": 5, "peak_memory_mb": 1.0}) + "\n"
+        )
+        result = merge_sidecar_metrics(manifest, tmp_path)
+        assert result.notebooks["nb1"].cells[0].spark_jobs is None
+
+    def test_no_sidecar_files_unchanged(self, tmp_path):
+        manifest = CellProfileManifest(
+            environment="local",
+            notebooks={
+                "nb1": NotebookProfile(
+                    total_elapsed=1.0,
+                    cells=[
+                        CellProfileEntry("c1", "id1", 1.0, "completed"),
+                    ],
+                )
+            },
+        )
+        result = merge_sidecar_metrics(manifest, tmp_path)
+        assert result.notebooks["nb1"].cells[0].spark_jobs is None
+
+    def test_empty_cell_name_matched_by_id(self, tmp_path):
+        manifest = CellProfileManifest(
+            environment="local",
+            notebooks={
+                "nb1": NotebookProfile(
+                    total_elapsed=1.0,
+                    cells=[
+                        CellProfileEntry("c1", "id1", 1.0, "completed"),
+                    ],
+                )
+            },
+        )
+        sidecar = tmp_path / ".cr_cell_metrics_nb1.jsonl"
+        sidecar.write_text(
+            json.dumps({"cell_name": "", "cell_id": "id1", "spark_jobs": 7, "peak_memory_mb": 3.0}) + "\n"
+        )
+        result = merge_sidecar_metrics(manifest, tmp_path)
+        assert result.notebooks["nb1"].cells[0].spark_jobs == 7
 
 
 # ---------------------------------------------------------------------------
@@ -326,16 +445,21 @@ class TestDriftReportIntegration:
 
     def _minimal_drift_with_profiles(self, old_profiles, new_profiles):
         from compare_exploration_runs import DriftResult, ParsedManifest, RunMetadata
+
         return DriftResult(
             old_meta=RunMetadata("aaa", "1.0", "Jan 01"),
             new_meta=RunMetadata("bbb", "2.0", "Feb 01"),
             old_manifest=ParsedManifest({}, ""),
             new_manifest=ParsedManifest({}, ""),
             notebook_drifts=[],
-            snapshot_grid_old=None, snapshot_grid_new=None,
-            project_context_old=None, project_context_new=None,
-            feature_profile_old=None, feature_profile_new=None,
-            old_timings={}, new_timings={},
+            snapshot_grid_old=None,
+            snapshot_grid_new=None,
+            project_context_old=None,
+            project_context_new=None,
+            feature_profile_old=None,
+            feature_profile_new=None,
+            old_timings={},
+            new_timings={},
             metric_tables=[],
             old_cell_profiles=old_profiles,
             new_cell_profiles=new_profiles,
@@ -343,6 +467,7 @@ class TestDriftReportIntegration:
 
     def test_md_render_cell_profiling_with_data(self):
         from compare_exploration_runs import MarkdownDriftRenderer
+
         old = self._make_profiles({"nb1": [("load", "id1", 3.0), ("validate", "id2", 1.0)]})
         new = self._make_profiles({"nb1": [("load", "id1", 2.5), ("validate", "id2", 5.0)]})
         drift = self._minimal_drift_with_profiles(old, new)
@@ -359,12 +484,14 @@ class TestDriftReportIntegration:
 
     def test_md_render_cell_profiling_no_profiles(self):
         from compare_exploration_runs import MarkdownDriftRenderer
+
         drift = self._minimal_drift_with_profiles(None, None)
         md = MarkdownDriftRenderer(drift).render_cell_profiling()
         assert "No cell profiles found" in md
 
     def test_html_render_cell_profiling_with_data(self):
         from compare_exploration_runs import HtmlDriftRenderer
+
         old = self._make_profiles({"nb1": [("load", "id1", 3.0)]})
         new = self._make_profiles({"nb1": [("load", "id1", 2.0)]})
         drift = self._minimal_drift_with_profiles(old, new)
@@ -376,6 +503,7 @@ class TestDriftReportIntegration:
 
     def test_cross_environment_note(self):
         from compare_exploration_runs import MarkdownDriftRenderer
+
         old = self._make_profiles({"nb1": [("c1", "id1", 1.0)]})
         old.environment = "local"
         new = self._make_profiles({"nb1": [("c1", "id1", 2.0)]})
@@ -393,14 +521,18 @@ class TestDriftReportIntegration:
             MarkdownDriftRenderer,
             NotebookDrift,
         )
+
         old_profiles = self._make_profiles({"nb1": [("cell_a", "id_a", 2.0)]})
         new_profiles = self._make_profiles({"nb1": [("cell_a", "id_a", 5.0)]})
 
         old_cell = ManifestCell(name="cell_a", cell_id="id_a", section="", content="old output")
         new_cell = ManifestCell(name="cell_a", cell_id="id_a", section="", content="new output")
-        nd = NotebookDrift("nb1", [
-            CellMatch(old_cell, new_cell, CellMatchStatus.MODIFIED, "- old\n+ new"),
-        ])
+        nd = NotebookDrift(
+            "nb1",
+            [
+                CellMatch(old_cell, new_cell, CellMatchStatus.MODIFIED, "- old\n+ new"),
+            ],
+        )
 
         drift = self._minimal_drift_with_profiles(old_profiles, new_profiles)
         drift.notebook_drifts = [nd]
@@ -413,6 +545,7 @@ class TestDriftReportIntegration:
 
     def test_full_render_pipeline_with_profiles(self):
         from compare_exploration_runs import HtmlDriftRenderer, MarkdownDriftRenderer
+
         old = self._make_profiles({"nb1": [("c1", "id1", 1.0)]})
         new = self._make_profiles({"nb1": [("c1", "id1", 2.0)]})
         drift = self._minimal_drift_with_profiles(old, new)

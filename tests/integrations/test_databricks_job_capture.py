@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 from customer_retention.integrations.databricks_job_capture import (
     ParsedCell,
     _extract_outputs_from_block,
+    _extract_timing_from_block,
     _format_notebook_manifest,
     _is_chart_block,
     _parse_cr_tag_from_source,
@@ -19,6 +20,7 @@ from customer_retention.integrations.databricks_job_capture import (
     _strip_tags,
     _truncate,
     capture_job_run,
+    extract_cell_profiles_from_parsed_cells,
 )
 
 # ---------------------------------------------------------------------------
@@ -202,10 +204,10 @@ class TestIsChartBlock:
         assert _is_chart_block('<svg width="100"><rect/></svg>')
 
     def test_text_not_chart(self):
-        assert not _is_chart_block('<pre>42000</pre>')
+        assert not _is_chart_block("<pre>42000</pre>")
 
     def test_table_not_chart(self):
-        assert not _is_chart_block('<table><tr><td>val</td></tr></table>')
+        assert not _is_chart_block("<table><tr><td>val</td></tr></table>")
 
     def test_bokeh_detected(self):
         assert _is_chart_block('<div class="bk-root" id="bokeh-plot-123">...</div>')
@@ -302,7 +304,8 @@ class TestFormatNotebookManifest:
     def test_basic_format(self):
         cells = [
             ParsedCell(
-                index=0, cell_type="code",
+                index=0,
+                cell_type="code",
                 source="# @cr:code name='load' id=aabb1122\ndf = load()",
                 cr_tag={"kind": "code", "name": "load", "id": "aabb1122"},
                 outputs=[{"type": "stream", "content": "Loaded 100 rows"}],
@@ -317,7 +320,9 @@ class TestFormatNotebookManifest:
     def test_html_output_format(self):
         cells = [
             ParsedCell(
-                index=0, cell_type="code", source="display(df)",
+                index=0,
+                cell_type="code",
+                source="display(df)",
                 cr_tag=None,
                 outputs=[{"type": "html", "content": "<table><tr><td>A</td></tr></table>"}],
             ),
@@ -329,7 +334,9 @@ class TestFormatNotebookManifest:
     def test_error_format(self):
         cells = [
             ParsedCell(
-                index=0, cell_type="code", source="1/0",
+                index=0,
+                cell_type="code",
+                source="1/0",
                 cr_tag=None,
                 outputs=[{"type": "error", "content": "ZeroDivisionError"}],
             ),
@@ -350,7 +357,9 @@ class TestFormatNotebookManifest:
     def test_section_map_header(self):
         cells = [
             ParsedCell(
-                index=0, cell_type="code", source="print(1)",
+                index=0,
+                cell_type="code",
+                source="print(1)",
                 cr_tag=None,
                 outputs=[{"type": "stream", "content": "1"}],
             ),
@@ -437,3 +446,233 @@ class TestCaptureJobRun:
         mock_ws_cls.return_value = self._mock_workspace_client(html_content=html)
         result = capture_job_run(run_id=100)
         assert "_No captured outputs._" in result
+
+
+# ---------------------------------------------------------------------------
+# HTML fixtures with timing data
+# ---------------------------------------------------------------------------
+
+TIMED_CELL_HTML = textwrap.dedent("""\
+<div id="command-t1" class="command" data-commandruntime="3210">
+  <div class="commandInput">
+    <div class="code"><pre># @cr:code name='load_data' id=abcd1234
+df = spark.read.table("my_table")</pre></div>
+  </div>
+  <div class="commandResult">
+    <div class="ansiout"><pre>42000</pre></div>
+  </div>
+</div>
+""")
+
+TIMED_CELL_TEXT_HTML = textwrap.dedent("""\
+<div id="command-t2" class="command">
+  <div class="commandInput">
+    <div class="code"><pre># @cr:code name='validate' id=ef567890
+validate(df)</pre></div>
+  </div>
+  <div class="commandResult">
+    <div class="ansiout"><pre>OK</pre></div>
+    <div class="execution-time">Command took 1.50 seconds</div>
+  </div>
+</div>
+""")
+
+NO_TIMING_CELL_HTML = textwrap.dedent("""\
+<div id="command-t3" class="command">
+  <div class="commandInput">
+    <div class="code"><pre># @cr:code name='no_time' id=11223344
+x = 1</pre></div>
+  </div>
+  <div class="commandResult"></div>
+</div>
+""")
+
+
+# ---------------------------------------------------------------------------
+# Tests: _extract_timing_from_block
+# ---------------------------------------------------------------------------
+
+
+class TestExtractTimingFromBlock:
+    def test_data_commandruntime_attribute(self):
+        elapsed = _extract_timing_from_block(TIMED_CELL_HTML)
+        assert elapsed is not None
+        assert abs(elapsed - 3.21) < 0.01
+
+    def test_text_based_timing(self):
+        elapsed = _extract_timing_from_block(TIMED_CELL_TEXT_HTML)
+        assert elapsed is not None
+        assert abs(elapsed - 1.50) < 0.01
+
+    def test_no_timing_returns_none(self):
+        elapsed = _extract_timing_from_block(NO_TIMING_CELL_HTML)
+        assert elapsed is None
+
+    def test_simple_block_no_timing(self):
+        elapsed = _extract_timing_from_block(SIMPLE_CODE_CELL_HTML)
+        assert elapsed is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: extract_cell_profiles_from_parsed_cells
+# ---------------------------------------------------------------------------
+
+
+class TestExtractCellProfiles:
+    def test_basic_profile_extraction(self):
+        cells = [
+            ParsedCell(
+                index=0,
+                cell_type="code",
+                source="# @cr:code name='load' id=aabb1122\ndf=1",
+                cr_tag={"kind": "code", "name": "load", "id": "aabb1122"},
+                outputs=[{"type": "stream", "content": "ok"}],
+            ),
+        ]
+        entries = extract_cell_profiles_from_parsed_cells("nb1", cells)
+        assert len(entries) == 1
+        assert entries[0].cell_name == "load"
+        assert entries[0].cell_id == "aabb1122"
+
+    def test_skips_markdown_cells(self):
+        cells = [
+            ParsedCell(index=0, cell_type="markdown", source="## Title"),
+            ParsedCell(
+                index=1,
+                cell_type="code",
+                source="# @cr:code name='c1' id=aa11\nx=1",
+                cr_tag={"kind": "code", "name": "c1", "id": "aa11"},
+                outputs=[],
+            ),
+        ]
+        entries = extract_cell_profiles_from_parsed_cells("nb1", cells)
+        assert len(entries) == 1
+        assert entries[0].cell_name == "c1"
+
+    def test_fallback_name_without_cr_tag(self):
+        cells = [
+            ParsedCell(index=3, cell_type="code", source="x=1", outputs=[]),
+        ]
+        entries = extract_cell_profiles_from_parsed_cells("nb1", cells)
+        assert len(entries) == 1
+        assert entries[0].cell_name == "cell_3"
+        assert entries[0].cell_id == "idx3"
+
+    def test_with_elapsed_from_parsed_cell(self):
+        cell = ParsedCell(
+            index=0, cell_type="code", source="x=1", cr_tag={"kind": "code", "name": "c1", "id": "id1"}, outputs=[]
+        )
+        cell.elapsed_sec = 2.5  # type: ignore[attr-defined]
+        entries = extract_cell_profiles_from_parsed_cells("nb1", [cell])
+        assert entries[0].elapsed_sec == 2.5
+
+
+# ---------------------------------------------------------------------------
+# Tests: capture_job_run with profiles_path
+# ---------------------------------------------------------------------------
+
+
+class TestCaptureJobRunWithProfiles:
+    def _mock_workspace_client(self, tasks=None, html_content=""):
+        w = MagicMock()
+        run = MagicMock()
+        if tasks is None:
+            run.tasks = None
+            run.run_id = 100
+            run.notebook_task = None
+        else:
+            run.tasks = []
+            for task_key, task_run_id in tasks:
+                t = MagicMock()
+                t.task_key = task_key
+                t.run_id = task_run_id
+                run.tasks.append(t)
+        w.jobs.get_run.return_value = run
+
+        export = MagicMock()
+        view = MagicMock()
+        view.content = html_content
+        export.views = [view]
+        w.jobs.export_run.return_value = export
+        return w
+
+    @patch("customer_retention.integrations.databricks_job_capture.WorkspaceClient")
+    def test_profiles_path_writes_json(self, mock_ws_cls, tmp_path):
+        html = _full_html(TIMED_CELL_HTML)
+        mock_ws_cls.return_value = self._mock_workspace_client(html_content=html)
+        profiles_path = tmp_path / "cell_profiles.json"
+        capture_job_run(run_id=100, profiles_path=str(profiles_path))
+        assert profiles_path.exists()
+        import json
+
+        data = json.loads(profiles_path.read_text())
+        assert data["environment"] == "databricks"
+        assert "notebook" in data["notebooks"]
+
+    @patch("customer_retention.integrations.databricks_job_capture.WorkspaceClient")
+    def test_profiles_contain_timing(self, mock_ws_cls, tmp_path):
+        html = _full_html(TIMED_CELL_HTML)
+        mock_ws_cls.return_value = self._mock_workspace_client(html_content=html)
+        profiles_path = tmp_path / "cell_profiles.json"
+        capture_job_run(run_id=100, profiles_path=str(profiles_path))
+        import json
+
+        data = json.loads(profiles_path.read_text())
+        cells = data["notebooks"]["notebook"]["cells"]
+        timed = [c for c in cells if c["elapsed_sec"] > 0]
+        assert len(timed) >= 1
+        assert abs(timed[0]["elapsed_sec"] - 3.21) < 0.01
+
+    @patch("customer_retention.integrations.databricks_job_capture.WorkspaceClient")
+    def test_no_profiles_when_path_not_given(self, mock_ws_cls):
+        html = _full_html(SIMPLE_CODE_CELL_HTML)
+        mock_ws_cls.return_value = self._mock_workspace_client(html_content=html)
+        result = capture_job_run(run_id=100)
+        assert isinstance(result, str)
+
+
+# ---------------------------------------------------------------------------
+# Tests: _merge_runner_profiles
+# ---------------------------------------------------------------------------
+
+
+class TestMergeRunnerProfiles:
+    def test_merges_spark_jobs_from_runner(self):
+        from customer_retention.integrations.databricks_job_capture import _merge_runner_profiles
+
+        profiles_json = {
+            "version": 1,
+            "environment": "databricks",
+            "notebooks": {
+                "bronze/bronze_entity_orders": {
+                    "total_elapsed": 5.0,
+                    "cells": [
+                        {
+                            "cell_name": "load",
+                            "cell_id": "id1",
+                            "elapsed_sec": 5.0,
+                            "spark_jobs": None,
+                            "status": "completed",
+                            "start_time": None,
+                            "end_time": None,
+                            "peak_memory_mb": None,
+                        },
+                    ],
+                },
+            },
+        }
+        # _merge_runner_profiles calls RunNamespace internally and reads files.
+        # Without a real namespace, it should gracefully return unmodified profiles.
+        mock_run = MagicMock()
+        mock_run.tasks = None
+        mock_w = MagicMock()
+        result = _merge_runner_profiles(mock_w, mock_run, profiles_json)
+        assert result["notebooks"]["bronze/bronze_entity_orders"]["cells"][0]["spark_jobs"] is None
+
+    def test_graceful_on_missing_namespace(self):
+        from customer_retention.integrations.databricks_job_capture import _merge_runner_profiles
+
+        mock_run = MagicMock()
+        mock_run.tasks = []
+        result = _merge_runner_profiles(MagicMock(), mock_run, {"notebooks": {}})
+        assert result == {"notebooks": {}}

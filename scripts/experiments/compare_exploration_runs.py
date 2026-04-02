@@ -47,6 +47,7 @@ except ImportError:
         # When invoked from a different working directory
         _here = Path(__file__).resolve().parent
         import importlib.util
+
         _spec = importlib.util.spec_from_file_location("cell_profiling", _here / "cell_profiling.py")
         _mod = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
         _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
@@ -209,15 +210,14 @@ def _is_jupyter_default_id(cell_id: str) -> bool:
 
 
 def _compute_diff(old_content: str, new_content: str) -> str:
-    return "\n".join(difflib.unified_diff(
-        old_content.split("\n"), new_content.split("\n"), lineterm="", n=3
-    ))
+    return "\n".join(difflib.unified_diff(old_content.split("\n"), new_content.split("\n"), lineterm="", n=3))
 
 
 def _pair_lists(
     old_list: list[tuple[int, ManifestCell]],
     new_list: list[tuple[int, ManifestCell]],
-    matched_old: set[int], matched_new: set[int],
+    matched_old: set[int],
+    matched_new: set[int],
     results: list[CellMatch],
 ) -> None:
     for i in range(min(len(old_list), len(new_list))):
@@ -234,7 +234,8 @@ def _pair_lists(
 def _positional_pair(
     leftover_old: list[tuple[int, ManifestCell]],
     leftover_new: list[tuple[int, ManifestCell]],
-    matched_old: set[int], matched_new: set[int],
+    matched_old: set[int],
+    matched_new: set[int],
     results: list[CellMatch],
 ) -> None:
     new_sections = {c.section for _, c in leftover_new if c.section}
@@ -392,9 +393,7 @@ def _build_metric_comparisons(old_manifest: ParsedManifest, new_manifest: Parsed
     if not old_tables and not new_tables:
         return []
     result = []
-    for old_item, new_item in zip(
-        old_tables or [(None, None)], new_tables or [(None, None)]
-    ):
+    for old_item, new_item in zip(old_tables or [(None, None)], new_tables or [(None, None)]):
         old_name, old_df = old_item if old_item else (None, None)
         new_name, new_df = new_item if new_item else (None, None)
         result.append({"old_name": old_name, "old_df": old_df, "new_name": new_name, "new_df": new_df})
@@ -436,7 +435,12 @@ def compute_drift_result(
         fp_old = _load_yaml(old_run_dir / "merged" / "exploration_feature_profile.yaml")
         fp_new = _load_yaml(new_run_dir / "merged" / "exploration_feature_profile.yaml")
         for run_dir, target in [(old_run_dir, "old_timings"), (new_run_dir, "new_timings")]:
-            for base in [run_dir, run_dir / "notebooks", run_dir.parent.parent / "exploration_notebooks", run_dir.parent.parent]:
+            for base in [
+                run_dir,
+                run_dir / "notebooks",
+                run_dir.parent.parent / "exploration_notebooks",
+                run_dir.parent.parent,
+            ]:
                 log = base / "run_exploration.log"
                 if log.exists():
                     if target == "old_timings":
@@ -455,13 +459,19 @@ def compute_drift_result(
             new_cell_profiles = load_cell_profiles(new_run_dir / "cell_profiles.json")
 
     return DriftResult(
-        old_meta=old_meta, new_meta=new_meta,
-        old_manifest=old_m, new_manifest=new_m,
+        old_meta=old_meta,
+        new_meta=new_meta,
+        old_manifest=old_m,
+        new_manifest=new_m,
         notebook_drifts=notebook_drifts,
-        snapshot_grid_old=sg_old, snapshot_grid_new=sg_new,
-        project_context_old=pc_old, project_context_new=pc_new,
-        feature_profile_old=fp_old, feature_profile_new=fp_new,
-        old_timings=old_timings, new_timings=new_timings,
+        snapshot_grid_old=sg_old,
+        snapshot_grid_new=sg_new,
+        project_context_old=pc_old,
+        project_context_new=pc_new,
+        feature_profile_old=fp_old,
+        feature_profile_new=fp_new,
+        old_timings=old_timings,
+        new_timings=new_timings,
         metric_tables=_build_metric_comparisons(old_m, new_m),
         old_cell_profiles=old_cell_profiles,
         new_cell_profiles=new_cell_profiles,
@@ -475,18 +485,35 @@ def compute_drift_result(
 
 class DriftReportRenderer(ABC):
     REPORT_SECTIONS = [
-        "title", "summary", "section_map_changes", "model_metrics",
-        "snapshot_grid", "project_context", "feature_profile", "timing",
-        "cell_profiling", "cell_by_cell_diff",
+        "title",
+        "summary",
+        "section_map_changes",
+        "model_metrics",
+        "snapshot_grid",
+        "project_context",
+        "feature_profile",
+        "timing",
+        "cell_profiling",
+        "cell_by_cell_diff",
     ]
     SNAPSHOT_GRID_KEYS = [
-        "grid_start", "grid_end", "cadence_interval", "observation_window_days",
-        "purge_gap_days", "label_window_days", "max_grid_dates",
+        "grid_start",
+        "grid_end",
+        "cadence_interval",
+        "observation_window_days",
+        "purge_gap_days",
+        "label_window_days",
+        "max_grid_dates",
     ]
     PROJECT_CONTEXT_KEYS = [
-        "prediction_horizons", "recent_window_days", "observation_window_days",
-        "purge_gap_days", "label_window_days", "split_strategy",
-        "cadence_interval", "temporal_posture",
+        "prediction_horizons",
+        "recent_window_days",
+        "observation_window_days",
+        "purge_gap_days",
+        "label_window_days",
+        "split_strategy",
+        "cadence_interval",
+        "temporal_posture",
     ]
 
     def __init__(self, drift: DriftResult):
@@ -532,7 +559,9 @@ class DriftReportRenderer(ABC):
     @abstractmethod
     def render_cell_by_cell_diff(self) -> str: ...
 
-    def yaml_diff_rows(self, old: Optional[dict], new: Optional[dict], keys: list[str]) -> list[tuple[str, str, str, bool]]:
+    def yaml_diff_rows(
+        self, old: Optional[dict], new: Optional[dict], keys: list[str]
+    ) -> list[tuple[str, str, str, bool]]:
         rows = []
         for key in keys:
             old_val = str(old.get(key, "N/A")) if old else "N/A"
@@ -549,12 +578,14 @@ class DriftReportRenderer(ABC):
         old_parsed = {
             m.group(1): (int(m.group(2)), int(m.group(3)))
             for line in self.drift.old_manifest.section_map_raw.split("\n")
-            for m in [_SECTION_MAP_RE.match(line.strip())] if m
+            for m in [_SECTION_MAP_RE.match(line.strip())]
+            if m
         }
         new_parsed = {
             m.group(1): (int(m.group(2)), int(m.group(3)))
             for line in self.drift.new_manifest.section_map_raw.split("\n")
-            for m in [_SECTION_MAP_RE.match(line.strip())] if m
+            for m in [_SECTION_MAP_RE.match(line.strip())]
+            if m
         }
         all_nbs = sorted(set(old_parsed) | set(new_parsed))
         return {nb: (old_parsed.get(nb, (0, 0)), new_parsed.get(nb, (0, 0))) for nb in all_nbs}
@@ -578,6 +609,7 @@ class DriftReportRenderer(ABC):
             if cells:
                 return "OK"
             return "N/A"
+
         return _status(old_timing, old_cells), _status(new_timing, new_cells)
 
     def notebook_timing(self, nb_name: str) -> tuple[str, str]:
@@ -592,6 +624,7 @@ class DriftReportRenderer(ABC):
                 m2 = re.search(r"([\d.]+)s", raw)
                 return m2.group() if m2 else ""
             return ""
+
         return _seconds(self.drift.old_timings.get(nb_name, "")), _seconds(self.drift.new_timings.get(nb_name, ""))
 
     # --- Cell profile helpers ---
@@ -699,7 +732,9 @@ class DriftReportRenderer(ABC):
                         old_c, new_c = f"{base_col} (old)", f"{base_col} (new)"
                         if old_c in merged.columns and new_c in merged.columns:
                             try:
-                                merged[f"{base_col} delta"] = (merged[new_c].astype(float) - merged[old_c].astype(float)).round(4)
+                                merged[f"{base_col} delta"] = (
+                                    merged[new_c].astype(float) - merged[old_c].astype(float)
+                                ).round(4)
                             except (ValueError, TypeError):
                                 pass
                     entry["merged_df"] = merged
@@ -742,16 +777,22 @@ class MarkdownDriftRenderer(DriftReportRenderer):
         )
 
     def _status_icon(self, status: str) -> str:
-        return {"OK": "\u2705", "FAILED": "\u274c", "ERROR": "\u26a0\ufe0f", "SKIPPED": "\u23ed", "N/A": "\u2014"}.get(status, status)
+        return {"OK": "\u2705", "FAILED": "\u274c", "ERROR": "\u26a0\ufe0f", "SKIPPED": "\u23ed", "N/A": "\u2014"}.get(
+            status, status
+        )
 
     def render_section_map_changes(self) -> str:
-        rows = ["| Notebook | Old status | New status | Old cells (outputs) | New cells (outputs) | Cell delta | Output delta |",
-                "|----------|-----------|-----------|--------------------|--------------------|------------|--------------|"]
+        rows = [
+            "| Notebook | Old status | New status | Old cells (outputs) | New cells (outputs) | Cell delta | Output delta |",
+            "|----------|-----------|-----------|--------------------|--------------------|------------|--------------|",
+        ]
         for nb, ((oc, oo), (nc, no)) in self.section_map_parsed().items():
             old_st, new_st = self.notebook_run_status(nb)
             cd = nc - oc if oc or nc else "N/A"
             od = no - oo if oc or nc else "N/A"
-            rows.append(f"| {nb} | {self._status_icon(old_st)} {old_st} | {self._status_icon(new_st)} {new_st} | {oc} ({oo}) | {nc} ({no}) | {cd} | {od} |")
+            rows.append(
+                f"| {nb} | {self._status_icon(old_st)} {old_st} | {self._status_icon(new_st)} {new_st} | {oc} ({oo}) | {nc} ({no}) | {cd} | {od} |"
+            )
         return "## Section Map Changes\n\n" + "\n".join(rows)
 
     def render_model_metrics(self) -> str:
@@ -770,7 +811,9 @@ class MarkdownDriftRenderer(DriftReportRenderer):
                 parts.append(f"**New only ({entry['new_name']}):**\n{entry['new_df'].to_markdown(index=False)}")
         return "\n\n".join(parts)
 
-    def _render_yaml_section(self, title: str, old_d: Optional[dict], new_d: Optional[dict], keys: list[str], extra: str = "") -> str:
+    def _render_yaml_section(
+        self, title: str, old_d: Optional[dict], new_d: Optional[dict], keys: list[str], extra: str = ""
+    ) -> str:
         if old_d is None and new_d is None:
             return f"## {title}\n\n_Not available._"
         rows = ["| Parameter | Old | New | Changed |", "|-----------|-----|-----|---------|"]
@@ -784,13 +827,18 @@ class MarkdownDriftRenderer(DriftReportRenderer):
 
     def render_snapshot_grid(self) -> str:
         return self._render_yaml_section(
-            "Snapshot Grid", self.drift.snapshot_grid_old, self.drift.snapshot_grid_new,
-            self.SNAPSHOT_GRID_KEYS, self.grid_dates_summary() or "",
+            "Snapshot Grid",
+            self.drift.snapshot_grid_old,
+            self.drift.snapshot_grid_new,
+            self.SNAPSHOT_GRID_KEYS,
+            self.grid_dates_summary() or "",
         )
 
     def render_project_context(self) -> str:
         return self._render_yaml_section(
-            "Project Context / Intent", self.drift.project_context_old, self.drift.project_context_new,
+            "Project Context / Intent",
+            self.drift.project_context_old,
+            self.drift.project_context_new,
             self.PROJECT_CONTEXT_KEYS,
         )
 
@@ -843,12 +891,12 @@ class MarkdownDriftRenderer(DriftReportRenderer):
                         has_mem = True
         # Cross-environment note
         if op and np_ and op.environment != np_.environment:
-            parts.append(f"\n> _Cross-environment comparison ({op.environment} vs {np_.environment}) "
-                         f"\u2014 elapsed times reflect different hardware._\n")
+            parts.append(
+                f"\n> _Cross-environment comparison ({op.environment} vs {np_.environment}) "
+                f"\u2014 elapsed times reflect different hardware._\n"
+            )
 
-        all_nbs = sorted(set(
-            list(op.notebooks if op else {}) + list(np_.notebooks if np_ else {})
-        ))
+        all_nbs = sorted(set(list(op.notebooks if op else {}) + list(np_.notebooks if np_ else {})))
         for nb_name in all_nbs:
             nb_annotation = self._nb_timing_annotation(nb_name)
             header = f"### {nb_name}"
@@ -917,8 +965,16 @@ class MarkdownDriftRenderer(DriftReportRenderer):
         for nd in self.drift.notebook_drifts:
             old_st, new_st = self.notebook_run_status(nd.notebook_name)
             old_time, new_time = self.notebook_timing(nd.notebook_name)
-            old_part = f"{self._status_icon(old_st)} {old_st} ({old_time})" if old_time else f"{self._status_icon(old_st)} {old_st}"
-            new_part = f"{self._status_icon(new_st)} {new_st} ({new_time})" if new_time else f"{self._status_icon(new_st)} {new_st}"
+            old_part = (
+                f"{self._status_icon(old_st)} {old_st} ({old_time})"
+                if old_time
+                else f"{self._status_icon(old_st)} {old_st}"
+            )
+            new_part = (
+                f"{self._status_icon(new_st)} {new_st} ({new_time})"
+                if new_time
+                else f"{self._status_icon(new_st)} {new_st}"
+            )
             status_line = f"Old: {old_part} | New: {new_part}"
             if not nd.has_changes:
                 continue
@@ -960,7 +1016,7 @@ class MarkdownDriftRenderer(DriftReportRenderer):
 class HtmlDriftRenderer(DriftReportRenderer):
     def join_sections(self, sections: Iterable[str]) -> str:
         body = "\n".join(s for s in sections if s)
-        return f"<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Drift Report: {self.drift.old_meta.sha} vs {self.drift.new_meta.sha}</title>\n{self._render_style()}\n</head>\n<body>\n{body}\n</body>\n</html>"
+        return f'<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>Drift Report: {self.drift.old_meta.sha} vs {self.drift.new_meta.sha}</title>\n{self._render_style()}\n</head>\n<body>\n{body}\n</body>\n</html>'
 
     def _render_style(self) -> str:
         return """<style>
@@ -1008,7 +1064,9 @@ summary:hover { background: #f6f8fa; }
         return f'<span class="badge badge-{status.value}">{status.value}</span>'
 
     def render_title(self) -> str:
-        return f"<h1>Drift Report: {self._esc(self.drift.old_meta.sha)} \u2192 {self._esc(self.drift.new_meta.sha)}</h1>"
+        return (
+            f"<h1>Drift Report: {self._esc(self.drift.old_meta.sha)} \u2192 {self._esc(self.drift.new_meta.sha)}</h1>"
+        )
 
     def render_summary(self) -> str:
         d = self.drift
@@ -1022,7 +1080,12 @@ summary:hover { background: #f6f8fa; }
         )
 
     def _status_html(self, status: str) -> str:
-        cls = {"OK": "badge-added", "FAILED": "badge-removed", "ERROR": "badge-modified", "SKIPPED": "badge-unchanged"}.get(status, "badge-unchanged")
+        cls = {
+            "OK": "badge-added",
+            "FAILED": "badge-removed",
+            "ERROR": "badge-modified",
+            "SKIPPED": "badge-unchanged",
+        }.get(status, "badge-unchanged")
         return f'<span class="badge {cls}">{self._esc(status)}</span>'
 
     def render_section_map_changes(self) -> str:
@@ -1041,8 +1104,7 @@ summary:hover { background: #f6f8fa; }
         return (
             "<h2>Section Map Changes</h2>\n<table>\n"
             "<tr><th>Notebook</th><th>Old status</th><th>New status</th><th>Old cells (outputs)</th><th>New cells (outputs)</th>"
-            "<th>Cell delta</th><th>Output delta</th></tr>\n"
-            + "\n".join(rows) + "\n</table>"
+            "<th>Cell delta</th><th>Output delta</th></tr>\n" + "\n".join(rows) + "\n</table>"
         )
 
     def render_model_metrics(self) -> str:
@@ -1056,14 +1118,16 @@ summary:hover { background: #f6f8fa; }
                 for w in entry["warnings"]:
                     parts.append(f'<p class="warning">\u26a0 {self._esc(w)}</p>')
             elif entry["old_df"] is not None:
-                parts.append(f'<p><strong>Old only ({self._esc(str(entry["old_name"]))}):</strong></p>')
+                parts.append(f"<p><strong>Old only ({self._esc(str(entry['old_name']))}):</strong></p>")
                 parts.append(f'<div class="embed-table">{entry["old_df"].to_html(index=False)}</div>')
             elif entry["new_df"] is not None:
-                parts.append(f'<p><strong>New only ({self._esc(str(entry["new_name"]))}):</strong></p>')
+                parts.append(f"<p><strong>New only ({self._esc(str(entry['new_name']))}):</strong></p>")
                 parts.append(f'<div class="embed-table">{entry["new_df"].to_html(index=False)}</div>')
         return "\n".join(parts)
 
-    def _render_yaml_table(self, title: str, old_d: Optional[dict], new_d: Optional[dict], keys: list[str], extra: str = "") -> str:
+    def _render_yaml_table(
+        self, title: str, old_d: Optional[dict], new_d: Optional[dict], keys: list[str], extra: str = ""
+    ) -> str:
         if old_d is None and new_d is None:
             return f"<h2>{self._esc(title)}</h2>\n<p><em>Not available.</em></p>"
         rows = []
@@ -1072,8 +1136,7 @@ summary:hover { background: #f6f8fa; }
             rows.append(f"<tr{cls}><td>{self._esc(key)}</td><td>{self._esc(ov)}</td><td>{self._esc(nv)}</td></tr>")
         table = (
             f"<h2>{self._esc(title)}</h2>\n<table>\n"
-            "<tr><th>Parameter</th><th>Old</th><th>New</th></tr>\n"
-            + "\n".join(rows) + "\n</table>"
+            "<tr><th>Parameter</th><th>Old</th><th>New</th></tr>\n" + "\n".join(rows) + "\n</table>"
         )
         if extra:
             table += f"\n<p>{self._esc(extra)}</p>"
@@ -1081,13 +1144,18 @@ summary:hover { background: #f6f8fa; }
 
     def render_snapshot_grid(self) -> str:
         return self._render_yaml_table(
-            "Snapshot Grid", self.drift.snapshot_grid_old, self.drift.snapshot_grid_new,
-            self.SNAPSHOT_GRID_KEYS, self.grid_dates_summary() or "",
+            "Snapshot Grid",
+            self.drift.snapshot_grid_old,
+            self.drift.snapshot_grid_new,
+            self.SNAPSHOT_GRID_KEYS,
+            self.grid_dates_summary() or "",
         )
 
     def render_project_context(self) -> str:
         return self._render_yaml_table(
-            "Project Context / Intent", self.drift.project_context_old, self.drift.project_context_new,
+            "Project Context / Intent",
+            self.drift.project_context_old,
+            self.drift.project_context_new,
             self.PROJECT_CONTEXT_KEYS,
         )
 
@@ -1101,9 +1169,13 @@ summary:hover { background: #f6f8fa; }
             f"Added: {len(added)} | Removed: {len(removed)} | Common: {len(common)}</p>",
         ]
         if added:
-            parts.append(f'<p><span class="badge badge-added">Added</span> {self._esc(", ".join(sorted(added)[:20]))}</p>')
+            parts.append(
+                f'<p><span class="badge badge-added">Added</span> {self._esc(", ".join(sorted(added)[:20]))}</p>'
+            )
         if removed:
-            parts.append(f'<p><span class="badge badge-removed">Removed</span> {self._esc(", ".join(sorted(removed)[:20]))}</p>')
+            parts.append(
+                f'<p><span class="badge badge-removed">Removed</span> {self._esc(", ".join(sorted(removed)[:20]))}</p>'
+            )
         return "\n".join(parts)
 
     def render_timing(self) -> str:
@@ -1120,8 +1192,7 @@ summary:hover { background: #f6f8fa; }
             rows.append(f"<tr><td>{self._esc(nb)}</td><td>{ov}</td><td>{nv}</td><td>{delta}</td></tr>")
         return (
             "<h2>Per-Notebook Timing</h2>\n<table>\n"
-            "<tr><th>Notebook</th><th>Old</th><th>New</th><th>Delta</th></tr>\n"
-            + "\n".join(rows) + "\n</table>"
+            "<tr><th>Notebook</th><th>Old</th><th>New</th><th>Delta</th></tr>\n" + "\n".join(rows) + "\n</table>"
         )
 
     def render_cell_profiling(self) -> str:
@@ -1141,8 +1212,10 @@ summary:hover { background: #f6f8fa; }
                     if c.peak_memory_mb is not None:
                         has_mem = True
         if op and np_ and op.environment != np_.environment:
-            parts.append(f'<p class="note"><em>Cross-environment comparison ({self._esc(op.environment)} vs '
-                         f'{self._esc(np_.environment)}) &mdash; elapsed times reflect different hardware.</em></p>')
+            parts.append(
+                f'<p class="note"><em>Cross-environment comparison ({self._esc(op.environment)} vs '
+                f"{self._esc(np_.environment)}) &mdash; elapsed times reflect different hardware.</em></p>"
+            )
 
         all_nbs = sorted(set(list(op.notebooks if op else {}) + list(np_.notebooks if np_ else {})))
         for nb_name in all_nbs:
@@ -1186,12 +1259,16 @@ summary:hover { background: #f6f8fa; }
                 if old_sec is not None and new_sec is not None:
                     delta = new_sec - old_sec
                     delta_str = self._fmt_delta(delta)
-                    delta_cls = ' class="diff-added"' if delta < -0.5 else (' class="diff-removed"' if delta > 0.5 else "")
+                    delta_cls = (
+                        ' class="diff-added"' if delta < -0.5 else (' class="diff-removed"' if delta > 0.5 else "")
+                    )
                 else:
                     delta_str = "&mdash;"
                     delta_cls = ""
-                row_cells = (f"<td>{self._esc(cell_name)}</td><td><code>{self._esc(cell_id[:8])}</code></td>"
-                             f"<td>{old_str}</td><td>{new_str}</td><td{delta_cls}>{delta_str}</td>")
+                row_cells = (
+                    f"<td>{self._esc(cell_name)}</td><td><code>{self._esc(cell_id[:8])}</code></td>"
+                    f"<td>{old_str}</td><td>{new_str}</td><td{delta_cls}>{delta_str}</td>"
+                )
                 if has_spark:
                     old_sj = str(old_e.spark_jobs) if old_e and old_e.spark_jobs is not None else "&mdash;"
                     new_sj = str(new_e.spark_jobs) if new_e and new_e.spark_jobs is not None else "&mdash;"
@@ -1232,16 +1309,22 @@ summary:hover { background: #f6f8fa; }
         cell = m.new_cell or m.old_cell
         timing_ann = self._cell_timing_annotation(cell.name, cell.cell_id, nb_name) if cell and nb_name else ""
         timing_html = f' <span class="timing-annotation">{self._esc(timing_ann)}</span>' if timing_ann else ""
-        lines = [f'<h4>{title} {self._badge(m.status)}{timing_html}</h4>']
+        lines = [f"<h4>{title} {self._badge(m.status)}{timing_html}</h4>"]
         if m.old_cell and m.new_cell:
             sec_old = f' <span class="section-tag">{self._esc(m.old_cell.section)}</span>' if m.old_cell.section else ""
             sec_new = f' <span class="section-tag">{self._esc(m.new_cell.section)}</span>' if m.new_cell.section else ""
             lines.append('<div class="cell-grid">')
-            lines.append(f'<div class="cell-box"><div class="cell-label">Old: {self._esc(m.old_cell.name)}{sec_old}</div>{self._render_cell_content(m.old_cell.content)}</div>')
-            lines.append(f'<div class="cell-box"><div class="cell-label">New: {self._esc(m.new_cell.name)}{sec_new}</div>{self._render_cell_content(m.new_cell.content)}</div>')
+            lines.append(
+                f'<div class="cell-box"><div class="cell-label">Old: {self._esc(m.old_cell.name)}{sec_old}</div>{self._render_cell_content(m.old_cell.content)}</div>'
+            )
+            lines.append(
+                f'<div class="cell-box"><div class="cell-label">New: {self._esc(m.new_cell.name)}{sec_new}</div>{self._render_cell_content(m.new_cell.content)}</div>'
+            )
             lines.append("</div>")
             if m.diff_text:
-                lines.append(f'<details><summary>Show unified diff</summary><div class="cell-box">{self._render_diff_block(m.diff_text)}</div></details>')
+                lines.append(
+                    f'<details><summary>Show unified diff</summary><div class="cell-box">{self._render_diff_block(m.diff_text)}</div></details>'
+                )
         elif m.status == CellMatchStatus.ADDED:
             lines.append('<div class="cell-grid">')
             lines.append('<div class="cell-box" style="opacity:0.3"><em>no old cell</em></div>')
@@ -1265,12 +1348,14 @@ summary:hover { background: #f6f8fa; }
                 change_counts[m.status.value] = change_counts.get(m.status.value, 0) + 1
             count_str = ", ".join(f"{v} {k}" for k, v in change_counts.items()) if changed else "no changes"
             old_time, new_time = self.notebook_timing(nd.notebook_name)
-            old_pill = f'{self._status_html(old_st)} {old_time}' if old_time else self._status_html(old_st)
-            new_pill = f'{self._status_html(new_st)} {new_time}' if new_time else self._status_html(new_st)
-            status_pills = f' &mdash; Old: {old_pill} | New: {new_pill}'
+            old_pill = f"{self._status_html(old_st)} {old_time}" if old_time else self._status_html(old_st)
+            new_pill = f"{self._status_html(new_st)} {new_time}" if new_time else self._status_html(new_st)
+            status_pills = f" &mdash; Old: {old_pill} | New: {new_pill}"
             nb_timing = self._nb_timing_annotation(nd.notebook_name)
             timing_extra = f' <span class="timing-annotation">{self._esc(nb_timing)}</span>' if nb_timing else ""
-            nb_parts = [f'<details class="nb-section"><summary>{self._esc(nd.notebook_name)} ({count_str}){timing_extra}{status_pills}</summary>']
+            nb_parts = [
+                f'<details class="nb-section"><summary>{self._esc(nd.notebook_name)} ({count_str}){timing_extra}{status_pills}</summary>'
+            ]
             if not changed:
                 nb_parts.append("<p><em>No differences.</em></p>")
             for m in changed:

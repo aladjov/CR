@@ -2113,7 +2113,11 @@ dbutils.notebook.exit(_summary)
 
 # COMMAND ----------
 
+import json
+import os
 import time
+
+os.environ["CR_BATCH_EXECUTION"] = "1"
 
 # COMMAND ----------
 
@@ -2138,11 +2142,29 @@ _ns_params = {"experiments_dir": str(_NAMESPACE.root), "run_id": _NAMESPACE.run_
 # COMMAND ----------
 
 _log = []
+_profile = []
+
+def _spark_job_id():
+    try: return spark._jsc.sc().dagScheduler().nextJobId().get()
+    except Exception: return -1
 
 def run_notebook(path, timeout=3600):
+    sj_before = _spark_job_id()
     start = time.time()
-    result = dbutils.notebook.run(path, timeout, _ns_params)
-    elapsed = time.time() - start
+    try:
+        result = dbutils.notebook.run(path, timeout, _ns_params)
+        elapsed = time.time() - start
+        sj_after = _spark_job_id()
+        _profile.append({"notebook": path, "elapsed": round(elapsed, 3),
+                         "spark_jobs": (sj_after - sj_before) if sj_before >= 0 and sj_after >= 0 else None,
+                         "status": "completed"})
+    except Exception as exc:
+        elapsed = time.time() - start
+        sj_after = _spark_job_id()
+        _profile.append({"notebook": path, "elapsed": round(elapsed, 3),
+                         "spark_jobs": (sj_after - sj_before) if sj_before >= 0 and sj_after >= 0 else None,
+                         "status": "failed"})
+        result = f"FAILED: {exc}"
     line = f"{path}: {result} ({elapsed:.1f}s)"
     print(line)
     _log.append(line)
@@ -2210,6 +2232,22 @@ run_notebook("gold/gold_features_{{ config.composite_name or config.name }}")
 run_notebook("training/ml_experiment")
 
 # COMMAND ----------
+
+if _NAMESPACE is not None and _profile:
+    _profiles_json = {
+        "version": 1, "environment": "databricks",
+        "generated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+        "notebooks": {
+            e["notebook"]: {"total_elapsed": e["elapsed"], "cells": [
+                {"cell_name": e["notebook"], "cell_id": e["notebook"],
+                 "elapsed_sec": e["elapsed"], "status": e["status"],
+                 "spark_jobs": e["spark_jobs"], "start_time": None,
+                 "end_time": None, "peak_memory_mb": None}
+            ]} for e in _profile
+        },
+    }
+    _NAMESPACE.cell_profiles_path.parent.mkdir(parents=True, exist_ok=True)
+    _NAMESPACE.cell_profiles_path.write_text(json.dumps(_profiles_json, indent=2))
 
 dbutils.notebook.exit("\\n".join(_log))
 """,

@@ -633,7 +633,7 @@ class TestDatabricksRenderSilver:
     def test_simplified_merge_renames_entity_key_to_entity_id(self, renderer, sample_pipeline_config):
         result = renderer.render_silver(sample_pipeline_config)
         assert "SparkTemporalMerger" not in result
-        assert 'raw_entity_key' in result
+        assert "raw_entity_key" in result
         assert 'withColumnRenamed(raw_entity_key, "entity_id")' in result
 
     def test_simplified_merge_skips_rename_when_already_entity_id(self, renderer):
@@ -641,11 +641,17 @@ class TestDatabricksRenderSilver:
             SilverLayerConfig,
             SourceConfig,
         )
+
         source = SourceConfig(name="data", path="/data.csv", format="csv", entity_key="entity_id")
         silver = SilverLayerConfig(joins=[], aggregations=[])
         config = PipelineConfig(
-            name="test", target_column="churn", sources=[source],
-            bronze={}, silver=silver, gold=None, output_dir="/out",
+            name="test",
+            target_column="churn",
+            sources=[source],
+            bronze={},
+            silver=silver,
+            gold=None,
+            output_dir="/out",
         )
         result = renderer.render_silver(config)
         assert 'raw_entity_key != "entity_id"' in result
@@ -733,13 +739,13 @@ class TestDatabricksTrainingFeatureEngineering:
 
     def test_training_creates_feature_lookup(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def _log_best_model"):]
+        fn = result[result.index("def _log_best_model") :]
         assert "FeatureLookup" in fn
         assert "gold_table()" in fn
 
     def test_training_creates_training_set(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def _log_best_model"):]
+        fn = result[result.index("def _log_best_model") :]
         assert "create_training_set" in fn
 
     def test_training_registers_model_in_uc(self, renderer, sample_pipeline_config):
@@ -750,17 +756,17 @@ class TestDatabricksTrainingFeatureEngineering:
 
     def test_training_fe_has_import_fallback(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def _log_best_model"):]
+        fn = result[result.index("def _log_best_model") :]
         assert "except ImportError" in fn
 
     def test_training_fallback_uses_mlflow_spark(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def _log_best_model"):]
+        fn = result[result.index("def _log_best_model") :]
         assert "mlflow.spark.log_model" in fn
 
     def test_training_nested_runs_still_use_mlflow_spark(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("for name, model in models"):]
+        fn = result[result.index("for name, model in models") :]
         assert "mlflow.spark.log_model(fitted" in fn
 
     def test_training_log_best_model_is_valid_python(self, renderer, sample_pipeline_config):
@@ -769,8 +775,11 @@ class TestDatabricksTrainingFeatureEngineering:
 
 
 class TestDatabricksRenderTrainingImbalance:
-    def _make_config_with_imbalance(self, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale, strategy):
+    def _make_config_with_imbalance(
+        self, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale, strategy
+    ):
         from customer_retention.generators.pipeline_generator.models import TrainingConfig
+
         silver = SilverLayerConfig(joins=silver_with_join.joins, aggregations=[])
         gold = GoldLayerConfig(
             encodings=gold_with_encode_scale.encodings,
@@ -790,20 +799,32 @@ class TestDatabricksRenderTrainingImbalance:
         )
         return config
 
-    def test_training_class_weight_adds_weight_col(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
-        config = self._make_config_with_imbalance(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale, "class_weight")
+    def test_training_class_weight_adds_weight_col(
+        self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale
+    ):
+        config = self._make_config_with_imbalance(
+            entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale, "class_weight"
+        )
         result = renderer.render_training(config)
         assert "weightCol" in result or "weight" in result.lower()
         assert "class_weight" in result.lower() or "balanced" in result.lower() or "weight_col" in result
 
-    def test_training_smote_adds_resampling(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
-        config = self._make_config_with_imbalance(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale, "smote")
+    def test_training_smote_adds_resampling(
+        self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale
+    ):
+        config = self._make_config_with_imbalance(
+            entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale, "smote"
+        )
         result = renderer.render_training(config)
         assert "SMOTE" in result or "smote" in result.lower()
 
-    def test_training_imbalance_is_valid_python(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
+    def test_training_imbalance_is_valid_python(
+        self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale
+    ):
         for strategy in ("class_weight", "smote"):
-            config = self._make_config_with_imbalance(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale, strategy)
+            config = self._make_config_with_imbalance(
+                entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale, strategy
+            )
             result = renderer.render_training(config)
             ast.parse(result)
 
@@ -859,6 +880,24 @@ class TestDatabricksRenderRunner:
         result = renderer.render_runner(sample_pipeline_config)
         assert "_log.append(line)" in result
 
+    def test_render_runner_sets_batch_execution(self, renderer, sample_pipeline_config):
+        result = renderer.render_runner(sample_pipeline_config)
+        assert "CR_BATCH_EXECUTION" in result
+
+    def test_render_runner_has_spark_job_counter(self, renderer, sample_pipeline_config):
+        result = renderer.render_runner(sample_pipeline_config)
+        assert "_spark_job_id" in result
+        assert "nextJobId" in result
+
+    def test_render_runner_collects_profile(self, renderer, sample_pipeline_config):
+        result = renderer.render_runner(sample_pipeline_config)
+        assert "_profile" in result
+        assert "spark_jobs" in result
+
+    def test_render_runner_writes_cell_profiles(self, renderer, sample_pipeline_config):
+        result = renderer.render_runner(sample_pipeline_config)
+        assert "cell_profiles_path" in result
+
 
 class TestDatabricksNotebookExitSummary:
     def test_bronze_exits_with_summary(self, renderer):
@@ -869,13 +908,17 @@ class TestDatabricksNotebookExitSummary:
         assert "result.count()" in result
 
     def test_bronze_event_exits_with_summary(self, renderer):
-        source = SourceConfig(name="ev", path="ev.csv", format="csv", entity_key="id", time_column="ts", is_event_level=True)
+        source = SourceConfig(
+            name="ev", path="ev.csv", format="csv", entity_key="id", time_column="ts", is_event_level=True
+        )
         config = BronzeEventConfig(source=source, entity_column="id", time_column="ts")
         result = renderer.render_bronze_event("ev", config)
         assert "dbutils.notebook.exit(_summary)" in result
 
     def test_bronze_entity_exits_with_summary(self, renderer):
-        source = SourceConfig(name="ev", path="ev.csv", format="csv", entity_key="id", time_column="ts", is_event_level=True)
+        source = SourceConfig(
+            name="ev", path="ev.csv", format="csv", entity_key="id", time_column="ts", is_event_level=True
+        )
         config = BronzeEventConfig(source=source, entity_column="id", time_column="ts")
         result = renderer.render_bronze_entity("ev_aggregated", config, "ev")
         assert "dbutils.notebook.exit(_summary)" in result
@@ -895,7 +938,14 @@ class TestDatabricksNotebookExitSummary:
 
     def test_landing_exits_with_summary(self, renderer):
         source = SourceConfig(name="t", path="t.csv", format="csv", entity_key="id")
-        config = LandingLayerConfig(source=source, raw_source_path="t.csv", raw_source_format="csv", entity_column="id", time_column="ts", target_column="churn")
+        config = LandingLayerConfig(
+            source=source,
+            raw_source_path="t.csv",
+            raw_source_format="csv",
+            entity_column="id",
+            time_column="ts",
+            target_column="churn",
+        )
         result = renderer.render_landing("t", config)
         assert "dbutils.notebook.exit(_summary)" in result
 
@@ -1504,18 +1554,25 @@ class TestBronzeEventCategoricalAggregationSpark:
 
 
 class TestDatabricksDatetimeDerivation:
-
     def test_bronze_event_includes_datetime_derivation(self, renderer):
         from customer_retention.generators.pipeline_generator.models import DatetimeDerivationConfig
 
         source = SourceConfig(
-            name="events", path="/data/events.csv", format="csv",
-            entity_key="customer_id", time_column="event_date", is_event_level=True,
+            name="events",
+            path="/data/events.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="event_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="event_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="event_date",
             aggregation=AggregationWindowConfig(
-                windows=["30d"], value_columns=["amount"], agg_funcs=["sum"],
+                windows=["30d"],
+                value_columns=["amount"],
+                agg_funcs=["sum"],
             ),
             datetime_derivation=DatetimeDerivationConfig(
                 source_columns=["response_at"],
@@ -1533,11 +1590,17 @@ class TestDatabricksDatetimeDerivation:
         from customer_retention.generators.pipeline_generator.models import DatetimeDerivationConfig
 
         source = SourceConfig(
-            name="events", path="/data/events.csv", format="csv",
-            entity_key="customer_id", time_column="event_date", is_event_level=True,
+            name="events",
+            path="/data/events.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="event_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="event_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="event_date",
             datetime_derivation=DatetimeDerivationConfig(
                 source_columns=["next_date", "contract_end"],
                 reference_column="feature_timestamp",
@@ -1551,11 +1614,17 @@ class TestDatabricksDatetimeDerivation:
 
     def test_bronze_event_omits_derivation_when_none(self, renderer):
         source = SourceConfig(
-            name="events", path="/data/events.csv", format="csv",
-            entity_key="customer_id", time_column="event_date", is_event_level=True,
+            name="events",
+            path="/data/events.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="event_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="event_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="event_date",
         )
         code = renderer.render_bronze_event("events", config)
         assert "derive_datetime_features" not in code
@@ -1564,6 +1633,7 @@ class TestDatabricksDatetimeDerivation:
 class TestDatabricksFilterStep:
     def test_filter_non_negative(self, renderer):
         from customer_retention.generators.pipeline_generator.databricks_renderer import render_spark_step_call
+
         step = TransformationStep(
             type=PipelineTransformationType.FILTER,
             column="amount",
@@ -1576,6 +1646,7 @@ class TestDatabricksFilterStep:
 
     def test_filter_range(self, renderer):
         from customer_retention.generators.pipeline_generator.databricks_renderer import render_spark_step_call
+
         step = TransformationStep(
             type=PipelineTransformationType.FILTER,
             column="age",
@@ -1589,6 +1660,7 @@ class TestDatabricksFilterStep:
 
     def test_filter_valid_values(self, renderer):
         from customer_retention.generators.pipeline_generator.databricks_renderer import render_spark_step_call
+
         step = TransformationStep(
             type=PipelineTransformationType.FILTER,
             column="status",
@@ -1601,11 +1673,17 @@ class TestDatabricksFilterStep:
 
     def test_filter_in_bronze_event_template(self, renderer):
         source = SourceConfig(
-            name="events", path="/data/events.csv", format="csv",
-            entity_key="customer_id", time_column="event_date", is_event_level=True,
+            name="events",
+            path="/data/events.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="event_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="event_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="event_date",
             pre_shaping=[
                 TransformationStep(
                     type=PipelineTransformationType.FILTER,
@@ -1624,11 +1702,17 @@ class TestDatabricksFilterStep:
 class TestDatabricksDeduplication:
     def test_basic_dedup_with_bool_true(self, renderer):
         source = SourceConfig(
-            name="events", path="/data/events.csv", format="csv",
-            entity_key="customer_id", time_column="event_date", is_event_level=True,
+            name="events",
+            path="/data/events.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="event_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="event_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="event_date",
             deduplicate=True,
         )
         code = renderer.render_bronze_event("events", config)
@@ -1637,12 +1721,19 @@ class TestDatabricksDeduplication:
 
     def test_dedup_keep_first(self, renderer):
         from customer_retention.generators.pipeline_generator.models import DeduplicationConfig
+
         source = SourceConfig(
-            name="events", path="/data/events.csv", format="csv",
-            entity_key="customer_id", time_column="event_date", is_event_level=True,
+            name="events",
+            path="/data/events.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="event_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="event_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="event_date",
             deduplicate=DeduplicationConfig(strategy="keep_first"),
         )
         code = renderer.render_bronze_event("events", config)
@@ -1652,12 +1743,19 @@ class TestDatabricksDeduplication:
 
     def test_dedup_keep_most_complete(self, renderer):
         from customer_retention.generators.pipeline_generator.models import DeduplicationConfig
+
         source = SourceConfig(
-            name="events", path="/data/events.csv", format="csv",
-            entity_key="customer_id", time_column="event_date", is_event_level=True,
+            name="events",
+            path="/data/events.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="event_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="event_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="event_date",
             deduplicate=DeduplicationConfig(strategy="keep_most_complete"),
         )
         code = renderer.render_bronze_event("events", config)
@@ -1667,12 +1765,19 @@ class TestDatabricksDeduplication:
 
     def test_dedup_with_conflict_columns(self, renderer):
         from customer_retention.generators.pipeline_generator.models import DeduplicationConfig
+
         source = SourceConfig(
-            name="events", path="/data/events.csv", format="csv",
-            entity_key="customer_id", time_column="event_date", is_event_level=True,
+            name="events",
+            path="/data/events.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="event_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="event_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="event_date",
             deduplicate=DeduplicationConfig(
                 strategy="keep_first",
                 conflict_columns=["customer_id", "event_date", "amount"],
@@ -1685,11 +1790,17 @@ class TestDatabricksDeduplication:
 
     def test_no_dedup_when_false(self, renderer):
         source = SourceConfig(
-            name="events", path="/data/events.csv", format="csv",
-            entity_key="customer_id", time_column="event_date", is_event_level=True,
+            name="events",
+            path="/data/events.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="event_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="event_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="event_date",
             deduplicate=False,
         )
         code = renderer.render_bronze_event("events", config)
@@ -1699,11 +1810,17 @@ class TestDatabricksDeduplication:
 class TestDatabricksMomentumRatios:
     def test_bronze_entity_includes_momentum_ratios(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.csv", format="csv",
-            entity_key="customer_id", time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="order_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="order_date",
             lifecycle=LifecycleConfig(
                 include_recency_bucket=True,
                 momentum_pairs=[
@@ -1714,7 +1831,10 @@ class TestDatabricksMomentumRatios:
             post_shaping=[],
         )
         result = renderer.render_bronze_entity(
-            "orders_aggregated", config, "orders", "orders",
+            "orders_aggregated",
+            config,
+            "orders",
+            "orders",
         )
         assert "add_momentum_ratios" in result
         assert "momentum_7d_30d" in result
@@ -1724,40 +1844,60 @@ class TestDatabricksMomentumRatios:
 
     def test_bronze_entity_momentum_uses_safe_division(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.csv", format="csv",
-            entity_key="customer_id", time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="order_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="order_date",
             lifecycle=LifecycleConfig(
                 momentum_pairs=[{"short_window": "7d", "long_window": "30d"}],
             ),
             post_shaping=[],
         )
         result = renderer.render_bronze_entity(
-            "orders_aggregated", config, "orders", "orders",
+            "orders_aggregated",
+            config,
+            "orders",
+            "orders",
         )
         assert "F.when" in result
         assert "!= 0" in result
 
     def test_bronze_entity_no_momentum_without_pairs(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.csv", format="csv",
-            entity_key="customer_id", time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="order_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="order_date",
             lifecycle=LifecycleConfig(include_recency_bucket=True),
             post_shaping=[],
         )
         result = renderer.render_bronze_entity(
-            "orders_aggregated", config, "orders", "orders",
+            "orders_aggregated",
+            config,
+            "orders",
+            "orders",
         )
         assert "add_momentum_ratios" not in result
 
     def test_bronze_standalone_entity_momentum(self, renderer):
         source = SourceConfig(
-            name="customers", path="/data/customers.csv", format="csv",
+            name="customers",
+            path="/data/customers.csv",
+            format="csv",
             entity_key="customer_id",
         )
         config = BronzeLayerConfig(
@@ -1778,11 +1918,17 @@ class TestDatabricksMomentumRatios:
 
     def test_bronze_entity_momentum_is_valid_python(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.csv", format="csv",
-            entity_key="customer_id", time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="order_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="order_date",
             lifecycle=LifecycleConfig(
                 include_recency_bucket=True,
                 momentum_pairs=[
@@ -1793,7 +1939,10 @@ class TestDatabricksMomentumRatios:
             post_shaping=[],
         )
         result = renderer.render_bronze_entity(
-            "orders_aggregated", config, "orders", "orders",
+            "orders_aggregated",
+            config,
+            "orders",
+            "orders",
         )
         ast.parse(result)
 
@@ -1802,8 +1951,12 @@ class TestDatabricksLandingTemplate:
     @pytest.fixture
     def landing_config(self):
         source = SourceConfig(
-            name="orders", path="/data/orders.parquet", format="parquet",
-            entity_key="customer_id", time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.parquet",
+            format="parquet",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         return LandingLayerConfig(
             source=source,
@@ -1899,11 +2052,17 @@ class TestDatabricksConfigLandingTable:
 class TestDatabricksBronzeEventReadsFromLanding:
     def test_bronze_event_reads_from_landing_table(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.parquet", format="parquet",
-            entity_key="customer_id", time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.parquet",
+            format="parquet",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="order_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="order_date",
             aggregation=AggregationWindowConfig(
                 windows=["7d", "30d"],
                 value_columns=["amount"],
@@ -1916,11 +2075,17 @@ class TestDatabricksBronzeEventReadsFromLanding:
 
     def test_bronze_event_aggregation_preserves_feature_timestamp(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.parquet", format="parquet",
-            entity_key="customer_id", time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.parquet",
+            format="parquet",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="order_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="order_date",
             aggregation=AggregationWindowConfig(
                 windows=["7d", "30d"],
                 value_columns=["amount"],
@@ -1934,11 +2099,17 @@ class TestDatabricksBronzeEventReadsFromLanding:
 
     def test_bronze_event_aggregation_preserves_target_column(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.parquet", format="parquet",
-            entity_key="customer_id", time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.parquet",
+            format="parquet",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="order_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="order_date",
             aggregation=AggregationWindowConfig(
                 windows=["7d", "30d"],
                 value_columns=["amount"],
@@ -2006,8 +2177,12 @@ class TestDatabricksLandingFeatureTimestampGuard:
     @pytest.fixture
     def landing_config(self):
         source = SourceConfig(
-            name="emails", path="/data/emails.csv", format="csv",
-            entity_key="customer_id", time_column="sent_date", is_event_level=True,
+            name="emails",
+            path="/data/emails.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="sent_date",
+            is_event_level=True,
         )
         return LandingLayerConfig(
             source=source,
@@ -2041,11 +2216,17 @@ class TestDatabricksLandingFeatureTimestampGuard:
 class TestDatabricksBronzeEventNoRedundantRename:
     def test_bronze_event_no_raw_time_column_rename(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.parquet", format="parquet",
-            entity_key="customer_id", time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.parquet",
+            format="parquet",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="order_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="order_date",
             raw_time_column="sent_date",
             aggregation=AggregationWindowConfig(
                 windows=["7d", "30d"],
@@ -2064,18 +2245,21 @@ class TestDatabricksSilverTemporalMerge:
         from customer_retention.generators.pipeline_generator.models import TemporalMergeSourceConfig
 
         silver = SilverLayerConfig(
-            joins=[{
-                "left_keys": ["customer_id"],
-                "right_keys": ["customer_id"],
-                "right_source": "orders",
-                "how": "left",
-            }],
+            joins=[
+                {
+                    "left_keys": ["customer_id"],
+                    "right_keys": ["customer_id"],
+                    "right_source": "orders",
+                    "how": "left",
+                }
+            ],
             grid_dates=["2024-01-01", "2024-01-08", "2024-01-15"],
             entity_key="customer_id",
             merge_sources=[
                 TemporalMergeSourceConfig(name="customers", granularity="entity_level"),
-                TemporalMergeSourceConfig(name="orders", granularity="event_level",
-                                          feature_timestamp_column="order_date"),
+                TemporalMergeSourceConfig(
+                    name="orders", granularity="event_level", feature_timestamp_column="order_date"
+                ),
             ],
         )
         return PipelineConfig(
@@ -2127,19 +2311,23 @@ class TestDatabricksSilverTemporalMerge:
         assert "merge_sources" in result or "join" in result.lower()
 
     @pytest.fixture
-    def temporal_config_with_key_resolution(self, entity_source, event_source, bronze_with_impute, gold_with_encode_scale):
+    def temporal_config_with_key_resolution(
+        self, entity_source, event_source, bronze_with_impute, gold_with_encode_scale
+    ):
         from customer_retention.generators.pipeline_generator.models import (
             KeyResolutionStepConfig,
             TemporalMergeSourceConfig,
         )
 
         silver = SilverLayerConfig(
-            joins=[{
-                "left_keys": ["customer_id"],
-                "right_keys": ["customer_id"],
-                "right_source": "orders",
-                "how": "left",
-            }],
+            joins=[
+                {
+                    "left_keys": ["customer_id"],
+                    "right_keys": ["customer_id"],
+                    "right_source": "orders",
+                    "how": "left",
+                }
+            ],
             grid_dates=["2024-01-01", "2024-01-08"],
             entity_key="customer_id",
             merge_sources=[
@@ -2221,7 +2409,7 @@ class TestDatabricksGoldAsOfDate:
 class TestDatabricksTrainingNullImputation:
     def test_training_fills_nan_before_assembly(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        prepare_fn = result[result.index("def prepare_features"):]
+        prepare_fn = result[result.index("def prepare_features") :]
         fillna_pos = prepare_fn.index("fillna(0")
         assembler_pos = prepare_fn.index("VectorAssembler")
         assert fillna_pos < assembler_pos
@@ -2272,86 +2460,122 @@ class TestDatabricksConfigRawSources:
 class TestDatabricksBronzeEntityLifecycleReadsFromLanding:
     def test_recency_tenure_reads_from_landing_table(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.csv", format="csv",
-            entity_key="customer_id", time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="order_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="order_date",
             lifecycle=LifecycleConfig(include_recency_bucket=True),
             post_shaping=[],
         )
         result = renderer.render_bronze_entity(
-            "orders_aggregated", config, "orders", "orders",
+            "orders_aggregated",
+            config,
+            "orders",
+            "orders",
         )
         assert 'landing_table("orders")' in result
         assert "add_recency_tenure" in result
-        recency_fn = result[result.index("def add_recency_tenure"):]
-        recency_fn = recency_fn[:recency_fn.index("\ndef ")]
+        recency_fn = result[result.index("def add_recency_tenure") :]
+        recency_fn = recency_fn[: recency_fn.index("\ndef ")]
         assert "landing_table" in recency_fn
         assert "bronze_table" not in recency_fn
         ast.parse(result)
 
     def test_month_cyclical_reads_from_landing_table(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.csv", format="csv",
-            entity_key="customer_id", time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="order_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="order_date",
             lifecycle=LifecycleConfig(include_month_cyclical=True),
             post_shaping=[],
         )
         result = renderer.render_bronze_entity(
-            "orders_aggregated", config, "orders", "orders",
+            "orders_aggregated",
+            config,
+            "orders",
+            "orders",
         )
         assert 'landing_table("orders")' in result
         assert "add_month_quarter_cyclical" in result
-        cyclical_fn = result[result.index("def add_month_quarter_cyclical"):]
-        cyclical_fn = cyclical_fn[:cyclical_fn.index("\ndef ")]
+        cyclical_fn = result[result.index("def add_month_quarter_cyclical") :]
+        cyclical_fn = cyclical_fn[: cyclical_fn.index("\ndef ")]
         assert "landing_table" in cyclical_fn
         assert "bronze_table" not in cyclical_fn
         ast.parse(result)
 
     def test_cyclical_features_reads_from_landing_table(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.csv", format="csv",
-            entity_key="customer_id", time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="order_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="order_date",
             lifecycle=LifecycleConfig(include_cyclical_features=True),
             post_shaping=[],
         )
         result = renderer.render_bronze_entity(
-            "orders_aggregated", config, "orders", "orders",
+            "orders_aggregated",
+            config,
+            "orders",
+            "orders",
         )
         assert 'landing_table("orders")' in result
         assert "add_cyclical_features" in result
         assert "dow_sin" in result
         assert "dow_cos" in result
-        cyclical_fn = result[result.index("def add_cyclical_features"):]
-        cyclical_fn = cyclical_fn[:cyclical_fn.index("\ndef ")]
+        cyclical_fn = result[result.index("def add_cyclical_features") :]
+        cyclical_fn = cyclical_fn[: cyclical_fn.index("\ndef ")]
         assert "landing_table" in cyclical_fn
         assert "bronze_table" not in cyclical_fn
         ast.parse(result)
 
     def test_cohort_features_reads_from_landing_table(self, renderer):
         source = SourceConfig(
-            name="orders", path="/data/orders.csv", format="csv",
-            entity_key="customer_id", time_column="order_date", is_event_level=True,
+            name="orders",
+            path="/data/orders.csv",
+            format="csv",
+            entity_key="customer_id",
+            time_column="order_date",
+            is_event_level=True,
         )
         config = BronzeEventConfig(
-            source=source, entity_column="customer_id", time_column="order_date",
+            source=source,
+            entity_column="customer_id",
+            time_column="order_date",
             lifecycle=LifecycleConfig(include_cohort_features=True),
             post_shaping=[],
         )
         result = renderer.render_bronze_entity(
-            "orders_aggregated", config, "orders", "orders",
+            "orders_aggregated",
+            config,
+            "orders",
+            "orders",
         )
         assert 'landing_table("orders")' in result
         assert "add_cohort_features" in result
-        cohort_fn = result[result.index("def add_cohort_features"):]
-        cohort_fn = cohort_fn[:cohort_fn.index("\ndef ")]
+        cohort_fn = result[result.index("def add_cohort_features") :]
+        cohort_fn = cohort_fn[: cohort_fn.index("\ndef ")]
         assert "landing_table" in cohort_fn
         assert "bronze_table" not in cohort_fn
         ast.parse(result)
@@ -2363,28 +2587,40 @@ class TestDatabricksSilverToSparkConversion:
         from customer_retention.generators.pipeline_generator.models import TemporalMergeSourceConfig
 
         silver = SilverLayerConfig(
-            joins=[{
-                "left_keys": ["customer_id"], "right_keys": ["customer_id"],
-                "right_source": "orders", "how": "left",
-            }],
+            joins=[
+                {
+                    "left_keys": ["customer_id"],
+                    "right_keys": ["customer_id"],
+                    "right_source": "orders",
+                    "how": "left",
+                }
+            ],
             grid_dates=["2024-01-01", "2024-01-08"],
             entity_key="customer_id",
             merge_sources=[
                 TemporalMergeSourceConfig(name="customers", granularity="entity_level"),
-                TemporalMergeSourceConfig(name="orders", granularity="event_level",
-                                          feature_timestamp_column="order_date"),
+                TemporalMergeSourceConfig(
+                    name="orders", granularity="event_level", feature_timestamp_column="order_date"
+                ),
             ],
         )
         return PipelineConfig(
-            name="test_pipeline", target_column="churn",
+            name="test_pipeline",
+            target_column="churn",
             sources=[entity_source, event_source],
             bronze={"customers": bronze_with_impute},
-            bronze_event={"orders": BronzeEventConfig(
-                source=event_source, entity_column="customer_id", time_column="order_date",
-                aggregation=AggregationWindowConfig(windows=["7d"], value_columns=["amount"], agg_funcs=["sum"]),
-            )},
-            silver=silver, gold=gold_with_encode_scale,
-            output_dir="/output/test_pipeline", composite_name="cust_orde__abc1234",
+            bronze_event={
+                "orders": BronzeEventConfig(
+                    source=event_source,
+                    entity_column="customer_id",
+                    time_column="order_date",
+                    aggregation=AggregationWindowConfig(windows=["7d"], value_columns=["amount"], agg_funcs=["sum"]),
+                )
+            },
+            silver=silver,
+            gold=gold_with_encode_scale,
+            output_dir="/output/test_pipeline",
+            composite_name="cust_orde__abc1234",
         )
 
     def test_silver_temporal_converts_to_spark_after_merge(self, renderer, temporal_config):
@@ -2418,35 +2654,46 @@ class TestDatabricksGoldBatchedScaling:
 
     def test_gold_no_per_column_scale_calls_in_apply_scalings(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        apply_scalings_fn = result[result.index("def apply_scalings"):]
-        apply_scalings_fn = apply_scalings_fn[:apply_scalings_fn.index("\n\n")]
+        apply_scalings_fn = result[result.index("def apply_scalings") :]
+        apply_scalings_fn = apply_scalings_fn[: apply_scalings_fn.index("\n\n")]
         assert '_scale_standard(df, "' not in apply_scalings_fn
         assert '_scale_minmax(df, "' not in apply_scalings_fn
 
-    def test_gold_mixed_scaling_methods(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join):
+    def test_gold_mixed_scaling_methods(
+        self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join
+    ):
         gold = GoldLayerConfig(
             encodings=[],
             scalings=[
                 TransformationStep(
-                    type=PipelineTransformationType.SCALE, column="amount",
-                    parameters={"method": "standard"}, rationale="Standardize amount",
+                    type=PipelineTransformationType.SCALE,
+                    column="amount",
+                    parameters={"method": "standard"},
+                    rationale="Standardize amount",
                 ),
                 TransformationStep(
-                    type=PipelineTransformationType.SCALE, column="revenue",
-                    parameters={"method": "standard"}, rationale="Standardize revenue",
+                    type=PipelineTransformationType.SCALE,
+                    column="revenue",
+                    parameters={"method": "standard"},
+                    rationale="Standardize revenue",
                 ),
                 TransformationStep(
-                    type=PipelineTransformationType.SCALE, column="score",
-                    parameters={"method": "minmax"}, rationale="MinMax score",
+                    type=PipelineTransformationType.SCALE,
+                    column="score",
+                    parameters={"method": "minmax"},
+                    rationale="MinMax score",
                 ),
             ],
         )
         config = PipelineConfig(
-            name="test_pipeline", target_column="churn",
+            name="test_pipeline",
+            target_column="churn",
             sources=[entity_source, event_source],
             bronze={"customers": bronze_with_impute},
             silver=SilverLayerConfig(joins=silver_with_join.joins, aggregations=[]),
-            gold=gold, output_dir="/output", composite_name="cust_orde__abc1234",
+            gold=gold,
+            output_dir="/output",
+            composite_name="cust_orde__abc1234",
         )
         result = renderer.render_gold(config)
         assert '_batch_scale_standard(df, ["amount", "revenue"])' in result
@@ -2455,8 +2702,8 @@ class TestDatabricksGoldBatchedScaling:
 
     def test_gold_batch_scale_single_agg_call(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        batch_fn = result[result.index("def _batch_scale_standard"):]
-        batch_fn = batch_fn[:batch_fn.index("\ndef ")]
+        batch_fn = result[result.index("def _batch_scale_standard") :]
+        batch_fn = batch_fn[: batch_fn.index("\ndef ")]
         assert batch_fn.count(".collect()") == 1
 
     def test_gold_is_valid_python_with_batched_scaling(self, renderer, sample_pipeline_config):
@@ -2490,35 +2737,58 @@ class TestDatabricksGoldCapThenLog:
             ],
         )
         return PipelineConfig(
-            name="test_pipeline", target_column="churn",
+            name="test_pipeline",
+            target_column="churn",
             sources=[entity_source, event_source],
             bronze={"customers": bronze_with_impute},
             silver=SilverLayerConfig(joins=silver_with_join.joins, aggregations=[]),
-            gold=gold, output_dir="/output", composite_name="cust_orde__abc1234",
+            gold=gold,
+            output_dir="/output",
+            composite_name="cust_orde__abc1234",
         )
 
-    def test_gold_defines_batch_cap_then_log_helper(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
-        config = self._make_config(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale)
+    def test_gold_defines_batch_cap_then_log_helper(
+        self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale
+    ):
+        config = self._make_config(
+            entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale
+        )
         result = renderer.render_gold(config)
         assert "def _batch_cap_then_log(df, cols):" in result
 
-    def test_gold_cap_then_log_uses_approx_quantile(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
-        config = self._make_config(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale)
+    def test_gold_cap_then_log_uses_approx_quantile(
+        self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale
+    ):
+        config = self._make_config(
+            entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale
+        )
         result = renderer.render_gold(config)
         assert "approxQuantile" in result
 
-    def test_gold_cap_then_log_applies_log1p(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
-        config = self._make_config(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale)
+    def test_gold_cap_then_log_applies_log1p(
+        self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale
+    ):
+        config = self._make_config(
+            entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale
+        )
         result = renderer.render_gold(config)
         assert "F.log1p" in result
 
-    def test_gold_cap_then_log_is_valid_python(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
-        config = self._make_config(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale)
+    def test_gold_cap_then_log_is_valid_python(
+        self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale
+    ):
+        config = self._make_config(
+            entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale
+        )
         result = renderer.render_gold(config)
         ast.parse(result)
 
-    def test_gold_cap_then_log_no_f_lit_column(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
-        config = self._make_config(entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale)
+    def test_gold_cap_then_log_no_f_lit_column(
+        self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale
+    ):
+        config = self._make_config(
+            entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale
+        )
         result = renderer.render_gold(config)
         assert "F.lit(F.col(" not in result
 
@@ -2526,26 +2796,26 @@ class TestDatabricksGoldCapThenLog:
 class TestDatabricksGoldColumnFiltering:
     def test_batch_scale_standard_filters_to_existing_columns(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        batch_fn = result[result.index("def _batch_scale_standard"):]
-        batch_fn = batch_fn[:batch_fn.index("\ndef ")]
+        batch_fn = result[result.index("def _batch_scale_standard") :]
+        batch_fn = batch_fn[: batch_fn.index("\ndef ")]
         assert "c in df.columns" in batch_fn or "c for c in cols if c in" in batch_fn
 
     def test_batch_scale_minmax_filters_to_existing_columns(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        batch_fn = result[result.index("def _batch_scale_minmax"):]
-        batch_fn = batch_fn[:batch_fn.index("\ndef ")]
+        batch_fn = result[result.index("def _batch_scale_minmax") :]
+        batch_fn = batch_fn[: batch_fn.index("\ndef ")]
         assert "c in df.columns" in batch_fn or "c for c in cols if c in" in batch_fn
 
     def test_encode_one_hot_checks_column_exists(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        encode_fn = result[result.index("def _encode_one_hot"):]
-        encode_fn = encode_fn[:encode_fn.index("\ndef ")]
+        encode_fn = result[result.index("def _encode_one_hot") :]
+        encode_fn = encode_fn[: encode_fn.index("\ndef ")]
         assert "col not in df.columns" in encode_fn
 
     def test_label_encode_checks_column_exists(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        encode_fn = result[result.index("def _label_encode"):]
-        encode_fn = encode_fn[:encode_fn.index("\ndef ")]
+        encode_fn = result[result.index("def _label_encode") :]
+        encode_fn = encode_fn[: encode_fn.index("\ndef ")]
         assert "col not in df.columns" in encode_fn
 
     def test_batch_scale_standard_still_valid_python(self, renderer, sample_pipeline_config):
@@ -2556,14 +2826,14 @@ class TestDatabricksGoldColumnFiltering:
 class TestDatabricksGoldFeatureStoreRegistration:
     def test_gold_casts_timestamp_ntz_before_write(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        fn = result[result.index("def run_gold"):]
+        fn = result[result.index("def run_gold") :]
         cast_pos = fn.index("_cast_timestamp_ntz_to_timestamp")
         save_pos = fn.index("saveAsTable")
         assert cast_pos < save_pos
 
     def test_gold_cast_function_uses_timestamp_type(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        fn = result[result.index("def _cast_timestamp_ntz_to_timestamp"):]
+        fn = result[result.index("def _cast_timestamp_ntz_to_timestamp") :]
         assert "TimestampNTZType" in fn
         assert "TimestampType" in fn
         assert ".cast(TimestampType())" in fn
@@ -2579,25 +2849,25 @@ class TestDatabricksGoldFeatureStoreRegistration:
 
     def test_gold_registers_via_sql_pk_constraint(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        fn = result[result.index("def _register_feature_table"):]
+        fn = result[result.index("def _register_feature_table") :]
         assert "PRIMARY KEY" in fn
         assert "SET NOT NULL" in fn
         assert "TIMESERIES" in fn
 
     def test_gold_timeseries_in_pk_clause(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        fn = result[result.index("def _register_feature_table"):]
+        fn = result[result.index("def _register_feature_table") :]
         assert "TIMESERIES" in fn
         assert "TIMESTAMP_COLUMN" in fn
 
     def test_gold_timestamp_in_primary_keys(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        fn = result[result.index("def _register_feature_table"):]
+        fn = result[result.index("def _register_feature_table") :]
         assert 'pk = ["entity_id", TIMESTAMP_COLUMN] if has_ts' in fn
 
     def test_gold_registration_after_save(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        run_gold_fn = result[result.index("def run_gold"):]
+        run_gold_fn = result[result.index("def run_gold") :]
         save_pos = run_gold_fn.index("saveAsTable")
         reg_pos = run_gold_fn.index("_register_feature_table")
         assert save_pos < reg_pos
@@ -2616,14 +2886,14 @@ class TestDatabricksGoldFeatureStoreRegistration:
 
     def test_gold_not_null_before_pk_constraint(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        fn = result[result.index("def _register_feature_table"):]
+        fn = result[result.index("def _register_feature_table") :]
         not_null_pos = fn.index("SET NOT NULL")
         pk_pos = fn.index("PRIMARY KEY")
         assert not_null_pos < pk_pos
 
     def test_gold_pk_constraint_handles_existing(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        fn = result[result.index("def _register_feature_table"):]
+        fn = result[result.index("def _register_feature_table") :]
         assert "already exists" in fn
 
     def test_gold_no_rdd_access(self, renderer, sample_pipeline_config):
@@ -2632,20 +2902,24 @@ class TestDatabricksGoldFeatureStoreRegistration:
 
     def test_gold_reads_back_from_delta_after_save(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        fn = result[result.index("def run_gold"):]
+        fn = result[result.index("def run_gold") :]
         assert "del df" in fn
         assert "saved = spark.table(output_table)" in fn
         assert "return saved" in fn
 
     def test_gold_no_triple_materialization(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        fn = result[result.index("def run_gold"):]
-        after_save = fn[fn.index("saveAsTable"):]
+        fn = result[result.index("def run_gold") :]
+        after_save = fn[fn.index("saveAsTable") :]
         lines_with_df_ref = [
-            line.strip() for line in after_save.splitlines()
-            if "df" in line and "del df" not in line
-            and "reg_df" not in line and "saved" not in line
-            and line.strip() and not line.strip().startswith("#")
+            line.strip()
+            for line in after_save.splitlines()
+            if "df" in line
+            and "del df" not in line
+            and "reg_df" not in line
+            and "saved" not in line
+            and line.strip()
+            and not line.strip().startswith("#")
             and "df.schema" not in line
         ]
         assert not lines_with_df_ref, f"Stale df references after saveAsTable: {lines_with_df_ref}"
@@ -2656,7 +2930,7 @@ class TestDatabricksGoldFeatureStoreRegistration:
 
     def test_gold_one_hot_has_cardinality_guard(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
-        fn = result[result.index("def _encode_one_hot"):]
+        fn = result[result.index("def _encode_one_hot") :]
         assert "max_categories" in fn
         assert "_label_encode" in fn
 
@@ -2716,7 +2990,7 @@ class TestDatabricksTextFeatureFitMode:
 class TestDatabricksTrainingNullLabelFilter:
     def test_training_filters_null_labels_before_prepare(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        train_fn = result[result.index("def train_and_evaluate"):]
+        train_fn = result[result.index("def train_and_evaluate") :]
         filter_pos = train_fn.index("isNotNull")
         prepare_pos = train_fn.index("prepare_features(df)")
         assert filter_pos < prepare_pos
@@ -2735,21 +3009,31 @@ class TestDatabricksTrainingVectorSchema:
         result = renderer.render_training(sample_pipeline_config)
         assert "VectorUDT" in result
 
-    def test_training_smote_uses_explicit_schema(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
+    def test_training_smote_uses_explicit_schema(
+        self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale
+    ):
         from customer_retention.generators.pipeline_generator.models import TrainingConfig
+
         silver = SilverLayerConfig(joins=silver_with_join.joins, aggregations=[])
         gold = GoldLayerConfig(encodings=gold_with_encode_scale.encodings, scalings=gold_with_encode_scale.scalings)
         config = PipelineConfig(
-            name="test_pipeline", target_column="churn",
+            name="test_pipeline",
+            target_column="churn",
             sources=[entity_source, event_source],
-            bronze={"customers": bronze_with_impute}, bronze_event={},
-            silver=silver, gold=gold, output_dir="/output",
+            bronze={"customers": bronze_with_impute},
+            bronze_event={},
+            silver=silver,
+            gold=gold,
+            output_dir="/output",
             composite_name="test__abc1234",
             training=TrainingConfig(imbalance_strategy="smote"),
         )
         result = renderer.render_training(config)
-        smote_section = result[result.index("SMOTE"):]
-        assert "createDataFrame(resampled_pdf, schema=" in smote_section or "createDataFrame(resampled_pdf, _vector_schema" in smote_section
+        smote_section = result[result.index("SMOTE") :]
+        assert (
+            "createDataFrame(resampled_pdf, schema=" in smote_section
+            or "createDataFrame(resampled_pdf, _vector_schema" in smote_section
+        )
         ast.parse(result)
 
 
@@ -2764,14 +3048,14 @@ class TestDatabricksTrainingInstrumentation:
 
     def test_training_asserts_after_load(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def train_and_evaluate"):]
+        fn = result[result.index("def train_and_evaluate") :]
         load_pos = fn.index("load_training_data()")
         assert_pos = fn.index("_assert_rows(")
         assert load_pos < assert_pos
 
     def test_training_asserts_after_null_filter(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def train_and_evaluate"):]
+        fn = result[result.index("def train_and_evaluate") :]
         filter_pos = fn.index("isNotNull")
         remaining = fn[filter_pos:]
         assert "_assert_rows(" in remaining
@@ -2783,14 +3067,14 @@ class TestDatabricksTrainingInstrumentation:
 
     def test_training_no_pandas_roundtrip_for_splitting(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def train_and_evaluate"):]
+        fn = result[result.index("def train_and_evaluate") :]
         assert "createDataFrame(train_pdf" not in fn
         assert "createDataFrame(test_pdf" not in fn
 
     def test_training_per_model_timing(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
         assert "log_timing" in result
-        fn = result[result.index("for name, model in"):]
+        fn = result[result.index("for name, model in") :]
         assert "log_timing" in fn
 
     def test_training_timing_around_load(self, renderer, sample_pipeline_config):
@@ -2834,7 +3118,7 @@ class TestDatabricksTrainingFeatureTypeParity:
 
     def test_training_feature_types_used_in_prepare_features(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        prepare_fn = result[result.index("def prepare_features"):]
+        prepare_fn = result[result.index("def prepare_features") :]
         assert "_NUMERIC_TYPES" in prepare_fn
         assert "_EXCLUDE_COLS" in prepare_fn
 
@@ -2849,7 +3133,7 @@ class TestDatabricksTrainingFeatureProfile:
 
     def test_training_computes_production_profile(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def train_and_evaluate"):]
+        fn = result[result.index("def train_and_evaluate") :]
         assert "build_feature_profile(" in fn
         assert '"production"' in fn
         assert "Production profile:" in fn
@@ -2861,9 +3145,18 @@ class TestDatabricksTrainingFeatureProfile:
 
     def test_training_compares_when_exploration_profile_present(self, renderer, sample_pipeline_config):
         from customer_retention.generators.pipeline_generator.models import TrainingConfig
+
         config = sample_pipeline_config
         config.training = TrainingConfig(
-            exploration_feature_profile={"stage": "exploration", "created_at": "2024-01-01", "row_count": 100, "feature_count": 2, "target_column": "churn", "features": {"col_a": {"dtype": "double", "non_null": 90, "null_count": 10}}, "excluded": {}},
+            exploration_feature_profile={
+                "stage": "exploration",
+                "created_at": "2024-01-01",
+                "row_count": 100,
+                "feature_count": 2,
+                "target_column": "churn",
+                "features": {"col_a": {"dtype": "double", "non_null": 90, "null_count": 10}},
+                "excluded": {},
+            },
         )
         result = renderer.render_training(config)
         assert "_EXPLORATION_PROFILE = {" in result
@@ -2873,7 +3166,7 @@ class TestDatabricksTrainingFeatureProfile:
 
     def test_training_profile_uses_batched_null_agg(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def train_and_evaluate"):]
+        fn = result[result.index("def train_and_evaluate") :]
         assert "F.sum(F.when(F.col(c).isNull()" in fn
 
     def test_training_profile_timing(self, renderer, sample_pipeline_config):
@@ -2882,9 +3175,18 @@ class TestDatabricksTrainingFeatureProfile:
 
     def test_training_profile_is_valid_python(self, renderer, sample_pipeline_config):
         from customer_retention.generators.pipeline_generator.models import TrainingConfig
+
         config = sample_pipeline_config
         config.training = TrainingConfig(
-            exploration_feature_profile={"stage": "exploration", "created_at": "2024-01-01", "row_count": 100, "feature_count": 2, "target_column": "churn", "features": {"col_a": {"dtype": "double", "non_null": 90, "null_count": 10}}, "excluded": {}},
+            exploration_feature_profile={
+                "stage": "exploration",
+                "created_at": "2024-01-01",
+                "row_count": 100,
+                "feature_count": 2,
+                "target_column": "churn",
+                "features": {"col_a": {"dtype": "double", "non_null": 90, "null_count": 10}},
+                "excluded": {},
+            },
         )
         result = renderer.render_training(config)
         ast.parse(result)
@@ -2897,20 +3199,29 @@ class TestDatabricksTrainingProfilePersistence:
 
     def test_training_constructs_namespace_from_widgets(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def train_and_evaluate"):]
+        fn = result[result.index("def train_and_evaluate") :]
         assert "dbutils.widgets.get(" in fn or "_NAMESPACE" in result
 
     def test_training_saves_production_profile(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def train_and_evaluate"):]
+        fn = result[result.index("def train_and_evaluate") :]
         assert "prod_profile.save(" in fn
         assert "production_feature_profile_path" in fn
 
     def test_training_profile_save_is_valid_python(self, renderer, sample_pipeline_config):
         from customer_retention.generators.pipeline_generator.models import TrainingConfig
+
         config = sample_pipeline_config
         config.training = TrainingConfig(
-            exploration_feature_profile={"stage": "exploration", "created_at": "2024-01-01", "row_count": 100, "feature_count": 2, "target_column": "churn", "features": {"col_a": {"dtype": "double", "non_null": 90, "null_count": 10}}, "excluded": {}},
+            exploration_feature_profile={
+                "stage": "exploration",
+                "created_at": "2024-01-01",
+                "row_count": 100,
+                "feature_count": 2,
+                "target_column": "churn",
+                "features": {"col_a": {"dtype": "double", "non_null": 90, "null_count": 10}},
+                "excluded": {},
+            },
         )
         result = renderer.render_training(config)
         ast.parse(result)
@@ -2919,10 +3230,10 @@ class TestDatabricksTrainingProfilePersistence:
 class TestDatabricksTrainingDistributedSplit:
     def test_no_topandas_for_splitting(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        split_section = result[result.index("def train_and_evaluate"):]
+        split_section = result[result.index("def train_and_evaluate") :]
         if "toPandas" in split_section:
             topandas_pos = split_section.index("toPandas")
-            context = split_section[max(0, topandas_pos - 200):topandas_pos + 100]
+            context = split_section[max(0, topandas_pos - 200) : topandas_pos + 100]
             assert "mlflow.evaluate" in context or "label" in context.lower()
 
     def test_no_datasplitter_import(self, renderer, sample_pipeline_config):
@@ -2941,24 +3252,36 @@ class TestDatabricksTrainingDistributedSplit:
     def test_filter_based_temporal_split(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
         assert "TIMESTAMP_COLUMN" in result
-        fn = result[result.index("def train_and_evaluate"):]
+        fn = result[result.index("def train_and_evaluate") :]
         assert "filter" in fn.lower() or "where" in fn.lower()
 
-    def test_purge_gap_when_configured(self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale):
+    def test_purge_gap_when_configured(
+        self, renderer, entity_source, event_source, bronze_with_impute, silver_with_join, gold_with_encode_scale
+    ):
         from customer_retention.generators.pipeline_generator.models import TrainingConfig
+
         silver = SilverLayerConfig(joins=silver_with_join.joins, aggregations=[])
         gold = GoldLayerConfig(encodings=gold_with_encode_scale.encodings, scalings=gold_with_encode_scale.scalings)
         config = PipelineConfig(
-            name="test_pipeline", target_column="churn",
+            name="test_pipeline",
+            target_column="churn",
             sources=[entity_source, event_source],
-            bronze={"customers": bronze_with_impute}, bronze_event={},
-            silver=silver, gold=gold, output_dir="/output",
+            bronze={"customers": bronze_with_impute},
+            bronze_event={},
+            silver=silver,
+            gold=gold,
+            output_dir="/output",
             composite_name="test__abc1234",
             training=TrainingConfig(purge_gap_days=14),
         )
         result = renderer.render_training(config)
         assert "14" in result
-        assert "purge" in result.lower() or "gap" in result.lower() or "timedelta" in result.lower() or "days" in result.lower()
+        assert (
+            "purge" in result.lower()
+            or "gap" in result.lower()
+            or "timedelta" in result.lower()
+            or "days" in result.lower()
+        )
 
     def test_no_purge_gap_when_not_configured(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
@@ -3042,7 +3365,7 @@ class TestDatabricksTrainingFeatureImportance:
     def test_feature_names_in_importance(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
         assert "feature_cols" in result
-        importance_section = result[result.index("featureImportances"):]
+        importance_section = result[result.index("featureImportances") :]
         assert "feature_cols" in importance_section
 
 
@@ -3071,9 +3394,9 @@ class TestDatabricksTrainingMlflowNesting:
 
     def test_no_set_tag_outside_start_run(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def train_and_evaluate"):]
-        set_tag_pos = fn.find('mlflow.set_tag(')
-        start_run_pos = fn.find('with mlflow.start_run(')
+        fn = result[result.index("def train_and_evaluate") :]
+        set_tag_pos = fn.find("mlflow.set_tag(")
+        start_run_pos = fn.find("with mlflow.start_run(")
         assert start_run_pos < set_tag_pos, "set_tag must be inside a start_run context"
 
     def test_no_standalone_best_model_run(self, renderer, sample_pipeline_config):
@@ -3082,29 +3405,29 @@ class TestDatabricksTrainingMlflowNesting:
 
     def test_best_model_logged_to_parent_run(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def train_and_evaluate"):]
+        fn = result[result.index("def train_and_evaluate") :]
         assert 'mlflow.set_tag("best_model"' in fn
         assert 'mlflow.log_metric("best_roc_auc"' in fn
 
     def test_parent_run_logs_best_model_full_metrics(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def train_and_evaluate"):]
+        fn = result[result.index("def train_and_evaluate") :]
         assert "best_metrics" in fn
         assert 'mlflow.log_metrics({f"best_{k}"' in fn or "best_metrics" in fn
 
     def test_parent_run_tags_target_column(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def train_and_evaluate"):]
+        fn = result[result.index("def train_and_evaluate") :]
         assert 'mlflow.set_tag("target_column", TARGET)' in fn
 
     def test_parent_run_tags_entity_key(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def train_and_evaluate"):]
+        fn = result[result.index("def train_and_evaluate") :]
         assert 'mlflow.set_tag("entity_key", "entity_id")' in fn
 
     def test_parent_run_tags_timestamp_column(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def train_and_evaluate"):]
+        fn = result[result.index("def train_and_evaluate") :]
         assert 'mlflow.set_tag("timestamp_column", TIMESTAMP_COLUMN)' in fn
 
     def test_parent_run_tags_recommendations_hash(self, renderer, sample_pipeline_config):
@@ -3114,14 +3437,14 @@ class TestDatabricksTrainingMlflowNesting:
 
     def test_disables_autolog_before_explicit_tracking(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def train_and_evaluate"):]
+        fn = result[result.index("def train_and_evaluate") :]
         autolog_pos = fn.index("mlflow.autolog(disable=True)")
         start_run_pos = fn.index("mlflow.start_run(")
         assert autolog_pos < start_run_pos
 
     def test_ends_stale_active_run(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def train_and_evaluate"):]
+        fn = result[result.index("def train_and_evaluate") :]
         end_run_pos = fn.index("mlflow.end_run()")
         start_run_pos = fn.index("mlflow.start_run(")
         assert end_run_pos < start_run_pos
@@ -3132,7 +3455,9 @@ class TestDatabricksTrainingMlflowNesting:
 
     def test_parent_run_name_uses_composite_name(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        parent_line = [line for line in result.splitlines() if "with mlflow.start_run(run_name=" in line and "nested" not in line][0]
+        parent_line = [
+            line for line in result.splitlines() if "with mlflow.start_run(run_name=" in line and "nested" not in line
+        ][0]
         assert "COMPOSITE_NAME" in parent_line
 
     def test_pipeline_name_tagged(self, renderer, sample_pipeline_config):
@@ -3152,8 +3477,8 @@ class TestDatabricksTrainingFeatureListLogging:
 
     def test_feature_list_logged_on_parent_run(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def train_and_evaluate"):]
-        parent_block = fn[fn.index("with mlflow.start_run("):fn.index("return _results")]
+        fn = result[result.index("def train_and_evaluate") :]
+        parent_block = fn[fn.index("with mlflow.start_run(") : fn.index("return _results")]
         assert "features.json" in parent_block
 
     def test_feature_list_is_valid_python(self, renderer, sample_pipeline_config):
@@ -3162,7 +3487,7 @@ class TestDatabricksTrainingFeatureListLogging:
 
     def test_feature_list_in_namespace_metadata(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("_training_meta"):]
+        fn = result[result.index("_training_meta") :]
         assert '"feature_columns"' in fn
 
 
@@ -3182,7 +3507,7 @@ class TestDatabricksTrainingMetadataPersistence:
 
     def test_metadata_includes_scoring_fields(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        fn = result[result.index("def train_and_evaluate"):]
+        fn = result[result.index("def train_and_evaluate") :]
         for field in ("composite_name", "target_column", "timestamp_column", "best_model_name"):
             assert field in fn
 
@@ -3246,16 +3571,16 @@ class TestDatabricksBronzeEventColumnBlockedFuncs:
 
 
 class TestFrameworkRepoPathInRenderer:
-
     def test_config_includes_sys_path_when_repo_path_set(self, sample_pipeline_config):
         renderer = DatabricksCodeRenderer(
-            catalog="ml_catalog", schema="retention",
+            catalog="ml_catalog",
+            schema="retention",
             framework_repo_path="/Workspace/Repos/me/churnkit",
         )
         result = renderer.render_config(sample_pipeline_config)
         assert "import sys" in result
         assert 'FRAMEWORK_REPO_ROOT = "/Workspace/Repos/me/churnkit"' in result
-        assert '{FRAMEWORK_REPO_ROOT}/src' in result
+        assert "{FRAMEWORK_REPO_ROOT}/src" in result
         assert "sys.path.insert(0, _src)" in result
         ast.parse(result)
 
@@ -3265,10 +3590,13 @@ class TestFrameworkRepoPathInRenderer:
 
     def test_sys_path_is_first_code_cell(self, sample_pipeline_config):
         renderer = DatabricksCodeRenderer(
-            catalog="ml_catalog", schema="retention",
+            catalog="ml_catalog",
+            schema="retention",
             framework_repo_path="/Workspace/Repos/me/churnkit",
         )
         result = renderer.render_config(sample_pipeline_config)
         lines = result.splitlines()
-        code_start = next(i for i, line in enumerate(lines) if line.strip() and not line.startswith("#") and "MAGIC" not in line)
+        code_start = next(
+            i for i, line in enumerate(lines) if line.strip() and not line.startswith("#") and "MAGIC" not in line
+        )
         assert lines[code_start] == "import sys"

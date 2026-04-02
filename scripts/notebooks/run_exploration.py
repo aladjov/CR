@@ -41,9 +41,7 @@ _DISCOVERY_NOTEBOOK = "01_data_discovery"
 
 
 def _resolve_namespace(findings_dir: Path, run_id: Optional[str]):
-    experiments_dir = (
-        findings_dir.parent if findings_dir.name == "findings" else findings_dir
-    )
+    experiments_dir = findings_dir.parent if findings_dir.name == "findings" else findings_dir
     from customer_retention.analysis.auto_explorer.run_namespace import (
         RunNamespace,
     )
@@ -56,9 +54,6 @@ def _resolve_namespace(findings_dir: Path, run_id: Optional[str]):
 # ---------------------------------------------------------------------------
 # Findings helpers
 # ---------------------------------------------------------------------------
-
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -110,10 +105,7 @@ def _set_data_path(notebook_path: Path, data_path: str) -> None:
         lines = source if is_list else source.splitlines(True)
 
         has_active = any(
-            ln.lstrip().startswith("DATA_PATH")
-            and "=" in ln
-            and not ln.lstrip().startswith("#")
-            for ln in lines
+            ln.lstrip().startswith("DATA_PATH") and "=" in ln and not ln.lstrip().startswith("#") for ln in lines
         )
         if not has_active:
             continue
@@ -122,12 +114,7 @@ def _set_data_path(notebook_path: Path, data_path: str) -> None:
         replaced = False
         for ln in lines:
             stripped = ln.lstrip()
-            if (
-                not replaced
-                and stripped.startswith("DATA_PATH")
-                and "=" in stripped
-                and not stripped.startswith("#")
-            ):
+            if not replaced and stripped.startswith("DATA_PATH") and "=" in stripped and not stripped.startswith("#"):
                 indent = ln[: len(ln) - len(stripped)]
                 new_lines.append(f'{indent}DATA_PATH = "{data_path}"\n')
                 replaced = True
@@ -217,6 +204,7 @@ def _is_connection_error(error_text: str) -> bool:
 def _restart_spark_session() -> bool:
     try:
         from customer_retention.core.compat.detection import connect_remote_spark
+
         connect_remote_spark()
         print("    Spark session restarted successfully")
         return True
@@ -286,12 +274,14 @@ def _execute_one(
     print(f"  [{label}] FAILED ({elapsed:.0f}s)")
     print(f"    Error: {first_line}")
     if error_log is not None:
-        error_log.append_error({
-            "notebook": stem,
-            "dataset": dataset_name,
-            "elapsed": elapsed,
-            "traceback": error or "unknown error",
-        })
+        error_log.append_error(
+            {
+                "notebook": stem,
+                "dataset": dataset_name,
+                "elapsed": elapsed,
+                "traceback": error or "unknown error",
+            }
+        )
 
     return False
 
@@ -351,14 +341,16 @@ def _run_single_dataset_flow(
 
             if dataset_name:
                 skip_set, skip_reasons = _detect_skip_set_for_dataset(
-                    findings_dir, dataset_name,
+                    findings_dir,
+                    dataset_name,
                     context=context,
                     dataset_path=dataset_path,
                     namespace=namespace,
                 )
             else:
                 skip_set, skip_reasons = _detect_skip_set_for_dataset(
-                    findings_dir, "",
+                    findings_dir,
+                    "",
                     namespace=namespace,
                 )
 
@@ -367,15 +359,19 @@ def _run_single_dataset_flow(
                 for nb in sorted(skip_set):
                     print(f"  - {nb}: {skip_reasons[nb]}")
             else:
-                print(
-                    "\nAll remaining notebooks will run "
-                    "(no skip conditions detected)"
-                )
+                print("\nAll remaining notebooks will run (no skip conditions detected)")
             print()
 
         _execute_one(
-            nb_path, None, results, timings,
-            skip_set, skip_reasons, dry_run, timeout, kernel,
+            nb_path,
+            None,
+            results,
+            timings,
+            skip_set,
+            skip_reasons,
+            dry_run,
+            timeout,
+            kernel,
             error_log=error_log,
         )
 
@@ -397,19 +393,26 @@ def _run_multi_dataset_flow(
 
     print(f"\nMulti-dataset mode: {len(datasets)} datasets detected")
     for name, path in datasets:
-        role = "TARGET" if getattr(context.datasets[name], "has_target", False) or getattr(context.datasets[name], "role", None) == "target" else "source"
+        role = (
+            "TARGET"
+            if getattr(context.datasets[name], "has_target", False)
+            or getattr(context.datasets[name], "role", None) == "target"
+            else "source"
+        )
         print(f"  {name} ({role}): {path}")
 
     per_dataset_nbs = [nb for nb in notebooks if nb.stem in PER_DATASET_STEMS]
-    global_nbs = [
-        nb for nb in notebooks
-        if nb.stem not in SETUP_NOTEBOOKS and nb.stem not in PER_DATASET_STEMS
-    ]
+    global_nbs = [nb for nb in notebooks if nb.stem not in SETUP_NOTEBOOKS and nb.stem not in PER_DATASET_STEMS]
 
     for ds_name, ds_path in datasets:
         os.environ["CR_DATASET_ID"] = ds_name
 
-        role = "TARGET" if getattr(context.datasets[ds_name], "has_target", False) or getattr(context.datasets[ds_name], "role", None) == "target" else "source"
+        role = (
+            "TARGET"
+            if getattr(context.datasets[ds_name], "has_target", False)
+            or getattr(context.datasets[ds_name], "role", None) == "target"
+            else "source"
+        )
         print(f"\n{'=' * 60}")
         print(f"Dataset: {ds_name} ({role})")
         print(f"{'=' * 60}")
@@ -428,7 +431,8 @@ def _run_multi_dataset_flow(
             if not skip_detected and stem != _DISCOVERY_NOTEBOOK:
                 skip_detected = True
                 skip_set, skip_reasons = _detect_skip_set_for_dataset(
-                    findings_dir, ds_name,
+                    findings_dir,
+                    ds_name,
                     context=context,
                     dataset_path=ds_path,
                     namespace=namespace,
@@ -438,14 +442,19 @@ def _run_multi_dataset_flow(
                     for nb in sorted(skip_set):
                         print(f"    - {nb}: {skip_reasons[nb]}")
                 else:
-                    print(
-                        f"\n  All per-dataset notebooks will run for {ds_name}"
-                    )
+                    print(f"\n  All per-dataset notebooks will run for {ds_name}")
                 print()
 
             _execute_one(
-                nb_path, ds_name, results, timings,
-                skip_set, skip_reasons, dry_run, timeout, kernel,
+                nb_path,
+                ds_name,
+                results,
+                timings,
+                skip_set,
+                skip_reasons,
+                dry_run,
+                timeout,
+                kernel,
                 error_log=error_log,
             )
 
@@ -459,7 +468,9 @@ def _run_multi_dataset_flow(
         global_skip: Set[str] = set()
         global_reasons: Dict[str, str] = {}
         global_skip, global_reasons = _detect_global_skip_set(
-            findings_dir, context, namespace=namespace,
+            findings_dir,
+            context,
+            namespace=namespace,
         )
         if global_skip:
             print("\n  Global skip:")
@@ -469,8 +480,15 @@ def _run_multi_dataset_flow(
 
         for nb_path in global_nbs:
             ok = _execute_one(
-                nb_path, None, results, timings,
-                global_skip, global_reasons, dry_run, timeout, kernel,
+                nb_path,
+                None,
+                results,
+                timings,
+                global_skip,
+                global_reasons,
+                dry_run,
+                timeout,
+                kernel,
                 error_log=error_log,
             )
             if not ok and nb_path.stem in CRITICAL_GLOBAL:
@@ -528,8 +546,15 @@ def run_all(
     setup_nbs = [nb for nb in notebooks if nb.stem in SETUP_NOTEBOOKS]
     for nb_path in setup_nbs:
         _execute_one(
-            nb_path, None, results, timings,
-            set(), {}, dry_run, timeout, kernel,
+            nb_path,
+            None,
+            results,
+            timings,
+            set(),
+            {},
+            dry_run,
+            timeout,
+            kernel,
             error_log=error_log,
         )
 
@@ -547,15 +572,29 @@ def run_all(
 
     if is_multi:
         _run_multi_dataset_flow(
-            notebooks_dir, notebooks, findings_dir, context,
-            results, timings, dry_run, timeout, kernel,
+            notebooks_dir,
+            notebooks,
+            findings_dir,
+            context,
+            results,
+            timings,
+            dry_run,
+            timeout,
+            kernel,
             error_log=error_log,
             namespace=namespace,
         )
     else:
         _run_single_dataset_flow(
-            notebooks_dir, notebooks, findings_dir, context,
-            results, timings, dry_run, timeout, kernel,
+            notebooks_dir,
+            notebooks,
+            findings_dir,
+            context,
+            results,
+            timings,
+            dry_run,
+            timeout,
+            kernel,
             error_log=error_log,
             namespace=namespace,
         )
@@ -578,7 +617,6 @@ def run_all(
 
 
 class ProgressiveErrorLog:
-
     def __init__(self, notebooks_dir: Path, run_params: Optional[Dict] = None):
         self.log_path = notebooks_dir / "run_exploration.log"
         self.error_count = 0
@@ -637,8 +675,6 @@ class ProgressiveErrorLog:
             print(f"\nFull error details written to {self.log_path}")
         else:
             print(f"\nAll notebooks succeeded. Log at {self.log_path}")
-
-
 
 
 def _format_duration(seconds: float) -> str:
