@@ -157,6 +157,16 @@ def reload_config() -> None:
     EXPERIMENT_NAME = get_experiment_name()
 
 
+def get_mlflow_dfs_tmpdir() -> str | None:
+    if os.environ.get("MLFLOW_DFS_TMP"):
+        return os.environ["MLFLOW_DFS_TMP"]
+    if not os.environ.get("DATABRICKS_RUNTIME_VERSION"):
+        return None
+    path = f"/Volumes/{get_catalog()}/{get_schema()}/mlflow_tmp"
+    _ensure_uc_volume(path)
+    return path
+
+
 def _parse_uc_volume(path_str: str) -> tuple[str, str, str] | None:
     parts = str(path_str).strip("/").split("/")
     if len(parts) >= 4 and parts[0] == "Volumes":

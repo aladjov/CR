@@ -1,4 +1,5 @@
 import json
+from unittest.mock import MagicMock, patch
 
 
 class TestGetCatalog:
@@ -95,3 +96,43 @@ class TestGetExperimentName:
             lambda wp: config_file,
         )
         assert get_experiment_name() == "from_env"
+
+
+class TestGetMlflowDfsTmpdir:
+    def test_returns_uc_volume_path_on_databricks(self, monkeypatch):
+        from customer_retention.core.config.experiments import get_mlflow_dfs_tmpdir
+
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "15.4")
+        monkeypatch.setenv("CR_CATALOG", "analytics")
+        monkeypatch.setenv("CR_SCHEMA", "churn")
+        mock_spark = MagicMock()
+        with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
+            result = get_mlflow_dfs_tmpdir()
+        assert result == "/Volumes/analytics/churn/mlflow_tmp"
+        mock_spark.sql.assert_called_once_with(
+            "CREATE VOLUME IF NOT EXISTS `analytics`.`churn`.`mlflow_tmp`"
+        )
+
+    def test_returns_none_outside_databricks(self, monkeypatch):
+        from customer_retention.core.config.experiments import get_mlflow_dfs_tmpdir
+
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        assert get_mlflow_dfs_tmpdir() is None
+
+    def test_uses_default_catalog_schema(self, monkeypatch):
+        from customer_retention.core.config.experiments import get_mlflow_dfs_tmpdir
+
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "15.4")
+        monkeypatch.delenv("CR_CATALOG", raising=False)
+        monkeypatch.delenv("CR_SCHEMA", raising=False)
+        mock_spark = MagicMock()
+        with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
+            result = get_mlflow_dfs_tmpdir()
+        assert result == "/Volumes/main/default/mlflow_tmp"
+
+    def test_respects_env_override(self, monkeypatch):
+        from customer_retention.core.config.experiments import get_mlflow_dfs_tmpdir
+
+        monkeypatch.setenv("MLFLOW_DFS_TMP", "/Volumes/custom/path/vol")
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "15.4")
+        assert get_mlflow_dfs_tmpdir() == "/Volumes/custom/path/vol"

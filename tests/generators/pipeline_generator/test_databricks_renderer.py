@@ -769,6 +769,21 @@ class TestDatabricksTrainingFeatureEngineering:
         fn = result[result.index("for name, model in models") :]
         assert "mlflow.spark.log_model(fitted" in fn
 
+    def test_training_fallback_passes_dfs_tmpdir(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def _log_best_model") :]
+        assert 'dfs_tmpdir=_DFS_TMPDIR' in fn
+
+    def test_training_nested_run_passes_dfs_tmpdir(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("for name, model in models") :]
+        assert 'dfs_tmpdir=_DFS_TMPDIR' in fn
+
+    def test_training_defines_dfs_tmpdir_constant(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert '_DFS_TMPDIR = ' in result
+        assert 'get_mlflow_dfs_tmpdir' in result
+
     def test_training_log_best_model_is_valid_python(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
         ast.parse(result)

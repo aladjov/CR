@@ -150,7 +150,9 @@ train_df, test_df = df_ml.randomSplit([0.8, 0.2], seed=42)
 print(f"Train: {{train_df.count()}}, Test: {{test_df.count()}}")'''),
             self.cb.section("Setup MLflow"),
             self.cb.code(f'''import mlflow
-mlflow.set_experiment("/Users/{{spark.conf.get('spark.databricks.notebook.username', 'default')}}/{exp_name}")'''),
+from customer_retention.core.config.experiments import get_mlflow_dfs_tmpdir
+mlflow.set_experiment("/Users/{{spark.conf.get('spark.databricks.notebook.username', 'default')}}/{exp_name}")
+_dfs_tmpdir = get_mlflow_dfs_tmpdir()'''),
             self.cb.section("Train Gradient Boosted Trees"),
             self.cb.code(f'''from pyspark.ml.classification import GBTClassifier
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
@@ -165,7 +167,7 @@ with mlflow.start_run(run_name="gbt_baseline"):
 
     mlflow.log_param("maxIter", 100)
     mlflow.log_metric("auc_roc", auc)
-    mlflow.spark.log_model(model, "model")
+    mlflow.spark.log_model(model, "model", dfs_tmpdir=_dfs_tmpdir)
 
     run_id = mlflow.active_run().info.run_id
     print(f"AUC: {{auc:.4f}}, Run ID: {{run_id}}")'''),

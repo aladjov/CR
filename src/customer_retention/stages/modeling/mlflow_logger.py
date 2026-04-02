@@ -4,6 +4,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+from customer_retention.core.config.experiments import get_mlflow_dfs_tmpdir
+
 try:
     import mlflow
     import mlflow.sklearn
@@ -101,7 +103,11 @@ class MLflowLogger:
     def _log_spark_model(self, wrapper, artifact_path: str, registered_model_name: Optional[str] = None):
         import mlflow.spark as mlflow_spark
         pipeline_model = wrapper.as_pipeline_model()
-        mlflow_spark.log_model(pipeline_model, artifact_path, registered_model_name=registered_model_name)
+        kwargs: dict = {"registered_model_name": registered_model_name}
+        dfs_tmp = get_mlflow_dfs_tmpdir()
+        if dfs_tmp:
+            kwargs["dfs_tmpdir"] = dfs_tmp
+        mlflow_spark.log_model(pipeline_model, artifact_path, **kwargs)
         mlflow.set_tag(f"{artifact_path}.model_flavor", "spark")
         mlflow.log_dict({
             "spark_model_class": wrapper.spark_model_class,

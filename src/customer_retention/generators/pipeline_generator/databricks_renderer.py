@@ -1526,6 +1526,7 @@ from pyspark.sql.types import StructType, StructField, DoubleType
 from customer_retention.stages.modeling.feature_profile import FeatureProfile, ColumnProfile, build_feature_profile, compare_feature_profiles
 from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 from customer_retention.core.compat.timing import log_timing
+from customer_retention.core.config.experiments import get_mlflow_dfs_tmpdir
 {% if config.training and config.training.imbalance_strategy == "smote" %}
 from imblearn.over_sampling import SMOTE
 {% endif %}
@@ -1539,6 +1540,7 @@ from imblearn.over_sampling import SMOTE
 logger = logging.getLogger("training")
 
 TARGET = TARGET_COLUMN
+_DFS_TMPDIR = get_mlflow_dfs_tmpdir()
 _NUMERIC_TYPES = ("double", "float", "integer", "long", "short", "boolean", "byte", "decimal")
 _EXCLUDE_COLS = {TARGET, TIMESTAMP_COLUMN, ENTITY_KEY, "as_of_date", "feature_timestamp", "label_timestamp", "label_available_flag"}
 _vector_schema = StructType([
@@ -1679,7 +1681,7 @@ def _log_best_model(model, df, feature_cols):
         )
         print(f"[TRAINING] Model registered: {CATALOG}.{SCHEMA}.model_{COMPOSITE_NAME}")
     except ImportError:
-        mlflow.spark.log_model(model, "best_model")
+        mlflow.spark.log_model(model, "best_model", dfs_tmpdir=_DFS_TMPDIR)
 
 def train_and_evaluate():
     _results = {"models": {}, "feature_profile": {}}
@@ -1876,7 +1878,7 @@ def train_and_evaluate():
                 _results["models"][name] = metrics
                 mlflow.log_param("model_type", name)
                 mlflow.log_param("num_features", len(feature_cols))
-                mlflow.spark.log_model(fitted, f"model_{name}")
+                mlflow.spark.log_model(fitted, f"model_{name}", dfs_tmpdir=_DFS_TMPDIR)
                 mlflow.log_metrics(metrics)
                 _log_feature_importance(fitted, feature_cols)
                 _mlflow_evaluate_predictions(predictions)
