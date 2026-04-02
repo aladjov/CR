@@ -39,6 +39,25 @@ try:
 except ImportError:
     pd = None  # type: ignore[assignment]
 
+# Cell profiling support — lazy import to avoid hard dependency
+try:
+    from cell_profiling import CellProfileManifest, NotebookProfile, load_cell_profiles
+except ImportError:
+    try:
+        # When invoked from a different working directory
+        _here = Path(__file__).resolve().parent
+        import importlib.util
+        _spec = importlib.util.spec_from_file_location("cell_profiling", _here / "cell_profiling.py")
+        _mod = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
+        _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
+        CellProfileManifest = _mod.CellProfileManifest
+        NotebookProfile = _mod.NotebookProfile
+        load_cell_profiles = _mod.load_cell_profiles
+    except Exception:
+        CellProfileManifest = None  # type: ignore[assignment,misc]
+        NotebookProfile = None  # type: ignore[assignment,misc]
+        load_cell_profiles = None  # type: ignore[assignment]
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -141,6 +160,8 @@ class DriftResult:
     old_timings: dict[str, str]
     new_timings: dict[str, str]
     metric_tables: list = field(default_factory=list)
+    old_cell_profiles: Optional[Any] = None  # CellProfileManifest when available
+    new_cell_profiles: Optional[Any] = None
 
 
 # ---------------------------------------------------------------------------
@@ -424,6 +445,15 @@ def compute_drift_result(
                         new_timings = _parse_timing_log(log)
                     break
 
+    # Load cell profiles if available
+    old_cell_profiles = None
+    new_cell_profiles = None
+    if load_cell_profiles is not None:
+        if old_run_dir:
+            old_cell_profiles = load_cell_profiles(old_run_dir / "cell_profiles.json")
+        if new_run_dir:
+            new_cell_profiles = load_cell_profiles(new_run_dir / "cell_profiles.json")
+
     return DriftResult(
         old_meta=old_meta, new_meta=new_meta,
         old_manifest=old_m, new_manifest=new_m,
@@ -433,6 +463,8 @@ def compute_drift_result(
         feature_profile_old=fp_old, feature_profile_new=fp_new,
         old_timings=old_timings, new_timings=new_timings,
         metric_tables=_build_metric_comparisons(old_m, new_m),
+        old_cell_profiles=old_cell_profiles,
+        new_cell_profiles=new_cell_profiles,
     )
 
 
@@ -445,7 +477,7 @@ class DriftReportRenderer(ABC):
     REPORT_SECTIONS = [
         "title", "summary", "section_map_changes", "model_metrics",
         "snapshot_grid", "project_context", "feature_profile", "timing",
-        "cell_by_cell_diff",
+        "cell_profiling", "cell_by_cell_diff",
     ]
     SNAPSHOT_GRID_KEYS = [
         "grid_start", "grid_end", "cadence_interval", "observation_window_days",
@@ -493,6 +525,9 @@ class DriftReportRenderer(ABC):
 
     @abstractmethod
     def render_timing(self) -> str: ...
+
+    @abstractmethod
+    def render_cell_profiling(self) -> str: ...
 
     @abstractmethod
     def render_cell_by_cell_diff(self) -> str: ...
@@ -558,6 +593,85 @@ class DriftReportRenderer(ABC):
                 return m2.group() if m2 else ""
             return ""
         return _seconds(self.drift.old_timings.get(nb_name, "")), _seconds(self.drift.new_timings.get(nb_name, ""))
+
+    # --- Cell profile helpers ---
+
+    def _cell_profile_index(self, profiles: Optional[Any], nb_name: str) -> dict[str, Any]:
+        """Build cell_id -> profile entry index for a notebook."""
+        if profiles is None or not hasattr(profiles, "notebooks"):
+            return {}
+        nb_profile = profiles.notebooks.get(nb_name)
+        if nb_profile is None:
+            return {}
+        return {c.cell_id: c for c in nb_profile.cells}
+
+    def _cell_profile_name_index(self, profiles: Optional[Any], nb_name: str) -> dict[str, Any]:
+        """Build cell_name -> profile entry index (fallback matching)."""
+        if profiles is None or not hasattr(profiles, "notebooks"):
+            return {}
+        nb_profile = profiles.notebooks.get(nb_name)
+        if nb_profile is None:
+            return {}
+        return {c.cell_name: c for c in nb_profile.cells}
+
+    def _nb_profile_total(self, profiles: Optional[Any], nb_name: str) -> Optional[float]:
+        """Get total_elapsed for a notebook, or None."""
+        if profiles is None or not hasattr(profiles, "notebooks"):
+            return None
+        nb_profile = profiles.notebooks.get(nb_name)
+        return nb_profile.total_elapsed if nb_profile else None
+
+    def _cell_timing_annotation(self, cell_name: str, cell_id: str, nb_name: str) -> str:
+        """Return timing annotation string for a cell, e.g. '3.2s -> 2.8s (-0.4s)'."""
+        old_idx = self._cell_profile_index(self.drift.old_cell_profiles, nb_name)
+        new_idx = self._cell_profile_index(self.drift.new_cell_profiles, nb_name)
+        # Try by cell_id first, then by name
+        old_entry = old_idx.get(cell_id)
+        new_entry = new_idx.get(cell_id)
+        if old_entry is None:
+            old_name_idx = self._cell_profile_name_index(self.drift.old_cell_profiles, nb_name)
+            old_entry = old_name_idx.get(cell_name)
+        if new_entry is None:
+            new_name_idx = self._cell_profile_name_index(self.drift.new_cell_profiles, nb_name)
+            new_entry = new_name_idx.get(cell_name)
+        if old_entry is None and new_entry is None:
+            return ""
+        parts = []
+        old_sec = old_entry.elapsed_sec if old_entry else None
+        new_sec = new_entry.elapsed_sec if new_entry else None
+        if old_sec is not None and new_sec is not None:
+            delta = new_sec - old_sec
+            parts.append(f"{self._fmt_sec(old_sec)} \u2192 {self._fmt_sec(new_sec)} ({self._fmt_delta(delta)})")
+        elif old_sec is not None:
+            parts.append(self._fmt_sec(old_sec))
+        elif new_sec is not None:
+            parts.append(self._fmt_sec(new_sec))
+        return " \u2014 ".join(parts) if parts else ""
+
+    def _nb_timing_annotation(self, nb_name: str) -> str:
+        """Return notebook-level profile timing, e.g. '45.2s -> 38.1s (-7.1s)'."""
+        old_total = self._nb_profile_total(self.drift.old_cell_profiles, nb_name)
+        new_total = self._nb_profile_total(self.drift.new_cell_profiles, nb_name)
+        if old_total is None and new_total is None:
+            return ""
+        if old_total is not None and new_total is not None:
+            delta = new_total - old_total
+            return f"{self._fmt_sec(old_total)} \u2192 {self._fmt_sec(new_total)} ({self._fmt_delta(delta)})"
+        if old_total is not None:
+            return self._fmt_sec(old_total)
+        return self._fmt_sec(new_total)  # type: ignore[arg-type]
+
+    @staticmethod
+    def _fmt_sec(seconds: float) -> str:
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        return f"{seconds / 60:.1f}m"
+
+    @staticmethod
+    def _fmt_delta(delta: float) -> str:
+        if abs(delta) < 60:
+            return f"{delta:+.1f}s"
+        return f"{delta / 60:+.1f}m"
 
     def grid_dates_summary(self) -> Optional[str]:
         sg_old, sg_new = self.drift.snapshot_grid_old, self.drift.snapshot_grid_new
@@ -710,6 +824,93 @@ class MarkdownDriftRenderer(DriftReportRenderer):
             rows.append(f"| {nb} | {ov} | {nv} | {delta} |")
         return "## Per-Notebook Timing\n\n" + "\n".join(rows)
 
+    def render_cell_profiling(self) -> str:
+        op, np_ = self.drift.old_cell_profiles, self.drift.new_cell_profiles
+        if op is None and np_ is None:
+            return "## Per-Cell Profiling\n\n_No cell profiles found._"
+        parts = ["## Per-Cell Profiling"]
+        # Determine which columns have data
+        has_spark = False
+        has_mem = False
+        for profiles in [op, np_]:
+            if profiles is None:
+                continue
+            for nb_prof in profiles.notebooks.values():
+                for c in nb_prof.cells:
+                    if c.spark_jobs is not None:
+                        has_spark = True
+                    if c.peak_memory_mb is not None:
+                        has_mem = True
+        # Cross-environment note
+        if op and np_ and op.environment != np_.environment:
+            parts.append(f"\n> _Cross-environment comparison ({op.environment} vs {np_.environment}) "
+                         f"\u2014 elapsed times reflect different hardware._\n")
+
+        all_nbs = sorted(set(
+            list(op.notebooks if op else {}) + list(np_.notebooks if np_ else {})
+        ))
+        for nb_name in all_nbs:
+            nb_annotation = self._nb_timing_annotation(nb_name)
+            header = f"### {nb_name}"
+            if nb_annotation:
+                header += f" ({nb_annotation})"
+            parts.append(header)
+
+            # Build the table
+            cols = ["Cell Name", "Cell ID", "Old", "New", "Delta"]
+            if has_spark:
+                cols.append("Spark Jobs")
+            if has_mem:
+                cols.append("Mem MB")
+            header_row = "| " + " | ".join(cols) + " |"
+            sep_row = "|" + "|".join("---" for _ in cols) + "|"
+
+            old_idx = self._cell_profile_index(op, nb_name)
+            new_idx = self._cell_profile_index(np_, nb_name)
+            old_name_idx = self._cell_profile_name_index(op, nb_name)
+            new_name_idx = self._cell_profile_name_index(np_, nb_name)
+
+            # Collect all cells in order (new side order, then old-only)
+            seen_ids: set[str] = set()
+            ordered_cells: list[tuple[str, str]] = []  # (cell_name, cell_id)
+            for profiles in [np_, op]:
+                if profiles is None:
+                    continue
+                nb_prof = profiles.notebooks.get(nb_name)
+                if nb_prof is None:
+                    continue
+                for c in nb_prof.cells:
+                    if c.cell_id not in seen_ids:
+                        seen_ids.add(c.cell_id)
+                        ordered_cells.append((c.cell_name, c.cell_id))
+
+            rows = [header_row, sep_row]
+            for cell_name, cell_id in ordered_cells:
+                old_e = old_idx.get(cell_id) or old_name_idx.get(cell_name)
+                new_e = new_idx.get(cell_id) or new_name_idx.get(cell_name)
+                old_sec = old_e.elapsed_sec if old_e else None
+                new_sec = new_e.elapsed_sec if new_e else None
+
+                old_str = self._fmt_sec(old_sec) if old_sec is not None else "\u2014"
+                new_str = self._fmt_sec(new_sec) if new_sec is not None else "\u2014"
+                if old_sec is not None and new_sec is not None:
+                    delta_str = self._fmt_delta(new_sec - old_sec)
+                else:
+                    delta_str = "\u2014"
+
+                row_parts = [cell_name, cell_id[:8], old_str, new_str, delta_str]
+                if has_spark:
+                    old_sj = str(old_e.spark_jobs) if old_e and old_e.spark_jobs is not None else "\u2014"
+                    new_sj = str(new_e.spark_jobs) if new_e and new_e.spark_jobs is not None else "\u2014"
+                    row_parts.append(f"{old_sj}/{new_sj}")
+                if has_mem:
+                    old_mm = f"{old_e.peak_memory_mb:.1f}" if old_e and old_e.peak_memory_mb is not None else "\u2014"
+                    new_mm = f"{new_e.peak_memory_mb:.1f}" if new_e and new_e.peak_memory_mb is not None else "\u2014"
+                    row_parts.append(f"{old_mm}/{new_mm}")
+                rows.append("| " + " | ".join(row_parts) + " |")
+            parts.append("\n".join(rows))
+        return "\n\n".join(parts)
+
     def render_cell_by_cell_diff(self) -> str:
         parts = ["## Cell-by-Cell Diff"]
         any_diff = False
@@ -722,11 +923,21 @@ class MarkdownDriftRenderer(DriftReportRenderer):
             if not nd.has_changes:
                 continue
             any_diff = True
-            nb_parts = [f"---\n\n### {nd.notebook_name}\n\n> {status_line}"]
+            nb_timing = self._nb_timing_annotation(nd.notebook_name)
+            nb_header = f"### {nd.notebook_name}"
+            if nb_timing:
+                nb_header += f" ({nb_timing})"
+            nb_parts = [f"---\n\n{nb_header}\n\n> {status_line}"]
             for m in nd.changed_matches:
-                name = (m.new_cell or m.old_cell).name
+                cell = m.new_cell or m.old_cell
+                name = cell.name
+                cell_id = cell.cell_id
                 label = m.status.value.upper()
-                nb_parts.append(f"#### {name} ({label})")
+                timing_ann = self._cell_timing_annotation(name, cell_id, nd.notebook_name)
+                cell_header = f"#### {name} ({label})"
+                if timing_ann:
+                    cell_header += f" \u2014 {timing_ann}"
+                nb_parts.append(cell_header)
                 if m.status == CellMatchStatus.ADDED:
                     nb_parts.append(f"```\n{m.new_cell.content[:_CELL_CONTENT_MAX]}\n```")
                 elif m.status == CellMatchStatus.REMOVED:
@@ -787,6 +998,7 @@ summary:hover { background: #f6f8fa; }
 .embed-table { overflow-x: auto; }
 .embed-table table { font-size: 12px; }
 .section-tag { background: #eaeef2; color: #656d76; padding: 1px 6px; border-radius: 8px; font-size: 11px; font-weight: normal; }
+.timing-annotation { color: #656d76; font-weight: normal; font-size: 13px; margin-left: 6px; }
 </style>"""
 
     def _esc(self, text: str) -> str:
@@ -912,6 +1124,86 @@ summary:hover { background: #f6f8fa; }
             + "\n".join(rows) + "\n</table>"
         )
 
+    def render_cell_profiling(self) -> str:
+        op, np_ = self.drift.old_cell_profiles, self.drift.new_cell_profiles
+        if op is None and np_ is None:
+            return "<h2>Per-Cell Profiling</h2>\n<p><em>No cell profiles found.</em></p>"
+        parts = ["<h2>Per-Cell Profiling</h2>"]
+        has_spark = False
+        has_mem = False
+        for profiles in [op, np_]:
+            if profiles is None:
+                continue
+            for nb_prof in profiles.notebooks.values():
+                for c in nb_prof.cells:
+                    if c.spark_jobs is not None:
+                        has_spark = True
+                    if c.peak_memory_mb is not None:
+                        has_mem = True
+        if op and np_ and op.environment != np_.environment:
+            parts.append(f'<p class="note"><em>Cross-environment comparison ({self._esc(op.environment)} vs '
+                         f'{self._esc(np_.environment)}) &mdash; elapsed times reflect different hardware.</em></p>')
+
+        all_nbs = sorted(set(list(op.notebooks if op else {}) + list(np_.notebooks if np_ else {})))
+        for nb_name in all_nbs:
+            nb_ann = self._nb_timing_annotation(nb_name)
+            header_extra = f" ({self._esc(nb_ann)})" if nb_ann else ""
+            parts.append(f"<h3>{self._esc(nb_name)}{header_extra}</h3>")
+
+            cols = ["Cell Name", "Cell ID", "Old", "New", "Delta"]
+            if has_spark:
+                cols.append("Spark Jobs")
+            if has_mem:
+                cols.append("Mem MB")
+            header_row = "".join(f"<th>{c}</th>" for c in cols)
+
+            old_idx = self._cell_profile_index(op, nb_name)
+            new_idx = self._cell_profile_index(np_, nb_name)
+            old_name_idx = self._cell_profile_name_index(op, nb_name)
+            new_name_idx = self._cell_profile_name_index(np_, nb_name)
+
+            seen_ids: set[str] = set()
+            ordered_cells: list[tuple[str, str]] = []
+            for profiles in [np_, op]:
+                if profiles is None:
+                    continue
+                nb_prof = profiles.notebooks.get(nb_name)
+                if nb_prof is None:
+                    continue
+                for c in nb_prof.cells:
+                    if c.cell_id not in seen_ids:
+                        seen_ids.add(c.cell_id)
+                        ordered_cells.append((c.cell_name, c.cell_id))
+
+            rows = []
+            for cell_name, cell_id in ordered_cells:
+                old_e = old_idx.get(cell_id) or old_name_idx.get(cell_name)
+                new_e = new_idx.get(cell_id) or new_name_idx.get(cell_name)
+                old_sec = old_e.elapsed_sec if old_e else None
+                new_sec = new_e.elapsed_sec if new_e else None
+                old_str = self._fmt_sec(old_sec) if old_sec is not None else "&mdash;"
+                new_str = self._fmt_sec(new_sec) if new_sec is not None else "&mdash;"
+                if old_sec is not None and new_sec is not None:
+                    delta = new_sec - old_sec
+                    delta_str = self._fmt_delta(delta)
+                    delta_cls = ' class="diff-added"' if delta < -0.5 else (' class="diff-removed"' if delta > 0.5 else "")
+                else:
+                    delta_str = "&mdash;"
+                    delta_cls = ""
+                row_cells = (f"<td>{self._esc(cell_name)}</td><td><code>{self._esc(cell_id[:8])}</code></td>"
+                             f"<td>{old_str}</td><td>{new_str}</td><td{delta_cls}>{delta_str}</td>")
+                if has_spark:
+                    old_sj = str(old_e.spark_jobs) if old_e and old_e.spark_jobs is not None else "&mdash;"
+                    new_sj = str(new_e.spark_jobs) if new_e and new_e.spark_jobs is not None else "&mdash;"
+                    row_cells += f"<td>{old_sj}/{new_sj}</td>"
+                if has_mem:
+                    old_mm = f"{old_e.peak_memory_mb:.1f}" if old_e and old_e.peak_memory_mb is not None else "&mdash;"
+                    new_mm = f"{new_e.peak_memory_mb:.1f}" if new_e and new_e.peak_memory_mb is not None else "&mdash;"
+                    row_cells += f"<td>{old_mm}/{new_mm}</td>"
+                rows.append(f"<tr>{row_cells}</tr>")
+            parts.append(f"<table>\n<tr>{header_row}</tr>\n" + "\n".join(rows) + "\n</table>")
+        return "\n".join(parts)
+
     def _render_diff_block(self, diff_text: str) -> str:
         lines = []
         for line in diff_text.split("\n"):
@@ -932,11 +1224,15 @@ summary:hover { background: #f6f8fa; }
             return f'<div class="embed-table">{content}</div>'
         return f"<pre>{self._esc(content[:_CELL_CONTENT_MAX])}</pre>"
 
-    def _render_cell_pair(self, m: CellMatch) -> str:
+    def _render_cell_pair(self, m: CellMatch, nb_name: str = "") -> str:
         old_label = f"Old: {self._esc(m.old_cell.name)}" if m.old_cell else ""
         new_label = f"New: {self._esc(m.new_cell.name)}" if m.new_cell else ""
         title = new_label or old_label
-        lines = [f'<h4>{title} {self._badge(m.status)}</h4>']
+        # Add inline timing annotation
+        cell = m.new_cell or m.old_cell
+        timing_ann = self._cell_timing_annotation(cell.name, cell.cell_id, nb_name) if cell and nb_name else ""
+        timing_html = f' <span class="timing-annotation">{self._esc(timing_ann)}</span>' if timing_ann else ""
+        lines = [f'<h4>{title} {self._badge(m.status)}{timing_html}</h4>']
         if m.old_cell and m.new_cell:
             sec_old = f' <span class="section-tag">{self._esc(m.old_cell.section)}</span>' if m.old_cell.section else ""
             sec_new = f' <span class="section-tag">{self._esc(m.new_cell.section)}</span>' if m.new_cell.section else ""
@@ -972,11 +1268,13 @@ summary:hover { background: #f6f8fa; }
             old_pill = f'{self._status_html(old_st)} {old_time}' if old_time else self._status_html(old_st)
             new_pill = f'{self._status_html(new_st)} {new_time}' if new_time else self._status_html(new_st)
             status_pills = f' &mdash; Old: {old_pill} | New: {new_pill}'
-            nb_parts = [f'<details class="nb-section"><summary>{self._esc(nd.notebook_name)} ({count_str}){status_pills}</summary>']
+            nb_timing = self._nb_timing_annotation(nd.notebook_name)
+            timing_extra = f' <span class="timing-annotation">{self._esc(nb_timing)}</span>' if nb_timing else ""
+            nb_parts = [f'<details class="nb-section"><summary>{self._esc(nd.notebook_name)} ({count_str}){timing_extra}{status_pills}</summary>']
             if not changed:
                 nb_parts.append("<p><em>No differences.</em></p>")
             for m in changed:
-                nb_parts.append(self._render_cell_pair(m))
+                nb_parts.append(self._render_cell_pair(m, nb_name=nd.notebook_name))
             nb_parts.append("</details>")
             parts.append("\n".join(nb_parts))
             if changed:

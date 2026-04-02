@@ -589,21 +589,29 @@ if ! $DRY_RUN; then
 fi
 echo ""
 
-# ---- Step 7: Capture outputs (newest script, both worktrees) ----
-echo "[Step 7] Capturing cell outputs ..."
+# ---- Step 7: Capture outputs + cell profiles (newest script, both worktrees) ----
+echo "[Step 7] Capturing cell outputs and performance profiles ..."
 if $DRY_RUN; then
     $RUN_OLD && echo "  DRY_RUN: capture → $OLD_OUTPUT_DIR/cell_outputs.md"
+    $RUN_OLD && echo "  DRY_RUN: profile → $OLD_OUTPUT_DIR/cell_profiles.json"
     $RUN_NEW && echo "  DRY_RUN: capture → $NEW_OUTPUT_DIR/cell_outputs.md"
+    $RUN_NEW && echo "  DRY_RUN: profile → $NEW_OUTPUT_DIR/cell_profiles.json"
 else
     if $RUN_OLD; then
         python "$SCRIPTS_DIR/capture_notebook_outputs.py" \
             --notebooks-dir "$OLD_NB_DIR" \
             --output "$OLD_OUTPUT_DIR/cell_outputs.md"
+        python "$SCRIPTS_DIR/cell_profiling.py" extract \
+            --notebooks-dir "$OLD_NB_DIR" \
+            --output "$OLD_OUTPUT_DIR/cell_profiles.json"
     fi
     if $RUN_NEW; then
         python "$SCRIPTS_DIR/capture_notebook_outputs.py" \
             --notebooks-dir "$NEW_NB_DIR" \
             --output "$NEW_OUTPUT_DIR/cell_outputs.md"
+        python "$SCRIPTS_DIR/cell_profiling.py" extract \
+            --notebooks-dir "$NEW_NB_DIR" \
+            --output "$NEW_OUTPUT_DIR/cell_profiles.json"
     fi
 fi
 echo ""
