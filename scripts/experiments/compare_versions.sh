@@ -620,8 +620,9 @@ if $RUN_OLD && $RUN_NEW; then
                 --new-manifest "$NEW_OUTPUT_DIR/cell_outputs.md" \
                 --old-run-dir "$OLD_OUTPUT_DIR" \
                 --new-run-dir "$NEW_OUTPUT_DIR" \
-                --output "$REPORT_FILE"
-            echo "  Report: $REPORT_FILE"
+                --output "$REPORT_FILE" \
+                --format both
+            echo "  Report: $REPORT_FILE (+ .html)"
         else
             echo "  SKIP — one or both cell_outputs.md files missing"
         fi
@@ -653,7 +654,8 @@ echo "  DONE"
 echo ""
 echo "  $COMPARISON_DIR/"
 echo "    compare_versions.log"
-echo "    drift_report.md"
+echo "    drift_report.md    (LLM-optimized)"
+echo "    drift_report.html  (human-optimized)"
 echo "    old-${OLD_SHORT}/        ← v$OLD_VERSION ($OLD_DATE)"
 echo "      notebooks/"
 echo "      cell_outputs.md"
