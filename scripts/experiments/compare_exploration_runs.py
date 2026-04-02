@@ -676,9 +676,9 @@ class DriftReportRenderer(ABC):
             delta = new_sec - old_sec
             parts.append(f"{self._fmt_sec(old_sec)} \u2192 {self._fmt_sec(new_sec)} ({self._fmt_delta(delta)})")
         elif old_sec is not None:
-            parts.append(self._fmt_sec(old_sec))
+            parts.append(f"old: {self._fmt_sec(old_sec)}")
         elif new_sec is not None:
-            parts.append(self._fmt_sec(new_sec))
+            parts.append(f"new: {self._fmt_sec(new_sec)}")
         return " \u2014 ".join(parts) if parts else ""
 
     def _nb_timing_annotation(self, nb_name: str) -> str:
@@ -691,8 +691,8 @@ class DriftReportRenderer(ABC):
             delta = new_total - old_total
             return f"{self._fmt_sec(old_total)} \u2192 {self._fmt_sec(new_total)} ({self._fmt_delta(delta)})"
         if old_total is not None:
-            return self._fmt_sec(old_total)
-        return self._fmt_sec(new_total)  # type: ignore[arg-type]
+            return f"old: {self._fmt_sec(old_total)}"
+        return f"new: {self._fmt_sec(new_total)}"  # type: ignore[arg-type]
 
     @staticmethod
     def _fmt_sec(seconds: float) -> str:
@@ -870,7 +870,8 @@ class MarkdownDriftRenderer(DriftReportRenderer):
             except (ValueError, TypeError):
                 delta = "N/A"
             rows.append(f"| {nb} | {ov} | {nv} | {delta} |")
-        return "## Per-Notebook Timing\n\n" + "\n".join(rows)
+        table = "\n".join(rows)
+        return f"## Per-Notebook Timing\n\n<details>\n<summary>Show timing table</summary>\n\n{table}\n\n</details>"
 
     def render_cell_profiling(self) -> str:
         op, np_ = self.drift.old_cell_profiles, self.drift.new_cell_profiles
@@ -899,12 +900,10 @@ class MarkdownDriftRenderer(DriftReportRenderer):
         all_nbs = sorted(set(list(op.notebooks if op else {}) + list(np_.notebooks if np_ else {})))
         for nb_name in all_nbs:
             nb_annotation = self._nb_timing_annotation(nb_name)
-            header = f"### {nb_name}"
+            summary = nb_name
             if nb_annotation:
-                header += f" ({nb_annotation})"
-            parts.append(header)
+                summary += f" ({nb_annotation})"
 
-            # Build the table
             cols = ["Cell Name", "Cell ID", "Old", "New", "Delta"]
             if has_spark:
                 cols.append("Spark Jobs")
@@ -956,7 +955,8 @@ class MarkdownDriftRenderer(DriftReportRenderer):
                     new_mm = f"{new_e.peak_memory_mb:.1f}" if new_e and new_e.peak_memory_mb is not None else "\u2014"
                     row_parts.append(f"{old_mm}/{new_mm}")
                 rows.append("| " + " | ".join(row_parts) + " |")
-            parts.append("\n".join(rows))
+            table = "\n".join(rows)
+            parts.append(f"<details>\n<summary>{summary}</summary>\n\n{table}\n\n</details>")
         return "\n\n".join(parts)
 
     def render_cell_by_cell_diff(self) -> str:
@@ -1190,10 +1190,12 @@ summary:hover { background: #f6f8fa; }
             except (ValueError, TypeError):
                 delta = "N/A"
             rows.append(f"<tr><td>{self._esc(nb)}</td><td>{ov}</td><td>{nv}</td><td>{delta}</td></tr>")
-        return (
-            "<h2>Per-Notebook Timing</h2>\n<table>\n"
-            "<tr><th>Notebook</th><th>Old</th><th>New</th><th>Delta</th></tr>\n" + "\n".join(rows) + "\n</table>"
+        table = (
+            "<table>\n<tr><th>Notebook</th><th>Old</th><th>New</th><th>Delta</th></tr>\n"
+            + "\n".join(rows)
+            + "\n</table>"
         )
+        return f"<h2>Per-Notebook Timing</h2>\n<details><summary>Show timing table</summary>\n{table}\n</details>"
 
     def render_cell_profiling(self) -> str:
         op, np_ = self.drift.old_cell_profiles, self.drift.new_cell_profiles
@@ -1221,7 +1223,7 @@ summary:hover { background: #f6f8fa; }
         for nb_name in all_nbs:
             nb_ann = self._nb_timing_annotation(nb_name)
             header_extra = f" ({self._esc(nb_ann)})" if nb_ann else ""
-            parts.append(f"<h3>{self._esc(nb_name)}{header_extra}</h3>")
+            summary_text = f"{self._esc(nb_name)}{header_extra}"
 
             cols = ["Cell Name", "Cell ID", "Old", "New", "Delta"]
             if has_spark:
@@ -1278,7 +1280,8 @@ summary:hover { background: #f6f8fa; }
                     new_mm = f"{new_e.peak_memory_mb:.1f}" if new_e and new_e.peak_memory_mb is not None else "&mdash;"
                     row_cells += f"<td>{old_mm}/{new_mm}</td>"
                 rows.append(f"<tr>{row_cells}</tr>")
-            parts.append(f"<table>\n<tr>{header_row}</tr>\n" + "\n".join(rows) + "\n</table>")
+            table = f"<table>\n<tr>{header_row}</tr>\n" + "\n".join(rows) + "\n</table>"
+            parts.append(f"<details><summary>{summary_text}</summary>\n{table}\n</details>")
         return "\n".join(parts)
 
     def _render_diff_block(self, diff_text: str) -> str:
