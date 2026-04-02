@@ -129,28 +129,20 @@ class TestMLflowLoggerTags:
 
 class TestMLflowLoggerExperiment:
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
-    def test_creates_experiment_if_not_exists(self, mock_mlflow):
-        mock_mlflow.get_experiment_by_name.return_value = None
-        mock_mlflow.create_experiment.return_value = "new_id"
-
+    def test_sets_experiment_on_start(self, mock_mlflow):
         logger = MLflowLogger(experiment_name="new_experiment")
         logger.start_run()
 
-        mock_mlflow.create_experiment.assert_called()
-        create_args = mock_mlflow.create_experiment.call_args
-        assert "new_experiment" in str(create_args)
+        mock_mlflow.set_experiment.assert_called_once_with("new_experiment")
+        mock_mlflow.start_run.assert_called()
 
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
-    def test_uses_existing_experiment(self, mock_mlflow):
-        mock_experiment = MagicMock()
-        mock_experiment.experiment_id = "123"
-        mock_mlflow.get_experiment_by_name.return_value = mock_experiment
-
-        logger = MLflowLogger(experiment_name="existing_experiment")
+    def test_sets_tracking_uri_before_experiment(self, mock_mlflow):
+        logger = MLflowLogger(experiment_name="exp", tracking_uri="sqlite:///test.db")
         logger.start_run()
 
-        mock_mlflow.start_run.assert_called()
-        mock_mlflow.create_experiment.assert_not_called()
+        mock_mlflow.set_tracking_uri.assert_called_once_with("sqlite:///test.db")
+        mock_mlflow.set_experiment.assert_called_once_with("exp")
 
 
 class TestMLflowLoggerContextManager:

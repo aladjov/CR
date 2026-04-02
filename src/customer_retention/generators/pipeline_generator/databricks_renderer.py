@@ -1508,7 +1508,8 @@ dbutils.notebook.exit(_summary)
 # MAGIC # Training: {{ config.name }}
 
 # COMMAND ----------
-
+{% set best_model_type = config.training.best_model_type if config.training else None %}
+{% set production_cv_folds = config.training.production_cv_folds if config.training else None %}
 import json
 import logging
 import tempfile
@@ -1516,7 +1517,11 @@ import csv
 from pathlib import Path
 import mlflow
 import mlflow.spark
-from pyspark.ml.classification import LogisticRegression, RandomForestClassifier, GBTClassifier
+from pyspark.ml.classification import (
+{% if best_model_type is none or best_model_type == "logistic_regression" %}    LogisticRegression,
+{% endif %}{% if best_model_type is none or best_model_type == "random_forest" %}    RandomForestClassifier,
+{% endif %}{% if best_model_type is none or best_model_type == "xgboost" %}    GBTClassifier,
+{% endif %})
 from pyspark.ml.feature import VectorAssembler
 from pyspark.ml.functions import vector_to_array
 from pyspark.ml.linalg import VectorUDT
@@ -1845,11 +1850,16 @@ def train_and_evaluate():
 {% endif %}
 
 {% set weight_param = ', weightCol="class_weight"' if config.training and config.training.imbalance_strategy == "class_weight" else '' %}
-    models = {
-        "LogisticRegression": LogisticRegression(maxIter=100, featuresCol="features", labelCol="label"{{ weight_param }}),
-        "RandomForest": RandomForestClassifier(numTrees=100, featuresCol="features", labelCol="label"{{ weight_param }}),
-        "GBTClassifier": GBTClassifier(maxIter=50, featuresCol="features", labelCol="label"{{ weight_param }}),
-    }
+    models = {}
+{% if best_model_type is none or best_model_type == "logistic_regression" %}
+    models["LogisticRegression"] = LogisticRegression(maxIter=100, featuresCol="features", labelCol="label"{{ weight_param }})
+{% endif %}
+{% if best_model_type is none or best_model_type == "random_forest" %}
+    models["RandomForest"] = RandomForestClassifier(numTrees=100, featuresCol="features", labelCol="label"{{ weight_param }})
+{% endif %}
+{% if best_model_type is none or best_model_type == "xgboost" %}
+    models["GBTClassifier"] = GBTClassifier(maxIter=50, featuresCol="features", labelCol="label"{{ weight_param }})
+{% endif %}
 
     best_model_name = None
     best_auc = -1.0

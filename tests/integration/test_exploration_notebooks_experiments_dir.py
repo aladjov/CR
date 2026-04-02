@@ -340,7 +340,7 @@ class TestScoringValidationNotebook:
         expected_sections = [
             "11.1 Run Scoring",
             "11.2 Summary Metrics",
-            "11.3 Model Comparison Grid",
+            "11.3 Production Model Card",
             "11.4 Adversarial Pipeline Validation",
             "11.5 Transformation Validation",
             "11.6 Model Explanations (SHAP)",

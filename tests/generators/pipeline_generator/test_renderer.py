@@ -370,13 +370,20 @@ class TestRenderTrainingDropAsOfDate:
 
 
 class TestRenderTrainingCVProgress:
+    @staticmethod
+    def _with_cv(config, folds=5):
+        from customer_retention.generators.pipeline_generator.models import TrainingConfig
+        config.training = config.training or TrainingConfig()
+        config.training.production_cv_folds = folds
+        return config
+
     def test_training_imports_cross_validator(self, renderer, sample_pipeline_config):
-        result = renderer.render_training(sample_pipeline_config)
+        result = renderer.render_training(self._with_cv(sample_pipeline_config))
         assert "CrossValidator" in result
         assert "CVStrategy" in result
 
     def test_training_has_on_fold_callback(self, renderer, sample_pipeline_config):
-        result = renderer.render_training(sample_pipeline_config)
+        result = renderer.render_training(self._with_cv(sample_pipeline_config))
         assert "on_fold_complete" in result
         assert "_on_fold" in result
 
@@ -385,10 +392,15 @@ class TestRenderTrainingCVProgress:
         assert "from sklearn.model_selection import cross_val_score" not in result
 
     def test_training_shows_per_fold_progress(self, renderer, sample_pipeline_config):
-        result = renderer.render_training(sample_pipeline_config)
+        result = renderer.render_training(self._with_cv(sample_pipeline_config))
         assert "CV fold" in result
 
     def test_training_shows_cv_summary(self, renderer, sample_pipeline_config):
-        result = renderer.render_training(sample_pipeline_config)
+        result = renderer.render_training(self._with_cv(sample_pipeline_config))
         assert "cv_mean" in result
         assert "cv_std" in result
+
+    def test_training_without_cv_folds_skips_cv(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "CrossValidator" not in result
+        assert "_on_fold" not in result

@@ -89,9 +89,8 @@ class ScoringDataLoader:
         if not experiment:
             return []
         parent_run = self._find_best_parent_run(client, experiment.experiment_id)
-        child_runs = client.search_runs(
-            experiment_ids=[experiment.experiment_id],
-            filter_string=f"tags.mlflow.parentRunId = '{parent_run.info.run_id}'",
+        child_runs = self._find_child_runs(
+            client, experiment.experiment_id, parent_run.info.run_id,
         )
         if child_runs:
             return [c.info.run_name for c in child_runs]
@@ -244,11 +243,32 @@ class ScoringDataLoader:
             raise ValueError(f"No runs found in experiment '{self.config.pipeline_name}'")
         return runs[0]
 
-    def _find_model_run(self, client, experiment_id: str, parent_run, model_tag: str):
+    def _find_child_runs(self, client, experiment_id: str, parent_run_id: str):
+        """Search for child runs, checking all experiments if needed.
+
+        Nested runs with the sqlite backend sometimes land in the Default
+        experiment instead of the parent's experiment.
+        """
         child_runs = client.search_runs(
             experiment_ids=[experiment_id],
-            filter_string=f"tags.mlflow.parentRunId = '{parent_run.info.run_id}'",
+            filter_string=f"tags.mlflow.parentRunId = '{parent_run_id}'",
         )
+        if child_runs:
+            return child_runs
+        all_ids = [
+            e.experiment_id
+            for e in client.search_experiments()
+            if e.experiment_id != experiment_id
+        ]
+        if all_ids:
+            child_runs = client.search_runs(
+                experiment_ids=all_ids,
+                filter_string=f"tags.mlflow.parentRunId = '{parent_run_id}'",
+            )
+        return child_runs
+
+    def _find_model_run(self, client, experiment_id: str, parent_run, model_tag: str):
+        child_runs = self._find_child_runs(client, experiment_id, parent_run.info.run_id)
         return next((c for c in child_runs if c.info.run_name == model_tag), parent_run)
 
     def _load_gold_module(self):

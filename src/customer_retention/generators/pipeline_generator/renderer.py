@@ -1039,23 +1039,33 @@ def run_gold_features():
 if __name__ == "__main__":
     run_gold_features()
 """,
-    "training.py.j2": '''import logging
+    "training.py.j2": '''{% set best_model_type = config.training.best_model_type if config.training else None %}
+{% set production_cv_folds = config.training.production_cv_folds if config.training else None %}
+import logging
 import numpy as np
 import pandas as pd
 from datetime import datetime
 import mlflow
 import mlflow.sklearn
+{% if best_model_type is none or best_model_type == "xgboost" %}
 import mlflow.xgboost
 import xgboost as xgb
+{% endif %}
 from pathlib import Path
 from feast import FeatureStore
+{% if best_model_type is none or best_model_type == "random_forest" %}
 from sklearn.ensemble import RandomForestClassifier
+{% endif %}
+{% if best_model_type is none or best_model_type == "logistic_regression" %}
 from sklearn.linear_model import LogisticRegression
+{% endif %}
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score,
                              precision_score, recall_score, accuracy_score)
 from customer_retention.stages.modeling.data_splitter import DataSplitter, SplitStrategy
+{% if production_cv_folds %}
 from customer_retention.stages.modeling.cross_validator import CrossValidator, CVStrategy
+{% endif %}
 from customer_retention.stages.modeling.feature_profile import FeatureProfile, ColumnProfile, build_feature_profile, compare_feature_profiles
 from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 from customer_retention.core.compat.timing import log_timing
@@ -1176,6 +1186,7 @@ def log_feature_importance(model, feature_names):
     mlflow.log_artifact("feature_importance.csv")
 
 
+{% if best_model_type is none or best_model_type == "xgboost" %}
 def train_xgboost(X_train, y_train, X_test, y_test, feature_names):
     mlflow.xgboost.autolog(disable=True)
     dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=feature_names)
@@ -1185,10 +1196,12 @@ def train_xgboost(X_train, y_train, X_test, y_test, feature_names):
     model = xgb.train(params, dtrain, num_boost_round=100,
                       evals=[(dtrain, "train"), (dtest, "eval")], verbose_eval=False)
     return model
+{% endif %}
 
-
+{% if production_cv_folds %}
 def _on_fold(detail, fold_num, total_folds):
     print(f"  CV fold {fold_num}/{total_folds}: roc_auc={detail['score']:.4f} ({detail['elapsed_seconds']:.0f}s)", flush=True)
+{% endif %}
 
 
 def get_model_name_with_hash(base_name: str) -> str:
@@ -1355,10 +1368,13 @@ def run_experiment():
 {% endif %}
 
 {% set class_weight_param = ', class_weight="balanced"' if config.training and config.training.imbalance_strategy == "class_weight" else '' %}
-    sklearn_models = {
-        "logistic_regression": LogisticRegression(max_iter=5000, random_state=42{{ class_weight_param }}),
-        "random_forest": RandomForestClassifier(n_estimators=100, random_state=42{{ class_weight_param }}),
-    }
+    sklearn_models = {}
+{% if best_model_type is none or best_model_type == "logistic_regression" %}
+    sklearn_models["logistic_regression"] = LogisticRegression(max_iter=5000, random_state=42{{ class_weight_param }})
+{% endif %}
+{% if best_model_type is none or best_model_type == "random_forest" %}
+    sklearn_models["random_forest"] = RandomForestClassifier(n_estimators=100, random_state=42{{ class_weight_param }})
+{% endif %}
 
     run_name = get_model_name_with_hash(f"training_{COMPOSITE_NAME}")
     with mlflow.start_run(run_name=run_name):
@@ -1383,16 +1399,22 @@ def run_experiment():
                 metrics = compute_metrics(y_test, y_proba, y_pred)
                 model_artifact_name = get_model_name_with_hash(f"model_{name}")
                 mlflow.sklearn.log_model(model, model_artifact_name)
-                _cv = CrossValidator(strategy=CVStrategy.STRATIFIED_KFOLD, n_splits=5, scoring="roc_auc")
+{% if production_cv_folds %}
+                _cv = CrossValidator(strategy=CVStrategy.STRATIFIED_KFOLD, n_splits={{ production_cv_folds }}, scoring="roc_auc")
                 _cv_result = _cv.run(model, X_train, y_train, on_fold_complete=_on_fold)
                 print(f"  CV: {_cv_result.cv_mean:.4f} +/- {_cv_result.cv_std:.4f}", flush=True)
                 mlflow.log_metrics({**metrics, "cv_mean": _cv_result.cv_mean, "cv_std": _cv_result.cv_std})
+                _results["models"][name] = {**metrics, "cv_mean": _cv_result.cv_mean, "cv_std": _cv_result.cv_std}
+{% else %}
+                mlflow.log_metrics(metrics)
+                _results["models"][name] = metrics
+{% endif %}
                 log_feature_importance(model, feature_names)
                 print(f"{name}: ROC-AUC={metrics['roc_auc']:.4f}, PR-AUC={metrics['pr_auc']:.4f}, F1={metrics['f1']:.4f}", flush=True)
-                _results["models"][name] = {**metrics, "cv_mean": _cv_result.cv_mean, "cv_std": _cv_result.cv_std}
                 if metrics["roc_auc"] > best_auc:
                     best_auc, best_model = metrics["roc_auc"], name
 
+{% if best_model_type is none or best_model_type == "xgboost" %}
         with mlflow.start_run(run_name="xgboost", nested=True):
             if RECOMMENDATIONS_HASH:
                 mlflow.set_tag("recommendations_hash", RECOMMENDATIONS_HASH)
@@ -1414,6 +1436,7 @@ def run_experiment():
             _results["models"]["xgboost"] = metrics
             if metrics["roc_auc"] > best_auc:
                 best_auc, best_model = metrics["roc_auc"], "xgboost"
+{% endif %}
 
         mlflow.set_tag("best_model", best_model)
         mlflow.log_metric("best_roc_auc", best_auc)

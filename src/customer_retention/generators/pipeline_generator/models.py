@@ -172,6 +172,8 @@ class TrainingConfig:
     imbalance_strategy: str = "class_weight"
     imbalance_ratio: Optional[float] = None
     exploration_feature_profile: Optional[Dict[str, Any]] = None
+    best_model_type: Optional[str] = None
+    production_cv_folds: Optional[int] = None
 
 
 @dataclass

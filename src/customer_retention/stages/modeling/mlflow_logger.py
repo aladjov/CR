@@ -50,14 +50,12 @@ class MLflowLogger:
         if self.tracking_uri:
             mlflow.set_tracking_uri(self.tracking_uri)
 
-        experiment = mlflow.get_experiment_by_name(self.experiment_name)
-        if experiment is None:
-            experiment_id = mlflow.create_experiment(self.experiment_name)
-        else:
-            experiment_id = experiment.experiment_id
+        # set_experiment() both creates-if-needed and sets the global active
+        # experiment so that nested start_run(nested=True) calls inherit it
+        # automatically — see https://github.com/mlflow/mlflow/issues/1109
+        mlflow.set_experiment(self.experiment_name)
 
         self._run = mlflow.start_run(
-            experiment_id=experiment_id,
             run_name=run_name or self.run_name,
         )
         self._last_run_id = self._run.info.run_id

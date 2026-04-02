@@ -39,6 +39,15 @@ from .models import (
     TransformationStep,
 )
 
+_EXPLORATION_TO_PRODUCTION_MODEL = {
+    "Logistic Regression": "logistic_regression",
+    "Random Forest": "random_forest",
+    "Gradient Boosting": "xgboost",
+    "XGBoost": "xgboost",
+    "GBT": "xgboost",
+    "GBTClassifier": "xgboost",
+}
+
 
 def _edges_to_labels(edges: List[float]) -> List[str]:
     labels = []
@@ -1445,6 +1454,7 @@ class FindingsParser:
             return None
 
         exploration_profile = self._load_exploration_feature_profile()
+        best_model_type = self._read_best_model_type()
 
         return TrainingConfig(
             split_strategy=split_strategy,
@@ -1454,6 +1464,7 @@ class FindingsParser:
             filter_future_dates=filter_future,
             imbalance_strategy=imbalance_strategy,
             exploration_feature_profile=exploration_profile,
+            best_model_type=best_model_type,
         )
 
     def _load_exploration_feature_profile(self) -> Optional[Dict[str, Any]]:
@@ -1468,6 +1479,26 @@ class FindingsParser:
             return profile.to_dict() if profile else None
         except Exception:
             logger.warning("Could not load exploration feature profile from %s", profile_path)
+            return None
+
+    def _read_best_model_type(self) -> Optional[str]:
+        if getattr(self, "_namespace", None) is None:
+            return None
+        diag_path = self._namespace.exploration_diagnostics_path
+        if not diag_path.exists():
+            return None
+        try:
+            import json as _json
+
+            diag_data = _json.loads(diag_path.read_text())
+            exploration_best = diag_data.get("best_model_name")
+            if exploration_best:
+                return _EXPLORATION_TO_PRODUCTION_MODEL.get(
+                    exploration_best, exploration_best.lower().replace(" ", "_")
+                )
+            return None
+        except Exception:
+            logger.warning("Could not read best model from %s", diag_path)
             return None
 
     def _build_bronze_event_configs(

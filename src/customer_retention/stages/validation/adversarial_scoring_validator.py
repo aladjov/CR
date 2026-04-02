@@ -28,6 +28,11 @@ class FeatureDrift:
     affected_entities: int
     severity: DriftSeverity
     sample_diffs: Optional[List[float]] = None
+    gold_mean: Optional[float] = None
+    gold_std: Optional[float] = None
+    scoring_mean: Optional[float] = None
+    scoring_std: Optional[float] = None
+    sample_entity_values: Optional[List[dict]] = None
 
 
 @dataclass
@@ -47,13 +52,20 @@ class AdversarialValidationResult:
         ]
         if self.feature_drifts:
             lines.append(f"Features with drift: {len(self.feature_drifts)}")
+            counts: dict = {}
+            for d in self.feature_drifts:
+                counts[d.severity.name] = counts.get(d.severity.name, 0) + 1
+            lines.append(f"  Severity: {', '.join(f'{k}={v}' for k, v in sorted(counts.items()))}")
         if self.missing_entities:
             lines.append(f"Missing entities: {self.missing_entities}")
         return "\n".join(lines)
 
     def to_dataframe(self) -> Any:
         if not self.feature_drifts:
-            return native_pd.DataFrame(columns=["feature_name", "severity", "max_diff", "mean_diff", "affected"])
+            return native_pd.DataFrame(columns=[
+                "feature_name", "severity", "max_diff", "mean_diff", "affected",
+                "gold_mean", "gold_std", "scoring_mean", "scoring_std",
+            ])
         return native_pd.DataFrame([
             {
                 "feature_name": d.feature_name,
@@ -61,6 +73,10 @@ class AdversarialValidationResult:
                 "max_diff": d.max_absolute_diff,
                 "mean_diff": d.mean_absolute_diff,
                 "affected": d.affected_entities,
+                "gold_mean": d.gold_mean,
+                "gold_std": d.gold_std,
+                "scoring_mean": d.scoring_mean,
+                "scoring_std": d.scoring_std,
             }
             for d in self.feature_drifts
         ])
@@ -190,12 +206,31 @@ class AdversarialScoringValidator:
         max_diff = float(np.max(diff))
         mean_diff = float(np.mean(diff[diff > self.tolerance]))
         severity = self._compute_severity(max_diff, affected, len(gold_col))
+
+        sample_entity_values = None
+        affected_mask = diff > self.tolerance
+        affected_indices = affected_mask.nonzero()[0][:5]
+        if hasattr(gold_col, "index") and len(affected_indices) > 0:
+            sample_entity_values = [
+                {
+                    "entity_id": str(gold_col.index[idx]),
+                    "gold_value": float(gold_vals[idx]),
+                    "scoring_value": float(recomputed_vals[idx]),
+                }
+                for idx in affected_indices
+            ]
+
         return FeatureDrift(
             feature_name=col_name,
             max_absolute_diff=max_diff,
             mean_absolute_diff=mean_diff,
             affected_entities=int(affected),
             severity=severity,
+            gold_mean=float(np.mean(gold_vals)),
+            gold_std=float(np.std(gold_vals)),
+            scoring_mean=float(np.mean(recomputed_vals)),
+            scoring_std=float(np.std(recomputed_vals)),
+            sample_entity_values=sample_entity_values,
         )
 
     def _check_categorical_drift(
