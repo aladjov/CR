@@ -56,12 +56,39 @@ class SparkClassifierWrapper:
         self._fitted_model: Any = None
         self._classes: Optional[np.ndarray] = None
 
-    def fit(self, X: Any, y: Any) -> SparkClassifierWrapper:
-        spark_df = self._to_spark_df(X, y)
+    def fit(self, X: Any, y: Any, prepared_df: Any = None) -> SparkClassifierWrapper:
+        if prepared_df is not None:
+            self._validate_prepared_df(prepared_df)
+            spark_df = prepared_df
+            owns_cache = False
+        else:
+            spark_df = self._to_spark_df(X, y)
+            spark_df = self._repartition_for_training(spark_df)
+            owns_cache = True
         spark_model = self._create_spark_model()
         self._fitted_model = spark_model.fit(spark_df)
+        if owns_cache:
+            spark_df.unpersist()
         self._classes = np.array([0, 1])
         return self
+
+    def _validate_prepared_df(self, spark_df: Any) -> None:
+        cols = set(spark_df.columns)
+        missing = {_FEATURES_COL, _LABEL_COL} - cols
+        if missing:
+            raise ValueError(f"prepared_df missing required columns: {missing}")
+        if self.class_weight == "balanced" and self.spark_model_class != "GBTClassifier" and _WEIGHT_COL not in cols:
+            raise ValueError(f"prepared_df missing {_WEIGHT_COL} but class_weight='balanced'")
+
+    def prepare_training_data(self, X: Any, y: Any) -> Any:
+        """Prepare, repartition, and cache training data for reuse across models.
+
+        Call once per data variant (e.g. scaled vs unscaled), then pass
+        the result to ``fit(prepared_df=...)`` for each model.  Call
+        ``unpersist()`` on the returned DataFrame when done with all models.
+        """
+        spark_df = self._to_spark_df(X, y)
+        return self._repartition_for_training(spark_df)
 
     def predict(self, X: Any) -> np.ndarray:
         assembled = self._assemble_features(X)
@@ -129,6 +156,23 @@ class SparkClassifierWrapper:
 
         return _make_assembler(self.feature_names).transform(spark_df)
 
+    @staticmethod
+    def _repartition_for_training(spark_df: Any) -> Any:
+        """Repartition + cache before iterative model fit for full core utilization.
+
+        Uses 2x cores to mitigate straggler tasks — if one partition
+        finishes early, the core picks up the next pending partition
+        instead of sitting idle.  The extra scheduler overhead is
+        negligible vs thousands of L-BFGS iterations.
+        """
+        from customer_retention.core.compat.detection import get_default_parallelism
+        target = get_default_parallelism() * 2
+        if target > 2:
+            spark_df = spark_df.repartition(target)
+        spark_df.cache()
+        spark_df.count()
+        return spark_df
+
     def _add_weight_column(self, spark_df: Any) -> Any:
         import pyspark.sql.functions as F  # noqa: N812
 
@@ -181,5 +225,15 @@ class SparkClassifierWrapper:
 
         if self.class_weight == "balanced" and self.spark_model_class != "GBTClassifier":
             params["weightCol"] = _WEIGHT_COL
+
+        # Scale treeAggregate depth to actual partition count (2x cores)
+        # so reduce stages fan out across the cluster instead of
+        # serialising on the driver.
+        if "aggregationDepth" not in params:
+            from customer_retention.core.compat.detection import get_default_parallelism
+            n_partitions = get_default_parallelism() * 2
+            if n_partitions > 2:
+                import math
+                params["aggregationDepth"] = max(2, int(math.ceil(math.log2(n_partitions) / math.log2(4))))
 
         return model_cls(**params)

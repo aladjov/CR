@@ -3,7 +3,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from customer_retention.core.compat import as_spark_df, pd
-from customer_retention.core.compat.detection import get_spark_session, is_spark_available
+from customer_retention.core.compat.detection import get_default_parallelism, get_spark_session, is_spark_available
 
 from .base import DeltaStorage
 
@@ -61,12 +61,12 @@ class DatabricksDelta(DeltaStorage):
         repartition is unconditional since the shuffle is amortised into
         the write job.
         """
+        target = get_default_parallelism()
+        if target <= 1:
+            return spark_df
+        if force:
+            return spark_df.repartition(target)
         try:
-            target = int(self.spark.sparkContext.defaultParallelism)
-            if target <= 1:
-                return spark_df
-            if force:
-                return spark_df.repartition(target)
             # inputFiles() is plan-level metadata — no Spark job, no .rdd
             input_files = spark_df.inputFiles()
             if isinstance(input_files, (list, tuple)) and len(input_files) < target:
@@ -128,7 +128,7 @@ class DatabricksDelta(DeltaStorage):
                            partition_by: Optional[List[str]],
                            z_order_columns: Optional[List[str]]) -> None:
         try:
-            cores = int(self.spark.sparkContext.defaultParallelism)
+            cores = get_default_parallelism() or "?"
             files = self.spark.read.format("delta").load(path).inputFiles()
             n_files = len(files) if isinstance(files, (list, tuple)) else "?"
         except Exception:

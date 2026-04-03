@@ -61,6 +61,8 @@ ALLOWLISTED_FILES = {
     "batch_scorer.py", "champion_challenger.py",
     # Streaming operates within Spark structured streaming context
     "window_aggregator.py", "online_store_writer.py",
+    # Compat detection layer — sparkContext fallback for local mode only
+    "detection.py",
 }
 
 _STRING_LITERAL = re.compile(r'''("""[\s\S]*?"""|'''  r"""'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')""")
@@ -115,6 +117,11 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
         re.compile(r"\.rdd[.\)]"),
         ".rdd access is banned on Databricks shared clusters (Unity Catalog)",
         "Use F.spark_partition_id() for partition info, or Spark SQL APIs",
+    ),
+    (
+        re.compile(r"\.sparkContext\."),
+        ".sparkContext access is banned on Databricks shared clusters (Unity Catalog)",
+        "Use get_default_parallelism() from core.compat.detection, or spark.conf.get()",
     ),
     (
         re.compile(r"\bpd\.Timestamp\b"),

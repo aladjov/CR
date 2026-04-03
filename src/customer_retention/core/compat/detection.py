@@ -183,6 +183,35 @@ def get_databricks_username() -> Optional[str]:
     return None
 
 
+def get_default_parallelism() -> int:
+    """Return Spark default parallelism, safe for shared clusters.
+
+    Uses ``spark.conf.get`` with a fallback (RuntimeConfig API — works on
+    Unity Catalog shared clusters where ``sparkContext`` is blocked).
+    Falls back to ``sparkContext`` for local mode where the conf may
+    not be explicitly set.  Returns 0 if neither is available.
+
+    All downstream callers (``_ensure_parallelism``, ``_repartition_for_training``)
+    use only Spark SQL / DataFrame APIs (``repartition``, ``cache``, ``inputFiles``)
+    which are Spark Connect safe since 3.4.0.
+    """
+    spark = get_spark_session()
+    if not spark:
+        return 0
+    # Two-arg form returns the default without raising if key is absent
+    val = spark.conf.get("spark.default.parallelism", None)
+    if val is not None:
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            pass
+    # Fallback for local mode — sparkContext is available there
+    try:
+        return int(spark.sparkContext.defaultParallelism)
+    except Exception:
+        return 0
+
+
 def set_spark_config(key: str, value: Any) -> None:
     spark = get_spark_session()
     if spark:

@@ -38,12 +38,14 @@ def optimize_delta(path: str, z_order_columns: Optional[List[str]] = None) -> No
 
 def delta_write_summary(path: str) -> dict:
     """Query Delta table metadata for user-facing write summary."""
-    from customer_retention.core.compat.detection import get_spark_session
+    from customer_retention.core.compat.detection import get_default_parallelism, get_spark_session
     result: dict = {}
+    cores = get_default_parallelism()
+    if cores:
+        result["cores"] = cores
     spark = get_spark_session()
     if spark:
         try:
-            result["cores"] = int(spark.sparkContext.defaultParallelism)
             files = spark.read.format("delta").load(path).inputFiles()
             if isinstance(files, (list, tuple)):
                 result["files"] = len(files)
