@@ -212,64 +212,55 @@ class TestMLflowLoggerModel:
 
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
     def test_logs_spark_wrapper_uses_spark_flavor(self, mock_mlflow):
-        mock_spark_module = MagicMock()
-        mock_mlflow.spark = mock_spark_module
-        with patch.dict("sys.modules", {"mlflow.spark": mock_spark_module}):
-            logger = MLflowLogger(experiment_name="test")
-            mock_model = MagicMock()
-            mock_model.as_pipeline_model = MagicMock(return_value=MagicMock())
-            mock_model._fitted_model = MagicMock()
-            mock_model.spark_model_class = "LogisticRegression"
-            mock_model.spark_model_params = {"maxIter": 10}
-            mock_model.feature_names = ["f1", "f2"]
-            mock_model.class_weight = "balanced"
+        logger = MLflowLogger(experiment_name="test")
+        mock_model = MagicMock()
+        mock_model.as_pipeline_model = MagicMock(return_value=MagicMock())
+        mock_model._fitted_model = MagicMock()
+        mock_model.spark_model_class = "LogisticRegression"
+        mock_model.spark_model_params = {"maxIter": 10}
+        mock_model.feature_names = ["f1", "f2"]
+        mock_model.class_weight = "balanced"
 
-            logger.log_model(mock_model, "logistic_regression")
+        logger.log_model(mock_model, "logistic_regression")
 
-            mock_model.as_pipeline_model.assert_called_once()
-            mock_spark_module.log_model.assert_called_once()
-            mock_mlflow.set_tag.assert_called_with("logistic_regression.model_flavor", "spark")
-            mock_mlflow.log_dict.assert_called_once()
+        mock_model.as_pipeline_model.assert_called_once()
+        mock_mlflow.spark.log_model.assert_called_once()
+        mock_mlflow.set_tag.assert_called_with("logistic_regression.model_flavor", "spark")
+        mock_mlflow.log_dict.assert_called_once()
 
     @patch("customer_retention.stages.modeling.mlflow_logger.get_mlflow_dfs_tmpdir", return_value="/Volumes/cat/sch/mlflow_tmp")
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
     def test_spark_model_passes_dfs_tmpdir_on_databricks(self, mock_mlflow, _mock_tmpdir):
-        mock_spark_module = MagicMock()
-        mock_mlflow.spark = mock_spark_module
-        with patch.dict("sys.modules", {"mlflow.spark": mock_spark_module}):
-            logger = MLflowLogger(experiment_name="test")
-            mock_model = MagicMock()
-            mock_model.as_pipeline_model = MagicMock(return_value=MagicMock())
-            mock_model._fitted_model = MagicMock()
-            mock_model.spark_model_class = "LR"
-            mock_model.spark_model_params = {}
-            mock_model.feature_names = ["f1"]
-            mock_model.class_weight = None
+        logger = MLflowLogger(experiment_name="test")
+        mock_model = MagicMock()
+        mock_model.as_pipeline_model = MagicMock(return_value=MagicMock())
+        mock_model._fitted_model = MagicMock()
+        mock_model.spark_model_class = "LR"
+        mock_model.spark_model_params = {}
+        mock_model.feature_names = ["f1"]
+        mock_model.class_weight = None
 
-            logger.log_model(mock_model, "lr")
+        logger.log_model(mock_model, "lr")
 
-            call_kwargs = mock_spark_module.log_model.call_args
-            assert call_kwargs[1]["dfs_tmpdir"] == "/Volumes/cat/sch/mlflow_tmp"
+        call_kwargs = mock_mlflow.spark.log_model.call_args
+        assert call_kwargs[1]["dfs_tmpdir"] == "/Volumes/cat/sch/mlflow_tmp"
 
     @patch("customer_retention.stages.modeling.mlflow_logger.get_mlflow_dfs_tmpdir", return_value=None)
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
     def test_spark_model_no_dfs_tmpdir_locally(self, mock_mlflow, _mock_tmpdir):
-        mock_spark_module = MagicMock()
-        mock_mlflow.spark = mock_spark_module
-        with patch.dict("sys.modules", {"mlflow.spark": mock_spark_module}):
-            logger = MLflowLogger(experiment_name="test")
-            mock_model = MagicMock()
-            mock_model.as_pipeline_model = MagicMock(return_value=MagicMock())
-            mock_model._fitted_model = MagicMock()
-            mock_model.spark_model_class = "LR"
-            mock_model.spark_model_params = {}
-            mock_model.feature_names = ["f1"]
-            mock_model.class_weight = None
+        logger = MLflowLogger(experiment_name="test")
+        mock_model = MagicMock()
+        mock_model.as_pipeline_model = MagicMock(return_value=MagicMock())
+        mock_model._fitted_model = MagicMock()
+        mock_model.spark_model_class = "LR"
+        mock_model.spark_model_params = {}
+        mock_model.feature_names = ["f1"]
+        mock_model.class_weight = None
 
-            logger.log_model(mock_model, "lr")
+        logger.log_model(mock_model, "lr")
 
-            call_kwargs = mock_spark_module.log_model.call_args
-            assert "dfs_tmpdir" not in call_kwargs[1]
+        call_kwargs = mock_mlflow.spark.log_model.call_args
+        assert "dfs_tmpdir" not in call_kwargs[1]
 
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow.sklearn")
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
