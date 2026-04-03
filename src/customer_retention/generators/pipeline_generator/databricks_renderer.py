@@ -1652,11 +1652,12 @@ def _evaluate_model(predictions):
     }
 
 def _mlflow_evaluate_predictions(predictions):
+    _MAX_EVAL_ROWS = 100_000
     eval_pdf = predictions.select(
         F.col("label"),
         vector_to_array(F.col("probability"))[1].alias("prob_1"),
         F.col("prediction"),
-    ).toPandas()
+    ).limit(_MAX_EVAL_ROWS).toPandas()
     mlflow.evaluate(
         data=eval_pdf,
         model_type="classifier",
@@ -1882,31 +1883,42 @@ def train_and_evaluate():
                 with log_timing(f"fit_{name}", logger, train_rows=train_count):
                     fitted = model.fit(train_df)
                 _log_training_progress(fitted, name)
+                mlflow.log_param("model_type", name)
+                mlflow.log_param("num_features", len(feature_cols))
+                try:
+                    mlflow.spark.log_model(fitted, f"model_{name}", dfs_tmpdir=_DFS_TMPDIR)
+                except Exception as _save_err:
+                    print(f"[TRAINING] WARNING: Model save failed for {name}: {_save_err}")
                 predictions = fitted.transform(test_df)
                 metrics = _evaluate_model(predictions)
                 print(f"[TRAINING] {name}: AUC={metrics['roc_auc']:.4f}, PR-AUC={metrics['pr_auc']:.4f}, F1={metrics['f1']:.4f}")
                 _results["models"][name] = metrics
-                mlflow.log_param("model_type", name)
-                mlflow.log_param("num_features", len(feature_cols))
-                mlflow.spark.log_model(fitted, f"model_{name}", dfs_tmpdir=_DFS_TMPDIR)
                 mlflow.log_metrics(metrics)
                 _log_feature_importance(fitted, feature_cols)
-                _mlflow_evaluate_predictions(predictions)
+                try:
+                    _mlflow_evaluate_predictions(predictions)
+                except Exception as _eval_err:
+                    print(f"[TRAINING] WARNING: MLflow evaluate failed for {name}: {_eval_err}")
                 if metrics["roc_auc"] > best_auc:
                     best_auc = metrics["roc_auc"]
                     best_model_name = name
                     best_model = fitted
                     best_metrics = metrics
 
-        mlflow.set_tag("best_model", best_model_name)
-        mlflow.log_metric("best_roc_auc", best_auc)
-        mlflow.log_metrics({f"best_{k}": v for k, v in best_metrics.items()})
+        if best_model_name is not None:
+            mlflow.set_tag("best_model", best_model_name)
+            mlflow.log_metric("best_roc_auc", best_auc)
+            mlflow.log_metrics({f"best_{k}": v for k, v in best_metrics.items()})
         with tempfile.TemporaryDirectory() as _tmp_dir:
             _features_path = str(Path(_tmp_dir) / "features.json")
             with open(_features_path, "w") as f:
                 json.dump({"feature_columns": feature_cols, "count": len(feature_cols)}, f)
             mlflow.log_artifact(_features_path)
-        _log_best_model(best_model, df, feature_cols)
+        if best_model is not None:
+            try:
+                _log_best_model(best_model, df, feature_cols)
+            except Exception as _best_err:
+                print(f"[TRAINING] WARNING: Best model registration failed: {_best_err}")
 
     _results["best_model"] = best_model_name
     _results["best_roc_auc"] = best_auc

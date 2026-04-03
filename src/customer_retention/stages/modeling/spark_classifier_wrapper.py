@@ -90,6 +90,19 @@ class SparkClassifierWrapper:
         spark_df = self._to_spark_df(X, y)
         return self._repartition_for_training(spark_df)
 
+    def evaluate_distributed(self, prepared_df: Any) -> Dict[str, float]:
+        """Compute AUC and PR-AUC using Spark evaluators — data stays on cluster."""
+        from pyspark.ml.evaluation import BinaryClassificationEvaluator
+        predictions = self._fitted_model.transform(prepared_df)
+        return {
+            "roc_auc": BinaryClassificationEvaluator(
+                rawPredictionCol="rawPrediction", labelCol=_LABEL_COL, metricName="areaUnderROC",
+            ).evaluate(predictions),
+            "pr_auc": BinaryClassificationEvaluator(
+                rawPredictionCol="rawPrediction", labelCol=_LABEL_COL, metricName="areaUnderPR",
+            ).evaluate(predictions),
+        }
+
     def predict(self, X: Any) -> np.ndarray:
         assembled = self._assemble_features(X)
         predictions = self._fitted_model.transform(assembled)

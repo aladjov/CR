@@ -418,6 +418,85 @@ class TestPredictIntegration:
         mock_transformed.select.assert_called_once()
 
 
+class TestEvaluateDistributed:
+    def test_uses_spark_evaluators_without_collecting(self):
+        mock_fitted = MagicMock()
+        mock_predictions = MagicMock()
+        mock_fitted.transform.return_value = mock_predictions
+
+        mock_roc_eval = MagicMock()
+        mock_roc_eval.evaluate.return_value = 0.85
+        mock_pr_eval = MagicMock()
+        mock_pr_eval.evaluate.return_value = 0.72
+
+        wrapper = SparkClassifierWrapper(
+            spark_model_class="LogisticRegression",
+            spark_model_params={},
+            feature_names=["f1", "f2"],
+        )
+        wrapper._fitted_model = mock_fitted
+
+        call_count = [0]
+        def make_evaluator(**kwargs):
+            evaluator = mock_roc_eval if call_count[0] == 0 else mock_pr_eval
+            call_count[0] += 1
+            assert kwargs["labelCol"] == _LABEL_COL
+            assert kwargs["rawPredictionCol"] == "rawPrediction"
+            return evaluator
+
+        with patch("pyspark.ml.evaluation.BinaryClassificationEvaluator", side_effect=make_evaluator):
+            result = wrapper.evaluate_distributed(MagicMock(name="prepared_df"))
+
+        assert result == {"roc_auc": 0.85, "pr_auc": 0.72}
+        mock_fitted.transform.assert_called_once()
+        mock_roc_eval.evaluate.assert_called_once_with(mock_predictions)
+        mock_pr_eval.evaluate.assert_called_once_with(mock_predictions)
+
+    def test_unfitted_model_raises_attribute_error(self):
+        wrapper = SparkClassifierWrapper(
+            spark_model_class="LogisticRegression",
+            spark_model_params={},
+            feature_names=["f1", "f2"],
+        )
+        with pytest.raises(AttributeError):
+            wrapper.evaluate_distributed(MagicMock())
+
+    def test_returns_only_roc_auc_and_pr_auc_keys(self):
+        mock_fitted = MagicMock()
+        mock_fitted.transform.return_value = MagicMock()
+
+        wrapper = SparkClassifierWrapper(
+            spark_model_class="LogisticRegression",
+            spark_model_params={},
+            feature_names=["f1"],
+        )
+        wrapper._fitted_model = mock_fitted
+
+        with patch("pyspark.ml.evaluation.BinaryClassificationEvaluator") as mock_eval_cls:
+            mock_eval_cls.return_value.evaluate.return_value = 0.5
+            result = wrapper.evaluate_distributed(MagicMock())
+
+        assert set(result.keys()) == {"roc_auc", "pr_auc"}
+        assert all(isinstance(v, float) for v in result.values())
+
+    def test_transforms_prepared_df_not_raw_data(self):
+        mock_fitted = MagicMock()
+        mock_fitted.transform.return_value = MagicMock()
+        prepared = MagicMock(name="prepared_df")
+
+        wrapper = SparkClassifierWrapper(
+            spark_model_class="LogisticRegression",
+            spark_model_params={},
+            feature_names=["f1"],
+        )
+        wrapper._fitted_model = mock_fitted
+
+        with patch("pyspark.ml.evaluation.BinaryClassificationEvaluator"):
+            wrapper.evaluate_distributed(prepared)
+
+        mock_fitted.transform.assert_called_once_with(prepared)
+
+
 class TestAsPipelineModel:
     def test_unfitted_raises(self):
         wrapper = SparkClassifierWrapper(

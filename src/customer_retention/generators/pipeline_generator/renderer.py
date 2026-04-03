@@ -1394,11 +1394,14 @@ def run_experiment():
                 mlflow.set_tag("feature_source", "feast")
                 with log_timing(f"fit_{name}", logger):
                     model.fit(X_train, y_train)
+                model_artifact_name = get_model_name_with_hash(f"model_{name}")
+                try:
+                    mlflow.sklearn.log_model(model, model_artifact_name)
+                except Exception as _save_err:
+                    print(f"WARNING: Model save failed for {name}: {_save_err}", flush=True)
                 y_proba = model.predict_proba(X_test)[:, 1]
                 y_pred = model.predict(X_test)
                 metrics = compute_metrics(y_test, y_proba, y_pred)
-                model_artifact_name = get_model_name_with_hash(f"model_{name}")
-                mlflow.sklearn.log_model(model, model_artifact_name)
 {% if production_cv_folds %}
                 _cv = CrossValidator(strategy=CVStrategy.STRATIFIED_KFOLD, n_splits={{ production_cv_folds }}, scoring="roc_auc")
                 _cv_result = _cv.run(model, X_train, y_train, on_fold_complete=_on_fold)
@@ -1425,7 +1428,10 @@ def run_experiment():
             y_pred = (y_proba > 0.5).astype(int)
             metrics = compute_metrics(y_test, y_proba, y_pred)
             xgb_model_name = get_model_name_with_hash("model_xgboost")
-            mlflow.xgboost.log_model(xgb_model, xgb_model_name)
+            try:
+                mlflow.xgboost.log_model(xgb_model, xgb_model_name)
+            except Exception as _save_err:
+                print(f"WARNING: XGBoost model save failed: {_save_err}", flush=True)
             mlflow.log_metrics(metrics)
             importance = xgb_model.get_score(importance_type="gain")
             fi = pd.DataFrame({"feature": importance.keys(), "importance": importance.values()})
@@ -1438,8 +1444,9 @@ def run_experiment():
                 best_auc, best_model = metrics["roc_auc"], "xgboost"
 {% endif %}
 
-        mlflow.set_tag("best_model", best_model)
-        mlflow.log_metric("best_roc_auc", best_auc)
+        if best_model is not None:
+            mlflow.set_tag("best_model", best_model)
+            mlflow.log_metric("best_roc_auc", best_auc)
         mlflow.log_dict({"feature_columns": feature_names, "count": len(feature_names)}, "features.json")
         print(f"Best: {best_model} (ROC-AUC={best_auc:.4f})")
 
