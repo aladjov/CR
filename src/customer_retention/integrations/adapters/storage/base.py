@@ -10,7 +10,8 @@ class DeltaStorage(ABC):
     @abstractmethod
     def write(self, df: Any, path: str, mode: str = "overwrite",
               partition_by: Optional[List[str]] = None,
-              metadata: Optional[Dict[str, str]] = None) -> None:
+              metadata: Optional[Dict[str, str]] = None,
+              z_order_columns: Optional[List[str]] = None) -> None:
         pass
 
     @abstractmethod

@@ -42,11 +42,24 @@ class DatabricksDelta(DeltaStorage):
         try:
             spark_df = reader.load(path)
             from customer_retention.core.compat import sanitize_spark_timestamps
-            return self._as_pandas_api(sanitize_spark_timestamps(spark_df))
+            spark_df = sanitize_spark_timestamps(spark_df)
+            spark_df = self._ensure_parallelism(spark_df)
+            return self._as_pandas_api(spark_df)
         except Exception as exc:
             if "DELTA_TABLE_NOT_FOUND" in str(exc):
                 raise FileNotFoundError(f"Delta table not found: {path}") from exc
             raise
+
+    def _ensure_parallelism(self, spark_df: Any) -> Any:
+        """Repartition to match available cores if Delta file count is too low."""
+        try:
+            target = int(self.spark.sparkContext.defaultParallelism)
+            current = int(spark_df.rdd.getNumPartitions())
+            if current < target:
+                return spark_df.repartition(target)
+        except (TypeError, ValueError, AttributeError):
+            pass
+        return spark_df
 
     def _to_spark_df(self, df: pd.DataFrame) -> Any:
         from customer_retention.core.compat import normalize_timestamps, pandas_dtype_to_spark_schema
@@ -66,7 +79,8 @@ class DatabricksDelta(DeltaStorage):
 
     def write(self, df: Any, path: str, mode: str = "overwrite",
               partition_by: Optional[List[str]] = None,
-              metadata: Optional[Dict[str, str]] = None) -> None:
+              metadata: Optional[Dict[str, str]] = None,
+              z_order_columns: Optional[List[str]] = None) -> None:
         path = self._normalize_path(path)
         self.spark.conf.set("spark.sql.parquet.outputTimestampType", "TIMESTAMP_MICROS")
         self.spark.conf.set("spark.sql.execution.arrow.pyspark.fallback.enabled", "true")
@@ -84,12 +98,15 @@ class DatabricksDelta(DeltaStorage):
         spark_df = self._strip_spark_timestamp_tz(spark_df)
         from customer_retention.core.compat import clamp_spark_timestamps
         spark_df = clamp_spark_timestamps(spark_df)
+        spark_df = self._ensure_parallelism(spark_df)
         writer = spark_df.write.format("delta").mode(mode)
         if mode == "overwrite":
             writer = writer.option("overwriteSchema", "true")
         if partition_by:
             writer = writer.partitionBy(*partition_by)
         writer.save(path)
+        if z_order_columns:
+            self.optimize(path, z_order_columns)
 
     def merge(self, df: Any, path: str, condition: str,
               update_cols: Optional[List[str]] = None) -> None:

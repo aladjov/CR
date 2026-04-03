@@ -276,7 +276,7 @@ class TestLocalDeltaDistributedGuard:
         ):
             storage.write(mock_ps_df, str(tmp_path / "out"), mode="overwrite")
             mock_instance.write.assert_called_once_with(
-                mock_ps_df, str(tmp_path / "out"), "overwrite", None, None
+                mock_ps_df, str(tmp_path / "out"), "overwrite", None, None, None
             )
 
     def test_write_pandas_df_does_not_delegate(self, tmp_path):

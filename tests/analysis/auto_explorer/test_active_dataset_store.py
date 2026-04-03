@@ -295,7 +295,8 @@ class TestDistributedSavePath:
 
         mock_as_spark.assert_called_once_with(ps_df)
         mock_delta.write.assert_called_once_with(
-            mock_native, str(namespace.landing_table_dir("customers")), mode="overwrite",
+            mock_native, str(namespace.landing_table_dir("customers")),
+            mode="overwrite", z_order_columns=None,
         )
 
     @patch("customer_retention.analysis.auto_explorer.active_dataset_store.as_spark_df")
@@ -311,7 +312,8 @@ class TestDistributedSavePath:
 
         mock_as_spark.assert_called_once_with(ps_df)
         mock_delta.write.assert_called_once_with(
-            mock_native, str(namespace.bronze_table_dir("events")), mode="overwrite",
+            mock_native, str(namespace.bronze_table_dir("events")),
+            mode="overwrite", z_order_columns=None,
         )
 
     @patch("customer_retention.analysis.auto_explorer.active_dataset_store.as_spark_df")
@@ -323,11 +325,13 @@ class TestDistributedSavePath:
         mock_native = MagicMock()
         mock_as_spark.return_value = mock_native
 
+        ps_df.columns = ["feature_a", "feature_b"]  # no entity_id/as_of_date
         save_gold_features(namespace, "cust_emai__abc1234", ps_df)
 
         mock_as_spark.assert_called_once_with(ps_df)
         mock_delta.write.assert_called_once_with(
-            mock_native, str(namespace.gold_table_dir("cust_emai__abc1234")), mode="overwrite",
+            mock_native, str(namespace.gold_table_dir("cust_emai__abc1234")),
+            mode="overwrite", z_order_columns=None,
         )
 
     @patch("customer_retention.analysis.auto_explorer.active_dataset_store.as_spark_df")
@@ -510,7 +514,7 @@ class TestMergeDatasetsIncremental:
         assert report.columns_per_dataset == {"txns": 2}
         assert report.total_columns == 4  # entity_id, as_of_date, a, b
 
-    def test_compaction_only_no_zorder(self, _setup):
+    def test_optimize_with_zorder_columns(self, _setup):
         namespace, fake_delta, _ = _setup
         spine_sdf = self._spine_sdf()
 
@@ -519,7 +523,7 @@ class TestMergeDatasetsIncremental:
 
         assert len(fake_delta.optimize_calls) == 1
         call = fake_delta.optimize_calls[0]
-        assert call["z_order_columns"] is None
+        assert call["z_order_columns"] == ["entity_id", "as_of_date"]
 
     def test_memory_released_between_steps(self, _setup, monkeypatch):
         namespace, _, _ = _setup

@@ -53,11 +53,12 @@ class LocalDelta(DeltaStorage):
         mode: str = "overwrite",
         partition_by: Optional[List[str]] = None,
         metadata: Optional[Dict[str, str]] = None,
+        z_order_columns: Optional[List[str]] = None,
     ) -> None:
         if hasattr(df, "to_spark"):
             from .databricks import DatabricksDelta
 
-            DatabricksDelta().write(df, path, mode, partition_by, metadata)
+            DatabricksDelta().write(df, path, mode, partition_by, metadata, z_order_columns)
             return
         df = _coerce_null_columns(df)
         dl = _import_deltalake()
@@ -69,6 +70,8 @@ class LocalDelta(DeltaStorage):
         if metadata:
             kwargs["commit_properties"] = dl.CommitProperties(custom_metadata=metadata)
         dl.write_deltalake(path, df, **kwargs)
+        if z_order_columns:
+            self.optimize(path, z_order_columns)
 
     def merge(self, df: pd.DataFrame, path: str, condition: str, update_cols: Optional[List[str]] = None) -> None:
         dl = _import_deltalake()
