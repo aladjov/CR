@@ -34,6 +34,11 @@ from customer_retention.analysis.auto_explorer.skip_logic import (
 
 _DISCOVERY_NOTEBOOK = "01_data_discovery"
 
+_NOTEBOOK_TIMEOUT_MULTIPLIERS = {
+    "08_baseline_experiments": 3,
+    "10_spec_generation": 5,
+}
+
 
 # ---------------------------------------------------------------------------
 # Namespace resolution
@@ -243,12 +248,13 @@ def _execute_one(
         print(f"  [{label}] would run")
         return True
 
+    effective_timeout = int(timeout * _NOTEBOOK_TIMEOUT_MULTIPLIERS.get(stem, 1))
     spark_remote = os.environ.get("CR_SPARK_REMOTE") == "1"
     max_attempts = 2 if spark_remote else 1
 
     for attempt in range(1, max_attempts + 1):
         start = time.time()
-        ok, error = _run_notebook(nb_path, timeout=timeout, kernel=kernel)
+        ok, error = _run_notebook(nb_path, timeout=effective_timeout, kernel=kernel)
         elapsed = time.time() - start
         timings[result_key] = elapsed
 

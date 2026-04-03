@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from customer_retention.core.config.experiments import get_mlflow_dfs_tmpdir
@@ -43,6 +44,12 @@ class MLflowLogger:
         self.end_run()
         return False
 
+    def _artifact_location_from_tracking_uri(self) -> Optional[str]:
+        if not self.tracking_uri or not self.tracking_uri.startswith("sqlite:///"):
+            return None
+        db_path = Path(self.tracking_uri.replace("sqlite:///", ""))
+        return str(db_path.parent / "mlruns" / "artifacts")
+
     def start_run(self, run_name: Optional[str] = None):
         if not MLFLOW_AVAILABLE:
             return
@@ -50,9 +57,10 @@ class MLflowLogger:
         if self.tracking_uri:
             mlflow.set_tracking_uri(self.tracking_uri)
 
-        # set_experiment() both creates-if-needed and sets the global active
-        # experiment so that nested start_run(nested=True) calls inherit it
-        # automatically — see https://github.com/mlflow/mlflow/issues/1109
+        experiment = mlflow.get_experiment_by_name(self.experiment_name)
+        if experiment is None:
+            artifact_loc = self._artifact_location_from_tracking_uri()
+            mlflow.create_experiment(self.experiment_name, artifact_location=artifact_loc)
         mlflow.set_experiment(self.experiment_name)
 
         self._run = mlflow.start_run(

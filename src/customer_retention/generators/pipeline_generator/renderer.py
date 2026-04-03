@@ -1337,12 +1337,12 @@ def run_experiment():
             target_column=TARGET_COLUMN,
             strategy=SplitStrategy.TEMPORAL,
             temporal_column=FEAST_TIMESTAMP_COL,
-            group_column=FEAST_ENTITY_KEY,
+            group_column=ENTITY_KEY,
 {% if config.training and config.training.purge_gap_days %}
             purge_gap_days={{ config.training.purge_gap_days }},
 {% endif %}
             test_size={{ config.training.test_size if config.training else 0.2 }},
-            exclude_columns=[FEAST_TIMESTAMP_COL, FEAST_ENTITY_KEY],
+            exclude_columns=[FEAST_TIMESTAMP_COL, ENTITY_KEY],
         )
         split_df = training_data.loc[X.index].copy()
         split_df[TARGET_COLUMN] = y
@@ -1440,6 +1440,7 @@ def run_experiment():
 
         mlflow.set_tag("best_model", best_model)
         mlflow.log_metric("best_roc_auc", best_auc)
+        mlflow.log_dict({"feature_columns": feature_names, "count": len(feature_names)}, "features.json")
         print(f"Best: {best_model} (ROC-AUC={best_auc:.4f})")
 
     _results["best_model"] = best_model

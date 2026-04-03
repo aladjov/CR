@@ -12,6 +12,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "notebooks"))
 
 from run_exploration import (
+    _NOTEBOOK_TIMEOUT_MULTIPLIERS,
     PER_DATASET_STEMS,
     SETUP_NOTEBOOKS,
     ProgressiveErrorLog,
@@ -472,6 +473,34 @@ class TestExecuteOne:
             set(), {}, True, 600, "python3",
         )
         assert "01_data_discovery:my_ds" in results
+
+    def test_timeout_multiplier_applied(self, tmp_path, monkeypatch):
+        captured = {}
+
+        def fake_run_notebook(nb_path, timeout=600, kernel="python3"):
+            captured["timeout"] = timeout
+            return True, None
+
+        monkeypatch.setattr("run_exploration._run_notebook", fake_run_notebook)
+        nb_path = tmp_path / "08_baseline_experiments.ipynb"
+        nb_path.write_text("{}")
+
+        _execute_one(nb_path, None, {}, {}, set(), {}, False, 600, "python3")
+        assert captured["timeout"] == 600 * _NOTEBOOK_TIMEOUT_MULTIPLIERS["08_baseline_experiments"]
+
+    def test_timeout_multiplier_default_is_1x(self, tmp_path, monkeypatch):
+        captured = {}
+
+        def fake_run_notebook(nb_path, timeout=600, kernel="python3"):
+            captured["timeout"] = timeout
+            return True, None
+
+        monkeypatch.setattr("run_exploration._run_notebook", fake_run_notebook)
+        nb_path = tmp_path / "03_dataset_merge.ipynb"
+        nb_path.write_text("{}")
+
+        _execute_one(nb_path, None, {}, {}, set(), {}, False, 600, "python3")
+        assert captured["timeout"] == 600
 
 
 # ---------------------------------------------------------------------------

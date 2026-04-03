@@ -130,6 +130,7 @@ class TestMLflowLoggerTags:
 class TestMLflowLoggerExperiment:
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
     def test_sets_experiment_on_start(self, mock_mlflow):
+        mock_mlflow.get_experiment_by_name.return_value = MagicMock()
         logger = MLflowLogger(experiment_name="new_experiment")
         logger.start_run()
 
@@ -138,11 +139,28 @@ class TestMLflowLoggerExperiment:
 
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
     def test_sets_tracking_uri_before_experiment(self, mock_mlflow):
+        mock_mlflow.get_experiment_by_name.return_value = MagicMock()
         logger = MLflowLogger(experiment_name="exp", tracking_uri="sqlite:///test.db")
         logger.start_run()
 
         mock_mlflow.set_tracking_uri.assert_called_once_with("sqlite:///test.db")
         mock_mlflow.set_experiment.assert_called_once_with("exp")
+
+    @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
+    def test_creates_experiment_with_artifact_location_for_sqlite(self, mock_mlflow):
+        mock_mlflow.get_experiment_by_name.return_value = None
+        logger = MLflowLogger(experiment_name="exp", tracking_uri="sqlite:////data/experiments/mlruns.db")
+        logger.start_run()
+
+        mock_mlflow.create_experiment.assert_called_once_with("exp", artifact_location="/data/experiments/mlruns/artifacts")
+
+    @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
+    def test_skips_create_when_experiment_exists(self, mock_mlflow):
+        mock_mlflow.get_experiment_by_name.return_value = MagicMock()
+        logger = MLflowLogger(experiment_name="exp", tracking_uri="sqlite:///test.db")
+        logger.start_run()
+
+        mock_mlflow.create_experiment.assert_not_called()
 
 
 class TestMLflowLoggerContextManager:
