@@ -479,6 +479,8 @@ def _spark_chi_squared_selection(
         + [F.col(target_column).cast("double").alias(target_column)]
     )
     work_df = work_df.na.fill(0.0, subset=feature_columns)
+    if n_features > _CHI_BUCKET_BATCH:
+        work_df = work_df.localCheckpoint(eager=True)
 
     quantiles = [i / num_buckets for i in range(1, num_buckets)]
     all_splits: Dict[str, list] = {}
@@ -577,6 +579,8 @@ def _spark_lgbm_importance_selection(
         + [F.col(target_column).cast("double").alias(target_column)]
     )
     work_df = work_df.na.fill(0.0, subset=feature_columns)
+    if n_features > _CHI_BUCKET_BATCH:
+        work_df = work_df.localCheckpoint(eager=True)
 
     assembler = VectorAssembler(inputCols=feature_columns, outputCol="__lgbm_vec__", handleInvalid="keep")
     assembled = assembler.transform(work_df).select("__lgbm_vec__", target_column)
