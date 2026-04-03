@@ -1032,6 +1032,7 @@ details.nb-section > summary { font-size: 15px; padding: 10px 12px; background: 
 details.nb-section > summary:hover { background: #d8dee4; }
 summary { cursor: pointer; font-weight: 600; padding: 8px; background: transparent; border-radius: 6px; }
 summary:hover { background: #f6f8fa; }
+summary > h2 { margin: 0; border: none; padding: 0; }
 .cell-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
 .cell-box { border: 1px solid #d0d7de; border-radius: 6px; padding: 8px; max-height: 400px; overflow-y: auto; font-size: 13px; }
 .cell-box pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
@@ -1101,17 +1102,18 @@ summary:hover { background: #f6f8fa; }
                 f"<td>{oc} ({oo})</td><td>{nc} ({no})</td>"
                 f"<td{cd_cls}>{cd:+d}</td><td{od_cls}>{od:+d}</td></tr>"
             )
-        return (
-            "<h2>Section Map Changes</h2>\n<table>\n"
+        table = (
+            "<table>\n"
             "<tr><th>Notebook</th><th>Old status</th><th>New status</th><th>Old cells (outputs)</th><th>New cells (outputs)</th>"
             "<th>Cell delta</th><th>Output delta</th></tr>\n" + "\n".join(rows) + "\n</table>"
         )
+        return f"<details>\n<summary><h2 style=\"display:inline\">Section Map Changes</h2></summary>\n{table}\n</details>"
 
     def render_model_metrics(self) -> str:
         data = self.metric_comparison_data()
         if not data:
-            return "<h2>Model Metrics (NB08)</h2>\n<p><em>No metric tables found in either run.</em></p>"
-        parts = ["<h2>Model Metrics (NB08)</h2>"]
+            return "<details>\n<summary><h2 style=\"display:inline\">Model Metrics (NB08)</h2></summary>\n<p><em>No metric tables found in either run.</em></p>\n</details>"
+        parts: list[str] = []
         for entry in data:
             if entry["merged_df"] is not None:
                 parts.append(f'<div class="embed-table">{entry["merged_df"].to_html(index=False)}</div>')
@@ -1123,24 +1125,26 @@ summary:hover { background: #f6f8fa; }
             elif entry["new_df"] is not None:
                 parts.append(f"<p><strong>New only ({self._esc(str(entry['new_name']))}):</strong></p>")
                 parts.append(f'<div class="embed-table">{entry["new_df"].to_html(index=False)}</div>')
-        return "\n".join(parts)
+        content = "\n".join(parts)
+        return f"<details>\n<summary><h2 style=\"display:inline\">Model Metrics (NB08)</h2></summary>\n{content}\n</details>"
 
     def _render_yaml_table(
         self, title: str, old_d: Optional[dict], new_d: Optional[dict], keys: list[str], extra: str = ""
     ) -> str:
+        esc_title = self._esc(title)
         if old_d is None and new_d is None:
-            return f"<h2>{self._esc(title)}</h2>\n<p><em>Not available.</em></p>"
+            return f"<details>\n<summary><h2 style=\"display:inline\">{esc_title}</h2></summary>\n<p><em>Not available.</em></p>\n</details>"
         rows = []
         for key, ov, nv, changed in self.yaml_diff_rows(old_d, new_d, keys):
             cls = ' class="status-modified"' if changed else ""
             rows.append(f"<tr{cls}><td>{self._esc(key)}</td><td>{self._esc(ov)}</td><td>{self._esc(nv)}</td></tr>")
-        table = (
-            f"<h2>{self._esc(title)}</h2>\n<table>\n"
+        content = (
+            "<table>\n"
             "<tr><th>Parameter</th><th>Old</th><th>New</th></tr>\n" + "\n".join(rows) + "\n</table>"
         )
         if extra:
-            table += f"\n<p>{self._esc(extra)}</p>"
-        return table
+            content += f"\n<p>{self._esc(extra)}</p>"
+        return f"<details>\n<summary><h2 style=\"display:inline\">{esc_title}</h2></summary>\n{content}\n</details>"
 
     def render_snapshot_grid(self) -> str:
         return self._render_yaml_table(
@@ -1162,9 +1166,8 @@ summary:hover { background: #f6f8fa; }
     def render_feature_profile(self) -> str:
         added, removed, common = self.feature_profile_sets()
         if not added and not removed and not common:
-            return "<h2>Feature Profile</h2>\n<p><em>Not found in either run.</em></p>"
+            return "<details>\n<summary><h2 style=\"display:inline\">Feature Profile</h2></summary>\n<p><em>Not found in either run.</em></p>\n</details>"
         parts = [
-            "<h2>Feature Profile</h2>",
             f"<p>Old: {len(removed) + len(common)} features | New: {len(added) + len(common)} features | "
             f"Added: {len(added)} | Removed: {len(removed)} | Common: {len(common)}</p>",
         ]
@@ -1176,12 +1179,13 @@ summary:hover { background: #f6f8fa; }
             parts.append(
                 f'<p><span class="badge badge-removed">Removed</span> {self._esc(", ".join(sorted(removed)[:20]))}</p>'
             )
-        return "\n".join(parts)
+        content = "\n".join(parts)
+        return f"<details>\n<summary><h2 style=\"display:inline\">Feature Profile</h2></summary>\n{content}\n</details>"
 
     def render_timing(self) -> str:
         ot, nt = self.drift.old_timings, self.drift.new_timings
         if not ot and not nt:
-            return "<h2>Per-Notebook Timing</h2>\n<p><em>No timing logs found.</em></p>"
+            return "<details>\n<summary><h2 style=\"display:inline\">Per-Notebook Timing</h2></summary>\n<p><em>No timing logs found.</em></p>\n</details>"
         rows = []
         for nb in dict.fromkeys(list(ot) + list(nt)):
             ov, nv = ot.get(nb, "N/A"), nt.get(nb, "N/A")
@@ -1195,13 +1199,13 @@ summary:hover { background: #f6f8fa; }
             + "\n".join(rows)
             + "\n</table>"
         )
-        return f"<h2>Per-Notebook Timing</h2>\n<details><summary>Show timing table</summary>\n{table}\n</details>"
+        return f"<details>\n<summary><h2 style=\"display:inline\">Per-Notebook Timing</h2></summary>\n{table}\n</details>"
 
     def render_cell_profiling(self) -> str:
         op, np_ = self.drift.old_cell_profiles, self.drift.new_cell_profiles
         if op is None and np_ is None:
-            return "<h2>Per-Cell Profiling</h2>\n<p><em>No cell profiles found.</em></p>"
-        parts = ["<h2>Per-Cell Profiling</h2>"]
+            return "<details>\n<summary><h2 style=\"display:inline\">Per-Cell Profiling</h2></summary>\n<p><em>No cell profiles found.</em></p>\n</details>"
+        parts: list[str] = []
         has_spark = False
         has_mem = False
         for profiles in [op, np_]:
@@ -1282,7 +1286,8 @@ summary:hover { background: #f6f8fa; }
                 rows.append(f"<tr>{row_cells}</tr>")
             table = f"<table>\n<tr>{header_row}</tr>\n" + "\n".join(rows) + "\n</table>"
             parts.append(f"<details><summary>{summary_text}</summary>\n{table}\n</details>")
-        return "\n".join(parts)
+        content = "\n".join(parts)
+        return f"<details>\n<summary><h2 style=\"display:inline\">Per-Cell Profiling</h2></summary>\n{content}\n</details>"
 
     def _render_diff_block(self, diff_text: str) -> str:
         lines = []
