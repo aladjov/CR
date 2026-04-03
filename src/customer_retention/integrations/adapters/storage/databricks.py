@@ -50,12 +50,23 @@ class DatabricksDelta(DeltaStorage):
                 raise FileNotFoundError(f"Delta table not found: {path}") from exc
             raise
 
-    def _ensure_parallelism(self, spark_df: Any) -> Any:
-        """Repartition to match available cores if Delta file count is too low."""
+    def _ensure_parallelism(self, spark_df: Any, force: bool = False) -> Any:
+        """Repartition to match available cores if partition count is too low.
+
+        Uses ``inputFiles()`` (Spark SQL metadata, no .rdd) to estimate
+        partition count on read.  When *force* is True (write path) the
+        repartition is unconditional since the shuffle is amortised into
+        the write job.
+        """
         try:
             target = int(self.spark.sparkContext.defaultParallelism)
-            current = int(spark_df.rdd.getNumPartitions())
-            if current < target:
+            if target <= 1:
+                return spark_df
+            if force:
+                return spark_df.repartition(target)
+            # inputFiles() is plan-level metadata — no Spark job, no .rdd
+            input_files = spark_df.inputFiles()
+            if isinstance(input_files, (list, tuple)) and len(input_files) < target:
                 return spark_df.repartition(target)
         except (TypeError, ValueError, AttributeError):
             pass
@@ -98,7 +109,7 @@ class DatabricksDelta(DeltaStorage):
         spark_df = self._strip_spark_timestamp_tz(spark_df)
         from customer_retention.core.compat import clamp_spark_timestamps
         spark_df = clamp_spark_timestamps(spark_df)
-        spark_df = self._ensure_parallelism(spark_df)
+        spark_df = self._ensure_parallelism(spark_df, force=True)
         writer = spark_df.write.format("delta").mode(mode)
         if mode == "overwrite":
             writer = writer.option("overwriteSchema", "true")
