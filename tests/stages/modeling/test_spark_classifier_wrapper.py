@@ -275,6 +275,53 @@ class TestCreateSparkModel:
         call_kwargs = mock_cls.call_args[1]
         assert call_kwargs["weightCol"] == _WEIGHT_COL
 
+    _WRAPPER_MOD = "customer_retention.stages.modeling.spark_classifier_wrapper"
+
+    @patch(f"{_WRAPPER_MOD}.get_default_parallelism", return_value=16)
+    @patch(f"{_WRAPPER_MOD}._import_class")
+    def test_aggregation_depth_added_when_model_supports_it(self, mock_import, _mock_par):
+        mock_cls = MagicMock()
+        mock_cls.aggregationDepth = True
+        mock_import.return_value = mock_cls
+        wrapper = SparkClassifierWrapper(
+            spark_model_class="LogisticRegression",
+            spark_model_params={"maxIter": 10},
+            feature_names=["f1"],
+        )
+        wrapper._create_spark_model()
+        call_kwargs = mock_cls.call_args[1]
+        assert "aggregationDepth" in call_kwargs
+        assert call_kwargs["aggregationDepth"] >= 2
+
+    @patch(f"{_WRAPPER_MOD}.get_default_parallelism", return_value=16)
+    @patch(f"{_WRAPPER_MOD}._import_class")
+    def test_aggregation_depth_skipped_when_model_lacks_param(self, mock_import, _mock_par):
+        mock_cls = MagicMock(spec=[])
+        mock_import.return_value = mock_cls
+        wrapper = SparkClassifierWrapper(
+            spark_model_class="RandomForestClassifier",
+            spark_model_params={"numTrees": 100},
+            feature_names=["f1"],
+        )
+        wrapper._create_spark_model()
+        call_kwargs = mock_cls.call_args[1]
+        assert "aggregationDepth" not in call_kwargs
+
+    @patch(f"{_WRAPPER_MOD}.get_default_parallelism", return_value=16)
+    @patch(f"{_WRAPPER_MOD}._import_class")
+    def test_explicit_aggregation_depth_not_overridden(self, mock_import, _mock_par):
+        mock_cls = MagicMock()
+        mock_cls.aggregationDepth = True
+        mock_import.return_value = mock_cls
+        wrapper = SparkClassifierWrapper(
+            spark_model_class="LogisticRegression",
+            spark_model_params={"maxIter": 10, "aggregationDepth": 5},
+            feature_names=["f1"],
+        )
+        wrapper._create_spark_model()
+        call_kwargs = mock_cls.call_args[1]
+        assert call_kwargs["aggregationDepth"] == 5
+
 
 _MOD = "customer_retention.stages.modeling.spark_classifier_wrapper"
 

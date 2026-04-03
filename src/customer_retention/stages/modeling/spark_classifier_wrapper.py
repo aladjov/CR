@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from customer_retention.core.compat import _is_spark_pandas, as_spark_df, enable_arrow_optimization, native_pd
+from customer_retention.core.compat.detection import get_default_parallelism
 
 _MODEL_REGISTRY: Dict[str, str] = {
     "LogisticRegression": "pyspark.ml.classification.LogisticRegression",
@@ -178,7 +179,6 @@ class SparkClassifierWrapper:
         instead of sitting idle.  The extra scheduler overhead is
         negligible vs thousands of L-BFGS iterations.
         """
-        from customer_retention.core.compat.detection import get_default_parallelism
         target = get_default_parallelism() * 2
         if target > 2:
             spark_df = spark_df.repartition(target)
@@ -239,11 +239,7 @@ class SparkClassifierWrapper:
         if self.class_weight == "balanced" and self.spark_model_class != "GBTClassifier":
             params["weightCol"] = _WEIGHT_COL
 
-        # Scale treeAggregate depth to actual partition count (2x cores)
-        # so reduce stages fan out across the cluster instead of
-        # serialising on the driver.
-        if "aggregationDepth" not in params:
-            from customer_retention.core.compat.detection import get_default_parallelism
+        if "aggregationDepth" not in params and hasattr(model_cls, "aggregationDepth"):
             n_partitions = get_default_parallelism() * 2
             if n_partitions > 2:
                 import math
