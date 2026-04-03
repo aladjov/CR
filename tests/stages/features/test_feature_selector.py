@@ -249,6 +249,31 @@ class TestBatchedCorrelationSelection:
         selector.fit_transform(df)
         assert len(calls) >= 1
 
+    def test_correlation_candidates_passed_as_cross_columns(self, monkeypatch):
+        np.random.seed(42)
+        base = np.random.randn(100)
+        df = pd.DataFrame({
+            "base1": base,
+            "base2": np.random.randn(100),
+            "new1": base + np.random.randn(100) * 0.001,
+            "target": np.random.choice([0, 1], 100),
+        })
+
+        import customer_retention.stages.features.feature_selector as fs_mod
+        original_batched = fs_mod.batched_corr_matrix
+        captured_cross = []
+
+        def tracking_batched(*args, **kwargs):
+            captured_cross.append(kwargs.get("cross_columns"))
+            return original_batched(*args, **kwargs)
+
+        monkeypatch.setattr(fs_mod, "batched_corr_matrix", tracking_batched)
+        FeatureSelector(
+            method=SelectionMethod.CORRELATION, correlation_threshold=0.95,
+            target_column="target", correlation_candidates=["new1"],
+        ).fit_transform(df)
+        assert captured_cross == [["new1"]]
+
     def test_correlation_selection_drops_same_features(self):
         np.random.seed(42)
         base = np.random.randn(100)
@@ -888,3 +913,119 @@ class TestTemporalThinning:
             kept = [dates[i] for i in range(n_dates - 1, -1, -stride)]
             assert dates[-1] in kept, f"Last date missing for n_dates={n_dates}"
             assert len(kept) >= 4 or n_dates <= 4
+
+
+class TestCandidateFeatures:
+    @pytest.fixture
+    def df_base_and_new(self):
+        np.random.seed(42)
+        n = 300
+        target = np.random.choice([0, 1], n)
+        base_signal = target * 3.0 + np.random.randn(n) * 0.1
+        base_other = np.random.randn(n) * 5
+        new_low_var = [1.0] * n
+        new_correlated = base_signal + np.random.randn(n) * 0.001
+        new_noise = np.random.randn(n)
+        return pd.DataFrame({
+            "base_signal": base_signal,
+            "base_other": base_other,
+            "new_low_var": new_low_var,
+            "new_correlated": new_correlated,
+            "new_noise": new_noise,
+            "target": target,
+        })
+
+    def test_only_candidates_dropped_by_variance(self, df_base_and_new):
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        result = run_selection_pipeline(
+            df_base_and_new, target_column="target",
+            variance_threshold=0.01, correlation_threshold=1.0,
+            l1_enabled=False,
+            candidate_features=["new_low_var", "new_correlated", "new_noise"],
+        )
+        assert "new_low_var" in result.dropped_features
+        assert "base_signal" in result.selected_features
+        assert "base_other" in result.selected_features
+
+    def test_only_candidates_dropped_by_correlation(self, df_base_and_new):
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        result = run_selection_pipeline(
+            df_base_and_new, target_column="target",
+            variance_threshold=0.0, correlation_threshold=0.95,
+            l1_enabled=False,
+            candidate_features=["new_low_var", "new_correlated", "new_noise"],
+        )
+        assert "new_correlated" in result.dropped_features
+        assert "base_signal" in result.selected_features
+        assert "base_other" in result.selected_features
+
+    def test_empty_candidates_skips_filters(self, df_base_and_new):
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        result = run_selection_pipeline(
+            df_base_and_new, target_column="target",
+            variance_threshold=0.01, correlation_threshold=0.95,
+            l1_enabled=False, candidate_features=[],
+        )
+        assert len(result.dropped_features) == 0
+        assert set(result.selected_features) == {"base_signal", "base_other", "new_low_var", "new_correlated", "new_noise"}
+
+    def test_empty_candidates_with_l1_still_runs_l1(self, df_base_and_new):
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        result = run_selection_pipeline(
+            df_base_and_new, target_column="target",
+            variance_threshold=0.01, correlation_threshold=0.95,
+            l1_enabled=True, candidate_features=[],
+        )
+        assert result.method_used == SelectionMethod.L1_SELECTION
+        assert "base_signal" in result.selected_features
+
+    def test_l1_evaluates_all_features_not_just_candidates(self, df_base_and_new):
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        result = run_selection_pipeline(
+            df_base_and_new, target_column="target",
+            variance_threshold=0.0, correlation_threshold=1.0,
+            l1_enabled=True,
+            candidate_features=["new_low_var", "new_correlated", "new_noise"],
+        )
+        all_evaluated = set(result.selected_features) | set(result.dropped_features)
+        assert "base_signal" in all_evaluated
+        assert "base_other" in all_evaluated
+
+    def test_none_candidates_runs_full_pipeline(self, df_base_and_new):
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        result = run_selection_pipeline(
+            df_base_and_new, target_column="target",
+            variance_threshold=0.01, correlation_threshold=0.95,
+            l1_enabled=False, candidate_features=None,
+        )
+        assert "new_low_var" in result.dropped_features
+
+    def test_candidate_log_message(self, df_base_and_new, capsys):
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        run_selection_pipeline(
+            df_base_and_new, target_column="target",
+            variance_threshold=0.01, correlation_threshold=0.95,
+            l1_enabled=False,
+            candidate_features=["new_low_var", "new_correlated", "new_noise"],
+        )
+        output = capsys.readouterr().out
+        assert "3 candidate features" in output
+        assert "2 base protected" in output
+
+    def test_base_features_survive_even_if_low_variance(self):
+        from customer_retention.stages.features.feature_selector import run_selection_pipeline
+        np.random.seed(42)
+        n = 200
+        target = np.random.choice([0, 1], n)
+        df = pd.DataFrame({
+            "base_constant": [1.0] * n,
+            "new_normal": np.random.randn(n),
+            "target": target,
+        })
+        result = run_selection_pipeline(
+            df, target_column="target",
+            variance_threshold=0.01, correlation_threshold=1.0,
+            l1_enabled=False,
+            candidate_features=["new_normal"],
+        )
+        assert "base_constant" in result.selected_features

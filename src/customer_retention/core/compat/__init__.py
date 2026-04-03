@@ -887,6 +887,7 @@ def batched_corr_matrix(
     progress_fn: Any = None,
     precomputed_medians: dict[str, float] | None = None,
     precomputed_non_null: dict[str, int] | None = None,
+    cross_columns: list[str] | None = None,
 ) -> _pandas.DataFrame:
     import numpy as _np
 
@@ -901,8 +902,8 @@ def batched_corr_matrix(
         full.loc[corr.index, corr.columns] = corr
         return full
     if len(num_cols) > _ML_CORR_THRESHOLD:
-        return _spark_corr_matrix_ml(df, valid_cols, numeric, progress_fn, precomputed_medians, precomputed_non_null)
-    return _spark_pairwise_corr(df, valid_cols, numeric)
+        return _spark_corr_matrix_ml(df, valid_cols, numeric, progress_fn, precomputed_medians, precomputed_non_null, cross_columns)
+    return _spark_pairwise_corr(df, valid_cols, numeric, cross_columns)
 
 
 def _spark_corr_matrix_ml(
@@ -912,6 +913,7 @@ def _spark_corr_matrix_ml(
     progress_fn: Any = None,
     precomputed_medians: dict[str, float] | None = None,
     precomputed_non_null: dict[str, int] | None = None,
+    cross_columns: list[str] | None = None,
 ) -> _pandas.DataFrame:
     import time as _time
 
@@ -995,7 +997,12 @@ def _spark_corr_matrix_ml(
     else:
         imputed_df.cache()
         cached_rows = imputed_df.count()
-        block_pairs = [(i, j) for i in range(n_blocks) for j in range(i, n_blocks)]
+        if cross_columns is not None:
+            safe_cross = {safe[c] for c in cross_columns if c in safe}
+            cross_block_idx = {bi for bi, block in enumerate(blocks) if safe_cross.intersection(block)}
+            block_pairs = [(i, j) for i in range(n_blocks) for j in range(i, n_blocks) if i in cross_block_idx or j in cross_block_idx]
+        else:
+            block_pairs = [(i, j) for i in range(n_blocks) for j in range(i, n_blocks)]
         total_pairs = len(block_pairs)
         log(f"    Correlation: {n_valid} features, {n_blocks} blocks, {total_pairs} pairs ({cached_rows:,} rows)")
         pos = {c: i for i, c in enumerate(valid_safe)}
@@ -1035,7 +1042,7 @@ def _safe_corr_expr(col_a: Any, col_b: Any) -> Any:
     return F.covar_samp(col_a, col_b) / F.when(denom > 0, denom)
 
 
-def _spark_pairwise_corr(df: Any, cols: list[str], numeric: set[str]) -> _pandas.DataFrame:
+def _spark_pairwise_corr(df: Any, cols: list[str], numeric: set[str], cross_columns: list[str] | None = None) -> _pandas.DataFrame:
     import numpy as _np
     import pyspark.sql.functions as F  # noqa: N812
 
@@ -1054,7 +1061,11 @@ def _spark_pairwise_corr(df: Any, cols: list[str], numeric: set[str]) -> _pandas
                 has_variance.add(i)
                 matrix[i, i] = 1.0
 
-    pairs = [(i, j) for i in has_variance for j in has_variance if i < j]
+    if cross_columns is not None:
+        cross_idx = {i for i, c in enumerate(cols) if c in set(cross_columns)}
+        pairs = [(i, j) for i in has_variance for j in has_variance if i < j and (i in cross_idx or j in cross_idx)]
+    else:
+        pairs = [(i, j) for i in has_variance for j in has_variance if i < j]
     _BATCH = 500
     for start in range(0, len(pairs), _BATCH):
         batch = pairs[start : start + _BATCH]

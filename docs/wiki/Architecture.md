@@ -171,14 +171,18 @@ Feature selection is split across two notebooks because each step requires diffe
 | **Variance** | Near-constant features that carry no signal | Configurable (`VARIANCE_THRESHOLD`, default 0.01) |
 | **Pairwise correlation** | Redundant pairs where the weaker predictor is dropped | Configurable (`CORRELATION_THRESHOLD`, default 0.95) |
 
-Results are persisted as `drop_multicollinear` and `drop_weak` recommendations in `merged/recommendations.yaml`.
+Results are persisted as `drop_multicollinear` and `drop_weak` recommendations in `merged/recommendations.yaml`. NB05 also persists a `feature_selection_config` containing the thresholds used and the list of features analyzed, so NB08 can identify which features are new.
 
-**Step 2 -- L1-Regularised Selection (NB08):** Runs *after* the temporal train/test split, on training data only. Fits a logistic regression with L1 penalty -- features whose coefficients shrink to zero under regularisation have no marginal predictive value after accounting for inter-feature correlations. This catches features that passed the NB05 filters individually but add nothing in the presence of other features.
+**Step 2 -- L1-Regularised Selection (NB08):** Runs *after* the temporal train/test split, on training data only. Three sub-stages:
+
+1. **NB05 drops applied** — features flagged as `drop_multicollinear` or `drop_weak` are removed immediately.
+2. **Statistical filters on new features only** — features added after NB05 (interactions, ratios, composites, gold transforms) are identified via `feature_selection_config.analyzed_features`. Variance and correlation filters run on these new features only, using NB05's original thresholds. Base features that already passed NB05 are protected via `candidate_features` — they cannot be dropped by variance or correlation, but new features that correlate with them will be dropped. This avoids recomputing the full correlation matrix for features already vetted by NB05.
+3. **L1 selection** — fits a logistic regression with L1 penalty on *all* remaining features (base + new). Features whose coefficients shrink to zero have no marginal predictive value and are dropped.
 
 The two steps are deliberately separated:
 
 - NB05 filters are **data-intrinsic** (variance, redundancy) and do not require a target split. They run early so that downstream analysis (NB06-07) and gold-layer transforms operate on a cleaner feature set.
-- NB08 L1 selection is **model-aware** and must run after the temporal split to avoid target leakage from the test set into the selection process.
+- NB08 L1 selection is **model-aware** and must run after the temporal split to avoid target leakage from the test set into the selection process. The intermediate variance/correlation pass catches new features that NB05 never saw.
 
 Both steps write their results to `merged/recommendations.yaml`. NB08 gates NB05 drops behind `APPLY_NB05_DROPS` and its own L1 pass behind `L1_FEATURE_SELECTION_ENABLED`, so either step can be toggled independently.
 

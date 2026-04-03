@@ -57,7 +57,7 @@ class AvailabilityRecommendation:
 
 
 class FeatureSelector:
-    def __init__(self, method: SelectionMethod = SelectionMethod.VARIANCE, variance_threshold: float = 0.01, correlation_threshold: float = 0.95, target_column: Optional[str] = None, preserve_features: Optional[List[str]] = None, max_features: Optional[int] = None, apply_correlation_filter: bool = False, precomputed_corr_matrix: Optional[Any] = None, l1_C: float = 1.0, l1_ratio: float = 1.0, progress_fn: Optional[Callable[[str], None]] = None, precomputed_variances: Optional[Any] = None, precomputed_medians: Optional[Dict[str, float]] = None, precomputed_non_null: Optional[Dict[str, int]] = None):
+    def __init__(self, method: SelectionMethod = SelectionMethod.VARIANCE, variance_threshold: float = 0.01, correlation_threshold: float = 0.95, target_column: Optional[str] = None, preserve_features: Optional[List[str]] = None, max_features: Optional[int] = None, apply_correlation_filter: bool = False, precomputed_corr_matrix: Optional[Any] = None, l1_C: float = 1.0, l1_ratio: float = 1.0, progress_fn: Optional[Callable[[str], None]] = None, precomputed_variances: Optional[Any] = None, precomputed_medians: Optional[Dict[str, float]] = None, precomputed_non_null: Optional[Dict[str, int]] = None, correlation_candidates: Optional[List[str]] = None):
         self.method = method
         self.variance_threshold = variance_threshold
         self.correlation_threshold = correlation_threshold
@@ -71,6 +71,7 @@ class FeatureSelector:
         self._progress_fn = progress_fn
         self._precomputed_medians = precomputed_medians
         self._precomputed_non_null = precomputed_non_null
+        self._correlation_candidates = correlation_candidates
 
         self.selected_features: List[str] = []
         self.dropped_features: List[str] = []
@@ -171,6 +172,7 @@ class FeatureSelector:
                 df, numeric_features, progress_fn=self._progress_fn,
                 precomputed_medians=self._precomputed_medians,
                 precomputed_non_null=self._precomputed_non_null,
+                cross_columns=self._correlation_candidates,
             ).abs()
         upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
         variances = self._get_variances(df, numeric_features, numeric_set)
@@ -453,6 +455,7 @@ def run_selection_pipeline(
     precomputed_non_null: Optional[Dict[str, int]] = None,
     temporal_column: Optional[str] = None,
     l1_sample_rows: int = _L1_SAMPLE_ROWS,
+    candidate_features: Optional[List[str]] = None,
 ) -> FeatureSelectionResult:
     log = progress_fn or (lambda msg: print(msg))
     all_dropped: List[str] = []
@@ -462,47 +465,70 @@ def run_selection_pipeline(
     pipeline_start = time.monotonic()
     n_features_initial = len([c for c in df.columns if c != target_column])
 
-    stages = ["variance", "correlation"]
+    if candidate_features is not None:
+        _candidate_set = set(candidate_features)
+        _non_target = [c for c in df.columns if c != target_column]
+        _base_features = [f for f in _non_target if f not in _candidate_set]
+        filter_preserve = list(set((preserve_features or []) + _base_features))
+        _skip_filters = len(candidate_features) == 0
+    else:
+        filter_preserve = preserve_features
+        _skip_filters = False
+
+    stages: List[str] = []
+    if not _skip_filters:
+        stages += ["variance", "correlation"]
     if l1_enabled:
         stages.append("L1")
     total_stages = len(stages)
 
-    log(f"Feature selection pipeline: {n_features_initial} features, {total_stages} stages")
+    if candidate_features is not None and not _skip_filters:
+        log(f"Feature selection pipeline: {len(candidate_features)} candidate features "
+            f"({len(_base_features)} base protected), {total_stages} stages")
+    else:
+        log(f"Feature selection pipeline: {n_features_initial} features, {total_stages} stages")
 
-    t0 = time.monotonic()
-    log(f"  [1/{total_stages}] Variance filter (threshold={variance_threshold})...")
-    var_selector = FeatureSelector(
-        method=SelectionMethod.VARIANCE, variance_threshold=variance_threshold,
-        target_column=target_column, preserve_features=preserve_features,
-        precomputed_variances=precomputed_variances,
-    )
-    result_var = var_selector.fit_transform(current_df)
-    # Share cached variances with subsequent stages to avoid recomputation
-    shared_variances = var_selector._cached_variances
-    current_df = result_var.df
-    all_dropped.extend(result_var.dropped_features)
-    all_reasons.update(result_var.drop_reasons)
-    elapsed = time.monotonic() - t0
-    remaining = len(result_var.selected_features)
-    log(f"    {_format_elapsed(elapsed)} — dropped {len(result_var.dropped_features)}, remaining {remaining}")
+    shared_variances = precomputed_variances
+    result_var = None
+    result_corr = None
 
-    t0 = time.monotonic()
-    log(f"  [2/{total_stages}] Correlation filter (threshold={correlation_threshold}, {remaining} features)...")
-    last_method = SelectionMethod.CORRELATION
-    result_corr = FeatureSelector(
-        method=SelectionMethod.CORRELATION, correlation_threshold=correlation_threshold,
-        target_column=target_column, preserve_features=preserve_features,
-        precomputed_corr_matrix=precomputed_corr_matrix, progress_fn=log,
-        precomputed_variances=shared_variances,
-        precomputed_medians=precomputed_medians,
-        precomputed_non_null=precomputed_non_null,
-    ).fit_transform(current_df)
-    current_df = result_corr.df
-    all_dropped.extend(result_corr.dropped_features)
-    all_reasons.update(result_corr.drop_reasons)
-    elapsed = time.monotonic() - t0
-    remaining = len(result_corr.selected_features)
-    log(f"    {_format_elapsed(elapsed)} — dropped {len(result_corr.dropped_features)}, remaining {remaining}")
+    if not _skip_filters:
+        t0 = time.monotonic()
+        log(f"  [1/{total_stages}] Variance filter (threshold={variance_threshold})...")
+        var_selector = FeatureSelector(
+            method=SelectionMethod.VARIANCE, variance_threshold=variance_threshold,
+            target_column=target_column, preserve_features=filter_preserve,
+            precomputed_variances=precomputed_variances,
+        )
+        result_var = var_selector.fit_transform(current_df)
+        shared_variances = var_selector._cached_variances
+        current_df = result_var.df
+        all_dropped.extend(result_var.dropped_features)
+        all_reasons.update(result_var.drop_reasons)
+        elapsed = time.monotonic() - t0
+        remaining = len(result_var.selected_features)
+        log(f"    {_format_elapsed(elapsed)} — dropped {len(result_var.dropped_features)}, remaining {remaining}")
+
+        t0 = time.monotonic()
+        log(f"  [2/{total_stages}] Correlation filter (threshold={correlation_threshold}, {remaining} features)...")
+        result_corr = FeatureSelector(
+            method=SelectionMethod.CORRELATION, correlation_threshold=correlation_threshold,
+            target_column=target_column, preserve_features=filter_preserve,
+            precomputed_corr_matrix=precomputed_corr_matrix, progress_fn=log,
+            precomputed_variances=shared_variances,
+            precomputed_medians=precomputed_medians,
+            precomputed_non_null=precomputed_non_null,
+            correlation_candidates=candidate_features,
+        ).fit_transform(current_df)
+        current_df = result_corr.df
+        all_dropped.extend(result_corr.dropped_features)
+        all_reasons.update(result_corr.drop_reasons)
+        elapsed = time.monotonic() - t0
+        remaining = len(result_corr.selected_features)
+        log(f"    {_format_elapsed(elapsed)} — dropped {len(result_corr.dropped_features)}, remaining {remaining}")
+
+    last_method = SelectionMethod.CORRELATION if not _skip_filters else SelectionMethod.L1_SELECTION
+    remaining = len([c for c in current_df.columns if c != target_column])
 
     if l1_enabled:
         import gc
@@ -516,7 +542,7 @@ def run_selection_pipeline(
             current_df = current_df.drop(columns=[temporal_column])
 
         t0 = time.monotonic()
-        log(f"  [3/{total_stages}] L1 selection ({remaining} features, max_features={max_features})...")
+        log(f"  [{total_stages}/{total_stages}] L1 selection ({remaining} features, max_features={max_features})...")
         last_method = SelectionMethod.L1_SELECTION
         result_l1 = FeatureSelector(
             method=SelectionMethod.L1_SELECTION, target_column=target_column,

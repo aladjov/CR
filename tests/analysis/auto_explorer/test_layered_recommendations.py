@@ -1550,3 +1550,74 @@ class TestRecommendationRegistryMerge:
         result = RecommendationRegistry.merge([reg1, reg2])
         assert result.fit_artifacts["rec_2"] == "artifact_b"
         assert result.fit_artifacts["rec_1"] == "artifact_a_override"
+
+
+class TestFeatureSelectionConfig:
+    def test_set_config_stores_thresholds_and_features(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("target")
+        reg.set_feature_selection_config(0.01, 0.95, ["feat_a", "feat_b", "feat_c"])
+        cfg = reg.gold.feature_selection_config
+        assert cfg.variance_threshold == 0.01
+        assert cfg.correlation_threshold == 0.95
+        assert cfg.analyzed_features == ["feat_a", "feat_b", "feat_c"]
+
+    def test_config_features_sorted(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("target")
+        reg.set_feature_selection_config(0.01, 0.95, ["z_col", "a_col", "m_col"])
+        assert reg.gold.feature_selection_config.analyzed_features == ["a_col", "m_col", "z_col"]
+
+    def test_config_none_by_default(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("target")
+        assert reg.gold.feature_selection_config is None
+
+    def test_config_noop_without_gold(self):
+        reg = RecommendationRegistry()
+        reg.set_feature_selection_config(0.01, 0.95, ["a"])
+        assert reg.gold is None
+
+    def test_config_roundtrips_through_save_load(self, tmp_path):
+        reg = RecommendationRegistry()
+        reg.init_gold("target")
+        reg.set_feature_selection_config(0.01, 0.95, ["feat_a", "feat_b"])
+        path = tmp_path / "recs.yaml"
+        reg.save(path)
+        loaded = RecommendationRegistry.load(path)
+        cfg = loaded.gold.feature_selection_config
+        assert cfg.variance_threshold == 0.01
+        assert cfg.correlation_threshold == 0.95
+        assert cfg.analyzed_features == ["feat_a", "feat_b"]
+
+    def test_config_not_in_hash(self):
+        reg1 = RecommendationRegistry()
+        reg1.init_gold("target")
+        reg2 = RecommendationRegistry()
+        reg2.init_gold("target")
+        reg2.set_feature_selection_config(0.01, 0.95, ["a", "b", "c"])
+        assert reg1.compute_recommendations_hash() == reg2.compute_recommendations_hash()
+
+    def test_config_preserved_through_merge(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("target")
+        reg.set_feature_selection_config(0.01, 0.95, ["a", "b"])
+        merged = RecommendationRegistry.merge([reg])
+        assert merged.gold.feature_selection_config.variance_threshold == 0.01
+
+    def test_config_is_typed_dataclass(self):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import FeatureSelectionConfig
+        reg = RecommendationRegistry()
+        reg.init_gold("target")
+        reg.set_feature_selection_config(0.01, 0.95, ["a"])
+        assert isinstance(reg.gold.feature_selection_config, FeatureSelectionConfig)
+
+    def test_config_roundtrip_produces_dataclass(self, tmp_path):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import FeatureSelectionConfig
+        reg = RecommendationRegistry()
+        reg.init_gold("target")
+        reg.set_feature_selection_config(0.01, 0.95, ["a", "b"])
+        path = tmp_path / "recs.yaml"
+        reg.save(path)
+        loaded = RecommendationRegistry.load(path)
+        assert isinstance(loaded.gold.feature_selection_config, FeatureSelectionConfig)
