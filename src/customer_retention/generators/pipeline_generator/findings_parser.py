@@ -1057,7 +1057,7 @@ class FindingsParser:
     def _collect_feature_selection_drops(self, gold, prioritized: Set[str], target_column: str, pipeline_columns: Optional[Set[str]] = None) -> Set[str]:
         drops = set()
         for rec in getattr(gold, "feature_selection", []):
-            if rec.action in ("drop_multicollinear", "drop_weak", "drop_l1_zero", "drop_availability", "drop_zero_variance"):
+            if rec.action in ("drop_multicollinear", "drop_weak", "drop_l1_zero", "drop_chi_squared", "drop_lgbm_importance", "drop_availability", "drop_zero_variance"):
                 if rec.target_column not in prioritized and rec.target_column != target_column:
                     if pipeline_columns is not None and rec.target_column not in pipeline_columns:
                         logger.warning("Skipping feature selection drop '%s': column not in pipeline", rec.target_column)

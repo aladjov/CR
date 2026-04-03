@@ -24,6 +24,8 @@ class SelectionMethod(Enum):
     IMPORTANCE = "IMPORTANCE"
     RECURSIVE = "RECURSIVE"
     L1_SELECTION = "L1_SELECTION"
+    CHI_SQUARED = "CHI_SQUARED"
+    LGBM_IMPORTANCE = "LGBM_IMPORTANCE"
 
 
 @dataclass
@@ -57,7 +59,7 @@ class AvailabilityRecommendation:
 
 
 class FeatureSelector:
-    def __init__(self, method: SelectionMethod = SelectionMethod.VARIANCE, variance_threshold: float = 0.01, correlation_threshold: float = 0.95, target_column: Optional[str] = None, preserve_features: Optional[List[str]] = None, max_features: Optional[int] = None, apply_correlation_filter: bool = False, precomputed_corr_matrix: Optional[Any] = None, l1_C: float = 1.0, l1_ratio: float = 1.0, progress_fn: Optional[Callable[[str], None]] = None, precomputed_variances: Optional[Any] = None, precomputed_medians: Optional[Dict[str, float]] = None, precomputed_non_null: Optional[Dict[str, int]] = None, correlation_candidates: Optional[List[str]] = None):
+    def __init__(self, method: SelectionMethod = SelectionMethod.VARIANCE, variance_threshold: float = 0.01, correlation_threshold: float = 0.95, target_column: Optional[str] = None, preserve_features: Optional[List[str]] = None, max_features: Optional[int] = None, apply_correlation_filter: bool = False, precomputed_corr_matrix: Optional[Any] = None, l1_C: float = 1.0, l1_ratio: float = 1.0, progress_fn: Optional[Callable[[str], None]] = None, precomputed_variances: Optional[Any] = None, precomputed_medians: Optional[Dict[str, float]] = None, precomputed_non_null: Optional[Dict[str, int]] = None, correlation_candidates: Optional[List[str]] = None, chi_squared_num_buckets: int = 10, lgbm_num_iterations: int = 200, lgbm_num_leaves: int = 63):
         self.method = method
         self.variance_threshold = variance_threshold
         self.correlation_threshold = correlation_threshold
@@ -72,6 +74,9 @@ class FeatureSelector:
         self._precomputed_medians = precomputed_medians
         self._precomputed_non_null = precomputed_non_null
         self._correlation_candidates = correlation_candidates
+        self.chi_squared_num_buckets = chi_squared_num_buckets
+        self.lgbm_num_iterations = lgbm_num_iterations
+        self.lgbm_num_leaves = lgbm_num_leaves
 
         self.selected_features: List[str] = []
         self.dropped_features: List[str] = []
@@ -94,6 +99,10 @@ class FeatureSelector:
             self._apply_correlation_selection(df, feature_cols, numeric_set)
         elif self.method == SelectionMethod.L1_SELECTION:
             self._apply_l1_selection(df, feature_cols, numeric_set)
+        elif self.method == SelectionMethod.CHI_SQUARED:
+            self._apply_chi_squared_selection(df, feature_cols, numeric_set)
+        elif self.method == SelectionMethod.LGBM_IMPORTANCE:
+            self._apply_lgbm_importance_selection(df, feature_cols, numeric_set)
 
         if self.apply_correlation_filter and self.method != SelectionMethod.CORRELATION:
             self._apply_correlation_selection(df, self.selected_features.copy(), numeric_set)
@@ -252,6 +261,72 @@ class FeatureSelector:
                 self.dropped_features.append(feature)
                 self.drop_reasons[feature] = "L1 zero coefficient"
 
+    def _apply_chi_squared_selection(self, df: DataFrame, features: List[str], numeric_set: set) -> None:
+        if not self.target_column:
+            raise ValueError("target_column is required for CHI_SQUARED")
+        if self.target_column not in df.columns:
+            raise ValueError(f"target_column '{self.target_column}' not in DataFrame")
+
+        candidates = [f for f in features if f not in self.preserve_features and f in numeric_set]
+        if not candidates or (self.max_features and self.max_features >= len(candidates)):
+            return
+
+        from customer_retention.core.compat import _is_spark_pandas
+        if _is_spark_pandas(df):
+            from customer_retention.core.compat import as_spark_df
+            spark_df = as_spark_df(df[candidates + [self.target_column]])
+            dropped, reasons, scores = _spark_chi_squared_selection(
+                spark_df, self.target_column, candidates,
+                num_top_features=self.max_features or len(candidates),
+                num_buckets=self.chi_squared_num_buckets,
+            )
+        else:
+            dropped, reasons, scores = _local_chi_squared_selection(
+                df, self.target_column, candidates,
+                num_top_features=self.max_features or len(candidates),
+                num_buckets=self.chi_squared_num_buckets,
+            )
+        self.importance_scores = scores
+        for feature in dropped:
+            if feature in self.selected_features:
+                self.selected_features.remove(feature)
+                self.dropped_features.append(feature)
+                self.drop_reasons[feature] = reasons[feature]
+
+    def _apply_lgbm_importance_selection(self, df: DataFrame, features: List[str], numeric_set: set) -> None:
+        if not self.target_column:
+            raise ValueError("target_column is required for LGBM_IMPORTANCE")
+        if self.target_column not in df.columns:
+            raise ValueError(f"target_column '{self.target_column}' not in DataFrame")
+
+        candidates = [f for f in features if f not in self.preserve_features and f in numeric_set]
+        if not candidates or (self.max_features and self.max_features >= len(candidates)):
+            return
+
+        from customer_retention.core.compat import _is_spark_pandas
+        if _is_spark_pandas(df):
+            from customer_retention.core.compat import as_spark_df
+            spark_df = as_spark_df(df[candidates + [self.target_column]])
+            dropped, reasons, scores = _spark_lgbm_importance_selection(
+                spark_df, self.target_column, candidates,
+                num_top_features=self.max_features or len(candidates),
+                num_iterations=self.lgbm_num_iterations,
+                num_leaves=self.lgbm_num_leaves,
+            )
+        else:
+            dropped, reasons, scores = _local_lgbm_importance_selection(
+                df, self.target_column, candidates,
+                num_top_features=self.max_features or len(candidates),
+                num_iterations=self.lgbm_num_iterations,
+                num_leaves=self.lgbm_num_leaves,
+            )
+        self.importance_scores = scores
+        for feature in dropped:
+            if feature in self.selected_features:
+                self.selected_features.remove(feature)
+                self.dropped_features.append(feature)
+                self.drop_reasons[feature] = reasons[feature]
+
     def get_availability_recommendations(self, availability: Optional["FeatureAvailabilityMetadata"]) -> List[AvailabilityRecommendation]:
         if availability is None:
             return []
@@ -373,6 +448,174 @@ def _spark_l1_selection(
     for col in zero_cols:
         dropped.append(col)
         reasons[col] = "L1 zero coefficient"
+    return dropped, reasons, scores
+
+
+# ---------------------------------------------------------------------------
+# Chi-squared selection (statistical, univariate)
+# ---------------------------------------------------------------------------
+
+def _import_spark_chi_squared_ml():
+    import pyspark.sql.functions as F  # noqa: N812
+    from pyspark.ml.feature import Bucketizer, ChiSqSelector, VectorAssembler
+    return ChiSqSelector, VectorAssembler, Bucketizer, F
+
+
+_CHI_BUCKET_BATCH = 200
+
+
+def _spark_chi_squared_selection(
+    spark_df: Any, target_column: str, feature_columns: List[str],
+    num_top_features: int = 1000, num_buckets: int = 10,
+) -> tuple:
+    ChiSqSelector, VectorAssembler, Bucketizer, F = _import_spark_chi_squared_ml()
+
+    n_features = len(feature_columns)
+    if num_top_features >= n_features:
+        return [], {}, None
+
+    work_df = spark_df.select(
+        [F.coalesce(F.col(c).cast("double"), F.lit(0.0)).alias(c) for c in feature_columns]
+        + [F.col(target_column).cast("double").alias(target_column)]
+    )
+    work_df = work_df.na.fill(0.0, subset=feature_columns)
+
+    quantiles = [i / num_buckets for i in range(1, num_buckets)]
+    all_splits: Dict[str, list] = {}
+    for start in range(0, n_features, _CHI_BUCKET_BATCH):
+        batch = feature_columns[start:start + _CHI_BUCKET_BATCH]
+        exprs = [F.percentile_approx(c, quantiles).alias(f"__p_{i}")
+                 for i, c in enumerate(batch)]
+        row = work_df.agg(*exprs).head()
+        for i, c in enumerate(batch):
+            all_splits[c] = row[f"__p_{i}"]
+
+    bucketed_names = []
+    for start in range(0, n_features, _CHI_BUCKET_BATCH):
+        batch = feature_columns[start:start + _CHI_BUCKET_BATCH]
+        b_input, b_output, b_splits_arr = [], [], []
+        for c in batch:
+            pcts = all_splits.get(c)
+            unique = sorted(set(pcts)) if pcts else []
+            if len(unique) < 2:
+                unique = [0.0, 1.0]
+            b_input.append(c)
+            bkt_name = f"__bkt_{c}"
+            b_output.append(bkt_name)
+            bucketed_names.append(bkt_name)
+            b_splits_arr.append([float("-inf")] + unique + [float("inf")])
+        bkt = Bucketizer(inputCols=b_input, outputCols=b_output,
+                         splitsArray=b_splits_arr, handleInvalid="keep")
+        work_df = bkt.transform(work_df)
+        if start + _CHI_BUCKET_BATCH < n_features:
+            work_df = work_df.localCheckpoint(eager=True)
+
+    assembler = VectorAssembler(inputCols=bucketed_names, outputCol="__chi_vec__", handleInvalid="keep")
+    assembled = assembler.transform(work_df).select("__chi_vec__", target_column)
+
+    selector = ChiSqSelector(numTopFeatures=num_top_features, featuresCol="__chi_vec__",
+                              outputCol="__chi_sel__", labelCol=target_column)
+    model = selector.fit(assembled)
+    selected_idx = set(model.selectedFeatures)
+    del work_df, assembled
+
+    dropped = [feature_columns[i] for i in range(n_features) if i not in selected_idx]
+    reasons = {c: "chi_squared below threshold" for c in dropped}
+    return dropped, reasons, None
+
+
+def _local_chi_squared_selection(
+    df: Any, target_column: str, feature_columns: List[str],
+    num_top_features: int = 1000, num_buckets: int = 10,
+) -> tuple:
+    from sklearn.feature_selection import SelectKBest, chi2
+    from sklearn.preprocessing import KBinsDiscretizer
+
+    X = df[feature_columns].fillna(0).to_numpy()
+    y = df[target_column].to_numpy()
+    k = min(num_top_features, len(feature_columns))
+
+    discretizer = KBinsDiscretizer(n_bins=num_buckets, encode="ordinal", strategy="quantile", subsample=None)
+    X_binned = discretizer.fit_transform(X)
+
+    selector = SelectKBest(chi2, k=k)
+    selector.fit(X_binned, y)
+    mask = selector.get_support()
+    chi2_scores = selector.scores_
+
+    scores = {feature_columns[i]: float(chi2_scores[i]) if not np.isnan(chi2_scores[i]) else 0.0
+              for i in range(len(feature_columns))}
+    dropped = [feature_columns[i] for i in range(len(feature_columns)) if not mask[i]]
+    reasons = {c: "chi_squared below threshold" for c in dropped}
+    return dropped, reasons, scores
+
+
+# ---------------------------------------------------------------------------
+# LightGBM importance-based selection
+# ---------------------------------------------------------------------------
+
+def _import_spark_lgbm_ml():
+    import pyspark.sql.functions as F  # noqa: N812
+    from pyspark.ml.feature import VectorAssembler
+    from synapse.ml.lightgbm import LightGBMClassifier
+    return LightGBMClassifier, VectorAssembler, F
+
+
+def _spark_lgbm_importance_selection(
+    spark_df: Any, target_column: str, feature_columns: List[str],
+    num_top_features: int = 300, num_iterations: int = 200, num_leaves: int = 63,
+) -> tuple:
+    LGBMClassifier, VectorAssembler, F = _import_spark_lgbm_ml()
+
+    n_features = len(feature_columns)
+    if num_top_features >= n_features:
+        scores = {c: 0.0 for c in feature_columns}
+        return [], {}, scores
+
+    work_df = spark_df.select(
+        [F.col(c).cast("double").alias(c) for c in feature_columns]
+        + [F.col(target_column).cast("double").alias(target_column)]
+    )
+    work_df = work_df.na.fill(0.0, subset=feature_columns)
+
+    assembler = VectorAssembler(inputCols=feature_columns, outputCol="__lgbm_vec__", handleInvalid="keep")
+    assembled = assembler.transform(work_df).select("__lgbm_vec__", target_column)
+
+    lgbm = LGBMClassifier(featuresCol="__lgbm_vec__", labelCol=target_column,
+                           numLeaves=num_leaves, numIterations=num_iterations, learningRate=0.1)
+    model = lgbm.fit(assembled)
+    importances = model.getFeatureImportances("gain")
+    del work_df, assembled
+
+    scores: Dict[str, float] = {feature_columns[i]: float(importances[i]) for i in range(n_features)}
+    top_indices = set(np.argsort(importances)[-num_top_features:])
+    dropped = [feature_columns[i] for i in range(n_features) if i not in top_indices]
+    reasons = {c: f"lgbm_importance below top-{num_top_features}" for c in dropped}
+    return dropped, reasons, scores
+
+
+def _local_lgbm_importance_selection(
+    df: Any, target_column: str, feature_columns: List[str],
+    num_top_features: int = 300, num_iterations: int = 200, num_leaves: int = 63,
+) -> tuple:
+    import lightgbm as lgb
+
+    n_features = len(feature_columns)
+    if num_top_features >= n_features:
+        return [], {}, {c: 0.0 for c in feature_columns}
+
+    X = df[feature_columns].fillna(0).to_numpy()
+    y = df[target_column].to_numpy()
+
+    model = lgb.LGBMClassifier(n_estimators=num_iterations, num_leaves=num_leaves,
+                                learning_rate=0.1, importance_type="gain", n_jobs=-1, verbose=-1)
+    model.fit(X, y)
+    importances = model.feature_importances_
+
+    scores: Dict[str, float] = {feature_columns[i]: float(importances[i]) for i in range(n_features)}
+    top_indices = set(np.argsort(importances)[-num_top_features:])
+    dropped = [feature_columns[i] for i in range(n_features) if i not in top_indices]
+    reasons = {c: f"lgbm_importance below top-{num_top_features}" for c in dropped}
     return dropped, reasons, scores
 
 
@@ -565,3 +808,69 @@ def run_selection_pipeline(
         df=current_df, selected_features=selected, dropped_features=all_dropped,
         drop_reasons=all_reasons, method_used=last_method, importance_scores=importance_scores,
     )
+
+
+def run_chi_squared_selection(
+    df: DataFrame, target_column: str, max_features: int = 1000,
+    num_buckets: int = 10, feature_columns: Optional[List[str]] = None,
+    temporal_column: Optional[str] = None,
+    progress_fn: Optional[Callable[[str], None]] = None,
+) -> FeatureSelectionResult:
+    log = progress_fn or (lambda msg: print(msg))
+    t0 = time.monotonic()
+
+    exclude = {target_column}
+    if temporal_column:
+        exclude.add(temporal_column)
+    if feature_columns is None:
+        feature_columns = [c for c in df.columns if c not in exclude]
+    work_df = df[feature_columns + [target_column]]
+    if temporal_column and temporal_column in df.columns:
+        work_df = work_df.drop(columns=[temporal_column], errors="ignore")
+
+    n_initial = len(feature_columns)
+    log(f"  Chi-squared selection: {n_initial} features, selecting top {max_features}...")
+
+    selector = FeatureSelector(
+        method=SelectionMethod.CHI_SQUARED, target_column=target_column,
+        max_features=max_features, chi_squared_num_buckets=num_buckets,
+    )
+    result = selector.fit_transform(work_df)
+    elapsed = time.monotonic() - t0
+    log(f"    {_format_elapsed(elapsed)} — dropped {len(result.dropped_features)}, "
+        f"remaining {len(result.selected_features)}")
+    return result
+
+
+def run_lgbm_importance_selection(
+    df: DataFrame, target_column: str, max_features: int = 300,
+    num_iterations: int = 200, num_leaves: int = 63,
+    feature_columns: Optional[List[str]] = None,
+    temporal_column: Optional[str] = None,
+    progress_fn: Optional[Callable[[str], None]] = None,
+) -> FeatureSelectionResult:
+    log = progress_fn or (lambda msg: print(msg))
+    t0 = time.monotonic()
+
+    exclude = {target_column}
+    if temporal_column:
+        exclude.add(temporal_column)
+    if feature_columns is None:
+        feature_columns = [c for c in df.columns if c not in exclude]
+    work_df = df[feature_columns + [target_column]]
+    if temporal_column and temporal_column in df.columns:
+        work_df = work_df.drop(columns=[temporal_column], errors="ignore")
+
+    n_initial = len(feature_columns)
+    log(f"  LightGBM importance selection: {n_initial} features, selecting top {max_features}...")
+
+    selector = FeatureSelector(
+        method=SelectionMethod.LGBM_IMPORTANCE, target_column=target_column,
+        max_features=max_features, lgbm_num_iterations=num_iterations,
+        lgbm_num_leaves=num_leaves,
+    )
+    result = selector.fit_transform(work_df)
+    elapsed = time.monotonic() - t0
+    log(f"    {_format_elapsed(elapsed)} — dropped {len(result.dropped_features)}, "
+        f"remaining {len(result.selected_features)}")
+    return result

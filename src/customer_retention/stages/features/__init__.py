@@ -35,6 +35,8 @@ from customer_retention.stages.features.feature_selector import (
     FeatureSelector,
     SelectionMethod,
     extract_precomputed_stats,
+    run_chi_squared_selection,
+    run_lgbm_importance_selection,
     run_selection_pipeline,
 )
 from customer_retention.stages.features.interaction_features import (
@@ -66,6 +68,8 @@ __all__ = [
     "SelectionMethod",
     "FeatureSelectionResult",
     "run_selection_pipeline",
+    "run_chi_squared_selection",
+    "run_lgbm_importance_selection",
     "extract_precomputed_stats",
     "FeatureManifest",
     "FeatureSet",

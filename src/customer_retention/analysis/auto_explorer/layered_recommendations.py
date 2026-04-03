@@ -333,6 +333,19 @@ class RecommendationRegistry:
                                           params, rationale, source_notebook)
         self.gold.feature_selection.append(rec)
 
+    def add_gold_drop_chi_squared(self, column: str, rationale: str,
+                                   source_notebook: str) -> None:
+        rec = self._create_recommendation("gold", "feature_selection", "drop_chi_squared", column,
+                                          {}, rationale, source_notebook)
+        self.gold.feature_selection.append(rec)
+
+    def add_gold_drop_lgbm_importance(self, column: str, importance: float,
+                                       rationale: str, source_notebook: str) -> None:
+        params = {"importance": importance}
+        rec = self._create_recommendation("gold", "feature_selection", "drop_lgbm_importance", column,
+                                          params, rationale, source_notebook)
+        self.gold.feature_selection.append(rec)
+
     def add_silver_ratio(self, column: str, numerator: str, denominator: str,
                          rationale: str, source_notebook: str) -> None:
         params = {"feature_type": "ratio", "numerator": numerator, "denominator": denominator,
