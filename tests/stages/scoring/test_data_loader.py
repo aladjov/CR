@@ -835,3 +835,60 @@ class TestPredictSparkMl:
             inputCols=["feat_a", "feat_b"], outputCol="features", handleInvalid="keep",
         )
         np.testing.assert_array_equal(result, [0.6, 0.4])
+
+    def test_distributed_input_uses_as_spark_df(self, databricks_config):
+        pytest.importorskip("pyspark")
+        mock_spark_df = MagicMock()
+        mock_assembler = MagicMock()
+        mock_assembled = MagicMock()
+        mock_assembler.transform.return_value = mock_assembled
+        mock_model = MagicMock()
+        mock_predictions = MagicMock()
+        mock_model.transform.return_value = mock_predictions
+        proba_values = np.array([0.3, 0.9])
+        mock_predictions.select.return_value.toPandas.return_value = pd.DataFrame({"prob": proba_values})
+
+        mock_psdf = MagicMock()
+        mock_psdf.__getitem__ = MagicMock(return_value=mock_psdf)
+        mock_psdf.spark = MagicMock()
+        mock_psdf.to_spark = MagicMock()
+
+        with (
+            patch("customer_retention.stages.scoring.data_loader._VectorAssembler", return_value=mock_assembler),
+            patch("customer_retention.stages.scoring.data_loader._vector_to_array"),
+            patch("customer_retention.core.compat.as_spark_df", return_value=mock_spark_df) as mock_as_spark,
+            patch("customer_retention.core.compat._is_spark_pandas", return_value=True),
+        ):
+            loader = ScoringDataLoader(databricks_config)
+            result = loader.predict_spark_ml(mock_model, mock_psdf, feature_names=["f1", "f2"])
+
+        mock_as_spark.assert_called_once()
+        mock_assembler.transform.assert_called_once_with(mock_spark_df)
+        mock_model.transform.assert_called_once_with(mock_assembled)
+        np.testing.assert_array_equal(result, proba_values)
+
+    def test_distributed_input_skips_create_dataframe(self, databricks_config):
+        pytest.importorskip("pyspark")
+        mock_spark = MagicMock()
+        mock_assembler = MagicMock()
+        mock_assembler.transform.return_value = MagicMock()
+        mock_model = MagicMock()
+        mock_predictions = MagicMock()
+        mock_model.transform.return_value = mock_predictions
+        mock_predictions.select.return_value.toPandas.return_value = pd.DataFrame({"prob": [0.5]})
+
+        mock_psdf = MagicMock()
+        mock_psdf.spark = MagicMock()
+        mock_psdf.to_spark = MagicMock()
+
+        with (
+            patch("customer_retention.stages.scoring.data_loader.get_spark_session", return_value=mock_spark),
+            patch("customer_retention.stages.scoring.data_loader._VectorAssembler", return_value=mock_assembler),
+            patch("customer_retention.stages.scoring.data_loader._vector_to_array"),
+            patch("customer_retention.core.compat.as_spark_df", return_value=MagicMock()),
+            patch("customer_retention.core.compat._is_spark_pandas", return_value=True),
+        ):
+            loader = ScoringDataLoader(databricks_config)
+            loader.predict_spark_ml(mock_model, mock_psdf, feature_names=["f1"])
+
+        mock_spark.createDataFrame.assert_not_called()

@@ -145,12 +145,16 @@ class ScoringDataLoader:
     def predict_spark_ml(self, model: Any, X: Any, feature_names: list[str]) -> Any:
         from pyspark.sql import functions as F  # noqa: N812
 
-        from customer_retention.core.compat import normalize_timestamps, pandas_dtype_to_spark_schema
+        from customer_retention.core.compat import _is_spark_pandas, as_spark_df
 
-        spark = get_spark_session()
-        normalized = normalize_timestamps(X[feature_names])
-        schema = pandas_dtype_to_spark_schema(normalized)
-        spark_df = spark.createDataFrame(normalized, schema=schema)
+        if _is_spark_pandas(X):
+            spark_df = as_spark_df(X[feature_names])
+        else:
+            from customer_retention.core.compat import normalize_timestamps, pandas_dtype_to_spark_schema
+            spark = get_spark_session()
+            normalized = normalize_timestamps(X[feature_names])
+            schema = pandas_dtype_to_spark_schema(normalized)
+            spark_df = spark.createDataFrame(normalized, schema=schema)
         assembler = _VectorAssembler(inputCols=feature_names, outputCol="features", handleInvalid="keep")
         assembled = assembler.transform(spark_df)
         predictions = model.transform(assembled)
