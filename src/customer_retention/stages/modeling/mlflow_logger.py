@@ -10,9 +10,23 @@ from customer_retention.core.config.experiments import get_mlflow_dfs_tmpdir
 try:
     import mlflow
     import mlflow.sklearn
+    from mlflow.models import ModelSignature
+    from mlflow.types.schema import ColSpec, Schema
     MLFLOW_AVAILABLE = True
 except ImportError:
     MLFLOW_AVAILABLE = False
+
+
+def _spark_pip_requirements() -> list:
+    import pyspark
+    return [f"pyspark=={pyspark.__version__}"]
+
+
+def _spark_classification_signature(feature_names: list):
+    return ModelSignature(
+        inputs=Schema([ColSpec("double", name) for name in feature_names]),
+        outputs=Schema([ColSpec("double", "prediction")]),
+    )
 
 
 @dataclass
@@ -112,6 +126,8 @@ class MLflowLogger:
         dfs_tmp = get_mlflow_dfs_tmpdir()
         if dfs_tmp:
             kwargs["dfs_tmpdir"] = dfs_tmp
+        kwargs["pip_requirements"] = _spark_pip_requirements()
+        kwargs["signature"] = _spark_classification_signature(wrapper.feature_names)
         mlflow.spark.log_model(pipeline_model, artifact_path, **kwargs)
         mlflow.set_tag(f"{artifact_path}.model_flavor", "spark")
         mlflow.log_dict({

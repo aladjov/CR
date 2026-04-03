@@ -1515,8 +1515,10 @@ import logging
 import tempfile
 import csv
 from pathlib import Path
+import pyspark
 import mlflow
 import mlflow.spark
+from mlflow.models import infer_signature
 from pyspark.ml.classification import (
 {% if best_model_type is none or best_model_type == "logistic_regression" %}    LogisticRegression,
 {% endif %}{% if best_model_type is none or best_model_type == "random_forest" %}    RandomForestClassifier,
@@ -1546,6 +1548,7 @@ logger = logging.getLogger("training")
 
 TARGET = TARGET_COLUMN
 _DFS_TMPDIR = get_mlflow_dfs_tmpdir()
+_PIP_REQS = [f"pyspark=={pyspark.__version__}"]
 _NUMERIC_TYPES = ("double", "float", "integer", "long", "short", "boolean", "byte", "decimal")
 _EXCLUDE_COLS = {TARGET, TIMESTAMP_COLUMN, ENTITY_KEY, "as_of_date", "feature_timestamp", "label_timestamp", "label_available_flag"}
 _vector_schema = StructType([
@@ -1666,7 +1669,7 @@ def _mlflow_evaluate_predictions(predictions):
         extra_metrics=None,
     )
 
-def _log_best_model(model, df, feature_cols):
+def _log_best_model(model, df, feature_cols, test_df):
     try:
         from databricks.feature_engineering import FeatureEngineeringClient, FeatureLookup
         fe = FeatureEngineeringClient()
@@ -1687,7 +1690,8 @@ def _log_best_model(model, df, feature_cols):
         )
         print(f"[TRAINING] Model registered: {CATALOG}.{SCHEMA}.model_{COMPOSITE_NAME}")
     except ImportError:
-        mlflow.spark.log_model(model, "best_model", dfs_tmpdir=_DFS_TMPDIR)
+        _sig = infer_signature(test_df, model.transform(test_df))
+        mlflow.spark.log_model(model, "best_model", dfs_tmpdir=_DFS_TMPDIR, pip_requirements=_PIP_REQS, signature=_sig)
 
 def train_and_evaluate():
     _results = {"models": {}, "feature_profile": {}}
@@ -1885,11 +1889,12 @@ def train_and_evaluate():
                 _log_training_progress(fitted, name)
                 mlflow.log_param("model_type", name)
                 mlflow.log_param("num_features", len(feature_cols))
+                predictions = fitted.transform(test_df)
+                _sig = infer_signature(test_df, predictions)
                 try:
-                    mlflow.spark.log_model(fitted, f"model_{name}", dfs_tmpdir=_DFS_TMPDIR)
+                    mlflow.spark.log_model(fitted, f"model_{name}", dfs_tmpdir=_DFS_TMPDIR, pip_requirements=_PIP_REQS, signature=_sig)
                 except Exception as _save_err:
                     print(f"[TRAINING] WARNING: Model save failed for {name}: {_save_err}")
-                predictions = fitted.transform(test_df)
                 metrics = _evaluate_model(predictions)
                 print(f"[TRAINING] {name}: AUC={metrics['roc_auc']:.4f}, PR-AUC={metrics['pr_auc']:.4f}, F1={metrics['f1']:.4f}")
                 _results["models"][name] = metrics
@@ -1916,7 +1921,7 @@ def train_and_evaluate():
             mlflow.log_artifact(_features_path)
         if best_model is not None:
             try:
-                _log_best_model(best_model, df, feature_cols)
+                _log_best_model(best_model, df, feature_cols, test_df)
             except Exception as _best_err:
                 print(f"[TRAINING] WARNING: Best model registration failed: {_best_err}")
 

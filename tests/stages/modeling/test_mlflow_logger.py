@@ -1,6 +1,10 @@
 from unittest.mock import MagicMock, patch
 
 from customer_retention.stages.modeling import ExperimentConfig, MLflowLogger
+from customer_retention.stages.modeling.mlflow_logger import (
+    _spark_classification_signature,
+    _spark_pip_requirements,
+)
 
 
 class TestExperimentConfig:
@@ -273,6 +277,77 @@ class TestMLflowLoggerModel:
         logger.log_model(mock_model, "model")
 
         mock_sklearn.log_model.assert_called_once()
+
+    @patch("customer_retention.stages.modeling.mlflow_logger.get_mlflow_dfs_tmpdir", return_value=None)
+    @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
+    def test_spark_model_passes_pip_requirements(self, mock_mlflow, _mock_tmpdir):
+        logger = MLflowLogger(experiment_name="test")
+        mock_model = MagicMock()
+        mock_model.as_pipeline_model = MagicMock(return_value=MagicMock())
+        mock_model._fitted_model = MagicMock()
+        mock_model.spark_model_class = "LR"
+        mock_model.spark_model_params = {}
+        mock_model.feature_names = ["f1"]
+        mock_model.class_weight = None
+
+        logger.log_model(mock_model, "lr")
+
+        call_kwargs = mock_mlflow.spark.log_model.call_args[1]
+        assert "pip_requirements" in call_kwargs
+        assert any("pyspark==" in r for r in call_kwargs["pip_requirements"])
+
+    @patch("customer_retention.stages.modeling.mlflow_logger.get_mlflow_dfs_tmpdir", return_value=None)
+    @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
+    def test_spark_model_passes_signature(self, mock_mlflow, _mock_tmpdir):
+        logger = MLflowLogger(experiment_name="test")
+        mock_model = MagicMock()
+        mock_model.as_pipeline_model = MagicMock(return_value=MagicMock())
+        mock_model._fitted_model = MagicMock()
+        mock_model.spark_model_class = "LR"
+        mock_model.spark_model_params = {}
+        mock_model.feature_names = ["f1", "f2"]
+        mock_model.class_weight = None
+
+        logger.log_model(mock_model, "lr")
+
+        call_kwargs = mock_mlflow.spark.log_model.call_args[1]
+        sig = call_kwargs["signature"]
+        input_names = [col.name for col in sig.inputs.inputs]
+        assert input_names == ["f1", "f2"]
+        output_names = [col.name for col in sig.outputs.inputs]
+        assert output_names == ["prediction"]
+
+
+class TestSparkPipRequirements:
+    def test_returns_pyspark_pinned_version(self):
+        reqs = _spark_pip_requirements()
+        assert len(reqs) == 1
+        assert reqs[0].startswith("pyspark==")
+
+    def test_version_matches_installed(self):
+        import pyspark
+        reqs = _spark_pip_requirements()
+        assert reqs[0] == f"pyspark=={pyspark.__version__}"
+
+
+class TestSparkClassificationSignature:
+    def test_signature_input_matches_feature_names(self):
+        sig = _spark_classification_signature(["f1", "f2", "f3"])
+        input_names = [col.name for col in sig.inputs.inputs]
+        assert input_names == ["f1", "f2", "f3"]
+
+    def test_signature_output_is_prediction(self):
+        sig = _spark_classification_signature(["f1"])
+        output_names = [col.name for col in sig.outputs.inputs]
+        assert output_names == ["prediction"]
+
+    def test_signature_all_doubles(self):
+        from mlflow.types.schema import DataType
+        sig = _spark_classification_signature(["a", "b"])
+        for col in sig.inputs.inputs:
+            assert col.type == DataType.double
+        for col in sig.outputs.inputs:
+            assert col.type == DataType.double
 
 
 class TestMLflowLoggerRunId:
