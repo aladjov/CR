@@ -1,10 +1,8 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from customer_retention.stages.modeling import ExperimentConfig, MLflowLogger
-from customer_retention.stages.modeling.mlflow_logger import (
-    _spark_classification_signature,
-    _spark_pip_requirements,
-)
 
 
 class TestExperimentConfig:
@@ -320,29 +318,36 @@ class TestMLflowLoggerModel:
 
 class TestSparkPipRequirements:
     def test_returns_pyspark_pinned_version(self):
+        pytest.importorskip("pyspark")
+        from customer_retention.stages.modeling.mlflow_logger import _spark_pip_requirements
         reqs = _spark_pip_requirements()
         assert len(reqs) == 1
         assert reqs[0].startswith("pyspark==")
 
     def test_version_matches_installed(self):
-        import pyspark
+        pyspark = pytest.importorskip("pyspark")
+        from customer_retention.stages.modeling.mlflow_logger import _spark_pip_requirements
         reqs = _spark_pip_requirements()
         assert reqs[0] == f"pyspark=={pyspark.__version__}"
 
 
 class TestSparkClassificationSignature:
     def test_signature_input_matches_feature_names(self):
+        from customer_retention.stages.modeling.mlflow_logger import _spark_classification_signature
         sig = _spark_classification_signature(["f1", "f2", "f3"])
         input_names = [col.name for col in sig.inputs.inputs]
         assert input_names == ["f1", "f2", "f3"]
 
     def test_signature_output_is_prediction(self):
+        from customer_retention.stages.modeling.mlflow_logger import _spark_classification_signature
         sig = _spark_classification_signature(["f1"])
         output_names = [col.name for col in sig.outputs.inputs]
         assert output_names == ["prediction"]
 
     def test_signature_all_doubles(self):
         from mlflow.types.schema import DataType
+
+        from customer_retention.stages.modeling.mlflow_logger import _spark_classification_signature
         sig = _spark_classification_signature(["a", "b"])
         for col in sig.inputs.inputs:
             assert col.type == DataType.double
