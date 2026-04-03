@@ -1,10 +1,13 @@
 import json
+import logging
 from typing import Any, Dict, List, Optional
 
 from customer_retention.core.compat import as_spark_df, pd
 from customer_retention.core.compat.detection import get_spark_session, is_spark_available
 
 from .base import DeltaStorage
+
+logger = logging.getLogger(__name__)
 
 
 class DatabricksDelta(DeltaStorage):
@@ -110,6 +113,7 @@ class DatabricksDelta(DeltaStorage):
         from customer_retention.core.compat import clamp_spark_timestamps
         spark_df = clamp_spark_timestamps(spark_df)
         spark_df = self._ensure_parallelism(spark_df, force=True)
+        n_cols = len(spark_df.columns)
         writer = spark_df.write.format("delta").mode(mode)
         if mode == "overwrite":
             writer = writer.option("overwriteSchema", "true")
@@ -118,6 +122,28 @@ class DatabricksDelta(DeltaStorage):
         writer.save(path)
         if z_order_columns:
             self.optimize(path, z_order_columns)
+        self._log_write_summary(path, n_cols, partition_by, z_order_columns)
+
+    def _log_write_summary(self, path: str, n_cols: int,
+                           partition_by: Optional[List[str]],
+                           z_order_columns: Optional[List[str]]) -> None:
+        try:
+            cores = int(self.spark.sparkContext.defaultParallelism)
+            files = self.spark.read.format("delta").load(path).inputFiles()
+            n_files = len(files) if isinstance(files, (list, tuple)) else "?"
+        except Exception:
+            cores, n_files = "?", "?"
+        parts = [
+            f"Delta write: {path.rsplit('/', 1)[-1]}",
+            f"  files={n_files}  cores={cores}  columns={n_cols}",
+        ]
+        if partition_by:
+            parts.append(f"  partition_by={partition_by}")
+        if z_order_columns:
+            parts.append(f"  z_order={z_order_columns}  (OPTIMIZE complete)")
+        else:
+            parts.append("  z_order=none  compaction=skipped")
+        logger.info("\n".join(parts))
 
     def merge(self, df: Any, path: str, condition: str,
               update_cols: Optional[List[str]] = None) -> None:
