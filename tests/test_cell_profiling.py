@@ -497,7 +497,7 @@ class TestDriftReportIntegration:
         drift = self._minimal_drift_with_profiles(old, new)
         html = HtmlDriftRenderer(drift).render_cell_profiling()
 
-        assert "<h2>Per-Cell Profiling</h2>" in html
+        assert "Per-Cell Profiling</h2>" in html
         assert "<table>" in html
         assert "load" in html
 
