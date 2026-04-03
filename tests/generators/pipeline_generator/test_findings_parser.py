@@ -6138,6 +6138,42 @@ class TestDropL1ZeroAction(TestFeatureSelectionDropSkipsTarget):
         assert "age" in config.gold.feature_selections
         assert "region" in config.gold.feature_selections
 
+    def test_drop_chi_squared_collected(self):
+        parser = self._make_parser()
+        config = self._make_config()
+        registry = self._make_registry(feature_selection=[
+            self._make_rec("age", "drop_chi_squared"),
+        ])
+        parser._apply_gold_recommendations(config, registry)
+        assert "age" in config.gold.feature_selections
+
+    def test_drop_chi_squared_skips_target(self):
+        parser = self._make_parser()
+        config = self._make_config()
+        registry = self._make_registry(feature_selection=[
+            self._make_rec("unsubscribed", "drop_chi_squared"),
+        ])
+        parser._apply_gold_recommendations(config, registry)
+        assert "unsubscribed" not in config.gold.feature_selections
+
+    def test_drop_lgbm_importance_collected(self):
+        parser = self._make_parser()
+        config = self._make_config()
+        registry = self._make_registry(feature_selection=[
+            self._make_rec("region", "drop_lgbm_importance"),
+        ])
+        parser._apply_gold_recommendations(config, registry)
+        assert "region" in config.gold.feature_selections
+
+    def test_drop_lgbm_importance_skips_target(self):
+        parser = self._make_parser()
+        config = self._make_config()
+        registry = self._make_registry(feature_selection=[
+            self._make_rec("unsubscribed", "drop_lgbm_importance"),
+        ])
+        parser._apply_gold_recommendations(config, registry)
+        assert "unsubscribed" not in config.gold.feature_selections
+
     def test_prioritize_does_not_override_drop_multicollinear(self):
         parser = self._make_parser()
         config = self._make_config()

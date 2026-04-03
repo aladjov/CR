@@ -852,6 +852,31 @@ class TestGoldFeatureSelectionRecommendations:
         assert rec.action == "drop_zero_variance"
         assert rec.parameters["variance"] == 0.0
 
+    def test_adds_drop_chi_squared_to_gold(self):
+        registry = RecommendationRegistry()
+        registry.init_gold("churned")
+        registry.add_gold_drop_chi_squared(
+            column="low_chi_feature", rationale="chi_squared below threshold",
+            source_notebook="08"
+        )
+        assert len(registry.gold.feature_selection) == 1
+        rec = registry.gold.feature_selection[0]
+        assert rec.target_column == "low_chi_feature"
+        assert rec.action == "drop_chi_squared"
+
+    def test_adds_drop_lgbm_importance_to_gold(self):
+        registry = RecommendationRegistry()
+        registry.init_gold("churned")
+        registry.add_gold_drop_lgbm_importance(
+            column="low_gain_feature", importance=0.5,
+            rationale="lgbm_importance below top-300", source_notebook="08"
+        )
+        assert len(registry.gold.feature_selection) == 1
+        rec = registry.gold.feature_selection[0]
+        assert rec.target_column == "low_gain_feature"
+        assert rec.action == "drop_lgbm_importance"
+        assert rec.parameters["importance"] == 0.5
+
     def test_feature_selection_in_all_recommendations(self):
         registry = RecommendationRegistry()
         registry.init_gold("churned")
