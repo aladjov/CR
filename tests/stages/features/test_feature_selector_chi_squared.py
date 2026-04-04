@@ -169,63 +169,165 @@ class TestChiSquaredStandaloneFunction:
 
 
 class TestDistributedChiSquaredSelection:
-    def test_spark_chi_squared_returns_dropped_features(self):
+    def test_spark_chi_squared_selects_top_n_by_score(self):
         from unittest.mock import MagicMock, patch
 
         from customer_retention.stages.features.feature_selector import _spark_chi_squared_selection
 
         feature_cols = ["f1", "f2", "f3", "f4", "f5"]
-        mock_spark_df = MagicMock()
-        work_df = mock_spark_df.select.return_value.na.fill.return_value
+        mock_scores = {"f1": 50.0, "f2": 40.0, "f3": 10.0, "f4": 5.0, "f5": 1.0}
 
-        pct_row = {f"__p_{i}": [0.1 * j for j in range(1, 10)] for i in range(5)}
-        work_df.agg.return_value.head.return_value = pct_row
-
-        mock_bucketizer_cls = MagicMock()
-        mock_bucketizer_cls.return_value.transform.return_value = work_df
-
-        mock_assembler_cls = MagicMock()
-        assembled_df = MagicMock()
-        mock_assembler_cls.return_value.transform.return_value.select.return_value = assembled_df
-
-        mock_selector_cls = MagicMock()
-        mock_model = MagicMock()
-        mock_model.selectedFeatures = [0, 2]
-        mock_selector_cls.return_value.fit.return_value = mock_model
-
-        with patch("customer_retention.stages.features.feature_selector._import_spark_chi_squared_ml") as mock_imp:
+        with patch("customer_retention.stages.features.feature_selector._import_spark_chi_squared_bucketizer") as mock_imp, \
+             patch("customer_retention.stages.features.feature_selector._spark_sql_chi_squared_scores", return_value=mock_scores):
             mock_F = MagicMock()
-            mock_imp.return_value = (mock_selector_cls, mock_assembler_cls, mock_bucketizer_cls, mock_F)
+            mock_bucketizer = MagicMock()
+            mock_imp.return_value = (mock_bucketizer, mock_F)
+            mock_spark_df = MagicMock()
+            work_df = mock_spark_df.select.return_value.na.fill.return_value
+            work_df.agg.return_value.head.return_value = {f"__p_{i}": [0.5] for i in range(5)}
+            mock_bucketizer.return_value.transform.return_value = work_df
+
             dropped, reasons, scores = _spark_chi_squared_selection(
                 mock_spark_df, "target", feature_cols, num_top_features=2,
             )
 
-        assert set(dropped) == {"f2", "f4", "f5"}
+        assert scores == mock_scores
+        assert set(dropped) == {"f3", "f4", "f5"}
         assert all("chi_squared" in r for r in reasons.values())
 
     def test_spark_chi_squared_no_drop_when_all_selected(self):
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.features.feature_selector import _spark_chi_squared_selection
+
+        dropped, reasons, scores = _spark_chi_squared_selection(
+            MagicMock(), "target", ["f1", "f2"], num_top_features=10,
+        )
+        assert dropped == []
+        assert reasons == {}
+
+    def test_spark_chi_squared_degenerate_target_returns_zeros(self):
         from unittest.mock import MagicMock, patch
 
         from customer_retention.stages.features.feature_selector import _spark_chi_squared_selection
 
         feature_cols = ["f1", "f2"]
-        mock_spark_df = MagicMock()
-        work_df = mock_spark_df.select.return_value.na.fill.return_value
-        pct_row = {f"__p_{i}": [0.5] for i in range(2)}
-        work_df.agg.return_value.head.return_value = pct_row
+        zero_scores = {"f1": 0.0, "f2": 0.0}
 
-        with patch("customer_retention.stages.features.feature_selector._import_spark_chi_squared_ml") as mock_imp:
+        with patch("customer_retention.stages.features.feature_selector._import_spark_chi_squared_bucketizer") as mock_imp, \
+             patch("customer_retention.stages.features.feature_selector._spark_sql_chi_squared_scores", return_value=zero_scores):
             mock_F = MagicMock()
-            mock_selector_cls = MagicMock()
-            mock_selector_cls.return_value.fit.return_value.selectedFeatures = [0, 1]
-            mock_imp.return_value = (mock_selector_cls, MagicMock(), MagicMock(), mock_F)
-            mock_imp.return_value[1].return_value.transform.return_value = work_df
-            mock_imp.return_value[2].return_value.transform.return_value = work_df
-            work_df.select.return_value = work_df
+            mock_bucketizer = MagicMock()
+            mock_imp.return_value = (mock_bucketizer, mock_F)
+            mock_spark_df = MagicMock()
+            work_df = mock_spark_df.select.return_value.na.fill.return_value
+            work_df.agg.return_value.head.return_value = {f"__p_{i}": [0.5] for i in range(2)}
+            mock_bucketizer.return_value.transform.return_value = work_df
+
             dropped, reasons, scores = _spark_chi_squared_selection(
-                mock_spark_df, "target", feature_cols, num_top_features=10,
+                mock_spark_df, "target", feature_cols, num_top_features=1,
             )
-        assert dropped == []
+
+        assert scores == zero_scores
+        assert len(dropped) == 1
+
+
+class TestSqlChiSquaredScores:
+    def test_scores_rank_features_correctly(self):
+        from sklearn.preprocessing import KBinsDiscretizer
+
+        from customer_retention.stages.features.feature_selector import _sql_chi_squared_scores
+
+        np.random.seed(42)
+        n = 1000
+        target = np.random.choice([0, 1], n)
+        features = {
+            "strong": target * 5.0 + np.random.randn(n),
+            "medium": target * 2.0 + np.random.randn(n) * 2,
+            "noise": np.random.randn(n),
+        }
+        df = pd.DataFrame({**features, "target": target})
+
+        num_buckets = 10
+        disc = KBinsDiscretizer(n_bins=num_buckets, encode="ordinal", strategy="quantile", subsample=None)
+        feat_names = list(features.keys())
+        X_binned = disc.fit_transform(df[feat_names].fillna(0).to_numpy())
+
+        bucketed_df = pd.DataFrame(
+            {f"__bkt_{c}": X_binned[:, i] for i, c in enumerate(feat_names)}
+        )
+        bucketed_df["target"] = target
+        scores = _sql_chi_squared_scores(
+            bucketed_df, "target", feat_names,
+            [f"__bkt_{c}" for c in feat_names], num_buckets,
+        )
+
+        assert all(v >= 0 for v in scores.values())
+        assert scores["strong"] > scores["medium"] > scores["noise"]
+
+    def test_pearson_chi2_matches_scipy(self):
+        from scipy.stats import chi2_contingency
+
+        from customer_retention.stages.features.feature_selector import _sql_chi_squared_scores
+
+        np.random.seed(42)
+        n = 2000
+        target = np.random.choice([0, 1], n)
+        buckets = np.random.choice(range(5), n)
+        df = pd.DataFrame({"__bkt_f1": buckets, "target": target})
+
+        scores = _sql_chi_squared_scores(df, "target", ["f1"], ["__bkt_f1"], 10)
+
+        ct = pd.crosstab(buckets, target)
+        scipy_chi2, _, _, _ = chi2_contingency(ct)
+        assert scores["f1"] == pytest.approx(scipy_chi2, rel=0.01)
+
+    def test_scores_zero_for_constant_target(self):
+        from customer_retention.stages.features.feature_selector import _sql_chi_squared_scores
+
+        np.random.seed(42)
+        n = 100
+        df = pd.DataFrame({
+            "__bkt_f1": np.random.choice([0, 1, 2], n),
+            "__bkt_f2": np.random.choice([0, 1, 2], n),
+            "target": np.ones(n),
+        })
+        scores = _sql_chi_squared_scores(
+            df, "target", ["f1", "f2"], ["__bkt_f1", "__bkt_f2"], 10,
+        )
+        assert scores == {"f1": 0.0, "f2": 0.0}
+
+    def test_handles_empty_buckets(self):
+        from customer_retention.stages.features.feature_selector import _sql_chi_squared_scores
+
+        np.random.seed(42)
+        n = 200
+        target = np.random.choice([0, 1], n)
+        df = pd.DataFrame({
+            "__bkt_f1": np.zeros(n),
+            "target": target,
+        })
+        scores = _sql_chi_squared_scores(df, "target", ["f1"], ["__bkt_f1"], 10)
+        assert scores["f1"] == pytest.approx(0.0, abs=1e-10)
+
+    def test_batching_produces_same_scores(self):
+        from customer_retention.stages.features.feature_selector import (
+            _CHI_SQL_BATCH,
+            _sql_chi_squared_scores,
+        )
+
+        np.random.seed(42)
+        n = 300
+        target = np.random.choice([0, 1], n)
+        n_features = _CHI_SQL_BATCH + 5
+        feat_names = [f"f{i}" for i in range(n_features)]
+        bkt_names = [f"__bkt_f{i}" for i in range(n_features)]
+        data = {bkt_names[i]: np.random.choice(range(10), n) for i in range(n_features)}
+        data["target"] = target
+        df = pd.DataFrame(data)
+        scores = _sql_chi_squared_scores(df, "target", feat_names, bkt_names, 10)
+        assert len(scores) == n_features
+        assert all(v >= 0 for v in scores.values())
 
 
 class TestSelectionMethodEnum:

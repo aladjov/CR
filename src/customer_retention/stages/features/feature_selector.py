@@ -455,20 +455,102 @@ def _spark_l1_selection(
 # Chi-squared selection (statistical, univariate)
 # ---------------------------------------------------------------------------
 
-def _import_spark_chi_squared_ml():
+def _import_spark_chi_squared_bucketizer():
     import pyspark.sql.functions as F  # noqa: N812
-    from pyspark.ml.feature import Bucketizer, ChiSqSelector, VectorAssembler
-    return ChiSqSelector, VectorAssembler, Bucketizer, F
+    from pyspark.ml.feature import Bucketizer
+    return Bucketizer, F
 
 
 _CHI_BUCKET_BATCH = 200
+_CHI_SQL_BATCH = 10
+
+
+def _sql_chi_squared_scores(
+    df: Any, target_column: str, feature_columns: List[str],
+    bucketed_names: List[str], num_buckets: int,
+) -> Dict[str, float]:
+    is_pandas = hasattr(df, "iloc") and not hasattr(df, "to_spark")
+    if is_pandas:
+        return _pandas_chi_squared_scores(df, target_column, feature_columns, bucketed_names, num_buckets)
+    return _spark_sql_chi_squared_scores(df, target_column, feature_columns, bucketed_names, num_buckets)
+
+
+def _pandas_chi_squared_scores(
+    df: Any, target_column: str, feature_columns: List[str],
+    bucketed_names: List[str], num_buckets: int,
+) -> Dict[str, float]:
+    target = df[target_column].to_numpy()
+    N = len(target)
+    N1 = float(target.sum())
+    N0 = N - N1
+    if N1 == 0 or N0 == 0:
+        return {c: 0.0 for c in feature_columns}
+    scores: Dict[str, float] = {}
+    for feat_col, bkt_col in zip(feature_columns, bucketed_names):
+        bkt = df[bkt_col].to_numpy()
+        chi2 = 0.0
+        for b in range(num_buckets + 1):
+            mask = bkt == b
+            nb = int(mask.sum())
+            if nb == 0:
+                continue
+            nb1 = float(target[mask].sum())
+            nb0 = nb - nb1
+            e_b0, e_b1 = nb * N0 / N, nb * N1 / N
+            if e_b0 > 0:
+                chi2 += (nb0 - e_b0) ** 2 / e_b0
+            if e_b1 > 0:
+                chi2 += (nb1 - e_b1) ** 2 / e_b1
+        scores[feat_col] = chi2
+    return scores
+
+
+def _spark_sql_chi_squared_scores(
+    work_df: Any, target_column: str, feature_columns: List[str],
+    bucketed_names: List[str], num_buckets: int,
+) -> Dict[str, float]:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    N = work_df.count()
+    target_sum_row = work_df.agg(F.sum(F.col(target_column).cast("double"))).head()
+    N1 = float(target_sum_row[0] or 0)
+    N0 = N - N1
+    if N1 == 0 or N0 == 0:
+        return {c: 0.0 for c in feature_columns}
+
+    n_features = len(feature_columns)
+    scores: Dict[str, float] = {}
+    for start in range(0, n_features, _CHI_SQL_BATCH):
+        batch_feats = feature_columns[start:start + _CHI_SQL_BATCH]
+        batch_bkts = bucketed_names[start:start + _CHI_SQL_BATCH]
+        exprs = []
+        for fi, bkt_col in enumerate(batch_bkts):
+            for b in range(num_buckets + 1):
+                exprs.append(F.sum(F.when(F.col(bkt_col) == b, F.lit(1)).otherwise(F.lit(0))).alias(f"nb_{fi}_{b}"))
+                exprs.append(F.sum(F.when(F.col(bkt_col) == b, F.col(target_column)).otherwise(F.lit(0))).alias(f"nb1_{fi}_{b}"))
+        row = work_df.agg(*exprs).head()
+        for fi, feat_col in enumerate(batch_feats):
+            chi2 = 0.0
+            for b in range(num_buckets + 1):
+                nb = int(row[f"nb_{fi}_{b}"] or 0)
+                if nb == 0:
+                    continue
+                nb1 = float(row[f"nb1_{fi}_{b}"] or 0)
+                nb0 = nb - nb1
+                e_b0, e_b1 = nb * N0 / N, nb * N1 / N
+                if e_b0 > 0:
+                    chi2 += (nb0 - e_b0) ** 2 / e_b0
+                if e_b1 > 0:
+                    chi2 += (nb1 - e_b1) ** 2 / e_b1
+            scores[feat_col] = chi2
+    return scores
 
 
 def _spark_chi_squared_selection(
     spark_df: Any, target_column: str, feature_columns: List[str],
     num_top_features: int = 1000, num_buckets: int = 10,
 ) -> tuple:
-    ChiSqSelector, VectorAssembler, Bucketizer, F = _import_spark_chi_squared_ml()
+    Bucketizer, F = _import_spark_chi_squared_bucketizer()
 
     n_features = len(feature_columns)
     if num_top_features >= n_features:
@@ -512,18 +594,14 @@ def _spark_chi_squared_selection(
         if start + _CHI_BUCKET_BATCH < n_features:
             work_df = work_df.localCheckpoint(eager=True)
 
-    assembler = VectorAssembler(inputCols=bucketed_names, outputCol="__chi_vec__", handleInvalid="keep")
-    assembled = assembler.transform(work_df).select("__chi_vec__", target_column)
+    scores = _spark_sql_chi_squared_scores(work_df, target_column, feature_columns, bucketed_names, num_buckets)
+    del work_df
 
-    selector = ChiSqSelector(numTopFeatures=num_top_features, featuresCol="__chi_vec__",
-                              outputCol="__chi_sel__", labelCol=target_column)
-    model = selector.fit(assembled)
-    selected_idx = set(model.selectedFeatures)
-    del work_df, assembled
-
-    dropped = [feature_columns[i] for i in range(n_features) if i not in selected_idx]
+    sorted_features = sorted(scores, key=scores.get, reverse=True)
+    selected = set(sorted_features[:num_top_features])
+    dropped = [c for c in feature_columns if c not in selected]
     reasons = {c: "chi_squared below threshold" for c in dropped}
-    return dropped, reasons, None
+    return dropped, reasons, scores
 
 
 def _local_chi_squared_selection(
