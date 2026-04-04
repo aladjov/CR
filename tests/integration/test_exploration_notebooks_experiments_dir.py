@@ -588,6 +588,62 @@ class TestNotebook09Architecture:
         assert "mlflow_tracking_uri" in content, "NB08 must persist mlflow_tracking_uri in exploration metadata"
         assert "get_tracking_uri" in content, "NB08 must capture the effective tracking URI via mlflow.get_tracking_uri()"
 
+    def test_nb09_loads_gold_features_not_silver(self):
+        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+        cell = next(
+            c for c in nb["cells"]
+            if c["cell_type"] == "code" and c["source"]
+            and "load_train_test_data" in c["source"][0]
+        )
+        source = "".join(cell["source"])
+        assert "load_gold_features" in source, (
+            "NB09 must load persisted gold features (not replay transforms from silver)"
+        )
+        assert "load_gold_features_distributed" in source, (
+            "NB09 must use distributed gold loading on Databricks"
+        )
+        assert "composite_name" in source, (
+            "NB09 must read composite_name from exploration metadata to locate gold table"
+        )
+        assert "require_silver_merged" not in source, (
+            "NB09 must not load raw silver_merged — gold features are already persisted by NB08"
+        )
+
+    def test_nb09_uses_distributed_aware_loading(self):
+        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+        cell = next(
+            c for c in nb["cells"]
+            if c["cell_type"] == "code" and c["source"]
+            and "load_train_test_data" in c["source"][0]
+        )
+        source = "".join(cell["source"])
+        assert "use_distributed_processing" in source, (
+            "NB09 must check environment to choose local vs distributed"
+        )
+        assert "track_stage_object" in source, (
+            "NB09 must track the loaded DataFrame for memory management"
+        )
+
+    def test_nb08_saves_gold_features(self):
+        nb08 = NOTEBOOKS_DIR / "08_baseline_experiments.ipynb"
+        with open(nb08, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+        save_cell = [
+            c for c in nb["cells"]
+            if c["cell_type"] == "code" and c["source"]
+            and "save_gold_features" in c["source"][0]
+        ]
+        assert save_cell, "NB08 must have a save_gold_features cell"
+        source = "".join(save_cell[0]["source"])
+        assert "save_gold_features(" in source, (
+            "NB08 must persist gold-transformed data for downstream notebooks"
+        )
+        assert "gold_metadata_path" in source, (
+            "NB08 must write gold_metadata.json alongside the gold table"
+        )
+
 
 _CELL_ID_PATTERN = re.compile(r"^[a-f0-9]{8}$")
 
