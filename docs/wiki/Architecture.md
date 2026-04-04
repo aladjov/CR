@@ -259,7 +259,7 @@ Z-ORDER columns are chosen per stage based on the join keys used by downstream n
 
 The optimization applies in three contexts:
 
-1. **Exploration notebooks** — `optimize_delta()` helper in `active_dataset_store.py` is called after `save_active_dataset()` (NB01), `save_aggregated_dataset()` (NB01d), and `delta.write()` (NB03). Columns are derived from findings (entity column, detected timestamp) or from the post-merge standard (`entity_id`, `as_of_date`).
+1. **Exploration notebooks** — `save_active_dataset()` (NB01), `save_aggregated_dataset()` (NB01d), and `delta.write()` (NB03) pass `z_order_columns` directly to the storage adapter's `write()` method, which runs OPTIMIZE + Z-ORDER atomically after the write. Columns are derived from findings (entity column, detected timestamp) or from the post-merge standard (`entity_id`, `as_of_date`). `print_write_report()` displays verified diagnostics (file count, core count, z-order confirmation from Delta history).
 
 2. **Generated local pipelines** — Each template calls `get_delta(force_local=True).optimize(str(output_path), z_cols)` after writing. Column guards (`if c in df.columns`) ensure the call succeeds even if a column is absent.
 

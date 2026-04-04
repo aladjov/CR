@@ -209,7 +209,15 @@ def get_default_parallelism() -> int:
     try:
         return int(spark.sparkContext.defaultParallelism)
     except Exception:
-        return 0
+        pass
+    # Shared clusters (Spark Connect): sparkContext blocked, use shuffle partitions
+    val = spark.conf.get("spark.sql.shuffle.partitions", None)
+    if val is not None:
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            pass
+    return 0
 
 
 def set_spark_config(key: str, value: Any) -> None:

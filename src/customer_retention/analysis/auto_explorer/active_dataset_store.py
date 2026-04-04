@@ -33,11 +33,14 @@ def _to_native_pandas(df: Any) -> Any:
 
 
 def optimize_delta(path: str, z_order_columns: Optional[List[str]] = None) -> None:
-    _local_delta().optimize(path, z_order_columns or None)
+    get_delta().optimize(path, z_order_columns or None)
 
 
 def delta_write_summary(path: str) -> dict:
-    """Query Delta table metadata for user-facing write summary."""
+    """Query Delta table metadata for user-facing write summary.
+
+    Returns dict with keys: cores, files, optimize_verified, z_order_verified.
+    """
     from customer_retention.core.compat.detection import get_default_parallelism, get_spark_session
     result: dict = {}
     cores = get_default_parallelism()
@@ -51,13 +54,76 @@ def delta_write_summary(path: str) -> dict:
                 result["files"] = len(files)
         except Exception:
             pass
+        try:
+            from delta.tables import DeltaTable
+            dt = DeltaTable.forPath(spark, path)
+            hist = dt.history(5).select("operation", "operationParameters").collect()
+            for row in hist:
+                if row.operation == "OPTIMIZE":
+                    result["optimize_verified"] = True
+                    params = row.operationParameters or {}
+                    z_val = params.get("zOrderBy", "")
+                    result["z_order_verified"] = bool(z_val and z_val != "[]")
+                    break
+        except Exception:
+            pass
     if "files" not in result:
         try:
             import deltalake
-            result["files"] = len(deltalake.DeltaTable(path).files())
+            result["files"] = len(deltalake.DeltaTable(path).file_uris())
+        except Exception:
+            pass
+    if "optimize_verified" not in result:
+        try:
+            import deltalake
+            for entry in deltalake.DeltaTable(path).history(5):
+                if entry.get("operation") == "OPTIMIZE":
+                    result["optimize_verified"] = True
+                    params = entry.get("operationParameters", {})
+                    z_val = params.get("zOrderBy", "")
+                    result["z_order_verified"] = bool(z_val and z_val != "[]")
+                    break
         except Exception:
             pass
     return result
+
+
+def print_write_report(
+    title: str,
+    path: str,
+    rows: int,
+    columns: int,
+    z_order_columns: Optional[List[str]] = None,
+) -> None:
+    """Print standardized Delta write diagnostics via console.
+
+    Replaces per-notebook diagnostic blocks with a single call.
+    """
+    from customer_retention.analysis.visualization import console
+
+    ws = delta_write_summary(path)
+
+    files = ws.get("files", "?")
+    if ws.get("optimize_verified"):
+        files = f"{files} (optimized)"
+
+    cores = ws.get("cores", "unavailable")
+
+    z_label = ", ".join(z_order_columns) if z_order_columns else "none"
+    if z_order_columns and ws.get("z_order_verified"):
+        z_label += " (verified)"
+    elif z_order_columns and not ws.get("optimize_verified"):
+        z_label += " (unverified)"
+
+    console.start_section()
+    console.header(title)
+    console.metric("Rows", f"{rows:,}")
+    console.metric("Columns", columns)
+    console.metric("Delta files", files)
+    console.metric("Spark cores", cores)
+    console.metric("Z-order keys", z_label)
+    console.metric("Path", path)
+    console.end_section()
 
 
 def _write_delta(df: Any, path: str, z_order_columns: Optional[List[str]] = None) -> None:
@@ -77,9 +143,7 @@ def save_active_dataset(
     z_order_columns: Optional[List[str]] = None,
 ) -> Path:
     dlt_path = namespace.landing_table_dir(dataset_name)
-    _write_delta(df, str(dlt_path))
-    if z_order_columns:
-        optimize_delta(str(dlt_path), z_order_columns)
+    _write_delta(df, str(dlt_path), z_order_columns=z_order_columns)
     return dlt_path
 
 
@@ -97,9 +161,7 @@ def save_aggregated_dataset(
     z_order_columns: Optional[List[str]] = None,
 ) -> Path:
     dlt_path = namespace.bronze_table_dir(dataset_name)
-    _write_delta(df, str(dlt_path))
-    if z_order_columns:
-        optimize_delta(str(dlt_path), z_order_columns)
+    _write_delta(df, str(dlt_path), z_order_columns=z_order_columns)
     return dlt_path
 
 
