@@ -1331,3 +1331,20 @@ class TestBatchAdversarialDiffs:
             mock_spark.assert_called_once()
             assert n == 5
             assert "f1" in diffs
+
+    def test_spark_path_uses_as_spark_df_for_distributed_score(self):
+        """score_df may be pyspark.pandas — must use as_spark_df, not pandas_dtype_to_spark_schema."""
+        from customer_retention.core.compat.bulk_profiling import batch_adversarial_diffs
+
+        score_ps = MagicMock()
+        score_ps.to_spark = MagicMock()
+        score_ps.columns = ["eid", "f1"]
+
+        with (
+            patch("customer_retention.core.compat.bulk_profiling._spark_adversarial_diffs") as mock_spark,
+            patch("customer_retention.core.compat.pandas_dtype_to_spark_schema") as mock_schema,
+        ):
+            mock_spark.return_value = (2, {})
+            batch_adversarial_diffs(score_ps, score_ps, "eid", "target", "orig")
+            mock_spark.assert_called_once()
+            mock_schema.assert_not_called()

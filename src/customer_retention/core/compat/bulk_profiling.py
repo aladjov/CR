@@ -2112,7 +2112,11 @@ def _spark_adversarial_diffs(
     import pyspark.sql.functions as F  # noqa: N812
     from pyspark.sql.types import NumericType
 
-    from customer_retention.core.compat import normalize_timestamps, pandas_dtype_to_spark_schema
+    from customer_retention.core.compat import (
+        _is_spark_pandas,
+        normalize_timestamps,
+        pandas_dtype_to_spark_schema,
+    )
     from customer_retention.core.compat.detection import get_spark_session
 
     spark = get_spark_session()
@@ -2127,8 +2131,11 @@ def _spark_adversarial_diffs(
     if not feature_cols:
         return 0, {}
 
-    score_pd = normalize_timestamps(score_df)
-    score_spark = spark.createDataFrame(score_pd, schema=pandas_dtype_to_spark_schema(score_pd))
+    if _is_spark_pandas(score_df):
+        score_spark = as_spark_df(score_df)
+    else:
+        score_pd = normalize_timestamps(score_df)
+        score_spark = spark.createDataFrame(score_pd, schema=pandas_dtype_to_spark_schema(score_pd))
 
     gold_schema = {f.name: f.dataType for f in gold_spark.schema.fields}
     numeric_cols = [c for c in feature_cols if isinstance(gold_schema.get(c), NumericType)]
