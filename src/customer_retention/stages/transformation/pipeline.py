@@ -78,7 +78,7 @@ class TransformationPipeline:
 
     def fit(self, df: DataFrame) -> "TransformationPipeline":
         self._identify_columns_to_drop(df)
-        working_df = df.drop(columns=self._columns_to_drop, errors='ignore')
+        working_df = df.drop(columns=[c for c in self._columns_to_drop if c in df.columns])
 
         for col, col_type in self.column_types.items():
             if col in self._columns_to_drop or col not in working_df.columns:
@@ -159,7 +159,7 @@ class TransformationPipeline:
         working_df = df.copy()
 
         manifest.columns_dropped = {col: "identifier/high_missing/constant" for col in self._columns_to_drop}
-        working_df = working_df.drop(columns=self._columns_to_drop, errors='ignore')
+        working_df = working_df.drop(columns=[c for c in self._columns_to_drop if c in working_df.columns])
 
         for col, handler in self._missing_handlers.items():
             if col in working_df.columns:
@@ -191,7 +191,7 @@ class TransformationPipeline:
                     "extracted": result.extracted_features
                 }
                 manifest.column_mapping[col] = list(result.df.columns)
-        working_df = working_df.drop(columns=datetime_cols_to_drop, errors='ignore')
+        working_df = working_df.drop(columns=datetime_cols_to_drop)
 
         # Handle NaN values from invalid datetime parsing (e.g., '1/0/00')
         for col in datetime_extracted_cols:
@@ -221,7 +221,7 @@ class TransformationPipeline:
                 manifest.categorical_encodings[col] = {
                     "strategy": str(result.strategy), "columns_created": result.columns_created
                 }
-        working_df = working_df.drop(columns=categorical_cols_to_drop, errors='ignore')
+        working_df = working_df.drop(columns=categorical_cols_to_drop)
 
         for col, handler in self._binary_handlers.items():
             if col in working_df.columns:
@@ -244,7 +244,7 @@ class TransformationPipeline:
         errors = []
 
         target_cols = [c for c, t in self.column_types.items() if t == ColumnType.TARGET and c in df.columns]
-        non_target = df.drop(columns=target_cols, errors='ignore')
+        non_target = df.drop(columns=target_cols)
 
         if non_target.isna().any().any():
             null_cols = non_target.columns[non_target.isna().any()].tolist()

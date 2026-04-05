@@ -191,11 +191,10 @@ class TemporalMerger:
             result = result.drop(columns=[ft_col])
 
         if len(result) != len(spine):
-            result = spine.merge(
-                result.drop(columns=[self.config.as_of_column], errors="ignore"),
-                on=self.config.entity_key,
-                how="left",
-            )
+            to_merge = result
+            if self.config.as_of_column in result.columns:
+                to_merge = result.drop(columns=[self.config.as_of_column])
+            result = spine.merge(to_merge, on=self.config.entity_key, how="left")
 
         return result
 

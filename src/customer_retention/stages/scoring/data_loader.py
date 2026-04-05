@@ -129,8 +129,8 @@ class ScoringDataLoader:
             self.config.original_column,
             self.config.target_column,
         ]
-        df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
-        df = df.drop(columns=[c for c in df.columns if c.startswith("original_")], errors="ignore")
+        df = df.drop(columns=[c for c in drop_cols if c in df.columns])
+        df = df.drop(columns=[c for c in df.columns if c.startswith("original_")])
         df = executor.apply_all(df, transforms, fit_mode=False, artifact_store=artifact_store)
         df = select_model_ready_columns(df)
         from customer_retention.core.compat import _is_spark_pandas

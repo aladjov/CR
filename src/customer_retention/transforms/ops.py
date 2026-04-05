@@ -49,7 +49,9 @@ def apply_type_cast(df: DataFrame, column: str, *, dtype: str = "float") -> Data
 
 
 def apply_drop_column(df: DataFrame, column: str) -> DataFrame:
-    return df.drop(columns=[column], errors="ignore")
+    if column not in df.columns:
+        return df
+    return df.drop(columns=[column])
 
 
 @_requires_column
@@ -126,7 +128,9 @@ def apply_one_hot_encode(df: DataFrame, column: str) -> DataFrame:
 
 
 def apply_feature_select(df: DataFrame, column: str) -> DataFrame:
-    return df.drop(columns=[column], errors="ignore")
+    if column not in df.columns:
+        return df
+    return df.drop(columns=[column])
 
 
 def apply_derived_ratio(

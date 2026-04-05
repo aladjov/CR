@@ -907,8 +907,8 @@ def run_chi_squared_selection(
     if feature_columns is None:
         feature_columns = [c for c in df.columns if c not in exclude]
     work_df = df[feature_columns + [target_column]]
-    if temporal_column and temporal_column in df.columns:
-        work_df = work_df.drop(columns=[temporal_column], errors="ignore")
+    if temporal_column and temporal_column in work_df.columns:
+        work_df = work_df.drop(columns=[temporal_column])
 
     n_initial = len(feature_columns)
     log(f"  Chi-squared selection: {n_initial} features, selecting top {max_features}...")
@@ -940,8 +940,8 @@ def run_lgbm_importance_selection(
     if feature_columns is None:
         feature_columns = [c for c in df.columns if c not in exclude]
     work_df = df[feature_columns + [target_column]]
-    if temporal_column and temporal_column in df.columns:
-        work_df = work_df.drop(columns=[temporal_column], errors="ignore")
+    if temporal_column and temporal_column in work_df.columns:
+        work_df = work_df.drop(columns=[temporal_column])
 
     n_initial = len(feature_columns)
     log(f"  LightGBM importance selection: {n_initial} features, selecting top {max_features}...")

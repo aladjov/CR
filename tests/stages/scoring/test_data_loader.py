@@ -595,6 +595,24 @@ class TestPrepareFeatures:
         result = loader.prepare_features(df, [], mock_executor, MagicMock())
         assert "val" in result.columns
 
+    def test_drop_does_not_use_errors_kwarg(self, local_config, sample_gold_df):
+        """Ensure .drop() never passes errors= — pyspark.pandas rejects it."""
+        loader = ScoringDataLoader(local_config)
+        mock_executor = MagicMock()
+        mock_executor.apply_all.side_effect = lambda df, *a, **kw: df
+        holdout = sample_gold_df[sample_gold_df["unsubscribed"].isna()].copy()
+        original_drop = pd.DataFrame.drop
+
+        def strict_drop(self_df, *args, **kwargs):
+            if "errors" in kwargs:
+                raise TypeError("errors kwarg not supported (pyspark.pandas)")
+            return original_drop(self_df, *args, **kwargs)
+
+        with patch.object(pd.DataFrame, "drop", strict_drop):
+            result = loader.prepare_features(holdout, [], mock_executor, MagicMock())
+        assert "customer_id" not in result.columns
+        assert "original_unsubscribed" not in result.columns
+
 
 @pytest.fixture
 def local_pipeline_with_gold(tmp_path):

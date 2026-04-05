@@ -173,6 +173,11 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
         ".itertuples() collects distributed data row-by-row — OOM on large datasets",
         "Use vectorized operations or iterate on small collected aggregates only",
     ),
+    (
+        re.compile(r"""\.drop\([^)]*errors\s*="""),
+        ".drop(errors=) is not supported in pyspark.pandas",
+        "Filter columns before dropping: df.drop(columns=[c for c in cols if c in df.columns])",
+    ),
 ]
 
 
