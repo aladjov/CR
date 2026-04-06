@@ -576,6 +576,11 @@ class TestNotebook09Architecture:
         with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
             return f.read()
 
+    def test_nb09_sets_mlflow_tracking_uri(self):
+        content = self._read_content()
+        assert "set_tracking_uri" in content, "NB09 must set MLflow tracking URI before loading models"
+        assert "mlflow_tracking_uri" in content, "NB09 must read mlflow_tracking_uri from exploration metadata"
+
     def test_nb08_persists_tracking_uri_in_metadata(self):
         nb08 = NOTEBOOKS_DIR / "08_baseline_experiments.ipynb"
         with open(nb08, "r", encoding="utf-8") as f:
@@ -583,82 +588,42 @@ class TestNotebook09Architecture:
         assert "mlflow_tracking_uri" in content, "NB08 must persist mlflow_tracking_uri in exploration metadata"
         assert "get_tracking_uri" in content, "NB08 must capture the effective tracking URI via mlflow.get_tracking_uri()"
 
-    def test_nb09_consumes_persisted_diagnostics_no_recompute(self):
+    def test_nb09_loads_gold_features_not_silver(self):
         with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
             nb = json.load(f)
-        sources = "".join(
-            "".join(c["source"]) for c in nb["cells"]
-            if c["cell_type"] == "code" and c["source"]
-        )
-        assert "exploration_diagnostics_path" in sources, (
-            "NB09 must read exploration_diagnostics.json instead of recomputing"
-        )
-        assert "model_diagnostics_report" in sources, (
-            "NB09 must consume the model_diagnostics_report key persisted by NB08"
-        )
-        assert "best_model_holdout_metrics" in sources, (
-            "NB09 must consume the best_model_holdout_metrics key persisted by NB08"
-        )
-
-    def test_nb09_does_not_load_gold_or_split_for_diagnostics(self):
-        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
-            nb = json.load(f)
-        sources = "".join(
-            "".join(c["source"]) for c in nb["cells"]
-            if c["cell_type"] == "code" and c["source"]
-        )
-        assert "load_gold_features" not in sources, (
-            "NB09 must NOT load gold — diagnostics are precomputed in NB08"
-        )
-        assert "TrainingPreparator" not in sources, (
-            "NB09 must NOT instantiate TrainingPreparator — split was done in NB08"
-        )
-        assert "prepare_for_diagnostics" not in sources, (
-            "NB09 must NOT call prepare_for_diagnostics — diagnostics are precomputed in NB08"
-        )
-
-    def test_nb09_does_not_load_models_from_mlflow(self):
-        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
-            nb = json.load(f)
-        sources = "".join(
-            "".join(c["source"]) for c in nb["cells"]
-            if c["cell_type"] == "code" and c["source"]
-        )
-        assert "mlflow.spark.load_model" not in sources, (
-            "NB09 must not load Spark models — diagnostics are precomputed in NB08"
-        )
-        assert "mlflow.sklearn.load_model" not in sources, (
-            "NB09 must not load sklearn models — diagnostics are precomputed in NB08"
-        )
-
-    def test_nb08_computes_and_persists_diagnostics(self):
-        nb08 = NOTEBOOKS_DIR / "08_baseline_experiments.ipynb"
-        with open(nb08, "r", encoding="utf-8") as f:
-            nb = json.load(f)
-        sources = "".join(
-            "".join(c["source"]) for c in nb["cells"]
-            if c["cell_type"] == "code" and c["source"]
-        )
-        assert "compute_and_persist_diagnostics" in sources, (
-            "NB08 must call compute_and_persist_diagnostics so NB09 can consume the report"
-        )
-        assert "y_proba_test" in sources, (
-            "NB08 must capture y_proba_test in model_predictions for the diagnostics generator"
-        )
-
-    def test_nb08_diagnostics_failure_does_not_abort_training(self):
-        nb08 = NOTEBOOKS_DIR / "08_baseline_experiments.ipynb"
-        with open(nb08, "r", encoding="utf-8") as f:
-            nb = json.load(f)
-        diag_cells = [
+        cell = next(
             c for c in nb["cells"]
             if c["cell_type"] == "code" and c["source"]
-            and "compute_model_diagnostics" in c["source"][0]
-        ]
-        assert diag_cells, "NB08 must have a compute_model_diagnostics cell"
-        source = "".join(diag_cells[0]["source"])
-        assert "try:" in source and "except Exception" in source, (
-            "compute_model_diagnostics must catch exceptions so a failed diagnostic does not lose the trained models"
+            and "load_train_test_data" in c["source"][0]
+        )
+        source = "".join(cell["source"])
+        assert "load_gold_features" in source, (
+            "NB09 must load persisted gold features (not replay transforms from silver)"
+        )
+        assert "load_gold_features_distributed" in source, (
+            "NB09 must use distributed gold loading on Databricks"
+        )
+        assert "composite_name" in source, (
+            "NB09 must read composite_name from exploration metadata to locate gold table"
+        )
+        assert "require_silver_merged" not in source, (
+            "NB09 must not load raw silver_merged — gold features are already persisted by NB08"
+        )
+
+    def test_nb09_uses_distributed_aware_loading(self):
+        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+        cell = next(
+            c for c in nb["cells"]
+            if c["cell_type"] == "code" and c["source"]
+            and "load_train_test_data" in c["source"][0]
+        )
+        source = "".join(cell["source"])
+        assert "use_distributed_processing" in source, (
+            "NB09 must check environment to choose local vs distributed"
+        )
+        assert "track_stage_object" in source, (
+            "NB09 must track the loaded DataFrame for memory management"
         )
 
     def test_nb08_saves_gold_features(self):
