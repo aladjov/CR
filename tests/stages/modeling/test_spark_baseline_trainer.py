@@ -90,7 +90,10 @@ class TestSparkBaselineTrainerFit:
         mock_get_spark.return_value = mock_spark
         mock_spark.createDataFrame.return_value = MagicMock()
         mock_spark.createDataFrame.return_value.withColumn.return_value = mock_spark.createDataFrame.return_value
-        mock_make_asm.return_value.transform.return_value = MagicMock()
+        mock_assembled = MagicMock()
+        mock_assembled.count.return_value = 2
+        mock_assembled.repartition.return_value = mock_assembled
+        mock_make_asm.return_value.transform.return_value = mock_assembled
 
         mock_model_cls = MagicMock()
         mock_model_cls.return_value.fit.return_value = MagicMock()
@@ -117,7 +120,10 @@ class TestSparkBaselineTrainerFit:
         mock_get_spark.return_value = mock_spark
         mock_spark.createDataFrame.return_value = MagicMock()
         mock_spark.createDataFrame.return_value.withColumn.return_value = mock_spark.createDataFrame.return_value
-        mock_make_asm.return_value.transform.return_value = MagicMock()
+        mock_assembled = MagicMock()
+        mock_assembled.count.return_value = 100
+        mock_assembled.repartition.return_value = mock_assembled
+        mock_make_asm.return_value.transform.return_value = mock_assembled
 
         mock_model_cls = MagicMock()
         mock_model_cls.return_value.fit.return_value = MagicMock()
@@ -147,7 +153,10 @@ class TestSparkBaselineTrainerFit:
             {"__label__": 0.0, "count": 80},
             {"__label__": 1.0, "count": 20},
         ]
-        mock_make_asm.return_value.transform.return_value = MagicMock()
+        mock_assembled = MagicMock()
+        mock_assembled.count.return_value = 100
+        mock_assembled.repartition.return_value = mock_assembled
+        mock_make_asm.return_value.transform.return_value = mock_assembled
 
         mock_model_cls = MagicMock()
         mock_model_cls.return_value.fit.return_value = MagicMock()
@@ -204,6 +213,15 @@ class TestCreateDistributedModels:
         lr = models["Logistic Regression"]
         assert lr.spark_model_class == "LogisticRegression"
         assert lr.spark_model_params["maxIter"] == 1000
+
+    def test_logistic_regression_carries_tol_for_early_termination(self):
+        # Without an explicit tol, L-BFGS uses 1e-6 which never converges on
+        # imbalanced data with class_weight='balanced' — runs all 1000 iterations
+        # and pays per-task overhead × 1000 on shared/Spark-Connect clusters.
+        models = create_distributed_models(feature_names=["f1"])
+        lr = models["Logistic Regression"]
+        assert "tol" in lr.spark_model_params
+        assert lr.spark_model_params["tol"] >= 1e-4
 
     def test_random_forest_params(self):
         models = create_distributed_models(feature_names=["f1"])

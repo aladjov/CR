@@ -339,6 +339,8 @@ class TestFitIntegration:
         mock_spark_df.withColumn.return_value = mock_spark_df
 
         mock_assembled = MagicMock()
+        mock_assembled.count.return_value = len(X)
+        mock_assembled.repartition.return_value = mock_assembled
         mock_make_asm.return_value.transform.return_value = mock_assembled
 
         mock_model_cls = MagicMock()
@@ -719,3 +721,109 @@ class TestToSparkDfAlignment:
 
         mock_X_sel.reset_index.assert_called_once_with(drop=True)
         mock_y_renamed.reset_index.assert_called_once_with(drop=True)
+
+
+class TestTargetPartitionsRowAware:
+    """Repartition target must be capped by row count to avoid the shared-cluster slowdown
+    where get_default_parallelism() falls back to spark.sql.shuffle.partitions=200 and
+    L-BFGS pays per-task scheduling overhead × 1000 iterations."""
+
+    @patch(f"{_MOD}.get_default_parallelism", return_value=200)
+    def test_small_data_does_not_overpartition_on_high_parallelism(self, _mock_par):
+        # 60K rows on a 200-parallelism shared cluster should NOT become 400 partitions
+        target = SparkClassifierWrapper._target_partitions(60_000)
+        assert target == 12  # ceil(60000 / 5000)
+        assert target < 50, "small data must never be over-partitioned"
+
+    @patch(f"{_MOD}.get_default_parallelism", return_value=200)
+    def test_medium_data_capped_by_row_count_not_parallelism(self, _mock_par):
+        # 250K rows: target_by_size = 50, parallelism*2 = 400 → take 50
+        target = SparkClassifierWrapper._target_partitions(250_000)
+        assert target == 50
+
+    @patch(f"{_MOD}.get_default_parallelism", return_value=16)
+    def test_large_data_capped_by_parallelism(self, _mock_par):
+        # 10M rows on a 16-core cluster: target_by_size = 2000, parallelism*2 = 32 → take 32
+        target = SparkClassifierWrapper._target_partitions(10_000_000)
+        assert target == 32
+
+    @patch(f"{_MOD}.get_default_parallelism", return_value=16)
+    def test_small_data_on_small_cluster_uses_row_count(self, _mock_par):
+        # 60K rows on 16-core cluster: ceil(60000/5000)=12, parallelism*2=32 → take 12
+        assert SparkClassifierWrapper._target_partitions(60_000) == 12
+
+    @patch(f"{_MOD}.get_default_parallelism", return_value=200)
+    def test_zero_rows_returns_one_partition(self, _mock_par):
+        assert SparkClassifierWrapper._target_partitions(0) == 1
+
+    @patch(f"{_MOD}.get_default_parallelism", return_value=0)
+    def test_zero_parallelism_falls_back_to_one(self, _mock_par):
+        # Defensive: get_default_parallelism can return 0 when spark isn't available
+        target = SparkClassifierWrapper._target_partitions(60_000)
+        # With parallelism = max(1, 0) = 1, target = min(2, 12) = 2
+        assert target == 2
+
+
+class TestRepartitionForTraining:
+    """Verify repartition_for_training uses the row-aware target."""
+
+    @patch(f"{_MOD}.get_default_parallelism", return_value=200)
+    def test_repartition_target_matches_row_count_not_parallelism(self, _mock_par):
+        spark_df = MagicMock()
+        spark_df.count.return_value = 60_000
+        spark_df.repartition.return_value = spark_df
+
+        SparkClassifierWrapper._repartition_for_training(spark_df)
+
+        spark_df.repartition.assert_called_once_with(12)
+        spark_df.cache.assert_called_once()
+
+    @patch(f"{_MOD}.get_default_parallelism", return_value=16)
+    def test_repartition_uses_parallelism_cap_for_large_data(self, _mock_par):
+        spark_df = MagicMock()
+        spark_df.count.return_value = 10_000_000
+        spark_df.repartition.return_value = spark_df
+
+        SparkClassifierWrapper._repartition_for_training(spark_df)
+
+        spark_df.repartition.assert_called_once_with(32)
+
+
+class TestFitPropagatesRowCount:
+    """fit() must pass n_rows down so _create_spark_model picks an aggregationDepth
+    based on the actual partition count, not raw cluster parallelism."""
+
+    @patch(f"{_MOD}._make_assembler")
+    @patch(f"{_MOD}._get_spark_session")
+    @patch(f"{_MOD}.get_default_parallelism", return_value=200)
+    def test_fit_aggregation_depth_uses_row_aware_partition_count(
+        self, _mock_par, mock_get_spark, mock_make_asm, binary_data,
+    ):
+        X, _ = binary_data
+        mock_get_spark.return_value = MagicMock()
+
+        mock_assembled = MagicMock()
+        # Pretend the data has 100K rows; with parallelism=200 the row-aware
+        # target is 20 (NOT 400) → aggregationDepth = ceil(log2(20)/log2(4)) = 3
+        mock_assembled.count.return_value = 100_000
+        mock_assembled.repartition.return_value = mock_assembled
+        mock_make_asm.return_value.transform.return_value = mock_assembled
+
+        mock_model_cls = MagicMock()
+        mock_model_cls.aggregationDepth = True
+        with patch(f"{_MOD}._import_class", return_value=mock_model_cls):
+            wrapper = SparkClassifierWrapper(
+                spark_model_class="LogisticRegression",
+                spark_model_params={"maxIter": 10},
+                feature_names=X.columns.tolist(),
+            )
+            y = pd.Series(np.random.randint(0, 2, len(X)))
+            wrapper.fit(X, y)
+
+        call_kwargs = mock_model_cls.call_args[1]
+        assert "aggregationDepth" in call_kwargs
+        # 20 row-aware partitions → log2(20)/log2(4) ≈ 2.16 → ceil = 3
+        assert call_kwargs["aggregationDepth"] == 3, (
+            "aggregationDepth must scale with the row-aware partition count, "
+            "not raw cluster parallelism (which would give depth 5 here)"
+        )

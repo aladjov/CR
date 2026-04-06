@@ -186,38 +186,59 @@ def get_databricks_username() -> Optional[str]:
 def get_default_parallelism() -> int:
     """Return Spark default parallelism, safe for shared clusters.
 
-    Uses ``spark.conf.get`` with a fallback (RuntimeConfig API — works on
-    Unity Catalog shared clusters where ``sparkContext`` is blocked).
-    Falls back to ``sparkContext`` for local mode where the conf may
-    not be explicitly set.  Returns 0 if neither is available.
+    Resolution order:
+
+    1. ``CR_CLUSTER_CORES`` env var — **explicit user override** for Unity
+       Catalog shared clusters where ``sparkContext`` is blocked AND
+       ``spark.default.parallelism`` is unset. Set this on the cluster
+       (Cluster → Edit → Advanced Options → Spark → Environment Variables)
+       so every attached notebook sees it without relying on per-notebook init.
+    2. ``spark.cr.cluster_cores`` Spark SQL conf — same value as #1 but settable
+       from inside a notebook via ``spark.conf.set("spark.cr.cluster_cores", "32")``
+       for ad-hoc overrides without restarting the cluster.
+    3. ``spark.default.parallelism`` Spark conf (often unset on Spark Connect).
+    4. ``spark.sparkContext.defaultParallelism`` (full SparkContext only; blocked
+       on Unity Catalog shared clusters).
+    5. ``spark.sql.shuffle.partitions`` (last resort — defaults to 200 and is
+       NOT a reliable proxy for actual cluster cores).
+    6. Returns 0 if nothing is available.
 
     All downstream callers (``_ensure_parallelism``, ``_repartition_for_training``)
     use only Spark SQL / DataFrame APIs (``repartition``, ``cache``, ``inputFiles``)
     which are Spark Connect safe since 3.4.0.
     """
+    cores = _coerce_positive_int(os.environ.get("CR_CLUSTER_CORES"))
+    if cores:
+        return cores
     spark = get_spark_session()
     if not spark:
         return 0
-    # Two-arg form returns the default without raising if key is absent
-    val = spark.conf.get("spark.default.parallelism", None)
-    if val is not None:
-        try:
-            return int(val)
-        except (TypeError, ValueError):
-            pass
+    cores = _coerce_positive_int(spark.conf.get("spark.cr.cluster_cores", None))
+    if cores:
+        return cores
+    cores = _coerce_positive_int(spark.conf.get("spark.default.parallelism", None))
+    if cores:
+        return cores
     # Fallback for local mode — sparkContext is available there
     try:
         return int(spark.sparkContext.defaultParallelism)
     except Exception:
         pass
     # Shared clusters (Spark Connect): sparkContext blocked, use shuffle partitions
-    val = spark.conf.get("spark.sql.shuffle.partitions", None)
-    if val is not None:
-        try:
-            return int(val)
-        except (TypeError, ValueError):
-            pass
+    cores = _coerce_positive_int(spark.conf.get("spark.sql.shuffle.partitions", None))
+    if cores:
+        return cores
     return 0
+
+
+def _coerce_positive_int(value: Any) -> int:
+    if value is None:
+        return 0
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return coerced if coerced > 0 else 0
 
 
 def set_spark_config(key: str, value: Any) -> None:

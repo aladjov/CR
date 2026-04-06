@@ -7,6 +7,7 @@ from customer_retention.core.compat.detection import (
     enable_arrow_optimization,
     get_databricks_username,
     get_dbutils,
+    get_default_parallelism,
     get_display_function,
     get_spark_session,
     is_databricks,
@@ -526,3 +527,136 @@ class TestConfigureSparkPandas:
             with patch("builtins.__import__", side_effect=mock_import):
                 # Should not raise (exception is caught)
                 configure_spark_pandas()
+
+
+class TestGetDefaultParallelism:
+    """get_default_parallelism resolution order:
+    1. CR_CLUSTER_CORES env var (cluster-wide override)
+    2. spark.cr.cluster_cores Spark conf (in-notebook override)
+    3. spark.default.parallelism Spark conf
+    4. spark.sparkContext.defaultParallelism (blocked on UC shared)
+    5. spark.sql.shuffle.partitions (last resort)
+    6. 0 if nothing available
+    """
+
+    def setup_method(self):
+        self._saved = os.environ.pop("CR_CLUSTER_CORES", None)
+
+    def teardown_method(self):
+        os.environ.pop("CR_CLUSTER_CORES", None)
+        if self._saved:
+            os.environ["CR_CLUSTER_CORES"] = self._saved
+
+    def test_cr_cluster_cores_env_var_wins(self):
+        os.environ["CR_CLUSTER_CORES"] = "32"
+        mock_spark = MagicMock()
+        mock_spark.conf.get.return_value = "999"  # would otherwise win
+        mock_spark.sparkContext.defaultParallelism = 999
+        with patch(
+            "customer_retention.core.compat.detection.get_spark_session",
+            return_value=mock_spark,
+        ):
+            assert get_default_parallelism() == 32
+
+    def test_zero_env_var_falls_through(self):
+        os.environ["CR_CLUSTER_CORES"] = "0"
+        mock_spark = MagicMock()
+        mock_spark.conf.get.side_effect = lambda key, default=None: {
+            "spark.cr.cluster_cores": None,
+            "spark.default.parallelism": "16",
+            "spark.sql.shuffle.partitions": None,
+        }.get(key, default)
+        with patch(
+            "customer_retention.core.compat.detection.get_spark_session",
+            return_value=mock_spark,
+        ):
+            # Zero env var → falls through to spark.default.parallelism
+            assert get_default_parallelism() == 16
+
+    def test_malformed_env_var_falls_through(self):
+        os.environ["CR_CLUSTER_CORES"] = "not-a-number"
+        mock_spark = MagicMock()
+        mock_spark.conf.get.side_effect = lambda key, default=None: {
+            "spark.cr.cluster_cores": None,
+            "spark.default.parallelism": "8",
+            "spark.sql.shuffle.partitions": None,
+        }.get(key, default)
+        with patch(
+            "customer_retention.core.compat.detection.get_spark_session",
+            return_value=mock_spark,
+        ):
+            assert get_default_parallelism() == 8
+
+    def test_negative_env_var_falls_through(self):
+        os.environ["CR_CLUSTER_CORES"] = "-4"
+        mock_spark = MagicMock()
+        mock_spark.conf.get.side_effect = lambda key, default=None: {
+            "spark.cr.cluster_cores": None,
+            "spark.default.parallelism": "12",
+            "spark.sql.shuffle.partitions": None,
+        }.get(key, default)
+        with patch(
+            "customer_retention.core.compat.detection.get_spark_session",
+            return_value=mock_spark,
+        ):
+            assert get_default_parallelism() == 12
+
+    def test_spark_conf_cr_cluster_cores_used_when_env_var_unset(self):
+        # No env var set; spark.conf has the override
+        mock_spark = MagicMock()
+        mock_spark.conf.get.side_effect = lambda key, default=None: {
+            "spark.cr.cluster_cores": "24",
+        }.get(key, default)
+        with patch(
+            "customer_retention.core.compat.detection.get_spark_session",
+            return_value=mock_spark,
+        ):
+            assert get_default_parallelism() == 24
+
+    def test_env_var_beats_spark_conf(self):
+        os.environ["CR_CLUSTER_CORES"] = "64"
+        mock_spark = MagicMock()
+        mock_spark.conf.get.side_effect = lambda key, default=None: {
+            "spark.cr.cluster_cores": "24",
+        }.get(key, default)
+        with patch(
+            "customer_retention.core.compat.detection.get_spark_session",
+            return_value=mock_spark,
+        ):
+            # Env var (64) wins over Spark conf (24)
+            assert get_default_parallelism() == 64
+
+    def test_no_spark_returns_zero_when_no_env_var(self):
+        with patch(
+            "customer_retention.core.compat.detection.get_spark_session",
+            return_value=None,
+        ):
+            assert get_default_parallelism() == 0
+
+    def test_no_spark_but_env_var_set_returns_env_var(self):
+        os.environ["CR_CLUSTER_CORES"] = "16"
+        with patch(
+            "customer_retention.core.compat.detection.get_spark_session",
+            return_value=None,
+        ):
+            # Env var should be honoured even with no Spark session
+            assert get_default_parallelism() == 16
+
+    def test_falls_back_to_shuffle_partitions_only_as_last_resort(self):
+        mock_spark = MagicMock()
+        # All higher-priority sources return None except shuffle.partitions
+        mock_spark.conf.get.side_effect = lambda key, default=None: {
+            "spark.cr.cluster_cores": None,
+            "spark.default.parallelism": None,
+            "spark.sql.shuffle.partitions": "200",
+        }.get(key, default)
+        # sparkContext access raises (UC shared cluster behaviour)
+        from unittest.mock import PropertyMock
+        sc_mock = MagicMock()
+        type(sc_mock).defaultParallelism = PropertyMock(side_effect=Exception("blocked"))
+        mock_spark.sparkContext = sc_mock
+        with patch(
+            "customer_retention.core.compat.detection.get_spark_session",
+            return_value=mock_spark,
+        ):
+            assert get_default_parallelism() == 200

@@ -66,7 +66,8 @@ class SparkClassifierWrapper:
             spark_df = self._to_spark_df(X, y)
             spark_df = self._repartition_for_training(spark_df)
             owns_cache = True
-        spark_model = self._create_spark_model()
+        n_rows = spark_df.count()
+        spark_model = self._create_spark_model(n_rows=n_rows)
         self._fitted_model = spark_model.fit(spark_df)
         if owns_cache:
             spark_df.unpersist()
@@ -172,19 +173,35 @@ class SparkClassifierWrapper:
 
     @staticmethod
     def _repartition_for_training(spark_df: Any) -> Any:
-        """Repartition + cache before iterative model fit for full core utilization.
+        """Repartition + cache before iterative model fit.
 
-        Uses 2x cores to mitigate straggler tasks — if one partition
-        finishes early, the core picks up the next pending partition
-        instead of sitting idle.  The extra scheduler overhead is
-        negligible vs thousands of L-BFGS iterations.
+        Partition target is **row-aware**: ``min(2 * parallelism, n_rows / ~5K)``.
+        On Spark Connect / shared clusters ``get_default_parallelism()`` falls
+        back to ``spark.sql.shuffle.partitions`` (default 200), which inflates
+        the cluster-size estimate by 5–10x. Without a row-aware cap a 60K-row
+        training set would be split into 400 partitions (~150 rows each), and
+        every L-BFGS iteration would pay 400× per-task scheduling overhead.
+        For 1000 iterations on a shared cluster that compounds to hours.
         """
-        target = get_default_parallelism() * 2
-        if target > 2:
-            spark_df = spark_df.repartition(target)
+        n_rows = spark_df.count()
+        target = SparkClassifierWrapper._target_partitions(n_rows)
+        spark_df = spark_df.repartition(target)
         spark_df.cache()
         spark_df.count()
         return spark_df
+
+    @staticmethod
+    def _target_partitions(n_rows: int) -> int:
+        """Pick a partition count for iterative ML training.
+
+        Aim for ~5000 rows per partition (large enough that per-task scheduling
+        is amortised over real work, small enough to use the cluster).  Cap at
+        ``2 * parallelism`` so we never exceed the cluster-size estimate.
+        """
+        rows_per_partition = 5_000
+        target_by_size = max(1, (n_rows + rows_per_partition - 1) // rows_per_partition)
+        parallelism = max(1, get_default_parallelism())
+        return max(1, min(parallelism * 2, target_by_size))
 
     def _add_weight_column(self, spark_df: Any) -> Any:
         import pyspark.sql.functions as F  # noqa: N812
@@ -226,7 +243,7 @@ class SparkClassifierWrapper:
         wrapper._classes = np.array([0, 1])
         return wrapper
 
-    def _create_spark_model(self) -> Any:
+    def _create_spark_model(self, n_rows: int = 0) -> Any:
         fqn = _MODEL_REGISTRY.get(self.spark_model_class)
         if fqn is None:
             raise ValueError(f"Unknown spark model class: {self.spark_model_class}")
@@ -240,7 +257,13 @@ class SparkClassifierWrapper:
             params["weightCol"] = _WEIGHT_COL
 
         if "aggregationDepth" not in params and hasattr(model_cls, "aggregationDepth"):
-            n_partitions = get_default_parallelism() * 2
+            # Use the row-aware partition count, not raw parallelism, so the
+            # depth tracks the actual treeAggregate fan-in we'll see at fit time.
+            n_partitions = (
+                SparkClassifierWrapper._target_partitions(n_rows)
+                if n_rows > 0
+                else max(1, get_default_parallelism()) * 2
+            )
             if n_partitions > 2:
                 import math
                 params["aggregationDepth"] = max(2, int(math.ceil(math.log2(n_partitions) / math.log2(4))))

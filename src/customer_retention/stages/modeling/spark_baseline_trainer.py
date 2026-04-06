@@ -8,10 +8,21 @@ from customer_retention.core.components.enums import ModelType
 from .baseline_trainer import BaselineTrainer, TrainedModel
 from .spark_classifier_wrapper import SparkClassifierWrapper
 
+_LR_PARAMS: Dict[str, Any] = {
+    # maxIter caps the worst case; tol gives L-BFGS an early-termination
+    # criterion so it stops as soon as the parameter delta drops below 1e-4.
+    # The default tol=1e-6 is too strict for class_weight='balanced' on
+    # imbalanced data — L-BFGS oscillates near optimum and runs all 1000
+    # iterations, paying per-task scheduling overhead × N partitions × 1000
+    # on shared/Spark-Connect clusters.
+    "maxIter": 1000,
+    "tol": 1e-4,
+}
+
 _SPARK_MODEL_MAP: Dict[ModelType, tuple[str, Dict[str, Any]]] = {
     ModelType.LOGISTIC_REGRESSION: (
         "LogisticRegression",
-        {"maxIter": 1000},
+        dict(_LR_PARAMS),
     ),
     ModelType.RANDOM_FOREST: (
         "RandomForestClassifier",
@@ -95,7 +106,7 @@ def create_distributed_models(
     return {
         "Logistic Regression": SparkClassifierWrapper(
             spark_model_class="LogisticRegression",
-            spark_model_params={"maxIter": 1000},
+            spark_model_params=dict(_LR_PARAMS),
             feature_names=feature_names,
             class_weight=class_weight,
         ),
