@@ -313,6 +313,7 @@ class FeatureSelector:
                 num_top_features=self.max_features or len(candidates),
                 num_iterations=self.lgbm_num_iterations,
                 num_leaves=self.lgbm_num_leaves,
+                progress_fn=self._progress_fn,
             )
         else:
             dropped, reasons, scores = _local_lgbm_importance_selection(
@@ -320,6 +321,7 @@ class FeatureSelector:
                 num_top_features=self.max_features or len(candidates),
                 num_iterations=self.lgbm_num_iterations,
                 num_leaves=self.lgbm_num_leaves,
+                progress_fn=self._progress_fn,
             )
         self.importance_scores = scores
         for feature in dropped:
@@ -692,14 +694,17 @@ def _import_spark_lgbm_ml():
 def _spark_lgbm_importance_selection(
     spark_df: Any, target_column: str, feature_columns: List[str],
     num_top_features: int = 300, num_iterations: int = 200, num_leaves: int = 63,
+    progress_fn: Optional[Callable[[str], None]] = None,
 ) -> tuple:
     LGBMClassifier, VectorAssembler, F = _import_spark_lgbm_ml()
+    log = progress_fn or (lambda _msg: None)
 
     n_features = len(feature_columns)
     if num_top_features >= n_features:
         scores = {c: 0.0 for c in feature_columns}
         return [], {}, scores
 
+    log(f"    Preparing {n_features} features (cast + fill null)...")
     work_df = spark_df.select(
         [F.col(c).cast("double").alias(c) for c in feature_columns]
         + [F.col(target_column).cast("double").alias(target_column)]
@@ -708,14 +713,17 @@ def _spark_lgbm_importance_selection(
     if n_features > _CHI_BUCKET_BATCH:
         work_df = work_df.localCheckpoint(eager=True)
 
+    log(f"    Assembling {n_features} features into vector...")
     assembler = VectorAssembler(inputCols=feature_columns, outputCol="__lgbm_vec__", handleInvalid="keep")
     assembled = assembler.transform(work_df).select("__lgbm_vec__", target_column)
 
+    log(f"    Training LightGBM ({num_iterations} iterations, {num_leaves} leaves)...")
     lgbm = LGBMClassifier(featuresCol="__lgbm_vec__", labelCol=target_column,
                            numLeaves=num_leaves, numIterations=num_iterations, learningRate=0.1)
     model = lgbm.fit(assembled)
     importances = model.getFeatureImportances("gain")
     del work_df, assembled
+    log("    Training done, ranking features by gain importance...")
 
     scores: Dict[str, float] = {feature_columns[i]: float(importances[i]) for i in range(n_features)}
     top_indices = set(np.argsort(importances)[-num_top_features:])
@@ -727,20 +735,25 @@ def _spark_lgbm_importance_selection(
 def _local_lgbm_importance_selection(
     df: Any, target_column: str, feature_columns: List[str],
     num_top_features: int = 300, num_iterations: int = 200, num_leaves: int = 63,
+    progress_fn: Optional[Callable[[str], None]] = None,
 ) -> tuple:
     import lightgbm as lgb
 
+    log = progress_fn or (lambda _msg: None)
     n_features = len(feature_columns)
     if num_top_features >= n_features:
         return [], {}, {c: 0.0 for c in feature_columns}
 
+    log(f"    Preparing {n_features} features...")
     X = df[feature_columns].fillna(0).to_numpy()
     y = df[target_column].to_numpy()
 
+    log(f"    Training LightGBM ({num_iterations} iterations, {num_leaves} leaves)...")
     model = lgb.LGBMClassifier(n_estimators=num_iterations, num_leaves=num_leaves,
                                 learning_rate=0.1, importance_type="gain", n_jobs=-1, verbose=-1)
     model.fit(X, y)
     importances = model.feature_importances_
+    log("    Training done, ranking features by gain importance...")
 
     scores: Dict[str, float] = {feature_columns[i]: float(importances[i]) for i in range(n_features)}
     top_indices = set(np.argsort(importances)[-num_top_features:])
@@ -998,7 +1011,7 @@ def run_lgbm_importance_selection(
     selector = FeatureSelector(
         method=SelectionMethod.LGBM_IMPORTANCE, target_column=target_column,
         max_features=max_features, lgbm_num_iterations=num_iterations,
-        lgbm_num_leaves=num_leaves,
+        lgbm_num_leaves=num_leaves, progress_fn=log,
     )
     result = selector.fit_transform(work_df)
     elapsed = time.monotonic() - t0

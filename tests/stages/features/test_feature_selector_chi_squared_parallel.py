@@ -129,6 +129,51 @@ class TestBatchedScoringPandas:
         assert any("Chi-squared" in m for m in messages)
 
 
+class TestLgbmProgressFn:
+    def test_run_lgbm_forwards_progress_fn(self):
+        from customer_retention.stages.features.feature_selector import run_lgbm_importance_selection
+        np.random.seed(42)
+        n = 200
+        target = np.random.choice([0, 1], n)
+        df = pd.DataFrame({
+            "f1": target * 3.0 + np.random.randn(n),
+            "f2": np.random.randn(n),
+            "target": target,
+        })
+        messages: list[str] = []
+        run_lgbm_importance_selection(df, "target", max_features=1, num_iterations=10, progress_fn=messages.append)
+        assert any("LightGBM" in m for m in messages)
+        assert any("Training" in m for m in messages)
+
+    def test_spark_lgbm_receives_progress_fn(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.stages.features.feature_selector import _spark_lgbm_importance_selection
+
+        feature_cols = ["f1", "f2", "f3"]
+        messages: list[str] = []
+
+        with patch("customer_retention.stages.features.feature_selector._import_spark_lgbm_ml") as mock_imp:
+            mock_F = MagicMock()
+            mock_assembler_cls = MagicMock()
+            mock_lgbm_cls = MagicMock()
+            mock_model = MagicMock()
+            mock_model.getFeatureImportances.return_value = np.array([50.0, 10.0, 1.0])
+            mock_lgbm_cls.return_value.fit.return_value = mock_model
+            mock_imp.return_value = (mock_lgbm_cls, mock_assembler_cls, mock_F)
+            mock_spark_df = MagicMock()
+            work_df = mock_spark_df.select.return_value.na.fill.return_value
+            mock_assembler_cls.return_value.transform.return_value.select.return_value = work_df
+
+            _spark_lgbm_importance_selection(
+                mock_spark_df, "target", feature_cols, num_top_features=1,
+                progress_fn=messages.append,
+            )
+
+        assert len(messages) > 0
+        assert any("Training" in m for m in messages)
+
+
 class TestBucketizerCheckpointInterval:
     def test_checkpoint_interval_constant_exists(self):
         from customer_retention.stages.features.feature_selector import _CHI_BUCKET_BATCH, _CHI_CHECKPOINT_INTERVAL
