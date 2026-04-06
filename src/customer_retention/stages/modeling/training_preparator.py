@@ -567,3 +567,71 @@ class TrainingPreparator:
     def _class_distribution(self, y: Series) -> dict[int, int]:
         vc = collect_for_sklearn(y.value_counts())
         return {int(k): int(v) for k, v in vc.items()}
+
+
+def prepare_for_diagnostics(
+    gold: DataFrame,
+    *,
+    target_column: str,
+    feature_names: list[str],
+    purge_gap_days: int,
+    entity_column: str = "entity_id",
+    date_column: str = "as_of_date",
+    test_size: float = 0.2,
+    random_state: int = 42,
+) -> Any:
+    """Reproduce NB08's temporal train/test split from a saved gold table.
+
+    NB09 uses the saved models on the exact train/test partition that NB08 trained on.
+    Running ``TrainingPreparator.prepare`` again is fragile: its zero-variance drop
+    and entity sampling can diverge from NB08's in-memory run and silently remove
+    columns that the trained model still expects. Instead this helper:
+
+    * Fails fast if any model feature is missing from gold (so the caller learns
+      the gold table is out of date instead of silently corrupting diagnostics).
+    * Selects only the final ``feature_names`` + split metadata.
+    * Drops rows with a missing target and median-imputes the feature columns,
+      mirroring the preparator's pre-split steps.
+    * Delegates to ``DataSplitter`` with the same temporal/entity config NB08 used
+      so the hash-based entity split and purge gap match exactly.
+
+    Returns a :class:`~customer_retention.stages.modeling.data_splitter.SplitResult`.
+    Works on both pandas and pyspark.pandas — heavy operations stay distributed
+    and use batched bulk helpers.
+    """
+    missing = [c for c in feature_names if c not in gold.columns]
+    if missing:
+        preview = ", ".join(missing[:5])
+        suffix = f" (+{len(missing) - 5} more)" if len(missing) > 5 else ""
+        raise KeyError(
+            f"Gold table is missing {len(missing)} feature(s) the trained model expects: "
+            f"{preview}{suffix}. Re-run NB08 so the saved gold contains every column listed "
+            f"in exploration_diagnostics.json#feature_names."
+        )
+
+    selected = gold[list(feature_names) + [target_column, entity_column, date_column]]
+    df = _drop_missing_target_rows(selected, target_column)
+    df = bulk_median_impute(df, columns=list(feature_names))
+
+    splitter = DataSplitter(
+        target_column=target_column,
+        strategy=SplitStrategy.TEMPORAL,
+        temporal_column=date_column,
+        group_column=entity_column,
+        test_size=test_size,
+        random_state=random_state,
+        purge_gap_days=purge_gap_days,
+        exclude_columns=[date_column, entity_column],
+    )
+    return splitter.split(df)
+
+
+def _drop_missing_target_rows(df: DataFrame, target_column: str) -> DataFrame:
+    if _is_spark_pandas(df):
+        from pyspark.sql import functions as F  # noqa: N812
+
+        from customer_retention.core.compat.spark_backend import _as_pandas_api
+
+        spark_df = as_spark_df(df).filter(F.col(target_column).isNotNull())
+        return _as_pandas_api(spark_df)
+    return df[df[target_column].notna()]
