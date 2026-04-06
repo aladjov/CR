@@ -1670,6 +1670,7 @@ def _mlflow_evaluate_predictions(predictions):
     )
 
 def _log_best_model(model, df, feature_cols, test_df):
+    _registered_name = f"{CATALOG}.{SCHEMA}.model_{COMPOSITE_NAME}"
     try:
         from databricks.feature_engineering import FeatureEngineeringClient, FeatureLookup
         fe = FeatureEngineeringClient()
@@ -1686,12 +1687,31 @@ def _log_best_model(model, df, feature_cols, test_df):
         fe.log_model(
             model=model, artifact_path="best_model", flavor=mlflow.spark,
             training_set=training_set,
-            registered_model_name=f"{CATALOG}.{SCHEMA}.model_{COMPOSITE_NAME}",
+            registered_model_name=_registered_name,
         )
-        print(f"[TRAINING] Model registered: {CATALOG}.{SCHEMA}.model_{COMPOSITE_NAME}")
+        print(f"[TRAINING] Model registered: {_registered_name}")
     except ImportError:
         _sig = infer_signature(test_df, model.transform(test_df))
-        mlflow.spark.log_model(model, "best_model", dfs_tmpdir=_DFS_TMPDIR, pip_requirements=_PIP_REQS, signature=_sig)
+        mlflow.spark.log_model(
+            model, "best_model", dfs_tmpdir=_DFS_TMPDIR,
+            pip_requirements=_PIP_REQS, signature=_sig,
+            registered_model_name=_registered_name,
+        )
+        print(f"[TRAINING] Model registered (fallback path): {_registered_name}")
+    return _registered_name
+
+
+def _promote_to_production(registered_name, parent_run_id):
+    from mlflow.tracking import MlflowClient as _MlflowClient
+    _client = _MlflowClient()
+    _versions = _client.search_model_versions(f"name='{registered_name}' and run_id='{parent_run_id}'")
+    if not _versions:
+        print(f"[TRAINING] WARNING: no model versions found for {registered_name} run_id={parent_run_id}")
+        return None
+    _latest = max(_versions, key=lambda v: int(v.version))
+    _client.set_registered_model_alias(registered_name, "production", _latest.version)
+    print(f"[TRAINING] Alias @production -> {registered_name} v{_latest.version}")
+    return _latest.version
 
 def train_and_evaluate():
     _results = {"models": {}, "feature_profile": {}}
@@ -1870,6 +1890,9 @@ def train_and_evaluate():
     best_auc = -1.0
     best_model = None
     best_metrics = {}
+    _logged_models = []
+    _registered_model_name = ""
+    _registered_model_version = None
 
     _experiment_name = f"/Shared/training_{COMPOSITE_NAME}"
     with mlflow.start_run(run_name=f"training_{COMPOSITE_NAME}") as _parent_run:
@@ -1883,7 +1906,7 @@ def train_and_evaluate():
         mlflow.log_params({"train_samples": train_count, "test_samples": test_count, "n_features": len(feature_cols)})
 
         for name, model in models.items():
-            with mlflow.start_run(run_name=name, nested=True):
+            with mlflow.start_run(run_name=name, nested=True) as _nested_run:
                 with log_timing(f"fit_{name}", logger, train_rows=train_count):
                     fitted = model.fit(train_df)
                 _log_training_progress(fitted, name)
@@ -1891,10 +1914,16 @@ def train_and_evaluate():
                 mlflow.log_param("num_features", len(feature_cols))
                 predictions = fitted.transform(test_df)
                 _sig = infer_signature(test_df, predictions)
-                try:
-                    mlflow.spark.log_model(fitted, f"model_{name}", dfs_tmpdir=_DFS_TMPDIR, pip_requirements=_PIP_REQS, signature=_sig)
-                except Exception as _save_err:
-                    print(f"[TRAINING] WARNING: Model save failed for {name}: {_save_err}")
+                _artifact_path = f"model_{name}"
+                _log_info = mlflow.spark.log_model(fitted, _artifact_path, dfs_tmpdir=_DFS_TMPDIR, pip_requirements=_PIP_REQS, signature=_sig)
+                _logged_models.append({
+                    "artifact_path": _artifact_path,
+                    "model_uri": _log_info.model_uri,
+                    "flavor": "spark",
+                    "run_id": _nested_run.info.run_id,
+                    "display_name": name,
+                    "wrapper_meta_artifact_path": None,
+                })
                 metrics = _evaluate_model(predictions)
                 print(f"[TRAINING] {name}: AUC={metrics['roc_auc']:.4f}, PR-AUC={metrics['pr_auc']:.4f}, F1={metrics['f1']:.4f}")
                 _results["models"][name] = metrics
@@ -1920,13 +1949,13 @@ def train_and_evaluate():
                 json.dump({"feature_columns": feature_cols, "count": len(feature_cols)}, f)
             mlflow.log_artifact(_features_path)
         if best_model is not None:
-            try:
-                _log_best_model(best_model, df, feature_cols, test_df)
-            except Exception as _best_err:
-                print(f"[TRAINING] WARNING: Best model registration failed: {_best_err}")
+            _registered_model_name = _log_best_model(best_model, df, feature_cols, test_df)
+            _registered_model_version = _promote_to_production(_registered_model_name, _parent_run.info.run_id)
 
     _results["best_model"] = best_model_name
     _results["best_roc_auc"] = best_auc
+    _results["registered_model_name"] = _registered_model_name
+    _results["registered_model_version"] = _registered_model_version
 
     if _NAMESPACE is not None:
         _training_meta = {
@@ -1940,6 +1969,9 @@ def train_and_evaluate():
             "best_model_name": best_model_name,
             "best_roc_auc": best_auc,
             "feature_columns": feature_cols,
+            "logged_models": _logged_models,
+            "registered_model_name": _registered_model_name,
+            "registered_model_version": _registered_model_version,
         }
         _NAMESPACE.training_metadata_path.parent.mkdir(parents=True, exist_ok=True)
         _NAMESPACE.training_metadata_path.write_text(json.dumps(_training_meta))

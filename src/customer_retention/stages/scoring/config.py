@@ -3,16 +3,11 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
-from customer_retention.core.config.experiments import get_catalog, get_experiment_name, get_experiments_dir, get_schema
-
-try:
-    from mlflow.tracking import MlflowClient
-except ImportError:  # pragma: no cover
-    MlflowClient = None  # type: ignore[assignment,misc]
+from customer_retention.core.config.experiments import get_catalog, get_experiments_dir, get_schema
 
 
 @dataclass
@@ -32,6 +27,10 @@ class ScoringConfig:
     feast_repo_path: str = ""
     feast_feature_view: str = ""
     pipeline_dir: Path = Path()
+    mlflow_run_id: str = ""
+    best_model_name: str = ""
+    logged_models: List[Dict[str, Any]] = field(default_factory=list)
+    registered_model_name: str = ""
 
     @property
     def original_column(self) -> str:
@@ -53,6 +52,7 @@ class ScoringConfig:
             raise FileNotFoundError(f"No config.py found in {pipeline_dir}")
         module = _load_module_from_path("_scoring_config_gen", config_path)
         cn = getattr(module, "COMPOSITE_NAME", module.PIPELINE_NAME)
+        meta = _load_training_metadata(_discover_namespace())
         return cls(
             pipeline_name=module.PIPELINE_NAME,
             composite_name=cn,
@@ -67,6 +67,10 @@ class ScoringConfig:
             feast_repo_path=module.FEAST_REPO_PATH,
             feast_feature_view=module.FEAST_FEATURE_VIEW,
             pipeline_dir=pipeline_dir,
+            mlflow_run_id=(meta or {}).get("mlflow_run_id", ""),
+            best_model_name=(meta or {}).get("best_model_name", ""),
+            logged_models=(meta or {}).get("logged_models", []),
+            registered_model_name=(meta or {}).get("registered_model_name", ""),
         )
 
     @classmethod
@@ -76,39 +80,18 @@ class ScoringConfig:
         experiments_dir = get_experiments_dir()
         ns = _discover_namespace()
         meta = _load_training_metadata(ns) if ns else None
-        experiment_name = meta["mlflow_experiment_name"] if meta else get_experiment_name()
-        client = MlflowClient()
-        experiment = client.get_experiment_by_name(experiment_name)
-        if not experiment and not meta:
-            training_name = f"/Shared/training_{experiment_name}"
-            experiment = client.get_experiment_by_name(training_name)
-        if not experiment:
-            experiment = _search_experiment_by_suffix(client, experiment_name)
-        if not experiment:
-            tried = [experiment_name, f"/Shared/training_{experiment_name}", f"*{experiment_name}* (search)"]
+        if not meta:
             raise ValueError(
-                f"MLflow experiment not found. Tried: {tried}. "
-                "Set CR_EXPERIMENT_NAME to the full experiment path."
+                "No training_metadata.json found in the run namespace. "
+                "Re-run the generated training pipeline (NB10 output) before scoring."
             )
-        runs = client.search_runs(
-            experiment_ids=[experiment.experiment_id],
-            order_by=["metrics.best_roc_auc DESC"],
-            max_results=1,
-        )
-        if not runs:
-            raise ValueError(f"No runs found in experiment '{experiment_name}'")
-        run = runs[0]
-        tags = run.data.tags
-        params = run.data.params
-        target_column = tags.get("target_column", params.get("target_column", "target"))
-        entity_key = tags.get("entity_key", params.get("entity_key", "customer_id"))
-        timestamp_column = tags.get("timestamp_column", params.get("timestamp_column", "event_timestamp"))
-        recommendations_hash = tags.get("recommendations_hash", "")
-        cn = tags.get("composite_name", experiment_name)
-        if ns:
-            artifacts_path = ns.artifacts_dir(recommendations_hash)
-        else:
-            artifacts_path = experiments_dir / "artifacts" / (recommendations_hash or "default")
+        experiment_name = meta["mlflow_experiment_name"]
+        target_column = meta.get("target_column", "target")
+        entity_key = meta.get("entity_key", "entity_id")
+        timestamp_column = meta.get("timestamp_column", "event_timestamp")
+        recommendations_hash = meta.get("recommendations_hash", "")
+        cn = meta.get("composite_name", experiment_name)
+        artifacts_path = ns.artifacts_dir(recommendations_hash)
         return cls(
             pipeline_name=experiment_name,
             composite_name=cn,
@@ -122,6 +105,10 @@ class ScoringConfig:
             production_dir=experiments_dir,
             catalog=catalog,
             schema=schema,
+            mlflow_run_id=meta.get("mlflow_run_id", ""),
+            best_model_name=meta.get("best_model_name", ""),
+            logged_models=meta.get("logged_models", []),
+            registered_model_name=meta.get("registered_model_name", ""),
         )
 
 
@@ -131,21 +118,14 @@ def _discover_namespace() -> Optional["RunNamespace"]:  # noqa: F821
 
 
 def _load_training_metadata(ns) -> Optional[dict]:
+    if ns is None:
+        return None
     for path in (ns.training_metadata_path, ns.exploration_metadata_path):
         try:
             return json.loads(path.read_text())
         except (OSError, json.JSONDecodeError):
             continue
     return None
-
-
-def _search_experiment_by_suffix(client, experiment_name: str):
-    results = client.search_experiments(
-        filter_string=f"name LIKE '%{experiment_name}'"
-    )
-    if not results:
-        return None
-    return max(results, key=lambda e: getattr(e, "creation_time", 0))
 
 
 def _load_module_from_path(module_name: str, path: Path):

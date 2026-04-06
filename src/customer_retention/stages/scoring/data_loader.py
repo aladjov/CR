@@ -53,56 +53,56 @@ class ScoringDataLoader:
             return scoring_df
         return self._load_feast_features(scoring_df)
 
-    def _resolve_experiment(self, client):
-        experiment = client.get_experiment_by_name(self.config.pipeline_name)
-        if not experiment:
-            experiment = client.get_experiment_by_name(f"training_{self.config.composite_name}")
-        return experiment
-
     def load_model(self, model_tag: str | None = None) -> Tuple[Any, str]:
         mlflow.set_tracking_uri(self.config.mlflow_tracking_uri)
-        client = MlflowClient()
-        experiment = self._resolve_experiment(client)
-        if not experiment:
-            raise ValueError(f"Experiment '{self.config.pipeline_name}' not found")
-        parent_run = self._find_best_parent_run(client, experiment.experiment_id)
-        tag = model_tag or parent_run.data.tags.get("best_model", "random_forest")
-        model_name = self._model_artifact_name(tag)
-        model_run = self._find_model_run(client, experiment.experiment_id, parent_run, tag)
-        model_uri = f"runs:/{model_run.info.run_id}/{model_name}"
-        if self.config.is_databricks:
+        if self.config.is_databricks and self.config.registered_model_name and model_tag is None:
+            alias_uri = f"models:/{self.config.registered_model_name}@production"
+            return mlflow.spark.load_model(alias_uri), alias_uri
+        entry = self._select_logged_model(model_tag)
+        model_uri = entry["model_uri"]
+        flavor = entry["flavor"]
+        if flavor == "spark":
             return mlflow.spark.load_model(model_uri), model_uri
-        loader_module = mlflow.xgboost if tag == "xgboost" else mlflow.sklearn
-        try:
-            return loader_module.load_model(model_uri), model_uri
-        except Exception:
-            logged_models = client.search_logged_models(experiment_ids=[experiment.experiment_id])
-            for lm in logged_models:
-                if lm.name == model_name and lm.source_run_id == model_run.info.run_id:
-                    return loader_module.load_model(lm.model_uri), lm.model_uri
-            raise
+        if flavor == "xgboost":
+            return mlflow.xgboost.load_model(model_uri), model_uri
+        return mlflow.sklearn.load_model(model_uri), model_uri
 
     def list_trained_model_tags(self) -> List[str]:
-        mlflow.set_tracking_uri(self.config.mlflow_tracking_uri)
-        client = MlflowClient()
-        experiment = self._resolve_experiment(client)
-        if not experiment:
-            return []
-        parent_run = self._find_best_parent_run(client, experiment.experiment_id)
-        child_runs = self._find_child_runs(
-            client, experiment.experiment_id, parent_run.info.run_id,
-        )
-        if child_runs:
-            return [c.info.run_name for c in child_runs]
-        return [parent_run.data.tags.get("best_model", "random_forest")]
+        return [self._entry_display_name(e) for e in self.config.logged_models]
 
-    def _model_artifact_name(self, model_tag: str) -> str:
-        base = f"model_{model_tag}"
-        if self.config.is_databricks:
-            return base
-        if self.config.recommendations_hash:
-            return f"{base}_{self.config.recommendations_hash}"
-        return base
+    def _select_logged_model(self, model_tag: str | None) -> dict:
+        if not self.config.logged_models:
+            raise ValueError(
+                "ScoringConfig.logged_models is empty. "
+                "Re-run the generated training pipeline (NB10 output) so it persists model URIs "
+                "into training_metadata.json."
+            )
+        if model_tag:
+            for entry in self.config.logged_models:
+                if self._entry_matches(entry, model_tag):
+                    return entry
+            available = [self._entry_display_name(e) for e in self.config.logged_models]
+            raise ValueError(f"Model tag '{model_tag}' not found in logged_models. Available: {available}")
+        target_name = self.config.best_model_name
+        if target_name:
+            for entry in self.config.logged_models:
+                if self._entry_matches(entry, target_name):
+                    return entry
+        return self.config.logged_models[0]
+
+    @staticmethod
+    def _entry_display_name(entry: dict) -> str:
+        return entry.get("display_name") or entry.get("artifact_path", "")
+
+    @classmethod
+    def _entry_matches(cls, entry: dict, name: str) -> bool:
+        candidates = {
+            entry.get("display_name"),
+            entry.get("artifact_path"),
+            entry.get("artifact_path", "").removeprefix("model_") or None,
+        }
+        candidates.discard(None)
+        return name in candidates
 
     def load_artifact_store(self) -> ArtifactStore | None:
         if self.config.is_databricks:
@@ -163,14 +163,15 @@ class ScoringDataLoader:
         ).toPandas()["prob"].to_numpy()
 
     def load_training_feature_names(self) -> list[str]:
+        if not self.config.mlflow_run_id:
+            raise ValueError(
+                "ScoringConfig.mlflow_run_id is empty. "
+                "Re-run the generated training pipeline so it persists the parent run id."
+            )
         mlflow.set_tracking_uri(self.config.mlflow_tracking_uri)
         client = MlflowClient()
-        experiment = self._resolve_experiment(client)
-        if not experiment:
-            raise ValueError(f"Experiment '{self.config.pipeline_name}' not found in MLflow")
-        parent_run = self._find_best_parent_run(client, experiment.experiment_id)
         import json as _json
-        local_path = Path(client.download_artifacts(parent_run.info.run_id, "features.json"))
+        local_path = Path(client.download_artifacts(self.config.mlflow_run_id, "features.json"))
         if local_path.is_dir():
             children = list(local_path.iterdir())
             json_files = [c for c in children if c.suffix == ".json"]
@@ -179,7 +180,7 @@ class ScoringDataLoader:
             data = _json.load(f)
         features = data.get("feature_columns")
         if not features:
-            raise ValueError(f"features.json in run {parent_run.info.run_id} has no 'feature_columns'")
+            raise ValueError(f"features.json in run {self.config.mlflow_run_id} has no 'feature_columns'")
         return features
 
     def _load_gold_from_spark(self) -> Any:
@@ -227,53 +228,6 @@ class ScoringDataLoader:
         result_df[self.config.original_column] = scoring_df[self.config.original_column].to_numpy()
         result_df[self.config.entity_key] = scoring_df[self.config.entity_key].to_numpy()
         return result_df
-
-    def _find_best_parent_run(self, client, experiment_id: str):
-        if self.config.recommendations_hash:
-            runs = client.search_runs(
-                experiment_ids=[experiment_id],
-                filter_string=f"tags.recommendations_hash = '{self.config.recommendations_hash}'",
-                order_by=["metrics.best_roc_auc DESC"],
-                max_results=1,
-            )
-            if runs:
-                return runs[0]
-        runs = client.search_runs(
-            experiment_ids=[experiment_id],
-            order_by=["metrics.best_roc_auc DESC"],
-            max_results=1,
-        )
-        if not runs:
-            raise ValueError(f"No runs found in experiment '{self.config.pipeline_name}'")
-        return runs[0]
-
-    def _find_child_runs(self, client, experiment_id: str, parent_run_id: str):
-        """Search for child runs, checking all experiments if needed.
-
-        Nested runs with the sqlite backend sometimes land in the Default
-        experiment instead of the parent's experiment.
-        """
-        child_runs = client.search_runs(
-            experiment_ids=[experiment_id],
-            filter_string=f"tags.mlflow.parentRunId = '{parent_run_id}'",
-        )
-        if child_runs:
-            return child_runs
-        all_ids = [
-            e.experiment_id
-            for e in client.search_experiments()
-            if e.experiment_id != experiment_id
-        ]
-        if all_ids:
-            child_runs = client.search_runs(
-                experiment_ids=all_ids,
-                filter_string=f"tags.mlflow.parentRunId = '{parent_run_id}'",
-            )
-        return child_runs
-
-    def _find_model_run(self, client, experiment_id: str, parent_run, model_tag: str):
-        child_runs = self._find_child_runs(client, experiment_id, parent_run.info.run_id)
-        return next((c for c in child_runs if c.info.run_name == model_tag), parent_run)
 
     def _load_gold_module(self):
         if self.config.is_databricks:

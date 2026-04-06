@@ -66,19 +66,6 @@ def sample_gold_df():
     return df
 
 
-@pytest.fixture
-def mock_mlflow_client():
-    client = MagicMock()
-    experiment = MagicMock()
-    experiment.experiment_id = "exp_1"
-    client.get_experiment_by_name.return_value = experiment
-    parent_run = MagicMock()
-    parent_run.info.run_id = "parent_run_1"
-    parent_run.data.tags = {"best_model": "random_forest", "recommendations_hash": "abc123"}
-    client.search_runs.return_value = [parent_run]
-    return client
-
-
 class TestLoadGoldFeaturesLocal:
     def test_loads_from_delta_with_cn(self, local_config, sample_gold_df, tmp_path):
         from customer_retention.integrations.adapters.factory import get_delta
@@ -182,246 +169,178 @@ class TestLoadGoldFeaturesDistributedDatabricks:
         mock_spark.table.return_value.toPandas.assert_not_called()
 
 
+def _sklearn_entry(display="random_forest", run_id="run_rf", artifact="model_random_forest_abc123"):
+    return {
+        "artifact_path": artifact,
+        "model_uri": f"runs:/{run_id}/{artifact}",
+        "flavor": "sklearn",
+        "run_id": run_id,
+        "display_name": display,
+        "wrapper_meta_artifact_path": None,
+    }
+
+
+def _spark_entry(display="RandomForestClassifier", run_id="run_rf", artifact="model_RandomForestClassifier"):
+    return {
+        "artifact_path": artifact,
+        "model_uri": f"runs:/{run_id}/{artifact}",
+        "flavor": "spark",
+        "run_id": run_id,
+        "display_name": display,
+        "wrapper_meta_artifact_path": None,
+    }
+
+
 class TestLoadModel:
-    def test_loads_sklearn_model(self, local_config, mock_mlflow_client):
+    def test_loads_sklearn_model_from_persisted_uri(self, local_config):
+        local_config.logged_models = [_sklearn_entry()]
+        local_config.best_model_name = "random_forest"
         mock_model = MagicMock()
-        with (
-            patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow,
-            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
-        ):
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
             mock_mlflow.sklearn.load_model.return_value = mock_model
             loader = ScoringDataLoader(local_config)
             model, uri = loader.load_model()
         assert model is mock_model
-        assert "runs:/" in uri
+        assert uri == "runs:/run_rf/model_random_forest_abc123"
+        mock_mlflow.sklearn.load_model.assert_called_once_with(uri)
 
-    def test_loads_xgboost_model(self, local_config, mock_mlflow_client):
-        mock_mlflow_client.search_runs.return_value[0].data.tags["best_model"] = "xgboost"
-        mock_model = MagicMock()
-        with (
-            patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow,
-            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
-        ):
-            mock_mlflow.xgboost.load_model.return_value = mock_model
-            loader = ScoringDataLoader(local_config)
-            model, uri = loader.load_model()
-        assert model is mock_model
-        mock_mlflow.xgboost.load_model.assert_called_once()
-
-    def test_no_experiment_raises(self, local_config):
-        client = MagicMock()
-        client.get_experiment_by_name.return_value = None
-        with (
-            patch("customer_retention.stages.scoring.data_loader.mlflow"),
-            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=client),
-        ):
-            loader = ScoringDataLoader(local_config)
-            with pytest.raises(ValueError, match="not found"):
-                loader.load_model()
-
-    def test_no_runs_raises(self, local_config):
-        client = MagicMock()
-        experiment = MagicMock()
-        experiment.experiment_id = "exp_1"
-        client.get_experiment_by_name.return_value = experiment
-        client.search_runs.return_value = []
-        with (
-            patch("customer_retention.stages.scoring.data_loader.mlflow"),
-            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=client),
-        ):
-            loader = ScoringDataLoader(local_config)
-            with pytest.raises(ValueError, match="No runs"):
-                loader.load_model()
-
-    def test_child_run_used_when_available(self, local_config, mock_mlflow_client):
-        child_run = MagicMock()
-        child_run.info.run_id = "child_1"
-        child_run.info.run_name = "random_forest"
-
-        def side_effect(experiment_ids, filter_string="", order_by=None, max_results=None):
-            if "parentRunId" in filter_string:
-                return [child_run]
-            return mock_mlflow_client.search_runs.return_value
-
-        mock_mlflow_client.search_runs.side_effect = side_effect
-        with (
-            patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow,
-            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
-        ):
-            mock_mlflow.sklearn.load_model.return_value = MagicMock()
+    def test_loads_xgboost_model_by_flavor(self, local_config):
+        xgb_entry = {
+            "artifact_path": "model_xgboost_abc123",
+            "model_uri": "runs:/run_xgb/model_xgboost_abc123",
+            "flavor": "xgboost",
+            "run_id": "run_xgb",
+            "display_name": "xgboost",
+            "wrapper_meta_artifact_path": None,
+        }
+        local_config.logged_models = [xgb_entry]
+        local_config.best_model_name = "xgboost"
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
+            mock_mlflow.xgboost.load_model.return_value = MagicMock()
             loader = ScoringDataLoader(local_config)
             _, uri = loader.load_model()
-        assert "child_1" in uri
+        assert uri == "runs:/run_xgb/model_xgboost_abc123"
+        mock_mlflow.xgboost.load_model.assert_called_once()
+        mock_mlflow.sklearn.load_model.assert_not_called()
 
+    def test_empty_logged_models_raises(self, local_config):
+        local_config.logged_models = []
+        with patch("customer_retention.stages.scoring.data_loader.mlflow"):
+            loader = ScoringDataLoader(local_config)
+            with pytest.raises(ValueError, match="logged_models is empty"):
+                loader.load_model()
 
-    def test_loads_spark_model_on_databricks(self, databricks_config, mock_mlflow_client):
+    def test_unknown_tag_raises_with_available_names(self, local_config):
+        local_config.logged_models = [_sklearn_entry(display="random_forest")]
+        with patch("customer_retention.stages.scoring.data_loader.mlflow"):
+            loader = ScoringDataLoader(local_config)
+            with pytest.raises(ValueError, match="not found.*random_forest"):
+                loader.load_model(model_tag="nonexistent")
+
+    def test_databricks_loads_from_production_alias(self, databricks_config):
+        databricks_config.registered_model_name = "analytics.churn.model_cust_emails_prof__a1b2c3d"
+        databricks_config.logged_models = [_spark_entry()]
         mock_spark_model = MagicMock()
-        with (
-            patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow,
-            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
-        ):
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
             mock_mlflow.spark.load_model.return_value = mock_spark_model
             loader = ScoringDataLoader(databricks_config)
             model, uri = loader.load_model()
         assert model is mock_spark_model
-        mock_mlflow.spark.load_model.assert_called_once()
-        mock_mlflow.sklearn.load_model.assert_not_called()
+        assert uri == "models:/analytics.churn.model_cust_emails_prof__a1b2c3d@production"
+        mock_mlflow.spark.load_model.assert_called_once_with(uri)
 
-    def test_databricks_model_name_has_no_hash(self, databricks_config, mock_mlflow_client):
-        with (
-            patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow,
-            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
-        ):
+    def test_databricks_without_registered_name_falls_back_to_logged_models(self, databricks_config):
+        databricks_config.registered_model_name = ""
+        databricks_config.logged_models = [_spark_entry()]
+        databricks_config.best_model_name = "RandomForestClassifier"
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
             mock_mlflow.spark.load_model.return_value = MagicMock()
             loader = ScoringDataLoader(databricks_config)
             _, uri = loader.load_model()
-        assert "model_random_forest" in uri
-        assert "abc123" not in uri
+        assert uri == "runs:/run_rf/model_RandomForestClassifier"
 
-    def test_local_model_name_includes_hash(self, local_config, mock_mlflow_client):
-        with (
-            patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow,
-            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
-        ):
+    def test_databricks_explicit_tag_bypasses_alias(self, databricks_config):
+        databricks_config.registered_model_name = "analytics.churn.model_x"
+        databricks_config.logged_models = [
+            _spark_entry(display="LogisticRegression", run_id="run_lr", artifact="model_LogisticRegression"),
+            _spark_entry(display="GBTClassifier", run_id="run_gbt", artifact="model_GBTClassifier"),
+        ]
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
+            mock_mlflow.spark.load_model.return_value = MagicMock()
+            loader = ScoringDataLoader(databricks_config)
+            _, uri = loader.load_model(model_tag="LogisticRegression")
+        assert uri == "runs:/run_lr/model_LogisticRegression"
+
+    def test_best_model_name_selects_matching_entry(self, local_config):
+        local_config.logged_models = [
+            _sklearn_entry(display="logistic_regression", run_id="run_lr", artifact="model_logistic_regression_abc"),
+            _sklearn_entry(display="random_forest", run_id="run_rf", artifact="model_random_forest_abc"),
+        ]
+        local_config.best_model_name = "random_forest"
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
             mock_mlflow.sklearn.load_model.return_value = MagicMock()
             loader = ScoringDataLoader(local_config)
             _, uri = loader.load_model()
-        assert "model_random_forest_abc123" in uri
+        assert "run_rf" in uri
 
-    def test_explicit_model_tag_overrides_best(self, local_config, mock_mlflow_client):
-        with (
-            patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow,
-            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
-        ):
+    def test_explicit_tag_matches_by_display_name(self, local_config):
+        local_config.logged_models = [
+            _sklearn_entry(display="logistic_regression", run_id="run_lr", artifact="model_logistic_regression_abc"),
+            _sklearn_entry(display="random_forest", run_id="run_rf", artifact="model_random_forest_abc"),
+        ]
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
             mock_mlflow.sklearn.load_model.return_value = MagicMock()
             loader = ScoringDataLoader(local_config)
             _, uri = loader.load_model(model_tag="logistic_regression")
-        assert "model_logistic_regression_abc123" in uri
+        assert "run_lr" in uri
 
-    def test_explicit_xgboost_tag_uses_xgboost_loader(self, local_config, mock_mlflow_client):
-        with (
-            patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow,
-            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
-        ):
-            mock_mlflow.xgboost.load_model.return_value = MagicMock()
-            loader = ScoringDataLoader(local_config)
-            loader.load_model(model_tag="xgboost")
-        mock_mlflow.xgboost.load_model.assert_called_once()
-        mock_mlflow.sklearn.load_model.assert_not_called()
-
-    def test_explicit_tag_on_databricks_uses_spark(self, databricks_config, mock_mlflow_client):
-        with (
-            patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow,
-            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
-        ):
-            mock_mlflow.spark.load_model.return_value = MagicMock()
-            loader = ScoringDataLoader(databricks_config)
-            _, uri = loader.load_model(model_tag="RandomForestClassifier")
-        mock_mlflow.spark.load_model.assert_called_once()
-        assert "model_RandomForestClassifier" in uri
-
-    def test_explicit_tag_databricks_no_hash(self, databricks_config, mock_mlflow_client):
-        with (
-            patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow,
-            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
-        ):
-            mock_mlflow.spark.load_model.return_value = MagicMock()
-            loader = ScoringDataLoader(databricks_config)
-            _, uri = loader.load_model(model_tag="RandomForestClassifier")
-        assert "abc123" not in uri
-
-    def test_explicit_tag_finds_matching_child_run(self, local_config, mock_mlflow_client):
-        child_lr = MagicMock()
-        child_lr.info.run_id = "child_lr"
-        child_lr.info.run_name = "logistic_regression"
-        child_rf = MagicMock()
-        child_rf.info.run_id = "child_rf"
-        child_rf.info.run_name = "random_forest"
-
-        def side_effect(experiment_ids, filter_string="", order_by=None, max_results=None):
-            if "parentRunId" in filter_string:
-                return [child_lr, child_rf]
-            return mock_mlflow_client.search_runs.return_value
-
-        mock_mlflow_client.search_runs.side_effect = side_effect
-        with (
-            patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow,
-            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
-        ):
+    def test_explicit_tag_matches_by_stripped_artifact(self, local_config):
+        local_config.logged_models = [_sklearn_entry(display="RandomForest", artifact="model_random_forest_abc")]
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
             mock_mlflow.sklearn.load_model.return_value = MagicMock()
             loader = ScoringDataLoader(local_config)
-            _, uri = loader.load_model(model_tag="logistic_regression")
-        assert "child_lr" in uri
+            loader.load_model(model_tag="random_forest_abc")
+        mock_mlflow.sklearn.load_model.assert_called_once()
+
+    def test_no_tag_and_no_best_falls_back_to_first_entry(self, local_config):
+        local_config.logged_models = [
+            _sklearn_entry(display="logistic_regression", run_id="run_lr", artifact="model_lr"),
+            _sklearn_entry(display="random_forest", run_id="run_rf", artifact="model_rf"),
+        ]
+        local_config.best_model_name = ""
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
+            mock_mlflow.sklearn.load_model.return_value = MagicMock()
+            loader = ScoringDataLoader(local_config)
+            _, uri = loader.load_model()
+        assert "run_lr" in uri
 
 
 class TestListTrainedModelTags:
-    def test_returns_child_run_names(self, local_config, mock_mlflow_client):
-        child_lr = MagicMock()
-        child_lr.info.run_name = "logistic_regression"
-        child_rf = MagicMock()
-        child_rf.info.run_name = "random_forest"
+    def test_returns_display_names_from_logged_models(self, local_config):
+        local_config.logged_models = [
+            _sklearn_entry(display="logistic_regression"),
+            _sklearn_entry(display="random_forest"),
+        ]
+        loader = ScoringDataLoader(local_config)
+        assert loader.list_trained_model_tags() == ["logistic_regression", "random_forest"]
 
-        def side_effect(experiment_ids, filter_string="", order_by=None, max_results=None):
-            if "parentRunId" in filter_string:
-                return [child_lr, child_rf]
-            return mock_mlflow_client.search_runs.return_value
+    def test_returns_empty_when_no_logged_models(self, local_config):
+        local_config.logged_models = []
+        loader = ScoringDataLoader(local_config)
+        assert loader.list_trained_model_tags() == []
 
-        mock_mlflow_client.search_runs.side_effect = side_effect
-        with (
-            patch("customer_retention.stages.scoring.data_loader.mlflow"),
-            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
-        ):
-            loader = ScoringDataLoader(local_config)
-            tags = loader.list_trained_model_tags()
-        assert tags == ["logistic_regression", "random_forest"]
-
-    def test_returns_best_model_when_no_children(self, local_config, mock_mlflow_client):
-        mock_mlflow_client.search_runs.side_effect = None
-
-        def side_effect(experiment_ids, filter_string="", order_by=None, max_results=None):
-            if "parentRunId" in filter_string:
-                return []
-            return mock_mlflow_client.search_runs.return_value
-
-        mock_mlflow_client.search_runs.side_effect = side_effect
-        with (
-            patch("customer_retention.stages.scoring.data_loader.mlflow"),
-            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
-        ):
-            loader = ScoringDataLoader(local_config)
-            tags = loader.list_trained_model_tags()
-        assert tags == ["random_forest"]
-
-    def test_returns_empty_when_no_experiment(self, local_config):
-        client = MagicMock()
-        client.get_experiment_by_name.return_value = None
-        with (
-            patch("customer_retention.stages.scoring.data_loader.mlflow"),
-            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=client),
-        ):
-            loader = ScoringDataLoader(local_config)
-            tags = loader.list_trained_model_tags()
-        assert tags == []
-
-    def test_databricks_returns_spark_model_names(self, databricks_config, mock_mlflow_client):
-        child_rf = MagicMock()
-        child_rf.info.run_name = "RandomForestClassifier"
-        child_gbt = MagicMock()
-        child_gbt.info.run_name = "GBTClassifier"
-
-        def side_effect(experiment_ids, filter_string="", order_by=None, max_results=None):
-            if "parentRunId" in filter_string:
-                return [child_rf, child_gbt]
-            return mock_mlflow_client.search_runs.return_value
-
-        mock_mlflow_client.search_runs.side_effect = side_effect
-        with (
-            patch("customer_retention.stages.scoring.data_loader.mlflow"),
-            patch("customer_retention.stages.scoring.data_loader.MlflowClient", return_value=mock_mlflow_client),
-        ):
-            loader = ScoringDataLoader(databricks_config)
-            tags = loader.list_trained_model_tags()
-        assert tags == ["RandomForestClassifier", "GBTClassifier"]
+    def test_falls_back_to_artifact_path_when_no_display_name(self, local_config):
+        local_config.logged_models = [
+            {
+                "artifact_path": "model_rf",
+                "model_uri": "runs:/x/model_rf",
+                "flavor": "sklearn",
+                "run_id": "x",
+                "wrapper_meta_artifact_path": None,
+            }
+        ]
+        loader = ScoringDataLoader(local_config)
+        assert loader.list_trained_model_tags() == ["model_rf"]
 
 
 class TestLoadScoringFeatures:

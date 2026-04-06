@@ -1377,7 +1377,8 @@ def run_experiment():
 {% endif %}
 
     run_name = get_model_name_with_hash(f"training_{COMPOSITE_NAME}")
-    with mlflow.start_run(run_name=run_name):
+    _logged_models = []
+    with mlflow.start_run(run_name=run_name) as _parent_run:
         mlflow.log_params({"train_samples": len(X_train), "test_samples": len(X_test), "n_features": X.shape[1]})
         mlflow.set_tag("feature_source", "feast")
         mlflow.set_tag("feast_feature_view", FEAST_FEATURE_VIEW)
@@ -1388,17 +1389,22 @@ def run_experiment():
         best_model, best_auc = None, -1
 
         for name, model in sklearn_models.items():
-            with mlflow.start_run(run_name=name, nested=True):
+            with mlflow.start_run(run_name=name, nested=True) as _nested_run:
                 if RECOMMENDATIONS_HASH:
                     mlflow.set_tag("recommendations_hash", RECOMMENDATIONS_HASH)
                 mlflow.set_tag("feature_source", "feast")
                 with log_timing(f"fit_{name}", logger):
                     model.fit(X_train, y_train)
                 model_artifact_name = get_model_name_with_hash(f"model_{name}")
-                try:
-                    mlflow.sklearn.log_model(model, model_artifact_name)
-                except Exception as _save_err:
-                    print(f"WARNING: Model save failed for {name}: {_save_err}", flush=True)
+                _log_info = mlflow.sklearn.log_model(model, model_artifact_name)
+                _logged_models.append({
+                    "artifact_path": model_artifact_name,
+                    "model_uri": _log_info.model_uri,
+                    "flavor": "sklearn",
+                    "run_id": _nested_run.info.run_id,
+                    "display_name": name,
+                    "wrapper_meta_artifact_path": None,
+                })
                 y_proba = model.predict_proba(X_test)[:, 1]
                 y_pred = model.predict(X_test)
                 metrics = compute_metrics(y_test, y_proba, y_pred)
@@ -1418,7 +1424,7 @@ def run_experiment():
                     best_auc, best_model = metrics["roc_auc"], name
 
 {% if best_model_type is none or best_model_type == "xgboost" %}
-        with mlflow.start_run(run_name="xgboost", nested=True):
+        with mlflow.start_run(run_name="xgboost", nested=True) as _xgb_run:
             if RECOMMENDATIONS_HASH:
                 mlflow.set_tag("recommendations_hash", RECOMMENDATIONS_HASH)
             mlflow.set_tag("feature_source", "feast")
@@ -1428,10 +1434,15 @@ def run_experiment():
             y_pred = (y_proba > 0.5).astype(int)
             metrics = compute_metrics(y_test, y_proba, y_pred)
             xgb_model_name = get_model_name_with_hash("model_xgboost")
-            try:
-                mlflow.xgboost.log_model(xgb_model, xgb_model_name)
-            except Exception as _save_err:
-                print(f"WARNING: XGBoost model save failed: {_save_err}", flush=True)
+            _xgb_log_info = mlflow.xgboost.log_model(xgb_model, xgb_model_name)
+            _logged_models.append({
+                "artifact_path": xgb_model_name,
+                "model_uri": _xgb_log_info.model_uri,
+                "flavor": "xgboost",
+                "run_id": _xgb_run.info.run_id,
+                "display_name": "xgboost",
+                "wrapper_meta_artifact_path": None,
+            })
             mlflow.log_metrics(metrics)
             importance = xgb_model.get_score(importance_type="gain")
             fi = pd.DataFrame({"feature": importance.keys(), "importance": importance.values()})
@@ -1451,7 +1462,18 @@ def run_experiment():
         print(f"Best: {best_model} (ROC-AUC={best_auc:.4f})")
 
     _results["best_model"] = best_model
+    _results["best_model_name"] = best_model
     _results["best_roc_auc"] = best_auc
+    _results["mlflow_run_id"] = _parent_run.info.run_id
+    _results["mlflow_experiment_name"] = _experiment_name
+    _results["composite_name"] = COMPOSITE_NAME
+    _results["target_column"] = TARGET_COLUMN
+    _results["entity_key"] = ENTITY_KEY
+    _results["timestamp_column"] = FEAST_TIMESTAMP_COL
+    _results["recommendations_hash"] = RECOMMENDATIONS_HASH or ""
+    _results["feature_columns"] = feature_names
+    _results["logged_models"] = _logged_models
+    _results["registered_model_name"] = ""
     if _NAMESPACE is not None:
         import json as _json
         _NAMESPACE.training_metadata_path.parent.mkdir(parents=True, exist_ok=True)

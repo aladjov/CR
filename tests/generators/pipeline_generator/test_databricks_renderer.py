@@ -751,8 +751,8 @@ class TestDatabricksTrainingFeatureEngineering:
     def test_training_registers_model_in_uc(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
         assert "registered_model_name" in result
-        assert "CATALOG" in result.split("registered_model_name")[1][:50]
-        assert "SCHEMA" in result.split("registered_model_name")[1][:50]
+        assert '_registered_name = f"{CATALOG}.{SCHEMA}.model_{COMPOSITE_NAME}"' in result
+        assert "registered_model_name=_registered_name" in result
 
     def test_training_fe_has_import_fallback(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
@@ -787,6 +787,30 @@ class TestDatabricksTrainingFeatureEngineering:
     def test_training_log_best_model_is_valid_python(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
         ast.parse(result)
+
+    def test_training_captures_logged_models_list(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "_logged_models = []" in result
+        assert "_logged_models.append" in result
+        assert '"model_uri": _log_info.model_uri' in result
+        assert '"flavor": "spark"' in result
+
+    def test_training_metadata_includes_logged_models(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert '"logged_models": _logged_models' in result
+        assert '"registered_model_name": _registered_model_name' in result
+
+    def test_training_promotes_to_production_alias(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "def _promote_to_production" in result
+        assert "set_registered_model_alias" in result
+        assert '"production"' in result
+        assert "_promote_to_production(_registered_model_name" in result
+
+    def test_log_best_model_returns_registered_name(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def _log_best_model") : result.index("def _promote_to_production")]
+        assert "return _registered_name" in fn
 
 
 class TestDatabricksRenderTrainingImbalance:
