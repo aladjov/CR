@@ -159,10 +159,14 @@ def reload_config() -> None:
 
 def get_mlflow_dfs_tmpdir() -> str | None:
     if os.environ.get("MLFLOW_DFS_TMP"):
-        return os.environ["MLFLOW_DFS_TMP"]
+        path = os.environ["MLFLOW_DFS_TMP"]
+        _ensure_uc_volume(path)
+        return path
     if not os.environ.get("DATABRICKS_RUNTIME_VERSION"):
         return None
-    return f"/tmp/mlflow_cr/{get_catalog()}/{get_schema()}"
+    path = f"/Volumes/{get_catalog()}/{get_schema()}/mlflow_tmp"
+    _ensure_uc_volume(path)
+    return path
 
 
 def _parse_uc_volume(path_str: str) -> tuple[str, str, str] | None:
@@ -184,6 +188,7 @@ def _ensure_uc_volume(base_path: Union[str, Path, "RemotePath"]) -> None:
         return
     if not spark:
         return
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{schema}`")
     spark.sql(f"CREATE VOLUME IF NOT EXISTS `{catalog}`.`{schema}`.`{volume}`")
 
 

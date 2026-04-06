@@ -230,7 +230,7 @@ class TestMLflowLoggerModel:
         mock_mlflow.set_tag.assert_called_with("logistic_regression.model_flavor", "spark")
         mock_mlflow.log_dict.assert_called_once()
 
-    @patch("customer_retention.stages.modeling.mlflow_logger.get_mlflow_dfs_tmpdir", return_value="/tmp/mlflow_cr/cat/sch")
+    @patch("customer_retention.stages.modeling.mlflow_logger.get_mlflow_dfs_tmpdir", return_value="/Volumes/cat/sch/mlflow_tmp")
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
     def test_spark_model_passes_dfs_tmpdir_on_databricks(self, mock_mlflow, _mock_tmpdir):
         logger = MLflowLogger(experiment_name="test")
@@ -245,7 +245,8 @@ class TestMLflowLoggerModel:
         logger.log_model(mock_model, "lr")
 
         call_kwargs = mock_mlflow.spark.log_model.call_args
-        assert call_kwargs[1]["dfs_tmpdir"] == "/tmp/mlflow_cr/cat/sch"
+        assert call_kwargs[1]["dfs_tmpdir"] == "/Volumes/cat/sch/mlflow_tmp"
+        assert call_kwargs[1]["dfs_tmpdir"].startswith("/Volumes/")
 
     @patch("customer_retention.stages.modeling.mlflow_logger.get_mlflow_dfs_tmpdir", return_value=None)
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")

@@ -1,4 +1,5 @@
 import json
+from unittest.mock import MagicMock, patch
 
 
 class TestGetCatalog:
@@ -98,28 +99,46 @@ class TestGetExperimentName:
 
 
 class TestGetMlflowDfsTmpdir:
-    def test_returns_dbfs_tmp_path_on_databricks(self, monkeypatch):
+    def test_returns_uc_volume_path_on_databricks(self, monkeypatch):
         from customer_retention.core.config.experiments import get_mlflow_dfs_tmpdir
 
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "15.4")
         monkeypatch.setenv("CR_CATALOG", "analytics")
         monkeypatch.setenv("CR_SCHEMA", "churn")
-        result = get_mlflow_dfs_tmpdir()
-        assert result == "/tmp/mlflow_cr/analytics/churn"
+        mock_spark = MagicMock()
+        with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
+            result = get_mlflow_dfs_tmpdir()
+        assert result == "/Volumes/analytics/churn/mlflow_tmp"
 
-    def test_path_does_not_use_volumes(self, monkeypatch):
+    def test_creates_schema_and_volume(self, monkeypatch):
         from customer_retention.core.config.experiments import get_mlflow_dfs_tmpdir
 
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "15.4")
         monkeypatch.setenv("CR_CATALOG", "analytics")
         monkeypatch.setenv("CR_SCHEMA", "churn")
-        result = get_mlflow_dfs_tmpdir()
-        assert "/Volumes/" not in result
+        mock_spark = MagicMock()
+        with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
+            get_mlflow_dfs_tmpdir()
+        sql_calls = [call.args[0] for call in mock_spark.sql.call_args_list]
+        assert "CREATE SCHEMA IF NOT EXISTS `analytics`.`churn`" in sql_calls
+        assert "CREATE VOLUME IF NOT EXISTS `analytics`.`churn`.`mlflow_tmp`" in sql_calls
+
+    def test_path_starts_with_volumes_for_shared_clusters(self, monkeypatch):
+        from customer_retention.core.config.experiments import get_mlflow_dfs_tmpdir
+
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "15.4")
+        monkeypatch.setenv("CR_CATALOG", "analytics")
+        monkeypatch.setenv("CR_SCHEMA", "churn")
+        mock_spark = MagicMock()
+        with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
+            result = get_mlflow_dfs_tmpdir()
+        assert result.startswith("/Volumes/")
 
     def test_returns_none_outside_databricks(self, monkeypatch):
         from customer_retention.core.config.experiments import get_mlflow_dfs_tmpdir
 
         monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+        monkeypatch.delenv("MLFLOW_DFS_TMP", raising=False)
         assert get_mlflow_dfs_tmpdir() is None
 
     def test_uses_default_catalog_schema(self, monkeypatch):
@@ -128,12 +147,16 @@ class TestGetMlflowDfsTmpdir:
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "15.4")
         monkeypatch.delenv("CR_CATALOG", raising=False)
         monkeypatch.delenv("CR_SCHEMA", raising=False)
-        result = get_mlflow_dfs_tmpdir()
-        assert result == "/tmp/mlflow_cr/main/default"
+        mock_spark = MagicMock()
+        with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
+            result = get_mlflow_dfs_tmpdir()
+        assert result == "/Volumes/main/default/mlflow_tmp"
 
     def test_respects_env_override(self, monkeypatch):
         from customer_retention.core.config.experiments import get_mlflow_dfs_tmpdir
 
-        monkeypatch.setenv("MLFLOW_DFS_TMP", "/custom/path")
+        monkeypatch.setenv("MLFLOW_DFS_TMP", "/Volumes/custom/path/vol")
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "15.4")
-        assert get_mlflow_dfs_tmpdir() == "/custom/path"
+        mock_spark = MagicMock()
+        with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
+            assert get_mlflow_dfs_tmpdir() == "/Volumes/custom/path/vol"

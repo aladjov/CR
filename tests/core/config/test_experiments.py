@@ -245,7 +245,7 @@ class TestParseUcVolume:
 
 
 class TestEnsureUcVolume:
-    def test_creates_volume_via_spark_sql(self):
+    def test_creates_schema_and_volume_via_spark_sql(self):
         from unittest.mock import MagicMock
 
         mock_spark = MagicMock()
@@ -253,7 +253,9 @@ class TestEnsureUcVolume:
             from customer_retention.core.config.experiments import _ensure_uc_volume
 
             _ensure_uc_volume("/Volumes/mycat/mysch/experiments")
-        mock_spark.sql.assert_called_once_with("CREATE VOLUME IF NOT EXISTS `mycat`.`mysch`.`experiments`")
+        sql_calls = [call.args[0] for call in mock_spark.sql.call_args_list]
+        assert "CREATE SCHEMA IF NOT EXISTS `mycat`.`mysch`" in sql_calls
+        assert "CREATE VOLUME IF NOT EXISTS `mycat`.`mysch`.`experiments`" in sql_calls
 
     def test_noop_for_local_path(self):
         from unittest.mock import MagicMock
@@ -292,7 +294,9 @@ class TestEnsureUcVolume:
             from customer_retention.core.config.experiments import _ensure_uc_volume
 
             _ensure_uc_volume(RemotePath("/Volumes/cat/sch/vol"))
-        mock_spark.sql.assert_called_once_with("CREATE VOLUME IF NOT EXISTS `cat`.`sch`.`vol`")
+        sql_calls = [call.args[0] for call in mock_spark.sql.call_args_list]
+        assert "CREATE SCHEMA IF NOT EXISTS `cat`.`sch`" in sql_calls
+        assert "CREATE VOLUME IF NOT EXISTS `cat`.`sch`.`vol`" in sql_calls
 
 
 class TestSetupExperimentsStructureAutoCreatesVolume:
