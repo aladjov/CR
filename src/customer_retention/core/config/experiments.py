@@ -162,9 +162,7 @@ def get_mlflow_dfs_tmpdir() -> str | None:
         return os.environ["MLFLOW_DFS_TMP"]
     if not os.environ.get("DATABRICKS_RUNTIME_VERSION"):
         return None
-    path = f"/Volumes/{get_catalog()}/{get_schema()}/mlflow_tmp"
-    _ensure_uc_volume(path)
-    return path
+    return f"/tmp/mlflow_cr/{get_catalog()}/{get_schema()}"
 
 
 def _parse_uc_volume(path_str: str) -> tuple[str, str, str] | None:

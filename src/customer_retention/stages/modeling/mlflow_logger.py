@@ -37,6 +37,34 @@ class ExperimentConfig:
     artifact_location: Optional[str] = None
 
 
+@dataclass
+class LoggedModelInfo:
+    artifact_path: str
+    model_uri: str
+    flavor: str
+    run_id: str
+    wrapper_meta_artifact_path: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "artifact_path": self.artifact_path,
+            "model_uri": self.model_uri,
+            "flavor": self.flavor,
+            "run_id": self.run_id,
+            "wrapper_meta_artifact_path": self.wrapper_meta_artifact_path,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "LoggedModelInfo":
+        return cls(
+            artifact_path=data["artifact_path"],
+            model_uri=data["model_uri"],
+            flavor=data["flavor"],
+            run_id=data["run_id"],
+            wrapper_meta_artifact_path=data.get("wrapper_meta_artifact_path"),
+        )
+
+
 class MLflowLogger:
     def __init__(
         self,
@@ -112,15 +140,20 @@ class MLflowLogger:
         if MLFLOW_AVAILABLE:
             mlflow.log_dict(dictionary, artifact_file)
 
-    def log_model(self, model, artifact_path: str, registered_model_name: Optional[str] = None):
+    def log_model(self, model, artifact_path: str, registered_model_name: Optional[str] = None) -> Optional[LoggedModelInfo]:
         if not MLFLOW_AVAILABLE:
-            return
+            return None
         if hasattr(model, "as_pipeline_model") and model._fitted_model is not None:
-            self._log_spark_model(model, artifact_path, registered_model_name)
-        else:
-            mlflow.sklearn.log_model(model, artifact_path, registered_model_name=registered_model_name)
+            return self._log_spark_model(model, artifact_path, registered_model_name)
+        info = mlflow.sklearn.log_model(model, artifact_path, registered_model_name=registered_model_name)
+        return LoggedModelInfo(
+            artifact_path=artifact_path,
+            model_uri=info.model_uri,
+            flavor="sklearn",
+            run_id=info.run_id,
+        )
 
-    def _log_spark_model(self, wrapper, artifact_path: str, registered_model_name: Optional[str] = None):
+    def _log_spark_model(self, wrapper, artifact_path: str, registered_model_name: Optional[str] = None) -> LoggedModelInfo:
         pipeline_model = wrapper.as_pipeline_model()
         kwargs: dict = {"registered_model_name": registered_model_name}
         dfs_tmp = get_mlflow_dfs_tmpdir()
@@ -128,14 +161,22 @@ class MLflowLogger:
             kwargs["dfs_tmpdir"] = dfs_tmp
         kwargs["pip_requirements"] = _spark_pip_requirements()
         kwargs["signature"] = _spark_classification_signature(wrapper.feature_names)
-        mlflow.spark.log_model(pipeline_model, artifact_path, **kwargs)
+        info = mlflow.spark.log_model(pipeline_model, artifact_path, **kwargs)
         mlflow.set_tag(f"{artifact_path}.model_flavor", "spark")
+        wrapper_meta_artifact = f"{artifact_path}_wrapper_meta.json"
         mlflow.log_dict({
             "spark_model_class": wrapper.spark_model_class,
             "spark_model_params": wrapper.spark_model_params,
             "feature_names": wrapper.feature_names,
             "class_weight": wrapper.class_weight,
-        }, f"{artifact_path}_wrapper_meta.json")
+        }, wrapper_meta_artifact)
+        return LoggedModelInfo(
+            artifact_path=artifact_path,
+            model_uri=info.model_uri,
+            flavor="spark",
+            run_id=info.run_id,
+            wrapper_meta_artifact_path=wrapper_meta_artifact,
+        )
 
     def log_figure(self, figure, artifact_file: str):
         if MLFLOW_AVAILABLE:

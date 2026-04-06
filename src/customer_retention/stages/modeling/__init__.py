@@ -11,7 +11,7 @@ from .imbalance_handler import (
     ImbalanceResult,
     ImbalanceStrategy,
 )
-from .mlflow_logger import ExperimentConfig, MLflowLogger
+from .mlflow_logger import ExperimentConfig, LoggedModelInfo, MLflowLogger
 from .model_comparator import ComparisonResult, ModelComparator, ModelMetrics
 from .model_evaluator import EvaluationResult, ModelEvaluator
 from .spark_baseline_trainer import SparkBaselineTrainer, create_distributed_models
@@ -33,6 +33,6 @@ __all__ = [
     "FeatureScaler", "ScalerType", "ScalingResult",
     "SparkFeatureScaler",
     "SparkBaselineTrainer", "SparkClassifierWrapper", "create_distributed_models",
-    "MLflowLogger", "ExperimentConfig",
+    "MLflowLogger", "ExperimentConfig", "LoggedModelInfo",
     "TrainingPreparator", "TrainingPreparationResult", "PreparationProgressTracker",
 ]

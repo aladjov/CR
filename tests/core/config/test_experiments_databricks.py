@@ -1,5 +1,4 @@
 import json
-from unittest.mock import MagicMock, patch
 
 
 class TestGetCatalog:
@@ -99,19 +98,23 @@ class TestGetExperimentName:
 
 
 class TestGetMlflowDfsTmpdir:
-    def test_returns_uc_volume_path_on_databricks(self, monkeypatch):
+    def test_returns_dbfs_tmp_path_on_databricks(self, monkeypatch):
         from customer_retention.core.config.experiments import get_mlflow_dfs_tmpdir
 
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "15.4")
         monkeypatch.setenv("CR_CATALOG", "analytics")
         monkeypatch.setenv("CR_SCHEMA", "churn")
-        mock_spark = MagicMock()
-        with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
-            result = get_mlflow_dfs_tmpdir()
-        assert result == "/Volumes/analytics/churn/mlflow_tmp"
-        mock_spark.sql.assert_called_once_with(
-            "CREATE VOLUME IF NOT EXISTS `analytics`.`churn`.`mlflow_tmp`"
-        )
+        result = get_mlflow_dfs_tmpdir()
+        assert result == "/tmp/mlflow_cr/analytics/churn"
+
+    def test_path_does_not_use_volumes(self, monkeypatch):
+        from customer_retention.core.config.experiments import get_mlflow_dfs_tmpdir
+
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "15.4")
+        monkeypatch.setenv("CR_CATALOG", "analytics")
+        monkeypatch.setenv("CR_SCHEMA", "churn")
+        result = get_mlflow_dfs_tmpdir()
+        assert "/Volumes/" not in result
 
     def test_returns_none_outside_databricks(self, monkeypatch):
         from customer_retention.core.config.experiments import get_mlflow_dfs_tmpdir
@@ -125,14 +128,12 @@ class TestGetMlflowDfsTmpdir:
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "15.4")
         monkeypatch.delenv("CR_CATALOG", raising=False)
         monkeypatch.delenv("CR_SCHEMA", raising=False)
-        mock_spark = MagicMock()
-        with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
-            result = get_mlflow_dfs_tmpdir()
-        assert result == "/Volumes/main/default/mlflow_tmp"
+        result = get_mlflow_dfs_tmpdir()
+        assert result == "/tmp/mlflow_cr/main/default"
 
     def test_respects_env_override(self, monkeypatch):
         from customer_retention.core.config.experiments import get_mlflow_dfs_tmpdir
 
-        monkeypatch.setenv("MLFLOW_DFS_TMP", "/Volumes/custom/path/vol")
+        monkeypatch.setenv("MLFLOW_DFS_TMP", "/custom/path")
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "15.4")
-        assert get_mlflow_dfs_tmpdir() == "/Volumes/custom/path/vol"
+        assert get_mlflow_dfs_tmpdir() == "/custom/path"

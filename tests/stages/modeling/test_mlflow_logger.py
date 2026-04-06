@@ -230,7 +230,7 @@ class TestMLflowLoggerModel:
         mock_mlflow.set_tag.assert_called_with("logistic_regression.model_flavor", "spark")
         mock_mlflow.log_dict.assert_called_once()
 
-    @patch("customer_retention.stages.modeling.mlflow_logger.get_mlflow_dfs_tmpdir", return_value="/Volumes/cat/sch/mlflow_tmp")
+    @patch("customer_retention.stages.modeling.mlflow_logger.get_mlflow_dfs_tmpdir", return_value="/tmp/mlflow_cr/cat/sch")
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
     def test_spark_model_passes_dfs_tmpdir_on_databricks(self, mock_mlflow, _mock_tmpdir):
         logger = MLflowLogger(experiment_name="test")
@@ -245,7 +245,7 @@ class TestMLflowLoggerModel:
         logger.log_model(mock_model, "lr")
 
         call_kwargs = mock_mlflow.spark.log_model.call_args
-        assert call_kwargs[1]["dfs_tmpdir"] == "/Volumes/cat/sch/mlflow_tmp"
+        assert call_kwargs[1]["dfs_tmpdir"] == "/tmp/mlflow_cr/cat/sch"
 
     @patch("customer_retention.stages.modeling.mlflow_logger.get_mlflow_dfs_tmpdir", return_value=None)
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
@@ -314,6 +314,59 @@ class TestMLflowLoggerModel:
         assert input_names == ["f1", "f2"]
         output_names = [col.name for col in sig.outputs.inputs]
         assert output_names == ["prediction"]
+
+
+class TestMLflowLoggerLogModelReturnsInfo:
+    @patch("customer_retention.stages.modeling.mlflow_logger.mlflow.sklearn")
+    @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
+    def test_sklearn_returns_logged_model_info(self, mock_mlflow, mock_sklearn):
+        mock_info = MagicMock()
+        mock_info.model_uri = "runs:/abc123/model_rf"
+        mock_info.run_id = "abc123"
+        mock_sklearn.log_model.return_value = mock_info
+
+        logger = MLflowLogger(experiment_name="test")
+        mock_model = MagicMock(spec=[])
+
+        result = logger.log_model(mock_model, "model_rf")
+
+        assert result is not None
+        assert result.model_uri == "runs:/abc123/model_rf"
+        assert result.flavor == "sklearn"
+        assert result.artifact_path == "model_rf"
+        assert result.run_id == "abc123"
+        assert result.wrapper_meta_artifact_path is None
+
+    @patch("customer_retention.stages.modeling.mlflow_logger.get_mlflow_dfs_tmpdir", return_value=None)
+    @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
+    def test_spark_returns_logged_model_info(self, mock_mlflow, _mock_tmpdir):
+        mock_info = MagicMock()
+        mock_info.model_uri = "runs:/xyz789/model_gbt"
+        mock_info.run_id = "xyz789"
+        mock_mlflow.spark.log_model.return_value = mock_info
+
+        logger = MLflowLogger(experiment_name="test")
+        mock_model = MagicMock()
+        mock_model.as_pipeline_model = MagicMock(return_value=MagicMock())
+        mock_model._fitted_model = MagicMock()
+        mock_model.spark_model_class = "GBT"
+        mock_model.spark_model_params = {}
+        mock_model.feature_names = ["f1", "f2"]
+        mock_model.class_weight = None
+
+        result = logger.log_model(mock_model, "model_gbt")
+
+        assert result is not None
+        assert result.model_uri == "runs:/xyz789/model_gbt"
+        assert result.flavor == "spark"
+        assert result.artifact_path == "model_gbt"
+        assert result.run_id == "xyz789"
+        assert result.wrapper_meta_artifact_path == "model_gbt_wrapper_meta.json"
+
+    @patch("customer_retention.stages.modeling.mlflow_logger.MLFLOW_AVAILABLE", False)
+    def test_returns_none_when_mlflow_unavailable(self):
+        logger = MLflowLogger(experiment_name="test")
+        assert logger.log_model(MagicMock(spec=[]), "model") is None
 
 
 class TestSparkPipRequirements:
