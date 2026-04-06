@@ -279,6 +279,7 @@ class FeatureSelector:
                 spark_df, self.target_column, candidates,
                 num_top_features=self.max_features or len(candidates),
                 num_buckets=self.chi_squared_num_buckets,
+                progress_fn=self._progress_fn,
             )
         else:
             dropped, reasons, scores = _local_chi_squared_selection(
@@ -462,17 +463,24 @@ def _import_spark_chi_squared_bucketizer():
 
 
 _CHI_BUCKET_BATCH = 200
-_CHI_SQL_BATCH = 10
+_CHI_CHECKPOINT_INTERVAL = 600
+_CHI_SQL_BATCH = 10  # legacy default, use _chi_sql_batch_size() instead
+
+
+def _chi_sql_batch_size(num_buckets: int) -> int:
+    exprs_per_feature = 2 * (num_buckets + 1)
+    return max(5, 400 // exprs_per_feature)
 
 
 def _sql_chi_squared_scores(
     df: Any, target_column: str, feature_columns: List[str],
     bucketed_names: List[str], num_buckets: int,
+    progress_fn: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, float]:
     is_pandas = hasattr(df, "iloc") and not hasattr(df, "to_spark")
     if is_pandas:
         return _pandas_chi_squared_scores(df, target_column, feature_columns, bucketed_names, num_buckets)
-    return _spark_sql_chi_squared_scores(df, target_column, feature_columns, bucketed_names, num_buckets)
+    return _spark_sql_chi_squared_scores(df, target_column, feature_columns, bucketed_names, num_buckets, progress_fn=progress_fn)
 
 
 def _pandas_chi_squared_scores(
@@ -508,9 +516,11 @@ def _pandas_chi_squared_scores(
 def _spark_sql_chi_squared_scores(
     work_df: Any, target_column: str, feature_columns: List[str],
     bucketed_names: List[str], num_buckets: int,
+    progress_fn: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, float]:
     import pyspark.sql.functions as F  # noqa: N812
 
+    log = progress_fn or (lambda _msg: None)
     N = work_df.count()
     target_sum_row = work_df.agg(F.sum(F.col(target_column).cast("double"))).head()
     N1 = float(target_sum_row[0] or 0)
@@ -519,10 +529,16 @@ def _spark_sql_chi_squared_scores(
         return {c: 0.0 for c in feature_columns}
 
     n_features = len(feature_columns)
+    batch_size = _chi_sql_batch_size(num_buckets)
+    n_batches = (n_features + batch_size - 1) // batch_size
+    log(f"      Scoring {n_features} features in {n_batches} batches "
+        f"(batch_size={batch_size})...")
+
     scores: Dict[str, float] = {}
-    for start in range(0, n_features, _CHI_SQL_BATCH):
-        batch_feats = feature_columns[start:start + _CHI_SQL_BATCH]
-        batch_bkts = bucketed_names[start:start + _CHI_SQL_BATCH]
+    report_every = max(1, n_batches // 10)
+    for bi, start in enumerate(range(0, n_features, batch_size)):
+        batch_feats = feature_columns[start:start + batch_size]
+        batch_bkts = bucketed_names[start:start + batch_size]
         exprs = []
         for fi, bkt_col in enumerate(batch_bkts):
             for b in range(num_buckets + 1):
@@ -543,19 +559,26 @@ def _spark_sql_chi_squared_scores(
                 if e_b1 > 0:
                     chi2 += (nb1 - e_b1) ** 2 / e_b1
             scores[feat_col] = chi2
+        done = bi + 1
+        if done % report_every == 0 or done == n_batches:
+            log(f"      Scoring: {done}/{n_batches} batches "
+                f"({done * 100 // n_batches}%)")
     return scores
 
 
 def _spark_chi_squared_selection(
     spark_df: Any, target_column: str, feature_columns: List[str],
     num_top_features: int = 1000, num_buckets: int = 10,
+    progress_fn: Optional[Callable[[str], None]] = None,
 ) -> tuple:
     Bucketizer, F = _import_spark_chi_squared_bucketizer()
+    log = progress_fn or (lambda _msg: None)
 
     n_features = len(feature_columns)
     if num_top_features >= n_features:
         return [], {}, None
 
+    log(f"    Preparing {n_features} features...")
     work_df = spark_df.select(
         [F.coalesce(F.col(c).cast("double"), F.lit(0.0)).alias(c) for c in feature_columns]
         + [F.col(target_column).cast("double").alias(target_column)]
@@ -564,17 +587,29 @@ def _spark_chi_squared_selection(
     if n_features > _CHI_BUCKET_BATCH:
         work_df = work_df.localCheckpoint(eager=True)
 
+    # --- Phase 1: quantile splits ---
     quantiles = [i / num_buckets for i in range(1, num_buckets)]
+    n_q = (n_features + _CHI_BUCKET_BATCH - 1) // _CHI_BUCKET_BATCH
+    log(f"    Phase 1/3: quantile splits ({n_q} batches)...")
     all_splits: Dict[str, list] = {}
-    for start in range(0, n_features, _CHI_BUCKET_BATCH):
+    report_q = max(1, n_q // 5)
+    for qi, start in enumerate(range(0, n_features, _CHI_BUCKET_BATCH)):
         batch = feature_columns[start:start + _CHI_BUCKET_BATCH]
         exprs = [F.percentile_approx(c, quantiles).alias(f"__p_{i}")
                  for i, c in enumerate(batch)]
         row = work_df.agg(*exprs).head()
         for i, c in enumerate(batch):
             all_splits[c] = row[f"__p_{i}"]
+        done = qi + 1
+        if done % report_q == 0 or done == n_q:
+            log(f"      Quantiles: {done}/{n_q} batches")
 
-    bucketed_names = []
+    # --- Phase 2: bucketizer (checkpoint every _CHI_CHECKPOINT_INTERVAL cols) ---
+    n_bkt = (n_features + _CHI_BUCKET_BATCH - 1) // _CHI_BUCKET_BATCH
+    log(f"    Phase 2/3: bucketizer ({n_bkt} batches, "
+        f"checkpoint every {_CHI_CHECKPOINT_INTERVAL} features)...")
+    bucketed_names: List[str] = []
+    cols_since_checkpoint = 0
     for start in range(0, n_features, _CHI_BUCKET_BATCH):
         batch = feature_columns[start:start + _CHI_BUCKET_BATCH]
         b_input, b_output, b_splits_arr = [], [], []
@@ -591,10 +626,23 @@ def _spark_chi_squared_selection(
         bkt = Bucketizer(inputCols=b_input, outputCols=b_output,
                          splitsArray=b_splits_arr, handleInvalid="keep")
         work_df = bkt.transform(work_df)
-        if start + _CHI_BUCKET_BATCH < n_features:
+        cols_since_checkpoint += len(batch)
+        needs_more = start + _CHI_BUCKET_BATCH < n_features
+        if needs_more and cols_since_checkpoint >= _CHI_CHECKPOINT_INTERVAL:
             work_df = work_df.localCheckpoint(eager=True)
+            cols_since_checkpoint = 0
+            log(f"      Bucketizer: checkpoint after {start + len(batch)}/{n_features} features")
 
-    scores = _spark_sql_chi_squared_scores(work_df, target_column, feature_columns, bucketed_names, num_buckets)
+    if cols_since_checkpoint > 0 and n_features > _CHI_BUCKET_BATCH:
+        work_df = work_df.localCheckpoint(eager=True)
+    log(f"      Bucketizer: done ({n_features} features bucketed)")
+
+    # --- Phase 3: chi-squared scoring ---
+    log("    Phase 3/3: chi-squared scoring...")
+    scores = _spark_sql_chi_squared_scores(
+        work_df, target_column, feature_columns, bucketed_names, num_buckets,
+        progress_fn=progress_fn,
+    )
     del work_df
 
     sorted_features = sorted(scores, key=scores.get, reverse=True)
@@ -916,6 +964,7 @@ def run_chi_squared_selection(
     selector = FeatureSelector(
         method=SelectionMethod.CHI_SQUARED, target_column=target_column,
         max_features=max_features, chi_squared_num_buckets=num_buckets,
+        progress_fn=log,
     )
     result = selector.fit_transform(work_df)
     elapsed = time.monotonic() - t0
