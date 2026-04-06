@@ -478,13 +478,15 @@ class TestDatabricksInitExperimentStructure:
 
 
 class TestEnsureExperimentsVolumeExists:
-    def test_creates_volume_via_spark_sql(self, databricks_env):
+    def test_creates_schema_and_volume_via_spark_sql(self, databricks_env):
         mock_spark = MagicMock()
         with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
             from customer_retention.integrations.databricks_init import _ensure_experiments_volume_exists
 
             _ensure_experiments_volume_exists("churnkit", "analysis")
-        mock_spark.sql.assert_called_once_with("CREATE VOLUME IF NOT EXISTS `churnkit`.`analysis`.`experiments`")
+        sql_calls = [call.args[0] for call in mock_spark.sql.call_args_list]
+        assert "CREATE SCHEMA IF NOT EXISTS `churnkit`.`analysis`" in sql_calls
+        assert "CREATE VOLUME IF NOT EXISTS `churnkit`.`analysis`.`experiments`" in sql_calls
 
     def test_handles_no_spark_session(self, databricks_env):
         with patch("customer_retention.core.compat.detection.get_spark_session", return_value=None):
