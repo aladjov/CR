@@ -1,4 +1,5 @@
 import textwrap
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -8,6 +9,14 @@ import pytest
 
 from customer_retention.stages.scoring.config import ScoringConfig
 from customer_retention.stages.scoring.data_loader import ScoringDataLoader
+
+
+@contextmanager
+def _patched_alias_flavors(flavors: dict):
+    fake_model = MagicMock()
+    fake_model.flavors = flavors
+    with patch("mlflow.models.Model.load", return_value=fake_model) as mock_load:
+        yield mock_load
 
 
 @pytest.fixture
@@ -241,7 +250,8 @@ class TestLoadModel:
         databricks_config.registered_model_name = "analytics.churn.model_cust_emails_prof__a1b2c3d"
         databricks_config.logged_models = [_spark_entry()]
         mock_spark_model = MagicMock()
-        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow, \
+                _patched_alias_flavors({"spark": {}, "python_function": {}}):
             mock_mlflow.spark.load_model.return_value = mock_spark_model
             loader = ScoringDataLoader(databricks_config)
             model, uri = loader.load_model()
@@ -254,7 +264,8 @@ class TestLoadModel:
         databricks_config.logged_models = [_sklearn_entry()]
         databricks_config.best_model_name = "random_forest"
         mock_sklearn_model = MagicMock()
-        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow, \
+                _patched_alias_flavors({"sklearn": {}, "python_function": {}}):
             mock_mlflow.sklearn.load_model.return_value = mock_sklearn_model
             loader = ScoringDataLoader(databricks_config)
             model, uri = loader.load_model()
@@ -276,7 +287,8 @@ class TestLoadModel:
         databricks_config.logged_models = [xgb_entry]
         databricks_config.best_model_name = "xgboost"
         mock_xgb_model = MagicMock()
-        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow, \
+                _patched_alias_flavors({"xgboost": {}, "python_function": {}}):
             mock_mlflow.xgboost.load_model.return_value = mock_xgb_model
             loader = ScoringDataLoader(databricks_config)
             model, uri = loader.load_model()
@@ -286,10 +298,59 @@ class TestLoadModel:
         mock_mlflow.spark.load_model.assert_not_called()
         mock_mlflow.sklearn.load_model.assert_not_called()
 
-    def test_databricks_alias_without_logged_models_defaults_to_sklearn(self, databricks_config):
+    def test_databricks_wrapped_alias_falls_back_to_nested_logged_model(self, databricks_config, capsys):
+        databricks_config.registered_model_name = "analytics.churn.model_cust_emails_prof__a1b2c3d"
+        databricks_config.logged_models = [_spark_entry()]
+        mock_spark_model = MagicMock()
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow, \
+                _patched_alias_flavors({"python_function": {"loader_module": "databricks.feature_store.mlflow_model"}}):
+            mock_mlflow.spark.load_model.return_value = mock_spark_model
+            loader = ScoringDataLoader(databricks_config)
+            model, uri = loader.load_model()
+        assert model is mock_spark_model
+        assert uri == "runs:/run_rf/model_RandomForestClassifier"
+        mock_mlflow.spark.load_model.assert_called_once_with("runs:/run_rf/model_RandomForestClassifier")
+        captured = capsys.readouterr()
+        assert "Falling back to nested training-run model" in captured.out
+        assert "wrapped" in captured.out or "python_function" in captured.out or "Feature-Engineering" in captured.out
+
+    def test_databricks_wrapped_alias_with_xgb_nested_uses_xgb_loader(self, databricks_config):
+        databricks_config.registered_model_name = "analytics.churn.model_cust_emails_prof__a1b2c3d"
+        xgb_entry = {
+            "artifact_path": "model_xgboost",
+            "model_uri": "runs:/run_xgb/model_xgboost",
+            "flavor": "xgboost",
+            "run_id": "run_xgb",
+            "display_name": "xgboost",
+            "wrapper_meta_artifact_path": None,
+        }
+        databricks_config.logged_models = [xgb_entry]
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow, \
+                _patched_alias_flavors({"python_function": {}}):
+            mock_mlflow.xgboost.load_model.return_value = MagicMock()
+            loader = ScoringDataLoader(databricks_config)
+            _, uri = loader.load_model()
+        assert uri == "runs:/run_xgb/model_xgboost"
+        mock_mlflow.xgboost.load_model.assert_called_once_with("runs:/run_xgb/model_xgboost")
+        mock_mlflow.spark.load_model.assert_not_called()
+
+    def test_databricks_wrapped_alias_with_no_logged_models_raises(self, databricks_config):
         databricks_config.registered_model_name = "analytics.churn.model_cust_emails_prof__a1b2c3d"
         databricks_config.logged_models = []
-        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow, \
+                _patched_alias_flavors({"python_function": {}}):
+            loader = ScoringDataLoader(databricks_config)
+            with pytest.raises(ValueError, match="no native MLflow flavor.*Re-run the generated training pipeline"):
+                loader.load_model()
+        mock_mlflow.spark.load_model.assert_not_called()
+        mock_mlflow.sklearn.load_model.assert_not_called()
+        mock_mlflow.xgboost.load_model.assert_not_called()
+
+    def test_databricks_alias_without_logged_models_loads_native_alias(self, databricks_config):
+        databricks_config.registered_model_name = "analytics.churn.model_cust_emails_prof__a1b2c3d"
+        databricks_config.logged_models = []
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow, \
+                _patched_alias_flavors({"sklearn": {}}):
             mock_mlflow.sklearn.load_model.return_value = MagicMock()
             loader = ScoringDataLoader(databricks_config)
             _, uri = loader.load_model()
