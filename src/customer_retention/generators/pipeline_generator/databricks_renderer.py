@@ -1841,11 +1841,15 @@ def _log_best_model(model, df, feature_cols, test_df):
 def _promote_to_production(registered_name, parent_run_id):
     from mlflow.tracking import MlflowClient as _MlflowClient
     _client = _MlflowClient()
-    _versions = _client.search_model_versions(f"name='{registered_name}' and run_id='{parent_run_id}'")
+    _versions = _client.search_model_versions(f"name='{registered_name}'")
     if not _versions:
-        print(f"[TRAINING] WARNING: no model versions found for {registered_name} run_id={parent_run_id}")
+        print(f"[TRAINING] WARNING: no model versions found for {registered_name}")
         return None
-    _latest = max(_versions, key=lambda v: int(v.version))
+    _matching = [v for v in _versions if v.run_id == parent_run_id]
+    _candidates = _matching or _versions
+    _latest = max(_candidates, key=lambda v: int(v.version))
+    if not _matching:
+        print(f"[TRAINING] No version matched run_id={parent_run_id}; using latest v{_latest.version}")
     _client.set_registered_model_alias(registered_name, "production", _latest.version)
     print(f"[TRAINING] Alias @production -> {registered_name} v{_latest.version}")
     return _latest.version

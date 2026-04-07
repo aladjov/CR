@@ -821,7 +821,8 @@ class TestDatabricksTrainingFeatureEngineering:
     def test_promote_to_production_falls_back_to_latest_version(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
         fn = result[result.index("def _promote_to_production") : result.index("def train_and_evaluate")]
-        assert "max(_versions, key=lambda v: int(v.version))" in fn
+        assert "_matching or _versions" in fn
+        assert "max(_candidates, key=lambda v: int(v.version))" in fn
 
     def test_log_best_model_returns_registered_name(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
