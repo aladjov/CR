@@ -338,6 +338,218 @@ class TestRegisterTempViewRoundTrip:
             spark.catalog.dropGlobalTempView(view_name)
 
 
+class _FakeSparkDF:
+    """Records Spark DataFrame method calls without needing a session.
+
+    pyspark.sql.functions builds Column expressions without an active session,
+    so we can run the full _enrich_distributed body against this stub and
+    assert the resulting call sequence.
+    """
+
+    def __init__(self, columns, *, count=0, history=None):
+        self._columns = list(columns)
+        self._count = count
+        self.history = history if history is not None else []
+
+    @property
+    def columns(self):
+        return list(self._columns)
+
+    def withColumn(self, name, expr):  # noqa: N802 — Spark API
+        self.history.append(("withColumn", name, str(expr)))
+        new_cols = self._columns if name in self._columns else self._columns + [name]
+        return _FakeSparkDF(new_cols, count=self._count, history=self.history)
+
+    def filter(self, expr):
+        self.history.append(("filter", str(expr)))
+        return _FakeSparkDF(self._columns, count=self._count, history=self.history)
+
+    def drop(self, *cols):
+        self.history.append(("drop", cols))
+        remaining = [c for c in self._columns if c not in cols]
+        return _FakeSparkDF(remaining, count=self._count, history=self.history)
+
+    def count(self):
+        self.history.append(("count",))
+        return self._count
+
+    def unionByName(self, other):  # noqa: N802 — Spark API
+        self.history.append(("unionByName", id(other)))
+        return _FakeSparkDF(self._columns, count=self._count, history=self.history)
+
+
+class TestEnrichDistributed:
+    def test_distributed_pipeline_emits_start_and_terminate(self):
+        pytest.importorskip("pyspark")
+        from customer_retention.stages.lifecycle.enrich import _enrich_distributed
+
+        df = _FakeSparkDF([
+            "ACCOUNT_ID",
+            "CONTRACT_ID",
+            "CONTRACT_START_DATE",
+            "BILLING_TERMINATION_DATE",
+            "CONTRACT_STATUS",
+            "TAKE_RATE",
+        ])
+        cfg = _base_config()
+
+        result = _enrich_distributed(df, cfg)
+
+        ops = [h[0] for h in df.history]
+        # Cast valid_from + valid_to columns to timestamp
+        assert ops.count("withColumn") >= 2
+        # Effective valid_to column added
+        added_col_names = [h[1] for h in df.history if h[0] == "withColumn"]
+        assert "__effective_valid_to__" in added_col_names
+        # Drop columns step
+        drops = [h for h in df.history if h[0] == "drop"]
+        assert len(drops) >= 1
+        # event_type and event_timestamp added on starts and terminates
+        assert "event_type" in added_col_names
+        assert "event_timestamp" in added_col_names
+        # Terminates filter on isNotNull
+        filter_strs = [h[1] for h in df.history if h[0] == "filter"]
+        assert any("Not Null" in s or "NOT NULL" in s.upper() or "isnotnull" in s.lower() for s in filter_strs)
+        # Final unionByName
+        assert any(h[0] == "unionByName" for h in df.history)
+        assert isinstance(result, _FakeSparkDF)
+
+    def test_distributed_skip_corrupt_filters_inverted(self):
+        pytest.importorskip("pyspark")
+        from customer_retention.stages.lifecycle.enrich import _apply_corrupt_row_policy_spark
+
+        df = _FakeSparkDF(["CONTRACT_START_DATE", "__effective_valid_to__"])
+        cfg = _base_config(on_corrupt_row="skip")
+
+        _apply_corrupt_row_policy_spark(df, cfg)
+
+        # 'skip' takes a fast path: filter only, no count, no withColumn clamp
+        ops = [h[0] for h in df.history]
+        assert "filter" in ops
+        assert "count" not in ops
+        assert "withColumn" not in ops
+
+    def test_distributed_raise_when_corrupt_count_positive(self):
+        pytest.importorskip("pyspark")
+        from customer_retention.stages.lifecycle.enrich import _apply_corrupt_row_policy_spark
+
+        df = _FakeSparkDF(
+            ["CONTRACT_START_DATE", "__effective_valid_to__"],
+            count=3,
+        )
+        cfg = _base_config(on_corrupt_row="raise")
+
+        with pytest.raises(ValueError, match="3 rows have inverted lifecycle"):
+            _apply_corrupt_row_policy_spark(df, cfg)
+
+    def test_distributed_raise_no_corrupt_returns_input(self):
+        pytest.importorskip("pyspark")
+        from customer_retention.stages.lifecycle.enrich import _apply_corrupt_row_policy_spark
+
+        df = _FakeSparkDF(
+            ["CONTRACT_START_DATE", "__effective_valid_to__"],
+            count=0,
+        )
+        cfg = _base_config(on_corrupt_row="raise")
+
+        result = _apply_corrupt_row_policy_spark(df, cfg)
+
+        # No corrupt rows: input returned unmodified, no withColumn called
+        assert result is df
+        ops = [h[0] for h in df.history]
+        assert "count" in ops
+        assert "withColumn" not in ops
+
+    def test_distributed_warn_clamps_inverted_rows(self, caplog):
+        pytest.importorskip("pyspark")
+        from customer_retention.stages.lifecycle.enrich import _apply_corrupt_row_policy_spark
+
+        df = _FakeSparkDF(
+            ["CONTRACT_START_DATE", "__effective_valid_to__"],
+            count=2,
+        )
+        cfg = _base_config(on_corrupt_row="warn")
+
+        with caplog.at_level(logging.WARNING, logger="customer_retention.stages.lifecycle.enrich"):
+            _apply_corrupt_row_policy_spark(df, cfg)
+
+        # warn path: count + withColumn clamp
+        ops = [h[0] for h in df.history]
+        assert "count" in ops
+        assert "withColumn" in ops
+        clamp_calls = [h for h in df.history if h[0] == "withColumn"]
+        assert clamp_calls[0][1] == "__effective_valid_to__"
+        assert any("Clamping 2 rows" in rec.message for rec in caplog.records)
+
+    def test_cast_lifecycle_columns_to_timestamp_only_present_columns(self):
+        pytest.importorskip("pyspark")
+        from customer_retention.stages.lifecycle.enrich import (
+            _cast_lifecycle_columns_to_timestamp,
+        )
+
+        df = _FakeSparkDF(["CONTRACT_START_DATE", "BILLING_TERMINATION_DATE"])
+        # Config references a valid_to_column that ISN'T in df.columns; should be skipped
+        cfg = _base_config(
+            valid_to_columns=("BILLING_TERMINATION_DATE", "CONTRACT_END_DATE"),
+            drop_columns=(),
+        )
+
+        _cast_lifecycle_columns_to_timestamp(df, cfg)
+
+        casts = [h[1] for h in df.history if h[0] == "withColumn"]
+        assert "CONTRACT_START_DATE" in casts
+        assert "BILLING_TERMINATION_DATE" in casts
+        # CONTRACT_END_DATE missing in df.columns → must NOT be cast
+        assert "CONTRACT_END_DATE" not in casts
+
+    def test_build_effective_valid_to_no_present_columns(self):
+        pytest.importorskip("pyspark")
+        from customer_retention.stages.lifecycle.enrich import _build_effective_valid_to_expr
+
+        class FakeDF:
+            columns = ("OTHER",)
+
+        cfg = _base_config(
+            valid_to_columns=("BILLING_TERMINATION_DATE",),
+            status_column=None,
+            terminal_status_values=(),
+        )
+        expr = _build_effective_valid_to_expr(FakeDF(), cfg)
+        assert "NULL" in str(expr).upper()
+
+
+class TestPandasNoPresentValidToColumns:
+    def test_coalesce_pandas_no_present_columns_raises_keyerror(self):
+        """Defensive branch — exercised for coverage but never expected in real flow.
+
+        The pandas dispatcher never invokes _coalesce_pandas without present
+        columns; the lifecycle config is validated upstream. This test pins the
+        current behavior of the fallback line so a regression is noisy.
+        """
+        from customer_retention.stages.lifecycle.enrich import _coalesce_pandas
+
+        df = native_pd.DataFrame({"OTHER": [1, 2, 3]})
+        with pytest.raises(KeyError):
+            _coalesce_pandas(df, ["MISSING_COLUMN"])
+
+    def test_coalesce_pandas_single_present_column_returned_directly(self):
+        from customer_retention.stages.lifecycle.enrich import _coalesce_pandas
+
+        df = native_pd.DataFrame({"col_a": [1, None, 3]})
+        result = _coalesce_pandas(df, ["col_a"])
+        assert list(result) == [1, None, 3] or result.iloc[0] == 1
+
+    def test_coalesce_pandas_multiple_columns_falls_back(self):
+        from customer_retention.stages.lifecycle.enrich import _coalesce_pandas
+
+        df = native_pd.DataFrame({
+            "primary": [None, 2, None],
+            "secondary": [10, 20, 30],
+        })
+        result = _coalesce_pandas(df, ["primary", "secondary"])
+        assert list(result) == [10, 2, 30]
+
+
 class TestParity:
     def test_pandas_and_spark_pandas_equivalence(self, synthetic_contract_records):
         pytest.importorskip("pyspark")

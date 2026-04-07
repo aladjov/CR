@@ -816,3 +816,409 @@ class TestPrepareForDiagnostics:
         )
         assert list(gold_df.columns) == original_cols
         assert len(gold_df) == original_len
+
+
+class TestFmtDuration:
+    def test_seconds_format(self):
+        from customer_retention.stages.modeling.training_preparator import _fmt_duration
+        assert _fmt_duration(0) == "0s"
+        assert _fmt_duration(45.7) == "46s"
+        assert _fmt_duration(59.4) == "59s"
+
+    def test_minutes_format(self):
+        from customer_retention.stages.modeling.training_preparator import _fmt_duration
+        assert _fmt_duration(60) == "1m00s"
+        assert _fmt_duration(125) == "2m05s"
+        assert _fmt_duration(3599) == "59m59s"
+
+    def test_hours_format(self):
+        from customer_retention.stages.modeling.training_preparator import _fmt_duration
+        assert _fmt_duration(3600) == "1h00m"
+        assert _fmt_duration(3600 + 120) == "1h02m"
+        assert _fmt_duration(2 * 3600 + 30 * 60) == "2h30m"
+
+
+class TestPreparationProgressTracker:
+    def test_tracker_prints_progress(self, capsys):
+        from customer_retention.stages.modeling.training_preparator import PreparationProgressTracker
+
+        tracker = PreparationProgressTracker()
+        tracker(1, 10, "step1", 0.5)
+        tracker(5, 10, "step5", 1.2)
+        tracker(10, 10, "step10", 0.3)
+        captured = capsys.readouterr()
+        assert "[1/10] step1" in captured.out
+        assert "[5/10] step5" in captured.out
+        assert "[10/10] step10" in captured.out
+        # ETA is shown when step < total
+        assert "ETA" in captured.out
+
+    def test_print_preparation_progress(self, capsys):
+        from customer_retention.stages.modeling.training_preparator import print_preparation_progress
+
+        print_preparation_progress(3, 10, "classify", 2.5)
+        captured = capsys.readouterr()
+        assert "[3/10] classify: 2.5s" in captured.out
+
+
+class _FakeSparkDFForPreparator:
+    """Stub Spark DataFrame recording method calls for preparator tests."""
+
+    def __init__(self, columns, *, schema_fields=None, agg_row=None, history=None):
+        self._columns = list(columns)
+        self._schema_fields = schema_fields or []
+        self._agg_row = agg_row
+        self.history = history if history is not None else []
+
+    @property
+    def columns(self):
+        return list(self._columns)
+
+    @property
+    def schema(self):
+        from unittest.mock import MagicMock
+        s = MagicMock()
+        s.fields = self._schema_fields
+        return s
+
+    def agg(self, *exprs):  # noqa: ARG002
+        self.history.append(("agg",))
+        return self
+
+    def head(self):
+        self.history.append(("head",))
+        return self._agg_row
+
+    def filter(self, expr):  # noqa: ARG002
+        self.history.append(("filter",))
+        return _FakeSparkDFForPreparator(
+            self._columns, schema_fields=self._schema_fields,
+            agg_row=self._agg_row, history=self.history,
+        )
+
+    def select(self, cols):
+        self.history.append(("select", cols if isinstance(cols, list) else [cols]))
+        kept = [c for c in self._columns if c in (cols if isinstance(cols, list) else [cols])]
+        return _FakeSparkDFForPreparator(
+            kept or self._columns,
+            schema_fields=self._schema_fields,
+            agg_row=self._agg_row,
+            history=self.history,
+        )
+
+    def toDF(self, *aliases):  # noqa: N802
+        self.history.append(("toDF", aliases))
+        return _FakeSparkDFForPreparator(
+            list(aliases),
+            schema_fields=self._schema_fields,
+            agg_row=self._agg_row,
+            history=self.history,
+        )
+
+    @property
+    def na(self):
+        class _NaAccessor:
+            def __init__(self, parent):
+                self.parent = parent
+
+            def fill(self, value):  # noqa: ARG002
+                self.parent.history.append(("fillna",))
+                return self.parent
+
+        return _NaAccessor(self)
+
+    def localCheckpoint(self, eager=True):  # noqa: ARG002, N802
+        self.history.append(("localCheckpoint",))
+        return self
+
+
+class TestClassifyColumnsSpark:
+    def test_classify_via_schema_excludes_datetime_types(self):
+        pytest.importorskip("pyspark")
+        from pyspark.sql.types import (
+            DoubleType,
+            IntegerType,
+            StringType,
+            StructField,
+            TimestampNTZType,
+        )
+
+        from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
+        fake = _FakeSparkDFForPreparator(
+            ["feat_a", "feat_b", "feat_c", "feat_d"],
+            schema_fields=[
+                StructField("feat_a", DoubleType()),
+                StructField("feat_b", IntegerType()),
+                StructField("feat_c", StringType()),
+                StructField("feat_d", TimestampNTZType()),
+            ],
+        )
+        non_dt, str_cols = TrainingPreparator._classify_via_schema(
+            fake, ["feat_a", "feat_b", "feat_c", "feat_d"],
+        )
+        assert "feat_d" not in non_dt  # datetime excluded
+        assert "feat_a" in non_dt
+        assert "feat_b" in non_dt
+        assert "feat_c" in non_dt
+        assert str_cols == ["feat_c"]  # only string cols
+
+    def test_classify_via_schema_routes_from_dispatcher(self, preparator):
+        from unittest.mock import MagicMock, patch
+
+        fake_df = MagicMock()
+        with patch("customer_retention.stages.modeling.training_preparator._is_spark_pandas", return_value=True), \
+             patch("customer_retention.stages.modeling.training_preparator.as_spark_df", return_value=fake_df), \
+             patch.object(TrainingPreparator := type(preparator), "_classify_via_schema", return_value=(["a"], [])) as mock_schema:
+            result = preparator._classify_columns(fake_df, ["a", "b"])
+        mock_schema.assert_called_once()
+        assert result == (["a"], [])
+
+
+class TestDropMissingTargetSpark:
+    def test_drops_rows_with_null_target(self, preparator):
+        from unittest.mock import MagicMock, patch
+
+        fake_spark = MagicMock()
+        fake_spark.agg.return_value.head.return_value = {"nulls": 10, "total": 100}
+        fake_spark.filter.return_value = fake_spark
+        fake_input = MagicMock()
+
+        with patch("customer_retention.stages.modeling.training_preparator._is_spark_pandas", return_value=True), \
+             patch("customer_retention.stages.modeling.training_preparator.as_spark_df", return_value=fake_spark), \
+             patch("customer_retention.core.compat.spark_backend._as_pandas_api", return_value="filtered_ps"):
+            result, nan_count = preparator._drop_missing_target(fake_input)
+
+        assert nan_count == 10
+        assert result == "filtered_ps"
+        fake_spark.filter.assert_called_once()
+
+    def test_raises_when_all_target_null(self, preparator):
+        from unittest.mock import MagicMock, patch
+
+        fake_spark = MagicMock()
+        fake_spark.agg.return_value.head.return_value = {"nulls": 100, "total": 100}
+
+        with patch("customer_retention.stages.modeling.training_preparator._is_spark_pandas", return_value=True), \
+             patch("customer_retention.stages.modeling.training_preparator.as_spark_df", return_value=fake_spark):
+            with pytest.raises(ValueError, match="all target values are NaN"):
+                preparator._drop_missing_target(MagicMock())
+
+    def test_no_filter_when_no_nulls(self, preparator):
+        from unittest.mock import MagicMock, patch
+
+        fake_spark = MagicMock()
+        fake_spark.agg.return_value.head.return_value = {"nulls": 0, "total": 100}
+        fake_input = MagicMock()
+
+        with patch("customer_retention.stages.modeling.training_preparator._is_spark_pandas", return_value=True), \
+             patch("customer_retention.stages.modeling.training_preparator.as_spark_df", return_value=fake_spark):
+            result, nan_count = preparator._drop_missing_target(fake_input)
+
+        assert nan_count == 0
+        assert result is fake_input
+        fake_spark.filter.assert_not_called()
+
+    def test_nan_count_none_handled(self, preparator):
+        from unittest.mock import MagicMock, patch
+
+        fake_spark = MagicMock()
+        # Simulate a SQL NULL: row["nulls"] is None
+        fake_spark.agg.return_value.head.return_value = {"nulls": None, "total": 100}
+
+        with patch("customer_retention.stages.modeling.training_preparator._is_spark_pandas", return_value=True), \
+             patch("customer_retention.stages.modeling.training_preparator.as_spark_df", return_value=fake_spark):
+            result, nan_count = preparator._drop_missing_target(MagicMock())
+
+        assert nan_count == 0
+
+
+class TestSampleEntitiesSpark:
+    def test_returns_input_when_under_limit(self, feature_cols):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
+        prep = TrainingPreparator(
+            target_column="target", feature_columns=feature_cols, max_rows=1000,
+        )
+        fake_spark = MagicMock()
+        fake_spark.agg.return_value.head.return_value = {"total": 500, "n_entities": 50}
+        fake_input = MagicMock()
+
+        with patch("customer_retention.stages.modeling.training_preparator._is_spark_pandas", return_value=True), \
+             patch("customer_retention.stages.modeling.training_preparator.as_spark_df", return_value=fake_spark):
+            result = prep._sample_entities(fake_input)
+
+        assert result is fake_input
+
+    def test_samples_when_over_limit(self, feature_cols):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
+        prep = TrainingPreparator(
+            target_column="target", feature_columns=feature_cols, max_rows=100,
+        )
+        # 500 rows / 100 entities → 5 rows per entity → target 20 entities
+        fake_spark = MagicMock()
+        fake_spark.agg.return_value.head.return_value = {"total": 500, "n_entities": 100}
+
+        fake_input = MagicMock()
+        fake_input.__getitem__ = MagicMock(return_value=MagicMock(drop_duplicates=MagicMock(return_value="entity_df")))
+        fake_input.merge = MagicMock(return_value="merged_result")
+
+        with patch("customer_retention.stages.modeling.training_preparator._is_spark_pandas", return_value=True), \
+             patch("customer_retention.stages.modeling.training_preparator.as_spark_df", return_value=fake_spark), \
+             patch("customer_retention.stages.modeling.training_preparator.safe_sample", return_value="sampled"):
+            result = prep._sample_entities(fake_input)
+
+        assert result == "merged_result"
+        fake_input.merge.assert_called_once()
+
+    def test_no_op_when_max_rows_none(self, preparator):
+        from unittest.mock import MagicMock
+
+        fake_input = MagicMock()
+        result = preparator._sample_entities(fake_input)
+        assert result is fake_input
+
+
+class TestExtractTrainMetadataFromResult:
+    def test_uses_train_metadata_when_available(self, preparator):
+        from unittest.mock import MagicMock
+
+        split_result = MagicMock()
+        split_result.train_metadata = {
+            "entity_id": "meta_entity_series",
+            "as_of_date": "meta_date_series",
+        }
+        entities, dates = preparator._extract_train_metadata(split_result, MagicMock())
+        assert entities == "meta_entity_series"
+        assert dates == "meta_date_series"
+
+
+class TestSparkFillnaAndDrop:
+    def test_spark_fillna_drops_zero_variance_columns(self, preparator):
+        from unittest.mock import MagicMock, patch
+
+        fake_train_spark = MagicMock()
+        fake_train_spark.columns = ["f1", "f2", "f3"]
+        fake_train_spark.select.return_value.na.fill.return_value.localCheckpoint.return_value = "train_ckpt"
+        fake_test_spark = MagicMock()
+        fake_test_spark.columns = ["f1", "f2", "f3"]
+        fake_test_spark.select.return_value.na.fill.return_value.localCheckpoint.return_value = "test_ckpt"
+
+        call_sequence = [fake_train_spark, fake_test_spark]
+        with patch("customer_retention.stages.modeling.training_preparator._is_spark_pandas", return_value=True), \
+             patch("customer_retention.stages.modeling.training_preparator.as_spark_df", side_effect=lambda df: call_sequence.pop(0)), \
+             patch.object(preparator, "_spark_nulls_and_zero_var", return_value=({"f1": 2, "f2": 0, "f3": 5}, ["f2"])), \
+             patch("customer_retention.core.compat.spark_backend._as_pandas_api", side_effect=lambda x: f"ps_{x}"):
+            X_train, X_test, zero_var, nulls = preparator._spark_fillna_and_drop(MagicMock(), MagicMock())
+
+        assert zero_var == ["f2"]
+        assert "f2" not in nulls  # Zero-variance col removed from nulls dict
+        assert X_train == "ps_train_ckpt"
+        assert X_test == "ps_test_ckpt"
+
+
+class TestPandasNullsAndZeroVar:
+    def test_returns_empty_when_no_numeric_cols(self):
+        from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
+        X_train = pd.DataFrame({"txt": ["a", "b", "c"]})
+        X_test = pd.DataFrame({"txt": ["d", "e", "f"]})
+        # Null counts dict built against training columns, zero_var list empty
+        nulls, zero_var = TrainingPreparator._pandas_nulls_and_zero_var(X_train, X_test)
+        assert "txt" in nulls
+        assert zero_var == []
+
+    def test_identifies_zero_variance_numeric_col(self):
+        from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
+        X_train = pd.DataFrame({"constant": [5.0, 5.0, 5.0], "varied": [1.0, 2.0, 3.0]})
+        X_test = pd.DataFrame({"constant": [5.0], "varied": [2.5]})
+        nulls, zero_var = TrainingPreparator._pandas_nulls_and_zero_var(X_train, X_test)
+        assert "constant" in zero_var
+        assert "varied" not in zero_var
+
+    def test_identifies_nan_std_as_zero_variance(self):
+        from customer_retention.stages.modeling.training_preparator import TrainingPreparator
+
+        X_train = pd.DataFrame({"single": [5.0]})
+        X_test = pd.DataFrame({"single": [5.0]})
+        _, zero_var = TrainingPreparator._pandas_nulls_and_zero_var(X_train, X_test)
+        assert "single" in zero_var
+
+
+class TestSparkNullsAndZeroVar:
+    def test_spark_batch_aggregation_collects_stats(self, preparator):
+        pytest.importorskip("pyspark")
+        from unittest.mock import MagicMock, patch
+
+        from pyspark.sql.types import DoubleType, StringType, StructField
+
+        fake_train = MagicMock()
+        fake_train.columns = ["num1", "num2", "txt1"]
+        fake_train.schema.fields = [
+            StructField("num1", DoubleType()),
+            StructField("num2", DoubleType()),
+            StructField("txt1", StringType()),
+        ]
+
+        # toDF returns a work-df that supports .agg().head()
+        work_df = MagicMock()
+        # Train row: nulls + stddev per numeric col
+        train_row = {
+            "__a0____n": 3, "__a0____s": 1.5,  # num1: has variance
+            "__a1____n": 2, "__a1____s": 0.0,  # num2: zero variance
+            "__a2____n": 0,                    # txt1: null count only, no stddev
+        }
+        # Test row: just null counts
+        test_row = {"__a0____n": 1, "__a1____n": 0, "__a2____n": 2}
+        work_df.agg.return_value.head.side_effect = [train_row, test_row]
+        fake_train.toDF.return_value = work_df
+
+        fake_test = MagicMock()
+        fake_test.columns = ["num1", "num2", "txt1"]
+        fake_test.toDF.return_value = work_df
+
+        call_sequence = [fake_train, fake_test]
+        with patch("customer_retention.stages.modeling.training_preparator.as_spark_df", side_effect=lambda df: call_sequence.pop(0)):
+            nulls, zero_var = preparator._spark_nulls_and_zero_var(MagicMock(), MagicMock())
+
+        assert nulls["num1"] == 4  # 3 train + 1 test
+        assert nulls["num2"] == 2
+        assert nulls["txt1"] == 2
+        assert "num2" in zero_var
+        assert "num1" not in zero_var
+        # txt1 is not numeric → never flagged as zero_var
+        assert "txt1" not in zero_var
+
+
+class TestDropMissingTargetRows:
+    def test_pandas_filters_by_notna(self):
+        from customer_retention.stages.modeling.training_preparator import _drop_missing_target_rows
+
+        df = pd.DataFrame({"target": [1, np.nan, 0, np.nan, 1], "f": [1, 2, 3, 4, 5]})
+        result = _drop_missing_target_rows(df, "target")
+        assert len(result) == 3
+        assert not result["target"].isna().any()
+
+    def test_spark_path_uses_filter(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.stages.modeling.training_preparator import _drop_missing_target_rows
+
+        fake_spark_df = MagicMock()
+        fake_filtered = MagicMock()
+        fake_spark_df.filter.return_value = fake_filtered
+        fake_input = MagicMock()
+
+        with patch("customer_retention.stages.modeling.training_preparator._is_spark_pandas", return_value=True), \
+             patch("customer_retention.stages.modeling.training_preparator.as_spark_df", return_value=fake_spark_df), \
+             patch("customer_retention.core.compat.spark_backend._as_pandas_api", return_value="ps_filtered"):
+            result = _drop_missing_target_rows(fake_input, "target")
+
+        fake_spark_df.filter.assert_called_once()
+        assert result == "ps_filtered"

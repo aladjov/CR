@@ -946,3 +946,464 @@ class TestTemporalPurgeGap:
         result = splitter.split(temporal_df)
         # Large purge may drop all train rows but entities are still separated
         assert len(result.X_test) > 0
+
+
+class TestTemporalSplitGroupColumnRequired:
+    def test_pandas_path_temporal_without_group_column_raises(self, sample_df):
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="date", test_size=0.2,
+            exclude_columns=["date", "custid"],
+        )
+        with pytest.raises(ValueError, match="group_column"):
+            splitter.split(sample_df)
+
+    def test_spark_path_temporal_without_group_column_raises(self):
+        from unittest.mock import MagicMock, patch
+
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", test_size=0.2,
+        )
+        mock_df = MagicMock()
+        mock_spark_df = MagicMock()
+        # min_count agg returns 100
+        mock_spark_df.groupBy.return_value.count.return_value.agg.return_value.head.return_value = [100]
+
+        with patch("customer_retention.stages.modeling.data_splitter._is_spark_pandas", return_value=True), \
+             patch("customer_retention.stages.modeling.data_splitter.as_spark_df", return_value=mock_spark_df):
+            with pytest.raises(ValueError, match="group_column"):
+                splitter.split(mock_df)
+
+
+class TestSplitSparkDispatchByStrategy:
+    """Verify _split_spark dispatches each strategy and merges availability warnings."""
+
+    def _build_mock_spark_df(self, *, min_count=200):
+        from unittest.mock import MagicMock
+        sdf = MagicMock()
+        sdf.groupBy.return_value.count.return_value.agg.return_value.head.return_value = [min_count]
+        return sdf
+
+    def test_random_stratified_strategy_calls_stratified_split(self):
+        from unittest.mock import MagicMock, patch
+
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.RANDOM_STRATIFIED,
+            test_size=0.2,
+        )
+        sdf = self._build_mock_spark_df()
+        sdf.toPandas.return_value = pd.DataFrame({
+            "feature1": np.random.randn(200),
+            "target": np.random.choice([0, 1], 200, p=[0.3, 0.7]),
+        })
+        mock_result = MagicMock(spec=SplitResult)
+        mock_result.split_info = {}
+        with patch.object(splitter, "_stratified_split", return_value=mock_result) as mock_strat:
+            result = splitter._split_spark(sdf)
+        mock_strat.assert_called_once()
+        assert result is mock_result
+
+    def test_group_strategy_calls_group_split(self):
+        from unittest.mock import MagicMock, patch
+
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.GROUP,
+            group_column="entity_id", test_size=0.2,
+        )
+        sdf = self._build_mock_spark_df()
+        sdf.toPandas.return_value = pd.DataFrame({
+            "feature1": np.random.randn(200),
+            "target": np.random.choice([0, 1], 200),
+            "entity_id": [f"e{i % 20}" for i in range(200)],
+        })
+        mock_result = MagicMock(spec=SplitResult)
+        mock_result.split_info = {}
+        with patch.object(splitter, "_group_split", return_value=mock_result) as mock_grp:
+            result = splitter._split_spark(sdf)
+        mock_grp.assert_called_once()
+        assert result is mock_result
+
+    def test_temporal_strategy_calls_distributed_temporal(self):
+        from unittest.mock import MagicMock, patch
+
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", group_column="entity_id", test_size=0.2,
+        )
+        sdf = self._build_mock_spark_df()
+        mock_result = MagicMock(spec=SplitResult)
+        mock_result.split_info = {}
+        with patch.object(splitter, "_distributed_temporal_split", return_value=mock_result) as mock_dist:
+            result = splitter._split_spark(sdf)
+        mock_dist.assert_called_once_with(sdf)
+        assert result is mock_result
+
+    def test_low_minority_count_warns(self):
+        from unittest.mock import MagicMock, patch
+
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", group_column="entity_id", test_size=0.2,
+        )
+        # min_count * 0.2 = 4 → < 50 triggers warning
+        sdf = self._build_mock_spark_df(min_count=20)
+        mock_result = MagicMock(spec=SplitResult)
+        mock_result.split_info = {}
+        with patch.object(splitter, "_distributed_temporal_split", return_value=mock_result):
+            with pytest.warns(UserWarning, match="Insufficient minority samples"):
+                splitter._split_spark(sdf)
+
+    def test_min_count_none_treated_as_zero(self):
+        from unittest.mock import MagicMock, patch
+
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", group_column="entity_id", test_size=0.2,
+        )
+        sdf = MagicMock()
+        # head returns [None] simulating empty groupBy
+        sdf.groupBy.return_value.count.return_value.agg.return_value.head.return_value = [None]
+        mock_result = MagicMock(spec=SplitResult)
+        mock_result.split_info = {}
+        with patch.object(splitter, "_distributed_temporal_split", return_value=mock_result):
+            with pytest.warns(UserWarning):
+                splitter._split_spark(sdf)
+
+    def test_availability_warnings_added_to_split_info(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.analysis.auto_explorer.findings import (
+            FeatureAvailabilityInfo,
+            FeatureAvailabilityMetadata,
+        )
+
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", group_column="entity_id", test_size=0.2,
+        )
+        sdf = self._build_mock_spark_df()
+        sdf.columns = ["feature1", "target", "as_of_date", "entity_id", "new_feat"]
+        availability = FeatureAvailabilityMetadata(
+            data_start="2024-01-01",
+            data_end="2025-01-01",
+            time_span_days=365,
+            new_tracking=["new_feat"],
+            retired_tracking=[],
+            partial_window=[],
+            features={"new_feat": FeatureAvailabilityInfo(
+                first_valid_date="2024-01-01",
+                last_valid_date="2025-01-01",
+                coverage_pct=100.0,
+                availability_type="new_tracking",
+                days_from_start=0,
+                days_before_end=0,
+            )},
+        )
+        mock_result = MagicMock(spec=SplitResult)
+        mock_result.split_info = {}
+        with patch.object(splitter, "_distributed_temporal_split", return_value=mock_result):
+            splitter._split_spark(sdf, feature_availability=availability)
+
+        assert "availability_warnings" in mock_result.split_info
+        assert mock_result.split_info["availability_warnings"][0]["column"] == "new_feat"
+
+
+class TestValidateFeatureAvailabilityPartialWindow:
+    def test_partial_window_emits_warning(self):
+        from customer_retention.analysis.auto_explorer.findings import (
+            FeatureAvailabilityInfo,
+            FeatureAvailabilityMetadata,
+        )
+
+        df = pd.DataFrame({"partial_feat": [1, 2, 3], "target": [0, 1, 0]})
+        availability = FeatureAvailabilityMetadata(
+            data_start="2024-01-01",
+            data_end="2024-12-31",
+            time_span_days=365,
+            new_tracking=[],
+            retired_tracking=[],
+            partial_window=["partial_feat"],
+            features={"partial_feat": FeatureAvailabilityInfo(
+                first_valid_date="2024-03-01",
+                last_valid_date="2024-09-30",
+                coverage_pct=58.0,
+                availability_type="partial_window",
+                days_from_start=60,
+                days_before_end=92,
+            )},
+        )
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="date", group_column="entity",
+        )
+        warnings_list = splitter.validate_feature_availability(df, availability)
+        assert len(warnings_list) == 1
+        assert warnings_list[0].column == "partial_feat"
+        assert warnings_list[0].issue == "partial_window"
+        assert "2024-03-01" in warnings_list[0].recommendation
+        assert "2024-09-30" in warnings_list[0].recommendation
+
+    def test_partial_window_unknown_dates_when_feature_missing(self):
+        from customer_retention.analysis.auto_explorer.findings import FeatureAvailabilityMetadata
+
+        df = pd.DataFrame({"orphan_col": [1, 2], "target": [0, 1]})
+        availability = FeatureAvailabilityMetadata(
+            data_start="2024-01-01",
+            data_end="2024-12-31",
+            time_span_days=365,
+            new_tracking=[],
+            retired_tracking=[],
+            partial_window=["orphan_col"],
+            features={},  # No metadata for orphan_col
+        )
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="date", group_column="entity",
+        )
+        warnings_list = splitter.validate_feature_availability(df, availability)
+        assert len(warnings_list) == 1
+        assert "unknown" in warnings_list[0].recommendation
+
+
+class TestGroupSplitWithValidation:
+    def test_group_split_includes_validation(self):
+        n = 600
+        df = pd.DataFrame({
+            "feature1": np.random.randn(n),
+            "feature2": np.random.randn(n),
+            "target": np.random.choice([0, 1], n),
+            "entity_id": [f"e{i % 30}" for i in range(n)],
+        })
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.GROUP,
+            group_column="entity_id", test_size=0.2,
+            include_validation=True, validation_size=0.10,
+            exclude_columns=["entity_id"],
+        )
+        result = splitter.split(df)
+        assert result.X_val is not None
+        assert result.y_val is not None
+        assert len(result.X_val) > 0
+        # No entity should appear in more than one split
+        train_ents = set(df.loc[result.X_train.index, "entity_id"])
+        val_ents = set(df.loc[result.X_val.index, "entity_id"])
+        test_ents = set(df.loc[result.X_test.index, "entity_id"])
+        assert not (train_ents & val_ents)
+        assert not (train_ents & test_ents)
+        assert not (val_ents & test_ents)
+        assert "validation_size" in result.split_info
+
+
+class _FakeSparkDFForSplit:
+    """Records spark calls and produces deterministic head/agg results."""
+
+    def __init__(self, columns, schema_fields, *, total=200, cutoff_epoch=1700000000, history=None):
+        self._columns = list(columns)
+        self._schema_fields = schema_fields
+        self._total = total
+        self._cutoff_epoch = cutoff_epoch
+        self.history = history if history is not None else []
+        self._next_filtered = 100
+
+    @property
+    def columns(self):
+        return list(self._columns)
+
+    @property
+    def schema(self):
+        from unittest.mock import MagicMock
+        s = MagicMock()
+        s.fields = self._schema_fields
+        return s
+
+    def drop(self, *cols):
+        self.history.append(("drop", cols))
+        remaining = [c for c in self._columns if c not in cols]
+        return _FakeSparkDFForSplit(
+            remaining, self._schema_fields,
+            total=self._total, cutoff_epoch=self._cutoff_epoch,
+            history=self.history,
+        )
+
+    def agg(self, *exprs):  # noqa: ARG002
+        self.history.append(("agg", "cutoff/total"))
+        return self
+
+    def head(self):
+        self.history.append(("head",))
+        return {"cutoff": self._cutoff_epoch, "total": self._total}
+
+    def filter(self, expr):  # noqa: ARG002
+        self.history.append(("filter",))
+        return _FakeSparkDFForSplit(
+            self._columns, self._schema_fields,
+            total=self._total, cutoff_epoch=self._cutoff_epoch,
+            history=self.history,
+        )
+
+    def localCheckpoint(self, eager=True):  # noqa: ARG002, N802
+        self.history.append(("localCheckpoint",))
+        return self
+
+
+class TestDistributedTemporalSplitFullPath:
+    """Exercise the full _distributed_temporal_split body using fake Spark DFs."""
+
+    def _build_schema(self):
+        pytest.importorskip("pyspark")
+        from pyspark.sql.types import (
+            DoubleType,
+            IntegerType,
+            StringType,
+            StructField,
+            TimestampNTZType,
+        )
+        return [
+            StructField("feature1", DoubleType()),
+            StructField("feature2", DoubleType()),
+            StructField("target", IntegerType()),
+            StructField("as_of_date", TimestampNTZType()),
+            StructField("entity_id", StringType()),
+        ]
+
+    def _stub_select(self, splitter):
+        from unittest.mock import MagicMock
+
+        def fake_select(ps_df, schema):  # noqa: ARG001
+            return MagicMock(name="X"), MagicMock(name="y")
+
+        splitter._select_features_target_from_ps = fake_select  # type: ignore[method-assign]
+
+    def test_full_distributed_path_runs(self):
+        from unittest.mock import MagicMock, patch
+
+        schema = self._build_schema()
+        sdf = _FakeSparkDFForSplit(
+            ["feature1", "feature2", "target", "as_of_date", "entity_id"],
+            schema,
+        )
+
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, exclude_columns=["as_of_date", "entity_id"],
+        )
+        self._stub_select(splitter)
+
+        with patch("customer_retention.stages.modeling.data_splitter.as_spark_df", return_value=sdf), \
+             patch("customer_retention.core.compat.spark_backend._as_pandas_api", return_value=MagicMock()):
+            result = splitter._distributed_temporal_split(MagicMock())
+
+        assert isinstance(result, SplitResult)
+        # Should call agg + head once for cutoff
+        assert any(h[0] == "agg" for h in sdf.history)
+        # Should checkpoint train and test
+        ckpts = [h for h in sdf.history if h[0] == "localCheckpoint"]
+        assert len(ckpts) >= 2
+
+    def test_distributed_drops_index_level_columns(self):
+        from unittest.mock import MagicMock, patch
+
+        schema = self._build_schema()
+        sdf = _FakeSparkDFForSplit(
+            ["__index_level_0__", "feature1", "target", "as_of_date", "entity_id"],
+            schema,
+        )
+
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, exclude_columns=["as_of_date", "entity_id"],
+        )
+        self._stub_select(splitter)
+
+        with patch("customer_retention.stages.modeling.data_splitter.as_spark_df", return_value=sdf), \
+             patch("customer_retention.core.compat.spark_backend._as_pandas_api", return_value=MagicMock()):
+            splitter._distributed_temporal_split(MagicMock())
+
+        drops = [h for h in sdf.history if h[0] == "drop"]
+        assert any("__index_level_0__" in d[1] for d in drops)
+
+    def test_distributed_purge_gap_filters_train(self):
+        from unittest.mock import MagicMock, patch
+
+        schema = self._build_schema()
+        sdf = _FakeSparkDFForSplit(
+            ["feature1", "target", "as_of_date", "entity_id"],
+            schema,
+            total=200,
+        )
+
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, purge_gap_days=30,
+            exclude_columns=["as_of_date", "entity_id"],
+        )
+        self._stub_select(splitter)
+
+        with patch("customer_retention.stages.modeling.data_splitter.as_spark_df", return_value=sdf), \
+             patch("customer_retention.core.compat.spark_backend._as_pandas_api", return_value=MagicMock()):
+            result = splitter._distributed_temporal_split(MagicMock())
+
+        # purge_gap adds an extra filter on the train side
+        filters = [h for h in sdf.history if h[0] == "filter"]
+        assert len(filters) >= 3  # test_filter, train_filter, purge_filter
+        assert "purge_gap_days" in result.split_info
+        assert result.split_info["purge_gap_days"] == 30
+        assert "purge_gap_rows" in result.split_info
+
+    def test_distributed_validation_split_path(self):
+        from unittest.mock import MagicMock, patch
+
+        schema = self._build_schema()
+        sdf = _FakeSparkDFForSplit(
+            ["feature1", "target", "as_of_date", "entity_id"],
+            schema,
+        )
+
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, include_validation=True, validation_size=0.1,
+            exclude_columns=["as_of_date", "entity_id"],
+        )
+        self._stub_select(splitter)
+
+        with patch("customer_retention.stages.modeling.data_splitter.as_spark_df", return_value=sdf), \
+             patch("customer_retention.core.compat.spark_backend._as_pandas_api", return_value=MagicMock()):
+            result = splitter._distributed_temporal_split(MagicMock())
+
+        assert result.X_val is not None
+        # Validation split adds an extra checkpoint
+        ckpts = [h for h in sdf.history if h[0] == "localCheckpoint"]
+        assert len(ckpts) >= 3
+
+    def test_distributed_train_metadata_extracted(self):
+        from unittest.mock import MagicMock, patch
+
+        schema = self._build_schema()
+        sdf = _FakeSparkDFForSplit(
+            ["feature1", "target", "as_of_date", "entity_id"],
+            schema,
+        )
+
+        splitter = DataSplitter(
+            target_column="target", strategy=SplitStrategy.TEMPORAL,
+            temporal_column="as_of_date", group_column="entity_id",
+            test_size=0.2, exclude_columns=["as_of_date", "entity_id"],
+        )
+        self._stub_select(splitter)
+
+        # Make _as_pandas_api return a dict-like with metadata cols
+        ps_obj = MagicMock()
+        ps_obj.__getitem__ = MagicMock(return_value="meta_series")
+
+        with patch("customer_retention.stages.modeling.data_splitter.as_spark_df", return_value=sdf), \
+             patch("customer_retention.core.compat.spark_backend._as_pandas_api", return_value=ps_obj):
+            result = splitter._distributed_temporal_split(MagicMock())
+
+        # exclude_columns ["as_of_date", "entity_id"] both in schema → metadata captured
+        assert "as_of_date" in result.train_metadata
+        assert "entity_id" in result.train_metadata

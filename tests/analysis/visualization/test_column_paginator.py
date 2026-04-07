@@ -556,3 +556,295 @@ class TestRenderPageDirect:
 
         mock_output.clear_output.assert_called_once_with(wait=True)
         assert render_mock.call_count == 1
+
+
+# ===================================================================
+# _show_widget (Jupyter widget path)
+# ===================================================================
+
+
+def _fake_widgets_module():
+    """Build a MagicMock that impersonates the ipywidgets module enough for _show_widget."""
+    mod = MagicMock()
+
+    class _Widget:
+        def __init__(self, *args, **kwargs):
+            if args and "value" not in kwargs:
+                kwargs["value"] = args[0]
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+            if not hasattr(self, "value"):
+                self.value = ""
+            self._observers: list = []
+            self._click_handlers: list = []
+
+        def observe(self, fn, names=None):  # noqa: ARG002
+            self._observers.append(fn)
+
+        def on_click(self, fn):
+            self._click_handlers.append(fn)
+
+        def clear_output(self, wait=False):  # noqa: ARG002
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    mod.Text = lambda *a, **kw: _Widget(*a, **kw)
+    mod.Dropdown = lambda *a, **kw: _Widget(*a, **kw)
+    mod.IntSlider = lambda *a, **kw: _Widget(*a, **kw)
+    mod.Button = lambda *a, **kw: _Widget(*a, **kw)
+    mod.HTML = lambda *a, **kw: _Widget(*a, **kw)
+    mod.Output = lambda *a, **kw: _Widget(*a, **kw)
+    mod.HBox = lambda children, **kw: _Widget(children=children, **kw)
+    mod.VBox = lambda children, **kw: _Widget(children=children, **kw)
+    mod.Layout = lambda *a, **kw: _Widget(*a, **kw)
+    return mod
+
+
+class TestShowWidget:
+    def test_show_widget_renders_initial_page(self):
+        entries = [_entry(f"c{i}", 100 - i) for i in range(15)]
+        render_mock = MagicMock()
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=5, title="WT")
+
+        fake_widgets = _fake_widgets_module()
+        with patch("customer_retention.analysis.visualization.column_paginator.widgets", fake_widgets), \
+             patch("IPython.display.display") as mock_display:
+            p._show_widget()
+
+        # Initial render: first page (5 entries)
+        assert render_mock.call_count == 5
+        mock_display.assert_called_once()
+
+    def test_show_widget_search_observer_filters_and_renders(self):
+        entries = [_entry("alpha", 90), _entry("beta", 80), _entry("gamma", 70), _entry("delta", 60)]
+        render_mock = MagicMock()
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10)
+
+        fake_widgets = _fake_widgets_module()
+        captured_widgets = {}
+
+        text_orig = fake_widgets.Text
+        dropdown_orig = fake_widgets.Dropdown
+        slider_orig = fake_widgets.IntSlider
+
+        def _capture_text(**kw):
+            w = text_orig(**kw)
+            captured_widgets["search"] = w
+            return w
+
+        def _capture_dropdown(**kw):
+            w = dropdown_orig(**kw)
+            captured_widgets["sort"] = w
+            return w
+
+        def _capture_slider(**kw):
+            w = slider_orig(**kw)
+            captured_widgets["slider"] = w
+            return w
+
+        fake_widgets.Text = _capture_text
+        fake_widgets.Dropdown = _capture_dropdown
+        fake_widgets.IntSlider = _capture_slider
+
+        with patch("customer_retention.analysis.visualization.column_paginator.widgets", fake_widgets), \
+             patch("IPython.display.display"):
+            p._show_widget()
+
+        render_mock.reset_mock()
+
+        # Simulate user typing "alph" — fires observer
+        captured_widgets["search"].value = "alph"
+        for obs in captured_widgets["search"]._observers:
+            obs(None)
+
+        # Only 'alpha' matches; current page reset to 0
+        assert p._current_page == 0
+        assert [e.name for e in p._filtered_entries] == ["alpha"]
+        assert render_mock.call_count == 1
+
+    def test_show_widget_min_score_slider_filters(self):
+        entries = [_entry("a", 90), _entry("b", 50), _entry("c", 30)]
+        render_mock = MagicMock()
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10)
+
+        fake_widgets = _fake_widgets_module()
+        captured = {}
+        slider_orig = fake_widgets.IntSlider
+
+        def _capture_slider(**kw):
+            w = slider_orig(**kw)
+            captured["slider"] = w
+            return w
+
+        fake_widgets.IntSlider = _capture_slider
+
+        with patch("customer_retention.analysis.visualization.column_paginator.widgets", fake_widgets), \
+             patch("IPython.display.display"):
+            p._show_widget()
+
+        captured["slider"].value = 60
+        for obs in captured["slider"]._observers:
+            obs(None)
+
+        assert [e.name for e in p._filtered_entries] == ["a"]
+
+    def test_show_widget_sort_dropdown_changes_order(self):
+        entries = [_entry("zebra", 50), _entry("alpha", 60)]
+        render_mock = MagicMock()
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10)
+
+        fake_widgets = _fake_widgets_module()
+        captured = {}
+        dropdown_orig = fake_widgets.Dropdown
+
+        def _capture(**kw):
+            w = dropdown_orig(**kw)
+            captured["sort"] = w
+            return w
+
+        fake_widgets.Dropdown = _capture
+
+        with patch("customer_retention.analysis.visualization.column_paginator.widgets", fake_widgets), \
+             patch("IPython.display.display"):
+            p._show_widget()
+
+        captured["sort"].value = "name"
+        for obs in captured["sort"]._observers:
+            obs(None)
+
+        assert [e.name for e in p._filtered_entries] == ["alpha", "zebra"]
+
+    def test_show_widget_next_and_prev_buttons(self):
+        entries = [_entry(f"c{i}", 100 - i) for i in range(25)]
+        render_mock = MagicMock()
+        p = ColumnPaginator(entries, render_mock, _noop_summary, page_size=10)
+
+        fake_widgets = _fake_widgets_module()
+        captured = {"buttons": []}
+        btn_orig = fake_widgets.Button
+
+        def _capture_btn(**kw):
+            w = btn_orig(**kw)
+            captured["buttons"].append(w)
+            return w
+
+        fake_widgets.Button = _capture_btn
+
+        with patch("customer_retention.analysis.visualization.column_paginator.widgets", fake_widgets), \
+             patch("IPython.display.display"):
+            p._show_widget()
+
+        prev_btn, next_btn = captured["buttons"]
+
+        # Next goes page 0 -> 1
+        for h in next_btn._click_handlers:
+            h(None)
+        assert p._current_page == 1
+
+        # Next again: 1 -> 2 (last page)
+        for h in next_btn._click_handlers:
+            h(None)
+        assert p._current_page == 2
+
+        # Next at last page is a no-op
+        for h in next_btn._click_handlers:
+            h(None)
+        assert p._current_page == 2
+
+        # Prev: 2 -> 1
+        for h in prev_btn._click_handlers:
+            h(None)
+        assert p._current_page == 1
+
+        # Prev back to 0
+        for h in prev_btn._click_handlers:
+            h(None)
+        assert p._current_page == 0
+
+        # Prev at page 0 is a no-op
+        for h in prev_btn._click_handlers:
+            h(None)
+        assert p._current_page == 0
+
+    def test_show_widget_page_label_shows_total(self):
+        entries = [_entry(f"c{i}", 100 - i) for i in range(23)]
+        p = ColumnPaginator(entries, _noop_render, _noop_summary, page_size=10)
+
+        fake_widgets = _fake_widgets_module()
+        captured = {"html": []}
+        html_orig = fake_widgets.HTML
+
+        def _capture_html(*a, **kw):
+            w = html_orig(*a, **kw)
+            captured["html"].append(w)
+            return w
+
+        fake_widgets.HTML = _capture_html
+
+        with patch("customer_retention.analysis.visualization.column_paginator.widgets", fake_widgets), \
+             patch("IPython.display.display"):
+            p._show_widget()
+
+        # Source creates page_label HTML first (line 185), title HTML later (inside VBox)
+        page_label = captured["html"][0]
+        assert "Page 1 of 3" in page_label.value
+        assert "23 columns" in page_label.value
+
+    def test_show_widget_dispatched_from_show_when_interactive(self):
+        entries = [_entry("a", 50)]
+        p = ColumnPaginator(entries, _noop_render, _noop_summary, page_size=10)
+
+        fake_widgets = _fake_widgets_module()
+        with patch("customer_retention.analysis.visualization.column_paginator.has_interactive_widgets", return_value=True), \
+             patch("customer_retention.analysis.visualization.column_paginator.display_table"), \
+             patch("customer_retention.analysis.visualization.column_paginator.widgets", fake_widgets), \
+             patch("IPython.display.display"):
+            # Should not crash — exercises line 140 (branch to _show_widget)
+            p.show()
+
+
+# ===================================================================
+# _is_headless_execution — extra branch coverage
+# ===================================================================
+
+
+class TestIsHeadlessExecutionBranches:
+    @patch("customer_retention.analysis.visualization.column_paginator.detect_environment", return_value="jupyter")
+    def test_no_ipython_kernel(self, mock_env, monkeypatch):
+        monkeypatch.delenv("PAPERMILL_OUTPUT_PATH", raising=False)
+        monkeypatch.delenv("CR_BATCH_EXECUTION", raising=False)
+        mock_ip = MagicMock()
+        mock_ip.kernel = None
+        with patch("IPython.get_ipython", return_value=mock_ip):
+            assert _is_headless_execution() is True
+
+    @patch("customer_retention.analysis.visualization.column_paginator.detect_environment", return_value="jupyter")
+    def test_no_comm_manager(self, mock_env, monkeypatch):
+        monkeypatch.delenv("PAPERMILL_OUTPUT_PATH", raising=False)
+        monkeypatch.delenv("CR_BATCH_EXECUTION", raising=False)
+        mock_ip = MagicMock()
+        mock_ip.kernel = MagicMock()
+        mock_ip.kernel.comm_manager = None
+        mock_ip.user_ns = {}
+        with patch("IPython.get_ipython", return_value=mock_ip):
+            assert _is_headless_execution() is True
+
+    @patch("customer_retention.analysis.visualization.column_paginator.detect_environment", return_value="jupyter")
+    def test_get_ipython_returns_none(self, mock_env, monkeypatch):
+        monkeypatch.delenv("PAPERMILL_OUTPUT_PATH", raising=False)
+        monkeypatch.delenv("CR_BATCH_EXECUTION", raising=False)
+        with patch("IPython.get_ipython", return_value=None):
+            assert _is_headless_execution() is True
+
+    @patch("customer_retention.analysis.visualization.column_paginator.detect_environment", return_value="jupyter")
+    def test_exception_in_detection_falls_back_to_not_headless(self, mock_env, monkeypatch):
+        monkeypatch.delenv("PAPERMILL_OUTPUT_PATH", raising=False)
+        monkeypatch.delenv("CR_BATCH_EXECUTION", raising=False)
+        with patch("IPython.get_ipython", side_effect=RuntimeError("boom")):
+            # Exception swallowed; falls through to return False
+            assert _is_headless_execution() is False

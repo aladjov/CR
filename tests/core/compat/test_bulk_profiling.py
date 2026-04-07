@@ -1348,3 +1348,710 @@ class TestBatchAdversarialDiffs:
             batch_adversarial_diffs(score_ps, score_ps, "eid", "target", "orig")
             mock_spark.assert_called_once()
             mock_schema.assert_not_called()
+
+
+# ===========================================================================
+# Coverage-driven tests for uncovered Spark and pandas paths
+# ===========================================================================
+
+
+def _row(d):
+    """Build a MagicMock row that subscripts into a dict."""
+    r = MagicMock()
+    r.__getitem__ = lambda self, key: d.get(key)
+    r.asDict = MagicMock(return_value=d)
+    return r
+
+
+def _agg_returning(rows):
+    """Build a MagicMock spark DataFrame whose .agg(...).collect() returns rows."""
+    sdf = MagicMock()
+    sdf.agg.return_value.collect.return_value = rows
+    return sdf
+
+
+class TestSparkBulkHistogramsBatched:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_batched_histograms_for_multiple_columns(self):
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_histograms
+
+        # Two columns: col_a (lo=0, hi=10), col_b (lo=5, hi=15)
+        bounds_row = _row({
+            "__lo__col_a": 0.0, "__hi__col_a": 10.0,
+            "__lo__col_b": 5.0, "__hi__col_b": 15.0,
+        })
+        # Histogram counts: 5 columns × nbins => use uniform 7 each
+        hist_row = _row({f"__hb_{c}_{i}__": 7 for c in ("col_a", "col_b") for i in range(5)})
+
+        sdf = MagicMock()
+        sdf.agg.return_value.collect.side_effect = [[bounds_row], [hist_row]]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=sdf):
+            result = _spark_bulk_histograms(MagicMock(), ["col_a", "col_b"], nbins=5)
+
+        assert "col_a" in result
+        assert "col_b" in result
+        assert len(result["col_a"].counts) == 5
+        assert all(c == 7 for c in result["col_a"].counts)
+
+    def test_skip_degenerate_columns(self):
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_histograms
+
+        bounds_row = _row({
+            "__lo__col_a": None, "__hi__col_a": None,
+            "__lo__col_b": 5.0, "__hi__col_b": 5.0,  # lo >= hi
+            "__lo__col_c": 0.0, "__hi__col_c": 10.0,  # valid
+        })
+        hist_row = _row({f"__hb_col_c_{i}__": 3 for i in range(4)})
+        sdf = MagicMock()
+        sdf.agg.return_value.collect.side_effect = [[bounds_row], [hist_row]]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=sdf):
+            result = _spark_bulk_histograms(MagicMock(), ["col_a", "col_b", "col_c"], nbins=4)
+
+        assert result["col_a"].counts == []
+        assert result["col_b"].counts == []
+        assert result["col_c"].counts == [3, 3, 3, 3]
+
+    def test_all_degenerate_short_circuits(self):
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_histograms
+
+        bounds_row = _row({"__lo__col_a": None, "__hi__col_a": None})
+        sdf = MagicMock()
+        sdf.agg.return_value.collect.return_value = [bounds_row]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=sdf):
+            result = _spark_bulk_histograms(MagicMock(), ["col_a"], nbins=10)
+
+        assert result["col_a"].counts == []
+        # Only bounds agg should run; no histogram agg
+        sdf.agg.assert_called_once()
+
+
+class TestSparkBulkStatsNumeric:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_full_numeric_path(self):
+        pytest.importorskip("pyspark")
+        from pyspark.sql.types import DoubleType, StringType, StructField
+
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_stats
+
+        sdf = MagicMock()
+        sdf.columns = ["num1", "txt1"]
+        sdf.schema.fields = [
+            StructField("num1", DoubleType()),
+            StructField("txt1", StringType()),
+        ]
+
+        # Batch 1: count + null + distinct
+        row1 = _row({
+            "__total_count__": 100,
+            "__null__num1": 5, "__dist__num1": 50,
+            "__null__txt1": 0, "__dist__txt1": 10,
+        })
+        # Batch 1b: mode values
+        mode_row = _row({"__mode__num1": 1.0, "__mode__txt1": "common"})
+        # Batch 1c: mode counts
+        mode_count = _row({"__mcount__num1": 30, "__mcount__txt1": 25})
+        # Batch 2: numeric stats
+        row2 = _row({
+            "__mean__num1": 1.5, "__std__num1": 0.5,
+            "__min__num1": 0.0, "__max__num1": 10.0,
+            "__q1__num1": 0.5, "__med__num1": 1.5, "__q3__num1": 2.5,
+            "__skew__num1": 0.1, "__kurt__num1": 0.2,
+        })
+        # Batch 3: counts/outliers
+        row3 = _row({
+            "__zero__num1": 3, "__neg__num1": 2, "__inf__num1": 0,
+            "__oiqr__num1": 4, "__ozscore__num1": 6,
+        })
+        # Batch 4: histograms
+        hist_row = _row({f"__hist_{i}__num1": 10 for i in range(10)})
+
+        sdf.agg.return_value.collect.side_effect = [
+            [row1], [mode_row], [mode_count], [row2], [row3], [hist_row],
+        ]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=sdf):
+            result = _spark_bulk_stats(MagicMock())
+
+        assert result.total_count == 100
+        assert result.columns["num1"].null_count == 5
+        assert result.columns["num1"].most_common_value == "1.0"
+        assert result.columns["num1"].most_common_frequency == 30
+        assert "num1" in result.numeric
+        n_stats = result.numeric["num1"]
+        assert n_stats.mean == 1.5
+        assert n_stats.zero_count == 3
+        assert n_stats.outlier_count_iqr == 4
+        assert n_stats.non_null_count == 95  # 100 - 5 nulls
+        assert len(n_stats.histogram_bins) == 10
+
+    def test_no_numeric_cols_short_circuit(self):
+        pytest.importorskip("pyspark")
+        from pyspark.sql.types import StringType, StructField
+
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_stats
+
+        sdf = MagicMock()
+        sdf.columns = ["txt"]
+        sdf.schema.fields = [StructField("txt", StringType())]
+
+        row1 = _row({"__total_count__": 50, "__null__txt": 0, "__dist__txt": 5})
+        mode_row = _row({"__mode__txt": "x"})
+        mode_count = _row({"__mcount__txt": 10})
+        sdf.agg.return_value.collect.side_effect = [[row1], [mode_row], [mode_count]]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=sdf):
+            result = _spark_bulk_stats(MagicMock())
+
+        assert result.numeric == {}
+        # Mode value present even for non-numeric
+        assert result.columns["txt"].most_common_value == "x"
+
+    def test_mode_none_yields_no_frequency(self):
+        pytest.importorskip("pyspark")
+        from pyspark.sql.types import StringType, StructField
+
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_stats
+
+        sdf = MagicMock()
+        sdf.columns = ["all_null"]
+        sdf.schema.fields = [StructField("all_null", StringType())]
+
+        row1 = _row({"__total_count__": 0, "__null__all_null": 0, "__dist__all_null": 0})
+        mode_row = _row({"__mode__all_null": None})
+        mode_count = _row({"__mcount__all_null": 0})
+        sdf.agg.return_value.collect.side_effect = [[row1], [mode_row], [mode_count]]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=sdf):
+            result = _spark_bulk_stats(MagicMock())
+
+        assert result.columns["all_null"].most_common_value is None
+        assert result.columns["all_null"].most_common_frequency is None
+
+    def test_degenerate_min_max_skips_histogram(self):
+        pytest.importorskip("pyspark")
+        from pyspark.sql.types import DoubleType, StructField
+
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_stats
+
+        sdf = MagicMock()
+        sdf.columns = ["c"]
+        sdf.schema.fields = [StructField("c", DoubleType())]
+
+        row1 = _row({"__total_count__": 10, "__null__c": 0, "__dist__c": 1})
+        mode_row = _row({"__mode__c": 5.0})
+        mode_count = _row({"__mcount__c": 10})
+        # min == max → degenerate
+        row2 = _row({
+            "__mean__c": 5.0, "__std__c": 0.0,
+            "__min__c": 5.0, "__max__c": 5.0,
+            "__q1__c": 5.0, "__med__c": 5.0, "__q3__c": 5.0,
+            "__skew__c": None, "__kurt__c": None,
+        })
+        row3 = _row({
+            "__zero__c": 0, "__neg__c": 0, "__inf__c": 0,
+            "__oiqr__c": 0, "__ozscore__c": 0,
+        })
+        # No histogram batch since all degenerate
+        sdf.agg.return_value.collect.side_effect = [[row1], [mode_row], [mode_count], [row2], [row3]]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=sdf):
+            result = _spark_bulk_stats(MagicMock())
+
+        assert result.numeric["c"].histogram_bins == []
+        # 5 batches called (no histogram)
+        assert sdf.agg.return_value.collect.call_count == 5
+
+
+class TestSparkBulkValidateRanges:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_range_rule_validation(self):
+        from pyspark.sql.types import DoubleType, StructField
+
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_validate_ranges
+
+        sdf = MagicMock()
+        sdf.columns = ["age"]
+        sdf.schema.fields = [StructField("age", DoubleType())]
+        sdf.agg.return_value.collect.return_value = [_row({
+            "__cnt__age": 100, "__min__age": 0, "__max__age": 150, "__inv__age": 5,
+        })]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=sdf):
+            result = _spark_bulk_validate_ranges(
+                MagicMock(),
+                {"age": {"type": "range", "min": 0, "max": 120}},
+                chunk_size=200,
+            )
+
+        assert result["age"].invalid_count == 5
+        assert result["age"].non_null_count == 100
+
+    def test_returns_empty_when_no_numeric_rules(self):
+        from pyspark.sql.types import StringType, StructField
+
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_validate_ranges
+
+        sdf = MagicMock()
+        sdf.columns = ["name"]
+        sdf.schema.fields = [StructField("name", StringType())]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=sdf):
+            result = _spark_bulk_validate_ranges(
+                MagicMock(),
+                {"name": {"type": "range", "min": 0, "max": 100}},
+                chunk_size=200,
+            )
+
+        assert result == {}
+
+
+class TestSparkInvalidExpr:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_percentage_rule(self):
+        import pyspark.sql.functions as F  # noqa: N812
+
+        from customer_retention.core.compat.bulk_profiling import _spark_invalid_expr
+
+        c = F.col("pct")
+        expr = _spark_invalid_expr(c, "percentage", {}, F)
+        assert "0" in str(expr)
+        assert "100" in str(expr)
+
+    def test_binary_rule(self):
+        import pyspark.sql.functions as F  # noqa: N812
+
+        from customer_retention.core.compat.bulk_profiling import _spark_invalid_expr
+
+        c = F.col("flag")
+        expr = _spark_invalid_expr(c, "binary", {"valid_values": [0, 1]}, F)
+        assert expr is not None
+
+    def test_non_negative_rule(self):
+        import pyspark.sql.functions as F  # noqa: N812
+
+        from customer_retention.core.compat.bulk_profiling import _spark_invalid_expr
+
+        c = F.col("count")
+        expr = _spark_invalid_expr(c, "non_negative", {}, F)
+        # Spark Connect renders operators in prefix form: <(count, 0)
+        s = str(expr)
+        assert "0" in s
+        assert "isNotNull" in s
+
+    def test_rate_rule(self):
+        import pyspark.sql.functions as F  # noqa: N812
+
+        from customer_retention.core.compat.bulk_profiling import _spark_invalid_expr
+
+        c = F.col("ratio")
+        expr = _spark_invalid_expr(c, "rate", {}, F)
+        s = str(expr)
+        # Should reference both bound checks (0 and 1)
+        assert "0" in s
+        assert "1" in s
+        assert "or" in s.lower()
+
+    def test_general_range_with_min_only(self):
+        import pyspark.sql.functions as F  # noqa: N812
+
+        from customer_retention.core.compat.bulk_profiling import _spark_invalid_expr
+
+        c = F.col("v")
+        expr = _spark_invalid_expr(c, "range", {"min": 5}, F)
+        s = str(expr)
+        assert "5" in s
+        assert "isNotNull" in s
+
+    def test_general_range_with_max_only(self):
+        import pyspark.sql.functions as F  # noqa: N812
+
+        from customer_retention.core.compat.bulk_profiling import _spark_invalid_expr
+
+        c = F.col("v")
+        expr = _spark_invalid_expr(c, "range", {"max": 99}, F)
+        s = str(expr)
+        assert "99" in s
+        assert "isNotNull" in s
+
+    def test_general_range_no_bounds_returns_false_lit(self):
+        import pyspark.sql.functions as F  # noqa: N812
+
+        from customer_retention.core.compat.bulk_profiling import _spark_invalid_expr
+
+        c = F.col("v")
+        expr = _spark_invalid_expr(c, "range", {}, F)
+        assert "false" in str(expr).lower()
+
+
+class TestSparkBulkDistributionStats:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_distribution_stats_full_path(self):
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_distribution_stats
+
+        # Pass 1 row: full stats for col 'x'
+        pct_arr = [0.01, 0.05, 0.10, 1.0, 2.0, 3.0, 4.0, 5.0, 9.99]
+        pass1_row = _row({
+            "__cnt__x": 100, "__avg__x": 2.5, "__std__x": 1.0,
+            "__min__x": 0.0, "__max__x": 10.0,
+            "__pct__x": pct_arr,
+            "__skw__x": 0.1, "__krt__x": 0.2,
+            "__zer__x": 5, "__neg__x": 0,
+        })
+        # Pass 2 row: outlier counts (the asDict path)
+        pass2_row = MagicMock()
+        pass2_dict = {"__out__x": 7}
+        pass2_row.__getitem__ = lambda self, key: pass2_dict.get(key)
+        pass2_row.asDict = MagicMock(return_value=pass2_dict)
+
+        sdf = MagicMock()
+        sdf.agg.return_value.collect.side_effect = [[pass1_row], [pass2_row]]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=sdf):
+            result = _spark_bulk_distribution_stats(MagicMock(), ["x"], chunk_size=200)
+
+        assert result["x"].non_null_count == 100
+        assert result["x"].mean == 2.5
+        assert result["x"].q1 == 1.0
+        assert result["x"].q3 == 3.0
+        assert result["x"].outlier_count_iqr == 7
+        assert "p1" in result["x"].percentiles
+
+    def test_zero_count_columns_yield_empty_results(self):
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_distribution_stats
+
+        pass1_row = _row({
+            "__cnt__y": 0, "__avg__y": None, "__std__y": None,
+            "__min__y": None, "__max__y": None, "__pct__y": [None] * 9,
+            "__skw__y": None, "__krt__y": None, "__zer__y": 0, "__neg__y": 0,
+        })
+
+        sdf = MagicMock()
+        sdf.agg.return_value.collect.return_value = [pass1_row]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=sdf):
+            result = _spark_bulk_distribution_stats(MagicMock(), ["y"], chunk_size=200)
+
+        assert result["y"].non_null_count == 0
+        assert result["y"].mean is None
+
+
+class TestSparkBulkCategoricalStats:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_categorical_stats_basic(self):
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_categorical_stats
+
+        # Pass 1: counts row
+        count_row = _row({"__cnt__color": 100})
+        # Pass 2 vc rows
+        vc_rows = [
+            _row({"__col__": "color", "__val__": "red", "count": 60}),
+            _row({"__col__": "color", "__val__": "blue", "count": 30}),
+            _row({"__col__": "color", "__val__": "green", "count": 10}),
+        ]
+
+        # First select for stack_part (returns intermediate select)
+        stack_select = MagicMock()
+        stack_select.filter.return_value = stack_select
+        stack_select.unionAll.return_value = stack_select
+
+        sdf = MagicMock()
+        sdf.agg.return_value.collect.return_value = [count_row]
+        sdf.select.return_value = stack_select
+
+        # The stacked.groupBy().count().collect() returns vc_rows
+        stack_select.groupBy.return_value.count.return_value.collect.return_value = vc_rows
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=sdf):
+            result = _spark_bulk_categorical_stats(MagicMock(), ["color"], top_n=5, rare_threshold=0.05)
+
+        assert result["color"].total_count == 100
+        assert result["color"].category_count == 3
+        assert "red" in result["color"].value_counts
+
+    def test_categorical_stats_zero_count_returns_empty(self):
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_categorical_stats
+
+        count_row = _row({"__cnt__empty_col": 0})
+        sdf = MagicMock()
+        sdf.agg.return_value.collect.return_value = [count_row]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=sdf):
+            result = _spark_bulk_categorical_stats(MagicMock(), ["empty_col"], top_n=10, rare_threshold=0.01)
+
+        assert result["empty_col"].total_count == 0
+        assert result["empty_col"].category_count == 0
+
+
+class TestSparkBulkDatetimeAnalysis:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_datetime_analysis_with_data(self):
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_datetime_analysis
+
+        mn = pd.Timestamp("2023-01-01")
+        mx = pd.Timestamp("2023-12-31")
+        pass1_row = _row({
+            "__min__dt": mn, "__max__dt": mx, "__null__dt": 5, "__plc__dt": 0,
+        })
+
+        # Stacked select returns intermediate
+        stack = MagicMock()
+        stack.filter.return_value = stack
+        stack.unionAll.return_value = stack
+
+        # groupBy results for monthly + dow
+        month_rows = [
+            _row({"__col__": "dt", "__month__": "2023-01", "count": 10}),
+            _row({"__col__": "dt", "__month__": "2023-02", "count": 15}),
+        ]
+        dow_rows = [
+            _row({"__col__": "dt", "__dow__": 2, "count": 50}),  # Monday in Spark dayofweek
+            _row({"__col__": "dt", "__dow__": 6, "count": 20}),  # Friday in Spark dayofweek
+        ]
+        stack.groupBy.return_value.count.return_value.collect.side_effect = [month_rows, dow_rows]
+
+        sdf = MagicMock()
+        sdf.count.return_value = 365
+        sdf.agg.return_value.collect.return_value = [pass1_row]
+        sdf.select.return_value = stack
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=sdf):
+            result = _spark_bulk_datetime_analysis(MagicMock(), ["dt"])
+
+        assert result["dt"].total_count == 365
+        assert result["dt"].null_count == 5
+        assert result["dt"].span_days >= 364
+        assert len(result["dt"].monthly_counts) == 2
+        # Spark dow 2 (Mon) → Python idx 0, Spark dow 6 (Fri) → Python idx 4
+        assert result["dt"].dow_counts[0] == 50
+        assert result["dt"].dow_counts[4] == 20
+
+    def test_datetime_analysis_skips_columns_with_no_data(self):
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_datetime_analysis
+
+        # pass1 returns None for min — column has no data → skip stack_parts
+        pass1_row = _row({
+            "__min__dt": None, "__max__dt": None, "__null__dt": 100, "__plc__dt": 0,
+        })
+
+        sdf = MagicMock()
+        sdf.count.return_value = 100
+        sdf.agg.return_value.collect.return_value = [pass1_row]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=sdf):
+            result = _spark_bulk_datetime_analysis(MagicMock(), ["dt"])
+
+        assert result["dt"].total_count == 100
+        assert result["dt"].null_count == 100
+        assert result["dt"].monthly_counts == []
+        assert result["dt"].dow_counts == [0] * 7
+
+
+class TestPandasDatetimeStatsErrorHandling:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_returns_empty_on_unconvertible_data(self):
+        from customer_retention.core.compat.bulk_profiling import _pandas_datetime_stats
+
+        # Force the to_datetime conversion exception path
+        bad = pd.Series(["not_a_date"] * 5, dtype=object)
+        result = _pandas_datetime_stats(bad)
+        # Either coerced to NaT (returns empty) or returns proper empty stats
+        assert result.future_date_count == 0
+
+    def test_weekend_count_exception_handled(self):
+        from customer_retention.core.compat.bulk_profiling import _pandas_datetime_stats
+
+        clean = pd.to_datetime(["2024-01-01", "2024-01-06", "2024-01-07"])
+        result = _pandas_datetime_stats(pd.Series(clean))
+        # Mon, Sat, Sun → 2 weekend
+        assert result.weekend_count == 2
+
+
+class TestPandasDatetimeAnalysisExtras:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_pandas_no_data_returns_empty_stats(self):
+        df = pd.DataFrame({"dt": pd.to_datetime([None, None])})
+        result = _pandas_bulk_datetime_analysis(df, ["dt"])
+        assert result["dt"].total_count == 2
+        assert result["dt"].null_count == 2
+        assert result["dt"].monthly_counts == []
+
+
+class TestBulkNuniqueDispatcher:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_pandas_default_columns(self):
+        from customer_retention.core.compat.bulk_profiling import bulk_nunique
+
+        df = pd.DataFrame({"a": [1, 1, 2], "b": ["x", "y", "z"]})
+        result = bulk_nunique(df)
+        assert result == {"a": 2, "b": 3}
+
+    def test_empty_columns_returns_empty(self):
+        from customer_retention.core.compat.bulk_profiling import bulk_nunique
+
+        df = pd.DataFrame({"a": [1]})
+        assert bulk_nunique(df, columns=[]) == {}
+
+    def test_spark_dispatch(self):
+        from customer_retention.core.compat.bulk_profiling import bulk_nunique
+
+        mock_df = MagicMock()
+        mock_df.to_spark = MagicMock()
+        mock_df.columns = ["a", "b"]
+        with patch("customer_retention.core.compat.bulk_profiling._spark_bulk_nunique") as mock_spark:
+            mock_spark.return_value = {"a": 5, "b": 3}
+            result = bulk_nunique(mock_df, columns=["a", "b"])
+        assert result == {"a": 5, "b": 3}
+        mock_spark.assert_called_once()
+
+
+class TestBulkNullCountsDispatcher:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_pandas_with_progress_fn(self):
+        from customer_retention.core.compat.bulk_profiling import bulk_null_counts
+
+        df = pd.DataFrame({"a": [1, None, 3], "b": [None, None, 5]})
+        messages = []
+        result = bulk_null_counts(df, progress_fn=lambda m: messages.append(m))
+        assert result == {"a": 1, "b": 2}
+        assert any("pandas" in m for m in messages)
+
+    def test_empty_columns_returns_empty(self):
+        from customer_retention.core.compat.bulk_profiling import bulk_null_counts
+
+        df = pd.DataFrame({"a": [1, 2]})
+        assert bulk_null_counts(df, columns=[]) == {}
+
+    def test_invalid_columns_filtered_out(self):
+        from customer_retention.core.compat.bulk_profiling import bulk_null_counts
+
+        df = pd.DataFrame({"a": [1, None]})
+        result = bulk_null_counts(df, columns=["a", "missing"])
+        assert "a" in result
+        assert "missing" not in result
+
+    def test_spark_dispatch(self):
+        from customer_retention.core.compat.bulk_profiling import bulk_null_counts
+
+        mock_df = MagicMock()
+        mock_df.to_spark = MagicMock()
+        mock_df.columns = ["a", "b"]
+        with patch("customer_retention.core.compat.bulk_profiling._spark_bulk_null_counts") as mock_spark:
+            mock_spark.return_value = {"a": 0, "b": 5}
+            result = bulk_null_counts(mock_df)
+        assert result == {"a": 0, "b": 5}
+
+
+class TestSparkBulkNullCounts:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_batched_null_counts(self):
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_null_counts
+
+        # 250 columns → 2 batches of 200 + 50
+        cols = [f"c{i}" for i in range(250)]
+        batch_a = _row({f"__null__c{i}": i for i in range(200)})
+        batch_b = _row({f"__null__c{i}": i for i in range(200, 250)})
+
+        sdf = MagicMock()
+        sdf.agg.return_value.collect.side_effect = [[batch_a], [batch_b]]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=sdf):
+            messages = []
+            result = _spark_bulk_null_counts(MagicMock(), cols, log=lambda m: messages.append(m))
+
+        assert len(result) == 250
+        assert result["c0"] == 0
+        assert result["c249"] == 249
+        # Two batch progress messages
+        assert len([m for m in messages if "batch" in m]) == 2
+
+
+class TestBulkHistogramsDispatcher:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_empty_valid_columns_returns_empty(self):
+        from customer_retention.core.compat.bulk_profiling import bulk_histograms
+
+        df = pd.DataFrame({"a": [1, 2, 3]})
+        result = bulk_histograms(df, columns=["missing"], nbins=10)
+        assert result == {}
+
+    def test_spark_dispatch(self):
+        from customer_retention.core.compat.bulk_profiling import bulk_histograms
+
+        mock_df = MagicMock()
+        mock_df.to_spark = MagicMock()
+        mock_df.columns = ["a"]
+        with patch("customer_retention.core.compat.bulk_profiling._spark_bulk_histograms") as mock_spark:
+            mock_spark.return_value = {"a": HistogramData()}
+            result = bulk_histograms(mock_df, columns=["a"], nbins=5)
+        assert "a" in result
+        mock_spark.assert_called_once()
+
+
+class TestPandasBulkHistogramsEdgeCases:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_non_numeric_column_returns_empty_histogram(self):
+        from customer_retention.core.compat.bulk_profiling import _pandas_bulk_histograms
+
+        df = pd.DataFrame({"text": ["a", "b", "c"], "num": [1.0, 2.0, 3.0]})
+        result = _pandas_bulk_histograms(df, ["text", "num"], nbins=5)
+        assert result["text"].counts == []
+        assert len(result["num"].counts) == 5
+
+    def test_all_inf_yields_empty_histogram(self):
+        from customer_retention.core.compat.bulk_profiling import _pandas_bulk_histograms
+
+        df = pd.DataFrame({"v": [float("inf"), float("-inf"), float("nan")]})
+        result = _pandas_bulk_histograms(df, ["v"], nbins=10)
+        assert result["v"].counts == []
+
+    def test_constant_column_yields_empty_histogram(self):
+        from customer_retention.core.compat.bulk_profiling import _pandas_bulk_histograms
+
+        df = pd.DataFrame({"c": [5.0, 5.0, 5.0]})
+        result = _pandas_bulk_histograms(df, ["c"], nbins=10)
+        assert result["c"].counts == []
