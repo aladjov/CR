@@ -627,6 +627,138 @@ def _window_to_days(window_str):
 CATEGORICAL_COLUMNS = {{ config.aggregation.categorical_columns }}
 BINARY_COLUMNS = {{ config.aggregation.binary_columns }}
 COLUMN_BLOCKED_FUNCS = {{ config.aggregation.column_blocked_funcs }}
+{%- if config.per_grid_date_mode %}
+GRID_DATES = {{ grid_dates }}
+VALUE_COUNTS_COLUMNS = {{ config.value_counts_columns | list }}
+AGGREGATION_WINDOWS = {{ config.aggregation.windows }}
+
+
+def _spark_cumulative_at(spine_df, running_df, anchor_col):
+    # Backward-asof "cumulative count at anchor" via a single Window pass.
+    #
+    # spine_df schema:   (ENTITY_COLUMN, anchor_col)
+    # running_df schema: (ENTITY_COLUMN, _event_ts, _running)
+    #
+    # Both sides are unioned into one stream tagged with _is_anchor. Within
+    # each entity, rows are ordered by (_ts asc, _is_anchor asc) so events
+    # at the same instant as an anchor sort BEFORE the anchor — backward-asof
+    # semantics. F.max("_running") OVER (UNBOUNDED PRECEDING, CURRENT ROW)
+    # then propagates the latest cumulative count into each anchor row in a
+    # single sort+scan, with no per-entity Cartesian materialization.
+    spine_marker = spine_df.select(
+        F.col(ENTITY_COLUMN),
+        F.col(anchor_col).alias("_ts"),
+        F.lit(None).cast("long").alias("_running"),
+        F.lit(True).alias("_is_anchor"),
+    )
+    running_marker = running_df.select(
+        F.col(ENTITY_COLUMN),
+        F.col("_event_ts").alias("_ts"),
+        F.col("_running"),
+        F.lit(False).alias("_is_anchor"),
+    )
+    unified = spine_marker.unionByName(running_marker)
+    w = (
+        Window.partitionBy(ENTITY_COLUMN)
+        .orderBy(F.col("_ts").asc(), F.col("_is_anchor").asc())
+        .rowsBetween(Window.unboundedPreceding, Window.currentRow)
+    )
+    return (
+        unified.withColumn("_cum_raw", F.max("_running").over(w))
+        .filter(F.col("_is_anchor"))
+        .select(
+            F.col(ENTITY_COLUMN),
+            F.col("_ts").alias(anchor_col),
+            F.coalesce(F.col("_cum_raw"), F.lit(0)).cast("long").alias("_cum"),
+        )
+    )
+
+
+def apply_event_aggregation_per_grid_date(df):
+    # Per-grid-date count aggregation using Spark Window functions.
+    # For each (entity, value-of-VALUE_COUNTS_COLUMN, window) we compute the
+    # cumulative event count at each grid date and at (grid_date - window).
+    # The window count is the difference. Output has one row per
+    # (entity, as_of_date) which downstream temporal_merger handles via equi-join.
+    df = df.withColumn(TIME_COLUMN, F.to_timestamp(F.col(TIME_COLUMN)))
+
+    grid_rows = [(d,) for d in GRID_DATES]
+    grid_df = spark.createDataFrame(grid_rows, ["as_of_date"]).withColumn(
+        "as_of_date", F.to_timestamp("as_of_date")
+    )
+    entities = df.select(ENTITY_COLUMN).distinct()
+    spine = entities.crossJoin(F.broadcast(grid_df))
+
+    output = spine
+    for vc_col in VALUE_COUNTS_COLUMNS:
+        if vc_col not in [f.name for f in df.schema.fields]:
+            continue
+        distinct_values = sorted(
+            r[0]
+            for r in df.filter(F.col(vc_col).isNotNull())
+            .select(vc_col)
+            .distinct()
+            .collect()
+        )
+        for value in distinct_values:
+            sub = df.filter(F.col(vc_col) == value).select(
+                ENTITY_COLUMN, F.col(TIME_COLUMN).alias("_event_ts")
+            )
+            w = Window.partitionBy(ENTITY_COLUMN).orderBy(F.col("_event_ts").cast("long"))
+            running = sub.withColumn("_running", F.row_number().over(w))
+
+            cum_at_G = _spark_cumulative_at(spine, running, "as_of_date")
+
+            for window_str in AGGREGATION_WINDOWS:
+                col_name = f"{vc_col}_{value}_count_{window_str}"
+                if window_str == "all_time":
+                    contribution = cum_at_G.withColumnRenamed("_cum", col_name)
+                else:
+                    days = _window_to_days(window_str)
+                    spine_shifted = spine.withColumn(
+                        "as_of_date_shifted",
+                        F.expr(f"as_of_date - INTERVAL {days} DAYS"),
+                    )
+                    cum_at_minus = _spark_cumulative_at(
+                        spine_shifted, running, "as_of_date_shifted"
+                    )
+                    cum_g_renamed = cum_at_G.withColumnRenamed("_cum", "_cum_g")
+                    cum_m_renamed = cum_at_minus.select(
+                        ENTITY_COLUMN, "as_of_date_shifted", F.col("_cum").alias("_cum_m")
+                    )
+                    # Re-attach the unshifted as_of_date by joining the shifted
+                    # spine back. We can simply align on row order via join.
+                    pair = (
+                        cum_g_renamed.join(
+                            spine.select(
+                                ENTITY_COLUMN,
+                                "as_of_date",
+                                F.expr(
+                                    f"as_of_date - INTERVAL {days} DAYS"
+                                ).alias("as_of_date_shifted"),
+                            ),
+                            on=[ENTITY_COLUMN, "as_of_date"],
+                            how="inner",
+                        )
+                        .join(
+                            cum_m_renamed,
+                            on=[ENTITY_COLUMN, "as_of_date_shifted"],
+                            how="left",
+                        )
+                        .withColumn("_cum_m", F.coalesce(F.col("_cum_m"), F.lit(0)))
+                        .withColumn(col_name, F.col("_cum_g") - F.col("_cum_m"))
+                        .select(ENTITY_COLUMN, "as_of_date", col_name)
+                    )
+                    contribution = pair
+
+                output = output.join(
+                    contribution, on=[ENTITY_COLUMN, "as_of_date"], how="left"
+                ).withColumn(
+                    col_name, F.coalesce(F.col(col_name), F.lit(0)).cast("long")
+                )
+
+    return output
+{%- endif %}
 
 def _get_numeric_columns(df, value_columns):
     numeric_cols = set()
@@ -743,7 +875,12 @@ def run_bronze_event():
     df = derive_datetime_features(df)
 {%- endif %}
 {%- if config.aggregation %}
+{%- if config.per_grid_date_mode %}
+    agg_df = apply_event_aggregation_per_grid_date(df)
+    reference_date = None
+{%- else %}
     agg_df, reference_date = apply_event_aggregation(df)
+{%- endif %}
 {%- if config.temporal_features %}
     agg_df = compute_temporal_features(agg_df, raw_df)
 {%- endif %}
@@ -2622,8 +2759,18 @@ class DatabricksCodeRenderer:
     def render_bronze(self, source_name: str, bronze_config: BronzeLayerConfig) -> str:
         return self._render("bronze", source=source_name, config=bronze_config)
 
-    def render_bronze_event(self, source_name: str, config: BronzeEventConfig) -> str:
-        return self._render("bronze_event", source=source_name, config=config)
+    def render_bronze_event(
+        self,
+        source_name: str,
+        config: BronzeEventConfig,
+        pipeline_config: "PipelineConfig | None" = None,
+    ) -> str:
+        grid_dates = []
+        if pipeline_config is not None and pipeline_config.silver is not None:
+            grid_dates = list(pipeline_config.silver.grid_dates or [])
+        return self._render(
+            "bronze_event", source=source_name, config=config, grid_dates=grid_dates
+        )
 
     def render_bronze_entity(
         self, source_name: str, config: BronzeEventConfig, bronze_input_name: str, raw_source_name: str = ""

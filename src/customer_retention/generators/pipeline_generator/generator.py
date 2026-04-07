@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from customer_retention.core.naming import Manifest
 
@@ -19,6 +19,7 @@ class PipelineGenerator(PipelineGeneratorBase):
         production_dir: str = None,
         namespace=None,
         intent=None,
+        bronze_aggregation_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
     ):
         self._findings_dir = Path(findings_dir)
         self._output_dir = Path(output_dir)
@@ -26,7 +27,12 @@ class PipelineGenerator(PipelineGeneratorBase):
         self._experiments_dir = experiments_dir
         self._production_dir = production_dir
         self._namespace = namespace
-        self._parser = FindingsParser(findings_dir, namespace=namespace, intent=intent)
+        self._parser = FindingsParser(
+            findings_dir,
+            namespace=namespace,
+            intent=intent,
+            bronze_aggregation_overrides=bronze_aggregation_overrides,
+        )
         self._renderer = CodeRenderer()
 
     def generate(self) -> List[Path]:

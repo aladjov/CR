@@ -807,6 +807,22 @@ class TestDatabricksTrainingFeatureEngineering:
         assert '"production"' in result
         assert "_promote_to_production(_registered_model_name" in result
 
+    def test_promote_to_production_uses_name_only_filter(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def _promote_to_production") : result.index("def train_and_evaluate")]
+        assert "search_model_versions(f\"name='{registered_name}'\")" in fn
+        assert "and run_id=" not in fn
+
+    def test_promote_to_production_filters_run_id_python_side(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def _promote_to_production") : result.index("def train_and_evaluate")]
+        assert "v.run_id == parent_run_id" in fn
+
+    def test_promote_to_production_falls_back_to_latest_version(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def _promote_to_production") : result.index("def train_and_evaluate")]
+        assert "max(_versions, key=lambda v: int(v.version))" in fn
+
     def test_log_best_model_returns_registered_name(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
         fn = result[result.index("def _log_best_model") : result.index("def _promote_to_production")]

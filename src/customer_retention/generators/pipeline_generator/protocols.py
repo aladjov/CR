@@ -23,7 +23,12 @@ class CodeRendererProtocol(Protocol):
 
     def render_bronze(self, source_name: str, bronze_config: BronzeLayerConfig) -> str: ...
 
-    def render_bronze_event(self, source_name: str, config: BronzeEventConfig) -> str: ...
+    def render_bronze_event(
+        self,
+        source_name: str,
+        config: BronzeEventConfig,
+        pipeline_config: "PipelineConfig | None" = None,
+    ) -> str: ...
 
     def render_bronze_entity(
         self, source_name: str, config: BronzeEventConfig, bronze_input_name: str, raw_source_name: str = ""
@@ -93,7 +98,9 @@ class PipelineGeneratorBase(ABC):
         for source_name, event_config in config.bronze_event.items():
             event_script = script_name("bronze_event", source_name)
             path = bronze_dir / f"{event_script}.py"
-            path.write_text(self._renderer.render_bronze_event(source_name, event_config))
+            path.write_text(
+                self._renderer.render_bronze_event(source_name, event_config, config)
+            )
             paths.append(path)
             agg_name = f"{source_name}_aggregated"
             entity_script = script_name("bronze_entity", agg_name)

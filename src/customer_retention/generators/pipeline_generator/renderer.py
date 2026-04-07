@@ -2175,6 +2175,88 @@ CATEGORICAL_AGG_FUNCS = {{ config.aggregation.categorical_agg_funcs }}
 BINARY_COLUMNS = {{ config.aggregation.binary_columns }}
 COLUMN_BLOCKED_FUNCS = {{ config.aggregation.column_blocked_funcs }}
 {% endif %}
+{%- if config.per_grid_date_mode %}
+GRID_DATES = {{ grid_dates }}
+VALUE_COUNTS_COLUMNS = {{ config.value_counts_columns | list }}
+
+
+def apply_event_aggregation_per_grid_date(df: pd.DataFrame) -> pd.DataFrame:
+    # Per-grid-date count aggregation using pandas merge_asof.
+    #
+    # For each (entity, value-of-VALUE_COUNTS_COLUMN, window) we compute the
+    # cumulative event count at each grid date and at (grid_date - window).
+    # The window count is the difference. Output has one row per (entity,
+    # as_of_date) which downstream temporal_merger handles via equi-join.
+    ensure_timestamp(df, TIME_COLUMN)
+    df[TIME_COLUMN] = as_tz_naive(df[TIME_COLUMN])
+
+    grid = pd.to_datetime(GRID_DATES)
+    entities = df[[ENTITY_COLUMN]].drop_duplicates()
+    spine = entities.assign(_key=1).merge(
+        pd.DataFrame({"as_of_date": grid, "_key": 1}), on="_key"
+    ).drop(columns=["_key"])
+    spine = spine.sort_values([ENTITY_COLUMN, "as_of_date"]).reset_index(drop=True)
+
+    output = spine.copy()
+
+    for vc_col in VALUE_COUNTS_COLUMNS:
+        if vc_col not in df.columns:
+            continue
+        distinct_values = sorted(df[vc_col].dropna().unique().tolist())
+        for value in distinct_values:
+            sub = df[df[vc_col] == value][[ENTITY_COLUMN, TIME_COLUMN]].copy()
+            if sub.empty:
+                continue
+            sub = sub.sort_values([ENTITY_COLUMN, TIME_COLUMN]).reset_index(drop=True)
+            sub["_running"] = sub.groupby(ENTITY_COLUMN).cumcount() + 1
+            sub_running = sub.rename(columns={TIME_COLUMN: "_event_ts"})
+
+            cum_at_G = pd.merge_asof(
+                spine.sort_values("as_of_date"),
+                sub_running.sort_values("_event_ts"),
+                left_on="as_of_date",
+                right_on="_event_ts",
+                by=ENTITY_COLUMN,
+                direction="backward",
+            )[[ENTITY_COLUMN, "as_of_date", "_running"]].rename(
+                columns={"_running": "_cum_G"}
+            )
+            cum_at_G["_cum_G"] = cum_at_G["_cum_G"].fillna(0)
+
+            for window_str in AGGREGATION_WINDOWS:
+                col_name = f"{vc_col}_{value}_count_{window_str}"
+                if window_str == "all_time":
+                    merged = cum_at_G.rename(columns={"_cum_G": col_name})
+                else:
+                    td = _parse_window(window_str)
+                    spine_shifted = spine.copy()
+                    spine_shifted["as_of_date_shifted"] = (
+                        spine_shifted["as_of_date"] - td
+                    )
+                    cum_at_minus = pd.merge_asof(
+                        spine_shifted.sort_values("as_of_date_shifted"),
+                        sub_running.sort_values("_event_ts"),
+                        left_on="as_of_date_shifted",
+                        right_on="_event_ts",
+                        by=ENTITY_COLUMN,
+                        direction="backward",
+                    )[[ENTITY_COLUMN, "as_of_date", "_running"]].rename(
+                        columns={"_running": "_cum_minus"}
+                    )
+                    cum_at_minus["_cum_minus"] = cum_at_minus["_cum_minus"].fillna(0)
+                    merged = cum_at_G.merge(
+                        cum_at_minus, on=[ENTITY_COLUMN, "as_of_date"]
+                    )
+                    merged[col_name] = merged["_cum_G"] - merged["_cum_minus"]
+                    merged = merged[[ENTITY_COLUMN, "as_of_date", col_name]]
+
+                output = output.merge(
+                    merged, on=[ENTITY_COLUMN, "as_of_date"], how="left"
+                )
+                output[col_name] = output[col_name].fillna(0).astype("int64")
+
+    return output
+{%- endif %}
 
 
 def apply_event_aggregation(df: pd.DataFrame) -> pd.DataFrame:
@@ -2278,7 +2360,11 @@ def run_bronze_event_{{ source }}():
 {% if config.datetime_derivation %}
     df = derive_datetime_features(df)
 {% endif %}
+{%- if config.per_grid_date_mode %}
+    df = apply_event_aggregation_per_grid_date(df)
+{%- else %}
     df = apply_event_aggregation(df)
+{%- endif %}
 {% if config.temporal_features %}
     df = compute_temporal_features(df, raw_df)
 {% endif %}
@@ -2837,8 +2923,18 @@ class CodeRenderer:
     def render_landing(self, name: str, config: LandingLayerConfig) -> str:
         return self._env.get_template("landing.py.j2").render(name=name, config=config)
 
-    def render_bronze_event(self, source_name: str, config: BronzeEventConfig) -> str:
-        return self._env.get_template("bronze_event.py.j2").render(source=source_name, config=config)
+    def render_bronze_event(
+        self,
+        source_name: str,
+        config: BronzeEventConfig,
+        pipeline_config: "PipelineConfig | None" = None,
+    ) -> str:
+        grid_dates = []
+        if pipeline_config is not None and pipeline_config.silver is not None:
+            grid_dates = list(pipeline_config.silver.grid_dates or [])
+        return self._env.get_template("bronze_event.py.j2").render(
+            source=source_name, config=config, grid_dates=grid_dates
+        )
 
     def render_bronze_entity(
         self, source_name: str, config: BronzeEventConfig, bronze_input_name: str, raw_source_name: str = ""

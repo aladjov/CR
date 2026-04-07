@@ -229,6 +229,8 @@ class BronzeEventConfig:
     datetime_derivation: Optional[DatetimeDerivationConfig] = None
     temporal_features: Optional[TemporalFeatureConfig] = None
     text_features: List[TextFeatureConfig] = field(default_factory=list)
+    per_grid_date_mode: bool = False
+    value_counts_columns: tuple = ()
 
 
 @dataclass

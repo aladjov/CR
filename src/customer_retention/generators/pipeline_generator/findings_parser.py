@@ -57,11 +57,25 @@ def _edges_to_labels(edges: List[float]) -> List[str]:
     return labels
 
 
+_RECOGNIZED_BRONZE_OVERRIDE_KEYS = frozenset(
+    {"per_grid_date_mode", "value_counts_columns", "windows"}
+)
+
+
 class FindingsParser:
-    def __init__(self, findings_dir: str, namespace=None, intent=None):
+    def __init__(
+        self,
+        findings_dir: str,
+        namespace=None,
+        intent=None,
+        bronze_aggregation_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
+    ):
         self._findings_dir = Path(findings_dir)
         self._namespace = namespace
         self._intent = intent
+        self._bronze_aggregation_overrides: Dict[str, Dict[str, Any]] = (
+            dict(bronze_aggregation_overrides) if bronze_aggregation_overrides else {}
+        )
         self._source_findings_paths: Dict[str, Path] = {}
         self._raw_source_columns: Dict[str, Set[str]] = {}
 
@@ -1536,6 +1550,9 @@ class FindingsParser:
                 temporal_features=self._build_temporal_feature_config(multi, findings),
                 text_features=self._build_text_feature_configs(findings),
             )
+            self._apply_bronze_aggregation_overrides(
+                config.bronze_event[event_name], event_name
+            )
         for agg_name, preagg in (discovered_events or {}).items():
             if agg_name in config.bronze_event:
                 continue
@@ -1563,6 +1580,44 @@ class FindingsParser:
                 temporal_features=self._build_temporal_feature_config(multi, preagg),
                 text_features=self._build_text_feature_configs(preagg),
             )
+            self._apply_bronze_aggregation_overrides(
+                config.bronze_event[agg_name], agg_name
+            )
+
+        self._fail_on_overrides_targeting_non_event_datasets(config)
+
+    def _fail_on_overrides_targeting_non_event_datasets(self, config: PipelineConfig) -> None:
+        for name in self._bronze_aggregation_overrides:
+            if name not in config.bronze_event:
+                raise ValueError(
+                    f"bronze_aggregation_overrides target '{name}' is not an "
+                    f"event source (no bronze_event config was generated for it)"
+                )
+
+    def _apply_bronze_aggregation_overrides(
+        self, event_cfg: BronzeEventConfig, event_name: str
+    ) -> None:
+        overrides = self._bronze_aggregation_overrides.get(event_name)
+        if not overrides:
+            return
+        unknown = set(overrides) - _RECOGNIZED_BRONZE_OVERRIDE_KEYS
+        if unknown:
+            raise ValueError(
+                f"unknown bronze aggregation override key(s) for '{event_name}': "
+                f"{sorted(unknown)}. Recognized: "
+                f"{sorted(_RECOGNIZED_BRONZE_OVERRIDE_KEYS)}"
+            )
+        if "per_grid_date_mode" in overrides:
+            event_cfg.per_grid_date_mode = bool(overrides["per_grid_date_mode"])
+        if "value_counts_columns" in overrides:
+            event_cfg.value_counts_columns = tuple(overrides["value_counts_columns"])
+        if "windows" in overrides:
+            if event_cfg.aggregation is None:
+                event_cfg.aggregation = AggregationWindowConfig(
+                    windows=list(overrides["windows"])
+                )
+            else:
+                event_cfg.aggregation.windows = list(overrides["windows"])
 
     def _discover_event_sources(
         self, source_findings: Dict[str, ExplorationFindings]

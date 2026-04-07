@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from customer_retention.core.config.experiments import get_framework_repo_path
 
@@ -22,6 +22,7 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
         namespace=None,
         intent=None,
         framework_repo_path: str | None = None,
+        bronze_aggregation_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
     ):
         self._findings_dir = Path(findings_dir)
         self._output_dir = Path(output_dir)
@@ -29,7 +30,12 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
         self._catalog = catalog
         self._schema = schema
         self._experiments_dir = experiments_dir
-        self._parser = FindingsParser(findings_dir, namespace=namespace, intent=intent)
+        self._parser = FindingsParser(
+            findings_dir,
+            namespace=namespace,
+            intent=intent,
+            bronze_aggregation_overrides=bronze_aggregation_overrides,
+        )
         self._renderer = DatabricksCodeRenderer(
             catalog=catalog, schema=schema,
             framework_repo_path=framework_repo_path or get_framework_repo_path(),
