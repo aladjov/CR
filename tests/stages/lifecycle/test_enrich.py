@@ -91,18 +91,16 @@ class TestCorruptRowPolicy:
         with pytest.raises(ValueError, match="inverted lifecycle"):
             enrich_lifecycle_dataset(df, config=_base_config(on_corrupt_row="raise"))
 
-    def test_corrupt_row_skip_drops_with_warning(
-        self, df_factory, synthetic_contract_records, caplog
+    def test_corrupt_row_skip_drops_inverted_rows(
+        self, df_factory, synthetic_contract_records
     ):
         df = df_factory([r for r in synthetic_contract_records if r["ACCOUNT_ID"] == "E"])
-        with caplog.at_level(logging.WARNING, logger="customer_retention.stages.lifecycle.enrich"):
-            out = _to_native(
-                enrich_lifecycle_dataset(df, config=_base_config(on_corrupt_row="skip"))
-            )
+        out = _to_native(
+            enrich_lifecycle_dataset(df, config=_base_config(on_corrupt_row="skip"))
+        )
         # Account E only has 1 row → with skip the inverted row is dropped
         # entirely, leaving 0 events.
         assert len(out) == 0
-        assert any("inverted lifecycle" in rec.message for rec in caplog.records)
 
     def test_corrupt_row_warn_clamps_to_valid_from(
         self, df_factory, synthetic_contract_records, caplog

@@ -211,6 +211,10 @@ def _apply_corrupt_row_policy_spark(
     inverted_expr = F.col("__effective_valid_to__").isNotNull() & (
         F.col(config.valid_from_column) > F.col("__effective_valid_to__")
     )
+
+    if config.on_corrupt_row == "skip":
+        return spark_df.filter(~inverted_expr)
+
     n_inverted = spark_df.filter(inverted_expr).count()
     if n_inverted == 0:
         return spark_df
@@ -221,12 +225,6 @@ def _apply_corrupt_row_policy_spark(
             f"(valid_from > effective_valid_to). Set "
             f"on_corrupt_row='skip' or 'warn' to triage."
         )
-    if config.on_corrupt_row == "skip":
-        logger.warning(
-            "Dropping %d rows with inverted lifecycle (valid_from > effective_valid_to)",
-            n_inverted,
-        )
-        return spark_df.filter(~inverted_expr)
     logger.warning(
         "Clamping %d rows with inverted lifecycle to valid_from",
         n_inverted,
