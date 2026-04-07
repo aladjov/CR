@@ -57,15 +57,22 @@ class ScoringDataLoader:
         mlflow.set_tracking_uri(self.config.mlflow_tracking_uri)
         if self.config.is_databricks and self.config.registered_model_name and model_tag is None:
             alias_uri = f"models:/{self.config.registered_model_name}@production"
-            return mlflow.spark.load_model(alias_uri), alias_uri
+            return self._load_by_flavor(self._registered_model_flavor(), alias_uri), alias_uri
         entry = self._select_logged_model(model_tag)
-        model_uri = entry["model_uri"]
-        flavor = entry["flavor"]
+        return self._load_by_flavor(entry["flavor"], entry["model_uri"]), entry["model_uri"]
+
+    @staticmethod
+    def _load_by_flavor(flavor: str, uri: str) -> Any:
         if flavor == "spark":
-            return mlflow.spark.load_model(model_uri), model_uri
+            return mlflow.spark.load_model(uri)
         if flavor == "xgboost":
-            return mlflow.xgboost.load_model(model_uri), model_uri
-        return mlflow.sklearn.load_model(model_uri), model_uri
+            return mlflow.xgboost.load_model(uri)
+        return mlflow.sklearn.load_model(uri)
+
+    def _registered_model_flavor(self) -> str:
+        if not self.config.logged_models:
+            return "sklearn"
+        return self._select_logged_model(None).get("flavor", "sklearn")
 
     def list_trained_model_tags(self) -> List[str]:
         return [self._entry_display_name(e) for e in self.config.logged_models]

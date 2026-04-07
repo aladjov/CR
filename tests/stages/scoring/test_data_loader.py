@@ -249,6 +249,54 @@ class TestLoadModel:
         assert uri == "models:/analytics.churn.model_cust_emails_prof__a1b2c3d@production"
         mock_mlflow.spark.load_model.assert_called_once_with(uri)
 
+    def test_databricks_sklearn_alias_uses_sklearn_loader(self, databricks_config):
+        databricks_config.registered_model_name = "analytics.churn.model_cust_emails_prof__a1b2c3d"
+        databricks_config.logged_models = [_sklearn_entry()]
+        databricks_config.best_model_name = "random_forest"
+        mock_sklearn_model = MagicMock()
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
+            mock_mlflow.sklearn.load_model.return_value = mock_sklearn_model
+            loader = ScoringDataLoader(databricks_config)
+            model, uri = loader.load_model()
+        assert model is mock_sklearn_model
+        assert uri == "models:/analytics.churn.model_cust_emails_prof__a1b2c3d@production"
+        mock_mlflow.sklearn.load_model.assert_called_once_with(uri)
+        mock_mlflow.spark.load_model.assert_not_called()
+
+    def test_databricks_xgboost_alias_uses_xgboost_loader(self, databricks_config):
+        databricks_config.registered_model_name = "analytics.churn.model_cust_emails_prof__a1b2c3d"
+        xgb_entry = {
+            "artifact_path": "model_xgboost",
+            "model_uri": "runs:/run_xgb/model_xgboost",
+            "flavor": "xgboost",
+            "run_id": "run_xgb",
+            "display_name": "xgboost",
+            "wrapper_meta_artifact_path": None,
+        }
+        databricks_config.logged_models = [xgb_entry]
+        databricks_config.best_model_name = "xgboost"
+        mock_xgb_model = MagicMock()
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
+            mock_mlflow.xgboost.load_model.return_value = mock_xgb_model
+            loader = ScoringDataLoader(databricks_config)
+            model, uri = loader.load_model()
+        assert model is mock_xgb_model
+        assert uri == "models:/analytics.churn.model_cust_emails_prof__a1b2c3d@production"
+        mock_mlflow.xgboost.load_model.assert_called_once_with(uri)
+        mock_mlflow.spark.load_model.assert_not_called()
+        mock_mlflow.sklearn.load_model.assert_not_called()
+
+    def test_databricks_alias_without_logged_models_defaults_to_sklearn(self, databricks_config):
+        databricks_config.registered_model_name = "analytics.churn.model_cust_emails_prof__a1b2c3d"
+        databricks_config.logged_models = []
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
+            mock_mlflow.sklearn.load_model.return_value = MagicMock()
+            loader = ScoringDataLoader(databricks_config)
+            _, uri = loader.load_model()
+        assert uri == "models:/analytics.churn.model_cust_emails_prof__a1b2c3d@production"
+        mock_mlflow.sklearn.load_model.assert_called_once_with(uri)
+        mock_mlflow.spark.load_model.assert_not_called()
+
     def test_databricks_without_registered_name_falls_back_to_logged_models(self, databricks_config):
         databricks_config.registered_model_name = ""
         databricks_config.logged_models = [_spark_entry()]
