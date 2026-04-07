@@ -238,6 +238,32 @@ class TestStagePathsUseDatasetName:
         assert "silver/dataset_cleaned" in code
 
 
+class TestIngestionDatabricksReadDispatch:
+    def _databricks_code(self, source_path, source_format="csv"):
+        from customer_retention.generators.notebook_generator.config import NotebookConfig
+        from customer_retention.generators.notebook_generator.stages.s01_ingestion import IngestionStage
+        findings = MockExplorationFindings(source_path=source_path, source_format=source_format)
+        stage = IngestionStage(NotebookConfig(), findings)
+        cells = stage.generate_databricks_cells()
+        return "\n".join(c.source for c in cells if c.cell_type == "code")
+
+    def test_databricks_uc_table_path_uses_spark_read_table(self):
+        code = self._databricks_code("sps.production.case", "delta")
+        assert "spark.read.table(" in code
+        assert '.format("delta").option' not in code
+        assert '.load(DATA_PATH)' not in code
+
+    def test_databricks_file_path_uses_format_load(self):
+        code = self._databricks_code("/mnt/landing/customers.csv", "csv")
+        assert '.format("csv")' in code
+        assert ".load(DATA_PATH)" in code
+
+    def test_databricks_dbfs_path_uses_format_load(self):
+        code = self._databricks_code("dbfs:/mnt/raw/orders.parquet", "parquet")
+        assert '.format("parquet")' in code
+        assert ".load(DATA_PATH)" in code
+
+
 class TestAllStageProperties:
     @pytest.mark.parametrize("stage_class,expected_stage", [
         ("IngestionStage", "INGESTION"),

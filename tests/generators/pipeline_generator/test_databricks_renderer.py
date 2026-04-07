@@ -373,6 +373,39 @@ class TestDatabricksRenderConfig:
         result = renderer.render_config(sample_pipeline_config)
         assert 'ENTITY_KEY = "entity_id"' in result
 
+    def test_render_config_defines_read_raw_source_helper(self, renderer, sample_pipeline_config):
+        result = renderer.render_config(sample_pipeline_config)
+        assert "def read_raw_source(" in result
+        assert "spark.read.table(" in result
+
+    def test_render_config_read_raw_source_detects_uc_table(self, renderer, sample_pipeline_config):
+        result = renderer.render_config(sample_pipeline_config)
+        assert "def _is_uc_table_reference(" in result
+        assert '"/" in path' in result or "'/' in path" in result
+
+    def test_render_config_read_raw_source_handles_csv_and_file_paths(self, renderer, sample_pipeline_config):
+        result = renderer.render_config(sample_pipeline_config)
+        helper = result[result.index("def read_raw_source") : result.index("SOURCES = {")]
+        assert 'fmt == "csv"' in helper
+        assert 'spark.read.format(fmt).load(path)' in helper
+        assert 'spark.read.table(path)' in helper
+
+    def test_rendered_uc_table_detector_distinguishes_tables_from_paths(self, renderer, sample_pipeline_config):
+        result = renderer.render_config(sample_pipeline_config)
+        start = result.index("_UC_TABLE_FILE_SUFFIXES")
+        end = result.index("def read_raw_source", start)
+        ns: dict = {}
+        exec(result[start:end], ns)
+        detector = ns["_is_uc_table_reference"]
+        assert detector("sps.production.case") is True
+        assert detector("main.retention.landing_orders") is True
+        assert detector("/data/orders.parquet") is False
+        assert detector("/Volumes/main/retention/raw/orders.csv") is False
+        assert detector("dbfs:/mnt/raw/orders.parquet") is False
+        assert detector("orders") is False
+        assert detector("data.csv") is False
+        assert detector("data.parquet") is False
+
 
 class TestDatabricksConfigRunPath:
     def test_bronze_entity_uses_parent_config_path(self, renderer, sample_pipeline_config):
@@ -440,6 +473,11 @@ class TestDatabricksRenderBronze:
     def test_render_bronze_has_notebook_header(self, renderer, sample_pipeline_config):
         result = renderer.render_bronze("customers", sample_pipeline_config.bronze["customers"])
         assert "Databricks notebook source" in result
+
+    def test_render_bronze_entity_uses_read_raw_source_helper(self, renderer, sample_pipeline_config):
+        result = renderer.render_bronze("customers", sample_pipeline_config.bronze["customers"])
+        assert "read_raw_source(" in result
+        assert "spark.read.format(fmt).load(path)" not in result
 
 
 class TestDatabricksRenderBronzeEvent:
@@ -1083,7 +1121,12 @@ class TestDatabricksLoadSourceFormat:
         )
         config = BronzeLayerConfig(source=source)
         result = renderer.render_bronze("customers", config)
-        assert 'format("delta")' not in result or "format(fmt)" in result
+        load_start = result.index("def load_source")
+        load_end = result.index("\n\n", load_start)
+        load_fn = result[load_start:load_end]
+        assert "read_raw_source(" in load_fn
+        assert 'format("parquet")' not in load_fn
+        assert 'format("delta")' not in load_fn
 
     def test_bronze_event_load_source_no_raw_file_read(self, renderer):
         source = SourceConfig(
@@ -2043,6 +2086,33 @@ class TestDatabricksLandingTemplate:
     def test_landing_reads_from_raw_sources_dict(self, renderer, landing_config):
         result = renderer.render_landing("orders", landing_config)
         assert "RAW_SOURCES[SOURCE_NAME]" in result
+
+    def test_landing_uses_read_raw_source_helper(self, renderer, landing_config):
+        result = renderer.render_landing("orders", landing_config)
+        assert "read_raw_source(" in result
+        assert 'spark.read.format(fmt).load(path)' not in result
+
+    def test_landing_with_uc_table_raw_source_uses_read_raw_source(self, renderer):
+        source = SourceConfig(
+            name="case",
+            path="sps.production.case",
+            format="delta",
+            entity_key="customer_id",
+            time_column="created_at",
+            is_event_level=True,
+        )
+        landing_config = LandingLayerConfig(
+            source=source,
+            raw_source_path="sps.production.case",
+            raw_source_format="delta",
+            entity_column="customer_id",
+            time_column="created_at",
+            target_column="churn",
+        )
+        result = renderer.render_landing("case", landing_config)
+        assert "read_raw_source(" in result
+        assert "spark.read.format(fmt).load(path)" not in result
+        ast.parse(result)
 
     def test_landing_writes_to_landing_table(self, renderer, landing_config):
         result = renderer.render_landing("orders", landing_config)

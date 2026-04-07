@@ -249,6 +249,24 @@ def gold_table() -> str:
 def landing_table(source_name: str) -> str:
     return table_name(f"landing_{source_name}")
 
+_UC_TABLE_FILE_SUFFIXES = (".csv", ".parquet", ".json", ".orc", ".avro", ".delta", ".txt")
+
+def _is_uc_table_reference(path: str) -> bool:
+    if not path:
+        return False
+    if "/" in path or "\\\\" in path or ":" in path:
+        return False
+    if "." not in path:
+        return False
+    return not path.lower().endswith(_UC_TABLE_FILE_SUFFIXES)
+
+def read_raw_source(path: str, fmt: str):
+    if _is_uc_table_reference(path):
+        return spark.read.table(path)
+    if fmt == "csv":
+        return spark.read.option("header", "true").option("inferSchema", "true").csv(path)
+    return spark.read.format(fmt).load(path)
+
 SOURCES = {
 {% for source in config.sources %}
     "{{ source.name }}": {
@@ -292,11 +310,7 @@ SOURCE_NAME = "{{ source }}"
 
 def load_source():
     source_config = SOURCES[SOURCE_NAME]
-    path = source_config["path"]
-    fmt = source_config["format"]
-    if fmt == "csv":
-        return spark.read.option("header", "true").option("inferSchema", "true").csv(path)
-    return spark.read.format(fmt).load(path)
+    return read_raw_source(source_config["path"], source_config["format"])
 
 {% set groups = group_steps(config.transformations) %}
 def apply_transformations(df):
@@ -2149,11 +2163,7 @@ TIME_COLUMN = "{{ config.time_column }}"
 
 def load_source():
     source_config = RAW_SOURCES[SOURCE_NAME]
-    path = source_config["path"]
-    fmt = source_config["format"]
-    if fmt == "csv":
-        return spark.read.option("header", "true").option("inferSchema", "true").csv(path)
-    return spark.read.format(fmt).load(path)
+    return read_raw_source(source_config["path"], source_config["format"])
 
 def derive_feature_timestamp(df):
     \"\"\"Source: Data Discovery > Timestamp Detection\"\"\"

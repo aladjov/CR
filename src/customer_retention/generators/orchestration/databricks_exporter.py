@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from customer_retention.analysis.auto_explorer.dataset_fingerprinter import is_table_name
 from customer_retention.analysis.auto_explorer.layered_recommendations import (
     LayeredRecommendation,
     RecommendationRegistry,
@@ -7,6 +8,15 @@ from customer_retention.analysis.auto_explorer.layered_recommendations import (
 
 if TYPE_CHECKING:
     from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
+
+
+def _emit_raw_source_load(var_name: str, source_path: str, source_format: str = "csv") -> str:
+    if is_table_name(source_path):
+        return f'{var_name} = spark.read.table("{source_path}")'
+    return (
+        f'{var_name} = spark.read.format("{source_format}").option("header", "true")'
+        f'.option("inferSchema", "true").load("{source_path}")'
+    )
 
 
 class DatabricksExporter:
@@ -53,7 +63,7 @@ class DatabricksExporter:
             "# COMMAND ----------",
             "",
             f"# Read from landing zone: {name}",
-            f'df_raw = spark.read.format("csv").option("header", "true").option("inferSchema", "true").load("{bronze.source_file}")',
+            _emit_raw_source_load("df_raw", bronze.source_file),
             "",
             "# Apply cleaning transformations",
             "df_bronze = df_raw",
@@ -176,7 +186,7 @@ class DatabricksExporter:
             "# COMMAND ----------",
             "",
             "# Read from landing zone",
-            f'df_raw = spark.read.format("csv").option("header", "true").option("inferSchema", "true").load("{self._landing_path()}")',
+            _emit_raw_source_load("df_raw", self._landing_path()),
             "",
             "# Apply cleaning transformations",
             "df_bronze = df_raw",

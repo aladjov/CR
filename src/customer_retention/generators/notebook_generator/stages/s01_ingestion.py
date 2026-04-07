@@ -2,6 +2,8 @@ from typing import List
 
 import nbformat
 
+from customer_retention.analysis.auto_explorer.dataset_fingerprinter import is_table_name
+
 from ..base import NotebookStage
 from .base_stage import StageGenerator
 
@@ -80,6 +82,17 @@ print(f"Pipeline context updated. Use snapshot '{metadata['snapshot_id']}' for t
         schema = self.config.feature_store.schema
         data_path = self.findings.source_path if self.findings else "/mnt/landing/customers"
         source_format = getattr(self.findings, "source_format", "csv") if self.findings else "csv"
+        load_cell = (
+            "df_raw = spark.read.table(DATA_PATH)"
+            if is_table_name(data_path)
+            else (
+                f'df_raw = (spark.read\n'
+                f'    .format("{source_format}")\n'
+                f'    .option("header", "true")\n'
+                f'    .option("inferSchema", "true")\n'
+                f'    .load(DATA_PATH))'
+            )
+        )
         return self.header_cells() + [
             self.cb.section("Configuration"),
             self.cb.code(f'''CATALOG = "{catalog}"
@@ -88,11 +101,7 @@ DATA_PATH = "{data_path}"
 spark.sql(f"USE CATALOG {{CATALOG}}")
 spark.sql(f"USE SCHEMA {{SCHEMA}}")'''),
             self.cb.section("Load Raw Data"),
-            self.cb.code(f'''df_raw = (spark.read
-    .format("{source_format}")
-    .option("header", "true")
-    .option("inferSchema", "true")
-    .load(DATA_PATH))
+            self.cb.code(f'''{load_cell}
 print(f"Loaded {{df_raw.count()}} rows")
 display(df_raw.limit(10))'''),
             self.cb.section("Save to Bronze Table"),

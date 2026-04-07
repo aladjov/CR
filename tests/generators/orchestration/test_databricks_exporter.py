@@ -111,6 +111,55 @@ class TestBronzeNotebook:
         code = exporter.generate_bronze_notebook()
         assert "delta" in code.lower() or "write" in code
 
+    def test_bronze_file_path_uses_format_load(self, full_registry, sample_findings):
+        registry = RecommendationRegistry()
+        registry.init_bronze("/mnt/landing/customers.csv")
+        registry.init_silver("customer_id", "event_date")
+        registry.init_gold("churned")
+        exporter = DatabricksExporter(registry, sample_findings)
+        code = exporter.generate_bronze_notebook()
+        assert 'format("csv")' in code
+        assert '.load("/mnt/landing/customers.csv")' in code
+
+    def test_bronze_uc_table_uses_spark_read_table(self):
+        registry = RecommendationRegistry()
+        registry.init_bronze("sps.production.case")
+        registry.init_silver("customer_id", "event_date")
+        registry.init_gold("churned")
+        findings = ExplorationFindings(
+            source_path="sps.production.case", source_format="delta",
+            row_count=10000, column_count=2, columns={},
+            target_column="churned", identifier_columns=["customer_id"],
+        )
+        exporter = DatabricksExporter(registry, findings)
+        code = exporter.generate_bronze_notebook()
+        assert 'spark.read.table("sps.production.case")' in code
+        assert '.load("sps.production.case")' not in code
+
+    def test_source_bronze_notebook_uc_table_uses_spark_read_table(self, sample_findings):
+        registry = RecommendationRegistry()
+        registry.init_bronze("/mnt/landing/customers.csv")
+        registry.init_silver("customer_id", "event_date")
+        registry.init_gold("churned")
+        registry.add_source("case", "sps.production.case")
+        exporter = DatabricksExporter(registry, sample_findings)
+        notebooks = exporter.generate_source_notebooks()
+        assert "case" in notebooks
+        code = notebooks["case"]
+        assert 'spark.read.table("sps.production.case")' in code
+        assert '.load("sps.production.case")' not in code
+
+    def test_source_bronze_notebook_file_path_uses_format_load(self, sample_findings):
+        registry = RecommendationRegistry()
+        registry.init_bronze("/mnt/landing/customers.csv")
+        registry.init_silver("customer_id", "event_date")
+        registry.init_gold("churned")
+        registry.add_source("orders", "/mnt/landing/orders.parquet")
+        exporter = DatabricksExporter(registry, sample_findings)
+        notebooks = exporter.generate_source_notebooks()
+        code = notebooks["orders"]
+        assert '.load("/mnt/landing/orders.parquet")' in code
+
 
 class TestSilverNotebook:
     def test_generates_silver_cell(self, full_registry, sample_findings):
