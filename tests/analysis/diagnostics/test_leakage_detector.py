@@ -359,3 +359,185 @@ class TestTemporalMetadataExclusion:
         assert "feature1" in analyzable
         for col in TEMPORAL_METADATA_COLUMNS:
             assert col not in analyzable
+
+
+class TestWindowOverlapsHorizonLD062LD063:
+    """LD062 / LD063: aggregation windows that span the label horizon."""
+
+    def _make_x(self, columns):
+        n = 50
+        rng = np.random.default_rng(0)
+        return pd.DataFrame({col: rng.standard_normal(n) for col in columns})
+
+    def test_is_zero_flag_on_window_equal_horizon_is_critical_ld062(self):
+        X = self._make_x(["NET_PRICE_count_90d_is_zero"])
+        detector = LeakageDetector(label_horizon_days=90)
+        result = detector.check_window_overlaps_horizon(X)
+        ld062 = [c for c in result.checks if c.check_id == "LD062"]
+        assert len(ld062) == 1
+        assert ld062[0].feature == "NET_PRICE_count_90d_is_zero"
+        assert ld062[0].severity == Severity.CRITICAL
+
+    def test_is_zero_flag_on_window_above_horizon_is_critical_ld062(self):
+        X = self._make_x(["NET_PRICE_sum_180d_is_zero"])
+        detector = LeakageDetector(label_horizon_days=90)
+        result = detector.check_window_overlaps_horizon(X)
+        ld062 = [c for c in result.checks if c.check_id == "LD062"]
+        assert len(ld062) == 1
+
+    def test_is_zero_flag_on_all_time_window_is_critical_ld062(self):
+        X = self._make_x(["EVENT_count_all_time_is_zero"])
+        detector = LeakageDetector(label_horizon_days=30)
+        result = detector.check_window_overlaps_horizon(X)
+        ld062 = [c for c in result.checks if c.check_id == "LD062"]
+        assert len(ld062) == 1
+
+    def test_is_zero_flag_on_window_below_horizon_is_clean(self):
+        X = self._make_x(["NET_PRICE_count_30d_is_zero"])
+        detector = LeakageDetector(label_horizon_days=90)
+        result = detector.check_window_overlaps_horizon(X)
+        ld062 = [c for c in result.checks if c.check_id == "LD062"]
+        assert len(ld062) == 0
+        assert result.passed
+
+    def test_count_aggregation_over_horizon_is_high_ld063(self):
+        X = self._make_x(["NET_PRICE_count_180d"])
+        detector = LeakageDetector(label_horizon_days=90)
+        result = detector.check_window_overlaps_horizon(X)
+        ld063 = [c for c in result.checks if c.check_id == "LD063"]
+        assert len(ld063) == 1
+        assert ld063[0].feature == "NET_PRICE_count_180d"
+        assert ld063[0].severity == Severity.HIGH
+
+    def test_sum_aggregation_at_horizon_is_high_ld063(self):
+        X = self._make_x(["NET_PRICE_sum_90d"])
+        detector = LeakageDetector(label_horizon_days=90)
+        result = detector.check_window_overlaps_horizon(X)
+        ld063 = [c for c in result.checks if c.check_id == "LD063"]
+        assert len(ld063) == 1
+
+    def test_mean_aggregation_not_flagged(self):
+        # mean describes the shape of activity, not presence/absence
+        X = self._make_x(["NET_PRICE_mean_180d"])
+        detector = LeakageDetector(label_horizon_days=90)
+        result = detector.check_window_overlaps_horizon(X)
+        flagged = [c for c in result.checks if c.check_id in ("LD062", "LD063")]
+        assert len(flagged) == 0
+
+    def test_max_min_aggregation_not_flagged(self):
+        X = self._make_x(["NET_PRICE_max_180d", "NET_PRICE_min_180d"])
+        detector = LeakageDetector(label_horizon_days=90)
+        result = detector.check_window_overlaps_horizon(X)
+        flagged = [c for c in result.checks if c.check_id in ("LD062", "LD063")]
+        assert len(flagged) == 0
+
+    def test_count_below_horizon_is_clean(self):
+        X = self._make_x(["NET_PRICE_count_30d", "NET_PRICE_sum_30d"])
+        detector = LeakageDetector(label_horizon_days=90)
+        result = detector.check_window_overlaps_horizon(X)
+        flagged = [c for c in result.checks if c.check_id in ("LD062", "LD063")]
+        assert len(flagged) == 0
+
+    def test_check_disabled_when_no_horizon(self):
+        X = self._make_x(["NET_PRICE_count_180d_is_zero", "NET_PRICE_sum_180d"])
+        detector = LeakageDetector()  # no label_horizon_days
+        result = detector.check_window_overlaps_horizon(X)
+        flagged = [c for c in result.checks if c.check_id in ("LD062", "LD063")]
+        assert len(flagged) == 0
+
+    def test_non_aggregation_columns_are_ignored(self):
+        X = self._make_x(["customer_age", "tenure_months", "annual_revenue"])
+        detector = LeakageDetector(label_horizon_days=90)
+        result = detector.check_window_overlaps_horizon(X)
+        assert len(result.checks) == 0
+
+    def test_week_unit_is_converted_correctly(self):
+        # 13w = 91 days >= 90d horizon → flagged
+        X = self._make_x(["EVENT_count_13w_is_zero"])
+        detector = LeakageDetector(label_horizon_days=90)
+        result = detector.check_window_overlaps_horizon(X)
+        ld062 = [c for c in result.checks if c.check_id == "LD062"]
+        assert len(ld062) == 1
+
+    def test_week_unit_below_horizon_is_clean(self):
+        # 12w = 84 days < 90d horizon → clean
+        X = self._make_x(["EVENT_count_12w_is_zero"])
+        detector = LeakageDetector(label_horizon_days=90)
+        result = detector.check_window_overlaps_horizon(X)
+        ld062 = [c for c in result.checks if c.check_id == "LD062"]
+        assert len(ld062) == 0
+
+    def test_temporal_metadata_columns_are_excluded(self):
+        # Even if the column name happened to match the pattern, temporal
+        # metadata should be filtered before parsing.
+        X = self._make_x(["feature_timestamp", "label_timestamp", "label_available_flag"])
+        detector = LeakageDetector(label_horizon_days=90)
+        result = detector.check_window_overlaps_horizon(X)
+        assert len(result.checks) == 0
+
+    def test_full_sps_leakage_pattern_detected(self):
+        # Reproduces the SPS NET_PRICE incident: 90d horizon, the full set of
+        # leaderboard features dominating the chart.
+        X = self._make_x([
+            "NET_PRICE_count_180d_is_zero",
+            "NET_PRICE_sum_180d_is_zero",
+            "NET_PRICE_count_90d_is_zero",
+            "NET_PRICE_sum_90d_is_zero",
+            "NET_PRICE_count_180d",
+            "NET_PRICE_count_all_time",
+            "NET_PRICE_sum_180d",
+            "NET_PRICE_mean_180d",  # not flagged
+            "BLENDED_DOC_RATE_STANDARD_DOCUMENT_sum_180d",
+            "QUANTITY_count_30d_is_zero",  # not flagged: 30d < 90d
+        ])
+        detector = LeakageDetector(label_horizon_days=90)
+        result = detector.check_window_overlaps_horizon(X)
+
+        critical_features = {c.feature for c in result.checks if c.check_id == "LD062"}
+        high_features = {c.feature for c in result.checks if c.check_id == "LD063"}
+
+        assert critical_features == {
+            "NET_PRICE_count_180d_is_zero",
+            "NET_PRICE_sum_180d_is_zero",
+            "NET_PRICE_count_90d_is_zero",
+            "NET_PRICE_sum_90d_is_zero",
+        }
+        assert high_features == {
+            "NET_PRICE_count_180d",
+            "NET_PRICE_count_all_time",
+            "NET_PRICE_sum_180d",
+            "BLENDED_DOC_RATE_STANDARD_DOCUMENT_sum_180d",
+        }
+        assert not result.passed
+
+    def test_run_all_checks_includes_window_overlap(self):
+        # Verify the integration into run_all_checks fires LD062/LD063 too.
+        n = 100
+        rng = np.random.default_rng(42)
+        X = pd.DataFrame({
+            "NET_PRICE_count_180d_is_zero": rng.integers(0, 2, n).astype(float),
+            "normal_feature": rng.standard_normal(n),
+        })
+        y = pd.Series(rng.integers(0, 2, n))
+
+        detector = LeakageDetector(label_horizon_days=90)
+        result = detector.run_all_checks(X, y, include_pit=False)
+
+        ld062 = [c for c in result.checks if c.check_id == "LD062"]
+        assert len(ld062) == 1
+        assert ld062[0].feature == "NET_PRICE_count_180d_is_zero"
+        assert not result.passed
+
+    def test_run_all_checks_no_horizon_does_not_fire_window_check(self):
+        n = 100
+        rng = np.random.default_rng(42)
+        X = pd.DataFrame({
+            "NET_PRICE_count_180d_is_zero": rng.integers(0, 2, n).astype(float),
+        })
+        y = pd.Series(rng.integers(0, 2, n))
+
+        detector = LeakageDetector()  # no horizon
+        result = detector.run_all_checks(X, y, include_pit=False)
+
+        ld062 = [c for c in result.checks if c.check_id == "LD062"]
+        assert len(ld062) == 0

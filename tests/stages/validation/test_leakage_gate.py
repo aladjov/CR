@@ -586,3 +586,169 @@ class TestCaseInsensitiveTimestampColumns:
         gate = LeakageGate(target_column="TARGET")
         result = gate.run(df)
         assert len(result.critical_issues) > 0
+
+
+class TestWindowOverlapsHorizonLK014LK015:
+    """LK014 / LK015: aggregation windows that span the label horizon."""
+
+    def _make_df(self, columns):
+        n = 50
+        rng = np.random.default_rng(0)
+        data = {col: rng.standard_normal(n) for col in columns}
+        data["target"] = rng.integers(0, 2, n)
+        return pd.DataFrame(data)
+
+    def test_is_zero_flag_on_window_equal_horizon_is_critical_lk014(self):
+        df = self._make_df(["NET_PRICE_count_90d_is_zero"])
+        gate = LeakageGate(target_column="target", label_horizon_days=90)
+        result = gate.run(df)
+        lk014 = [i for i in result.critical_issues if i.check_id == "LK014"]
+        assert len(lk014) == 1
+        assert lk014[0].feature == "NET_PRICE_count_90d_is_zero"
+
+    def test_is_zero_flag_on_window_above_horizon_is_critical_lk014(self):
+        df = self._make_df(["NET_PRICE_sum_180d_is_zero"])
+        gate = LeakageGate(target_column="target", label_horizon_days=90)
+        result = gate.run(df)
+        lk014 = [i for i in result.critical_issues if i.check_id == "LK014"]
+        assert len(lk014) == 1
+
+    def test_is_zero_flag_on_all_time_window_is_critical_lk014(self):
+        df = self._make_df(["EVENT_count_all_time_is_zero"])
+        gate = LeakageGate(target_column="target", label_horizon_days=30)
+        result = gate.run(df)
+        lk014 = [i for i in result.critical_issues if i.check_id == "LK014"]
+        assert len(lk014) == 1
+        # all_time has no finite window length
+        assert lk014[0].value is None
+
+    def test_is_zero_flag_on_window_below_horizon_is_clean(self):
+        df = self._make_df(["NET_PRICE_count_30d_is_zero"])
+        gate = LeakageGate(target_column="target", label_horizon_days=90)
+        result = gate.run(df)
+        lk014 = [i for i in result.critical_issues if i.check_id == "LK014"]
+        assert len(lk014) == 0
+
+    def test_count_aggregation_over_horizon_is_high_lk015(self):
+        df = self._make_df(["NET_PRICE_count_180d"])
+        gate = LeakageGate(target_column="target", label_horizon_days=90)
+        result = gate.run(df)
+        lk015 = [i for i in result.high_issues if i.check_id == "LK015"]
+        assert len(lk015) == 1
+        assert lk015[0].feature == "NET_PRICE_count_180d"
+
+    def test_sum_aggregation_over_horizon_is_high_lk015(self):
+        df = self._make_df(["NET_PRICE_sum_90d"])
+        gate = LeakageGate(target_column="target", label_horizon_days=90)
+        result = gate.run(df)
+        lk015 = [i for i in result.high_issues if i.check_id == "LK015"]
+        assert len(lk015) == 1
+
+    def test_mean_aggregation_not_flagged(self):
+        # mean describes shape of activity, not presence/absence — not flagged
+        df = self._make_df(["NET_PRICE_mean_180d"])
+        gate = LeakageGate(target_column="target", label_horizon_days=90)
+        result = gate.run(df)
+        lk014_15 = [
+            i for i in (result.critical_issues + result.high_issues)
+            if i.check_id in ("LK014", "LK015")
+        ]
+        assert len(lk014_15) == 0
+
+    def test_max_min_aggregation_not_flagged(self):
+        df = self._make_df(["NET_PRICE_max_180d", "NET_PRICE_min_180d"])
+        gate = LeakageGate(target_column="target", label_horizon_days=90)
+        result = gate.run(df)
+        lk014_15 = [
+            i for i in (result.critical_issues + result.high_issues)
+            if i.check_id in ("LK014", "LK015")
+        ]
+        assert len(lk014_15) == 0
+
+    def test_count_below_horizon_is_clean(self):
+        df = self._make_df(["NET_PRICE_count_30d", "NET_PRICE_sum_30d"])
+        gate = LeakageGate(target_column="target", label_horizon_days=90)
+        result = gate.run(df)
+        lk014_15 = [
+            i for i in (result.critical_issues + result.high_issues)
+            if i.check_id in ("LK014", "LK015")
+        ]
+        assert len(lk014_15) == 0
+
+    def test_check_disabled_when_no_horizon_provided(self):
+        df = self._make_df(["NET_PRICE_count_180d_is_zero", "NET_PRICE_sum_180d"])
+        gate = LeakageGate(target_column="target")  # no label_horizon_days
+        result = gate.run(df)
+        lk014_15 = [
+            i for i in (result.critical_issues + result.high_issues)
+            if i.check_id in ("LK014", "LK015")
+        ]
+        assert len(lk014_15) == 0
+
+    def test_non_aggregation_columns_are_ignored(self):
+        df = self._make_df(["customer_age", "tenure_months", "annual_revenue"])
+        gate = LeakageGate(target_column="target", label_horizon_days=90)
+        result = gate.run(df)
+        lk014_15 = [
+            i for i in (result.critical_issues + result.high_issues)
+            if i.check_id in ("LK014", "LK015")
+        ]
+        assert len(lk014_15) == 0
+
+    def test_week_unit_is_converted_correctly(self):
+        # 13w = 91 days >= 90d horizon
+        df = self._make_df(["EVENT_count_13w_is_zero"])
+        gate = LeakageGate(target_column="target", label_horizon_days=90)
+        result = gate.run(df)
+        lk014 = [i for i in result.critical_issues if i.check_id == "LK014"]
+        assert len(lk014) == 1
+
+    def test_week_unit_below_horizon_is_clean(self):
+        # 12w = 84 days < 90d horizon
+        df = self._make_df(["EVENT_count_12w_is_zero"])
+        gate = LeakageGate(target_column="target", label_horizon_days=90)
+        result = gate.run(df)
+        lk014 = [i for i in result.critical_issues if i.check_id == "LK014"]
+        assert len(lk014) == 0
+
+    def test_full_sps_leakage_pattern_detected(self):
+        # Reproduce the SPS NET_PRICE incident: 90d horizon, all the leaking
+        # features dominate feature importance.
+        df = self._make_df([
+            "NET_PRICE_count_180d_is_zero",
+            "NET_PRICE_sum_180d_is_zero",
+            "NET_PRICE_count_90d_is_zero",
+            "NET_PRICE_sum_90d_is_zero",
+            "NET_PRICE_count_180d",
+            "NET_PRICE_count_all_time",
+            "NET_PRICE_sum_180d",
+            "NET_PRICE_mean_180d",  # not flagged
+            "BLENDED_DOC_RATE_STANDARD_DOCUMENT_sum_180d",
+            "QUANTITY_count_30d_is_zero",  # not flagged: 30d < 90d
+        ])
+        gate = LeakageGate(target_column="target", label_horizon_days=90)
+        result = gate.run(df)
+
+        critical_features = {
+            i.feature for i in result.critical_issues if i.check_id == "LK014"
+        }
+        high_features = {
+            i.feature for i in result.high_issues if i.check_id == "LK015"
+        }
+
+        assert critical_features == {
+            "NET_PRICE_count_180d_is_zero",
+            "NET_PRICE_sum_180d_is_zero",
+            "NET_PRICE_count_90d_is_zero",
+            "NET_PRICE_sum_90d_is_zero",
+        }
+        assert high_features == {
+            "NET_PRICE_count_180d",
+            "NET_PRICE_count_all_time",
+            "NET_PRICE_sum_180d",
+            "BLENDED_DOC_RATE_STANDARD_DOCUMENT_sum_180d",
+        }
+        assert not result.passed
+        # Critical features should appear in recommended drops
+        for feat in critical_features:
+            assert feat in result.recommended_drops

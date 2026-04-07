@@ -1,4 +1,5 @@
 import math
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -45,6 +46,25 @@ class LeakageGate:
         "partial_window": "Feature only available {first_date} to {last_date}. Both train and test may have gaps.",
     }
 
+    # LK014/LK015: parses windowed-aggregation feature names like
+    # "NET_PRICE_count_180d", "QUANTITY_sum_90d_is_zero", "EVENT_count_all_time".
+    # Captures: base column, aggregation func, window spec, optional flag suffix.
+    _WINDOW_FEATURE_PATTERN = re.compile(
+        r"^(?P<base>.+?)"
+        r"_(?P<func>count|sum|mean|avg|max|min|nunique|std|var)"
+        r"_(?P<window>\d+[dhwmy]|all_time)"
+        r"(?P<flag>_is_zero|_log)?$",
+        re.IGNORECASE,
+    )
+
+    _WINDOW_UNIT_DAYS = {
+        "h": 1.0 / 24.0,
+        "d": 1.0,
+        "w": 7.0,
+        "m": 30.0,
+        "y": 365.0,
+    }
+
     def __init__(
         self,
         target_column: str,
@@ -57,6 +77,7 @@ class LeakageGate:
         label_timestamp_column: Optional[str] = None,
         enforce_point_in_time: bool = True,
         availability_coverage_threshold: float = 50.0,
+        label_horizon_days: Optional[int] = None,
     ):
         self.target_column = target_column
         self.correlation_threshold_critical = correlation_threshold_critical
@@ -68,6 +89,7 @@ class LeakageGate:
         self.label_timestamp_column = label_timestamp_column or "label_timestamp"
         self.enforce_point_in_time = enforce_point_in_time
         self.availability_coverage_threshold = availability_coverage_threshold
+        self.label_horizon_days = label_horizon_days
 
     def _resolve_columns(self, df: DataFrame) -> None:
         try:
@@ -130,6 +152,11 @@ class LeakageGate:
             audit_issues = self._check_field_availability_audit(feature_cols, field_availability_audit)
             critical_issues.extend([i for i in audit_issues if i.severity == Severity.CRITICAL])
             high_issues.extend([i for i in audit_issues if i.severity == Severity.HIGH])
+
+        if self.label_horizon_days is not None:
+            window_issues = self._check_window_overlaps_horizon(feature_cols)
+            critical_issues.extend([i for i in window_issues if i.severity == Severity.CRITICAL])
+            high_issues.extend([i for i in window_issues if i.severity == Severity.HIGH])
 
         for issue in critical_issues + high_issues:
             if issue.feature not in suspicious_features:
@@ -393,4 +420,85 @@ class LeakageGate:
                     check_id="LK013", severity=Severity.HIGH, feature=col,
                     description=f"Field availability audit flagged '{col}' for investigation — suspicious population pattern near termination",
                 ))
+        return issues
+
+    @classmethod
+    def _parse_window_feature(cls, name: str) -> Optional[Dict[str, Optional[str]]]:
+        match = cls._WINDOW_FEATURE_PATTERN.match(name)
+        if match is None:
+            return None
+        return {
+            "base": match.group("base"),
+            "func": match.group("func").lower(),
+            "window": match.group("window").lower(),
+            "flag": (match.group("flag") or "").lower() or None,
+        }
+
+    @classmethod
+    def _window_to_days(cls, window: str) -> float:
+        if window == "all_time":
+            return math.inf
+        unit = window[-1]
+        try:
+            magnitude = int(window[:-1])
+        except ValueError:
+            return math.nan
+        return magnitude * cls._WINDOW_UNIT_DAYS[unit]
+
+    def _check_window_overlaps_horizon(self, feature_cols: List[str]) -> List[LeakageIssue]:
+        """LK014/LK015: aggregation windows that span the label horizon.
+
+        When an aggregation window N is greater than or equal to the label
+        horizon H, the feature can encode "did anything happen in a span at
+        least as long as the period the label is asking about" — which, for
+        churn-style targets, is a near-perfect proxy. The `_is_zero` flag on
+        such a window collapses to a single bit that *is* the answer
+        ("entity inactive in N days") and is treated as CRITICAL. Continuous
+        `count` / `sum` aggregations on the same window are HIGH because they
+        carry the same signal in a denser form. Other aggregation funcs
+        (`mean`, `max`, etc.) are not flagged: they describe the *shape* of
+        activity, not its presence/absence.
+        """
+        issues: List[LeakageIssue] = []
+        horizon = self.label_horizon_days
+        if horizon is None:
+            return issues
+
+        for col in feature_cols:
+            parsed = self._parse_window_feature(col)
+            if parsed is None:
+                continue
+            window_days = self._window_to_days(parsed["window"])
+            if math.isnan(window_days) or window_days < horizon:
+                continue
+
+            window_label = parsed["window"]
+            window_display = "all_time" if window_label == "all_time" else f"{window_label} ({int(window_days)}d)"
+
+            if parsed["flag"] == "_is_zero":
+                issues.append(LeakageIssue(
+                    check_id="LK014",
+                    severity=Severity.CRITICAL,
+                    feature=col,
+                    description=(
+                        f"Zero-inflation flag on aggregation window {window_display} "
+                        f">= label horizon ({horizon}d). Encodes 'entity inactive over a "
+                        f"span at least as long as the prediction window' — isomorphic to "
+                        f"the target for activity-driven labels."
+                    ),
+                    value=float(window_days) if not math.isinf(window_days) else None,
+                ))
+            elif parsed["func"] in ("count", "sum"):
+                issues.append(LeakageIssue(
+                    check_id="LK015",
+                    severity=Severity.HIGH,
+                    feature=col,
+                    description=(
+                        f"Aggregation '{parsed['func']}' over window {window_display} "
+                        f">= label horizon ({horizon}d). Often a near-perfect proxy for "
+                        f"the target when the underlying column tracks entity activity."
+                    ),
+                    value=float(window_days) if not math.isinf(window_days) else None,
+                ))
+
         return issues

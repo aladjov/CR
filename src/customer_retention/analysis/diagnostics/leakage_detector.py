@@ -1,8 +1,9 @@
 """Leakage detection probes for model validation."""
 
+import math
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
@@ -51,15 +52,38 @@ class LeakageDetector:
         r"overall_mean|overall_std|benchmark|percentile_rank)",
         re.IGNORECASE,
     )
+    # LD062 / LD063: parses windowed-aggregation feature names like
+    # "NET_PRICE_count_180d", "QUANTITY_sum_90d_is_zero", "EVENT_count_all_time".
+    # Captures: base column, aggregation func, window spec, optional flag suffix.
+    WINDOW_FEATURE_PATTERN = re.compile(
+        r"^(?P<base>.+?)"
+        r"_(?P<func>count|sum|mean|avg|max|min|nunique|std|var)"
+        r"_(?P<window>\d+[dhwmy]|all_time)"
+        r"(?P<flag>_is_zero|_log)?$",
+        re.IGNORECASE,
+    )
+    WINDOW_UNIT_DAYS = {
+        "h": 1.0 / 24.0,
+        "d": 1.0,
+        "w": 7.0,
+        "m": 30.0,
+        "y": 365.0,
+    }
     CORRELATION_CRITICAL, CORRELATION_HIGH, CORRELATION_MEDIUM = 0.90, 0.70, 0.50
     SEPARATION_CRITICAL, SEPARATION_HIGH, SEPARATION_MEDIUM = 0.0, 1.0, 5.0
     AUC_CRITICAL, AUC_HIGH = 0.90, 0.80
     CV_FOLDS = 5
     NUMERIC_DTYPES = (np.float64, np.int64, np.float32, np.int32)
 
-    def __init__(self, feature_timestamp_column: str = "feature_timestamp", label_timestamp_column: str = "label_timestamp"):
+    def __init__(
+        self,
+        feature_timestamp_column: str = "feature_timestamp",
+        label_timestamp_column: str = "label_timestamp",
+        label_horizon_days: Optional[int] = None,
+    ):
         self.feature_timestamp_column = feature_timestamp_column
         self.label_timestamp_column = label_timestamp_column
+        self.label_horizon_days = label_horizon_days
         self._excluded_columns: Set[str] = set(TEMPORAL_METADATA_COLUMNS)
 
     def _get_analyzable_columns(self, X: DataFrame) -> List[str]:
@@ -381,6 +405,91 @@ class LeakageDetector:
             return Severity.HIGH, f"INVESTIGATE {col}: Domain pattern with correlation ({corr:.2f}) warrants review."
         return Severity.MEDIUM, f"REVIEW {col}: Contains churn/retention terminology. Low correlation ({corr:.2f}) suggests safe."
 
+    @classmethod
+    def _parse_window_feature(cls, name: str) -> Optional[Dict[str, Optional[str]]]:
+        match = cls.WINDOW_FEATURE_PATTERN.match(name)
+        if match is None:
+            return None
+        return {
+            "base": match.group("base"),
+            "func": match.group("func").lower(),
+            "window": match.group("window").lower(),
+            "flag": (match.group("flag") or "").lower() or None,
+        }
+
+    @classmethod
+    def _window_to_days(cls, window: str) -> float:
+        if window == "all_time":
+            return math.inf
+        unit = window[-1]
+        try:
+            magnitude = int(window[:-1])
+        except ValueError:
+            return math.nan
+        return magnitude * cls.WINDOW_UNIT_DAYS[unit]
+
+    def check_window_overlaps_horizon(self, X: DataFrame) -> LeakageResult:
+        """LD062 / LD063: aggregation windows that span the label horizon.
+
+        When the aggregation window N is greater than or equal to the label
+        horizon H, the feature can encode "did anything happen in a span at
+        least as long as the period the label is asking about" — which, for
+        churn-style targets, is a near-perfect proxy. The `_is_zero` flag on
+        such a window collapses to a single bit that *is* the answer
+        ("entity inactive in N days") and is treated as CRITICAL (LD062).
+        Continuous `count` / `sum` aggregations on the same window are HIGH
+        (LD063) because they carry the same signal in a denser form. Other
+        aggregation funcs (`mean`, `max`, etc.) are deliberately not flagged:
+        they describe the *shape* of activity, not its presence/absence.
+
+        No-op when ``label_horizon_days`` was not set on the detector.
+        """
+        checks: List[LeakageCheck] = []
+        horizon = self.label_horizon_days
+        if horizon is None:
+            return self._build_result(checks)
+
+        for col in self._get_analyzable_columns(X):
+            parsed = self._parse_window_feature(col)
+            if parsed is None:
+                continue
+            window_days = self._window_to_days(parsed["window"])
+            if math.isnan(window_days) or window_days < horizon:
+                continue
+
+            window_label = parsed["window"]
+            window_display = (
+                "all_time" if window_label == "all_time" else f"{window_label} ({int(window_days)}d)"
+            )
+
+            if parsed["flag"] == "_is_zero":
+                checks.append(LeakageCheck(
+                    check_id="LD062",
+                    feature=col,
+                    severity=Severity.CRITICAL,
+                    recommendation=(
+                        f"REMOVE {col}: zero-inflation flag on aggregation window "
+                        f"{window_display} >= label horizon ({horizon}d). Encodes "
+                        f"'entity inactive over a span at least as long as the "
+                        f"prediction window' — isomorphic to the target for "
+                        f"activity-driven labels."
+                    ),
+                ))
+            elif parsed["func"] in ("count", "sum"):
+                checks.append(LeakageCheck(
+                    check_id="LD063",
+                    feature=col,
+                    severity=Severity.HIGH,
+                    recommendation=(
+                        f"INVESTIGATE {col}: aggregation '{parsed['func']}' over "
+                        f"window {window_display} >= label horizon ({horizon}d). "
+                        f"Often a near-perfect proxy for the target when the "
+                        f"underlying column tracks entity activity."
+                    ),
+                ))
+
+        return self._build_result(checks)
+
     def run_all_checks(self, X: DataFrame, y: Series, include_pit: bool = True) -> LeakageResult:
         all_checks = (
             self.check_correlations(X, y).checks
@@ -397,6 +506,7 @@ class LeakageDetector:
 
         all_checks.extend(self.check_target_in_features(X, y).checks)
         all_checks.extend(self.check_domain_target_patterns(X, y).checks)
+        all_checks.extend(self.check_window_overlaps_horizon(X).checks)
 
         critical = [c for c in all_checks if c.severity == Severity.CRITICAL]
         recommendations = list({c.recommendation for c in all_checks if c.severity in [Severity.CRITICAL, Severity.HIGH]})
