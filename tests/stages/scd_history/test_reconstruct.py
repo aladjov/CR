@@ -397,6 +397,189 @@ class TestPandasFallbackEdgeCases:
             reconstruct_scd_history_at_grid(history, grid_dates, cfg, parent)
 
 
+class TestParentColumnCaseInsensitiveResolution:
+    """Snowflake-sourced parent tables mix unquoted UPPERCASE columns
+    (``CASE_STATUS``, ``CASE_TYPE``) with quoted-identifier camelCase
+    columns (``Origin``, ``Priority``) preserved from the Salesforce schema.
+    The reconstruction must resolve ``parent_value_columns`` references
+    case-insensitively so users do not have to know which case their
+    upstream warehouse is using.
+    """
+
+    def test_uppercase_config_resolves_to_camelcase_parent(
+        self, df_factory, grid_dates
+    ):
+        history = df_factory([
+            {
+                "CASE_HISTORY_ID": "h1",
+                "CASE_ID": "A",
+                "FIELD": "Origin",
+                "OLD_VALUE": None,
+                "NEW_VALUE": "Email",
+                "CREATED_DATE": grid_dates[2],
+            }
+        ])
+        # Parent has the column as Salesforce-camelCase ``Origin``; the
+        # config references it as Snowflake-style ``ORIGIN``.
+        parent = df_factory([
+            {"CASE_ID": "A", "Origin": "Web"},
+            {"CASE_ID": "B", "Origin": "Phone"},
+        ])
+        cfg = _base_config(
+            tracked_fields=("Origin",),
+            parent_value_columns=(("Origin", "ORIGIN"),),
+        )
+
+        out = _to_native(
+            reconstruct_scd_history_at_grid(history, grid_dates, cfg, parent)
+        )
+
+        # Case A: history change at grid_dates[2] propagates forward; before
+        # that, the parent fallback ("Web") applies.
+        assert _row_for(out, "A", grid_dates[0])["Origin"] == "Web"
+        assert _row_for(out, "A", grid_dates[2])["Origin"] == "Email"
+        # Case B: no history → parent fallback ("Phone") for every anchor.
+        assert _row_for(out, "B", grid_dates[0])["Origin"] == "Phone"
+        assert _row_for(out, "B", grid_dates[4])["Origin"] == "Phone"
+
+    def test_camelcase_config_resolves_to_uppercase_parent(
+        self, df_factory, grid_dates
+    ):
+        history = df_factory([
+            {
+                "CASE_HISTORY_ID": "h1",
+                "CASE_ID": "A",
+                "FIELD": "Status",
+                "OLD_VALUE": None,
+                "NEW_VALUE": "Open",
+                "CREATED_DATE": grid_dates[1],
+            }
+        ])
+        parent = df_factory([
+            {"CASE_ID": "A", "CASE_STATUS": "Pending"},
+        ])
+        # Config uses Salesforce camelCase ``case_status`` while the
+        # parent has the unquoted Snowflake ``CASE_STATUS``.
+        cfg = _base_config(
+            tracked_fields=("Status",),
+            parent_value_columns=(("Status", "case_status"),),
+        )
+
+        out = _to_native(
+            reconstruct_scd_history_at_grid(history, grid_dates, cfg, parent)
+        )
+
+        assert _row_for(out, "A", grid_dates[0])["Status"] == "Pending"
+        assert _row_for(out, "A", grid_dates[1])["Status"] == "Open"
+
+    def test_mixed_case_resolution_across_multiple_columns(
+        self, df_factory, grid_dates
+    ):
+        # Snowflake reality for SPS: CASE_STATUS / CASE_TYPE are unquoted
+        # (UPPERCASE) but Origin / Priority are quoted (camelCase).
+        history = df_factory([
+            {
+                "CASE_HISTORY_ID": "h1",
+                "CASE_ID": "A",
+                "FIELD": "Status",
+                "OLD_VALUE": None,
+                "NEW_VALUE": "Open",
+                "CREATED_DATE": grid_dates[0],
+            },
+            {
+                "CASE_HISTORY_ID": "h2",
+                "CASE_ID": "A",
+                "FIELD": "Type",
+                "OLD_VALUE": None,
+                "NEW_VALUE": "Support",
+                "CREATED_DATE": grid_dates[0],
+            },
+            {
+                "CASE_HISTORY_ID": "h3",
+                "CASE_ID": "A",
+                "FIELD": "Origin",
+                "OLD_VALUE": None,
+                "NEW_VALUE": "Web",
+                "CREATED_DATE": grid_dates[0],
+            },
+            {
+                "CASE_HISTORY_ID": "h4",
+                "CASE_ID": "A",
+                "FIELD": "Priority",
+                "OLD_VALUE": None,
+                "NEW_VALUE": "High",
+                "CREATED_DATE": grid_dates[0],
+            },
+        ])
+        parent = df_factory([
+            {
+                "CASE_ID": "A",
+                "CASE_STATUS": "ParentStatus",
+                "CASE_TYPE": "ParentType",
+                "Origin": "ParentOrigin",
+                "Priority": "ParentPriority",
+            },
+            {
+                "CASE_ID": "B",
+                "CASE_STATUS": "ParentStatus",
+                "CASE_TYPE": "ParentType",
+                "Origin": "ParentOrigin",
+                "Priority": "ParentPriority",
+            },
+        ])
+        cfg = _base_config(
+            tracked_fields=("Status", "Type", "Origin", "Priority"),
+            parent_value_columns=(
+                ("Status", "CASE_STATUS"),
+                ("Type", "CASE_TYPE"),
+                ("Origin", "ORIGIN"),
+                ("Priority", "PRIORITY"),
+            ),
+        )
+
+        out = _to_native(
+            reconstruct_scd_history_at_grid(history, grid_dates, cfg, parent)
+        )
+
+        # Case A: history at grid_dates[0] is the source of truth at every
+        # subsequent anchor (no later changes).
+        a_anchor = _row_for(out, "A", grid_dates[2])
+        assert a_anchor["Status"] == "Open"
+        assert a_anchor["Type"] == "Support"
+        assert a_anchor["Origin"] == "Web"
+        assert a_anchor["Priority"] == "High"
+        # Case B: no history → parent fallback resolved case-insensitively.
+        b_anchor = _row_for(out, "B", grid_dates[0])
+        assert b_anchor["Status"] == "ParentStatus"
+        assert b_anchor["Type"] == "ParentType"
+        assert b_anchor["Origin"] == "ParentOrigin"
+        assert b_anchor["Priority"] == "ParentPriority"
+
+    def test_unresolvable_parent_column_still_raises(
+        self, df_factory, grid_dates
+    ):
+        history = df_factory([
+            {
+                "CASE_HISTORY_ID": "h1",
+                "CASE_ID": "A",
+                "FIELD": "Origin",
+                "OLD_VALUE": None,
+                "NEW_VALUE": "Email",
+                "CREATED_DATE": grid_dates[1],
+            }
+        ])
+        parent = df_factory([
+            {"CASE_ID": "A", "OTHER_COL": "x"},
+        ])
+        cfg = _base_config(
+            tracked_fields=("Origin",),
+            parent_value_columns=(("Origin", "ORIGIN"),),
+        )
+
+        with pytest.raises(ValueError, match="ORIGIN"):
+            reconstruct_scd_history_at_grid(history, grid_dates, cfg, parent)
+
+
 class _FakeColumn:
     """Records the column expression for assertion."""
     def __init__(self, expr):

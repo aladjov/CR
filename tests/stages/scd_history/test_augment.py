@@ -171,3 +171,56 @@ class TestValidation:
 
         with pytest.raises(ValueError, match="CASE_ID"):
             augment_parent_with_scd_state(parent, state, "CASE_ID")
+
+
+class TestFailFastDuplicateGuards:
+    """Fail-fast guards: surface upstream column-name dupes at the augment
+    cell instead of letting them propagate to NB01 as ``[AMBIGUOUS_REFERENCE]``.
+    """
+
+    def test_parent_with_case_insensitive_duplicate_raises(self):
+        # Native pandas only — pandas allows duplicate column names; pyspark
+        # rejects them at construction time. The fail-fast guard runs in
+        # both backends and surfaces the same error message at the cell.
+        parent = native_pd.DataFrame(
+            [{"CASE_ID": "A", "x": 1, "y": 2}],
+        )
+        # Force a case-insensitive duplicate by overwriting columns directly.
+        parent.columns = ["CASE_ID", "ORIGIN", "Origin"]
+        state = native_pd.DataFrame(
+            [{"CASE_ID": "A", "as_of_date": T0, "Status": "Open"}]
+        )
+
+        with pytest.raises(ValueError, match="parent_df.*ORIGIN"):
+            augment_parent_with_scd_state(parent, state, "CASE_ID")
+
+    def test_state_view_with_case_insensitive_duplicate_raises(self):
+        parent = native_pd.DataFrame([{"CASE_ID": "A"}])
+        state = native_pd.DataFrame(
+            [{"CASE_ID": "A", "x": 1, "y": 2}],
+        )
+        state.columns = ["CASE_ID", "Status", "STATUS"]
+
+        with pytest.raises(ValueError, match="state_view.*STATUS|state_view.*Status"):
+            augment_parent_with_scd_state(parent, state, "CASE_ID")
+
+    def test_collision_drops_all_case_variants_from_parent(self):
+        # Pandas-only: parent has BOTH ``ORIGIN`` and ``Origin``, state has
+        # ``Origin``. Both parent variants must be dropped — the state view
+        # is the source of truth — and the output must be free of duplicates.
+        parent = native_pd.DataFrame(
+            [{"CASE_ID": "A", "x": 1, "y": 2, "z": "Alice"}]
+        )
+        parent.columns = ["CASE_ID", "ORIGIN", "Origin", "OWNER_NAME"]
+        state = native_pd.DataFrame(
+            [{"CASE_ID": "A", "as_of_date": T0, "Origin": "Email"}]
+        )
+
+        out = augment_parent_with_scd_state(parent, state, "CASE_ID")
+
+        cols_lower = [str(c).lower() for c in out.columns]
+        assert cols_lower.count("origin") == 1, (
+            f"output should have exactly one origin column, got {list(out.columns)}"
+        )
+        assert "OWNER_NAME" in out.columns
+        assert out.iloc[0]["Origin"] == "Email"

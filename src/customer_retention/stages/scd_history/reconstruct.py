@@ -242,24 +242,55 @@ def _apply_parent_fallback_pandas(
     field_name: str,
     parent_column: str,
 ) -> native_pd.DataFrame:
-    if parent_column not in parent_df.columns:
-        raise ValueError(
-            f"parent_value_columns references column {parent_column!r} for "
-            f"tracked field {field_name!r} but it is not present in the parent "
-            f"dataset {config.parent_table_dataset_name!r}"
-        )
+    resolved = _resolve_parent_column_or_raise(
+        parent_df, parent_column, field_name, config
+    )
+    fallback_alias = f"__parent__{field_name}__"
     parent_subset = safe_drop_duplicates(
-        parent_df[[config.parent_record_key, parent_column]],
+        parent_df[[config.parent_record_key, resolved]],
         subset=[config.parent_record_key],
         keep="last",
-    )
+    ).rename(columns={resolved: fallback_alias})
     merged = per_field.merge(
         parent_subset, on=config.parent_record_key, how="left"
     )
     merged[field_name] = merged[field_name].where(
-        merged[field_name].notna(), merged[parent_column]
+        merged[field_name].notna(), merged[fallback_alias]
     )
-    return merged.drop(columns=[parent_column])
+    return merged.drop(columns=[fallback_alias])
+
+
+def _resolve_parent_column(parent_columns: Sequence[str], requested: str) -> Optional[str]:
+    """Return the parent column whose name matches ``requested`` case-insensitively.
+
+    Snowflake-sourced parent tables routinely mix unquoted UPPERCASE columns
+    with quoted-identifier camelCase columns. Users should not have to know
+    the warehouse's quoting history when configuring ``parent_value_columns``.
+    """
+    if requested in parent_columns:
+        return requested
+    lowered = requested.lower()
+    for actual in parent_columns:
+        if str(actual).lower() == lowered:
+            return actual
+    return None
+
+
+def _resolve_parent_column_or_raise(
+    parent_df: Any,
+    parent_column: str,
+    field_name: str,
+    config: SCDHistoryReconstructionConfig,
+) -> str:
+    resolved = _resolve_parent_column(list(parent_df.columns), parent_column)
+    if resolved is None:
+        raise ValueError(
+            f"parent_value_columns references column {parent_column!r} for "
+            f"tracked field {field_name!r} but it is not present in the parent "
+            f"dataset {config.parent_table_dataset_name!r} (resolution is "
+            f"case-insensitive)"
+        )
+    return resolved
 
 
 # ---------------------------------------------------------------------------
@@ -405,23 +436,28 @@ def _apply_parent_fallbacks_distributed(
 ) -> Any:
     from pyspark.sql import functions as F  # noqa: N812
 
-    missing = [
-        parent_column
-        for _, parent_column in applicable
-        if parent_column not in spark_parent.columns
-    ]
+    parent_columns = list(spark_parent.columns)
+    resolved_pairs: List[tuple] = []
+    missing: List[str] = []
+    for field_name, parent_column in applicable:
+        resolved = _resolve_parent_column(parent_columns, parent_column)
+        if resolved is None:
+            missing.append(parent_column)
+        else:
+            resolved_pairs.append((field_name, resolved))
     if missing:
         raise ValueError(
             f"parent_value_columns reference column(s) {missing} that are not "
-            f"present in the parent dataset {config.parent_table_dataset_name!r}"
+            f"present in the parent dataset {config.parent_table_dataset_name!r} "
+            f"(resolution is case-insensitive)"
         )
 
     select_cols = [F.col(config.parent_record_key)]
     aliases: dict[str, str] = {}
-    for field_name, parent_column in applicable:
+    for field_name, resolved in resolved_pairs:
         alias = f"__parent__{field_name}__"
         aliases[field_name] = alias
-        select_cols.append(F.col(parent_column).cast("string").alias(alias))
+        select_cols.append(F.col(resolved).cast("string").alias(alias))
 
     parent_subset = spark_parent.select(*select_cols).dropDuplicates(
         [config.parent_record_key]
