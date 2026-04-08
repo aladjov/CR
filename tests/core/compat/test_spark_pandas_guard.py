@@ -25,6 +25,7 @@ TEMPORAL_DIR = _STAGES_ROOT / "temporal"
 MODELING_DIR = _STAGES_ROOT / "modeling"
 VALIDATION_DIR = _STAGES_ROOT / "validation"
 LIFECYCLE_DIR = _STAGES_ROOT / "lifecycle"
+SCD_HISTORY_DIR = _STAGES_ROOT / "scd_history"
 AUTO_EXPLORER_DIR = _SRC_ROOT / "analysis" / "auto_explorer"
 RECOMMENDATIONS_DIR = _SRC_ROOT / "analysis" / "recommendations"
 DISCOVERY_DIR = _SRC_ROOT / "analysis" / "discovery"
@@ -228,6 +229,13 @@ def _collect_lifecycle_files() -> list[Path]:
     )
 
 
+def _collect_scd_history_files() -> list[Path]:
+    return sorted(
+        p for p in SCD_HISTORY_DIR.glob("*.py")
+        if p.name not in ALLOWLISTED_FILES and not p.name.startswith("__")
+    )
+
+
 def _collect_auto_explorer_files() -> list[Path]:
     return sorted(
         p for p in AUTO_EXPLORER_DIR.glob("*.py")
@@ -296,6 +304,11 @@ def test_no_dangerous_spark_pandas_patterns_lifecycle(source_file: Path):
     _check_file(source_file)
 
 
+@pytest.mark.parametrize("source_file", _collect_scd_history_files(), ids=lambda p: p.name)
+def test_no_dangerous_spark_pandas_patterns_scd_history(source_file: Path):
+    _check_file(source_file)
+
+
 @pytest.mark.parametrize("source_file", _collect_auto_explorer_files(), ids=lambda p: p.name)
 def test_no_dangerous_spark_pandas_patterns_auto_explorer(source_file: Path):
     _check_file(source_file)
@@ -322,6 +335,7 @@ def _already_covered_files() -> set[Path]:
         _collect_profiling_files, _collect_features_files, _collect_temporal_files,
         _collect_modeling_files, _collect_validation_files, _collect_auto_explorer_files,
         _collect_guarded_analysis_and_adapter_files, _collect_lifecycle_files,
+        _collect_scd_history_files,
     ]:
         covered.update(collector())
     return covered

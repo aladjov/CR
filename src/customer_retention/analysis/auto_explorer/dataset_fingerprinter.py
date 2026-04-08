@@ -54,10 +54,13 @@ class DatasetFingerprinter:
         df = self._load(data)
         sampled = len(df) < full_row_count
 
+        self._validate_known_column(name, "entity_column", known_entity_column, df.columns)
+        self._validate_known_column(name, "time_column", known_time_column, df.columns)
+
         all_known = known_entity_column and known_time_column and known_granularity
         if all_known:
-            entity_columns = [known_entity_column] if known_entity_column in df.columns else []
-            time_columns = [known_time_column] if known_time_column in df.columns else []
+            entity_columns = [known_entity_column]
+            time_columns = [known_time_column]
             target_candidates: list[str] = []
             granularity = known_granularity
             best_entity = known_entity_column
@@ -112,6 +115,20 @@ class DatasetFingerprinter:
             data_start=data_start,
             data_end=data_end,
             sampled=sampled,
+        )
+
+    @staticmethod
+    def _validate_known_column(dataset_name: str, kind: str, column: Optional[str], available) -> None:
+        if column is None or column in available:
+            return
+        raise ValueError(
+            f"Configured {kind} '{column}' for dataset '{dataset_name}' is not present "
+            f"in the loaded data. Available columns: {list(available)}. "
+            f"This typically means the column was dropped or renamed by an upstream transform "
+            f"(e.g., lifecycle enrichment replaces the raw start-date column with 'event_timestamp', "
+            f"and DROP_COLUMNS in NB01 removes any column listed in it). "
+            f"Update the semantics_overrides cell in NB00 to point at a column that survives "
+            f"the transforms applied before landing."
         )
 
     def fingerprint_all(self, datasets: dict[str, pd.DataFrame | str | Path]) -> dict[str, DatasetFingerprint]:

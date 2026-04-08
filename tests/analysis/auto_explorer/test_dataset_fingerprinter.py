@@ -453,6 +453,95 @@ class TestFingerprinterWithHints:
         assert fp.time_column == "event_timestamp"
 
 
+class TestFingerprinterValidatesKnownColumns:
+    """Reproduces the SPS lifecycle-enrichment regression: when an upstream
+    transform (e.g., `enrich_contract_lifecycle`) drops the raw start-date
+    column and replaces it with `event_timestamp`, a stale semantics override
+    that still references the raw column must be rejected at fingerprint time
+    instead of silently propagating into findings and exploding two notebooks
+    later in `column_configuration`.
+    """
+
+    @staticmethod
+    def _doubled_contract_df():
+        return pd.DataFrame({
+            "ACCOUNT_ID": ["A1", "A1", "A2"],
+            "CONTRACT_TERM": [12, 12, 24],
+            "event_type": ["start", "terminate", "start"],
+            "event_timestamp": pd.to_datetime(["2024-01-01", "2024-06-01", "2024-02-01"]),
+        })
+
+    def test_missing_known_time_column_raises_with_diagnostic_message(self):
+        with pytest.raises(ValueError, match="time_column 'CONTRACT_START_DATE'"):
+            DatasetFingerprinter().fingerprint(
+                "contract", self._doubled_contract_df(),
+                known_entity_column="ACCOUNT_ID",
+                known_time_column="CONTRACT_START_DATE",
+                known_granularity=DatasetGranularity.EVENT_LEVEL,
+            )
+
+    def test_missing_known_time_column_error_lists_available_columns(self):
+        with pytest.raises(ValueError) as excinfo:
+            DatasetFingerprinter().fingerprint(
+                "contract", self._doubled_contract_df(),
+                known_entity_column="ACCOUNT_ID",
+                known_time_column="CONTRACT_START_DATE",
+                known_granularity=DatasetGranularity.EVENT_LEVEL,
+            )
+        msg = str(excinfo.value)
+        assert "ACCOUNT_ID" in msg
+        assert "event_timestamp" in msg
+        assert "event_type" in msg
+
+    def test_missing_known_time_column_error_mentions_lifecycle_enrichment(self):
+        with pytest.raises(ValueError, match="lifecycle enrichment"):
+            DatasetFingerprinter().fingerprint(
+                "contract", self._doubled_contract_df(),
+                known_entity_column="ACCOUNT_ID",
+                known_time_column="CONTRACT_START_DATE",
+                known_granularity=DatasetGranularity.EVENT_LEVEL,
+            )
+
+    def test_missing_known_entity_column_raises(self):
+        with pytest.raises(ValueError, match="entity_column 'CUSTOMER_ID'"):
+            DatasetFingerprinter().fingerprint(
+                "events", _event_level_df(),
+                known_entity_column="CUSTOMER_ID",
+                known_time_column="event_timestamp",
+                known_granularity=DatasetGranularity.EVENT_LEVEL,
+            )
+
+    def test_missing_known_time_column_without_granularity_still_raises(self):
+        with pytest.raises(ValueError, match="time_column 'missing_ts'"):
+            DatasetFingerprinter().fingerprint(
+                "events", _event_level_df(),
+                known_time_column="missing_ts",
+            )
+
+    def test_missing_known_entity_column_without_granularity_still_raises(self):
+        with pytest.raises(ValueError, match="entity_column 'missing_id'"):
+            DatasetFingerprinter().fingerprint(
+                "events", _event_level_df(),
+                known_entity_column="missing_id",
+            )
+
+    def test_validation_passes_when_known_columns_present(self):
+        fp = DatasetFingerprinter().fingerprint(
+            "contract", self._doubled_contract_df(),
+            known_entity_column="ACCOUNT_ID",
+            known_time_column="event_timestamp",
+            known_granularity=DatasetGranularity.EVENT_LEVEL,
+        )
+        assert fp.entity_column == "ACCOUNT_ID"
+        assert fp.time_column == "event_timestamp"
+        assert fp.granularity == DatasetGranularity.EVENT_LEVEL
+
+    def test_none_known_columns_skip_validation(self):
+        fp = DatasetFingerprinter().fingerprint("events", _event_level_df())
+        assert fp.entity_column == "customer_id"
+        assert fp.time_column == "event_timestamp"
+
+
 class TestFingerprintAllSkipsInaccessible:
     def _mock_spark(self, monkeypatch, mock_spark):
         monkeypatch.setattr(DatasetFingerprinter, "_ensure_spark", staticmethod(lambda: mock_spark))
