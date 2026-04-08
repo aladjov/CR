@@ -196,6 +196,7 @@ class TestDistributedChiSquaredSelection:
         assert all("chi_squared" in r for r in reasons.values())
 
     def test_spark_chi_squared_no_drop_when_all_selected(self):
+        pytest.importorskip("pyspark")
         from unittest.mock import MagicMock
 
         from customer_retention.stages.features.feature_selector import _spark_chi_squared_selection

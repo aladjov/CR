@@ -959,6 +959,7 @@ class TestTemporalSplitGroupColumnRequired:
             splitter.split(sample_df)
 
     def test_spark_path_temporal_without_group_column_raises(self):
+        pytest.importorskip("pyspark")
         from unittest.mock import MagicMock, patch
 
         splitter = DataSplitter(
@@ -978,6 +979,10 @@ class TestTemporalSplitGroupColumnRequired:
 
 class TestSplitSparkDispatchByStrategy:
     """Verify _split_spark dispatches each strategy and merges availability warnings."""
+
+    @pytest.fixture(autouse=True)
+    def _require_pyspark(self):
+        pytest.importorskip("pyspark")
 
     def _build_mock_spark_df(self, *, min_count=200):
         from unittest.mock import MagicMock

@@ -976,6 +976,10 @@ class TestClassifyColumnsSpark:
 
 
 class TestDropMissingTargetSpark:
+    @pytest.fixture(autouse=True)
+    def _require_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def test_drops_rows_with_null_target(self, preparator):
         from unittest.mock import MagicMock, patch
 
@@ -1035,6 +1039,7 @@ class TestDropMissingTargetSpark:
 
 class TestSampleEntitiesSpark:
     def test_returns_input_when_under_limit(self, feature_cols):
+        pytest.importorskip("pyspark")
         from unittest.mock import MagicMock, patch
 
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
@@ -1053,6 +1058,7 @@ class TestSampleEntitiesSpark:
         assert result is fake_input
 
     def test_samples_when_over_limit(self, feature_cols):
+        pytest.importorskip("pyspark")
         from unittest.mock import MagicMock, patch
 
         from customer_retention.stages.modeling.training_preparator import TrainingPreparator
@@ -1206,6 +1212,7 @@ class TestDropMissingTargetRows:
         assert not result["target"].isna().any()
 
     def test_spark_path_uses_filter(self):
+        pytest.importorskip("pyspark")
         from unittest.mock import MagicMock, patch
 
         from customer_retention.stages.modeling.training_preparator import _drop_missing_target_rows

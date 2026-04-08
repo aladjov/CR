@@ -252,7 +252,11 @@ class FeatureSelector:
         max_coefs = coefs.max(axis=0) if coefs.ndim == 2 else coefs
 
         self.importance_scores = {numeric_features[i]: float(max_coefs[i]) for i in range(len(numeric_features))}
-        zero_features = [numeric_features[i] for i in range(len(numeric_features)) if max_coefs[i] == 0.0]
+        # L1 with saga solver may not produce exact zeros for noise features; use a relative
+        # threshold (1% of the strongest signal) so weak features get dropped consistently.
+        max_signal = float(max_coefs.max()) if len(max_coefs) else 0.0
+        drop_threshold = max_signal * 0.01
+        zero_features = [numeric_features[i] for i in range(len(numeric_features)) if max_coefs[i] <= drop_threshold]
         if len(zero_features) == len(numeric_features):
             return
         for feature in zero_features:

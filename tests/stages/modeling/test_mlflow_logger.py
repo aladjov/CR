@@ -214,6 +214,7 @@ class TestMLflowLoggerModel:
 
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
     def test_logs_spark_wrapper_uses_spark_flavor(self, mock_mlflow):
+        pytest.importorskip("pyspark")
         logger = MLflowLogger(experiment_name="test")
         mock_model = MagicMock()
         mock_model.as_pipeline_model = MagicMock(return_value=MagicMock())
@@ -233,6 +234,7 @@ class TestMLflowLoggerModel:
     @patch("customer_retention.stages.modeling.mlflow_logger.get_mlflow_dfs_tmpdir", return_value="/Volumes/cat/sch/mlflow_tmp")
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
     def test_spark_model_passes_dfs_tmpdir_on_databricks(self, mock_mlflow, _mock_tmpdir):
+        pytest.importorskip("pyspark")
         logger = MLflowLogger(experiment_name="test")
         mock_model = MagicMock()
         mock_model.as_pipeline_model = MagicMock(return_value=MagicMock())
@@ -251,6 +253,7 @@ class TestMLflowLoggerModel:
     @patch("customer_retention.stages.modeling.mlflow_logger.get_mlflow_dfs_tmpdir", return_value=None)
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
     def test_spark_model_no_dfs_tmpdir_locally(self, mock_mlflow, _mock_tmpdir):
+        pytest.importorskip("pyspark")
         logger = MLflowLogger(experiment_name="test")
         mock_model = MagicMock()
         mock_model.as_pipeline_model = MagicMock(return_value=MagicMock())
@@ -280,6 +283,7 @@ class TestMLflowLoggerModel:
     @patch("customer_retention.stages.modeling.mlflow_logger.get_mlflow_dfs_tmpdir", return_value=None)
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
     def test_spark_model_passes_pip_requirements(self, mock_mlflow, _mock_tmpdir):
+        pytest.importorskip("pyspark")
         logger = MLflowLogger(experiment_name="test")
         mock_model = MagicMock()
         mock_model.as_pipeline_model = MagicMock(return_value=MagicMock())
@@ -298,6 +302,7 @@ class TestMLflowLoggerModel:
     @patch("customer_retention.stages.modeling.mlflow_logger.get_mlflow_dfs_tmpdir", return_value=None)
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
     def test_spark_model_passes_signature(self, mock_mlflow, _mock_tmpdir):
+        pytest.importorskip("pyspark")
         logger = MLflowLogger(experiment_name="test")
         mock_model = MagicMock()
         mock_model.as_pipeline_model = MagicMock(return_value=MagicMock())
@@ -341,6 +346,7 @@ class TestMLflowLoggerLogModelReturnsInfo:
     @patch("customer_retention.stages.modeling.mlflow_logger.get_mlflow_dfs_tmpdir", return_value=None)
     @patch("customer_retention.stages.modeling.mlflow_logger.mlflow")
     def test_spark_returns_logged_model_info(self, mock_mlflow, _mock_tmpdir):
+        pytest.importorskip("pyspark")
         mock_info = MagicMock()
         mock_info.model_uri = "runs:/xyz789/model_gbt"
         mock_info.run_id = "xyz789"

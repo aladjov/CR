@@ -426,6 +426,7 @@ class TestPredictIntegration:
     @patch(f"{_MOD}._make_assembler")
     @patch(f"{_MOD}._get_spark_session")
     def test_predict_proba_uses_vector_to_array(self, mock_get_spark, mock_make_asm, binary_data):
+        pytest.importorskip("pyspark")
         X, _ = binary_data
         mock_spark = MagicMock()
         mock_get_spark.return_value = mock_spark
@@ -468,6 +469,10 @@ class TestPredictIntegration:
 
 
 class TestEvaluateDistributed:
+    @pytest.fixture(autouse=True)
+    def _require_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def test_uses_spark_evaluators_without_collecting(self):
         mock_fitted = MagicMock()
         mock_predictions = MagicMock()
@@ -547,6 +552,10 @@ class TestEvaluateDistributed:
 
 
 class TestAsPipelineModel:
+    @pytest.fixture(autouse=True)
+    def _require_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def test_unfitted_raises(self):
         wrapper = SparkClassifierWrapper(
             spark_model_class="LogisticRegression",

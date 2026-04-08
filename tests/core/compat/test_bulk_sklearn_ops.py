@@ -299,6 +299,7 @@ class TestBulkMedianImpute:
 
 class TestSparkBulkMedianImpute:
     def test_uses_batched_agg_not_stacking(self):
+        pytest.importorskip("pyspark")
         from unittest.mock import MagicMock, patch
 
         from customer_retention.core.compat import _spark_bulk_median_impute
@@ -327,6 +328,7 @@ class TestSparkBulkMedianImpute:
             mock_stacked.assert_not_called()
 
     def test_no_nulls_skips_median_computation(self):
+        pytest.importorskip("pyspark")
         from unittest.mock import MagicMock, patch
 
         from customer_retention.core.compat import _spark_bulk_median_impute
