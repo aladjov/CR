@@ -173,6 +173,59 @@ class TestValidation:
             augment_parent_with_scd_state(parent, state, "CASE_ID")
 
 
+class TestIdempotencyOnRerun:
+    """The augment cell is rerun-safe: when a user re-executes only the
+    0.11.5 cell after a previous successful run, ``datasets["case"]`` still
+    points to the previously-augmented view (it carries ``as_of_date`` and
+    every tracked field). The helper must drop ALL state-view columns from
+    the parent — not just the configured tracked fields — so that the
+    re-run produces a clean output instead of duplicating ``as_of_date``.
+    """
+
+    def test_rerun_with_previously_augmented_parent(self, df_factory):
+        # Simulate the second invocation: ``parent`` already carries the
+        # output schema of a prior augmentation run.
+        previously_augmented_parent = df_factory([
+            {
+                "CASE_ID": "A",
+                "OWNER_NAME": "Alice",
+                "as_of_date": T0,
+                "Status": "Open",
+                "Origin": "Web",
+            },
+            {
+                "CASE_ID": "A",
+                "OWNER_NAME": "Alice",
+                "as_of_date": T0 + 30 * DAY,
+                "Status": "Closed",
+                "Origin": "Web",
+            },
+        ])
+        # Fresh state view from a re-reconstruction step.
+        state = df_factory([
+            {"CASE_ID": "A", "as_of_date": T0, "Status": "Reopened", "Origin": "Phone"},
+            {"CASE_ID": "A", "as_of_date": T0 + 30 * DAY, "Status": "Closed", "Origin": "Phone"},
+        ])
+
+        out = _to_native(
+            augment_parent_with_scd_state(
+                previously_augmented_parent, state, "CASE_ID"
+            )
+        )
+
+        # No case-insensitive duplicates anywhere.
+        cols_lower = [str(c).lower() for c in out.columns]
+        assert len(cols_lower) == len(set(cols_lower)), (
+            f"output has duplicates after re-run: {list(out.columns)}"
+        )
+        # State view is the source of truth — its values win.
+        assert "as_of_date" in out.columns
+        assert "OWNER_NAME" in out.columns
+        # Re-running and re-augmenting should yield the state-view values.
+        assert set(out["Status"].dropna()) == {"Reopened", "Closed"}
+        assert set(out["Origin"].dropna()) == {"Phone"}
+
+
 class TestFailFastDuplicateGuards:
     """Fail-fast guards: surface upstream column-name dupes at the augment
     cell instead of letting them propagate to NB01 as ``[AMBIGUOUS_REFERENCE]``.

@@ -1737,8 +1737,29 @@ def load_spark_table(source: str) -> Any:
 
 
 def register_temp_view(spark_df: Any, view_name: str) -> str:
+    _assert_no_case_insensitive_duplicate_columns(spark_df, view_name)
     spark_df.createOrReplaceGlobalTempView(view_name)
     return f"global_temp.{view_name}"
+
+
+def _assert_no_case_insensitive_duplicate_columns(spark_df: Any, view_name: str) -> None:
+    columns = list(getattr(spark_df, "columns", ()))
+    if not columns:
+        return
+    seen: dict[str, list[str]] = {}
+    for c in columns:
+        seen.setdefault(str(c).lower(), []).append(str(c))
+    duplicates = sorted(
+        name for variants in seen.values() if len(variants) > 1 for name in variants
+    )
+    if duplicates:
+        raise ValueError(
+            f"register_temp_view({view_name!r}): DataFrame has case-insensitive "
+            f"duplicate columns: {duplicates}. Spark resolves column names "
+            f"case-insensitively by default, so any downstream `F.col(name)` "
+            f"or `as_pandas_api()` call would raise [AMBIGUOUS_REFERENCE]. "
+            f"Drop or rename the offending columns before registering the view."
+        )
 
 
 _stage_objects: list[Any] = []

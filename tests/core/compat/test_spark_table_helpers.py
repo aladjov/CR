@@ -28,22 +28,46 @@ class TestLoadSparkTable:
 
 
 class TestRegisterTempView:
+    def _fake_sdf(self, columns):
+        sdf = MagicMock()
+        sdf.columns = columns
+        return sdf
+
     def test_returns_qualified_global_temp_name(self):
-        mock_sdf = MagicMock()
+        mock_sdf = self._fake_sdf(["ACCOUNT_ID", "churned"])
         result = register_temp_view(mock_sdf, "enriched_account")
         assert result == "global_temp.enriched_account"
         mock_sdf.createOrReplaceGlobalTempView.assert_called_once_with("enriched_account")
 
     def test_qualified_name_recognized_by_is_table_name(self):
         from customer_retention.analysis.auto_explorer.dataset_fingerprinter import is_table_name
-        mock_sdf = MagicMock()
+        mock_sdf = self._fake_sdf(["ACCOUNT_ID"])
         name = register_temp_view(mock_sdf, "enriched_account")
         assert is_table_name(name)
 
     def test_different_view_names(self):
-        mock_sdf = MagicMock()
-        assert register_temp_view(mock_sdf, "foo") == "global_temp.foo"
-        assert register_temp_view(mock_sdf, "bar_baz") == "global_temp.bar_baz"
+        assert register_temp_view(self._fake_sdf(["x"]), "foo") == "global_temp.foo"
+        assert register_temp_view(self._fake_sdf(["x"]), "bar_baz") == "global_temp.bar_baz"
+
+    def test_raises_on_case_insensitive_duplicate_columns(self):
+        # Idempotency / collision guard: catches the bug at the registration
+        # site, not 6 cells later when as_pandas_api iterates the schema and
+        # the case-insensitive Spark resolver raises [AMBIGUOUS_REFERENCE].
+        mock_sdf = self._fake_sdf(["CASE_ID", "as_of_date", "as_of_date", "Status"])
+        with pytest.raises(ValueError, match="case-insensitive duplicate columns"):
+            register_temp_view(mock_sdf, "broken_view")
+        mock_sdf.createOrReplaceGlobalTempView.assert_not_called()
+
+    def test_raises_on_mixed_case_duplicate(self):
+        mock_sdf = self._fake_sdf(["CASE_ID", "Origin", "ORIGIN"])
+        with pytest.raises(ValueError, match="ORIGIN.*Origin|Origin.*ORIGIN"):
+            register_temp_view(mock_sdf, "broken_view")
+
+    def test_empty_columns_does_not_raise(self):
+        # Defensive: an empty schema should not crash the registration call.
+        mock_sdf = self._fake_sdf([])
+        register_temp_view(mock_sdf, "empty_view")
+        mock_sdf.createOrReplaceGlobalTempView.assert_called_once_with("empty_view")
 
 
 class TestAsPandasApi:
