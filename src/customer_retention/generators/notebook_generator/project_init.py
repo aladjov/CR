@@ -11,6 +11,7 @@ class ProjectInitializer:
     generate_orchestration: bool = False
     platforms: Optional[List[str]] = None
     exploration_notebooks_path: str = "exploration_notebooks"
+    experiments_path: str = "experiments"
 
     def initialize(self, output_dir: str) -> Dict[str, any]:
         project_path = Path(output_dir)
@@ -30,18 +31,19 @@ class ProjectInitializer:
         }
 
     def _create_directories(self, project_path: Path) -> None:
+        exp = self.experiments_path
         directories = [
             self.exploration_notebooks_path,
             "generated_pipelines/local",
             "generated_pipelines/databricks",
-            "experiments/findings",
-            "experiments/data/bronze",
-            "experiments/data/silver",
-            "experiments/data/gold",
-            "experiments/data/models",
-            "experiments/data/predictions",
-            "experiments/mlruns",
-            "experiments/feature_store",
+            f"{exp}/findings",
+            f"{exp}/data/bronze",
+            f"{exp}/data/silver",
+            f"{exp}/data/gold",
+            f"{exp}/data/models",
+            f"{exp}/data/predictions",
+            f"{exp}/mlruns",
+            f"{exp}/feature_store",
         ]
         for directory in directories:
             (project_path / directory).mkdir(parents=True, exist_ok=True)
@@ -96,11 +98,11 @@ results = generate_orchestration_notebooks(
         return gitignore_path
 
     def _gitignore_content(self) -> str:
-        return """.venv/
+        return f""".venv/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
-experiments/
+{self.experiments_path}/
 *.egg-info/
 dist/
 build/
@@ -188,10 +190,12 @@ def initialize_project(
     project_name: str,
     generate_orchestration: bool = False,
     exploration_notebooks_path: str = "exploration_notebooks",
+    experiments_path: str = "experiments",
 ) -> Dict[str, any]:
     initializer = ProjectInitializer(
         project_name=project_name,
         generate_orchestration=generate_orchestration,
         exploration_notebooks_path=exploration_notebooks_path,
+        experiments_path=experiments_path,
     )
     return initializer.initialize(output_dir)

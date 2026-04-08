@@ -508,7 +508,7 @@ class TestEnsureExperimentsVolumeExists:
             from customer_retention.integrations.databricks_init import databricks_init
 
             databricks_init(catalog="churnkit", schema="analysis", copy_notebooks=False)
-        mock_ensure.assert_called_once_with("churnkit", "analysis")
+        mock_ensure.assert_called_once_with("churnkit", "analysis", "experiments")
 
 
 class TestEnsureWorkspaceDirectory:
@@ -1286,3 +1286,95 @@ class TestExplorationNotebooksPathParameter:
         databricks_init(exploration_notebooks_path="my_team_notebooks", copy_notebooks=False)
         captured = capsys.readouterr()
         assert "my_team_notebooks" in captured.out
+
+
+class TestExperimentsPathParameter:
+    def test_default_path_used_for_env_var(self, monkeypatch, databricks_env):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        databricks_init(catalog="churnkit", schema="prod", copy_notebooks=False)
+        assert os.environ["CR_EXPERIMENTS_DIR"] == "/Volumes/churnkit/prod/experiments"
+
+    def test_custom_path_used_for_env_var(self, monkeypatch, databricks_env):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        databricks_init(
+            catalog="churnkit", schema="prod",
+            experiments_path="experiments_secondary", copy_notebooks=False,
+        )
+        assert os.environ["CR_EXPERIMENTS_DIR"] == "/Volumes/churnkit/prod/experiments_secondary"
+
+    def test_result_exposes_experiments_path(self, monkeypatch, databricks_env):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        result = databricks_init(experiments_path="experiments_secondary", copy_notebooks=False)
+        assert result.experiments_path == "experiments_secondary"
+
+    def test_result_default_experiments_path(self, monkeypatch, databricks_env):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        result = databricks_init(copy_notebooks=False)
+        assert result.experiments_path == "experiments"
+
+    def test_result_environment_variables_use_custom_path(self, monkeypatch, databricks_env):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        result = databricks_init(
+            catalog="analytics", schema="churn",
+            experiments_path="experiments_secondary", copy_notebooks=False,
+        )
+        env_vars = result.environment_variables
+        assert env_vars["CR_EXPERIMENTS_DIR"] == "/Volumes/analytics/churn/experiments_secondary"
+
+    def test_volume_creation_uses_custom_path(self, databricks_env):
+        with patch("customer_retention.integrations.databricks_init._ensure_experiments_volume_exists") as mock_ensure:
+            from customer_retention.integrations.databricks_init import databricks_init
+
+            databricks_init(
+                catalog="churnkit", schema="analysis",
+                experiments_path="experiments_secondary", copy_notebooks=False,
+            )
+        mock_ensure.assert_called_once_with("churnkit", "analysis", "experiments_secondary")
+
+    def test_ensure_experiments_volume_creates_custom_volume(self, databricks_env):
+        mock_spark = MagicMock()
+        with patch("customer_retention.core.compat.detection.get_spark_session", return_value=mock_spark):
+            from customer_retention.integrations.databricks_init import _ensure_experiments_volume_exists
+
+            _ensure_experiments_volume_exists("churnkit", "analysis", "experiments_secondary")
+        sql_calls = [call.args[0] for call in mock_spark.sql.call_args_list]
+        assert "CREATE SCHEMA IF NOT EXISTS `churnkit`.`analysis`" in sql_calls
+        assert "CREATE VOLUME IF NOT EXISTS `churnkit`.`analysis`.`experiments_secondary`" in sql_calls
+
+    def test_persisted_config_uses_custom_path(self, monkeypatch, databricks_env, tmp_path):
+        config_file = tmp_path / ".churnkit_config.json"
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        databricks_init(
+            catalog="churnkit", schema="analysis", workspace_path="Users/me/proj",
+            experiments_path="experiments_secondary", copy_notebooks=False,
+        )
+        data = json.loads(config_file.read_text())
+        assert data["experiments_dir"] == "/Volumes/churnkit/analysis/experiments_secondary"
+
+    def test_display_summary_shows_custom_experiments_path(self, monkeypatch, databricks_env, capsys):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        databricks_init(
+            catalog="churnkit", schema="prod",
+            experiments_path="experiments_secondary", copy_notebooks=False,
+        )
+        captured = capsys.readouterr()
+        assert "experiments_secondary" in captured.out
+        assert "/Volumes/churnkit/prod/experiments_secondary" in captured.out
+
+    def test_display_summary_default_experiments_path(self, monkeypatch, databricks_env, capsys):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        databricks_init(catalog="main", schema="default", copy_notebooks=False)
+        captured = capsys.readouterr()
+        assert "/Volumes/main/default/experiments" in captured.out

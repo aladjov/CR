@@ -50,6 +50,11 @@ Examples:
         default="exploration_notebooks",
         help="Path (folder or nested subpath) for exploration notebooks (default: exploration_notebooks)",
     )
+    parser.add_argument(
+        "--experiments-path",
+        default="experiments",
+        help="Path (folder name) for the experiments volume — set per cluster to enable parallel runs (default: experiments)",
+    )
 
     args = parser.parse_args()
 
@@ -74,6 +79,7 @@ Examples:
             project_name=args.name or output_dir.name,
             platforms=platforms,
             exploration_notebooks_path=args.exploration_notebooks_path,
+            experiments_path=args.experiments_path,
         )
         initializer.initialize(str(output_dir))
 
@@ -82,7 +88,7 @@ Examples:
         print("=" * 50)
         print("\nNext steps:")
         print(f"  1. cd {output_dir}")
-        print("  2. Add your data to experiments/data/")
+        print(f"  2. Add your data to {args.experiments_path}/data/")
         print(f"  3. Open {args.exploration_notebooks_path}/01_data_discovery.ipynb")
         print("  4. Set DATA_PATH to your data file")
         print("  5. Run all cells - auto-discovery will do the rest!")

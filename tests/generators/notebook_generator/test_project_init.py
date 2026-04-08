@@ -206,3 +206,52 @@ class TestExplorationNotebooksPathParameter:
             str(project_dir), project_name="proj", exploration_notebooks_path="custom_nb",
         )
         assert (project_dir / "custom_nb").is_dir()
+
+
+class TestExperimentsPathParameter:
+    def test_default_path_is_experiments(self, tmp_path):
+        from customer_retention.generators.notebook_generator.project_init import ProjectInitializer
+        project_dir = tmp_path / "proj"
+        ProjectInitializer(project_name="proj").initialize(str(project_dir))
+        assert (project_dir / "experiments" / "data" / "bronze").is_dir()
+        assert (project_dir / "experiments" / "findings").is_dir()
+        assert (project_dir / "experiments" / "mlruns").is_dir()
+
+    def test_custom_path_creates_directory(self, tmp_path):
+        from customer_retention.generators.notebook_generator.project_init import ProjectInitializer
+        project_dir = tmp_path / "proj"
+        ProjectInitializer(
+            project_name="proj", experiments_path="experiments_secondary",
+        ).initialize(str(project_dir))
+        assert (project_dir / "experiments_secondary" / "data" / "bronze").is_dir()
+        assert (project_dir / "experiments_secondary" / "findings").is_dir()
+        assert (project_dir / "experiments_secondary" / "mlruns").is_dir()
+        assert not (project_dir / "experiments").exists()
+
+    def test_custom_path_creates_all_subdirs(self, tmp_path):
+        from customer_retention.generators.notebook_generator.project_init import ProjectInitializer
+        project_dir = tmp_path / "proj"
+        ProjectInitializer(
+            project_name="proj", experiments_path="experiments_secondary",
+        ).initialize(str(project_dir))
+        for sub in ("bronze", "silver", "gold", "models", "predictions"):
+            assert (project_dir / "experiments_secondary" / "data" / sub).is_dir()
+        assert (project_dir / "experiments_secondary" / "feature_store").is_dir()
+
+    def test_gitignore_uses_custom_path(self, tmp_path):
+        from customer_retention.generators.notebook_generator.project_init import ProjectInitializer
+        project_dir = tmp_path / "proj"
+        ProjectInitializer(
+            project_name="proj", experiments_path="experiments_secondary",
+        ).initialize(str(project_dir))
+        content = (project_dir / ".gitignore").read_text()
+        assert "experiments_secondary/" in content
+
+    def test_initialize_project_function_accepts_experiments_path(self, tmp_path):
+        from customer_retention.generators.notebook_generator import initialize_project
+        project_dir = tmp_path / "proj"
+        initialize_project(
+            str(project_dir), project_name="proj",
+            experiments_path="experiments_secondary",
+        )
+        assert (project_dir / "experiments_secondary" / "findings").is_dir()
