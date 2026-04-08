@@ -81,3 +81,5 @@ tests/.coverage*
 # Internal docs (kept locally, not published)
 # The leading / anchors to docs/ — does not affect docs/wiki/*.md
 docs/*.md
+
+playbooks/

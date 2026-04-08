@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field
 
 from customer_retention.analysis.auto_explorer.project_context import (
     CadenceInterval,
-    DatasetRegistryEntry,
     IntentConfig,
 )
 from customer_retention.core.compat.remote_path import RemotePath
@@ -109,18 +108,28 @@ class SnapshotGrid(BaseModel):
     def from_intent(
         cls,
         intent: IntentConfig,
-        datasets: dict[str, DatasetRegistryEntry],
+        granularities: dict[str, DatasetGranularity],
         mode: GridAdjustmentMode = GridAdjustmentMode.NO_ADJUSTMENTS,
         fingerprints: Optional[dict] = None,
     ) -> SnapshotGrid:
+        """Build a snapshot grid from intent + per-dataset granularities.
+
+        Decoupled from the dataset registry so the grid can be built BEFORE
+        the registry exists in NB00 (after intent / semantics, before relationship
+        scaffold + registry build). This lets preprocessing cells that depend
+        on the grid (e.g. SCD history reconstruction) run in the same
+        block as lifecycle enrichment, with their changes naturally captured
+        by the later registry build and project_context save.
+        """
         from customer_retention.analysis.auto_explorer.dataset_fingerprinter import DatasetFingerprint
 
         votes: dict[str, DatasetGridVote] = {}
-        for name, entry in datasets.items():
-            auto_voted = entry.granularity != DatasetGranularity.EVENT_LEVEL
+        for name, granularity in granularities.items():
+            resolved = granularity or DatasetGranularity.UNKNOWN
+            auto_voted = resolved != DatasetGranularity.EVENT_LEVEL
             votes[name] = DatasetGridVote(
                 dataset_name=name,
-                granularity=entry.granularity or DatasetGranularity.UNKNOWN,
+                granularity=resolved,
                 voted=auto_voted,
             )
 

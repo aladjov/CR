@@ -58,6 +58,23 @@ def _minimal_entry(name, granularity):
     )
 
 
+def _granularities(*entries):
+    """Build the granularity dict expected by SnapshotGrid.from_intent.
+
+    Accepts either (name, granularity) tuples or DatasetRegistryEntry instances
+    so existing test bodies can keep their entry-based fixtures while passing
+    the slim input to from_intent.
+    """
+    out: dict[str, DatasetGranularity] = {}
+    for item in entries:
+        if isinstance(item, DatasetRegistryEntry):
+            out[item.name] = item.granularity
+        else:
+            name, granularity = item
+            out[name] = granularity
+    return out
+
+
 class TestGridAdjustmentModeEnum:
     def test_values(self):
         assert GridAdjustmentMode.NO_ADJUSTMENTS.value == "no_adjustments"
@@ -126,53 +143,56 @@ class TestFromIntent:
             cadence_interval=CadenceInterval.MONTHLY,
             observation_window_days=180,
         )
-        grid = SnapshotGrid.from_intent(intent, datasets={})
+        grid = SnapshotGrid.from_intent(intent, granularities={})
         assert grid.cadence_interval == CadenceInterval.MONTHLY
         assert grid.observation_window_days == 180
 
     def test_entity_datasets_auto_voted(self):
-        datasets = {
-            "profiles": _minimal_entry("profiles", DatasetGranularity.ENTITY_LEVEL),
-        }
-        grid = SnapshotGrid.from_intent(_minimal_intent(), datasets=datasets)
+        granularities = {"profiles": DatasetGranularity.ENTITY_LEVEL}
+        grid = SnapshotGrid.from_intent(_minimal_intent(), granularities=granularities)
         assert grid.dataset_votes["profiles"].voted is True
 
     def test_event_datasets_not_voted(self):
-        datasets = {
-            "transactions": _minimal_entry("transactions", DatasetGranularity.EVENT_LEVEL),
-        }
-        grid = SnapshotGrid.from_intent(_minimal_intent(), datasets=datasets)
+        granularities = {"transactions": DatasetGranularity.EVENT_LEVEL}
+        grid = SnapshotGrid.from_intent(_minimal_intent(), granularities=granularities)
         assert grid.dataset_votes["transactions"].voted is False
 
     def test_mode_passthrough(self):
         grid = SnapshotGrid.from_intent(
             _minimal_intent(),
-            datasets={},
+            granularities={},
             mode=GridAdjustmentMode.ALLOW_ADJUSTMENTS,
         )
         assert grid.mode == GridAdjustmentMode.ALLOW_ADJUSTMENTS
 
     def test_mixed_granularities(self):
-        datasets = {
-            "profiles": _minimal_entry("profiles", DatasetGranularity.ENTITY_LEVEL),
-            "transactions": _minimal_entry("transactions", DatasetGranularity.EVENT_LEVEL),
-            "tickets": _minimal_entry("tickets", DatasetGranularity.EVENT_LEVEL),
+        granularities = {
+            "profiles": DatasetGranularity.ENTITY_LEVEL,
+            "transactions": DatasetGranularity.EVENT_LEVEL,
+            "tickets": DatasetGranularity.EVENT_LEVEL,
         }
-        grid = SnapshotGrid.from_intent(_minimal_intent(), datasets=datasets)
+        grid = SnapshotGrid.from_intent(_minimal_intent(), granularities=granularities)
         assert grid.dataset_votes["profiles"].voted is True
         assert grid.dataset_votes["transactions"].voted is False
         assert grid.dataset_votes["tickets"].voted is False
 
     def test_empty_datasets(self):
-        grid = SnapshotGrid.from_intent(_minimal_intent(), datasets={})
+        grid = SnapshotGrid.from_intent(_minimal_intent(), granularities={})
         assert grid.dataset_votes == {}
 
     def test_unknown_granularity_treated_as_entity(self):
-        datasets = {
-            "mystery": _minimal_entry("mystery", DatasetGranularity.UNKNOWN),
-        }
-        grid = SnapshotGrid.from_intent(_minimal_intent(), datasets=datasets)
+        granularities = {"mystery": DatasetGranularity.UNKNOWN}
+        grid = SnapshotGrid.from_intent(_minimal_intent(), granularities=granularities)
         assert grid.dataset_votes["mystery"].voted is True
+
+    def test_accepts_granularities_built_from_registry_entries(self):
+        """Backwards-compat helper: callers that already have registry entries
+        can extract granularities via the _granularities() helper."""
+        entry = _minimal_entry("profiles", DatasetGranularity.ENTITY_LEVEL)
+        grid = SnapshotGrid.from_intent(
+            _minimal_intent(), granularities=_granularities(entry)
+        )
+        assert grid.dataset_votes["profiles"].voted is True
 
 
 class TestCadenceToDays:
@@ -795,30 +815,24 @@ class TestFromIntentWithFingerprints:
         intent = _minimal_intent(
             observation_window_days=270, purge_gap_days=104, label_window_days=90,
         )
-        datasets = {
-            "events": _minimal_entry("events", DatasetGranularity.EVENT_LEVEL),
-        }
+        granularities = {"events": DatasetGranularity.EVENT_LEVEL}
         fps = {"events": _fp("events", data_start="2020-01-01", data_end="2024-12-31")}
-        grid = SnapshotGrid.from_intent(intent, datasets, fingerprints=fps)
+        grid = SnapshotGrid.from_intent(intent, granularities, fingerprints=fps)
         assert grid.grid_start is not None
         assert grid.grid_end is not None
 
     def test_no_fingerprints_boundaries_none(self):
         intent = _minimal_intent()
-        datasets = {
-            "events": _minimal_entry("events", DatasetGranularity.EVENT_LEVEL),
-        }
-        grid = SnapshotGrid.from_intent(intent, datasets)
+        granularities = {"events": DatasetGranularity.EVENT_LEVEL}
+        grid = SnapshotGrid.from_intent(intent, granularities)
         assert grid.grid_start is None
         assert grid.grid_end is None
 
     def test_fingerprints_without_dates_boundaries_none(self):
         intent = _minimal_intent()
-        datasets = {
-            "profiles": _minimal_entry("profiles", DatasetGranularity.ENTITY_LEVEL),
-        }
+        granularities = {"profiles": DatasetGranularity.ENTITY_LEVEL}
         fps = {"profiles": _fp("profiles")}
-        grid = SnapshotGrid.from_intent(intent, datasets, fingerprints=fps)
+        grid = SnapshotGrid.from_intent(intent, granularities, fingerprints=fps)
         assert grid.grid_start is None
         assert grid.grid_end is None
 
@@ -826,15 +840,15 @@ class TestFromIntentWithFingerprints:
         intent = _minimal_intent(
             observation_window_days=270, purge_gap_days=104, label_window_days=90,
         )
-        datasets = {
-            "events": _minimal_entry("events", DatasetGranularity.EVENT_LEVEL),
-            "profiles": _minimal_entry("profiles", DatasetGranularity.ENTITY_LEVEL),
+        granularities = {
+            "events": DatasetGranularity.EVENT_LEVEL,
+            "profiles": DatasetGranularity.ENTITY_LEVEL,
         }
         fps = {
             "events": _fp("events", data_start="2020-01-01", data_end="2024-12-31"),
             "profiles": _fp("profiles"),
         }
-        grid = SnapshotGrid.from_intent(intent, datasets, fingerprints=fps)
+        grid = SnapshotGrid.from_intent(intent, granularities, fingerprints=fps)
         assert grid.grid_start is not None
         assert grid.grid_end is not None
 
@@ -842,11 +856,9 @@ class TestFromIntentWithFingerprints:
         intent = _minimal_intent(
             observation_window_days=270, purge_gap_days=104, label_window_days=90,
         )
-        datasets = {
-            "events": _minimal_entry("events", DatasetGranularity.EVENT_LEVEL),
-        }
+        granularities = {"events": DatasetGranularity.EVENT_LEVEL}
         fps = {"events": _fp("events", data_start="2020-01-01", data_end="2024-12-31")}
-        grid = SnapshotGrid.from_intent(intent, datasets, fingerprints=fps)
+        grid = SnapshotGrid.from_intent(intent, granularities, fingerprints=fps)
         assert grid.grid_start is not None
         assert grid.grid_end is not None
         assert len(grid.grid_dates) > 0
@@ -962,7 +974,7 @@ class TestGenerateGridDatesWithCap:
 
 class TestFromIntentHistoryWindow:
     def _datasets(self):
-        return {"events": _minimal_entry("events", DatasetGranularity.EVENT_LEVEL)}
+        return {"events": DatasetGranularity.EVENT_LEVEL}
 
     def _fps(self):
         return {"events": _fp("events", data_start="2020-01-01", data_end="2024-12-31")}
