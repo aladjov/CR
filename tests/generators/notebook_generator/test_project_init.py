@@ -162,3 +162,47 @@ class TestExplorationNotebookCopyEdgeCases:
         copied = init._copy_exploration_notebooks(project_dir)
         assert copied == []
         init._get_exploration_source_dir = original_get
+
+
+class TestExplorationNotebooksPathParameter:
+    def test_default_path_is_exploration_notebooks(self, tmp_path):
+        from customer_retention.generators.notebook_generator.project_init import ProjectInitializer
+        project_dir = tmp_path / "proj"
+        ProjectInitializer(project_name="proj").initialize(str(project_dir))
+        assert (project_dir / "exploration_notebooks").is_dir()
+
+    def test_custom_path_creates_directory(self, tmp_path):
+        from customer_retention.generators.notebook_generator.project_init import ProjectInitializer
+        project_dir = tmp_path / "proj"
+        ProjectInitializer(
+            project_name="proj", exploration_notebooks_path="team_notebooks",
+        ).initialize(str(project_dir))
+        assert (project_dir / "team_notebooks").is_dir()
+        assert not (project_dir / "exploration_notebooks").exists()
+
+    def test_custom_path_receives_notebooks(self, tmp_path):
+        from customer_retention.generators.notebook_generator.project_init import ProjectInitializer
+        project_dir = tmp_path / "proj"
+        ProjectInitializer(
+            project_name="proj", exploration_notebooks_path="my_nb",
+        ).initialize(str(project_dir))
+        notebooks = list((project_dir / "my_nb").glob("*.ipynb"))
+        assert len(notebooks) > 0
+
+    def test_nested_subpath(self, tmp_path):
+        from customer_retention.generators.notebook_generator.project_init import ProjectInitializer
+        project_dir = tmp_path / "proj"
+        ProjectInitializer(
+            project_name="proj", exploration_notebooks_path="team/explore",
+        ).initialize(str(project_dir))
+        assert (project_dir / "team" / "explore").is_dir()
+        notebooks = list((project_dir / "team" / "explore").glob("*.ipynb"))
+        assert len(notebooks) > 0
+
+    def test_initialize_project_function_accepts_path(self, tmp_path):
+        from customer_retention.generators.notebook_generator import initialize_project
+        project_dir = tmp_path / "proj"
+        initialize_project(
+            str(project_dir), project_name="proj", exploration_notebooks_path="custom_nb",
+        )
+        assert (project_dir / "custom_nb").is_dir()

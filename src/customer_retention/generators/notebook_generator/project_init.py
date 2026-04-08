@@ -10,6 +10,7 @@ class ProjectInitializer:
     project_name: str
     generate_orchestration: bool = False
     platforms: Optional[List[str]] = None
+    exploration_notebooks_path: str = "exploration_notebooks"
 
     def initialize(self, output_dir: str) -> Dict[str, any]:
         project_path = Path(output_dir)
@@ -30,7 +31,7 @@ class ProjectInitializer:
 
     def _create_directories(self, project_path: Path) -> None:
         directories = [
-            "exploration_notebooks",
+            self.exploration_notebooks_path,
             "generated_pipelines/local",
             "generated_pipelines/databricks",
             "experiments/findings",
@@ -134,7 +135,7 @@ dev = [
 
     def _copy_exploration_notebooks(self, project_path: Path) -> List[str]:
         source_dir = self._get_exploration_source_dir()
-        dest_dir = project_path / "exploration_notebooks"
+        dest_dir = project_path / self.exploration_notebooks_path
         copied = []
         if source_dir and source_dir.exists():
             for notebook in source_dir.glob("*.ipynb"):
@@ -186,9 +187,11 @@ def initialize_project(
     output_dir: str,
     project_name: str,
     generate_orchestration: bool = False,
+    exploration_notebooks_path: str = "exploration_notebooks",
 ) -> Dict[str, any]:
     initializer = ProjectInitializer(
         project_name=project_name,
         generate_orchestration=generate_orchestration,
+        exploration_notebooks_path=exploration_notebooks_path,
     )
     return initializer.initialize(output_dir)

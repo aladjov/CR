@@ -45,6 +45,11 @@ Examples:
         default="both",
         help="Target platform (default: both)",
     )
+    parser.add_argument(
+        "--exploration-notebooks-path",
+        default="exploration_notebooks",
+        help="Path (folder or nested subpath) for exploration notebooks (default: exploration_notebooks)",
+    )
 
     args = parser.parse_args()
 
@@ -68,6 +73,7 @@ Examples:
         initializer = ProjectInitializer(
             project_name=args.name or output_dir.name,
             platforms=platforms,
+            exploration_notebooks_path=args.exploration_notebooks_path,
         )
         initializer.initialize(str(output_dir))
 
@@ -77,7 +83,7 @@ Examples:
         print("\nNext steps:")
         print(f"  1. cd {output_dir}")
         print("  2. Add your data to experiments/data/")
-        print("  3. Open exploration_notebooks/01_data_discovery.ipynb")
+        print(f"  3. Open {args.exploration_notebooks_path}/01_data_discovery.ipynb")
         print("  4. Set DATA_PATH to your data file")
         print("  5. Run all cells - auto-discovery will do the rest!")
         print()

@@ -16,6 +16,7 @@ class DatabricksInitResult:
     workspace_path: str | None
     model_name: str
     framework_repo_path: str | None = None
+    exploration_notebooks_path: str = "exploration_notebooks"
     notebooks_copied: list[str] = field(default_factory=list)
     notebooks_synced: list[str] = field(default_factory=list)
 
@@ -42,6 +43,7 @@ def databricks_init(
     copy_notebooks: bool = True,
     model_name: str = "customer_retention",
     framework_repo_path: str | None = None,
+    exploration_notebooks_path: str = "exploration_notebooks",
 ) -> DatabricksInitResult:
     _validate_databricks_environment()
     if workspace_path:
@@ -59,7 +61,9 @@ def databricks_init(
     notebooks_synced: list[str] = []
     if copy_notebooks and workspace_path:
         notebooks_copied, notebooks_synced = _sync_exploration_notebooks(
-            workspace_path, framework_repo_path=framework_repo_path,
+            workspace_path,
+            framework_repo_path=framework_repo_path,
+            exploration_notebooks_path=exploration_notebooks_path,
         )
     if workspace_path:
         _write_requirements_files(workspace_path)
@@ -70,6 +74,7 @@ def databricks_init(
         workspace_path=workspace_path,
         model_name=model_name,
         framework_repo_path=framework_repo_path,
+        exploration_notebooks_path=exploration_notebooks_path,
         notebooks_copied=notebooks_copied,
         notebooks_synced=notebooks_synced,
     )
@@ -179,7 +184,10 @@ def _ensure_workspace_directory(workspace_path: str) -> None:
 
 
 def _sync_exploration_notebooks(
-    workspace_path: str, *, framework_repo_path: str | None = None,
+    workspace_path: str,
+    *,
+    framework_repo_path: str | None = None,
+    exploration_notebooks_path: str = "exploration_notebooks",
 ) -> tuple[list[str], list[str]]:
     from customer_retention.generators.notebook_generator.project_init import ProjectInitializer
 
@@ -187,7 +195,7 @@ def _sync_exploration_notebooks(
     if not source_dir or not source_dir.exists():
         return [], []
 
-    dest_dir = Path(f"/Workspace/{workspace_path}/exploration_notebooks")
+    dest_dir = Path(f"/Workspace/{workspace_path}/{exploration_notebooks_path}")
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     copied = []
@@ -286,6 +294,7 @@ def _display_init_summary(result: DatabricksInitResult) -> None:
     print(f"  Experiment:       {result.experiment_name}")
     print(f"  Experiments Dir:  /Volumes/{result.catalog}/{result.schema}/experiments")
     print(f"  Workspace Path:   {result.workspace_path or '(not set)'}")
+    print(f"  Notebooks Path:   {result.exploration_notebooks_path}")
     print(f"  Model Name:       {result.model_name}")
     if result.framework_repo_path:
         print(f"  Framework Repo:   {result.framework_repo_path}")

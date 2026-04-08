@@ -1146,3 +1146,143 @@ class TestFrameworkRepoPathEnvVarAndResult:
         databricks_init(copy_notebooks=False)
         captured = capsys.readouterr()
         assert "PyPI" in captured.out
+
+
+class TestExplorationNotebooksPathParameter:
+
+    def _make_source_with_notebook(self, tmp_path):
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        _write_notebook(
+            source_dir / "nb.ipynb",
+            _make_test_notebook([("c1", "code", "# @cr:code\nrun()")]),
+        )
+        return source_dir
+
+    def _install_path_observer(self, monkeypatch, dest_dir):
+        import customer_retention.integrations.databricks_init as mod
+
+        observed: list[str] = []
+        real_path = mod.Path
+
+        def redirect_path(p):
+            observed.append(str(p))
+            if "/Workspace/" in str(p):
+                return dest_dir
+            return real_path(str(p))
+
+        monkeypatch.setattr(mod, "Path", redirect_path)
+        return mod, observed
+
+    def test_default_path_used_when_param_omitted(self, monkeypatch, databricks_env, tmp_path):
+        source_dir = self._make_source_with_notebook(tmp_path)
+        dest_dir = tmp_path / "dest"
+        dest_dir.mkdir()
+        mod, observed = self._install_path_observer(monkeypatch, dest_dir)
+        mock_cls = MagicMock()
+        mock_cls.return_value._get_exploration_source_dir.return_value = source_dir
+
+        with patch(
+            "customer_retention.generators.notebook_generator.project_init.ProjectInitializer",
+            mock_cls,
+        ):
+            mod._sync_exploration_notebooks("Users/me/project")
+
+        assert any(p.endswith("Users/me/project/exploration_notebooks") for p in observed)
+
+    def test_custom_path_used(self, monkeypatch, databricks_env, tmp_path):
+        source_dir = self._make_source_with_notebook(tmp_path)
+        dest_dir = tmp_path / "dest"
+        dest_dir.mkdir()
+        mod, observed = self._install_path_observer(monkeypatch, dest_dir)
+        mock_cls = MagicMock()
+        mock_cls.return_value._get_exploration_source_dir.return_value = source_dir
+
+        with patch(
+            "customer_retention.generators.notebook_generator.project_init.ProjectInitializer",
+            mock_cls,
+        ):
+            mod._sync_exploration_notebooks(
+                "Users/me/project", exploration_notebooks_path="team_notebooks",
+            )
+
+        assert any(p.endswith("Users/me/project/team_notebooks") for p in observed)
+        assert not any(p.endswith("Users/me/project/exploration_notebooks") for p in observed)
+
+    def test_nested_subpath_accepted(self, monkeypatch, databricks_env, tmp_path):
+        source_dir = self._make_source_with_notebook(tmp_path)
+        dest_dir = tmp_path / "dest"
+        dest_dir.mkdir()
+        mod, observed = self._install_path_observer(monkeypatch, dest_dir)
+        mock_cls = MagicMock()
+        mock_cls.return_value._get_exploration_source_dir.return_value = source_dir
+
+        with patch(
+            "customer_retention.generators.notebook_generator.project_init.ProjectInitializer",
+            mock_cls,
+        ):
+            mod._sync_exploration_notebooks(
+                "Users/me/project", exploration_notebooks_path="team/explore",
+            )
+
+        assert any(p.endswith("Users/me/project/team/explore") for p in observed)
+
+    def test_databricks_init_passes_path_through(self, monkeypatch, databricks_env, tmp_path):
+        from customer_retention.integrations import databricks_init as mod
+
+        captured: dict = {}
+
+        def fake_sync(workspace_path, *, framework_repo_path=None, exploration_notebooks_path="exploration_notebooks"):
+            captured["workspace_path"] = workspace_path
+            captured["exploration_notebooks_path"] = exploration_notebooks_path
+            return [], []
+
+        monkeypatch.setattr(mod, "_sync_exploration_notebooks", fake_sync)
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: tmp_path / ".churnkit_config.json",
+        )
+
+        mod.databricks_init(
+            workspace_path="Users/me/project",
+            exploration_notebooks_path="custom_nb",
+            copy_notebooks=True,
+        )
+        assert captured["exploration_notebooks_path"] == "custom_nb"
+
+    def test_databricks_init_default_path(self, monkeypatch, databricks_env, tmp_path):
+        from customer_retention.integrations import databricks_init as mod
+
+        captured: dict = {}
+
+        def fake_sync(workspace_path, *, framework_repo_path=None, exploration_notebooks_path="exploration_notebooks"):
+            captured["exploration_notebooks_path"] = exploration_notebooks_path
+            return [], []
+
+        monkeypatch.setattr(mod, "_sync_exploration_notebooks", fake_sync)
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: tmp_path / ".churnkit_config.json",
+        )
+
+        mod.databricks_init(workspace_path="Users/me/project", copy_notebooks=True)
+        assert captured["exploration_notebooks_path"] == "exploration_notebooks"
+
+    def test_result_exposes_exploration_notebooks_path(self, monkeypatch, databricks_env):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        result = databricks_init(exploration_notebooks_path="custom_nb", copy_notebooks=False)
+        assert result.exploration_notebooks_path == "custom_nb"
+
+    def test_result_default_exploration_notebooks_path(self, monkeypatch, databricks_env):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        result = databricks_init(copy_notebooks=False)
+        assert result.exploration_notebooks_path == "exploration_notebooks"
+
+    def test_display_summary_shows_custom_path(self, monkeypatch, databricks_env, capsys):
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        databricks_init(exploration_notebooks_path="my_team_notebooks", copy_notebooks=False)
+        captured = capsys.readouterr()
+        assert "my_team_notebooks" in captured.out
