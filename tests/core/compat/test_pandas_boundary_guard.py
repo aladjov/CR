@@ -98,6 +98,10 @@ COLLECT_BOUNDARY_FILES = {
     "stages/modeling/cross_validator.py",
     # L1 thinning — .distinct().collect() for snapshot dates (small: ~100 dates max)
     "stages/features/feature_selector.py",
+    # SCD reconstruction — .distinct().collect() on the FIELD column for
+    # fail-fast tracked-field validation (small: ~26 distinct fields for SPS
+    # case_history; bounded by domain enum cardinality, not row count)
+    "stages/scd_history/reconstruct.py",
 }
 
 # ── bare 'import pandas as pd' allowlist ────────────────────────────────

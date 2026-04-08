@@ -171,9 +171,9 @@ def _all_parent_record_ids_pandas(
     parent_df: Optional[native_pd.DataFrame],
     config: SCDHistoryReconstructionConfig,
 ) -> List[Any]:
-    ids: set[Any] = set(history[config.parent_record_key].dropna().unique().tolist())
+    ids: set[Any] = set(history[config.parent_record_key].dropna().unique())
     if parent_df is not None:
-        ids |= set(parent_df[config.parent_record_key].dropna().unique().tolist())
+        ids |= set(parent_df[config.parent_record_key].dropna().unique())
     return sorted(ids, key=lambda v: (v is None, str(v)))
 
 
