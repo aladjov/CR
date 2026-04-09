@@ -354,6 +354,37 @@ class TestDistributedSavePath:
         loaded = load_active_dataset(namespace, "customers")
         pd.testing.assert_frame_equal(loaded, df)
 
+    @patch("customer_retention.analysis.auto_explorer.active_dataset_store._is_native_spark_df")
+    @patch("customer_retention.analysis.auto_explorer.active_dataset_store.as_spark_df")
+    @patch("customer_retention.analysis.auto_explorer.active_dataset_store.get_delta")
+    def test_save_active_routes_native_spark_df_distributed(
+        self, mock_get_delta, mock_as_spark, mock_is_native, namespace,
+    ):
+        # Regression: native PySpark DataFrames lack `.to_spark()` (only
+        # pyspark.pandas does), so a bare `hasattr(df, "to_spark")` check used
+        # to silently fall through to `toPandas()` and OOM the driver. The
+        # routing must recognize native Spark DFs and dispatch them through
+        # `get_delta().write` distributed-style.
+        mock_delta = MagicMock()
+        mock_get_delta.return_value = mock_delta
+        # Stand-in for pyspark.sql.DataFrame: no .to_spark, no .to_pandas, no
+        # .toPandas — if anything tries to collect, it will AttributeError.
+        class _FakeNativeSparkDF:
+            pass
+
+        native = _FakeNativeSparkDF()
+        mock_is_native.return_value = True
+        mock_as_spark.return_value = native
+
+        save_active_dataset(namespace, "customers", native)
+
+        mock_is_native.assert_called_once_with(native)
+        mock_as_spark.assert_called_once_with(native)
+        mock_delta.write.assert_called_once_with(
+            native, str(namespace.landing_table_dir("customers")),
+            mode="overwrite", z_order_columns=None,
+        )
+
 
 class TestAssertLandingSchemaMatchesRegistry:
     """Fail-fast schema-drift guard.

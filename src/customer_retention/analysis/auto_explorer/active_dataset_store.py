@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, List, Optional
 
 from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 from customer_retention.core.compat import (
+    _is_native_spark_df,
     as_spark_df,
     normalize_timestamps,
     release_stage_memory,
@@ -127,7 +128,7 @@ def print_write_report(
 
 
 def _write_delta(df: Any, path: str, z_order_columns: Optional[List[str]] = None) -> None:
-    if hasattr(df, "to_spark"):
+    if _is_native_spark_df(df) or hasattr(df, "to_spark"):
         get_delta().write(as_spark_df(df), path, mode="overwrite", z_order_columns=z_order_columns)
         return
     _local_delta().write(
