@@ -112,9 +112,12 @@ class TestDistributionToTransformationFlow:
         assert recommendation.priority == "high"
 
     def test_zero_inflated_feature_recommends_zero_inflation_handling(self):
+        # Threshold raised to 70% in 2026-04 — fixture bumped from 40% to 80%
+        # zeros so the recommendation still fires for genuinely zero-inflated
+        # data. Lower zero-shares are now treated as ordinary skew.
         np.random.seed(42)
         values = np.random.exponential(scale=50, size=1000)
-        values[np.random.choice(1000, size=400, replace=False)] = 0
+        values[np.random.choice(1000, size=800, replace=False)] = 0
         analyzer = DistributionAnalyzer()
         analysis = analyzer.analyze_distribution(pd.Series(values), "inactive_months")
         recommendation = analyzer.recommend_transformation(analysis)

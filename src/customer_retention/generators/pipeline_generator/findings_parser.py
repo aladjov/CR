@@ -61,6 +61,39 @@ _RECOGNIZED_BRONZE_OVERRIDE_KEYS = frozenset(
     {"per_grid_date_mode", "value_counts_columns", "windows"}
 )
 
+import re as _re
+
+_LAG_VELOCITY_RE = _re.compile(r"^(?:lag\d+|velocity)_")
+
+
+def _matches_any_prefix(column: str, prefixes: List[str]) -> bool:
+    """Return True if `column` is covered by any of the given prefixes.
+
+    A column matches a prefix if it equals the prefix (without trailing
+    underscore), starts with `prefix_`, or — after stripping a leading
+    `lag{N}_`/`velocity_` token — starts with the prefix. Mirrors the
+    matching logic in `FindingsParser.find_leakage_excluded_columns`.
+    """
+    if not prefixes:
+        return False
+    bare = {p.rstrip("_") for p in prefixes}
+    if column in bare:
+        return True
+    for p in prefixes:
+        norm = p if p.endswith("_") else f"{p}_"
+        if column.startswith(norm):
+            return True
+    m = _LAG_VELOCITY_RE.match(column)
+    if m:
+        tail = column[m.end():]
+        if tail in bare:
+            return True
+        for p in prefixes:
+            norm = p if p.endswith("_") else f"{p}_"
+            if tail.startswith(norm):
+                return True
+    return False
+
 
 class FindingsParser:
     def __init__(
@@ -96,7 +129,7 @@ class FindingsParser:
         self._build_discovered_landing_configs(config, discovered_events, multi_dataset)
         self._build_bronze_event_configs(config, multi_dataset, source_findings, discovered_events)
         if recommendations_registry:
-            self._apply_recommendations_to_config(config, recommendations_registry, multi_dataset)
+            self._apply_recommendations_to_config(config, recommendations_registry, multi_dataset, source_findings)
             self._apply_event_recommendations(config, recommendations_registry)
         config.gold.feature_exclusion_prefixes = self._collect_leakage_exclusion_prefixes(source_findings, multi_dataset)
         self._reconcile_discovered_event_transforms(config, discovered_events)
@@ -198,6 +231,8 @@ class FindingsParser:
                 time_column=info.get("time_column"),
                 target_column=info.get("target_column"),
                 excluded=info.get("excluded", False),
+                excluded_leaking_features=info.get("excluded_leaking_features", []),
+                zero_inflation_opt_in=info.get("zero_inflation_opt_in", []),
             )
         relationships = [
             DatasetRelationshipInfo(
@@ -516,12 +551,19 @@ class FindingsParser:
         return "target"
 
     def _apply_recommendations_to_config(
-        self, config: PipelineConfig, registry: RecommendationRegistry, multi: MultiDatasetFindings
+        self,
+        config: PipelineConfig,
+        registry: RecommendationRegistry,
+        multi: MultiDatasetFindings,
+        source_findings: Optional[Dict[str, "ExplorationFindings"]] = None,
     ) -> None:
         self._apply_bronze_recommendations(config, registry)
         self._apply_imbalance_recommendations(config, registry)
         self._apply_silver_recommendations(config, registry)
-        self._apply_gold_recommendations(config, registry)
+        zero_inflation_opt_in_prefixes = self._collect_zero_inflation_opt_in_prefixes(
+            source_findings or {}, multi
+        )
+        self._apply_gold_recommendations(config, registry, zero_inflation_opt_in_prefixes)
 
     def _apply_event_recommendations(
         self, config: PipelineConfig, registry: RecommendationRegistry
@@ -935,10 +977,16 @@ class FindingsParser:
             return False
         return True
 
-    def _apply_gold_recommendations(self, config: PipelineConfig, registry: RecommendationRegistry) -> None:
+    def _apply_gold_recommendations(
+        self,
+        config: PipelineConfig,
+        registry: RecommendationRegistry,
+        zero_inflation_opt_in_prefixes: Optional[List[str]] = None,
+    ) -> None:
         if not hasattr(registry, "gold") or registry.gold is None:
             return
         gold = registry.gold
+        opt_in_prefixes = list(zero_inflation_opt_in_prefixes or [])
         pipeline_columns = self._collect_pipeline_columns(config)
         for step in config.silver.derived_columns:
             pipeline_columns.add(step.column)
@@ -997,6 +1045,16 @@ class FindingsParser:
                     rec.target_column,
                 )
                 continue
+            if rec.action == "zero_inflation_handling" and not _matches_any_prefix(
+                rec.target_column, opt_in_prefixes
+            ):
+                logger.info(
+                    "Dropping zero_inflation_handling for '%s': not in ZERO_INFLATION_OPT_IN. "
+                    "Set the column (or its base column) in NB05 ZERO_INFLATION_OPT_IN to "
+                    "explicitly enable _is_zero / _log derivations.",
+                    rec.target_column,
+                )
+                continue
             step = self._map_gold_transformation(rec)
             if step:
                 config.gold.transformations.append(step)
@@ -1040,6 +1098,35 @@ class FindingsParser:
             for ds_info in multi_dataset.datasets.values():
                 for col in getattr(ds_info, "excluded_leaking_features", []):
                     prefixes.add(f"{col}_")
+        return sorted(prefixes)
+
+    @staticmethod
+    def _collect_zero_inflation_opt_in_prefixes(
+        source_findings: Dict[str, "ExplorationFindings"],
+        multi_dataset: "MultiDatasetFindings | None" = None,
+    ) -> List[str]:
+        """Return prefixes opted into the gold zero-inflation transform.
+
+        Each entry in `zero_inflation_opt_in` (per source) is treated as a base
+        column name. A gold `zero_inflation_handling` recommendation is allowed
+        through only if its target column equals or starts with one of these
+        bases (with the same lag/velocity treatment as the leakage exclusion).
+
+        Default policy: empty list. With no opt-in, the framework drops every
+        `zero_inflation_handling` step, suppressing the `{col}_is_zero` and
+        `{col}_log` derivations that the snapshot-broadcast bronze pathology
+        otherwise turns into label leakage.
+        """
+        prefixes: Set[str] = set()
+        for findings in source_findings.values():
+            for col in getattr(findings, "zero_inflation_opt_in", []):
+                prefixes.add(f"{col}_")
+                prefixes.add(col)
+        if multi_dataset is not None:
+            for ds_info in multi_dataset.datasets.values():
+                for col in getattr(ds_info, "zero_inflation_opt_in", []):
+                    prefixes.add(f"{col}_")
+                    prefixes.add(col)
         return sorted(prefixes)
 
     @staticmethod

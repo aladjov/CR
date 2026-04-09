@@ -62,8 +62,18 @@ class DistributionAnalysis:
 
     @property
     def has_zero_inflation(self) -> bool:
-        """Check if distribution has significant zero inflation."""
-        return self.zero_percentage > 30.0
+        """Check if distribution has significant zero inflation.
+
+        Threshold raised from 30% → 70% in 2026-04: on entity-level snapshot
+        bronze (the framework default for non per-grid-date sources), most
+        numeric columns trivially clear 30% zeros because the entity's full
+        history is broadcast onto every grid date and the post-event tail is
+        all zeros. The 30% trigger therefore promoted snapshot artifacts to
+        zero-inflation transforms, which produced single-bit `_is_zero` flags
+        that classified the target. 70% reserves the recommendation for
+        genuinely zero-inflated columns where zero is a semantic state.
+        """
+        return self.zero_percentage > 70.0
 
     @property
     def has_heavy_tails(self) -> bool:
@@ -124,7 +134,7 @@ class DistributionAnalyzer:
     # Thresholds
     HIGH_SKEWNESS_THRESHOLD = 2.0
     MODERATE_SKEWNESS_THRESHOLD = 1.0
-    ZERO_INFLATION_THRESHOLD = 30.0
+    ZERO_INFLATION_THRESHOLD = 70.0
     OUTLIER_THRESHOLD = 5.0
     HIGH_KURTOSIS_THRESHOLD = 7.0
 

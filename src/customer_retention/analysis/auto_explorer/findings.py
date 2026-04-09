@@ -232,6 +232,7 @@ class ExplorationFindings:
     datetime_derivation_sources: List[str] = field(default_factory=list)
     datetime_allow_future_columns: List[str] = field(default_factory=list)
     excluded_leaking_features: List[str] = field(default_factory=list)
+    zero_inflation_opt_in: List[str] = field(default_factory=list)
     field_availability_audit: Optional[Dict[str, Any]] = None
     label_timestamp_column: Optional[str] = None
     observation_window_days: int = 180

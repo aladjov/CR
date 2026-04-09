@@ -23,6 +23,10 @@ def full_findings_setup(tmp_path):
                 "entity_column": "customer_id",
                 "target_column": "churn",
                 "excluded": False,
+                # Opt `age` into the gold zero-inflation handling so the
+                # recommendation in this fixture survives the NB05 opt-in gate.
+                # Without this, the framework default suppresses _is_zero/_log.
+                "zero_inflation_opt_in": ["age"],
             },
             "orders": {
                 "name": "orders",

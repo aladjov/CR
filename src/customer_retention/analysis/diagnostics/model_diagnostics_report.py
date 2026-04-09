@@ -9,7 +9,7 @@ import numpy as np
 from customer_retention.analysis.diagnostics.calibration_analyzer import CalibrationAnalyzer, CalibrationResult
 from customer_retention.analysis.diagnostics.cv_analyzer import CVAnalysisResult, CVAnalyzer
 from customer_retention.analysis.diagnostics.feature_stability import FeatureStabilityAnalyzer, FeatureStabilityResult
-from customer_retention.analysis.diagnostics.leakage_detector import LeakageCheck, LeakageResult
+from customer_retention.analysis.diagnostics.leakage_detector import LeakageCheck, LeakageDetector, LeakageResult
 from customer_retention.analysis.diagnostics.overfitting_analyzer import OverfittingAnalyzer, OverfittingResult
 from customer_retention.core.components.enums import Severity
 from customer_retention.stages.validation.model_validity_gate import ModelValidityGate, ModelValidityResult
@@ -120,10 +120,13 @@ class ModelDiagnosticsReportGenerator:
         y_test: Any,
         recommendations: Optional[Any] = None,
         target_column: str = "target",
+        label_horizon_days: Optional[int] = None,
     ) -> ModelDiagnosticsReport:
         y_test_np = np.asarray(y_test)
 
-        leakage = self._safe_leakage_from_cache(recommendations, feature_names, target_column)
+        leakage = self._safe_leakage_from_cache(
+            recommendations, feature_names, target_column, label_horizon_days
+        )
         coverage = self._compute_leakage_coverage(recommendations, feature_names)
         summaries = self._run_summaries(models, y_test_np, cv_results, train_metrics, test_metrics, predictions)
         agreement = self._compute_cross_model_agreement(models, feature_names)
@@ -169,22 +172,51 @@ class ModelDiagnosticsReportGenerator:
         return list(getattr(config, "analyzed_features", []) or [])
 
     def _safe_leakage_from_cache(
-        self, recommendations: Optional[Any], feature_names: List[str], target_column: str,
+        self,
+        recommendations: Optional[Any],
+        feature_names: List[str],
+        target_column: str,
+        label_horizon_days: Optional[int] = None,
     ) -> LeakageResult:
         try:
-            return self._build_leakage_from_recommendations(recommendations, feature_names, target_column)
+            return self._build_leakage_from_recommendations(
+                recommendations, feature_names, target_column, label_horizon_days
+            )
         except Exception as exc:
             print(f"  [diagnostics] cached leakage build failed: {type(exc).__name__}: {exc}", flush=True)
             return LeakageResult(passed=True, checks=[])
 
     def _build_leakage_from_recommendations(
-        self, recommendations: Optional[Any], feature_names: List[str], target_column: str,
+        self,
+        recommendations: Optional[Any],
+        feature_names: List[str],
+        target_column: str,
+        label_horizon_days: Optional[int] = None,
     ) -> LeakageResult:
         checks: List[LeakageCheck] = []
         checks.extend(self._target_name_pattern_checks(feature_names, target_column))
         checks.extend(self._cached_correlation_checks(recommendations))
+        # LD062 / LD063: name-only scan against the model's actual feature
+        # set. The cached NB05 correlation view only sees silver-level columns,
+        # so any `_is_zero` / windowed-count derivation produced in gold gets a
+        # second-pass check here. The check is data-free (column names only).
+        checks.extend(self._window_overlap_checks(feature_names, label_horizon_days))
         critical = [c for c in checks if c.severity == Severity.CRITICAL]
         return LeakageResult(passed=not critical, checks=checks, critical_issues=critical)
+
+    @staticmethod
+    def _window_overlap_checks(
+        feature_names: List[str], label_horizon_days: Optional[int],
+    ) -> List[LeakageCheck]:
+        if not label_horizon_days or not feature_names:
+            return []
+
+        class _NamesOnly:
+            def __init__(self, names): self.columns = list(names)
+
+        detector = LeakageDetector(label_horizon_days=int(label_horizon_days))
+        result = detector.check_window_overlaps_horizon(_NamesOnly(feature_names))
+        return list(result.checks)
 
     @staticmethod
     def _target_name_pattern_checks(feature_names: List[str], target_column: str) -> List[LeakageCheck]:
@@ -412,6 +444,7 @@ def compute_and_persist_diagnostics(
     class_proportion: float,
     recommendations: Optional[Any] = None,
     target_column: str = "target",
+    label_horizon_days: Optional[int] = None,
 ) -> bool:
     """Compute the diagnostics report + best-model holdout metrics from precomputed data.
 
@@ -438,6 +471,7 @@ def compute_and_persist_diagnostics(
             best_model_name=best_model_name, class_proportion=class_proportion,
             predictions=predictions, y_test=y_test,
             recommendations=recommendations, target_column=target_column,
+            label_horizon_days=label_horizon_days,
         )
         report_payload = ModelDiagnosticsReportGenerator.to_jsonable(report)
     except Exception as exc:

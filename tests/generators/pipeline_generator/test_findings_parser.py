@@ -6200,7 +6200,10 @@ class TestDropL1ZeroAction(TestFeatureSelectionDropSkipsTarget):
             feature_selection=[rec_drop_is_zero, rec_drop_log],
             transformations=[rec_transform],
         )
-        parser._apply_gold_recommendations(config, registry)
+        # `age` is explicitly opted in to zero-inflation derivations so the
+        # transform survives the opt-in gate; the test then verifies that the
+        # downstream drop recommendations for the predicted columns persist.
+        parser._apply_gold_recommendations(config, registry, ["age_"])
         assert "age_is_zero" in config.gold.feature_selections
         assert "age_log" in config.gold.feature_selections
 
@@ -6325,9 +6328,128 @@ class TestPredictGoldGeneratedColumns(TestFeatureSelectionDropSkipsTarget):
             self._make_rec("age_is_zero", "drop_weak"),
             self._make_rec("age_log", "drop_weak"),
         ])
+        # Note: this exercises the case where the zero_inflation transform was
+        # added directly to the config (bypassing the recommendation gate), so
+        # no opt-in is required — gating only applies to RECOMMENDATIONS being
+        # promoted to steps, not to steps already in the config.
         parser._apply_gold_recommendations(config, registry)
         assert "age_is_zero" in config.gold.feature_selections
         assert "age_log" in config.gold.feature_selections
+
+
+class TestZeroInflationOptIn:
+    """Coverage for the NB05 opt-in gate that suppresses default _is_zero/_log."""
+
+    @staticmethod
+    def _make_findings(**kwargs):
+        from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
+        kwargs.setdefault("source_path", "/tmp/test.csv")
+        kwargs.setdefault("source_format", "csv")
+        return ExplorationFindings(**kwargs)
+
+    def test_collect_prefixes_from_per_source_findings(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        f = self._make_findings(zero_inflation_opt_in=["FIRST_RESPONSE_TIME"])
+        result = FindingsParser._collect_zero_inflation_opt_in_prefixes({"case": f})
+        assert "FIRST_RESPONSE_TIME_" in result
+        assert "FIRST_RESPONSE_TIME" in result
+
+    def test_collect_prefixes_from_multi_dataset(self):
+        from customer_retention.analysis.auto_explorer.exploration_manager import (
+            DatasetInfo,
+            MultiDatasetFindings,
+        )
+        from customer_retention.core.config.column_config import DatasetGranularity
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        info = DatasetInfo(
+            name="case",
+            findings_path="",
+            source_path="",
+            granularity=DatasetGranularity.ENTITY_LEVEL,
+            row_count=10,
+            column_count=2,
+            zero_inflation_opt_in=["FIRST_RESPONSE_TIME"],
+        )
+        multi = MultiDatasetFindings(datasets={"case": info})
+        result = FindingsParser._collect_zero_inflation_opt_in_prefixes({}, multi)
+        assert "FIRST_RESPONSE_TIME_" in result
+
+    def test_empty_when_no_opt_in(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        result = FindingsParser._collect_zero_inflation_opt_in_prefixes({})
+        assert result == []
+
+    def test_matches_any_prefix_base_and_derivations(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import _matches_any_prefix
+        prefixes = ["FIRST_RESPONSE_TIME_", "FIRST_RESPONSE_TIME"]
+        assert _matches_any_prefix("FIRST_RESPONSE_TIME", prefixes)
+        assert _matches_any_prefix("FIRST_RESPONSE_TIME_sum_180d", prefixes)
+        assert _matches_any_prefix("FIRST_RESPONSE_TIME_count_30d_is_zero", prefixes)
+        assert _matches_any_prefix("lag2_FIRST_RESPONSE_TIME_sum", prefixes)
+        assert _matches_any_prefix("velocity_FIRST_RESPONSE_TIME", prefixes)
+        assert not _matches_any_prefix("NET_PRICE_sum_180d", prefixes)
+        assert not _matches_any_prefix("FIRST_RESPONSE_TIMER_sum", prefixes)
+
+    def test_gate_drops_zero_inflation_when_not_opted_in(self):
+        # parser drops zero_inflation_handling recs by default; the predicted
+        # _is_zero/_log columns therefore never enter the pipeline.
+        parser = TestDropL1ZeroAction._make_parser()
+        config = TestDropL1ZeroAction._make_config()
+        rec_transform = TestDropL1ZeroAction._make_rec("age", "zero_inflation_handling")
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            GoldRecommendations,
+            RecommendationRegistry,
+        )
+        registry = RecommendationRegistry()
+        registry.gold = GoldRecommendations(
+            target_column="unsubscribed",
+            transformations=[rec_transform],
+        )
+        parser._apply_gold_recommendations(config, registry)
+        assert config.gold.transformations == []
+
+    def test_gate_keeps_zero_inflation_when_opted_in(self):
+        parser = TestDropL1ZeroAction._make_parser()
+        config = TestDropL1ZeroAction._make_config()
+        rec_transform = TestDropL1ZeroAction._make_rec("age", "zero_inflation_handling")
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            GoldRecommendations,
+            RecommendationRegistry,
+        )
+        from customer_retention.generators.pipeline_generator.models import PipelineTransformationType
+        registry = RecommendationRegistry()
+        registry.gold = GoldRecommendations(
+            target_column="unsubscribed",
+            transformations=[rec_transform],
+        )
+        parser._apply_gold_recommendations(config, registry, ["age_", "age"])
+        assert any(
+            step.type == PipelineTransformationType.ZERO_INFLATION_HANDLING
+            and step.column == "age"
+            for step in config.gold.transformations
+        )
+
+    def test_gate_does_not_affect_log_or_sqrt_recommendations(self):
+        # Only zero_inflation_handling is gated; log/sqrt/yeo_johnson recs
+        # still flow through unchanged.
+        parser = TestDropL1ZeroAction._make_parser()
+        config = TestDropL1ZeroAction._make_config()
+        rec_log = TestDropL1ZeroAction._make_rec("age", "log_transform")
+        from customer_retention.analysis.auto_explorer.layered_recommendations import (
+            GoldRecommendations,
+            RecommendationRegistry,
+        )
+        from customer_retention.generators.pipeline_generator.models import PipelineTransformationType
+        registry = RecommendationRegistry()
+        registry.gold = GoldRecommendations(
+            target_column="unsubscribed",
+            transformations=[rec_log],
+        )
+        parser._apply_gold_recommendations(config, registry)
+        assert any(
+            step.type == PipelineTransformationType.LOG_TRANSFORM and step.column == "age"
+            for step in config.gold.transformations
+        )
 
 
 class TestLeakageExclusionPrefixes:

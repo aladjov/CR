@@ -36,11 +36,11 @@ class TestDistributionAnalyzer:
 
     @pytest.fixture
     def zero_inflated_series(self):
-        """Create a zero-inflated series."""
+        """Create a zero-inflated series (>70% zeros to trip the threshold)."""
         np.random.seed(42)
         values = np.random.exponential(10, 1000)
-        # Make 40% of values zero
-        mask = np.random.random(1000) < 0.4
+        # Make ~80% of values zero (threshold raised to 70% in 2026-04)
+        mask = np.random.random(1000) < 0.8
         values[mask] = 0
         return pd.Series(values, name="zero_inflated")
 
@@ -71,7 +71,7 @@ class TestAnalyzeDistribution(TestDistributionAnalyzer):
         result = analyzer.analyze_distribution(zero_inflated_series, "zero_inflated")
 
         assert result.has_zero_inflation
-        assert result.zero_percentage > 30.0
+        assert result.zero_percentage > 70.0
         assert result.zero_count > 0
 
     def test_empty_series(self, analyzer):
@@ -316,8 +316,8 @@ class TestDistributionAnalysisDataclass:
             iqr=20.0,
             skewness=0.5,
             kurtosis=3.0,
-            zero_count=40,
-            zero_percentage=40.0,  # > 30%
+            zero_count=80,
+            zero_percentage=80.0,  # > 70% (threshold raised in 2026-04)
             negative_count=0,
             negative_percentage=0.0,
             outlier_count_iqr=5,

@@ -222,6 +222,75 @@ class TestLeakageFromCache:
         assert "[diagnostics] cached leakage build failed" in captured.out
 
 
+class TestWindowOverlapGoldOutputGate:
+    """LD062/LD063 second-pass scan against the actual model feature set.
+
+    Catches gold-derived features (e.g. `_is_zero` flags, windowed
+    counts/sums) that NB05's cached correlation view does not see.
+    """
+
+    def test_zero_inflation_flag_is_critical(self, generator):
+        feature_names = ["NET_PRICE_count_180d_is_zero", "safe_feature"]
+        result = generator._build_leakage_from_recommendations(
+            None, feature_names, "target", label_horizon_days=30,
+        )
+        assert any(
+            c.check_id == "LD062"
+            and c.feature == "NET_PRICE_count_180d_is_zero"
+            and c.severity == Severity.CRITICAL
+            for c in result.checks
+        )
+
+    def test_windowed_count_above_horizon_is_high(self, generator):
+        feature_names = ["NET_PRICE_count_180d", "safe_feature"]
+        result = generator._build_leakage_from_recommendations(
+            None, feature_names, "target", label_horizon_days=30,
+        )
+        assert any(
+            c.check_id == "LD063"
+            and c.feature == "NET_PRICE_count_180d"
+            and c.severity == Severity.HIGH
+            for c in result.checks
+        )
+
+    def test_window_below_horizon_is_safe(self, generator):
+        feature_names = ["NET_PRICE_count_7d", "NET_PRICE_count_24h"]
+        result = generator._build_leakage_from_recommendations(
+            None, feature_names, "target", label_horizon_days=30,
+        )
+        assert not any(c.check_id in ("LD062", "LD063") for c in result.checks)
+
+    def test_no_horizon_is_noop(self, generator):
+        feature_names = ["NET_PRICE_count_180d_is_zero", "NET_PRICE_count_365d"]
+        # Without label_horizon_days the gate must not fire — preserves
+        # backwards compatibility for callers that don't yet pass it through.
+        result = generator._build_leakage_from_recommendations(
+            None, feature_names, "target", label_horizon_days=None,
+        )
+        assert not any(c.check_id in ("LD062", "LD063") for c in result.checks)
+
+    def test_other_aggregations_are_not_flagged(self, generator):
+        # mean/max/min/std on a long window are not flagged: they describe
+        # the SHAPE of activity, not its presence/absence. Only count/sum
+        # (LD063) and `_is_zero` (LD062) are leak-shaped.
+        feature_names = ["NET_PRICE_mean_180d", "NET_PRICE_max_365d"]
+        result = generator._build_leakage_from_recommendations(
+            None, feature_names, "target", label_horizon_days=30,
+        )
+        assert not any(c.check_id in ("LD062", "LD063") for c in result.checks)
+
+    def test_window_overlap_runs_alongside_cached_correlation_checks(self, generator):
+        # End-to-end: a feature with a cached HIGH correlation AND another
+        # feature that triggers LD062 should both surface in the same result.
+        recs = _make_recommendations([("feat_a", 0.85)])
+        feature_names = ["feat_a", "feat_b", "TXN_count_180d_is_zero"]
+        result = generator._build_leakage_from_recommendations(
+            recs, feature_names, "target", label_horizon_days=30,
+        )
+        assert any(c.feature == "feat_a" and c.severity == Severity.HIGH for c in result.checks)
+        assert any(c.check_id == "LD062" and c.feature == "TXN_count_180d_is_zero" for c in result.checks)
+
+
 # ---------------------------------------------------------------------------
 # Cross-model agreement (unchanged from prior — feature_importances only)
 # ---------------------------------------------------------------------------
