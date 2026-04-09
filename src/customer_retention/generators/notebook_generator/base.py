@@ -23,6 +23,10 @@ class NotebookStage(str, Enum):
     MONITORING = "09_monitoring"
     BATCH_INFERENCE = "10_batch_inference"
     FEATURE_STORE = "11_feature_store"
+    PUBLISH_DEFINITIONS = "c01_publish_definitions"
+    ARCHETYPE_DERIVATION = "c02_archetype_derivation"
+    APPROVAL_GATE = "c03_approval_gate"
+    SNAPSHOT_AND_DASHBOARD = "c04_snapshot_and_dashboard"
 
 
 class NotebookGenerator(ABC):
@@ -49,6 +53,7 @@ class NotebookGenerator(ABC):
         saved_paths = []
         for stage, notebook in self.generate_all().items():
             file_path = output_path / f"{stage.value}.ipynb"
+            file_path.parent.mkdir(parents=True, exist_ok=True)
             with open(file_path, "w", encoding="utf-8") as f:
                 nbformat.write(notebook, f)
             saved_paths.append(str(file_path))

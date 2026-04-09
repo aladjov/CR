@@ -10,10 +10,16 @@ from .s08_deployment import DeploymentStage
 from .s09_monitoring import MonitoringStage
 from .s10_batch_inference import BatchInferenceStage
 from .s11_feature_store import FeatureStoreStage
+from .s_c01_publish_definitions import PublishDefinitionsStage
+from .s_c02_archetype_derivation import ArchetypeDerivationStage
+from .s_c03_approval_gate import ApprovalGateStage
+from .s_c04_snapshot_and_dashboard import SnapshotAndDashboardStage
 
 __all__ = [
     "StageGenerator",
     "IngestionStage", "ProfilingStage", "CleaningStage", "TransformationStage",
     "FeatureEngineeringStage", "FeatureSelectionStage", "ModelTrainingStage",
     "DeploymentStage", "MonitoringStage", "BatchInferenceStage", "FeatureStoreStage",
+    "PublishDefinitionsStage", "ArchetypeDerivationStage", "ApprovalGateStage",
+    "SnapshotAndDashboardStage",
 ]

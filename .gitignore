@@ -83,3 +83,4 @@ tests/.coverage*
 docs/*.md
 
 playbooks/
+debug/

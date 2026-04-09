@@ -68,7 +68,7 @@ def load_playbooks_from_dir(
     for yaml_file in sorted(yaml_files, key=lambda p: p.name):
         try:
             doc = _load_yaml(yaml_file)
-        except Exception as exc:  # noqa: BLE001 — top-level loader, log + continue
+        except (OSError, yaml.YAMLError) as exc:
             logger.warning("Failed to parse playbook YAML %s: %s", yaml_file, exc)
             continue
         if not isinstance(doc, dict):
@@ -77,7 +77,7 @@ def load_playbooks_from_dir(
         try:
             catalog_row = _parse_catalog(doc.get("catalog"))
             steps = _parse_steps(doc.get("steps"), catalog_row)
-        except Exception as exc:  # noqa: BLE001
+        except (KeyError, TypeError, ValueError) as exc:
             logger.warning("Schema mismatch in playbook YAML %s: %s", yaml_file, exc)
             continue
         catalog_rows.append(catalog_row)
@@ -177,33 +177,27 @@ def _list_top_level_yaml_files(playbooks_dir: PathLike) -> List[PathLike]:
         logger.warning("Playbooks directory does not exist: %s", playbooks_dir)
         return []
     yaml_files: List[PathLike] = []
-    for entry in playbooks_dir.glob("*.yaml"):
-        # Glob already returns top-level entries; defensive check that we got a file
-        if hasattr(entry, "is_file"):
-            try:
-                if entry.is_file():
-                    yaml_files.append(entry)
-            except Exception:
+    for pattern in ("*.yaml", "*.yml"):
+        for entry in playbooks_dir.glob(pattern):
+            if _is_file(entry):
                 yaml_files.append(entry)
-        else:
-            yaml_files.append(entry)
-    # Also accept .yml extension
-    for entry in playbooks_dir.glob("*.yml"):
-        if hasattr(entry, "is_file"):
-            try:
-                if entry.is_file():
-                    yaml_files.append(entry)
-            except Exception:
-                yaml_files.append(entry)
-        else:
-            yaml_files.append(entry)
     return yaml_files
+
+
+def _is_file(entry: PathLike) -> bool:
+    """Return True when ``entry`` is a regular file (or has no is_file check)."""
+    if not hasattr(entry, "is_file"):
+        return True
+    try:
+        return bool(entry.is_file())
+    except OSError:
+        return True
 
 
 def _exists(path: PathLike) -> bool:
     try:
         return path.exists()
-    except Exception:
+    except OSError:
         return False
 
 

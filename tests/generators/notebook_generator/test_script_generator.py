@@ -20,7 +20,7 @@ class TestScriptGenerator:
         from customer_retention.generators.notebook_generator.script_generator import LocalScriptGenerator
         generator = LocalScriptGenerator(NotebookConfig(), None)
         paths = generator.save_all(str(tmp_path))
-        assert len(paths) == 10  # Holdout stage disabled by default
+        assert len(paths) == 14  # 10 standard stages + 4 causal-track stages (c01..c04)
         assert all(p.endswith(".py") for p in paths)
 
     def test_script_has_main_block(self, tmp_path):
@@ -90,7 +90,7 @@ class TestGenerateScriptsFunction:
         from customer_retention.generators.notebook_generator import Platform, generate_orchestration_scripts
         results = generate_orchestration_scripts(output_dir=str(tmp_path), platforms=[Platform.LOCAL])
         assert Platform.LOCAL in results
-        assert len(results[Platform.LOCAL]) == 10  # Holdout stage disabled by default
+        assert len(results[Platform.LOCAL]) == 14  # 10 standard stages + 4 causal-track stages (c01..c04)
 
     def test_generate_scripts_both_platforms(self, tmp_path):
         from customer_retention.generators.notebook_generator import generate_orchestration_scripts
@@ -113,4 +113,4 @@ class TestScriptRunnerValidation:
         runner = ScriptRunner()
         report = runner.validate_sequence(str(tmp_path / "local"), platform="local")
         assert report.all_passed
-        assert report.total_notebooks == 10  # Holdout stage disabled by default
+        assert report.total_notebooks == 14  # 10 standard stages + 4 causal-track stages (c01..c04)

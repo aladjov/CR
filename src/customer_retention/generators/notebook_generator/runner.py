@@ -94,7 +94,7 @@ class NotebookRunner:
             return NotebookValidationResult(notebook_name, False, time.time() - start_time, error=str(e))
 
     def validate_sequence(self, notebooks_dir: str, platform: str) -> ValidationReport:
-        notebook_files = sorted(Path(notebooks_dir).glob("*.ipynb"))
+        notebook_files = sorted(Path(notebooks_dir).rglob("*.ipynb"))
         results = []
         for nb_path in notebook_files:
             result = self.validate_notebook(str(nb_path))
@@ -140,7 +140,7 @@ class ScriptRunner:
             return NotebookValidationResult(script_name, False, time.time() - start_time, error=str(e))
 
     def validate_sequence(self, scripts_dir: str, platform: str) -> ValidationReport:
-        script_files = sorted(Path(scripts_dir).glob("*.py"))
+        script_files = sorted(Path(scripts_dir).rglob("*.py"))
         results = []
         for script_path in script_files:
             result = self.validate_script(str(script_path))

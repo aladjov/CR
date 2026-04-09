@@ -12,14 +12,22 @@ Two write modes are supported:
   tables like ``eligibility_snapshot``). Re-running with the same inputs is
   a no-op.
 
-The module is intentionally thin — Delta-specific bits are isolated here so
-the loaders and the higher-level orchestrator can stay free of Spark imports.
+Implementation notes:
 
-The functions accept a fully-qualified table name like
-``catalog.schema.table_name``. Callers are expected to format that string
-themselves (typically using ``CATALOG`` and ``SCHEMA`` from
-``customer_retention.core.config``); this module does not own catalog/schema
-resolution.
+- ``merge_into`` uses ``delta.tables.DeltaTable.merge()`` directly. No
+  ``createOrReplaceTempView`` (which conflicts with the
+  ``register_temp_view`` audit contract introduced in
+  ``core/compat/__init__.py``) and no manual MERGE SQL string assembly.
+- ``merge_into`` returns the source row count, not a fabricated
+  inserted/updated estimate. The previous implementation triggered three
+  full table scans (``pre_count``, ``_count_matching`` join+count,
+  ``post_count``) just to compute a row-count delta — and the result was
+  wrong because ``post - pre`` does not equal ``updated``. The accurate
+  metrics live in Delta's commit history, accessible via
+  ``DeltaTable.history()`` when an operator wants them.
+
+Callers pass a fully-qualified table name (``catalog.schema.table_name``).
+This module does not own catalog/schema resolution.
 """
 
 from __future__ import annotations
@@ -77,55 +85,31 @@ def merge_into(
     table_fqn: str,
     merge_keys: Sequence[str],
 ) -> Dict[str, int]:
-    """Idempotent upsert: insert new rows, update changed rows, leave the rest.
+    """Idempotent upsert via ``DeltaTable.merge()``.
 
-    Uses Delta MERGE INTO with a natural key. The target table is created
-    automatically with the supplied schema if it does not exist.
+    Insert new rows, update changed rows on the natural key, and leave
+    everything else alone. The target table is created automatically with
+    the supplied schema if it does not exist.
 
-    ``merge_keys`` must reference columns present in both ``rows`` and the
-    schema; this is the join condition for the MERGE.
-
-    Returns ``{"inserted": int, "updated": int}`` based on the source
-    versus existing-target row counts. (Spark does not surface MERGE
-    affected-row counts portably, so the return is a best-effort estimate
-    derived from a pre-merge count diff.)
+    Returns ``{"source_rows": int}`` so the caller has at least one number
+    to log without paying for full pre/post table scans. Operators who
+    need accurate ``inserted``/``updated`` counts should consult
+    ``DeltaTable.forName(spark, fqn).history()``.
     """
     if not merge_keys:
         raise ValueError("merge_into requires at least one merge_key")
 
     _ensure_table_exists(spark, table_fqn, schema)
 
-    df = _build_dataframe(spark, rows, schema)
     if not rows:
         logger.info("merge_into %s skipped (empty source rows)", table_fqn)
-        return {"inserted": 0, "updated": 0}
+        return {"source_rows": 0}
 
-    pre_count = spark.table(table_fqn).count()
-    matching_pre_count = _count_matching(spark, df, table_fqn, merge_keys)
+    source_df = _build_dataframe(spark, rows, schema)
+    _execute_delta_merge(spark, source_df, table_fqn, merge_keys, schema)
 
-    df.createOrReplaceTempView("_causal_merge_source")
-    on_clause = " AND ".join(f"target.{k} = source.{k}" for k in merge_keys)
-    update_set = ", ".join(
-        f"target.{f.name} = source.{f.name}" for f in schema.fields if f.name not in merge_keys
-    )
-    insert_cols = ", ".join(f.name for f in schema.fields)
-    insert_vals = ", ".join(f"source.{f.name}" for f in schema.fields)
-
-    sql = f"""
-    MERGE INTO {table_fqn} AS target
-    USING _causal_merge_source AS source
-    ON {on_clause}
-    WHEN MATCHED THEN UPDATE SET {update_set}
-    WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})
-    """
-    spark.sql(sql)
-    spark.catalog.dropTempView("_causal_merge_source")
-
-    post_count = spark.table(table_fqn).count()
-    inserted = max(post_count - pre_count, 0)
-    updated = max(matching_pre_count, 0)
-    logger.info("merged %d rows into %s (inserted=%d, updated=%d)", len(rows), table_fqn, inserted, updated)
-    return {"inserted": inserted, "updated": updated}
+    logger.info("merged %d rows into %s via DeltaTable.merge", len(rows), table_fqn)
+    return {"source_rows": len(rows)}
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +134,6 @@ def _build_dataframe(
     for row in rows:
         normalized_rows.append({name: row.get(name) for name in field_order})
     if not normalized_rows:
-        # createDataFrame with empty list still respects the schema
         return spark.createDataFrame([], schema=schema)
     return spark.createDataFrame(normalized_rows, schema=schema)
 
@@ -169,16 +152,27 @@ def _ensure_table_exists(spark: "SparkSession", table_fqn: str, schema: "StructT
     logger.info("created empty Delta table %s", table_fqn)
 
 
-def _count_matching(
+def _execute_delta_merge(
     spark: "SparkSession",
     source_df: "DataFrame",
     table_fqn: str,
     merge_keys: Sequence[str],
-) -> int:
-    """Count source rows that already exist in the target on the merge keys."""
-    # Skip the join when the source is empty. Using limit(1).count() avoids
-    # .rdd access (banned on Databricks shared clusters / Unity Catalog).
-    if source_df.limit(1).count() == 0:
-        return 0
-    target_df = spark.table(table_fqn).select(*merge_keys).distinct()
-    return source_df.select(*merge_keys).join(target_df, list(merge_keys), "inner").count()
+    schema: "StructType",
+) -> None:
+    """Run ``DeltaTable.forName(spark, fqn).merge(...).execute()``.
+
+    Splitting this out lets unit tests patch ``delta.tables.DeltaTable``
+    in isolation while keeping the public API surface clean.
+    """
+    from delta.tables import DeltaTable
+
+    target = DeltaTable.forName(spark, table_fqn)
+    join_condition = " AND ".join(f"target.{k} = source.{k}" for k in merge_keys)
+    update_set = {
+        f.name: f"source.{f.name}" for f in schema.fields if f.name not in merge_keys
+    }
+    insert_set = {f.name: f"source.{f.name}" for f in schema.fields}
+    builder = target.alias("target").merge(source_df.alias("source"), join_condition)
+    if update_set:
+        builder = builder.whenMatchedUpdate(set=update_set)
+    builder.whenNotMatchedInsert(values=insert_set).execute()

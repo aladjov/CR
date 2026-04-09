@@ -88,7 +88,7 @@ def load_decision_policy(path: PathLike) -> List[Dict[str, Any]]:
             continue
         try:
             rows.append(_parse_decision_policy_row(entry))
-        except Exception as exc:  # noqa: BLE001
+        except (KeyError, TypeError, ValueError) as exc:
             logger.warning("Skipping malformed decision_policy entry: %s", exc)
             continue
     return rows
@@ -228,7 +228,7 @@ def _load_yaml_file(path: PathLike) -> Any:
         return None
     try:
         text = path.read_text() if hasattr(path, "read_text") else open(path).read()
-    except Exception as exc:  # noqa: BLE001
+    except OSError as exc:
         logger.warning("Failed to read policy YAML %s: %s", path, exc)
         return None
     try:
@@ -241,7 +241,7 @@ def _load_yaml_file(path: PathLike) -> Any:
 def _exists(path: PathLike) -> bool:
     try:
         return path.exists()
-    except Exception:
+    except OSError:
         return False
 
 

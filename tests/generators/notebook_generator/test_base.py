@@ -1,12 +1,13 @@
 from abc import ABC
+from pathlib import Path
 
 import pytest
 
 
 class TestNotebookStage:
-    def test_all_eleven_stages_defined(self):
+    def test_all_stages_defined(self):
         from customer_retention.generators.notebook_generator.base import NotebookStage
-        assert len(NotebookStage) == 11
+        assert len(NotebookStage) == 15
 
     def test_stage_values(self):
         from customer_retention.generators.notebook_generator.base import NotebookStage
@@ -20,12 +21,17 @@ class TestNotebookStage:
         assert NotebookStage.DEPLOYMENT.value == "08_deployment"
         assert NotebookStage.MONITORING.value == "09_monitoring"
         assert NotebookStage.BATCH_INFERENCE.value == "10_batch_inference"
+        assert NotebookStage.FEATURE_STORE.value == "11_feature_store"
+        assert NotebookStage.PUBLISH_DEFINITIONS.value == "c01_publish_definitions"
+        assert NotebookStage.ARCHETYPE_DERIVATION.value == "c02_archetype_derivation"
+        assert NotebookStage.APPROVAL_GATE.value == "c03_approval_gate"
+        assert NotebookStage.SNAPSHOT_AND_DASHBOARD.value == "c04_snapshot_and_dashboard"
 
     def test_stage_ordering(self):
         from customer_retention.generators.notebook_generator.base import NotebookStage
         stages = list(NotebookStage)
         assert stages[0] == NotebookStage.INGESTION
-        assert stages[-1] == NotebookStage.FEATURE_STORE
+        assert stages[-1] == NotebookStage.SNAPSHOT_AND_DASHBOARD
 
 
 class TestNotebookGenerator:
@@ -65,7 +71,7 @@ class TestNotebookGenerator:
         generator = ConcreteGenerator(NotebookConfig(), None)
         result = generator.generate_all()
         assert isinstance(result, dict)
-        assert len(result) == 11
+        assert len(result) == 15
         assert all(stage in result for stage in NotebookStage)
 
     def test_save_all_creates_files(self, tmp_path):
@@ -82,7 +88,7 @@ class TestNotebookGenerator:
 
         generator = ConcreteGenerator(NotebookConfig(), None)
         paths = generator.save_all(str(tmp_path))
-        assert len(paths) == 11
+        assert len(paths) == 15
         assert all(p.endswith(".ipynb") for p in paths)
         for path in paths:
-            assert (tmp_path / path.split("/")[-1]).exists()
+            assert Path(path).exists()

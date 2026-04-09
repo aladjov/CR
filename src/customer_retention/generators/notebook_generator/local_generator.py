@@ -9,6 +9,8 @@ if TYPE_CHECKING:
 from .cell_builder import CellBuilder
 from .config import NotebookConfig, Platform
 from .stages import (
+    ApprovalGateStage,
+    ArchetypeDerivationStage,
     BatchInferenceStage,
     CleaningStage,
     DeploymentStage,
@@ -18,6 +20,8 @@ from .stages import (
     ModelTrainingStage,
     MonitoringStage,
     ProfilingStage,
+    PublishDefinitionsStage,
+    SnapshotAndDashboardStage,
     TransformationStage,
 )
 
@@ -40,6 +44,10 @@ class LocalNotebookGenerator(NotebookGenerator):
             NotebookStage.DEPLOYMENT: DeploymentStage(config, findings),
             NotebookStage.MONITORING: MonitoringStage(config, findings),
             NotebookStage.BATCH_INFERENCE: BatchInferenceStage(config, findings),
+            NotebookStage.PUBLISH_DEFINITIONS: PublishDefinitionsStage(config, findings),
+            NotebookStage.ARCHETYPE_DERIVATION: ArchetypeDerivationStage(config, findings),
+            NotebookStage.APPROVAL_GATE: ApprovalGateStage(config, findings),
+            NotebookStage.SNAPSHOT_AND_DASHBOARD: SnapshotAndDashboardStage(config, findings),
         }
 
     def generate_stage(self, stage: NotebookStage) -> nbformat.NotebookNode:

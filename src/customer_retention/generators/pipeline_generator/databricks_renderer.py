@@ -2863,6 +2863,11 @@ class DatabricksCodeRenderer:
         ("12_View_Documentation", "12_view_documentation", "11_Scoring_Validation"),
     ]
 
+    # Causal-track notebooks live at a different repo root (`causal_notebooks/`,
+    # sibling to `exploration_notebooks/`). Phase 3 ships a dedicated workflow
+    # task group with its own `notebooks_base_path` so they aren't mixed in
+    # with the exploration DAG above.
+
     def render_for_each_workflow(self, project_name: str, notebooks_base_path: str) -> str:
         per_dataset = [
             {

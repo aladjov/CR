@@ -6,10 +6,19 @@ refuses local SparkSession.builder, so these tests use mocks against the
 Spark API surface is invoked with the right arguments — coverage of the
 data semantics happens in integration tests against a real Databricks
 workspace.
+
+After the bug-fix rewrite, ``merge_into`` calls
+``delta.tables.DeltaTable.forName(spark, fqn).merge(...).execute()``
+directly. The previous version assembled raw MERGE SQL and used
+``createOrReplaceTempView`` plus three full table scans to fabricate
+inserted/updated counts; both have been removed. The DeltaTable Python
+API gives us the same upsert semantics for free.
 """
 
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -27,8 +36,8 @@ from customer_retention.stages.causal.schemas import (
 # ---------------------------------------------------------------------------
 
 
-def _make_fake_spark(rows_in_table=0, table_exists=True):
-    """Build a SimpleNamespace mimicking the SparkSession surface delta_writer touches."""
+def _make_fake_spark(table_exists=True):
+    """Build a fake SparkSession with the surface ``delta_writer`` touches."""
     fake_writer = MagicMock(name="DataFrameWriter")
     fake_writer.format.return_value = fake_writer
     fake_writer.mode.return_value = fake_writer
@@ -37,28 +46,45 @@ def _make_fake_spark(rows_in_table=0, table_exists=True):
 
     fake_df = MagicMock(name="DataFrame")
     fake_df.write = fake_writer
-    fake_df.count.return_value = rows_in_table
-    fake_df.columns = []
-    # limit().count() chain for _count_matching
-    fake_limit = MagicMock(name="LimitedDF")
-    fake_limit.count.return_value = rows_in_table
-    fake_df.limit.return_value = fake_limit
-    # select().distinct() chain
-    fake_df.select.return_value = fake_df
-    fake_df.distinct.return_value = fake_df
-    fake_df.join.return_value = fake_df
-    fake_df.createOrReplaceTempView = MagicMock()
+    fake_df.alias = MagicMock(return_value=fake_df)
 
     fake_catalog = MagicMock()
     fake_catalog.tableExists.return_value = table_exists
-    fake_catalog.dropTempView = MagicMock()
 
     spark = MagicMock(name="SparkSession")
     spark.createDataFrame.return_value = fake_df
-    spark.table.return_value = fake_df
     spark.catalog = fake_catalog
-    spark.sql = MagicMock()
     return spark, fake_df, fake_writer
+
+
+@pytest.fixture
+def patched_delta_table(monkeypatch):
+    """Patch ``delta.tables.DeltaTable`` so the merge chain can be inspected."""
+    builder = MagicMock(name="MergeBuilder")
+    builder.whenMatchedUpdate.return_value = builder
+    builder.whenNotMatchedInsert.return_value = builder
+    builder.execute = MagicMock()
+
+    delta_target = MagicMock(name="DeltaTarget")
+    delta_target_aliased = MagicMock(name="DeltaTargetAliased")
+    delta_target.alias.return_value = delta_target_aliased
+    delta_target_aliased.merge.return_value = builder
+
+    fake_delta_tables = MagicMock(name="delta.tables")
+    fake_delta_tables.DeltaTable = MagicMock(return_value=delta_target)
+    fake_delta_tables.DeltaTable.forName = MagicMock(return_value=delta_target)
+
+    fake_delta_pkg = MagicMock(name="delta")
+    fake_delta_pkg.tables = fake_delta_tables
+
+    monkeypatch.setitem(sys.modules, "delta", fake_delta_pkg)
+    monkeypatch.setitem(sys.modules, "delta.tables", fake_delta_tables)
+    return SimpleNamespace(
+        delta_table_class=fake_delta_tables.DeltaTable,
+        target=delta_target,
+        target_aliased=delta_target_aliased,
+        builder=builder,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +174,7 @@ class TestOverwriteTable:
 
 
 class TestMergeInto:
-    def test_requires_merge_keys(self):
+    def test_requires_merge_keys(self, patched_delta_table):
         spark, _, _ = _make_fake_spark()
         with pytest.raises(ValueError, match="merge_key"):
             delta_writer.merge_into(
@@ -159,7 +185,7 @@ class TestMergeInto:
                 merge_keys=[],
             )
 
-    def test_empty_rows_short_circuits(self):
+    def test_empty_rows_short_circuits(self, patched_delta_table):
         spark, _, _ = _make_fake_spark()
         result = delta_writer.merge_into(
             spark,
@@ -168,38 +194,48 @@ class TestMergeInto:
             table_fqn="test.cat.tbl",
             merge_keys=["playbook_id", "version"],
         )
-        # Returns the no-op result without calling spark.sql
-        assert result == {"inserted": 0, "updated": 0}
-        spark.sql.assert_not_called()
+        # Empty source returns the source-row-count metric without invoking
+        # the Delta merge builder
+        assert result == {"source_rows": 0}
+        patched_delta_table.target_aliased.merge.assert_not_called()
 
-    def test_merge_emits_sql_with_correct_join_and_set_clauses(self):
-        spark, fake_df, _ = _make_fake_spark(rows_in_table=2, table_exists=True)
+    def test_merge_invokes_delta_merge_builder_with_correct_join_and_set(
+        self, patched_delta_table
+    ):
+        spark, _, _ = _make_fake_spark(table_exists=True)
         rows = [
             {"playbook_id": "alpha", "version": "1.0.0", "name": "Alpha"},
             {"playbook_id": "beta", "version": "1.0.0", "name": "Beta"},
         ]
-        delta_writer.merge_into(
+        result = delta_writer.merge_into(
             spark,
             rows=rows,
             schema=playbook_catalog_schema(),
             table_fqn="test.cat.playbook_catalog",
             merge_keys=["playbook_id", "version"],
         )
-        # spark.sql was called with the MERGE statement
-        assert spark.sql.called
-        sql = spark.sql.call_args[0][0]
-        assert "MERGE INTO test.cat.playbook_catalog" in sql
-        assert "USING _causal_merge_source" in sql
-        # ON clause uses both merge keys
-        assert "target.playbook_id = source.playbook_id" in sql
-        assert "target.version = source.version" in sql
-        # UPDATE SET excludes the merge keys
-        assert "target.name = source.name" in sql
-        assert "target.playbook_id = source.playbook_id" in sql.split("UPDATE SET")[0]
-        # WHEN NOT MATCHED inserts every column
-        assert "WHEN NOT MATCHED THEN INSERT" in sql
+        # DeltaTable.forName was called with the table FQN
+        patched_delta_table.delta_table_class.forName.assert_called_once_with(
+            spark, "test.cat.playbook_catalog"
+        )
+        # The merge() join condition uses both merge keys
+        merge_call = patched_delta_table.target_aliased.merge.call_args
+        join_condition = merge_call.args[1]
+        assert "target.playbook_id = source.playbook_id" in join_condition
+        assert "target.version = source.version" in join_condition
+        # whenMatchedUpdate set excludes the merge keys
+        update_set = patched_delta_table.builder.whenMatchedUpdate.call_args.kwargs["set"]
+        assert "name" in update_set
+        assert "playbook_id" not in update_set
+        assert "version" not in update_set
+        # whenNotMatchedInsert covers every schema field
+        insert_set = patched_delta_table.builder.whenNotMatchedInsert.call_args.kwargs["values"]
+        for field in playbook_catalog_schema().fields:
+            assert field.name in insert_set
+        patched_delta_table.builder.execute.assert_called_once()
+        assert result == {"source_rows": 2}
 
-    def test_merge_creates_target_table_if_missing(self):
+    def test_merge_creates_target_table_if_missing(self, patched_delta_table):
         spark, _, fake_writer = _make_fake_spark(table_exists=False)
         delta_writer.merge_into(
             spark,
@@ -212,6 +248,7 @@ class TestMergeInto:
         # at least once to create the empty target before MERGE
         save_calls = [c.args[0] for c in fake_writer.saveAsTable.call_args_list]
         assert "test.cat.new_table" in save_calls
+        patched_delta_table.builder.execute.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -236,36 +273,9 @@ class TestEnsureTableExists:
 
 
 # ---------------------------------------------------------------------------
-# _count_matching
+# Note: ``_count_matching`` was removed alongside the bug-fix rewrite.
+# It existed only to fabricate inserted/updated counts via three full
+# table scans, and the result was structurally wrong (post - pre rows
+# does not equal updated rows). Operators who need accurate counts can
+# query ``DeltaTable.forName(spark, fqn).history()``.
 # ---------------------------------------------------------------------------
-
-
-class TestCountMatching:
-    def test_empty_source_returns_zero_without_querying_target(self):
-        spark, fake_df, _ = _make_fake_spark(rows_in_table=0)
-        # Source DataFrame has 0 rows (limit(1).count() == 0)
-        empty_source = MagicMock(name="EmptySourceDF")
-        empty_source.limit.return_value.count.return_value = 0
-
-        result = delta_writer._count_matching(
-            spark, empty_source, "test.cat.tbl", ["playbook_id", "version"]
-        )
-        assert result == 0
-        # Crucially we did NOT call spark.table() — the empty short-circuit
-        # avoided unnecessary I/O against the target
-        spark.table.assert_not_called()
-
-    def test_non_empty_source_joins_against_target(self):
-        spark, fake_df, _ = _make_fake_spark(rows_in_table=5)
-        source = MagicMock(name="SourceDF")
-        source.limit.return_value.count.return_value = 1  # non-empty
-        # Mock the source.select(...).join(target, keys, "inner").count() chain
-        join_result = MagicMock()
-        join_result.count.return_value = 3
-        source.select.return_value.join.return_value = join_result
-
-        result = delta_writer._count_matching(
-            spark, source, "test.cat.tbl", ["playbook_id", "version"]
-        )
-        assert result == 3
-        spark.table.assert_called_with("test.cat.tbl")

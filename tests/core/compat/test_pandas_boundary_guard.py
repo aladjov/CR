@@ -107,6 +107,18 @@ COLLECT_BOUNDARY_FILES = {
     # Batch inference — .agg().collect() for the summary stats row (1 row),
     # .groupBy("risk_tier").count().collect() for risk distribution (3 rows)
     "stages/scoring/batch_inference.py",
+    # Causal track — small aggregated collects:
+    #   shap_runner: stratified-sample groupBy().agg(count).collect() (≤2 rows)
+    #     and bounded freeze-background .limit(n).collect() (n=1000)
+    "stages/causal/shap_runner.py",
+    #   clusterer: groupBy(cluster_id).agg(F.mean(...)).collect() — 1 row per cluster (k≤8)
+    "stages/causal/clusterer.py",
+    #   approval_gate: per-row .collect() on filter chains, bounded by per-derivation
+    #     archetype count (typically 4-8 rows). UPDATE statements emit no result.
+    "stages/causal/approval_gate.py",
+    #   derivation: orchestrator collects per-cluster summaries (k≤8 rows) and a
+    #     bounded surrogate-tree input sample (≤MAX_SAMPLE_ROWS = 100K rows).
+    "stages/causal/derivation.py",
 }
 
 # ── bare 'import pandas as pd' allowlist ────────────────────────────────

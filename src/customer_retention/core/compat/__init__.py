@@ -1736,28 +1736,29 @@ def load_spark_table(source: str) -> Any:
     return spark.table(source)
 
 
-_SCD_VIEW_NAME_HINT = (
-    "SCD-augmented parent views must not be registered as Spark temp views — "
-    "they are session-scoped and invisible to downstream notebooks. Call "
-    "`augment_and_persist_parent_dataset(...)` from "
-    "`customer_retention.stages.scd_history` instead, which overwrites the "
-    "landing Delta atomically so NB01's `load_active_dataset` picks up the "
-    "augmented schema."
-)
+def register_temp_view(spark_df: Any, view_name: str, *, purpose: str) -> str:
+    """Register ``spark_df`` as a Spark global temp view.
 
-
-def _is_scd_view_name(view_name: str) -> bool:
-    return view_name.endswith("_with_state_history") or "_state_view" in view_name
-
-
-def register_temp_view(spark_df: Any, view_name: str) -> str:
+    ``purpose`` is a required, non-empty audit string documenting why the
+    caller needs a session-scoped view (e.g. ``"lifecycle_round_trip_test"``,
+    ``"interactive_debug"``). Code review can scan call sites and ask "is a
+    temp view really the right tool here?" — for cross-notebook persistence
+    the right tool is ``save_active_dataset``, since temp views vanish when
+    the next notebook starts a new SparkSession.
+    """
+    _require_purpose(purpose)
     _assert_no_case_insensitive_duplicate_columns(spark_df, view_name)
-    if _is_scd_view_name(view_name):
-        raise ValueError(
-            f"register_temp_view({view_name!r}): {_SCD_VIEW_NAME_HINT}",
-        )
     spark_df.createOrReplaceGlobalTempView(view_name)
     return f"global_temp.{view_name}"
+
+
+def _require_purpose(purpose: str) -> None:
+    if not isinstance(purpose, str) or not purpose.strip():
+        raise ValueError(
+            "register_temp_view: 'purpose' kwarg is required and must be a "
+            "non-empty audit string. Spark global temp views are session-"
+            "scoped — for cross-notebook persistence call `save_active_dataset`."
+        )
 
 
 def _assert_no_case_insensitive_duplicate_columns(spark_df: Any, view_name: str) -> None:

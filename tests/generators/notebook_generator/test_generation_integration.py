@@ -11,8 +11,8 @@ class TestFullNotebookGenerationWorkflow:
         assert Platform.LOCAL in results
         result = results[Platform.LOCAL]
         assert result.all_valid
-        assert len(result.notebook_paths) == 10  # Holdout stage disabled by default
-        assert result.validation_report.total_notebooks == 10
+        assert len(result.notebook_paths) == 14  # 10 standard stages + 4 causal-track stages (c01..c04)
+        assert result.validation_report.total_notebooks == 14
         assert result.validation_report.all_passed
         report_path = tmp_path / "local" / "VALIDATION_REPORT.md"
         assert report_path.exists()
@@ -48,11 +48,11 @@ class TestFullScriptGenerationWorkflow:
             platforms=[Platform.LOCAL]
         )
         assert Platform.LOCAL in results
-        assert len(results[Platform.LOCAL]) == 10  # Holdout stage disabled by default
+        assert len(results[Platform.LOCAL]) == 14  # 10 standard stages + 4 causal-track stages (c01..c04)
         runner = ScriptRunner()
         report = runner.validate_sequence(str(tmp_path / "local"), "local")
         assert report.all_passed
-        assert report.total_notebooks == 10
+        assert report.total_notebooks == 14
 
     def test_generate_and_validate_databricks_scripts(self, tmp_path):
         from customer_retention.generators.notebook_generator import Platform, generate_orchestration_scripts
@@ -242,4 +242,4 @@ class TestValidationReportContent:
         assert "## Summary" in content
         assert "## Results" in content
         assert "| Notebook | Status | Duration | Error |" in content
-        assert "**Total Notebooks:** 10" in content
+        assert "**Total Notebooks:** 14" in content

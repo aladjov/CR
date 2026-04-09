@@ -1,7 +1,9 @@
 """SCD history reconstruction.
 
-Reconstructs per-(parent_record, grid_date) field state from a Salesforce-style
-change-log table via a backward-asof window. The output is a wide
+Reconstructs per-(parent_record, grid_date) field state from a slowly-changing-
+dimension change-log table via a backward-asof window. Works with any change-
+log shape (Salesforce-style ``FIELD/NEW_VALUE`` rows, audit-trigger tables,
+CDC streams). The output is a wide
 ``(parent_record_key, as_of_date, *tracked_fields)`` view that the framework's
 existing temporal merger handles via the standard equi-join branch.
 
@@ -12,23 +14,23 @@ Quick Start::
     )
 
     config = SCDHistoryReconstructionConfig(
-        enriched_view_name="sps_reconstructed_case_history",
-        parent_record_key="CASE_ID",
-        field_column="FIELD",
-        new_value_column="NEW_VALUE",
-        old_value_column="OLD_VALUE",
-        change_timestamp_column="CREATED_DATE",
-        unique_row_id_column="CASE_HISTORY_ID",
-        tracked_fields=("Status", "Priority"),
-        parent_table_dataset_name="case",
-        parent_creation_timestamp_column="CREATED_DATE",
-        parent_value_columns=(("Status", "CASE_STATUS"), ("Priority", "PRIORITY")),
+        enriched_view_name="reconstructed_parent_history",
+        parent_record_key="parent_id",
+        field_column="field_name",
+        new_value_column="new_value",
+        old_value_column="old_value",
+        change_timestamp_column="changed_at",
+        unique_row_id_column="change_id",
+        tracked_fields=("status", "priority"),
+        parent_table_dataset_name="parent",
+        parent_creation_timestamp_column="created_at",
+        parent_value_columns=(("status", "current_status"), ("priority", "current_priority")),
     )
     reconstructed = reconstruct_scd_history_at_grid(
-        history_df=case_history_df,
+        history_df=change_log_df,
         grid_dates=snapshot_grid.grid_dates,
         config=config,
-        parent_df=case_df,
+        parent_df=parent_df,
     )
 """
 

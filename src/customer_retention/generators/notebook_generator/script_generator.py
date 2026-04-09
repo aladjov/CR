@@ -10,6 +10,8 @@ if TYPE_CHECKING:
     from .stages.base_stage import StageGenerator
 from .config import NotebookConfig, Platform
 from .stages import (
+    ApprovalGateStage,
+    ArchetypeDerivationStage,
     BatchInferenceStage,
     CleaningStage,
     DeploymentStage,
@@ -19,6 +21,8 @@ from .stages import (
     ModelTrainingStage,
     MonitoringStage,
     ProfilingStage,
+    PublishDefinitionsStage,
+    SnapshotAndDashboardStage,
     TransformationStage,
 )
 
@@ -63,6 +67,7 @@ class ScriptGenerator(ABC):
         saved_paths = []
         for stage, code in self.generate_all().items():
             file_path = output_path / f"{stage.value}.py"
+            file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(code, encoding="utf-8")
             saved_paths.append(str(file_path))
         return saved_paths
@@ -86,6 +91,10 @@ class LocalScriptGenerator(ScriptGenerator):
             NotebookStage.DEPLOYMENT: DeploymentStage(self.config, self.findings),
             NotebookStage.MONITORING: MonitoringStage(self.config, self.findings),
             NotebookStage.BATCH_INFERENCE: BatchInferenceStage(self.config, self.findings),
+            NotebookStage.PUBLISH_DEFINITIONS: PublishDefinitionsStage(self.config, self.findings),
+            NotebookStage.ARCHETYPE_DERIVATION: ArchetypeDerivationStage(self.config, self.findings),
+            NotebookStage.APPROVAL_GATE: ApprovalGateStage(self.config, self.findings),
+            NotebookStage.SNAPSHOT_AND_DASHBOARD: SnapshotAndDashboardStage(self.config, self.findings),
         }
 
 
@@ -107,4 +116,8 @@ class DatabricksScriptGenerator(ScriptGenerator):
             NotebookStage.DEPLOYMENT: DeploymentStage(self.config, self.findings),
             NotebookStage.MONITORING: MonitoringStage(self.config, self.findings),
             NotebookStage.BATCH_INFERENCE: BatchInferenceStage(self.config, self.findings),
+            NotebookStage.PUBLISH_DEFINITIONS: PublishDefinitionsStage(self.config, self.findings),
+            NotebookStage.ARCHETYPE_DERIVATION: ArchetypeDerivationStage(self.config, self.findings),
+            NotebookStage.APPROVAL_GATE: ApprovalGateStage(self.config, self.findings),
+            NotebookStage.SNAPSHOT_AND_DASHBOARD: SnapshotAndDashboardStage(self.config, self.findings),
         }

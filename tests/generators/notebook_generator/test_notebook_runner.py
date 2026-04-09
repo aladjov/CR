@@ -120,12 +120,13 @@ class TestNotebookRunner:
         notebooks = generator.generate_all()
         for stage, nb in notebooks.items():
             nb_path = tmp_path / f"{stage.value}.ipynb"
+            nb_path.parent.mkdir(parents=True, exist_ok=True)
             with open(nb_path, "w") as f:
                 nbformat.write(nb, f)
 
         runner = NotebookRunner()
         report = runner.validate_sequence(str(tmp_path), platform="local")
-        assert report.total_notebooks == 10  # Holdout stage disabled by default
+        assert report.total_notebooks == 14  # 10 standard stages + 4 causal-track stages (c01..c04)
         assert report.all_passed
 
 
@@ -140,6 +141,7 @@ class TestNotebookRunnerExecution:
         notebooks = generator.generate_all()
         for stage, nb in notebooks.items():
             nb_path = tmp_path / f"{stage.value}.ipynb"
+            nb_path.parent.mkdir(parents=True, exist_ok=True)
             with open(nb_path, "w") as f:
                 nbformat.write(nb, f)
 
@@ -182,7 +184,7 @@ class TestIntegrationWithGeneration:
         runner = NotebookRunner(dry_run=True)
         report = runner.validate_sequence(str(tmp_path / "local"), platform="local")
         assert report.all_passed
-        assert report.total_notebooks == 10  # Holdout stage disabled by default
+        assert report.total_notebooks == 14  # 10 standard stages + 4 causal-track stages (c01..c04)
 
     def test_generate_and_validate_databricks(self, tmp_path):
         from customer_retention.generators.notebook_generator import Platform, generate_orchestration_notebooks
@@ -192,7 +194,7 @@ class TestIntegrationWithGeneration:
         runner = NotebookRunner(dry_run=True)
         report = runner.validate_sequence(str(tmp_path / "databricks"), platform="databricks")
         assert report.all_passed
-        assert report.total_notebooks == 10  # Holdout stage disabled by default
+        assert report.total_notebooks == 14  # 10 standard stages + 4 causal-track stages (c01..c04)
 
 
 class TestGenerationResult:
@@ -201,7 +203,7 @@ class TestGenerationResult:
         results = generate_and_validate_notebooks(output_dir=str(tmp_path), platforms=[Platform.LOCAL])
         assert Platform.LOCAL in results
         assert results[Platform.LOCAL].all_valid
-        assert len(results[Platform.LOCAL].notebook_paths) == 10  # Holdout stage disabled by default
+        assert len(results[Platform.LOCAL].notebook_paths) == 14  # 10 standard stages + 4 causal-track stages (c01..c04)
 
     def test_creates_validation_report_file(self, tmp_path):
         from customer_retention.generators.notebook_generator import Platform, generate_and_validate_notebooks
@@ -224,7 +226,7 @@ class TestGenerationResult:
         from customer_retention.generators.notebook_generator import Platform, generate_and_validate_notebooks
         results = generate_and_validate_notebooks(output_dir=str(tmp_path), platforms=[Platform.LOCAL])
         report = results[Platform.LOCAL].validation_report
-        assert report.total_notebooks == 10  # Holdout stage disabled by default
+        assert report.total_notebooks == 14  # 10 standard stages + 4 causal-track stages (c01..c04)
         notebook_names = [r.notebook_name for r in report.results]
         assert "01_ingestion" in notebook_names
         assert "10_batch_inference" in notebook_names
