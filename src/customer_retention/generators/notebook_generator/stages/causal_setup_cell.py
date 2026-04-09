@@ -84,12 +84,15 @@ FORCE_APPROVE = False
 
 _C04_CONFIG_MD = """## Configuration
 
-The cell below is the only place you should need to edit.
+The cell below is the only place you should need to edit. Every value here is read by the snapshot writer and the dashboard publisher — nothing is hardcoded inside the algorithmic cells.
 
-- **`RUN_PHASE3`** — the snapshot writer and dashboard SQL views ship in Phase 3. While they are not implemented, this flag stays `False` so the placeholder cells print a status line and skip; the run-summary cell at the bottom still executes. Flip to `True` once Phase 3 ships.
+- **`SNAPSHOT_RISK_TIER_HIGH` / `SNAPSHOT_RISK_TIER_MEDIUM`** — risk-tier thresholds applied at snapshot time. Leave as `None` to fall back to the values stored on the active `decision_policy` row (the canonical source — set in `c01_publish_definitions`).
+- **`SNAPSHOT_CAPACITY_PARTITION_COLUMN`** — optional partition column for capacity caps (e.g. `"csm_owner_id"`). Leave as `""` to apply caps globally per playbook.
 """
 
-_C04_CONFIG_BODY = '''RUN_PHASE3 = False
+_C04_CONFIG_BODY = '''SNAPSHOT_RISK_TIER_HIGH = None
+SNAPSHOT_RISK_TIER_MEDIUM = None
+SNAPSHOT_CAPACITY_PARTITION_COLUMN = ""
 '''
 
 
@@ -136,6 +139,8 @@ GOLD_FEATURES_FQN = (
 
 ARCHETYPE_CATALOG_FQN = f"{CATALOG}.{SCHEMA}.archetype_catalog"
 ELIGIBILITY_POLICY_FQN = f"{CATALOG}.{SCHEMA}.eligibility_policy"
+DECISION_POLICY_FQN = f"{CATALOG}.{SCHEMA}.decision_policy"
+ELIGIBILITY_SNAPSHOT_FQN = f"{CATALOG}.{SCHEMA}.eligibility_snapshot"
 PREDICTIONS_FQN = f"{CATALOG}.{SCHEMA}.predictions"
 
 print(f"Resolved playbooks_dir: {PLAYBOOKS_DIR}")

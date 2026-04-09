@@ -51,6 +51,11 @@ Examples:
         help="Path (folder or nested subpath) for exploration notebooks (default: exploration_notebooks)",
     )
     parser.add_argument(
+        "--causal-notebooks-path",
+        default="causal_notebooks",
+        help="Path (folder or nested subpath) for causal-track notebooks (default: causal_notebooks)",
+    )
+    parser.add_argument(
         "--experiments-path",
         default="experiments",
         help="Path (folder name) for the experiments volume — set per cluster to enable parallel runs (default: experiments)",
@@ -84,6 +89,7 @@ Examples:
             project_name=args.name or output_dir.name,
             platforms=platforms,
             exploration_notebooks_path=args.exploration_notebooks_path,
+            causal_notebooks_path=args.causal_notebooks_path,
             experiments_path=args.experiments_path,
             playbooks_path=args.playbooks_path,
         )
@@ -100,6 +106,7 @@ Examples:
         print("  5. Run all cells - auto-discovery will do the rest!")
         print(f"  6. (Optional, causal track) Edit {args.playbooks_path}/policies/")
         print(f"     and add per-playbook YAMLs to {args.playbooks_path}/")
+        print(f"  7. (Causal track) Run {args.causal_notebooks_path}/c01_publish_definitions.ipynb")
         print()
 
         return 0

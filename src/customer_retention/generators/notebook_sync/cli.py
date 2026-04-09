@@ -133,17 +133,40 @@ def sync_directory(
 
 def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(
-        description="Sync exploration notebooks: merge repo updates while preserving user config",
+        description=(
+            "Sync exploration and causal notebooks: merge repo updates while "
+            "preserving user config and tagged cells."
+        ),
     )
     parser.add_argument(
         "--repo-dir",
         required=True,
-        help="Directory with updated repo notebooks",
+        help="Directory with updated repo notebooks (exploration_notebooks)",
     )
     parser.add_argument(
         "--user-dir",
         default="exploration_notebooks",
-        help="User's notebook directory (default: exploration_notebooks)",
+        help="User's exploration notebook directory (default: exploration_notebooks)",
+    )
+    parser.add_argument(
+        "--causal-repo-dir",
+        default=None,
+        help=(
+            "Directory with updated causal-track notebooks. Defaults to "
+            "'causal_notebooks' under the parent of --repo-dir if that "
+            "directory exists, so a single --repo-dir invocation upgrades "
+            "both layers in lock-step."
+        ),
+    )
+    parser.add_argument(
+        "--causal-user-dir",
+        default="causal_notebooks",
+        help="User's causal-track notebook directory (default: causal_notebooks)",
+    )
+    parser.add_argument(
+        "--no-causal",
+        action="store_true",
+        help="Skip causal notebooks even if a causal-repo-dir is detected",
     )
     parser.add_argument(
         "--notebook",
@@ -177,7 +200,8 @@ def main(argv: list[str] | None = None):
         print(f"User directory not found: {user_dir}")
         sys.exit(1)
 
-    results = sync_directory(
+    print(f"\n[exploration] {repo_dir.name}/ -> {user_dir}")
+    exploration_results = sync_directory(
         repo_dir,
         user_dir,
         notebook=args.notebook,
@@ -186,10 +210,41 @@ def main(argv: list[str] | None = None):
         force=args.force,
     )
 
-    total = len(results)
-    changed = sum(1 for r in results.values() if r.has_changes)
+    causal_results: dict[str, SyncReport] = {}
+    causal_repo_dir = _resolve_causal_repo_dir(args, repo_dir)
+    causal_user_dir = Path(args.causal_user_dir).resolve()
+    if causal_repo_dir and causal_user_dir.exists():
+        print(f"\n[causal]      {causal_repo_dir.name}/ -> {causal_user_dir}")
+        causal_results = sync_directory(
+            causal_repo_dir,
+            causal_user_dir,
+            notebook=args.notebook,
+            backup=not args.no_backup,
+            dry_run=args.dry_run,
+            force=args.force,
+        )
+    elif causal_repo_dir and not causal_user_dir.exists():
+        print(f"\n[causal] user dir not found ({causal_user_dir}); skipping")
+
+    total = len(exploration_results) + len(causal_results)
+    changed = sum(1 for r in exploration_results.values() if r.has_changes) + sum(
+        1 for r in causal_results.values() if r.has_changes
+    )
     label = "Would sync" if args.dry_run else "Synced"
     print(f"\n{label} {changed}/{total} notebooks")
+
+
+def _resolve_causal_repo_dir(args, repo_dir: Path) -> Path | None:
+    if args.no_causal:
+        return None
+    if args.causal_repo_dir:
+        candidate = Path(args.causal_repo_dir).resolve()
+        if not candidate.exists():
+            print(f"Causal repo directory not found: {candidate}")
+            return None
+        return candidate
+    sibling = (repo_dir.parent / "causal_notebooks").resolve()
+    return sibling if sibling.exists() else None
 
 
 if __name__ == "__main__":

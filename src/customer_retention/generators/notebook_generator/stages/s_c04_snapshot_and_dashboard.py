@@ -3,11 +3,6 @@
 The final causal-track notebook. Builds the per-scoring-run
 ``eligibility_snapshot`` table, publishes the dashboard SQL views, and
 prints the four-way anchor tuple in force.
-
-Phase 3 placeholder. Cells 1 and 2 are gated on ``RUN_PHASE3``; while
-the flag is ``False`` they print a status line and skip, so the run
-summary cell at the bottom always executes against any populated
-``archetype_catalog``.
 """
 
 from typing import List
@@ -47,9 +42,9 @@ class SnapshotAndDashboardStage(StageGenerator):
             self.header_cells()
             + c04_setup_block()
             + [
-                self.cb.section("1. Build Eligibility Snapshot (Phase 3 — gated)"),
+                self.cb.section("1. Build Eligibility Snapshot"),
                 self.cb.code(_BUILD_SNAPSHOT_CELL),
-                self.cb.section("2. Publish Dashboard SQL Views (Phase 3 — gated)"),
+                self.cb.section("2. Publish Dashboard SQL Views"),
                 self.cb.code(_PUBLISH_VIEWS_CELL),
                 self.cb.section("3. Print Run Summary"),
                 self.cb.code(_PRINT_SUMMARY_CELL),
@@ -57,20 +52,45 @@ class SnapshotAndDashboardStage(StageGenerator):
         )
 
 
-_BUILD_SNAPSHOT_CELL = '''if not RUN_PHASE3:
-    print("SKIPPED: RUN_PHASE3=False (snapshot_writer.py ships in Phase 3)")
+_BUILD_SNAPSHOT_CELL = '''from customer_retention.stages.causal import SnapshotConfig, build_eligibility_snapshot
+
+snapshot_result = None
+if spark is None:
+    print("SKIPPED: no Spark session (Databricks-only cell)")
+elif not spark.catalog.tableExists(ARCHETYPE_CATALOG_FQN):
+    print(f"SKIPPED: {ARCHETYPE_CATALOG_FQN} does not exist (run c01..c03 first)")
+elif not spark.catalog.tableExists(PREDICTIONS_FQN):
+    print(f"SKIPPED: {PREDICTIONS_FQN} not populated (run s10_batch_inference first)")
 else:
-    raise NotImplementedError(
-        "snapshot_writer.py ships in Phase 3 — see "
-        "docs/causal_track_implementation_plan.md §Phase 3"
+    snapshot_cfg = SnapshotConfig(
+        spark=spark,
+        predictions_fqn=PREDICTIONS_FQN,
+        archetype_catalog_fqn=ARCHETYPE_CATALOG_FQN,
+        eligibility_policy_fqn=ELIGIBILITY_POLICY_FQN,
+        decision_policy_fqn=DECISION_POLICY_FQN,
+        snapshot_table_fqn=ELIGIBILITY_SNAPSHOT_FQN,
+        model_name=MODEL_NAME,
+        model_version=MODEL_VERSION,
     )
+    snapshot_result = build_eligibility_snapshot(snapshot_cfg)
+    print(snapshot_result.summary())
 '''
 
 
-_PUBLISH_VIEWS_CELL = '''if not RUN_PHASE3:
-    print("SKIPPED: RUN_PHASE3=False (dashboard_views.sql ships in Phase 3)")
+_PUBLISH_VIEWS_CELL = '''from customer_retention.stages.causal.dashboard_views import (
+    DASHBOARD_VIEW_NAMES,
+    publish_dashboard_views,
+)
+
+if spark is None:
+    print("SKIPPED: no Spark session (Databricks-only cell)")
+elif not spark.catalog.tableExists(ELIGIBILITY_SNAPSHOT_FQN):
+    print(f"SKIPPED: {ELIGIBILITY_SNAPSHOT_FQN} not populated yet")
 else:
-    raise NotImplementedError("dashboard_views.sql ships in Phase 3")
+    statements = publish_dashboard_views(spark, CATALOG, SCHEMA)
+    print(f"Published {len(statements)} dashboard views:")
+    for view_name in DASHBOARD_VIEW_NAMES:
+        print(f"  - {CATALOG}.{SCHEMA}.{view_name}")
 '''
 
 
@@ -84,4 +104,6 @@ else:
     for row in counts:
         print(f"  {row['status']}: {row['n']}")
     print(f"Model: {MODEL_NAME} v{MODEL_VERSION}")
+    if snapshot_result is not None:
+        print(snapshot_result.summary())
 '''

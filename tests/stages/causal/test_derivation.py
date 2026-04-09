@@ -206,6 +206,7 @@ class TestBuildArchetypeRows:
             shap_centroids=[[0.1, 0.0]],
             raw_centroids=[[1.0, 2.0]],
             raw_feature_order=["a", "b"],
+            feature_scales=[10.0, 5.0],
             extracted_rules=rules,
             mappings=mappings,
             sizes=[(0, 50)],
@@ -221,6 +222,7 @@ class TestBuildArchetypeRows:
         assert row["centroid_vector"] == [0.1, 0.0]
         assert row["centroid_vector_raw"] == [1.0, 2.0]
         assert row["centroid_feature_order"] == ["a", "b"]
+        assert row["centroid_feature_scales"] == [10.0, 5.0]
         assert row["name"] == "Test 0"
         # derivation_params is JSON-encoded
         params = json.loads(row["derivation_params"])

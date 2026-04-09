@@ -17,10 +17,13 @@ class DatabricksInitResult:
     model_name: str
     framework_repo_path: str | None = None
     exploration_notebooks_path: str = "exploration_notebooks"
+    causal_notebooks_path: str = "causal_notebooks"
     experiments_path: str = "experiments"
     playbooks_path: str = "playbooks"
     notebooks_copied: list[str] = field(default_factory=list)
     notebooks_synced: list[str] = field(default_factory=list)
+    causal_notebooks_copied: list[str] = field(default_factory=list)
+    causal_notebooks_synced: list[str] = field(default_factory=list)
 
     @property
     def environment_variables(self) -> dict[str, str]:
@@ -33,6 +36,9 @@ class DatabricksInitResult:
         }
         if self.workspace_path:
             env_vars["CR_WORKSPACE_PATH"] = self.workspace_path
+            env_vars["CR_CAUSAL_NOTEBOOKS_DIR"] = (
+                f"/Workspace/{self.workspace_path}/{self.causal_notebooks_path}"
+            )
         if self.framework_repo_path:
             env_vars["CR_FRAMEWORK_REPO_PATH"] = self.framework_repo_path
         return env_vars
@@ -47,6 +53,7 @@ def databricks_init(
     model_name: str = "customer_retention",
     framework_repo_path: str | None = None,
     exploration_notebooks_path: str = "exploration_notebooks",
+    causal_notebooks_path: str = "causal_notebooks",
     experiments_path: str = "experiments",
     playbooks_path: str = "playbooks",
 ) -> DatabricksInitResult:
@@ -56,14 +63,14 @@ def databricks_init(
         _ensure_workspace_directory(workspace_path)
     _set_environment_variables(
         catalog, schema, workspace_path, framework_repo_path,
-        experiments_path, playbooks_path,
+        experiments_path, playbooks_path, causal_notebooks_path,
     )
     resolved_experiment_name = experiment_name or _resolve_experiment_name_from_notebook_path()
     resolved_experiment_name = _make_absolute_experiment_path(resolved_experiment_name, workspace_path)
     _set_experiment_name_env_var(resolved_experiment_name)
     _persist_config(
         catalog, schema, workspace_path, resolved_experiment_name, framework_repo_path,
-        experiments_path, playbooks_path,
+        experiments_path, playbooks_path, causal_notebooks_path,
     )
     _reload_config_constants()
     _ensure_experiments_volume_exists(catalog, schema, experiments_path)
@@ -71,11 +78,18 @@ def databricks_init(
     _setup_experiment_directories()
     notebooks_copied: list[str] = []
     notebooks_synced: list[str] = []
+    causal_copied: list[str] = []
+    causal_synced: list[str] = []
     if copy_notebooks and workspace_path:
         notebooks_copied, notebooks_synced = _sync_exploration_notebooks(
             workspace_path,
             framework_repo_path=framework_repo_path,
             exploration_notebooks_path=exploration_notebooks_path,
+        )
+        causal_copied, causal_synced = _sync_causal_notebooks(
+            workspace_path,
+            framework_repo_path=framework_repo_path,
+            causal_notebooks_path=causal_notebooks_path,
         )
     if workspace_path:
         _write_requirements_files(workspace_path)
@@ -87,10 +101,13 @@ def databricks_init(
         model_name=model_name,
         framework_repo_path=framework_repo_path,
         exploration_notebooks_path=exploration_notebooks_path,
+        causal_notebooks_path=causal_notebooks_path,
         experiments_path=experiments_path,
         playbooks_path=playbooks_path,
         notebooks_copied=notebooks_copied,
         notebooks_synced=notebooks_synced,
+        causal_notebooks_copied=causal_copied,
+        causal_notebooks_synced=causal_synced,
     )
     _display_init_summary(result)
     return result
@@ -108,6 +125,7 @@ def _set_environment_variables(
     catalog: str, schema: str, workspace_path: str | None, framework_repo_path: str | None = None,
     experiments_path: str = "experiments",
     playbooks_path: str = "playbooks",
+    causal_notebooks_path: str = "causal_notebooks",
 ) -> None:
     os.environ["CR_CATALOG"] = catalog
     os.environ["CR_SCHEMA"] = schema
@@ -115,6 +133,9 @@ def _set_environment_variables(
     os.environ["CR_PLAYBOOKS_DIR"] = f"/Volumes/{catalog}/{schema}/{playbooks_path}"
     if workspace_path:
         os.environ["CR_WORKSPACE_PATH"] = workspace_path
+        os.environ["CR_CAUSAL_NOTEBOOKS_DIR"] = (
+            f"/Workspace/{workspace_path}/{causal_notebooks_path}"
+        )
     if framework_repo_path:
         os.environ["CR_FRAMEWORK_REPO_PATH"] = framework_repo_path
 
@@ -128,13 +149,18 @@ def _persist_config(
     experiment_name: str | None = None, framework_repo_path: str | None = None,
     experiments_path: str = "experiments",
     playbooks_path: str = "playbooks",
+    causal_notebooks_path: str = "causal_notebooks",
 ) -> None:
     from customer_retention.core.config.experiments import persist_databricks_config
 
+    causal_dir = (
+        f"/Workspace/{workspace_path}/{causal_notebooks_path}" if workspace_path else None
+    )
     persist_databricks_config(
         f"/Volumes/{catalog}/{schema}/{experiments_path}", catalog, schema, workspace_path,
         experiment_name, framework_repo_path=framework_repo_path,
         playbooks_dir=f"/Volumes/{catalog}/{schema}/{playbooks_path}",
+        causal_notebooks_dir=causal_dir,
     )
 
 
@@ -222,29 +248,68 @@ def _sync_exploration_notebooks(
     from customer_retention.generators.notebook_generator.project_init import ProjectInitializer
 
     source_dir = ProjectInitializer(project_name="")._get_exploration_source_dir()
+    return _sync_notebook_directory(
+        source_dir,
+        workspace_path,
+        exploration_notebooks_path,
+        framework_repo_path=framework_repo_path,
+    )
+
+
+def _sync_causal_notebooks(
+    workspace_path: str,
+    *,
+    framework_repo_path: str | None = None,
+    causal_notebooks_path: str = "causal_notebooks",
+) -> tuple[list[str], list[str]]:
+    """Mirror :func:`_sync_exploration_notebooks` for ``causal_notebooks/``.
+
+    Causal notebooks live alongside the exploration notebooks in the
+    framework package and use the same cell-id sync engine. The destination
+    is a sibling workspace folder so operators see two parallel directories
+    inside their Databricks workspace.
+    """
+    from customer_retention.generators.notebook_generator.project_init import ProjectInitializer
+
+    source_dir = ProjectInitializer(project_name="")._get_causal_source_dir()
+    return _sync_notebook_directory(
+        source_dir,
+        workspace_path,
+        causal_notebooks_path,
+        framework_repo_path=framework_repo_path,
+    )
+
+
+def _sync_notebook_directory(
+    source_dir: Path | None,
+    workspace_path: str,
+    workspace_subpath: str,
+    *,
+    framework_repo_path: str | None,
+) -> tuple[list[str], list[str]]:
     if not source_dir or not source_dir.exists():
         return [], []
 
-    dest_dir = Path(f"/Workspace/{workspace_path}/{exploration_notebooks_path}")
+    dest_dir = Path(f"/Workspace/{workspace_path}/{workspace_subpath}")
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    copied = []
-    synced = []
+    copied: list[str] = []
+    synced: list[str] = []
     for notebook in source_dir.glob("*.ipynb"):
         dest_path = dest_dir / notebook.name
         if not dest_path.exists():
             shutil.copy2(notebook, dest_path)
             _inject_system_cell(dest_path, framework_repo_path)
             copied.append(str(dest_path))
-        else:
-            try:
-                if _sync_notebook(notebook, dest_path, framework_repo_path=framework_repo_path):
-                    synced.append(str(dest_path))
-            except Exception:
-                warnings.warn(
-                    f"Could not sync notebook '{notebook.name}', skipping",
-                    stacklevel=2,
-                )
+            continue
+        try:
+            if _sync_notebook(notebook, dest_path, framework_repo_path=framework_repo_path):
+                synced.append(str(dest_path))
+        except (OSError, ValueError):
+            warnings.warn(
+                f"Could not sync notebook '{notebook.name}', skipping",
+                stacklevel=2,
+            )
 
     return copied, synced
 
@@ -328,6 +393,7 @@ def _display_init_summary(result: DatabricksInitResult) -> None:
     print(f"  Playbooks Path:   {result.playbooks_path}")
     print(f"  Workspace Path:   {result.workspace_path or '(not set)'}")
     print(f"  Notebooks Path:   {result.exploration_notebooks_path}")
+    print(f"  Causal NB Path:   {result.causal_notebooks_path}")
     print(f"  Model Name:       {result.model_name}")
     if result.framework_repo_path:
         print(f"  Framework Repo:   {result.framework_repo_path}")
@@ -340,5 +406,13 @@ def _display_init_summary(result: DatabricksInitResult) -> None:
     if result.notebooks_synced:
         print(f"  Notebooks Synced: {len(result.notebooks_synced)}")
         for nb in result.notebooks_synced:
+            print(f"    - {nb}")
+    if result.causal_notebooks_copied:
+        print(f"  Causal Copied:    {len(result.causal_notebooks_copied)}")
+        for nb in result.causal_notebooks_copied:
+            print(f"    - {nb}")
+    if result.causal_notebooks_synced:
+        print(f"  Causal Synced:    {len(result.causal_notebooks_synced)}")
+        for nb in result.causal_notebooks_synced:
             print(f"    - {nb}")
     print("=" * 45)

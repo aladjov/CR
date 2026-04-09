@@ -85,11 +85,16 @@ def merge_into(
     table_fqn: str,
     merge_keys: Sequence[str],
 ) -> Dict[str, int]:
-    """Idempotent upsert via ``DeltaTable.merge()``.
+    """Idempotent upsert via ``DeltaTable.merge()`` from driver-side row dicts.
 
     Insert new rows, update changed rows on the natural key, and leave
     everything else alone. The target table is created automatically with
     the supplied schema if it does not exist.
+
+    Used for the small definition tables (≤ a few hundred rows). For
+    distributed merges (snapshot writer, derivation outputs that ride a
+    Spark DataFrame instead of being collected to the driver) call
+    :func:`merge_dataframe_into` directly.
 
     Returns ``{"source_rows": int}`` so the caller has at least one number
     to log without paying for full pre/post table scans. Operators who
@@ -99,17 +104,39 @@ def merge_into(
     if not merge_keys:
         raise ValueError("merge_into requires at least one merge_key")
 
-    _ensure_table_exists(spark, table_fqn, schema)
-
     if not rows:
+        _ensure_table_exists(spark, table_fqn, schema)
         logger.info("merge_into %s skipped (empty source rows)", table_fqn)
         return {"source_rows": 0}
 
     source_df = _build_dataframe(spark, rows, schema)
-    _execute_delta_merge(spark, source_df, table_fqn, merge_keys, schema)
+    merge_dataframe_into(spark, source_df, schema, table_fqn, merge_keys)
 
     logger.info("merged %d rows into %s via DeltaTable.merge", len(rows), table_fqn)
     return {"source_rows": len(rows)}
+
+
+def merge_dataframe_into(
+    spark: "SparkSession",
+    source_df: "DataFrame",
+    schema: "StructType",
+    table_fqn: str,
+    merge_keys: Sequence[str],
+) -> None:
+    """Idempotent upsert via ``DeltaTable.merge()`` from a Spark DataFrame.
+
+    The merge runs entirely on the cluster — ``source_df`` is **never**
+    collected to the driver. Used by the snapshot writer where the source
+    can be tens of millions of rows wide (population × |playbooks|).
+
+    Auto-creates the target table from ``schema`` when it does not exist
+    so the first scoring run never has to seed the table by hand.
+    """
+    if not merge_keys:
+        raise ValueError("merge_dataframe_into requires at least one merge_key")
+    _ensure_table_exists(spark, table_fqn, schema)
+    _execute_delta_merge(spark, source_df, table_fqn, merge_keys, schema)
+    logger.info("merged Spark DataFrame into %s via DeltaTable.merge", table_fqn)
 
 
 # ---------------------------------------------------------------------------

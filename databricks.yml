@@ -11,6 +11,18 @@ variables:
   experiments_dir:
     description: Experiments volume path
     default: /Volumes/churnkit/analysis/experiments
+  playbooks_dir:
+    description: Playbooks volume path (sibling to experiments under {catalog}/{schema})
+    default: /Volumes/churnkit/analysis/playbooks
+  causal_notebooks_path:
+    description: Workspace folder name for the four hand-authored causal-track notebooks
+    default: causal_notebooks
+  workspace_user_path:
+    description: Workspace user path under which causal_notebooks/ is materialized
+    default: Users/${workspace.current_user.userName}/customer_retention
+  warehouse_id:
+    description: SQL warehouse id used by the AI/BI dashboard (override per target)
+    default: ""
 
 targets:
   dev:
@@ -21,3 +33,43 @@ targets:
     variables:
       catalog: churnkit
       schema: ${workspace.current_user.short_name}
+
+resources:
+  jobs:
+    causal_track_pipeline:
+      name: customer_retention_causal_track
+      description: >-
+        c01 -> c02 -> c03 -> c04 sequenced after s10_batch_inference. Reads
+        the predictions table written by s10 and produces the per-scoring-run
+        eligibility_snapshot plus the six dashboard SQL views the AI/BI
+        dashboard reads.
+      tasks:
+        - task_key: c01_publish_definitions
+          notebook_task:
+            notebook_path: /Workspace/${var.workspace_user_path}/${var.causal_notebooks_path}/c01_publish_definitions
+            source: WORKSPACE
+        - task_key: c02_archetype_derivation
+          depends_on:
+            - task_key: c01_publish_definitions
+          notebook_task:
+            notebook_path: /Workspace/${var.workspace_user_path}/${var.causal_notebooks_path}/c02_archetype_derivation
+            source: WORKSPACE
+        - task_key: c03_approval_gate
+          depends_on:
+            - task_key: c02_archetype_derivation
+          notebook_task:
+            notebook_path: /Workspace/${var.workspace_user_path}/${var.causal_notebooks_path}/c03_approval_gate
+            source: WORKSPACE
+        - task_key: c04_snapshot_and_dashboard
+          depends_on:
+            - task_key: c03_approval_gate
+          notebook_task:
+            notebook_path: /Workspace/${var.workspace_user_path}/${var.causal_notebooks_path}/c04_snapshot_and_dashboard
+            source: WORKSPACE
+
+  dashboards:
+    customer_retention_dashboard:
+      display_name: Customer Retention — Causal Track
+      file_path: ../dashboards/customer_retention_dashboard.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+      parent_path: /Workspace/${var.workspace_user_path}

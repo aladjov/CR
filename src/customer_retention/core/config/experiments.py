@@ -41,6 +41,7 @@ def persist_databricks_config(
     workspace_path: str | None = None, experiment_name: str | None = None,
     framework_repo_path: str | None = None,
     playbooks_dir: str | None = None,
+    causal_notebooks_dir: str | None = None,
 ) -> None:
     if not workspace_path:
         return
@@ -51,6 +52,8 @@ def persist_databricks_config(
         data["framework_repo_path"] = framework_repo_path
     if playbooks_dir:
         data["playbooks_dir"] = playbooks_dir
+    if causal_notebooks_dir:
+        data["causal_notebooks_dir"] = causal_notebooks_dir
     try:
         _workspace_config_path(workspace_path).write_text(json.dumps(data))
     except OSError:
@@ -118,6 +121,29 @@ def get_playbooks_dir(default: Optional[str] = None) -> Union[Path, RemotePath]:
     return _find_project_root() / "playbooks"
 
 
+def get_causal_notebooks_dir(default: Optional[str] = None) -> Union[Path, RemotePath]:
+    """Resolve the causal-notebooks directory.
+
+    Sibling of ``exploration_notebooks/`` that holds the four hand-authored
+    causal-track notebooks (``c01..c04``). Resolution order mirrors
+    ``get_playbooks_dir``:
+
+    1. ``CR_CAUSAL_NOTEBOOKS_DIR`` environment variable
+    2. Explicit ``default`` argument
+    3. ``causal_notebooks_dir`` from the persisted Databricks config (set by
+       ``databricks_init``)
+    4. Repo-local fallback: project root ``/causal_notebooks``
+    """
+    if "CR_CAUSAL_NOTEBOOKS_DIR" in os.environ:
+        return make_path(os.environ["CR_CAUSAL_NOTEBOOKS_DIR"])
+    if default:
+        return make_path(default)
+    persisted = _load_persisted_databricks_config()
+    if persisted and "causal_notebooks_dir" in persisted:
+        return make_path(persisted["causal_notebooks_dir"])
+    return _find_project_root() / "causal_notebooks"
+
+
 def get_catalog(default: str = "main") -> str:
     if "CR_CATALOG" in os.environ:
         return os.environ["CR_CATALOG"]
@@ -164,6 +190,7 @@ DATA_DIR = get_data_dir()
 MLRUNS_DIR = get_mlruns_dir()
 FEATURE_STORE_DIR = get_feature_store_dir()
 PLAYBOOKS_DIR = get_playbooks_dir()
+CAUSAL_NOTEBOOKS_DIR = get_causal_notebooks_dir()
 OUTPUT_DIR = FINDINGS_DIR
 CATALOG = get_catalog()
 SCHEMA = get_schema()
@@ -173,7 +200,7 @@ EXPERIMENT_NAME = get_experiment_name()
 
 def reload_config() -> None:
     global EXPERIMENTS_DIR, FINDINGS_DIR, DATA_DIR, MLRUNS_DIR, FEATURE_STORE_DIR
-    global PLAYBOOKS_DIR
+    global PLAYBOOKS_DIR, CAUSAL_NOTEBOOKS_DIR
     global OUTPUT_DIR, CATALOG, SCHEMA, WORKSPACE_PATH, EXPERIMENT_NAME
     EXPERIMENTS_DIR = get_experiments_dir()
     FINDINGS_DIR = get_findings_dir()
@@ -181,6 +208,7 @@ def reload_config() -> None:
     MLRUNS_DIR = get_mlruns_dir()
     FEATURE_STORE_DIR = get_feature_store_dir()
     PLAYBOOKS_DIR = get_playbooks_dir()
+    CAUSAL_NOTEBOOKS_DIR = get_causal_notebooks_dir()
     OUTPUT_DIR = FINDINGS_DIR
     CATALOG = get_catalog()
     SCHEMA = get_schema()

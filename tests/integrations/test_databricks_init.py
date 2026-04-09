@@ -1237,7 +1237,14 @@ class TestExplorationNotebooksPathParameter:
             captured["exploration_notebooks_path"] = exploration_notebooks_path
             return [], []
 
+        def fake_causal_sync(workspace_path, *, framework_repo_path=None, causal_notebooks_path="causal_notebooks"):
+            captured["causal_notebooks_path"] = causal_notebooks_path
+            return [], []
+
         monkeypatch.setattr(mod, "_sync_exploration_notebooks", fake_sync)
+        monkeypatch.setattr(mod, "_sync_causal_notebooks", fake_causal_sync)
+        monkeypatch.setattr(mod, "_ensure_workspace_directory", lambda *_a, **_k: None)
+        monkeypatch.setattr(mod, "_write_requirements_files", lambda *_a, **_k: None)
         monkeypatch.setattr(
             "customer_retention.core.config.experiments._workspace_config_path",
             lambda wp: tmp_path / ".churnkit_config.json",
@@ -1259,7 +1266,14 @@ class TestExplorationNotebooksPathParameter:
             captured["exploration_notebooks_path"] = exploration_notebooks_path
             return [], []
 
+        def fake_causal_sync(workspace_path, *, framework_repo_path=None, causal_notebooks_path="causal_notebooks"):
+            captured["causal_notebooks_path"] = causal_notebooks_path
+            return [], []
+
         monkeypatch.setattr(mod, "_sync_exploration_notebooks", fake_sync)
+        monkeypatch.setattr(mod, "_sync_causal_notebooks", fake_causal_sync)
+        monkeypatch.setattr(mod, "_ensure_workspace_directory", lambda *_a, **_k: None)
+        monkeypatch.setattr(mod, "_write_requirements_files", lambda *_a, **_k: None)
         monkeypatch.setattr(
             "customer_retention.core.config.experiments._workspace_config_path",
             lambda wp: tmp_path / ".churnkit_config.json",
@@ -1267,6 +1281,7 @@ class TestExplorationNotebooksPathParameter:
 
         mod.databricks_init(workspace_path="Users/me/project", copy_notebooks=True)
         assert captured["exploration_notebooks_path"] == "exploration_notebooks"
+        assert captured["causal_notebooks_path"] == "causal_notebooks"
 
     def test_result_exposes_exploration_notebooks_path(self, monkeypatch, databricks_env):
         from customer_retention.integrations.databricks_init import databricks_init

@@ -252,6 +252,12 @@ def archetype_catalog_schema() -> "StructType":
             t["StructField"]("centroid_vector", t["ArrayType"](t["DoubleType"]()), True),
             t["StructField"]("centroid_vector_raw", t["ArrayType"](t["DoubleType"]()), True),
             t["StructField"]("centroid_feature_order", t["ArrayType"](t["StringType"]()), True),
+            # Per-feature population std-dev, aligned 1:1 with centroid_feature_order.
+            # Used by the runtime snapshot writer to compute scaled Euclidean
+            # distance (x - centroid)/scale so features with different units
+            # (tenure_days vs nps_score) don't let the high-cardinality feature
+            # dominate the nearest-neighbor match.
+            t["StructField"]("centroid_feature_scales", t["ArrayType"](t["DoubleType"]()), True),
             t["StructField"](
                 "feature_thresholds",
                 t["MapType"](t["StringType"](), _feature_threshold_struct()),

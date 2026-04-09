@@ -200,6 +200,7 @@ def derive_archetypes_and_policies(config: DerivationConfig) -> DerivationResult
         feature_columns=selected_raw_features,
         cluster_col=CLUSTER_COL,
     )
+    feature_scales = _compute_feature_scales(raw_with_clusters, raw_feature_order)
     shap_centroids, _ = cluster_shap_centroids(
         clustering.labelled_df,
         shap_columns=selected_shap_columns,
@@ -248,6 +249,7 @@ def derive_archetypes_and_policies(config: DerivationConfig) -> DerivationResult
         shap_centroids=shap_centroids,
         raw_centroids=raw_centroids,
         raw_feature_order=raw_feature_order,
+        feature_scales=feature_scales,
         extracted_rules=extracted_rules,
         mappings=mappings,
         sizes=sizes,
@@ -365,6 +367,39 @@ def _row_value(row: Any, column: str) -> float:
 _TOP_DRIVER_COUNT: int = 10
 
 
+def _compute_feature_scales(
+    raw_with_clusters: "DataFrame",
+    feature_order: Sequence[str],
+) -> List[float]:
+    """Return per-feature population std-dev aligned with ``feature_order``.
+
+    A single batched Spark aggregation job computes ``stddev_pop`` for every
+    feature column in one scan. Features absent from the DataFrame, or with
+    zero / null std-dev (constant columns), fall back to ``1.0`` so distance
+    computation degrades gracefully to unscaled rather than dividing by zero.
+
+    The returned list is aligned 1:1 with ``feature_order`` and is stored as
+    ``centroid_feature_scales`` on every archetype row so the runtime
+    snapshot writer can apply scaled Euclidean distance:
+    ``scaled_diff = (x - centroid) / scale``.
+    """
+    from pyspark.sql import functions as F  # noqa: N812
+
+    available = set(raw_with_clusters.columns)
+    indexed = [(i, c) for i, c in enumerate(feature_order) if c in available]
+    if not indexed:
+        return [1.0] * len(feature_order)
+
+    exprs = [F.stddev_pop(F.col(c)).alias(f"__scale_{i}") for i, c in indexed]
+    row = raw_with_clusters.agg(*exprs).head()
+
+    scales = [1.0] * len(feature_order)
+    for i, c in indexed:
+        v = row[f"__scale_{i}"]
+        scales[i] = float(v) if (v is not None and float(v) > 0.0) else 1.0
+    return scales
+
+
 def _build_archetype_summaries(
     sizes: List[Tuple[int, int]],
     mean_targets: List[Tuple[int, float]],
@@ -431,6 +466,7 @@ def _build_archetype_rows(
     shap_centroids: List[List[float]],
     raw_centroids: List[List[float]],
     raw_feature_order: List[str],
+    feature_scales: List[float],
     extracted_rules: List[ExtractedRule],
     mappings: List[ArchetypeMapping],
     sizes: List[Tuple[int, int]],
@@ -472,6 +508,7 @@ def _build_archetype_rows(
                 "centroid_vector": shap_vector,
                 "centroid_vector_raw": raw_vector,
                 "centroid_feature_order": list(raw_feature_order),
+                "centroid_feature_scales": list(feature_scales),
                 "feature_thresholds": feature_thresholds,
                 "name": mapping.archetype_name if mapping else f"Archetype {cluster_index}",
                 "description": mapping.archetype_description if mapping else "",

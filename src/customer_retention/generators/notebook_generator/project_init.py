@@ -11,6 +11,7 @@ class ProjectInitializer:
     generate_orchestration: bool = False
     platforms: Optional[List[str]] = None
     exploration_notebooks_path: str = "exploration_notebooks"
+    causal_notebooks_path: str = "causal_notebooks"
     experiments_path: str = "experiments"
     playbooks_path: str = "playbooks"
 
@@ -22,6 +23,7 @@ class ProjectInitializer:
         gitignore_path = self._create_gitignore(project_path)
         pyproject_path = self._create_pyproject(project_path)
         exploration_notebooks = self._copy_exploration_notebooks(project_path)
+        causal_notebooks = self._copy_causal_notebooks(project_path)
         seed_yamls_copied = self._copy_seed_yamls(project_path)
         if self.generate_orchestration:
             self._generate_orchestration(project_path)
@@ -30,6 +32,7 @@ class ProjectInitializer:
             "gitignore_path": str(gitignore_path),
             "pyproject_path": str(pyproject_path),
             "exploration_notebooks": exploration_notebooks,
+            "causal_notebooks": causal_notebooks,
             "seed_yamls_copied": seed_yamls_copied,
         }
 
@@ -38,6 +41,7 @@ class ProjectInitializer:
         pb = self.playbooks_path
         directories = [
             self.exploration_notebooks_path,
+            self.causal_notebooks_path,
             "generated_pipelines/local",
             "generated_pipelines/databricks",
             f"{exp}/findings",
@@ -66,7 +70,10 @@ Customer retention analysis project using the churnkit framework.
 ## Structure
 
 ### Code (version controlled)
-- `exploration_notebooks/` - Interactive exploration notebooks
+- `{self.exploration_notebooks_path}/` - Interactive exploration notebooks
+- `{self.causal_notebooks_path}/` - Causal-track orchestration notebooks
+  (`c01_publish_definitions`, `c02_archetype_derivation`,
+  `c03_approval_gate`, `c04_snapshot_and_dashboard`)
 - `generated_pipelines/` - Auto-generated pipeline notebooks/scripts
   - `local/` - Local platform notebooks
   - `databricks/` - Databricks platform notebooks
@@ -149,12 +156,23 @@ dev = [
     def _copy_exploration_notebooks(self, project_path: Path) -> List[str]:
         source_dir = self._get_exploration_source_dir()
         dest_dir = project_path / self.exploration_notebooks_path
-        copied = []
-        if source_dir and source_dir.exists():
-            for notebook in source_dir.glob("*.ipynb"):
-                dest_path = dest_dir / notebook.name
-                shutil.copy2(notebook, dest_path)
-                copied.append(str(dest_path))
+        return self._copy_notebook_dir(source_dir, dest_dir)
+
+    def _copy_causal_notebooks(self, project_path: Path) -> List[str]:
+        source_dir = self._get_causal_source_dir()
+        dest_dir = project_path / self.causal_notebooks_path
+        return self._copy_notebook_dir(source_dir, dest_dir)
+
+    @staticmethod
+    def _copy_notebook_dir(source_dir: Optional[Path], dest_dir: Path) -> List[str]:
+        copied: List[str] = []
+        if source_dir is None or not source_dir.exists():
+            return copied
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        for notebook in source_dir.glob("*.ipynb"):
+            dest_path = dest_dir / notebook.name
+            shutil.copy2(notebook, dest_path)
+            copied.append(str(dest_path))
         return copied
 
     def _copy_seed_yamls(self, project_path: Path) -> List[str]:
@@ -197,20 +215,35 @@ dev = [
         return None
 
     def _get_exploration_source_dir(self) -> Optional[Path]:
+        return self._resolve_packaged_notebook_dir(
+            dir_name="exploration_notebooks",
+            sentinel_basename="00_start_here.ipynb",
+        )
+
+    def _get_causal_source_dir(self) -> Optional[Path]:
+        return self._resolve_packaged_notebook_dir(
+            dir_name="causal_notebooks",
+            sentinel_basename="c01_publish_definitions.ipynb",
+        )
+
+    def _resolve_packaged_notebook_dir(
+        self, *, dir_name: str, sentinel_basename: str,
+    ) -> Optional[Path]:
         # 1. Development / editable install: notebooks live in the source tree
         pkg_root = Path(__file__).parent.parent.parent.parent
         for candidate in (pkg_root, pkg_root.parent):
-            dev_path = candidate / "exploration_notebooks"
+            dev_path = candidate / dir_name
             if dev_path.is_dir():
                 return dev_path
 
         # 2. Installed package: resolve from package metadata RECORD.
         #    Works across pip, conda, uv, pipx — any PEP 376 compliant installer.
+        sentinel_suffix = f"{dir_name}/{sentinel_basename}"
         try:
             from importlib.metadata import PackageNotFoundError, distribution
             dist = distribution("churnkit")
             for f in dist.files or []:
-                if str(f).endswith("exploration_notebooks/00_start_here.ipynb"):
+                if str(f).endswith(sentinel_suffix):
                     resolved = Path(dist.locate_file(f)).resolve()
                     if resolved.parent.is_dir():
                         return resolved.parent
@@ -219,7 +252,7 @@ dev = [
 
         # 3. Fallback: common shared-data location under sys.prefix
         #    (covers cases where RECORD is missing, e.g. conda --no-record)
-        prefix_path = Path(sys.prefix) / "share" / "churnkit" / "exploration_notebooks"
+        prefix_path = Path(sys.prefix) / "share" / "churnkit" / dir_name
         if prefix_path.is_dir():
             return prefix_path
 
@@ -240,6 +273,7 @@ def initialize_project(
     project_name: str,
     generate_orchestration: bool = False,
     exploration_notebooks_path: str = "exploration_notebooks",
+    causal_notebooks_path: str = "causal_notebooks",
     experiments_path: str = "experiments",
     playbooks_path: str = "playbooks",
 ) -> Dict[str, any]:
@@ -247,6 +281,7 @@ def initialize_project(
         project_name=project_name,
         generate_orchestration=generate_orchestration,
         exploration_notebooks_path=exploration_notebooks_path,
+        causal_notebooks_path=causal_notebooks_path,
         experiments_path=experiments_path,
         playbooks_path=playbooks_path,
     )

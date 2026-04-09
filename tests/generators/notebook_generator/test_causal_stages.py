@@ -137,15 +137,22 @@ class TestPerStageContent:
         # c03 doesn't build the LLM namer
         assert "build_llm_namer" not in code
 
-    def test_c04_phase3_cells_are_gated(self):
+    def test_c04_calls_snapshot_writer_and_dashboard_views(self):
         gen = LocalNotebookGenerator(NotebookConfig(), None)
         nb = gen.generate_stage(NotebookStage.SNAPSHOT_AND_DASHBOARD)
         code = _all_code(nb)
-        # NotImplementedError must NOT be top-level — it must sit inside an
-        # `else` branch under the RUN_PHASE3 guard so the summary cell still
-        # runs when RUN_PHASE3=False.
-        assert "RUN_PHASE3" in code
-        assert "if not RUN_PHASE3" in code
+        # Phase 3 wires up the live snapshot writer and dashboard publisher
+        assert "build_eligibility_snapshot" in code
+        assert "SnapshotConfig" in code
+        assert "publish_dashboard_views" in code
+        assert "DASHBOARD_VIEW_NAMES" in code
+        # The four Delta tables the snapshot writer reads must be referenced
+        assert "ELIGIBILITY_SNAPSHOT_FQN" in code
+        assert "DECISION_POLICY_FQN" in code
+        assert "PREDICTIONS_FQN" in code
+        # NotImplementedError / RUN_PHASE3 placeholder must be gone
+        assert "RUN_PHASE3" not in code
+        assert "NotImplementedError" not in code
         # The summary cell exists and queries archetype_catalog
         assert "archetype_catalog row counts" in code
 

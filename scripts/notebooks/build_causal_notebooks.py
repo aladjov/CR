@@ -168,6 +168,8 @@ GOLD_FEATURES_FQN = (
 
 ARCHETYPE_CATALOG_FQN = f"{CATALOG}.{SCHEMA}.archetype_catalog"
 ELIGIBILITY_POLICY_FQN = f"{CATALOG}.{SCHEMA}.eligibility_policy"
+DECISION_POLICY_FQN = f"{CATALOG}.{SCHEMA}.decision_policy"
+ELIGIBILITY_SNAPSHOT_FQN = f"{CATALOG}.{SCHEMA}.eligibility_snapshot"
 PREDICTIONS_FQN = f"{CATALOG}.{SCHEMA}.predictions"
 
 print(f"Resolved playbooks_dir: {PLAYBOOKS_DIR}")
@@ -543,29 +545,60 @@ def build_c03() -> List[Dict[str, Any]]:
 
 _C04_CONFIG_MD = """## Configuration
 
-The cell below is the only place you should need to edit.
+The cell below is the only place you should need to edit. Every value here is read by the snapshot writer and the dashboard publisher — nothing is hardcoded inside the algorithmic cells.
 
-- **`RUN_PHASE3`** — the snapshot writer and dashboard SQL views ship in Phase 3. While they are not implemented, this flag stays `False` so the placeholder cells print a status line and skip; the run-summary cell at the bottom still executes. Flip to `True` once Phase 3 ships and the snapshot writer is wired up.
+- **`SNAPSHOT_RISK_TIER_HIGH` / `SNAPSHOT_RISK_TIER_MEDIUM`** — risk-tier thresholds applied at snapshot time. Leave as `None` to fall back to the values stored on the active `decision_policy` row (the canonical source — set in `c01_publish_definitions`).
+- **`SNAPSHOT_CAPACITY_PARTITION_COLUMN`** — optional partition column for capacity caps (e.g. `"csm_owner_id"`). Leave as `""` to apply caps globally per playbook.
 """
 
-_C04_CONFIG_BODY = '''RUN_PHASE3 = False
+_C04_CONFIG_BODY = '''SNAPSHOT_RISK_TIER_HIGH = None
+SNAPSHOT_RISK_TIER_MEDIUM = None
+SNAPSHOT_CAPACITY_PARTITION_COLUMN = ""
 '''
 
 
-_C04_BUILD_SNAPSHOT_BODY = '''if not RUN_PHASE3:
-    print("SKIPPED: RUN_PHASE3=False (snapshot_writer.py ships in Phase 3)")
+_C04_BUILD_SNAPSHOT_BODY = '''from customer_retention.stages.causal import SnapshotConfig, build_eligibility_snapshot
+
+snapshot_result = None
+if spark is None:
+    print("SKIPPED: no Spark session (Databricks-only cell)")
+elif not spark.catalog.tableExists(ARCHETYPE_CATALOG_FQN):
+    print(f"SKIPPED: {ARCHETYPE_CATALOG_FQN} does not exist (run c01..c03 first)")
+elif not spark.catalog.tableExists(PREDICTIONS_FQN):
+    print(f"SKIPPED: {PREDICTIONS_FQN} not populated (run s10_batch_inference first)")
 else:
-    raise NotImplementedError(
-        "snapshot_writer.py ships in Phase 3 — see "
-        "docs/causal_track_implementation_plan.md §Phase 3"
+    snapshot_cfg = SnapshotConfig(
+        spark=spark,
+        predictions_fqn=PREDICTIONS_FQN,
+        archetype_catalog_fqn=ARCHETYPE_CATALOG_FQN,
+        eligibility_policy_fqn=ELIGIBILITY_POLICY_FQN,
+        decision_policy_fqn=DECISION_POLICY_FQN,
+        snapshot_table_fqn=ELIGIBILITY_SNAPSHOT_FQN,
+        model_name=MODEL_NAME,
+        model_version=MODEL_VERSION,
+        risk_tier_high=SNAPSHOT_RISK_TIER_HIGH,
+        risk_tier_medium=SNAPSHOT_RISK_TIER_MEDIUM,
+        capacity_partition_column=SNAPSHOT_CAPACITY_PARTITION_COLUMN or None,
     )
+    snapshot_result = build_eligibility_snapshot(snapshot_cfg)
+    print(snapshot_result.summary())
 '''
 
 
-_C04_PUBLISH_VIEWS_BODY = '''if not RUN_PHASE3:
-    print("SKIPPED: RUN_PHASE3=False (dashboard_views.sql ships in Phase 3)")
+_C04_PUBLISH_VIEWS_BODY = '''from customer_retention.stages.causal.dashboard_views import (
+    DASHBOARD_VIEW_NAMES,
+    publish_dashboard_views,
+)
+
+if spark is None:
+    print("SKIPPED: no Spark session (Databricks-only cell)")
+elif not spark.catalog.tableExists(ELIGIBILITY_SNAPSHOT_FQN):
+    print(f"SKIPPED: {ELIGIBILITY_SNAPSHOT_FQN} not populated yet")
 else:
-    raise NotImplementedError("dashboard_views.sql ships in Phase 3")
+    statements = publish_dashboard_views(spark, CATALOG, SCHEMA)
+    print(f"Published {len(statements)} dashboard views:")
+    for view_name in DASHBOARD_VIEW_NAMES:
+        print(f"  - {CATALOG}.{SCHEMA}.{view_name}")
 '''
 
 
@@ -579,6 +612,8 @@ else:
     for row in counts:
         print(f"  {row['status']}: {row['n']}")
     print(f"Model: {MODEL_NAME} v{MODEL_VERSION}")
+    if snapshot_result is not None:
+        print(snapshot_result.summary())
 '''
 
 
@@ -591,20 +626,18 @@ def build_c04() -> List[Dict[str, Any]]:
             [
                 "# Chapter c04: Snapshot + Dashboard (Causal Track)\n",
                 "\n",
-                "Builds the per-scoring-run `eligibility_snapshot` table, publishes the dashboard SQL views, and prints the four-way anchor tuple in force.\n",
+                "Builds the per-scoring-run `eligibility_snapshot` table, publishes the six dashboard SQL views, and prints the four-way anchor tuple in force.\n",
                 "\n",
-                "**Phase 3 placeholder.** Cells 1 and 2 are gated on `RUN_PHASE3`; while the flag is `False` they print a status line and the run-summary cell at the bottom still executes against any populated `archetype_catalog`. Flip `RUN_PHASE3=True` once `snapshot_writer.py` and `dashboard_views.sql` ship in Phase 3.\n",
-                "\n",
-                "Reads `predictions` from `s10_batch_inference` (do **not** trigger scoring here).\n",
+                "Reads `predictions` from `s10_batch_inference` (do **not** trigger scoring here). Reads the active rows from `archetype_catalog`, `eligibility_policy`, and `decision_policy`. Writes `eligibility_snapshot` via Delta MERGE on the natural `(scoring_run_id, account_id, playbook_id)` key — re-running with the same anchor tuple is a no-op.\n",
             ],
         ),
         init_progress_cell(stage, stage),
         md_cell(stage, "c04_configuration", [_C04_CONFIG_MD]),
         code_cell(stage, "config", "configuration", [_C04_CONFIG_BODY]),
         *setup_block(stage, needs_model=True),
-        md_cell(stage, "c04_build_snapshot_section", ["## 1. Build Eligibility Snapshot (Phase 3 — gated)\n"]),
+        md_cell(stage, "c04_build_snapshot_section", ["## 1. Build Eligibility Snapshot\n"]),
         code_cell(stage, "code", "build_eligibility_snapshot", [_C04_BUILD_SNAPSHOT_BODY]),
-        md_cell(stage, "c04_publish_views_section", ["## 2. Publish Dashboard SQL Views (Phase 3 — gated)\n"]),
+        md_cell(stage, "c04_publish_views_section", ["## 2. Publish Dashboard SQL Views\n"]),
         code_cell(stage, "code", "publish_dashboard_views", [_C04_PUBLISH_VIEWS_BODY]),
         md_cell(stage, "c04_summary_section", ["## 3. Print Run Summary\n"]),
         code_cell(stage, "code", "print_run_summary", [_C04_SUMMARY_BODY]),

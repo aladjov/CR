@@ -119,6 +119,12 @@ COLLECT_BOUNDARY_FILES = {
     #   derivation: orchestrator collects per-cluster summaries (k≤8 rows) and a
     #     bounded surrogate-tree input sample (≤MAX_SAMPLE_ROWS = 100K rows).
     "stages/causal/derivation.py",
+    #   snapshot_writer: collects active definition rows (≤8 archetypes, ≤ a few
+    #     hundred policies, 1 decision_policy) plus a 1-row .agg().head() for
+    #     summary counts and a per-risk-tier groupBy().count().collect() (3 rows).
+    #     The snapshot DataFrame itself is MERGE'd via DeltaTable.merge(...)
+    #     directly — never collected to the driver.
+    "stages/causal/snapshot_writer.py",
 }
 
 # ── bare 'import pandas as pd' allowlist ────────────────────────────────

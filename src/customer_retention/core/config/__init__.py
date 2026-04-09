@@ -8,6 +8,7 @@ from .column_config import (
 )
 from .experiments import (
     CATALOG,
+    CAUSAL_NOTEBOOKS_DIR,
     DATA_DIR,
     EXPERIMENT_NAME,
     EXPERIMENTS_DIR,
@@ -19,6 +20,7 @@ from .experiments import (
     SCHEMA,
     WORKSPACE_PATH,
     get_catalog,
+    get_causal_notebooks_dir,
     get_data_dir,
     get_experiment_name,
     get_experiments_dir,
@@ -71,6 +73,7 @@ __all__ = [
     "MLRUNS_DIR",
     "FEATURE_STORE_DIR",
     "PLAYBOOKS_DIR",
+    "CAUSAL_NOTEBOOKS_DIR",
     "OUTPUT_DIR",
     "get_catalog",
     "get_schema",
@@ -82,5 +85,6 @@ __all__ = [
     "get_mlruns_dir",
     "get_feature_store_dir",
     "get_playbooks_dir",
+    "get_causal_notebooks_dir",
     "setup_experiments_structure",
 ]

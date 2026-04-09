@@ -12,10 +12,13 @@ specified in ``docs/playbook_execution_data_model.md``:
 - Analytical-only DDL: ``assignments``, ``actions``, ``outcomes`` (defined for
   the writeback contract; not populated by this stage).
 
-The package is organized as a thin library that the four generated
-notebooks under ``exploration_notebooks/causal_notebooks/`` orchestrate
-(``c01_publish_definitions``, ``c02_archetype_derivation``,
-``c03_approval_gate``, ``c04_snapshot_and_dashboard``). See
+The package is organized as a thin library that the four hand-authored
+notebooks under ``causal_notebooks/`` (project root, sibling of
+``exploration_notebooks/``) orchestrate: ``c01_publish_definitions``,
+``c02_archetype_derivation``, ``c03_approval_gate``, and
+``c04_snapshot_and_dashboard``. The same library code is also rendered as
+production scripts under ``generated_pipelines/{platform}/c0X_*.py`` via
+the ``s_c01..s_c04`` stage generators. See
 ``docs/playbook_execution_data_model.md`` for the full specification and
 ``docs/causal_track_implementation_plan.md`` for the implementation plan.
 """
@@ -70,6 +73,17 @@ from .shap_runner import (
     compute_shap_distributed,
     freeze_background,
 )
+from .snapshot_writer import (
+    SnapshotConfig,
+    SnapshotResult,
+    apply_decision_policy,
+    assign_archetype,
+    build_eligibility_snapshot,
+    compute_eligibility_id,
+    compute_scoring_run_id,
+    evaluate_eligibility,
+    write_snapshot,
+)
 
 __all__ = [
     "DEFAULT_FEATURE_CAP",
@@ -88,9 +102,14 @@ __all__ = [
     "LLMNamer",
     "PlaybookFitDecision",
     "ShapRunResult",
+    "SnapshotConfig",
+    "SnapshotResult",
     "StabilityDecision",
     "TemplateNamer",
+    "apply_decision_policy",
+    "assign_archetype",
     "auto_promote_stable",
+    "build_eligibility_snapshot",
     "build_llm_namer",
     "cluster_centroids_raw",
     "cluster_kmeans",
@@ -99,9 +118,12 @@ __all__ = [
     "cluster_target_means",
     "collect_features",
     "compile_predicate",
+    "compute_eligibility_id",
+    "compute_scoring_run_id",
     "compute_shap_distributed",
     "cosine_similarity",
     "derive_archetypes_and_policies",
+    "evaluate_eligibility",
     "extract_eligibility_rules",
     "extract_features_from_text",
     "freeze_background",
@@ -109,4 +131,5 @@ __all__ = [
     "map_archetypes_to_playbooks",
     "predicate_to_sql",
     "select_top_shap_features",
+    "write_snapshot",
 ]

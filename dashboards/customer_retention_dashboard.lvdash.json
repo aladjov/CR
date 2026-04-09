@@ -1,0 +1,199 @@
+{
+  "displayName": "Customer Retention \u2014 Causal Track",
+  "datasets": [
+    {
+      "name": "ds_ranked_at_risk_customers",
+      "displayName": "Ranked at-risk customers",
+      "queryLines": [
+        "SELECT *",
+        "FROM {{ catalog }}.{{ schema }}.v_ranked_at_risk_customers",
+        "ORDER BY churn_probability DESC"
+      ],
+      "parameters": [
+        {
+          "displayName": "catalog",
+          "keyword": "catalog",
+          "dataType": "STRING"
+        },
+        {
+          "displayName": "schema",
+          "keyword": "schema",
+          "dataType": "STRING"
+        }
+      ]
+    },
+    {
+      "name": "ds_archetype_overview",
+      "displayName": "Archetype overview",
+      "queryLines": [
+        "SELECT *",
+        "FROM {{ catalog }}.{{ schema }}.v_archetype_overview"
+      ],
+      "parameters": [
+        {"displayName": "catalog", "keyword": "catalog", "dataType": "STRING"},
+        {"displayName": "schema", "keyword": "schema", "dataType": "STRING"}
+      ]
+    },
+    {
+      "name": "ds_eligibility_rules",
+      "displayName": "Active eligibility rules",
+      "queryLines": [
+        "SELECT *",
+        "FROM {{ catalog }}.{{ schema }}.v_playbook_eligibility_rules"
+      ],
+      "parameters": [
+        {"displayName": "catalog", "keyword": "catalog", "dataType": "STRING"},
+        {"displayName": "schema", "keyword": "schema", "dataType": "STRING"}
+      ]
+    },
+    {
+      "name": "ds_capacity_utilization",
+      "displayName": "Capacity utilization",
+      "queryLines": [
+        "SELECT *",
+        "FROM {{ catalog }}.{{ schema }}.v_capacity_utilization"
+      ],
+      "parameters": [
+        {"displayName": "catalog", "keyword": "catalog", "dataType": "STRING"},
+        {"displayName": "schema", "keyword": "schema", "dataType": "STRING"}
+      ]
+    },
+    {
+      "name": "ds_holdouts",
+      "displayName": "Holdout assignments",
+      "queryLines": [
+        "SELECT *",
+        "FROM {{ catalog }}.{{ schema }}.v_holdout_assignments"
+      ],
+      "parameters": [
+        {"displayName": "catalog", "keyword": "catalog", "dataType": "STRING"},
+        {"displayName": "schema", "keyword": "schema", "dataType": "STRING"}
+      ]
+    },
+    {
+      "name": "ds_run_history",
+      "displayName": "Scoring run history",
+      "queryLines": [
+        "SELECT *",
+        "FROM {{ catalog }}.{{ schema }}.v_run_anchor_history"
+      ],
+      "parameters": [
+        {"displayName": "catalog", "keyword": "catalog", "dataType": "STRING"},
+        {"displayName": "schema", "keyword": "schema", "dataType": "STRING"}
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "page_overview",
+      "displayName": "Overview",
+      "layout": [
+        {
+          "widget": {
+            "name": "w_ranked_customers",
+            "displayName": "Ranked at-risk customers",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_ranked_at_risk_customers",
+                  "fields": [
+                    {"name": "account_id", "expression": "`account_id`"},
+                    {"name": "churn_probability", "expression": "`churn_probability`"},
+                    {"name": "risk_tier", "expression": "`risk_tier`"},
+                    {"name": "playbook_id", "expression": "`playbook_id`"},
+                    {"name": "archetype_id", "expression": "`archetype_id`"},
+                    {"name": "policy_rank_among_eligible", "expression": "`policy_rank_among_eligible`"},
+                    {"name": "eligibility_evidence", "expression": "`eligibility_evidence`"}
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table"
+            }
+          },
+          "position": {"x": 0, "y": 0, "width": 6, "height": 6}
+        },
+        {
+          "widget": {
+            "name": "w_archetype_table",
+            "displayName": "Active archetypes",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_archetype_overview",
+                  "fields": [
+                    {"name": "archetype_id", "expression": "`archetype_id`"},
+                    {"name": "archetype_name", "expression": "`archetype_name`"},
+                    {"name": "cluster_size", "expression": "`cluster_size`"},
+                    {"name": "cluster_mean_churn_probability", "expression": "`cluster_mean_churn_probability`"},
+                    {"name": "rationale", "expression": "`rationale`"}
+                  ]
+                }
+              }
+            ],
+            "spec": {"version": 1, "widgetType": "table"}
+          },
+          "position": {"x": 0, "y": 6, "width": 6, "height": 4}
+        },
+        {
+          "widget": {
+            "name": "w_capacity",
+            "displayName": "Capacity utilization (latest run)",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_capacity_utilization",
+                  "fields": [
+                    {"name": "playbook_id", "expression": "`playbook_id`"},
+                    {"name": "eligible_count", "expression": "`eligible_count`"},
+                    {"name": "recommended_count", "expression": "`recommended_count`"},
+                    {"name": "holdout_count", "expression": "`holdout_count`"},
+                    {"name": "suppressed_count", "expression": "`suppressed_count`"}
+                  ]
+                }
+              }
+            ],
+            "spec": {"version": 1, "widgetType": "bar"}
+          },
+          "position": {"x": 0, "y": 10, "width": 6, "height": 4}
+        }
+      ]
+    },
+    {
+      "name": "page_run_history",
+      "displayName": "Run history",
+      "layout": [
+        {
+          "widget": {
+            "name": "w_run_history",
+            "displayName": "Scoring run history",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_run_history",
+                  "fields": [
+                    {"name": "scoring_run_id", "expression": "`scoring_run_id`"},
+                    {"name": "as_of_date", "expression": "`as_of_date`"},
+                    {"name": "model_version", "expression": "`model_version`"},
+                    {"name": "total_eligible_rows", "expression": "`total_eligible_rows`"},
+                    {"name": "recommended_rows", "expression": "`recommended_rows`"},
+                    {"name": "holdout_rows", "expression": "`holdout_rows`"},
+                    {"name": "mean_churn_probability", "expression": "`mean_churn_probability`"}
+                  ]
+                }
+              }
+            ],
+            "spec": {"version": 1, "widgetType": "table"}
+          },
+          "position": {"x": 0, "y": 0, "width": 6, "height": 6}
+        }
+      ]
+    }
+  ]
+}
