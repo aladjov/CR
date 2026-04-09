@@ -40,6 +40,7 @@ def persist_databricks_config(
     experiments_dir: str, catalog: str, schema: str,
     workspace_path: str | None = None, experiment_name: str | None = None,
     framework_repo_path: str | None = None,
+    playbooks_dir: str | None = None,
 ) -> None:
     if not workspace_path:
         return
@@ -48,6 +49,8 @@ def persist_databricks_config(
         data["experiment_name"] = experiment_name
     if framework_repo_path:
         data["framework_repo_path"] = framework_repo_path
+    if playbooks_dir:
+        data["playbooks_dir"] = playbooks_dir
     try:
         _workspace_config_path(workspace_path).write_text(json.dumps(data))
     except OSError:
@@ -88,6 +91,31 @@ def get_mlruns_dir(default: Optional[str] = None) -> Path:
 
 def get_feature_store_dir(default: Optional[str] = None) -> Path:
     return get_experiments_dir(default) / "feature_repo"
+
+
+def get_playbooks_dir(default: Optional[str] = None) -> Union[Path, RemotePath]:
+    """Resolve the playbooks volume / directory.
+
+    Resolution order, mirroring ``get_experiments_dir``:
+
+    1. ``CR_PLAYBOOKS_DIR`` environment variable
+    2. Explicit ``default`` argument
+    3. ``playbooks_dir`` from the persisted Databricks config (set by
+       ``databricks_init`` and friends)
+    4. Repo-local fallback: project root ``/playbooks``
+
+    The fallback uses the same project root discovery as ``get_experiments_dir``
+    so local development "just works" against the gitignored ``playbooks/``
+    directory in the repo.
+    """
+    if "CR_PLAYBOOKS_DIR" in os.environ:
+        return make_path(os.environ["CR_PLAYBOOKS_DIR"])
+    if default:
+        return make_path(default)
+    persisted = _load_persisted_databricks_config()
+    if persisted and "playbooks_dir" in persisted:
+        return make_path(persisted["playbooks_dir"])
+    return _find_project_root() / "playbooks"
 
 
 def get_catalog(default: str = "main") -> str:
@@ -135,6 +163,7 @@ FINDINGS_DIR = get_findings_dir()
 DATA_DIR = get_data_dir()
 MLRUNS_DIR = get_mlruns_dir()
 FEATURE_STORE_DIR = get_feature_store_dir()
+PLAYBOOKS_DIR = get_playbooks_dir()
 OUTPUT_DIR = FINDINGS_DIR
 CATALOG = get_catalog()
 SCHEMA = get_schema()
@@ -144,12 +173,14 @@ EXPERIMENT_NAME = get_experiment_name()
 
 def reload_config() -> None:
     global EXPERIMENTS_DIR, FINDINGS_DIR, DATA_DIR, MLRUNS_DIR, FEATURE_STORE_DIR
+    global PLAYBOOKS_DIR
     global OUTPUT_DIR, CATALOG, SCHEMA, WORKSPACE_PATH, EXPERIMENT_NAME
     EXPERIMENTS_DIR = get_experiments_dir()
     FINDINGS_DIR = get_findings_dir()
     DATA_DIR = get_data_dir()
     MLRUNS_DIR = get_mlruns_dir()
     FEATURE_STORE_DIR = get_feature_store_dir()
+    PLAYBOOKS_DIR = get_playbooks_dir()
     OUTPUT_DIR = FINDINGS_DIR
     CATALOG = get_catalog()
     SCHEMA = get_schema()

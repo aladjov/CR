@@ -56,6 +56,8 @@ TOPANDAS_BOUNDARY_FILES = {
     "stages/modeling/spark_classifier_wrapper.py",
     "stages/modeling/data_splitter.py",  # non-temporal strategies fall back to sklearn (pandas)
     "stages/features/feature_selector.py",  # L1 selection collects to pandas for sklearn LogisticRegression
+    # Batch inference — fe.score_batch fallback path needs pandas to feed sklearn predict
+    "stages/scoring/batch_inference.py",
     # Batch fitting — bounded sample (≤50K rows) for sklearn PowerTransformer
     "transforms/executor.py",
     # Bounded sampling for type detection / fingerprinting
@@ -102,6 +104,9 @@ COLLECT_BOUNDARY_FILES = {
     # fail-fast tracked-field validation (small: ~26 distinct fields for SPS
     # case_history; bounded by domain enum cardinality, not row count)
     "stages/scd_history/reconstruct.py",
+    # Batch inference — .agg().collect() for the summary stats row (1 row),
+    # .groupBy("risk_tier").count().collect() for risk distribution (3 rows)
+    "stages/scoring/batch_inference.py",
 }
 
 # ── bare 'import pandas as pd' allowlist ────────────────────────────────

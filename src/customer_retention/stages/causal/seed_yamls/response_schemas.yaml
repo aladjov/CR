@@ -1,0 +1,163 @@
+# Framework seed: response_schemas
+#
+# Generic named response payload shapes that ship with the framework. Each
+# schema_id matches a response_schema_id reference in the playbook step
+# YAMLs (see playbook_loader). The CSM tool uses these shapes when sending
+# Event 4 (response capture) writebacks per the data model doc §0.1.2.
+#
+# Each "fields" entry describes one structured field on the response
+# payload, with its type and (when applicable) the controlled vocabulary it
+# draws from. The loader serializes "fields" as a JSON string for Delta
+# storage; downstream consumers parse it with from_json when needed.
+#
+# Add new schemas as new entries; never edit an in-use schema_id in place
+# (bump version instead, or define a new schema_id). Historical responses
+# stay interpretable because every action row references the schema_id +
+# version that was in force at execution time.
+
+- schema_id: csm_assessment_v1
+  version: "1.0.0"
+  name: "CSM Assessment"
+  description: >
+    Structured CSM judgment captured at the start of a playbook (e.g., the
+    NPS Response Review step). Used by mediation analyses to relate the
+    CSM's initial read on the account to the eventual outcome.
+  fields:
+    - name: csm_judgment
+      type: enum
+      vocabulary: csm_judgment
+      required: true
+    - name: confidence
+      type: enum
+      vocabulary: confidence_level
+      required: true
+    - name: risk_changed_since_assignment
+      type: enum
+      vocabulary: risk_change
+      required: false
+    - name: notes_structured
+      type: array<enum>
+      vocabulary: assessment_notes
+      required: false
+
+- schema_id: email_engagement_v1
+  version: "1.0.0"
+  name: "Email Engagement"
+  description: >
+    Engagement metadata for an email action. Most fields are auto-populated
+    from the email service provider (delivery, opens, clicks); reply
+    sentiment requires CSM tagging or LLM extraction post-hoc.
+  fields:
+    - name: delivered
+      type: bool
+    - name: delivered_at
+      type: timestamp
+    - name: opened
+      type: bool
+    - name: opened_at
+      type: timestamp
+    - name: open_count
+      type: int
+    - name: clicked
+      type: bool
+    - name: clicked_at
+      type: timestamp
+    - name: click_count
+      type: int
+    - name: bounced
+      type: bool
+    - name: unsubscribed
+      type: bool
+    - name: replied
+      type: bool
+    - name: reply_sentiment
+      type: enum
+      vocabulary: sentiment
+
+- schema_id: structured_call_log_v1
+  version: "1.0.0"
+  name: "Structured Call Log"
+  description: >
+    Structured outcome of a CSM call action. The CSM is expected to fill
+    these fields immediately after the call. Free-text notes are NOT
+    captured here — they live in actions.free_text_notes only. This is
+    the highest-leverage response payload for mediation analysis since
+    sentiment + commitments + objections together support most behavioral
+    causal questions.
+  fields:
+    - name: contact_made
+      type: bool
+      required: true
+    - name: duration_seconds
+      type: int
+    - name: sentiment
+      type: enum
+      vocabulary: sentiment
+    - name: engagement_level
+      type: enum
+      vocabulary: engagement_level
+    - name: topics_raised
+      type: array<enum>
+      vocabulary: topics_raised
+    - name: objections_raised
+      type: array<enum>
+      vocabulary: objections_raised
+    - name: commitments_obtained
+      type: array<enum>
+      vocabulary: commitments_obtained
+    - name: commitment_strength
+      type: enum
+      vocabulary: commitment_strength
+    - name: next_action_required
+      type: enum
+      vocabulary: next_action
+
+- schema_id: meeting_log_v1
+  version: "1.0.0"
+  name: "Meeting Log"
+  description: >
+    Structured outcome of a CSM meeting action (e.g., business review,
+    product optimization session). Captures attendance, sentiment, and the
+    decisions/next-steps that came out of the meeting. Referenced by
+    playbook step types `csm_meeting`.
+  fields:
+    - name: attended
+      type: bool
+      required: true
+    - name: attendee_count
+      type: int
+    - name: sentiment
+      type: enum
+      vocabulary: sentiment
+    - name: decisions_made
+      type: array<enum>
+      vocabulary: meeting_decisions
+    - name: next_steps_agreed
+      type: array<enum>
+      vocabulary: meeting_next_steps
+
+- schema_id: executive_review_v1
+  version: "1.0.0"
+  name: "Executive Review"
+  description: >
+    Structured outcome of an executive-level escalation (typically the final
+    step of a credit_request or critical-tier playbook). Captures the
+    executive decision, the rationale, and any commitments made beyond what
+    a standard meeting log records. The structured fields are deliberately
+    sparse — most executive interactions land in free_text_notes since they
+    are low-volume and high-judgment.
+  fields:
+    - name: executive_attended
+      type: bool
+      required: true
+    - name: decision
+      type: enum
+      vocabulary: executive_decision
+    - name: decision_rationale_tags
+      type: array<enum>
+      vocabulary: executive_decision_rationale
+    - name: committed_value_usd
+      type: double
+    - name: committed_terms
+      type: enum
+      vocabulary: executive_terms

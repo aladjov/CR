@@ -1,0 +1,157 @@
+# Framework seed: vocabularies
+#
+# Generic controlled vocabularies that ship with the framework. The values
+# below come from the data model doc §1.3 plus the vocabulary references
+# inside response_schemas.yaml. Each (vocabulary_name, value) pair becomes
+# one row in the vocabularies Delta table.
+#
+# Two accepted shapes — this seed uses the convenient dict-of-lists shape:
+#
+#   vocabulary_name: [value1, value2, value3]
+#
+# Deployments that need richer metadata (description, valid_from windows)
+# can switch to the explicit list-of-rows shape — see policy_loader docstring.
+#
+# Adding a value is a row insert. Deprecating one is a valid_to update —
+# do that in your customized copy in the volume, NOT here in the seed.
+# Historical responses remain interpretable because the loader preserves
+# the full history of every (vocabulary_name, value, valid_from) tuple.
+
+# Sentiment expressed by the customer in the interaction
+sentiment:
+  - positive
+  - neutral
+  - negative
+  - mixed
+
+# How engaged the customer was during the interaction
+engagement_level:
+  - engaged
+  - polite_but_disengaged
+  - hostile
+  - unreachable
+
+# What topics the customer raised during the interaction
+topics_raised:
+  - price
+  - product_fit
+  - support_quality
+  - competitor
+  - billing
+  - integration_difficulty
+  - training_gaps
+  - internal_change
+  - business_decline
+  - relationship
+  - no_concern_expressed
+  - other
+
+# What objections the customer raised
+objections_raised:
+  - too_expensive
+  - missing_feature
+  - switching_cost
+  - poor_support_history
+  - contract_terms
+  - internal_blocker
+  - other
+
+# What commitments the customer made
+commitments_obtained:
+  - renewal_intent
+  - evaluate_alternative
+  - schedule_followup
+  - pilot_expansion
+  - no_commitment
+  - declined
+
+# Strength of any commitment obtained
+commitment_strength:
+  - firm
+  - soft
+  - none
+  - declined
+
+# CSM's structured judgment of the account's risk
+csm_judgment:
+  - low_risk
+  - medium_risk
+  - high_risk
+  - critical_risk
+  - already_resolved
+
+# Confidence the CSM places in their assessment
+confidence_level:
+  - high
+  - medium
+  - low
+
+# Whether the risk picture has changed since the assignment was made
+risk_change:
+  - improved
+  - unchanged
+  - worsened
+  - unknown
+
+# Structured tags the CSM can attach to an assessment
+assessment_notes:
+  - billing_issue_resolved
+  - product_issue_open
+  - integration_concern
+  - team_change
+  - executive_attention_needed
+  - no_action_required
+
+# What action the CSM thinks should follow this interaction
+next_action:
+  - schedule_meeting
+  - escalate_to_manager
+  - escalate_to_executive
+  - hand_off_to_support
+  - hand_off_to_billing
+  - close_no_action
+  - wait_and_observe
+
+# Structured outcomes of a meeting
+meeting_decisions:
+  - renewal_committed
+  - renewal_at_risk
+  - upsell_discussed
+  - downsell_discussed
+  - cancellation_discussed
+  - no_decision
+
+meeting_next_steps:
+  - send_proposal
+  - schedule_followup
+  - involve_executive
+  - hand_off_to_support
+  - no_followup_needed
+
+# Executive-level decisions on credit / escalation playbooks
+executive_decision:
+  - approved
+  - approved_with_conditions
+  - denied
+  - deferred
+  - escalated_higher
+
+# Why the executive made the decision (multi-select tags)
+executive_decision_rationale:
+  - strategic_account
+  - high_lifetime_value
+  - competitive_pressure
+  - billing_dispute_resolved
+  - billing_dispute_unresolved
+  - pattern_of_abuse
+  - service_level_breach
+  - other
+
+# Terms attached to an executive commitment
+executive_terms:
+  - immediate
+  - net_30
+  - net_60
+  - structured_payment_plan
+  - waiver
+  - none

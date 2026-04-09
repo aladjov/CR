@@ -12,6 +12,7 @@ class ProjectInitializer:
     platforms: Optional[List[str]] = None
     exploration_notebooks_path: str = "exploration_notebooks"
     experiments_path: str = "experiments"
+    playbooks_path: str = "playbooks"
 
     def initialize(self, output_dir: str) -> Dict[str, any]:
         project_path = Path(output_dir)
@@ -21,6 +22,7 @@ class ProjectInitializer:
         gitignore_path = self._create_gitignore(project_path)
         pyproject_path = self._create_pyproject(project_path)
         exploration_notebooks = self._copy_exploration_notebooks(project_path)
+        seed_yamls_copied = self._copy_seed_yamls(project_path)
         if self.generate_orchestration:
             self._generate_orchestration(project_path)
         return {
@@ -28,10 +30,12 @@ class ProjectInitializer:
             "gitignore_path": str(gitignore_path),
             "pyproject_path": str(pyproject_path),
             "exploration_notebooks": exploration_notebooks,
+            "seed_yamls_copied": seed_yamls_copied,
         }
 
     def _create_directories(self, project_path: Path) -> None:
         exp = self.experiments_path
+        pb = self.playbooks_path
         directories = [
             self.exploration_notebooks_path,
             "generated_pipelines/local",
@@ -44,6 +48,7 @@ class ProjectInitializer:
             f"{exp}/data/predictions",
             f"{exp}/mlruns",
             f"{exp}/feature_store",
+            f"{pb}/policies",
         ]
         for directory in directories:
             (project_path / directory).mkdir(parents=True, exist_ok=True)
@@ -72,6 +77,11 @@ Customer retention analysis project using the churnkit framework.
   - `data/` - Pipeline outputs (bronze/silver/gold layers)
   - `mlruns/` - MLflow experiment tracking
   - `feature_store/` - Feast feature store
+- `playbooks/` - Playbook YAML definitions for the causal track (gitignored
+  intentionally; each deployment customizes its own private playbooks)
+  - `*.yaml` - Per-playbook intervention design files
+  - `policies/` - Decision policy, response schemas, controlled vocabularies
+    (seeded from framework templates on first init)
 
 ## Getting Started
 
@@ -103,6 +113,7 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 {self.experiments_path}/
+{self.playbooks_path}/
 *.egg-info/
 dist/
 build/
@@ -145,6 +156,45 @@ dev = [
                 shutil.copy2(notebook, dest_path)
                 copied.append(str(dest_path))
         return copied
+
+    def _copy_seed_yamls(self, project_path: Path) -> List[str]:
+        """Copy framework seed YAMLs into ``{playbooks_path}/policies/``.
+
+        Source files live inside the framework package at
+        ``customer_retention/stages/causal/seed_yamls/``. Existing destination
+        files are NOT overwritten — once a deployment customizes its policies,
+        re-running ``churnkit-init`` will not clobber the changes.
+        """
+        source_dir = self._get_seed_yamls_source_dir()
+        if source_dir is None or not source_dir.exists():
+            return []
+        dest_dir = project_path / self.playbooks_path / "policies"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        copied: List[str] = []
+        for seed_file in source_dir.glob("*.yaml"):
+            dest_path = dest_dir / seed_file.name
+            if dest_path.exists():
+                continue
+            shutil.copy2(seed_file, dest_path)
+            copied.append(str(dest_path))
+        return copied
+
+    def _get_seed_yamls_source_dir(self) -> Optional[Path]:
+        # Development / editable install: framework package is in src/
+        pkg_root = Path(__file__).parent.parent.parent
+        candidate = pkg_root / "stages" / "causal" / "seed_yamls"
+        if candidate.is_dir():
+            return candidate
+        # Installed package: resolve via importlib.resources
+        try:
+            from importlib.resources import files
+            resolved = files("customer_retention.stages.causal") / "seed_yamls"
+            resolved_path = Path(str(resolved))
+            if resolved_path.is_dir():
+                return resolved_path
+        except (ImportError, ModuleNotFoundError, FileNotFoundError):
+            pass
+        return None
 
     def _get_exploration_source_dir(self) -> Optional[Path]:
         # 1. Development / editable install: notebooks live in the source tree
@@ -191,11 +241,13 @@ def initialize_project(
     generate_orchestration: bool = False,
     exploration_notebooks_path: str = "exploration_notebooks",
     experiments_path: str = "experiments",
+    playbooks_path: str = "playbooks",
 ) -> Dict[str, any]:
     initializer = ProjectInitializer(
         project_name=project_name,
         generate_orchestration=generate_orchestration,
         exploration_notebooks_path=exploration_notebooks_path,
         experiments_path=experiments_path,
+        playbooks_path=playbooks_path,
     )
     return initializer.initialize(output_dir)

@@ -55,6 +55,11 @@ Examples:
         default="experiments",
         help="Path (folder name) for the experiments volume — set per cluster to enable parallel runs (default: experiments)",
     )
+    parser.add_argument(
+        "--playbooks-path",
+        default="playbooks",
+        help="Path (folder name) for the playbooks volume holding causal-track YAMLs (default: playbooks)",
+    )
 
     args = parser.parse_args()
 
@@ -80,6 +85,7 @@ Examples:
             platforms=platforms,
             exploration_notebooks_path=args.exploration_notebooks_path,
             experiments_path=args.experiments_path,
+            playbooks_path=args.playbooks_path,
         )
         initializer.initialize(str(output_dir))
 
@@ -92,6 +98,8 @@ Examples:
         print(f"  3. Open {args.exploration_notebooks_path}/01_data_discovery.ipynb")
         print("  4. Set DATA_PATH to your data file")
         print("  5. Run all cells - auto-discovery will do the rest!")
+        print(f"  6. (Optional, causal track) Edit {args.playbooks_path}/policies/")
+        print(f"     and add per-playbook YAMLs to {args.playbooks_path}/")
         print()
 
         return 0

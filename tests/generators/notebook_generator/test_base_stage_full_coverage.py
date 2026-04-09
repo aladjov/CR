@@ -223,10 +223,29 @@ class TestStagePathsUseDatasetName:
         assert "gold/customer_emails_selected.parquet" in code
 
     def test_batch_inference_uses_dataset_name_in_paths(self):
+        # Post-refactor (Phase 1.6): the inline gold-path business logic moved
+        # into customer_retention.stages.scoring.batch_inference. The cell now
+        # passes the dataset_name through to BatchInferenceConfig and the
+        # framework's _load_local_customers() owns the gold/{name}_to_score
+        # and gold/{name}_features fallback chain. This test verifies the
+        # dataset_name still flows through to the framework call.
         from customer_retention.generators.notebook_generator.stages.s10_batch_inference import BatchInferenceStage
         code = self._code_for_stage(BatchInferenceStage)
-        assert "gold/customer_emails_to_score" in code
-        assert "gold/customer_emails_features" in code
+        assert "BatchInferenceConfig" in code
+        assert "run_batch_inference" in code
+        assert "dataset_name='customer_emails'" in code or 'dataset_name="customer_emails"' in code
+
+    def test_batch_inference_local_customer_fallback_chain_in_framework(self):
+        # The gold/{name}_to_score and gold/{name}_features fallback paths now
+        # live in the framework module, not the cell text. This guards the
+        # contract between the cell's dataset_name argument and the framework
+        # paths so a future refactor can't silently drop one.
+        from customer_retention.stages.scoring.batch_inference import _load_local_customers  # noqa
+        import inspect
+        source = inspect.getsource(_load_local_customers)
+        assert "_to_score" in source
+        assert "_features" in source
+        assert "_delta_log" in source
 
     def test_fallback_dataset_name_without_findings(self):
         from customer_retention.generators.notebook_generator.config import NotebookConfig

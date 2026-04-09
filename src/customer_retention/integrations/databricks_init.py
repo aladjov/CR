@@ -18,6 +18,7 @@ class DatabricksInitResult:
     framework_repo_path: str | None = None
     exploration_notebooks_path: str = "exploration_notebooks"
     experiments_path: str = "experiments"
+    playbooks_path: str = "playbooks"
     notebooks_copied: list[str] = field(default_factory=list)
     notebooks_synced: list[str] = field(default_factory=list)
 
@@ -28,6 +29,7 @@ class DatabricksInitResult:
             "CR_SCHEMA": self.schema,
             "CR_EXPERIMENT_NAME": self.experiment_name,
             "CR_EXPERIMENTS_DIR": f"/Volumes/{self.catalog}/{self.schema}/{self.experiments_path}",
+            "CR_PLAYBOOKS_DIR": f"/Volumes/{self.catalog}/{self.schema}/{self.playbooks_path}",
         }
         if self.workspace_path:
             env_vars["CR_WORKSPACE_PATH"] = self.workspace_path
@@ -46,21 +48,26 @@ def databricks_init(
     framework_repo_path: str | None = None,
     exploration_notebooks_path: str = "exploration_notebooks",
     experiments_path: str = "experiments",
+    playbooks_path: str = "playbooks",
 ) -> DatabricksInitResult:
     _validate_databricks_environment()
     if workspace_path:
         workspace_path = _normalize_workspace_path(workspace_path)
         _ensure_workspace_directory(workspace_path)
-    _set_environment_variables(catalog, schema, workspace_path, framework_repo_path, experiments_path)
+    _set_environment_variables(
+        catalog, schema, workspace_path, framework_repo_path,
+        experiments_path, playbooks_path,
+    )
     resolved_experiment_name = experiment_name or _resolve_experiment_name_from_notebook_path()
     resolved_experiment_name = _make_absolute_experiment_path(resolved_experiment_name, workspace_path)
     _set_experiment_name_env_var(resolved_experiment_name)
     _persist_config(
         catalog, schema, workspace_path, resolved_experiment_name, framework_repo_path,
-        experiments_path,
+        experiments_path, playbooks_path,
     )
     _reload_config_constants()
     _ensure_experiments_volume_exists(catalog, schema, experiments_path)
+    _ensure_playbooks_volume_exists(catalog, schema, playbooks_path)
     _setup_experiment_directories()
     notebooks_copied: list[str] = []
     notebooks_synced: list[str] = []
@@ -81,6 +88,7 @@ def databricks_init(
         framework_repo_path=framework_repo_path,
         exploration_notebooks_path=exploration_notebooks_path,
         experiments_path=experiments_path,
+        playbooks_path=playbooks_path,
         notebooks_copied=notebooks_copied,
         notebooks_synced=notebooks_synced,
     )
@@ -99,10 +107,12 @@ def _validate_databricks_environment() -> None:
 def _set_environment_variables(
     catalog: str, schema: str, workspace_path: str | None, framework_repo_path: str | None = None,
     experiments_path: str = "experiments",
+    playbooks_path: str = "playbooks",
 ) -> None:
     os.environ["CR_CATALOG"] = catalog
     os.environ["CR_SCHEMA"] = schema
     os.environ["CR_EXPERIMENTS_DIR"] = f"/Volumes/{catalog}/{schema}/{experiments_path}"
+    os.environ["CR_PLAYBOOKS_DIR"] = f"/Volumes/{catalog}/{schema}/{playbooks_path}"
     if workspace_path:
         os.environ["CR_WORKSPACE_PATH"] = workspace_path
     if framework_repo_path:
@@ -117,12 +127,14 @@ def _persist_config(
     catalog: str, schema: str, workspace_path: str | None,
     experiment_name: str | None = None, framework_repo_path: str | None = None,
     experiments_path: str = "experiments",
+    playbooks_path: str = "playbooks",
 ) -> None:
     from customer_retention.core.config.experiments import persist_databricks_config
 
     persist_databricks_config(
         f"/Volumes/{catalog}/{schema}/{experiments_path}", catalog, schema, workspace_path,
         experiment_name, framework_repo_path=framework_repo_path,
+        playbooks_dir=f"/Volumes/{catalog}/{schema}/{playbooks_path}",
     )
 
 
@@ -138,6 +150,14 @@ def _ensure_experiments_volume_exists(
     from customer_retention.core.config.experiments import _ensure_uc_volume
 
     _ensure_uc_volume(f"/Volumes/{catalog}/{schema}/{experiments_path}")
+
+
+def _ensure_playbooks_volume_exists(
+    catalog: str, schema: str, playbooks_path: str = "playbooks",
+) -> None:
+    from customer_retention.core.config.experiments import _ensure_uc_volume
+
+    _ensure_uc_volume(f"/Volumes/{catalog}/{schema}/{playbooks_path}")
 
 
 def _setup_experiment_directories() -> None:
@@ -304,6 +324,8 @@ def _display_init_summary(result: DatabricksInitResult) -> None:
     print(f"  Experiment:       {result.experiment_name}")
     print(f"  Experiments Dir:  /Volumes/{result.catalog}/{result.schema}/{result.experiments_path}")
     print(f"  Experiments Path: {result.experiments_path}")
+    print(f"  Playbooks Dir:    /Volumes/{result.catalog}/{result.schema}/{result.playbooks_path}")
+    print(f"  Playbooks Path:   {result.playbooks_path}")
     print(f"  Workspace Path:   {result.workspace_path or '(not set)'}")
     print(f"  Notebooks Path:   {result.exploration_notebooks_path}")
     print(f"  Model Name:       {result.model_name}")

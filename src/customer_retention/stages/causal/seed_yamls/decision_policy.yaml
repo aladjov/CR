@@ -1,0 +1,114 @@
+# Framework seed: decision_policy
+#
+# Generic operational policy template that ships with the framework. The
+# bootstrap script (scripts/seed_playbooks_volume.py) copies this file into
+# {PLAYBOOKS_DIR}/policies/decision_policy.yaml the first time a deployment
+# initializes its playbooks volume. After that, each deployment customizes
+# its own copy and the bootstrap script will not overwrite it.
+#
+# This file maps to the decision_policy Delta table (sub-layer 4 in the
+# data model doc, §1.6). One row per policy version. Capacity, holdout
+# fractions, cooldown windows, suppression rules, channel availability —
+# everything that the operational team controls and that needs to be
+# versioned independently of intervention design.
+
+decision_policy_id: policy_initial_v1
+version: "1.0.0"
+
+# Set valid_from to a real timestamp before publishing. The loader will
+# default it to "now" if left null, but in production each version should
+# be anchored to the date the operational team actually promoted it.
+valid_from: null
+valid_to: null
+
+# Versions of the sub-policies. Mostly placeholders in this seed — bump
+# whenever you change the corresponding sub-policy below.
+eligibility_logic_version: "1.0"
+prioritization_logic_version: "1.0"
+capacity_rule_version: "1.0"
+holdout_rule_version: "1.0"
+holdout_stratification_version: "1.0"
+
+# Stratification fields used to define randomization buckets for holdouts.
+# Tune to your CSM segmentation. The default below is the doc's example.
+holdout_stratification_fields:
+  - risk_decile
+  - archetype_id
+  - csm_region
+
+# Recipe for the deterministic seed used to assign accounts to strata.
+# Hash inputs go in here so the same account always lands in the same
+# bucket across reruns and historical reconstructions.
+holdout_seed_recipe: "sha256(account_id || playbook_id || holdout_rule_version)"
+
+# Per-playbook holdout fractions. The 0.10 default is the seed value;
+# adjust per playbook based on the cohort size and the minimum sample
+# size needed for the per-playbook causal estimate. Critical playbooks
+# (e.g., executive escalations on top-revenue accounts) may be exempt
+# entirely — set their fraction to 0.0 in your customized copy.
+holdout_fractions_by_playbook:
+  business_review: 0.10
+  cancel_followup: 0.10
+  credit_request: 0.10
+  dataflow_no_flow: 0.10
+  inbound: 0.10
+  low_nps: 0.10
+  missed_payment: 0.10
+  product_optimization: 0.10
+  relationship: 0.10
+  weekly_1tp_cancel: 0.10
+
+# Per-playbook capacity (slots per period). Placeholder values — replace
+# with the real CSM team capacity during the policy review process. The
+# scoring run uses these to gate the recommended set: when the cohort
+# exceeds capacity, the lowest-priority rows get playbook_suppressed_reason
+# = "capacity_exhausted" and recommended = false.
+capacity_by_playbook:
+  business_review: 50
+  cancel_followup: 50
+  credit_request: 50
+  dataflow_no_flow: 50
+  inbound: 50
+  low_nps: 50
+  missed_payment: 50
+  product_optimization: 50
+  relationship: 50
+  weekly_1tp_cancel: 50
+
+# Per-playbook cooldown in days. Suppresses re-recommending the same
+# playbook to the same account within this window after the prior
+# assignment. 14 days is a generic default; tighten or relax per playbook.
+cooldown_days_by_playbook:
+  business_review: 14
+  cancel_followup: 14
+  credit_request: 14
+  dataflow_no_flow: 14
+  inbound: 14
+  low_nps: 14
+  missed_payment: 14
+  product_optimization: 14
+  relationship: 14
+  weekly_1tp_cancel: 14
+
+# Suppression rules: structured rules that disable a playbook for a segment.
+# Stored as JSON; the predicate compiler evaluates them at scoring time.
+# TODO: confirm with CS leadership which segment-suppression rules apply
+# (e.g., "playbook X suppressed for ARR < $10k", "no outbound calls in
+# regions Y and Z"). Empty {} means no suppressions.
+suppression_rules: {}
+
+# Channel availability rules: which channels are active in this policy
+# version. Lets you globally disable a channel (e.g., outbound calling
+# in restricted regions) without rewriting individual playbooks.
+# TODO: confirm regional restrictions with compliance.
+channel_availability_rules: {}
+
+# Risk-tier thresholds in force at decision time. The dashboard buckets
+# customers as High / Medium / Low based on these. Stored on the policy
+# row so historical risk_tier assignments are reconstructable from the
+# policy version that was active at scoring time.
+risk_tier_high_threshold: 0.6
+risk_tier_medium_threshold: 0.3
+
+description: "Initial framework seed policy. Replace placeholder values during your first policy review."
+changed_by: "framework_seed"
