@@ -9,13 +9,13 @@ Quick Start:
     ...     LifecycleEnrichmentConfig, enrich_lifecycle_dataset,
     ... )
     >>> config = LifecycleEnrichmentConfig(
-    ...     enriched_view_name="sps_enriched_contract",
-    ...     parent_entity_key="ACCOUNT_ID",
-    ...     sub_entity_key="CONTRACT_ID",
-    ...     valid_from_column="CONTRACT_START_DATE",
-    ...     valid_to_columns=("BILLING_TERMINATION_DATE",),
-    ...     status_column="CONTRACT_STATUS",
-    ...     terminal_status_values=("Cancelled", "Terminated", "Expired"),
+    ...     enriched_view_name="enriched_contract",
+    ...     parent_entity_key="account_id",
+    ...     sub_entity_key="contract_id",
+    ...     valid_from_column="start_date",
+    ...     valid_to_columns=("termination_date",),
+    ...     status_column="status",
+    ...     terminal_status_values=("cancelled", "terminated", "expired"),
     ... )
     >>> doubled = enrich_lifecycle_dataset(raw_contract_df, config=config)
 """

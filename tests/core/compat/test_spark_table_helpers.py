@@ -35,19 +35,23 @@ class TestRegisterTempView:
 
     def test_returns_qualified_global_temp_name(self):
         mock_sdf = self._fake_sdf(["ACCOUNT_ID", "churned"])
-        result = register_temp_view(mock_sdf, "enriched_account")
+        result = register_temp_view(mock_sdf, "enriched_account", purpose="test")
         assert result == "global_temp.enriched_account"
         mock_sdf.createOrReplaceGlobalTempView.assert_called_once_with("enriched_account")
 
     def test_qualified_name_recognized_by_is_table_name(self):
         from customer_retention.analysis.auto_explorer.dataset_fingerprinter import is_table_name
         mock_sdf = self._fake_sdf(["ACCOUNT_ID"])
-        name = register_temp_view(mock_sdf, "enriched_account")
+        name = register_temp_view(mock_sdf, "enriched_account", purpose="test")
         assert is_table_name(name)
 
     def test_different_view_names(self):
-        assert register_temp_view(self._fake_sdf(["x"]), "foo") == "global_temp.foo"
-        assert register_temp_view(self._fake_sdf(["x"]), "bar_baz") == "global_temp.bar_baz"
+        assert register_temp_view(
+            self._fake_sdf(["x"]), "foo", purpose="test",
+        ) == "global_temp.foo"
+        assert register_temp_view(
+            self._fake_sdf(["x"]), "bar_baz", purpose="test",
+        ) == "global_temp.bar_baz"
 
     def test_raises_on_case_insensitive_duplicate_columns(self):
         # Idempotency / collision guard: catches the bug at the registration
@@ -55,49 +59,45 @@ class TestRegisterTempView:
         # the case-insensitive Spark resolver raises [AMBIGUOUS_REFERENCE].
         mock_sdf = self._fake_sdf(["CASE_ID", "as_of_date", "as_of_date", "Status"])
         with pytest.raises(ValueError, match="case-insensitive duplicate columns"):
-            register_temp_view(mock_sdf, "broken_view")
+            register_temp_view(mock_sdf, "broken_view", purpose="test")
         mock_sdf.createOrReplaceGlobalTempView.assert_not_called()
 
     def test_raises_on_mixed_case_duplicate(self):
         mock_sdf = self._fake_sdf(["CASE_ID", "Origin", "ORIGIN"])
         with pytest.raises(ValueError, match="ORIGIN.*Origin|Origin.*ORIGIN"):
-            register_temp_view(mock_sdf, "broken_view")
+            register_temp_view(mock_sdf, "broken_view", purpose="test")
 
     def test_empty_columns_does_not_raise(self):
         # Defensive: an empty schema should not crash the registration call.
         mock_sdf = self._fake_sdf([])
-        register_temp_view(mock_sdf, "empty_view")
+        register_temp_view(mock_sdf, "empty_view", purpose="test")
         mock_sdf.createOrReplaceGlobalTempView.assert_called_once_with("empty_view")
 
-    def test_raises_on_with_state_history_suffix(self):
-        # Fail-fast guide-rail: SCD-augmented parent views must NOT be registered
-        # as Spark temp views — they are session-scoped and invisible to NB01's
-        # ``load_active_dataset`` path. The error message points the caller to
-        # ``augment_and_persist_parent_dataset`` instead.
-        mock_sdf = self._fake_sdf(["CASE_ID", "as_of_date", "Status"])
-        with pytest.raises(
-            ValueError,
-            match="augment_and_persist_parent_dataset",
-        ):
-            register_temp_view(mock_sdf, "sps_case_with_state_history")
+    def test_purpose_is_required(self):
+        # The audit-trail kwarg is required so every call site is reviewable —
+        # temp views are session-scoped, code review must catch misuse.
+        mock_sdf = self._fake_sdf(["x"])
+        with pytest.raises(TypeError, match="purpose"):
+            register_temp_view(mock_sdf, "foo")  # type: ignore[call-arg]
         mock_sdf.createOrReplaceGlobalTempView.assert_not_called()
 
-    def test_raises_on_state_view_substring(self):
-        mock_sdf = self._fake_sdf(["CASE_ID", "as_of_date", "Status"])
-        with pytest.raises(
-            ValueError,
-            match="augment_and_persist_parent_dataset",
-        ):
-            register_temp_view(mock_sdf, "case_state_view_v2")
+    def test_purpose_must_be_non_empty(self):
+        mock_sdf = self._fake_sdf(["x"])
+        with pytest.raises(ValueError, match="purpose"):
+            register_temp_view(mock_sdf, "foo", purpose="")
         mock_sdf.createOrReplaceGlobalTempView.assert_not_called()
 
-    def test_does_not_raise_on_unrelated_name(self):
-        # Regression guard: ``enriched_account``, ``foo``, etc. are legitimate
-        # non-SCD temp-view use cases that the narrow guard must not break.
-        for name in ("enriched_account", "foo", "bar_baz", "customer_history"):
-            mock_sdf = self._fake_sdf(["x", "y"])
-            register_temp_view(mock_sdf, name)
-            mock_sdf.createOrReplaceGlobalTempView.assert_called_once_with(name)
+    def test_purpose_must_not_be_whitespace(self):
+        mock_sdf = self._fake_sdf(["x"])
+        with pytest.raises(ValueError, match="purpose"):
+            register_temp_view(mock_sdf, "foo", purpose="   ")
+        mock_sdf.createOrReplaceGlobalTempView.assert_not_called()
+
+    def test_purpose_must_be_string(self):
+        mock_sdf = self._fake_sdf(["x"])
+        with pytest.raises(ValueError, match="purpose"):
+            register_temp_view(mock_sdf, "foo", purpose=42)  # type: ignore[arg-type]
+        mock_sdf.createOrReplaceGlobalTempView.assert_not_called()
 
 
 class TestAsPandasApi:

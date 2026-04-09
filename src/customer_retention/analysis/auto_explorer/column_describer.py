@@ -191,8 +191,8 @@ def generate_column_descriptions(
     Parameters
     ----------
     table_fqn:
-        Fully-qualified table name, e.g.
-        ``prod_corp_snowflake_provisioning_shared.salesforce.account``.
+        Fully-qualified Unity Catalog table name, e.g.
+        ``catalog.schema.table``.
     columns:
         Column names to describe.
     endpoint:

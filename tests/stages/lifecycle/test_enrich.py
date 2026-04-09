@@ -322,7 +322,9 @@ class TestRegisterTempViewRoundTrip:
         enriched = enrich_lifecycle_dataset(df, config=_base_config())
 
         view_name = "test_enriched_contract_round_trip"
-        register_temp_view(as_spark_df(enriched), view_name)
+        register_temp_view(
+            as_spark_df(enriched), view_name, purpose="lifecycle_round_trip_test",
+        )
         try:
             loaded = load_spark_table(f"global_temp.{view_name}")
             schema_names = {f.name for f in loaded.schema.fields}

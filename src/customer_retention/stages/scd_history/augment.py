@@ -19,8 +19,8 @@ pyspark.pandas, or native pandas DataFrames interchangeably.
 entry point. It composes :func:`augment_parent_with_scd_state` with
 ``save_active_dataset`` so the augmented schema lands on the canonical
 landing Delta path that NB01 reads from. Manual ``join + register_temp_view``
-patterns are rejected by ``register_temp_view``'s SCD-name guard — temp
-views are session-scoped and invisible to downstream notebooks.
+patterns produce session-scoped views that are invisible to downstream
+notebooks — use the facade instead.
 """
 from __future__ import annotations
 

@@ -1,11 +1,13 @@
 """Configuration for SCD history reconstruction.
 
 A ``SCDHistoryReconstructionConfig`` describes how to reconstruct per-grid-date
-field state from a Salesforce-style change-log table. For each tracked field
+field state from a slowly-changing-dimension change-log table (Salesforce
+field history, audit-trigger tables, CDC streams — any shape with one row per
+``(parent, field, new_value, change_timestamp)``). For each tracked field
 ``F`` and parent record ``R`` the reconstructor produces, at every grid anchor
-``G``, the value of ``NEW_VALUE`` of the most recent change with
-``CREATED_DATE <= G`` (backward-asof semantics), with optional fallback to a
-parent table column when the record has no recorded changes.
+``G``, the new-value of the most recent change with
+``change_timestamp <= G`` (backward-asof semantics), with optional fallback
+to a parent-table column when the record has no recorded changes.
 """
 from __future__ import annotations
 
