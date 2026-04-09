@@ -54,6 +54,112 @@ class TestLoadMissing:
             load_active_dataset(namespace, "nonexistent")
 
 
+class _SpyDistributedDF:
+    # Stand-in for pyspark.pandas / native Spark DataFrame: explodes if any
+    # caller tries to collect via `.to_pandas()`. Used by every
+    # "no driver collect" regression test in this file.
+    def to_pandas(self):
+        raise AssertionError(
+            "loader collected distributed data to driver — must stay distributed",
+        )
+
+
+class TestLoadActiveDatasetNoDriverCollect:
+    # Regression: a native-pandas-only load path forced `.to_pandas()` on the
+    # full landing Delta, OOM'ing the driver after the SCD history augmentation
+    # expanded `case` into (case × grid-anchor) fan-out (observed 4.4 GiB
+    # collect). All load functions must dispatch via `get_delta()` and return
+    # whatever the active backend hands back — pyspark.pandas on Databricks,
+    # native pandas on local — without a full driver collect on the
+    # distributed path.
+    def test_load_active_dataset_returns_without_collect(self, namespace):
+        (namespace.landing_table_dir("case")).mkdir(parents=True, exist_ok=True)
+
+        fake_delta = MagicMock()
+        fake_delta.read.return_value = _SpyDistributedDF()
+
+        with patch(
+            "customer_retention.analysis.auto_explorer.active_dataset_store.get_delta",
+            return_value=fake_delta,
+        ):
+            result = load_active_dataset(namespace, "case")
+
+        fake_delta.read.assert_called_once_with(
+            str(namespace.landing_table_dir("case")),
+        )
+        assert isinstance(result, _SpyDistributedDF)
+
+    def test_load_merge_dataset_event_level_returns_without_collect(self, namespace):
+        (namespace.bronze_table_dir("events")).mkdir(parents=True, exist_ok=True)
+
+        fake_delta = MagicMock()
+        fake_delta.read.return_value = _SpyDistributedDF()
+
+        with patch(
+            "customer_retention.analysis.auto_explorer.active_dataset_store.get_delta",
+            return_value=fake_delta,
+        ):
+            result = load_merge_dataset(
+                namespace, "events", DatasetGranularity.EVENT_LEVEL,
+            )
+
+        fake_delta.read.assert_called_once_with(
+            str(namespace.bronze_table_dir("events")),
+        )
+        assert isinstance(result, _SpyDistributedDF)
+
+    def test_load_silver_merged_returns_without_collect(self, namespace):
+        namespace.silver_merged_path.mkdir(parents=True, exist_ok=True)
+
+        fake_delta = MagicMock()
+        fake_delta.read.return_value = _SpyDistributedDF()
+
+        with patch(
+            "customer_retention.analysis.auto_explorer.active_dataset_store.get_delta",
+            return_value=fake_delta,
+        ):
+            result = load_silver_merged(
+                namespace, "events", DatasetGranularity.EVENT_LEVEL,
+            )
+
+        fake_delta.read.assert_called_once_with(str(namespace.silver_merged_path))
+        assert isinstance(result, _SpyDistributedDF)
+
+    def test_require_silver_merged_returns_without_collect(self, namespace):
+        namespace.silver_merged_path.mkdir(parents=True, exist_ok=True)
+
+        fake_delta = MagicMock()
+        fake_delta.read.return_value = _SpyDistributedDF()
+
+        with patch(
+            "customer_retention.analysis.auto_explorer.active_dataset_store.get_delta",
+            return_value=fake_delta,
+        ):
+            result = require_silver_merged(namespace)
+
+        fake_delta.read.assert_called_once_with(str(namespace.silver_merged_path))
+        assert isinstance(result, _SpyDistributedDF)
+
+    def test_load_gold_features_returns_without_collect(self, namespace):
+        (namespace.gold_table_dir("cust_emai__abc1234")).mkdir(
+            parents=True, exist_ok=True,
+        )
+
+        fake_delta = MagicMock()
+        fake_delta.read.return_value = _SpyDistributedDF()
+
+        with patch(
+            "customer_retention.analysis.auto_explorer.active_dataset_store.get_delta",
+            return_value=fake_delta,
+        ):
+            result = load_gold_features(namespace, "cust_emai__abc1234")
+
+        fake_delta.read.assert_called_once_with(
+            str(namespace.gold_table_dir("cust_emai__abc1234")),
+        )
+        assert isinstance(result, _SpyDistributedDF)
+
+
 class TestSaveNormalizesTimestamps:
     def test_tz_aware_timestamps_saved_as_tz_naive(self, namespace):
         df = pd.DataFrame({
