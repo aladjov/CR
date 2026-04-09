@@ -1,6 +1,6 @@
 [project]
 name = "churnkit"
-version = "1.00.4a2"
+version = "1.00.4a3"
 description = "Structured ML framework for customer churn prediction -- from exploration notebooks to production pipelines, locally or on Databricks."
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -150,11 +150,13 @@ packages = ["src/customer_retention"]
 
 [tool.hatch.build.targets.wheel.shared-data]
 "exploration_notebooks" = "share/churnkit/exploration_notebooks"
+"causal_notebooks" = "share/churnkit/causal_notebooks"
 
 [tool.hatch.build.targets.sdist]
 include = [
     "src/",
     "exploration_notebooks/",
+    "causal_notebooks/",
     "scripts/",
     "constraints/",
 ]
