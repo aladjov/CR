@@ -1,4 +1,4 @@
-"""Tests for ``augment_parent_with_scd_state``.
+"""Tests for ``augment_parent_with_scd_state`` and ``augment_and_persist_parent_dataset``.
 
 Each test runs against pandas AND pyspark.pandas via the ``df_factory``
 fixture in ``conftest.py``. The augment helper exists to bridge the
@@ -7,13 +7,26 @@ the static parent attributes via a single distributed join. Its core
 responsibility is to drop parent columns whose name case-insensitively
 collides with a state-view column — Spark's default case-insensitive
 resolver would otherwise raise ``[AMBIGUOUS_REFERENCE]`` downstream.
+
+``augment_and_persist_parent_dataset`` is the single supported NB00 entry
+point: it composes the augment helper with ``save_active_dataset`` so the
+augmented schema lands on the canonical Delta path that NB01 reads from.
 """
 from __future__ import annotations
 
 import pytest
 
+from customer_retention.analysis.auto_explorer.active_dataset_store import (
+    load_active_dataset,
+    save_active_dataset,
+)
+from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 from customer_retention.core.compat import native_pd
-from customer_retention.stages.scd_history import augment_parent_with_scd_state
+from customer_retention.stages.scd_history import (
+    SCDHistoryReconstructionConfig,
+    augment_and_persist_parent_dataset,
+    augment_parent_with_scd_state,
+)
 
 T0 = native_pd.Timestamp("2024-01-01")
 DAY = native_pd.Timedelta(days=1)
@@ -277,3 +290,331 @@ class TestFailFastDuplicateGuards:
         )
         assert "OWNER_NAME" in out.columns
         assert out.iloc[0]["Origin"] == "Email"
+
+
+def _scd_config(
+    *,
+    parent_table_dataset_name: str | None = None,
+    enriched_view_name: str = "case_with_state_history",
+) -> SCDHistoryReconstructionConfig:
+    return SCDHistoryReconstructionConfig(
+        enriched_view_name=enriched_view_name,
+        parent_record_key="CASE_ID",
+        field_column="FIELD",
+        new_value_column="NEW_VALUE",
+        change_timestamp_column="CREATED_DATE",
+        tracked_fields=("Status",),
+        parent_table_dataset_name=parent_table_dataset_name,
+    )
+
+
+@pytest.fixture()
+def namespace(tmp_path):
+    ns = RunNamespace(root=tmp_path, run_id="scd-test1234")
+    ns.setup()
+    return ns
+
+
+class TestAugmentAndPersistParentDataset:
+    """The single NB00 entry point: augment + overwrite landing Delta + return schema.
+
+    The whole class exists because the previous user-cell pattern of
+    ``join + register_temp_view`` left the augmented schema invisible to
+    NB01's ``load_active_dataset`` path — temp views are session-scoped,
+    landing Delta is the canonical sink.
+    """
+
+    def test_persists_to_landing_delta_and_returns_augmented(self, namespace):
+        parent = native_pd.DataFrame([{"CASE_ID": "A", "OWNER_NAME": "Alice"}])
+        state = native_pd.DataFrame(
+            [{"CASE_ID": "A", "as_of_date": T0, "Status": "Open"}]
+        )
+        config = _scd_config(parent_table_dataset_name="case")
+
+        augmented, schema = augment_and_persist_parent_dataset(
+            namespace=namespace,
+            parent_dataset_name="case",
+            parent_df=parent,
+            state_view=state,
+            config=config,
+        )
+
+        landing = namespace.landing_table_dir("case")
+        assert landing.is_dir(), f"landing Delta not created at {landing}"
+
+        loaded = load_active_dataset(namespace, "case")
+        assert "CASE_ID" in loaded.columns
+        assert "OWNER_NAME" in loaded.columns
+        assert "as_of_date" in loaded.columns
+        assert "Status" in loaded.columns
+        assert loaded.iloc[0]["Status"] == "Open"
+        assert {str(c).lower() for c in augmented.columns} == {
+            str(c).lower() for c in loaded.columns
+        }
+        assert isinstance(schema, dict)
+
+    def test_returned_schema_keys_match_landing_delta_columns(self, namespace):
+        parent = native_pd.DataFrame([{"CASE_ID": "A", "OWNER_NAME": "Alice"}])
+        state = native_pd.DataFrame(
+            [{"CASE_ID": "A", "as_of_date": T0, "Status": "Open"}]
+        )
+
+        _, schema = augment_and_persist_parent_dataset(
+            namespace=namespace,
+            parent_dataset_name="case",
+            parent_df=parent,
+            state_view=state,
+            config=_scd_config(),
+        )
+
+        loaded = load_active_dataset(namespace, "case")
+        assert {k.lower() for k in schema} == {
+            str(c).lower() for c in loaded.columns
+        }
+
+    def test_sps_scenario_drops_origin_priority_as_of_date_then_persists(
+        self, namespace
+    ):
+        # Reproduces the production failure shape: Snowflake parent with
+        # ``ORIGIN``, ``PRIORITY``, AND a pre-existing ``as_of_date`` column
+        # (e.g. from a prior augment run). All three must be dropped before
+        # the join, and the persisted Delta must have no case-insensitive
+        # duplicates.
+        parent = native_pd.DataFrame(
+            [
+                {
+                    "CASE_ID": "A",
+                    "ORIGIN": "Web",
+                    "PRIORITY": "Low",
+                    "OWNER_NAME": "Alice",
+                    "as_of_date": T0 - DAY,
+                },
+            ]
+        )
+        state = native_pd.DataFrame(
+            [
+                {
+                    "CASE_ID": "A",
+                    "as_of_date": T0,
+                    "Origin": "Email",
+                    "Priority": "High",
+                    "Status": "Open",
+                },
+            ]
+        )
+
+        augmented, _ = augment_and_persist_parent_dataset(
+            namespace=namespace,
+            parent_dataset_name="case",
+            parent_df=parent,
+            state_view=state,
+            config=_scd_config(parent_table_dataset_name="case"),
+        )
+
+        loaded = load_active_dataset(namespace, "case")
+        cols_lower = [str(c).lower() for c in loaded.columns]
+        assert len(cols_lower) == len(set(cols_lower)), (
+            f"persisted Delta has case-insensitive dupes: {list(loaded.columns)}"
+        )
+        assert "ORIGIN" not in loaded.columns
+        assert "PRIORITY" not in loaded.columns
+        assert "Origin" in loaded.columns
+        assert "Priority" in loaded.columns
+        assert "OWNER_NAME" in loaded.columns
+        assert loaded.iloc[0]["Origin"] == "Email"
+        assert loaded.iloc[0]["Priority"] == "High"
+        # The state-view ``as_of_date`` wins, parent's stale value is dropped.
+        assert native_pd.Timestamp(loaded.iloc[0]["as_of_date"]) == T0
+
+    def test_rerun_overwrites_landing_delta_idempotently(self, namespace):
+        parent = native_pd.DataFrame(
+            [{"CASE_ID": "A", "OWNER_NAME": "Alice"}]
+        )
+        state_first = native_pd.DataFrame(
+            [{"CASE_ID": "A", "as_of_date": T0, "Status": "Open"}]
+        )
+        state_second = native_pd.DataFrame(
+            [
+                {"CASE_ID": "A", "as_of_date": T0, "Status": "Reopened"},
+                {"CASE_ID": "A", "as_of_date": T0 + 30 * DAY, "Status": "Closed"},
+            ]
+        )
+
+        augment_and_persist_parent_dataset(
+            namespace=namespace,
+            parent_dataset_name="case",
+            parent_df=parent,
+            state_view=state_first,
+            config=_scd_config(),
+        )
+        # Re-run feeds the previously-augmented landing Delta back in as the
+        # parent (simulating a user re-execution of the cell).
+        previously_persisted = load_active_dataset(namespace, "case")
+
+        augment_and_persist_parent_dataset(
+            namespace=namespace,
+            parent_dataset_name="case",
+            parent_df=previously_persisted,
+            state_view=state_second,
+            config=_scd_config(),
+        )
+
+        final = load_active_dataset(namespace, "case")
+        cols_lower = [str(c).lower() for c in final.columns]
+        assert len(cols_lower) == len(set(cols_lower)), (
+            f"persisted Delta has dupes after re-run: {list(final.columns)}"
+        )
+        assert set(final["Status"].dropna()) == {"Reopened", "Closed"}
+        assert "OWNER_NAME" in final.columns
+
+    def test_empty_dataset_name_raises(self, namespace):
+        parent = native_pd.DataFrame([{"CASE_ID": "A"}])
+        state = native_pd.DataFrame(
+            [{"CASE_ID": "A", "as_of_date": T0, "Status": "Open"}]
+        )
+
+        with pytest.raises(ValueError, match="parent_dataset_name"):
+            augment_and_persist_parent_dataset(
+                namespace=namespace,
+                parent_dataset_name="",
+                parent_df=parent,
+                state_view=state,
+                config=_scd_config(),
+            )
+
+    def test_whitespace_dataset_name_raises(self, namespace):
+        parent = native_pd.DataFrame([{"CASE_ID": "A"}])
+        state = native_pd.DataFrame(
+            [{"CASE_ID": "A", "as_of_date": T0, "Status": "Open"}]
+        )
+
+        with pytest.raises(ValueError, match="parent_dataset_name"):
+            augment_and_persist_parent_dataset(
+                namespace=namespace,
+                parent_dataset_name="   ",
+                parent_df=parent,
+                state_view=state,
+                config=_scd_config(),
+            )
+
+    def test_config_dataset_name_mismatch_raises(self, namespace):
+        # The config says the parent dataset is "case", but the cell passes
+        # "support_ticket" — this is the copy-paste failure mode.
+        parent = native_pd.DataFrame([{"CASE_ID": "A"}])
+        state = native_pd.DataFrame(
+            [{"CASE_ID": "A", "as_of_date": T0, "Status": "Open"}]
+        )
+
+        with pytest.raises(
+            ValueError, match=r"parent_table_dataset_name.*case.*support_ticket",
+        ):
+            augment_and_persist_parent_dataset(
+                namespace=namespace,
+                parent_dataset_name="support_ticket",
+                parent_df=parent,
+                state_view=state,
+                config=_scd_config(parent_table_dataset_name="case"),
+            )
+
+    def test_config_dataset_name_unset_is_allowed(self, namespace):
+        # When ``parent_table_dataset_name`` is None, the facade trusts the
+        # caller — no mismatch check fires.
+        parent = native_pd.DataFrame([{"CASE_ID": "A", "OWNER_NAME": "Alice"}])
+        state = native_pd.DataFrame(
+            [{"CASE_ID": "A", "as_of_date": T0, "Status": "Open"}]
+        )
+
+        augment_and_persist_parent_dataset(
+            namespace=namespace,
+            parent_dataset_name="case",
+            parent_df=parent,
+            state_view=state,
+            config=_scd_config(parent_table_dataset_name=None),
+        )
+
+        assert namespace.landing_table_dir("case").is_dir()
+
+    def test_landing_schema_drift_after_write_raises(
+        self, namespace, monkeypatch
+    ):
+        # Simulate a Delta-write reordering or silent column drop by
+        # monkey-patching the schema-readback to return fewer columns.
+        from customer_retention.stages.scd_history import augment as augment_module
+
+        parent = native_pd.DataFrame(
+            [{"CASE_ID": "A", "OWNER_NAME": "Alice"}]
+        )
+        state = native_pd.DataFrame(
+            [{"CASE_ID": "A", "as_of_date": T0, "Status": "Open"}]
+        )
+
+        original = augment_module._read_landing_columns
+
+        def _drop_a_column(landing_path):
+            cols = original(landing_path)
+            return [c for c in cols if c != "OWNER_NAME"]
+
+        monkeypatch.setattr(augment_module, "_read_landing_columns", _drop_a_column)
+
+        with pytest.raises(ValueError, match="landing Delta schema drift"):
+            augment_and_persist_parent_dataset(
+                namespace=namespace,
+                parent_dataset_name="case",
+                parent_df=parent,
+                state_view=state,
+                config=_scd_config(),
+            )
+
+    def test_join_type_left_keeps_unmatched(self, namespace):
+        parent = native_pd.DataFrame(
+            [
+                {"CASE_ID": "A", "OWNER_NAME": "Alice"},
+                {"CASE_ID": "Z", "OWNER_NAME": "Zoe"},
+            ]
+        )
+        state = native_pd.DataFrame(
+            [{"CASE_ID": "A", "as_of_date": T0, "Status": "Open"}]
+        )
+
+        augment_and_persist_parent_dataset(
+            namespace=namespace,
+            parent_dataset_name="case",
+            parent_df=parent,
+            state_view=state,
+            config=_scd_config(),
+            join_type="left",
+        )
+
+        loaded = load_active_dataset(namespace, "case")
+        assert sorted(loaded["CASE_ID"].unique()) == ["A", "Z"]
+
+    def test_existing_landing_delta_is_overwritten(self, namespace):
+        # If NB00 wrote a stale landing Delta earlier in the run (e.g. via
+        # the key-resolution save), the facade must overwrite it cleanly.
+        save_active_dataset(
+            namespace,
+            "case",
+            native_pd.DataFrame(
+                [{"CASE_ID": "A", "OWNER_NAME": "Alice", "stale_col": 1}]
+            ),
+        )
+
+        parent = native_pd.DataFrame(
+            [{"CASE_ID": "A", "OWNER_NAME": "Alice"}]
+        )
+        state = native_pd.DataFrame(
+            [{"CASE_ID": "A", "as_of_date": T0, "Status": "Open"}]
+        )
+
+        augment_and_persist_parent_dataset(
+            namespace=namespace,
+            parent_dataset_name="case",
+            parent_df=parent,
+            state_view=state,
+            config=_scd_config(),
+        )
+
+        loaded = load_active_dataset(namespace, "case")
+        # Stale column from the prior write is gone — overwrite, not append.
+        assert "stale_col" not in loaded.columns
+        assert "Status" in loaded.columns

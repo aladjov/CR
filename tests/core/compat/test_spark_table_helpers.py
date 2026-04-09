@@ -69,6 +69,36 @@ class TestRegisterTempView:
         register_temp_view(mock_sdf, "empty_view")
         mock_sdf.createOrReplaceGlobalTempView.assert_called_once_with("empty_view")
 
+    def test_raises_on_with_state_history_suffix(self):
+        # Fail-fast guide-rail: SCD-augmented parent views must NOT be registered
+        # as Spark temp views — they are session-scoped and invisible to NB01's
+        # ``load_active_dataset`` path. The error message points the caller to
+        # ``augment_and_persist_parent_dataset`` instead.
+        mock_sdf = self._fake_sdf(["CASE_ID", "as_of_date", "Status"])
+        with pytest.raises(
+            ValueError,
+            match="augment_and_persist_parent_dataset",
+        ):
+            register_temp_view(mock_sdf, "sps_case_with_state_history")
+        mock_sdf.createOrReplaceGlobalTempView.assert_not_called()
+
+    def test_raises_on_state_view_substring(self):
+        mock_sdf = self._fake_sdf(["CASE_ID", "as_of_date", "Status"])
+        with pytest.raises(
+            ValueError,
+            match="augment_and_persist_parent_dataset",
+        ):
+            register_temp_view(mock_sdf, "case_state_view_v2")
+        mock_sdf.createOrReplaceGlobalTempView.assert_not_called()
+
+    def test_does_not_raise_on_unrelated_name(self):
+        # Regression guard: ``enriched_account``, ``foo``, etc. are legitimate
+        # non-SCD temp-view use cases that the narrow guard must not break.
+        for name in ("enriched_account", "foo", "bar_baz", "customer_history"):
+            mock_sdf = self._fake_sdf(["x", "y"])
+            register_temp_view(mock_sdf, name)
+            mock_sdf.createOrReplaceGlobalTempView.assert_called_once_with(name)
+
 
 class TestAsPandasApi:
     @pytest.fixture(autouse=True)

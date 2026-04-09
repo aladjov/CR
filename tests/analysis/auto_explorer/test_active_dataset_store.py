@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from customer_retention.analysis.auto_explorer.active_dataset_store import (
+    assert_landing_schema_matches_registry,
     load_active_dataset,
     load_active_dataset_distributed,
     load_gold_features,
@@ -352,6 +353,98 @@ class TestDistributedSavePath:
         save_active_dataset(namespace, "customers", df)
         loaded = load_active_dataset(namespace, "customers")
         pd.testing.assert_frame_equal(loaded, df)
+
+
+class TestAssertLandingSchemaMatchesRegistry:
+    """Fail-fast schema-drift guard.
+
+    Catches the bouncing failure mode where NB00 patches the in-memory
+    registry but the landing Delta on disk is stale (or vice versa). The
+    helper is schema-only — never iterates rows — so it stays distributed-
+    safe even on multi-million row datasets.
+    """
+
+    def test_passes_when_columns_match_exactly(self, namespace):
+        df = pd.DataFrame(
+            {"CASE_ID": ["A"], "OWNER_NAME": ["Alice"], "Status": ["Open"]},
+        )
+        save_active_dataset(namespace, "case", df)
+
+        assert_landing_schema_matches_registry(
+            namespace, "case", ["CASE_ID", "OWNER_NAME", "Status"],
+        )
+
+    def test_passes_with_case_insensitive_match(self, namespace):
+        df = pd.DataFrame(
+            {"CASE_ID": ["A"], "OWNER_NAME": ["Alice"], "Status": ["Open"]},
+        )
+        save_active_dataset(namespace, "case", df)
+
+        assert_landing_schema_matches_registry(
+            namespace, "case", ["case_id", "owner_name", "status"],
+        )
+
+    def test_raises_when_landing_dir_missing(self, namespace):
+        with pytest.raises(FileNotFoundError, match="Landing Delta missing"):
+            assert_landing_schema_matches_registry(
+                namespace, "nonexistent", ["a", "b"],
+            )
+
+    def test_raises_when_landing_has_extra_column(self, namespace):
+        df = pd.DataFrame(
+            {"CASE_ID": ["A"], "OWNER_NAME": ["Alice"], "stale_col": [1]},
+        )
+        save_active_dataset(namespace, "case", df)
+
+        with pytest.raises(ValueError, match="stale_col"):
+            assert_landing_schema_matches_registry(
+                namespace, "case", ["CASE_ID", "OWNER_NAME"],
+            )
+
+    def test_raises_when_registry_has_extra_column(self, namespace):
+        df = pd.DataFrame(
+            {"CASE_ID": ["A"], "OWNER_NAME": ["Alice"]},
+        )
+        save_active_dataset(namespace, "case", df)
+
+        with pytest.raises(ValueError, match="missing_col"):
+            assert_landing_schema_matches_registry(
+                namespace, "case", ["CASE_ID", "OWNER_NAME", "missing_col"],
+            )
+
+    def test_does_not_iterate_rows(self, namespace, monkeypatch):
+        # Distributed-safety contract: the helper inspects the schema only,
+        # never .collect() / .count() / per-row scans. We mock get_delta to
+        # return a stub whose .read(path) returns a DF whose .columns is the
+        # only attribute exercised.
+        from customer_retention.analysis.auto_explorer import (
+            active_dataset_store as store_mod,
+        )
+
+        landing_path = namespace.landing_table_dir("case")
+        landing_path.mkdir(parents=True, exist_ok=True)
+
+        captured_calls: list[str] = []
+
+        class _SchemaOnlyDF:
+            columns = ["CASE_ID", "Status"]
+
+            def __getattr__(self, name):
+                captured_calls.append(name)
+                raise AssertionError(
+                    f"schema-drift guard called {name!r} — must inspect columns only",
+                )
+
+        class _SchemaOnlyDelta:
+            def read(self, path):
+                return _SchemaOnlyDF()
+
+        monkeypatch.setattr(store_mod, "get_delta", lambda: _SchemaOnlyDelta())
+
+        assert_landing_schema_matches_registry(
+            namespace, "case", ["CASE_ID", "Status"],
+        )
+        assert captured_calls == [], f"helper accessed forbidden attrs: {captured_calls}"
 
 
 # ---------------------------------------------------------------------------

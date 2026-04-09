@@ -15,14 +15,16 @@ column drop, no per-row Python collection. Backend dispatch matches
 :func:`reconstruct_scd_history_at_grid` so callers can pass native Spark,
 pyspark.pandas, or native pandas DataFrames interchangeably.
 
-Fail-fast guards surface upstream column-name dupes (e.g. a Snowflake source
-that has both ``Origin`` and ``ORIGIN`` from quoted-identifier history) at
-this cell, instead of letting them propagate to NB01's data-load step as an
-``[AMBIGUOUS_REFERENCE]`` error several cells removed from the root cause.
+:func:`augment_and_persist_parent_dataset` is the single supported NB00
+entry point. It composes :func:`augment_parent_with_scd_state` with
+``save_active_dataset`` so the augmented schema lands on the canonical
+landing Delta path that NB01 reads from. Manual ``join + register_temp_view``
+patterns are rejected by ``register_temp_view``'s SCD-name guard — temp
+views are session-scoped and invisible to downstream notebooks.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Tuple
 
 from customer_retention.core.compat import (
     _is_native_spark_df,
@@ -30,6 +32,8 @@ from customer_retention.core.compat import (
     as_pandas_api,
     as_spark_df,
 )
+
+from .config import SCDHistoryReconstructionConfig
 
 
 def augment_parent_with_scd_state(
@@ -168,3 +172,114 @@ def _drop_collisions_pandas(
         for c in parent_df.columns
     ]
     return parent_df.loc[:, keep_mask]
+
+
+def augment_and_persist_parent_dataset(
+    *,
+    namespace: Any,
+    parent_dataset_name: str,
+    parent_df: Any,
+    state_view: Any,
+    config: SCDHistoryReconstructionConfig,
+    join_type: str = "inner",
+) -> Tuple[Any, dict[str, str]]:
+    """Augment a parent with SCD state and overwrite its landing Delta.
+
+    The single supported entry point for SCD augmentation in NB00. Replaces
+    the manual ``join + register_temp_view`` pattern that left the augmented
+    schema invisible to NB01's ``load_active_dataset`` path (temp views are
+    session-scoped). Returns ``(augmented_df, schema_dict)`` so the cell can
+    update both the in-memory ``datasets`` dict and the registry entry's
+    ``detected_schema`` field atomically.
+
+    Distributed-safe end-to-end: reuses :func:`augment_parent_with_scd_state`
+    (native Spark ``.toDF()`` aliasing + ``.select()`` + ``.join(on=key)``)
+    and ``save_active_dataset`` (``as_spark_df`` + ``delta.write``). The
+    schema-drift verification reads only ``columns`` from the persisted
+    Delta — no row scan, no ``.collect()``.
+
+    Fail-fast on:
+      - empty / whitespace ``parent_dataset_name``
+      - mismatch between ``parent_dataset_name`` and
+        ``config.parent_table_dataset_name`` (catches copy-paste of the
+        wrong config object)
+      - case-insensitive duplicate columns in the augmented frame
+      - schema drift between the augmented frame and the persisted Delta
+    """
+    _require_dataset_name(parent_dataset_name)
+    _require_config_matches(parent_dataset_name, config)
+
+    augmented = augment_parent_with_scd_state(
+        parent_df, state_view, config.parent_record_key, join_type=join_type,
+    )
+    _assert_no_case_insensitive_duplicates(
+        augmented, "augment_and_persist_parent_dataset output",
+    )
+
+    landing_path = _persist_to_landing(namespace, parent_dataset_name, augmented)
+    _assert_landing_delta_matches_schema(
+        landing_path, augmented, parent_dataset_name,
+    )
+
+    return augmented, _augmented_schema(augmented)
+
+
+def _require_dataset_name(name: str) -> None:
+    if not name or not str(name).strip():
+        raise ValueError(
+            "augment_and_persist_parent_dataset: parent_dataset_name must "
+            "not be empty or whitespace-only",
+        )
+
+
+def _require_config_matches(
+    parent_dataset_name: str, config: SCDHistoryReconstructionConfig
+) -> None:
+    configured = config.parent_table_dataset_name
+    if configured is not None and configured != parent_dataset_name:
+        raise ValueError(
+            f"augment_and_persist_parent_dataset: parent_table_dataset_name "
+            f"mismatch — config says {configured!r}, caller passed "
+            f"{parent_dataset_name!r}. Refusing to persist under the wrong "
+            f"dataset name (catches copy-paste of the wrong config object).",
+        )
+
+
+def _persist_to_landing(namespace: Any, dataset_name: str, augmented: Any) -> Any:
+    from customer_retention.analysis.auto_explorer.active_dataset_store import (
+        save_active_dataset,
+    )
+
+    return save_active_dataset(namespace, dataset_name, augmented)
+
+
+def _read_landing_columns(landing_path: Any) -> list[str]:
+    from customer_retention.integrations.adapters.factory import get_delta
+
+    return list(get_delta().read(str(landing_path)).columns)
+
+
+def _assert_landing_delta_matches_schema(
+    landing_path: Any, augmented: Any, dataset_name: str
+) -> None:
+    actual = {str(c).lower() for c in _read_landing_columns(landing_path)}
+    expected = {str(c).lower() for c in augmented.columns}
+    if actual == expected:
+        return
+    only_actual = sorted(actual - expected)
+    only_expected = sorted(expected - actual)
+    raise ValueError(
+        f"augment_and_persist_parent_dataset: landing Delta schema drift "
+        f"for dataset {dataset_name!r} — Delta has columns not in augmented "
+        f"frame={only_actual}, augmented frame has columns not in Delta="
+        f"{only_expected}",
+    )
+
+
+def _augmented_schema(augmented: Any) -> dict[str, str]:
+    if hasattr(augmented, "dtypes"):
+        dtypes = augmented.dtypes
+        if hasattr(dtypes, "items"):
+            return {str(name): str(dtype) for name, dtype in dtypes.items()}
+        return {str(name): str(dtype) for name, dtype in dtypes}
+    return {str(c): "unknown" for c in augmented.columns}

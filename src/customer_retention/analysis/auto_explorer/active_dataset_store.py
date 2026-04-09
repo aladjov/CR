@@ -147,6 +147,37 @@ def save_active_dataset(
     return dlt_path
 
 
+def assert_landing_schema_matches_registry(
+    namespace: RunNamespace,
+    dataset_name: str,
+    expected_columns: List[str],
+) -> None:
+    """Raise if the landing Delta's columns differ from ``expected_columns``.
+
+    Catches the bouncing failure mode where NB00 patches the in-memory
+    registry but the landing Delta on disk is stale (or vice versa). The
+    helper is schema-only — it reads ``columns`` from the persisted Delta
+    plan, never iterates rows — so it stays distributed-safe even on
+    multi-million-row datasets.
+    """
+    landing_path = namespace.landing_table_dir(dataset_name)
+    if not landing_path.is_dir():
+        raise FileNotFoundError(
+            f"Landing Delta missing for dataset {dataset_name!r}: {landing_path}",
+        )
+    actual = {str(c).lower() for c in get_delta().read(str(landing_path)).columns}
+    expected = {str(c).lower() for c in expected_columns}
+    if actual == expected:
+        return
+    only_actual = sorted(actual - expected)
+    only_expected = sorted(expected - actual)
+    raise ValueError(
+        f"Schema drift for dataset {dataset_name!r}: landing Delta has "
+        f"columns not in registry={only_actual}, registry has columns not "
+        f"in landing Delta={only_expected}",
+    )
+
+
 def load_active_dataset(namespace: RunNamespace, dataset_name: str) -> Any:
     dlt_path = namespace.landing_table_dir(dataset_name)
     if not dlt_path.is_dir():

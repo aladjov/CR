@@ -32,12 +32,16 @@ Quick Start::
     )
 """
 
-from .augment import augment_parent_with_scd_state
+from .augment import (
+    augment_and_persist_parent_dataset,
+    augment_parent_with_scd_state,
+)
 from .config import SCDHistoryReconstructionConfig
 from .reconstruct import reconstruct_scd_history_at_grid
 
 __all__ = [
     "SCDHistoryReconstructionConfig",
+    "augment_and_persist_parent_dataset",
     "augment_parent_with_scd_state",
     "reconstruct_scd_history_at_grid",
 ]
