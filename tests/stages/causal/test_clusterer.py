@@ -16,6 +16,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+pytest.importorskip("pyspark", reason="PySpark required for causal clusterer tests")
+
 from customer_retention.stages.causal import clusterer
 from customer_retention.stages.causal.clusterer import (
     CLUSTER_COL,

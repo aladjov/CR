@@ -20,6 +20,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+pytest.importorskip("pyspark", reason="PySpark required for SHAP runner tests")
+
 from customer_retention.stages.causal import shap_runner
 from customer_retention.stages.causal.shap_runner import (
     DEFAULT_BACKGROUND_SIZE,

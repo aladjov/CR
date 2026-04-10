@@ -26,6 +26,16 @@ omit =
     */stages/temporal/spark_temporal_merger.py
     */core/compat/spark_backend.py
     */transforms/spark_ops.py
+    ; Causal track — all Spark-dependent
+    */stages/causal/clusterer.py
+    */stages/causal/shap_runner.py
+    */stages/causal/snapshot_writer.py
+    */stages/causal/delta_writer.py
+    */stages/causal/dashboard_views.py
+    */stages/causal/derivation.py
+    */stages/causal/approval_gate.py
+    */stages/causal/predicate_compiler.py
+    */stages/causal/schemas.py
 
 [report]
 precision = 2

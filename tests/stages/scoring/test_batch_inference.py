@@ -101,6 +101,7 @@ class TestApplyRiskTiersSpark:
     """
 
     def test_invokes_when_chain_with_thresholds(self):
+        pytest.importorskip("pyspark", reason="PySpark required for Spark risk-tier tests")
         from unittest.mock import MagicMock
 
         from customer_retention.stages.scoring.batch_inference import apply_risk_tiers_spark
@@ -140,6 +141,7 @@ class TestGetSpark:
 
 class TestRunDatabricksRequiresIdentity:
     def test_missing_catalog_schema_or_model_raises(self, monkeypatch):
+        pytest.importorskip("pyspark", reason="PySpark required for Databricks inference tests")
         from customer_retention.stages.scoring import batch_inference
         from customer_retention.stages.scoring.batch_inference import (
             BatchInferenceConfig,

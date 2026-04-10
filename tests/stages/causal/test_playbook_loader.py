@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+pytest.importorskip("pyspark", reason="PySpark required for playbook loader tests")
+
 from customer_retention.stages.causal.playbook_loader import load_playbooks_from_dir
 from customer_retention.stages.causal.schemas import playbook_catalog_schema, playbook_steps_schema
 

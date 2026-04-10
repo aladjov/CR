@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytest.importorskip("pyspark", reason="PySpark required for policy loader tests")
+
 from customer_retention.stages.causal.policy_loader import (
     load_decision_policy,
     load_policies_from_dir,
