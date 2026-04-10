@@ -126,87 +126,13 @@ def write_notebook(path: Path, cells: List[Dict[str, Any]]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Shared setup cell — resolves catalog/schema/model from ScoringConfig
+# Shared setup cell — single source imported from causal_setup_cell
 # ---------------------------------------------------------------------------
 
-
-_SETUP_BODY_NEEDS_MODEL = '''from customer_retention.core.compat.detection import get_spark_session, is_databricks
-from customer_retention.core.config import get_playbooks_dir
-from customer_retention.core.config.experiments import get_experiments_dir
-from customer_retention.stages.scoring import ScoringConfig
-
-spark = get_spark_session()
-PLAYBOOKS_DIR = get_playbooks_dir()
-
-if is_databricks():
-    scoring_config = ScoringConfig.from_databricks()
-    CATALOG = scoring_config.catalog
-    SCHEMA = scoring_config.schema
-    MODEL_NAME = scoring_config.registered_model_name
-    import mlflow
-
-    mlflow_client = mlflow.tracking.MlflowClient()
-    production_version = mlflow_client.get_model_version_by_alias(
-        f"{CATALOG}.{SCHEMA}.{MODEL_NAME}", "production"
-    )
-    MODEL_VERSION = production_version.version
-    MODEL_URI = f"models:/{CATALOG}.{SCHEMA}.{MODEL_NAME}@production"
-else:
-    scoring_config = ScoringConfig.from_local_config(get_experiments_dir())
-    CATALOG = "local"
-    SCHEMA = "local"
-    MODEL_NAME = scoring_config.best_model_name or "local_model"
-    MODEL_VERSION = "local"
-    MODEL_URI = None
-
-COMPOSITE_NAME = scoring_config.composite_name
-GOLD_FEATURES_FQN = (
-    f"{CATALOG}.{SCHEMA}.gold_features_{COMPOSITE_NAME}"
-    if COMPOSITE_NAME
-    else f"{CATALOG}.{SCHEMA}.gold_features"
+from customer_retention.generators.notebook_generator.stages.causal_setup_cell import (
+    _SETUP_BODY_NEEDS_MODEL,
+    _SETUP_BODY_PUBLISH_ONLY,
 )
-
-ARCHETYPE_CATALOG_FQN = f"{CATALOG}.{SCHEMA}.archetype_catalog"
-ELIGIBILITY_POLICY_FQN = f"{CATALOG}.{SCHEMA}.eligibility_policy"
-DECISION_POLICY_FQN = f"{CATALOG}.{SCHEMA}.decision_policy"
-ELIGIBILITY_SNAPSHOT_FQN = f"{CATALOG}.{SCHEMA}.eligibility_snapshot"
-PREDICTIONS_FQN = f"{CATALOG}.{SCHEMA}.predictions"
-
-print(f"Resolved playbooks_dir: {PLAYBOOKS_DIR}")
-print(f"Catalog/schema:         {CATALOG}.{SCHEMA}")
-print(f"Composite name:         {COMPOSITE_NAME or '(unset)'}")
-print(f"Gold features table:    {GOLD_FEATURES_FQN}")
-print(f"Model URI:              {MODEL_URI or '(local)'}")
-print(f"Model version:          {MODEL_VERSION}")
-'''
-
-
-_SETUP_BODY_PUBLISH_ONLY = '''from customer_retention.core.compat.detection import get_spark_session, is_databricks
-from customer_retention.core.config import get_playbooks_dir
-from customer_retention.core.config.experiments import get_experiments_dir
-from customer_retention.stages.scoring import ScoringConfig
-
-spark = get_spark_session()
-PLAYBOOKS_DIR = get_playbooks_dir()
-
-if is_databricks():
-    scoring_config = ScoringConfig.from_databricks()
-    CATALOG = scoring_config.catalog
-    SCHEMA = scoring_config.schema
-else:
-    scoring_config = ScoringConfig.from_local_config(get_experiments_dir())
-    CATALOG = "local"
-    SCHEMA = "local"
-
-PLAYBOOK_CATALOG_FQN = f"{CATALOG}.{SCHEMA}.playbook_catalog"
-PLAYBOOK_STEPS_FQN = f"{CATALOG}.{SCHEMA}.playbook_steps"
-DECISION_POLICY_FQN = f"{CATALOG}.{SCHEMA}.decision_policy"
-RESPONSE_SCHEMAS_FQN = f"{CATALOG}.{SCHEMA}.response_schemas"
-VOCABULARIES_FQN = f"{CATALOG}.{SCHEMA}.vocabularies"
-
-print(f"Resolved playbooks_dir: {PLAYBOOKS_DIR}")
-print(f"Catalog/schema:         {CATALOG}.{SCHEMA}")
-'''
 
 
 def setup_block(stage: str, *, needs_model: bool) -> List[Dict[str, Any]]:
@@ -343,6 +269,7 @@ _C02_DERIVE_BODY = '''from customer_retention.stages.causal import (
     DerivationConfig,
     build_llm_namer,
     derive_archetypes_and_policies,
+    unwrap_tree_model,
 )
 from customer_retention.stages.causal.playbook_loader import load_playbooks_from_dir
 
@@ -384,7 +311,7 @@ else:
         training_df=training_df,
         raw_feature_df=training_df,
         feature_columns=feature_columns,
-        model=mlflow.pyfunc.load_model(MODEL_URI),
+        model=unwrap_tree_model(mlflow.pyfunc.load_model(MODEL_URI)),
         target_column="target",
         join_key=join_key,
         archetype_catalog_fqn=ARCHETYPE_CATALOG_FQN,
@@ -454,7 +381,9 @@ FORCE_APPROVE = False
 '''
 
 
-_C03_RESOLVE_BODY = '''derivation_run_id = None
+_C03_RESOLVE_BODY = '''from customer_retention.stages.causal import expire_stale_pending
+
+derivation_run_id = None
 if spark is not None and spark.catalog.tableExists(ARCHETYPE_CATALOG_FQN):
     row = spark.sql(
         f"SELECT derivation_run_id FROM {ARCHETYPE_CATALOG_FQN} "
@@ -467,6 +396,12 @@ if spark is not None and spark.catalog.tableExists(ARCHETYPE_CATALOG_FQN):
 if derivation_run_id is None:
     print("No pending_review derivations found for the current model version.")
 else:
+    expired = expire_stale_pending(
+        spark, ARCHETYPE_CATALOG_FQN, ELIGIBILITY_POLICY_FQN,
+        MODEL_NAME, MODEL_VERSION, derivation_run_id,
+    )
+    if expired:
+        print(f"Expired {expired} stale pending_review rows from prior derivation runs")
     print(f"Resolved derivation_run_id: {derivation_run_id}")
 '''
 
@@ -579,6 +514,7 @@ else:
         risk_tier_high=SNAPSHOT_RISK_TIER_HIGH,
         risk_tier_medium=SNAPSHOT_RISK_TIER_MEDIUM,
         capacity_partition_column=SNAPSHOT_CAPACITY_PARTITION_COLUMN or None,
+        top_shap_drivers_fqn=TOP_SHAP_DRIVERS_FQN or None,
     )
     snapshot_result = build_eligibility_snapshot(snapshot_cfg)
     print(snapshot_result.summary())

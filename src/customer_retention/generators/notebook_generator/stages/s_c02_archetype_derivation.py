@@ -61,6 +61,7 @@ _DERIVE_ARCHETYPES_CELL = '''from customer_retention.stages.causal import (
     DerivationConfig,
     build_llm_namer,
     derive_archetypes_and_policies,
+    unwrap_tree_model,
 )
 from customer_retention.stages.causal.playbook_loader import load_playbooks_from_dir
 
@@ -102,7 +103,7 @@ else:
         training_df=training_df,
         raw_feature_df=training_df,
         feature_columns=feature_columns,
-        model=mlflow.pyfunc.load_model(MODEL_URI),
+        model=unwrap_tree_model(mlflow.pyfunc.load_model(MODEL_URI)),
         target_column="target",
         join_key=join_key,
         archetype_catalog_fqn=ARCHETYPE_CATALOG_FQN,

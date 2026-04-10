@@ -142,6 +142,7 @@ ELIGIBILITY_POLICY_FQN = f"{CATALOG}.{SCHEMA}.eligibility_policy"
 DECISION_POLICY_FQN = f"{CATALOG}.{SCHEMA}.decision_policy"
 ELIGIBILITY_SNAPSHOT_FQN = f"{CATALOG}.{SCHEMA}.eligibility_snapshot"
 PREDICTIONS_FQN = f"{CATALOG}.{SCHEMA}.predictions"
+TOP_SHAP_DRIVERS_FQN = f"{CATALOG}.{SCHEMA}.top_shap_drivers"
 
 print(f"Resolved playbooks_dir: {PLAYBOOKS_DIR}")
 print(f"Catalog/schema:         {CATALOG}.{SCHEMA}")

@@ -180,6 +180,49 @@ def auto_promote_stable(
     return result
 
 
+def expire_stale_pending(
+    spark: "SparkSession",
+    archetype_table_fqn: str,
+    policy_table_fqn: str,
+    model_name: str,
+    model_version: str,
+    keep_derivation_run_id: str,
+    now: Optional[datetime] = None,
+) -> int:
+    """Expire orphan ``pending_review`` rows from prior derivation runs.
+
+    When c02 runs but c03 never approves, re-running c02 creates a new
+    derivation_run_id alongside the old pending rows. This function marks
+    all ``pending_review`` rows for the given ``(model_name, model_version)``
+    as ``expired`` except those belonging to ``keep_derivation_run_id``.
+    Returns the number of archetype rows expired.
+    """
+    timestamp = now or datetime.now(timezone.utc)
+    expired = 0
+    for table_fqn in (archetype_table_fqn, policy_table_fqn):
+        if not _table_exists(spark, table_fqn):
+            continue
+        spark.sql(
+            f"UPDATE {table_fqn} "
+            f"SET status = 'expired', valid_to = ? "
+            f"WHERE status = 'pending_review' "
+            f"  AND model_name = ? AND model_version = ? "
+            f"  AND derivation_run_id != ?",
+            args=[timestamp, model_name, model_version, keep_derivation_run_id],
+        )
+    if _table_exists(spark, archetype_table_fqn):
+        rows = spark.sql(
+            f"SELECT COUNT(*) AS c FROM {archetype_table_fqn} "
+            f"WHERE status = 'expired' AND model_name = ? AND model_version = ? "
+            f"  AND derivation_run_id != ?",
+            args=[model_name, model_version, keep_derivation_run_id],
+        ).collect()
+        expired = int(rows[0]["c"]) if rows else 0
+    if expired:
+        logger.info("Expired %d stale pending_review rows for %s v%s", expired, model_name, model_version)
+    return expired
+
+
 def list_pending_review(
     spark: "SparkSession",
     archetype_table_fqn: str,
@@ -395,28 +438,4 @@ def _merge_policy_status(
             *promoted_archetype_versions,
         ],
     )
-    return _count_archetype_versions_superseded(
-        spark, table_fqn, promoted_archetype_versions
-    )
-
-
-def _count_archetype_versions_superseded(
-    spark: "SparkSession", table_fqn: str, archetype_versions: List[str]
-) -> int:
-    """Best-effort count of policy rows whose status flipped from cascading.
-
-    Returns the number of policies that now reference at least one of the
-    promoted archetype versions and are still in ``active`` state — used
-    only for the run summary, never as a correctness signal.
-    """
-    if not archetype_versions:
-        return 0
-    placeholders = ", ".join("?" for _ in archetype_versions)
-    rows = spark.sql(
-        f"SELECT COUNT(*) AS c FROM {table_fqn} "
-        f"WHERE status = 'active' AND arrays_overlap(archetype_ids, array({placeholders}))",
-        args=list(archetype_versions),
-    ).collect()
-    if not rows:
-        return 0
-    return int(rows[0]["c"])
+    return len(promoted_archetype_versions)

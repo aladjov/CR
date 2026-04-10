@@ -24,10 +24,9 @@
 -- ============================================================================
 CREATE OR REPLACE VIEW {catalog}.{schema}.v_ranked_at_risk_customers AS
 WITH latest_run AS (
-    SELECT scoring_run_id, MAX(as_of_date) AS as_of_date
+    SELECT scoring_run_id, as_of_date
     FROM {catalog}.{schema}.eligibility_snapshot
-    GROUP BY scoring_run_id
-    ORDER BY as_of_date DESC
+    WHERE as_of_date = (SELECT MAX(as_of_date) FROM {catalog}.{schema}.eligibility_snapshot)
     LIMIT 1
 )
 SELECT
@@ -156,10 +155,9 @@ WHERE s.is_holdout = TRUE;
 -- ============================================================================
 CREATE OR REPLACE VIEW {catalog}.{schema}.v_capacity_utilization AS
 WITH latest_run AS (
-    SELECT scoring_run_id, MAX(as_of_date) AS as_of_date
+    SELECT scoring_run_id, as_of_date
     FROM {catalog}.{schema}.eligibility_snapshot
-    GROUP BY scoring_run_id
-    ORDER BY as_of_date DESC
+    WHERE as_of_date = (SELECT MAX(as_of_date) FROM {catalog}.{schema}.eligibility_snapshot)
     LIMIT 1
 )
 SELECT

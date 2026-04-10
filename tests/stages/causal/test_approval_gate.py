@@ -29,6 +29,7 @@ from customer_retention.stages.causal.approval_gate import (
     StabilityDecision,
     auto_promote_stable,
     cosine_similarity,
+    expire_stale_pending,
     list_pending_review,
 )
 
@@ -464,3 +465,57 @@ class TestApprovalGateResult:
         assert "0 auto-promoted" in text
         assert "0 pending review" in text
         assert "superseded 2" in text
+
+
+# ---------------------------------------------------------------------------
+# expire_stale_pending
+# ---------------------------------------------------------------------------
+
+
+def _make_expire_spark(table_exists: bool = True, expired_count: int = 0):
+    spark = MagicMock(name="SparkSession")
+    spark.catalog = MagicMock()
+    spark.catalog.tableExists.return_value = table_exists
+    sql_calls: List[_SqlCall] = []
+    spark.__sql_calls__ = sql_calls
+
+    def _sql(query: str, args: List[Any] | None = None) -> _FakeResultDF:
+        sql_calls.append(_SqlCall(query=query, args=list(args) if args else []))
+        if "SELECT COUNT(*)" in query:
+            return _FakeResultDF([{"c": expired_count}])
+        return _FakeResultDF([])
+
+    spark.sql.side_effect = _sql
+    return spark
+
+
+class TestExpireStalePending:
+    def test_returns_zero_when_table_missing(self):
+        spark = _make_expire_spark(table_exists=False)
+        result = expire_stale_pending(
+            spark, "cat.sch.archetype_catalog", "cat.sch.eligibility_policy",
+            "model_a", "v1", "keep_run",
+        )
+        assert result == 0
+
+    def test_issues_update_for_both_tables(self):
+        spark = _make_expire_spark(table_exists=True, expired_count=3)
+        expire_stale_pending(
+            spark, "cat.sch.archetype_catalog", "cat.sch.eligibility_policy",
+            "model_a", "v1", "keep_run", now=datetime(2026, 4, 10),
+        )
+        update_calls = [c for c in spark.__sql_calls__ if "UPDATE" in c.query]
+        assert len(update_calls) == 2
+        for call in update_calls:
+            assert "status = 'expired'" in call.query
+            assert "model_a" in call.args
+            assert "v1" in call.args
+            assert "keep_run" in call.args
+
+    def test_returns_expired_count(self):
+        spark = _make_expire_spark(table_exists=True, expired_count=5)
+        result = expire_stale_pending(
+            spark, "cat.sch.archetype_catalog", "cat.sch.eligibility_policy",
+            "model_a", "v1", "keep_run",
+        )
+        assert result == 5

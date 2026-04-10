@@ -56,6 +56,38 @@ SHAP_PREFIX: str = "shap_"
 
 
 # ---------------------------------------------------------------------------
+# Model unwrapping
+# ---------------------------------------------------------------------------
+
+
+def unwrap_tree_model(model: Any) -> Any:
+    """Extract the tree-native estimator from an MLflow PyFuncModel.
+
+    ``shap.TreeExplainer`` requires the raw sklearn / xgboost / lightgbm
+    estimator, not the ``mlflow.pyfunc.PyFuncModel`` wrapper (which only
+    exposes ``predict()``). This function probes the known internal
+    attribute chains. If the model is already a raw estimator it is
+    returned as-is.
+    """
+    try:
+        import mlflow.pyfunc
+        if isinstance(model, mlflow.pyfunc.PyFuncModel):
+            inner = getattr(model, "_model_impl", None)
+            if inner is not None:
+                # sklearn / xgboost / lightgbm flavors store the raw model
+                # on the ``python_model`` attribute of the implementation.
+                py_model = getattr(inner, "python_model", None)
+                if py_model is not None:
+                    return py_model
+            # mlflow >= 2.10 stores it under .unwrap_python_model()
+            if hasattr(model, "unwrap_python_model"):
+                return model.unwrap_python_model()
+    except (ImportError, AttributeError):
+        pass
+    return model
+
+
+# ---------------------------------------------------------------------------
 # Public dataclasses
 # ---------------------------------------------------------------------------
 

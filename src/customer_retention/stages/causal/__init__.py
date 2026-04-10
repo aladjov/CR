@@ -28,6 +28,7 @@ from .approval_gate import (
     StabilityDecision,
     auto_promote_stable,
     cosine_similarity,
+    expire_stale_pending,
     list_pending_review,
 )
 from .clusterer import (
@@ -72,6 +73,7 @@ from .shap_runner import (
     ShapRunResult,
     compute_shap_distributed,
     freeze_background,
+    unwrap_tree_model,
 )
 from .snapshot_writer import (
     SnapshotConfig,
@@ -123,6 +125,7 @@ __all__ = [
     "compute_shap_distributed",
     "cosine_similarity",
     "derive_archetypes_and_policies",
+    "expire_stale_pending",
     "evaluate_eligibility",
     "extract_eligibility_rules",
     "extract_features_from_text",
@@ -131,5 +134,6 @@ __all__ = [
     "map_archetypes_to_playbooks",
     "predicate_to_sql",
     "select_top_shap_features",
+    "unwrap_tree_model",
     "write_snapshot",
 ]

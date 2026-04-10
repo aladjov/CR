@@ -151,6 +151,7 @@ def cluster_kmeans(
 
         candidates: List[ClusterCandidate] = []
         best_model = None
+        best_labelled = None
         best_score = float("-inf")
         best_k = k_low
         evaluator = ClusteringEvaluator(featuresCol=SHAP_VECTOR_COL, predictionCol=CLUSTER_COL)
@@ -173,11 +174,12 @@ def cluster_kmeans(
                 best_score = score
                 best_k = k
                 best_model = model
+                best_labelled = labelled
 
-        if best_model is None:
+        if best_model is None or best_labelled is None:
             raise RuntimeError("KMeans silhouette sweep produced no candidates — check k_range")
 
-        labelled_df = best_model.transform(assembled).drop(SHAP_VECTOR_COL)
+        labelled_df = best_labelled.drop(SHAP_VECTOR_COL)
         centroids = [[float(v) for v in c] for c in best_model.clusterCenters()]
         return ClusteringResult(
             best_k=best_k,

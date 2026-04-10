@@ -810,18 +810,11 @@ def _compile_suppression(rules_json: Any) -> Tuple["Column", str]:
 def _capacity_lookup_column(capacity_map: Mapping[str, Any]) -> "Column":
     from pyspark.sql import functions as F  # noqa: N812
 
-    if not capacity_map:
+    entries = {str(k): int(v) for k, v in capacity_map.items() if v is not None}
+    if not entries:
         return F.lit(None).cast("int")
-    cases: Optional["Column"] = None
-    for playbook_id, capacity in capacity_map.items():
-        if capacity is None:
-            continue
-        cond = F.col("playbook_id") == F.lit(str(playbook_id))
-        value = F.lit(int(capacity))
-        cases = F.when(cond, value) if cases is None else cases.when(cond, value)
-    if cases is None:
-        return F.lit(None).cast("int")
-    return cases.otherwise(F.lit(None).cast("int"))
+    map_col = F.create_map(*[x for k, v in entries.items() for x in (F.lit(k), F.lit(v))])
+    return map_col[F.col("playbook_id")].cast("int")
 
 
 def _apply_holdout_assignment(
@@ -860,18 +853,11 @@ def _apply_holdout_assignment(
 def _holdout_fraction_lookup(holdout_fractions: Mapping[str, Any]) -> "Column":
     from pyspark.sql import functions as F  # noqa: N812
 
-    if not holdout_fractions:
+    entries = {str(k): float(v) for k, v in holdout_fractions.items() if v is not None}
+    if not entries:
         return F.lit(_DEFAULT_HOLDOUT_FRACTION)
-    cases: Optional["Column"] = None
-    for playbook_id, fraction in holdout_fractions.items():
-        if fraction is None:
-            continue
-        cond = F.col("playbook_id") == F.lit(str(playbook_id))
-        value = F.lit(float(fraction))
-        cases = F.when(cond, value) if cases is None else cases.when(cond, value)
-    if cases is None:
-        return F.lit(_DEFAULT_HOLDOUT_FRACTION)
-    return cases.otherwise(F.lit(_DEFAULT_HOLDOUT_FRACTION))
+    map_col = F.create_map(*[x for k, v in entries.items() for x in (F.lit(k), F.lit(v))])
+    return F.coalesce(map_col[F.col("playbook_id")], F.lit(_DEFAULT_HOLDOUT_FRACTION))
 
 
 def _seed_columns(seed_recipe: str, available: Sequence[str], account_id_column: str) -> List[str]:

@@ -56,7 +56,9 @@ class ApprovalGateStage(StageGenerator):
         )
 
 
-_RESOLVE_RUN_CELL = '''derivation_run_id = None
+_RESOLVE_RUN_CELL = '''from customer_retention.stages.causal import expire_stale_pending
+
+derivation_run_id = None
 if spark is not None and spark.catalog.tableExists(ARCHETYPE_CATALOG_FQN):
     row = spark.sql(
         f"SELECT derivation_run_id FROM {ARCHETYPE_CATALOG_FQN} "
@@ -69,6 +71,12 @@ if spark is not None and spark.catalog.tableExists(ARCHETYPE_CATALOG_FQN):
 if derivation_run_id is None:
     print("No pending_review derivations found for the current model version.")
 else:
+    expired = expire_stale_pending(
+        spark, ARCHETYPE_CATALOG_FQN, ELIGIBILITY_POLICY_FQN,
+        MODEL_NAME, MODEL_VERSION, derivation_run_id,
+    )
+    if expired:
+        print(f"Expired {expired} stale pending_review rows from prior derivation runs")
     print(f"Resolved derivation_run_id: {derivation_run_id}")
 '''
 

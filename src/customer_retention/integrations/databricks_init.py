@@ -201,7 +201,7 @@ def _resolve_experiment_name_from_notebook_path() -> str:
         if dbutils:
             notebook_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
             return notebook_path.rsplit("/", 1)[-1]
-    except Exception:
+    except (AttributeError, RuntimeError, KeyError, TypeError):
         pass
     return "customer_retention"
 
@@ -211,7 +211,7 @@ def _get_dbutils() -> Any | None:
         from customer_retention.core.compat.detection import get_dbutils
 
         return get_dbutils()
-    except Exception:
+    except (ImportError, AttributeError, RuntimeError):
         return None
 
 
@@ -324,7 +324,7 @@ def _sync_notebook(
     try:
         repo_nb = nbformat.read(str(repo_path), as_version=4)
         user_nb = nbformat.read(str(user_path), as_version=4)
-    except Exception:
+    except (OSError, ValueError, KeyError):
         return False
 
     engine = NotebookSyncEngine()
@@ -348,7 +348,7 @@ def _inject_system_cell(notebook_path: Path, framework_repo_path: str | None) ->
 
     try:
         nb = nbformat.read(str(notebook_path), as_version=4)
-    except Exception:
+    except (OSError, ValueError, KeyError):
         return
 
     if NotebookSyncEngine.ensure_system_cell(nb, framework_repo_path):
@@ -374,7 +374,7 @@ def _find_requirements_file(name: str) -> Path | None:
         candidate = pkg_root / name
         if candidate.exists():
             return candidate
-    except Exception:
+    except (ImportError, AttributeError, TypeError, OSError):
         pass
     return None
 

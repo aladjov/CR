@@ -30,6 +30,7 @@ from customer_retention.stages.causal.shap_runner import (
     ShapRunResult,
     compute_shap_distributed,
     freeze_background,
+    unwrap_tree_model,
 )
 
 # ---------------------------------------------------------------------------
@@ -290,3 +291,56 @@ class TestPicklableModelWrapper:
         assert passed_background is not None
         assert list(passed_background.columns) == ["a", "b"]
         assert len(passed_background) == 2
+
+
+# ---------------------------------------------------------------------------
+# unwrap_tree_model
+# ---------------------------------------------------------------------------
+
+
+class TestUnwrapTreeModel:
+    def test_raw_model_returned_as_is(self):
+        raw_model = MagicMock(name="XGBClassifier", spec=[])
+        assert unwrap_tree_model(raw_model) is raw_model
+
+    def test_pyfunc_model_unwraps_via_model_impl(self, monkeypatch):
+        import sys
+
+        inner_model = MagicMock(name="InnerSklearnModel")
+        impl = MagicMock(name="ModelImpl")
+        impl.python_model = inner_model
+        pyfunc_model = MagicMock(name="PyFuncModel")
+        pyfunc_model._model_impl = impl
+
+        fake_pyfunc = MagicMock(name="mlflow.pyfunc")
+        fake_pyfunc.PyFuncModel = type(pyfunc_model)
+        fake_mlflow = MagicMock(name="mlflow")
+        fake_mlflow.pyfunc = fake_pyfunc
+        monkeypatch.setitem(sys.modules, "mlflow", fake_mlflow)
+        monkeypatch.setitem(sys.modules, "mlflow.pyfunc", fake_pyfunc)
+
+        result = unwrap_tree_model(pyfunc_model)
+        assert result is inner_model
+
+    def test_pyfunc_without_impl_falls_through(self, monkeypatch):
+        import sys
+
+        pyfunc_model = MagicMock(name="PyFuncModel", spec=["predict"])
+        del pyfunc_model._model_impl
+
+        fake_pyfunc = MagicMock(name="mlflow.pyfunc")
+        fake_pyfunc.PyFuncModel = type(pyfunc_model)
+        fake_mlflow = MagicMock(name="mlflow")
+        fake_mlflow.pyfunc = fake_pyfunc
+        monkeypatch.setitem(sys.modules, "mlflow", fake_mlflow)
+        monkeypatch.setitem(sys.modules, "mlflow.pyfunc", fake_pyfunc)
+
+        result = unwrap_tree_model(pyfunc_model)
+        assert result is pyfunc_model
+
+    def test_no_mlflow_returns_model(self, monkeypatch):
+        import sys
+        monkeypatch.delitem(sys.modules, "mlflow", raising=False)
+        monkeypatch.delitem(sys.modules, "mlflow.pyfunc", raising=False)
+        model = MagicMock(name="SomeModel", spec=[])
+        assert unwrap_tree_model(model) is model

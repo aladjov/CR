@@ -38,6 +38,13 @@ resources:
   jobs:
     causal_track_pipeline:
       name: customer_retention_causal_track
+      # PREREQUISITE: s10_batch_inference must complete before this job runs.
+      # s10 is a generated pipeline (not in this bundle) so it cannot be
+      # added as a DAB task dependency. Operators must either:
+      #   (a) schedule this job after the scoring pipeline completes, or
+      #   (b) wire a RunJobTask dependency from the scoring workflow, or
+      #   (c) trigger this job manually after confirming predictions are populated.
+      # c04 will SKIPPED-print if the predictions table is empty.
       description: >-
         c01 -> c02 -> c03 -> c04 sequenced after s10_batch_inference. Reads
         the predictions table written by s10 and produces the per-scoring-run

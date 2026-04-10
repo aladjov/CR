@@ -71,6 +71,10 @@ else:
         snapshot_table_fqn=ELIGIBILITY_SNAPSHOT_FQN,
         model_name=MODEL_NAME,
         model_version=MODEL_VERSION,
+        risk_tier_high=SNAPSHOT_RISK_TIER_HIGH,
+        risk_tier_medium=SNAPSHOT_RISK_TIER_MEDIUM,
+        capacity_partition_column=SNAPSHOT_CAPACITY_PARTITION_COLUMN or None,
+        top_shap_drivers_fqn=TOP_SHAP_DRIVERS_FQN or None,
     )
     snapshot_result = build_eligibility_snapshot(snapshot_cfg)
     print(snapshot_result.summary())
