@@ -82,16 +82,33 @@ def _assign_lifecycle_quadrant(duration_days: np.ndarray, intensity: np.ndarray,
     return result
 
 
+def _assign_lifecycle_quadrant_spark(duration_col, intensity_col,
+                                     tenure_threshold: float, intensity_threshold: float):
+    import pyspark.sql.functions as F  # noqa: N812
+    long = duration_col >= F.lit(tenure_threshold)
+    high = intensity_col >= F.lit(intensity_threshold)
+    return (F.when(long & high, LIFECYCLE_LABELS["high_high"])
+             .when(long & ~high, LIFECYCLE_LABELS["high_low"])
+             .when(~long & high, LIFECYCLE_LABELS["low_high"])
+             .otherwise(LIFECYCLE_LABELS["low_low"]))
+
+
 def classify_lifecycle_quadrants(entity_lifecycles: DataFrame) -> LifecycleQuadrantResult:
     lc = entity_lifecycles.copy()
     tenure_threshold = float(lc["duration_days"].median())
     lc["intensity"] = lc["event_count"] / lc["duration_days"].clip(lower=1)
     intensity_threshold = float(lc["intensity"].median())
 
-    lc["lifecycle_quadrant"] = _assign_lifecycle_quadrant(
-        lc["duration_days"].to_numpy(), lc["intensity"].to_numpy(),
-        tenure_threshold, intensity_threshold
-    )
+    if _is_spark_pandas(lc):
+        intensity_col = lc["intensity"].spark.column
+        lc["lifecycle_quadrant"] = lc["duration_days"].spark.transform(
+            lambda dur: _assign_lifecycle_quadrant_spark(
+                dur, intensity_col, tenure_threshold, intensity_threshold))
+    else:
+        lc["lifecycle_quadrant"] = _assign_lifecycle_quadrant(
+            lc["duration_days"].to_numpy(), lc["intensity"].to_numpy(),
+            tenure_threshold, intensity_threshold
+        )
 
     counts = lc["lifecycle_quadrant"].value_counts()
     total = len(lc)
