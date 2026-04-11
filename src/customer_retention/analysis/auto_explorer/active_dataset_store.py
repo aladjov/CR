@@ -13,6 +13,7 @@ from customer_retention.core.compat import (
     native_pd,
     normalize_timestamps,
     release_stage_memory,
+    sanitize_spark_timestamps,
 )
 from customer_retention.core.compat import to_pandas as _compat_to_pandas
 from customer_retention.core.config.column_config import DatasetGranularity
@@ -124,7 +125,8 @@ def print_write_report(
 
 def _write_delta(df: Any, path: str, z_order_columns: Optional[List[str]] = None) -> None:
     if _is_native_spark_df(df) or hasattr(df, "to_spark"):
-        get_delta().write(as_spark_df(df), path, mode="overwrite", z_order_columns=z_order_columns)
+        spark_df = sanitize_spark_timestamps(as_spark_df(df))
+        get_delta().write(spark_df, path, mode="overwrite", z_order_columns=z_order_columns)
         return
     _local_delta().write(
         normalize_timestamps(_compat_to_pandas(df)), path, mode="overwrite",
