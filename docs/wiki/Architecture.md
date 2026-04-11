@@ -105,7 +105,7 @@ Notebook 09 aligns model output with business objectives. Notebook 10 generates 
 | 03 | Dataset Merge | Temporal merge into unified feature matrix |
 | 04 | Column Deep Dive | Column-level analysis on merged data |
 | 04a | Text Columns Deep Dive | NLP analysis (conditional) |
-| 05 | Relationship Analysis | Correlations, redundancy, interactions, statistical feature selection |
+| 05 | Relationship Analysis | Correlations, redundancy, interactions, statistical feature selection. IID-sensitive stats (target correlations, pairwise Pearson, Cohen's d, Cramer's V, leakage gate) route through a single penultimate time slice shared with NB08's rescue selector; variance and null counts stay on the full panel. See `docs/nb05_time_slice_relationship_plan.md`. |
 | 06 | Feature Opportunities | Transformation and encoding candidates |
 | 07 | Modeling Readiness | Training grid, split policy, label horizon |
 | 08 | Baseline Experiments | L1 feature selection, gold transforms, model training with temporal CV |

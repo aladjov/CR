@@ -1029,6 +1029,40 @@ def _spark_resolve_time_slice(
     )
 
 
+def slice_df_at_date(df: Any, time_column: str, slice_date: Any) -> Any:
+    """Return rows of ``df`` where ``time_column`` equals ``slice_date``.
+
+    Dispatches pandas vs pyspark.pandas via :func:`_is_spark_pandas`. On the
+    Spark path the filter goes through ``as_spark_df → .where() →
+    localCheckpoint → _as_pandas_api`` to avoid the ``_psseries`` corruption
+    trap documented in ``docs/Coding_Practices.md``.
+
+    Thin wrapper: no positive-rate gate, no fallback, no materialization of
+    metadata. Callers pick ``slice_date`` explicitly for visualization or
+    ad-hoc inspection (e.g. NB05 ``BOX_PLOT_SLICE_DATE`` override).
+
+    :param df: pandas or pyspark.pandas DataFrame
+    :param time_column: the name of the timestamp / date column
+    :param slice_date: the exact value to match; accepts anything the
+        underlying column's comparison understands (ISO string, datetime, etc.)
+    :returns: a filtered DataFrame of the same backend as ``df``
+    :raises FeatureSelectionError: if ``time_column`` is not in ``df.columns``
+    """
+    if time_column not in df.columns:
+        raise FeatureSelectionError(
+            f"slice_df_at_date: time_column {time_column!r} not in DataFrame columns"
+        )
+    if _is_spark_pandas(df):
+        from pyspark.sql import functions as F  # noqa: N812
+
+        from .spark_backend import _as_pandas_api
+
+        spark_df = as_spark_df(df)
+        sliced = spark_df.where(F.col(time_column) == F.lit(slice_date)).localCheckpoint(eager=True)
+        return _as_pandas_api(sliced)
+    return df[df[time_column] == slice_date]
+
+
 def _spark_numeric_cols(spark_df: Any, columns: list[str] | None = None) -> list[str]:
     from pyspark.sql.types import NumericType
 
@@ -2135,6 +2169,7 @@ __all__ = [
     "temporal_quantile",
     "FeatureSelectionError",
     "resolve_time_slice",
+    "slice_df_at_date",
     "spark_cast_float32",
     "spark_checkpoint",
     "spark_persist",

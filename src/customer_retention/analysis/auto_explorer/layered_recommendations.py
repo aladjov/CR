@@ -292,15 +292,35 @@ class RecommendationRegistry:
             )
 
     def add_gold_drop_multicollinear(self, column: str, correlated_with: str, correlation: float,
-                                      rationale: str, source_notebook: str) -> None:
-        params = {"correlated_with": correlated_with, "correlation": correlation}
+                                      rationale: str, source_notebook: str,
+                                      *,
+                                      slice_date: Optional[str] = None,
+                                      slice_strategy: Optional[str] = None,
+                                      slice_row_count: Optional[int] = None) -> None:
+        params: Dict[str, Any] = {"correlated_with": correlated_with, "correlation": correlation}
+        if slice_date is not None:
+            params["slice_date"] = slice_date
+        if slice_strategy is not None:
+            params["slice_strategy"] = slice_strategy
+        if slice_row_count is not None:
+            params["slice_row_count"] = int(slice_row_count)
         rec = self._create_recommendation("gold", "feature_selection", "drop_multicollinear", column,
                                           params, rationale, source_notebook)
         self.gold.feature_selection.append(rec)
 
     def add_gold_drop_weak(self, column: str, effect_size: float, correlation: float,
-                           rationale: str, source_notebook: str) -> None:
-        params = {"effect_size": effect_size, "correlation": correlation}
+                           rationale: str, source_notebook: str,
+                           *,
+                           slice_date: Optional[str] = None,
+                           slice_strategy: Optional[str] = None,
+                           slice_row_count: Optional[int] = None) -> None:
+        params: Dict[str, Any] = {"effect_size": effect_size, "correlation": correlation}
+        if slice_date is not None:
+            params["slice_date"] = slice_date
+        if slice_strategy is not None:
+            params["slice_strategy"] = slice_strategy
+        if slice_row_count is not None:
+            params["slice_row_count"] = int(slice_row_count)
         rec = self._create_recommendation("gold", "feature_selection", "drop_weak", column,
                                           params, rationale, source_notebook)
         self.gold.feature_selection.append(rec)

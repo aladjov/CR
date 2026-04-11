@@ -799,6 +799,92 @@ class TestGoldFeatureSelectionRecommendations:
         assert rec.parameters["effect_size"] == 0.05
         assert rec.parameters["correlation"] == 0.02
 
+    def test_drop_multicollinear_threads_slice_metadata_when_provided(self):
+        """NB05 slice plumbing — slice_date/slice_strategy/slice_row_count are
+        additive kwargs per docs/nb05_time_slice_relationship_plan.md §3.5."""
+        registry = RecommendationRegistry()
+        registry.init_gold("churned")
+        registry.add_gold_drop_multicollinear(
+            column="f_a", correlated_with="f_b", correlation=0.97,
+            rationale="Pearson 0.97 at penultimate slice",
+            source_notebook="05_relationship_analysis",
+            slice_date="2026-03-01", slice_strategy="penultimate", slice_row_count=5000,
+        )
+        rec = registry.gold.feature_selection[-1]
+        assert rec.parameters["slice_date"] == "2026-03-01"
+        assert rec.parameters["slice_strategy"] == "penultimate"
+        assert rec.parameters["slice_row_count"] == 5000
+
+    def test_drop_multicollinear_slice_metadata_omitted_by_default(self):
+        """Existing call sites that pass no slice kwargs must keep emitting
+        a recommendation with NO slice_* keys in its parameters dict."""
+        registry = RecommendationRegistry()
+        registry.init_gold("churned")
+        registry.add_gold_drop_multicollinear(
+            column="f_a", correlated_with="f_b", correlation=0.85,
+            rationale="High correlation", source_notebook="04",
+        )
+        rec = registry.gold.feature_selection[-1]
+        assert "slice_date" not in rec.parameters
+        assert "slice_strategy" not in rec.parameters
+        assert "slice_row_count" not in rec.parameters
+
+    def test_drop_weak_threads_slice_metadata_when_provided(self):
+        registry = RecommendationRegistry()
+        registry.init_gold("churned")
+        registry.add_gold_drop_weak(
+            column="weak_f", effect_size=0.05, correlation=0.02,
+            rationale="Negligible at penultimate slice",
+            source_notebook="05_relationship_analysis",
+            slice_date="2026-03-01", slice_strategy="penultimate", slice_row_count=5000,
+        )
+        rec = registry.gold.feature_selection[-1]
+        assert rec.parameters["slice_date"] == "2026-03-01"
+        assert rec.parameters["slice_strategy"] == "penultimate"
+        assert rec.parameters["slice_row_count"] == 5000
+
+    def test_drop_weak_slice_metadata_omitted_for_variance_drops(self):
+        """Variance-driven drops must NOT thread slice metadata (variance
+        stays on full panel per §2); caller is responsible for withholding
+        the kwargs. This test pins the no-op default behavior."""
+        registry = RecommendationRegistry()
+        registry.init_gold("churned")
+        registry.add_gold_drop_weak(
+            column="const_f", effect_size=0.0, correlation=0.0,
+            rationale="zero variance", source_notebook="05_relationship_analysis",
+        )
+        rec = registry.gold.feature_selection[-1]
+        assert "slice_date" not in rec.parameters
+        assert "slice_strategy" not in rec.parameters
+        assert "slice_row_count" not in rec.parameters
+
+    def test_slice_metadata_roundtrips_via_to_dict_from_dict(self):
+        """Step 9 — generator plumbing. slice_* keys in the opaque parameters
+        dict must survive the to_dict / from_dict serialization loop so that
+        pipeline generators reading the YAML recommendations file see them."""
+        registry = RecommendationRegistry()
+        registry.init_gold("churned")
+        registry.add_gold_drop_multicollinear(
+            column="f_a", correlated_with="f_b", correlation=0.97,
+            rationale="0.97 at penultimate slice",
+            source_notebook="05_relationship_analysis",
+            slice_date="2026-03-01", slice_strategy="penultimate", slice_row_count=5000,
+        )
+        registry.add_gold_drop_weak(
+            column="weak_f", effect_size=0.05, correlation=0.03,
+            rationale="small effect at slice",
+            source_notebook="05_relationship_analysis",
+            slice_date="2026-03-01", slice_strategy="penultimate", slice_row_count=5000,
+        )
+
+        roundtripped = RecommendationRegistry.from_dict(registry.to_dict())
+        recs = {r.target_column: r for r in roundtripped.gold.feature_selection}
+        assert recs["f_a"].parameters["slice_date"] == "2026-03-01"
+        assert recs["f_a"].parameters["slice_strategy"] == "penultimate"
+        assert recs["f_a"].parameters["slice_row_count"] == 5000
+        assert recs["weak_f"].parameters["slice_date"] == "2026-03-01"
+        assert recs["weak_f"].parameters["slice_row_count"] == 5000
+
     def test_adds_prioritize_feature_to_gold(self):
         registry = RecommendationRegistry()
         registry.init_gold("churned")

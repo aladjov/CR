@@ -807,3 +807,63 @@ class TestEdgeCases:
 
 def test_run_chi_squared_rescue_selection_is_exported():
     from customer_retention.stages.features import run_chi_squared_rescue_selection  # noqa: F401
+
+
+# ---------------------------------------------------------------------------
+# slice_df_at_date — NB05 BOX_PLOT_SLICE_DATE override helper
+# Spec: docs/nb05_time_slice_relationship_plan.md §5.1
+# ---------------------------------------------------------------------------
+
+
+class TestSliceDfAtDate:
+    def _make_grid(self, n_dates: int = 4, rows_per_date: int = 25) -> pd.DataFrame:
+        dates = pd.date_range("2025-01-01", periods=n_dates, freq="MS")
+        rows = []
+        for d in dates:
+            for i in range(rows_per_date):
+                rows.append({"__cv_date__": d, "value": i, "target": i % 2})
+        return pd.DataFrame(rows)
+
+    def test_returns_only_rows_matching_slice_date(self):
+        from customer_retention.core.compat import slice_df_at_date
+        df = self._make_grid()
+        target_date = pd.Timestamp("2025-02-01")
+        sliced = slice_df_at_date(df, "__cv_date__", target_date)
+        assert len(sliced) == 25
+        assert (sliced["__cv_date__"] == target_date).all()
+
+    def test_unknown_date_returns_empty_frame(self):
+        from customer_retention.core.compat import slice_df_at_date
+        df = self._make_grid()
+        sliced = slice_df_at_date(df, "__cv_date__", pd.Timestamp("2099-01-01"))
+        assert len(sliced) == 0
+        # Same columns — empty frame, not None
+        assert list(sliced.columns) == list(df.columns)
+
+    def test_missing_time_column_raises(self):
+        from customer_retention.core.compat import FeatureSelectionError, slice_df_at_date
+        df = self._make_grid()
+        with pytest.raises(FeatureSelectionError):
+            slice_df_at_date(df, "not_a_column", pd.Timestamp("2025-01-01"))
+
+    def test_pandas_path_preserves_row_ordering(self):
+        from customer_retention.core.compat import slice_df_at_date
+        df = self._make_grid()
+        target_date = pd.Timestamp("2025-03-01")
+        sliced = slice_df_at_date(df, "__cv_date__", target_date)
+        assert sliced["value"].tolist() == list(range(25))
+
+    def test_no_positive_rate_gate_or_fallback(self):
+        """Unlike resolve_time_slice, slice_df_at_date never walks backward."""
+        from customer_retention.core.compat import slice_df_at_date
+        # Build a grid where the chosen date has zero positives — filter should
+        # still return those rows, not silently fall back to another date.
+        dates = pd.date_range("2025-01-01", periods=3, freq="MS")
+        rows = []
+        for d in dates:
+            for _ in range(10):
+                rows.append({"__cv_date__": d, "target": 0 if d == dates[1] else 1})
+        df = pd.DataFrame(rows)
+        sliced = slice_df_at_date(df, "__cv_date__", dates[1])
+        assert len(sliced) == 10
+        assert int(sliced["target"].sum()) == 0
