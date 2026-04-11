@@ -591,6 +591,34 @@ def groupby_multi_agg(df: Any, group_col: str, agg_col: str, agg_funcs: list) ->
     return df.groupby(group_col)[agg_col].agg(agg_funcs).reset_index()
 
 
+def groupby_multi_col_agg(
+    df: Any, group_col: str, agg_cols: list, agg_funcs: list, col_prefix: str = "",
+) -> Any:
+    """Grouped aggregation over multiple columns and multiple functions.
+
+    Returns DataFrame with *group_col* and ``{prefix}{col}_{func}`` columns.
+    On Spark dispatches to a single ``groupBy().agg()`` call; on pandas uses
+    ``DataFrame.groupby().agg(dict)``.
+    """
+    if hasattr(df, "to_spark"):
+        import pyspark.sql.functions as F  # noqa: N812
+
+        spark_df = as_spark_df(df)
+        _agg_map = {"sum": F.sum, "mean": F.mean, "count": F.count, "max": F.max, "min": F.min}
+        exprs = [
+            _agg_map[fn](c).alias(f"{col_prefix}{c}_{fn}")
+            for c in agg_cols for fn in agg_funcs
+        ]
+        result = spark_df.groupBy(group_col).agg(*exprs)
+        from .spark_backend import _as_pandas_api
+
+        return _as_pandas_api(result)
+
+    agg_result = df.groupby(group_col)[agg_cols].agg(agg_funcs)
+    agg_result.columns = [f"{col_prefix}{c}_{fn}" for c, fn in agg_result.columns]
+    return agg_result.reset_index()
+
+
 def _to_native_list(obj: Any) -> list:
     if _is_spark_pandas(obj):
         raise TypeError("_to_native_list cannot be used with distributed pandas-on-Spark objects")

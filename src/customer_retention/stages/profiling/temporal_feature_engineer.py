@@ -26,14 +26,13 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from customer_retention.core.compat import (
-    Timedelta,
     groupby_multi_agg,
-    head_as_list,
+    groupby_multi_col_agg,
     native_pd,
     pd,
     timedelta_to_days,
-    timestamp_diffs_seconds,
     to_datetime,
+    to_numeric,
 )
 
 
@@ -188,33 +187,27 @@ class TemporalFeatureEngineer:
         Returns:
             TemporalFeatureResult with features DataFrame and metadata
         """
-        events_df = events_df.copy()
-        events_df[time_col] = to_datetime(events_df[time_col])
+        prep = events_df[[entity_col, time_col, *[c for c in value_cols if c in events_df.columns]]].copy()
+        prep[time_col] = to_datetime(prep[time_col])
         for vc in value_cols:
-            if vc in events_df.columns:
-                events_df[vc] = pd.to_numeric(events_df[vc], errors="coerce").astype("float64")
+            if vc in prep.columns:
+                prep[vc] = to_numeric(prep[vc], errors="coerce").astype("float64")
 
-        # Determine reference dates per entity
         ref_dates = self._get_reference_dates(
-            events_df, entity_col, time_col, reference_dates, reference_col
+            prep, entity_col, time_col, reference_dates, reference_col
         )
 
-        # Compute each feature group
         all_features = []
         feature_groups = []
 
-        # Group 1: Lagged Windows
         lag_features, lag_group = self._compute_lagged_windows(
-            events_df, entity_col, time_col, value_cols, ref_dates
+            prep, entity_col, time_col, value_cols, ref_dates
         )
         all_features.append(lag_features)
         feature_groups.append(lag_group)
 
-        # Group 2: Velocity
         if self.config.compute_velocity:
-            velocity_features, velocity_group = self._compute_velocity(
-                lag_features, value_cols
-            )
+            velocity_features, velocity_group = self._compute_velocity(lag_features, value_cols)
             all_features.append(velocity_features)
             feature_groups.append(velocity_group)
         else:
@@ -223,7 +216,6 @@ class TemporalFeatureEngineer:
                 rationale=self.RATIONALES[FeatureGroup.VELOCITY], enabled=False
             ))
 
-        # Group 3: Acceleration
         if self.config.compute_acceleration and self.config.compute_velocity:
             accel_features, accel_group = self._compute_acceleration(
                 all_features[1] if len(all_features) > 1 else lag_features,
@@ -237,10 +229,9 @@ class TemporalFeatureEngineer:
                 rationale=self.RATIONALES[FeatureGroup.ACCELERATION], enabled=False
             ))
 
-        # Group 4: Lifecycle
         if self.config.compute_lifecycle:
             lifecycle_features, lifecycle_group = self._compute_lifecycle(
-                events_df, entity_col, time_col, value_cols, ref_dates
+                prep, entity_col, time_col, value_cols, ref_dates
             )
             all_features.append(lifecycle_features)
             feature_groups.append(lifecycle_group)
@@ -250,10 +241,9 @@ class TemporalFeatureEngineer:
                 rationale=self.RATIONALES[FeatureGroup.LIFECYCLE], enabled=False
             ))
 
-        # Group 5: Recency
         if self.config.compute_recency:
             recency_features, recency_group = self._compute_recency(
-                events_df, entity_col, time_col, ref_dates
+                prep, entity_col, time_col, ref_dates
             )
             all_features.append(recency_features)
             feature_groups.append(recency_group)
@@ -263,10 +253,9 @@ class TemporalFeatureEngineer:
                 rationale=self.RATIONALES[FeatureGroup.RECENCY], enabled=False
             ))
 
-        # Group 6: Regularity
         if self.config.compute_regularity:
             regularity_features, regularity_group = self._compute_regularity(
-                events_df, entity_col, time_col, ref_dates
+                prep, entity_col, time_col, ref_dates
             )
             all_features.append(regularity_features)
             feature_groups.append(regularity_group)
@@ -276,7 +265,6 @@ class TemporalFeatureEngineer:
                 rationale=self.RATIONALES[FeatureGroup.REGULARITY], enabled=False
             ))
 
-        # Group 7: Cohort Comparison
         if self.config.compute_cohort:
             cohort_features, cohort_group = self._compute_cohort_comparison(
                 lag_features, value_cols, entity_col
@@ -338,53 +326,46 @@ class TemporalFeatureEngineer:
         value_cols: List[str],
         ref_dates: pd.DataFrame,
     ) -> tuple:
-        """Compute lagged window aggregations (Group 1)."""
+        """Compute lagged window aggregations (Group 1).
+
+        Uses one batched groupby per lag window across all value_cols and
+        aggregation functions, instead of per-column-per-agg iteration.
+        """
         window_days = self.config.lag_window_days
         num_lags = self.config.num_lags
 
-        # Merge reference dates
         df = events_df.merge(ref_dates, on=entity_col)
-
-        # Calculate days before reference for each event
         df["days_before_ref"] = timedelta_to_days(df["reference_date"] - df[time_col])
 
-        # Initialize result with entities
         result = ref_dates[[entity_col]].copy()
         feature_names = []
 
         for lag in range(num_lags):
             start_days = lag * window_days
             end_days = (lag + 1) * window_days
-
-            # Filter events in this lag window
             lag_mask = (df["days_before_ref"] >= start_days) & (df["days_before_ref"] < end_days)
             lag_df = df[lag_mask]
 
+            prefix = f"lag{lag}_"
+            lag_agg = groupby_multi_col_agg(
+                lag_df, entity_col, value_cols,
+                self.config.lag_aggregations, col_prefix=prefix,
+            )
             for col in value_cols:
                 for agg in self.config.lag_aggregations:
-                    feat_name = f"lag{lag}_{col}_{agg}"
-                    feature_names.append(feat_name)
+                    feature_names.append(f"{prefix}{col}_{agg}")
 
-                    if agg == "count":
-                        agg_result = lag_df.groupby(entity_col)[col].count().reset_index()
-                        agg_result.columns = [entity_col, feat_name]
-                        # Fill missing with 0 for counts
-                        result = result.merge(agg_result, on=entity_col, how="left")
-                        result[feat_name] = result[feat_name].fillna(0).astype(int)
-                    else:
-                        agg_func = {"sum": "sum", "mean": "mean", "max": "max", "min": "min"}.get(agg, agg)
-                        agg_result = lag_df.groupby(entity_col)[col].agg(agg_func).reset_index()
-                        agg_result.columns = [entity_col, feat_name]
-                        result = result.merge(agg_result, on=entity_col, how="left")
-                        # Leave as NaN for non-count aggregations
+            result = result.merge(lag_agg, on=entity_col, how="left")
+            for col in value_cols:
+                count_col = f"{prefix}{col}_count"
+                if count_col in result.columns:
+                    result[count_col] = result[count_col].fillna(0).astype(int)
 
-        group_result = FeatureGroupResult(
+        return result, FeatureGroupResult(
             group=FeatureGroup.LAGGED_WINDOWS,
             features=feature_names,
             rationale=self.RATIONALES[FeatureGroup.LAGGED_WINDOWS],
         )
-
-        return result, group_result
 
     def _compute_velocity(
         self,
@@ -470,13 +451,16 @@ class TemporalFeatureEngineer:
         value_cols: List[str],
         ref_dates: pd.DataFrame,
     ) -> tuple:
-        """Compute lifecycle features (Group 4): Beginning/Middle/End."""
+        """Compute lifecycle features (Group 4): Beginning/Middle/End.
+
+        Vectorized: classifies each event into a lifecycle phase via numeric
+        day-offsets, then aggregates per (entity, phase) in bulk.
+        """
         result = ref_dates[[entity_col]].copy()
         feature_names = []
         min_days = self.config.min_history_days
         splits = self.config.lifecycle_splits
 
-        # Get history span per entity
         history_stats = groupby_multi_agg(events_df, entity_col, time_col, ["min", "max"])
         history_stats.columns = [entity_col, "first_event", "last_event"]
         history_stats["history_days"] = timedelta_to_days(
@@ -484,56 +468,46 @@ class TemporalFeatureEngineer:
         )
 
         df = events_df.merge(history_stats, on=entity_col)
+        df = df[df["history_days"] >= min_days]
+
+        df["_days_since_first"] = timedelta_to_days(df[time_col] - df["first_event"])
+        split1_days = df["history_days"] * splits[0]
+        split2_days = df["history_days"] * (splits[0] + splits[1])
+
+        beginning_df = df[df["_days_since_first"] < split1_days]
+        middle_df = df[(df["_days_since_first"] >= split1_days) & (df["_days_since_first"] < split2_days)]
+        end_df = df[df["_days_since_first"] >= split2_days]
+
+        phase_frames = [
+            (beginning_df, "beginning"),
+            (middle_df, "middle"),
+            (end_df, "end"),
+        ]
+        for phase_df, phase_name in phase_frames:
+            if len(value_cols) == 0:
+                continue
+            phase_sums = phase_df.groupby(entity_col)[value_cols].sum().reset_index()
+            rename = {c: f"{c}_{phase_name}" for c in value_cols}
+            phase_sums = phase_sums.rename(columns=rename)
+            result = result.merge(phase_sums, on=entity_col, how="left")
 
         for col in value_cols:
-            # Initialize columns
-            result[f"{col}_beginning"] = np.nan
-            result[f"{col}_middle"] = np.nan
-            result[f"{col}_end"] = np.nan
-            result[f"{col}_trend_ratio"] = np.nan
-
+            for phase_name in ("beginning", "middle", "end"):
+                feat = f"{col}_{phase_name}"
+                if feat not in result.columns:
+                    result[feat] = np.nan
+            trend_col = f"{col}_trend_ratio"
+            beg_safe = result[f"{col}_beginning"].replace(0, np.nan)
+            result[trend_col] = result[f"{col}_end"] / beg_safe
             feature_names.extend([
-                f"{col}_beginning", f"{col}_middle", f"{col}_end", f"{col}_trend_ratio"
+                f"{col}_beginning", f"{col}_middle", f"{col}_end", trend_col
             ])
 
-        # Process each entity
-        for entity in head_as_list(result[entity_col].unique(), 10000):
-            entity_df = df[df[entity_col] == entity]
-            if len(entity_df) == 0:
-                continue
-
-            history_days = entity_df["history_days"].iloc[0]
-
-            if pd.isna(history_days) or history_days < min_days:
-                continue
-
-            first_event = entity_df["first_event"].iloc[0]
-
-            # Calculate split boundaries
-            split1 = first_event + Timedelta(days=history_days * splits[0])
-            split2 = first_event + Timedelta(days=history_days * (splits[0] + splits[1]))
-
-            for col in value_cols:
-                beginning_val = entity_df[entity_df[time_col] < split1][col].sum()
-                middle_val = entity_df[(entity_df[time_col] >= split1) &
-                                       (entity_df[time_col] < split2)][col].sum()
-                end_val = entity_df[entity_df[time_col] >= split2][col].sum()
-
-                mask = result[entity_col] == entity
-                result.loc[mask, f"{col}_beginning"] = beginning_val
-                result.loc[mask, f"{col}_middle"] = middle_val
-                result.loc[mask, f"{col}_end"] = end_val
-
-                if beginning_val > 0:
-                    result.loc[mask, f"{col}_trend_ratio"] = end_val / beginning_val
-
-        group_result = FeatureGroupResult(
+        return result, FeatureGroupResult(
             group=FeatureGroup.LIFECYCLE,
             features=feature_names,
             rationale=self.RATIONALES[FeatureGroup.LIFECYCLE],
         )
-
-        return result, group_result
 
     def _compute_recency(
         self,
@@ -596,45 +570,49 @@ class TemporalFeatureEngineer:
         time_col: str,
         ref_dates: pd.DataFrame,
     ) -> tuple:
-        """Compute frequency and regularity features (Group 6)."""
+        """Compute frequency and regularity features (Group 6).
+
+        Vectorized: computes inter-event gaps via groupby().diff() on epoch-day
+        column, then aggregates gap stats with three groupby calls (mean, std, max).
+        """
         result = ref_dates[[entity_col]].copy()
 
-        for entity in head_as_list(result[entity_col].unique(), 10000):
-            entity_events = events_df[events_df[entity_col] == entity].sort_values(time_col)
+        sorted_df = events_df[[entity_col, time_col]].sort_values([entity_col, time_col])
+        epoch_ref = sorted_df[time_col].min()
+        sorted_df["_epoch_days"] = timedelta_to_days(sorted_df[time_col] - epoch_ref)
+        sorted_df["_gap_days"] = sorted_df.groupby(entity_col)["_epoch_days"].diff()
 
-            if len(entity_events) < 2:
-                continue
+        gaps_df = sorted_df.dropna(subset=["_gap_days"])
 
-            # Inter-event gaps
-            tc = entity_events[time_col]
-            gaps = (timestamp_diffs_seconds(tc) // 86400).dropna()
+        gap_mean = gaps_df.groupby(entity_col)["_gap_days"].mean().reset_index()
+        gap_mean.columns = [entity_col, "inter_event_gap_mean"]
 
-            if len(gaps) > 0:
-                gap_mean = gaps.mean()
-                gap_std = gaps.std() if len(gaps) > 1 else 0
-                gap_max = gaps.max()
+        gap_std = gaps_df.groupby(entity_col)["_gap_days"].std().reset_index()
+        gap_std.columns = [entity_col, "inter_event_gap_std"]
 
-                mask = result[entity_col] == entity
+        gap_max = gaps_df.groupby(entity_col)["_gap_days"].max().reset_index()
+        gap_max.columns = [entity_col, "inter_event_gap_max"]
 
-                # Event frequency (events per 30 days)
-                total_days = (entity_events[time_col].max() - entity_events[time_col].min()).days
-                if total_days > 0:
-                    result.loc[mask, "event_frequency"] = len(entity_events) / total_days * 30
-                else:
-                    result.loc[mask, "event_frequency"] = len(entity_events)
+        event_stats = groupby_multi_agg(events_df, entity_col, time_col, ["min", "max", "count"])
+        event_stats.columns = [entity_col, "first_event", "last_event", "event_count"]
+        total_days = timedelta_to_days(event_stats["last_event"] - event_stats["first_event"])
+        safe_total = total_days.replace(0, np.nan)
+        event_stats["event_frequency"] = event_stats["event_count"] / safe_total * 30
+        zero_mask = total_days == 0
+        event_stats["event_frequency"] = event_stats["event_frequency"].where(
+            ~zero_mask, event_stats["event_count"].astype(float),
+        )
 
-                result.loc[mask, "inter_event_gap_mean"] = gap_mean
-                result.loc[mask, "inter_event_gap_std"] = gap_std
-                result.loc[mask, "inter_event_gap_max"] = gap_max
+        result = result.merge(gap_mean, on=entity_col, how="left")
+        result = result.merge(gap_std, on=entity_col, how="left")
+        result = result.merge(gap_max, on=entity_col, how="left")
+        result = result.merge(event_stats[[entity_col, "event_frequency"]], on=entity_col, how="left")
 
-                # Regularity score: 1 - (std / mean), higher = more regular
-                if gap_mean > 0:
-                    regularity = max(0, 1 - (gap_std / gap_mean))
-                    result.loc[mask, "regularity_score"] = regularity
-                else:
-                    result.loc[mask, "regularity_score"] = 1.0
+        mean_safe = result["inter_event_gap_mean"].replace(0, np.nan)
+        result["regularity_score"] = (1 - result["inter_event_gap_std"] / mean_safe).clip(0, 1)
+        zero_gap = result["inter_event_gap_mean"] == 0
+        result["regularity_score"] = result["regularity_score"].where(~zero_gap, 1.0)
 
-        # Fill NaN for entities with single event
         for col in ["event_frequency", "inter_event_gap_mean", "inter_event_gap_std",
                     "inter_event_gap_max", "regularity_score"]:
             if col not in result.columns:
@@ -644,14 +622,11 @@ class TemporalFeatureEngineer:
             "event_frequency", "inter_event_gap_mean", "inter_event_gap_std",
             "inter_event_gap_max", "regularity_score"
         ]
-
-        group_result = FeatureGroupResult(
+        return result, FeatureGroupResult(
             group=FeatureGroup.REGULARITY,
             features=feature_names,
             rationale=self.RATIONALES[FeatureGroup.REGULARITY],
         )
-
-        return result, group_result
 
     def _compute_cohort_comparison(
         self,

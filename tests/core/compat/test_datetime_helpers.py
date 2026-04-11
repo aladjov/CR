@@ -10,6 +10,7 @@ from customer_retention.core.compat import (
     as_tz_naive,
     ensure_datetime_column,
     groupby_multi_agg,
+    groupby_multi_col_agg,
     normalize_timestamps,
     safe_to_datetime,
     timestamp_diff_days,
@@ -60,6 +61,43 @@ class TestGroupbyMultiAgg:
         result = groupby_multi_agg(df, "g", "v", ["sum", "count"])
         assert len(result) == 0
         assert list(result.columns) == ["g", "sum", "count"]
+
+
+class TestGroupbyMultiColAgg:
+    def test_multi_col_sum_mean(self):
+        df = pd.DataFrame({
+            "entity": ["A", "A", "B", "B"],
+            "x": [10.0, 20.0, 30.0, 40.0],
+            "y": [1.0, 2.0, 3.0, 4.0],
+        })
+        result = groupby_multi_col_agg(df, "entity", ["x", "y"], ["sum", "mean"])
+        a = result[result["entity"] == "A"].iloc[0]
+        assert a["x_sum"] == 30.0
+        assert a["x_mean"] == 15.0
+        assert a["y_sum"] == 3.0
+        assert a["y_mean"] == 1.5
+
+    def test_col_prefix(self):
+        df = pd.DataFrame({"g": ["A", "A"], "v": [5.0, 15.0]})
+        result = groupby_multi_col_agg(df, "g", ["v"], ["sum", "count"], col_prefix="lag0_")
+        assert "lag0_v_sum" in result.columns
+        assert "lag0_v_count" in result.columns
+        assert result.iloc[0]["lag0_v_sum"] == 20.0
+
+    def test_empty_dataframe(self):
+        df = pd.DataFrame({"g": pd.Series([], dtype=str), "a": pd.Series([], dtype=float)})
+        result = groupby_multi_col_agg(df, "g", ["a"], ["sum", "count"])
+        assert len(result) == 0
+
+    def test_count_returns_integers(self):
+        df = pd.DataFrame({
+            "g": ["A", "A", "B"],
+            "v1": [1.0, 2.0, 3.0],
+            "v2": [4.0, 5.0, 6.0],
+        })
+        result = groupby_multi_col_agg(df, "g", ["v1", "v2"], ["count"])
+        assert result[result["g"] == "A"].iloc[0]["v1_count"] == 2
+        assert result[result["g"] == "B"].iloc[0]["v1_count"] == 1
 
 
 class TestTimestampDiffsSeconds:

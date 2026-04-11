@@ -1031,3 +1031,143 @@ class TestVelocityWithNullableNA:
         df = result.features_df
         if "amount_velocity_pct" in df.columns:
             assert df["amount_velocity_pct"].isna().all()
+
+
+class TestVectorizedBatchAggregation:
+    """Verify batched groupby produces correct results at scale."""
+
+    def test_many_entities_lagged_windows(self):
+        n_entities = 200
+        events_per_entity = 30
+        rng = np.random.default_rng(42)
+        rows = []
+        for i in range(n_entities):
+            dates = pd.date_range("2023-01-01", periods=events_per_entity, freq="3D")
+            for d in dates:
+                rows.append({"customer_id": f"E{i}", "event_date": d, "amount": rng.uniform(10, 100)})
+        events_df = pd.DataFrame(rows)
+
+        config = TemporalAggregationConfig(
+            lag_window_days=30, num_lags=3,
+            compute_lifecycle=False, compute_regularity=False,
+            compute_cohort=False, compute_velocity=False, compute_acceleration=False,
+        )
+        result = TemporalFeatureEngineer(config=config).compute(
+            events_df=events_df, entity_col="customer_id",
+            time_col="event_date", value_cols=["amount"],
+        )
+        df = result.features_df
+        assert len(df) == n_entities
+        for lag in range(3):
+            assert f"lag{lag}_amount_sum" in df.columns
+            assert f"lag{lag}_amount_count" in df.columns
+        assert (df["lag0_amount_count"] >= 0).all()
+
+    def test_many_entities_lifecycle_vectorized(self):
+        n_entities = 150
+        rng = np.random.default_rng(99)
+        rows = []
+        for i in range(n_entities):
+            dates = pd.date_range("2023-01-01", periods=40, freq="5D")
+            for d in dates:
+                rows.append({"customer_id": f"E{i}", "event_date": d, "amount": rng.uniform(5, 50)})
+        events_df = pd.DataFrame(rows)
+
+        config = TemporalAggregationConfig(
+            min_history_days=30, compute_regularity=False,
+            compute_cohort=False, compute_velocity=False, compute_acceleration=False,
+        )
+        result = TemporalFeatureEngineer(config=config).compute(
+            events_df=events_df, entity_col="customer_id",
+            time_col="event_date", value_cols=["amount"],
+        )
+        df = result.features_df
+        assert len(df) == n_entities
+        assert "amount_beginning" in df.columns
+        assert "amount_trend_ratio" in df.columns
+        valid = df.dropna(subset=["amount_beginning"])
+        assert len(valid) > 0
+        for _, row in valid.iterrows():
+            if row["amount_beginning"] > 0:
+                expected = row["amount_end"] / row["amount_beginning"]
+                assert row["amount_trend_ratio"] == pytest.approx(expected, rel=0.01)
+
+    def test_many_entities_regularity_vectorized(self):
+        n_entities = 100
+        rng = np.random.default_rng(77)
+        rows = []
+        for i in range(n_entities):
+            gap = rng.integers(2, 10)
+            dates = pd.date_range("2023-01-01", periods=20, freq=f"{gap}D")
+            for d in dates:
+                rows.append({"customer_id": f"E{i}", "event_date": d, "amount": 10.0})
+        events_df = pd.DataFrame(rows)
+
+        config = TemporalAggregationConfig(
+            compute_lifecycle=False, compute_cohort=False,
+            compute_velocity=False, compute_acceleration=False,
+        )
+        result = TemporalFeatureEngineer(config=config).compute(
+            events_df=events_df, entity_col="customer_id",
+            time_col="event_date", value_cols=["amount"],
+        )
+        df = result.features_df
+        assert len(df) == n_entities
+        assert "regularity_score" in df.columns
+        assert "event_frequency" in df.columns
+        valid = df.dropna(subset=["regularity_score"])
+        assert (valid["regularity_score"] >= 0).all()
+        assert (valid["regularity_score"] <= 1).all()
+        perfectly_regular = df[df["inter_event_gap_std"] == 0]
+        if len(perfectly_regular) > 0:
+            assert (perfectly_regular["regularity_score"] == 1.0).all()
+
+    def test_multiple_value_cols_batched(self):
+        events_df = pd.DataFrame({
+            "cid": ["A"] * 10 + ["B"] * 10,
+            "ts": list(pd.date_range("2023-01-01", periods=10, freq="7D")) * 2,
+            "amount": np.random.uniform(10, 100, 20),
+            "quantity": np.random.randint(1, 10, 20).astype(float),
+            "score": np.random.uniform(0, 1, 20),
+        })
+        config = TemporalAggregationConfig(
+            lag_window_days=30, num_lags=2,
+            compute_lifecycle=False, compute_regularity=False,
+            compute_cohort=False,
+        )
+        result = TemporalFeatureEngineer(config=config).compute(
+            events_df=events_df, entity_col="cid",
+            time_col="ts", value_cols=["amount", "quantity", "score"],
+        )
+        df = result.features_df
+        assert len(df) == 2
+        for col in ["amount", "quantity", "score"]:
+            assert f"lag0_{col}_sum" in df.columns
+            assert f"lag1_{col}_mean" in df.columns
+
+    def test_lifecycle_short_history_excluded(self):
+        short = pd.DataFrame({
+            "cid": ["S"] * 3,
+            "ts": pd.date_range("2023-01-01", periods=3, freq="5D"),
+            "val": [10.0, 20.0, 30.0],
+        })
+        long = pd.DataFrame({
+            "cid": ["L"] * 30,
+            "ts": pd.date_range("2023-01-01", periods=30, freq="5D"),
+            "val": np.random.uniform(10, 50, 30),
+        })
+        events_df = pd.concat([short, long], ignore_index=True)
+        config = TemporalAggregationConfig(
+            min_history_days=60,
+            compute_regularity=False, compute_cohort=False,
+            compute_velocity=False, compute_acceleration=False,
+        )
+        result = TemporalFeatureEngineer(config=config).compute(
+            events_df=events_df, entity_col="cid",
+            time_col="ts", value_cols=["val"],
+        )
+        df = result.features_df
+        short_row = df[df["cid"] == "S"].iloc[0]
+        long_row = df[df["cid"] == "L"].iloc[0]
+        assert pd.isna(short_row["val_beginning"])
+        assert pd.notna(long_row["val_beginning"])
