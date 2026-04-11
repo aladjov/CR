@@ -802,6 +802,233 @@ def _spark_temporal_quantile(series: Any, q: float) -> _pandas.Timestamp:
     return _pandas.Timestamp(row["v"], unit="s")
 
 
+class FeatureSelectionError(RuntimeError):
+    """Raised when a feature-selection precondition is not satisfied.
+
+    Used by ``resolve_time_slice`` and the chi-squared rescue selector for
+    fail-fast validation: missing columns, empty data, no slice with adequate
+    positive-class balance, etc. Coding_Practices.md ``fail fast`` rule —
+    never silently fall back to a degenerate selection.
+    """
+
+
+_TIME_SLICE_STRATEGIES = ("penultimate", "last", "random_per_entity", "two_slice_union")
+
+
+def resolve_time_slice(
+    df: Any, time_column: str, strategy: str = "penultimate",
+    *,
+    target_column: Any = None, min_positive_rate: float = 0.0,
+    entity_column: Any = None, fallback_max_steps: int = 6,
+    random_state: int = 42,
+) -> tuple[Any, str, int]:
+    """Pick an IID training slice for feature selection on snapshot-grid data.
+
+    Returns ``(slice_df, slice_date_iso, slice_row_count)``. The slice is
+    materialized via Spark filter + localCheckpoint when ``df`` is
+    pyspark.pandas — never row-collected on the driver.
+
+    ``min_positive_rate``: when > 0 and ``target_column`` is provided, walk
+    earlier dates until a slice satisfies the threshold; raise
+    :class:`FeatureSelectionError` if none does.
+    """
+    if strategy not in _TIME_SLICE_STRATEGIES:
+        raise FeatureSelectionError(
+            f"resolve_time_slice: unknown strategy {strategy!r}; "
+            f"expected one of {_TIME_SLICE_STRATEGIES}"
+        )
+    if time_column not in df.columns:
+        raise FeatureSelectionError(
+            f"resolve_time_slice: time_column {time_column!r} not in DataFrame columns"
+        )
+    if min_positive_rate > 0 and (target_column is None or target_column not in df.columns):
+        raise FeatureSelectionError(
+            f"resolve_time_slice: min_positive_rate={min_positive_rate} requires "
+            f"target_column to be present in DataFrame"
+        )
+    if strategy == "random_per_entity" and (
+        entity_column is None or entity_column not in df.columns
+    ):
+        raise FeatureSelectionError(
+            "resolve_time_slice: 'random_per_entity' strategy requires entity_column"
+        )
+
+    if _is_spark_pandas(df):
+        return _spark_resolve_time_slice(
+            df, time_column, strategy,
+            target_column=target_column, min_positive_rate=min_positive_rate,
+            entity_column=entity_column, fallback_max_steps=fallback_max_steps,
+            random_state=random_state,
+        )
+    return _pandas_resolve_time_slice(
+        df, time_column, strategy,
+        target_column=target_column, min_positive_rate=min_positive_rate,
+        entity_column=entity_column, fallback_max_steps=fallback_max_steps,
+        random_state=random_state,
+    )
+
+
+def _format_slice_date(value: Any) -> str:
+    if value is None or (isinstance(value, float) and value != value):
+        raise FeatureSelectionError("resolve_time_slice: encountered NaT/None slice date")
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return _pandas.Timestamp(value).isoformat()
+
+
+def _pandas_resolve_time_slice(
+    df: Any, time_column: str, strategy: str,
+    *, target_column: Any, min_positive_rate: float,
+    entity_column: Any, fallback_max_steps: int, random_state: int,
+) -> tuple[Any, str, int]:
+    if len(df) == 0:
+        raise FeatureSelectionError("resolve_time_slice: empty DataFrame")
+    distinct = df[time_column].dropna().unique()
+    if len(distinct) == 0:
+        raise FeatureSelectionError(
+            f"resolve_time_slice: time_column {time_column!r} has no non-null values"
+        )
+    sorted_dates = sorted(distinct.tolist())
+
+    if strategy == "random_per_entity":
+        slice_df = (
+            df.sample(frac=1.0, random_state=random_state)
+              .drop_duplicates(subset=[entity_column], keep="first")
+        )
+        slice_date = _format_slice_date(sorted_dates[-1])
+        return slice_df, slice_date, len(slice_df)
+
+    if strategy == "two_slice_union":
+        if len(sorted_dates) < 2:
+            slice_df = df[df[time_column] == sorted_dates[-1]]
+            return slice_df, _format_slice_date(sorted_dates[-1]), len(slice_df)
+        penult = sorted_dates[-2]
+        middle = sorted_dates[len(sorted_dates) // 2]
+        if middle == penult and len(sorted_dates) >= 3:
+            middle = sorted_dates[len(sorted_dates) // 2 - 1]
+        slice_df = df[df[time_column].isin([penult, middle])]
+        return slice_df, _format_slice_date(penult), len(slice_df)
+
+    if strategy == "last":
+        candidate_order = list(reversed(sorted_dates))
+    else:  # penultimate
+        if len(sorted_dates) < 2:
+            slice_df = df[df[time_column] == sorted_dates[-1]]
+            return slice_df, _format_slice_date(sorted_dates[-1]), len(slice_df)
+        candidate_order = [sorted_dates[-2]] + list(reversed(sorted_dates[:-2])) + [sorted_dates[-1]]
+
+    last_seen_rate = -1.0
+    for step, candidate in enumerate(candidate_order):
+        if step >= fallback_max_steps:
+            break
+        slice_df = df[df[time_column] == candidate]
+        n_rows = len(slice_df)
+        if n_rows == 0:
+            continue
+        if min_positive_rate <= 0:
+            return slice_df, _format_slice_date(candidate), n_rows
+        positives = float(slice_df[target_column].sum())
+        rate = positives / n_rows
+        last_seen_rate = max(last_seen_rate, rate)
+        if rate >= min_positive_rate:
+            return slice_df, _format_slice_date(candidate), n_rows
+    raise FeatureSelectionError(
+        f"resolve_time_slice: no slice for strategy={strategy!r} satisfied "
+        f"min_positive_rate={min_positive_rate} (best observed rate={last_seen_rate:.4f})"
+    )
+
+
+def _spark_resolve_time_slice(
+    df: Any, time_column: str, strategy: str,
+    *, target_column: Any, min_positive_rate: float,
+    entity_column: Any, fallback_max_steps: int, random_state: int,
+) -> tuple[Any, str, int]:
+    from pyspark.sql import functions as F  # noqa: N812
+
+    from .spark_backend import _as_pandas_api
+
+    spark_df = as_spark_df(df)
+    distinct_rows = (
+        spark_df.select(F.col(time_column).alias("__t"))
+                .where(F.col("__t").isNotNull())
+                .distinct()
+                .orderBy("__t")
+                .collect()
+    )
+    if not distinct_rows:
+        raise FeatureSelectionError(
+            f"resolve_time_slice: time_column {time_column!r} has no non-null values"
+        )
+    sorted_dates = [row["__t"] for row in distinct_rows]
+
+    if strategy == "random_per_entity":
+        from pyspark.sql import Window
+
+        window = Window.partitionBy(F.col(entity_column)).orderBy(F.rand(seed=random_state))
+        sliced = (
+            spark_df.withColumn("__rk", F.row_number().over(window))
+                    .where(F.col("__rk") == 1)
+                    .drop("__rk")
+                    .localCheckpoint(eager=True)
+        )
+        n_rows = int(sliced.count())
+        slice_pdf = _as_pandas_api(sliced)
+        return slice_pdf, _format_slice_date(sorted_dates[-1]), n_rows
+
+    if strategy == "two_slice_union":
+        if len(sorted_dates) < 2:
+            sliced = spark_df.where(F.col(time_column) == F.lit(sorted_dates[-1]))
+            sliced = sliced.localCheckpoint(eager=True)
+            n_rows = int(sliced.count())
+            return _as_pandas_api(sliced), _format_slice_date(sorted_dates[-1]), n_rows
+        penult = sorted_dates[-2]
+        middle = sorted_dates[len(sorted_dates) // 2]
+        if middle == penult and len(sorted_dates) >= 3:
+            middle = sorted_dates[len(sorted_dates) // 2 - 1]
+        sliced = spark_df.where(F.col(time_column).isin([penult, middle]))
+        sliced = sliced.localCheckpoint(eager=True)
+        n_rows = int(sliced.count())
+        return _as_pandas_api(sliced), _format_slice_date(penult), n_rows
+
+    if strategy == "last":
+        candidate_order = list(reversed(sorted_dates))
+    else:  # penultimate
+        if len(sorted_dates) < 2:
+            sliced = spark_df.where(F.col(time_column) == F.lit(sorted_dates[-1]))
+            sliced = sliced.localCheckpoint(eager=True)
+            n_rows = int(sliced.count())
+            return _as_pandas_api(sliced), _format_slice_date(sorted_dates[-1]), n_rows
+        candidate_order = [sorted_dates[-2]] + list(reversed(sorted_dates[:-2])) + [sorted_dates[-1]]
+
+    last_seen_rate = -1.0
+    for step, candidate in enumerate(candidate_order):
+        if step >= fallback_max_steps:
+            break
+        sliced = spark_df.where(F.col(time_column) == F.lit(candidate))
+        sliced = sliced.localCheckpoint(eager=True)
+        if min_positive_rate <= 0:
+            n_rows = int(sliced.count())
+            if n_rows == 0:
+                continue
+            return _as_pandas_api(sliced), _format_slice_date(candidate), n_rows
+        agg_row = sliced.agg(
+            F.count(F.lit(1)).alias("__n"),
+            F.sum(F.col(target_column).cast("double")).alias("__pos"),
+        ).head()
+        n_rows = int(agg_row["__n"] or 0)
+        if n_rows == 0:
+            continue
+        positives = float(agg_row["__pos"] or 0.0)
+        rate = positives / n_rows
+        last_seen_rate = max(last_seen_rate, rate)
+        if rate >= min_positive_rate:
+            return _as_pandas_api(sliced), _format_slice_date(candidate), n_rows
+    raise FeatureSelectionError(
+        f"resolve_time_slice: no slice for strategy={strategy!r} satisfied "
+        f"min_positive_rate={min_positive_rate} (best observed rate={last_seen_rate:.4f})"
+    )
+
+
 def _spark_numeric_cols(spark_df: Any, columns: list[str] | None = None) -> list[str]:
     from pyspark.sql.types import NumericType
 
@@ -1906,6 +2133,8 @@ __all__ = [
     "bulk_effect_sizes",
     "BulkEffectSizeResult",
     "temporal_quantile",
+    "FeatureSelectionError",
+    "resolve_time_slice",
     "spark_cast_float32",
     "spark_checkpoint",
     "spark_persist",

@@ -6174,6 +6174,24 @@ class TestDropL1ZeroAction(TestFeatureSelectionDropSkipsTarget):
         parser._apply_gold_recommendations(config, registry)
         assert "unsubscribed" not in config.gold.feature_selections
 
+    def test_drop_rescue_consensus_collected(self):
+        parser = self._make_parser()
+        config = self._make_config()
+        registry = self._make_registry(feature_selection=[
+            self._make_rec("age", "drop_rescue_consensus"),
+        ])
+        parser._apply_gold_recommendations(config, registry)
+        assert "age" in config.gold.feature_selections
+
+    def test_drop_rescue_consensus_skips_target(self):
+        parser = self._make_parser()
+        config = self._make_config()
+        registry = self._make_registry(feature_selection=[
+            self._make_rec("unsubscribed", "drop_rescue_consensus"),
+        ])
+        parser._apply_gold_recommendations(config, registry)
+        assert "unsubscribed" not in config.gold.feature_selections
+
     def test_prioritize_does_not_override_drop_multicollinear(self):
         parser = self._make_parser()
         config = self._make_config()

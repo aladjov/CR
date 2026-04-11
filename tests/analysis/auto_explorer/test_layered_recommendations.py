@@ -877,6 +877,33 @@ class TestGoldFeatureSelectionRecommendations:
         assert rec.action == "drop_gbdt_importance"
         assert rec.parameters["importance"] == 0.5
 
+    def test_adds_drop_rescue_consensus_to_gold(self):
+        registry = RecommendationRegistry()
+        registry.init_gold("churned")
+        registry.add_gold_drop_rescue_consensus(
+            column="account_events_7d_mean",
+            chi_rank=742, chi_score=0.8,
+            l1_coefficient=0.0, gbdt_total_gain=0.0,
+            slice_date="2026-03-01", slice_strategy="penultimate", slice_row_count=5000,
+            rationale="Dropped by all enabled selectors; chi-squared rank 742, "
+                      "L1 coef 0, GBDT gain 0",
+            source_notebook="08_baseline_experiments",
+        )
+        assert len(registry.gold.feature_selection) == 1
+        rec = registry.gold.feature_selection[0]
+        assert rec.target_column == "account_events_7d_mean"
+        assert rec.action == "drop_rescue_consensus"
+        params = rec.parameters
+        assert params["chi_squared_rank"] == 742
+        assert params["chi_squared_score"] == 0.8
+        assert params["l1_coefficient"] == 0.0
+        assert params["gbdt_total_gain"] == 0.0
+        assert params["slice_date"] == "2026-03-01"
+        assert params["slice_strategy"] == "penultimate"
+        assert params["slice_row_count"] == 5000
+        assert params["l1_considered"] is True
+        assert params["gbdt_considered"] is True
+
     def test_feature_selection_in_all_recommendations(self):
         registry = RecommendationRegistry()
         registry.init_gold("churned")

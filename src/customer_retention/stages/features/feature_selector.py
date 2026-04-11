@@ -1042,3 +1042,584 @@ def run_gbdt_importance_selection(
     log(f"    {_format_elapsed(elapsed)} — dropped {len(result.dropped_features)}, "
         f"remaining {len(result.selected_features)}")
     return result
+
+
+# ---------------------------------------------------------------------------
+# Chi-squared rescue selection (snapshot-grid IID-aware union of selectors)
+#
+# See docs/chi_squared_rescue_selection_plan.md for the design.  The flow is:
+#   1. Slice the training data to one IID-respecting time slice (penultimate
+#      snapshot by default) using compat.resolve_time_slice.
+#   2. Run chi-squared on the slice as the primary selector.
+#   3. Rescue chi-squared drops via L1 and/or XGBoost gain importance trained
+#      on the same slice, restricted to the chi-squared drop pool.
+#   4. Union the three keep sets and audit drop reasons with triple-consensus
+#      stats (chi rank + L1 coef + GBDT total_gain) so the recommendation
+#      registry can persist them as drop_rescue_consensus actions.
+#
+# All Spark dispatch reuses the existing distributed batched primitives in
+# this file:  _spark_chi_squared_selection (Phase 1/2/3 batched aggs +
+# bucketizer with checkpoints), _spark_gbdt_importance_selection (cast/fill
+# + checkpoint + VectorAssembler + SparkXGBClassifier), and
+# _spark_l1_selection (batched mean/stddev aggs + scaled select).  The rescue
+# helpers never collect feature rows to the driver — they hand the slice to
+# these distributed primitives instead.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _RescueResult:
+    l1_keep: set
+    gbdt_keep: set
+    l1_coefs: Dict[str, float]
+    gbdt_gains: Dict[str, float]
+
+
+def _chi_squared_primary(
+    df: Any, target_column: str, features: List[str],
+    top_k: int, num_buckets: int = 10,
+    progress_fn: Optional[Callable[[str], None]] = None,
+) -> tuple[set, set, Dict[str, Dict[str, float]]]:
+    """Run chi-squared on the training slice; return (keep, drop, stats).
+
+    ``stats`` maps every input feature to ``{"score": float, "rank": int}``.
+    The Spark path stays distributed via the existing batched
+    ``_spark_chi_squared_selection`` primitive — slice rows are never
+    collected for chi-squared scoring.
+    """
+    if not features:
+        return set(), set(), {}
+
+    from customer_retention.core.compat import _is_spark_pandas
+
+    if _is_spark_pandas(df):
+        from customer_retention.core.compat import as_spark_df
+        spark_df = as_spark_df(df[features + [target_column]])
+        _, _, scores = _spark_chi_squared_selection(
+            spark_df, target_column, features,
+            num_top_features=len(features),  # always score all; we cut top_k below
+            num_buckets=num_buckets, progress_fn=progress_fn,
+        )
+    else:
+        _, _, scores = _local_chi_squared_selection(
+            df, target_column, features,
+            num_top_features=len(features), num_buckets=num_buckets,
+        )
+    scores = scores or {f: 0.0 for f in features}
+    ordered = sorted(features, key=lambda f: float(scores.get(f, 0.0)), reverse=True)
+    keep = set(ordered[:top_k])
+    drop = set(ordered[top_k:])
+    stats = {
+        f: {"score": float(scores.get(f, 0.0)), "rank": rank + 1}
+        for rank, f in enumerate(ordered)
+    }
+    return keep, drop, stats
+
+
+def _l1_rescue_on_pool(
+    df: Any, target_column: str, drop_pool: List[str],
+    max_features: int = 50, C: float = 1.0,
+    progress_fn: Optional[Callable[[str], None]] = None,
+) -> tuple[set, Dict[str, float]]:
+    """L1 rescue on the chi-squared drop pool.  Returns (kept, coefs)."""
+    if not drop_pool:
+        return set(), {}
+
+    from customer_retention.core.compat import _is_spark_pandas
+
+    if _is_spark_pandas(df):
+        from customer_retention.core.compat import as_spark_df
+        spark_df = as_spark_df(df[drop_pool + [target_column]])
+        _, _, scores = _spark_l1_selection(
+            spark_df, target_column, drop_pool, reg_param=1.0 / C,
+        )
+    else:
+        scores = _local_l1_scores(df, target_column, drop_pool, C=C)
+    coefs = {f: float(scores.get(f, 0.0)) for f in drop_pool}
+    if not coefs:
+        return set(), coefs
+    max_coef = max(coefs.values()) if coefs else 0.0
+    if max_coef <= 0.0:
+        return set(), coefs
+    floor = max_coef * 0.01
+    ranked = sorted(drop_pool, key=lambda f: coefs[f], reverse=True)
+    kept: set = set()
+    for f in ranked:
+        if coefs[f] <= floor:
+            break
+        if len(kept) >= max_features:
+            break
+        kept.add(f)
+    return kept, coefs
+
+
+def _local_l1_scores(
+    df: Any, target_column: str, feature_columns: List[str], C: float = 1.0,
+) -> Dict[str, float]:
+    work_df = df[feature_columns + [target_column]].dropna(subset=[target_column])
+    if len(work_df) < 10:
+        return {f: 0.0 for f in feature_columns}
+    X = work_df[feature_columns].fillna(0).to_numpy()
+    y = work_df[target_column].to_numpy()
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.preprocessing import StandardScaler
+
+    X_scaled = StandardScaler().fit_transform(X)
+    model = LogisticRegression(solver="saga", C=C, max_iter=2000, l1_ratio=1.0)
+    model.fit(X_scaled, y)
+    coefs = np.abs(model.coef_)
+    max_coefs = coefs.max(axis=0) if coefs.ndim == 2 else coefs
+    return {feature_columns[i]: float(max_coefs[i]) for i in range(len(feature_columns))}
+
+
+def _gbdt_rescue_on_pool(
+    df: Any, target_column: str, drop_pool: List[str],
+    max_features: int = 100, n_estimators: int = 200, max_depth: int = 6,
+    progress_fn: Optional[Callable[[str], None]] = None,
+) -> tuple[set, Dict[str, float]]:
+    """XGBoost gain rescue on the chi-squared drop pool.
+
+    Returns ``(kept, gains)``. Spark path stays distributed via the existing
+    ``_spark_gbdt_importance_selection`` primitive (VectorAssembler +
+    SparkXGBClassifier with checkpoint and ``num_workers`` from the
+    parallelism resolver). No row collection.
+    """
+    if not drop_pool:
+        return set(), {}
+
+    from customer_retention.core.compat import _is_spark_pandas
+
+    if _is_spark_pandas(df):
+        from customer_retention.core.compat import as_spark_df
+        spark_df = as_spark_df(df[drop_pool + [target_column]])
+        scores = _spark_gbdt_total_gain_scores(
+            spark_df, target_column, drop_pool,
+            n_estimators=n_estimators, max_depth=max_depth,
+            progress_fn=progress_fn,
+        )
+    else:
+        scores = _local_gbdt_total_gain_scores(
+            df, target_column, drop_pool,
+            n_estimators=n_estimators, max_depth=max_depth,
+            progress_fn=progress_fn,
+        )
+    gains = {f: float(scores.get(f, 0.0)) for f in drop_pool}
+    kept = _apply_importance_floor(gains, max_features=max_features, floor_ratio=0.01)
+    return kept, gains
+
+
+def _local_gbdt_total_gain_scores(
+    df: Any, target_column: str, feature_columns: List[str],
+    n_estimators: int, max_depth: int,
+    progress_fn: Optional[Callable[[str], None]] = None,
+) -> Dict[str, float]:
+    """Train XGBoost and return raw total_gain importances per feature.
+
+    Unlike ``_local_gbdt_importance_selection``, this never short-circuits
+    when ``num_top_features >= n_features`` — the rescue stage needs the
+    real gains regardless of how the keep cap is set.
+    """
+    import xgboost as xgb
+
+    log = progress_fn or (lambda _msg: None)
+    if not feature_columns:
+        return {}
+    X = df[feature_columns].fillna(0).to_numpy()
+    y = df[target_column].to_numpy()
+    log(f"    GBDT rescue: {len(feature_columns)} features × {len(X)} rows...")
+    model = xgb.XGBClassifier(
+        n_estimators=n_estimators, max_depth=max_depth,
+        learning_rate=0.1, importance_type="total_gain",
+        tree_method="hist", n_jobs=-1, verbosity=0,
+    )
+    model.fit(X, y)
+    booster = model.get_booster()
+    raw = booster.get_score(importance_type="total_gain")
+    scores: Dict[str, float] = {f: 0.0 for f in feature_columns}
+    for k, v in raw.items():
+        if k.startswith("f") and k[1:].isdigit():
+            idx = int(k[1:])
+            if 0 <= idx < len(feature_columns):
+                scores[feature_columns[idx]] = float(v)
+    return scores
+
+
+def _spark_gbdt_total_gain_scores(
+    spark_df: Any, target_column: str, feature_columns: List[str],
+    n_estimators: int, max_depth: int,
+    progress_fn: Optional[Callable[[str], None]] = None,
+) -> Dict[str, float]:
+    """Distributed XGBoost gain importances — never short-circuits.
+
+    Reuses the existing chunked + checkpointed prep pattern from
+    ``_spark_gbdt_importance_selection`` (cast/fill, localCheckpoint above
+    _CHI_BUCKET_BATCH features, VectorAssembler, SparkXGBClassifier with
+    num_workers from the parallelism resolver).
+    """
+    SparkXGBClassifier, VectorAssembler, F = _import_spark_gbdt_ml()
+    log = progress_fn or (lambda _msg: None)
+    if not feature_columns:
+        return {}
+    n_features = len(feature_columns)
+    log(f"    GBDT rescue (distributed): preparing {n_features} features...")
+    work_df = spark_df.select(
+        [F.col(c).cast("double").alias(c) for c in feature_columns]
+        + [F.col(target_column).cast("double").alias(target_column)]
+    )
+    work_df = work_df.na.fill(0.0, subset=feature_columns)
+    if n_features > _CHI_BUCKET_BATCH:
+        work_df = work_df.localCheckpoint(eager=True)
+    assembler = VectorAssembler(
+        inputCols=feature_columns, outputCol="__gbdt_rescue_vec__", handleInvalid="keep",
+    )
+    assembled = assembler.transform(work_df).select("__gbdt_rescue_vec__", target_column)
+    num_workers = _resolve_spark_gbdt_workers()
+    log(f"    GBDT rescue: training XGBoost ({n_estimators} est, depth {max_depth}, "
+        f"{num_workers} workers)...")
+    estimator = SparkXGBClassifier(
+        features_col="__gbdt_rescue_vec__", label_col=target_column,
+        num_workers=num_workers,
+        n_estimators=n_estimators, max_depth=max_depth,
+        learning_rate=0.1, verbosity=0,
+    )
+    model = estimator.fit(assembled)
+    raw = model.get_feature_importances(importance_type="total_gain")
+    del work_df, assembled
+    scores: Dict[str, float] = {f: 0.0 for f in feature_columns}
+    for k, v in raw.items():
+        if k.startswith("f") and k[1:].isdigit():
+            idx = int(k[1:])
+            if 0 <= idx < len(feature_columns):
+                scores[feature_columns[idx]] = float(v)
+    return scores
+
+
+def _apply_importance_floor(
+    gains: Dict[str, float], max_features: int, floor_ratio: float = 0.01,
+) -> set:
+    """Return the top-K features above ``floor_ratio * max(gain)``.
+
+    Implements the §3.3 absolute importance floor — keeps the rescue from
+    importing "least-bad noise" when the drop pool has no real signal.
+    """
+    if not gains:
+        return set()
+    max_gain = max(gains.values())
+    if max_gain <= 0.0:
+        return set()
+    floor = max_gain * floor_ratio
+    above_floor = [f for f, g in gains.items() if g > floor]
+    above_floor.sort(key=lambda f: gains[f], reverse=True)
+    return set(above_floor[:max_features])
+
+
+def _apply_shadow_floor(
+    gains: Dict[str, float], shadow_gains: Dict[str, float],
+) -> set:
+    """Boruta-style floor: keep features whose gain exceeds the best shadow."""
+    if not shadow_gains:
+        return set(gains.keys())
+    shadow_max = max(shadow_gains.values()) if shadow_gains else 0.0
+    return {f for f, g in gains.items() if g > shadow_max}
+
+
+def _rescue_from_chi_drops(
+    df: Any, target_column: str, drop_pool: List[str],
+    *,
+    l1_enabled: bool = False, gbdt_enabled: bool = True,
+    l1_max: int = 50, l1_C: float = 1.0,
+    gbdt_max: int = 100, gbdt_n_estimators: int = 200, gbdt_max_depth: int = 6,
+    shadow_floor_enabled: bool = False, shadow_floor_fraction: float = 0.1,
+    progress_fn: Optional[Callable[[str], None]] = None,
+) -> _RescueResult:
+    """Run L1 and GBDT rescue selectors on the chi-squared drop pool.
+
+    Both selectors are confined to the drop pool and trained on the slice
+    that ``df`` represents.  Spark path stays distributed throughout.
+    """
+    from customer_retention.core.compat import FeatureSelectionError
+
+    if not drop_pool and (l1_enabled or gbdt_enabled):
+        raise FeatureSelectionError(
+            "_rescue_from_chi_drops: drop_pool is empty but rescue selectors are enabled"
+        )
+
+    l1_keep: set = set()
+    gbdt_keep: set = set()
+    l1_coefs: Dict[str, float] = {f: 0.0 for f in drop_pool}
+    gbdt_gains: Dict[str, float] = {f: 0.0 for f in drop_pool}
+
+    if l1_enabled and drop_pool:
+        l1_keep, l1_coefs = _l1_rescue_on_pool(
+            df, target_column, drop_pool,
+            max_features=l1_max, C=l1_C, progress_fn=progress_fn,
+        )
+    if gbdt_enabled and drop_pool:
+        gbdt_keep, gbdt_gains = _gbdt_rescue_on_pool(
+            df, target_column, drop_pool,
+            max_features=gbdt_max, n_estimators=gbdt_n_estimators,
+            max_depth=gbdt_max_depth, progress_fn=progress_fn,
+        )
+        if shadow_floor_enabled and gbdt_keep:
+            gbdt_keep = _gbdt_rescue_with_shadow(
+                df, target_column, drop_pool,
+                base_gains=gbdt_gains,
+                fraction=shadow_floor_fraction,
+                n_estimators=gbdt_n_estimators, max_depth=gbdt_max_depth,
+                progress_fn=progress_fn,
+            )
+
+    return _RescueResult(
+        l1_keep=l1_keep, gbdt_keep=gbdt_keep,
+        l1_coefs=l1_coefs, gbdt_gains=gbdt_gains,
+    )
+
+
+def _gbdt_rescue_with_shadow(
+    df: Any, target_column: str, drop_pool: List[str],
+    base_gains: Dict[str, float], fraction: float,
+    n_estimators: int, max_depth: int,
+    progress_fn: Optional[Callable[[str], None]] = None,
+) -> set:
+    """Permute a fraction of the drop pool as shadow features, retrain,
+    keep only real features whose gain exceeds the best shadow gain.
+
+    Spark path stays distributed: shadow columns are built via
+    ``Window.orderBy(F.rand())`` + row_number join — no driver collection.
+    Pandas path permutes via ``.sample(frac=1.0)``.
+    """
+    from customer_retention.core.compat import _is_spark_pandas
+
+    n_shadow = max(1, int(round(len(drop_pool) * fraction)))
+    rng = np.random.default_rng(0)
+    chosen = list(rng.choice(drop_pool, size=min(n_shadow, len(drop_pool)), replace=False))
+    shadow_names = [f"__shadow_{i}" for i in range(len(chosen))]
+
+    if _is_spark_pandas(df):
+        augmented = _spark_augment_with_shadow(df, target_column, drop_pool, chosen, shadow_names)
+        augmented_pool = drop_pool + shadow_names
+        from customer_retention.core.compat import as_spark_df
+        spark_aug = as_spark_df(augmented)
+        _, _, scores = _spark_gbdt_importance_selection(
+            spark_aug, target_column, augmented_pool,
+            num_top_features=len(augmented_pool),
+            n_estimators=n_estimators, max_depth=max_depth,
+            progress_fn=progress_fn,
+        )
+    else:
+        local = df[drop_pool + [target_column]]
+        permuted = local[chosen].sample(frac=1.0, random_state=42).reset_index(drop=True)
+        augmented = local.reset_index(drop=True).assign(
+            **{shadow_names[i]: permuted[chosen[i]].to_numpy() for i in range(len(chosen))}
+        )
+        augmented_pool = drop_pool + shadow_names
+        _, _, scores = _local_gbdt_importance_selection(
+            augmented, target_column, augmented_pool,
+            num_top_features=len(augmented_pool),
+            n_estimators=n_estimators, max_depth=max_depth,
+            progress_fn=progress_fn,
+        )
+
+    shadow_scores = {n: float(scores.get(n, 0.0)) for n in shadow_names}
+    return _apply_shadow_floor(base_gains, shadow_scores)
+
+
+def _spark_augment_with_shadow(
+    df: Any, target_column: str, drop_pool: List[str],
+    chosen: List[str], shadow_names: List[str],
+) -> Any:
+    """Distributed shadow append: row_number join between original and
+    rand-ordered slice — no driver collect."""
+    from pyspark.sql import Window
+    from pyspark.sql import functions as F  # noqa: N812
+
+    from customer_retention.core.compat import as_spark_df
+    from customer_retention.core.compat.spark_backend import _as_pandas_api
+
+    spark_df = as_spark_df(df[drop_pool + [target_column]])
+    indexed = spark_df.withColumn(
+        "__rid", F.row_number().over(Window.orderBy(F.monotonically_increasing_id()))
+    )
+    shuffled = (
+        spark_df.select([F.col(c).alias(s) for c, s in zip(chosen, shadow_names)])
+                .withColumn("__rid", F.row_number().over(Window.orderBy(F.rand(seed=42))))
+    )
+    joined = indexed.join(shuffled, on="__rid", how="inner").drop("__rid")
+    joined = joined.localCheckpoint(eager=True)
+    return _as_pandas_api(joined)
+
+
+def _build_rescue_consensus_reasons(
+    dropped: List[str], chi_stats: Dict[str, Dict[str, float]],
+    l1_coefs: Dict[str, float], gbdt_gains: Dict[str, float],
+    *,
+    slice_date: str, slice_strategy: str, slice_row_count: int,
+    l1_considered: bool, gbdt_considered: bool,
+) -> Dict[str, Dict[str, Any]]:
+    """Build the triple-consensus drop_reason dicts for every dropped feature."""
+    reasons: Dict[str, Dict[str, Any]] = {}
+    for feat in dropped:
+        chi = chi_stats.get(feat, {"score": 0.0, "rank": -1})
+        l1_coef = float(l1_coefs.get(feat, 0.0))
+        gbdt_gain = float(gbdt_gains.get(feat, 0.0))
+        params: Dict[str, Any] = {
+            "chi_squared_rank": int(chi["rank"]),
+            "chi_squared_score": float(chi["score"]),
+            "l1_coefficient": l1_coef,
+            "l1_considered": bool(l1_considered),
+            "gbdt_total_gain": gbdt_gain,
+            "gbdt_considered": bool(gbdt_considered),
+            "slice_date": slice_date,
+            "slice_strategy": slice_strategy,
+            "slice_row_count": int(slice_row_count),
+        }
+        rationale_parts = [f"chi-squared rank {int(chi['rank'])}"]
+        if l1_considered:
+            rationale_parts.append(f"L1 coef {l1_coef:.4g}")
+        if gbdt_considered:
+            rationale_parts.append(f"GBDT gain {gbdt_gain:.4g}")
+        rationale = "Dropped by all enabled selectors; " + ", ".join(rationale_parts)
+        reasons[feat] = {
+            "action": "drop_rescue_consensus",
+            "parameters": params,
+            "rationale": rationale,
+        }
+    return reasons
+
+
+def run_chi_squared_rescue_selection(
+    df: Any, target_column: str, max_features: int = 500,
+    *,
+    entity_column: Optional[str] = None,
+    time_column: Optional[str] = None,
+    slice_strategy: str = "penultimate",
+    min_positive_rate: float = 0.03,
+    num_buckets: int = 10,
+    l1_rescue_enabled: bool = False,
+    l1_rescue_max_features: int = 50,
+    l1_C: float = 1.0,
+    gbdt_rescue_enabled: bool = True,
+    gbdt_rescue_max_features: int = 100,
+    gbdt_n_estimators: int = 200,
+    gbdt_max_depth: int = 6,
+    shadow_feature_floor: bool = False,
+    progress_fn: Optional[Callable[[str], None]] = None,
+) -> FeatureSelectionResult:
+    """Three-stage chi-squared + rescue feature selection on a snapshot grid.
+
+    See ``docs/chi_squared_rescue_selection_plan.md``.
+
+    The selection runs on a single ``slice_strategy`` slice of ``df`` to
+    restore IID assumptions in the snapshot-grid panel data; the resulting
+    keep set is then applied to the full ``df`` for downstream modeling.
+
+    Spark dispatch is fully distributed: the time-slice filter, chi-squared
+    primary, and rescue selectors all stay in batched Spark jobs (see
+    ``_spark_chi_squared_selection``, ``_spark_gbdt_importance_selection``,
+    ``_spark_l1_selection``).
+    """
+    log = progress_fn or (lambda _msg: None)
+    t_start = time.monotonic()
+
+    from customer_retention.core.compat import (
+        FeatureSelectionError,
+        resolve_time_slice,
+    )
+
+    if target_column not in df.columns:
+        raise FeatureSelectionError(
+            f"run_chi_squared_rescue_selection: target_column {target_column!r} "
+            f"not in DataFrame columns"
+        )
+    if time_column is None or time_column not in df.columns:
+        raise FeatureSelectionError(
+            f"run_chi_squared_rescue_selection: time_column {time_column!r} "
+            f"not in DataFrame columns"
+        )
+    if entity_column is not None and entity_column not in df.columns:
+        raise FeatureSelectionError(
+            f"run_chi_squared_rescue_selection: entity_column {entity_column!r} "
+            f"not in DataFrame columns"
+        )
+
+    meta_cols = {target_column, time_column}
+    if entity_column:
+        meta_cols.add(entity_column)
+    feature_cols = [c for c in df.columns if c not in meta_cols]
+    if not feature_cols:
+        raise FeatureSelectionError(
+            "run_chi_squared_rescue_selection: no feature columns after excluding meta"
+        )
+
+    log(f"  Resolving training slice (strategy={slice_strategy}, "
+        f"min_positive_rate={min_positive_rate})...")
+    slice_df, slice_date, slice_count = resolve_time_slice(
+        df, time_column=time_column, strategy=slice_strategy,
+        target_column=target_column, min_positive_rate=min_positive_rate,
+        entity_column=entity_column,
+    )
+    log(f"    slice_date={slice_date}, rows={slice_count:,}")
+
+    selector_cols = feature_cols + [target_column]
+    slice_for_selection = slice_df[selector_cols]
+
+    log(f"  Stage 1/3: chi-squared primary on {len(feature_cols)} features (top_k={max_features})...")
+    keep_chi, drop_chi, chi_stats = _chi_squared_primary(
+        slice_for_selection, target_column=target_column,
+        features=feature_cols, top_k=max_features, num_buckets=num_buckets,
+        progress_fn=progress_fn,
+    )
+    log(f"    chi-squared kept={len(keep_chi)}, dropped={len(drop_chi)}")
+
+    rescue: Optional[_RescueResult] = None
+    rescue_l1: set = set()
+    rescue_gbdt: set = set()
+    if drop_chi and (l1_rescue_enabled or gbdt_rescue_enabled):
+        log(f"  Stage 2/3: rescue on {len(drop_chi)} chi-squared drops "
+            f"(L1={l1_rescue_enabled}, GBDT={gbdt_rescue_enabled})...")
+        rescue = _rescue_from_chi_drops(
+            slice_for_selection, target_column=target_column,
+            drop_pool=sorted(drop_chi),
+            l1_enabled=l1_rescue_enabled, gbdt_enabled=gbdt_rescue_enabled,
+            l1_max=l1_rescue_max_features, l1_C=l1_C,
+            gbdt_max=gbdt_rescue_max_features,
+            gbdt_n_estimators=gbdt_n_estimators, gbdt_max_depth=gbdt_max_depth,
+            shadow_floor_enabled=shadow_feature_floor,
+            progress_fn=progress_fn,
+        )
+        rescue_l1 = rescue.l1_keep
+        rescue_gbdt = rescue.gbdt_keep
+        log(f"    rescued L1={len(rescue_l1)}, rescued GBDT={len(rescue_gbdt)}")
+
+    final_keep = keep_chi | rescue_l1 | rescue_gbdt
+    dropped = [f for f in feature_cols if f not in final_keep]
+
+    l1_coefs = rescue.l1_coefs if rescue else {f: 0.0 for f in feature_cols}
+    gbdt_gains = rescue.gbdt_gains if rescue else {f: 0.0 for f in feature_cols}
+
+    log("  Stage 3/3: building drop_rescue_consensus reasons...")
+    reasons = _build_rescue_consensus_reasons(
+        dropped, chi_stats, l1_coefs, gbdt_gains,
+        slice_date=slice_date, slice_strategy=slice_strategy,
+        slice_row_count=slice_count,
+        l1_considered=l1_rescue_enabled, gbdt_considered=gbdt_rescue_enabled,
+    )
+
+    selected = [f for f in feature_cols if f in final_keep]
+    keep_cols = [c for c in df.columns if c in final_keep or c in meta_cols]
+    result_df = df[keep_cols]
+
+    importance_scores: Dict[str, float] = {}
+    for f in feature_cols:
+        importance_scores[f] = float(chi_stats.get(f, {"score": 0.0})["score"])
+
+    elapsed = time.monotonic() - t_start
+    log(f"  Done: {len(feature_cols)} -> {len(selected)} features "
+        f"({len(dropped)} dropped) in {_format_elapsed(elapsed)}")
+
+    result = FeatureSelectionResult(
+        df=result_df, selected_features=selected, dropped_features=dropped,
+        drop_reasons=reasons, method_used=SelectionMethod.CHI_SQUARED,
+        importance_scores=importance_scores,
+    )
+    return result
