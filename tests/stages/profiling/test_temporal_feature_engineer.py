@@ -1145,6 +1145,53 @@ class TestVectorizedBatchAggregation:
             assert f"lag0_{col}_sum" in df.columns
             assert f"lag1_{col}_mean" in df.columns
 
+    def test_compute_with_empty_value_cols_returns_non_value_features(self):
+        """TFE must handle empty value_cols: returns recency/regularity features only.
+
+        Regression guard for optimization commit 569a509 — batched
+        groupby_multi_col_agg raised AssertionError('exprs should not be empty')
+        when value_cols was empty after the caller's numeric filter.
+        """
+        events_df = pd.DataFrame({
+            "cid": ["A"] * 5 + ["B"] * 5,
+            "ts": list(pd.date_range("2023-01-01", periods=5, freq="3D")) * 2,
+        })
+        config = TemporalAggregationConfig(
+            lag_window_days=30, num_lags=2,
+            compute_lifecycle=False, compute_cohort=False,
+            compute_velocity=False, compute_acceleration=False,
+        )
+        result = TemporalFeatureEngineer(config=config).compute(
+            events_df=events_df, entity_col="cid", time_col="ts", value_cols=[],
+        )
+        df = result.features_df
+        assert "cid" in df.columns
+        assert set(df["cid"].tolist()) == {"A", "B"}
+        assert "days_since_last_event" in df.columns
+        assert "regularity_score" in df.columns
+        for col in df.columns:
+            assert not col.startswith("lag")
+
+    def test_lagged_windows_empty_value_cols_returns_entity_only(self):
+        """_compute_lagged_windows early-return path."""
+        events_df = pd.DataFrame({
+            "cid": ["A", "A", "B"],
+            "ts": pd.to_datetime(["2023-01-01", "2023-01-15", "2023-01-10"]),
+        })
+        config = TemporalAggregationConfig(
+            compute_lifecycle=False, compute_regularity=False,
+            compute_cohort=False, compute_velocity=False,
+            compute_acceleration=False, compute_recency=False,
+        )
+        result = TemporalFeatureEngineer(config=config).compute(
+            events_df=events_df, entity_col="cid", time_col="ts", value_cols=[],
+        )
+        df = result.features_df
+        assert list(df.columns) == ["cid"]
+        assert len(df) == 2
+        lag_group = next(g for g in result.feature_groups if g.group == FeatureGroup.LAGGED_WINDOWS)
+        assert lag_group.features == []
+
     def test_lifecycle_short_history_excluded(self):
         short = pd.DataFrame({
             "cid": ["S"] * 3,

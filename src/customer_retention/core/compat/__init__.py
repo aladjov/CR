@@ -599,7 +599,15 @@ def groupby_multi_col_agg(
     Returns DataFrame with *group_col* and ``{prefix}{col}_{func}`` columns.
     On Spark dispatches to a single ``groupBy().agg()`` call; on pandas uses
     ``DataFrame.groupby().agg(dict)``.
+
+    Raises ``ValueError`` on empty ``agg_cols`` or ``agg_funcs`` — callers
+    must guard instead of asking for "zero aggregations", which has no
+    well-defined result and fails differently on each backend.
     """
+    if not agg_cols:
+        raise ValueError("groupby_multi_col_agg requires non-empty agg_cols")
+    if not agg_funcs:
+        raise ValueError("groupby_multi_col_agg requires non-empty agg_funcs")
     if hasattr(df, "to_spark"):
         import pyspark.sql.functions as F  # noqa: N812
 

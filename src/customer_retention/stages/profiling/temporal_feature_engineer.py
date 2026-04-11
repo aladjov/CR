@@ -331,6 +331,13 @@ class TemporalFeatureEngineer:
         Uses one batched groupby per lag window across all value_cols and
         aggregation functions, instead of per-column-per-agg iteration.
         """
+        if not value_cols:
+            return ref_dates[[entity_col]].copy(), FeatureGroupResult(
+                group=FeatureGroup.LAGGED_WINDOWS,
+                features=[],
+                rationale=self.RATIONALES[FeatureGroup.LAGGED_WINDOWS],
+            )
+
         window_days = self.config.lag_window_days
         num_lags = self.config.num_lags
 

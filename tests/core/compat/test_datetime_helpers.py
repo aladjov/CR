@@ -99,6 +99,16 @@ class TestGroupbyMultiColAgg:
         assert result[result["g"] == "A"].iloc[0]["v1_count"] == 2
         assert result[result["g"] == "B"].iloc[0]["v1_count"] == 1
 
+    def test_empty_agg_cols_raises(self):
+        df = pd.DataFrame({"g": ["A", "B"], "v": [1.0, 2.0]})
+        with pytest.raises(ValueError, match="agg_cols"):
+            groupby_multi_col_agg(df, "g", [], ["sum", "mean"])
+
+    def test_empty_agg_funcs_raises(self):
+        df = pd.DataFrame({"g": ["A", "B"], "v": [1.0, 2.0]})
+        with pytest.raises(ValueError, match="agg_funcs"):
+            groupby_multi_col_agg(df, "g", ["v"], [])
+
 
 class TestTimestampDiffsSeconds:
     def test_consecutive_diffs(self):
