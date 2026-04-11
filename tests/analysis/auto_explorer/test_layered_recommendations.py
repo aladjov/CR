@@ -864,17 +864,17 @@ class TestGoldFeatureSelectionRecommendations:
         assert rec.target_column == "low_chi_feature"
         assert rec.action == "drop_chi_squared"
 
-    def test_adds_drop_lgbm_importance_to_gold(self):
+    def test_adds_drop_gbdt_importance_to_gold(self):
         registry = RecommendationRegistry()
         registry.init_gold("churned")
-        registry.add_gold_drop_lgbm_importance(
+        registry.add_gold_drop_gbdt_importance(
             column="low_gain_feature", importance=0.5,
-            rationale="lgbm_importance below top-300", source_notebook="08"
+            rationale="gbdt_importance below top-300", source_notebook="08"
         )
         assert len(registry.gold.feature_selection) == 1
         rec = registry.gold.feature_selection[0]
         assert rec.target_column == "low_gain_feature"
-        assert rec.action == "drop_lgbm_importance"
+        assert rec.action == "drop_gbdt_importance"
         assert rec.parameters["importance"] == 0.5
 
     def test_feature_selection_in_all_recommendations(self):

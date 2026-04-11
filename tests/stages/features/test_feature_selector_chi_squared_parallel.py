@@ -129,9 +129,9 @@ class TestBatchedScoringPandas:
         assert any("Chi-squared" in m for m in messages)
 
 
-class TestLgbmProgressFn:
-    def test_run_lgbm_forwards_progress_fn(self):
-        from customer_retention.stages.features.feature_selector import run_lgbm_importance_selection
+class TestGbdtProgressFn:
+    def test_run_gbdt_forwards_progress_fn(self):
+        from customer_retention.stages.features.feature_selector import run_gbdt_importance_selection
         np.random.seed(42)
         n = 200
         target = np.random.choice([0, 1], n)
@@ -141,31 +141,32 @@ class TestLgbmProgressFn:
             "target": target,
         })
         messages: list[str] = []
-        run_lgbm_importance_selection(df, "target", max_features=1, num_iterations=10, progress_fn=messages.append)
-        assert any("LightGBM" in m for m in messages)
+        run_gbdt_importance_selection(df, "target", max_features=1, n_estimators=10, progress_fn=messages.append)
+        assert any("XGBoost" in m for m in messages)
         assert any("Training" in m for m in messages)
 
-    def test_spark_lgbm_receives_progress_fn(self):
+    def test_spark_gbdt_receives_progress_fn(self):
         from unittest.mock import MagicMock, patch
 
-        from customer_retention.stages.features.feature_selector import _spark_lgbm_importance_selection
+        from customer_retention.stages.features.feature_selector import _spark_gbdt_importance_selection
 
         feature_cols = ["f1", "f2", "f3"]
         messages: list[str] = []
 
-        with patch("customer_retention.stages.features.feature_selector._import_spark_lgbm_ml") as mock_imp:
+        with patch("customer_retention.stages.features.feature_selector._import_spark_gbdt_ml") as mock_imp, \
+             patch("customer_retention.stages.features.feature_selector._resolve_spark_gbdt_workers", return_value=2):
             mock_F = MagicMock()
             mock_assembler_cls = MagicMock()
-            mock_lgbm_cls = MagicMock()
+            mock_xgb_cls = MagicMock()
             mock_model = MagicMock()
-            mock_model.getFeatureImportances.return_value = np.array([50.0, 10.0, 1.0])
-            mock_lgbm_cls.return_value.fit.return_value = mock_model
-            mock_imp.return_value = (mock_lgbm_cls, mock_assembler_cls, mock_F)
+            mock_model.get_feature_importances.return_value = {"f0": 50.0, "f1": 10.0, "f2": 1.0}
+            mock_xgb_cls.return_value.fit.return_value = mock_model
+            mock_imp.return_value = (mock_xgb_cls, mock_assembler_cls, mock_F)
             mock_spark_df = MagicMock()
             work_df = mock_spark_df.select.return_value.na.fill.return_value
             mock_assembler_cls.return_value.transform.return_value.select.return_value = work_df
 
-            _spark_lgbm_importance_selection(
+            _spark_gbdt_importance_selection(
                 mock_spark_df, "target", feature_cols, num_top_features=1,
                 progress_fn=messages.append,
             )

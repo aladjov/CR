@@ -335,5 +335,5 @@ class TestSelectionMethodEnum:
     def test_chi_squared_exists(self):
         assert SelectionMethod.CHI_SQUARED.value == "CHI_SQUARED"
 
-    def test_lgbm_importance_exists(self):
-        assert SelectionMethod.LGBM_IMPORTANCE.value == "LGBM_IMPORTANCE"
+    def test_gbdt_importance_exists(self):
+        assert SelectionMethod.GBDT_IMPORTANCE.value == "GBDT_IMPORTANCE"

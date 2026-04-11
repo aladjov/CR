@@ -339,10 +339,10 @@ class RecommendationRegistry:
                                           {}, rationale, source_notebook)
         self.gold.feature_selection.append(rec)
 
-    def add_gold_drop_lgbm_importance(self, column: str, importance: float,
+    def add_gold_drop_gbdt_importance(self, column: str, importance: float,
                                        rationale: str, source_notebook: str) -> None:
         params = {"importance": importance}
-        rec = self._create_recommendation("gold", "feature_selection", "drop_lgbm_importance", column,
+        rec = self._create_recommendation("gold", "feature_selection", "drop_gbdt_importance", column,
                                           params, rationale, source_notebook)
         self.gold.feature_selection.append(rec)
 

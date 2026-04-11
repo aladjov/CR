@@ -25,7 +25,7 @@ class SelectionMethod(Enum):
     RECURSIVE = "RECURSIVE"
     L1_SELECTION = "L1_SELECTION"
     CHI_SQUARED = "CHI_SQUARED"
-    LGBM_IMPORTANCE = "LGBM_IMPORTANCE"
+    GBDT_IMPORTANCE = "GBDT_IMPORTANCE"
 
 
 @dataclass
@@ -59,7 +59,7 @@ class AvailabilityRecommendation:
 
 
 class FeatureSelector:
-    def __init__(self, method: SelectionMethod = SelectionMethod.VARIANCE, variance_threshold: float = 0.01, correlation_threshold: float = 0.95, target_column: Optional[str] = None, preserve_features: Optional[List[str]] = None, max_features: Optional[int] = None, apply_correlation_filter: bool = False, precomputed_corr_matrix: Optional[Any] = None, l1_C: float = 1.0, l1_ratio: float = 1.0, progress_fn: Optional[Callable[[str], None]] = None, precomputed_variances: Optional[Any] = None, precomputed_medians: Optional[Dict[str, float]] = None, precomputed_non_null: Optional[Dict[str, int]] = None, correlation_candidates: Optional[List[str]] = None, chi_squared_num_buckets: int = 10, lgbm_num_iterations: int = 200, lgbm_num_leaves: int = 63):
+    def __init__(self, method: SelectionMethod = SelectionMethod.VARIANCE, variance_threshold: float = 0.01, correlation_threshold: float = 0.95, target_column: Optional[str] = None, preserve_features: Optional[List[str]] = None, max_features: Optional[int] = None, apply_correlation_filter: bool = False, precomputed_corr_matrix: Optional[Any] = None, l1_C: float = 1.0, l1_ratio: float = 1.0, progress_fn: Optional[Callable[[str], None]] = None, precomputed_variances: Optional[Any] = None, precomputed_medians: Optional[Dict[str, float]] = None, precomputed_non_null: Optional[Dict[str, int]] = None, correlation_candidates: Optional[List[str]] = None, chi_squared_num_buckets: int = 10, gbdt_n_estimators: int = 200, gbdt_max_depth: int = 6):
         self.method = method
         self.variance_threshold = variance_threshold
         self.correlation_threshold = correlation_threshold
@@ -75,8 +75,8 @@ class FeatureSelector:
         self._precomputed_non_null = precomputed_non_null
         self._correlation_candidates = correlation_candidates
         self.chi_squared_num_buckets = chi_squared_num_buckets
-        self.lgbm_num_iterations = lgbm_num_iterations
-        self.lgbm_num_leaves = lgbm_num_leaves
+        self.gbdt_n_estimators = gbdt_n_estimators
+        self.gbdt_max_depth = gbdt_max_depth
 
         self.selected_features: List[str] = []
         self.dropped_features: List[str] = []
@@ -101,8 +101,8 @@ class FeatureSelector:
             self._apply_l1_selection(df, feature_cols, numeric_set)
         elif self.method == SelectionMethod.CHI_SQUARED:
             self._apply_chi_squared_selection(df, feature_cols, numeric_set)
-        elif self.method == SelectionMethod.LGBM_IMPORTANCE:
-            self._apply_lgbm_importance_selection(df, feature_cols, numeric_set)
+        elif self.method == SelectionMethod.GBDT_IMPORTANCE:
+            self._apply_gbdt_importance_selection(df, feature_cols, numeric_set)
 
         if self.apply_correlation_filter and self.method != SelectionMethod.CORRELATION:
             self._apply_correlation_selection(df, self.selected_features.copy(), numeric_set)
@@ -298,9 +298,9 @@ class FeatureSelector:
                 self.dropped_features.append(feature)
                 self.drop_reasons[feature] = reasons[feature]
 
-    def _apply_lgbm_importance_selection(self, df: DataFrame, features: List[str], numeric_set: set) -> None:
+    def _apply_gbdt_importance_selection(self, df: DataFrame, features: List[str], numeric_set: set) -> None:
         if not self.target_column:
-            raise ValueError("target_column is required for LGBM_IMPORTANCE")
+            raise ValueError("target_column is required for GBDT_IMPORTANCE")
         if self.target_column not in df.columns:
             raise ValueError(f"target_column '{self.target_column}' not in DataFrame")
 
@@ -312,19 +312,19 @@ class FeatureSelector:
         if _is_spark_pandas(df):
             from customer_retention.core.compat import as_spark_df
             spark_df = as_spark_df(df[candidates + [self.target_column]])
-            dropped, reasons, scores = _spark_lgbm_importance_selection(
+            dropped, reasons, scores = _spark_gbdt_importance_selection(
                 spark_df, self.target_column, candidates,
                 num_top_features=self.max_features or len(candidates),
-                num_iterations=self.lgbm_num_iterations,
-                num_leaves=self.lgbm_num_leaves,
+                n_estimators=self.gbdt_n_estimators,
+                max_depth=self.gbdt_max_depth,
                 progress_fn=self._progress_fn,
             )
         else:
-            dropped, reasons, scores = _local_lgbm_importance_selection(
+            dropped, reasons, scores = _local_gbdt_importance_selection(
                 df, self.target_column, candidates,
                 num_top_features=self.max_features or len(candidates),
-                num_iterations=self.lgbm_num_iterations,
-                num_leaves=self.lgbm_num_leaves,
+                n_estimators=self.gbdt_n_estimators,
+                max_depth=self.gbdt_max_depth,
                 progress_fn=self._progress_fn,
             )
         self.importance_scores = scores
@@ -685,28 +685,39 @@ def _local_chi_squared_selection(
 
 
 # ---------------------------------------------------------------------------
-# LightGBM importance-based selection
+# Gradient-Boosted Decision Tree (GBDT) importance-based selection
+#
+# Uses XGBoost as the backend for both distributed (Spark) and local paths —
+# matches the default downstream training model (xgboost) so feature importance
+# ranking is parity-consistent between exploration and production. The Spark
+# path uses xgboost.spark.SparkXGBClassifier which stays fully distributed and
+# works on PySpark 4.0 / Unity Catalog shared clusters, unlike SynapseML's
+# LightGBMClassifier (see microsoft/SynapseML#2452).
 # ---------------------------------------------------------------------------
 
-def _import_spark_lgbm_ml():
+def _import_spark_gbdt_ml():
     import pyspark.sql.functions as F  # noqa: N812
     from pyspark.ml.feature import VectorAssembler
-    from synapse.ml.lightgbm import LightGBMClassifier
-    return LightGBMClassifier, VectorAssembler, F
+    from xgboost.spark import SparkXGBClassifier
+    return SparkXGBClassifier, VectorAssembler, F
 
 
-def _spark_lgbm_importance_selection(
+def _resolve_spark_gbdt_workers() -> int:
+    from customer_retention.core.compat.detection import get_default_parallelism
+    return max(1, get_default_parallelism() or 1)
+
+
+def _spark_gbdt_importance_selection(
     spark_df: Any, target_column: str, feature_columns: List[str],
-    num_top_features: int = 300, num_iterations: int = 200, num_leaves: int = 63,
+    num_top_features: int = 300, n_estimators: int = 200, max_depth: int = 6,
     progress_fn: Optional[Callable[[str], None]] = None,
 ) -> tuple:
-    LGBMClassifier, VectorAssembler, F = _import_spark_lgbm_ml()
+    SparkXGBClassifier, VectorAssembler, F = _import_spark_gbdt_ml()
     log = progress_fn or (lambda _msg: None)
 
     n_features = len(feature_columns)
     if num_top_features >= n_features:
-        scores = {c: 0.0 for c in feature_columns}
-        return [], {}, scores
+        return [], {}, {c: 0.0 for c in feature_columns}
 
     log(f"    Preparing {n_features} features (cast + fill null)...")
     work_df = spark_df.select(
@@ -718,30 +729,36 @@ def _spark_lgbm_importance_selection(
         work_df = work_df.localCheckpoint(eager=True)
 
     log(f"    Assembling {n_features} features into vector...")
-    assembler = VectorAssembler(inputCols=feature_columns, outputCol="__lgbm_vec__", handleInvalid="keep")
-    assembled = assembler.transform(work_df).select("__lgbm_vec__", target_column)
+    assembler = VectorAssembler(inputCols=feature_columns, outputCol="__gbdt_vec__", handleInvalid="keep")
+    assembled = assembler.transform(work_df).select("__gbdt_vec__", target_column)
 
-    log(f"    Training LightGBM ({num_iterations} iterations, {num_leaves} leaves)...")
-    lgbm = LGBMClassifier(featuresCol="__lgbm_vec__", labelCol=target_column,
-                           numLeaves=num_leaves, numIterations=num_iterations, learningRate=0.1)
-    model = lgbm.fit(assembled)
-    importances = model.getFeatureImportances("gain")
+    num_workers = _resolve_spark_gbdt_workers()
+    log(f"    Training XGBoost ({n_estimators} estimators, max_depth {max_depth}, {num_workers} workers)...")
+    xgb_estimator = SparkXGBClassifier(
+        features_col="__gbdt_vec__", label_col=target_column,
+        num_workers=num_workers,
+        n_estimators=n_estimators, max_depth=max_depth,
+        learning_rate=0.1, verbosity=0,
+    )
+    model = xgb_estimator.fit(assembled)
+    scores_dict = model.get_feature_importances(importance_type="total_gain")
     del work_df, assembled
     log("    Training done, ranking features by gain importance...")
 
+    importances = np.array([float(scores_dict.get(f"f{i}", 0.0)) for i in range(n_features)])
     scores: Dict[str, float] = {feature_columns[i]: float(importances[i]) for i in range(n_features)}
     top_indices = set(np.argsort(importances)[-num_top_features:])
     dropped = [feature_columns[i] for i in range(n_features) if i not in top_indices]
-    reasons = {c: f"lgbm_importance below top-{num_top_features}" for c in dropped}
+    reasons = {c: f"gbdt_importance below top-{num_top_features}" for c in dropped}
     return dropped, reasons, scores
 
 
-def _local_lgbm_importance_selection(
+def _local_gbdt_importance_selection(
     df: Any, target_column: str, feature_columns: List[str],
-    num_top_features: int = 300, num_iterations: int = 200, num_leaves: int = 63,
+    num_top_features: int = 300, n_estimators: int = 200, max_depth: int = 6,
     progress_fn: Optional[Callable[[str], None]] = None,
 ) -> tuple:
-    import lightgbm as lgb
+    import xgboost as xgb
 
     log = progress_fn or (lambda _msg: None)
     n_features = len(feature_columns)
@@ -752,9 +769,12 @@ def _local_lgbm_importance_selection(
     X = df[feature_columns].fillna(0).to_numpy()
     y = df[target_column].to_numpy()
 
-    log(f"    Training LightGBM ({num_iterations} iterations, {num_leaves} leaves)...")
-    model = lgb.LGBMClassifier(n_estimators=num_iterations, num_leaves=num_leaves,
-                                learning_rate=0.1, importance_type="gain", n_jobs=-1, verbose=-1)
+    log(f"    Training XGBoost ({n_estimators} estimators, max_depth {max_depth})...")
+    model = xgb.XGBClassifier(
+        n_estimators=n_estimators, max_depth=max_depth,
+        learning_rate=0.1, importance_type="total_gain",
+        tree_method="hist", n_jobs=-1, verbosity=0,
+    )
     model.fit(X, y)
     importances = model.feature_importances_
     log("    Training done, ranking features by gain importance...")
@@ -762,7 +782,7 @@ def _local_lgbm_importance_selection(
     scores: Dict[str, float] = {feature_columns[i]: float(importances[i]) for i in range(n_features)}
     top_indices = set(np.argsort(importances)[-num_top_features:])
     dropped = [feature_columns[i] for i in range(n_features) if i not in top_indices]
-    reasons = {c: f"lgbm_importance below top-{num_top_features}" for c in dropped}
+    reasons = {c: f"gbdt_importance below top-{num_top_features}" for c in dropped}
     return dropped, reasons, scores
 
 
@@ -990,9 +1010,9 @@ def run_chi_squared_selection(
     return result
 
 
-def run_lgbm_importance_selection(
+def run_gbdt_importance_selection(
     df: DataFrame, target_column: str, max_features: int = 300,
-    num_iterations: int = 200, num_leaves: int = 63,
+    n_estimators: int = 200, max_depth: int = 6,
     feature_columns: Optional[List[str]] = None,
     temporal_column: Optional[str] = None,
     progress_fn: Optional[Callable[[str], None]] = None,
@@ -1010,12 +1030,12 @@ def run_lgbm_importance_selection(
         work_df = work_df.drop(columns=[temporal_column])
 
     n_initial = len(feature_columns)
-    log(f"  LightGBM importance selection: {n_initial} features, selecting top {max_features}...")
+    log(f"  XGBoost GBDT importance selection: {n_initial} features, selecting top {max_features}...")
 
     selector = FeatureSelector(
-        method=SelectionMethod.LGBM_IMPORTANCE, target_column=target_column,
-        max_features=max_features, lgbm_num_iterations=num_iterations,
-        lgbm_num_leaves=num_leaves, progress_fn=log,
+        method=SelectionMethod.GBDT_IMPORTANCE, target_column=target_column,
+        max_features=max_features, gbdt_n_estimators=n_estimators,
+        gbdt_max_depth=max_depth, progress_fn=log,
     )
     result = selector.fit_transform(work_df)
     elapsed = time.monotonic() - t0

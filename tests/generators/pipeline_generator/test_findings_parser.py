@@ -6156,20 +6156,20 @@ class TestDropL1ZeroAction(TestFeatureSelectionDropSkipsTarget):
         parser._apply_gold_recommendations(config, registry)
         assert "unsubscribed" not in config.gold.feature_selections
 
-    def test_drop_lgbm_importance_collected(self):
+    def test_drop_gbdt_importance_collected(self):
         parser = self._make_parser()
         config = self._make_config()
         registry = self._make_registry(feature_selection=[
-            self._make_rec("region", "drop_lgbm_importance"),
+            self._make_rec("region", "drop_gbdt_importance"),
         ])
         parser._apply_gold_recommendations(config, registry)
         assert "region" in config.gold.feature_selections
 
-    def test_drop_lgbm_importance_skips_target(self):
+    def test_drop_gbdt_importance_skips_target(self):
         parser = self._make_parser()
         config = self._make_config()
         registry = self._make_registry(feature_selection=[
-            self._make_rec("unsubscribed", "drop_lgbm_importance"),
+            self._make_rec("unsubscribed", "drop_gbdt_importance"),
         ])
         parser._apply_gold_recommendations(config, registry)
         assert "unsubscribed" not in config.gold.feature_selections

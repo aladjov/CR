@@ -1261,9 +1261,9 @@ def run_experiment():
                     _drop_recs = RecommendationRegistry.from_dict(_rec_yaml.safe_load(_rf))
                 _runtime_drops = set()
                 for _rec in getattr(getattr(_drop_recs, 'gold', None), 'feature_selection', []):
-                    if _rec.action in ('drop_multicollinear', 'drop_weak', 'drop_l1_zero', 'drop_chi_squared', 'drop_lgbm_importance', 'drop_availability', 'drop_zero_variance'):
+                    if _rec.action in ('drop_multicollinear', 'drop_weak', 'drop_l1_zero', 'drop_chi_squared', 'drop_gbdt_importance', 'drop_availability', 'drop_zero_variance'):
                         excluded_cols[_rec.target_column] = _rec.action
-                    if _rec.action in ('drop_l1_zero', 'drop_chi_squared', 'drop_lgbm_importance', 'drop_zero_variance'):
+                    if _rec.action in ('drop_l1_zero', 'drop_chi_squared', 'drop_gbdt_importance', 'drop_zero_variance'):
                         _runtime_drops.add(_rec.target_column)
                 _actual_runtime = [c for c in _runtime_drops if c in feature_names]
                 if _actual_runtime:
