@@ -238,6 +238,12 @@ class ExplorationFindings:
     observation_window_days: int = 180
 
     @property
+    def time_column(self) -> Optional[str]:
+        if self.time_series_metadata is None:
+            return None
+        return self.time_series_metadata.time_column
+
+    @property
     def is_time_series(self) -> bool:
         if self.time_series_metadata is None:
             return False

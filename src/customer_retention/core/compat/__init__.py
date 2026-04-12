@@ -1377,6 +1377,178 @@ def _spark_pairwise_corr(df: Any, cols: list[str], numeric: set[str], cross_colu
     return _pandas.DataFrame(matrix, columns=cols, index=cols)
 
 
+def batched_missingness_corr(
+    df: Any, columns: list[str] | None = None,
+) -> _pandas.DataFrame:
+    """Pairwise correlation of null-indicator columns.
+
+    On pandas: ``df[cols].isnull().corr()``.
+    On Spark: batched ``F.corr`` on ``isnull().cast("double")`` indicators,
+    processing column-pairs in groups to keep Catalyst plans small.
+
+    Returns a symmetric *native* pandas DataFrame (small — cols × cols).
+    """
+    import numpy as _np
+
+    cols = list(columns or df.columns)
+    cols = [c for c in cols if c in df.columns]
+    if len(cols) < 2:
+        return _pandas.DataFrame(index=cols, columns=cols, dtype=float)
+
+    if not _is_spark_pandas(df):
+        return df[cols].isnull().corr()
+
+    import pyspark.sql.functions as F  # noqa: N812
+
+    spark_df = as_spark_df(df[cols])
+    # Build null-indicator columns: 1.0 if null, 0.0 otherwise
+    null_cols = [F.when(F.col(f"`{c}`").isNull(), 1.0).otherwise(0.0).alias(c) for c in cols]
+    null_df = spark_df.select(*null_cols)
+
+    # Pre-filter: only columns with at least one null have meaningful variance
+    _BATCH_NC = 200
+    has_nulls: set[str] = set()
+    for start in range(0, len(cols), _BATCH_NC):
+        batch = cols[start : start + _BATCH_NC]
+        exprs = [F.coalesce(F.sum(F.col(c).cast("int")), F.lit(0)).alias(c) for c in batch]
+        row = null_df.agg(*exprs).head()
+        for c in batch:
+            if row[c] and int(row[c]) > 0:
+                has_nulls.add(c)
+
+    n = len(cols)
+    matrix = _np.full((n, n), _np.nan)
+    _np.fill_diagonal(matrix, 1.0)
+    idx = {c: i for i, c in enumerate(cols)}
+
+    # Only compute pairs where both columns have nulls (non-zero variance)
+    active = sorted(has_nulls, key=cols.index)
+    pairs = [(i, j) for ii, a in enumerate(active) for j_idx, b in enumerate(active[ii + 1:], ii + 1)
+             if (i := idx[a]) is not None and (j := idx[b]) is not None]
+
+    _BATCH_CORR = 500
+    for start in range(0, len(pairs), _BATCH_CORR):
+        batch = pairs[start : start + _BATCH_CORR]
+        exprs = [_safe_corr_expr(cols[i], cols[j]).alias(f"c_{i}_{j}") for i, j in batch]
+        row = null_df.select(*exprs).head()
+        for i, j in batch:
+            val = row[f"c_{i}_{j}"]
+            val = float(val) if val is not None else _np.nan
+            matrix[i, j] = val
+            matrix[j, i] = val
+
+    # Columns with zero nulls have no variance → corr = NaN with everything (already set),
+    # except self-correlation = NaN for zero-variance (consistent with pandas behavior)
+    for c in cols:
+        if c not in has_nulls:
+            matrix[idx[c], idx[c]] = _np.nan
+
+    return _pandas.DataFrame(matrix, columns=cols, index=cols)
+
+
+def bulk_iqr_bounds(
+    df: Any, columns: list[str],
+) -> _pandas.DataFrame:
+    """Compute IQR outlier bounds and counts for many columns in bulk.
+
+    Returns a native pandas DataFrame with columns:
+        feature, Q1, Q3, IQR, lower_bound, upper_bound,
+        outliers_low, outliers_high, total_outliers, outlier_pct
+
+    On pandas: per-column quantile (fast, in-process).
+    On Spark: batched ``percentile_approx`` + batched conditional counts
+    so the total Spark jobs scale as ``len(columns) / batch_size``, not
+    ``5 × len(columns)``.
+    """
+    import numpy as _np
+
+    valid = [c for c in columns if c in df.columns]
+    if not valid:
+        return _pandas.DataFrame(columns=[
+            "feature", "Q1", "Q3", "IQR", "lower_bound", "upper_bound",
+            "outliers_low", "outliers_high", "total_outliers", "outlier_pct",
+        ])
+
+    if not _is_spark_pandas(df):
+        return _bulk_iqr_pandas(df, valid)
+    return _bulk_iqr_spark(df, valid)
+
+
+def _bulk_iqr_pandas(df: Any, cols: list[str]) -> _pandas.DataFrame:
+    rows = []
+    for c in cols:
+        s = df[c].dropna()
+        q1, q3 = float(s.quantile(0.25)), float(s.quantile(0.75))
+        iqr = q3 - q1
+        lo, hi = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+        ol = int((s < lo).sum())
+        oh = int((s > hi).sum())
+        tot = ol + oh
+        rows.append({"feature": c, "Q1": q1, "Q3": q3, "IQR": iqr,
+                      "lower_bound": lo, "upper_bound": hi,
+                      "outliers_low": ol, "outliers_high": oh,
+                      "total_outliers": tot,
+                      "outlier_pct": tot / len(s) * 100 if len(s) > 0 else 0})
+    return _pandas.DataFrame(rows)
+
+
+def _bulk_iqr_spark(df: Any, cols: list[str]) -> _pandas.DataFrame:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    spark_df = as_spark_df(df[cols])
+
+    # Pass 1: batched Q1/Q3
+    _BATCH = 100
+    q1_map: dict[str, float] = {}
+    q3_map: dict[str, float] = {}
+    for start in range(0, len(cols), _BATCH):
+        batch = cols[start : start + _BATCH]
+        exprs = []
+        for c in batch:
+            dc = F.col(f"`{c}`").cast("double")
+            exprs.append(F.percentile_approx(dc, 0.25).alias(f"q1_{c}"))
+            exprs.append(F.percentile_approx(dc, 0.75).alias(f"q3_{c}"))
+        row = spark_df.agg(*exprs).head()
+        for c in batch:
+            v1 = row[f"q1_{c}"]
+            v3 = row[f"q3_{c}"]
+            q1_map[c] = float(v1) if v1 is not None else float("nan")
+            q3_map[c] = float(v3) if v3 is not None else float("nan")
+
+    # Compute bounds
+    bounds: dict[str, tuple[float, float, float, float, float]] = {}
+    for c in cols:
+        q1, q3 = q1_map[c], q3_map[c]
+        iqr = q3 - q1
+        bounds[c] = (q1, q3, iqr, q1 - 1.5 * iqr, q3 + 1.5 * iqr)
+
+    # Pass 2: batched outlier counts (low, high, non-null count)
+    _BATCH_CNT = 70  # 3 exprs per column
+    rows = []
+    for start in range(0, len(cols), _BATCH_CNT):
+        batch = cols[start : start + _BATCH_CNT]
+        exprs = []
+        for c in batch:
+            q1, q3, iqr, lo, hi = bounds[c]
+            dc = F.col(f"`{c}`").cast("double")
+            exprs.append(F.coalesce(F.sum((dc < lo).cast("int")), F.lit(0)).alias(f"lo_{c}"))
+            exprs.append(F.coalesce(F.sum((dc > hi).cast("int")), F.lit(0)).alias(f"hi_{c}"))
+            exprs.append(F.count(dc).alias(f"nn_{c}"))
+        row = spark_df.agg(*exprs).head()
+        for c in batch:
+            q1, q3, iqr, lo, hi = bounds[c]
+            ol = int(row[f"lo_{c}"])
+            oh = int(row[f"hi_{c}"])
+            nn = int(row[f"nn_{c}"]) if row[f"nn_{c}"] else 0
+            tot = ol + oh
+            rows.append({"feature": c, "Q1": q1, "Q3": q3, "IQR": iqr,
+                          "lower_bound": lo, "upper_bound": hi,
+                          "outliers_low": ol, "outliers_high": oh,
+                          "total_outliers": tot,
+                          "outlier_pct": tot / nn * 100 if nn > 0 else 0})
+    return _pandas.DataFrame(rows)
+
+
 def bulk_corr_with_target(df: Any, columns: list[str], target_column: str, progress_fn: Any = None) -> dict[str, float]:
     import math
 
@@ -2196,6 +2368,8 @@ __all__ = [
     "safe_select",
     "safe_describe",
     "batched_corr_matrix",
+    "batched_missingness_corr",
+    "bulk_iqr_bounds",
     "bulk_corr_with_target",
     "bulk_null_counts",
     "leakage_corr_combined",

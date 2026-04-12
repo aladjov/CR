@@ -495,6 +495,30 @@ class TestTimeSeriesMetadata:
         )
         assert not no_metadata.is_time_series
 
+    def test_time_column_property(self):
+        from customer_retention.analysis.auto_explorer.findings import TimeSeriesMetadata
+        from customer_retention.core.config import DatasetGranularity
+
+        with_time = ExplorationFindings(
+            source_path="tx.csv", source_format="csv",
+            time_series_metadata=TimeSeriesMetadata(
+                granularity=DatasetGranularity.EVENT_LEVEL,
+                entity_column="cust", time_column="event_date",
+            ),
+        )
+        assert with_time.time_column == "event_date"
+
+        no_time = ExplorationFindings(
+            source_path="tx.csv", source_format="csv",
+            time_series_metadata=TimeSeriesMetadata(
+                granularity=DatasetGranularity.ENTITY_LEVEL,
+            ),
+        )
+        assert no_time.time_column is None
+
+        no_meta = ExplorationFindings(source_path="x.csv", source_format="csv")
+        assert no_meta.time_column is None
+
     def test_aggregation_tracking_fields_defaults(self):
         from customer_retention.analysis.auto_explorer.findings import TimeSeriesMetadata
         from customer_retention.core.config import DatasetGranularity
