@@ -5,9 +5,25 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from customer_retention.core.compat import DataFrame, normalize_decimal_columns, pd
-from customer_retention.stages.cleaning.outlier_handler import OutlierDetectionMethod, OutlierHandler, OutlierResult
+from customer_retention.stages.cleaning.outlier_handler import (
+    OutlierDetectionMethod,
+    OutlierHandler,
+    OutlierResult,
+    OutlierTreatmentStrategy,
+)
 
 from .segment_analyzer import SegmentAnalyzer, SegmentationResult
+
+
+@dataclass
+class _BoundsInfo:
+    """Lightweight outlier bounds -- scalars only, no data references."""
+    lower: float
+    upper: float
+    outlier_count: int
+
+
+_EMPTY_SERIES: pd.Series = pd.Series([], dtype=float)
 
 
 @dataclass
@@ -63,7 +79,8 @@ class SegmentAwareOutlierAnalyzer:
 
         df = normalize_decimal_columns(df)
 
-        global_analysis = self._analyze_global(df, valid_cols)
+        # Compute global outlier bounds (scalars only -- no masks stored)
+        global_bounds = self._compute_global_bounds(df, valid_cols)
 
         if segment_col and segment_col in df.columns:
             segment_labels, n_segments = self._use_explicit_segments(df, segment_col)
@@ -73,10 +90,24 @@ class SegmentAwareOutlierAnalyzer:
                 df, valid_cols, target_col
             )
 
-        segment_analysis = self._analyze_by_segment(df, valid_cols, segment_labels, n_segments)
-        false_outliers = self._identify_false_outliers(
-            df, valid_cols, global_analysis, segment_analysis, segment_labels
+        # Compute per-segment bounds (scalars only)
+        segment_bounds = self._compute_segment_bounds(
+            df, valid_cols, segment_labels, n_segments
         )
+
+        # Count false outliers using bounds -- one column at a time, no masks retained
+        false_outliers = self._count_false_outliers(
+            df, valid_cols, global_bounds, segment_bounds, segment_labels
+        )
+
+        # Build lightweight OutlierResult objects for the return value
+        global_analysis = {
+            col: self._bounds_to_result(b) for col, b in global_bounds.items()
+        }
+        segment_analysis = {
+            seg_id: {col: self._bounds_to_result(b) for col, b in col_bounds.items()}
+            for seg_id, col_bounds in segment_bounds.items()
+        }
 
         segmentation_recommended, recommendations, rationale = self._make_recommendations(
             global_analysis, segment_analysis, false_outliers, n_segments
@@ -94,13 +125,106 @@ class SegmentAwareOutlierAnalyzer:
             segmentation_result=segmentation_result
         )
 
-    def _analyze_global(self, df: DataFrame, feature_cols: List[str]) -> Dict[str, OutlierResult]:
+    # ---- bounds computation (scalars only) ----
+
+    def _compute_global_bounds(
+        self, df: DataFrame, feature_cols: List[str]
+    ) -> Dict[str, _BoundsInfo]:
         handler = OutlierHandler(
             detection_method=self.detection_method,
             iqr_multiplier=self.iqr_multiplier,
-            zscore_threshold=self.zscore_threshold
+            zscore_threshold=self.zscore_threshold,
         )
-        return {col: handler.detect(df[col]) for col in feature_cols}
+        bounds: Dict[str, _BoundsInfo] = {}
+        for col in feature_cols:
+            series = df[col]
+            clean = series.dropna()
+            lower, upper = handler._compute_bounds(clean)
+            count = int(((series < lower) | (series > upper)).fillna(False).sum())
+            bounds[col] = _BoundsInfo(lower, upper, count)
+        return bounds
+
+    def _compute_segment_bounds(
+        self,
+        df: DataFrame,
+        feature_cols: List[str],
+        segment_labels: np.ndarray,
+        n_segments: int,
+    ) -> Dict[Any, Dict[str, _BoundsInfo]]:
+        handler = OutlierHandler(
+            detection_method=self.detection_method,
+            iqr_multiplier=self.iqr_multiplier,
+            zscore_threshold=self.zscore_threshold,
+        )
+        result: Dict[Any, Dict[str, _BoundsInfo]] = {}
+        for seg_id in range(n_segments):
+            mask = segment_labels == seg_id
+            if mask.sum() < self.MIN_SEGMENT_SIZE:
+                continue
+            seg_df = df.loc[mask]
+            col_bounds: Dict[str, _BoundsInfo] = {}
+            for col in feature_cols:
+                series = seg_df[col]
+                clean = series.dropna()
+                if len(clean) == 0:
+                    col_bounds[col] = _BoundsInfo(0.0, 0.0, 0)
+                    continue
+                lower, upper = handler._compute_bounds(clean)
+                count = int(((series < lower) | (series > upper)).fillna(False).sum())
+                col_bounds[col] = _BoundsInfo(lower, upper, count)
+            result[seg_id] = col_bounds
+        return result
+
+    # ---- false outlier counting (bounds-only, one column at a time) ----
+
+    def _count_false_outliers(
+        self,
+        df: DataFrame,
+        feature_cols: List[str],
+        global_bounds: Dict[str, _BoundsInfo],
+        segment_bounds: Dict[Any, Dict[str, _BoundsInfo]],
+        segment_labels: np.ndarray,
+    ) -> Dict[str, int]:
+        """Count false outliers per column using scalar bounds only.
+
+        A false outlier is a row that is flagged as an outlier globally but is
+        within the normal range of its segment.  Counts are computed one column
+        and one segment at a time so that no full-length boolean arrays are
+        retained in memory.
+        """
+        false_outliers: Dict[str, int] = {}
+        for col in feature_cols:
+            g = global_bounds[col]
+            if g.outlier_count == 0:
+                false_outliers[col] = 0
+                continue
+            count = 0
+            for seg_id, col_bounds in segment_bounds.items():
+                sb = col_bounds.get(col)
+                if sb is None:
+                    continue
+                seg_mask = segment_labels == seg_id
+                seg_series = df.loc[seg_mask, col]
+                is_global_outlier = (seg_series < g.lower) | (seg_series > g.upper)
+                is_seg_normal = (seg_series >= sb.lower) & (seg_series <= sb.upper)
+                count += int((is_global_outlier & is_seg_normal).fillna(False).sum())
+            false_outliers[col] = count
+        return false_outliers
+
+    # ---- lightweight OutlierResult construction ----
+
+    def _bounds_to_result(self, b: _BoundsInfo) -> OutlierResult:
+        return OutlierResult(
+            series=_EMPTY_SERIES,
+            method_used=self.detection_method,
+            strategy_used=OutlierTreatmentStrategy.NONE,
+            outliers_detected=b.outlier_count,
+            outliers_treated=0,
+            lower_bound=b.lower,
+            upper_bound=b.upper,
+        )
+
+    # ---- segmentation ----
 
     def _use_explicit_segments(self, df: DataFrame, segment_col: str) -> tuple:
         unique_vals = df[segment_col].dropna().unique()
@@ -131,77 +255,7 @@ class SegmentAwareOutlierAnalyzer:
         except Exception:
             return np.zeros(n_rows, dtype=int), 1, None
 
-    def _analyze_by_segment(
-        self,
-        df: DataFrame,
-        feature_cols: List[str],
-        segment_labels: np.ndarray,
-        n_segments: int
-    ) -> Dict[Any, Dict[str, OutlierResult]]:
-        segment_analysis = {}
-        handler = OutlierHandler(
-            detection_method=self.detection_method,
-            iqr_multiplier=self.iqr_multiplier,
-            zscore_threshold=self.zscore_threshold
-        )
-
-        for seg_id in range(n_segments):
-            mask = segment_labels == seg_id
-            if mask.sum() < self.MIN_SEGMENT_SIZE:
-                continue
-
-            segment_df = df.loc[mask]
-            segment_analysis[seg_id] = {
-                col: handler.detect(segment_df[col]) for col in feature_cols
-            }
-
-        return segment_analysis
-
-    def _identify_false_outliers(
-        self,
-        df: DataFrame,
-        feature_cols: List[str],
-        global_analysis: Dict[str, OutlierResult],
-        segment_analysis: Dict[Any, Dict[str, OutlierResult]],
-        segment_labels: np.ndarray,
-    ) -> Dict[str, int]:
-        segment_normal = self._build_segment_normal_masks(
-            feature_cols, segment_analysis, segment_labels,
-        )
-        false_outliers = {}
-        for col in feature_cols:
-            global_result = global_analysis[col]
-            if global_result.outlier_mask is None:
-                false_outliers[col] = 0
-                continue
-            global_mask = np.asarray(global_result.outlier_mask, dtype=bool)
-            false_outliers[col] = int(np.sum(global_mask & segment_normal.get(col, np.zeros(len(segment_labels), dtype=bool))))
-        return false_outliers
-
-    @staticmethod
-    def _build_segment_normal_masks(
-        feature_cols: List[str],
-        segment_analysis: Dict[Any, Dict[str, OutlierResult]],
-        segment_labels: np.ndarray,
-    ) -> Dict[str, np.ndarray]:
-        n = len(segment_labels)
-        seg_index_map: Dict[Any, np.ndarray] = {}
-        for seg_id in segment_analysis:
-            seg_index_map[seg_id] = np.flatnonzero(segment_labels == seg_id)
-
-        result: Dict[str, np.ndarray] = {}
-        for col in feature_cols:
-            normal_mask = np.zeros(n, dtype=bool)
-            for seg_id, seg_cols in segment_analysis.items():
-                seg_result = seg_cols.get(col)
-                if seg_result is None or seg_result.outlier_mask is None:
-                    continue
-                seg_indices = seg_index_map[seg_id]
-                seg_outlier_arr = np.asarray(seg_result.outlier_mask, dtype=bool)
-                count = min(len(seg_indices), len(seg_outlier_arr))
-                normal_mask[seg_indices[:count]] = ~seg_outlier_arr[:count]
-            result[col] = normal_mask
-        return result
+    # ---- recommendations ----
 
     def _make_recommendations(
         self,
@@ -248,7 +302,7 @@ class SegmentAwareOutlierAnalyzer:
                 if reduction > 0.3:
                     rationale.append(
                         f"Segment-aware analysis reduces outliers by {reduction:.0%} "
-                        f"({total_global} global → {total_segment} segment-level)"
+                        f"({total_global} global -> {total_segment} segment-level)"
                     )
 
         if not segmentation_recommended and n_segments <= 1:
@@ -258,13 +312,19 @@ class SegmentAwareOutlierAnalyzer:
         return segmentation_recommended, recommendations, rationale
 
     def _empty_result(self, feature_cols: List[str]) -> SegmentAwareOutlierResult:
-        empty_handler = OutlierHandler()
-        empty_series = pd.Series([], dtype=float)
-        empty_result = empty_handler.detect(empty_series)
+        empty = OutlierResult(
+            series=_EMPTY_SERIES,
+            method_used=self.detection_method,
+            strategy_used=OutlierTreatmentStrategy.NONE,
+            outliers_detected=0,
+            outliers_treated=0,
+            lower_bound=None,
+            upper_bound=None,
+        )
 
         return SegmentAwareOutlierResult(
             n_segments=0,
-            global_analysis={col: empty_result for col in feature_cols},
+            global_analysis={col: empty for col in feature_cols},
             segment_analysis={},
             false_outliers={col: 0 for col in feature_cols},
             segmentation_recommended=False,

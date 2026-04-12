@@ -235,11 +235,18 @@ class SegmentAnalyzer:
             clf = NearestCentroid()
             clf.fit(scaled_sample, labels_sample)
 
-            # Transform entire features_df through same scaler (+ PCA if used)
-            full_scaled = self._scaler.transform(features_df.to_numpy())
-            if full_scaled.shape[1] > self._MAX_FEATURES_BEFORE_PCA:
-                full_scaled = pca.transform(full_scaled)  # noqa: F821 -- pca defined above when branch taken
-            labels_all = clf.predict(full_scaled)
+            # Predict in batches to limit driver memory on large DataFrames
+            _BATCH = 50_000
+            n_full = len(features_df)
+            labels_all = np.empty(n_full, dtype=int)
+            for _start in range(0, n_full, _BATCH):
+                _end = min(_start + _BATCH, n_full)
+                _batch = self._scaler.transform(
+                    features_df.iloc[_start:_end].to_numpy()
+                )
+                if _batch.shape[1] > self._MAX_FEATURES_BEFORE_PCA:
+                    _batch = pca.transform(_batch)  # noqa: F821 -- pca defined above when branch taken
+                labels_all[_start:_end] = clf.predict(_batch)
         else:
             labels_all = labels_sample
 
