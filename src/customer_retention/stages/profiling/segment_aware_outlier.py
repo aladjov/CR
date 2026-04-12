@@ -4,7 +4,14 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from customer_retention.core.compat import DataFrame, normalize_decimal_columns, pd
+from customer_retention.core.compat import (
+    DataFrame,
+    _is_spark_pandas,
+    as_spark_df,
+    native_pd,
+    normalize_decimal_columns,
+    safe_len,
+)
 from customer_retention.stages.cleaning.outlier_handler import (
     OutlierDetectionMethod,
     OutlierHandler,
@@ -14,6 +21,14 @@ from customer_retention.stages.cleaning.outlier_handler import (
 
 from .segment_analyzer import SegmentAnalyzer, SegmentationResult
 
+_EMPTY_SERIES: native_pd.Series = native_pd.Series([], dtype=float)
+_STAT_BATCH = 100
+_COUNT_BATCH = 70
+
+
+def _safe_float(val: Any) -> float:
+    return float(val) if val is not None else 0.0
+
 
 @dataclass
 class _BoundsInfo:
@@ -21,9 +36,6 @@ class _BoundsInfo:
     lower: float
     upper: float
     outlier_count: int
-
-
-_EMPTY_SERIES: pd.Series = pd.Series([], dtype=float)
 
 
 @dataclass
@@ -45,9 +57,13 @@ class SegmentAwareOutlierAnalyzer:
 
     Addresses the problem where global outliers may actually be valid data
     points from a different segment (e.g., enterprise vs retail customers).
+
+    On Databricks with an explicit segment column the analysis stays fully
+    distributed via batched Spark aggregation.  Without a segment column the
+    auto-detection path delegates to SegmentAnalyzer which requires pandas.
     """
 
-    FALSE_OUTLIER_THRESHOLD = 0.5  # If >50% of global outliers are segment-normal
+    FALSE_OUTLIER_THRESHOLD = 0.5
     MIN_SEGMENT_SIZE = 10
 
     def __init__(
@@ -70,16 +86,25 @@ class SegmentAwareOutlierAnalyzer:
         segment_col: Optional[str] = None,
         target_col: Optional[str] = None
     ) -> SegmentAwareOutlierResult:
-        if len(df) == 0 or all(df[col].isna().all() for col in feature_cols if col in df.columns):
-            return self._empty_result(feature_cols)
-
         valid_cols = [c for c in feature_cols if c in df.columns]
-        if not valid_cols:
+        if safe_len(df) == 0 or not valid_cols:
             return self._empty_result(feature_cols)
 
         df = normalize_decimal_columns(df)
 
-        # Compute global outlier bounds (scalars only -- no masks stored)
+        if _is_spark_pandas(df):
+            if segment_col and segment_col in df.columns:
+                return self._analyze_spark_explicit(df, valid_cols, segment_col)
+            return self._analyze_spark_auto(df, valid_cols, target_col)
+
+        if all(df[col].isna().all() for col in valid_cols):
+            return self._empty_result(feature_cols)
+
+        return self._analyze_local(df, valid_cols, segment_col, target_col)
+
+    # ---- local (pandas) path ----
+
+    def _analyze_local(self, df, valid_cols, segment_col, target_col):
         global_bounds = self._compute_global_bounds(df, valid_cols)
 
         if segment_col and segment_col in df.columns:
@@ -90,23 +115,483 @@ class SegmentAwareOutlierAnalyzer:
                 df, valid_cols, target_col
             )
 
-        # Compute per-segment bounds (scalars only)
         segment_bounds = self._compute_segment_bounds(
             df, valid_cols, segment_labels, n_segments
         )
 
-        # Count false outliers using bounds -- one column at a time, no masks retained
         false_outliers = self._count_false_outliers(
             df, valid_cols, global_bounds, segment_bounds, segment_labels
         )
 
-        # Build lightweight OutlierResult objects for the return value
-        global_analysis = {
-            col: self._bounds_to_result(b) for col, b in global_bounds.items()
-        }
+        return self._build_result(
+            valid_cols, global_bounds, segment_bounds, false_outliers,
+            n_segments, segment_labels, segmentation_result,
+        )
+
+    # ---- distributed Spark path (auto-detect segments) ----
+
+    def _analyze_spark_auto(self, df, valid_cols, target_col):
+        import pyspark.sql.functions as F  # noqa: N812
+
+        spark_df = as_spark_df(df)
+        global_bounds = self._spark_compute_bounds(spark_df, valid_cols)
+
+        segment_labels, n_segments, segmentation_result = self._detect_segments(
+            df, valid_cols, target_col
+        )
+
+        if n_segments <= 1:
+            return self._build_result(
+                valid_cols, global_bounds, {}, {c: 0 for c in valid_cols},
+                n_segments, segment_labels, segmentation_result,
+            )
+
+        seg_col = "__segment__"
+        spark_df = spark_df.withColumn("__mid__", F.monotonically_increasing_id())
+        ids = [r["__mid__"] for r in spark_df.select("__mid__").collect()]
+        label_pdf = native_pd.DataFrame({
+            "__mid__": ids,
+            seg_col: segment_labels.astype(int),
+        })
+        label_sdf = spark_df.sparkSession.createDataFrame(label_pdf)
+        spark_df = spark_df.join(label_sdf, "__mid__", "inner").drop("__mid__")
+
+        valid_segs = list(range(n_segments))
+        seg_map = {i: i for i in range(n_segments)}
+
+        segment_bounds = self._spark_grouped_segment_bounds(
+            spark_df, valid_cols, seg_col, valid_segs, seg_map,
+        )
+
+        false_outliers = self._spark_false_outlier_counts(
+            spark_df, valid_cols, global_bounds, segment_bounds,
+            seg_col, seg_map,
+        )
+
+        return self._build_result(
+            valid_cols, global_bounds, segment_bounds, false_outliers,
+            n_segments, segment_labels, segmentation_result,
+        )
+
+    # ---- distributed Spark path (explicit segment column) ----
+
+    def _analyze_spark_explicit(self, df, valid_cols, segment_col):
+        import pyspark.sql.functions as F  # noqa: N812
+
+        spark_df = as_spark_df(df)
+
+        seg_rows = (
+            spark_df.groupBy(segment_col)
+            .agg(F.count(F.lit(1)).alias("__cnt__"))
+            .collect()
+        )
+        unique_segs = [r[segment_col] for r in seg_rows if r[segment_col] is not None]
+        seg_counts = {r[segment_col]: int(r["__cnt__"]) for r in seg_rows if r[segment_col] is not None}
+        seg_map = {v: i for i, v in enumerate(unique_segs)}
+        n_segments = len(unique_segs)
+        valid_segs = [v for v in unique_segs if seg_counts.get(v, 0) >= self.MIN_SEGMENT_SIZE]
+
+        global_bounds = self._spark_compute_bounds(spark_df, valid_cols)
+
+        segment_bounds = self._spark_grouped_segment_bounds(
+            spark_df, valid_cols, segment_col, valid_segs, seg_map,
+        )
+
+        false_outliers = self._spark_false_outlier_counts(
+            spark_df, valid_cols, global_bounds, segment_bounds,
+            segment_col, seg_map,
+        )
+
+        segment_labels = self._use_explicit_segments(df, segment_col)[0]
+
+        return self._build_result(
+            valid_cols, global_bounds, segment_bounds, false_outliers,
+            n_segments, segment_labels, None,
+        )
+
+    # ---- grouped segment bounds (single scan via groupBy per batch) ----
+
+    def _spark_grouped_segment_bounds(
+        self, spark_df, cols, segment_col, valid_segs, seg_map,
+    ):
+        if not valid_segs:
+            return {}
+
+        seg_lower_upper = self._spark_grouped_stats(
+            spark_df, cols, segment_col, valid_segs,
+        )
+        return self._spark_grouped_outlier_counts(
+            spark_df, cols, segment_col, valid_segs, seg_map,
+            seg_lower_upper,
+        )
+
+    def _spark_grouped_stats(self, spark_df, cols, segment_col, valid_segs):
+        import pyspark.sql.functions as F  # noqa: N812
+
+        method = self.detection_method
+        seg_lu: Dict[Any, Dict[str, tuple]] = {sv: {} for sv in valid_segs}
+        valid_set = set(valid_segs)
+
+        if method == OutlierDetectionMethod.IQR:
+            self._grouped_iqr(spark_df, cols, segment_col, valid_set, seg_lu, F)
+        elif method == OutlierDetectionMethod.ZSCORE:
+            self._grouped_zscore(spark_df, cols, segment_col, valid_set, seg_lu, F)
+        elif method == OutlierDetectionMethod.PERCENTILE:
+            self._grouped_percentile(spark_df, cols, segment_col, valid_set, seg_lu, F)
+        else:
+            self._grouped_modified_zscore(spark_df, cols, segment_col, valid_set, seg_lu, F)
+        return seg_lu
+
+    def _grouped_iqr(self, spark_df, cols, seg_col, valid_set, seg_lu, F):
+        for start in range(0, len(cols), _STAT_BATCH):
+            batch = cols[start:start + _STAT_BATCH]
+            exprs = []
+            for c in batch:
+                dc = F.col(f"`{c}`").cast("double")
+                exprs.extend([
+                    F.percentile_approx(dc, 0.25).alias(f"q1__{c}"),
+                    F.percentile_approx(dc, 0.75).alias(f"q3__{c}"),
+                ])
+            rows = spark_df.groupBy(seg_col).agg(*exprs).collect()
+            for row in rows:
+                sv = row[seg_col]
+                if sv not in valid_set:
+                    continue
+                for c in batch:
+                    q1, q3 = _safe_float(row[f"q1__{c}"]), _safe_float(row[f"q3__{c}"])
+                    iqr = q3 - q1
+                    seg_lu[sv][c] = (q1 - self.iqr_multiplier * iqr, q3 + self.iqr_multiplier * iqr)
+
+    def _grouped_zscore(self, spark_df, cols, seg_col, valid_set, seg_lu, F):
+        for start in range(0, len(cols), _STAT_BATCH):
+            batch = cols[start:start + _STAT_BATCH]
+            exprs = []
+            for c in batch:
+                dc = F.col(f"`{c}`").cast("double")
+                exprs.extend([F.mean(dc).alias(f"m__{c}"), F.stddev_samp(dc).alias(f"s__{c}")])
+            rows = spark_df.groupBy(seg_col).agg(*exprs).collect()
+            for row in rows:
+                sv = row[seg_col]
+                if sv not in valid_set:
+                    continue
+                for c in batch:
+                    m, s = _safe_float(row[f"m__{c}"]), _safe_float(row[f"s__{c}"])
+                    seg_lu[sv][c] = (m - self.zscore_threshold * s, m + self.zscore_threshold * s)
+
+    def _grouped_percentile(self, spark_df, cols, seg_col, valid_set, seg_lu, F):
+        for start in range(0, len(cols), _STAT_BATCH):
+            batch = cols[start:start + _STAT_BATCH]
+            exprs = []
+            for c in batch:
+                dc = F.col(f"`{c}`").cast("double")
+                exprs.extend([
+                    F.percentile_approx(dc, 0.01).alias(f"lo__{c}"),
+                    F.percentile_approx(dc, 0.99).alias(f"hi__{c}"),
+                ])
+            rows = spark_df.groupBy(seg_col).agg(*exprs).collect()
+            for row in rows:
+                sv = row[seg_col]
+                if sv not in valid_set:
+                    continue
+                for c in batch:
+                    seg_lu[sv][c] = (_safe_float(row[f"lo__{c}"]), _safe_float(row[f"hi__{c}"]))
+
+    def _grouped_modified_zscore(self, spark_df, cols, seg_col, valid_set, seg_lu, F):
+        medians: Dict[Any, Dict[str, float]] = {sv: {} for sv in valid_set}
+        for start in range(0, len(cols), _STAT_BATCH):
+            batch = cols[start:start + _STAT_BATCH]
+            exprs = [
+                F.percentile_approx(F.col(f"`{c}`").cast("double"), 0.5).alias(c)
+                for c in batch
+            ]
+            rows = spark_df.groupBy(seg_col).agg(*exprs).collect()
+            for row in rows:
+                sv = row[seg_col]
+                if sv not in valid_set:
+                    continue
+                for c in batch:
+                    medians[sv][c] = _safe_float(row[c])
+
+        k = 1.4826
+        for start in range(0, len(cols), _STAT_BATCH):
+            batch = cols[start:start + _STAT_BATCH]
+            exprs = [
+                F.percentile_approx(
+                    F.abs(F.col(f"`{c}`").cast("double") - F.lit(medians.get(sv, {}).get(c, 0.0))),
+                    0.5,
+                ).alias(f"mad_{c}")
+                for c in batch
+                for sv in valid_set
+            ]
+            if not exprs:
+                continue
+            # Modified zscore MAD needs per-segment computation -- fall back to groupBy
+            mad_exprs = []
+            for c in batch:
+                dc = F.col(f"`{c}`").cast("double")
+                for sv in valid_set:
+                    med = medians.get(sv, {}).get(c, 0.0)
+                    seg_cond = F.col(f"`{seg_col}`") == F.lit(sv)
+                    mad_exprs.append(
+                        F.percentile_approx(
+                            F.when(seg_cond, F.abs(dc - F.lit(med))),
+                            0.5,
+                        ).alias(f"mad_{seg_col}_{sv}_{c}")
+                    )
+            if not mad_exprs:
+                continue
+            # Batch MAD expressions to keep plan size manageable
+            seg_batch = max(5, _STAT_BATCH // max(len(valid_set), 1))
+            for ms in range(0, len(batch), seg_batch):
+                mb = batch[ms:ms + seg_batch]
+                mb_exprs = []
+                for c in mb:
+                    dc = F.col(f"`{c}`").cast("double")
+                    for sv in valid_set:
+                        med = medians.get(sv, {}).get(c, 0.0)
+                        seg_cond = F.col(f"`{seg_col}`") == F.lit(sv)
+                        mb_exprs.append(
+                            F.percentile_approx(
+                                F.when(seg_cond, F.abs(dc - F.lit(med))),
+                                0.5,
+                            ).alias(f"mad_{id(sv)}_{c}")
+                        )
+                if not mb_exprs:
+                    continue
+                row = spark_df.agg(*mb_exprs).head()
+                for c in mb:
+                    for sv in valid_set:
+                        med = medians.get(sv, {}).get(c, 0.0)
+                        mad = _safe_float(row[f"mad_{id(sv)}_{c}"])
+                        seg_lu[sv][c] = (med - 3.5 * k * mad, med + 3.5 * k * mad)
+
+    def _spark_grouped_outlier_counts(
+        self, spark_df, cols, segment_col, valid_segs, seg_map, seg_lower_upper,
+    ):
+        import pyspark.sql.functions as F  # noqa: N812
+
+        segment_bounds: Dict[int, Dict[str, _BoundsInfo]] = {}
+        for sv in valid_segs:
+            segment_bounds[seg_map[sv]] = {}
+
+        n_segs = max(len(valid_segs), 1)
+        batch_size = max(10, _COUNT_BATCH // n_segs)
+
+        for start in range(0, len(cols), batch_size):
+            batch = cols[start:start + batch_size]
+            exprs = []
+            expr_keys: List[tuple] = []
+            for c in batch:
+                for sv in valid_segs:
+                    lu = seg_lower_upper[sv].get(c)
+                    if lu is None:
+                        continue
+                    lo, hi = lu
+                    dc = F.col(f"`{c}`").cast("double")
+                    seg_cond = F.col(f"`{segment_col}`") == F.lit(sv)
+                    is_outlier = (dc < F.lit(lo)) | (dc > F.lit(hi))
+                    alias = f"o_{seg_map[sv]}_{len(expr_keys)}"
+                    exprs.append(
+                        F.coalesce(
+                            F.sum(F.when(seg_cond, is_outlier.cast("int")).otherwise(0)),
+                            F.lit(0),
+                        ).alias(alias)
+                    )
+                    expr_keys.append((seg_map[sv], c, lo, hi, alias))
+
+            if not exprs:
+                continue
+            row = spark_df.agg(*exprs).head()
+            for seg_id, c, lo, hi, alias in expr_keys:
+                cnt = int(row[alias]) if row[alias] is not None else 0
+                segment_bounds[seg_id][c] = _BoundsInfo(lo, hi, cnt)
+
+        return segment_bounds
+
+    # ---- batched Spark bounds computation ----
+
+    def _spark_compute_bounds(self, spark_df, cols):
+        lower_upper = self._spark_bulk_stats(spark_df, cols)
+        return self._spark_bulk_outlier_counts(spark_df, cols, lower_upper)
+
+    def _spark_bulk_stats(self, spark_df, cols):
+        import pyspark.sql.functions as F  # noqa: N812
+
+        method = self.detection_method
+        results: Dict[str, tuple] = {}
+
+        if method == OutlierDetectionMethod.IQR:
+            self._spark_batch_iqr(spark_df, cols, results, F)
+        elif method == OutlierDetectionMethod.ZSCORE:
+            self._spark_batch_zscore(spark_df, cols, results, F)
+        elif method == OutlierDetectionMethod.PERCENTILE:
+            self._spark_batch_percentile(spark_df, cols, results, F)
+        else:
+            self._spark_batch_modified_zscore(spark_df, cols, results, F)
+        return results
+
+    def _spark_batch_iqr(self, spark_df, cols, results, F):
+        for start in range(0, len(cols), _STAT_BATCH):
+            batch = cols[start:start + _STAT_BATCH]
+            exprs = []
+            for c in batch:
+                dc = F.col(f"`{c}`").cast("double")
+                exprs.extend([
+                    F.percentile_approx(dc, 0.25).alias(f"q1__{c}"),
+                    F.percentile_approx(dc, 0.75).alias(f"q3__{c}"),
+                ])
+            row = spark_df.agg(*exprs).head()
+            for c in batch:
+                q1, q3 = _safe_float(row[f"q1__{c}"]), _safe_float(row[f"q3__{c}"])
+                iqr = q3 - q1
+                results[c] = (q1 - self.iqr_multiplier * iqr, q3 + self.iqr_multiplier * iqr)
+
+    def _spark_batch_zscore(self, spark_df, cols, results, F):
+        for start in range(0, len(cols), _STAT_BATCH):
+            batch = cols[start:start + _STAT_BATCH]
+            exprs = []
+            for c in batch:
+                dc = F.col(f"`{c}`").cast("double")
+                exprs.extend([F.mean(dc).alias(f"m__{c}"), F.stddev_samp(dc).alias(f"s__{c}")])
+            row = spark_df.agg(*exprs).head()
+            for c in batch:
+                m, s = _safe_float(row[f"m__{c}"]), _safe_float(row[f"s__{c}"])
+                results[c] = (m - self.zscore_threshold * s, m + self.zscore_threshold * s)
+
+    def _spark_batch_percentile(self, spark_df, cols, results, F):
+        for start in range(0, len(cols), _STAT_BATCH):
+            batch = cols[start:start + _STAT_BATCH]
+            exprs = []
+            for c in batch:
+                dc = F.col(f"`{c}`").cast("double")
+                exprs.extend([
+                    F.percentile_approx(dc, 0.01).alias(f"lo__{c}"),
+                    F.percentile_approx(dc, 0.99).alias(f"hi__{c}"),
+                ])
+            row = spark_df.agg(*exprs).head()
+            for c in batch:
+                results[c] = (_safe_float(row[f"lo__{c}"]), _safe_float(row[f"hi__{c}"]))
+
+    def _spark_batch_modified_zscore(self, spark_df, cols, results, F):
+        medians: Dict[str, float] = {}
+        for start in range(0, len(cols), _STAT_BATCH):
+            batch = cols[start:start + _STAT_BATCH]
+            exprs = [
+                F.percentile_approx(F.col(f"`{c}`").cast("double"), 0.5).alias(c)
+                for c in batch
+            ]
+            row = spark_df.agg(*exprs).head()
+            for c in batch:
+                medians[c] = _safe_float(row[c])
+
+        k = 1.4826
+        for start in range(0, len(cols), _STAT_BATCH):
+            batch = cols[start:start + _STAT_BATCH]
+            exprs = [
+                F.percentile_approx(
+                    F.abs(F.col(f"`{c}`").cast("double") - F.lit(medians[c])), 0.5
+                ).alias(c)
+                for c in batch
+            ]
+            row = spark_df.agg(*exprs).head()
+            for c in batch:
+                mad = _safe_float(row[c])
+                results[c] = (medians[c] - 3.5 * k * mad, medians[c] + 3.5 * k * mad)
+
+    def _spark_bulk_outlier_counts(self, spark_df, cols, lower_upper):
+        import pyspark.sql.functions as F  # noqa: N812
+
+        bounds: Dict[str, _BoundsInfo] = {}
+        for start in range(0, len(cols), _COUNT_BATCH):
+            batch = cols[start:start + _COUNT_BATCH]
+            exprs = []
+            for c in batch:
+                lo, hi = lower_upper[c]
+                dc = F.col(f"`{c}`").cast("double")
+                exprs.append(
+                    F.coalesce(
+                        F.sum(((dc < F.lit(lo)) | (dc > F.lit(hi))).cast("int")),
+                        F.lit(0),
+                    ).alias(c)
+                )
+            row = spark_df.agg(*exprs).head()
+            for c in batch:
+                lo, hi = lower_upper[c]
+                bounds[c] = _BoundsInfo(lo, hi, int(row[c]) if row[c] is not None else 0)
+        return bounds
+
+    def _spark_false_outlier_counts(
+        self, spark_df, valid_cols, global_bounds, segment_bounds,
+        segment_col, seg_map,
+    ):
+        import pyspark.sql.functions as F  # noqa: N812
+
+        if not segment_bounds:
+            return {c: 0 for c in valid_cols}
+
+        id_to_val = {v: k for k, v in seg_map.items()}
+        false_outliers: Dict[str, int] = {}
+
+        for start in range(0, len(valid_cols), _COUNT_BATCH):
+            batch = valid_cols[start:start + _COUNT_BATCH]
+            exprs = []
+            batch_with_expr: List[str] = []
+
+            for c in batch:
+                g = global_bounds[c]
+                if g.outlier_count == 0:
+                    false_outliers[c] = 0
+                    continue
+
+                dc = F.col(f"`{c}`").cast("double")
+                sc = F.col(f"`{segment_col}`")
+                is_global_outlier = (dc < F.lit(g.lower)) | (dc > F.lit(g.upper))
+
+                seg_normal_cases = []
+                for seg_id, col_bounds in segment_bounds.items():
+                    sb = col_bounds.get(c)
+                    if sb is None:
+                        continue
+                    seg_val = id_to_val[seg_id]
+                    seg_normal_cases.append(
+                        (sc == F.lit(seg_val))
+                        & (dc >= F.lit(sb.lower))
+                        & (dc <= F.lit(sb.upper))
+                    )
+
+                if not seg_normal_cases:
+                    false_outliers[c] = 0
+                    continue
+
+                any_seg_normal = seg_normal_cases[0]
+                for cond in seg_normal_cases[1:]:
+                    any_seg_normal = any_seg_normal | cond
+
+                exprs.append(
+                    F.coalesce(
+                        F.sum((is_global_outlier & any_seg_normal).cast("int")),
+                        F.lit(0),
+                    ).alias(c)
+                )
+                batch_with_expr.append(c)
+
+            if exprs:
+                row = spark_df.agg(*exprs).head()
+                for c in batch_with_expr:
+                    false_outliers[c] = int(row[c]) if row[c] is not None else 0
+
+        return false_outliers
+
+    # ---- shared result builder ----
+
+    def _build_result(
+        self, valid_cols, global_bounds, segment_bounds, false_outliers,
+        n_segments, segment_labels, segmentation_result,
+    ):
+        global_analysis = {col: self._bounds_to_result(b) for col, b in global_bounds.items()}
         segment_analysis = {
-            seg_id: {col: self._bounds_to_result(b) for col, b in col_bounds.items()}
-            for seg_id, col_bounds in segment_bounds.items()
+            seg_id: {col: self._bounds_to_result(b) for col, b in cb.items()}
+            for seg_id, cb in segment_bounds.items()
         }
 
         segmentation_recommended, recommendations, rationale = self._make_recommendations(
@@ -122,10 +607,10 @@ class SegmentAwareOutlierAnalyzer:
             recommendations=recommendations,
             rationale=rationale,
             segment_labels=segment_labels,
-            segmentation_result=segmentation_result
+            segmentation_result=segmentation_result,
         )
 
-    # ---- bounds computation (scalars only) ----
+    # ---- local bounds computation (scalars only) ----
 
     def _compute_global_bounds(
         self, df: DataFrame, feature_cols: List[str]
@@ -145,11 +630,8 @@ class SegmentAwareOutlierAnalyzer:
         return bounds
 
     def _compute_segment_bounds(
-        self,
-        df: DataFrame,
-        feature_cols: List[str],
-        segment_labels: np.ndarray,
-        n_segments: int,
+        self, df: DataFrame, feature_cols: List[str],
+        segment_labels: np.ndarray, n_segments: int,
     ) -> Dict[Any, Dict[str, _BoundsInfo]]:
         handler = OutlierHandler(
             detection_method=self.detection_method,
@@ -175,23 +657,14 @@ class SegmentAwareOutlierAnalyzer:
             result[seg_id] = col_bounds
         return result
 
-    # ---- false outlier counting (bounds-only, one column at a time) ----
+    # ---- local false outlier counting (bounds-only, one column at a time) ----
 
     def _count_false_outliers(
-        self,
-        df: DataFrame,
-        feature_cols: List[str],
+        self, df: DataFrame, feature_cols: List[str],
         global_bounds: Dict[str, _BoundsInfo],
         segment_bounds: Dict[Any, Dict[str, _BoundsInfo]],
         segment_labels: np.ndarray,
     ) -> Dict[str, int]:
-        """Count false outliers per column using scalar bounds only.
-
-        A false outlier is a row that is flagged as an outlier globally but is
-        within the normal range of its segment.  Counts are computed one column
-        and one segment at a time so that no full-length boolean arrays are
-        retained in memory.
-        """
         false_outliers: Dict[str, int] = {}
         for col in feature_cols:
             g = global_bounds[col]
@@ -264,8 +737,8 @@ class SegmentAwareOutlierAnalyzer:
         false_outliers: Dict[str, int],
         n_segments: int
     ) -> tuple:
-        recommendations = []
-        rationale = []
+        recommendations: List[str] = []
+        rationale: List[str] = []
         segmentation_recommended = False
 
         for col, false_count in false_outliers.items():

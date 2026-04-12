@@ -78,6 +78,8 @@ COLLECT_BOUNDARY_FILES = {
     "stages/modeling/spark_classifier_wrapper.py",
     # Aggregated bulk stats (always after .agg() — small result)
     "stages/profiling/time_series_profiler.py",
+    # Segment-aware outlier — groupBy(segment).agg().collect() for per-segment bounds (≤5 rows)
+    "stages/profiling/segment_aware_outlier.py",
     # Timeseries validation — aggregated stats
     "stages/validation/timeseries_detector.py",
     # Timestamp discovery — bounded .head() + collect
