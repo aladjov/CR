@@ -384,6 +384,10 @@ class TestLoadGoldFeaturesDistributed:
 
 
 class TestDistributedSavePath:
+    @pytest.fixture(autouse=True)
+    def _require_pyspark(self):
+        pytest.importorskip("pyspark")
+
     def _make_spark_pandas_df(self):
         mock_df = MagicMock()
         mock_df.to_spark = MagicMock()
