@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from customer_retention.core.config.column_config import GOLD_METADATA_COLUMNS
 from customer_retention.stages.scoring.config import ScoringConfig
 from customer_retention.stages.scoring.data_loader import ScoringDataLoader
 
@@ -622,6 +623,40 @@ class TestPrepareFeatures:
         mock_executor.apply_all.side_effect = lambda df, *a, **kw: df
         result = loader.prepare_features(df, [], mock_executor, MagicMock())
         assert "val" in result.columns
+
+    def test_drops_gold_metadata_columns(self, local_config):
+        loader = ScoringDataLoader(local_config)
+        df = pd.DataFrame({
+            "feature_a": [1.0, 2.0],
+            "feature_b": [3.0, 4.0],
+            "as_of_date": pd.date_range("2024-01-01", periods=2),
+            "feature_timestamp": pd.date_range("2024-01-01", periods=2),
+            "label_timestamp": pd.date_range("2024-01-01", periods=2),
+            "label_available_flag": [True, False],
+        })
+        mock_executor = MagicMock()
+        mock_executor.apply_all.side_effect = lambda df, *a, **kw: df
+        result = loader.prepare_features(df, [], mock_executor, MagicMock())
+        for col in GOLD_METADATA_COLUMNS:
+            assert col not in result.columns, f"gold metadata column '{col}' was not dropped"
+        assert "feature_a" in result.columns
+        assert "feature_b" in result.columns
+
+    def test_drops_gold_metadata_subset(self, local_config):
+        loader = ScoringDataLoader(local_config)
+        df = pd.DataFrame({
+            "feature_a": [1.0, 2.0],
+            "label_available_flag": [True, False],
+        })
+        mock_executor = MagicMock()
+        mock_executor.apply_all.side_effect = lambda df, *a, **kw: df
+        result = loader.prepare_features(df, [], mock_executor, MagicMock())
+        assert "label_available_flag" not in result.columns
+        assert "feature_a" in result.columns
+
+    def test_gold_metadata_constant_matches_renderer(self):
+        expected = {"as_of_date", "feature_timestamp", "label_timestamp", "label_available_flag"}
+        assert GOLD_METADATA_COLUMNS == expected
 
     def test_drop_does_not_use_errors_kwarg(self, local_config, sample_gold_df):
         """Ensure .drop() never passes errors= — pyspark.pandas rejects it."""

@@ -1069,6 +1069,7 @@ from customer_retention.stages.modeling.cross_validator import CrossValidator, C
 from customer_retention.stages.modeling.feature_profile import FeatureProfile, ColumnProfile, build_feature_profile, compare_feature_profiles
 from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 from customer_retention.core.compat.timing import log_timing
+from customer_retention.core.config.column_config import GOLD_METADATA_COLUMNS
 {% if config.training and config.training.imbalance_strategy == "smote" %}
 from customer_retention.stages.modeling.imbalance_handler import ImbalanceHandler, ImbalanceStrategy
 {% endif %}
@@ -1078,7 +1079,7 @@ from config import (TARGET_COLUMN, PIPELINE_NAME, COMPOSITE_NAME, RECOMMENDATION
 
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 logger = logging.getLogger("training")
-_EXCLUDE_COLS = {TARGET_COLUMN, FEAST_TIMESTAMP_COL, ENTITY_KEY, "as_of_date", "feature_timestamp", "label_timestamp", "label_available_flag"}
+_EXCLUDE_COLS = {TARGET_COLUMN, FEAST_TIMESTAMP_COL, ENTITY_KEY} | GOLD_METADATA_COLUMNS
 {% if config.training and config.training.exploration_feature_profile %}
 _EXPLORATION_PROFILE = {{ config.training.exploration_feature_profile }}
 {% else %}

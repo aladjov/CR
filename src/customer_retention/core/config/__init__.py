@@ -1,4 +1,5 @@
 from .column_config import (
+    GOLD_METADATA_COLUMNS,
     NON_FEATURE_COLUMN_TYPES,
     NON_FEATURE_DTYPES,
     ColumnConfig,
@@ -48,6 +49,7 @@ __all__ = [
     "ColumnType",
     "ColumnConfig",
     "DatasetGranularity",
+    "GOLD_METADATA_COLUMNS",
     "NON_FEATURE_COLUMN_TYPES",
     "NON_FEATURE_DTYPES",
     "select_model_ready_columns",

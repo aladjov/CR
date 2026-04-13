@@ -1884,9 +1884,8 @@ class TestLocalTrainingFeatureProfile:
 
     def test_local_training_excludes_temporal_metadata(self, renderer, pipeline_config_minimal):
         result = renderer.render_training(pipeline_config_minimal)
-        assert '"as_of_date"' in result
-        assert '"feature_timestamp"' in result
-        assert '"label_timestamp"' in result
+        assert "GOLD_METADATA_COLUMNS" in result
+        assert "_EXCLUDE_COLS" in result
 
     def test_local_training_is_valid_python(self, renderer, pipeline_config_minimal):
         result = renderer.render_training(pipeline_config_minimal)

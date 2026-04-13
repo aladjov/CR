@@ -1684,6 +1684,7 @@ from pyspark.sql.types import StructType, StructField, DoubleType
 from customer_retention.stages.modeling.feature_profile import FeatureProfile, ColumnProfile, build_feature_profile, compare_feature_profiles
 from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 from customer_retention.core.compat.timing import log_timing
+from customer_retention.core.config.column_config import GOLD_METADATA_COLUMNS
 from customer_retention.core.config.experiments import get_mlflow_dfs_tmpdir
 {% if config.training and config.training.imbalance_strategy == "smote" %}
 from imblearn.over_sampling import SMOTE
@@ -1701,7 +1702,7 @@ TARGET = TARGET_COLUMN
 _DFS_TMPDIR = get_mlflow_dfs_tmpdir()
 _PIP_REQS = [f"pyspark=={pyspark.__version__}"]
 _NUMERIC_TYPES = ("double", "float", "integer", "long", "short", "boolean", "byte", "decimal")
-_EXCLUDE_COLS = {TARGET, TIMESTAMP_COLUMN, ENTITY_KEY, "as_of_date", "feature_timestamp", "label_timestamp", "label_available_flag"}
+_EXCLUDE_COLS = {TARGET, TIMESTAMP_COLUMN, ENTITY_KEY} | GOLD_METADATA_COLUMNS
 _vector_schema = StructType([
     StructField("features", VectorUDT(), True),
     StructField("label", DoubleType(), True),

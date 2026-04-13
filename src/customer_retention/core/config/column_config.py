@@ -33,6 +33,10 @@ NON_FEATURE_COLUMN_TYPES = frozenset({
 
 NON_FEATURE_DTYPES = frozenset({"datetime64", "datetimetz", "timedelta64"})
 
+GOLD_METADATA_COLUMNS = frozenset({
+    "as_of_date", "feature_timestamp", "label_timestamp", "label_available_flag",
+})
+
 
 def select_model_ready_columns(df: pd.DataFrame) -> pd.DataFrame:
     from customer_retention.core.compat import _is_spark_pandas

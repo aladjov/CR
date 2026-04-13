@@ -3235,8 +3235,8 @@ class TestDatabricksTrainingFeatureTypeParity:
 
     def test_training_excludes_temporal_metadata_columns(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        assert '"as_of_date"' in result
-        assert '"feature_timestamp"' in result
+        assert "GOLD_METADATA_COLUMNS" in result
+        assert "_EXCLUDE_COLS" in result
 
     def test_training_checks_minimum_two_classes(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)

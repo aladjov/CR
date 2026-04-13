@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, List, Tuple
 
 from customer_retention.core.compat.detection import get_spark_session
-from customer_retention.core.config.column_config import select_model_ready_columns
+from customer_retention.core.config.column_config import GOLD_METADATA_COLUMNS, select_model_ready_columns
 from customer_retention.integrations.adapters.factory import get_delta
 from customer_retention.stages.scoring.config import ScoringConfig, _load_module_from_path
 from customer_retention.transforms import ArtifactStore, TransformExecutor
@@ -164,6 +164,7 @@ class ScoringDataLoader:
             self.config.timestamp_column,
             self.config.original_column,
             self.config.target_column,
+            *GOLD_METADATA_COLUMNS,
         ]
         df = df.drop(columns=[c for c in drop_cols if c in df.columns])
         df = df.drop(columns=[c for c in df.columns if c.startswith("original_")])

@@ -362,7 +362,7 @@ class TestRenderGoldAsOfDate:
 class TestRenderTrainingDropAsOfDate:
     def test_training_drops_as_of_date(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        assert "as_of_date" in result
+        assert "GOLD_METADATA_COLUMNS" in result
 
     def test_training_is_valid_python(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
