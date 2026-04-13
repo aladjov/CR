@@ -178,11 +178,11 @@ def _cast_lifecycle_columns_to_timestamp(
     from pyspark.sql import functions as F  # noqa: N812
 
     df = spark_df.withColumn(
-        config.valid_from_column, F.to_timestamp(F.col(config.valid_from_column)),
+        config.valid_from_column, F.expr(f"try_to_timestamp(`{config.valid_from_column}`)"),
     )
     for col in config.valid_to_columns:
         if col in df.columns:
-            df = df.withColumn(col, F.to_timestamp(F.col(col)))
+            df = df.withColumn(col, F.expr(f"try_to_timestamp(`{col}`)"))
     return df
 
 

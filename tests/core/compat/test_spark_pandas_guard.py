@@ -180,6 +180,11 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
         ".drop(errors=) is not supported in pyspark.pandas",
         "Filter columns before dropping: df.drop(columns=[c for c in cols if c in df.columns])",
     ),
+    (
+        re.compile(r"F\.to_timestamp\("),
+        "F.to_timestamp() raises CAST_INVALID_INPUT on unparseable strings (e.g. '2025Q3')",
+        "Use ensure_timestamp() or safe_to_datetime() from core.compat (uses try_to_timestamp internally)",
+    ),
 ]
 
 

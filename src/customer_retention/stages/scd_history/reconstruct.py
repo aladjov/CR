@@ -309,7 +309,7 @@ def _reconstruct_distributed(
 
     history = spark_history.withColumn(
         config.change_timestamp_column,
-        F.to_timestamp(F.col(config.change_timestamp_column)),
+        F.expr(f"try_to_timestamp(`{config.change_timestamp_column}`)"),
     ).filter(F.col(config.field_column).isin(list(effective_fields)))
 
     spine = _build_spine_distributed(history, grid_dates, config, spark_parent)

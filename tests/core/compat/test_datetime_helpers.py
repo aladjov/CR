@@ -226,16 +226,26 @@ class TestSafeToDatetimeSparkPandasTimestamp:
     def test_spark_pandas_string_series_falls_to_spark_branch(self):
         from unittest.mock import MagicMock, patch
         mock_series = MagicMock()
-        mock_series.spark = MagicMock()
-        mock_series.to_spark = MagicMock()
         mock_series.dtype = "object"
-        transformed = MagicMock()
-        mock_series.spark.transform.return_value = transformed
-        with patch("customer_retention.core.compat._is_spark_pandas", return_value=True):
-            with patch("pandas.api.types.is_datetime64_any_dtype", return_value=False):
-                result = safe_to_datetime(mock_series)
-        mock_series.spark.transform.assert_called_once()
-        assert result is transformed
+        mock_series.name = "ts_col"
+        mock_frame = MagicMock()
+        mock_series.to_frame.return_value = mock_frame
+        mock_spark_df = MagicMock()
+        mock_result_spark = MagicMock()
+        mock_spark_df.withColumn.return_value = mock_result_spark
+        mock_ps_result = MagicMock()
+        mock_result_series = MagicMock()
+        mock_ps_result.__getitem__ = MagicMock(return_value=mock_result_series)
+        with (
+            patch("customer_retention.core.compat._is_spark_pandas", return_value=True),
+            patch("customer_retention.core.compat.as_spark_df", return_value=mock_spark_df),
+            patch("customer_retention.core.compat.spark_backend._as_pandas_api", return_value=mock_ps_result),
+        ):
+            result = safe_to_datetime(mock_series)
+        call_args = mock_spark_df.withColumn.call_args
+        assert call_args[0][0] == "ts_col"
+        assert "try_to_timestamp" in str(call_args[0][1])
+        assert result is mock_result_series
 
 
 class TestSafeToDatetime:
@@ -1368,3 +1378,181 @@ class TestNormalizeTimestampsDistributed:
         ):
             result = normalize_timestamps(mock_df)
         assert result is mock_df
+
+
+class TestEnsureTimestampSpark:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_unparseable_quarter_string_uses_try_to_timestamp(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.core.compat import ensure_timestamp
+
+        mock_df = MagicMock()
+        mock_series = MagicMock()
+        mock_series.dtype = "object"
+        mock_df.__getitem__ = MagicMock(return_value=mock_series)
+
+        mock_spark_df = MagicMock()
+        mock_result_spark = MagicMock()
+        mock_spark_df.withColumn.return_value = mock_result_spark
+        mock_ps_result = MagicMock()
+
+        with (
+            patch("customer_retention.core.compat._is_spark_pandas", return_value=True),
+            patch("customer_retention.core.compat.as_spark_df", return_value=mock_spark_df) as mock_as_spark,
+            patch("customer_retention.core.compat.spark_backend._as_pandas_api", return_value=mock_ps_result),
+        ):
+            result = ensure_timestamp(mock_df, "cohort_quarter")
+
+        mock_as_spark.assert_called_once_with(mock_df)
+        call_args = mock_spark_df.withColumn.call_args
+        assert call_args[0][0] == "cohort_quarter"
+        assert "try_to_timestamp" in str(call_args[0][1])
+        assert result is mock_ps_result
+
+    def test_already_timestamp_dtype_returns_unchanged(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.core.compat import ensure_timestamp
+
+        mock_df = MagicMock()
+        mock_series = MagicMock()
+        mock_series.dtype = "timestamp_ntz"
+        mock_df.__getitem__ = MagicMock(return_value=mock_series)
+
+        with patch("customer_retention.core.compat._is_spark_pandas", return_value=True):
+            result = ensure_timestamp(mock_df, "ts_col")
+
+        assert result is mock_df
+
+    def test_already_datetime_dtype_returns_unchanged(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.core.compat import ensure_timestamp
+
+        mock_df = MagicMock()
+        mock_series = MagicMock()
+        mock_series.dtype = "datetime64[ns]"
+        mock_df.__getitem__ = MagicMock(return_value=mock_series)
+
+        with patch("customer_retention.core.compat._is_spark_pandas", return_value=True):
+            result = ensure_timestamp(mock_df, "ts_col")
+
+        assert result is mock_df
+
+    def test_valid_iso_string_uses_try_to_timestamp(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.core.compat import ensure_timestamp
+
+        mock_df = MagicMock()
+        mock_series = MagicMock()
+        mock_series.dtype = "object"
+        mock_df.__getitem__ = MagicMock(return_value=mock_series)
+
+        mock_spark_df = MagicMock()
+        mock_result_spark = MagicMock()
+        mock_spark_df.withColumn.return_value = mock_result_spark
+        mock_ps_result = MagicMock()
+
+        with (
+            patch("customer_retention.core.compat._is_spark_pandas", return_value=True),
+            patch("customer_retention.core.compat.as_spark_df", return_value=mock_spark_df),
+            patch("customer_retention.core.compat.spark_backend._as_pandas_api", return_value=mock_ps_result),
+        ):
+            result = ensure_timestamp(mock_df, "created_at")
+
+        call_args = mock_spark_df.withColumn.call_args
+        assert "try_to_timestamp" in str(call_args[0][1])
+        assert result is mock_ps_result
+
+    def test_pandas_path_delegates_to_ensure_datetime_column(self):
+        from customer_retention.core.compat import ensure_timestamp
+
+        df = pd.DataFrame({"ts": ["2023-01-01", "2023-06-15"], "val": [1, 2]})
+        result = ensure_timestamp(df, "ts")
+        assert pd.api.types.is_datetime64_any_dtype(result["ts"])
+        assert result["val"].iloc[0] == 1
+
+
+class TestSafeToDatetimeSparkUnparseableStrings:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_unparseable_quarter_string_uses_try_to_timestamp(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.core.compat import safe_to_datetime
+
+        mock_series = MagicMock()
+        mock_series.dtype = "object"
+        mock_series.name = "cohort_quarter"
+        mock_frame = MagicMock()
+        mock_series.to_frame.return_value = mock_frame
+        mock_spark_df = MagicMock()
+        mock_result_spark = MagicMock()
+        mock_spark_df.withColumn.return_value = mock_result_spark
+        mock_ps_result = MagicMock()
+        mock_result_series = MagicMock()
+        mock_ps_result.__getitem__ = MagicMock(return_value=mock_result_series)
+
+        with (
+            patch("customer_retention.core.compat._is_spark_pandas", return_value=True),
+            patch("customer_retention.core.compat.as_spark_df", return_value=mock_spark_df) as mock_as_spark,
+            patch("customer_retention.core.compat.spark_backend._as_pandas_api", return_value=mock_ps_result),
+        ):
+            result = safe_to_datetime(mock_series)
+
+        mock_as_spark.assert_called_once_with(mock_frame)
+        call_args = mock_spark_df.withColumn.call_args
+        assert call_args[0][0] == "cohort_quarter"
+        assert "try_to_timestamp" in str(call_args[0][1])
+        assert result is mock_result_series
+
+    def test_unnamed_series_uses_fallback_col_name(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.core.compat import safe_to_datetime
+
+        mock_series = MagicMock()
+        mock_series.dtype = "object"
+        mock_series.name = None
+        mock_frame = MagicMock()
+        mock_series.to_frame.return_value = mock_frame
+        mock_spark_df = MagicMock()
+        mock_result_spark = MagicMock()
+        mock_spark_df.withColumn.return_value = mock_result_spark
+        mock_ps_result = MagicMock()
+        mock_result_series = MagicMock()
+        mock_ps_result.__getitem__ = MagicMock(return_value=mock_result_series)
+
+        with (
+            patch("customer_retention.core.compat._is_spark_pandas", return_value=True),
+            patch("customer_retention.core.compat.as_spark_df", return_value=mock_spark_df),
+            patch("customer_retention.core.compat.spark_backend._as_pandas_api", return_value=mock_ps_result),
+        ):
+            result = safe_to_datetime(mock_series)
+
+        call_args = mock_spark_df.withColumn.call_args
+        assert call_args[0][0] == "__safe_to_dt_col"
+        assert result is mock_result_series
+
+    def test_integer_dtype_still_uses_from_unixtime(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.core.compat import safe_to_datetime
+
+        mock_series = MagicMock()
+        mock_series.dtype = "int64"
+        mock_transform_result = MagicMock()
+        mock_series.spark.transform.return_value = mock_transform_result
+
+        with patch("customer_retention.core.compat._is_spark_pandas", return_value=True):
+            result = safe_to_datetime(mock_series)
+
+        mock_series.spark.transform.assert_called_once()
+        assert result is mock_transform_result

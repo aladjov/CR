@@ -253,7 +253,12 @@ def safe_to_datetime(series: Any, **kwargs: Any) -> Any:
             return series
         if "int" in dtype_str or "long" in dtype_str:
             return series.spark.transform(lambda c: F.from_unixtime(c).cast("timestamp"))
-        return series.spark.transform(lambda c: F.to_timestamp(c))
+        col_name = series.name if series.name else "__safe_to_dt_col"
+        spark_df = as_spark_df(series.to_frame(col_name))
+        spark_df = spark_df.withColumn(col_name, F.expr(f"try_to_timestamp(`{col_name}`)"))
+        from .spark_backend import _as_pandas_api
+
+        return _as_pandas_api(spark_df)[col_name]
     if _pandas.api.types.is_datetime64_any_dtype(series):
         return as_tz_naive(series if isinstance(series, _pandas.Series) else _pandas.Series(series))
     arr = series.to_numpy() if hasattr(series, "to_numpy") else _pandas.array(series)
@@ -283,8 +288,11 @@ def ensure_timestamp(df: Any, column: str) -> Any:
         dtype_str = str(df[column].dtype).lower()
         if "timestamp" in dtype_str or "datetime" in dtype_str:
             return df
-        df[column] = df[column].spark.transform(lambda c: F.to_timestamp(c))
-        return df
+        spark_df = as_spark_df(df)
+        spark_df = spark_df.withColumn(column, F.expr(f"try_to_timestamp(`{column}`)"))
+        from .spark_backend import _as_pandas_api
+
+        return _as_pandas_api(spark_df)
     return ensure_datetime_column(df, column)
 
 

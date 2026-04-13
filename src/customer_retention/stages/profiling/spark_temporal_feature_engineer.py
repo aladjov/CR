@@ -326,7 +326,7 @@ class SparkTemporalFeatureEngineer(TemporalFeatureEngineer):
 
         import pyspark.sql.functions as F  # noqa: N812
 
-        spark_df = spark_df.withColumn(time_col, F.to_timestamp(F.col(time_col)))
+        spark_df = spark_df.withColumn(time_col, F.expr(f"try_to_timestamp(`{time_col}`)"))
         for vc in value_cols:
             if vc in spark_df.columns:
                 spark_df = spark_df.withColumn(vc, F.col(vc).cast("double"))
@@ -419,7 +419,7 @@ class SparkTemporalFeatureEngineer(TemporalFeatureEngineer):
                 ref_spark = spark_df.sparkSession.createDataFrame(reference_dates)
             return ref_spark.select(
                 F.col(entity_col),
-                F.to_timestamp(F.col(reference_col)).alias("reference_date"))
+                F.expr(f"try_to_timestamp(`{reference_col}`)").alias("reference_date"))
 
         return spark_df.groupBy(entity_col).agg(
             F.max(time_col).alias("reference_date"))

@@ -442,7 +442,7 @@ class TimeSeriesDetector:
 
         spark_df = as_spark_df(df)
         spark_df = spark_df.withColumn(
-            "__ts__", F.to_timestamp(F.col(timestamp_column))
+            "__ts__", F.expr(f"try_to_timestamp(`{timestamp_column}`)")
         ).filter(F.col("__ts__").isNotNull())
 
         w = Window.partitionBy(entity_column).orderBy("__ts__")
