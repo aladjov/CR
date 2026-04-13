@@ -1411,7 +1411,7 @@ def batched_missingness_corr(
     spark_df = as_spark_df(df[cols])
     # Build null-indicator columns: 1.0 if null, 0.0 otherwise
     null_cols = [F.when(F.col(f"`{c}`").isNull(), 1.0).otherwise(0.0).alias(c) for c in cols]
-    null_df = spark_df.select(*null_cols)
+    null_df = spark_df.select(*null_cols).localCheckpoint(eager=True)
 
     # Pre-filter: only columns with at least one null have meaningful variance
     _BATCH_NC = 200
@@ -1444,6 +1444,9 @@ def batched_missingness_corr(
             val = float(val) if val is not None else _np.nan
             matrix[i, j] = val
             matrix[j, i] = val
+
+    null_df.unpersist()
+    del null_df
 
     # Columns with zero nulls have no variance → corr = NaN with everything (already set),
     # except self-correlation = NaN for zero-variance (consistent with pandas behavior)

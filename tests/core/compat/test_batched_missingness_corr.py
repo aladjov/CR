@@ -85,6 +85,37 @@ class TestBatchedMissingnessCorr:
         assert not np.isnan(result.loc["has_nulls_1", "has_nulls_2"])
 
 
+class TestBatchedMissingnessSparkCheckpointed:
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_spark_path_calls_localcheckpoint(self):
+        from unittest.mock import MagicMock, patch
+
+        cols = ["a", "b"]
+        mock_df = MagicMock()
+        mock_df.columns = cols
+
+        mock_spark_df = MagicMock()
+        mock_null_df = MagicMock()
+        mock_checkpointed = MagicMock()
+        mock_spark_df.select.return_value = mock_null_df
+        mock_null_df.localCheckpoint.return_value = mock_checkpointed
+        null_count_row = MagicMock()
+        null_count_row.__getitem__ = lambda self, k: 0
+        mock_checkpointed.agg.return_value.head.return_value = null_count_row
+
+        with (
+            patch("customer_retention.core.compat._is_spark_pandas", return_value=True),
+            patch("customer_retention.core.compat.as_spark_df", return_value=mock_spark_df),
+        ):
+            batched_missingness_corr(mock_df, cols)
+
+        mock_null_df.localCheckpoint.assert_called_once_with(eager=True)
+        mock_checkpointed.agg.assert_called()
+
+
 class TestBulkIqrBounds:
 
     def test_returns_dataframe_with_expected_columns(self):

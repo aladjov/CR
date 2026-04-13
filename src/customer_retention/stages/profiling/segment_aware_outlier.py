@@ -10,6 +10,7 @@ from customer_retention.core.compat import (
     as_spark_df,
     native_pd,
     normalize_decimal_columns,
+    resolve_time_slice,
     safe_len,
 )
 from customer_retention.stages.cleaning.outlier_handler import (
@@ -130,20 +131,28 @@ class SegmentAwareOutlierAnalyzer:
 
     # ---- distributed Spark path (auto-detect segments) ----
 
+    _GRID_TIME_COLUMNS = ("as_of_date", "feature_timestamp")
+    _MAX_COLLECT_FOR_SEGMENTATION = 50_000
+
     def _analyze_spark_auto(self, df, valid_cols, target_col):
         import pyspark.sql.functions as F  # noqa: N812
 
         spark_df = as_spark_df(df)
+        n_rows = int(spark_df.count())
         global_bounds = self._spark_compute_bounds(spark_df, valid_cols)
 
-        segment_labels, n_segments, segmentation_result = self._detect_segments(
-            df, valid_cols, target_col
+        local_pdf = self._spark_iid_slice_for_segmentation(
+            df, spark_df, valid_cols, target_col, n_rows,
         )
+        segment_labels, n_segments, segmentation_result = self._detect_segments(
+            local_pdf, valid_cols, target_col
+        )
+        del local_pdf
 
         if n_segments <= 1:
             return self._build_result(
                 valid_cols, global_bounds, {}, {c: 0 for c in valid_cols},
-                n_segments, segment_labels, segmentation_result,
+                n_segments, np.zeros(n_rows, dtype=int), segmentation_result,
             )
 
         seg_col = "__segment__"
@@ -153,8 +162,10 @@ class SegmentAwareOutlierAnalyzer:
             "__mid__": ids,
             seg_col: segment_labels.astype(int),
         })
+        del ids
         label_sdf = spark_df.sparkSession.createDataFrame(label_pdf)
         spark_df = spark_df.join(label_sdf, "__mid__", "inner").drop("__mid__")
+        del label_pdf
 
         valid_segs = list(range(n_segments))
         seg_map = {i: i for i in range(n_segments)}
@@ -172,6 +183,48 @@ class SegmentAwareOutlierAnalyzer:
             valid_cols, global_bounds, segment_bounds, false_outliers,
             n_segments, segment_labels, segmentation_result,
         )
+
+    def _spark_iid_slice_for_segmentation(
+        self, df, spark_df, valid_cols, target_col, n_rows,
+    ):
+        """Extract an IID slice for sklearn segment detection.
+
+        Grid datasets (entity × as_of_date) are reduced to the penultimate
+        time slice — one row per entity — so clustering sees IID data instead
+        of N_snapshots copies of each entity. Entity-level datasets without a
+        time column fall back to bounded sampling.
+
+        Returns a native pandas DataFrame (bounded by entity count or 50K).
+        """
+        time_col = next(
+            (c for c in self._GRID_TIME_COLUMNS if c in df.columns), None,
+        )
+        slice_df_to_unpersist = None
+        if time_col is not None:
+            try:
+                slice_df, _, slice_n = resolve_time_slice(
+                    df, time_col, "penultimate",
+                )
+                slice_spark = as_spark_df(slice_df)
+                slice_df_to_unpersist = slice_spark
+            except Exception:
+                slice_spark, slice_n = spark_df, n_rows
+        else:
+            slice_spark, slice_n = spark_df, n_rows
+
+        select_cols = list(valid_cols)
+        if target_col and target_col not in select_cols and target_col in spark_df.columns:
+            select_cols.append(target_col)
+        selected = slice_spark.select([f"`{c}`" for c in select_cols])
+        if slice_n > self._MAX_COLLECT_FOR_SEGMENTATION:
+            frac = min(1.0, self._MAX_COLLECT_FOR_SEGMENTATION * 1.5 / slice_n)
+            selected = selected.sample(fraction=frac, seed=42).limit(
+                self._MAX_COLLECT_FOR_SEGMENTATION
+            )
+        result = selected.toPandas()
+        if slice_df_to_unpersist is not None:
+            slice_df_to_unpersist.unpersist()
+        return result
 
     # ---- distributed Spark path (explicit segment column) ----
 

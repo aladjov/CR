@@ -66,6 +66,8 @@ TOPANDAS_BOUNDARY_FILES = {
     "analysis/auto_explorer/explorer.py",
     "analysis/auto_explorer/analysis_context.py",
     "analysis/auto_explorer/dataset_fingerprinter.py",
+    # sklearn interface — bounded sample (≤50K rows) for KMeans segment detection
+    "stages/profiling/segment_aware_outlier.py",
 }
 
 # ── .collect() allowlist ────────────────────────────────────────────────
