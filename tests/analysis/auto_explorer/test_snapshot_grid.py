@@ -12,6 +12,7 @@ from customer_retention.analysis.auto_explorer.project_context import (
     IntentConfig,
 )
 from customer_retention.analysis.auto_explorer.snapshot_grid import (
+    DEFAULT_MAX_GRID_DATES,
     DatasetGridVote,
     GridAdjustmentMode,
     SnapshotGrid,
@@ -968,6 +969,26 @@ class TestCapGridDates:
         assert len(result) == 3
         assert result[0] == "2024-01-01"
         assert result[-1] == "2024-01-05"
+
+    def test_default_cap_kicks_in_when_no_override(self, monkeypatch):
+        monkeypatch.delenv("CR_GRID_MAX_DATES", raising=False)
+        dates = [f"day-{i}" for i in range(DEFAULT_MAX_GRID_DATES + 200)]
+        result = _cap_grid_dates(dates)
+        assert len(result) == DEFAULT_MAX_GRID_DATES
+        assert result[0] == dates[0]
+        assert result[-1] == dates[-1]
+
+    def test_default_cap_does_not_trigger_below_limit(self, monkeypatch):
+        monkeypatch.delenv("CR_GRID_MAX_DATES", raising=False)
+        dates = [f"day-{i}" for i in range(DEFAULT_MAX_GRID_DATES - 1)]
+        result = _cap_grid_dates(dates)
+        assert result == dates
+
+    def test_explicit_override_takes_precedence_over_default(self, monkeypatch):
+        monkeypatch.delenv("CR_GRID_MAX_DATES", raising=False)
+        dates = [f"day-{i}" for i in range(DEFAULT_MAX_GRID_DATES + 200)]
+        result = _cap_grid_dates(dates, max_dates_override=DEFAULT_MAX_GRID_DATES + 100)
+        assert len(result) == DEFAULT_MAX_GRID_DATES + 100
 
 
 class TestGenerateGridDatesWithCap:

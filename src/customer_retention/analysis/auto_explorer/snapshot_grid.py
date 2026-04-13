@@ -36,13 +36,18 @@ def _atomic_write_text(path, content: str) -> None:
         path.write_text(content)
 
 
+DEFAULT_MAX_GRID_DATES: int = 500
+
+
 def _cap_grid_dates(dates: list[str], max_dates_override: Optional[int] = None) -> list[str]:
     max_dates: Optional[int] = max_dates_override
     if max_dates is None:
         raw = os.environ.get("CR_GRID_MAX_DATES")
         if raw:
             max_dates = int(raw)
-    if max_dates is None or max_dates < 2 or len(dates) <= max_dates:
+    if max_dates is None:
+        max_dates = DEFAULT_MAX_GRID_DATES
+    if max_dates < 2 or len(dates) <= max_dates:
         return dates
     step = (len(dates) - 1) / (max_dates - 1)
     indices = [round(i * step) for i in range(max_dates)]
