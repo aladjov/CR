@@ -729,14 +729,36 @@ class TestComputeBoundaries:
         assert start == "2022-09-28"
         assert end == "2024-06-20"
 
-    def test_multiple_datasets_uses_min_start_max_end(self):
+    def test_multiple_datasets_uses_max_start_min_end(self):
         spans = [("2023-01-01", "2024-06-01"), ("2022-06-01", "2024-12-31")]
         start, end = compute_boundaries(spans, observation_window_days=270, purge_gap_days=104, label_window_days=90)
         from datetime import date, timedelta
-        expected_start = str(date.fromisoformat("2022-06-01") + timedelta(days=270))
+        expected_start = str(date.fromisoformat("2023-01-01") + timedelta(days=270))
+        expected_end = str(date.fromisoformat("2024-06-01") - timedelta(days=104 + 90))
+        assert start == expected_start
+        assert end == expected_end
+
+    def test_wide_span_event_dataset_uses_intersection(self):
+        spans = [("2002-01-01", "2024-12-31"), ("2020-01-01", "2024-12-31")]
+        start, end = compute_boundaries(spans, observation_window_days=270, purge_gap_days=104, label_window_days=90)
+        from datetime import date, timedelta
+        expected_start = str(date.fromisoformat("2020-01-01") + timedelta(days=270))
         expected_end = str(date.fromisoformat("2024-12-31") - timedelta(days=104 + 90))
         assert start == expected_start
         assert end == expected_end
+
+    def test_non_overlapping_datasets_returns_none(self):
+        spans = [("2020-01-01", "2020-06-01"), ("2021-01-01", "2021-06-01")]
+        start, end = compute_boundaries(spans, observation_window_days=0, purge_gap_days=0, label_window_days=0)
+        assert start is None
+        assert end is None
+
+    def test_single_dataset_unchanged(self):
+        spans = [("2020-01-01", "2024-12-31")]
+        start, end = compute_boundaries(spans, observation_window_days=270, purge_gap_days=104, label_window_days=90)
+        from datetime import date, timedelta
+        assert start == str(date.fromisoformat("2020-01-01") + timedelta(days=270))
+        assert end == str(date.fromisoformat("2024-12-31") - timedelta(days=104 + 90))
 
     def test_empty_spans_returns_none(self):
         start, end = compute_boundaries([], observation_window_days=270, purge_gap_days=0, label_window_days=0)

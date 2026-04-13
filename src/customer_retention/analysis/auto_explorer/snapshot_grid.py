@@ -73,8 +73,8 @@ def compute_boundaries(
         return None, None
     starts = [_dt.date.fromisoformat(s) for s, _ in data_spans]
     ends = [_dt.date.fromisoformat(e) for _, e in data_spans]
-    grid_start = min(starts) + _dt.timedelta(days=observation_window_days)
-    grid_end = max(ends) - _dt.timedelta(days=purge_gap_days + label_window_days)
+    grid_start = max(starts) + _dt.timedelta(days=observation_window_days)
+    grid_end = min(ends) - _dt.timedelta(days=purge_gap_days + label_window_days)
     if grid_end < grid_start:
         return None, None
     return grid_start.isoformat(), grid_end.isoformat()
