@@ -654,6 +654,21 @@ class TestPrepareFeatures:
         assert "label_available_flag" not in result.columns
         assert "feature_a" in result.columns
 
+    def test_drops_gold_metadata_case_insensitive(self, local_config):
+        """Spark tables may store column names with different casing."""
+        loader = ScoringDataLoader(local_config)
+        df = pd.DataFrame({
+            "feature_a": [1.0, 2.0],
+            "Label_Available_Flag": [True, False],
+            "As_Of_Date": pd.date_range("2024-01-01", periods=2),
+        })
+        mock_executor = MagicMock()
+        mock_executor.apply_all.side_effect = lambda df, *a, **kw: df
+        result = loader.prepare_features(df, [], mock_executor, MagicMock())
+        assert "Label_Available_Flag" not in result.columns
+        assert "As_Of_Date" not in result.columns
+        assert "feature_a" in result.columns
+
     def test_gold_metadata_constant_matches_renderer(self):
         expected = {"as_of_date", "feature_timestamp", "label_timestamp", "label_available_flag"}
         assert GOLD_METADATA_COLUMNS == expected

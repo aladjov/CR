@@ -72,7 +72,7 @@ Notebooks 04-05 run on the merged dataset: column deep dive (type validation, sk
 
 ### Phase III -- Gold: Modeling and Production
 
-Notebooks 06-07 consolidate feature opportunities and formalize the training setup (grid selection, split policy, label horizon). Notebook 08 prepares data for modelling in five stages -- prerequisite validation, feature availability filtering, gold-layer transforms (fitted on train only), entity-aware temporal split with purge gap, and **L1-regularised feature selection** that complements the NB05 statistical drops. It then trains baseline models with **entity-grouped temporal cross-validation** (`TemporalEntitySplit`) to prevent entity information leakage.
+Notebooks 06-07 consolidate feature opportunities and formalize the training setup (grid selection, split policy, label horizon). Notebook 08 prepares data for modelling in five stages -- prerequisite validation, feature availability filtering, gold-layer transforms (fitted on train only), entity-aware temporal split with purge gap, and **chi-squared rescue feature selection** (penultimate-slice chi-squared primary + GBDT rescue on drops) that complements the NB05 statistical drops. It then trains baseline models with **entity-grouped temporal cross-validation** (`TemporalEntitySplit`) to prevent entity information leakage.
 
 Notebook 09 aligns model output with business objectives. Notebook 10 generates production pipeline code for both local and Databricks execution. Notebook 11 validates that scoring reproduces training features identically.
 
@@ -108,7 +108,7 @@ Notebook 09 aligns model output with business objectives. Notebook 10 generates 
 | 05 | Relationship Analysis | Correlations, redundancy, interactions, statistical feature selection. IID-sensitive stats (target correlations, pairwise Pearson, Cohen's d, Cramer's V, leakage gate) route through a single penultimate time slice shared with NB08's rescue selector; variance and null counts stay on the full panel. See `docs/nb05_time_slice_relationship_plan.md`. |
 | 06 | Feature Opportunities | Transformation and encoding candidates |
 | 07 | Modeling Readiness | Training grid, split policy, label horizon |
-| 08 | Baseline Experiments | L1 feature selection, gold transforms, model training with temporal CV |
+| 08 | Baseline Experiments | Chi-squared rescue feature selection (penultimate-slice), gold transforms, model training with temporal CV |
 | 09 | Business Alignment | Intervention strategies, risk thresholds, ROI |
 | 10 | Spec Generation | Production pipeline code generation |
 | 11 | Scoring Validation | Train/serve skew validation |
@@ -162,31 +162,49 @@ All downstream stages (Bronze through Gold) operate exclusively on tz-naive time
 
 ### Two-Step Feature Selection (Notebooks 05 and 08)
 
-Feature selection is split across two notebooks because each step requires different inputs and serves a different purpose.
+Feature selection is split across two notebooks because each step requires different inputs and serves a different purpose. Both notebooks route IID-sensitive statistics through a **penultimate time slice** — a single `as_of_date` (second-to-last snapshot) that gives one row per entity, restoring IID and avoiding the inflated significance that snapshot-grid panel data (`N_entities × N_snapshots`) produces on the flat matrix.
 
 **Step 1 -- Statistical Filters (NB05):** Runs on the merged silver feature matrix *before* any train/test split. Identifies features to drop based on properties intrinsic to the data:
 
-| Filter | What it catches | Threshold |
-|--------|----------------|-----------|
-| **Variance** | Near-constant features that carry no signal | Configurable (`VARIANCE_THRESHOLD`, default 0.01) |
-| **Pairwise correlation** | Redundant pairs where the weaker predictor is dropped | Configurable (`CORRELATION_THRESHOLD`, default 0.95) |
+| Filter | What it catches | Data source | Threshold |
+|--------|----------------|-------------|-----------|
+| **Variance** | Near-constant features that carry no signal | Full panel (replication-invariant) | Configurable (`VARIANCE_THRESHOLD`, default 0.01) |
+| **Pairwise correlation** | Redundant pairs where the weaker predictor is dropped | **Penultimate slice** (IID-sensitive) | Configurable (`CORRELATION_THRESHOLD`, default 0.95) |
+| **Target correlations** | Feature-target associations (Pearson, Cohen's d, Cramer's V) | **Penultimate slice** | Informational, used for ranking |
 
-Results are persisted as `drop_multicollinear` and `drop_weak` recommendations in `merged/recommendations.yaml`. NB05 also persists a `feature_selection_config` containing the thresholds used and the list of features analyzed, so NB08 can identify which features are new.
+Results are persisted as `drop_multicollinear` and `drop_weak` recommendations in `merged/recommendations.yaml`. NB05 also persists a `feature_selection_config` containing the thresholds used and the list of features analyzed, so NB08 can identify which features are new. The penultimate slice is resolved by `resolve_time_slice(strategy="penultimate")`, shared with NB08; if the positive rate at that slice falls below `SELECTOR_MIN_POSITIVE_RATE`, it walks back to earlier slices. Variance and null counts stay on the full panel because they are replication-invariant (adding identical snapshot rows does not change variance). See `docs/nb05_time_slice_relationship_plan.md`.
 
-**Step 2 -- L1-Regularised Selection (NB08):** Runs *after* the temporal train/test split, on training data only. Three sub-stages:
+**Step 2 -- Chi-Squared Rescue Selection (NB08, default since 2026-04):** Runs *after* the temporal train/test split, on training data only. Controlled by `GBDT_SELECTION_MODE = "chi_squared_rescue"`.
 
-1. **NB05 drops applied** — features flagged as `drop_multicollinear` or `drop_weak` are removed immediately.
-2. **Statistical filters on new features only** — features added after NB05 (interactions, ratios, composites, gold transforms) are identified via `feature_selection_config.analyzed_features`. Variance and correlation filters run on these new features only, using NB05's original thresholds. Base features that already passed NB05 are protected via `candidate_features` — they cannot be dropped by variance or correlation, but new features that correlate with them will be dropped. This avoids recomputing the full correlation matrix for features already vetted by NB05.
-3. **L1 selection** — fits a logistic regression with L1 penalty on *all* remaining features (base + new). Features whose coefficients shrink to zero have no marginal predictive value and are dropped.
+The selection operates in three stages on the same penultimate time slice used by NB05:
 
-**Chi-Squared Rescue Selection (NB08, default since 2026-04):** the GBDT-importance stage now runs in `chi_squared_rescue` mode by default (`GBDT_SELECTION_MODE` knob). Instead of `chi-squared → L1 → GBDT` chained on the full snapshot grid, it picks a single penultimate-snapshot slice (one row per entity, label-complete, IID), runs chi-squared on that slice as the primary selector, and then trains XGBoost (and optionally L1) on the same slice but restricted to the chi-squared **drop pool**. The union of the three keep sets is the final selected feature set; every dropped feature carries a triple-consensus `drop_rescue_consensus` audit dict (chi rank + L1 coefficient + GBDT total_gain + slice metadata). This addresses chi-squared's documented bias against time-varying features in `N_entities × N_snapshots` panel data without inflating compute cost — slicing collapses the rescue training data by an order of magnitude, and the Spark dispatch reuses the existing batched primitives (`_spark_chi_squared_selection`, `_spark_gbdt_importance_selection`, `_spark_l1_selection`) so the path stays distributed and chunked. Legacy chain mode remains available behind `GBDT_SELECTION_MODE = "chain"` for A/B comparison. See `docs/chi_squared_rescue_selection_plan.md` for the design.
+```
+Stage A: Chi-squared primary (penultimate slice, IID)
+  → keep top-K features (STATISTICAL_MAX_FEATURES)
+  → everything else enters the "drop pool"
+
+Stage B: Rescue on chi-squared drops (same slice, drop pool only)
+  → GBDT (XGBoost): top features by total_gain (GBDT_RESCUE_MAX_FEATURES)
+  → L1 (optional): non-zero-coefficient features (L1_RESCUE_MAX_FEATURES)
+
+Stage C: Union + audit
+  → final_keep = keep_chi ∪ rescue_gbdt ∪ rescue_l1
+  → every dropped feature gets a drop_rescue_consensus audit dict
+    (chi rank + L1 coefficient + GBDT total_gain + slice metadata)
+```
+
+The rescue selectors train **only on the drop pool** — they answer "among features chi-squared considered weak, which have the most relative signal?" This is semantically different from global re-ranking and prevents rescue selectors from being dominated by entity-level features that chi-squared already kept. Hard caps and an optional shadow-feature floor (Boruta-style permuted-shadow rejection) prevent importing noise.
+
+The time slice collapses rescue training data from ~60K rows to ~5K (one per entity), making XGBoost and L1 fits ~15–20× faster while being statistically valid (IID). The Spark dispatch reuses existing batched primitives (`_spark_chi_squared_selection`, `_spark_gbdt_importance_selection`, `_spark_l1_selection`) so the path stays distributed. Legacy chain mode (`chi-squared → L1 → GBDT` on the full grid) remains available behind `GBDT_SELECTION_MODE = "chain"` for A/B comparison. See `docs/chi_squared_rescue_selection_plan.md`.
+
+**Why the slice matters:** On snapshot-grid panel data, chi-squared on the flat matrix systematically inflates entity-level features (tenure, segment, milestone snapshots) and dilutes time-varying behavioral signal (recent engagement, deltas, recency) because each entity contributes `N_snapshots` near-identical rows. Slicing to one snapshot per entity restores IID and lets both the primary chi-squared pass and the GBDT rescue see the true signal distribution.
 
 The two steps are deliberately separated:
 
 - NB05 filters are **data-intrinsic** (variance, redundancy) and do not require a target split. They run early so that downstream analysis (NB06-07) and gold-layer transforms operate on a cleaner feature set.
-- NB08 L1 selection is **model-aware** and must run after the temporal split to avoid target leakage from the test set into the selection process. The intermediate variance/correlation pass catches new features that NB05 never saw.
+- NB08 selection is **model-aware** and must run after the temporal split to avoid target leakage from the test set into the selection process.
 
-Both steps write their results to `merged/recommendations.yaml`. NB08 gates NB05 drops behind `APPLY_NB05_DROPS` and its own L1 pass behind `L1_FEATURE_SELECTION_ENABLED`, so either step can be toggled independently.
+Both steps write their results to `merged/recommendations.yaml`. NB08 gates NB05 drops behind `APPLY_NB05_DROPS`. The rescue selectors are individually toggleable: `GBDT_RESCUE_ENABLED`, `L1_RESCUE_ENABLED`. The standalone L1 step (`L1_FEATURE_SELECTION_ENABLED`) is independent of the rescue and can be enabled separately for legacy comparison.
 
 ### Entity-Aware Temporal Cross-Validation
 
@@ -475,7 +493,7 @@ tests/                              # Test suite (7900+ tests, 91%+ coverage)
 
 7. **Each notebook produces something that is not re-evaluated later.** Temporal evidence drives grid design. Aggregation happens once. Cleanup happens before merge. Production faithfully replicates exploration.
 
-8. **Feature selection is two-step: data-intrinsic (NB05) then model-aware (NB08).** NB05 removes variance-dead and pairwise-redundant features before any split. NB08 applies L1-regularised selection on training data only, catching features that are individually plausible but collectively redundant. Splitting the steps avoids target leakage from the test set into the selection process while still cleaning the feature set early for downstream analysis.
+8. **Feature selection is two-step: data-intrinsic (NB05) then model-aware (NB08), both routed through a penultimate time slice.** NB05 removes variance-dead and pairwise-redundant features before any split (IID-sensitive stats on the penultimate slice, variance on the full panel). NB08 runs chi-squared primary selection on the same slice, then rescues time-varying features that chi-squared drops via GBDT (and optionally L1) trained on the drop pool. The union of keep sets is the final feature set. Splitting the steps avoids target leakage from the test set into the selection process while still cleaning the feature set early for downstream analysis. The time slice addresses snapshot-grid panel bias where chi-squared inflates entity-level features and dilutes behavioral signal.
 
 ## Next Steps
 

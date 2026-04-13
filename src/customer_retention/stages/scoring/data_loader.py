@@ -159,15 +159,15 @@ class ScoringDataLoader:
         artifact_store: ArtifactStore | None,
     ) -> Any:
         df = df.copy()
-        drop_cols = [
+        drop_lower = {c.lower() for c in [
             self.config.entity_key,
             self.config.timestamp_column,
             self.config.original_column,
             self.config.target_column,
             *GOLD_METADATA_COLUMNS,
-        ]
-        df = df.drop(columns=[c for c in drop_cols if c in df.columns])
-        df = df.drop(columns=[c for c in df.columns if c.startswith("original_")])
+        ]}
+        df = df.drop(columns=[c for c in df.columns if c.lower() in drop_lower])
+        df = df.drop(columns=[c for c in df.columns if c.lower().startswith("original_")])
         df = executor.apply_all(df, transforms, fit_mode=False, artifact_store=artifact_store)
         df = select_model_ready_columns(df)
         from customer_retention.core.compat import _is_spark_pandas
