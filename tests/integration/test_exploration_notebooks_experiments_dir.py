@@ -568,6 +568,31 @@ class TestNotebook08Architecture:
         content = self._read_content()
         assert "entity_id" in content and "missing" in content.lower(), "NB08 must validate entity_id column"
 
+    def test_nb08_write_feature_spec_loads_diag_recs_locally(self):
+        with open(self.NOTEBOOK_PATH, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+        diag_cell = next(
+            c for c in nb["cells"]
+            if c["cell_type"] == "code" and c["source"] and "compute_model_diagnostics" in c["source"][0]
+        )
+        spec_cell = next(
+            c for c in nb["cells"]
+            if c["cell_type"] == "code" and c["source"] and "write_feature_spec" in c["source"][0]
+        )
+        diag_src = "".join(diag_cell["source"])
+        spec_src = "".join(spec_cell["source"])
+        assert "del _diag_predictions, _diag_recs" in diag_src, (
+            "compute_model_diagnostics must free _diag_recs at end of cell"
+        )
+        assert "_diag_recs" in spec_src, "write_feature_spec must reference _diag_recs"
+        assert "_diag_recs = None" in spec_src and "RecommendationRegistry" in spec_src, (
+            "write_feature_spec must load _diag_recs locally (prior cell del's it); "
+            "otherwise a NameError fires on Databricks when the diagnostics cell completes"
+        )
+        assert "merged_recommendations_path" in spec_src, (
+            "write_feature_spec must load recommendations from namespace.merged_recommendations_path"
+        )
+
 
 class TestNotebook09Architecture:
     NOTEBOOK_PATH = NOTEBOOKS_DIR / "09_business_alignment.ipynb"
