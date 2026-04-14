@@ -1623,3 +1623,20 @@ def run_chi_squared_rescue_selection(
         importance_scores=importance_scores,
     )
     return result
+
+
+_GBDT_SELECTION_MODE_DISPATCH: Dict[str, Callable[..., FeatureSelectionResult]] = {
+    "standalone": run_gbdt_importance_selection,
+    "chain": run_gbdt_importance_selection,
+    "chi_squared_rescue": run_chi_squared_rescue_selection,
+}
+
+
+def resolve_gbdt_selection_mode(mode: Optional[str]) -> Callable[..., FeatureSelectionResult]:
+    selector = _GBDT_SELECTION_MODE_DISPATCH.get(mode) if mode else None
+    if selector is None:
+        valid = sorted(_GBDT_SELECTION_MODE_DISPATCH)
+        raise ValueError(
+            f"GBDT_SELECTION_MODE={mode!r} is not recognized. Valid modes: {valid}"
+        )
+    return selector

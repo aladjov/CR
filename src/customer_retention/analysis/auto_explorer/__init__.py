@@ -29,7 +29,13 @@ from .field_availability_audit import (
     FieldLeadLagProfile,
     run_field_availability_audit,
 )
-from .findings import ColumnFinding, ExplorationFindings, TextProcessingMetadata, TimeSeriesMetadata
+from .findings import (
+    ColumnFinding,
+    ExplorationFindings,
+    TextProcessingMetadata,
+    TimeSeriesMetadata,
+    apply_zero_inflation_opt_in,
+)
 from .intent_defaults import IntentDefaultsEngine, IntentSuggestion
 from .key_resolver import resolve_entity_keys, resolve_sample_ids_via_bridge, suggest_key_resolutions
 from .layered_recommendations import (
@@ -241,4 +247,5 @@ __all__ = [
     "DatasetLinkage",
     "detect_service_unit",
     "classify_dataset_linkage",
+    "apply_zero_inflation_opt_in",
 ]

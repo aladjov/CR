@@ -5,14 +5,19 @@ This module provides functions for analyzing distributions and recommending
 appropriate transformations based on distribution characteristics.
 """
 
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import numpy as np
 
 from customer_retention.core.compat import Series, _is_spark_pandas, native_pd, pd, to_pandas
 from customer_retention.core.compat.bulk_profiling import bulk_distribution_stats
+
+logger = logging.getLogger(__name__)
+
+ZERO_INFLATION_CONSIDER_THRESHOLD = 30.0
 
 
 class DistributionTransformationType(Enum):
@@ -250,6 +255,17 @@ class DistributionAnalyzer:
             percentiles=percentiles
         )
 
+    @staticmethod
+    def count_zero_inflation_recommendations(
+        recommendations: Iterable["TransformationRecommendation"],
+    ) -> int:
+        return sum(
+            1
+            for rec in recommendations
+            if rec is not None
+            and rec.recommended_transform == DistributionTransformationType.ZERO_INFLATION_HANDLING
+        )
+
     def recommend_transformation(
         self,
         analysis: DistributionAnalysis
@@ -269,6 +285,17 @@ class DistributionAnalyzer:
         """
         warnings = []
         alternatives = []
+
+        if (
+            not analysis.has_zero_inflation
+            and analysis.zero_percentage > ZERO_INFLATION_CONSIDER_THRESHOLD
+        ):
+            logger.info(
+                "zero_inflation skipped %s: zero_pct=%.2f < threshold=%.2f",
+                analysis.column_name,
+                analysis.zero_percentage,
+                self.ZERO_INFLATION_THRESHOLD,
+            )
 
         # Decision tree for transformation recommendation
         if analysis.has_zero_inflation and analysis.is_highly_skewed:

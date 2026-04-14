@@ -27,6 +27,21 @@ class ColumnClassification:
     target: Optional[str] = None
 
 
+def apply_zero_inflation_opt_in(
+    findings: Dict[str, "ExplorationFindings"],
+    opt_in: Dict[str, List[str]],
+) -> None:
+    if opt_in is None:
+        raise TypeError("apply_zero_inflation_opt_in: opt_in config cannot be None")
+    unknown = sorted(name for name in opt_in if name not in findings)
+    if unknown:
+        raise KeyError(
+            f"apply_zero_inflation_opt_in: unknown dataset(s) in opt-in config: {unknown}"
+        )
+    for name, cols in opt_in.items():
+        findings[name].zero_inflation_opt_in = list(cols)
+
+
 def classify_columns(
     findings: "ExplorationFindings",
     exclude: Optional[set[str]] = None,

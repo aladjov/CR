@@ -132,6 +132,13 @@ class RunNamespace:
     def session_dir(self) -> Path:
         return self.run_dir / "session" / "users"
 
+    @property
+    def diagnostics_dir(self) -> Path:
+        return self.run_dir / "diagnostics"
+
+    def diagnostic_path(self, name: str) -> Path:
+        return self.diagnostics_dir / f"diag_{name}.yaml"
+
     def user_session_path(self, username: str) -> Path:
         return self.session_dir / f"{username}.json"
 
