@@ -164,7 +164,7 @@ class FindingsParser:
         )
 
     def _collect_known_pipeline_columns(self, config: PipelineConfig) -> Set[str]:
-        cols: Set[str] = set()
+        cols: Set[str] = self._collect_pipeline_columns(config)
         for bronze in config.bronze.values():
             agg = getattr(bronze, "aggregation", None)
             if agg is None:
@@ -179,6 +179,9 @@ class FindingsParser:
                 cols.add(landing.time_column)
             if getattr(landing, "target_column", None):
                 cols.add(landing.target_column)
+        if config.silver is not None:
+            for step in config.silver.derived_columns:
+                cols.add(step.column)
         cols |= self._predict_gold_generated_columns(config)
         for raw_cols in self._raw_source_columns.values():
             cols |= raw_cols

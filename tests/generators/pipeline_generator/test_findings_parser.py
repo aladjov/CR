@@ -6746,3 +6746,191 @@ class TestReconcileBronzeColumns:
         assert ("a", "drop_column") in remaining
         assert ("b", "drop_column") in remaining
         assert ("c", "winsorize") in remaining
+
+
+class TestCollectKnownPipelineColumns:
+    """Parity check uses `_collect_known_pipeline_columns` to validate selected_features.
+
+    It must cover every column the generated pipeline will actually produce —
+    raw bronze, event-aggregated (temporal/lifecycle), silver DERIVED_COLUMN
+    outputs, and gold zero-inflation derivatives. Missing any of these causes
+    spurious `FeatureSpec parity violation` errors at generation time.
+    """
+
+    @staticmethod
+    def _parser_with(event_cfg=None, silver_derived=None, gold_transforms=None, raw_source_columns=None):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeLayerConfig,
+            GoldLayerConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
+        entity_src = SourceConfig(name="cust", path="c.csv", format="csv", entity_key="cid", raw_source_path="/c.csv")
+        sources = [entity_src]
+        bronze_events = {}
+        if event_cfg is not None:
+            event_src = SourceConfig(
+                name="evt", path="e.csv", format="csv", entity_key="cid",
+                raw_source_path="/e.csv", is_event_level=True, time_column="ts",
+            )
+            sources.append(event_src)
+            event_cfg.source = event_src
+            bronze_events["evt"] = event_cfg
+        config = PipelineConfig(
+            name="t", target_column="churn", sources=sources,
+            bronze={"cust": BronzeLayerConfig(source=entity_src)},
+            silver=SilverLayerConfig(derived_columns=list(silver_derived or [])),
+            gold=GoldLayerConfig(transformations=list(gold_transforms or [])),
+            output_dir=".",
+        )
+        config.bronze_event = bronze_events
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = dict(raw_source_columns or {"cust": {"cid"}})
+        parser._source_findings_paths = {}
+        return parser, config
+
+    def test_temporal_regularity_group_included(self):
+        """Regression: `regularity_score`, `event_frequency`, `inter_event_gap_max`
+        are emitted by event bronze via `TemporalFeatureConfig.regularity` group.
+        The parity check must recognize them as pipeline columns.
+        """
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeEventConfig,
+            TemporalFeatureConfig,
+        )
+        event_cfg = BronzeEventConfig(
+            source=None, entity_column="cid", time_column="ts",
+            temporal_features=TemporalFeatureConfig(
+                lag_columns=["amt"], num_lags=1, lag_agg_funcs=["sum"],
+                feature_groups=["regularity"],
+            ),
+        )
+        parser, config = self._parser_with(event_cfg=event_cfg)
+        cols = parser._collect_known_pipeline_columns(config)
+        assert {"event_frequency", "inter_event_gap_max", "regularity_score",
+                "inter_event_gap_mean", "inter_event_gap_std"} <= cols
+
+    def test_temporal_recency_group_included(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeEventConfig,
+            TemporalFeatureConfig,
+        )
+        event_cfg = BronzeEventConfig(
+            source=None, entity_column="cid", time_column="ts",
+            temporal_features=TemporalFeatureConfig(
+                lag_columns=["amt"], num_lags=1, lag_agg_funcs=["sum"],
+                feature_groups=["recency"],
+            ),
+        )
+        parser, config = self._parser_with(event_cfg=event_cfg)
+        cols = parser._collect_known_pipeline_columns(config)
+        assert {"days_since_last_event", "days_since_first_event",
+                "active_span_days", "recency_ratio"} <= cols
+
+    def test_event_aggregated_columns_included(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+            BronzeEventConfig,
+        )
+        event_cfg = BronzeEventConfig(
+            source=None, entity_column="cid", time_column="ts",
+            aggregation=AggregationWindowConfig(
+                windows=["30d", "180d"], value_columns=["amount"],
+                agg_funcs=["sum", "mean"],
+            ),
+        )
+        parser, config = self._parser_with(event_cfg=event_cfg)
+        cols = parser._collect_known_pipeline_columns(config)
+        assert {"amount_sum_30d", "amount_mean_30d", "amount_sum_180d",
+                "amount_mean_180d", "event_count_30d", "event_count_180d"} <= cols
+
+    def test_silver_derived_ratio_column_included(self):
+        """Regression: ratio features added to `silver.derived_columns` must
+        appear as pipeline columns. These are names like
+        `event_count_180d_to_days_since_last_event_x_ratio`.
+        """
+        from customer_retention.generators.pipeline_generator.models import (
+            PipelineTransformationType,
+            TransformationStep,
+        )
+        ratio_step = TransformationStep(
+            type=PipelineTransformationType.DERIVED_COLUMN,
+            column="event_count_180d_to_days_since_last_event_x_ratio",
+            parameters={"action": "ratio", "numerator": "event_count_180d", "denominator": "days_since_last_event"},
+            rationale="high-mutual-info ratio",
+        )
+        parser, config = self._parser_with(silver_derived=[ratio_step])
+        cols = parser._collect_known_pipeline_columns(config)
+        assert "event_count_180d_to_days_since_last_event_x_ratio" in cols
+
+    def test_silver_derived_interaction_and_composite_included(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            PipelineTransformationType,
+            TransformationStep,
+        )
+        steps = [
+            TransformationStep(
+                type=PipelineTransformationType.DERIVED_COLUMN,
+                column="amt_x_qty", parameters={"action": "interaction"}, rationale="",
+            ),
+            TransformationStep(
+                type=PipelineTransformationType.DERIVED_COLUMN,
+                column="engagement_composite", parameters={"action": "composite"}, rationale="",
+            ),
+        ]
+        parser, config = self._parser_with(silver_derived=steps)
+        cols = parser._collect_known_pipeline_columns(config)
+        assert {"amt_x_qty", "engagement_composite"} <= cols
+
+    def test_gold_zero_inflation_derivatives_included(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            PipelineTransformationType,
+            TransformationStep,
+        )
+        zi_step = TransformationStep(
+            type=PipelineTransformationType.ZERO_INFLATION_HANDLING,
+            column="amount", parameters={}, rationale="",
+        )
+        parser, config = self._parser_with(gold_transforms=[zi_step])
+        cols = parser._collect_known_pipeline_columns(config)
+        assert {"amount_is_zero", "amount_log"} <= cols
+
+    def test_enforce_parity_accepts_regularity_and_ratio_features(self, tmp_path):
+        """End-to-end: parity check does NOT raise when selected_features
+        reference temporal `regularity` features and silver ratio outputs.
+        """
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeEventConfig,
+            PipelineTransformationType,
+            TemporalFeatureConfig,
+            TransformationStep,
+        )
+        from customer_retention.stages.modeling.feature_spec import FeatureSpec, FittedTransform
+
+        event_cfg = BronzeEventConfig(
+            source=None, entity_column="cid", time_column="ts",
+            temporal_features=TemporalFeatureConfig(
+                lag_columns=["amt"], num_lags=1, lag_agg_funcs=["sum"],
+                feature_groups=["regularity"],
+            ),
+        )
+        ratio_step = TransformationStep(
+            type=PipelineTransformationType.DERIVED_COLUMN,
+            column="event_count_180d_to_days_since_last_event_x_ratio",
+            parameters={"action": "ratio", "numerator": "event_count_180d", "denominator": "days_since_last_event"},
+            rationale="",
+        )
+        parser, config = self._parser_with(event_cfg=event_cfg, silver_derived=[ratio_step])
+        selected = [
+            "regularity_score", "event_frequency", "inter_event_gap_max",
+            "event_count_180d_to_days_since_last_event_x_ratio",
+        ]
+        parser._feature_spec = FeatureSpec(
+            exploration_run_id="r", target_column="churn",
+            entity_column="entity_id", timestamp_column="as_of_date",
+            horizon_days=30, selected_features=selected,
+            fitted_transforms=[FittedTransform(column=c, action="impute", method="median") for c in selected],
+        )
+        parser._enforce_spec_schema_parity(config)  # must not raise
