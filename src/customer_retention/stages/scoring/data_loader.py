@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
+from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 from customer_retention.core.compat.detection import get_spark_session
 from customer_retention.core.config.column_config import GOLD_METADATA_COLUMNS, select_model_ready_columns
 from customer_retention.integrations.adapters.factory import get_delta
+from customer_retention.stages.modeling.feature_spec import FeatureSpec
 from customer_retention.stages.scoring.config import ScoringConfig, _load_module_from_path
+from customer_retention.stages.scoring.exceptions import ScoringSpecMismatchError
 from customer_retention.transforms import ArtifactStore, TransformExecutor
+
+logger = logging.getLogger(__name__)
 
 try:
     import mlflow
@@ -58,15 +64,47 @@ class ScoringDataLoader:
 
     def load_model(self, model_tag: str | None = None) -> Tuple[Any, str]:
         mlflow.set_tracking_uri(self.config.mlflow_tracking_uri)
+        spec = self.load_feature_spec()
         if self.config.is_databricks and self.config.registered_model_name and model_tag is None:
             alias_uri = f"models:/{self.config.registered_model_name}@production"
             alias_flavor = self._detect_flavor_from_uri(alias_uri)
             if alias_flavor in _NATIVE_MODEL_FLAVORS:
+                self._enforce_spec_gate(spec, alias_uri)
                 return self._load_by_flavor(alias_flavor, alias_uri), alias_uri
             nested = self._first_native_logged_model(alias_flavor)
+            self._enforce_spec_gate(spec, nested["model_uri"])
             return self._load_by_flavor(nested["flavor"], nested["model_uri"]), nested["model_uri"]
         entry = self._select_logged_model(model_tag)
+        self._enforce_spec_gate(spec, entry["model_uri"])
         return self._load_by_flavor(entry["flavor"], entry["model_uri"]), entry["model_uri"]
+
+    def load_feature_spec(self) -> Optional[FeatureSpec]:
+        spec_path = self._resolve_feature_spec_path()
+        if spec_path is None or not spec_path.exists():
+            logger.info("ScoringDataLoader: no feature_spec.yaml found — spec gate skipped")
+            return None
+        return FeatureSpec.load(spec_path)
+
+    def _resolve_feature_spec_path(self) -> Optional[Path]:
+        experiments_dir = getattr(self.config, "experiments_dir", None)
+        if experiments_dir is None:
+            return None
+        ns = RunNamespace.from_env_or_latest(Path(experiments_dir))
+        return ns.feature_spec_path if ns is not None else None
+
+    def _enforce_spec_gate(self, spec: Optional[FeatureSpec], model_uri: str) -> None:
+        if spec is None:
+            return
+        model_features = self.load_training_feature_names()
+        spec_set = set(spec.selected_features)
+        actual_set = set(model_features)
+        if spec_set != actual_set:
+            raise ScoringSpecMismatchError.from_diff(
+                spec_features=spec.selected_features,
+                actual_features=model_features,
+                model_uri=model_uri,
+                context=f"model {model_uri}",
+            )
 
     @staticmethod
     def _load_by_flavor(flavor: str, uri: str) -> Any:

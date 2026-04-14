@@ -5,12 +5,15 @@ for the same holdout entities, catching transformation inconsistencies.
 """
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Any, Callable, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, List, Optional
 
 import numpy as np
 
 from customer_retention.core.compat import _is_spark_pandas, native_pd
 from customer_retention.core.utils.leakage import get_valid_feature_columns
+
+if TYPE_CHECKING:
+    from customer_retention.stages.modeling.feature_spec import FeatureSpec
 
 
 class DriftSeverity(IntEnum):
@@ -36,12 +39,24 @@ class FeatureDrift:
 
 
 @dataclass
+class FeatureSetMismatch:
+    missing_features: List[str] = field(default_factory=list)
+    extra_features: List[str] = field(default_factory=list)
+    severity: DriftSeverity = DriftSeverity.CRITICAL
+
+    @property
+    def has_mismatch(self) -> bool:
+        return bool(self.missing_features or self.extra_features)
+
+
+@dataclass
 class AdversarialValidationResult:
     passed: bool
     entities_validated: int
     feature_drifts: List[FeatureDrift] = field(default_factory=list)
     missing_entities: int = 0
     extra_entities: int = 0
+    feature_set_mismatch: Optional["FeatureSetMismatch"] = None
 
     @property
     def summary(self) -> str:
@@ -50,6 +65,12 @@ class AdversarialValidationResult:
             f"Adversarial Validation: {status}",
             f"Entities validated: {self.entities_validated}",
         ]
+        if self.feature_set_mismatch and self.feature_set_mismatch.has_mismatch:
+            mm = self.feature_set_mismatch
+            lines.append(
+                f"Feature-set mismatch (CRITICAL): "
+                f"{len(mm.missing_features)} missing, {len(mm.extra_features)} extra"
+            )
         if self.feature_drifts:
             lines.append(f"Features with drift: {len(self.feature_drifts)}")
             counts: dict = {}
@@ -105,10 +126,41 @@ class AdversarialScoringValidator:
         )
         return self.gold_features.loc[is_holdout, self.entity_column].tolist()
 
-    def validate_features(self, recomputed_features: Any) -> AdversarialValidationResult:
+    def validate_features(
+        self,
+        recomputed_features: Any,
+        spec: Optional["FeatureSpec"] = None,
+    ) -> AdversarialValidationResult:
+        if spec is not None:
+            mismatch = self.validate_feature_set(list(recomputed_features.columns), spec)
+            if mismatch.has_mismatch:
+                return AdversarialValidationResult(
+                    passed=False, entities_validated=0,
+                    feature_set_mismatch=mismatch,
+                )
         if _is_spark_pandas(self.gold_features):
             return self._validate_features_distributed(recomputed_features)
         return self._validate_features_local(recomputed_features)
+
+    def validate_feature_set(
+        self,
+        scoring_columns: List[str],
+        spec: "FeatureSpec",
+    ) -> "FeatureSetMismatch":
+        metadata = {
+            self.entity_column, self.target_column, self._holdout_column,
+            "as_of_date", "event_timestamp", "feature_timestamp",
+            "label_timestamp", "label_available_flag",
+        }
+        spec_set = set(spec.selected_features)
+        actual_set = {
+            c for c in scoring_columns
+            if c not in metadata and not c.startswith("original_")
+        }
+        return FeatureSetMismatch(
+            missing_features=sorted(spec_set - actual_set),
+            extra_features=sorted(actual_set - spec_set),
+        )
 
     def _validate_features_local(self, recomputed_features: Any) -> AdversarialValidationResult:
         gold_holdout = self._get_holdout_features()

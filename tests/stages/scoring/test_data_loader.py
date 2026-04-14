@@ -988,3 +988,116 @@ class TestPredictSparkMl:
             loader.predict_spark_ml(mock_model, mock_psdf, feature_names=["f1"])
 
         mock_spark.createDataFrame.assert_not_called()
+
+
+class TestSpecGate:
+    @staticmethod
+    def _make_spec(features):
+        from customer_retention.stages.modeling.feature_spec import FeatureSpec, FittedTransform
+        return FeatureSpec(
+            exploration_run_id="test-run",
+            target_column="unsubscribed", entity_column="customer_id",
+            timestamp_column="event_timestamp", horizon_days=90,
+            selected_features=list(features),
+            fitted_transforms=[FittedTransform(column=c, action="impute", method="median") for c in features],
+        )
+
+    @staticmethod
+    def _write_spec_at(experiments_dir: Path, run_id: str, features):
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        ns = RunNamespace(root=experiments_dir, run_id=run_id)
+        ns.merged_dir.mkdir(parents=True, exist_ok=True)
+        ns.run_dir.mkdir(parents=True, exist_ok=True)
+        ns.write_sentinel()
+        TestSpecGate._make_spec(features).save(ns.feature_spec_path)
+        return ns
+
+    def test_no_spec_no_gate(self, local_config, tmp_path):
+        local_config.experiments_dir = tmp_path
+        local_config.logged_models = [_sklearn_entry()]
+        local_config.best_model_name = "random_forest"
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
+            mock_mlflow.sklearn.load_model.return_value = MagicMock()
+            loader = ScoringDataLoader(local_config)
+            assert loader.load_feature_spec() is None
+            loader.load_model()
+
+    def test_load_feature_spec_returns_spec_when_present(self, local_config, tmp_path):
+        local_config.experiments_dir = tmp_path
+        self._write_spec_at(tmp_path, "test-run", ["a", "b"])
+        loader = ScoringDataLoader(local_config)
+        spec = loader.load_feature_spec()
+        assert spec is not None
+        assert spec.selected_features == ["a", "b"]
+
+    def test_matching_spec_loads_cleanly(self, local_config, tmp_path):
+        local_config.experiments_dir = tmp_path
+        local_config.logged_models = [_sklearn_entry()]
+        local_config.best_model_name = "random_forest"
+        local_config.mlflow_run_id = "run_rf"
+        self._write_spec_at(tmp_path, "test-run", ["feat_a", "feat_b"])
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
+            mock_mlflow.sklearn.load_model.return_value = MagicMock()
+            loader = ScoringDataLoader(local_config)
+            with patch.object(
+                ScoringDataLoader, "load_training_feature_names",
+                return_value=["feat_a", "feat_b"],
+            ):
+                model, uri = loader.load_model()
+        assert uri == "runs:/run_rf/model_random_forest_abc123"
+
+    def test_missing_features_raises(self, local_config, tmp_path):
+        from customer_retention.stages.scoring import ScoringSpecMismatchError
+        local_config.experiments_dir = tmp_path
+        local_config.logged_models = [_sklearn_entry()]
+        local_config.best_model_name = "random_forest"
+        local_config.mlflow_run_id = "run_rf"
+        self._write_spec_at(tmp_path, "test-run", ["feat_a", "feat_b", "missing_one"])
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
+            mock_mlflow.sklearn.load_model.return_value = MagicMock()
+            loader = ScoringDataLoader(local_config)
+            with patch.object(
+                ScoringDataLoader, "load_training_feature_names",
+                return_value=["feat_a", "feat_b"],
+            ):
+                with pytest.raises(ScoringSpecMismatchError) as excinfo:
+                    loader.load_model()
+        assert "missing_one" in str(excinfo.value)
+        assert "missing_one" in excinfo.value.missing
+
+    def test_extra_features_raises(self, local_config, tmp_path):
+        from customer_retention.stages.scoring import ScoringSpecMismatchError
+        local_config.experiments_dir = tmp_path
+        local_config.logged_models = [_sklearn_entry()]
+        local_config.best_model_name = "random_forest"
+        local_config.mlflow_run_id = "run_rf"
+        self._write_spec_at(tmp_path, "test-run", ["feat_a"])
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow:
+            mock_mlflow.sklearn.load_model.return_value = MagicMock()
+            loader = ScoringDataLoader(local_config)
+            with patch.object(
+                ScoringDataLoader, "load_training_feature_names",
+                return_value=["feat_a", "rogue_extra"],
+            ):
+                with pytest.raises(ScoringSpecMismatchError) as excinfo:
+                    loader.load_model()
+        assert "rogue_extra" in excinfo.value.extra
+
+    def test_databricks_wrapped_alias_falls_back_and_still_gates(self, databricks_config, tmp_path):
+        from customer_retention.stages.scoring import ScoringSpecMismatchError
+        databricks_config.experiments_dir = tmp_path
+        databricks_config.registered_model_name = "ns.churn.model_x"
+        databricks_config.logged_models = [_sklearn_entry()]
+        databricks_config.best_model_name = "random_forest"
+        databricks_config.mlflow_run_id = "run_rf"
+        self._write_spec_at(tmp_path, "test-run", ["feat_a"])
+        with patch("customer_retention.stages.scoring.data_loader.mlflow") as mock_mlflow, \
+                _patched_alias_flavors({"python_function": {}}):
+            mock_mlflow.sklearn.load_model.return_value = MagicMock()
+            loader = ScoringDataLoader(databricks_config)
+            with patch.object(
+                ScoringDataLoader, "load_training_feature_names",
+                return_value=["feat_a", "wrong_extra"],
+            ):
+                with pytest.raises(ScoringSpecMismatchError):
+                    loader.load_model()

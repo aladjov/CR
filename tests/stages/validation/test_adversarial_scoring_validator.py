@@ -334,3 +334,79 @@ class TestValidateFeatureTransformationGoldFeatures:
             transform_fn=lambda df: df, entity_column="customer_id", verbose=False,
         )
         assert report.features_validated
+
+
+class TestValidateFeatureSet:
+    def _spec(self, features):
+        from customer_retention.stages.modeling.feature_spec import FeatureSpec, FittedTransform
+        return FeatureSpec(
+            exploration_run_id="r", target_column="target",
+            entity_column="customer_id", timestamp_column="ts", horizon_days=30,
+            selected_features=list(features),
+            fitted_transforms=[FittedTransform(column=c, action="impute", method="median") for c in features],
+        )
+
+    def _validator(self):
+        df = pd.DataFrame({
+            "customer_id": ["a", "b"],
+            "feat_a": [0.0, 1.0],
+            "feat_b": [2.0, 3.0],
+            "target": [0.0, 1.0],
+            "original_target": [0.0, 1.0],
+        })
+        from customer_retention.stages.validation.adversarial_scoring_validator import (
+            AdversarialScoringValidator,
+        )
+        return AdversarialScoringValidator(
+            gold_features=df, entity_column="customer_id", target_column="target",
+        )
+
+    def test_no_mismatch_when_sets_match(self):
+        v = self._validator()
+        m = v.validate_feature_set(["feat_a", "feat_b"], self._spec(["feat_a", "feat_b"]))
+        assert not m.has_mismatch
+        assert m.missing_features == []
+        assert m.extra_features == []
+
+    def test_missing_features_reported(self):
+        v = self._validator()
+        m = v.validate_feature_set(["feat_a"], self._spec(["feat_a", "feat_b", "feat_c"]))
+        assert m.has_mismatch
+        assert m.missing_features == ["feat_b", "feat_c"]
+        assert m.extra_features == []
+
+    def test_extra_features_reported(self):
+        v = self._validator()
+        m = v.validate_feature_set(["feat_a", "rogue"], self._spec(["feat_a"]))
+        assert m.has_mismatch
+        assert m.missing_features == []
+        assert m.extra_features == ["rogue"]
+
+    def test_severity_critical_by_default(self):
+        v = self._validator()
+        m = v.validate_feature_set(["x"], self._spec(["y"]))
+        from customer_retention.stages.validation.adversarial_scoring_validator import DriftSeverity
+        assert m.severity == DriftSeverity.CRITICAL
+
+    def test_validate_features_with_spec_short_circuits_on_mismatch(self):
+        v = self._validator()
+        recomputed = pd.DataFrame({
+            "customer_id": ["a"], "feat_a": [99.0], "target": [None],
+        })
+        spec = self._spec(["feat_a", "feat_b_missing"])
+        result = v.validate_features(recomputed, spec=spec)
+        assert result.passed is False
+        assert result.feature_set_mismatch is not None
+        assert "feat_b_missing" in result.feature_set_mismatch.missing_features
+        assert result.entities_validated == 0
+        assert result.feature_drifts == []
+
+    def test_validate_features_with_matching_spec_proceeds_to_drift(self):
+        v = self._validator()
+        recomputed = pd.DataFrame({
+            "customer_id": ["a", "b"], "feat_a": [0.0, 1.0], "feat_b": [2.0, 3.0],
+            "target": [None, None],
+        })
+        spec = self._spec(["feat_a", "feat_b"])
+        result = v.validate_features(recomputed, spec=spec)
+        assert result.feature_set_mismatch is None
