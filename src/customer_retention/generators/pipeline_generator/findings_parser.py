@@ -14,6 +14,7 @@ from customer_retention.analysis.auto_explorer.exploration_manager import (
 from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
 from customer_retention.analysis.auto_explorer.layered_recommendations import RecommendationRegistry
 from customer_retention.core.config.column_config import ColumnType
+from customer_retention.stages.modeling.feature_spec import LeakageExclusion
 
 from .models import (
     AggregationWindowConfig,
@@ -231,7 +232,9 @@ class FindingsParser:
                 time_column=info.get("time_column"),
                 target_column=info.get("target_column"),
                 excluded=info.get("excluded", False),
-                excluded_leaking_features=info.get("excluded_leaking_features", []),
+                excluded_leaking_features=[
+                    LeakageExclusion.from_dict(e) for e in info.get("excluded_leaking_features") or []
+                ],
                 zero_inflation_opt_in=info.get("zero_inflation_opt_in", []),
             )
         relationships = [
@@ -1092,12 +1095,12 @@ class FindingsParser:
     ) -> List[str]:
         prefixes: Set[str] = set()
         for findings in source_findings.values():
-            for col in getattr(findings, "excluded_leaking_features", []):
-                prefixes.add(f"{col}_")
+            for excl in getattr(findings, "excluded_leaking_features", []):
+                prefixes.add(f"{excl.column}_")
         if multi_dataset is not None:
             for ds_info in multi_dataset.datasets.values():
-                for col in getattr(ds_info, "excluded_leaking_features", []):
-                    prefixes.add(f"{col}_")
+                for excl in getattr(ds_info, "excluded_leaking_features", []):
+                    prefixes.add(f"{excl.column}_")
         return sorted(prefixes)
 
     @staticmethod

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 import yaml
 
 from customer_retention.core.config.column_config import DatasetGranularity
+from customer_retention.stages.modeling.feature_spec import LeakageExclusion
 
 from .findings import ExplorationFindings
 
@@ -41,7 +42,7 @@ class DatasetInfo:
     raw_source_path: Optional[str] = None
     excluded: bool = False
     feature_exclusions: List[FeatureExclusion] = field(default_factory=list)
-    excluded_leaking_features: List[str] = field(default_factory=list)
+    excluded_leaking_features: List[LeakageExclusion] = field(default_factory=list)
     zero_inflation_opt_in: List[str] = field(default_factory=list)
 
 
@@ -217,7 +218,7 @@ class MultiDatasetFindings:
                         }
                         for e in info.feature_exclusions
                     ],
-                    "excluded_leaking_features": info.excluded_leaking_features,
+                    "excluded_leaking_features": [e.to_dict() for e in info.excluded_leaking_features],
                     "zero_inflation_opt_in": info.zero_inflation_opt_in,
                 }
                 for name, info in self.datasets.items()
@@ -279,7 +280,9 @@ class MultiDatasetFindings:
                     )
                     for e in info.get("feature_exclusions", [])
                 ],
-                excluded_leaking_features=info.get("excluded_leaking_features", []),
+                excluded_leaking_features=[
+                    LeakageExclusion.from_dict(e) for e in info.get("excluded_leaking_features") or []
+                ],
                 zero_inflation_opt_in=info.get("zero_inflation_opt_in", []),
             )
 

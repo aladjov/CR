@@ -6472,16 +6472,24 @@ class TestZeroInflationOptIn:
 
 class TestLeakageExclusionPrefixes:
     @staticmethod
-    def _make_findings(**kwargs):
+    def _make_findings(*, columns=None, **kwargs):
         from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
+        from customer_retention.stages.modeling.feature_spec import LeakageExclusion
         kwargs.setdefault("source_path", "/tmp/test.csv")
         kwargs.setdefault("source_format", "csv")
+        if columns is not None:
+            kwargs["excluded_leaking_features"] = [LeakageExclusion(column=c) for c in columns]
         return ExplorationFindings(**kwargs)
+
+    @staticmethod
+    def _exclusions(*columns):
+        from customer_retention.stages.modeling.feature_spec import LeakageExclusion
+        return [LeakageExclusion(column=c) for c in columns]
 
     def test_collects_prefixes_from_source_findings(self):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
-        findings_a = self._make_findings(excluded_leaking_features=["BILLING_TERMINATION_DATE"])
-        findings_b = self._make_findings(excluded_leaking_features=["CONTRACT_END_DATE"])
+        findings_a = self._make_findings(columns=["BILLING_TERMINATION_DATE"])
+        findings_b = self._make_findings(columns=["CONTRACT_END_DATE"])
         result = FindingsParser._collect_leakage_exclusion_prefixes({"a": findings_a, "b": findings_b})
         assert "BILLING_TERMINATION_DATE_" in result
         assert "CONTRACT_END_DATE_" in result
@@ -6494,8 +6502,8 @@ class TestLeakageExclusionPrefixes:
 
     def test_deduplicates_prefixes(self):
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
-        findings_a = self._make_findings(excluded_leaking_features=["COL_A"])
-        findings_b = self._make_findings(excluded_leaking_features=["COL_A", "COL_B"])
+        findings_a = self._make_findings(columns=["COL_A"])
+        findings_b = self._make_findings(columns=["COL_A", "COL_B"])
         result = FindingsParser._collect_leakage_exclusion_prefixes({"a": findings_a, "b": findings_b})
         assert result.count("COL_A_") == 1
         assert "COL_B_" in result
@@ -6517,11 +6525,10 @@ class TestLeakageExclusionPrefixes:
                     granularity=DatasetGranularity.EVENT_LEVEL,
                     row_count=100,
                     column_count=10,
-                    excluded_leaking_features=["SUBSCRIPTION_END_DATE"],
+                    excluded_leaking_features=self._exclusions("SUBSCRIPTION_END_DATE"),
                 ),
             },
         )
-        # Individual findings have no exclusions
         findings = self._make_findings()
         result = FindingsParser._collect_leakage_exclusion_prefixes(
             {"subscription": findings}, multi
@@ -6545,12 +6552,11 @@ class TestLeakageExclusionPrefixes:
                     granularity=DatasetGranularity.EVENT_LEVEL,
                     row_count=100,
                     column_count=10,
-                    excluded_leaking_features=["CONTRACT_END_DATE"],
+                    excluded_leaking_features=self._exclusions("CONTRACT_END_DATE"),
                 ),
             },
         )
-        # Individual findings have a different exclusion
-        findings = self._make_findings(excluded_leaking_features=["BILLING_TERMINATION_DATE"])
+        findings = self._make_findings(columns=["BILLING_TERMINATION_DATE"])
         result = FindingsParser._collect_leakage_exclusion_prefixes(
             {"contract": findings}, multi
         )

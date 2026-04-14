@@ -323,8 +323,9 @@ class LLMDocsGenerator:
             lines.append("")
         if findings.excluded_leaking_features:
             lines.append("## Excluded Features (Leakage)\n")
-            for feat in findings.excluded_leaking_features:
-                lines.append(f"- `{feat}`")
+            for excl in findings.excluded_leaking_features:
+                suffix = f" ({excl.code})" if excl.code else ""
+                lines.append(f"- `{excl.column}`{suffix}")
             lines.append("")
 
     def _append_source_recommendations(self, lines: List[str], name: str) -> None:

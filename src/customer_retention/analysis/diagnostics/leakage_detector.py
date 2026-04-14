@@ -19,6 +19,7 @@ from customer_retention.core.compat import (
 )
 from customer_retention.core.components.enums import Severity
 from customer_retention.core.utils.leakage import TEMPORAL_METADATA_COLUMNS
+from customer_retention.stages.modeling.feature_spec import LeakageExclusion
 
 
 @dataclass
@@ -31,6 +32,13 @@ class LeakageCheck:
     overlap_pct: float = 100.0
     auc: float = 0.5
 
+    def to_exclusion(self) -> LeakageExclusion:
+        return LeakageExclusion(
+            column=self.feature, code=self.check_id,
+            severity=self.severity.value.upper() if hasattr(self.severity, "value") else str(self.severity),
+            rationale=self.recommendation,
+        )
+
 
 @dataclass
 class LeakageResult:
@@ -38,6 +46,25 @@ class LeakageResult:
     checks: List[LeakageCheck] = field(default_factory=list)
     critical_issues: List[LeakageCheck] = field(default_factory=list)
     recommendations: List[str] = field(default_factory=list)
+
+    def to_exclusions(self, min_severity: Severity = Severity.HIGH) -> List[LeakageExclusion]:
+        order = {Severity.CRITICAL: 3, Severity.HIGH: 2, Severity.MEDIUM: 1, Severity.LOW: 0, Severity.INFO: 0}
+        threshold = order.get(min_severity, 2)
+        seen: Dict[str, LeakageExclusion] = {}
+        for chk in self.checks:
+            if order.get(chk.severity, 0) < threshold:
+                continue
+            existing = seen.get(chk.feature)
+            if existing is None or order.get(chk.severity, 0) > order.get(_severity_from_str(existing.severity), 0):
+                seen[chk.feature] = chk.to_exclusion()
+        return sorted(seen.values(), key=lambda e: e.column)
+
+
+def _severity_from_str(value: str) -> Severity:
+    try:
+        return Severity(value.lower())
+    except ValueError:
+        return Severity.INFO
 
 
 class LeakageDetector:

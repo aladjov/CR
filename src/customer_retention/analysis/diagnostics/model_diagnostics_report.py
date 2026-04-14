@@ -50,6 +50,18 @@ class ModelDiagnosticsSummary:
     validity: ModelValidityResult
     feature_stability: Optional[FeatureStabilityResult]
 
+    @property
+    def cv_mean(self) -> float:
+        return float(self.cv_analysis.cv_mean)
+
+    @property
+    def cv_std(self) -> float:
+        return float(self.cv_analysis.cv_std)
+
+    @property
+    def fold_aucs(self) -> List[float]:
+        return [float(fold.get("score", 0.0)) for fold in self.cv_analysis.fold_analysis]
+
 
 @dataclass
 class LeakageCoverage:

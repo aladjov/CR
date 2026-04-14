@@ -68,6 +68,14 @@ class TestRunNamespacePathConstruction:
         ns = RunNamespace(root=tmp_path, run_id="proj-abc")
         assert ns.merged_dir == tmp_path / "runs" / "proj-abc" / "merged"
 
+    def test_feature_spec_path(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="proj-abc")
+        assert ns.feature_spec_path == tmp_path / "runs" / "proj-abc" / "merged" / "feature_spec.yaml"
+
+    def test_production_diagnostics_path(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="proj-abc")
+        assert ns.production_diagnostics_path == tmp_path / "runs" / "proj-abc" / "production_diagnostics.json"
+
     def test_candidate_dir(self, tmp_path):
         ns = RunNamespace(root=tmp_path, run_id="proj-abc")
         expected = tmp_path / "runs" / "proj-abc" / "merged" / "candidate_v1"

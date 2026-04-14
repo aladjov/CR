@@ -91,6 +91,14 @@ class RunNamespace:
         return self.merged_dir / "production_feature_profile.yaml"
 
     @property
+    def feature_spec_path(self) -> Path:
+        return self.merged_dir / "feature_spec.yaml"
+
+    @property
+    def production_diagnostics_path(self) -> Path:
+        return self.run_dir / "production_diagnostics.json"
+
+    @property
     def field_availability_audit_dir(self) -> Path:
         return self.merged_dir / "field_availability_audit"
 

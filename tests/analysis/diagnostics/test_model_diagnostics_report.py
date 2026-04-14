@@ -840,3 +840,33 @@ class TestSparkSafety:
         )
         assert "RF" in report.summaries
         assert report.best_model_learning_curve is None
+
+
+class TestModelDiagnosticsSummaryAccessors:
+    def _summary(self, cv_mean: float = 0.75, cv_std: float = 0.04,
+                 fold_scores=(0.73, 0.77, 0.75)) -> ModelDiagnosticsSummary:
+        from customer_retention.analysis.diagnostics.cv_analyzer import CVAnalysisResult
+        cv = CVAnalysisResult(
+            passed=True, cv_mean=cv_mean, cv_std=cv_std,
+            fold_analysis=[{"fold": i, "score": s, "deviation": s - cv_mean}
+                           for i, s in enumerate(fold_scores)],
+        )
+        return ModelDiagnosticsSummary(
+            model_name="rf", cv_analysis=cv,
+            overfitting=MagicMock(), calibration=MagicMock(),
+            validity=MagicMock(), feature_stability=None,
+        )
+
+    def test_cv_mean_surfaces_from_cv_analysis(self):
+        assert self._summary(cv_mean=0.81).cv_mean == pytest.approx(0.81)
+
+    def test_cv_std_surfaces_from_cv_analysis(self):
+        assert self._summary(cv_std=0.12).cv_std == pytest.approx(0.12)
+
+    def test_fold_aucs_extracts_scores_in_order(self):
+        s = self._summary(fold_scores=(0.68, 0.72, 0.80, 0.74))
+        assert s.fold_aucs == [pytest.approx(x) for x in (0.68, 0.72, 0.80, 0.74)]
+
+    def test_fold_aucs_empty_when_no_fold_analysis(self):
+        s = self._summary(fold_scores=())
+        assert s.fold_aucs == []

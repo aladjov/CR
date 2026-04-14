@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from customer_retention.analysis.auto_explorer.findings import ColumnFinding, ExplorationFindings, _convert_to_native
 from customer_retention.core.config.column_config import ColumnType
@@ -321,6 +322,31 @@ class TestExplorationFindings:
     def test_datetime_allow_future_columns_default_empty(self):
         findings = ExplorationFindings(source_path="test.csv", source_format="csv")
         assert findings.datetime_allow_future_columns == []
+
+    def test_excluded_leaking_features_roundtrip_structured(self):
+        from customer_retention.stages.modeling.feature_spec import LeakageExclusion
+        original = self.create_sample_findings()
+        original.excluded_leaking_features = [
+            LeakageExclusion(column="event_count_365d", code="LD063",
+                             severity="HIGH", rationale="180d horizon inside 365d window"),
+            LeakageExclusion(column="some_col"),
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "findings.yaml"
+            original.save(str(path))
+            loaded = ExplorationFindings.load(str(path))
+            assert loaded.excluded_leaking_features == original.excluded_leaking_features
+
+    def test_excluded_leaking_features_legacy_flat_list_rejected(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "findings.yaml"
+            with open(path, "w") as f:
+                f.write(
+                    "source_path: test.csv\nsource_format: csv\n"
+                    "excluded_leaking_features: [BILLING_TERMINATION_DATE, CONTRACT_END_DATE]\n"
+                )
+            with pytest.raises(TypeError, match="flat-list"):
+                ExplorationFindings.load(str(path))
 
     def test_numpy_types_converted_to_native(self):
         findings = ExplorationFindings(
