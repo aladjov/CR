@@ -33,6 +33,19 @@ from typing import Dict, Iterable, List, Optional, Set
 
 _LAG_PREFIX_RE = re.compile(r"^(lag\d+|velocity|momentum|acceleration)_")
 
+_INTERACTION_TOKEN_RE = re.compile(r"(^|_)(interaction|x|ratio)(_|$)")
+
+
+def _is_interaction_feature(feature_name: str) -> bool:
+    """Return True if the feature name looks like an interaction / ratio.
+
+    Interaction features combine two or more raw columns via multiply,
+    divide, ratio, or a named ``interaction_`` prefix. Their source
+    column dtype is ambiguous (which of the N inputs?), so NB09 shows
+    no dtype for them.
+    """
+    return bool(_INTERACTION_TOKEN_RE.search(feature_name.lower()))
+
 
 @dataclass(frozen=True)
 class ParsedFeature:
@@ -181,6 +194,49 @@ class FeatureProvenanceRow:
     importance: float
     nb05_correlation: Optional[float]
     nb05_status: str  # "confirmed" / "new" / "missing"
+    original_dtype: Optional[str] = None
+
+
+def build_source_column_types(
+    multi_dataset_path,
+    findings_loader=None,
+) -> Dict[str, Dict[str, str]]:
+    """Walk a multi_dataset_findings.yaml and build {source: {raw_col: dtype_name}}.
+
+    Mirrors :func:`build_source_column_map` but carries the per-column
+    ``inferred_type`` string for each source. Callers pass the result to
+    :func:`build_provenance_table` so the NB09 provenance view can show
+    the original column type next to each derived feature.
+    """
+    import yaml
+
+    if findings_loader is None:
+        from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
+        findings_loader = ExplorationFindings.load
+
+    from pathlib import Path
+
+    multi_path = Path(str(multi_dataset_path))
+    if not multi_path.exists():
+        return {}
+    with multi_path.open("r") as f:
+        multi = yaml.safe_load(f) or {}
+
+    result: Dict[str, Dict[str, str]] = {}
+    for name, info in (multi.get("datasets") or {}).items():
+        clean = name[: -len("_aggregated")] if name.endswith("_aggregated") else name
+        path = info.get("findings_path")
+        if not path:
+            continue
+        try:
+            findings = findings_loader(path)
+        except Exception:
+            continue
+        cols = getattr(findings, "columns", {}) or {}
+        types = {col: getattr(c.inferred_type, "value", str(c.inferred_type)) for col, c in cols.items()}
+        if types:
+            result[clean] = types
+    return result
 
 
 def build_provenance_table(
@@ -189,6 +245,7 @@ def build_provenance_table(
     cached_correlations: Dict[str, float],
     *,
     top_n: int = 20,
+    source_column_types: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> List[FeatureProvenanceRow]:
     """Join model feature importances with provenance + NB05 correlations.
 
@@ -220,6 +277,14 @@ def build_provenance_table(
             status = "confirmed"
         else:
             status = "missing"
+        dtype = None
+        if (
+            source_column_types
+            and parsed.source
+            and parsed.base_column
+            and not _is_interaction_feature(feat)
+        ):
+            dtype = (source_column_types.get(parsed.source) or {}).get(parsed.base_column)
         rows.append(
             FeatureProvenanceRow(
                 feature=feat,
@@ -230,6 +295,7 @@ def build_provenance_table(
                 importance=float(importance),
                 nb05_correlation=corr,
                 nb05_status=status,
+                original_dtype=dtype,
             )
         )
     return rows
@@ -248,3 +314,32 @@ def source_histogram(rows: List[FeatureProvenanceRow]) -> List[tuple]:
         (src, counts[src], importances[src] / counts[src])
         for src in sorted(counts, key=counts.get, reverse=True)
     ]
+
+
+def build_overall_source_distribution(
+    model_importances: Dict[str, Dict[str, float]],
+    source_columns: Dict[str, Iterable[str]],
+) -> List[tuple]:
+    """Count unique features per source across every trained model.
+
+    Walks the union of feature names used by any model (deduped) and
+    resolves each one to its source dataset via
+    :func:`parse_feature_provenance`. Returns ``[(source, count), ...]``
+    sorted by count descending — this powers the NB09 overall pie chart
+    showing which datasets the trained models lean on the most.
+
+    Unresolved features (interactions, composites that don't prefix-match
+    any raw column) are grouped under ``"(unresolved)"``.
+    """
+    unique_features: Set[str] = set()
+    for imps in (model_importances or {}).values():
+        if not imps:
+            continue
+        unique_features.update(imps.keys())
+    if not unique_features:
+        return []
+    counts: Counter = Counter()
+    for feat in unique_features:
+        parsed = parse_feature_provenance(feat, source_columns)
+        counts[parsed.source or "(unresolved)"] += 1
+    return [(src, counts[src]) for src in sorted(counts, key=counts.get, reverse=True)]

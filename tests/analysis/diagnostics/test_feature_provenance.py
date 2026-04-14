@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from customer_retention.analysis.diagnostics.feature_provenance import (
+    build_overall_source_distribution,
     build_provenance_table,
     cached_target_correlations,
     parse_feature_provenance,
@@ -208,3 +209,140 @@ class TestSourceHistogram:
 
     def test_empty_rows_returns_empty(self):
         assert source_histogram([]) == []
+
+
+@pytest.fixture
+def source_column_types():
+    return {
+        "subscription": {
+            "NET_PRICE": "numeric_continuous",
+            "DOCUMENT_ALLOTMENT": "numeric_discrete",
+            "NUMBER_OF_ASINS": "numeric_discrete",
+        },
+        "contract": {
+            "ACTIVATED_DATE": "datetime",
+            "CONTRACT_VALUE": "numeric_continuous",
+            "PROBABILITY_PERCENTAGE": "numeric_continuous",
+        },
+        "case": {
+            "CASE_AGE_HOURS": "numeric_continuous",
+            "STATUS": "categorical_nominal",
+        },
+    }
+
+
+class TestOriginalDtypeResolution:
+    def test_dtype_populated_for_resolved_feature(self, source_columns, source_column_types):
+        importances = {"NET_PRICE_sum_180d": 0.5}
+        rows = build_provenance_table(
+            importances, source_columns, {}, top_n=10,
+            source_column_types=source_column_types,
+        )
+        assert rows[0].original_dtype == "numeric_continuous"
+
+    def test_dtype_populated_for_categorical_base(self, source_columns, source_column_types):
+        importances = {"STATUS_count_30d": 0.5}
+        rows = build_provenance_table(
+            importances, source_columns, {}, top_n=10,
+            source_column_types=source_column_types,
+        )
+        assert rows[0].original_dtype == "categorical_nominal"
+
+    def test_dtype_none_for_interaction_feature(self, source_columns, source_column_types):
+        # `_x_` in the name signals an interaction combining two inputs.
+        # Source still resolves (to the first prefix match) so the overall
+        # pie chart can count it, but dtype is ambiguous → None.
+        importances = {"NET_PRICE_sum_180d_x_CONTRACT_VALUE_max_180d": 0.5}
+        rows = build_provenance_table(
+            importances, source_columns, {}, top_n=10,
+            source_column_types=source_column_types,
+        )
+        assert rows[0].original_dtype is None
+
+    def test_dtype_none_for_ratio_feature(self, source_columns, source_column_types):
+        importances = {"NET_PRICE_ratio_CONTRACT_VALUE": 0.5}
+        rows = build_provenance_table(
+            importances, source_columns, {}, top_n=10,
+            source_column_types=source_column_types,
+        )
+        assert rows[0].original_dtype is None
+
+    def test_dtype_none_when_truly_unresolved(self, source_columns, source_column_types):
+        importances = {"UNKNOWN_FEATURE_sum_30d": 0.5}
+        rows = build_provenance_table(
+            importances, source_columns, {}, top_n=10,
+            source_column_types=source_column_types,
+        )
+        assert rows[0].source == "(unresolved)"
+        assert rows[0].original_dtype is None
+
+    def test_dtype_none_when_types_not_provided(self, source_columns):
+        importances = {"NET_PRICE_sum_180d": 0.5}
+        rows = build_provenance_table(importances, source_columns, {}, top_n=10)
+        assert rows[0].original_dtype is None
+
+    def test_dtype_none_when_base_missing_from_types(self, source_columns):
+        types = {"subscription": {"DOCUMENT_ALLOTMENT": "numeric_discrete"}}
+        importances = {"NET_PRICE_sum_180d": 0.5}
+        rows = build_provenance_table(
+            importances, source_columns, {}, top_n=10,
+            source_column_types=types,
+        )
+        assert rows[0].source == "subscription"
+        assert rows[0].original_dtype is None
+
+
+class TestTopNBump:
+    def test_top_n_fifty_returned_when_available(self, source_columns):
+        importances = {f"NET_PRICE_sum_{i}d": 1.0 / (i + 1) for i in range(60)}
+        rows = build_provenance_table(importances, source_columns, {}, top_n=50)
+        assert len(rows) == 50
+        assert rows[0].importance > rows[-1].importance
+
+
+class TestBuildOverallSourceDistribution:
+    def test_aggregates_unique_features_across_models(self, source_columns):
+        model_importances = {
+            "xgb": {
+                "NET_PRICE_sum_180d": 0.5,
+                "DOCUMENT_ALLOTMENT_count_30d": 0.3,
+                "CONTRACT_VALUE_max_all_time": 0.2,
+            },
+            "rf": {
+                "NET_PRICE_sum_180d": 0.4,  # duplicate — counted once
+                "NUMBER_OF_ASINS_mean_90d": 0.25,
+                "CASE_AGE_HOURS_sum_30d": 0.1,
+            },
+        }
+        dist = build_overall_source_distribution(model_importances, source_columns)
+        as_dict = {src: count for src, count in dist}
+        assert as_dict["subscription"] == 3
+        assert as_dict["contract"] == 1
+        assert as_dict["case"] == 1
+
+    def test_unresolved_features_grouped(self, source_columns):
+        model_importances = {
+            "xgb": {
+                "NET_PRICE_sum_180d": 0.5,
+                "MYSTERY_FEATURE": 0.2,
+            },
+        }
+        dist = build_overall_source_distribution(model_importances, source_columns)
+        as_dict = {src: count for src, count in dist}
+        assert as_dict["(unresolved)"] == 1
+        assert as_dict["subscription"] == 1
+
+    def test_sorted_by_count_descending(self, source_columns):
+        model_importances = {
+            "xgb": {
+                "NET_PRICE_sum_180d": 0.5,
+                "NUMBER_OF_ASINS_mean_90d": 0.3,
+                "CONTRACT_VALUE_max_all_time": 0.2,
+            },
+        }
+        dist = build_overall_source_distribution(model_importances, source_columns)
+        counts = [count for _src, count in dist]
+        assert counts == sorted(counts, reverse=True)
+
+    def test_empty_inputs_return_empty_list(self):
+        assert build_overall_source_distribution({}, {}) == []
