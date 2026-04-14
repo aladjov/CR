@@ -55,6 +55,7 @@ class PipelineGenerator(PipelineGeneratorBase):
             self._write_manifest(config),
         ]
         self._copy_holdout_ids()
+        self._copy_feature_spec()
         return generated_files
 
     def _copy_holdout_ids(self) -> None:
@@ -71,6 +72,20 @@ class PipelineGenerator(PipelineGeneratorBase):
         dst_dir = self._output_dir / "findings"
         dst_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst_dir / "holdout_entity_ids.json")
+
+    def _copy_feature_spec(self) -> None:
+        import shutil
+
+        src = None
+        if self._namespace is not None and self._namespace.feature_spec_path.exists():
+            src = self._namespace.feature_spec_path
+        elif (self._findings_dir / "feature_spec.yaml").exists():
+            src = self._findings_dir / "feature_spec.yaml"
+        if src is None:
+            return
+        dst_dir = self._output_dir / "findings"
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst_dir / "feature_spec.yaml")
 
     def _write_manifest(self, config: PipelineConfig) -> Path:
         source_names = [s.name for s in config.sources if not s.excluded]

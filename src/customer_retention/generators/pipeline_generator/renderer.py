@@ -1041,7 +1041,11 @@ if __name__ == "__main__":
 """,
     "training.py.j2": '''{% set best_model_type = config.training.best_model_type if config.training else None %}
 {% set production_cv_folds = config.training.production_cv_folds if config.training else None %}
+{% set feature_spec_path = config.feature_spec_path %}
+import json as _json
 import logging
+import os
+import warnings
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -1067,6 +1071,11 @@ from customer_retention.stages.modeling.data_splitter import DataSplitter, Split
 from customer_retention.stages.modeling.cross_validator import CrossValidator, CVStrategy
 {% endif %}
 from customer_retention.stages.modeling.feature_profile import FeatureProfile, ColumnProfile, build_feature_profile, compare_feature_profiles
+{% if feature_spec_path %}
+from customer_retention.stages.modeling.feature_spec import FeatureSpec
+from customer_retention.transforms import ArtifactStore
+from customer_retention.transforms.executor import TransformExecutor
+{% endif %}
 from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 from customer_retention.core.compat.timing import log_timing
 from customer_retention.core.config.column_config import GOLD_METADATA_COLUMNS
@@ -1086,6 +1095,15 @@ _EXPLORATION_PROFILE = {{ config.training.exploration_feature_profile }}
 _EXPLORATION_PROFILE = None
 {% endif %}
 _NAMESPACE = RunNamespace.from_env_or_latest(EXPERIMENTS_DIR)
+
+{% if feature_spec_path %}
+_FEATURE_SPEC_PATH = Path(r"{{ feature_spec_path }}")
+PRODUCTION_TEST_SIZE = {{ config.training.production_internal_split_test_size if config.training else 0.1 }}
+PRODUCTION_RANDOM_STATE = 42
+_HARD_BLOCK_VERDICTS = {"overfit", "leaky"}
+{% else %}
+_FEATURE_SPEC_PATH = None
+{% endif %}
 
 def _assert_rows(count, stage):
     if count == 0:
@@ -1253,6 +1271,41 @@ def run_experiment():
         for _fs_col in {{ config.gold.feature_selections }}:
             excluded_cols[_fs_col] = "feature_selection"
 {% endif %}
+{% if feature_spec_path %}
+        _SPEC = FeatureSpec.load(_FEATURE_SPEC_PATH)
+        if _SPEC.verdict.is_hard_block() and not os.environ.get("CR_OVERRIDE_UNSTABLE_SPEC"):
+            raise RuntimeError(
+                f"FeatureSpec verdict={_SPEC.verdict.status!r}; refusing to train. "
+                "Set CR_OVERRIDE_UNSTABLE_SPEC=1 to override."
+            )
+        if _SPEC.verdict.status == "unstable":
+            warnings.warn(
+                f"FeatureSpec verdict=unstable (cv_std={_SPEC.verdict.cv_std:.3f}); proceeding.",
+                stacklevel=1,
+            )
+        _leakage_excluded = {e.column for e in _SPEC.leakage_exclusions}
+        _leakage_drops = [c for c in X.columns if c in _leakage_excluded]
+        if _leakage_drops:
+            X = X.drop(columns=_leakage_drops)
+            for _c in _leakage_drops:
+                excluded_cols[_c] = "leakage_exclusion"
+        _missing = [c for c in _SPEC.selected_features if c not in X.columns]
+        if _missing:
+            raise RuntimeError(
+                f"FeatureSpec parity violation: gold missing {len(_missing)} declared "
+                f"features: {_missing[:10]}. Bronze/silver/gold derivation is out of sync "
+                "with exploration — regenerate gold or re-run NB08."
+            )
+        for _c in X.columns:
+            if _c not in set(_SPEC.selected_features):
+                excluded_cols.setdefault(_c, "not_in_spec")
+        X = X[list(_SPEC.selected_features)].copy()
+        feature_names = list(_SPEC.selected_features)
+        print(
+            f"[TRAINING] FeatureSpec applied: {len(feature_names)} features, "
+            f"verdict={_SPEC.verdict.status}, leakage_drops={len(_leakage_drops)}"
+        )
+{% else %}
         if _NAMESPACE is not None:
             _rec_path = _NAMESPACE.merged_recommendations_path
             if _rec_path.exists():
@@ -1271,6 +1324,7 @@ def run_experiment():
                     X = X.drop(columns=_actual_runtime)
                     feature_names = [c for c in feature_names if c not in _runtime_drops]
                     print(f"[TRAINING] Runtime L1/variance drops: {len(_actual_runtime)} features")
+{% endif %}
         feature_stats = {}
         for c in feature_names:
             null_count = int(X[c].isna().sum())
@@ -1342,7 +1396,7 @@ def run_experiment():
 {% if config.training and config.training.purge_gap_days %}
             purge_gap_days={{ config.training.purge_gap_days }},
 {% endif %}
-            test_size={{ config.training.test_size if config.training else 0.2 }},
+            test_size={% if feature_spec_path %}PRODUCTION_TEST_SIZE{% else %}{{ config.training.test_size if config.training else 0.2 }}{% endif %},
             exclude_columns=[FEAST_TIMESTAMP_COL, ENTITY_KEY],
         )
         split_df = training_data.loc[X.index].copy()
@@ -1476,14 +1530,32 @@ def run_experiment():
     _results["logged_models"] = _logged_models
     _results["registered_model_name"] = ""
     if _NAMESPACE is not None:
-        import json as _json
         _NAMESPACE.training_metadata_path.parent.mkdir(parents=True, exist_ok=True)
         _NAMESPACE.training_metadata_path.write_text(_json.dumps(_results, default=str))
+{% if feature_spec_path %}
+    if _NAMESPACE is not None:
+        _label_rate_train = float(pd.Series(y_train).mean()) if len(y_train) else 0.0
+        _label_rate_test = float(pd.Series(y_test).mean()) if len(y_test) else 0.0
+        _prod_diag = {
+            "run_type": "production",
+            "exploration_run_id": _SPEC.exploration_run_id,
+            "feature_count": len(feature_names),
+            "feature_names": list(feature_names),
+            "split": {"train": int(len(X_train)), "test": int(len(X_test)), **_results.get("split", {})},
+            "test_metrics": {n: v for n, v in _results["models"].items()},
+            "label_distribution": _results.get("label_distribution", {}),
+            "label_rate_train": _label_rate_train,
+            "label_rate_test": _label_rate_test,
+            "best_model_name": best_model,
+            "best_roc_auc": best_auc,
+        }
+        _NAMESPACE.production_diagnostics_path.write_text(_json.dumps(_prod_diag, default=str))
+        print(f"[TRAINING] Production diagnostics saved to {_NAMESPACE.production_diagnostics_path}")
+{% endif %}
     return _results
 
 
 if __name__ == "__main__":
-    import json as _json
     _training_results = run_experiment()
     print("\\n" + "=" * 60)
     print("TRAINING RESULTS")

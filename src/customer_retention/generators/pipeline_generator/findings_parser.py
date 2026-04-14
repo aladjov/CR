@@ -14,7 +14,12 @@ from customer_retention.analysis.auto_explorer.exploration_manager import (
 from customer_retention.analysis.auto_explorer.findings import ExplorationFindings
 from customer_retention.analysis.auto_explorer.layered_recommendations import RecommendationRegistry
 from customer_retention.core.config.column_config import ColumnType
-from customer_retention.stages.modeling.feature_spec import LeakageExclusion
+from customer_retention.stages.modeling.feature_spec import FeatureSpec, LeakageExclusion
+
+_FEATURE_SPEC_PROTECTED_COLUMNS = frozenset({
+    "entity_id", "as_of_date", "event_timestamp",
+    "feature_timestamp", "label_timestamp", "label_available_flag",
+})
 
 from .models import (
     AggregationWindowConfig,
@@ -112,8 +117,10 @@ class FindingsParser:
         )
         self._source_findings_paths: Dict[str, Path] = {}
         self._raw_source_columns: Dict[str, Set[str]] = {}
+        self._feature_spec: Optional[FeatureSpec] = None
 
     def parse(self) -> PipelineConfig:
+        self._feature_spec = self._load_feature_spec()
         multi_dataset = self._load_multi_dataset_findings()
         selected_sources = list(multi_dataset.datasets.keys())
         source_findings = self._load_source_findings(selected_sources, self._findings_dir, multi_dataset)
@@ -125,7 +132,16 @@ class FindingsParser:
             recommendations_registry.compute_recommendations_hash() if recommendations_registry else None
         )
         config = self._build_pipeline_config(multi_dataset, source_findings, recommendations_hash)
+        if self._feature_spec is not None:
+            spec_path_str = (
+                str(self._namespace.feature_spec_path)
+                if self._namespace is not None
+                else str(self._findings_dir / "feature_spec.yaml")
+            )
+            config.feature_spec_path = spec_path_str
         config.training = self._build_training_config(multi_dataset, source_findings)
+        if self._feature_spec is not None and config.training is not None:
+            config.training.feature_spec_path = config.feature_spec_path
         self._build_landing_configs(config, multi_dataset, source_findings)
         self._build_discovered_landing_configs(config, discovered_events, multi_dataset)
         self._build_bronze_event_configs(config, multi_dataset, source_findings, discovered_events)
@@ -137,11 +153,78 @@ class FindingsParser:
         self._reconcile_event_post_shaping(config)
         self._reconcile_bronze_columns(config)
         self._reconcile_gold_columns(config)
+        if self._feature_spec is not None:
+            self._enforce_spec_schema_parity(config)
         return config
+
+    def _enforce_spec_schema_parity(self, config: PipelineConfig) -> None:
+        pipeline_columns = set(config.gold.feature_selections or []) | self._collect_known_pipeline_columns(config)
+        self._collect_allowlist_drops(
+            self._feature_spec, pipeline_columns, config.target_column,
+        )
+
+    def _collect_known_pipeline_columns(self, config: PipelineConfig) -> Set[str]:
+        cols: Set[str] = set()
+        for bronze in config.bronze.values():
+            agg = getattr(bronze, "aggregation", None)
+            if agg is None:
+                continue
+            cols |= set(getattr(agg, "value_columns", []) or [])
+            cols |= set(getattr(agg, "categorical_columns", []) or [])
+            cols |= set(getattr(agg, "binary_columns", []) or [])
+        for landing in config.landing.values():
+            if getattr(landing, "entity_column", None):
+                cols.add(landing.entity_column)
+            if getattr(landing, "time_column", None):
+                cols.add(landing.time_column)
+            if getattr(landing, "target_column", None):
+                cols.add(landing.target_column)
+        cols |= self._predict_gold_generated_columns(config)
+        for raw_cols in self._raw_source_columns.values():
+            cols |= raw_cols
+        return cols
 
     def _index_raw_source_columns(self, discovered_events: Dict[str, ExplorationFindings]) -> None:
         for name, findings in discovered_events.items():
             self._raw_source_columns[name] = set(findings.columns.keys())
+
+    def _load_feature_spec(self) -> Optional[FeatureSpec]:
+        spec_path = None
+        if self._namespace is not None:
+            candidate = self._namespace.feature_spec_path
+            if candidate.exists():
+                spec_path = candidate
+        if spec_path is None:
+            fallback = self._findings_dir / "feature_spec.yaml"
+            if fallback.exists():
+                spec_path = fallback
+        if spec_path is None:
+            return None
+        return FeatureSpec.load(spec_path)
+
+    def _collect_allowlist_drops(
+        self,
+        spec: FeatureSpec,
+        pipeline_columns: Set[str],
+        target_column: str,
+    ) -> Set[str]:
+        missing = [c for c in spec.selected_features if c not in pipeline_columns]
+        if missing:
+            raise ValueError(
+                f"FeatureSpec parity violation at generation time: pipeline is missing "
+                f"{len(missing)} declared selected_features: {missing[:10]}. "
+                f"Bronze/silver/gold derivation is out of sync with exploration — "
+                f"regenerate upstream layers or re-run NB08."
+            )
+        keep: Set[str] = set(spec.selected_features)
+        keep.add(target_column)
+        keep.update(_FEATURE_SPEC_PROTECTED_COLUMNS)
+        if spec.entity_column:
+            keep.add(spec.entity_column)
+        if spec.timestamp_column:
+            keep.add(spec.timestamp_column)
+        keep |= {c for c in pipeline_columns if c.startswith("original_")}
+        return {c for c in pipeline_columns if c not in keep}
 
     def _load_recommendations(self) -> Optional[RecommendationRegistry]:
         if self._namespace is not None:
@@ -1062,9 +1145,17 @@ class FindingsParser:
             if step:
                 config.gold.transformations.append(step)
         pipeline_columns |= self._predict_gold_generated_columns(config)
-        drop_columns = self._collect_feature_selection_drops(gold, set(), config.target_column, pipeline_columns)
-        drop_columns |= {c for c in pipeline_columns if c.endswith("_middle")}
-        config.gold.feature_selections = list(drop_columns)
+        spec = getattr(self, "_feature_spec", None)
+        if spec is not None:
+            drop_columns = self._collect_allowlist_drops(
+                spec, pipeline_columns, config.target_column,
+            )
+        else:
+            drop_columns = self._collect_feature_selection_drops(
+                gold, set(), config.target_column, pipeline_columns,
+            )
+            drop_columns |= {c for c in pipeline_columns if c.endswith("_middle")}
+        config.gold.feature_selections = sorted(drop_columns)
 
     def _map_gold_transformation(self, rec) -> Optional[TransformationStep]:
         action = rec.action

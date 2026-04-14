@@ -174,6 +174,8 @@ class TrainingConfig:
     exploration_feature_profile: Optional[Dict[str, Any]] = None
     best_model_type: Optional[str] = None
     production_cv_folds: Optional[int] = None
+    feature_spec_path: Optional[str] = None
+    production_internal_split_test_size: float = 0.1
 
 
 @dataclass
@@ -280,3 +282,4 @@ class PipelineConfig:
     training: Optional[TrainingConfig] = None
     landing: Dict[str, LandingLayerConfig] = field(default_factory=dict)
     bronze_event: Dict[str, BronzeEventConfig] = field(default_factory=dict)
+    feature_spec_path: Optional[str] = None

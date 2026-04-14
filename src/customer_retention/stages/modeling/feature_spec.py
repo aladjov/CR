@@ -44,6 +44,43 @@ class LeakageExclusion:
         )
 
 
+_STATELESS_ACTION_TO_PIPELINE_TYPE: Dict[str, str] = {
+    "log_transform": "log_transform",
+    "sqrt_transform": "sqrt_transform",
+    "yj_transform": "yeo_johnson",
+    "yeo_johnson": "yeo_johnson",
+    "zero_inflation_handling": "zero_inflation_handling",
+    "cap_outlier": "cap_outlier",
+    "cap_then_log": "cap_then_log",
+    "winsorize": "winsorize",
+    "segment_aware_cap": "segment_aware_cap",
+}
+
+_FITTED_ACTION_TO_PIPELINE_TYPE: Dict[str, str] = {
+    "impute": "impute_null",
+    "scale": "scale",
+    "encode": "encode",
+    "cap_outlier": "cap_outlier",
+}
+
+
+def _build_transformation_step(
+    pipeline_type_value: str, column: str, parameters: Dict[str, Any],
+    rationale: str, source_notebook: str,
+):
+    from customer_retention.generators.pipeline_generator.models import (
+        PipelineTransformationType,
+        TransformationStep,
+    )
+    return TransformationStep(
+        type=PipelineTransformationType(pipeline_type_value),
+        column=column,
+        parameters=dict(parameters or {}),
+        rationale=rationale,
+        source_notebook=source_notebook or None,
+    )
+
+
 @dataclass
 class TransformStep:
     column: str
@@ -62,6 +99,19 @@ class TransformStep:
             column=data["column"], action=data["action"],
             parameters=dict(data.get("parameters") or {}),
             source_notebook=data.get("source_notebook", ""),
+        )
+
+    def to_transformation_step(self):
+        mapped = _STATELESS_ACTION_TO_PIPELINE_TYPE.get(self.action)
+        if mapped is None:
+            raise ValueError(
+                f"TransformStep: unknown stateless action {self.action!r}. "
+                f"Known: {sorted(_STATELESS_ACTION_TO_PIPELINE_TYPE)}"
+            )
+        return _build_transformation_step(
+            mapped, self.column, self.parameters,
+            rationale=f"feature_spec.transform_topology:{self.action}",
+            source_notebook=self.source_notebook,
         )
 
 
@@ -89,6 +139,20 @@ class FittedTransform:
             exploration_null_count=int(data.get("exploration_null_count", 0)),
             strategy_source=data.get("strategy_source", ""),
             parameters=dict(data.get("parameters") or {}),
+        )
+
+    def to_transformation_step(self):
+        mapped = _FITTED_ACTION_TO_PIPELINE_TYPE.get(self.action)
+        if mapped is None:
+            raise ValueError(
+                f"FittedTransform: unknown stateful action {self.action!r}. "
+                f"Known: {sorted(_FITTED_ACTION_TO_PIPELINE_TYPE)}"
+            )
+        params = {"method": self.method, **self.parameters}
+        return _build_transformation_step(
+            mapped, self.column, params,
+            rationale=f"feature_spec.fitted_transforms:{self.action}:{self.method}",
+            source_notebook="08_baseline_experiments",
         )
 
 

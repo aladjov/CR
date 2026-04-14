@@ -248,6 +248,46 @@ class TestFeatureSpecHardBlock:
         assert v.is_hard_block() is hard_block
 
 
+class TestToTransformationStep:
+    def test_stateless_log_transform_maps_to_log(self):
+        step = TransformStep(column="c", action="log_transform", parameters={"clip": 0.0})
+        ts = step.to_transformation_step()
+        assert ts.type.value == "log_transform"
+        assert ts.column == "c"
+        assert ts.parameters == {"clip": 0.0}
+
+    def test_stateless_yj_transform_maps_to_yeo_johnson(self):
+        step = TransformStep(column="c", action="yj_transform")
+        assert step.to_transformation_step().type.value == "yeo_johnson"
+
+    def test_stateless_zero_inflation_handling_maps_directly(self):
+        step = TransformStep(column="x", action="zero_inflation_handling",
+                             parameters={"strategy": "separate_indicator"})
+        ts = step.to_transformation_step()
+        assert ts.type.value == "zero_inflation_handling"
+        assert ts.parameters["strategy"] == "separate_indicator"
+
+    def test_stateless_unknown_action_raises(self):
+        with pytest.raises(ValueError, match="unknown stateless action"):
+            TransformStep(column="c", action="bogus_transform").to_transformation_step()
+
+    def test_fitted_impute_merges_method_into_parameters(self):
+        ft = FittedTransform(column="x", action="impute", method="median")
+        ts = ft.to_transformation_step()
+        assert ts.type.value == "impute_null"
+        assert ts.parameters["method"] == "median"
+
+    def test_fitted_scale_standard(self):
+        ft = FittedTransform(column="y", action="scale", method="standard")
+        ts = ft.to_transformation_step()
+        assert ts.type.value == "scale"
+        assert ts.parameters["method"] == "standard"
+
+    def test_fitted_unknown_action_raises(self):
+        with pytest.raises(ValueError, match="unknown stateful action"):
+            FittedTransform(column="x", action="bogus", method="m").to_transformation_step()
+
+
 class TestBuildFittedImputeTransforms:
     def test_numeric_default_to_median(self):
         ft = build_fitted_impute_transforms(

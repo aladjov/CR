@@ -1661,9 +1661,12 @@ dbutils.notebook.exit(_summary)
 # COMMAND ----------
 {% set best_model_type = config.training.best_model_type if config.training else None %}
 {% set production_cv_folds = config.training.production_cv_folds if config.training else None %}
+{% set feature_spec_path = config.feature_spec_path %}
 import json
 import logging
+import os
 import tempfile
+import warnings
 import csv
 from pathlib import Path
 import pyspark
@@ -1682,6 +1685,9 @@ from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClass
 from pyspark.sql import functions as F
 from pyspark.sql.types import StructType, StructField, DoubleType
 from customer_retention.stages.modeling.feature_profile import FeatureProfile, ColumnProfile, build_feature_profile, compare_feature_profiles
+{% if feature_spec_path %}
+from customer_retention.stages.modeling.feature_spec import FeatureSpec
+{% endif %}
 from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 from customer_retention.core.compat.timing import log_timing
 from customer_retention.core.config.column_config import GOLD_METADATA_COLUMNS
@@ -1719,10 +1725,52 @@ try:
 except Exception:
     _NAMESPACE = RunNamespace.from_env_or_latest()
 
+{% if feature_spec_path %}
+_FEATURE_SPEC_PATH = Path(r"{{ feature_spec_path }}")
+PRODUCTION_TEST_SIZE = {{ config.training.production_internal_split_test_size if config.training else 0.1 }}
+PRODUCTION_RANDOM_STATE = 42
+{% else %}
+_FEATURE_SPEC_PATH = None
+{% endif %}
+
 def _assert_rows(count, stage):
     if count == 0:
         raise ValueError(f"[TRAINING] {stage}: 0 rows remaining — cannot proceed")
     return count
+
+{% if feature_spec_path %}
+def _apply_feature_spec_gate(df, spec):
+    if spec.verdict.is_hard_block() and not os.environ.get("CR_OVERRIDE_UNSTABLE_SPEC"):
+        raise RuntimeError(
+            f"FeatureSpec verdict={spec.verdict.status!r}; refusing to train. "
+            "Set CR_OVERRIDE_UNSTABLE_SPEC=1 to override."
+        )
+    if spec.verdict.status == "unstable":
+        warnings.warn(
+            f"FeatureSpec verdict=unstable (cv_std={spec.verdict.cv_std:.3f}); proceeding.",
+            stacklevel=1,
+        )
+    _leakage_excluded = {e.column for e in spec.leakage_exclusions}
+    _leakage_drops = [c for c in df.columns if c in _leakage_excluded]
+    if _leakage_drops:
+        df = df.drop(*_leakage_drops)
+    _missing = [c for c in spec.selected_features if c not in df.columns]
+    if _missing:
+        raise RuntimeError(
+            f"FeatureSpec parity violation: gold missing {len(_missing)} declared "
+            f"features: {_missing[:10]}. Bronze/silver/gold derivation is out of sync "
+            "with exploration — regenerate gold or re-run NB08."
+        )
+    keep = list(spec.selected_features)
+    for meta_col in (TARGET, TIMESTAMP_COLUMN, ENTITY_KEY, spec.target_column,
+                     spec.entity_column, spec.timestamp_column):
+        if meta_col and meta_col in df.columns and meta_col not in keep:
+            keep.append(meta_col)
+    for c in df.columns:
+        if c.startswith("original_") and c not in keep:
+            keep.append(c)
+    return df.select(*keep), _leakage_drops
+{% endif %}
 
 def load_training_data():
     return spark.table(gold_table())
@@ -1897,6 +1945,16 @@ def train_and_evaluate():
     filtered_count = _assert_rows(df.count(), "after_null_label_filter")
     print(f"[TRAINING] After null-label filter: {filtered_count:,} rows")
 
+{% if feature_spec_path %}
+    with log_timing("feature_spec_gate", logger):
+        _SPEC = FeatureSpec.load(_FEATURE_SPEC_PATH)
+        df, _spec_leakage_drops = _apply_feature_spec_gate(df, _SPEC)
+        print(
+            f"[TRAINING] FeatureSpec applied: {len(_SPEC.selected_features)} features, "
+            f"verdict={_SPEC.verdict.status}, leakage_drops={len(_spec_leakage_drops)}"
+        )
+{% endif %}
+
     with log_timing("prepare_features", logger):
         assembled, feature_cols = prepare_features(df)
     assembled_count = _assert_rows(assembled.count(), "after_assembly")
@@ -1918,6 +1976,10 @@ def train_and_evaluate():
         for _fs_col in {{ config.gold.feature_selections }}:
             excluded_cols[_fs_col] = "feature_selection"
 {%- endif %}
+{% if feature_spec_path %}
+        for _c in _spec_leakage_drops:
+            excluded_cols[_c] = "leakage_exclusion"
+{% else %}
         if _NAMESPACE is not None:
             _rec_path = _NAMESPACE.merged_recommendations_path
             if _rec_path.exists():
@@ -1936,6 +1998,7 @@ def train_and_evaluate():
                     df = df.drop(*_actual_runtime)
                     feature_cols = [c for c in feature_cols if c not in _runtime_drops]
                     print(f"[TRAINING] Runtime L1/variance drops: {len(_actual_runtime)} features")
+{% endif %}
         for c in feature_cols:
             null_count = int(null_row[c])
             feature_stats[c] = ColumnProfile(dtype=df.schema[c].dataType.typeName(), non_null_count=filtered_count - null_count, null_count=null_count)
@@ -1989,7 +2052,7 @@ def train_and_evaluate():
                     print(f"[TRAINING]   {_c}: {_dropped_strong[_c]} -> survived by: {_surv_str}")
 
     with log_timing("temporal_split", logger):
-        train_df, test_df, cutoff_date = _temporal_split(assembled, {{ config.training.test_size if config.training else 0.2 }})
+        train_df, test_df, cutoff_date = _temporal_split(assembled, {% if feature_spec_path %}PRODUCTION_TEST_SIZE{% else %}{{ config.training.test_size if config.training else 0.2 }}{% endif %})
     train_count = _assert_rows(train_df.count(), "train_set_after_split")
     test_count = _assert_rows(test_df.count(), "test_set_after_split")
     print(f"[TRAINING] Split: train={train_count:,}, test={test_count:,}")
@@ -2132,6 +2195,27 @@ def train_and_evaluate():
         _NAMESPACE.training_metadata_path.parent.mkdir(parents=True, exist_ok=True)
         _NAMESPACE.training_metadata_path.write_text(json.dumps(_training_meta))
         print(f"[TRAINING] Metadata saved to {_NAMESPACE.training_metadata_path}")
+
+{% if feature_spec_path %}
+    if _NAMESPACE is not None:
+        _train_label_rate = train_df.filter(F.col("label") == 1).count() / max(train_df.count(), 1)
+        _test_label_rate = test_df.filter(F.col("label") == 1).count() / max(test_df.count(), 1)
+        _prod_diag = {
+            "run_type": "production",
+            "exploration_run_id": _SPEC.exploration_run_id,
+            "feature_count": len(feature_cols),
+            "feature_names": list(feature_cols),
+            "split": {**_results.get("split", {}), "train": train_count, "test": test_count},
+            "test_metrics": {n: v for n, v in _results["models"].items()},
+            "label_distribution": _results.get("label_distribution", {}),
+            "label_rate_train": float(_train_label_rate),
+            "label_rate_test": float(_test_label_rate),
+            "best_model_name": best_model_name,
+            "best_roc_auc": best_auc,
+        }
+        _NAMESPACE.production_diagnostics_path.write_text(json.dumps(_prod_diag, default=str))
+        print(f"[TRAINING] Production diagnostics saved to {_NAMESPACE.production_diagnostics_path}")
+{% endif %}
 
     return _results
 
