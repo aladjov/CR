@@ -446,13 +446,75 @@ def bulk_nunique(df: Any, columns: list[str] | None = None) -> dict[str, int]:
     return {col: int(df[col].nunique()) for col in columns}
 
 
+_NUNIQUE_BATCH = 200
+
+
 def _spark_bulk_nunique(df: Any, columns: list[str]) -> dict[str, int]:
     import pyspark.sql.functions as F  # noqa: N812
 
     spark_df = as_spark_df(df)
-    exprs = [F.countDistinct(F.col(c)).alias(f"__dist__{c}") for c in columns]
-    row = spark_df.agg(*exprs).collect()[0]
-    return {c: int(row[f"__dist__{c}"]) for c in columns}
+    result: dict[str, int] = {}
+    for start in range(0, len(columns), _NUNIQUE_BATCH):
+        batch = columns[start : start + _NUNIQUE_BATCH]
+        exprs = [F.countDistinct(F.col(c)).alias(f"__dist__{c}") for c in batch]
+        row = spark_df.agg(*exprs).collect()[0]
+        for c in batch:
+            result[c] = _safe_int(row[f"__dist__{c}"])
+    return result
+
+
+def bulk_binary_flags(df: Any, columns: list[str]) -> dict[str, bool]:
+    valid = [c for c in columns if c in df.columns]
+    if not valid:
+        return {}
+    if hasattr(df, "to_spark"):
+        return _spark_bulk_binary_flags(df, valid)
+    return _pandas_bulk_binary_flags(df, valid)
+
+
+def _pandas_bulk_binary_flags(df: _pandas.DataFrame, columns: list[str]) -> dict[str, bool]:
+    result: dict[str, bool] = {}
+    allowed = {0, 1, 0.0, 1.0}
+    for col in columns:
+        series = df[col].dropna()
+        if len(series) == 0:
+            result[col] = False
+            continue
+        distinct = series.nunique()
+        if distinct > 2 or distinct < 1:
+            result[col] = False
+            continue
+        uniques = set(series.unique().tolist())
+        result[col] = uniques.issubset(allowed)
+    return result
+
+
+_BINARY_BATCH = 100
+
+
+def _spark_bulk_binary_flags(df: Any, columns: list[str]) -> dict[str, bool]:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    spark_df = as_spark_df(df)
+    result: dict[str, bool] = {}
+    for start in range(0, len(columns), _BINARY_BATCH):
+        batch = columns[start : start + _BINARY_BATCH]
+        exprs = []
+        for c in batch:
+            cast_col = F.col(c).cast("double")
+            exprs.append(F.min(cast_col).alias(f"__min__{c}"))
+            exprs.append(F.max(cast_col).alias(f"__max__{c}"))
+            exprs.append(F.countDistinct(F.col(c)).alias(f"__dist__{c}"))
+        row = spark_df.agg(*exprs).collect()[0]
+        for c in batch:
+            lo = row[f"__min__{c}"]
+            hi = row[f"__max__{c}"]
+            distinct = _safe_int(row[f"__dist__{c}"])
+            if distinct < 1 or distinct > 2 or lo is None or hi is None:
+                result[c] = False
+                continue
+            result[c] = float(lo) in (0.0, 1.0) and float(hi) in (0.0, 1.0)
+    return result
 
 
 def bulk_null_counts(

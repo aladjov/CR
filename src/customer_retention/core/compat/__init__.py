@@ -2416,6 +2416,7 @@ __all__ = [
     "bulk_iqr_bounds",
     "bulk_corr_with_target",
     "bulk_null_counts",
+    "bulk_null_corr_with_target",
     "leakage_corr_combined",
     "bulk_class_overlap",
     "bulk_effect_sizes",
