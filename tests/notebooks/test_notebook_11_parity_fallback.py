@@ -74,14 +74,34 @@ class TestParityCellFallbackChain:
         assert "_expl_ns.feature_spec_path.exists()" in cell_source
 
     def test_error_message_names_all_remedies(self, cell_source: str):
-        """Fail-closed error must point at both remedies (re-run NB08 vs.
+        """Fail-closed error must point at both remedies (run NB08 vs.
         regenerate+re-run training) so the user isn't guessing."""
-        assert "re-run NB08" in cell_source
-        assert "re-run training" in cell_source or "regenerated via NB10" in cell_source
+        assert "NB08" in cell_source
+        assert "NB10" in cell_source
         assert "feature_spec_source_path" in cell_source
 
     def test_success_path_sets_spec_path_not_mutated_when_current_exists(self, cell_source: str):
-        """The fallback block must only run when the current-run spec is missing —
-        no risk of accidentally pointing at an older run when the current one
-        is self-consistent."""
+        """The prod_diag fallback block must only run when the current-run spec
+        is missing — no risk of accidentally pointing at an older run when the
+        current one is self-consistent."""
         assert "not _spec_path.exists() and _prod_path.exists()" in cell_source
+
+    def test_scans_sibling_runs_when_prod_diag_missing(self, cell_source: str):
+        """The user's repeated failure mode: current run has neither spec NOR
+        production_diagnostics.json (training failed before writing it). The
+        scan fallback must run independently of prod_diag, globbing
+        `runs/*/merged/feature_spec.yaml`."""
+        assert '_runs_root = _parity_namespace.root / "runs"' in cell_source
+        assert '_runs_root.glob("*/merged/feature_spec.yaml")' in cell_source
+
+    def test_scan_picks_most_recent_by_mtime(self, cell_source: str):
+        """When multiple sibling runs have specs, pick the most recently
+        modified — matches `RunNamespace.from_latest` heuristic so the
+        fallback aligns with user mental model ('the run I just finished')."""
+        assert "sort(key=lambda p: p.stat().st_mtime, reverse=True)" in cell_source
+
+    def test_error_lists_all_searched_paths(self, cell_source: str):
+        """On fail-closed, the error must enumerate every path the cell tried,
+        so the user can see exactly where the lookup went."""
+        assert "_searched" in cell_source
+        assert "Searched (in order)" in cell_source

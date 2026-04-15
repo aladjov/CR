@@ -63,7 +63,28 @@ class PipelineGeneratorBase(ABC):
             f"{s.name}_aggregated" if s.is_event_level else s.name for s in config.sources if not s.excluded
         ]
         config.composite_name = composite_name(source_names)
+        self._snapshot_feature_spec_into_namespace(config)
         return config
+
+    def _snapshot_feature_spec_into_namespace(self, config: PipelineConfig) -> None:
+        """Mirror the spec that was used for generation into the current run's
+        namespace so NB11's parity report can resolve it without scanning
+        sibling runs. No-op when there is no namespace, no spec, the spec is
+        already at the destination, or a local copy already exists (idempotent,
+        byte-exact, never overwrites)."""
+        ns = getattr(self._parser, "_namespace", None)
+        spec_source = getattr(config, "feature_spec_path", None)
+        if ns is None or not spec_source:
+            return
+        src = Path(spec_source)
+        if not src.exists():
+            return
+        dst = ns.feature_spec_path
+        if dst == src or dst.exists():
+            return
+        import shutil
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
 
     def _write_config(self, config: PipelineConfig) -> Path:
         path = self._output_dir / "config.py"

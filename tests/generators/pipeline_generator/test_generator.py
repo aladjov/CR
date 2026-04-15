@@ -264,3 +264,108 @@ class TestBronzeDedup:
         assert len(segment_caps) == 1, (
             f"Expected 1 SEGMENT_AWARE_CAP for revenue, got {len(segment_caps)}"
         )
+
+
+class TestSnapshotFeatureSpecIntoNamespace:
+    """NB10 generator mirrors the FeatureSpec into the current run's namespace
+    so NB11's parity report can resolve it locally even when NB08 ran in a
+    different run. Part of the multi-layer discovery strategy: the generator
+    populates the run at generation time; NB11 has a scan fallback for runs
+    that predate this behavior. Both ensure the user never has to manually
+    copy YAML files between run directories."""
+
+    def _make_namespace(self, tmp_path, run_id="test-run-1"):
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+        ns = RunNamespace(root=tmp_path, run_id=run_id)
+        ns.merged_dir.mkdir(parents=True, exist_ok=True)
+        return ns
+
+    def _write_source_spec(self, path: Path) -> bytes:
+        from customer_retention.stages.modeling.feature_spec import FeatureSpec, FittedTransform
+        path.parent.mkdir(parents=True, exist_ok=True)
+        spec = FeatureSpec(
+            exploration_run_id="src-run", target_column="churn",
+            entity_column="entity_id", timestamp_column="as_of_date",
+            horizon_days=30, selected_features=["amt_sum_180d"],
+            fitted_transforms=[FittedTransform(column="amt_sum_180d", action="impute", method="median")],
+        )
+        spec.save(path)
+        return path.read_bytes()
+
+    def test_copies_spec_when_destination_missing(self, sample_findings_dir, tmp_path):
+        source_ns = self._make_namespace(tmp_path / "experiments", run_id="source-run")
+        source_bytes = self._write_source_spec(source_ns.feature_spec_path)
+
+        target_ns = self._make_namespace(tmp_path / "experiments", run_id="target-run")
+        assert not target_ns.feature_spec_path.exists()
+
+        generator = PipelineGenerator(
+            str(sample_findings_dir), str(tmp_path / "out"), "p", namespace=target_ns,
+        )
+        generator._parser._feature_spec = object()  # sentinel
+        from customer_retention.generators.pipeline_generator.models import PipelineConfig
+        _cfg = PipelineConfig(name="p", target_column="churn", sources=[], bronze={},
+                              silver=None, gold=None, output_dir=".")
+        _cfg.feature_spec_path = str(source_ns.feature_spec_path)
+
+        generator._snapshot_feature_spec_into_namespace(_cfg)
+
+        assert target_ns.feature_spec_path.exists()
+        assert target_ns.feature_spec_path.read_bytes() == source_bytes, "byte-exact copy expected"
+
+    def test_noop_when_destination_exists(self, sample_findings_dir, tmp_path):
+        """Idempotent: never overwrite an existing spec in the current run."""
+        source_ns = self._make_namespace(tmp_path / "experiments", run_id="src")
+        self._write_source_spec(source_ns.feature_spec_path)
+
+        target_ns = self._make_namespace(tmp_path / "experiments", run_id="tgt")
+        target_ns.feature_spec_path.write_text("PRE_EXISTING")
+
+        generator = PipelineGenerator(
+            str(sample_findings_dir), str(tmp_path / "out"), "p", namespace=target_ns,
+        )
+        from customer_retention.generators.pipeline_generator.models import PipelineConfig
+        _cfg = PipelineConfig(name="p", target_column="churn", sources=[], bronze={},
+                              silver=None, gold=None, output_dir=".")
+        _cfg.feature_spec_path = str(source_ns.feature_spec_path)
+        generator._snapshot_feature_spec_into_namespace(_cfg)
+        assert target_ns.feature_spec_path.read_text() == "PRE_EXISTING"
+
+    def test_noop_when_paths_equal(self, sample_findings_dir, tmp_path):
+        """No self-copy when source and destination resolve to the same path."""
+        ns = self._make_namespace(tmp_path / "experiments", run_id="r")
+        source_bytes = self._write_source_spec(ns.feature_spec_path)
+
+        generator = PipelineGenerator(
+            str(sample_findings_dir), str(tmp_path / "out"), "p", namespace=ns,
+        )
+        from customer_retention.generators.pipeline_generator.models import PipelineConfig
+        _cfg = PipelineConfig(name="p", target_column="churn", sources=[], bronze={},
+                              silver=None, gold=None, output_dir=".")
+        _cfg.feature_spec_path = str(ns.feature_spec_path)
+        generator._snapshot_feature_spec_into_namespace(_cfg)
+        assert ns.feature_spec_path.read_bytes() == source_bytes  # unchanged
+
+    def test_noop_when_no_namespace(self, sample_findings_dir, tmp_path):
+        generator = PipelineGenerator(
+            str(sample_findings_dir), str(tmp_path / "out"), "p",
+        )
+        from customer_retention.generators.pipeline_generator.models import PipelineConfig
+        _cfg = PipelineConfig(name="p", target_column="churn", sources=[], bronze={},
+                              silver=None, gold=None, output_dir=".")
+        _cfg.feature_spec_path = "/nonexistent/spec.yaml"
+        generator._snapshot_feature_spec_into_namespace(_cfg)  # must not raise
+
+    def test_noop_when_source_spec_missing(self, sample_findings_dir, tmp_path):
+        """Don't create a broken copy when the recorded spec path points at a
+        file that no longer exists (e.g., volume unmounted between runs)."""
+        target_ns = self._make_namespace(tmp_path / "experiments", run_id="tgt")
+        generator = PipelineGenerator(
+            str(sample_findings_dir), str(tmp_path / "out"), "p", namespace=target_ns,
+        )
+        from customer_retention.generators.pipeline_generator.models import PipelineConfig
+        _cfg = PipelineConfig(name="p", target_column="churn", sources=[], bronze={},
+                              silver=None, gold=None, output_dir=".")
+        _cfg.feature_spec_path = "/nonexistent/spec.yaml"
+        generator._snapshot_feature_spec_into_namespace(_cfg)
+        assert not target_ns.feature_spec_path.exists()
