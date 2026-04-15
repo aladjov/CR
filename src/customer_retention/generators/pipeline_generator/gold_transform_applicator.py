@@ -25,8 +25,17 @@ def build_gold_steps(
 ) -> List[TransformationStep]:
     if not hasattr(registry, "gold") or registry.gold is None:
         return []
+    gold = registry.gold
+    return (
+        _build_transformation_steps(gold, pipeline_columns)
+        + _build_encoding_steps(gold, pipeline_columns)
+        + _build_scaling_steps(gold, pipeline_columns)
+    )
+
+
+def _build_transformation_steps(gold, pipeline_columns: Set[str]) -> List[TransformationStep]:
     steps: List[TransformationStep] = []
-    for rec in getattr(registry.gold, "transformations", []):
+    for rec in getattr(gold, "transformations", []):
         if rec.target_column not in pipeline_columns:
             continue
         trans_type = _GOLD_TYPE_MAP.get(rec.action)
@@ -40,6 +49,48 @@ def build_gold_steps(
             source_notebook=rec.source_notebook,
         ))
     return steps
+
+
+def _build_encoding_steps(gold, pipeline_columns: Set[str]) -> List[TransformationStep]:
+    steps: List[TransformationStep] = []
+    for rec in getattr(gold, "encoding", []):
+        if rec.target_column not in pipeline_columns:
+            continue
+        steps.append(TransformationStep(
+            type=PipelineTransformationType.ENCODE,
+            column=rec.target_column,
+            parameters={"method": _normalise_encoding_method(rec)},
+            rationale=rec.rationale,
+            source_notebook=rec.source_notebook,
+        ))
+    return steps
+
+
+def _build_scaling_steps(gold, pipeline_columns: Set[str]) -> List[TransformationStep]:
+    steps: List[TransformationStep] = []
+    for rec in getattr(gold, "scaling", []):
+        if rec.target_column not in pipeline_columns:
+            continue
+        steps.append(TransformationStep(
+            type=PipelineTransformationType.SCALE,
+            column=rec.target_column,
+            parameters={"method": _extract_method(rec, default="standard")},
+            rationale=rec.rationale,
+            source_notebook=rec.source_notebook,
+        ))
+    return steps
+
+
+def _normalise_encoding_method(rec) -> str:
+    method = _extract_method(rec, default="one_hot")
+    if method in ("onehot", "one_hot"):
+        return "one_hot"
+    return method
+
+
+def _extract_method(rec, *, default: str) -> str:
+    params = rec.parameters or {}
+    return params.get("method") or rec.action or default
 
 
 def build_silver_derived_steps(

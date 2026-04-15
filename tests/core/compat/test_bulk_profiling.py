@@ -22,6 +22,7 @@ from customer_retention.core.compat.bulk_profiling import (
     _pandas_bulk_validate_ranges,
     _safe_float,
     _safe_int,
+    bulk_binary_flags,
     bulk_categorical_distribution_stats,
     bulk_datetime_analysis_stats,
     bulk_datetime_discovery_stats,
@@ -690,6 +691,48 @@ class TestBulkNunique:
         assert result == {}
 
 
+class TestBulkBinaryFlags:
+    def test_pure_binary_ints(self):
+        df = pd.DataFrame({"a": [0, 1, 1, 0], "b": [0, 0, 0, 0], "c": [1, 1, 1, 1]})
+        result = bulk_binary_flags(df, ["a", "b", "c"])
+        assert result == {"a": True, "b": True, "c": True}
+
+    def test_binary_floats(self):
+        df = pd.DataFrame({"a": [0.0, 1.0, 0.0], "b": [0.5, 0.5, 0.5]})
+        result = bulk_binary_flags(df, ["a", "b"])
+        assert result["a"] is True
+        assert result["b"] is False
+
+    def test_not_binary_more_than_two_values(self):
+        df = pd.DataFrame({"a": [0, 1, 2]})
+        result = bulk_binary_flags(df, ["a"])
+        assert result == {"a": False}
+
+    def test_not_binary_out_of_range(self):
+        df = pd.DataFrame({"a": [1, 2]})
+        result = bulk_binary_flags(df, ["a"])
+        assert result == {"a": False}
+
+    def test_all_null(self):
+        df = pd.DataFrame({"a": [None, None, None]})
+        result = bulk_binary_flags(df, ["a"])
+        assert result == {"a": False}
+
+    def test_ignores_nulls(self):
+        df = pd.DataFrame({"a": [0, 1, None, 1, None]})
+        result = bulk_binary_flags(df, ["a"])
+        assert result == {"a": True}
+
+    def test_missing_column_skipped(self):
+        df = pd.DataFrame({"a": [0, 1]})
+        result = bulk_binary_flags(df, ["a", "missing"])
+        assert result == {"a": True}
+
+    def test_empty_columns(self):
+        df = pd.DataFrame({"a": [0, 1]})
+        assert bulk_binary_flags(df, []) == {}
+
+
 class TestBulkDatetimeDiscoveryStats:
     def test_basic(self):
         df = pd.DataFrame({"dt": pd.date_range("2020-01-01", periods=10)})
@@ -874,6 +917,62 @@ class TestSparkBulkHelpersMocked:
             result = _spark_bulk_nunique(MagicMock(), ["a", "b"])
 
         assert result == {"a": 5, "b": 10}
+
+    def test_spark_bulk_nunique_batched(self):
+        from customer_retention.core.compat.bulk_profiling import _NUNIQUE_BATCH, _spark_bulk_nunique
+
+        columns = [f"c{i}" for i in range(_NUNIQUE_BATCH * 2 + 3)]
+        result_map = {f"__dist__{c}": i + 1 for i, c in enumerate(columns)}
+        mock_row = MagicMock()
+        mock_row.__getitem__ = lambda self, k: result_map.get(k, 0)
+        mock_df = MagicMock()
+        mock_df.agg.return_value.collect.return_value = [mock_row]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=mock_df):
+            result = _spark_bulk_nunique(MagicMock(), columns)
+
+        assert mock_df.agg.call_count == 3
+        assert result[columns[0]] == 1
+        assert result[columns[-1]] == len(columns)
+
+    def test_spark_bulk_binary_flags(self):
+        from customer_retention.core.compat.bulk_profiling import _spark_bulk_binary_flags
+
+        result_map = {
+            "__min__a": 0.0, "__max__a": 1.0, "__dist__a": 2,
+            "__min__b": 0.0, "__max__b": 0.5, "__dist__b": 2,
+            "__min__c": 0.0, "__max__c": 0.0, "__dist__c": 1,
+            "__min__d": None, "__max__d": None, "__dist__d": 0,
+        }
+        mock_row = MagicMock()
+        mock_row.__getitem__ = lambda self, k: result_map.get(k)
+        mock_df = MagicMock()
+        mock_df.agg.return_value.collect.return_value = [mock_row]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=mock_df):
+            result = _spark_bulk_binary_flags(MagicMock(), ["a", "b", "c", "d"])
+
+        assert result == {"a": True, "b": False, "c": True, "d": False}
+
+    def test_spark_bulk_binary_flags_batched(self):
+        from customer_retention.core.compat.bulk_profiling import _BINARY_BATCH, _spark_bulk_binary_flags
+
+        columns = [f"c{i}" for i in range(_BINARY_BATCH + 5)]
+        result_map = {}
+        for c in columns:
+            result_map[f"__min__{c}"] = 0.0
+            result_map[f"__max__{c}"] = 1.0
+            result_map[f"__dist__{c}"] = 2
+        mock_row = MagicMock()
+        mock_row.__getitem__ = lambda self, k: result_map.get(k)
+        mock_df = MagicMock()
+        mock_df.agg.return_value.collect.return_value = [mock_row]
+
+        with patch("customer_retention.core.compat.bulk_profiling.as_spark_df", return_value=mock_df):
+            result = _spark_bulk_binary_flags(MagicMock(), columns)
+
+        assert mock_df.agg.call_count == 2
+        assert all(result[c] for c in columns)
 
 
 class TestChunked:

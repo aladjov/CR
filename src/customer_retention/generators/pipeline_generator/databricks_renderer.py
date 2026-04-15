@@ -1415,9 +1415,9 @@ def _label_encode(df, col):
         print(f"WARNING: column '{col}' not in DataFrame, skipping label encoding")
         return df
     from pyspark.ml.feature import StringIndexer
-    indexer = StringIndexer(inputCol=col, outputCol=f"{col}_encoded", handleInvalid="keep")
-    df = indexer.fit(df).transform(df)
-    df = df.drop(col)
+    tmp = f"__{col}_idx"
+    indexer = StringIndexer(inputCol=col, outputCol=tmp, handleInvalid="keep", stringOrderType="alphabetAsc")
+    df = indexer.fit(df).transform(df).drop(col).withColumnRenamed(tmp, col)
     return df
 
 def _batch_scale_standard(df, cols):

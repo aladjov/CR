@@ -157,6 +157,109 @@ class TestBuildGoldSteps:
         assert steps[0].parameters == {}
 
 
+class TestBuildGoldStepsIncludesEncoding:
+    """Parity: exploration must apply encodings so _feature_names matches Databricks gold."""
+
+    def test_one_hot_encoding_emitted(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_encoding("recency_bucket", "one_hot", "low cardinality", "04")
+        steps = build_gold_steps(reg, {"recency_bucket"})
+        assert len(steps) == 1
+        assert steps[0].type == PipelineTransformationType.ENCODE
+        assert steps[0].column == "recency_bucket"
+        assert steps[0].parameters == {"method": "one_hot"}
+
+    def test_target_encoding_emitted(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_encoding("zip_code", "target", "high cardinality", "04")
+        steps = build_gold_steps(reg, {"zip_code"})
+        assert len(steps) == 1
+        assert steps[0].type == PipelineTransformationType.ENCODE
+        assert steps[0].parameters == {"method": "target"}
+
+    def test_onehot_alias_normalised_to_one_hot(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_encoding("recency_bucket", "onehot", "low cardinality", "04")
+        steps = build_gold_steps(reg, {"recency_bucket"})
+        assert steps[0].parameters == {"method": "one_hot"}
+
+    def test_encoding_column_not_in_pipeline_is_skipped(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_encoding("stale_col", "one_hot", "low cardinality", "04")
+        steps = build_gold_steps(reg, {"other_col"})
+        assert steps == []
+
+    def test_encoding_rationale_and_source_notebook_propagated(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_encoding("city", "one_hot", "low cardinality", "nb04")
+        steps = build_gold_steps(reg, {"city"})
+        assert steps[0].rationale == "low cardinality"
+        assert steps[0].source_notebook == "nb04"
+
+
+class TestBuildGoldStepsIncludesScaling:
+    """Parity: exploration must apply scalings so numeric features match Databricks gold."""
+
+    def test_standard_scaling_emitted(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_scaling("revenue", "standard", "normalize", "04")
+        steps = build_gold_steps(reg, {"revenue"})
+        assert len(steps) == 1
+        assert steps[0].type == PipelineTransformationType.SCALE
+        assert steps[0].parameters == {"method": "standard"}
+
+    def test_minmax_scaling_emitted(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_scaling("orders", "minmax", "normalize", "04")
+        steps = build_gold_steps(reg, {"orders"})
+        assert len(steps) == 1
+        assert steps[0].type == PipelineTransformationType.SCALE
+        assert steps[0].parameters == {"method": "minmax"}
+
+    def test_scaling_column_not_in_pipeline_is_skipped(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_scaling("stale_col", "standard", "normalize", "04")
+        steps = build_gold_steps(reg, {"other_col"})
+        assert steps == []
+
+
+class TestBuildGoldStepsOrdering:
+    """Order must match Databricks gold run_gold(): transforms → encodings → scalings."""
+
+    def test_transformations_then_encodings_then_scalings(self):
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_transformation("revenue", "log", {}, "skew", "04")
+        reg.add_gold_encoding("city", "one_hot", "low card", "04")
+        reg.add_gold_scaling("orders", "standard", "normalize", "04")
+        steps = build_gold_steps(reg, {"revenue", "city", "orders"})
+        assert [s.type for s in steps] == [
+            PipelineTransformationType.LOG_TRANSFORM,
+            PipelineTransformationType.ENCODE,
+            PipelineTransformationType.SCALE,
+        ]
+
+    def test_lifecycle_columns_one_hot_encoded_end_to_end(self):
+        """Regression for FeatureSpec parity violation: gold missing ['lifecycle_quadrant', 'recency_bucket']."""
+        reg = RecommendationRegistry()
+        reg.init_gold("churn")
+        reg.add_gold_encoding("recency_bucket", "one_hot", "low cardinality", "04")
+        reg.add_gold_encoding("lifecycle_quadrant", "one_hot", "low cardinality", "04")
+        steps = build_gold_steps(reg, {"recency_bucket", "lifecycle_quadrant", "days_since_last"})
+        encoded = [s for s in steps if s.type == PipelineTransformationType.ENCODE]
+        assert {s.column for s in encoded} == {"recency_bucket", "lifecycle_quadrant"}
+        for step in encoded:
+            assert step.parameters == {"method": "one_hot"}
+
+
 # ---------------------------------------------------------------------------
 # build_silver_derived_steps
 # ---------------------------------------------------------------------------

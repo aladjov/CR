@@ -2944,6 +2944,13 @@ class TestDatabricksGoldColumnFiltering:
         encode_fn = encode_fn[: encode_fn.index("\ndef ")]
         assert "col not in df.columns" in encode_fn
 
+    def test_label_encode_preserves_column_name_for_parity_with_exploration(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        encode_fn = result[result.index("def _label_encode") :]
+        encode_fn = encode_fn[: encode_fn.index("\ndef ")]
+        assert 'withColumnRenamed' in encode_fn
+        assert 'alphabetAsc' in encode_fn
+
     def test_batch_scale_standard_still_valid_python(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
         ast.parse(result)
