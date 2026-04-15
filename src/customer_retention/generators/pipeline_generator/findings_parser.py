@@ -165,6 +165,9 @@ class FindingsParser:
 
     def _enforce_spec_schema_parity(self, config: PipelineConfig) -> None:
         pipeline_columns = set(config.gold.feature_selections or []) | self._collect_known_pipeline_columns(config)
+        pipeline_columns |= self._predict_one_hot_expanded_columns(
+            config, self._feature_spec, pipeline_columns,
+        )
         self._collect_allowlist_drops(
             self._feature_spec, pipeline_columns, config.target_column,
         )
@@ -934,6 +937,35 @@ class FindingsParser:
         return generated
 
     @staticmethod
+    def _one_hot_encoded_targets(config: "PipelineConfig", pipeline_columns: Set[str]) -> Set[str]:
+        return {
+            step.column
+            for step in config.gold.encodings
+            if (step.parameters or {}).get("method", "one_hot") == "one_hot"
+            and step.column in pipeline_columns
+        }
+
+    @staticmethod
+    def _predict_one_hot_expanded_columns(
+        config: "PipelineConfig",
+        spec: Optional[FeatureSpec],
+        pipeline_columns: Set[str],
+    ) -> Set[str]:
+        if spec is None:
+            return set()
+        encode_targets = FindingsParser._one_hot_encoded_targets(config, pipeline_columns)
+        if not encode_targets:
+            return set()
+        expanded: Set[str] = set()
+        for feature in spec.selected_features:
+            for target in encode_targets:
+                prefix = f"{target}_"
+                if feature != target and feature.startswith(prefix):
+                    expanded.add(feature)
+                    break
+        return expanded
+
+    @staticmethod
     def _event_aggregated_columns(event_cfg: "BronzeEventConfig") -> Set[str]:
         columns: Set[str] = set()
         agg = event_cfg.aggregation
@@ -1186,6 +1218,9 @@ class FindingsParser:
         pipeline_columns |= self._predict_gold_generated_columns(config)
         spec = getattr(self, "_feature_spec", None)
         if spec is not None:
+            pipeline_columns |= self._predict_one_hot_expanded_columns(
+                config, spec, pipeline_columns,
+            )
             drop_columns = self._collect_allowlist_drops(
                 spec, pipeline_columns, config.target_column,
             )

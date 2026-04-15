@@ -7145,3 +7145,290 @@ class TestStripMergeSuffixArtifacts:
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
         cols = {"solo_y", "other"}
         assert FindingsParser._strip_merge_suffix_artifacts(cols) == {"solo_y", "other"}
+
+
+class TestPredictOneHotExpandedColumns:
+    """Regression: FeatureSpec parity must accept post-encoding column names
+    (`{col}_{value}`) when the bare `col` is the target of a one-hot ENCODE
+    step. Without this, NB10 fails with `FeatureSpec parity violation: pipeline
+    is missing 9 declared selected_features: ['lifecycle_quadrant_*', 'recency_bucket_*']`
+    even though the encoding steps will produce those columns at runtime.
+    """
+
+    @staticmethod
+    def _config_with_encoding(target_columns, *, scaling_columns=()):
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeLayerConfig,
+            GoldLayerConfig,
+            PipelineConfig,
+            PipelineTransformationType,
+            SilverLayerConfig,
+            SourceConfig,
+            TransformationStep,
+        )
+        src = SourceConfig(name="cust", path="c.csv", format="csv", entity_key="cid", raw_source_path="/c.csv")
+        encodings = [
+            TransformationStep(
+                type=PipelineTransformationType.ENCODE,
+                column=col, parameters={"method": "one_hot"}, rationale="",
+            )
+            for col in target_columns
+        ]
+        scalings = [
+            TransformationStep(
+                type=PipelineTransformationType.SCALE,
+                column=col, parameters={"method": "standard"}, rationale="",
+            )
+            for col in scaling_columns
+        ]
+        return PipelineConfig(
+            name="t", target_column="churn", sources=[src],
+            bronze={"cust": BronzeLayerConfig(source=src)},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(encodings=encodings, scalings=scalings),
+            output_dir=".",
+        )
+
+    @staticmethod
+    def _make_spec(selected_features):
+        from customer_retention.stages.modeling.feature_spec import FeatureSpec, FittedTransform
+        return FeatureSpec(
+            exploration_run_id="r", target_column="churn",
+            entity_column="entity_id", timestamp_column="as_of_date",
+            horizon_days=30, selected_features=list(selected_features),
+            fitted_transforms=[
+                FittedTransform(column=c, action="impute", method="median")
+                for c in selected_features
+            ],
+        )
+
+    def test_returns_empty_when_spec_is_none(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        config = self._config_with_encoding(["recency_bucket"])
+        result = FindingsParser._predict_one_hot_expanded_columns(config, None, {"recency_bucket"})
+        assert result == set()
+
+    def test_returns_empty_when_no_encodings(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        config = self._config_with_encoding([])
+        spec = self._make_spec(["recency_bucket_0_7d"])
+        result = FindingsParser._predict_one_hot_expanded_columns(config, spec, {"recency_bucket"})
+        assert result == set()
+
+    def test_expands_lifecycle_quadrant_and_recency_bucket(self):
+        """The exact regression: NB08 records `lifecycle_quadrant_*` /
+        `recency_bucket_*` in selected_features (post-encoding). Both bare
+        columns are produced by event aggregation and have ENCODE steps, so
+        the post-encoding variants must satisfy parity."""
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        config = self._config_with_encoding(["recency_bucket", "lifecycle_quadrant"])
+        spec = self._make_spec([
+            "lifecycle_quadrant_intense_brief_lifecycle",
+            "lifecycle_quadrant_occasional_loyal_lifecycle",
+            "lifecycle_quadrant_one_shot_lifecycle",
+            "lifecycle_quadrant_steady_loyal_lifecycle",
+            "recency_bucket_0_7d", "recency_bucket_8_30d",
+            "recency_bucket_31_90d", "recency_bucket_91_180d",
+            "recency_bucket_>180d",
+            "event_count_180d",
+        ])
+        pipeline_columns = {"recency_bucket", "lifecycle_quadrant", "event_count_180d"}
+        result = FindingsParser._predict_one_hot_expanded_columns(config, spec, pipeline_columns)
+        assert "event_count_180d" not in result, "non-encoded features must not leak in"
+        assert "lifecycle_quadrant" not in result, "bare target must not be returned as expansion"
+        assert result == {
+            "lifecycle_quadrant_intense_brief_lifecycle",
+            "lifecycle_quadrant_occasional_loyal_lifecycle",
+            "lifecycle_quadrant_one_shot_lifecycle",
+            "lifecycle_quadrant_steady_loyal_lifecycle",
+            "recency_bucket_0_7d", "recency_bucket_8_30d",
+            "recency_bucket_31_90d", "recency_bucket_91_180d",
+            "recency_bucket_>180d",
+        }
+
+    def test_skips_encoding_target_not_in_pipeline_columns(self):
+        """If the bare column was dropped upstream (bronze/silver derivation
+        broken), the encoding can't run — its `{col}_*` variants must NOT be
+        treated as predicted, so the parity check still surfaces the bug."""
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        config = self._config_with_encoding(["recency_bucket"])
+        spec = self._make_spec(["recency_bucket_0_7d", "recency_bucket_8_30d"])
+        result = FindingsParser._predict_one_hot_expanded_columns(config, spec, set())
+        assert result == set()
+
+    def test_ignores_non_one_hot_encoding_methods(self):
+        """`target` / `label` encoders do not expand into `{col}_value` columns,
+        so they should not contribute to the predicted expansion set."""
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeLayerConfig,
+            GoldLayerConfig,
+            PipelineConfig,
+            PipelineTransformationType,
+            SilverLayerConfig,
+            SourceConfig,
+            TransformationStep,
+        )
+        src = SourceConfig(name="cust", path="c.csv", format="csv", entity_key="cid", raw_source_path="/c.csv")
+        config = PipelineConfig(
+            name="t", target_column="churn", sources=[src],
+            bronze={"cust": BronzeLayerConfig(source=src)},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(encodings=[
+                TransformationStep(type=PipelineTransformationType.ENCODE, column="zip",
+                                   parameters={"method": "target"}, rationale=""),
+            ]),
+            output_dir=".",
+        )
+        spec = self._make_spec(["zip_99001", "zip_99002"])
+        result = FindingsParser._predict_one_hot_expanded_columns(config, spec, {"zip"})
+        assert result == set()
+
+    def test_does_not_match_unrelated_prefixes(self):
+        """`recency_bucket_0_7d` must not be confused with a pipeline column
+        like `recency_buckets` (different name). Match must be strict prefix
+        with trailing underscore."""
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        config = self._config_with_encoding(["recency"])
+        spec = self._make_spec(["recency_bucket_0_7d", "recency_score"])
+        result = FindingsParser._predict_one_hot_expanded_columns(config, spec, {"recency"})
+        assert result == {"recency_bucket_0_7d", "recency_score"}
+
+    def test_default_method_treated_as_one_hot(self):
+        """Encoding parameters may omit `method`; `_apply_gold_recommendations`
+        defaults to `one_hot`. The prediction logic must mirror that default."""
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeLayerConfig,
+            GoldLayerConfig,
+            PipelineConfig,
+            PipelineTransformationType,
+            SilverLayerConfig,
+            SourceConfig,
+            TransformationStep,
+        )
+        src = SourceConfig(name="cust", path="c.csv", format="csv", entity_key="cid", raw_source_path="/c.csv")
+        config = PipelineConfig(
+            name="t", target_column="churn", sources=[src],
+            bronze={"cust": BronzeLayerConfig(source=src)},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(encodings=[
+                TransformationStep(type=PipelineTransformationType.ENCODE, column="recency_bucket",
+                                   parameters={}, rationale=""),
+            ]),
+            output_dir=".",
+        )
+        spec = self._make_spec(["recency_bucket_0_7d"])
+        result = FindingsParser._predict_one_hot_expanded_columns(config, spec, {"recency_bucket"})
+        assert result == {"recency_bucket_0_7d"}
+
+
+class TestEnforceSpecSchemaParityWithOneHotEncoding:
+    """End-to-end parity check with one-hot encoded selected features."""
+
+    @staticmethod
+    def _parser_and_config(*, encode_columns, agg_columns=("amt",)):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+            BronzeEventConfig,
+            BronzeLayerConfig,
+            GoldLayerConfig,
+            LifecycleConfig,
+            PipelineConfig,
+            PipelineTransformationType,
+            SilverLayerConfig,
+            SourceConfig,
+            TransformationStep,
+        )
+        entity_src = SourceConfig(name="cust", path="c.csv", format="csv",
+                                  entity_key="cid", raw_source_path="/c.csv")
+        event_src = SourceConfig(name="evt", path="e.csv", format="csv",
+                                 entity_key="cid", raw_source_path="/e.csv",
+                                 is_event_level=True, time_column="ts")
+        event_cfg = BronzeEventConfig(
+            source=event_src, entity_column="cid", time_column="ts",
+            aggregation=AggregationWindowConfig(
+                windows=["180d"], value_columns=list(agg_columns),
+                agg_funcs=["sum", "count"],
+            ),
+            lifecycle=LifecycleConfig(
+                include_lifecycle_quadrant=True, include_recency_bucket=True,
+            ),
+        )
+        config = PipelineConfig(
+            name="t", target_column="churn", sources=[entity_src, event_src],
+            bronze={"cust": BronzeLayerConfig(source=entity_src)},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(encodings=[
+                TransformationStep(type=PipelineTransformationType.ENCODE,
+                                   column=col, parameters={"method": "one_hot"}, rationale="")
+                for col in encode_columns
+            ]),
+            output_dir=".",
+        )
+        config.bronze_event = {"evt": event_cfg}
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {"cust": {"cid"}, "evt": {"cid", "ts", "amt"}}
+        parser._source_findings_paths = {}
+        parser._silver_merged_columns_cache = None
+        parser._namespace = None
+        return parser, config
+
+    @staticmethod
+    def _make_spec(selected_features):
+        from customer_retention.stages.modeling.feature_spec import FeatureSpec, FittedTransform
+        return FeatureSpec(
+            exploration_run_id="r", target_column="churn",
+            entity_column="entity_id", timestamp_column="as_of_date",
+            horizon_days=30, selected_features=list(selected_features),
+            fitted_transforms=[
+                FittedTransform(column=c, action="impute", method="median")
+                for c in selected_features
+            ],
+        )
+
+    def test_parity_passes_for_lifecycle_and_recency_one_hot_features(self):
+        """Regression for the NB10 failure on customer_emails:
+        'pipeline is missing 9 declared selected_features:
+         lifecycle_quadrant_*, recency_bucket_*'."""
+        parser, config = self._parser_and_config(
+            encode_columns=("lifecycle_quadrant", "recency_bucket"),
+        )
+        parser._feature_spec = self._make_spec([
+            "amt_sum_180d", "event_count_180d",
+            "lifecycle_quadrant_intense_brief_lifecycle",
+            "lifecycle_quadrant_occasional_loyal_lifecycle",
+            "lifecycle_quadrant_one_shot_lifecycle",
+            "lifecycle_quadrant_steady_loyal_lifecycle",
+            "recency_bucket_0_7d", "recency_bucket_8_30d",
+            "recency_bucket_31_90d", "recency_bucket_91_180d",
+            "recency_bucket_>180d",
+        ])
+        parser._enforce_spec_schema_parity(config)  # must not raise
+
+    def test_parity_fails_when_bare_encoded_column_missing_from_pipeline(self):
+        """If the bare column is not produced upstream, the encoded variants
+        cannot be created either — parity must still flag the violation so
+        the user knows bronze/silver derivation broke."""
+        import pytest
+        parser, config = self._parser_and_config(
+            encode_columns=("region",),
+        )
+        parser._feature_spec = self._make_spec([
+            "amt_sum_180d", "region_north", "region_south",
+        ])
+        with pytest.raises(ValueError, match="FeatureSpec parity violation"):
+            parser._enforce_spec_schema_parity(config)
+
+    def test_parity_fails_when_encoded_features_have_no_encoding_step(self):
+        """A `recency_bucket_*` feature in the spec without a corresponding
+        ENCODE step in `config.gold.encodings` is a real bug — the renderer
+        won't expand the column and the model load will fail at runtime."""
+        import pytest
+        parser, config = self._parser_and_config(encode_columns=())
+        parser._feature_spec = self._make_spec([
+            "amt_sum_180d", "recency_bucket_0_7d",
+        ])
+        with pytest.raises(ValueError, match="recency_bucket_0_7d"):
+            parser._enforce_spec_schema_parity(config)
