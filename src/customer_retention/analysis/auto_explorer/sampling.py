@@ -30,6 +30,10 @@ _SEGMENT_ID_COL = "_segment_entity_id"
 _STRAT_KEY_COL = "_strat_key"
 _CANDIDATE_SAMPLE_SIZES: tuple[int, ...] = (500, 1000, 2000, 5000, 10000)
 
+_LOOKBACK_MIN_INPUT_ROWS = 1000
+_LOOKBACK_MIN_RETAINED_ROWS = 100
+_LOOKBACK_MIN_RETENTION_RATIO = 0.001
+
 
 def apply_temporal_lookback(df: Any, time_col: str, intent: IntentConfig) -> Any:
     if intent.lookback_periods is None:
@@ -41,14 +45,59 @@ def apply_temporal_lookback(df: Any, time_col: str, intent: IntentConfig) -> Any
     if native_pd.isna(upper):
         return df
     cap = native_pd.Timestamp(intent.history_upper_limit) if intent.history_upper_limit else None
-    if cap is not None and cap < upper:
-        upper = cap
+    upper_capped = cap if cap is not None and cap < upper else upper
     lookback_days = intent.lookback_periods * CADENCE_DAYS[intent.cadence_interval]
-    lower = upper - timedelta(days=lookback_days)
+    lower = upper_capped - timedelta(days=lookback_days)
     mask = ts >= lower
     if cap is not None:
-        mask = mask & (ts <= upper)
-    return df[mask]
+        mask = mask & (ts <= upper_capped)
+    filtered = df[mask]
+    _assert_lookback_retention(df, filtered, time_col, intent, lookback_days, lower, upper_capped)
+    return filtered
+
+
+def _assert_lookback_retention(
+    pre_df: Any,
+    post_df: Any,
+    time_col: str,
+    intent: IntentConfig,
+    lookback_days: int,
+    lower: Any,
+    upper: Any,
+) -> None:
+    """Fail fast when the lookback filter destroys almost all data.
+
+    Triggered only on non-trivial inputs (>= 1000 rows) that collapse to
+    < 100 rows AND retain < 0.1%. Interval-type datasets (contracts,
+    subscriptions) that skip the lookback via raw_time_column_role don't
+    reach this code path — this guard catches misconfiguration where a
+    lookback is applied to data whose timestamps predate the window.
+    """
+    pre_count = safe_len(pre_df)
+    if pre_count < _LOOKBACK_MIN_INPUT_ROWS:
+        return
+    post_count = safe_len(post_df)
+    if post_count >= _LOOKBACK_MIN_RETAINED_ROWS:
+        return
+    if pre_count > 0 and post_count / pre_count >= _LOOKBACK_MIN_RETENTION_RATIO:
+        return
+    lower_str = lower.isoformat() if hasattr(lower, "isoformat") else str(lower)
+    upper_str = upper.isoformat() if hasattr(upper, "isoformat") else str(upper)
+    raise ValueError(
+        f"Temporal lookback filter on '{time_col}' retained only {post_count:,} "
+        f"of {pre_count:,} rows. Window: [{lower_str}, {upper_str}] "
+        f"({lookback_days} days = {intent.lookback_periods} x "
+        f"{intent.cadence_interval.value}). "
+        f"Resolve by one of: "
+        f"(1) for interval-type datasets (contracts/subscriptions whose "
+        f"events span START->END), set "
+        f"raw_time_column_role=RawTimeColumnRole.INTERVAL_START_TIME in NB00 "
+        f"semantics_overrides to skip the lookback; "
+        f"(2) increase intent.lookback_periods (or set it to None) so the "
+        f"window covers more history; "
+        f"(3) verify that '{time_col}' is populated — a mostly-NULL column "
+        f"will silently collapse under the filter."
+    )
 
 
 class SegmentEntitySelection:
