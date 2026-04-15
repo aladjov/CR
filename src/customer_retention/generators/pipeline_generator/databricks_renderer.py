@@ -1398,8 +1398,12 @@ from pyspark.sql import functions as F
 
 def _encode_one_hot(df, col, max_categories=100):
     if col not in df.columns:
-        print(f"WARNING: column '{col}' not in DataFrame, skipping one-hot encoding")
-        return df
+        raise RuntimeError(
+            f"[GOLD] one-hot encoding target '{col}' missing from DataFrame. "
+            "An upstream step (feature_selection, leakage exclusion, or silver merge) "
+            "dropped it before apply_encodings ran. Regenerate the pipeline — the "
+            "post-encoding '{col}_*' columns will otherwise be silently absent from gold."
+        )
     categories = [row[col] for row in df.select(col).distinct().collect() if row[col] is not None]
     if len(categories) > max_categories:
         print(f"WARNING: column '{col}' has {len(categories)} categories (>{max_categories}), using label encoding instead")
@@ -1412,8 +1416,10 @@ def _encode_one_hot(df, col, max_categories=100):
 
 def _label_encode(df, col):
     if col not in df.columns:
-        print(f"WARNING: column '{col}' not in DataFrame, skipping label encoding")
-        return df
+        raise RuntimeError(
+            f"[GOLD] label encoding target '{col}' missing from DataFrame. "
+            "An upstream step dropped it before apply_encodings ran."
+        )
     from pyspark.ml.feature import StringIndexer
     tmp = f"__{col}_idx"
     indexer = StringIndexer(inputCol=col, outputCol=tmp, handleInvalid="keep", stringOrderType="alphabetAsc")

@@ -2938,11 +2938,31 @@ class TestDatabricksGoldColumnFiltering:
         encode_fn = encode_fn[: encode_fn.index("\ndef ")]
         assert "col not in df.columns" in encode_fn
 
+    def test_encode_one_hot_raises_when_target_missing(self, renderer, sample_pipeline_config):
+        """Per Coding_Practices: fail fast when a configured encoding target has
+        been dropped upstream. Silently warning and returning unchanged caused
+        the gold table to end up without `{col}_*` columns, surfacing only at
+        training time as an unhelpful `FeatureSpec parity violation` on the
+        gate."""
+        result = renderer.render_gold(sample_pipeline_config)
+        encode_fn = result[result.index("def _encode_one_hot") :]
+        encode_fn = encode_fn[: encode_fn.index("\ndef ")]
+        assert "raise RuntimeError" in encode_fn
+        assert "one-hot encoding target" in encode_fn
+        assert "skipping one-hot encoding" not in encode_fn, "silent skip must be removed"
+
     def test_label_encode_checks_column_exists(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)
         encode_fn = result[result.index("def _label_encode") :]
         encode_fn = encode_fn[: encode_fn.index("\ndef ")]
         assert "col not in df.columns" in encode_fn
+
+    def test_label_encode_raises_when_target_missing(self, renderer, sample_pipeline_config):
+        result = renderer.render_gold(sample_pipeline_config)
+        encode_fn = result[result.index("def _label_encode") :]
+        encode_fn = encode_fn[: encode_fn.index("\ndef ")]
+        assert "raise RuntimeError" in encode_fn
+        assert "skipping label encoding" not in encode_fn, "silent skip must be removed"
 
     def test_label_encode_preserves_column_name_for_parity_with_exploration(self, renderer, sample_pipeline_config):
         result = renderer.render_gold(sample_pipeline_config)

@@ -170,6 +170,7 @@ class FindingsParser:
         )
         self._collect_allowlist_drops(
             self._feature_spec, pipeline_columns, config.target_column,
+            post_selection_step_targets=self._gold_post_selection_step_targets(config),
         )
 
     def _collect_known_pipeline_columns(self, config: PipelineConfig) -> Set[str]:
@@ -219,6 +220,7 @@ class FindingsParser:
         spec: FeatureSpec,
         pipeline_columns: Set[str],
         target_column: str,
+        post_selection_step_targets: Optional[Set[str]] = None,
     ) -> Set[str]:
         missing = [c for c in spec.selected_features if c not in pipeline_columns]
         if missing:
@@ -235,8 +237,30 @@ class FindingsParser:
             keep.add(spec.entity_column)
         if spec.timestamp_column:
             keep.add(spec.timestamp_column)
+        if post_selection_step_targets:
+            keep |= (post_selection_step_targets & pipeline_columns)
         keep |= {c for c in pipeline_columns if c.startswith("original_")}
         return {c for c in pipeline_columns if c not in keep}
+
+    @staticmethod
+    def _gold_post_selection_step_targets(config: "PipelineConfig") -> Set[str]:
+        """Bare columns of gold steps that run AFTER `apply_feature_selection`
+        in the generated Databricks/local pipeline. These targets must survive
+        feature selection or the steps silently no-op and their outputs (one-hot
+        expansions, scaled values) never land in gold.
+
+        Encodings are load-bearing: `_encode_one_hot(df, col)` drops the bare
+        column and emits `{col}_{value}` columns only when `col` is still
+        present. Scalings are preserved for symmetry — a scale target dropped
+        pre-scaling leaves the column unscaled, which would silently break
+        parity with the training-time fitted distribution.
+        """
+        targets: Set[str] = set()
+        for step in config.gold.encodings:
+            targets.add(step.column)
+        for step in config.gold.scalings:
+            targets.add(step.column)
+        return targets
 
     def _load_recommendations(self) -> Optional[RecommendationRegistry]:
         if self._namespace is not None:
@@ -1223,6 +1247,7 @@ class FindingsParser:
             )
             drop_columns = self._collect_allowlist_drops(
                 spec, pipeline_columns, config.target_column,
+                post_selection_step_targets=self._gold_post_selection_step_targets(config),
             )
         else:
             drop_columns = self._collect_feature_selection_drops(

@@ -7432,3 +7432,248 @@ class TestEnforceSpecSchemaParityWithOneHotEncoding:
         ])
         with pytest.raises(ValueError, match="recency_bucket_0_7d"):
             parser._enforce_spec_schema_parity(config)
+
+
+class TestGoldPostSelectionStepTargets:
+    """Gold's `apply_feature_selection` runs BEFORE `apply_encodings` and
+    `apply_scalings`. Any column that is still needed by a post-selection step
+    must NOT appear in `config.gold.feature_selections` (the drop list), or the
+    generated Databricks gold notebook silently produces a table without the
+    expected post-encoded/post-scaled columns.
+    """
+
+    @staticmethod
+    def _config(*, encode=(), scale=()):
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeLayerConfig,
+            GoldLayerConfig,
+            PipelineConfig,
+            PipelineTransformationType,
+            SilverLayerConfig,
+            SourceConfig,
+            TransformationStep,
+        )
+        src = SourceConfig(name="cust", path="c.csv", format="csv",
+                           entity_key="cid", raw_source_path="/c.csv")
+        encodings = [TransformationStep(type=PipelineTransformationType.ENCODE,
+                                        column=c, parameters={"method": "one_hot"},
+                                        rationale="") for c in encode]
+        scalings = [TransformationStep(type=PipelineTransformationType.SCALE,
+                                       column=c, parameters={"method": "standard"},
+                                       rationale="") for c in scale]
+        return PipelineConfig(
+            name="t", target_column="churn", sources=[src],
+            bronze={"cust": BronzeLayerConfig(source=src)},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(encodings=encodings, scalings=scalings),
+            output_dir=".",
+        )
+
+    def test_returns_encoding_and_scaling_targets(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        config = self._config(encode=("recency_bucket", "lifecycle_quadrant"),
+                              scale=("amt_sum_180d",))
+        targets = FindingsParser._gold_post_selection_step_targets(config)
+        assert targets == {"recency_bucket", "lifecycle_quadrant", "amt_sum_180d"}
+
+    def test_returns_empty_set_when_no_steps(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        config = self._config()
+        assert FindingsParser._gold_post_selection_step_targets(config) == set()
+
+
+class TestCollectAllowlistDropsPreservesEncodeTargets:
+    """The drop list returned by `_collect_allowlist_drops` is written verbatim
+    into `config.gold.feature_selections` and then into the generated Databricks
+    notebook. It must NOT contain bare one-hot ENCODE targets, otherwise the
+    generated `apply_feature_selection` drops them before `apply_encodings`,
+    `_encode_one_hot` silently warns, and the gold table ends up missing the
+    `{col}_*` post-encoding columns — exactly the runtime failure reported by
+    `_apply_feature_spec_gate` ('gold missing recency_bucket_*, lifecycle_quadrant_*').
+    """
+
+    @staticmethod
+    def _make_parser():
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {}
+        parser._source_findings_paths = {}
+        parser._silver_merged_columns_cache = None
+        parser._namespace = None
+        return parser
+
+    @staticmethod
+    def _make_spec(selected_features):
+        from customer_retention.stages.modeling.feature_spec import FeatureSpec, FittedTransform
+        return FeatureSpec(
+            exploration_run_id="r", target_column="churn",
+            entity_column="entity_id", timestamp_column="as_of_date",
+            horizon_days=30, selected_features=list(selected_features),
+            fitted_transforms=[
+                FittedTransform(column=c, action="impute", method="median")
+                for c in selected_features
+            ],
+        )
+
+    def test_bare_encoding_target_not_in_drop_list(self):
+        """Regression: the bare `recency_bucket` was ending up in the drop list
+        because only its post-encoding `recency_bucket_0_7d` variants appear in
+        spec.selected_features."""
+        parser = self._make_parser()
+        spec = self._make_spec([
+            "amt_sum_180d", "recency_bucket_0_7d", "recency_bucket_8_30d",
+        ])
+        pipeline_columns = {
+            "entity_id", "as_of_date", "churn",
+            "amt_sum_180d", "recency_bucket",
+            "recency_bucket_0_7d", "recency_bucket_8_30d",
+            "unused_feature",
+        }
+        drops = parser._collect_allowlist_drops(
+            spec, pipeline_columns, "churn",
+            post_selection_step_targets={"recency_bucket"},
+        )
+        assert "recency_bucket" not in drops, (
+            "bare encoding target must survive feature_selection so _encode_one_hot can run"
+        )
+        assert "unused_feature" in drops, "unrelated columns still get dropped"
+        assert "amt_sum_180d" not in drops, "selected features still preserved"
+
+    def test_bare_scaling_target_not_in_drop_list(self):
+        """Symmetric guarantee for scaling: apply_scalings also runs after
+        feature_selection, so scale targets must survive."""
+        parser = self._make_parser()
+        spec = self._make_spec(["amt_sum_180d"])
+        pipeline_columns = {
+            "entity_id", "as_of_date", "churn",
+            "amt_sum_180d", "throwaway_num",
+        }
+        drops = parser._collect_allowlist_drops(
+            spec, pipeline_columns, "churn",
+            post_selection_step_targets={"throwaway_num"},
+        )
+        assert "throwaway_num" not in drops
+
+    def test_post_selection_targets_none_preserves_legacy_behavior(self):
+        """Omitting the new kwarg must behave identically to the pre-fix
+        implementation — no false preservation when caller did not opt in."""
+        parser = self._make_parser()
+        spec = self._make_spec(["amt_sum_180d"])
+        pipeline_columns = {"entity_id", "as_of_date", "churn", "amt_sum_180d", "orphan"}
+        drops = parser._collect_allowlist_drops(spec, pipeline_columns, "churn")
+        assert drops == {"orphan"}
+
+    def test_target_only_preserved_if_in_pipeline_columns(self):
+        """A stale encoding target that no longer exists in pipeline_columns
+        (e.g. dropped by `_reconcile_gold_columns`) must not be spuriously
+        added to `keep` — it would confuse downstream consumers."""
+        parser = self._make_parser()
+        spec = self._make_spec(["amt_sum_180d"])
+        pipeline_columns = {"entity_id", "as_of_date", "churn", "amt_sum_180d", "x"}
+        drops = parser._collect_allowlist_drops(
+            spec, pipeline_columns, "churn",
+            post_selection_step_targets={"not_in_pipeline", "x"},
+        )
+        assert "x" not in drops
+        assert "not_in_pipeline" not in drops
+
+    def test_missing_spec_feature_still_raises_despite_targets(self):
+        """Preserving encode targets does not suppress the 'pipeline missing
+        feature' parity check."""
+        import pytest
+        parser = self._make_parser()
+        spec = self._make_spec(["amt_sum_180d", "unknown_feature"])
+        pipeline_columns = {"entity_id", "as_of_date", "churn", "amt_sum_180d"}
+        with pytest.raises(ValueError, match="unknown_feature"):
+            parser._collect_allowlist_drops(
+                spec, pipeline_columns, "churn",
+                post_selection_step_targets={"recency_bucket"},
+            )
+
+
+class TestApplyGoldRecommendationsDropListExcludesEncodeTargets:
+    """Integration at `_apply_gold_recommendations` — the function that writes
+    `config.gold.feature_selections`. The drop list is what lands in the
+    generated Databricks code's `apply_feature_selection(df)`, so this is the
+    load-bearing end-to-end assertion for the fix."""
+
+    def test_drop_list_excludes_bare_encoding_targets(self):
+        from customer_retention.analysis.auto_explorer.layered_recommendations import RecommendationRegistry
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+            BronzeEventConfig,
+            BronzeLayerConfig,
+            GoldLayerConfig,
+            LifecycleConfig,
+            PipelineConfig,
+            SilverLayerConfig,
+            SourceConfig,
+        )
+        from customer_retention.stages.modeling.feature_spec import FeatureSpec, FittedTransform
+
+        entity_src = SourceConfig(name="cust", path="c.csv", format="csv",
+                                  entity_key="cid", raw_source_path="/c.csv")
+        event_src = SourceConfig(name="evt", path="e.csv", format="csv",
+                                 entity_key="cid", raw_source_path="/e.csv",
+                                 is_event_level=True, time_column="ts")
+        event_cfg = BronzeEventConfig(
+            source=event_src, entity_column="cid", time_column="ts",
+            aggregation=AggregationWindowConfig(
+                windows=["180d"], value_columns=["amt"], agg_funcs=["sum", "count"],
+            ),
+            lifecycle=LifecycleConfig(
+                include_lifecycle_quadrant=True, include_recency_bucket=True,
+            ),
+        )
+        config = PipelineConfig(
+            name="t", target_column="churn", sources=[entity_src, event_src],
+            bronze={"cust": BronzeLayerConfig(source=entity_src)},
+            silver=SilverLayerConfig(),
+            gold=GoldLayerConfig(),
+            output_dir=".",
+        )
+        config.bronze_event = {"evt": event_cfg}
+
+        registry = RecommendationRegistry()
+        registry.init_gold("churn")
+        registry.add_gold_encoding("recency_bucket", "one_hot", "low card", "04")
+        registry.add_gold_encoding("lifecycle_quadrant", "one_hot", "low card", "04")
+
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._raw_source_columns = {"cust": {"cid"}, "evt": {"cid", "ts", "amt"}}
+        parser._source_findings_paths = {}
+        parser._silver_merged_columns_cache = None
+        parser._namespace = None
+        parser._feature_spec = FeatureSpec(
+            exploration_run_id="r", target_column="churn",
+            entity_column="entity_id", timestamp_column="as_of_date",
+            horizon_days=30,
+            selected_features=[
+                "amt_sum_180d",
+                "lifecycle_quadrant_steady_loyal_lifecycle",
+                "lifecycle_quadrant_one_shot_lifecycle",
+                "recency_bucket_0_7d", "recency_bucket_8_30d",
+            ],
+            fitted_transforms=[
+                FittedTransform(column=c, action="impute", method="median")
+                for c in [
+                    "amt_sum_180d",
+                    "lifecycle_quadrant_steady_loyal_lifecycle",
+                    "lifecycle_quadrant_one_shot_lifecycle",
+                    "recency_bucket_0_7d", "recency_bucket_8_30d",
+                ]
+            ],
+        )
+
+        parser._apply_gold_recommendations(config, registry, [])
+
+        assert "recency_bucket" not in config.gold.feature_selections, (
+            "bare recency_bucket must NOT be dropped pre-encoding — "
+            "dropping it causes _encode_one_hot to silently skip and the gold "
+            "table ends up without recency_bucket_0_7d etc."
+        )
+        assert "lifecycle_quadrant" not in config.gold.feature_selections
+        assert {e.column for e in config.gold.encodings} == {
+            "recency_bucket", "lifecycle_quadrant",
+        }
