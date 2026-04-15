@@ -1290,6 +1290,108 @@ class TestMaskFutureDatetimeDerivation:
             assert pd.isna(result.iloc[0][f"future_date{suffix}"])
 
 
+class TestDeriveExtraDatetimeFeaturesSparkPath:
+    """Spark path uses native Spark withColumn/select — no in-place __setitem__
+    on pyspark.pandas (which would corrupt _psseries)."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def _make_mock_spark_df(self, columns):
+        from unittest.mock import MagicMock
+
+        spark_df = MagicMock()
+        spark_df.columns = list(columns)
+        spark_df.select.return_value = spark_df
+        return spark_df
+
+    def test_spark_pandas_input_routes_through_with_column_path(self):
+        """pyspark.pandas input triggers distributed Spark path; no df.copy() calls."""
+        from unittest.mock import MagicMock, patch
+
+        mock_df = MagicMock()
+        mock_df.spark = True
+        mock_df.to_spark = MagicMock()
+
+        spark_df = self._make_mock_spark_df(["entity", "ts", "other"])
+        ps_result = MagicMock()
+
+        with (
+            patch(
+                "customer_retention.stages.profiling.time_window_aggregator._is_spark_pandas",
+                return_value=True,
+            ),
+            patch(
+                "customer_retention.stages.profiling.time_window_aggregator._is_native_spark_df",
+                return_value=False,
+            ),
+            patch(
+                "customer_retention.stages.profiling.time_window_aggregator.as_spark_df",
+                return_value=spark_df,
+            ),
+            patch(
+                "customer_retention.core.compat.spark_backend._as_pandas_api",
+                return_value=ps_result,
+            ),
+        ):
+            result, new_cols = derive_extra_datetime_features(
+                mock_df, "ts", ["created_at", "resolved_at"],
+            )
+
+        assert result is ps_result
+        assert new_cols == [
+            "created_at_delta_hours", "created_at_hour", "created_at_dow",
+            "created_at_is_weekend",
+            "resolved_at_delta_hours", "resolved_at_hour", "resolved_at_dow",
+            "resolved_at_is_weekend",
+        ]
+        mock_df.copy.assert_not_called()
+        spark_df.select.assert_called_once()
+        select_args = spark_df.select.call_args[0]
+        assert len(select_args) == len(spark_df.columns) + 4 * 2
+
+    def test_native_spark_input_returns_native_spark(self):
+        """When given a native pyspark.sql.DataFrame, return a native Spark DF too."""
+        from unittest.mock import MagicMock, patch
+
+        mock_df = MagicMock()
+        mock_df.columns = ["entity", "ts", "resolved_at"]
+        mock_df.select.return_value = mock_df
+
+        with (
+            patch(
+                "customer_retention.stages.profiling.time_window_aggregator._is_spark_pandas",
+                return_value=False,
+            ),
+            patch(
+                "customer_retention.stages.profiling.time_window_aggregator._is_native_spark_df",
+                return_value=True,
+            ),
+        ):
+            result, new_cols = derive_extra_datetime_features(
+                mock_df, "ts", ["resolved_at"],
+            )
+
+        assert result is mock_df
+        assert new_cols == [
+            "resolved_at_delta_hours", "resolved_at_hour", "resolved_at_dow",
+            "resolved_at_is_weekend",
+        ]
+        mock_df.select.assert_called_once()
+
+    def test_empty_datetime_columns_is_noop_even_on_spark(self):
+        """No datetime columns → return input unchanged, no Spark conversion triggered."""
+        from unittest.mock import MagicMock
+
+        mock_df = MagicMock()
+        mock_df.spark = True
+        result, new_cols = derive_extra_datetime_features(mock_df, "ts", [])
+        assert result is mock_df
+        assert new_cols == []
+        mock_df.copy.assert_not_called()
+
+
 @pytest.fixture
 def entity_datetime_df():
     return pd.DataFrame({

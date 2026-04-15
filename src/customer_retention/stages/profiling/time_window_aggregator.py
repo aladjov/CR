@@ -2,7 +2,7 @@ import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 
@@ -10,6 +10,9 @@ from customer_retention.core.compat import (
     DataFrame,
     Timedelta,
     Timestamp,
+    _is_native_spark_df,
+    _is_spark_pandas,
+    as_spark_df,
     as_tz_naive,
     cut,
     ensure_timestamp,
@@ -335,6 +338,15 @@ class TimeWindowAggregator:
         return np.array([days_since_first.get(e, np.nan) for e in entities])
 
 
+def _extra_datetime_feature_names(datetime_columns: list[str]) -> list[str]:
+    names: list[str] = []
+    for col in datetime_columns:
+        names.extend([
+            f"{col}_delta_hours", f"{col}_hour", f"{col}_dow", f"{col}_is_weekend",
+        ])
+    return names
+
+
 def derive_extra_datetime_features(
     df: DataFrame, time_column: str, datetime_columns: list[str],
     mask_future_columns: Optional[list[str]] = None,
@@ -342,10 +354,16 @@ def derive_extra_datetime_features(
     if not datetime_columns:
         return df, []
 
+    mask_set = set(mask_future_columns) if mask_future_columns else set()
+    new_columns = _extra_datetime_feature_names(datetime_columns)
+
+    if _is_spark_pandas(df) or _is_native_spark_df(df):
+        return _derive_extra_datetime_features_spark(
+            df, time_column, datetime_columns, mask_set,
+        ), new_columns
+
     df = df.copy()
-    new_columns: list[str] = []
     time_series = safe_to_datetime(df[time_column], errors="coerce")
-    _mask_set = set(mask_future_columns) if mask_future_columns else set()
 
     for col in datetime_columns:
         parsed = safe_to_datetime(df[col], errors="coerce")
@@ -360,14 +378,56 @@ def derive_extra_datetime_features(
         df[dow_name] = parsed.dt.dayofweek.astype("Float64")
         df[is_weekend_name] = (parsed.dt.dayofweek >= 5).astype("Float64")
 
-        if col in _mask_set:
+        if col in mask_set:
             future_mask = parsed > time_series
             for name in [delta_hours_name, hour_name, dow_name, is_weekend_name]:
                 df[name] = df[name].where(~future_mask)
 
-        new_columns.extend([delta_hours_name, hour_name, dow_name, is_weekend_name])
-
     return df, new_columns
+
+
+def _derive_extra_datetime_features_spark(
+    df: Any, time_column: str, datetime_columns: list[str], mask_set: set,
+) -> Any:
+    import pyspark.sql.functions as F  # noqa: N812
+
+    from customer_retention.core.compat.spark_backend import _as_pandas_api
+
+    was_pandas_api = not _is_native_spark_df(df)
+    spark_df = as_spark_df(df) if was_pandas_api else df
+
+    time_ts = F.expr(f"try_to_timestamp(`{time_column}`)")
+    time_epoch = F.unix_timestamp(time_ts).cast("double")
+
+    derived_names = set(_extra_datetime_feature_names(datetime_columns))
+    select_exprs: list[Any] = [F.col(c) for c in spark_df.columns if c not in derived_names]
+
+    for col in datetime_columns:
+        parsed_ts = F.expr(f"try_to_timestamp(`{col}`)")
+        parsed_epoch = F.unix_timestamp(parsed_ts).cast("double")
+
+        delta_hours = ((parsed_epoch - time_epoch) / F.lit(3600.0)).cast("double")
+        hour = F.hour(parsed_ts).cast("double")
+        dow = ((F.dayofweek(parsed_ts) + F.lit(5)) % F.lit(7)).cast("double")
+        is_weekend = F.when(dow >= F.lit(5.0), F.lit(1.0)).otherwise(F.lit(0.0))
+
+        if col in mask_set:
+            future_mask = parsed_ts > time_ts
+            null_d = F.lit(None).cast("double")
+            delta_hours = F.when(future_mask, null_d).otherwise(delta_hours)
+            hour = F.when(future_mask, null_d).otherwise(hour)
+            dow = F.when(future_mask, null_d).otherwise(dow)
+            is_weekend = F.when(future_mask, null_d).otherwise(is_weekend)
+
+        select_exprs.extend([
+            delta_hours.alias(f"{col}_delta_hours"),
+            hour.alias(f"{col}_hour"),
+            dow.alias(f"{col}_dow"),
+            is_weekend.alias(f"{col}_is_weekend"),
+        ])
+
+    result = spark_df.select(*select_exprs)
+    return _as_pandas_api(result) if was_pandas_api else result
 
 
 def detect_milestone_pairs(datetime_columns: list[str]) -> list[tuple[str, str]]:
