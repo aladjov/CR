@@ -303,6 +303,80 @@ class TestMomentumRatioSpark:
         assert result.iloc[2] == pytest.approx(1.0)  # 0/0 → 1.0
 
 
+# ── TFE merge does not produce _x/_y suffix artifacts ────────────────────
+
+class TestTFEMergeNoSuffixCollision:
+    """Regression guard for NB01d cell `save_aggregation_metadata` (id=ae7d0a25).
+
+    `TimeWindowAggregator.aggregate(include_recency=True, include_tenure=True)`
+    produces `days_since_last_event` and `days_since_first_event`. The
+    subsequent `TemporalFeatureEngineer.compute(...)` RECENCY group emits the
+    same column names plus `active_span_days`/`recency_ratio`. Without the
+    drop-before-merge guard, pandas `.merge()` appends `_x`/`_y` suffixes —
+    those suffixed names leak through NB03's silver merge into NB05's
+    ratio/interaction recommendations, which then reference columns that the
+    Databricks pipeline never materializes. Silver generation breaks with
+    `UNRESOLVED_COLUMN.WITH_SUGGESTION`. Keeping this behavior under test
+    ensures future edits to NB01d don't silently reintroduce the collision.
+    """
+
+    @staticmethod
+    def _merge_with_overlap_drop(df_aggregated, tfe_features, entity_col):
+        tfe_new_cols = [c for c in tfe_features.columns if c != entity_col]
+        overlap = [c for c in tfe_new_cols if c in df_aggregated.columns]
+        if overlap:
+            df_aggregated = df_aggregated.drop(columns=overlap)
+        return df_aggregated.merge(tfe_features, on=entity_col, how="left")
+
+    def test_overlap_dropped_before_merge_keeps_tfe_values(self):
+        df_aggregated = pd.DataFrame({
+            "entity_id": ["E1", "E2", "E3"],
+            "event_count_30d": [1, 2, 3],
+            "days_since_last_event": [100.0, 200.0, 300.0],
+            "days_since_first_event": [400.0, 500.0, 600.0],
+        })
+        tfe_features = pd.DataFrame({
+            "entity_id": ["E1", "E2", "E3"],
+            "days_since_last_event": [10.0, 20.0, 30.0],
+            "days_since_first_event": [40.0, 50.0, 60.0],
+            "active_span_days": [30.0, 30.0, 30.0],
+            "recency_ratio": [0.25, 0.4, 0.5],
+        })
+        merged = self._merge_with_overlap_drop(df_aggregated, tfe_features, "entity_id")
+        assert "days_since_last_event_x" not in merged.columns
+        assert "days_since_last_event_y" not in merged.columns
+        assert "days_since_first_event_x" not in merged.columns
+        assert "days_since_first_event_y" not in merged.columns
+        assert list(merged["days_since_last_event"]) == [10.0, 20.0, 30.0]
+        assert list(merged["days_since_first_event"]) == [40.0, 50.0, 60.0]
+        assert set({"active_span_days", "recency_ratio", "event_count_30d"}) <= set(merged.columns)
+
+    def test_no_overlap_passthrough(self):
+        df_aggregated = pd.DataFrame({
+            "entity_id": ["E1", "E2"],
+            "event_count_30d": [1, 2],
+        })
+        tfe_features = pd.DataFrame({
+            "entity_id": ["E1", "E2"],
+            "lag0_amt_sum": [100.0, 200.0],
+        })
+        merged = self._merge_with_overlap_drop(df_aggregated, tfe_features, "entity_id")
+        assert set(merged.columns) == {"entity_id", "event_count_30d", "lag0_amt_sum"}
+
+    def test_naive_merge_reproduces_collision_bug(self):
+        df_aggregated = pd.DataFrame({
+            "entity_id": ["E1"],
+            "days_since_last_event": [100.0],
+        })
+        tfe_features = pd.DataFrame({
+            "entity_id": ["E1"],
+            "days_since_last_event": [10.0],
+        })
+        naive = df_aggregated.merge(tfe_features, on="entity_id", how="left")
+        assert "days_since_last_event_x" in naive.columns
+        assert "days_since_last_event_y" in naive.columns
+
+
 # ── recency bucket (Spark-native F.when chain equivalent) ────────────────
 
 class TestRecencyBucketSpark:

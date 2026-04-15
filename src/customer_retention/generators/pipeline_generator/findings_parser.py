@@ -910,8 +910,19 @@ class FindingsParser:
             return self._silver_merged_columns_cache
         delta = _get_delta_for_silver_schema()
         df = delta.read(str(silver_path))
-        self._silver_merged_columns_cache = set(df.columns)
+        self._silver_merged_columns_cache = self._strip_merge_suffix_artifacts(set(df.columns))
         return self._silver_merged_columns_cache
+
+    @staticmethod
+    def _strip_merge_suffix_artifacts(columns: Set[str]) -> Set[str]:
+        merge_pairs = {
+            c[:-2] for c in columns
+            if c.endswith("_x") and (c[:-2] + "_y") in columns
+        }
+        return {
+            c for c in columns
+            if not ((c.endswith("_x") or c.endswith("_y")) and c[:-2] in merge_pairs)
+        }
 
     @staticmethod
     def _predict_gold_generated_columns(config: "PipelineConfig") -> Set[str]:

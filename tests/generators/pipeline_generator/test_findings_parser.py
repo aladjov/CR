@@ -7005,8 +7005,8 @@ class TestCollectKnownPipelineColumns:
     def test_silver_merged_columns_used_as_ground_truth(self, tmp_path):
         """When `namespace.silver_merged_path` exists, its actual columns
         (read from Delta metadata) are folded into the parity column set.
-        Lets merge-artifact columns like `days_since_last_event_x` register
-        as legitimately-produced even though no template predicts them.
+        Unpaired `_x`/`_y` endings stay untouched because they cannot be
+        merge artifacts (those always come in pairs).
         """
         from unittest.mock import MagicMock
 
@@ -7023,6 +7023,42 @@ class TestCollectKnownPipelineColumns:
         }
         cols = parser._collect_known_pipeline_columns(config)
         assert {"days_since_last_event_x", "days_since_first_event_y", "event_count_180d"} <= cols
+
+    def test_silver_merged_strips_merge_artifact_pairs(self, tmp_path):
+        """Paired `_x`/`_y` columns sharing the same base are the signature of
+        a pandas-merge suffix collision (fixed upstream in NB01d). Even if a
+        stale silver_merged Delta still contains them, the parity set must
+        drop both so downstream ratio/interaction recs referencing them are
+        filtered out instead of generating broken Databricks code.
+        """
+        from unittest.mock import MagicMock
+
+        parser, config = self._parser_with()
+        ns = MagicMock()
+        silver_dir = tmp_path / "silver_merged"
+        silver_dir.mkdir()
+        ns.silver_merged_path = silver_dir
+        parser._namespace = ns
+
+        from customer_retention.generators.pipeline_generator import findings_parser as fp
+        fake_df = MagicMock()
+        fake_df.columns = [
+            "entity_id", "as_of_date", "event_count_180d",
+            "days_since_last_event_x", "days_since_last_event_y",
+            "days_since_first_event_x", "days_since_first_event_y",
+            "legit_trailing_x",
+        ]
+        fake_delta = MagicMock()
+        fake_delta.read.return_value = fake_df
+        import pytest as _pytest
+        with _pytest.MonkeyPatch.context() as mp:
+            mp.setattr(fp, "_get_delta_for_silver_schema", lambda: fake_delta)
+            cols = parser._collect_known_pipeline_columns(config)
+        assert "legit_trailing_x" in cols
+        assert "days_since_last_event_x" not in cols
+        assert "days_since_last_event_y" not in cols
+        assert "days_since_first_event_x" not in cols
+        assert "days_since_first_event_y" not in cols
 
     def test_silver_ratio_with_merge_artifact_sources_passes_filter(self):
         """`_silver_derived_sources_available` must consult silver_merged columns
@@ -7073,3 +7109,39 @@ class TestCollectKnownPipelineColumns:
         assert first == {"entity_id", "as_of_date", "extra_col"}
         assert second == first
         fake_delta.read.assert_called_once()
+
+
+class TestStripMergeSuffixArtifacts:
+    def test_paired_suffixes_removed(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        cols = {"a_x", "a_y", "b", "entity_id"}
+        assert FindingsParser._strip_merge_suffix_artifacts(cols) == {"b", "entity_id"}
+
+    def test_unpaired_suffix_kept(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        cols = {"pos_x", "count", "days_y"}
+        assert FindingsParser._strip_merge_suffix_artifacts(cols) == {"pos_x", "count", "days_y"}
+
+    def test_multiple_pairs(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        cols = {
+            "entity_id",
+            "days_since_last_event_x", "days_since_last_event_y",
+            "days_since_first_event_x", "days_since_first_event_y",
+            "keep_me",
+        }
+        assert FindingsParser._strip_merge_suffix_artifacts(cols) == {"entity_id", "keep_me"}
+
+    def test_empty_set(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        assert FindingsParser._strip_merge_suffix_artifacts(set()) == set()
+
+    def test_paired_suffixes_removed_when_base_also_present(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        cols = {"coord_x", "coord_y", "coord"}
+        assert FindingsParser._strip_merge_suffix_artifacts(cols) == {"coord"}
+
+    def test_only_y_suffix_alone_is_kept(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        cols = {"solo_y", "other"}
+        assert FindingsParser._strip_merge_suffix_artifacts(cols) == {"solo_y", "other"}
