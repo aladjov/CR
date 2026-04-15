@@ -67,7 +67,10 @@ class SegmentEntitySelection:
     def from_spark_df(cls, spark_df: Any, entity_col: str) -> "SegmentEntitySelection":
         renamed = spark_df.withColumnRenamed(entity_col, _SEGMENT_ID_COL) \
             if entity_col != _SEGMENT_ID_COL else spark_df
-        return cls(renamed.select(_SEGMENT_ID_COL))
+        # Cache the passing-entity DataFrame so `.count()` materializes it once
+        # and the downstream semi-join in `filter_frame` reuses the cached
+        # block — otherwise Spark rescans the filter subquery on every action.
+        return cls(renamed.select(_SEGMENT_ID_COL).cache())
 
     @property
     def is_distributed(self) -> bool:
@@ -112,7 +115,7 @@ class SegmentEntitySelection:
         if not self.is_distributed and not other.is_distributed:
             return SegmentEntitySelection(set(self._data) & set(other._data))
         joined = self._as_spark_df().join(other._as_spark_df(), on=_SEGMENT_ID_COL, how="inner")
-        return SegmentEntitySelection(joined)
+        return SegmentEntitySelection(joined.cache())
 
     def filter_frame(self, df: Any, entity_col: str) -> Any:
         """Return df restricted to rows whose entity_col value is in this selection."""
@@ -163,6 +166,20 @@ def _pandas_passing_entities(df: Any, query_expr: str, entity_col: str) -> set:
     return set(passing[entity_col].to_numpy())
 
 
+def _expose_frames_as_views(frames: dict[str, Any]) -> None:
+    # Filter expressions may contain SQL subqueries that reference sibling
+    # datasets by name (e.g. `ACCOUNT_ID in (select ACCOUNT_ID from contract
+    # where CONTRACT_START_DATE is not null)`). Spark's SQL parser resolves
+    # unqualified identifiers through the session catalog — so we register
+    # every Spark-backed frame as a session-scoped temp view keyed by its
+    # dataset name. The views live on the lazy plans returned from here; the
+    # Spark session drops them on termination, no cleanup required.
+    for name, frame in frames.items():
+        if not _is_spark_pandas(frame):
+            continue
+        as_spark_df(frame).createOrReplaceTempView(name)
+
+
 def resolve_segment_entity_ids(
     frames: dict[str, pd.DataFrame],
     filters: Optional[dict[str, str]],
@@ -170,6 +187,7 @@ def resolve_segment_entity_ids(
 ) -> Optional[SegmentEntitySelection]:
     if not filters:
         return None
+    _expose_frames_as_views(frames)
     selections: list[SegmentEntitySelection] = []
     for dataset_name, query_expr in filters.items():
         if dataset_name not in frames:

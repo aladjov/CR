@@ -11,13 +11,50 @@ class TestLoadSparkTable:
             with pytest.raises(RuntimeError, match="No active Spark session"):
                 load_spark_table("catalog.schema.table")
 
-    def test_delegates_to_spark_table(self):
+    def test_passes_3_part_name_unchanged(self):
         mock_spark = MagicMock()
         mock_spark.table.return_value = MagicMock(name="spark_df")
         with patch("customer_retention.core.compat.get_spark_session", return_value=mock_spark):
             result = load_spark_table("catalog.schema.table")
         mock_spark.table.assert_called_once_with("catalog.schema.table")
+        mock_spark.catalog.currentCatalog.assert_not_called()
+        mock_spark.catalog.currentDatabase.assert_not_called()
         assert result is mock_spark.table.return_value
+
+    def test_qualifies_2_part_name_with_current_catalog(self):
+        # Spark Connect / multi-task Databricks jobs can re-analyze plans with
+        # a different current_catalog than at load time — pinning to the 3-part
+        # identifier keeps the plan robust.
+        mock_spark = MagicMock()
+        mock_spark.catalog.currentCatalog.return_value = "main"
+        mock_spark.catalog.currentDatabase.return_value = "bronze"
+        with patch("customer_retention.core.compat.get_spark_session", return_value=mock_spark):
+            load_spark_table("bronze.contract")
+        mock_spark.table.assert_called_once_with("main.bronze.contract")
+
+    def test_qualifies_1_part_name_with_current_catalog_and_schema(self):
+        mock_spark = MagicMock()
+        mock_spark.catalog.currentCatalog.return_value = "main"
+        mock_spark.catalog.currentDatabase.return_value = "bronze"
+        with patch("customer_retention.core.compat.get_spark_session", return_value=mock_spark):
+            load_spark_table("contract")
+        mock_spark.table.assert_called_once_with("main.bronze.contract")
+
+    def test_qualification_falls_back_on_catalog_api_error(self):
+        # Older Spark builds (pre 3.4) lack currentCatalog — don't break loads.
+        mock_spark = MagicMock()
+        mock_spark.catalog.currentCatalog.side_effect = Exception("not supported")
+        with patch("customer_retention.core.compat.get_spark_session", return_value=mock_spark):
+            load_spark_table("schema.contract")
+        mock_spark.table.assert_called_once_with("schema.contract")
+
+    def test_qualification_skipped_when_current_values_empty(self):
+        mock_spark = MagicMock()
+        mock_spark.catalog.currentCatalog.return_value = ""
+        mock_spark.catalog.currentDatabase.return_value = None
+        with patch("customer_retention.core.compat.get_spark_session", return_value=mock_spark):
+            load_spark_table("contract")
+        mock_spark.table.assert_called_once_with("contract")
 
     def test_propagates_spark_errors(self):
         mock_spark = MagicMock()

@@ -1,11 +1,13 @@
 import math
 from datetime import timedelta
+from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
 
 from customer_retention.analysis.auto_explorer.project_context import CadenceInterval, IntentConfig
 from customer_retention.analysis.auto_explorer.sampling import (
+    SegmentEntitySelection,
     _compute_group_budget,
     apply_sample_filters,
     apply_temporal_lookback,
@@ -391,6 +393,205 @@ class TestResolveSegmentEntityIds:
             {"ds": df}, {"ds": "region == 'US'"}, {"ds": "eid"},
         )
         assert result == {"ACC001", "ACC003"}
+
+
+class TestSegmentEntitySelection:
+    def test_pandas_set_supports_len_and_contains(self):
+        sel = SegmentEntitySelection.from_set({1, 2, 3})
+        assert len(sel) == 3
+        assert 1 in sel
+        assert 99 not in sel
+
+    def test_pandas_set_equals_plain_set(self):
+        sel = SegmentEntitySelection.from_set({"a", "b"})
+        assert sel == {"a", "b"}
+        assert sel != {"a"}
+
+    def test_pandas_intersection(self):
+        a = SegmentEntitySelection.from_set({1, 2, 3})
+        b = SegmentEntitySelection.from_set({2, 3, 4})
+        result = a.intersect(b)
+        assert result == {2, 3}
+
+    def test_filter_frame_pandas_semantics(self):
+        sel = SegmentEntitySelection.from_set({1, 3})
+        df = pd.DataFrame({"eid": [1, 2, 3, 4], "v": [10, 20, 30, 40]})
+        filtered = sel.filter_frame(df, "eid")
+        assert set(filtered["eid"]) == {1, 3}
+
+    def test_distributed_len_uses_count_without_collect(self):
+        # For Spark-backed selections the row count comes from a single .count()
+        # action — never a .collect() of entity IDs (would OOM on large tables).
+        mock_sdf = MagicMock()
+        mock_sdf.withColumnRenamed.return_value = mock_sdf
+        mock_sdf.select.return_value = mock_sdf
+        mock_sdf.cache.return_value = mock_sdf
+        mock_sdf.count.return_value = 1_250_000
+        sel = SegmentEntitySelection.from_spark_df(mock_sdf, "eid")
+        assert len(sel) == 1_250_000
+        mock_sdf.collect.assert_not_called()
+
+    def test_from_spark_df_caches_result_to_avoid_rescans(self):
+        # Without cache, `.count()` (len) + `.join()` (filter_frame) each
+        # re-execute the filter subquery from scratch. Caching pins the
+        # passing-entity IDs so downstream actions reuse the same block.
+        mock_sdf = MagicMock()
+        renamed = MagicMock()
+        selected = MagicMock()
+        cached = MagicMock(name="cached")
+        mock_sdf.withColumnRenamed.return_value = renamed
+        renamed.select.return_value = selected
+        selected.cache.return_value = cached
+
+        sel = SegmentEntitySelection.from_spark_df(mock_sdf, "eid")
+        selected.cache.assert_called_once()
+        assert sel._data is cached
+
+    def test_intersect_caches_join_result(self):
+        left_sdf = MagicMock(name="left_sdf")
+        left_sdf.withColumnRenamed.return_value = left_sdf
+        left_sdf.select.return_value = left_sdf
+        left_sdf.cache.return_value = left_sdf
+        right_sdf = MagicMock(name="right_sdf")
+        right_sdf.withColumnRenamed.return_value = right_sdf
+        right_sdf.select.return_value = right_sdf
+        right_sdf.cache.return_value = right_sdf
+        joined = MagicMock(name="joined")
+        joined.cache.return_value = MagicMock(name="joined_cached")
+        left_sdf.join.return_value = joined
+
+        a = SegmentEntitySelection.from_spark_df(left_sdf, "eid")
+        b = SegmentEntitySelection.from_spark_df(right_sdf, "eid")
+        a.intersect(b)
+        joined.cache.assert_called_once()
+
+    def test_distributed_len_cached(self):
+        mock_sdf = MagicMock()
+        mock_sdf.withColumnRenamed.return_value = mock_sdf
+        mock_sdf.select.return_value = mock_sdf
+        mock_sdf.cache.return_value = mock_sdf
+        mock_sdf.count.return_value = 42
+        sel = SegmentEntitySelection.from_spark_df(mock_sdf, "eid")
+        assert len(sel) == 42
+        assert len(sel) == 42
+        # One .count() job only, regardless of how many times len() is called.
+        assert mock_sdf.count.call_count == 1
+
+    def test_distributed_iteration_raises(self):
+        mock_sdf = MagicMock()
+        mock_sdf.withColumnRenamed.return_value = mock_sdf
+        mock_sdf.select.return_value = mock_sdf
+        mock_sdf.cache.return_value = mock_sdf
+        sel = SegmentEntitySelection.from_spark_df(mock_sdf, "eid")
+        with pytest.raises(TypeError, match="distributed"):
+            list(sel)
+        with pytest.raises(TypeError, match="distributed"):
+            _ = 5 in sel
+
+    def test_distributed_intersection_uses_inner_join(self):
+        # Intersection between two distributed selections must stay in Spark —
+        # a join, not collecting both sides to the driver.
+        left_sdf = MagicMock(name="left_sdf")
+        left_sdf.withColumnRenamed.return_value = left_sdf
+        left_sdf.select.return_value = left_sdf
+        left_sdf.cache.return_value = left_sdf
+        right_sdf = MagicMock(name="right_sdf")
+        right_sdf.withColumnRenamed.return_value = right_sdf
+        right_sdf.select.return_value = right_sdf
+        right_sdf.cache.return_value = right_sdf
+        joined = MagicMock(name="joined")
+        joined.cache.return_value = joined
+        left_sdf.join.return_value = joined
+
+        a = SegmentEntitySelection.from_spark_df(left_sdf, "eid")
+        b = SegmentEntitySelection.from_spark_df(right_sdf, "eid")
+        result = a.intersect(b)
+
+        left_sdf.join.assert_called_once()
+        _, kwargs = left_sdf.join.call_args
+        assert kwargs.get("how") == "inner"
+        assert result.is_distributed is True
+        left_sdf.collect.assert_not_called()
+        right_sdf.collect.assert_not_called()
+
+    def test_distributed_filter_frame_uses_left_semi_join(self, monkeypatch):
+        # Applying the filter back to a frame must use a left-semi join —
+        # never materialize the entity ID list.
+        mock_sdf = MagicMock()
+        mock_sdf.withColumnRenamed.return_value = mock_sdf
+        mock_sdf.select.return_value = mock_sdf
+        mock_sdf.cache.return_value = mock_sdf
+        sel = SegmentEntitySelection.from_spark_df(mock_sdf, "eid")
+
+        captured: dict = {}
+
+        def fake_as_spark_df(df):
+            captured["input"] = df
+            return MagicMock(name="target_sdf", **{
+                "join.return_value": MagicMock(name="joined"),
+            })
+
+        def fake_as_pandas_api(result):
+            captured["result"] = result
+            return "wrapped"
+
+        monkeypatch.setattr(
+            "customer_retention.analysis.auto_explorer.sampling.as_spark_df",
+            fake_as_spark_df,
+        )
+        monkeypatch.setattr(
+            "customer_retention.core.compat.spark_backend._as_pandas_api",
+            fake_as_pandas_api,
+        )
+
+        out = sel.filter_frame("any-psdf", "eid")
+        assert out == "wrapped"
+        assert captured["input"] == "any-psdf"
+        mock_sdf.collect.assert_not_called()
+
+
+class TestResolveSegmentEntityIdsRegistersViews:
+    def test_spark_frames_exposed_as_temp_views_by_dataset_name(self, monkeypatch):
+        # SQL subqueries in filter expressions (e.g. `... in (select ACCOUNT_ID
+        # from contract where ...)`) resolve through the session catalog.
+        # Every Spark-backed frame must be registered as a temp view keyed by
+        # its dataset name so those references resolve.
+        account_sdf = MagicMock(name="account_sdf")
+        contract_sdf = MagicMock(name="contract_sdf")
+
+        class FakeSparkFrame:
+            def __init__(self, sdf):
+                self._sdf = sdf
+
+            def to_spark(self):
+                return self._sdf
+
+        account_frame = FakeSparkFrame(account_sdf)
+        contract_frame = FakeSparkFrame(contract_sdf)
+
+        # Stub out the heavy Spark execution path — we only want to prove that
+        # temp view registration happened before any filter evaluation.
+        monkeypatch.setattr(
+            "customer_retention.analysis.auto_explorer.sampling._spark_passing_entities",
+            lambda df, expr, col: MagicMock(name="passing_ids_sdf"),
+        )
+
+        resolve_segment_entity_ids(
+            {"account": account_frame, "contract": contract_frame},
+            {"account": "ACCOUNT_ID in (select ACCOUNT_ID from contract)"},
+            {"account": "ACCOUNT_ID", "contract": "ACCOUNT_ID"},
+        )
+
+        account_sdf.createOrReplaceTempView.assert_called_once_with("account")
+        contract_sdf.createOrReplaceTempView.assert_called_once_with("contract")
+
+    def test_pandas_frames_do_not_touch_spark_catalog(self):
+        df = pd.DataFrame({"eid": [1, 2], "x": [10, 20]})
+        # Pure pandas path — no Spark session exists. Must not raise.
+        result = resolve_segment_entity_ids(
+            {"ds": df}, {"ds": "x > 5"}, {"ds": "eid"},
+        )
+        assert result == {1, 2}
 
 
 class TestEstimateSamplingAccuracy:
