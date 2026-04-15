@@ -3832,6 +3832,51 @@ class TestDatabricksLifecycleQuadrantParityWithNB01d:
         ast.parse(result)
 
 
+class TestDatabricksTrainingSpecSnapshot:
+    """The production training template must snapshot the FeatureSpec into
+    `_NAMESPACE.feature_spec_path` whenever the hardcoded `_FEATURE_SPEC_PATH`
+    differs. Without this, NB11's parity report (which reads from the current
+    run's namespace) raises `FileNotFoundError: FeatureSpec not found ...` when
+    exploration and production ran in different run_ids."""
+
+    @pytest.fixture
+    def config_with_feature_spec(self, sample_pipeline_config):
+        sample_pipeline_config.feature_spec_path = "/some/exploration/run/merged/feature_spec.yaml"
+        from customer_retention.generators.pipeline_generator.models import TrainingConfig
+        sample_pipeline_config.training = TrainingConfig(feature_spec_path=sample_pipeline_config.feature_spec_path)
+        return sample_pipeline_config
+
+    def test_snapshots_spec_into_current_namespace(self, renderer, config_with_feature_spec):
+        result = renderer.render_training(config_with_feature_spec)
+        fn = result[result.index("def train_and_evaluate") :]
+        assert "_runtime_spec_path = _NAMESPACE.feature_spec_path" in fn
+        assert "shutil" in fn
+        assert "copy2(_FEATURE_SPEC_PATH, _runtime_spec_path)" in fn
+
+    def test_snapshot_skips_when_paths_match(self, renderer, config_with_feature_spec):
+        """Idempotent: when the baked path already equals the runtime path, no copy."""
+        result = renderer.render_training(config_with_feature_spec)
+        fn = result[result.index("def train_and_evaluate") :]
+        assert "_runtime_spec_path != _FEATURE_SPEC_PATH" in fn
+
+    def test_snapshot_skips_when_destination_exists(self, renderer, config_with_feature_spec):
+        """Avoid overwriting a local spec that may have been edited in the current run."""
+        result = renderer.render_training(config_with_feature_spec)
+        fn = result[result.index("def train_and_evaluate") :]
+        assert "not _runtime_spec_path.exists()" in fn
+
+    def test_prod_diag_records_spec_source_path(self, renderer, config_with_feature_spec):
+        """NB11's fallback reads `feature_spec_source_path` from prod_diag to
+        locate the original spec when the current run is missing a copy."""
+        result = renderer.render_training(config_with_feature_spec)
+        assert '"feature_spec_source_path"' in result
+        assert "str(_FEATURE_SPEC_PATH)" in result
+
+    def test_rendered_training_is_valid_python(self, renderer, config_with_feature_spec):
+        result = renderer.render_training(config_with_feature_spec)
+        ast.parse(result)
+
+
 class TestDatabricksRecencyBucketLabelsMatchNB01d:
     """The recency_bucket chain writes string labels that later feed one-hot
     encoding. If the labels disagree with NB01d's (which the FeatureSpec
