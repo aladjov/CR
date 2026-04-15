@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Iterable, Optional
 
 from customer_retention.core.compat import (
     _is_spark_pandas,
@@ -21,6 +21,8 @@ from customer_retention.core.compat import (
 
 if TYPE_CHECKING:
     from customer_retention.analysis.auto_explorer.project_context import IntentConfig
+
+_SEGMENT_ID_COL = "_segment_entity_id"
 
 
 def apply_temporal_lookback(df: Any, time_col: str, intent: IntentConfig) -> Any:
@@ -43,24 +45,111 @@ def apply_temporal_lookback(df: Any, time_col: str, intent: IntentConfig) -> Any
     return df[mask]
 
 
-def _spark_passing_entities(df: Any, query_expr: str, entity_col: str) -> set:
-    """Single-pass Spark SQL: count total vs matching rows per entity."""
+class SegmentEntitySelection:
+    """Entity IDs that pass the segment filters.
+
+    On native pandas the IDs live in a set. On pyspark.pandas they stay as a
+    single-column Spark DataFrame so the driver never has to hold the full list
+    in memory — intersections and membership tests use Spark semi/inner joins.
+    """
+
+    __slots__ = ("_data", "_count")
+
+    def __init__(self, data: Any):
+        self._data: Any = data
+        self._count: Optional[int] = None
+
+    @classmethod
+    def from_set(cls, ids: Iterable) -> "SegmentEntitySelection":
+        return cls(set(ids))
+
+    @classmethod
+    def from_spark_df(cls, spark_df: Any, entity_col: str) -> "SegmentEntitySelection":
+        renamed = spark_df.withColumnRenamed(entity_col, _SEGMENT_ID_COL) \
+            if entity_col != _SEGMENT_ID_COL else spark_df
+        return cls(renamed.select(_SEGMENT_ID_COL))
+
+    @property
+    def is_distributed(self) -> bool:
+        return not isinstance(self._data, (set, frozenset))
+
+    def __len__(self) -> int:
+        if self._count is None:
+            self._count = int(self._data.count()) if self.is_distributed else len(self._data)
+        return self._count
+
+    def __contains__(self, value: Any) -> bool:
+        if self.is_distributed:
+            raise TypeError(
+                "SegmentEntitySelection is distributed — use .filter_frame() "
+                "instead of 'in' checks (collecting would OOM the driver).",
+            )
+        return value in self._data
+
+    def __iter__(self):
+        if self.is_distributed:
+            raise TypeError(
+                "SegmentEntitySelection is distributed — use .filter_frame() "
+                "instead of iterating (collecting would OOM the driver).",
+            )
+        return iter(self._data)
+
+    def __eq__(self, other: Any) -> bool:
+        if self.is_distributed:
+            return NotImplemented
+        if isinstance(other, SegmentEntitySelection):
+            if other.is_distributed:
+                return NotImplemented
+            return set(self._data) == set(other._data)
+        if isinstance(other, (set, frozenset)):
+            return set(self._data) == set(other)
+        return NotImplemented
+
+    def __hash__(self):  # unhashable — sets are mutable
+        raise TypeError("SegmentEntitySelection is unhashable")
+
+    def intersect(self, other: "SegmentEntitySelection") -> "SegmentEntitySelection":
+        if not self.is_distributed and not other.is_distributed:
+            return SegmentEntitySelection(set(self._data) & set(other._data))
+        joined = self._as_spark_df().join(other._as_spark_df(), on=_SEGMENT_ID_COL, how="inner")
+        return SegmentEntitySelection(joined)
+
+    def filter_frame(self, df: Any, entity_col: str) -> Any:
+        """Return df restricted to rows whose entity_col value is in this selection."""
+        if not self.is_distributed:
+            return safe_isin(df, entity_col, self._data)
+        from customer_retention.core.compat.spark_backend import _as_pandas_api
+        spark_df = as_spark_df(df)
+        semi_keys = self._data if _SEGMENT_ID_COL == entity_col \
+            else self._data.withColumnRenamed(_SEGMENT_ID_COL, entity_col)
+        return _as_pandas_api(spark_df.join(semi_keys, on=entity_col, how="left_semi"))
+
+    def _as_spark_df(self) -> Any:
+        if self.is_distributed:
+            return self._data
+        from customer_retention.core.compat.detection import get_spark_session
+        spark = get_spark_session()
+        if spark is None:
+            raise RuntimeError("No active Spark session available for distributed intersection")
+        return spark.createDataFrame([(v,) for v in self._data], [_SEGMENT_ID_COL])
+
+
+def _spark_passing_entities(df: Any, query_expr: str, entity_col: str) -> Any:
+    """Distributed: one-column Spark DataFrame of entities where every row passes."""
     from pyspark.sql import functions as F  # noqa: N812
 
     from customer_retention.core.compat import _spark_safe_query_expr
 
     spark_df = as_spark_df(df)
     spark_expr = _spark_safe_query_expr(query_expr)
-    rows = (
+    return (
         spark_df
         .withColumn("_m", F.when(F.expr(spark_expr), F.lit(1)).otherwise(F.lit(0)))
         .groupBy(entity_col)
         .agg(F.count("*").alias("_total"), F.sum("_m").alias("_matching"))
         .filter(F.col("_total") == F.col("_matching"))
         .select(entity_col)
-        .collect()
     )
-    return {row[0] for row in rows}
 
 
 def _pandas_passing_entities(df: Any, query_expr: str, entity_col: str) -> set:
@@ -78,25 +167,28 @@ def resolve_segment_entity_ids(
     frames: dict[str, pd.DataFrame],
     filters: Optional[dict[str, str]],
     entity_columns: dict[str, str],
-) -> Optional[set]:
+) -> Optional[SegmentEntitySelection]:
     if not filters:
         return None
-    allowed_sets = []
+    selections: list[SegmentEntitySelection] = []
     for dataset_name, query_expr in filters.items():
         if dataset_name not in frames:
             continue
         df = frames[dataset_name]
         entity_col = entity_columns[dataset_name]
         if _is_spark_pandas(df):
-            passing_ids = _spark_passing_entities(df, query_expr, entity_col)
+            selections.append(SegmentEntitySelection.from_spark_df(
+                _spark_passing_entities(df, query_expr, entity_col), entity_col,
+            ))
         else:
-            passing_ids = _pandas_passing_entities(df, query_expr, entity_col)
-        allowed_sets.append(passing_ids)
-    if not allowed_sets:
+            selections.append(SegmentEntitySelection.from_set(
+                _pandas_passing_entities(df, query_expr, entity_col),
+            ))
+    if not selections:
         return None
-    result = allowed_sets[0]
-    for s in allowed_sets[1:]:
-        result &= s
+    result = selections[0]
+    for s in selections[1:]:
+        result = result.intersect(s)
     return result
 
 

@@ -991,6 +991,17 @@ class TestPredictSparkMl:
 
 
 class TestSpecGate:
+    @pytest.fixture(autouse=True)
+    def _isolate_run_discovery(self, monkeypatch):
+        """RunNamespace.from_env_or_latest honors CR_RUN_ID / CR_EXPERIMENTS_DIR
+        above the sentinel we write under tmp_path. Ambient values (set by
+        leaky tests upstream, or by the developer's shell) would cause the
+        loader to look for the spec under a different run_id and silently
+        skip the gate. Clear them so sentinel-based discovery is authoritative.
+        """
+        monkeypatch.delenv("CR_RUN_ID", raising=False)
+        monkeypatch.delenv("CR_EXPERIMENTS_DIR", raising=False)
+
     @staticmethod
     def _make_spec(features):
         from customer_retention.stages.modeling.feature_spec import FeatureSpec, FittedTransform
