@@ -247,23 +247,37 @@ C01_RUN_PIPELINE_BODY = '''import json as _json
 import time as _time
 from pathlib import Path as _Path
 
-from customer_retention.core.compat.detection import get_dbutils
+from customer_retention.core.compat.detection import get_dbutils, get_spark_session
+from customer_retention.core.config.experiments import get_experiments_dir
+
+# Resolve upstream state defensively so this cell can run standalone.
+# Config knobs come from the configuration cell above; if that cell was not
+# executed yet (e.g. re-running just this cell), sensible defaults are used.
+_g = globals()
+_skip = _g.get("SKIP_PIPELINE_RUN", False)
+_pipeline_dir_cfg = _g.get("PIPELINE_DIR", None)
+_stages = _g.get(
+    "PIPELINE_STAGES",
+    ["landing", "bronze", "silver", "gold", "training", "scoring"],
+)
+_timeout = _g.get("PIPELINE_STAGE_TIMEOUT_SECONDS", 3600)
+_spark = _g.get("spark") or get_spark_session()
 
 _pipeline_results = {}
 _pipeline_errors = []
 
 _dbutils = get_dbutils()
 
-if SKIP_PIPELINE_RUN:
+if _skip:
     print("SKIPPED: SKIP_PIPELINE_RUN=True")
-elif spark is None:
+elif _spark is None:
     print("SKIPPED: no active Spark session (Databricks-only cell)")
 elif _dbutils is None:
     print("SKIPPED: dbutils unavailable (not running on Databricks)")
 else:
     _pipeline_dir = (
-        _Path(PIPELINE_DIR)
-        if PIPELINE_DIR
+        _Path(_pipeline_dir_cfg)
+        if _pipeline_dir_cfg
         else _Path(get_experiments_dir()).parent / "generated_pipelines" / "databricks"
     )
     if not _pipeline_dir.exists():
@@ -274,11 +288,11 @@ else:
         )
 
     print(f"PIPELINE_DIR: {_pipeline_dir}")
-    print(f"STAGES:       {PIPELINE_STAGES}")
+    print(f"STAGES:       {_stages}")
     print("=" * 70)
 
     _total_start = _time.time()
-    for _stage in PIPELINE_STAGES:
+    for _stage in _stages:
         _stage_dir = _pipeline_dir / _stage
         if not _stage_dir.exists():
             print(f"[{_stage.upper():<9}] (no scripts in {_stage_dir.name}/ - skipping)")
@@ -292,7 +306,7 @@ else:
             _start = _time.time()
             print(f"[{_stage.upper():<9}] {_nb} ... ", end="", flush=True)
             try:
-                _result = _dbutils.notebook.run(_path, PIPELINE_STAGE_TIMEOUT_SECONDS, {})
+                _result = _dbutils.notebook.run(_path, _timeout, {})
                 _elapsed = _time.time() - _start
                 print(f"{_elapsed:>7.1f}s")
                 if _result:
@@ -315,19 +329,39 @@ else:
 C01_PIPELINE_SUMMARY_BODY = '''# Summary: surface training metrics from the training stage (if it returned JSON)
 # and confirm the predictions Delta table is populated with a risk-tier distribution.
 
-if SKIP_PIPELINE_RUN:
+from customer_retention.core.compat.detection import get_spark_session
+from customer_retention.stages.scoring import ScoringConfig
+
+# Resolve upstream state defensively (see run_generated_pipeline cell comment).
+_g = globals()
+_skip = _g.get("SKIP_PIPELINE_RUN", False)
+_spark = _g.get("spark") or get_spark_session()
+_results = _g.get("_pipeline_results", {})
+_catalog = _g.get("CATALOG")
+_schema = _g.get("SCHEMA")
+if _catalog is None or _schema is None:
+    try:
+        _sc = ScoringConfig.from_databricks()
+        _catalog = _catalog or _sc.catalog
+        _schema = _schema or _sc.schema
+    except Exception:
+        pass
+
+if _skip:
     print("SKIPPED: SKIP_PIPELINE_RUN=True")
-elif spark is None:
+elif _spark is None:
     print("SKIPPED: no active Spark session")
+elif not _catalog or not _schema:
+    print("SKIPPED: CATALOG/SCHEMA not resolved (setup cell did not run)")
 else:
-    _predictions_fqn = f"{CATALOG}.{SCHEMA}.predictions"
+    _predictions_fqn = f"{_catalog}.{_schema}.predictions"
 
     print("=" * 70)
     print("PIPELINE SUMMARY")
     print("=" * 70)
 
     _training_result = next(
-        (v for k, v in _pipeline_results.items() if "train" in k.lower() and isinstance(v, dict)),
+        (v for k, v in _results.items() if "train" in k.lower() and isinstance(v, dict)),
         None,
     )
     if _training_result:
@@ -346,7 +380,7 @@ else:
             print(f"  Best: {_best} (AUC={_training_result.get('best_roc_auc', 0):.4f})")
 
     try:
-        _pred = spark.table(_predictions_fqn)
+        _pred = _spark.table(_predictions_fqn)
         _total = _pred.count()
         print(f"\\nPredictions table: {_predictions_fqn}")
         print(f"  rows: {_total:,}")
