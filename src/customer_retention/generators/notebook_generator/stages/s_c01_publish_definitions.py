@@ -13,7 +13,12 @@ import nbformat
 
 from ..base import NotebookStage
 from .base_stage import StageGenerator
-from .causal_setup_cell import c01_setup_block
+from .causal_setup_cell import (
+    C01_PIPELINE_SUMMARY_BODY,
+    C01_RUN_PIPELINE_BODY,
+    C01_RUN_PIPELINE_MD,
+    c01_setup_block,
+)
 
 
 class PublishDefinitionsStage(StageGenerator):
@@ -46,6 +51,9 @@ class PublishDefinitionsStage(StageGenerator):
             + [
                 self.cb.section("1. Publish Definition Tables (YAML → Delta)"),
                 self.cb.code(_PUBLISH_DEFINITIONS_CELL),
+                self.cb.markdown(C01_RUN_PIPELINE_MD),
+                self.cb.code(C01_RUN_PIPELINE_BODY),
+                self.cb.code(C01_PIPELINE_SUMMARY_BODY),
             ]
         )
 

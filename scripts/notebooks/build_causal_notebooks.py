@@ -132,6 +132,9 @@ def write_notebook(path: Path, cells: List[Dict[str, Any]]) -> None:
 from customer_retention.generators.notebook_generator.stages.causal_setup_cell import (
     _SETUP_BODY_NEEDS_MODEL,
     _SETUP_BODY_PUBLISH_ONLY,
+    C01_PIPELINE_SUMMARY_BODY,
+    C01_RUN_PIPELINE_BODY,
+    C01_RUN_PIPELINE_MD,
 )
 
 
@@ -162,16 +165,26 @@ def setup_block(stage: str, *, needs_model: bool) -> List[Dict[str, Any]]:
 
 _C01_CONFIG_MD = """## Configuration
 
-The cell below is the only place you should need to edit. Every value here is read by the publish cell — nothing is hardcoded inside the algorithmic cell.
+The cell below is the only place you should need to edit. Every value here is read by the publish cell and the pipeline runner below — nothing is hardcoded inside the algorithmic cells.
 
 - **`SKIP_PUBLISH_DEFINITIONS`** — short-circuit the publish step (e.g. when the YAMLs are unchanged since the last run).
 - **`RISK_TIER_HIGH_THRESHOLD` / `RISK_TIER_MEDIUM_THRESHOLD`** — risk tier cutoffs mirrored into `decision_policy` so historical assignments can be reconstructed from the policy version in force at scoring time. The publish step writes these as the on-disk default; if a YAML row in `decision_policy.yaml` already specifies them, the YAML wins.
+- **`SKIP_PIPELINE_RUN`** — skip invoking the generated pipeline (e.g. when predictions are already fresh).
+- **`PIPELINE_DIR`** — directory containing the generated pipeline scripts produced by `exploration_notebooks/10_spec_generation.ipynb`. Leave as `None` to default to `{experiments_dir}/../generated_pipelines/databricks`. Override if the scripts live elsewhere in the workspace.
+- **`PIPELINE_STAGES`** — ordered stage subdirectories to execute. Includes `scoring` so the `predictions` Delta table is populated before `c04_snapshot_and_dashboard` runs.
+- **`PIPELINE_STAGE_TIMEOUT_SECONDS`** — per-notebook timeout passed to `dbutils.notebook.run()`.
 """
 
 _C01_CONFIG_BODY = '''SKIP_PUBLISH_DEFINITIONS = False
 
 RISK_TIER_HIGH_THRESHOLD = 0.6
 RISK_TIER_MEDIUM_THRESHOLD = 0.3
+
+SKIP_PIPELINE_RUN = False
+
+PIPELINE_DIR = None
+PIPELINE_STAGES = ["landing", "bronze", "silver", "gold", "training", "scoring"]
+PIPELINE_STAGE_TIMEOUT_SECONDS = 3600
 '''
 
 
@@ -233,6 +246,9 @@ def build_c01() -> List[Dict[str, Any]]:
         *setup_block(stage, needs_model=False),
         md_cell(stage, "c01_publish_section", ["## 1. Publish Definition Tables (YAML → Delta)\n"]),
         code_cell(stage, "code", "publish_definition_tables", [_C01_PUBLISH_BODY]),
+        md_cell(stage, "c01_run_pipeline_section", [C01_RUN_PIPELINE_MD]),
+        code_cell(stage, "code", "run_generated_pipeline", [C01_RUN_PIPELINE_BODY]),
+        code_cell(stage, "code", "pipeline_summary", [C01_PIPELINE_SUMMARY_BODY]),
         release_cleanup_cell(stage),
     ]
 
