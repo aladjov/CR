@@ -5,6 +5,9 @@ import numpy as np
 
 from customer_retention.core.compat import (
     DataFrame,
+    _is_spark_pandas,
+    as_pandas_api,
+    as_spark_df,
     cut,
     ensure_timestamp,
     period_start_time,
@@ -481,12 +484,33 @@ def get_duplicate_event_count(findings: Any) -> int:
     return issues.get("duplicate_events", 0)
 
 
-def deduplicate_events(df: DataFrame, entity_column: str, time_column: str, duplicate_count: int = 0) -> Tuple[DataFrame, int]:
-    if duplicate_count <= 0:
-        return df, 0
+def deduplicate_events(
+    df: DataFrame, entity_column: str, time_column: str, duplicate_count: int = 0,
+) -> Tuple[DataFrame, int, int]:
+    """Remove duplicate ``(entity, time)`` rows.
+
+    Returns ``(df, removed, remaining)``. ``remaining`` is always populated
+    (even when no dedup runs) so callers never re-count.
+
+    Distributed-safe: on pyspark.pandas, runs Spark-native ``dropDuplicates``
+    and ``count`` without collecting rows to the driver.
+    """
+    if _is_spark_pandas(df):
+        spark_df = as_spark_df(df)
+        if duplicate_count <= 0:
+            return df, 0, int(spark_df.count())
+        before = int(spark_df.count())
+        if before == 0:
+            return df, 0, 0
+        deduped = spark_df.dropDuplicates([entity_column, time_column])
+        after = int(deduped.count())
+        return as_pandas_api(deduped), before - after, after
     before = len(df)
+    if duplicate_count <= 0 or before == 0:
+        return df, 0, before
     df = safe_drop_duplicates(df, subset=[entity_column, time_column], keep="first")
-    return df, before - len(df)
+    after = len(df)
+    return df, before - after, after
 
 
 def create_recency_bucket_feature(df: DataFrame, recency_column: str = "days_since_last_event") -> DataFrame:

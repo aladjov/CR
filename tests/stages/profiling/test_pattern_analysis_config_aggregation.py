@@ -582,8 +582,9 @@ class TestDeduplicateEvents:
             "event_date": pd.to_datetime(["2020-01-01", "2020-01-01", "2020-01-02", "2020-01-03", "2020-01-03"]),
             "value": [1, 2, 3, 4, 5],
         })
-        result, removed = deduplicate_events(df, "entity", "event_date", duplicate_count=2)
+        result, removed, remaining = deduplicate_events(df, "entity", "event_date", duplicate_count=2)
         assert removed == 2
+        assert remaining == 3
         assert len(result) == 3
 
     def test_no_op_when_zero_duplicates(self):
@@ -591,8 +592,9 @@ class TestDeduplicateEvents:
         df = pd.DataFrame({
             "entity": ["A", "B"], "event_date": pd.to_datetime(["2020-01-01", "2020-01-02"]),
         })
-        result, removed = deduplicate_events(df, "entity", "event_date", duplicate_count=0)
+        result, removed, remaining = deduplicate_events(df, "entity", "event_date", duplicate_count=0)
         assert removed == 0
+        assert remaining == 2
         assert len(result) == 2
 
     def test_keeps_first_occurrence(self):
@@ -602,8 +604,28 @@ class TestDeduplicateEvents:
             "event_date": pd.to_datetime(["2020-01-01", "2020-01-01"]),
             "value": [10, 20],
         })
-        result, removed = deduplicate_events(df, "entity", "event_date", duplicate_count=1)
+        result, removed, remaining = deduplicate_events(df, "entity", "event_date", duplicate_count=1)
         assert result.iloc[0]["value"] == 10
+        assert remaining == 1
+
+    def test_remaining_returned_when_skipping_dedup(self):
+        df = pd.DataFrame({
+            "entity": ["A", "A", "B"],
+            "event_date": pd.to_datetime(["2020-01-01", "2020-01-01", "2020-01-02"]),
+        })
+        result, removed, remaining = deduplicate_events(df, "entity", "event_date", duplicate_count=0)
+        assert removed == 0
+        assert remaining == 3
+        assert len(result) == 3
+
+    def test_remaining_matches_after_dedup(self):
+        df = pd.DataFrame({
+            "entity": ["A", "A", "A", "B"],
+            "event_date": pd.to_datetime(["2020-01-01", "2020-01-01", "2020-01-01", "2020-01-02"]),
+        })
+        result, removed, remaining = deduplicate_events(df, "entity", "event_date", duplicate_count=2)
+        assert remaining == len(result)
+        assert removed + remaining == 4
 
 
 class TestCreateRecencyBucketFeature:
@@ -733,8 +755,9 @@ class TestEdgeCases:
     def test_dedup_on_empty_dataframe(self):
 
         df = pd.DataFrame({"entity": pd.Series([], dtype=str), "event_date": pd.Series([], dtype="datetime64[ns]")})
-        result, removed = deduplicate_events(df, "entity", "event_date", duplicate_count=10)
+        result, removed, remaining = deduplicate_events(df, "entity", "event_date", duplicate_count=10)
         assert removed == 0
+        assert remaining == 0
         assert len(result) == 0
 
     def test_duplicate_event_count_with_nested_none(self):

@@ -857,19 +857,22 @@ class TestDeduplicateEvents:
 
     def test_no_duplicates_needed(self):
         df = pd.DataFrame({"e": [1, 2], "t": ["a", "b"]})
-        result, removed = deduplicate_events(df, "e", "t", duplicate_count=0)
+        result, removed, remaining = deduplicate_events(df, "e", "t", duplicate_count=0)
         assert removed == 0
+        assert remaining == 2
         assert len(result) == 2
 
     def test_negative_count(self):
         df = pd.DataFrame({"e": [1, 2], "t": ["a", "b"]})
-        result, removed = deduplicate_events(df, "e", "t", duplicate_count=-1)
+        result, removed, remaining = deduplicate_events(df, "e", "t", duplicate_count=-1)
         assert removed == 0
+        assert remaining == 2
 
     def test_with_duplicates(self):
         df = pd.DataFrame({"e": [1, 1, 2], "t": ["a", "a", "b"], "v": [10, 20, 30]})
-        result, removed = deduplicate_events(df, "e", "t", duplicate_count=1)
+        result, removed, remaining = deduplicate_events(df, "e", "t", duplicate_count=1)
         assert removed == 1
+        assert remaining == 2
         assert len(result) == 2
 
 
