@@ -6934,3 +6934,142 @@ class TestCollectKnownPipelineColumns:
             fitted_transforms=[FittedTransform(column=c, action="impute", method="median") for c in selected],
         )
         parser._enforce_spec_schema_parity(config)  # must not raise
+
+    def test_temporal_recency_included_when_lag_columns_empty(self):
+        """Recency features (`days_since_last_event`, etc.) are produced by the
+        renderer regardless of `lag_columns` — the engineer's `_compute_recency`
+        does not depend on `value_cols`. The parity check must reflect that.
+        """
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeEventConfig,
+            TemporalFeatureConfig,
+        )
+        event_cfg = BronzeEventConfig(
+            source=None, entity_column="cid", time_column="ts",
+            temporal_features=TemporalFeatureConfig(
+                lag_columns=[], num_lags=0, lag_agg_funcs=["sum"],
+                feature_groups=["recency"],
+            ),
+        )
+        parser, config = self._parser_with(event_cfg=event_cfg)
+        cols = parser._collect_known_pipeline_columns(config)
+        assert {"days_since_last_event", "days_since_first_event",
+                "active_span_days", "recency_ratio"} <= cols
+
+    def test_temporal_regularity_included_when_lag_columns_empty(self):
+        """Same as recency — `_compute_regularity` runs regardless of `value_cols`.
+        Without this, runs that omit lag_columns trigger a spurious parity
+        violation on `regularity_score`/`event_frequency`/`inter_event_gap_max`.
+        """
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeEventConfig,
+            TemporalFeatureConfig,
+        )
+        event_cfg = BronzeEventConfig(
+            source=None, entity_column="cid", time_column="ts",
+            temporal_features=TemporalFeatureConfig(
+                lag_columns=[], num_lags=0, lag_agg_funcs=["sum"],
+                feature_groups=["regularity"],
+            ),
+        )
+        parser, config = self._parser_with(event_cfg=event_cfg)
+        cols = parser._collect_known_pipeline_columns(config)
+        assert {"event_frequency", "inter_event_gap_mean", "inter_event_gap_std",
+                "inter_event_gap_max", "regularity_score"} <= cols
+
+    def test_temporal_lag_features_use_aggregation_value_columns_fallback(self):
+        """The renderer template emits `value_cols = lag_columns or aggregation.value_columns`.
+        When lag_columns is empty but aggregation.value_columns is set, the engineer
+        produces lag/velocity/etc. features over those value columns. The parity
+        check must mirror that fallback.
+        """
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+            BronzeEventConfig,
+            TemporalFeatureConfig,
+        )
+        event_cfg = BronzeEventConfig(
+            source=None, entity_column="cid", time_column="ts",
+            aggregation=AggregationWindowConfig(
+                windows=["30d"], value_columns=["amt"], agg_funcs=["sum"],
+            ),
+            temporal_features=TemporalFeatureConfig(
+                lag_columns=[], num_lags=2, lag_agg_funcs=["sum"],
+                feature_groups=["lagged_windows", "velocity"],
+            ),
+        )
+        parser, config = self._parser_with(event_cfg=event_cfg)
+        cols = parser._collect_known_pipeline_columns(config)
+        assert {"lag0_amt_sum", "lag1_amt_sum", "amt_velocity", "amt_velocity_pct"} <= cols
+
+    def test_silver_merged_columns_used_as_ground_truth(self, tmp_path):
+        """When `namespace.silver_merged_path` exists, its actual columns
+        (read from Delta metadata) are folded into the parity column set.
+        Lets merge-artifact columns like `days_since_last_event_x` register
+        as legitimately-produced even though no template predicts them.
+        """
+        from unittest.mock import MagicMock
+
+        parser, config = self._parser_with()
+        ns = MagicMock()
+        silver_dir = tmp_path / "silver_merged"
+        silver_dir.mkdir()
+        ns.silver_merged_path = silver_dir
+        parser._namespace = ns
+        parser._silver_merged_columns_cache = {
+            "entity_id", "as_of_date",
+            "days_since_last_event_x", "days_since_first_event_y",
+            "event_count_180d",
+        }
+        cols = parser._collect_known_pipeline_columns(config)
+        assert {"days_since_last_event_x", "days_since_first_event_y", "event_count_180d"} <= cols
+
+    def test_silver_ratio_with_merge_artifact_sources_passes_filter(self):
+        """`_silver_derived_sources_available` must consult silver_merged columns
+        (not just predicted ones), so a ratio whose denominator is a merge
+        artifact (`days_since_last_event_x`) is accepted.
+        """
+        from customer_retention.analysis.auto_explorer.layered_recommendations import LayeredRecommendation
+
+        parser, config = self._parser_with()
+        parser._silver_merged_columns_cache = {
+            "entity_id", "as_of_date", "event_count_180d", "days_since_last_event_x",
+        }
+        rec = LayeredRecommendation(
+            id="ratio-1", layer="silver", category="derived", action="ratio",
+            target_column="event_count_180d_to_days_since_last_event_x_ratio",
+            parameters={"feature_type": "ratio", "numerator": "event_count_180d",
+                        "denominator": "days_since_last_event_x",
+                        "expression": "event_count_180d / days_since_last_event_x"},
+            rationale="merge-artifact ratio", source_notebook="05_relationship_analysis",
+        )
+        pipeline_columns = parser._collect_pipeline_columns(config)
+        assert parser._silver_derived_sources_available(rec, pipeline_columns) is True
+
+    def test_silver_merged_schema_read_lazily_from_delta(self, tmp_path, monkeypatch):
+        """The schema-of-silver_merged read happens via `get_delta().read(path)`
+        (Spark Connect-safe — `.columns` is plan-level, no .rdd, no Spark job).
+        Cached on first access so the parity check stays cheap.
+        """
+        from unittest.mock import MagicMock
+
+        from customer_retention.generators.pipeline_generator import findings_parser as fp
+
+        parser, _ = self._parser_with()
+        ns = MagicMock()
+        silver_dir = tmp_path / "silver_merged"
+        silver_dir.mkdir()
+        ns.silver_merged_path = silver_dir
+        parser._namespace = ns
+
+        fake_df = MagicMock()
+        fake_df.columns = ["entity_id", "as_of_date", "extra_col"]
+        fake_delta = MagicMock()
+        fake_delta.read.return_value = fake_df
+        monkeypatch.setattr(fp, "_get_delta_for_silver_schema", lambda: fake_delta)
+
+        first = parser._read_silver_merged_columns()
+        second = parser._read_silver_merged_columns()
+        assert first == {"entity_id", "as_of_date", "extra_col"}
+        assert second == first
+        fake_delta.read.assert_called_once()

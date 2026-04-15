@@ -67,6 +67,11 @@ _RECOGNIZED_BRONZE_OVERRIDE_KEYS = frozenset(
     {"per_grid_date_mode", "value_counts_columns", "windows"}
 )
 
+
+def _get_delta_for_silver_schema():
+    from customer_retention.integrations.adapters.factory import get_delta
+    return get_delta()
+
 import re as _re
 
 _LAG_VELOCITY_RE = _re.compile(r"^(?:lag\d+|velocity)_")
@@ -118,6 +123,7 @@ class FindingsParser:
         self._source_findings_paths: Dict[str, Path] = {}
         self._raw_source_columns: Dict[str, Set[str]] = {}
         self._feature_spec: Optional[FeatureSpec] = None
+        self._silver_merged_columns_cache: Optional[Set[str]] = None
 
     def parse(self) -> PipelineConfig:
         self._feature_spec = self._load_feature_spec()
@@ -890,7 +896,22 @@ class FindingsParser:
             columns |= (raw_cols - dropped)
         for _name, event_cfg in config.bronze_event.items():
             columns |= self._event_aggregated_columns(event_cfg)
+        columns |= self._read_silver_merged_columns()
         return columns
+
+    def _read_silver_merged_columns(self) -> Set[str]:
+        cached = getattr(self, "_silver_merged_columns_cache", None)
+        if cached is not None:
+            return cached
+        namespace = getattr(self, "_namespace", None)
+        silver_path = getattr(namespace, "silver_merged_path", None) if namespace else None
+        if silver_path is None or not Path(silver_path).is_dir():
+            self._silver_merged_columns_cache = set()
+            return self._silver_merged_columns_cache
+        delta = _get_delta_for_silver_schema()
+        df = delta.read(str(silver_path))
+        self._silver_merged_columns_cache = set(df.columns)
+        return self._silver_merged_columns_cache
 
     @staticmethod
     def _predict_gold_generated_columns(config: "PipelineConfig") -> Set[str]:
@@ -960,28 +981,32 @@ class FindingsParser:
                 for i in range(text_cfg.n_components):
                     columns.add(f"{text_cfg.column}_emb_{i}")
         tf = event_cfg.temporal_features
-        if tf and tf.lag_columns:
+        if tf:
             groups = set(tf.feature_groups or [])
-            for lag_idx in range(tf.num_lags):
-                for col in tf.lag_columns:
-                    for fn in tf.lag_agg_funcs:
-                        columns.add(f"lag{lag_idx}_{col}_{fn}")
-            if "velocity" in groups:
-                for col in tf.lag_columns:
-                    columns |= {f"{col}_velocity", f"{col}_velocity_pct"}
-            if "acceleration" in groups:
-                for col in tf.lag_columns:
-                    columns |= {f"{col}_acceleration", f"{col}_momentum"}
-            if "lifecycle" in groups:
-                for col in tf.lag_columns:
-                    columns |= {f"{col}_beginning", f"{col}_middle", f"{col}_end", f"{col}_trend_ratio"}
             if "recency" in groups:
                 columns |= {"days_since_last_event", "days_since_first_event", "active_span_days", "recency_ratio"}
             if "regularity" in groups:
                 columns |= {"event_frequency", "inter_event_gap_mean", "inter_event_gap_std", "inter_event_gap_max", "regularity_score"}
-            if "cohort_comparison" in groups:
-                for col in tf.lag_columns:
-                    columns |= {f"{col}_vs_cohort_mean", f"{col}_vs_cohort_pct", f"{col}_cohort_zscore"}
+            value_cols = list(tf.lag_columns) or (
+                list(agg.value_columns) if agg and agg.value_columns else []
+            )
+            if value_cols:
+                for lag_idx in range(tf.num_lags):
+                    for col in value_cols:
+                        for fn in tf.lag_agg_funcs:
+                            columns.add(f"lag{lag_idx}_{col}_{fn}")
+                if "velocity" in groups:
+                    for col in value_cols:
+                        columns |= {f"{col}_velocity", f"{col}_velocity_pct"}
+                if "acceleration" in groups:
+                    for col in value_cols:
+                        columns |= {f"{col}_acceleration", f"{col}_momentum"}
+                if "lifecycle" in groups:
+                    for col in value_cols:
+                        columns |= {f"{col}_beginning", f"{col}_middle", f"{col}_end", f"{col}_trend_ratio"}
+                if "cohort_comparison" in groups:
+                    for col in value_cols:
+                        columns |= {f"{col}_vs_cohort_mean", f"{col}_vs_cohort_pct", f"{col}_cohort_zscore"}
         return columns
 
     @staticmethod
