@@ -588,6 +588,163 @@ class TestAugmentAndPersistParentDataset:
         loaded = load_active_dataset(namespace, "case")
         assert sorted(loaded["CASE_ID"].unique()) == ["A", "Z"]
 
+    def test_grid_anchor_count_derives_target_partitions(self, namespace, monkeypatch):
+        # When caller passes grid_anchor_count the facade derives a partition
+        # hint and forwards it to save_active_dataset. The hint stops the
+        # write path from defaulting to get_default_parallelism() which
+        # under-partitions multi-billion-row SCD fan-outs and spills OOM.
+        from customer_retention.stages.scd_history import augment as augment_module
+
+        monkeypatch.setattr(
+            augment_module, "get_default_parallelism", lambda: 8
+        )
+        captured: dict = {}
+
+        def fake_save(namespace, dataset_name, df, target_partitions=None):
+            captured["target_partitions"] = target_partitions
+            return namespace.landing_table_dir(dataset_name)
+
+        monkeypatch.setattr(
+            "customer_retention.analysis.auto_explorer.active_dataset_store.save_active_dataset",
+            fake_save,
+        )
+        monkeypatch.setattr(
+            augment_module, "_assert_landing_delta_matches_schema",
+            lambda *args, **kwargs: None,
+        )
+
+        parent = native_pd.DataFrame([{"CASE_ID": "A", "OWNER_NAME": "Alice"}])
+        state = native_pd.DataFrame(
+            [{"CASE_ID": "A", "as_of_date": T0, "Status": "Open"}]
+        )
+
+        augment_and_persist_parent_dataset(
+            namespace=namespace,
+            parent_dataset_name="case",
+            parent_df=parent,
+            state_view=state,
+            config=_scd_config(),
+            grid_anchor_count=12,
+        )
+
+        # 12 anchors × 8 cores × multiplier(8) = 768 partitions
+        assert captured["target_partitions"] == 12 * 8 * 8
+
+    def test_explicit_target_partitions_wins_over_grid_anchor_count(
+        self, namespace, monkeypatch
+    ):
+        from customer_retention.stages.scd_history import augment as augment_module
+
+        monkeypatch.setattr(
+            augment_module, "get_default_parallelism", lambda: 8
+        )
+        captured: dict = {}
+
+        def fake_save(namespace, dataset_name, df, target_partitions=None):
+            captured["target_partitions"] = target_partitions
+            return namespace.landing_table_dir(dataset_name)
+
+        monkeypatch.setattr(
+            "customer_retention.analysis.auto_explorer.active_dataset_store.save_active_dataset",
+            fake_save,
+        )
+        monkeypatch.setattr(
+            augment_module, "_assert_landing_delta_matches_schema",
+            lambda *args, **kwargs: None,
+        )
+
+        parent = native_pd.DataFrame([{"CASE_ID": "A", "OWNER_NAME": "Alice"}])
+        state = native_pd.DataFrame(
+            [{"CASE_ID": "A", "as_of_date": T0, "Status": "Open"}]
+        )
+
+        augment_and_persist_parent_dataset(
+            namespace=namespace,
+            parent_dataset_name="case",
+            parent_df=parent,
+            state_view=state,
+            config=_scd_config(),
+            grid_anchor_count=12,
+            target_partitions=200,
+        )
+
+        assert captured["target_partitions"] == 200
+
+    def test_partition_hint_capped_at_max(self, namespace, monkeypatch):
+        from customer_retention.stages.scd_history import augment as augment_module
+
+        monkeypatch.setattr(
+            augment_module, "get_default_parallelism", lambda: 64
+        )
+        captured: dict = {}
+
+        def fake_save(namespace, dataset_name, df, target_partitions=None):
+            captured["target_partitions"] = target_partitions
+            return namespace.landing_table_dir(dataset_name)
+
+        monkeypatch.setattr(
+            "customer_retention.analysis.auto_explorer.active_dataset_store.save_active_dataset",
+            fake_save,
+        )
+        monkeypatch.setattr(
+            augment_module, "_assert_landing_delta_matches_schema",
+            lambda *args, **kwargs: None,
+        )
+
+        parent = native_pd.DataFrame([{"CASE_ID": "A"}])
+        state = native_pd.DataFrame(
+            [{"CASE_ID": "A", "as_of_date": T0, "Status": "Open"}]
+        )
+
+        # 500 anchors × 64 cores × 8 = 256000 — capped at 4096
+        augment_and_persist_parent_dataset(
+            namespace=namespace,
+            parent_dataset_name="case",
+            parent_df=parent,
+            state_view=state,
+            config=_scd_config(),
+            grid_anchor_count=500,
+        )
+
+        assert captured["target_partitions"] == augment_module._AUGMENT_MAX_PARTITIONS
+
+    def test_partition_hint_not_below_cores(self, namespace, monkeypatch):
+        from customer_retention.stages.scd_history import augment as augment_module
+
+        monkeypatch.setattr(
+            augment_module, "get_default_parallelism", lambda: 32
+        )
+        captured: dict = {}
+
+        def fake_save(namespace, dataset_name, df, target_partitions=None):
+            captured["target_partitions"] = target_partitions
+            return namespace.landing_table_dir(dataset_name)
+
+        monkeypatch.setattr(
+            "customer_retention.analysis.auto_explorer.active_dataset_store.save_active_dataset",
+            fake_save,
+        )
+        monkeypatch.setattr(
+            augment_module, "_assert_landing_delta_matches_schema",
+            lambda *args, **kwargs: None,
+        )
+
+        parent = native_pd.DataFrame([{"CASE_ID": "A"}])
+        state = native_pd.DataFrame(
+            [{"CASE_ID": "A", "as_of_date": T0, "Status": "Open"}]
+        )
+
+        # grid_anchor_count=0 → no derivation → None hint passed through
+        augment_and_persist_parent_dataset(
+            namespace=namespace,
+            parent_dataset_name="case",
+            parent_df=parent,
+            state_view=state,
+            config=_scd_config(),
+            grid_anchor_count=0,
+        )
+        assert captured["target_partitions"] is None
+
     def test_existing_landing_delta_is_overwritten(self, namespace):
         # If NB00 wrote a stale landing Delta earlier in the run (e.g. via
         # the key-resolution save), the facade must overwrite it cleanly.

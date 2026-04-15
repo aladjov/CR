@@ -2661,3 +2661,47 @@ class TestBronzeEventColumnBlockedFuncs:
         config = self._make_bronze_event_config(column_blocked_funcs={"status": ["mode"]})
         result = renderer.render_bronze_event("emails", config)
         compile(result, "bronze_event_emails.py", "exec")
+
+
+class TestLocalLifecycleQuadrantParityWithNB01d:
+    """Local (pandas) renderer's `add_lifecycle_quadrant` must mirror NB01d's
+    `classify_lifecycle_quadrants` so that model artifacts trained via the
+    local pipeline match those from exploration. Same contract as the
+    Databricks version — keeping both aligned prevents local/Databricks drift."""
+
+    @staticmethod
+    def _render_bronze_with_quadrant(renderer):
+        from customer_retention.generators.pipeline_generator.models import (
+            BronzeLayerConfig,
+            LifecycleConfig,
+            SourceConfig,
+        )
+        source = SourceConfig(
+            name="events", path="events.parquet", format="parquet",
+            entity_key="customer_id", time_column="event_date",
+            is_event_level=True,
+        )
+        config = BronzeLayerConfig(
+            source=source, transformations=[],
+            lifecycle=LifecycleConfig(include_lifecycle_quadrant=True),
+            entity_column="customer_id", time_column="event_date",
+        )
+        return renderer.render_bronze("events", config)
+
+    def test_uses_duration_days_not_raw_days_since_first(self, renderer):
+        result = self._render_bronze_with_quadrant(renderer)
+        fn = result[result.index("def add_lifecycle_quadrant") :]
+        fn = fn[: fn.index("\ndef ")] if "\ndef " in fn else fn
+        assert 'df["days_since_first"] - df["days_since_last"]' in fn
+
+    def test_uses_events_per_day_intensity(self, renderer):
+        result = self._render_bronze_with_quadrant(renderer)
+        fn = result[result.index("def add_lifecycle_quadrant") :]
+        fn = fn[: fn.index("\ndef ")] if "\ndef " in fn else fn
+        assert "duration.clip(lower=1.0)" in fn
+
+    def test_prefers_event_count_all_time(self, renderer):
+        result = self._render_bronze_with_quadrant(renderer)
+        fn = result[result.index("def add_lifecycle_quadrant") :]
+        fn = fn[: fn.index("\ndef ")] if "\ndef " in fn else fn
+        assert "event_count_all_time" in fn

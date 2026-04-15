@@ -139,6 +139,7 @@ def _reconstruct_pandas(
 
     parent_record_ids = _all_parent_record_ids_pandas(history, parent_df, config)
     spine = _build_spine_pandas(parent_record_ids, grid_dates, config)
+    spine = _apply_parent_creation_filter_pandas(spine, parent_df, config)
 
     parent_lookup = _parent_value_lookup(config)
     field_results: list[native_pd.DataFrame] = []
@@ -188,6 +189,33 @@ def _build_spine_pandas(
         for anchor in grid_dates
     ]
     return native_pd.DataFrame(rows)
+
+
+def _apply_parent_creation_filter_pandas(
+    spine: native_pd.DataFrame,
+    parent_df: Optional[native_pd.DataFrame],
+    config: SCDHistoryReconstructionConfig,
+) -> native_pd.DataFrame:
+    if parent_df is None or not config.parent_creation_timestamp_column:
+        return spine
+    creation_col = _resolve_parent_column(
+        list(parent_df.columns), config.parent_creation_timestamp_column
+    )
+    if creation_col is None:
+        return spine
+    creation_lookup = safe_drop_duplicates(
+        parent_df[[config.parent_record_key, creation_col]],
+        subset=[config.parent_record_key],
+        keep="last",
+    ).rename(columns={creation_col: "__parent_created_at__"})
+    creation_lookup["__parent_created_at__"] = safe_to_datetime(
+        creation_lookup["__parent_created_at__"]
+    )
+    merged = spine.merge(creation_lookup, on=config.parent_record_key, how="left")
+    keep = merged["__parent_created_at__"].isna() | (
+        merged[_AS_OF_COLUMN] >= merged["__parent_created_at__"]
+    )
+    return merged.loc[keep, [config.parent_record_key, _AS_OF_COLUMN]].reset_index(drop=True)
 
 
 def _reconstruct_single_field_pandas(
@@ -351,19 +379,52 @@ def _build_spine_distributed(
 ) -> Any:
     from pyspark.sql import functions as F  # noqa: N812
 
-    history_ids = spark_history.select(config.parent_record_key).distinct()
-    if spark_parent is not None and config.parent_record_key in spark_parent.columns:
-        parent_ids = spark_parent.select(config.parent_record_key).distinct()
-        record_ids = history_ids.unionByName(parent_ids).distinct()
-    else:
-        record_ids = history_ids
-
     spark = spark_history.sparkSession
     grid_rows = [(native_pd.Timestamp(d).to_pydatetime(),) for d in grid_dates]
     grid_df = spark.createDataFrame(grid_rows, schema=[_AS_OF_COLUMN]).withColumn(
         _AS_OF_COLUMN, F.col(_AS_OF_COLUMN).cast("timestamp")
     )
-    return record_ids.crossJoin(F.broadcast(grid_df))
+
+    record_ids_with_creation = _record_ids_with_creation_distributed(
+        spark_history, spark_parent, config
+    )
+    crossed = record_ids_with_creation.crossJoin(F.broadcast(grid_df))
+    if "__parent_created_at__" not in crossed.columns:
+        return crossed
+    return crossed.filter(
+        F.col("__parent_created_at__").isNull()
+        | (F.col(_AS_OF_COLUMN) >= F.col("__parent_created_at__"))
+    ).drop("__parent_created_at__")
+
+
+def _record_ids_with_creation_distributed(
+    spark_history: Any,
+    spark_parent: Optional[Any],
+    config: SCDHistoryReconstructionConfig,
+) -> Any:
+    from pyspark.sql import functions as F  # noqa: N812
+
+    history_ids = spark_history.select(config.parent_record_key).distinct()
+    if spark_parent is None or config.parent_record_key not in spark_parent.columns:
+        return history_ids
+
+    parent_ids = spark_parent.select(config.parent_record_key).distinct()
+    record_ids = history_ids.unionByName(parent_ids).distinct()
+    creation_col = (
+        _resolve_parent_column(list(spark_parent.columns), config.parent_creation_timestamp_column)
+        if config.parent_creation_timestamp_column
+        else None
+    )
+    if creation_col is None:
+        return record_ids
+
+    creation_lookup = spark_parent.select(
+        F.col(config.parent_record_key),
+        F.expr(f"try_to_timestamp(`{creation_col}`)").alias("__parent_created_at__"),
+    ).dropDuplicates([config.parent_record_key])
+    return record_ids.join(
+        creation_lookup, on=config.parent_record_key, how="left"
+    )
 
 
 def _build_history_anchor_union(

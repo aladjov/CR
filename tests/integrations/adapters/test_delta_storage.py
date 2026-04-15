@@ -276,7 +276,8 @@ class TestLocalDeltaDistributedGuard:
         ):
             storage.write(mock_ps_df, str(tmp_path / "out"), mode="overwrite")
             mock_instance.write.assert_called_once_with(
-                mock_ps_df, str(tmp_path / "out"), "overwrite", None, None, None
+                mock_ps_df, str(tmp_path / "out"), "overwrite", None, None, None,
+                target_partitions=None,
             )
 
     def test_write_pandas_df_does_not_delegate(self, tmp_path):
@@ -924,3 +925,165 @@ class TestDatabricksDeltaWriteNormalizesPath:
                 mock_clamped.write.format("delta").mode("overwrite").option(
                     "overwriteSchema", "true"
                 ).save.assert_called_once_with("/mnt/data/table")
+
+
+class TestDatabricksDeltaEnsureParallelism:
+    """``_ensure_parallelism(force=True)`` is the last line of defence for
+    write-time partition count. Before this change it forced every write to
+    ``get_default_parallelism()`` partitions — for SCD fan-outs with billions
+    of rows that's ~28M rows per task, causing executor-disk spill OOMs.
+    ``target_partitions`` lets callers raise the floor without touching the
+    default.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_without_pyspark(self):
+        pytest.importorskip("pyspark")
+
+    def test_force_uses_default_parallelism_when_no_override(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            mock_df = MagicMock()
+            mock_df.repartition.return_value = mock_df
+            with patch(
+                "customer_retention.integrations.adapters.storage.databricks.get_default_parallelism",
+                return_value=16,
+            ):
+                storage._ensure_parallelism(mock_df, force=True)
+                mock_df.repartition.assert_called_once_with(16)
+
+    def test_force_respects_higher_target_partitions(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            mock_df = MagicMock()
+            mock_df.repartition.return_value = mock_df
+            with patch(
+                "customer_retention.integrations.adapters.storage.databricks.get_default_parallelism",
+                return_value=16,
+            ):
+                storage._ensure_parallelism(
+                    mock_df, force=True, target_partitions=1024
+                )
+                mock_df.repartition.assert_called_once_with(1024)
+
+    def test_target_partitions_below_cores_clamped_up(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            mock_df = MagicMock()
+            mock_df.repartition.return_value = mock_df
+            with patch(
+                "customer_retention.integrations.adapters.storage.databricks.get_default_parallelism",
+                return_value=64,
+            ):
+                storage._ensure_parallelism(
+                    mock_df, force=True, target_partitions=4
+                )
+                mock_df.repartition.assert_called_once_with(64)
+
+    def test_target_partitions_none_falls_back_to_cores(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            mock_df = MagicMock()
+            mock_df.repartition.return_value = mock_df
+            with patch(
+                "customer_retention.integrations.adapters.storage.databricks.get_default_parallelism",
+                return_value=32,
+            ):
+                storage._ensure_parallelism(
+                    mock_df, force=True, target_partitions=None
+                )
+                mock_df.repartition.assert_called_once_with(32)
+
+    def test_write_threads_target_partitions_through(self):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.integrations.adapters.storage.databricks import DatabricksDelta
+
+        with patch.object(DatabricksDelta, "__init__", lambda self: None):
+            storage = DatabricksDelta()
+            storage._spark = MagicMock()
+
+            mock_spark_df = MagicMock()
+            mock_ps_df = MagicMock()
+            mock_ps_df.to_spark.return_value = mock_spark_df
+            mock_clamped = MagicMock()
+            mock_clamped.schema.fields = []
+
+            with (
+                patch.object(DatabricksDelta, "_strip_spark_timestamp_tz", return_value=mock_spark_df),
+                patch("customer_retention.core.compat.clamp_spark_timestamps", return_value=mock_clamped),
+                patch.object(DatabricksDelta, "_ensure_parallelism", return_value=mock_clamped) as mock_ensure,
+            ):
+                storage.write(mock_ps_df, "/fake/path", target_partitions=512)
+                _, kwargs = mock_ensure.call_args
+                assert kwargs.get("target_partitions") == 512
+                assert kwargs.get("force") is True
+
+
+class TestSaveActiveDatasetTargetPartitions:
+    """``save_active_dataset`` is the canonical write path for landing Delta
+    updates. The SCD augment cell derives a partition hint from the grid
+    anchor count; this test pins the plumbing so the hint reaches the write
+    adapter and is not silently dropped somewhere along the way.
+    """
+
+    def test_target_partitions_forwarded_to_get_delta_write(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        from customer_retention.analysis.auto_explorer.active_dataset_store import (
+            save_active_dataset,
+        )
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+
+        namespace = RunNamespace(root=tmp_path, run_id="tp-test1234")
+        namespace.setup()
+
+        class _FakeSparkDF:
+            def to_spark(self):
+                return self
+
+            @property
+            def columns(self):
+                return ["x"]
+
+        df = _FakeSparkDF()
+        mock_delta = MagicMock()
+
+        with (
+            patch(
+                "customer_retention.analysis.auto_explorer.active_dataset_store.get_delta",
+                return_value=mock_delta,
+            ),
+            patch(
+                "customer_retention.analysis.auto_explorer.active_dataset_store.sanitize_spark_timestamps",
+                side_effect=lambda x: x,
+            ),
+            patch(
+                "customer_retention.analysis.auto_explorer.active_dataset_store.as_spark_df",
+                side_effect=lambda x: x,
+            ),
+            patch(
+                "customer_retention.analysis.auto_explorer.active_dataset_store._is_native_spark_df",
+                return_value=False,
+            ),
+        ):
+            save_active_dataset(namespace, "ds", df, target_partitions=1500)
+
+        args, kwargs = mock_delta.write.call_args
+        assert kwargs.get("target_partitions") == 1500

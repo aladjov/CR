@@ -392,13 +392,22 @@ class TestDatabricksRendererTrendCohortCyclical:
 
 
 class TestRecencyBucketConfig:
-    def test_default_edges(self):
+    def test_default_edges_match_nb01d_canonical(self):
+        """The renderer's recency_bucket chain is driven by these edges. NB01d
+        (the source of truth for spec features) uses boundaries at 7, 30, 90, 180
+        with the final bucket being ">180d" (no explicit 365 edge). Defaults that
+        add a 365 edge drive the renderer to produce `recency_bucket_180_365d`
+        columns that don't match the spec's `recency_bucket_>180d`."""
         config = LifecycleConfig()
-        assert config.recency_bucket_edges == [0, 7, 30, 90, 180, 365]
+        assert config.recency_bucket_edges == [0, 7, 30, 90, 180]
 
-    def test_default_labels(self):
+    def test_default_labels_match_nb01d_canonical(self):
+        """NB01d writes `"0-7d", "8-30d", "31-90d", "91-180d", ">180d"` into the
+        recency_bucket column. After one-hot sanitization those become
+        `recency_bucket_0_7d, ..._>180d` in the FeatureSpec; any deviation breaks
+        parity at `_apply_feature_spec_gate`."""
         config = LifecycleConfig()
-        assert config.recency_bucket_labels == ["0-7d", "7-30d", "30-90d", "90-180d", "180-365d", "365d+"]
+        assert config.recency_bucket_labels == ["0-7d", "8-30d", "31-90d", "91-180d", ">180d"]
 
     def test_custom_edges_accepted(self):
         config = LifecycleConfig(
@@ -410,13 +419,22 @@ class TestRecencyBucketConfig:
 
 
 class TestEdgesToLabels:
-    def test_standard_edges(self):
-        labels = _edges_to_labels([0, 7, 30, 90, 180, 365])
-        assert labels == ["0-7d", "7-30d", "30-90d", "90-180d", "180-365d", "365d+"]
+    """Parity-critical: `_edges_to_labels` must produce the same labels NB01c/NB01d
+    write into the recency_bucket column. The canonical convention is `"<start+1>-<end>d"`
+    for interior buckets, `"0-<end>d"` for the leading bucket, `">{start}d"` for any
+    trailing `inf` edge. See `temporal_pattern_analyzer.generate_bucket_labels`."""
+
+    def test_canonical_edges_match_nb01d(self):
+        labels = _edges_to_labels([0, 7, 30, 90, 180])
+        assert labels == ["0-7d", "8-30d", "31-90d", "91-180d"]
 
     def test_custom_edges(self):
         labels = _edges_to_labels([0, 14, 60])
-        assert labels == ["0-14d", "14-60d", "60d+"]
+        assert labels == ["0-14d", "15-60d"]
+
+    def test_inf_tail_edge_emits_gt_prefix(self):
+        labels = _edges_to_labels([0, 7, 30, float("inf")])
+        assert labels == ["0-7d", "8-30d", ">30d"]
 
 
 class TestRecencyBucketsFindingsParser:
@@ -491,7 +509,7 @@ class TestRecencyBucketsFindingsParser:
         config = parser.parse()
         lifecycle = config.bronze_event["orders"].lifecycle
         assert lifecycle.recency_bucket_edges == [0, 14, 60, 120]
-        assert lifecycle.recency_bucket_labels == ["0-14d", "14-60d", "60-120d", "120d+"]
+        assert lifecycle.recency_bucket_labels == ["0-14d", "15-60d", "61-120d"]
 
 
 class TestRecencyBucketsRenderer:

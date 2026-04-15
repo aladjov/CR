@@ -407,7 +407,7 @@ class TestDistributedSavePath:
         mock_as_spark.assert_called_once_with(ps_df)
         mock_delta.write.assert_called_once_with(
             mock_native, str(namespace.landing_table_dir("customers")),
-            mode="overwrite", z_order_columns=None,
+            mode="overwrite", z_order_columns=None, target_partitions=None,
         )
 
     @patch("customer_retention.analysis.auto_explorer.active_dataset_store.as_spark_df")
@@ -424,7 +424,7 @@ class TestDistributedSavePath:
         mock_as_spark.assert_called_once_with(ps_df)
         mock_delta.write.assert_called_once_with(
             mock_native, str(namespace.bronze_table_dir("events")),
-            mode="overwrite", z_order_columns=None,
+            mode="overwrite", z_order_columns=None, target_partitions=None,
         )
 
     @patch("customer_retention.analysis.auto_explorer.active_dataset_store.as_spark_df")
@@ -442,7 +442,7 @@ class TestDistributedSavePath:
         mock_as_spark.assert_called_once_with(ps_df)
         mock_delta.write.assert_called_once_with(
             mock_native, str(namespace.gold_table_dir("cust_emai__abc1234")),
-            mode="overwrite", z_order_columns=None,
+            mode="overwrite", z_order_columns=None, target_partitions=None,
         )
 
     @patch("customer_retention.analysis.auto_explorer.active_dataset_store.as_spark_df")
@@ -492,7 +492,7 @@ class TestDistributedSavePath:
         mock_as_spark.assert_called_once_with(native)
         mock_delta.write.assert_called_once_with(
             native, str(namespace.landing_table_dir("customers")),
-            mode="overwrite", z_order_columns=None,
+            mode="overwrite", z_order_columns=None, target_partitions=None,
         )
 
 

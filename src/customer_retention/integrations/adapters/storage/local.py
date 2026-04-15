@@ -54,11 +54,15 @@ class LocalDelta(DeltaStorage):
         partition_by: Optional[List[str]] = None,
         metadata: Optional[Dict[str, str]] = None,
         z_order_columns: Optional[List[str]] = None,
+        target_partitions: Optional[int] = None,
     ) -> None:
         if hasattr(df, "to_spark"):
             from .databricks import DatabricksDelta
 
-            DatabricksDelta().write(df, path, mode, partition_by, metadata, z_order_columns)
+            DatabricksDelta().write(
+                df, path, mode, partition_by, metadata, z_order_columns,
+                target_partitions=target_partitions,
+            )
             return
         df = _coerce_null_columns(df)
         dl = _import_deltalake()

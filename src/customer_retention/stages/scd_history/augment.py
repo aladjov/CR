@@ -24,7 +24,7 @@ notebooks — use the facade instead.
 """
 from __future__ import annotations
 
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 
 from customer_retention.core.compat import (
     _is_native_spark_df,
@@ -32,8 +32,12 @@ from customer_retention.core.compat import (
     as_pandas_api,
     as_spark_df,
 )
+from customer_retention.core.compat.detection import get_default_parallelism
 
 from .config import SCDHistoryReconstructionConfig
+
+_AUGMENT_PARTITION_FLOOR_MULTIPLIER = 8
+_AUGMENT_MAX_PARTITIONS = 4096
 
 
 def augment_parent_with_scd_state(
@@ -182,6 +186,8 @@ def augment_and_persist_parent_dataset(
     state_view: Any,
     config: SCDHistoryReconstructionConfig,
     join_type: str = "inner",
+    grid_anchor_count: Optional[int] = None,
+    target_partitions: Optional[int] = None,
 ) -> Tuple[Any, dict[str, str]]:
     """Augment a parent with SCD state and overwrite its landing Delta.
 
@@ -197,6 +203,13 @@ def augment_and_persist_parent_dataset(
     and ``save_active_dataset`` (``as_spark_df`` + ``delta.write``). The
     schema-drift verification reads only ``columns`` from the persisted
     Delta — no row scan, no ``.collect()``.
+
+    ``target_partitions`` lets the caller override the write-path partition
+    floor — SCD fan-out (parents × anchors) can produce billions of rows; a
+    64-partition default lands a multi-GB spill per task which exhausts
+    executor disk. When unset, the facade derives a hint from
+    ``grid_anchor_count * default_parallelism * 8`` (capped at 4096) which
+    scales partition count with fan-out magnitude.
 
     Fail-fast on:
       - empty / whitespace ``parent_dataset_name``
@@ -216,12 +229,49 @@ def augment_and_persist_parent_dataset(
         augmented, "augment_and_persist_parent_dataset output",
     )
 
-    landing_path = _persist_to_landing(namespace, parent_dataset_name, augmented)
+    effective_partitions = _resolve_target_partitions(
+        target_partitions, grid_anchor_count
+    )
+    augmented_for_write = _repartition_by_record_key(
+        augmented, config.parent_record_key, effective_partitions,
+    )
+    landing_path = _persist_to_landing(
+        namespace, parent_dataset_name, augmented_for_write, effective_partitions,
+    )
     _assert_landing_delta_matches_schema(
         landing_path, augmented, parent_dataset_name,
     )
 
     return augmented, _augmented_schema(augmented)
+
+
+def _resolve_target_partitions(
+    explicit: Optional[int], grid_anchor_count: Optional[int]
+) -> Optional[int]:
+    if explicit is not None:
+        return max(int(explicit), 1)
+    if not grid_anchor_count or grid_anchor_count <= 0:
+        return None
+    cores = get_default_parallelism()
+    if cores <= 0:
+        return None
+    derived = int(grid_anchor_count) * int(cores) * _AUGMENT_PARTITION_FLOOR_MULTIPLIER
+    return max(min(derived, _AUGMENT_MAX_PARTITIONS), cores)
+
+
+def _repartition_by_record_key(
+    augmented: Any, parent_record_key: str, target_partitions: Optional[int]
+) -> Any:
+    if target_partitions is None or target_partitions <= 0:
+        return augmented
+    if _is_native_spark_df(augmented):
+        return augmented.repartition(int(target_partitions), parent_record_key)
+    if _is_spark_pandas(augmented):
+        spark_df = as_spark_df(augmented).repartition(
+            int(target_partitions), parent_record_key
+        )
+        return as_pandas_api(spark_df)
+    return augmented
 
 
 def _require_dataset_name(name: str) -> None:
@@ -245,12 +295,19 @@ def _require_config_matches(
         )
 
 
-def _persist_to_landing(namespace: Any, dataset_name: str, augmented: Any) -> Any:
+def _persist_to_landing(
+    namespace: Any,
+    dataset_name: str,
+    augmented: Any,
+    target_partitions: Optional[int] = None,
+) -> Any:
     from customer_retention.analysis.auto_explorer.active_dataset_store import (
         save_active_dataset,
     )
 
-    return save_active_dataset(namespace, dataset_name, augmented)
+    return save_active_dataset(
+        namespace, dataset_name, augmented, target_partitions=target_partitions,
+    )
 
 
 def _read_landing_columns(landing_path: Any) -> list[str]:

@@ -134,9 +134,9 @@ class LifecycleConfig:
     include_cohort_features: bool = False
     include_month_cyclical: bool = False
     include_quarter_cyclical: bool = False
-    recency_bucket_edges: List[float] = field(default_factory=lambda: [0, 7, 30, 90, 180, 365])
+    recency_bucket_edges: List[float] = field(default_factory=lambda: [0, 7, 30, 90, 180])
     recency_bucket_labels: List[str] = field(
-        default_factory=lambda: ["0-7d", "7-30d", "30-90d", "90-180d", "180-365d", "365d+"]
+        default_factory=lambda: ["0-7d", "8-30d", "31-90d", "91-180d", ">180d"]
     )
 
 

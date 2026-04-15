@@ -366,19 +366,47 @@ def add_recency_buckets(df):
 {%- if config.lifecycle.include_lifecycle_quadrant %}
 
 def add_lifecycle_quadrant(df):
-    \"\"\"Source: Data Discovery > Lifecycle Segmentation\"\"\"
-    if "days_since_first" not in df.columns:
+    \"\"\"Source: Data Discovery > Lifecycle Segmentation.
+
+    Parity contract with NB01d `classify_lifecycle_quadrants`: tenure threshold
+    is the median of `duration_days = days_since_first - days_since_last` (the
+    entity's active span), intensity is `event_count / max(duration_days, 1)`
+    (events-per-day rate). Quadrant names must match `LIFECYCLE_LABELS` from
+    `time_series_profiler.py`. Using raw `days_since_first` and raw
+    `event_count_*` as was done previously produced different medians, shifted
+    quadrant boundaries, and silently populated only 2-of-4 categories — the
+    FeatureSpec parity gate then rejected the gold table.
+    \"\"\"
+    if "days_since_first" not in df.columns or "days_since_last" not in df.columns:
         return df
-    intensity_cols = [c for c in df.columns if c.startswith("event_count_")]
-    if not intensity_cols:
+    event_count_cols = sorted(c for c in df.columns if c.startswith("event_count_"))
+    if not event_count_cols:
         return df
-    tenure_med = df.approxQuantile("days_since_first", [0.5], 0.01)[0]
-    intensity_med = df.approxQuantile(intensity_cols[0], [0.5], 0.01)[0]
+    event_count_col = (
+        "event_count_all_time" if "event_count_all_time" in event_count_cols
+        else event_count_cols[-1]
+    )
+    df = df.withColumn(
+        "_lifecycle_duration_days",
+        (F.col("days_since_first") - F.col("days_since_last")).cast("double"),
+    ).withColumn(
+        "_lifecycle_intensity",
+        F.col(event_count_col).cast("double")
+        / F.greatest(F.col("_lifecycle_duration_days"), F.lit(1.0)),
+    )
+    _quantile_result = df.approxQuantile(
+        ["_lifecycle_duration_days", "_lifecycle_intensity"], [0.5], 0.01,
+    )
+    tenure_med = _quantile_result[0][0] if _quantile_result[0] else 0.0
+    intensity_med = _quantile_result[1][0] if _quantile_result[1] else 0.0
+    _long = F.col("_lifecycle_duration_days") >= F.lit(tenure_med)
+    _high = F.col("_lifecycle_intensity") >= F.lit(intensity_med)
     df = df.withColumn("lifecycle_quadrant",
-        F.when((F.col("days_since_first") >= tenure_med) & (F.col(intensity_cols[0]) >= intensity_med), "steady_loyal_lifecycle")
-        .when((F.col("days_since_first") >= tenure_med) & (F.col(intensity_cols[0]) < intensity_med), "occasional_loyal_lifecycle")
-        .when((F.col("days_since_first") < tenure_med) & (F.col(intensity_cols[0]) >= intensity_med), "intense_brief_lifecycle")
+        F.when(_long & _high, "steady_loyal_lifecycle")
+        .when(_long & ~_high, "occasional_loyal_lifecycle")
+        .when(~_long & _high, "intense_brief_lifecycle")
         .otherwise("one_shot_lifecycle"))
+    df = df.drop("_lifecycle_duration_days", "_lifecycle_intensity")
     return df
 {%- endif %}
 {%- if config.lifecycle.include_cyclical_features %}
@@ -1003,19 +1031,45 @@ def add_recency_buckets(df):
 {%- if config.lifecycle.include_lifecycle_quadrant %}
 
 def add_lifecycle_quadrant(df):
-    \"\"\"Source: Data Discovery > Lifecycle Segmentation\"\"\"
-    if "days_since_first" not in df.columns:
+    \"\"\"Source: Data Discovery > Lifecycle Segmentation.
+
+    Parity contract with NB01d `classify_lifecycle_quadrants`: tenure threshold
+    is the median of `duration_days = days_since_first - days_since_last` (the
+    entity's active span), intensity is `event_count / max(duration_days, 1)`
+    (events-per-day rate). Prefers `event_count_all_time` as the count source,
+    falling back to the widest windowed count. Uses a batched `approxQuantile`
+    (one Spark job, both medians) so the step stays cheap on large gold tables.
+    \"\"\"
+    if "days_since_first" not in df.columns or "days_since_last" not in df.columns:
         return df
-    intensity_cols = [c for c in df.columns if c.startswith("event_count_")]
-    if not intensity_cols:
+    event_count_cols = sorted(c for c in df.columns if c.startswith("event_count_"))
+    if not event_count_cols:
         return df
-    tenure_med = df.approxQuantile("days_since_first", [0.5], 0.01)[0]
-    intensity_med = df.approxQuantile(intensity_cols[0], [0.5], 0.01)[0]
+    event_count_col = (
+        "event_count_all_time" if "event_count_all_time" in event_count_cols
+        else event_count_cols[-1]
+    )
+    df = df.withColumn(
+        "_lifecycle_duration_days",
+        (F.col("days_since_first") - F.col("days_since_last")).cast("double"),
+    ).withColumn(
+        "_lifecycle_intensity",
+        F.col(event_count_col).cast("double")
+        / F.greatest(F.col("_lifecycle_duration_days"), F.lit(1.0)),
+    )
+    _quantile_result = df.approxQuantile(
+        ["_lifecycle_duration_days", "_lifecycle_intensity"], [0.5], 0.01,
+    )
+    tenure_med = _quantile_result[0][0] if _quantile_result[0] else 0.0
+    intensity_med = _quantile_result[1][0] if _quantile_result[1] else 0.0
+    _long = F.col("_lifecycle_duration_days") >= F.lit(tenure_med)
+    _high = F.col("_lifecycle_intensity") >= F.lit(intensity_med)
     df = df.withColumn("lifecycle_quadrant",
-        F.when((F.col("days_since_first") >= tenure_med) & (F.col(intensity_cols[0]) >= intensity_med), "steady_loyal_lifecycle")
-        .when((F.col("days_since_first") >= tenure_med) & (F.col(intensity_cols[0]) < intensity_med), "occasional_loyal_lifecycle")
-        .when((F.col("days_since_first") < tenure_med) & (F.col(intensity_cols[0]) >= intensity_med), "intense_brief_lifecycle")
+        F.when(_long & _high, "steady_loyal_lifecycle")
+        .when(_long & ~_high, "occasional_loyal_lifecycle")
+        .when(~_long & _high, "intense_brief_lifecycle")
         .otherwise("one_shot_lifecycle"))
+    df = df.drop("_lifecycle_duration_days", "_lifecycle_intensity")
     return df
 {%- endif %}
 {%- if config.lifecycle.include_cyclical_features %}

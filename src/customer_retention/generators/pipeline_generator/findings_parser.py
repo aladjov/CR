@@ -56,11 +56,18 @@ _EXPLORATION_TO_PRODUCTION_MODEL = {
 
 
 def _edges_to_labels(edges: List[float]) -> List[str]:
-    labels = []
-    for i in range(len(edges) - 1):
-        labels.append(f"{int(edges[i])}-{int(edges[i + 1])}d")
-    labels.append(f"{int(edges[-1])}d+")
-    return labels
+    """Delegate to the canonical label generator used by NB01c/NB01d.
+
+    A prior in-house implementation emitted `["0-7d", "7-30d", ..., "180d+"]`
+    which does NOT match the `["0-7d", "8-30d", ..., ">180d"]` labels written
+    into the gold table by NB01d's Spark path and `create_recency_bucket_feature`.
+    The resulting one-hot column names then diverge from `FeatureSpec.selected_features`
+    and training fails at the parity gate.
+    """
+    from customer_retention.stages.profiling.temporal_pattern_analyzer import (
+        generate_bucket_labels,
+    )
+    return generate_bucket_labels(edges)
 
 
 _RECOGNIZED_BRONZE_OVERRIDE_KEYS = frozenset(

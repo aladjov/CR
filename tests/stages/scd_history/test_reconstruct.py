@@ -1111,3 +1111,180 @@ class TestParity:
             pd_vals = [None if native_pd.isna(v) else v for v in out_pd[f]]
             ps_vals = [None if native_pd.isna(v) else v for v in out_ps[f]]
             assert pd_vals == ps_vals, f"mismatch on {f}"
+
+
+class TestSpinePrunedByParentCreationDate:
+    """State before a parent exists is meaningless. When
+    ``parent_creation_timestamp_column`` is configured and present on the
+    parent, the spine only emits anchor rows where
+    ``anchor_date >= parent.creation_date``. This is the main lever that
+    keeps the state-view size linear in ``sum_of_parent_lifetimes`` rather
+    than ``num_parents × num_anchors`` — the latter OOMs executor disk on
+    SPS-scale datasets (5M cases × hundreds of anchors = ~1B rows).
+    """
+
+    def test_anchors_before_creation_date_are_excluded(
+        self, df_factory, grid_dates
+    ):
+        late_parent_created_at = grid_dates[3]
+        history = df_factory([
+            {
+                "CASE_HISTORY_ID": "h1",
+                "CASE_ID": "LATE",
+                "FIELD": "Status",
+                "OLD_VALUE": None,
+                "NEW_VALUE": "Open",
+                "CREATED_DATE": late_parent_created_at,
+            }
+        ])
+        parent = df_factory([
+            {
+                "CASE_ID": "LATE",
+                "CREATED_DATE": late_parent_created_at,
+                "CASE_STATUS": "Open",
+                "PRIORITY": "Med",
+            }
+        ])
+        cfg = _base_config(
+            tracked_fields=("Status",),
+            parent_value_columns=(("Status", "CASE_STATUS"),),
+        )
+
+        out = _to_native(
+            reconstruct_scd_history_at_grid(history, grid_dates, cfg, parent)
+        )
+        out_late = out[out["CASE_ID"] == "LATE"]
+
+        kept_anchors = sorted(native_pd.to_datetime(out_late["as_of_date"]).unique())
+        expected = [native_pd.Timestamp(a) for a in grid_dates[3:]]
+        assert kept_anchors == expected
+
+    def test_no_creation_column_on_parent_keeps_all_anchors(
+        self, df_factory, grid_dates
+    ):
+        history = df_factory([
+            {
+                "CASE_HISTORY_ID": "h1",
+                "CASE_ID": "X",
+                "FIELD": "Status",
+                "OLD_VALUE": None,
+                "NEW_VALUE": "Open",
+                "CREATED_DATE": grid_dates[2],
+            }
+        ])
+        parent = df_factory([
+            {"CASE_ID": "X", "CASE_STATUS": "Open"},
+        ])
+        cfg = _base_config(
+            tracked_fields=("Status",),
+            parent_value_columns=(("Status", "CASE_STATUS"),),
+        )
+
+        out = _to_native(
+            reconstruct_scd_history_at_grid(history, grid_dates, cfg, parent)
+        )
+        kept = sorted(
+            native_pd.to_datetime(out[out["CASE_ID"] == "X"]["as_of_date"]).unique()
+        )
+        assert kept == [native_pd.Timestamp(a) for a in grid_dates]
+
+    def test_config_without_creation_column_keeps_all_anchors(
+        self, df_factory, grid_dates
+    ):
+        history = df_factory([
+            {
+                "CASE_HISTORY_ID": "h1",
+                "CASE_ID": "X",
+                "FIELD": "Status",
+                "OLD_VALUE": None,
+                "NEW_VALUE": "Open",
+                "CREATED_DATE": grid_dates[2],
+            }
+        ])
+        parent = df_factory([
+            {"CASE_ID": "X", "CREATED_DATE": grid_dates[3], "CASE_STATUS": "Open"},
+        ])
+        cfg = _base_config(
+            tracked_fields=("Status",),
+            parent_value_columns=(("Status", "CASE_STATUS"),),
+            parent_creation_timestamp_column=None,
+        )
+
+        out = _to_native(
+            reconstruct_scd_history_at_grid(history, grid_dates, cfg, parent)
+        )
+        kept = sorted(
+            native_pd.to_datetime(out[out["CASE_ID"] == "X"]["as_of_date"]).unique()
+        )
+        assert kept == [native_pd.Timestamp(a) for a in grid_dates]
+
+    def test_history_only_parent_keeps_all_anchors_when_parent_row_absent(
+        self, df_factory, grid_dates
+    ):
+        history = df_factory([
+            {
+                "CASE_HISTORY_ID": "h1",
+                "CASE_ID": "HIST_ONLY",
+                "FIELD": "Status",
+                "OLD_VALUE": None,
+                "NEW_VALUE": "Open",
+                "CREATED_DATE": grid_dates[0],
+            }
+        ])
+        parent = df_factory([
+            {
+                "CASE_ID": "OTHER",
+                "CREATED_DATE": grid_dates[4],
+                "CASE_STATUS": "Closed",
+            }
+        ])
+        cfg = _base_config(
+            tracked_fields=("Status",),
+            parent_value_columns=(("Status", "CASE_STATUS"),),
+        )
+
+        out = _to_native(
+            reconstruct_scd_history_at_grid(history, grid_dates, cfg, parent)
+        )
+        hist_anchors = sorted(
+            native_pd.to_datetime(
+                out[out["CASE_ID"] == "HIST_ONLY"]["as_of_date"]
+            ).unique()
+        )
+        assert hist_anchors == [native_pd.Timestamp(a) for a in grid_dates]
+
+    def test_creation_column_resolved_case_insensitively(
+        self, df_factory, grid_dates
+    ):
+        late_parent_created_at = grid_dates[2]
+        history = df_factory([
+            {
+                "CASE_HISTORY_ID": "h1",
+                "CASE_ID": "LATE",
+                "FIELD": "Status",
+                "OLD_VALUE": None,
+                "NEW_VALUE": "Open",
+                "CREATED_DATE": late_parent_created_at,
+            }
+        ])
+        parent = df_factory([
+            {
+                "CASE_ID": "LATE",
+                "created_date": late_parent_created_at,
+                "CASE_STATUS": "Open",
+            }
+        ])
+        cfg = _base_config(
+            tracked_fields=("Status",),
+            parent_value_columns=(("Status", "CASE_STATUS"),),
+            parent_creation_timestamp_column="CREATED_DATE",
+        )
+
+        out = _to_native(
+            reconstruct_scd_history_at_grid(history, grid_dates, cfg, parent)
+        )
+        kept = sorted(
+            native_pd.to_datetime(out[out["CASE_ID"] == "LATE"]["as_of_date"]).unique()
+        )
+        expected = [native_pd.Timestamp(a) for a in grid_dates[2:]]
+        assert kept == expected

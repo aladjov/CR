@@ -3753,3 +3753,110 @@ class TestFrameworkRepoPathInRenderer:
             i for i, line in enumerate(lines) if line.strip() and not line.startswith("#") and "MAGIC" not in line
         )
         assert lines[code_start] == "import sys"
+
+
+class TestDatabricksLifecycleQuadrantParityWithNB01d:
+    """Regression for the 3rd-pass parity failure (`gold missing lifecycle_quadrant_occasional_loyal_lifecycle,
+    lifecycle_quadrant_one_shot_lifecycle`). NB01d's `classify_lifecycle_quadrants`
+    computes tenure from `duration_days = last_event - first_event` (equivalent
+    to `days_since_first - days_since_last`) and intensity as `events-per-day`.
+    The renderer's `add_lifecycle_quadrant` MUST use the same quantities;
+    otherwise the median thresholds land in different places on the same data
+    and two of four quadrants end up with zero entities."""
+
+    @staticmethod
+    def _render_bronze_entity_with_quadrant(renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="order_date",
+            lifecycle=LifecycleConfig(include_lifecycle_quadrant=True),
+            post_shaping=[],
+        )
+        return renderer.render_bronze_entity("orders_aggregated", config, "orders", "orders")
+
+    def test_uses_duration_days_not_raw_days_since_first(self, renderer):
+        result = self._render_bronze_entity_with_quadrant(renderer)
+        fn = result[result.index("def add_lifecycle_quadrant") :]
+        fn = fn[: fn.index("\ndef ")]
+        assert "days_since_first\") - F.col(\"days_since_last\")" in fn, (
+            "must compute duration_days = days_since_first - days_since_last "
+            "to match NB01d's `lc['duration_days']`"
+        )
+
+    def test_uses_events_per_day_intensity(self, renderer):
+        result = self._render_bronze_entity_with_quadrant(renderer)
+        fn = result[result.index("def add_lifecycle_quadrant") :]
+        fn = fn[: fn.index("\ndef ")]
+        assert "F.greatest(F.col(\"_lifecycle_duration_days\")" in fn
+        assert "/ F.greatest" in fn, (
+            "must divide event_count by duration to match NB01d's "
+            "`intensity = event_count / duration_days.clip(lower=1)`"
+        )
+
+    def test_prefers_event_count_all_time(self, renderer):
+        result = self._render_bronze_entity_with_quadrant(renderer)
+        fn = result[result.index("def add_lifecycle_quadrant") :]
+        fn = fn[: fn.index("\ndef ")]
+        assert "event_count_all_time" in fn
+
+    def test_batched_approx_quantile_single_job(self, renderer):
+        """Both medians computed in one Spark job via list-arg approxQuantile —
+        avoids doubling the plan cost on large gold tables."""
+        result = self._render_bronze_entity_with_quadrant(renderer)
+        fn = result[result.index("def add_lifecycle_quadrant") :]
+        fn = fn[: fn.index("\ndef ")]
+        assert "approxQuantile(\n        [\"_lifecycle_duration_days\", \"_lifecycle_intensity\"]" in fn
+
+    def test_all_four_quadrant_labels_emitted(self, renderer):
+        result = self._render_bronze_entity_with_quadrant(renderer)
+        fn = result[result.index("def add_lifecycle_quadrant") :]
+        fn = fn[: fn.index("\ndef ")]
+        for label in ("steady_loyal_lifecycle", "occasional_loyal_lifecycle",
+                       "intense_brief_lifecycle", "one_shot_lifecycle"):
+            assert label in fn
+
+    def test_scratch_columns_cleaned_up(self, renderer):
+        """The `_lifecycle_*` helper columns must not leak into the gold table
+        — they'd pollute the feature space and potentially break downstream
+        joins on selected_features."""
+        result = self._render_bronze_entity_with_quadrant(renderer)
+        fn = result[result.index("def add_lifecycle_quadrant") :]
+        fn = fn[: fn.index("\ndef ")]
+        assert 'drop("_lifecycle_duration_days", "_lifecycle_intensity")' in fn
+
+    def test_bronze_entity_notebook_is_valid_python(self, renderer):
+        result = self._render_bronze_entity_with_quadrant(renderer)
+        ast.parse(result)
+
+
+class TestDatabricksRecencyBucketLabelsMatchNB01d:
+    """The recency_bucket chain writes string labels that later feed one-hot
+    encoding. If the labels disagree with NB01d's (which the FeatureSpec
+    captures), encoded column names don't match and training fails."""
+
+    @staticmethod
+    def _render_bronze_entity_with_recency(renderer):
+        source = SourceConfig(
+            name="orders", path="/data/orders.csv", format="csv",
+            entity_key="customer_id", time_column="order_date", is_event_level=True,
+        )
+        config = BronzeEventConfig(
+            source=source, entity_column="customer_id", time_column="order_date",
+            lifecycle=LifecycleConfig(include_recency_bucket=True),
+            post_shaping=[],
+        )
+        return renderer.render_bronze_entity("orders_aggregated", config, "orders", "orders")
+
+    def test_default_labels_match_nb01d_canonical(self, renderer):
+        result = self._render_bronze_entity_with_recency(renderer)
+        fn = result[result.index("def add_recency_buckets") :]
+        fn = fn[: fn.index("\ndef ")]
+        for label in ('"0-7d"', '"8-30d"', '"31-90d"', '"91-180d"', '">180d"'):
+            assert label in fn, f"canonical label {label} missing from renderer output"
+        for wrong_label in ('"7-30d"', '"30-90d"', '"90-180d"', '"180-365d"', '"365d+"'):
+            assert wrong_label not in fn, (
+                f"non-canonical label {wrong_label} leaked into renderer output"
+            )

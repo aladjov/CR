@@ -53,15 +53,25 @@ class DatabricksDelta(DeltaStorage):
                 raise FileNotFoundError(f"Delta table not found: {path}") from exc
             raise
 
-    def _ensure_parallelism(self, spark_df: Any, force: bool = False) -> Any:
+    def _ensure_parallelism(
+        self, spark_df: Any, force: bool = False,
+        target_partitions: Optional[int] = None,
+    ) -> Any:
         """Repartition to match available cores if partition count is too low.
 
         Uses ``inputFiles()`` (Spark SQL metadata, no .rdd) to estimate
         partition count on read.  When *force* is True (write path) the
         repartition is unconditional since the shuffle is amortised into
         the write job.
+
+        ``target_partitions`` lets the caller override the default-parallelism
+        floor for writes that produce billions of rows — a higher partition
+        count shrinks per-task data to avoid executor-disk spill OOMs. The
+        effective target is ``max(target_partitions, get_default_parallelism())``
+        so we never fall below core count.
         """
-        target = get_default_parallelism()
+        cores = get_default_parallelism()
+        target = max(int(target_partitions), cores) if target_partitions else cores
         if target <= 1:
             return spark_df
         if force:
@@ -94,7 +104,8 @@ class DatabricksDelta(DeltaStorage):
     def write(self, df: Any, path: str, mode: str = "overwrite",
               partition_by: Optional[List[str]] = None,
               metadata: Optional[Dict[str, str]] = None,
-              z_order_columns: Optional[List[str]] = None) -> None:
+              z_order_columns: Optional[List[str]] = None,
+              target_partitions: Optional[int] = None) -> None:
         path = self._normalize_path(path)
         self.spark.conf.set("spark.sql.parquet.outputTimestampType", "TIMESTAMP_MICROS")
         self.spark.conf.set("spark.sql.execution.arrow.pyspark.fallback.enabled", "true")
@@ -112,7 +123,9 @@ class DatabricksDelta(DeltaStorage):
         spark_df = self._strip_spark_timestamp_tz(spark_df)
         from customer_retention.core.compat import clamp_spark_timestamps
         spark_df = clamp_spark_timestamps(spark_df)
-        spark_df = self._ensure_parallelism(spark_df, force=True)
+        spark_df = self._ensure_parallelism(
+            spark_df, force=True, target_partitions=target_partitions
+        )
         n_cols = len(spark_df.columns)
         writer = spark_df.write.format("delta").mode(mode)
         if mode == "overwrite":

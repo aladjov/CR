@@ -265,7 +265,17 @@ def compute_recency_buckets(
     return bucket_stats
 
 
-def _generate_bucket_labels(edges: List[float]) -> List[str]:
+def generate_bucket_labels(edges: List[float]) -> List[str]:
+    """Canonical recency-bucket label generator used by NB01c/NB01d (exploration)
+    and the generated local/Databricks gold pipelines (production).
+
+    Convention: `(lower, upper]` intervals named as `"<lower+1>-<upper>d"` for
+    interior buckets, `"0-<upper>d"` for the leading bucket (inclusive of 0),
+    `">{lower}d"` for any trailing `inf` edge. Deviating from this convention
+    breaks one-hot parity with the FeatureSpec produced by NB08 (the spec
+    records `recency_bucket_8_30d`; any other generator produces
+    `recency_bucket_7_30d` and training fails at `_apply_feature_spec_gate`).
+    """
     labels = []
     for i in range(len(edges) - 1):
         start, end = int(edges[i]), edges[i + 1]
@@ -276,6 +286,9 @@ def _generate_bucket_labels(edges: List[float]) -> List[str]:
         else:
             labels.append(f"{start + 1}-{int(end)}d")
     return labels
+
+
+_generate_bucket_labels = generate_bucket_labels
 
 
 def detect_inflection_bucket(buckets: List[RecencyBucketStats]) -> Optional[str]:

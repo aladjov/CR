@@ -123,10 +123,19 @@ def print_write_report(
     console.end_section()
 
 
-def _write_delta(df: Any, path: str, z_order_columns: Optional[List[str]] = None) -> None:
+def _write_delta(
+    df: Any,
+    path: str,
+    z_order_columns: Optional[List[str]] = None,
+    target_partitions: Optional[int] = None,
+) -> None:
     if _is_native_spark_df(df) or hasattr(df, "to_spark"):
         spark_df = sanitize_spark_timestamps(as_spark_df(df))
-        get_delta().write(spark_df, path, mode="overwrite", z_order_columns=z_order_columns)
+        get_delta().write(
+            spark_df, path, mode="overwrite",
+            z_order_columns=z_order_columns,
+            target_partitions=target_partitions,
+        )
         return
     _local_delta().write(
         normalize_timestamps(_compat_to_pandas(df)), path, mode="overwrite",
@@ -147,9 +156,14 @@ def save_active_dataset(
     dataset_name: str,
     df: Any,
     z_order_columns: Optional[List[str]] = None,
+    target_partitions: Optional[int] = None,
 ) -> Path:
     dlt_path = namespace.landing_table_dir(dataset_name)
-    _write_delta(df, str(dlt_path), z_order_columns=z_order_columns)
+    _write_delta(
+        df, str(dlt_path),
+        z_order_columns=z_order_columns,
+        target_partitions=target_partitions,
+    )
     return dlt_path
 
 

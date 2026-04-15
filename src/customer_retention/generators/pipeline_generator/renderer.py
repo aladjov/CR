@@ -379,20 +379,24 @@ def add_recency_buckets(df: pd.DataFrame) -> pd.DataFrame:
 {% if config.lifecycle.include_lifecycle_quadrant %}
 
 def add_lifecycle_quadrant(df: pd.DataFrame) -> pd.DataFrame:
-    if "days_since_first" not in df.columns:
+    if "days_since_first" not in df.columns or "days_since_last" not in df.columns:
         return df
-    tenure = df["days_since_first"]
-    intensity_col = [c for c in df.columns if c.startswith("event_count_")]
-    if not intensity_col:
+    event_count_cols = sorted(c for c in df.columns if c.startswith("event_count_"))
+    if not event_count_cols:
         return df
-    intensity = df[intensity_col[0]]
-    tenure_med = tenure.median()
-    intensity_med = intensity.median()
+    event_count_col = (
+        "event_count_all_time" if "event_count_all_time" in event_count_cols
+        else event_count_cols[-1]
+    )
+    duration = (df["days_since_first"] - df["days_since_last"]).astype(float)
+    intensity = df[event_count_col].astype(float) / duration.clip(lower=1.0)
+    tenure_med = float(duration.median())
+    intensity_med = float(intensity.median())
     conditions = [
-        (tenure >= tenure_med) & (intensity >= intensity_med),
-        (tenure >= tenure_med) & (intensity < intensity_med),
-        (tenure < tenure_med) & (intensity >= intensity_med),
-        (tenure < tenure_med) & (intensity < intensity_med),
+        (duration >= tenure_med) & (intensity >= intensity_med),
+        (duration >= tenure_med) & (intensity < intensity_med),
+        (duration < tenure_med) & (intensity >= intensity_med),
+        (duration < tenure_med) & (intensity < intensity_med),
     ]
     labels = ["steady_loyal_lifecycle", "occasional_loyal_lifecycle", "intense_brief_lifecycle", "one_shot_lifecycle"]
     df["lifecycle_quadrant"] = np.select(conditions, labels, default="unknown")
@@ -2514,20 +2518,24 @@ def add_recency_buckets(df: pd.DataFrame) -> pd.DataFrame:
 {% if config.lifecycle.include_lifecycle_quadrant %}
 
 def add_lifecycle_quadrant(df: pd.DataFrame) -> pd.DataFrame:
-    if "days_since_first" not in df.columns:
+    if "days_since_first" not in df.columns or "days_since_last" not in df.columns:
         return df
-    tenure = df["days_since_first"]
-    intensity_col = [c for c in df.columns if c.startswith("event_count_")]
-    if not intensity_col:
+    event_count_cols = sorted(c for c in df.columns if c.startswith("event_count_"))
+    if not event_count_cols:
         return df
-    intensity = df[intensity_col[0]]
-    tenure_med = tenure.median()
-    intensity_med = intensity.median()
+    event_count_col = (
+        "event_count_all_time" if "event_count_all_time" in event_count_cols
+        else event_count_cols[-1]
+    )
+    duration = (df["days_since_first"] - df["days_since_last"]).astype(float)
+    intensity = df[event_count_col].astype(float) / duration.clip(lower=1.0)
+    tenure_med = float(duration.median())
+    intensity_med = float(intensity.median())
     conditions = [
-        (tenure >= tenure_med) & (intensity >= intensity_med),
-        (tenure >= tenure_med) & (intensity < intensity_med),
-        (tenure < tenure_med) & (intensity >= intensity_med),
-        (tenure < tenure_med) & (intensity < intensity_med),
+        (duration >= tenure_med) & (intensity >= intensity_med),
+        (duration >= tenure_med) & (intensity < intensity_med),
+        (duration < tenure_med) & (intensity >= intensity_med),
+        (duration < tenure_med) & (intensity < intensity_med),
     ]
     labels = ["steady_loyal_lifecycle", "occasional_loyal_lifecycle", "intense_brief_lifecycle", "one_shot_lifecycle"]
     df["lifecycle_quadrant"] = np.select(conditions, labels, default="unknown")
