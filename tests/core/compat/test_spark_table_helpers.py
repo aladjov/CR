@@ -63,6 +63,44 @@ class TestLoadSparkTable:
             with pytest.raises(Exception, match="Table not found"):
                 load_spark_table("catalog.schema.missing")
 
+    def test_global_temp_name_not_catalog_qualified(self):
+        # `global_temp` is Spark's session-scoped view schema; it must be read
+        # as "global_temp.<view>" directly. Prepending a catalog makes the
+        # lookup fail with TABLE_OR_VIEW_NOT_FOUND — the exact failure that
+        # register_temp_view + load_spark_table would hit on Databricks.
+        mock_spark = MagicMock()
+        mock_spark.conf.get.return_value = "global_temp"
+        mock_spark.catalog.currentCatalog.return_value = "main"
+        mock_spark.catalog.currentDatabase.return_value = "bronze"
+        with patch("customer_retention.core.compat.get_spark_session", return_value=mock_spark):
+            load_spark_table("global_temp.sps_enriched_contract")
+        mock_spark.table.assert_called_once_with("global_temp.sps_enriched_contract")
+
+    def test_global_temp_honors_custom_global_temp_database_conf(self):
+        mock_spark = MagicMock()
+        mock_spark.conf.get.return_value = "my_temp_db"
+        mock_spark.catalog.currentCatalog.return_value = "main"
+        mock_spark.catalog.currentDatabase.return_value = "bronze"
+        with patch("customer_retention.core.compat.get_spark_session", return_value=mock_spark):
+            load_spark_table("my_temp_db.enriched_view")
+        mock_spark.table.assert_called_once_with("my_temp_db.enriched_view")
+
+    def test_register_then_load_roundtrip(self):
+        # The critical contract: a view name returned by register_temp_view
+        # must be directly consumable by load_spark_table — otherwise the
+        # NB00 enrichment → derive_target flow can't hand data forward.
+        mock_spark = MagicMock()
+        mock_spark.conf.get.return_value = "global_temp"
+        mock_spark.catalog.currentCatalog.return_value = "main"
+        mock_spark.catalog.currentDatabase.return_value = "bronze"
+        mock_sdf = MagicMock()
+        mock_sdf.columns = ["entity_id", "churned"]
+        name = register_temp_view(mock_sdf, "enriched_contract", purpose="roundtrip-test")
+        assert name == "global_temp.enriched_contract"
+        with patch("customer_retention.core.compat.get_spark_session", return_value=mock_spark):
+            load_spark_table(name)
+        mock_spark.table.assert_called_once_with("global_temp.enriched_contract")
+
 
 class TestRegisterTempView:
     def _fake_sdf(self, columns):

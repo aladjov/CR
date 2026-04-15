@@ -2220,6 +2220,11 @@ def _qualify_table_name(spark: Any, name: str) -> str:
     parts = [p for p in name.split(".") if p]
     if len(parts) >= 3:
         return name
+    # Spark's session-scoped global temp views live in a reserved schema
+    # (configurable via spark.sql.globalTempDatabase, default "global_temp")
+    # and must be read as "global_temp.<view>" — not catalog-qualified.
+    if parts and parts[0] == _global_temp_database(spark):
+        return name
     try:
         catalog = spark.catalog.currentCatalog()
         database = spark.catalog.currentDatabase()
@@ -2232,6 +2237,16 @@ def _qualify_table_name(spark: Any, name: str) -> str:
     if len(parts) == 1:
         return f"{catalog}.{database}.{name}"
     return name
+
+
+def _global_temp_database(spark: Any) -> str:
+    try:
+        value = spark.conf.get("spark.sql.globalTempDatabase")
+        if value:
+            return value
+    except Exception:
+        pass
+    return "global_temp"
 
 
 def register_temp_view(spark_df: Any, view_name: str, *, purpose: str) -> str:
