@@ -2008,6 +2008,13 @@ def train_and_evaluate():
 {% if feature_spec_path %}
     with log_timing("feature_spec_gate", logger):
         _SPEC = FeatureSpec.load(_FEATURE_SPEC_PATH)
+        if _NAMESPACE is not None:
+            _runtime_spec_path = _NAMESPACE.feature_spec_path
+            if _runtime_spec_path != _FEATURE_SPEC_PATH and not _runtime_spec_path.exists():
+                import shutil as _spec_shutil
+                _runtime_spec_path.parent.mkdir(parents=True, exist_ok=True)
+                _spec_shutil.copy2(_FEATURE_SPEC_PATH, _runtime_spec_path)
+                print(f"[TRAINING] FeatureSpec snapshotted to {_runtime_spec_path} for parity report")
         df, _spec_leakage_drops = _apply_feature_spec_gate(df, _SPEC)
         print(
             f"[TRAINING] FeatureSpec applied: {len(_SPEC.selected_features)} features, "
@@ -2263,6 +2270,7 @@ def train_and_evaluate():
         _prod_diag = {
             "run_type": "production",
             "exploration_run_id": _SPEC.exploration_run_id,
+            "feature_spec_source_path": str(_FEATURE_SPEC_PATH),
             "feature_count": len(feature_cols),
             "feature_names": list(feature_cols),
             "split": {**_results.get("split", {}), "train": train_count, "test": test_count},
