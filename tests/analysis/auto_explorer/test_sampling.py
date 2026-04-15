@@ -7,14 +7,23 @@ import pytest
 
 from customer_retention.analysis.auto_explorer.project_context import CadenceInterval, IntentConfig
 from customer_retention.analysis.auto_explorer.sampling import (
+    PopulationSummary,
     SegmentEntitySelection,
+    _build_strat_key_column,
     _compute_group_budget,
     apply_sample_filters,
     apply_temporal_lookback,
+    candidate_sample_sizes,
     estimate_sampling_accuracy,
+    prepare_sample_frame,
+    render_population_markdown,
+    render_sample_result_markdown,
+    render_segment_filter_markdown,
     resolve_segment_entity_ids,
+    save_sample_ids,
     stratified_entity_sample,
     stratified_holdout_split,
+    summarize_population,
 )
 
 
@@ -893,3 +902,251 @@ class TestStratifiedHoldoutSplit:
         )
         assert t1 == t2
         assert h1 == h2
+
+
+class TestBuildStratKeyColumn:
+    def _df(self, n=20):
+        return pd.DataFrame({
+            "entity_id": range(n),
+            "target": [1, 0] * (n // 2),
+            "ts": pd.date_range("2023-01-01", periods=n, freq="45D"),
+            "region": (["a", "b", "c", "d"] * ((n // 4) + 1))[:n],
+            "amount": list(range(10, n + 10)),
+        })
+
+    def test_returns_none_when_no_dimensions(self):
+        key = _build_strat_key_column(self._df(), None, None, None)
+        assert key is None
+
+    def test_target_only(self):
+        df = self._df(4)
+        key = _build_strat_key_column(df, "target", None, None)
+        assert list(key) == ["1", "0", "1", "0"]
+
+    def test_target_and_time_produces_pipe_joined_cohort(self):
+        df = self._df(8)
+        key = _build_strat_key_column(df, "target", "ts", None)
+        assert all("|" in v for v in key)
+        assert all(v.split("|")[1].startswith("20") and "-Q" in v.split("|")[1] for v in key)
+
+    def test_extra_categorical_is_stringified(self):
+        df = self._df(8)
+        key = _build_strat_key_column(df, None, None, ["region"])
+        assert sorted(set(key)) == ["a", "b", "c", "d"]
+
+    def test_extra_numeric_is_qcut_binned(self):
+        df = self._df(20)
+        key = _build_strat_key_column(df, None, None, ["amount"])
+        assert len(set(key)) <= 4
+
+    def test_missing_extra_column_is_ignored(self):
+        df = self._df(4)
+        key = _build_strat_key_column(df, "target", None, ["nonexistent"])
+        assert list(key) == ["1", "0", "1", "0"]
+
+    def test_target_missing_in_df_is_ignored(self):
+        df = self._df(4).drop(columns=["target"])
+        key = _build_strat_key_column(df, "target", None, None)
+        assert key is None
+
+    def test_time_column_with_nat_produces_deterministic_key_per_row(self):
+        # Original behavior: NaT year/quarter stringify to "nan" — fillna never
+        # triggers. The refactor preserves this; the key is still stable.
+        df = pd.DataFrame({
+            "ts": pd.to_datetime(["2024-01-01", pd.NaT, "2024-04-01"]),
+        })
+        key = _build_strat_key_column(df, None, "ts", None)
+        vals = list(key)
+        assert len(vals) == 3
+        assert vals[0] != vals[2]
+        assert "Q" in vals[0] and "Q" in vals[2]
+
+
+class TestSummarizePopulation:
+    def test_none_target_df_returns_zero(self):
+        s = summarize_population(None, "entity_id", "target", "ts")
+        assert s == PopulationSummary(0, 0.5, 1, None)
+
+    def test_missing_entity_col_returns_zero(self):
+        df = pd.DataFrame({"x": [1, 2]})
+        s = summarize_population(df, "entity_id", "target", "ts")
+        assert s.total_entities == 0
+
+    def test_duplicates_deduped(self):
+        df = pd.DataFrame({
+            "entity_id": [1, 1, 2, 2, 3],
+            "target": [1, 1, 0, 0, 1],
+        })
+        s = summarize_population(df, "entity_id", "target", None)
+        assert s.total_entities == 3
+
+    def test_target_rate_computed_on_entities(self):
+        df = pd.DataFrame({
+            "entity_id": [1, 2, 3, 4],
+            "target": [1, 1, 0, 0],
+        })
+        s = summarize_population(df, "entity_id", "target", None)
+        assert s.target_rate == 0.5
+
+    def test_no_target_column_falls_back_to_default(self):
+        df = pd.DataFrame({"entity_id": [1, 2]})
+        s = summarize_population(df, "entity_id", "target", None)
+        assert s.target_rate == 0.5
+
+    def test_cohort_count_from_quarters(self):
+        df = pd.DataFrame({
+            "entity_id": range(8),
+            "ts": pd.to_datetime([
+                "2022-01-01", "2022-04-01", "2022-07-01", "2022-10-01",
+                "2023-01-01", "2023-04-01", "2023-07-01", "2023-10-01",
+            ]),
+        })
+        s = summarize_population(df, "entity_id", None, "ts")
+        assert s.n_cohorts == 8
+        assert s.time_column == "ts"
+
+    def test_time_column_missing_returns_one_cohort(self):
+        df = pd.DataFrame({"entity_id": [1, 2]})
+        s = summarize_population(df, "entity_id", None, "ts")
+        assert s.n_cohorts == 1
+        assert s.time_column is None
+
+
+class TestCandidateSampleSizes:
+    def test_returns_sorted_candidates_under_total(self):
+        assert candidate_sample_sizes(3000) == [500, 1000, 2000, 3000]
+
+    def test_includes_total_when_not_in_defaults(self):
+        sizes = candidate_sample_sizes(7500)
+        assert 7500 in sizes
+        assert max(sizes) == 7500
+
+    def test_total_equal_to_default_not_duplicated(self):
+        sizes = candidate_sample_sizes(1000)
+        assert sizes.count(1000) == 1
+
+    def test_total_zero_returns_empty(self):
+        assert candidate_sample_sizes(0) == []
+
+    def test_very_large_total_includes_all_defaults(self):
+        sizes = candidate_sample_sizes(1_000_000)
+        assert sizes == [500, 1000, 2000, 5000, 10000, 1_000_000]
+
+
+class TestPrepareSampleFrame:
+    def _df(self):
+        return pd.DataFrame({
+            "entity_id": [1, 2, 3],
+            "target": [1, 0, 1],
+            "ts": pd.to_datetime(["2024-01-01", "2024-06-01", "2024-09-01"]),
+            "region": ["a", "b", "a"],
+            "other": [10, 20, 30],
+        })
+
+    def test_projects_to_entity_target_time_and_extras(self):
+        out = prepare_sample_frame(self._df(), "entity_id", "target", "ts", ["region"], None)
+        assert set(out.columns) == {"entity_id", "target", "ts", "region"}
+
+    def test_omits_missing_extras(self):
+        out = prepare_sample_frame(self._df(), "entity_id", "target", None, ["missing"], None)
+        assert set(out.columns) == {"entity_id", "target"}
+
+    def test_without_target_or_time(self):
+        out = prepare_sample_frame(self._df(), "entity_id", None, None, None, None)
+        assert list(out.columns) == ["entity_id"]
+
+    def test_segment_filter_applied(self):
+        sel = SegmentEntitySelection.from_set({2})
+        out = prepare_sample_frame(self._df(), "entity_id", "target", None, None, sel)
+        assert list(out["entity_id"]) == [2]
+
+    def test_no_duplicate_columns_when_extra_overlaps_target(self):
+        out = prepare_sample_frame(self._df(), "entity_id", "target", None, ["target"], None)
+        assert list(out.columns).count("target") == 1
+
+
+class TestRenderMarkdowns:
+    def _estimate(self, **overrides):
+        base = {
+            "sample_size": 1000,
+            "pct_of_total": 0.1,
+            "churn_rate_ci": 0.015,
+            "correlation_error": 0.032,
+            "minority_expected": 80,
+            "cohort_ok": True,
+        }
+        base.update(overrides)
+        return base
+
+    def test_population_markdown_contains_counts_and_table_header(self):
+        summary = PopulationSummary(total_entities=10000, target_rate=0.08, n_cohorts=12, time_column="ts")
+        text = render_population_markdown(summary, 10000, False, 10000, [self._estimate()])
+        assert "**Population:** 10,000 entities" in text
+        assert "target rate 8.0%" in text
+        assert "12 cohorts" in text
+        assert "Sample Size" in text
+        assert "| 1,000 |" in text
+
+    def test_population_markdown_shows_filtered_suffix(self):
+        summary = PopulationSummary(total_entities=10000, target_rate=0.1, n_cohorts=1, time_column=None)
+        text = render_population_markdown(summary, 2000, True, 10000, [self._estimate()])
+        assert "2,000 entities (filtered from 10,000)" in text
+
+    def test_cohort_ok_renders_yes_or_no(self):
+        summary = PopulationSummary(total_entities=5, target_rate=0.5, n_cohorts=1, time_column=None)
+        text = render_population_markdown(summary, 5, False, 5, [self._estimate(cohort_ok=False)])
+        assert " no |" in text
+
+    def test_sample_result_markdown_without_extras(self):
+        text = render_sample_result_markdown(5000, 10000, 4000, 1000, 0.2, False, None)
+        assert "**Sampled:** 5,000 / 10,000 entities (50%)" in text
+        assert "stratified by target" in text
+        assert "**Train:** 4,000" in text
+        assert "**Holdout:** 1,000 entities (20%)" in text
+
+    def test_sample_result_markdown_with_time_and_extras(self):
+        text = render_sample_result_markdown(500, 1000, 400, 100, 0.2, True, ["region", "segment"])
+        assert "stratified by target + cohort + region, segment" in text
+
+    def test_sample_result_markdown_handles_zero_total(self):
+        text = render_sample_result_markdown(0, 0, 0, 0, 0.0, False, None)
+        assert "(0%)" in text
+
+    def test_segment_filter_markdown(self):
+        text = render_segment_filter_markdown({"account": "status == 'Active'", "orders": "amount > 0"})
+        assert "**Segment filters:**" in text
+        assert "**account**" in text
+        assert "`status == 'Active'`" in text
+
+
+class TestSaveSampleIds:
+    def _namespace(self, tmp_path):
+        class FakeNamespace:
+            sample_entity_ids_path = tmp_path / "sub" / "sample_entity_ids.json"
+            holdout_entity_ids_path = tmp_path / "sub" / "holdout_entity_ids.json"
+        return FakeNamespace()
+
+    def test_writes_train_and_holdout(self, tmp_path):
+        import json as _json
+        ns = self._namespace(tmp_path)
+        save_sample_ids(ns, [1, 2, 3], [4, 5])
+        assert _json.loads(ns.sample_entity_ids_path.read_text()) == [1, 2, 3]
+        assert _json.loads(ns.holdout_entity_ids_path.read_text()) == [4, 5]
+
+    def test_skips_holdout_when_empty(self, tmp_path):
+        ns = self._namespace(tmp_path)
+        save_sample_ids(ns, [1, 2], [])
+        assert ns.sample_entity_ids_path.exists()
+        assert not ns.holdout_entity_ids_path.exists()
+
+    def test_creates_parent_dir(self, tmp_path):
+        ns = self._namespace(tmp_path)
+        assert not ns.sample_entity_ids_path.parent.exists()
+        save_sample_ids(ns, [1], [])
+        assert ns.sample_entity_ids_path.parent.exists()
+
+    def test_serializes_non_json_native_ids_via_default_str(self, tmp_path):
+        ns = self._namespace(tmp_path)
+        import numpy as np
+        save_sample_ids(ns, [np.int64(7), np.int64(9)], [])
+        assert "7" in ns.sample_entity_ids_path.read_text()

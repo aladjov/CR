@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import math
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Iterable, Optional
 
@@ -14,15 +16,19 @@ from customer_retention.core.compat import (
     pd,
     qcut,
     safe_isin,
+    safe_len,
     safe_query,
     safe_sample,
     safe_to_datetime,
+    spark_persist,
 )
 
 if TYPE_CHECKING:
     from customer_retention.analysis.auto_explorer.project_context import IntentConfig
 
 _SEGMENT_ID_COL = "_segment_entity_id"
+_STRAT_KEY_COL = "_strat_key"
+_CANDIDATE_SAMPLE_SIZES: tuple[int, ...] = (500, 1000, 2000, 5000, 10000)
 
 
 def apply_temporal_lookback(df: Any, time_col: str, intent: IntentConfig) -> Any:
@@ -67,9 +73,6 @@ class SegmentEntitySelection:
     def from_spark_df(cls, spark_df: Any, entity_col: str) -> "SegmentEntitySelection":
         renamed = spark_df.withColumnRenamed(entity_col, _SEGMENT_ID_COL) \
             if entity_col != _SEGMENT_ID_COL else spark_df
-        # Cache the passing-entity DataFrame so `.count()` materializes it once
-        # and the downstream semi-join in `filter_frame` reuses the cached
-        # block — otherwise Spark rescans the filter subquery on every action.
         return cls(renamed.select(_SEGMENT_ID_COL).cache())
 
     @property
@@ -108,7 +111,7 @@ class SegmentEntitySelection:
             return set(self._data) == set(other)
         return NotImplemented
 
-    def __hash__(self):  # unhashable — sets are mutable
+    def __hash__(self):
         raise TypeError("SegmentEntitySelection is unhashable")
 
     def intersect(self, other: "SegmentEntitySelection") -> "SegmentEntitySelection":
@@ -167,13 +170,6 @@ def _pandas_passing_entities(df: Any, query_expr: str, entity_col: str) -> set:
 
 
 def _expose_frames_as_views(frames: dict[str, Any]) -> None:
-    # Filter expressions may contain SQL subqueries that reference sibling
-    # datasets by name (e.g. `ACCOUNT_ID in (select ACCOUNT_ID from contract
-    # where CONTRACT_START_DATE is not null)`). Spark's SQL parser resolves
-    # unqualified identifiers through the session catalog — so we register
-    # every Spark-backed frame as a session-scoped temp view keyed by its
-    # dataset name. The views live on the lazy plans returned from here; the
-    # Spark session drops them on termination, no cleanup required.
     for name, frame in frames.items():
         if not _is_spark_pandas(frame):
             continue
@@ -269,54 +265,105 @@ def _compute_group_budget(
     return budget
 
 
-def _spark_windowed_sample(
-    remaining_df: Any,
+def _binned_series(series: Any) -> Any:
+    if not is_numeric_dtype(series):
+        return series.astype(str)
+    try:
+        return qcut(series, q=4, labels=False, duplicates="drop").astype(str)
+    except (ValueError, TypeError):
+        return series.astype(str)
+
+
+def _build_strat_key_column(
+    df: Any,
+    target_col: Optional[str],
+    time_col: Optional[str],
+    extra_strat_cols: Optional[list[str]],
+) -> Any:
+    """Compose a single "|"-joined string stratification key from target, quarter, and extras.
+
+    Returns None when no stratification dimension is requested.
+    """
+    parts: list = []
+    if target_col and target_col in df.columns:
+        parts.append(df[target_col].astype(str))
+    if time_col and time_col in df.columns:
+        ts = safe_to_datetime(df[time_col], errors="coerce")
+        cohort = ts.dt.year.astype(str) + "-Q" + ts.dt.quarter.astype(str)
+        parts.append(cohort.fillna("unknown"))
+    for col in (extra_strat_cols or []):
+        if col in df.columns:
+            parts.append(_binned_series(df[col]))
+    if not parts:
+        return None
+    key = parts[0]
+    for p in parts[1:]:
+        key = key + "|" + p
+    return key
+
+
+def _attach_strat_key(df: Any, strat_key: Any) -> Any:
+    stratified = df.copy()
+    stratified[_STRAT_KEY_COL] = strat_key if strat_key is not None else "all"
+    return stratified
+
+
+def _spark_windowed_take(
+    df: Any,
     entity_col: str,
     group_budget: dict[str, int],
-    n_remaining: int,
+    total_take: int,
     random_state: int,
 ) -> list:
+    """Draw per-stratum samples in a SINGLE distributed pass via window row_number."""
     from pyspark.sql import Window, functions
 
-    spark_df = as_spark_df(remaining_df)
-
+    spark_df = as_spark_df(df)
     map_args: list = []
     for k, v in group_budget.items():
         map_args.extend([functions.lit(k), functions.lit(v)])
     budget_map = functions.create_map(*map_args)
-
-    w = Window.partitionBy("_strat_key").orderBy(functions.rand(seed=random_state))
-
+    w = Window.partitionBy(_STRAT_KEY_COL).orderBy(functions.rand(seed=random_state))
     result = (
         spark_df
-        .withColumn("_budget", budget_map[functions.col("_strat_key")])
+        .withColumn("_budget", budget_map[functions.col(_STRAT_KEY_COL)])
         .withColumn("_row_num", functions.row_number().over(w))
         .filter(functions.col("_row_num") <= functions.col("_budget"))
         .select(entity_col)
-        .limit(n_remaining)
+        .limit(total_take)
     )
-
     return [row[0] for row in result.collect()]
 
 
-def _pandas_group_sample(
-    remaining_df: Any,
+def _pandas_windowed_take(
+    df: Any,
     entity_col: str,
     group_budget: dict[str, int],
-    n_remaining: int,
+    total_take: int,
     random_state: int,
 ) -> list:
-    sampled_parts = []
+    parts = []
     for key, n_take in group_budget.items():
         if n_take <= 0:
             continue
-        group_df = remaining_df[remaining_df["_strat_key"] == key]
-        sampled_parts.append(safe_sample(group_df, n_take, random_state=random_state))
+        group_df = df[df[_STRAT_KEY_COL] == key]
+        parts.append(safe_sample(group_df, n_take, random_state=random_state))
+    if not parts:
+        return []
+    combined = concat(parts)
+    return head_as_list(combined[entity_col], total_take)
 
-    if sampled_parts:
-        sampled_df = concat(sampled_parts)
-        return head_as_list(sampled_df[entity_col], n_remaining)
-    return []
+
+def _stratified_ids_by_budget(
+    df: Any,
+    entity_col: str,
+    group_budget: dict[str, int],
+    total_take: int,
+    random_state: int,
+) -> list:
+    if _is_spark_pandas(df):
+        return _spark_windowed_take(df, entity_col, group_budget, total_take, random_state)
+    return _pandas_windowed_take(df, entity_col, group_budget, total_take, random_state)
 
 
 def stratified_entity_sample(
@@ -333,45 +380,14 @@ def stratified_entity_sample(
         return []
 
     deduped = entity_df.drop_duplicates(subset=[entity_col])
-    total = len(deduped)
+    total = safe_len(deduped)
     if n_entities >= total:
         return head_as_list(deduped[entity_col], total)
 
-    strat_parts = []
+    strat_key = _build_strat_key_column(deduped, target_col, time_col, extra_strat_cols)
+    deduped = _attach_strat_key(deduped, strat_key)
 
-    if target_col and target_col in deduped.columns:
-        strat_parts.append(deduped[target_col].astype(str))
-
-    if time_col and time_col in deduped.columns:
-        ts = safe_to_datetime(deduped[time_col], errors="coerce")
-        cohort_key = ts.dt.year.astype(str) + "-Q" + ts.dt.quarter.astype(str)
-        cohort_key = cohort_key.fillna("unknown")
-        strat_parts.append(cohort_key)
-
-    for col in (extra_strat_cols or []):
-        if col not in deduped.columns:
-            continue
-        series = deduped[col]
-        if is_numeric_dtype(series):
-            try:
-                binned = qcut(series, q=4, labels=False, duplicates="drop").astype(str)
-            except (ValueError, TypeError):
-                binned = series.astype(str)
-            strat_parts.append(binned)
-        else:
-            strat_parts.append(series.astype(str))
-
-    if strat_parts:
-        strat_key = strat_parts[0]
-        for part in strat_parts[1:]:
-            strat_key = strat_key + "|" + part
-        deduped = deduped.copy()
-        deduped["_strat_key"] = strat_key
-    else:
-        deduped = deduped.copy()
-        deduped["_strat_key"] = "all"
-
-    rare_ids = []
+    rare_ids: list = []
     if target_col and target_col in deduped.columns:
         class_counts = deduped[target_col].value_counts().to_dict()
         for cls_val, cnt in class_counts.items():
@@ -381,24 +397,16 @@ def stratified_entity_sample(
 
     remaining_df = safe_isin(deduped, entity_col, rare_ids, negate=True) if rare_ids else deduped
     n_remaining = n_entities - len(rare_ids)
-
     if n_remaining <= 0:
         return rare_ids[:n_entities]
 
-    group_counts = remaining_df["_strat_key"].value_counts().to_dict()
+    group_counts = remaining_df[_STRAT_KEY_COL].value_counts().to_dict()
     total_remaining = sum(group_counts.values())
-
     group_budget = _compute_group_budget(group_counts, n_remaining, total_remaining)
 
-    if _is_spark_pandas(remaining_df):
-        sampled_ids = _spark_windowed_sample(
-            remaining_df, entity_col, group_budget, n_remaining, random_state,
-        )
-    else:
-        sampled_ids = _pandas_group_sample(
-            remaining_df, entity_col, group_budget, n_remaining, random_state,
-        )
-
+    sampled_ids = _stratified_ids_by_budget(
+        remaining_df, entity_col, group_budget, n_remaining, random_state,
+    )
     return rare_ids + sampled_ids
 
 
@@ -412,9 +420,9 @@ def stratified_holdout_split(
     extra_strat_cols: Optional[list[str]] = None,
     random_state: int = 42,
 ) -> tuple[list, list]:
-    """Split pre-sampled entity IDs into train/holdout preserving strata proportions.
+    """Split pre-sampled entity IDs into (train, holdout), preserving strata proportions.
 
-    Returns (train_ids, holdout_ids).
+    Distributed path uses a single windowed Spark pass; pandas path loops per stratum.
     """
     if holdout_fraction <= 0.0:
         return list(entity_ids), []
@@ -423,59 +431,155 @@ def stratified_holdout_split(
 
     id_set = set(entity_ids)
     deduped = entity_df.drop_duplicates(subset=[entity_col])
-    deduped = deduped[deduped[entity_col].isin(id_set)].copy()
-
+    deduped = deduped[deduped[entity_col].isin(id_set)]
     n_holdout = max(1, int(len(id_set) * holdout_fraction))
 
-    # Build strata keys — same logic as stratified_entity_sample
-    strat_parts: list = []
+    strat_key = _build_strat_key_column(deduped, target_col, time_col, extra_strat_cols)
+    deduped = _attach_strat_key(deduped, strat_key)
 
-    if target_col and target_col in deduped.columns:
-        strat_parts.append(deduped[target_col].astype(str))
-
-    if time_col and time_col in deduped.columns:
-        ts = safe_to_datetime(deduped[time_col], errors="coerce")
-        cohort_key = ts.dt.year.astype(str) + "-Q" + ts.dt.quarter.astype(str)
-        cohort_key = cohort_key.fillna("unknown")
-        strat_parts.append(cohort_key)
-
-    for col in (extra_strat_cols or []):
-        if col not in deduped.columns:
-            continue
-        series = deduped[col]
-        if is_numeric_dtype(series):
-            try:
-                binned = qcut(series, q=4, labels=False, duplicates="drop").astype(str)
-            except (ValueError, TypeError):
-                binned = series.astype(str)
-            strat_parts.append(binned)
-        else:
-            strat_parts.append(series.astype(str))
-
-    if strat_parts:
-        strat_key = strat_parts[0]
-        for part in strat_parts[1:]:
-            strat_key = strat_key + "|" + part
-        deduped["_strat_key"] = strat_key
-    else:
-        deduped["_strat_key"] = "all"
-
-    # Proportional holdout per stratum
-    group_counts = deduped["_strat_key"].value_counts().to_dict()
+    group_counts = deduped[_STRAT_KEY_COL].value_counts().to_dict()
     total = sum(group_counts.values())
-
     holdout_budget = _compute_group_budget(group_counts, n_holdout, total)
 
-    # Sample holdout from each stratum using a shifted random state
-    holdout_ids_list: list = []
-    for key, n_take in holdout_budget.items():
-        if n_take <= 0:
-            continue
-        group_df = deduped[deduped["_strat_key"] == key]
-        sampled = safe_sample(group_df, n_take, random_state=random_state + 1)
-        holdout_ids_list.extend(head_as_list(sampled[entity_col], n_take))
-
+    holdout_ids_list = _stratified_ids_by_budget(
+        deduped, entity_col, holdout_budget, n_holdout, random_state + 1,
+    )
     holdout_set = set(holdout_ids_list)
     train_ids = [eid for eid in entity_ids if eid not in holdout_set]
-
     return train_ids, holdout_ids_list
+
+
+@dataclass(frozen=True)
+class PopulationSummary:
+    total_entities: int
+    target_rate: float
+    n_cohorts: int
+    time_column: Optional[str]
+
+
+def summarize_population(
+    target_df: Any,
+    entity_col: Optional[str],
+    target_col: Optional[str],
+    time_col: Optional[str],
+) -> PopulationSummary:
+    """Entity-level population stats: total, target rate, cohort count (1 pass each)."""
+    if target_df is None or not entity_col or entity_col not in target_df.columns:
+        return PopulationSummary(0, 0.5, 1, None)
+    entity_level = target_df.drop_duplicates(subset=[entity_col])
+    total = safe_len(entity_level)
+    rate = 0.5
+    if target_col and target_col in entity_level.columns:
+        rate = float(entity_level[target_col].mean())
+    n_cohorts = 1
+    resolved_time = None
+    if time_col and time_col in entity_level.columns:
+        dates = safe_to_datetime(entity_level[time_col], errors="coerce").dropna()
+        if safe_len(dates) > 0:
+            n_cohorts = max(1, int((dates.dt.year * 4 + dates.dt.quarter).nunique()))
+            resolved_time = time_col
+    return PopulationSummary(total, rate, n_cohorts, resolved_time)
+
+
+def candidate_sample_sizes(total_entities: int) -> list[int]:
+    return sorted({s for s in (*_CANDIDATE_SAMPLE_SIZES, total_entities) if 0 < s <= total_entities})
+
+
+def _sample_column_set(
+    target_df: Any,
+    entity_col: str,
+    target_col: Optional[str],
+    time_col: Optional[str],
+    strat_cols: Optional[list[str]],
+) -> list[str]:
+    cols = [entity_col]
+    for c in (target_col, time_col):
+        if c and c in target_df.columns and c not in cols:
+            cols.append(c)
+    for c in (strat_cols or []):
+        if c in target_df.columns and c not in cols:
+            cols.append(c)
+    return cols
+
+
+def prepare_sample_frame(
+    target_df: Any,
+    entity_col: str,
+    target_col: Optional[str],
+    time_col: Optional[str],
+    strat_cols: Optional[list[str]],
+    segment_ids: Optional[SegmentEntitySelection],
+) -> Any:
+    """Project to sampling columns, apply segment filter, persist for reuse across phases."""
+    cols = _sample_column_set(target_df, entity_col, target_col, time_col, strat_cols)
+    frame = target_df[cols]
+    if segment_ids is not None:
+        frame = segment_ids.filter_frame(frame, entity_col)
+    return spark_persist(frame)
+
+
+def _format_accuracy_row(e: dict) -> str:
+    return (
+        f"| {e['sample_size']:,} | {e['pct_of_total']:.0%} "
+        f"| +/-{e['churn_rate_ci']:.3f} "
+        f"| +/-{e['correlation_error']:.3f} "
+        f"| {e['minority_expected']:,.0f} "
+        f"| {'yes' if e['cohort_ok'] else 'no'} |"
+    )
+
+
+def render_population_markdown(
+    summary: PopulationSummary,
+    effective_total: int,
+    was_filtered: bool,
+    unfiltered_entities: int,
+    estimates: list[dict],
+) -> str:
+    table = (
+        "| Sample Size | % of Total | Churn Rate 95% CI | Correlation Error | Minority Class | Cohort Coverage |\n"
+        "|---:|---:|---:|---:|---:|:---|\n"
+        + "\n".join(_format_accuracy_row(e) for e in estimates)
+    )
+    pop_label = f"{effective_total:,} entities"
+    if was_filtered:
+        pop_label += f" (filtered from {unfiltered_entities:,})"
+    return (
+        f"**Population:** {pop_label}, target rate {summary.target_rate:.1%}, "
+        f"{summary.n_cohorts} cohorts\n\n{table}"
+    )
+
+
+def render_sample_result_markdown(
+    sampled_count: int,
+    effective_total: int,
+    train_count: int,
+    holdout_count: int,
+    holdout_fraction: float,
+    has_time_col: bool,
+    strat_cols: Optional[list[str]],
+) -> str:
+    strat_desc = "target"
+    if has_time_col:
+        strat_desc += " + cohort"
+    if strat_cols:
+        strat_desc += " + " + ", ".join(strat_cols)
+    pct = sampled_count / effective_total if effective_total else 0.0
+    return (
+        f"**Sampled:** {sampled_count:,} / {effective_total:,} entities "
+        f"({pct:.0%}), stratified by {strat_desc}\n\n"
+        f"- **Train:** {train_count:,} entities\n"
+        f"- **Holdout:** {holdout_count:,} entities ({holdout_fraction:.0%})"
+    )
+
+
+def render_segment_filter_markdown(filters: dict[str, str]) -> str:
+    lines = [f"  - **{k}**: `{v}`" for k, v in filters.items()]
+    return "**Segment filters:**\n" + "\n".join(lines)
+
+
+def save_sample_ids(namespace: Any, train_ids: list, holdout_ids: list) -> None:
+    train_path = namespace.sample_entity_ids_path
+    train_path.parent.mkdir(parents=True, exist_ok=True)
+    train_path.write_text(json.dumps(train_ids, default=str))
+    if holdout_ids:
+        namespace.holdout_entity_ids_path.write_text(json.dumps(holdout_ids, default=str))
