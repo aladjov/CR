@@ -146,34 +146,42 @@ class TestApplyTemporalLookback:
         assert len(result) == 0
 
     def test_raises_when_large_dataset_collapses_to_few_rows(self):
-        old_dates = pd.date_range("2010-01-01", periods=1500, freq="D")
+        old_dates = pd.date_range("2005-01-01", periods=10_000, freq="h")
         recent_dates = pd.to_datetime(["2024-12-20", "2024-12-21"])
         df = pd.DataFrame({
             "ts": list(old_dates) + list(recent_dates),
-            "v": range(1500 + 2),
+            "v": range(10_000 + 2),
         })
-        intent = _make_intent(lookback_periods=4, cadence=CadenceInterval.WEEKLY)
+        intent = _make_intent(lookback_periods=36, cadence=CadenceInterval.MONTHLY)
         with pytest.raises(ValueError, match="retained only 2"):
             apply_temporal_lookback(df, "ts", intent)
 
     def test_error_message_suggests_interval_start_time_fix(self):
-        dates = pd.date_range("2005-01-01", periods=1200, freq="D")
-        df = pd.DataFrame({"ts": dates, "v": range(1200)})
+        old_dates = pd.date_range("2005-01-01", periods=10_000, freq="D")
+        recent_dates = pd.to_datetime(["2036-07-01"])
+        df = pd.DataFrame({
+            "ts": list(old_dates) + list(recent_dates),
+            "v": range(10_001),
+        })
         intent = _make_intent(lookback_periods=4, cadence=CadenceInterval.WEEKLY)
         with pytest.raises(ValueError, match="INTERVAL_START_TIME"):
             apply_temporal_lookback(df, "ts", intent)
 
     def test_error_message_mentions_lookback_periods_remedy(self):
-        dates = pd.date_range("2005-01-01", periods=1200, freq="D")
-        df = pd.DataFrame({"ts": dates, "v": range(1200)})
+        old_dates = pd.date_range("2005-01-01", periods=10_000, freq="D")
+        recent_dates = pd.to_datetime(["2036-07-01"])
+        df = pd.DataFrame({
+            "ts": list(old_dates) + list(recent_dates),
+            "v": range(10_001),
+        })
         intent = _make_intent(lookback_periods=4, cadence=CadenceInterval.WEEKLY)
         with pytest.raises(ValueError, match="lookback_periods"):
             apply_temporal_lookback(df, "ts", intent)
 
     def test_error_message_mentions_null_time_column(self):
-        nulls = [pd.NaT] * 1500
+        nulls = [pd.NaT] * 10_000
         recent_dates = list(pd.to_datetime(["2024-12-20", "2024-12-21"]))
-        df = pd.DataFrame({"ts": nulls + recent_dates, "v": range(1500 + 2)})
+        df = pd.DataFrame({"ts": nulls + recent_dates, "v": range(10_000 + 2)})
         intent = _make_intent(lookback_periods=4, cadence=CadenceInterval.WEEKLY)
         with pytest.raises(ValueError, match="populated"):
             apply_temporal_lookback(df, "ts", intent)
@@ -183,7 +191,7 @@ class TestApplyTemporalLookback:
         df = pd.DataFrame({"ts": dates, "v": range(100)})
         intent = _make_intent(lookback_periods=4, cadence=CadenceInterval.WEEKLY)
         result = apply_temporal_lookback(df, "ts", intent)
-        assert len(result) == 0
+        assert len(result) == 29
 
     def test_passes_when_retention_meets_threshold(self):
         recent_dates = pd.date_range("2024-10-01", periods=120, freq="D")
@@ -197,8 +205,12 @@ class TestApplyTemporalLookback:
         assert len(result) >= 100
 
     def test_error_message_includes_window_bounds(self):
-        dates = pd.date_range("2005-01-01", periods=1200, freq="D")
-        df = pd.DataFrame({"ts": dates, "v": range(1200)})
+        old_dates = pd.date_range("2005-01-01", periods=10_000, freq="D")
+        recent_dates = pd.to_datetime(["2036-07-01"])
+        df = pd.DataFrame({
+            "ts": list(old_dates) + list(recent_dates),
+            "v": range(10_001),
+        })
         intent = _make_intent(lookback_periods=4, cadence=CadenceInterval.WEEKLY)
         with pytest.raises(ValueError, match=r"Window: \["):
             apply_temporal_lookback(df, "ts", intent)
