@@ -250,6 +250,7 @@ from pathlib import Path as _Path
 from customer_retention.core.compat.detection import get_dbutils, get_spark_session
 from customer_retention.core.config.experiments import get_workspace_path
 from customer_retention.stages.scoring import ScoringConfig
+from customer_retention.stages.scoring.pipeline_discovery import find_generated_pipeline_dir
 
 
 def _resolve_default_pipeline_dir() -> _Path:
@@ -261,14 +262,7 @@ def _resolve_default_pipeline_dir() -> _Path:
             "in the configuration cell to an absolute workspace path."
         )
     scoring_config = ScoringConfig.from_databricks()
-    pipeline_name = scoring_config.pipeline_name or scoring_config.composite_name
-    if not pipeline_name:
-        raise RuntimeError(
-            "Cannot resolve default PIPELINE_DIR: ScoringConfig has no pipeline_name. "
-            "Set PIPELINE_DIR in the configuration cell to the pipeline folder directly, "
-            "e.g. '/Workspace/{workspace_path}/generated_pipelines/databricks/<pipeline_name>'."
-        )
-    return _Path(f"/Workspace/{workspace_path}/generated_pipelines/databricks/{pipeline_name}")
+    return find_generated_pipeline_dir(_Path(f"/Workspace/{workspace_path}"), scoring_config)
 
 
 _g = globals()
