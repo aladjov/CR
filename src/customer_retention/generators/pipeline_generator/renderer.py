@@ -2252,6 +2252,7 @@ CATEGORICAL_COLUMNS = {{ config.aggregation.categorical_columns }}
 CATEGORICAL_AGG_FUNCS = {{ config.aggregation.categorical_agg_funcs }}
 BINARY_COLUMNS = {{ config.aggregation.binary_columns }}
 COLUMN_BLOCKED_FUNCS = {{ config.aggregation.column_blocked_funcs }}
+CATEGORICAL_VALUE_COUNTS = {{ config.aggregation.categorical_value_counts }}
 {% endif %}
 {%- if config.per_grid_date_mode %}
 GRID_DATES = {{ grid_dates }}
@@ -2343,6 +2344,12 @@ def apply_event_aggregation(df: pd.DataFrame) -> pd.DataFrame:
     df[TIME_COLUMN] = as_tz_naive(df[TIME_COLUMN])
     reference_date = df[TIME_COLUMN].max()
     numeric_value_columns = [c for c in VALUE_COLUMNS if c in df.columns and is_numeric_dtype(df[c])]
+    for _cvc_col in CATEGORICAL_VALUE_COUNTS:
+        if _cvc_col not in df.columns:
+            raise ValueError(
+                f"categorical_value_counts declares column {_cvc_col!r} but it is not "
+                f"present in the dataframe; fix upstream config or enrichment"
+            )
     base = df.groupby(ENTITY_COLUMN).agg("first")[[]]
     parts = []
     if TARGET_COLUMN in df.columns:
@@ -2371,6 +2378,10 @@ def apply_event_aggregation(df: pd.DataFrame) -> pd.DataFrame:
                     parts.append(window_df.groupby(ENTITY_COLUMN)[col].sum().rename(f"{col}_count_{window}"))
                 if "any" not in _blocked:
                     parts.append(window_df.groupby(ENTITY_COLUMN)[col].max().rename(f"{col}_any_{window}"))
+        for _cvc_col, _cvc_values in CATEGORICAL_VALUE_COUNTS.items():
+            for _cvc_value in _cvc_values:
+                _cvc_flag = (window_df[_cvc_col] == _cvc_value).astype(int)
+                parts.append(_cvc_flag.groupby(window_df[ENTITY_COLUMN]).sum().rename(f"{_cvc_col}_{_cvc_value}_count_{window}"))
         parts.append(window_df.groupby(ENTITY_COLUMN).size().rename(f"event_count_{window}"))
     if "feature_timestamp" in df.columns:
         parts.append(df.groupby(ENTITY_COLUMN)["feature_timestamp"].max().rename("feature_timestamp"))

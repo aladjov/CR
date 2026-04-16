@@ -669,6 +669,7 @@ def _window_to_days(window_str):
 CATEGORICAL_COLUMNS = {{ config.aggregation.categorical_columns }}
 BINARY_COLUMNS = {{ config.aggregation.binary_columns }}
 COLUMN_BLOCKED_FUNCS = {{ config.aggregation.column_blocked_funcs }}
+CATEGORICAL_VALUE_COUNTS = {{ config.aggregation.categorical_value_counts }}
 {%- if config.per_grid_date_mode %}
 GRID_DATES = {{ grid_dates }}
 VALUE_COUNTS_COLUMNS = {{ config.value_counts_columns | list }}
@@ -813,6 +814,13 @@ def apply_event_aggregation(df):
     \"\"\"Source: Event Aggregation > Time-Window Analysis\"\"\"
     reference_date = df.agg(F.max(TIME_COLUMN)).collect()[0][0]
     numeric_columns = _get_numeric_columns(df, {{ config.aggregation.value_columns }})
+    _schema_cols = {f.name for f in df.schema.fields}
+    for _cvc_col in CATEGORICAL_VALUE_COUNTS:
+        if _cvc_col not in _schema_cols:
+            raise ValueError(
+                f"categorical_value_counts declares column {_cvc_col!r} but it is not "
+                f"present in the dataframe; fix upstream config or enrichment"
+            )
     results = []
 {% for window in config.aggregation.windows %}
 {%- if window == "all_time" %}
@@ -845,6 +853,12 @@ def apply_event_aggregation(df):
                 agg_exprs.append(F.sum(col).alias(f"{col}_count_{{ window }}"))
             if "any" not in _blocked:
                 agg_exprs.append(F.max(col).alias(f"{col}_any_{{ window }}"))
+    for _cvc_col, _cvc_values in CATEGORICAL_VALUE_COUNTS.items():
+        for _cvc_value in _cvc_values:
+            agg_exprs.append(
+                F.sum(F.when(F.col(_cvc_col) == _cvc_value, 1).otherwise(0))
+                 .alias(f"{_cvc_col}_{_cvc_value}_count_{{ window }}")
+            )
     window_agg = window_df.groupBy(ENTITY_COLUMN).agg(*agg_exprs)
     results.append(window_agg)
 {% endfor %}

@@ -71,7 +71,7 @@ def _edges_to_labels(edges: List[float]) -> List[str]:
 
 
 _RECOGNIZED_BRONZE_OVERRIDE_KEYS = frozenset(
-    {"per_grid_date_mode", "value_counts_columns", "windows"}
+    {"per_grid_date_mode", "value_counts_columns", "windows", "categorical_value_counts"}
 )
 
 
@@ -1587,6 +1587,10 @@ class FindingsParser:
             ts=ts, value_columns=value_columns, blocked=column_blocked_funcs,
         )
 
+        _all_overrides = getattr(self, "_bronze_aggregation_overrides", {}) or {}
+        overrides = _all_overrides.get(dataset_name, {}) if dataset_name else {}
+        categorical_value_counts = dict(overrides.get("categorical_value_counts", {}) or {})
+
         return AggregationWindowConfig(
             windows=windows,
             value_columns=value_columns,
@@ -1596,6 +1600,7 @@ class FindingsParser:
             binary_columns=binary_columns,
             binary_agg_funcs=["rate", "count", "any"],
             column_blocked_funcs=column_blocked_funcs,
+            categorical_value_counts=categorical_value_counts,
         )
 
     @staticmethod

@@ -154,3 +154,143 @@ class TestExpectedEventsInWindow:
         ts = TimeSeriesMetadata(avg_events_per_entity=None, time_span_days=100)
         import math
         assert math.isinf(_expected_events_in_window(ts, "365d"))
+
+
+class TestCategoricalValueCountsConfig:
+    """Schema tests for the new categorical_value_counts field."""
+
+    def test_default_is_empty_dict(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+        )
+        cfg = AggregationWindowConfig()
+        assert cfg.categorical_value_counts == {}
+
+    def test_accepts_single_col_with_values(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+        )
+        cfg = AggregationWindowConfig(
+            categorical_value_counts={"event_type": ["start", "terminate"]},
+        )
+        assert cfg.categorical_value_counts == {"event_type": ["start", "terminate"]}
+
+    def test_accepts_multiple_cols(self):
+        from customer_retention.generators.pipeline_generator.models import (
+            AggregationWindowConfig,
+        )
+        cfg = AggregationWindowConfig(
+            categorical_value_counts={
+                "event_type": ["start", "terminate"],
+                "status": ["open", "closed"],
+            },
+        )
+        assert len(cfg.categorical_value_counts) == 2
+
+
+class TestBronzeAggregationOverridesPopulateValueCounts:
+    """bronze_aggregation_overrides → AggregationWindowConfig.categorical_value_counts."""
+
+    def test_override_propagates(self):
+        from customer_retention.analysis.auto_explorer.exploration_manager import (
+            DatasetInfo,
+            MultiDatasetFindings,
+        )
+        from customer_retention.analysis.auto_explorer.findings import (
+            ColumnFinding,
+            ColumnType,
+            ExplorationFindings,
+            TimeSeriesMetadata,
+        )
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        ts = TimeSeriesMetadata(
+            entity_column="entity_id", time_column="event_ts",
+            avg_events_per_entity=10.0, time_span_days=730,
+        )
+        ts.aggregation_windows_used = ["365d", "all_time"]
+        findings = ExplorationFindings(
+            source_path="unused", source_format="csv",
+            columns={
+                "entity_id": ColumnFinding(
+                    name="entity_id", inferred_type=ColumnType.IDENTIFIER,
+                    confidence=1.0, evidence=[],
+                ),
+                "event_ts": ColumnFinding(
+                    name="event_ts", inferred_type=ColumnType.DATETIME,
+                    confidence=1.0, evidence=[],
+                ),
+                "amount": ColumnFinding(
+                    name="amount", inferred_type=ColumnType.NUMERIC_CONTINUOUS,
+                    confidence=1.0, evidence=[],
+                ),
+            },
+            target_column="churned",
+            time_series_metadata=ts,
+        )
+        multi = MultiDatasetFindings(datasets={
+            "contract": DatasetInfo(
+                name="contract", findings_path="unused", source_path="",
+                granularity=None, row_count=0, column_count=0,
+            ),
+        })
+        parser = FindingsParser(
+            findings_dir="unused",
+            bronze_aggregation_overrides={
+                "contract": {
+                    "categorical_value_counts": {"event_type": ["start", "terminate"]},
+                },
+            },
+        )
+        cfg = parser._build_aggregation_config(multi, findings, dataset_name="contract")
+        assert cfg.categorical_value_counts == {"event_type": ["start", "terminate"]}
+
+    def test_no_override_yields_empty_dict(self):
+        from customer_retention.analysis.auto_explorer.exploration_manager import (
+            DatasetInfo,
+            MultiDatasetFindings,
+        )
+        from customer_retention.analysis.auto_explorer.findings import (
+            ColumnFinding,
+            ColumnType,
+            ExplorationFindings,
+            TimeSeriesMetadata,
+        )
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+        ts = TimeSeriesMetadata(
+            entity_column="entity_id", time_column="event_ts",
+            avg_events_per_entity=10.0, time_span_days=730,
+        )
+        ts.aggregation_windows_used = ["365d", "all_time"]
+        findings = ExplorationFindings(
+            source_path="unused", source_format="csv",
+            columns={
+                "entity_id": ColumnFinding(
+                    name="entity_id", inferred_type=ColumnType.IDENTIFIER,
+                    confidence=1.0, evidence=[],
+                ),
+                "event_ts": ColumnFinding(
+                    name="event_ts", inferred_type=ColumnType.DATETIME,
+                    confidence=1.0, evidence=[],
+                ),
+                "amount": ColumnFinding(
+                    name="amount", inferred_type=ColumnType.NUMERIC_CONTINUOUS,
+                    confidence=1.0, evidence=[],
+                ),
+            },
+            target_column="churned",
+            time_series_metadata=ts,
+        )
+        multi = MultiDatasetFindings(datasets={
+            "contract": DatasetInfo(
+                name="contract", findings_path="unused", source_path="",
+                granularity=None, row_count=0, column_count=0,
+            ),
+        })
+        cfg = FindingsParser(findings_dir="unused")._build_aggregation_config(
+            multi, findings, dataset_name="contract",
+        )
+        assert cfg.categorical_value_counts == {}
