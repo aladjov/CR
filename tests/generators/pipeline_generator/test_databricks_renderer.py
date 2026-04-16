@@ -3654,6 +3654,15 @@ class TestDatabricksTrainingMetadataPersistence:
         result = renderer.render_training(sample_pipeline_config)
         assert '"mlflow_experiment_name"' in result
 
+    def test_metadata_includes_pipeline_name(self, renderer, sample_pipeline_config):
+        # pipeline_name is the NB10 folder name (e.g. "customer_churn"), distinct
+        # from mlflow_experiment_name which is a workspace path like
+        # "/Shared/training_<cn>". Downstream code (c01 pipeline-runner) needs
+        # pipeline_name to locate generated_pipelines/databricks/<pipeline_name>.
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("_training_meta") :]
+        assert '"pipeline_name": PIPELINE_NAME' in fn
+
     def test_metadata_includes_run_id(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
         assert '"mlflow_run_id"' in result

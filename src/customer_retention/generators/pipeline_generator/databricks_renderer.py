@@ -2245,6 +2245,7 @@ def train_and_evaluate():
 
     if _NAMESPACE is not None:
         _training_meta = {
+            "pipeline_name": PIPELINE_NAME,
             "mlflow_experiment_name": _experiment_name,
             "mlflow_run_id": _parent_run.info.run_id,
             "composite_name": COMPOSITE_NAME,

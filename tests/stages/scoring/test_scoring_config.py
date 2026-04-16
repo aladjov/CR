@@ -27,6 +27,7 @@ def _make_namespace(tmp_path):
 
 def _write_training_meta(ns, **overrides):
     metadata = {
+        "pipeline_name": "customer_churn",
         "mlflow_experiment_name": "/Shared/training_cust_emails_prof__a1b2c3d",
         "mlflow_run_id": "run_abc",
         "composite_name": "cust_emails_prof__a1b2c3d",
@@ -166,6 +167,18 @@ class TestFromDatabricks:
 
     def test_pipeline_name_from_training_metadata(self, databricks_ns):
         config = ScoringConfig.from_databricks()
+        assert config.pipeline_name == "customer_churn"
+
+    def test_pipeline_name_falls_back_to_mlflow_experiment_name(self, databricks_env, tmp_path):
+        # Back-compat: older training_metadata.json files without the
+        # pipeline_name field should fall back to mlflow_experiment_name.
+        ns = _make_namespace(tmp_path)
+        _write_training_meta(ns)
+        meta = json.loads(ns.training_metadata_path.read_text())
+        meta.pop("pipeline_name", None)
+        ns.training_metadata_path.write_text(json.dumps(meta))
+        with patch("customer_retention.stages.scoring.config._discover_namespace", return_value=ns):
+            config = ScoringConfig.from_databricks()
         assert config.pipeline_name == "/Shared/training_cust_emails_prof__a1b2c3d"
 
     def test_discovers_target_from_metadata(self, databricks_ns):
@@ -229,14 +242,18 @@ class TestFromDatabricks:
 
     def test_training_metadata_takes_priority_over_exploration(self, databricks_env, tmp_path):
         ns = _make_namespace(tmp_path)
-        _write_training_meta(ns, composite_name="train_cn", mlflow_experiment_name="/Shared/training_exp")
+        _write_training_meta(
+            ns, pipeline_name="train_pipe", composite_name="train_cn",
+            mlflow_experiment_name="/Shared/training_exp",
+        )
         ns.exploration_metadata_path.write_text(json.dumps({
+            "pipeline_name": "expl_pipe",
             "mlflow_experiment_name": "/Users/me/exploration_exp",
             "composite_name": "expl_cn",
         }))
         with patch("customer_retention.stages.scoring.config._discover_namespace", return_value=ns):
             config = ScoringConfig.from_databricks()
-        assert config.pipeline_name == "/Shared/training_exp"
+        assert config.pipeline_name == "train_pipe"
         assert config.composite_name == "train_cn"
 
     def test_defaults_for_missing_fields(self, databricks_env, tmp_path):

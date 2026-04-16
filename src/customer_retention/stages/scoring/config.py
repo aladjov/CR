@@ -86,6 +86,7 @@ class ScoringConfig:
                 "Re-run the generated training pipeline (NB10 output) before scoring."
             )
         experiment_name = meta["mlflow_experiment_name"]
+        pipeline_name = meta.get("pipeline_name") or experiment_name
         target_column = meta.get("target_column", "target")
         entity_key = meta.get("entity_key", "entity_id")
         timestamp_column = meta.get("timestamp_column", "event_timestamp")
@@ -93,7 +94,7 @@ class ScoringConfig:
         cn = meta.get("composite_name", experiment_name)
         artifacts_path = ns.artifacts_dir(recommendations_hash)
         return cls(
-            pipeline_name=experiment_name,
+            pipeline_name=pipeline_name,
             composite_name=cn,
             target_column=target_column,
             entity_key=entity_key,

@@ -1525,6 +1525,7 @@ def run_experiment():
     _results["best_roc_auc"] = best_auc
     _results["mlflow_run_id"] = _parent_run.info.run_id
     _results["mlflow_experiment_name"] = _experiment_name
+    _results["pipeline_name"] = PIPELINE_NAME
     _results["composite_name"] = COMPOSITE_NAME
     _results["target_column"] = TARGET_COLUMN
     _results["entity_key"] = ENTITY_KEY
