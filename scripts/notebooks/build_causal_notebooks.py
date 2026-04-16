@@ -170,7 +170,7 @@ The cell below is the only place you should need to edit. Every value here is re
 - **`SKIP_PUBLISH_DEFINITIONS`** — short-circuit the publish step (e.g. when the YAMLs are unchanged since the last run).
 - **`RISK_TIER_HIGH_THRESHOLD` / `RISK_TIER_MEDIUM_THRESHOLD`** — risk tier cutoffs mirrored into `decision_policy` so historical assignments can be reconstructed from the policy version in force at scoring time. The publish step writes these as the on-disk default; if a YAML row in `decision_policy.yaml` already specifies them, the YAML wins.
 - **`SKIP_PIPELINE_RUN`** — skip invoking the generated pipeline (e.g. when predictions are already fresh).
-- **`PIPELINE_DIR`** — directory containing the generated pipeline scripts produced by `exploration_notebooks/10_spec_generation.ipynb`. Leave as `None` to default to `{experiments_dir}/../generated_pipelines/databricks`. Override if the scripts live elsewhere in the workspace.
+- **`PIPELINE_DIR`** — directory containing the generated pipeline scripts produced by `exploration_notebooks/10_spec_generation.ipynb`. Leave as `None` to resolve to `/Workspace/{workspace_path}/generated_pipelines/databricks/{pipeline_name}` via `get_workspace_path()` + `ScoringConfig`. Override if the scripts live elsewhere.
 - **`PIPELINE_STAGES`** — ordered stage subdirectories to execute. Includes `scoring` so the `predictions` Delta table is populated before `c04_snapshot_and_dashboard` runs.
 - **`PIPELINE_STAGE_TIMEOUT_SECONDS`** — per-notebook timeout passed to `dbutils.notebook.run()`.
 """

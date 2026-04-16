@@ -37,7 +37,7 @@ The cell below is the only place you should need to edit. Every value here is re
 - **`SKIP_PUBLISH_DEFINITIONS`** — short-circuit the publish step (e.g. when the YAMLs are unchanged since the last run).
 - **`RISK_TIER_HIGH_THRESHOLD` / `RISK_TIER_MEDIUM_THRESHOLD`** — risk tier cutoffs mirrored into `decision_policy` so historical assignments can be reconstructed from the policy version in force at scoring time. The publish step writes these as the on-disk default; if a YAML row in `decision_policy.yaml` already specifies them, the YAML wins.
 - **`SKIP_PIPELINE_RUN`** — skip invoking the generated pipeline (e.g. when predictions are already fresh).
-- **`PIPELINE_DIR`** — directory containing the generated pipeline scripts produced by `exploration_notebooks/10_spec_generation.ipynb`. Defaults to `{experiments_dir}/../generated_pipelines/databricks`. Override if the scripts live elsewhere in the workspace.
+- **`PIPELINE_DIR`** — directory containing the generated pipeline scripts produced by `exploration_notebooks/10_spec_generation.ipynb`. Leave as `None` to resolve to `/Workspace/{workspace_path}/generated_pipelines/databricks/{pipeline_name}` via `get_workspace_path()` + `ScoringConfig`. Override if the scripts live elsewhere.
 - **`PIPELINE_STAGES`** — ordered stage subdirectories to execute. Includes `scoring` so the `predictions` Delta table is populated before `c04_snapshot_and_dashboard` runs.
 - **`PIPELINE_STAGE_TIMEOUT_SECONDS`** — per-notebook timeout passed to `dbutils.notebook.run()`.
 """
@@ -49,7 +49,7 @@ RISK_TIER_MEDIUM_THRESHOLD = 0.3
 
 SKIP_PIPELINE_RUN = False
 
-PIPELINE_DIR = None  # None → resolve from get_experiments_dir().parent / "generated_pipelines" / "databricks"
+PIPELINE_DIR = None  # None → /Workspace/{workspace_path}/generated_pipelines/databricks/{pipeline_name}
 PIPELINE_STAGES = ["landing", "bronze", "silver", "gold", "training", "scoring"]
 PIPELINE_STAGE_TIMEOUT_SECONDS = 3600
 '''
@@ -248,11 +248,29 @@ import time as _time
 from pathlib import Path as _Path
 
 from customer_retention.core.compat.detection import get_dbutils, get_spark_session
-from customer_retention.core.config.experiments import get_experiments_dir
+from customer_retention.core.config.experiments import get_workspace_path
+from customer_retention.stages.scoring import ScoringConfig
 
-# Resolve upstream state defensively so this cell can run standalone.
-# Config knobs come from the configuration cell above; if that cell was not
-# executed yet (e.g. re-running just this cell), sensible defaults are used.
+
+def _resolve_default_pipeline_dir() -> _Path:
+    workspace_path = get_workspace_path()
+    if not workspace_path:
+        raise RuntimeError(
+            "Cannot resolve default PIPELINE_DIR: CR_WORKSPACE_PATH is not set. "
+            "Either run databricks_init(workspace_path=...) first, or set PIPELINE_DIR "
+            "in the configuration cell to an absolute workspace path."
+        )
+    scoring_config = ScoringConfig.from_databricks()
+    pipeline_name = scoring_config.pipeline_name or scoring_config.composite_name
+    if not pipeline_name:
+        raise RuntimeError(
+            "Cannot resolve default PIPELINE_DIR: ScoringConfig has no pipeline_name. "
+            "Set PIPELINE_DIR in the configuration cell to the pipeline folder directly, "
+            "e.g. '/Workspace/{workspace_path}/generated_pipelines/databricks/<pipeline_name>'."
+        )
+    return _Path(f"/Workspace/{workspace_path}/generated_pipelines/databricks/{pipeline_name}")
+
+
 _g = globals()
 _skip = _g.get("SKIP_PIPELINE_RUN", False)
 _pipeline_dir_cfg = _g.get("PIPELINE_DIR", None)
@@ -275,11 +293,7 @@ elif _spark is None:
 elif _dbutils is None:
     print("SKIPPED: dbutils unavailable (not running on Databricks)")
 else:
-    _pipeline_dir = (
-        _Path(_pipeline_dir_cfg)
-        if _pipeline_dir_cfg
-        else _Path(get_experiments_dir()).parent / "generated_pipelines" / "databricks"
-    )
+    _pipeline_dir = _Path(_pipeline_dir_cfg) if _pipeline_dir_cfg else _resolve_default_pipeline_dir()
     if not _pipeline_dir.exists():
         raise FileNotFoundError(
             f"Generated pipeline directory not found at {_pipeline_dir}. "
