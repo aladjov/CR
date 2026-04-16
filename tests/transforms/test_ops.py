@@ -220,6 +220,47 @@ class TestDerivedRatio:
         result = apply_derived_ratio(sample_df, "ratio", numerator="x", denominator="y")
         assert "ratio" not in result.columns
 
+    def test_raises_when_denominator_all_zero(self):
+        """100%-zero denominator → every ratio row is NaN → useless feature.
+        Fail-fast is better than silently generating a column that will be
+        median-imputed to a constant and dropped at variance downstream.
+        """
+        df = pd.DataFrame({"num": [1.0, 2.0, 3.0], "denom": [0.0, 0.0, 0.0]})
+        with pytest.raises(ValueError, match=r"denominator.*denom.*all-zero|100%"):
+            apply_derived_ratio(df, "ratio", numerator="num", denominator="denom")
+
+    def test_accepts_partially_zero_denominator(self):
+        """Mixed-zero denominator is legitimate — NaN rows get median-imputed
+        downstream, non-zero rows carry the actual ratio signal."""
+        df = pd.DataFrame({"num": [1.0, 2.0, 3.0, 4.0], "denom": [0.0, 5.0, 0.0, 10.0]})
+        result = apply_derived_ratio(df, "ratio", numerator="num", denominator="denom")
+        assert "ratio" in result.columns
+        assert pd.isna(result["ratio"].iloc[0])
+        assert result["ratio"].iloc[1] == pytest.approx(2.0 / 5.0)
+
+    def test_accepts_nonzero_denominator(self):
+        df = pd.DataFrame({"num": [1.0, 2.0], "denom": [5.0, 10.0]})
+        result = apply_derived_ratio(df, "ratio", numerator="num", denominator="denom")
+        assert result["ratio"].iloc[0] == pytest.approx(0.2)
+        assert result["ratio"].iloc[1] == pytest.approx(0.2)
+
+    def test_empty_df_noop(self):
+        """Empty DataFrame — cannot compute zero-rate, treat as no-op (no ratio
+        column added, no raise). Downstream will detect missing columns."""
+        df = pd.DataFrame({"num": [], "denom": []})
+        result = apply_derived_ratio(df, "ratio", numerator="num", denominator="denom")
+        # Zero-length series has no zero entries; ratio created as empty series
+        assert "ratio" in result.columns
+        assert len(result["ratio"]) == 0
+
+    def test_null_denominator_not_counted_as_zero(self):
+        """NaN denom rows stay NaN in ratio — they're not zero, just unknown."""
+        df = pd.DataFrame({"num": [1.0, 2.0, 3.0], "denom": [5.0, float("nan"), 10.0]})
+        result = apply_derived_ratio(df, "ratio", numerator="num", denominator="denom")
+        assert result["ratio"].iloc[0] == pytest.approx(0.2)
+        assert pd.isna(result["ratio"].iloc[1])
+        assert result["ratio"].iloc[2] == pytest.approx(0.3)
+
 
 class TestDerivedInteraction:
     def test_creates_product(self, sample_df):

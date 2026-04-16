@@ -1286,6 +1286,21 @@ def _chi_squared_primary(
     if not features:
         return set(), set(), {}
 
+    # No-op guard: when top_k covers the entire feature pool, every feature
+    # will be kept regardless of chi-squared score. Skip the scoring work
+    # (avoids bucketizer construction + one Spark job per batch of columns).
+    # Emit NaN scores so the trace can distinguish "not evaluated" from
+    # "genuinely-zero chi²".
+    if top_k >= len(features):
+        if progress_fn:
+            progress_fn(
+                f"    chi-squared: top_k={top_k} >= n_features={len(features)}, "
+                f"skipping scoring (all features kept)"
+            )
+        nan_val = float("nan")
+        stats = {f: {"score": nan_val, "rank": i + 1} for i, f in enumerate(features)}
+        return set(features), set(), stats
+
     from customer_retention.core.compat import _is_spark_pandas
 
     if _is_spark_pandas(df):

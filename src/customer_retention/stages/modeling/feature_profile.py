@@ -223,6 +223,40 @@ class SelectionTraceRecorder:
             raise ValueError(f"stage {decision.stage!r} already recorded for feature {feature!r}")
         trace.append(decision)
 
+    def record_nb05_drops(
+        self, drops: Dict[str, str], *,
+        total_pre_nb05_features: int, total_post_nb05_features: int,
+    ) -> None:
+        """Record pre-selection NB05 drops as stage='nb05' entries.
+
+        NB05 recommendations (drop_weak, drop_multicollinear, etc.) filter the
+        feature pool before any of the selection-pipeline stages run. Recording
+        them here gives the trace a complete end-to-end funnel — from the full
+        silver feature set through NB05 → variance → correlation → L1 → rescue.
+        """
+        stage_name = "nb05"
+        for feature, reason in drops.items():
+            trace = self._traces.setdefault(feature, [])
+            if any(e.stage == stage_name for e in trace):
+                raise ValueError(f"stage {stage_name!r} already recorded for feature {feature!r}")
+            trace.append(StageDecision(
+                stage=stage_name,
+                score=float("nan"),
+                score_name="nb05_recommendation",
+                threshold=None,
+                decision="dropped",
+                reason=str(reason),
+                rank=None,
+                stage_input_count=total_pre_nb05_features,
+                stage_output_count=total_post_nb05_features,
+            ))
+        self._stages.append({
+            "stage": stage_name,
+            "input": total_pre_nb05_features,
+            "output": total_post_nb05_features,
+            "dropped": len(drops),
+        })
+
     def trace_for(self, feature: str) -> List[StageDecision]:
         return list(self._traces.get(feature, []))
 

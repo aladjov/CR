@@ -138,7 +138,16 @@ def apply_derived_ratio(
 ) -> DataFrame:
     if numerator not in df.columns or denominator not in df.columns:
         return df
-    df[column] = df[numerator] / df[denominator].replace(0, float("nan"))
+    denom_series = df[denominator]
+    if len(denom_series) > 0 and (denom_series.fillna(-1) == 0).all():
+        raise ValueError(
+            f"apply_derived_ratio: denominator {denominator!r} is all-zero "
+            f"({len(denom_series)} rows). The resulting ratio {column!r} would "
+            f"be NaN everywhere and median-imputed to a constant downstream. "
+            f"Fix: remove this ratio from recommendations, or use a denominator "
+            f"that has non-zero values."
+        )
+    df[column] = df[numerator] / denom_series.replace(0, float("nan"))
     return df
 
 

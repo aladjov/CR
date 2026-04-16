@@ -247,3 +247,103 @@ class TestRecorderQueries:
         )
         recorder.record_single("a", decision)
         assert recorder.trace_for("a") == [decision]
+
+
+class TestRecordNB05Drops:
+    """NB05 drops happen BEFORE the selection pipeline runs. Recording them as
+    stage='nb05' entries makes the trace show the full funnel end-to-end instead
+    of starting at variance/correlation/L1.
+    """
+
+    def test_records_drop_as_nb05_stage(self):
+        recorder = SelectionTraceRecorder()
+        recorder.record_nb05_drops(
+            {"feat_a": "drop_weak", "feat_b": "drop_multicollinear"},
+            total_pre_nb05_features=10,
+            total_post_nb05_features=8,
+        )
+        trace_a = recorder.trace_for("feat_a")
+        assert len(trace_a) == 1
+        assert trace_a[0].stage == "nb05"
+        assert trace_a[0].decision == "dropped"
+        assert trace_a[0].reason == "drop_weak"
+
+    def test_records_multiple_drop_reasons(self):
+        recorder = SelectionTraceRecorder()
+        recorder.record_nb05_drops(
+            {"feat_a": "drop_weak", "feat_b": "drop_multicollinear"},
+            total_pre_nb05_features=10,
+            total_post_nb05_features=8,
+        )
+        reasons = {f: recorder.trace_for(f)[0].reason for f in ("feat_a", "feat_b")}
+        assert reasons == {"feat_a": "drop_weak", "feat_b": "drop_multicollinear"}
+
+    def test_input_output_counts_captured(self):
+        recorder = SelectionTraceRecorder()
+        recorder.record_nb05_drops(
+            {"feat_a": "drop_weak"},
+            total_pre_nb05_features=100,
+            total_post_nb05_features=99,
+        )
+        entry = recorder.trace_for("feat_a")[0]
+        assert entry.stage_input_count == 100
+        assert entry.stage_output_count == 99
+
+    def test_empty_drops_is_noop(self):
+        recorder = SelectionTraceRecorder()
+        recorder.record_nb05_drops(
+            {},
+            total_pre_nb05_features=100,
+            total_post_nb05_features=100,
+        )
+        assert recorder.all_features() == set()
+
+    def test_nb05_trace_precedes_variance_trace(self):
+        """Multi-stage: NB05 drop recorded, then feature enters variance stage."""
+        recorder = SelectionTraceRecorder()
+        recorder.record_nb05_drops(
+            {"dropped_early": "drop_weak"},
+            total_pre_nb05_features=2,
+            total_post_nb05_features=1,
+        )
+        recorder.record_stage(
+            stage="variance", score_name="variance",
+            scores={"survivor": 0.5}, threshold=0.01,
+            decisions={"survivor": "kept"}, reasons={"survivor": None},
+            stage_input_count=1, stage_output_count=1,
+        )
+        early = recorder.trace_for("dropped_early")
+        survivor = recorder.trace_for("survivor")
+        assert len(early) == 1 and early[0].stage == "nb05"
+        assert len(survivor) == 1 and survivor[0].stage == "variance"
+
+    def test_apply_to_profile_nb05_drops_go_to_excluded_profiles(self):
+        from customer_retention.stages.modeling.feature_profile import FeatureProfile
+        recorder = SelectionTraceRecorder()
+        recorder.record_nb05_drops(
+            {"early_drop": "drop_weak"},
+            total_pre_nb05_features=2,
+            total_post_nb05_features=1,
+        )
+        profile = FeatureProfile(
+            stage="exploration", created_at="x", row_count=10, target_column="y",
+            features={},
+            excluded={"early_drop": "drop_weak"},
+        )
+        recorder.apply_to_profile(profile)
+        assert "early_drop" in profile.excluded_profiles
+        assert profile.excluded_profiles["early_drop"].selection_trace[0].stage == "nb05"
+
+    def test_stage_summary_includes_nb05(self):
+        recorder = SelectionTraceRecorder()
+        recorder.record_nb05_drops(
+            {"a": "drop_weak", "b": "drop_multicollinear"},
+            total_pre_nb05_features=100,
+            total_post_nb05_features=98,
+        )
+        summary = recorder.stage_summary()
+        nb05_summaries = [s for s in summary if s["stage"] == "nb05"]
+        assert len(nb05_summaries) == 1
+        assert nb05_summaries[0]["input"] == 100
+        assert nb05_summaries[0]["output"] == 98
+        assert nb05_summaries[0]["dropped"] == 2
