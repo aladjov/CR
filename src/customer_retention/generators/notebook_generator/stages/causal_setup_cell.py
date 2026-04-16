@@ -127,11 +127,9 @@ if is_databricks():
     import mlflow
 
     mlflow_client = mlflow.tracking.MlflowClient()
-    production_version = mlflow_client.get_model_version_by_alias(
-        f"{CATALOG}.{SCHEMA}.{MODEL_NAME}", "production"
-    )
+    production_version = mlflow_client.get_model_version_by_alias(MODEL_NAME, "production")
     MODEL_VERSION = production_version.version
-    MODEL_URI = f"models:/{CATALOG}.{SCHEMA}.{MODEL_NAME}@production"
+    MODEL_URI = f"models:/{MODEL_NAME}@production"
 else:
     scoring_config = ScoringConfig.from_local_config(get_experiments_dir())
     CATALOG = "local"
@@ -234,7 +232,7 @@ C01_RUN_PIPELINE_MD = """## 2. Run the Generated Pipeline (s01 → s10)
 Before `c02_archetype_derivation` and `c04_snapshot_and_dashboard` can run, three artifacts must exist on the cluster:
 
 1. **Gold features table** — `{CATALOG}.{SCHEMA}.customer_features` registered as a feature table
-2. **Registered `@production` model** — `models:/{CATALOG}.{SCHEMA}.{MODEL_NAME}@production`
+2. **Registered `@production` model** — `models:/{MODEL_NAME}@production` (where `MODEL_NAME` is the 3-part Unity Catalog FQN written by training as `registered_model_name`)
 3. **Predictions table** — `{CATALOG}.{SCHEMA}.predictions` (one row per scored customer)
 
 The cells below invoke the generated pipeline scripts produced by `exploration_notebooks/10_spec_generation.ipynb`, in the order **landing → bronze → silver → gold → training → scoring**. Each stage runs as a Databricks notebook task via `dbutils.notebook.run()` — the same pattern NB10 uses for the training leg, extended here to include `scoring` (s10) so the `predictions` table is populated.
