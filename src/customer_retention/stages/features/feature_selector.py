@@ -39,6 +39,34 @@ class FeatureSelectionResult:
     importance_scores: Optional[Dict[str, float]] = None
 
 
+def split_reconsiderable_drops(result: FeatureSelectionResult) -> tuple[set, set]:
+    """Partition drops into (structural, reconsiderable) for rescue ordering.
+
+    When rescue runs after L1, the conventional NB08 flow strips X_train down
+    to L1's keeps — leaving rescue with nothing to rescue. This helper lets the
+    caller distinguish:
+
+    - **Structural** drops: variance, correlation, max_features limit, and any
+      unknown-reason drop. These are safe to apply unconditionally because they
+      indicate the column itself isn't meaningful (constant, redundant, capped).
+    - **Reconsiderable** drops: L1 zero-coefficient drops. These represent
+      model-opinion decisions that rescue can overrule. Keeping them out of
+      X_train pre-rescue means rescue can still evaluate and pick them.
+
+    Returns ``(structural_set, reconsiderable_set)``. Conservative default:
+    any drop whose reason doesn't contain ``"L1"`` (case-insensitive) is
+    treated as structural.
+    """
+    structural: set = set()
+    reconsiderable: set = set()
+    for feature, reason in result.drop_reasons.items():
+        if "l1" in str(reason).lower():
+            reconsiderable.add(feature)
+        else:
+            structural.add(feature)
+    return structural, reconsiderable
+
+
 @dataclass
 class AvailabilityRecommendation:
     column: str
