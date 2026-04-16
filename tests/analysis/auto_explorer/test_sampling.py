@@ -1220,3 +1220,272 @@ class TestSaveSampleIds:
         import numpy as np
         save_sample_ids(ns, [np.int64(7), np.int64(9)], [])
         assert "7" in ns.sample_entity_ids_path.read_text()
+
+
+class TestAssertSampledIdsHaveLabels:
+    """Fail-fast validation: every sampled ID must resolve to a non-null target."""
+
+    def _entity_df(self):
+        return pd.DataFrame({
+            "account_id": ["A", "B", "C", "D"],
+            "churned":    [1, 0, 1, 0],
+        })
+
+    def test_empty_ids_is_noop(self):
+        from customer_retention.analysis.auto_explorer.sampling import (
+            _assert_sampled_ids_have_labels,
+        )
+        _assert_sampled_ids_have_labels(
+            entity_df=self._entity_df(), entity_col="account_id",
+            target_col="churned", ids=[], pool_label="training",
+        )
+
+    def test_all_ids_resolvable_is_noop(self):
+        from customer_retention.analysis.auto_explorer.sampling import (
+            _assert_sampled_ids_have_labels,
+        )
+        _assert_sampled_ids_have_labels(
+            entity_df=self._entity_df(), entity_col="account_id",
+            target_col="churned", ids=["A", "B"], pool_label="training",
+        )
+
+    def test_raises_when_id_missing_from_entity_df(self):
+        from customer_retention.analysis.auto_explorer.sampling import (
+            _assert_sampled_ids_have_labels,
+        )
+        with pytest.raises(ValueError, match=r"training.*NULL.*churned"):
+            _assert_sampled_ids_have_labels(
+                entity_df=self._entity_df(), entity_col="account_id",
+                target_col="churned", ids=["A", "ORPHAN"], pool_label="training",
+            )
+
+    def test_raises_when_target_is_null(self):
+        from customer_retention.analysis.auto_explorer.sampling import (
+            _assert_sampled_ids_have_labels,
+        )
+        df = pd.DataFrame({
+            "account_id": ["A", "B", "C"],
+            "churned":    [1, None, 0],
+        })
+        with pytest.raises(ValueError, match=r"null target"):
+            _assert_sampled_ids_have_labels(
+                entity_df=df, entity_col="account_id", target_col="churned",
+                ids=["A", "B"], pool_label="training",
+            )
+
+    def test_error_message_includes_offending_ids(self):
+        from customer_retention.analysis.auto_explorer.sampling import (
+            _assert_sampled_ids_have_labels,
+        )
+        with pytest.raises(ValueError) as excinfo:
+            _assert_sampled_ids_have_labels(
+                entity_df=self._entity_df(), entity_col="account_id",
+                target_col="churned", ids=["A", "X", "Y", "Z"], pool_label="holdout",
+            )
+        msg = str(excinfo.value)
+        assert "holdout" in msg
+        assert "X" in msg
+        assert "3 absent" in msg or "3 missing" in msg
+
+    def test_pool_label_surfaces_in_error(self):
+        from customer_retention.analysis.auto_explorer.sampling import (
+            _assert_sampled_ids_have_labels,
+        )
+        with pytest.raises(ValueError, match=r"holdout"):
+            _assert_sampled_ids_have_labels(
+                entity_df=self._entity_df(), entity_col="account_id",
+                target_col="churned", ids=["ORPHAN"], pool_label="holdout",
+            )
+
+    def test_does_not_validate_when_target_col_absent(self):
+        from customer_retention.analysis.auto_explorer.sampling import (
+            _assert_sampled_ids_have_labels,
+        )
+        df = pd.DataFrame({"account_id": ["A"]})
+        _assert_sampled_ids_have_labels(
+            entity_df=df, entity_col="account_id",
+            target_col="churned", ids=["A"], pool_label="training",
+        )
+
+    def test_reports_null_and_missing_counts_independently(self):
+        from customer_retention.analysis.auto_explorer.sampling import (
+            _assert_sampled_ids_have_labels,
+        )
+        df = pd.DataFrame({
+            "account_id": ["A", "B", "C"],
+            "churned":    [1, None, 0],
+        })
+        with pytest.raises(ValueError) as excinfo:
+            _assert_sampled_ids_have_labels(
+                entity_df=df, entity_col="account_id", target_col="churned",
+                ids=["A", "B", "ORPHAN"], pool_label="training",
+            )
+        msg = str(excinfo.value)
+        assert "1 absent" in msg
+        assert "1 with null target" in msg
+
+
+class TestSaveSampleIdsValidation:
+    def _namespace(self, tmp_path):
+        class FakeNamespace:
+            sample_entity_ids_path = tmp_path / "sub" / "sample_entity_ids.json"
+            holdout_entity_ids_path = tmp_path / "sub" / "holdout_entity_ids.json"
+        return FakeNamespace()
+
+    def _entity_df(self):
+        return pd.DataFrame({
+            "account_id": ["A", "B", "C", "D"],
+            "churned":    [1, 0, 1, 0],
+        })
+
+    def test_without_validation_args_backward_compat(self, tmp_path):
+        ns = self._namespace(tmp_path)
+        save_sample_ids(ns, ["ORPHAN"], [])
+        assert ns.sample_entity_ids_path.exists()
+
+    def test_with_validation_passes_when_ids_valid(self, tmp_path):
+        ns = self._namespace(tmp_path)
+        save_sample_ids(
+            ns, ["A", "B"], ["C"],
+            entity_df=self._entity_df(), entity_col="account_id", target_col="churned",
+        )
+        assert ns.sample_entity_ids_path.exists()
+        assert ns.holdout_entity_ids_path.exists()
+
+    def test_with_validation_raises_on_orphan_train_id(self, tmp_path):
+        ns = self._namespace(tmp_path)
+        with pytest.raises(ValueError, match=r"training"):
+            save_sample_ids(
+                ns, ["A", "ORPHAN"], ["C"],
+                entity_df=self._entity_df(), entity_col="account_id", target_col="churned",
+            )
+        assert not ns.sample_entity_ids_path.exists()
+        assert not ns.holdout_entity_ids_path.exists()
+
+    def test_with_validation_raises_on_orphan_holdout_id(self, tmp_path):
+        ns = self._namespace(tmp_path)
+        with pytest.raises(ValueError, match=r"holdout"):
+            save_sample_ids(
+                ns, ["A", "B"], ["ORPHAN"],
+                entity_df=self._entity_df(), entity_col="account_id", target_col="churned",
+            )
+        assert not ns.sample_entity_ids_path.exists()
+
+    def test_validation_raises_before_any_write(self, tmp_path):
+        """No partial writes: train file should not be created when holdout fails."""
+        ns = self._namespace(tmp_path)
+        with pytest.raises(ValueError):
+            save_sample_ids(
+                ns, ["A"], ["ORPHAN"],
+                entity_df=self._entity_df(), entity_col="account_id", target_col="churned",
+            )
+        assert not ns.sample_entity_ids_path.exists()
+
+
+class TestSegmentFilterStats:
+    def test_pass_rate_calculation(self):
+        from customer_retention.analysis.auto_explorer.sampling import SegmentFilterStats
+        stats = SegmentFilterStats(
+            dataset="account", filter_expr="has_contract=1",
+            input_entities=402_384, output_entities=2_893,
+        )
+        assert abs(stats.pass_rate - 0.00719) < 1e-4
+
+    def test_pass_rate_zero_input(self):
+        from customer_retention.analysis.auto_explorer.sampling import SegmentFilterStats
+        stats = SegmentFilterStats(
+            dataset="account", filter_expr="x=1",
+            input_entities=0, output_entities=0,
+        )
+        assert stats.pass_rate == 0.0
+
+    def test_is_suspicious_below_threshold(self):
+        from customer_retention.analysis.auto_explorer.sampling import SegmentFilterStats
+        stats = SegmentFilterStats("account", "x=1", input_entities=100, output_entities=1)
+        assert stats.is_suspicious(threshold=0.05)
+
+    def test_is_not_suspicious_above_threshold(self):
+        from customer_retention.analysis.auto_explorer.sampling import SegmentFilterStats
+        stats = SegmentFilterStats("account", "x=1", input_entities=100, output_entities=50)
+        assert not stats.is_suspicious(threshold=0.05)
+
+
+class TestResolveSegmentEntityIdsDiagnostics:
+    def _frames(self):
+        return {
+            "account": pd.DataFrame({
+                "account_id": ["A", "B", "C", "D", "E"],
+                "has_contract": [1, 1, 0, 0, 0],
+            }),
+        }
+
+    def test_diagnostics_captured_when_param_provided(self):
+        diagnostics: list = []
+        resolve_segment_entity_ids(
+            frames=self._frames(),
+            filters={"account": "has_contract == 1"},
+            entity_columns={"account": "account_id"},
+            diagnostics=diagnostics,
+        )
+        assert len(diagnostics) == 1
+        assert diagnostics[0].dataset == "account"
+        assert diagnostics[0].input_entities == 5
+        assert diagnostics[0].output_entities == 2
+        assert abs(diagnostics[0].pass_rate - 0.4) < 1e-6
+
+    def test_no_diagnostics_when_param_none(self):
+        # backward compat: calling without diagnostics= works unchanged
+        result = resolve_segment_entity_ids(
+            frames=self._frames(),
+            filters={"account": "has_contract == 1"},
+            entity_columns={"account": "account_id"},
+        )
+        assert result is not None
+        assert len(result) == 2
+
+    def test_diagnostics_per_filter_dataset(self):
+        frames = {
+            "account": pd.DataFrame({
+                "account_id": ["A", "B", "C"],
+                "has_contract": [1, 0, 1],
+            }),
+            "contract": pd.DataFrame({
+                "account_id": ["A", "A", "B"],
+                "status": ["active", "active", "cancelled"],
+            }),
+        }
+        diagnostics: list = []
+        resolve_segment_entity_ids(
+            frames=frames,
+            filters={"account": "has_contract == 1", "contract": "status == 'active'"},
+            entity_columns={"account": "account_id", "contract": "account_id"},
+            diagnostics=diagnostics,
+        )
+        assert len(diagnostics) == 2
+        datasets = {d.dataset for d in diagnostics}
+        assert datasets == {"account", "contract"}
+
+
+class TestRenderSegmentFilterMarkdown:
+    def test_renders_without_diagnostics_shows_expressions(self):
+        md = render_segment_filter_markdown({"account": "has_contract == 1"})
+        assert "account" in md and "has_contract == 1" in md
+
+    def test_renders_with_diagnostics_shows_counts_and_pass_rate(self):
+        from customer_retention.analysis.auto_explorer.sampling import SegmentFilterStats
+        stats = [SegmentFilterStats("account", "has_contract == 1", 402384, 2893)]
+        md = render_segment_filter_markdown({"account": "has_contract == 1"}, diagnostics=stats)
+        assert "2,893" in md and "402,384" in md
+        assert "0.7%" in md
+
+    def test_flags_suspicious_pass_rate(self):
+        from customer_retention.analysis.auto_explorer.sampling import SegmentFilterStats
+        stats = [SegmentFilterStats("account", "x=1", 1000, 10)]  # 1%
+        md = render_segment_filter_markdown({"account": "x=1"}, diagnostics=stats)
+        assert "⚠" in md or "warn" in md.lower() or "suspicious" in md.lower()
+
+    def test_no_flag_when_pass_rate_reasonable(self):
+        from customer_retention.analysis.auto_explorer.sampling import SegmentFilterStats
+        stats = [SegmentFilterStats("account", "x=1", 1000, 500)]  # 50%
+        md = render_segment_filter_markdown({"account": "x=1"}, diagnostics=stats)
+        assert "⚠" not in md

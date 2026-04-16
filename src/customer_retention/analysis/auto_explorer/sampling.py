@@ -225,11 +225,43 @@ def _expose_frames_as_views(frames: dict[str, Any]) -> None:
         as_spark_df(frame).createOrReplaceTempView(name)
 
 
+@dataclass
+class SegmentFilterStats:
+    """Per-filter input/output counts captured during segment resolution."""
+
+    dataset: str
+    filter_expr: str
+    input_entities: int
+    output_entities: int
+
+    @property
+    def pass_rate(self) -> float:
+        return self.output_entities / self.input_entities if self.input_entities else 0.0
+
+    def is_suspicious(self, threshold: float = 0.05) -> bool:
+        """True when the filter removed more than ``1 - threshold`` of entities.
+
+        A very low pass rate does not necessarily mean the filter is wrong —
+        e.g. SPS's "accounts with at least one contract" legitimately keeps
+        only customers from a prospect-heavy account table. But visibility
+        at sample time lets the user confirm the intent.
+        """
+        return 0.0 < self.pass_rate < threshold
+
+
 def resolve_segment_entity_ids(
     frames: dict[str, pd.DataFrame],
     filters: Optional[dict[str, str]],
     entity_columns: dict[str, str],
+    *,
+    diagnostics: Optional[list] = None,
 ) -> Optional[SegmentEntitySelection]:
+    """Intersect per-dataset filters into a single entity-ID selection.
+
+    When ``diagnostics`` is a list, a :class:`SegmentFilterStats` is appended
+    for each applied filter recording the input + output entity counts. Keeps
+    fail-fast visibility at sample time without changing the return type.
+    """
     if not filters:
         return None
     _expose_frames_as_views(frames)
@@ -240,12 +272,19 @@ def resolve_segment_entity_ids(
         df = frames[dataset_name]
         entity_col = entity_columns[dataset_name]
         if _is_spark_pandas(df):
-            selections.append(SegmentEntitySelection.from_spark_df(
+            selection = SegmentEntitySelection.from_spark_df(
                 _spark_passing_entities(df, query_expr, entity_col), entity_col,
-            ))
+            )
         else:
-            selections.append(SegmentEntitySelection.from_set(
+            selection = SegmentEntitySelection.from_set(
                 _pandas_passing_entities(df, query_expr, entity_col),
+            )
+        selections.append(selection)
+        if diagnostics is not None:
+            input_count = int(safe_len(df[entity_col].drop_duplicates())) if entity_col in df.columns else 0
+            diagnostics.append(SegmentFilterStats(
+                dataset=dataset_name, filter_expr=query_expr,
+                input_entities=input_count, output_entities=len(selection),
             ))
     if not selections:
         return None
@@ -621,12 +660,109 @@ def render_sample_result_markdown(
     )
 
 
-def render_segment_filter_markdown(filters: dict[str, str]) -> str:
-    lines = [f"  - **{k}**: `{v}`" for k, v in filters.items()]
+def render_segment_filter_markdown(
+    filters: dict[str, str],
+    diagnostics: Optional[list] = None,
+    *,
+    suspicious_pass_rate_threshold: float = 0.05,
+) -> str:
+    """Render the applied segment filters.
+
+    When ``diagnostics`` is a list of :class:`SegmentFilterStats`, each filter
+    line includes its input/output entity counts, pass rate, and a ⚠️ flag
+    when the rate falls below ``suspicious_pass_rate_threshold``. Without
+    diagnostics the legacy expression-only rendering is preserved.
+    """
+    if not diagnostics:
+        lines = [f"  - **{k}**: `{v}`" for k, v in filters.items()]
+        return "**Segment filters:**\n" + "\n".join(lines)
+
+    lines = []
+    for stat in diagnostics:
+        flag = " ⚠️" if stat.is_suspicious(suspicious_pass_rate_threshold) else ""
+        lines.append(
+            f"  - **{stat.dataset}**{flag}: `{stat.filter_expr}` → "
+            f"{stat.output_entities:,} / {stat.input_entities:,} entities "
+            f"({stat.pass_rate:.1%} pass rate)"
+        )
     return "**Segment filters:**\n" + "\n".join(lines)
 
 
-def save_sample_ids(namespace: Any, train_ids: list, holdout_ids: list) -> None:
+def _assert_sampled_ids_have_labels(
+    *, entity_df: Any, entity_col: str, target_col: str,
+    ids: list, pool_label: str, max_examples: int = 10,
+) -> None:
+    """Fail fast if any sampled ID will produce a NULL target downstream.
+
+    Guards against two failure modes that both manifest as NULL ``target_col``
+    rows after the spine merge:
+
+    1. **Missing ID** — sampled ID has no row in ``entity_df`` at all. Happens
+       when the sampler reads a broader source than the one that will be
+       materialized into the primary entity dataset.
+    2. **Null target** — sampled ID has a row but its target value is NULL.
+       Happens when the user-code label derivation runs after sampling but
+       fails to cover every sampled entity.
+
+    Either case creates orphan panel rows that ``drop_missing_target`` silently
+    removes at training — wasting 30-60% of compute and making the training
+    set size opaque. Failing at the sampler surfaces the misconfiguration
+    where the user can still act on it.
+
+    ``target_col`` missing from ``entity_df`` short-circuits the check —
+    caller's responsibility to ensure the column is present when validation
+    is intended.
+    """
+    if not ids or target_col not in entity_df.columns:
+        return
+    id_set = set(ids)
+    matched = entity_df[entity_df[entity_col].isin(id_set)]
+    matched_ids = set(head_as_list(matched[entity_col].unique(), len(id_set)))
+    missing = [i for i in ids if i not in matched_ids]
+    null_mask = matched[target_col].isna()
+    null_ids: list = []
+    if bool(null_mask.any()):
+        null_ids = head_as_list(matched.loc[null_mask, entity_col].unique(), len(id_set))
+
+    if not missing and not null_ids:
+        return
+
+    raise ValueError(
+        f"Sampler {pool_label} pool: {len(missing) + len(null_ids)} of {len(ids)} IDs "
+        f"will produce NULL {target_col!r} values when the pipeline materializes silver_merged.\n"
+        f"  {len(missing)} absent from entity dataset, {len(null_ids)} with null target.\n"
+        f"  First absent IDs:     {missing[:max_examples]}\n"
+        f"  First null-target IDs: {null_ids[:max_examples]}\n"
+        f"Fix upstream filters so every sampled entity has a resolvable label before "
+        f"save_sample_ids() is called, or pre-filter the sampler input to entities that "
+        f"will be present in the primary entity dataset."
+    )
+
+
+def save_sample_ids(
+    namespace: Any, train_ids: list, holdout_ids: list,
+    *,
+    entity_df: Optional[Any] = None,
+    entity_col: Optional[str] = None,
+    target_col: Optional[str] = None,
+) -> None:
+    """Persist sampled train + holdout entity IDs.
+
+    When ``entity_df`` + ``entity_col`` + ``target_col`` are supplied, every
+    sampled ID is validated against the entity dataset via
+    :func:`_assert_sampled_ids_have_labels` BEFORE either file is written. A
+    validation failure raises ``ValueError`` and leaves both files unwritten,
+    so callers never see a partial state.
+    """
+    if entity_df is not None and entity_col and target_col:
+        _assert_sampled_ids_have_labels(
+            entity_df=entity_df, entity_col=entity_col, target_col=target_col,
+            ids=train_ids, pool_label="training",
+        )
+        _assert_sampled_ids_have_labels(
+            entity_df=entity_df, entity_col=entity_col, target_col=target_col,
+            ids=holdout_ids, pool_label="holdout",
+        )
     train_path = namespace.sample_entity_ids_path
     train_path.parent.mkdir(parents=True, exist_ok=True)
     train_path.write_text(json.dumps(train_ids, default=str))
