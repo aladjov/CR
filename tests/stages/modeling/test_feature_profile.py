@@ -1,9 +1,14 @@
 
+import math
+
 import pytest
+import yaml
 
 from customer_retention.stages.modeling.feature_profile import (
     ColumnProfile,
+    FeatureOrigin,
     FeatureProfile,
+    StageDecision,
     build_feature_profile,
     compare_feature_profiles,
 )
@@ -264,3 +269,294 @@ class TestCompareFeatureProfiles:
         exp = self._make("exploration", {"a": ColumnProfile("double", 100, 0)})
         prod = self._make("production", {"a": ColumnProfile("float64", 100, 0)})
         assert not any("TYPE MISMATCH" in d for d in compare_feature_profiles(exp, prod))
+
+
+class TestStageDecision:
+    def test_required_fields(self):
+        decision = StageDecision(
+            stage="variance", score=0.25, score_name="variance",
+            threshold=0.01, decision="kept", reason=None, rank=3,
+            stage_input_count=100, stage_output_count=80,
+        )
+        assert decision.stage == "variance"
+        assert decision.score == 0.25
+        assert decision.decision == "kept"
+        assert decision.companion_feature is None
+
+    def test_frozen_dataclass(self):
+        decision = StageDecision(
+            stage="l1", score=0.5, score_name="l1_abs_coef",
+            threshold=0.01, decision="dropped", reason="below_threshold", rank=42,
+            stage_input_count=358, stage_output_count=2,
+        )
+        with pytest.raises((AttributeError, TypeError)):
+            decision.stage = "variance"  # type: ignore
+
+    def test_companion_feature_for_correlation(self):
+        decision = StageDecision(
+            stage="correlation", score=0.97, score_name="abs_pearson_r",
+            threshold=0.95, decision="dropped", reason="high_correlation", rank=None,
+            stage_input_count=50, stage_output_count=49, companion_feature="winner_col",
+        )
+        assert decision.companion_feature == "winner_col"
+
+    def test_nan_score_preserved(self):
+        decision = StageDecision(
+            stage="l1", score=float("nan"), score_name="l1_abs_coef",
+            threshold=None, decision="not_evaluated", reason="not_numeric", rank=None,
+            stage_input_count=10, stage_output_count=10,
+        )
+        assert math.isnan(decision.score)
+
+
+class TestFeatureOrigin:
+    def test_all_fields(self):
+        origin = FeatureOrigin(
+            source="contract", base_column="ACTIVATED_DATE",
+            family="hour_max_all_time", lag_prefix=None,
+            derivation="bronze_aggregate", parents=(),
+        )
+        assert origin.source == "contract"
+        assert origin.derivation == "bronze_aggregate"
+        assert origin.parents == ()
+
+    def test_frozen(self):
+        origin = FeatureOrigin(source="contract", base_column="X", family="sum")
+        with pytest.raises((AttributeError, TypeError)):
+            origin.source = "other"  # type: ignore
+
+    def test_defaults(self):
+        origin = FeatureOrigin(source="subscription", base_column="NET_PRICE", family="mean_365d")
+        assert origin.lag_prefix is None
+        assert origin.derivation is None
+        assert origin.parents == ()
+
+    def test_parents_for_derived_ratio(self):
+        origin = FeatureOrigin(
+            source=None, base_column=None, family="ratio",
+            derivation="derived_ratio", parents=("CREATED_DATE_delta_hours", "ANNIVERSARY_DATE__C_dow"),
+        )
+        assert origin.parents == ("CREATED_DATE_delta_hours", "ANNIVERSARY_DATE__C_dow")
+
+
+class TestColumnProfileExtensions:
+    def test_defaults_are_empty(self):
+        col = ColumnProfile(dtype="double", non_null_count=100, null_count=0)
+        assert col.origin is None
+        assert col.selection_trace == []
+        assert col.final_score is None
+
+    def test_accepts_origin(self):
+        origin = FeatureOrigin(source="contract", base_column="X", family="")
+        col = ColumnProfile(dtype="double", non_null_count=1, null_count=0, origin=origin)
+        assert col.origin.source == "contract"
+
+    def test_accepts_trace(self):
+        trace = [
+            StageDecision(
+                stage="variance", score=0.5, score_name="variance",
+                threshold=0.01, decision="kept", reason=None, rank=1,
+                stage_input_count=10, stage_output_count=10,
+            )
+        ]
+        col = ColumnProfile(dtype="double", non_null_count=1, null_count=0, selection_trace=trace)
+        assert col.selection_trace[0].stage == "variance"
+
+    def test_final_score_populated(self):
+        col = ColumnProfile(dtype="double", non_null_count=1, null_count=0, final_score=0.865)
+        assert col.final_score == 0.865
+
+
+class TestFeatureProfileSchemaV2:
+    def _origin_contract(self):
+        return FeatureOrigin(
+            source="contract", base_column="ACTIVATED_DATE",
+            family="hour_max_all_time", derivation="bronze_aggregate",
+        )
+
+    def _decision_variance_kept(self):
+        return StageDecision(
+            stage="variance", score=0.25, score_name="variance",
+            threshold=0.01, decision="kept", reason=None, rank=1,
+            stage_input_count=2, stage_output_count=2,
+        )
+
+    def _decision_l1_dropped(self):
+        return StageDecision(
+            stage="l1", score=0.001, score_name="l1_abs_coef",
+            threshold=0.01, decision="dropped", reason="below_threshold", rank=42,
+            stage_input_count=358, stage_output_count=2,
+        )
+
+    def test_schema_version_defaults_2(self):
+        profile = FeatureProfile(
+            stage="exploration", created_at="2026-04-16",
+            row_count=10, target_column="y", features={},
+        )
+        assert profile.schema_version == 2
+
+    def test_excluded_profiles_defaults_empty(self):
+        profile = FeatureProfile(
+            stage="exploration", created_at="2026-04-16",
+            row_count=10, target_column="y", features={},
+        )
+        assert profile.excluded_profiles == {}
+
+    def test_roundtrip_empty_extensions_omits_fields(self):
+        profile = FeatureProfile(
+            stage="exploration", created_at="2026-04-16",
+            row_count=10, target_column="y",
+            features={"a": ColumnProfile("double", 10, 0)},
+        )
+        d = profile.to_dict()
+        assert d["schema_version"] == 2
+        assert "excluded_profiles" not in d or d["excluded_profiles"] == {}
+        assert "origin" not in d["features"]["a"]
+        assert "selection_trace" not in d["features"]["a"]
+
+    def test_roundtrip_with_origin_on_feature(self):
+        profile = FeatureProfile(
+            stage="exploration", created_at="2026-04-16",
+            row_count=10, target_column="y",
+            features={
+                "a": ColumnProfile("double", 10, 0, origin=self._origin_contract()),
+            },
+        )
+        restored = FeatureProfile.from_dict(profile.to_dict())
+        assert restored.features["a"].origin.source == "contract"
+        assert restored.features["a"].origin.base_column == "ACTIVATED_DATE"
+        assert restored.features["a"].origin.derivation == "bronze_aggregate"
+
+    def test_roundtrip_with_selection_trace(self):
+        profile = FeatureProfile(
+            stage="exploration", created_at="2026-04-16",
+            row_count=10, target_column="y",
+            features={
+                "a": ColumnProfile(
+                    "double", 10, 0,
+                    selection_trace=[self._decision_variance_kept()],
+                ),
+            },
+        )
+        restored = FeatureProfile.from_dict(profile.to_dict())
+        assert len(restored.features["a"].selection_trace) == 1
+        assert restored.features["a"].selection_trace[0].stage == "variance"
+        assert restored.features["a"].selection_trace[0].decision == "kept"
+
+    def test_roundtrip_with_excluded_profiles(self):
+        profile = FeatureProfile(
+            stage="exploration", created_at="2026-04-16",
+            row_count=10, target_column="y", features={},
+            excluded={"b": "drop_l1_zero"},
+            excluded_profiles={
+                "b": ColumnProfile(
+                    "double", 9, 1, origin=self._origin_contract(),
+                    selection_trace=[self._decision_l1_dropped()],
+                ),
+            },
+        )
+        restored = FeatureProfile.from_dict(profile.to_dict())
+        assert restored.excluded["b"] == "drop_l1_zero"
+        assert restored.excluded_profiles["b"].origin.source == "contract"
+        assert restored.excluded_profiles["b"].selection_trace[0].reason == "below_threshold"
+
+    def test_save_load_full_roundtrip(self, tmp_path):
+        profile = FeatureProfile(
+            stage="exploration", created_at="2026-04-16",
+            row_count=10, target_column="y",
+            features={
+                "a": ColumnProfile(
+                    "double", 10, 0, origin=self._origin_contract(),
+                    selection_trace=[self._decision_variance_kept()],
+                    final_score=0.865,
+                ),
+            },
+            excluded={"b": "drop_l1_zero"},
+            excluded_profiles={
+                "b": ColumnProfile(
+                    "double", 9, 1,
+                    selection_trace=[self._decision_l1_dropped()],
+                ),
+            },
+        )
+        path = tmp_path / "profile.yaml"
+        profile.save(path)
+        loaded = FeatureProfile.load(path)
+        assert loaded.schema_version == 2
+        assert loaded.features["a"].final_score == 0.865
+        assert loaded.excluded_profiles["b"].selection_trace[0].rank == 42
+
+    def test_load_v1_yaml_backfills_defaults(self, tmp_path):
+        v1_yaml = {
+            "stage": "exploration", "created_at": "2024-01-01",
+            "row_count": 100, "feature_count": 1, "target_column": "y",
+            "features": {"a": {"dtype": "double", "non_null": 100, "null_count": 0}},
+            "excluded": {"b": "drop_l1_zero"},
+        }
+        path = tmp_path / "v1.yaml"
+        with open(path, "w") as f:
+            yaml.dump(v1_yaml, f)
+        loaded = FeatureProfile.load(path)
+        assert loaded.schema_version == 1
+        assert loaded.features["a"].origin is None
+        assert loaded.features["a"].selection_trace == []
+        assert loaded.excluded_profiles == {}
+
+    def test_companion_feature_roundtrip(self):
+        decision = StageDecision(
+            stage="correlation", score=0.97, score_name="abs_pearson_r",
+            threshold=0.95, decision="dropped", reason="high_correlation", rank=None,
+            stage_input_count=50, stage_output_count=49, companion_feature="winner_col",
+        )
+        profile = FeatureProfile(
+            stage="exploration", created_at="2026-04-16",
+            row_count=10, target_column="y", features={},
+            excluded={"loser": "drop_multicollinear"},
+            excluded_profiles={
+                "loser": ColumnProfile("double", 10, 0, selection_trace=[decision]),
+            },
+        )
+        restored = FeatureProfile.from_dict(profile.to_dict())
+        assert restored.excluded_profiles["loser"].selection_trace[0].companion_feature == "winner_col"
+
+    def test_compare_ignores_new_fields(self):
+        exp = FeatureProfile(
+            stage="exploration", created_at="2024-01-01",
+            row_count=100, target_column="y",
+            features={"a": ColumnProfile("double", 100, 0, origin=self._origin_contract())},
+        )
+        prod = FeatureProfile(
+            stage="production", created_at="2024-01-01",
+            row_count=100, target_column="y",
+            features={"a": ColumnProfile("double", 100, 0)},
+        )
+        assert compare_feature_profiles(exp, prod) == []
+
+
+class TestBuildFeatureProfileExtensions:
+    def test_accepts_excluded_profiles_kw(self):
+        excluded_profiles = {
+            "b": ColumnProfile(
+                "double", 10, 0,
+                selection_trace=[StageDecision(
+                    stage="variance", score=0.0, score_name="variance",
+                    threshold=0.01, decision="dropped", reason="zero_variance", rank=None,
+                    stage_input_count=5, stage_output_count=4,
+                )],
+            ),
+        }
+        profile = build_feature_profile(
+            "exploration", "y", 100,
+            {"a": ColumnProfile("double", 100, 0)},
+            {"b": "drop_zero_variance"},
+            excluded_profiles=excluded_profiles,
+        )
+        assert profile.excluded_profiles["b"].selection_trace[0].reason == "zero_variance"
+
+    def test_builds_without_excluded_profiles(self):
+        profile = build_feature_profile(
+            "exploration", "y", 100,
+            {"a": ColumnProfile("double", 100, 0)},
+        )
+        assert profile.excluded_profiles == {}
+        assert profile.schema_version == 2

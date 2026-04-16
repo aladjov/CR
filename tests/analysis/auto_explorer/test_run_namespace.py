@@ -227,6 +227,11 @@ class TestFeatureProfilePaths:
         expected = tmp_path / "runs" / "proj-abc" / "merged" / "exploration_feature_profile.yaml"
         assert ns.exploration_feature_profile_path == expected
 
+    def test_selection_config_snapshot_path(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="proj-abc")
+        expected = tmp_path / "runs" / "proj-abc" / "merged" / "selection_config_snapshot.yaml"
+        assert ns.selection_config_snapshot_path == expected
+
     def test_production_feature_profile_path(self, tmp_path):
         ns = RunNamespace(root=tmp_path, run_id="proj-abc")
         expected = tmp_path / "runs" / "proj-abc" / "merged" / "production_feature_profile.yaml"

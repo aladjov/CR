@@ -87,6 +87,10 @@ class RunNamespace:
         return self.merged_dir / "exploration_feature_profile.yaml"
 
     @property
+    def selection_config_snapshot_path(self) -> Path:
+        return self.merged_dir / "selection_config_snapshot.yaml"
+
+    @property
     def production_feature_profile_path(self) -> Path:
         return self.merged_dir / "production_feature_profile.yaml"
 

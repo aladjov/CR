@@ -8,9 +8,12 @@ from customer_retention.analysis.diagnostics.feature_provenance import (
     build_overall_source_distribution,
     build_provenance_table,
     cached_target_correlations,
+    feature_origin_for,
+    feature_origins_for,
     parse_feature_provenance,
     source_histogram,
 )
+from customer_retention.stages.modeling.feature_profile import FeatureOrigin
 
 
 @pytest.fixture
@@ -346,3 +349,82 @@ class TestBuildOverallSourceDistribution:
 
     def test_empty_inputs_return_empty_list(self):
         assert build_overall_source_distribution({}, {}) == []
+
+
+class TestFeatureOriginFor:
+    def test_bronze_aggregate_resolved(self, source_columns):
+        origin = feature_origin_for("NET_PRICE_sum_180d", source_columns)
+        assert isinstance(origin, FeatureOrigin)
+        assert origin.source == "subscription"
+        assert origin.base_column == "NET_PRICE"
+        assert origin.family == "sum_180d"
+        assert origin.derivation == "bronze_aggregate"
+        assert origin.parents == ()
+
+    def test_lag_prefix_carried_through(self, source_columns):
+        origin = feature_origin_for("lag2_DOCUMENT_ALLOTMENT_count_30d", source_columns)
+        assert origin.lag_prefix == "lag2"
+        assert origin.source == "subscription"
+        assert origin.derivation == "bronze_aggregate"
+
+    def test_unresolved_feature(self, source_columns):
+        origin = feature_origin_for("UNKNOWN_sum_30d", source_columns)
+        assert origin.source is None
+        assert origin.base_column is None
+        assert origin.derivation is None
+
+    def test_derived_ratio_parents_extracted(self, source_columns):
+        origin = feature_origin_for(
+            "CREATED_DATE_delta_hours_to_ANNIVERSARY_DATE__C_dow_ratio", source_columns,
+        )
+        assert origin.derivation == "derived_ratio"
+        assert origin.family == "ratio"
+        assert origin.parents == ("CREATED_DATE_delta_hours", "ANNIVERSARY_DATE__C_dow")
+
+    def test_interaction_feature_marked(self, source_columns):
+        origin = feature_origin_for("NET_PRICE_x_NUMBER_OF_ASINS", source_columns)
+        assert origin.derivation == "interaction"
+        assert "NET_PRICE" in origin.parents
+        assert "NUMBER_OF_ASINS" in origin.parents
+
+    def test_temporal_derived_family(self, source_columns):
+        origin = feature_origin_for("subscription__recency_ratio", source_columns)
+        assert origin.derivation == "temporal_derived"
+        assert origin.source == "subscription"
+        assert origin.family == "recency_ratio"
+
+    def test_gold_transform_suffix(self, source_columns):
+        origin = feature_origin_for("NET_PRICE_sum_180d_log", source_columns)
+        assert origin.derivation == "gold_transform"
+        assert origin.source == "subscription"
+        assert origin.base_column == "NET_PRICE"
+
+
+class TestFeatureOriginsFor:
+    def test_bulk_resolves_all_features(self, source_columns):
+        features = [
+            "NET_PRICE_sum_180d",
+            "CONTRACT_VALUE_max_all_time",
+            "UNKNOWN_FEATURE",
+        ]
+        result = feature_origins_for(features, source_columns)
+        assert set(result.keys()) == set(features)
+        assert result["NET_PRICE_sum_180d"].source == "subscription"
+        assert result["CONTRACT_VALUE_max_all_time"].source == "contract"
+        assert result["UNKNOWN_FEATURE"].source is None
+
+    def test_empty_feature_list_returns_empty(self, source_columns):
+        assert feature_origins_for([], source_columns) == {}
+
+    def test_duplicate_features_deduplicated(self, source_columns):
+        result = feature_origins_for(
+            ["NET_PRICE_sum_180d", "NET_PRICE_sum_180d"], source_columns,
+        )
+        assert list(result.keys()) == ["NET_PRICE_sum_180d"]
+
+    def test_ratio_parents_in_bulk(self, source_columns):
+        result = feature_origins_for(
+            ["A_to_B_ratio", "NET_PRICE_sum_180d"], source_columns,
+        )
+        assert result["A_to_B_ratio"].derivation == "derived_ratio"
+        assert result["A_to_B_ratio"].parents == ("A", "B")

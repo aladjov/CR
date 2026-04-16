@@ -12,6 +12,7 @@ from customer_retention.core.compat import (
     bulk_variance,
     isna,
 )
+from customer_retention.stages.modeling.feature_profile import SelectionTraceRecorder
 
 if TYPE_CHECKING:
     from customer_retention.analysis.auto_explorer.findings import FeatureAvailabilityMetadata
@@ -59,7 +60,7 @@ class AvailabilityRecommendation:
 
 
 class FeatureSelector:
-    def __init__(self, method: SelectionMethod = SelectionMethod.VARIANCE, variance_threshold: float = 0.01, correlation_threshold: float = 0.95, target_column: Optional[str] = None, preserve_features: Optional[List[str]] = None, max_features: Optional[int] = None, apply_correlation_filter: bool = False, precomputed_corr_matrix: Optional[Any] = None, l1_C: float = 1.0, l1_ratio: float = 1.0, progress_fn: Optional[Callable[[str], None]] = None, precomputed_variances: Optional[Any] = None, precomputed_medians: Optional[Dict[str, float]] = None, precomputed_non_null: Optional[Dict[str, int]] = None, correlation_candidates: Optional[List[str]] = None, chi_squared_num_buckets: int = 10, gbdt_n_estimators: int = 200, gbdt_max_depth: int = 6):
+    def __init__(self, method: SelectionMethod = SelectionMethod.VARIANCE, variance_threshold: float = 0.01, correlation_threshold: float = 0.95, target_column: Optional[str] = None, preserve_features: Optional[List[str]] = None, max_features: Optional[int] = None, apply_correlation_filter: bool = False, precomputed_corr_matrix: Optional[Any] = None, l1_C: float = 1.0, l1_ratio: float = 1.0, progress_fn: Optional[Callable[[str], None]] = None, precomputed_variances: Optional[Any] = None, precomputed_medians: Optional[Dict[str, float]] = None, precomputed_non_null: Optional[Dict[str, int]] = None, correlation_candidates: Optional[List[str]] = None, chi_squared_num_buckets: int = 10, gbdt_n_estimators: int = 200, gbdt_max_depth: int = 6, trace_recorder: Optional[SelectionTraceRecorder] = None):
         self.method = method
         self.variance_threshold = variance_threshold
         self.correlation_threshold = correlation_threshold
@@ -77,6 +78,7 @@ class FeatureSelector:
         self.chi_squared_num_buckets = chi_squared_num_buckets
         self.gbdt_n_estimators = gbdt_n_estimators
         self.gbdt_max_depth = gbdt_max_depth
+        self.trace_recorder = trace_recorder
 
         self.selected_features: List[str] = []
         self.dropped_features: List[str] = []
@@ -157,16 +159,55 @@ class FeatureSelector:
 
     def _apply_variance_selection(self, df: DataFrame, features: List[str], numeric_set: set) -> None:
         candidates = [f for f in features if f not in self.preserve_features and f in numeric_set]
+        scores: Dict[str, float] = {}
+        decisions: Dict[str, str] = {}
+        reasons: Dict[str, Optional[str]] = {}
+        preserve_in_features = [f for f in features if f in self.preserve_features]
+        for f in preserve_in_features:
+            scores[f] = float("nan")
+            decisions[f] = "preserved"
+            reasons[f] = "in_preserve_list"
         if not candidates:
+            self._record_stage(
+                stage="variance", score_name="variance", scores=scores,
+                threshold=self.variance_threshold, decisions=decisions, reasons=reasons,
+                input_count=len(features), output_count=len(self.selected_features),
+            )
             return
         variances = self._get_variances(df, candidates, numeric_set)
         for feature in candidates:
             variance = variances[feature]
+            scores[feature] = float("nan") if isna(variance) else float(variance)
             if isna(variance) or variance < self.variance_threshold:
                 if feature in self.selected_features:
                     self.selected_features.remove(feature)
                     self.dropped_features.append(feature)
                     self.drop_reasons[feature] = f"low variance ({variance:.6f})"
+                decisions[feature] = "dropped"
+                reasons[feature] = "low_variance"
+            else:
+                decisions[feature] = "kept"
+                reasons[feature] = None
+        self._record_stage(
+            stage="variance", score_name="variance", scores=scores,
+            threshold=self.variance_threshold, decisions=decisions, reasons=reasons,
+            input_count=len(features), output_count=len(self.selected_features),
+        )
+
+    def _record_stage(
+        self, *, stage: str, score_name: str, scores: Dict[str, float],
+        threshold: Optional[float], decisions: Dict[str, str],
+        reasons: Dict[str, Optional[str]], input_count: int, output_count: int,
+        companion_map: Optional[Dict[str, str]] = None,
+    ) -> None:
+        if self.trace_recorder is None:
+            return
+        self.trace_recorder.record_stage(
+            stage=stage, score_name=score_name, scores=scores,
+            threshold=threshold, decisions=decisions, reasons=reasons,
+            stage_input_count=input_count, stage_output_count=output_count,
+            companion_map=companion_map,
+        )
 
     def _apply_correlation_selection(self, df: DataFrame, features: List[str], numeric_set: set) -> None:
         numeric_features = [f for f in features if f in numeric_set and f in self.selected_features]
@@ -186,26 +227,58 @@ class FeatureSelector:
         upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
         variances = self._get_variances(df, numeric_features, numeric_set)
 
-        to_drop = set()
+        to_drop: set = set()
+        companion_map: Dict[str, str] = {}
+        max_pair_corr: Dict[str, float] = {}
         for column in upper.columns:
             correlated = upper.index[upper[column] > self.correlation_threshold].tolist()
             for corr_feature in correlated:
+                pair_corr = float(upper.at[corr_feature, column])
                 if corr_feature in self.preserve_features:
-                    if column not in self.preserve_features:
-                        to_drop.add(column)
+                    loser = column if column not in self.preserve_features else None
+                    winner = corr_feature
                 elif column in self.preserve_features:
-                    to_drop.add(corr_feature)
+                    loser = corr_feature
+                    winner = column
                 else:
                     if variances[column] >= variances[corr_feature]:
-                        to_drop.add(corr_feature)
+                        loser, winner = corr_feature, column
                     else:
-                        to_drop.add(column)
+                        loser, winner = column, corr_feature
+                if loser is not None:
+                    to_drop.add(loser)
+                    if pair_corr > max_pair_corr.get(loser, 0.0):
+                        max_pair_corr[loser] = pair_corr
+                        companion_map[loser] = winner
 
         for feature in to_drop:
             if feature in self.selected_features:
                 self.selected_features.remove(feature)
                 self.dropped_features.append(feature)
                 self.drop_reasons[feature] = f"high correlation (> {self.correlation_threshold})"
+
+        scores: Dict[str, float] = {}
+        decisions: Dict[str, str] = {}
+        reasons: Dict[str, Optional[str]] = {}
+        for feature in numeric_features:
+            if feature in self.preserve_features:
+                scores[feature] = float("nan")
+                decisions[feature] = "preserved"
+                reasons[feature] = "in_preserve_list"
+            elif feature in to_drop:
+                scores[feature] = max_pair_corr.get(feature, float("nan"))
+                decisions[feature] = "dropped"
+                reasons[feature] = "high_correlation"
+            else:
+                scores[feature] = float(upper[feature].max()) if feature in upper.columns else 0.0
+                decisions[feature] = "kept"
+                reasons[feature] = None
+        self._record_stage(
+            stage="correlation", score_name="abs_pearson_r", scores=scores,
+            threshold=self.correlation_threshold, decisions=decisions, reasons=reasons,
+            input_count=len(numeric_features), output_count=len(self.selected_features),
+            companion_map=companion_map,
+        )
 
     def _apply_l1_selection(self, df: DataFrame, features: List[str], numeric_set: set) -> None:
         if not self.target_column:
@@ -223,11 +296,13 @@ class FeatureSelector:
             spark_df = as_spark_df(df[numeric_features + [self.target_column]])
             dropped, reasons, scores = _spark_l1_selection(spark_df, self.target_column, numeric_features, reg_param=1.0 / self.l1_C, elastic_net_param=self.l1_ratio)
             self.importance_scores = scores
+            drop_threshold_val: Optional[float] = None
             for feature in dropped:
                 if feature in self.selected_features:
                     self.selected_features.remove(feature)
                     self.dropped_features.append(feature)
                     self.drop_reasons[feature] = reasons[feature]
+            self._record_l1_trace(features, numeric_features, scores, set(dropped), drop_threshold_val)
             return
 
         work_df = df[numeric_features + [self.target_column]]
@@ -252,18 +327,51 @@ class FeatureSelector:
         max_coefs = coefs.max(axis=0) if coefs.ndim == 2 else coefs
 
         self.importance_scores = {numeric_features[i]: float(max_coefs[i]) for i in range(len(numeric_features))}
-        # L1 with saga solver may not produce exact zeros for noise features; use a relative
-        # threshold (1% of the strongest signal) so weak features get dropped consistently.
         max_signal = float(max_coefs.max()) if len(max_coefs) else 0.0
         drop_threshold = max_signal * 0.01
         zero_features = [numeric_features[i] for i in range(len(numeric_features)) if max_coefs[i] <= drop_threshold]
         if len(zero_features) == len(numeric_features):
+            self._record_l1_trace(features, numeric_features, self.importance_scores, set(), drop_threshold)
             return
         for feature in zero_features:
             if feature in self.selected_features:
                 self.selected_features.remove(feature)
                 self.dropped_features.append(feature)
                 self.drop_reasons[feature] = "L1 zero coefficient"
+        self._record_l1_trace(features, numeric_features, self.importance_scores, set(zero_features), drop_threshold)
+
+    def _record_l1_trace(
+        self, all_features: List[str], numeric_features: List[str],
+        coef_scores: Dict[str, float], dropped: set,
+        drop_threshold: Optional[float],
+    ) -> None:
+        if self.trace_recorder is None:
+            return
+        scores: Dict[str, float] = {}
+        decisions: Dict[str, str] = {}
+        reasons: Dict[str, Optional[str]] = {}
+        for feature in all_features:
+            if feature in self.preserve_features:
+                scores[feature] = float("nan")
+                decisions[feature] = "preserved"
+                reasons[feature] = "in_preserve_list"
+            elif feature in numeric_features:
+                scores[feature] = float(coef_scores.get(feature, 0.0))
+                if feature in dropped:
+                    decisions[feature] = "dropped"
+                    reasons[feature] = "below_threshold"
+                else:
+                    decisions[feature] = "kept"
+                    reasons[feature] = None
+            else:
+                scores[feature] = float("nan")
+                decisions[feature] = "not_evaluated"
+                reasons[feature] = "not_numeric"
+        self._record_stage(
+            stage="l1", score_name="l1_abs_coef", scores=scores,
+            threshold=drop_threshold, decisions=decisions, reasons=reasons,
+            input_count=len(all_features), output_count=len(self.selected_features),
+        )
 
     def _apply_chi_squared_selection(self, df: DataFrame, features: List[str], numeric_set: set) -> None:
         if not self.target_column:
@@ -273,6 +381,11 @@ class FeatureSelector:
 
         candidates = [f for f in features if f not in self.preserve_features and f in numeric_set]
         if not candidates or (self.max_features and self.max_features >= len(candidates)):
+            self._record_importance_trace(
+                stage="chi_squared", score_name="chi2_stat",
+                all_features=features, candidates=candidates, scores={}, dropped=set(),
+                threshold=None,
+            )
             return
 
         from customer_retention.core.compat import _is_spark_pandas
@@ -297,6 +410,44 @@ class FeatureSelector:
                 self.selected_features.remove(feature)
                 self.dropped_features.append(feature)
                 self.drop_reasons[feature] = reasons[feature]
+        self._record_importance_trace(
+            stage="chi_squared", score_name="chi2_stat",
+            all_features=features, candidates=candidates, scores=scores, dropped=set(dropped),
+            threshold=None,
+        )
+
+    def _record_importance_trace(
+        self, *, stage: str, score_name: str, all_features: List[str],
+        candidates: List[str], scores: Dict[str, float], dropped: set,
+        threshold: Optional[float],
+    ) -> None:
+        if self.trace_recorder is None:
+            return
+        out_scores: Dict[str, float] = {}
+        decisions: Dict[str, str] = {}
+        reasons: Dict[str, Optional[str]] = {}
+        for feature in all_features:
+            if feature in self.preserve_features:
+                out_scores[feature] = float("nan")
+                decisions[feature] = "preserved"
+                reasons[feature] = "in_preserve_list"
+            elif feature in candidates:
+                out_scores[feature] = float(scores.get(feature, 0.0))
+                if feature in dropped:
+                    decisions[feature] = "dropped"
+                    reasons[feature] = f"{stage}_drop"
+                else:
+                    decisions[feature] = "kept"
+                    reasons[feature] = None
+            else:
+                out_scores[feature] = float("nan")
+                decisions[feature] = "not_evaluated"
+                reasons[feature] = "not_numeric"
+        self._record_stage(
+            stage=stage, score_name=score_name, scores=out_scores,
+            threshold=threshold, decisions=decisions, reasons=reasons,
+            input_count=len(all_features), output_count=len(self.selected_features),
+        )
 
     def _apply_gbdt_importance_selection(self, df: DataFrame, features: List[str], numeric_set: set) -> None:
         if not self.target_column:
@@ -306,6 +457,11 @@ class FeatureSelector:
 
         candidates = [f for f in features if f not in self.preserve_features and f in numeric_set]
         if not candidates or (self.max_features and self.max_features >= len(candidates)):
+            self._record_importance_trace(
+                stage="gbdt_importance", score_name="gbdt_gain",
+                all_features=features, candidates=candidates, scores={}, dropped=set(),
+                threshold=None,
+            )
             return
 
         from customer_retention.core.compat import _is_spark_pandas
@@ -333,6 +489,11 @@ class FeatureSelector:
                 self.selected_features.remove(feature)
                 self.dropped_features.append(feature)
                 self.drop_reasons[feature] = reasons[feature]
+        self._record_importance_trace(
+            stage="gbdt_importance", score_name="gbdt_gain",
+            all_features=features, candidates=candidates, scores=scores, dropped=set(dropped),
+            threshold=None,
+        )
 
     def get_availability_recommendations(self, availability: Optional["FeatureAvailabilityMetadata"]) -> List[AvailabilityRecommendation]:
         if availability is None:
@@ -866,6 +1027,7 @@ def run_selection_pipeline(
     temporal_column: Optional[str] = None,
     l1_sample_rows: int = _L1_SAMPLE_ROWS,
     candidate_features: Optional[List[str]] = None,
+    trace_recorder: Optional[SelectionTraceRecorder] = None,
 ) -> FeatureSelectionResult:
     log = progress_fn or (lambda msg: print(msg))
     all_dropped: List[str] = []
@@ -909,6 +1071,7 @@ def run_selection_pipeline(
             method=SelectionMethod.VARIANCE, variance_threshold=variance_threshold,
             target_column=target_column, preserve_features=filter_preserve,
             precomputed_variances=precomputed_variances,
+            trace_recorder=trace_recorder,
         )
         result_var = var_selector.fit_transform(current_df)
         shared_variances = var_selector._cached_variances
@@ -929,6 +1092,7 @@ def run_selection_pipeline(
             precomputed_medians=precomputed_medians,
             precomputed_non_null=precomputed_non_null,
             correlation_candidates=candidate_features,
+            trace_recorder=trace_recorder,
         ).fit_transform(current_df)
         current_df = result_corr.df
         all_dropped.extend(result_corr.dropped_features)
@@ -958,6 +1122,7 @@ def run_selection_pipeline(
             method=SelectionMethod.L1_SELECTION, target_column=target_column,
             preserve_features=preserve_features, max_features=max_features,
             l1_C=l1_C, l1_ratio=l1_ratio,
+            trace_recorder=trace_recorder,
         ).fit_transform(current_df)
         current_df = result_l1.df
         all_dropped.extend(result_l1.dropped_features)
@@ -982,6 +1147,7 @@ def run_chi_squared_selection(
     num_buckets: int = 10, feature_columns: Optional[List[str]] = None,
     temporal_column: Optional[str] = None,
     progress_fn: Optional[Callable[[str], None]] = None,
+    trace_recorder: Optional[SelectionTraceRecorder] = None,
 ) -> FeatureSelectionResult:
     log = progress_fn or (lambda msg: print(msg))
     t0 = time.monotonic()
@@ -1001,7 +1167,7 @@ def run_chi_squared_selection(
     selector = FeatureSelector(
         method=SelectionMethod.CHI_SQUARED, target_column=target_column,
         max_features=max_features, chi_squared_num_buckets=num_buckets,
-        progress_fn=log,
+        progress_fn=log, trace_recorder=trace_recorder,
     )
     result = selector.fit_transform(work_df)
     elapsed = time.monotonic() - t0
@@ -1016,6 +1182,7 @@ def run_gbdt_importance_selection(
     feature_columns: Optional[List[str]] = None,
     temporal_column: Optional[str] = None,
     progress_fn: Optional[Callable[[str], None]] = None,
+    trace_recorder: Optional[SelectionTraceRecorder] = None,
 ) -> FeatureSelectionResult:
     log = progress_fn or (lambda msg: print(msg))
     t0 = time.monotonic()
@@ -1036,6 +1203,7 @@ def run_gbdt_importance_selection(
         method=SelectionMethod.GBDT_IMPORTANCE, target_column=target_column,
         max_features=max_features, gbdt_n_estimators=n_estimators,
         gbdt_max_depth=max_depth, progress_fn=log,
+        trace_recorder=trace_recorder,
     )
     result = selector.fit_transform(work_df)
     elapsed = time.monotonic() - t0
@@ -1504,6 +1672,7 @@ def run_chi_squared_rescue_selection(
     gbdt_max_depth: int = 6,
     shadow_feature_floor: bool = False,
     progress_fn: Optional[Callable[[str], None]] = None,
+    trace_recorder: Optional[SelectionTraceRecorder] = None,
 ) -> FeatureSelectionResult:
     """Three-stage chi-squared + rescue feature selection on a snapshot grid.
 
@@ -1617,12 +1786,60 @@ def run_chi_squared_rescue_selection(
     log(f"  Done: {len(feature_cols)} -> {len(selected)} features "
         f"({len(dropped)} dropped) in {_format_elapsed(elapsed)}")
 
+    _record_rescue_trace(
+        trace_recorder, feature_cols=feature_cols, keep_chi=keep_chi,
+        drop_chi=drop_chi, chi_stats=chi_stats, max_features=max_features,
+        rescue_l1=rescue_l1, rescue_gbdt=rescue_gbdt,
+        l1_coefs=l1_coefs, gbdt_gains=gbdt_gains,
+        l1_rescue_enabled=l1_rescue_enabled, gbdt_rescue_enabled=gbdt_rescue_enabled,
+    )
+
     result = FeatureSelectionResult(
         df=result_df, selected_features=selected, dropped_features=dropped,
         drop_reasons=reasons, method_used=SelectionMethod.CHI_SQUARED,
         importance_scores=importance_scores,
     )
     return result
+
+
+def _record_rescue_trace(
+    recorder: Optional[SelectionTraceRecorder], *, feature_cols: List[str],
+    keep_chi: set, drop_chi: set, chi_stats: Dict[str, Dict[str, float]],
+    max_features: int,
+    rescue_l1: set, rescue_gbdt: set,
+    l1_coefs: Dict[str, float], gbdt_gains: Dict[str, float],
+    l1_rescue_enabled: bool, gbdt_rescue_enabled: bool,
+) -> None:
+    if recorder is None:
+        return
+    chi_scores = {f: float(chi_stats.get(f, {"score": 0.0})["score"]) for f in feature_cols}
+    chi_decisions = {f: ("kept" if f in keep_chi else "dropped") for f in feature_cols}
+    chi_reasons = {f: (None if f in keep_chi else "chi_squared_drop") for f in feature_cols}
+    recorder.record_stage(
+        stage="chi_squared", score_name="chi2_stat", scores=chi_scores,
+        threshold=float(max_features), decisions=chi_decisions, reasons=chi_reasons,
+        stage_input_count=len(feature_cols), stage_output_count=len(keep_chi),
+    )
+    if l1_rescue_enabled:
+        l1_pool = sorted(drop_chi)
+        l1_scores = {f: float(l1_coefs.get(f, 0.0)) for f in l1_pool}
+        l1_decisions = {f: ("kept" if f in rescue_l1 else "dropped") for f in l1_pool}
+        l1_reasons = {f: ("l1_rescue" if f in rescue_l1 else "l1_below_floor") for f in l1_pool}
+        recorder.record_stage(
+            stage="l1_rescue", score_name="l1_abs_coef", scores=l1_scores,
+            threshold=None, decisions=l1_decisions, reasons=l1_reasons,
+            stage_input_count=len(l1_pool), stage_output_count=len(rescue_l1),
+        )
+    if gbdt_rescue_enabled:
+        gbdt_pool = sorted(drop_chi)
+        gbdt_scores = {f: float(gbdt_gains.get(f, 0.0)) for f in gbdt_pool}
+        gbdt_decisions = {f: ("kept" if f in rescue_gbdt else "dropped") for f in gbdt_pool}
+        gbdt_reasons = {f: ("gbdt_rescue" if f in rescue_gbdt else "gbdt_below_floor") for f in gbdt_pool}
+        recorder.record_stage(
+            stage="gbdt_rescue", score_name="gbdt_gain", scores=gbdt_scores,
+            threshold=None, decisions=gbdt_decisions, reasons=gbdt_reasons,
+            stage_input_count=len(gbdt_pool), stage_output_count=len(rescue_gbdt),
+        )
 
 
 _GBDT_SELECTION_MODE_DISPATCH: Dict[str, Callable[..., FeatureSelectionResult]] = {

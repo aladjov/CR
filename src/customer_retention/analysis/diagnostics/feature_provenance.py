@@ -31,9 +31,23 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Set
 
+from customer_retention.stages.modeling.feature_profile import FeatureOrigin
+
 _LAG_PREFIX_RE = re.compile(r"^(lag\d+|velocity|momentum|acceleration)_")
 
 _INTERACTION_TOKEN_RE = re.compile(r"(^|_)(interaction|x|ratio)(_|$)")
+
+_RATIO_SPLIT_RE = re.compile(r"^(?P<num>.+)_to_(?P<den>.+)_ratio$")
+_INTERACTION_SPLIT_RE = re.compile(r"^(?P<a>.+)_x_(?P<b>.+)$")
+_GOLD_TRANSFORM_SUFFIXES = (
+    "_log", "_sqrt", "_yeo_johnson", "_cap_then_log", "_scaled", "_encoded", "_zscore",
+)
+_TEMPORAL_DERIVED_FAMILIES = {
+    "recency_ratio", "active_span_days", "days_since_last_event",
+    "days_since_first_event", "event_density", "inter_event_gap_mean",
+    "inter_event_gap_std", "inter_event_gap_max", "regularity_score",
+}
+_ENTITY_PREFIX_RE = re.compile(r"^(?P<dataset>[a-z][a-z0-9_]*?)__(?P<family>.+)$")
 
 
 def _is_interaction_feature(feature_name: str) -> bool:
@@ -343,3 +357,73 @@ def build_overall_source_distribution(
         parsed = parse_feature_provenance(feat, source_columns)
         counts[parsed.source or "(unresolved)"] += 1
     return [(src, counts[src]) for src in sorted(counts, key=counts.get, reverse=True)]
+
+
+def _classify_derivation(
+    feature_name: str, parsed: ParsedFeature, source_keys: Set[str],
+) -> tuple[str, Optional[str], Optional[str], Optional[str], tuple, Optional[str]]:
+    """Classify a feature's derivation pathway.
+
+    Returns ``(derivation, source, base_column, family, parents, lag_prefix)``.
+    Parent tuples are populated for ratios and interactions; everything else
+    gets an empty tuple.
+    """
+    ratio_m = _RATIO_SPLIT_RE.match(feature_name)
+    if ratio_m:
+        parents = (ratio_m.group("num"), ratio_m.group("den"))
+        return "derived_ratio", parsed.source, parsed.base_column, "ratio", parents, parsed.lag_prefix
+
+    interaction_m = _INTERACTION_SPLIT_RE.match(feature_name)
+    if interaction_m and "_ratio" not in feature_name:
+        parents = (interaction_m.group("a"), interaction_m.group("b"))
+        return "interaction", parsed.source, parsed.base_column, "interaction", parents, parsed.lag_prefix
+
+    entity_m = _ENTITY_PREFIX_RE.match(feature_name)
+    if entity_m:
+        dataset = entity_m.group("dataset")
+        family = entity_m.group("family")
+        if dataset in source_keys and family in _TEMPORAL_DERIVED_FAMILIES:
+            return "temporal_derived", dataset, None, family, (), parsed.lag_prefix
+
+    if parsed.is_resolved:
+        for suffix in _GOLD_TRANSFORM_SUFFIXES:
+            if feature_name.endswith(suffix):
+                return "gold_transform", parsed.source, parsed.base_column, parsed.family, (), parsed.lag_prefix
+        return "bronze_aggregate", parsed.source, parsed.base_column, parsed.family, (), parsed.lag_prefix
+
+    return None, parsed.source, parsed.base_column, parsed.family or None, (), parsed.lag_prefix
+
+
+def feature_origin_for(
+    feature_name: str, source_columns: Dict[str, Iterable[str]],
+) -> FeatureOrigin:
+    """Return a persistable :class:`FeatureOrigin` for ``feature_name``.
+
+    Delegates the name-grammar parsing to :func:`parse_feature_provenance`
+    and adds a ``derivation`` classification so callers can distinguish
+    bronze aggregates from gold transforms, interactions, and ratios.
+    """
+    parsed = parse_feature_provenance(feature_name, source_columns)
+    source_keys = set(source_columns.keys())
+    derivation, source, base_column, family, parents, lag_prefix = _classify_derivation(
+        feature_name, parsed, source_keys,
+    )
+    return FeatureOrigin(
+        source=source, base_column=base_column, family=family,
+        lag_prefix=lag_prefix, derivation=derivation, parents=parents,
+    )
+
+
+def feature_origins_for(
+    features: Iterable[str], source_columns: Dict[str, Iterable[str]],
+) -> Dict[str, FeatureOrigin]:
+    """Bulk-resolve origins for many features in one pass.
+
+    Returns ``{feature: FeatureOrigin}``. Deduplicates repeated feature names.
+    """
+    result: Dict[str, FeatureOrigin] = {}
+    for feat in features:
+        if feat in result:
+            continue
+        result[feat] = feature_origin_for(feat, source_columns)
+    return result
