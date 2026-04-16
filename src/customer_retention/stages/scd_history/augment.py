@@ -24,7 +24,8 @@ notebooks — use the facade instead.
 """
 from __future__ import annotations
 
-from typing import Any, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Iterator, Optional
 
 from customer_retention.core.compat import (
     _is_native_spark_df,
@@ -38,6 +39,48 @@ from .config import SCDHistoryReconstructionConfig
 
 _AUGMENT_PARTITION_FLOOR_MULTIPLIER = 8
 _AUGMENT_MAX_PARTITIONS = 4096
+_DEFAULT_RETENTION_FLOOR = 0.70
+
+
+@dataclass(frozen=True)
+class AugmentationDiagnostics:
+    parent_record_count: int
+    augmented_record_count: int
+    retention: float
+    augmented_rows: int
+    augmented_cols: int
+    grid_anchor_count: int
+    fanout: float
+
+    def assert_retention(self, floor: float = _DEFAULT_RETENTION_FLOOR, parent_name: str = "") -> None:
+        if self.retention < floor:
+            label = f" for {parent_name!r}" if parent_name else ""
+            raise AssertionError(
+                f"Augmentation retention {self.retention:.1%}{label} below "
+                f"{floor:.0%} floor — investigate parent-table join coverage."
+            )
+
+    def summary_lines(self, parent_name: str = "") -> list[str]:
+        label = f"[{parent_name}] " if parent_name else ""
+        return [
+            f"SCD augmentation {label}retained {self.augmented_record_count:,} of "
+            f"{self.parent_record_count:,} parent records ({self.retention:.1%})",
+            f"SCD augmentation {label}expanded to "
+            f"{self.augmented_rows:,} rows x {self.augmented_cols} cols "
+            f"across {self.grid_anchor_count} grid anchors "
+            f"(fan-out {self.fanout:.1f}x per retained parent)",
+        ]
+
+
+@dataclass
+class AugmentationResult:
+    augmented_df: Any
+    schema: dict[str, str]
+    diagnostics: AugmentationDiagnostics
+    landing_path: str
+
+    def __iter__(self) -> Iterator:
+        return iter((self.augmented_df, self.schema))
 
 
 def augment_parent_with_scd_state(
@@ -188,15 +231,15 @@ def augment_and_persist_parent_dataset(
     join_type: str = "inner",
     grid_anchor_count: Optional[int] = None,
     target_partitions: Optional[int] = None,
-) -> Tuple[Any, dict[str, str]]:
+) -> AugmentationResult:
     """Augment a parent with SCD state and overwrite its landing Delta.
 
-    The single supported entry point for SCD augmentation in NB00. Replaces
-    the manual ``join + register_temp_view`` pattern that left the augmented
-    schema invisible to NB01's ``load_active_dataset`` path (temp views are
-    session-scoped). Returns ``(augmented_df, schema_dict)`` so the cell can
-    update both the in-memory ``datasets`` dict and the registry entry's
-    ``detected_schema`` field atomically.
+    The single supported entry point for SCD augmentation in NB00.
+
+    Returns :class:`AugmentationResult` which supports 2-tuple unpacking
+    ``(augmented_df, schema_dict)`` for backward compatibility, and also
+    exposes ``.diagnostics`` (:class:`AugmentationDiagnostics`) and
+    ``.landing_path``.
 
     Distributed-safe end-to-end: reuses :func:`augment_parent_with_scd_state`
     (native Spark ``.toDF()`` aliasing + ``.select()`` + ``.join(on=key)``)
@@ -210,14 +253,6 @@ def augment_and_persist_parent_dataset(
     executor disk. When unset, the facade derives a hint from
     ``grid_anchor_count * default_parallelism * 8`` (capped at 4096) which
     scales partition count with fan-out magnitude.
-
-    Fail-fast on:
-      - empty / whitespace ``parent_dataset_name``
-      - mismatch between ``parent_dataset_name`` and
-        ``config.parent_table_dataset_name`` (catches copy-paste of the
-        wrong config object)
-      - case-insensitive duplicate columns in the augmented frame
-      - schema drift between the augmented frame and the persisted Delta
     """
     _require_dataset_name(parent_dataset_name)
     _require_config_matches(parent_dataset_name, config)
@@ -242,7 +277,15 @@ def augment_and_persist_parent_dataset(
         landing_path, augmented, parent_dataset_name,
     )
 
-    return augmented, _augmented_schema(augmented)
+    diagnostics = _compute_diagnostics(
+        parent_df, augmented, config.parent_record_key, grid_anchor_count or 0,
+    )
+    return AugmentationResult(
+        augmented_df=augmented,
+        schema=_augmented_schema(augmented),
+        diagnostics=diagnostics,
+        landing_path=str(landing_path),
+    )
 
 
 def _resolve_target_partitions(
@@ -331,6 +374,39 @@ def _assert_landing_delta_matches_schema(
         f"frame={only_actual}, augmented frame has columns not in Delta="
         f"{only_expected}",
     )
+
+
+def _compute_diagnostics(
+    parent_df: Any, augmented: Any, parent_record_key: str, grid_anchor_count: int,
+) -> AugmentationDiagnostics:
+    parent_count = _distinct_key_count(parent_df, parent_record_key)
+    augmented_count = _distinct_key_count(augmented, parent_record_key)
+    augmented_rows = _row_count(augmented)
+    return AugmentationDiagnostics(
+        parent_record_count=parent_count,
+        augmented_record_count=augmented_count,
+        retention=augmented_count / parent_count if parent_count else 0.0,
+        augmented_rows=augmented_rows,
+        augmented_cols=len(augmented.columns),
+        grid_anchor_count=grid_anchor_count,
+        fanout=augmented_rows / augmented_count if augmented_count else 0.0,
+    )
+
+
+def _distinct_key_count(df: Any, key: str) -> int:
+    if _is_native_spark_df(df):
+        return df.select(key).distinct().count()
+    if _is_spark_pandas(df):
+        return as_spark_df(df).select(key).distinct().count()
+    return int(df[key].nunique())
+
+
+def _row_count(df: Any) -> int:
+    if _is_native_spark_df(df):
+        return df.count()
+    if _is_spark_pandas(df):
+        return as_spark_df(df).count()
+    return len(df)
 
 
 def _augmented_schema(augmented: Any) -> dict[str, str]:

@@ -260,6 +260,35 @@ class SnapshotGrid(BaseModel):
             self.dataset_votes[name] = vote
         self._refresh_grid()
 
+    def rehydrate_from_data_spans(
+        self, spans: dict[str, tuple[str, str]],
+    ) -> list[tuple[str, str]]:
+        """Update votes with authoritative full-data spans and regenerate grid.
+
+        ``spans`` maps dataset name to ``(start_date_iso, end_date_iso)``.
+        Only datasets that already have a vote in ``dataset_votes`` are
+        updated — unknown names are silently skipped. Returns per-dataset
+        status lines ``(name, message)`` for diagnostic output.
+
+        No-op when grid already has dates or is locked.
+        """
+        if self.grid_dates or self.locked:
+            return [(n, "skipped: grid already populated or locked") for n in spans]
+        status: list[tuple[str, str]] = []
+        updated_votes: dict[str, DatasetGridVote] = {}
+        for name, (span_start, span_end) in spans.items():
+            existing = self.dataset_votes.get(name)
+            if existing is None:
+                status.append((name, "skipped: no existing vote"))
+                continue
+            existing.data_span_start = str(span_start)
+            existing.data_span_end = str(span_end)
+            updated_votes[name] = existing
+            status.append((name, f"OK: span={span_start}→{span_end}"))
+        if updated_votes:
+            self.apply_votes(updated_votes)
+        return status
+
     @classmethod
     def save_vote(cls, vote_dir, dataset_name: str, vote: DatasetGridVote) -> None:
         p = _coerce_path(vote_dir)

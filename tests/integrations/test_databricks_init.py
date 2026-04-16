@@ -403,6 +403,24 @@ class TestDatabricksInitConfigPersistence:
         assert data["experiments_dir"] == "/Volumes/churnkit/analysis/experiments"
         assert data["catalog"] == "churnkit"
         assert data["schema"] == "analysis"
+        assert data["workspace_path"] == "Users/me/proj"
+
+    def test_persisted_workspace_path_survives_for_subsequent_import(self, monkeypatch, databricks_env, tmp_path):
+        config_file = tmp_path / ".churnkit_config.json"
+        monkeypatch.setattr(
+            "customer_retention.core.config.experiments._workspace_config_path",
+            lambda wp: config_file,
+        )
+        from customer_retention.integrations.databricks_init import databricks_init
+
+        databricks_init(
+            catalog="churnkit", schema="prod", workspace_path="Users/me/proj", copy_notebooks=False,
+        )
+        monkeypatch.delenv("CR_WORKSPACE_PATH", raising=False)
+        monkeypatch.chdir(tmp_path)
+        from customer_retention.core.config.experiments import get_workspace_path
+
+        assert get_workspace_path() == "Users/me/proj"
 
     def test_persists_experiment_name_to_workspace(self, monkeypatch, databricks_env, tmp_path):
         config_file = tmp_path / ".churnkit_config.json"

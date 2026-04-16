@@ -55,6 +55,28 @@ class TestGetWorkspacePath:
         monkeypatch.delenv("CR_WORKSPACE_PATH", raising=False)
         assert get_workspace_path(default="/Workspace/shared") == "/Workspace/shared"
 
+    def test_reads_from_persisted_config(self, tmp_path, monkeypatch):
+        from customer_retention.core.config.experiments import get_workspace_path
+
+        monkeypatch.delenv("CR_WORKSPACE_PATH", raising=False)
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "17.3")
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".churnkit_config.json").write_text(
+            json.dumps({"workspace_path": "Users/me/project"})
+        )
+        assert get_workspace_path() == "Users/me/project"
+
+    def test_env_var_takes_precedence_over_persisted(self, tmp_path, monkeypatch):
+        from customer_retention.core.config.experiments import get_workspace_path
+
+        monkeypatch.setenv("CR_WORKSPACE_PATH", "from_env")
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "17.3")
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".churnkit_config.json").write_text(
+            json.dumps({"workspace_path": "persisted"})
+        )
+        assert get_workspace_path() == "from_env"
+
 
 class TestGetExperimentName:
     def test_returns_env_var_when_set(self, monkeypatch):

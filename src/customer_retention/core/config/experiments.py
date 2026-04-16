@@ -45,7 +45,12 @@ def persist_databricks_config(
 ) -> None:
     if not workspace_path:
         return
-    data: dict = {"experiments_dir": experiments_dir, "catalog": catalog, "schema": schema}
+    data: dict = {
+        "experiments_dir": experiments_dir,
+        "catalog": catalog,
+        "schema": schema,
+        "workspace_path": workspace_path,
+    }
     if experiment_name:
         data["experiment_name"] = experiment_name
     if framework_repo_path:
@@ -163,7 +168,12 @@ def get_schema(default: str = "default") -> str:
 
 
 def get_workspace_path(default: str | None = None) -> str | None:
-    return os.environ.get("CR_WORKSPACE_PATH", default)
+    if "CR_WORKSPACE_PATH" in os.environ:
+        return os.environ["CR_WORKSPACE_PATH"]
+    persisted = _load_persisted_databricks_config()
+    if persisted and "workspace_path" in persisted:
+        return persisted["workspace_path"]
+    return default
 
 
 def get_experiment_name(default: str = "customer_retention") -> str:

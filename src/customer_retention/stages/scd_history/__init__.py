@@ -35,15 +35,21 @@ Quick Start::
 """
 
 from .augment import (
+    AugmentationDiagnostics,
+    AugmentationResult,
     augment_and_persist_parent_dataset,
     augment_parent_with_scd_state,
 )
 from .config import SCDHistoryReconstructionConfig
 from .reconstruct import reconstruct_scd_history_at_grid
+from .validation import validate_scd_sources
 
 __all__ = [
+    "AugmentationDiagnostics",
+    "AugmentationResult",
     "SCDHistoryReconstructionConfig",
     "augment_and_persist_parent_dataset",
     "augment_parent_with_scd_state",
     "reconstruct_scd_history_at_grid",
+    "validate_scd_sources",
 ]
