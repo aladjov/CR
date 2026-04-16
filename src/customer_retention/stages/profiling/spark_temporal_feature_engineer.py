@@ -209,9 +209,10 @@ def _recency_spark(spark_df, entity_col, time_col, ref_spark):
             F.when(F.col("active_span_days") > 0,
                 F.col("days_since_last_event") /
                 (F.col("active_span_days") + F.col("days_since_last_event"))
-            ).otherwise(F.lit(0.0)))
+            ).otherwise(F.lit(None).cast("double")))
         .withColumn("recency_ratio",
-            F.greatest(F.lit(0.0), F.least(F.lit(1.0), F.col("recency_ratio"))))
+            F.when(F.col("recency_ratio").isNotNull(),
+                F.greatest(F.lit(0.0), F.least(F.lit(1.0), F.col("recency_ratio")))))
         .drop("_first", "_last", "reference_date"))
 
     return result, FeatureGroupResult(

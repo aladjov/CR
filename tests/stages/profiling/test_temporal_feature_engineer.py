@@ -442,6 +442,56 @@ class TestRecencyFeatures:
         assert (valid_ratios >= 0).all()
         assert (valid_ratios <= 1).all()
 
+    def test_recency_ratio_nan_for_single_event_entity(self, engineer):
+        """Entity with one event has active_span=0 → ratio must be NaN (was 0 before fix)."""
+        events = pd.DataFrame({
+            "customer_id": ["SOLO", "MULTI", "MULTI", "MULTI"],
+            "event_date": pd.to_datetime([
+                "2023-06-01",
+                "2023-06-01", "2023-07-01", "2023-08-01",
+            ]),
+            "amount": [100.0, 50.0, 75.0, 80.0],
+        })
+        ref = pd.DataFrame({
+            "customer_id": ["SOLO", "MULTI"],
+            "reference_date": pd.to_datetime(["2023-10-01", "2023-10-01"]),
+        })
+        result = engineer.compute(
+            events_df=events, entity_col="customer_id", time_col="event_date",
+            value_cols=["amount"], reference_dates=ref, reference_col="reference_date",
+        )
+        df = result.features_df.set_index("customer_id")
+        assert pd.isna(df.loc["SOLO", "recency_ratio"])
+        assert not pd.isna(df.loc["MULTI", "recency_ratio"])
+
+    def test_recency_ratio_nan_when_first_equals_last(self, engineer):
+        """Multi-event entity with all events on same day → active_span=0 → NaN."""
+        events = pd.DataFrame({
+            "customer_id": ["COINCIDENT"] * 3,
+            "event_date": pd.to_datetime(["2023-06-01"] * 3),
+            "amount": [10.0, 20.0, 30.0],
+        })
+        ref = pd.DataFrame({
+            "customer_id": ["COINCIDENT"],
+            "reference_date": pd.to_datetime(["2023-10-01"]),
+        })
+        result = engineer.compute(
+            events_df=events, entity_col="customer_id", time_col="event_date",
+            value_cols=["amount"], reference_dates=ref, reference_col="reference_date",
+        )
+        df = result.features_df
+        assert pd.isna(df["recency_ratio"].iloc[0])
+
+    def test_recency_ratio_dtype_unchanged(self, engineer, sample_events_df, reference_dates):
+        """Column name + dtype must stay identical to pre-fix behavior."""
+        result = engineer.compute(
+            events_df=sample_events_df, entity_col="customer_id", time_col="event_date",
+            value_cols=["amount"], reference_dates=reference_dates, reference_col="reference_date",
+        )
+        df = result.features_df
+        assert "recency_ratio" in df.columns
+        assert df["recency_ratio"].dtype.kind == "f"
+
 
 class TestRegularityFeatures:
     """Group 6: Frequency and Regularity Features"""

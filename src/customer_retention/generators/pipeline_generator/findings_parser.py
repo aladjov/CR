@@ -84,6 +84,31 @@ import re as _re
 _LAG_VELOCITY_RE = _re.compile(r"^(?:lag\d+|velocity)_")
 
 
+_WINDOW_DAYS = {
+    "24h": 1.0, "7d": 7.0, "30d": 30.0, "90d": 90.0,
+    "180d": 180.0, "365d": 365.0, "all_time": None,
+}
+
+
+def _expected_events_in_window(ts_metadata, window: str) -> float:
+    """Estimate avg events/entity within ``window`` from lifetime metadata.
+
+    ``all_time`` returns the lifetime average unchanged. Finite windows scale
+    the lifetime average by ``min(1, window_days / time_span_days)``. Returns
+    ``inf`` when metadata is missing so callers fail-open and do not prune.
+    """
+    if ts_metadata is None or ts_metadata.avg_events_per_entity is None:
+        return float("inf")
+    lifetime = float(ts_metadata.avg_events_per_entity)
+    window_days = _WINDOW_DAYS.get(window)
+    if window_days is None:
+        return lifetime
+    span = ts_metadata.time_span_days
+    if not span or span <= 0:
+        return lifetime
+    return lifetime * min(1.0, window_days / float(span))
+
+
 def _matches_any_prefix(column: str, prefixes: List[str]) -> bool:
     """Return True if `column` is covered by any of the given prefixes.
 
@@ -1558,6 +1583,10 @@ class FindingsParser:
             if exc.blocked_funcs:
                 column_blocked_funcs[col] = exc.blocked_funcs
 
+        self._apply_sparse_aggregate_prune(
+            ts=ts, value_columns=value_columns, blocked=column_blocked_funcs,
+        )
+
         return AggregationWindowConfig(
             windows=windows,
             value_columns=value_columns,
@@ -1568,6 +1597,29 @@ class FindingsParser:
             binary_agg_funcs=["rate", "count", "any"],
             column_blocked_funcs=column_blocked_funcs,
         )
+
+    @staticmethod
+    def _apply_sparse_aggregate_prune(
+        *, ts, value_columns: List[str], blocked: Dict[str, List[str]],
+        threshold: float = 2.0,
+    ) -> None:
+        """Block ``mean``/``max`` for value columns when dataset is too sparse.
+
+        Datasets with fewer than ``threshold`` events per entity cannot produce
+        meaningful mean/max aggregates for any value column — the emitted
+        columns would be dominated by nulls (single-sample means) that get
+        median-imputed downstream, polluting selection with near-constant noise.
+        ``count``/``sum`` remain emitted; categorical and binary aggregates are
+        not affected. Fails open (no pruning) when metadata is missing.
+        """
+        if ts is None or ts.avg_events_per_entity is None:
+            return
+        if float(ts.avg_events_per_entity) >= threshold:
+            return
+        for col in value_columns:
+            existing = set(blocked.get(col, []))
+            existing.update(["mean", "max"])
+            blocked[col] = sorted(existing)
 
     def _build_lifecycle_config(
         self,

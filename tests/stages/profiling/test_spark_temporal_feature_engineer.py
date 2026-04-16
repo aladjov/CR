@@ -138,6 +138,47 @@ class TestSparkEngineerMatchesLocal:
         assert "recency_ratio" in df.columns
 
     @pytest.mark.parametrize("cls", BOTH_ENGINEERS)
+    def test_recency_ratio_nan_for_single_event_entity(self, cls):
+        events = pd.DataFrame({
+            "customer_id": ["SOLO", "MULTI", "MULTI", "MULTI"],
+            "event_date": pd.to_datetime([
+                "2023-06-01",
+                "2023-06-01", "2023-07-01", "2023-08-01",
+            ]),
+            "amount": [100.0, 50.0, 75.0, 80.0],
+        })
+        ref = pd.DataFrame({
+            "customer_id": ["SOLO", "MULTI"],
+            "reference_date": pd.to_datetime(["2023-10-01", "2023-10-01"]),
+        })
+        engineer = cls()
+        result = engineer.compute(
+            events_df=events, entity_col="customer_id", time_col="event_date",
+            value_cols=["amount"], reference_dates=ref, reference_col="reference_date",
+        )
+        df = result.features_df.set_index("customer_id")
+        assert pd.isna(df.loc["SOLO", "recency_ratio"])
+        assert not pd.isna(df.loc["MULTI", "recency_ratio"])
+
+    @pytest.mark.parametrize("cls", BOTH_ENGINEERS)
+    def test_recency_ratio_nan_when_first_equals_last(self, cls):
+        events = pd.DataFrame({
+            "customer_id": ["COINCIDENT"] * 3,
+            "event_date": pd.to_datetime(["2023-06-01"] * 3),
+            "amount": [10.0, 20.0, 30.0],
+        })
+        ref = pd.DataFrame({
+            "customer_id": ["COINCIDENT"],
+            "reference_date": pd.to_datetime(["2023-10-01"]),
+        })
+        engineer = cls()
+        result = engineer.compute(
+            events_df=events, entity_col="customer_id", time_col="event_date",
+            value_cols=["amount"], reference_dates=ref, reference_col="reference_date",
+        )
+        assert pd.isna(result.features_df["recency_ratio"].iloc[0])
+
+    @pytest.mark.parametrize("cls", BOTH_ENGINEERS)
     def test_regularity_features_created(self, sample_events, reference_dates, cls):
         engineer = cls()
         result = engineer.compute(

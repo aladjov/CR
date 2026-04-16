@@ -122,6 +122,7 @@ class AggregationWindowConfig:
     binary_agg_funcs: List[str] = field(default_factory=lambda: ["rate", "count", "any"])
     reference_date: Optional[str] = None
     column_blocked_funcs: Dict[str, List[str]] = field(default_factory=dict)
+    sparse_prune_threshold: float = 2.0
 
 
 @dataclass

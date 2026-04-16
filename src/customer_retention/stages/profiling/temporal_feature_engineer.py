@@ -548,11 +548,14 @@ class TemporalFeatureEngineer:
             result["last_event"] - result["first_event"]
         )
 
-        # Recency ratio: days_since_last / active_span (0 = just active, 1 = dormant)
+        # Recency ratio: days_since_last / active_span (0 = just active, 1 = dormant).
+        # Undefined for entities whose active_span_days == 0 (single event, or
+        # multi-event coincident on a single day) — emit NaN instead of 0 so
+        # downstream imputers distinguish degenerate history from genuinely-zero
+        # recency. `active_span_days` already carries the flag signal for models.
         active_positive = result["active_span_days"] > 0
         ratio = result["days_since_last_event"] / (result["active_span_days"] + result["days_since_last_event"])
-        result["recency_ratio"] = ratio.where(active_positive, 0)
-        result["recency_ratio"] = result["recency_ratio"].clip(0, 1)
+        result["recency_ratio"] = ratio.where(active_positive, float("nan")).clip(0, 1)
 
         # Clean up
         result = result.drop(columns=["first_event", "last_event", "event_count", "reference_date"])
