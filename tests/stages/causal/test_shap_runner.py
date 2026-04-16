@@ -309,9 +309,9 @@ class TestUnwrapTreeModel:
         import sys
 
         inner_model = MagicMock(name="InnerSklearnModel")
-        impl = MagicMock(name="ModelImpl")
+        impl = MagicMock(name="ModelImpl", spec=["python_model"])
         impl.python_model = inner_model
-        pyfunc_model = MagicMock(name="PyFuncModel")
+        pyfunc_model = MagicMock(name="PyFuncModel", spec=["_model_impl"])
         pyfunc_model._model_impl = impl
 
         fake_pyfunc = MagicMock(name="mlflow.pyfunc")
@@ -346,3 +346,107 @@ class TestUnwrapTreeModel:
         monkeypatch.delitem(sys.modules, "mlflow.pyfunc", raising=False)
         model = MagicMock(name="SomeModel", spec=[])
         assert unwrap_tree_model(model) is model
+
+    def _install_fake_mlflow(self, monkeypatch, pyfunc_model):
+        import sys
+        fake_pyfunc = MagicMock(name="mlflow.pyfunc")
+        fake_pyfunc.PyFuncModel = type(pyfunc_model)
+        fake_mlflow = MagicMock(name="mlflow")
+        fake_mlflow.pyfunc = fake_pyfunc
+        monkeypatch.setitem(sys.modules, "mlflow", fake_mlflow)
+        monkeypatch.setitem(sys.modules, "mlflow.pyfunc", fake_pyfunc)
+
+    def test_pyfunc_uses_get_raw_model_when_available(self, monkeypatch):
+        # Canonical MLflow accessor across sklearn / xgboost / lightgbm / spark
+        # wrappers — should be preferred over flavor-specific attribute probing.
+        raw_estimator = MagicMock(name="RawSklearnEstimator", spec=[])
+        impl = MagicMock(name="SklearnModelWrapper", spec=["get_raw_model"])
+        impl.get_raw_model.return_value = raw_estimator
+        pyfunc_model = MagicMock(name="PyFuncModel", spec=["_model_impl"])
+        pyfunc_model._model_impl = impl
+        self._install_fake_mlflow(monkeypatch, pyfunc_model)
+
+        assert unwrap_tree_model(pyfunc_model) is raw_estimator
+        impl.get_raw_model.assert_called_once_with()
+
+    def test_pyfunc_with_sklearn_impl_returns_sklearn_model(self, monkeypatch):
+        sklearn_model = MagicMock(name="SklearnRandomForest", spec=[])
+        impl = MagicMock(name="SklearnModelWrapper", spec=["sklearn_model"])
+        impl.sklearn_model = sklearn_model
+        pyfunc_model = MagicMock(name="PyFuncModel", spec=["_model_impl"])
+        pyfunc_model._model_impl = impl
+        self._install_fake_mlflow(monkeypatch, pyfunc_model)
+
+        assert unwrap_tree_model(pyfunc_model) is sklearn_model
+
+    def test_pyfunc_with_xgboost_impl_returns_xgb_model(self, monkeypatch):
+        xgb_model = MagicMock(name="XGBBooster", spec=[])
+        impl = MagicMock(name="XGBModelWrapper", spec=["xgb_model"])
+        impl.xgb_model = xgb_model
+        pyfunc_model = MagicMock(name="PyFuncModel", spec=["_model_impl"])
+        pyfunc_model._model_impl = impl
+        self._install_fake_mlflow(monkeypatch, pyfunc_model)
+
+        assert unwrap_tree_model(pyfunc_model) is xgb_model
+
+    def test_pyfunc_with_lightgbm_impl_returns_lgb_model(self, monkeypatch):
+        lgb_model = MagicMock(name="LGBBooster", spec=[])
+        impl = MagicMock(name="LGBModelWrapper", spec=["lgb_model"])
+        impl.lgb_model = lgb_model
+        pyfunc_model = MagicMock(name="PyFuncModel", spec=["_model_impl"])
+        pyfunc_model._model_impl = impl
+        self._install_fake_mlflow(monkeypatch, pyfunc_model)
+
+        assert unwrap_tree_model(pyfunc_model) is lgb_model
+
+    def test_pyfunc_with_spark_impl_returns_spark_pipeline(self, monkeypatch):
+        # Spark flavor wrapper exposes .spark_model (a Spark ML PipelineModel).
+        # SHAP TreeExplainer can't consume that, but returning it lets the
+        # caller surface a clear "model not supported" error from SHAP rather
+        # than the misleading "Unable to retrieve base model object from pyfunc"
+        # that PyFuncModel.unwrap_python_model() throws for flavor-loaded models.
+        spark_pipeline = MagicMock(name="SparkPipelineModel", spec=["stages", "transform"])
+        impl = MagicMock(name="SparkPyFuncModelWrapper", spec=["spark_model"])
+        impl.spark_model = spark_pipeline
+        pyfunc_model = MagicMock(name="PyFuncModel", spec=["_model_impl"])
+        pyfunc_model._model_impl = impl
+        self._install_fake_mlflow(monkeypatch, pyfunc_model)
+
+        assert unwrap_tree_model(pyfunc_model) is spark_pipeline
+
+    def test_unknown_flavor_returns_pyfunc_model_unchanged(self, monkeypatch):
+        # If no known accessor matches, return the PyFuncModel as-is.
+        # The downstream SHAP TreeExplainer will then raise a clear error.
+        impl = MagicMock(name="UnknownWrapper", spec=[])
+        pyfunc_model = MagicMock(name="PyFuncModel", spec=["_model_impl"])
+        pyfunc_model._model_impl = impl
+        self._install_fake_mlflow(monkeypatch, pyfunc_model)
+
+        assert unwrap_tree_model(pyfunc_model) is pyfunc_model
+
+    def test_does_not_call_unwrap_python_model_on_flavor_wrapper(self, monkeypatch):
+        # Regression: PyFuncModel.unwrap_python_model() raises MlflowException
+        # for all non-PythonModel flavors (sklearn / xgboost / spark / lightgbm).
+        # The unwrap helper must never call it — it broke c02 derivation for
+        # users with Spark ML models registered via mlflow.spark.log_model.
+        impl = MagicMock(name="SklearnModelWrapper", spec=["sklearn_model"])
+        impl.sklearn_model = MagicMock(name="raw")
+        pyfunc_model = MagicMock(name="PyFuncModel", spec=["_model_impl", "unwrap_python_model"])
+        pyfunc_model._model_impl = impl
+        self._install_fake_mlflow(monkeypatch, pyfunc_model)
+
+        unwrap_tree_model(pyfunc_model)
+        pyfunc_model.unwrap_python_model.assert_not_called()
+
+    def test_python_model_wrapper_still_unwraps(self, monkeypatch):
+        # Custom PythonModel subclasses logged via mlflow.pyfunc.log_model
+        # store the raw model on _model_impl.python_model — the existing
+        # behavior must remain.
+        custom_model = MagicMock(name="CustomPythonModel", spec=[])
+        impl = MagicMock(name="PyFuncImpl", spec=["python_model"])
+        impl.python_model = custom_model
+        pyfunc_model = MagicMock(name="PyFuncModel", spec=["_model_impl"])
+        pyfunc_model._model_impl = impl
+        self._install_fake_mlflow(monkeypatch, pyfunc_model)
+
+        assert unwrap_tree_model(pyfunc_model) is custom_model

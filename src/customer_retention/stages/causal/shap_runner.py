@@ -60,30 +60,40 @@ SHAP_PREFIX: str = "shap_"
 # ---------------------------------------------------------------------------
 
 
-def unwrap_tree_model(model: Any) -> Any:
-    """Extract the tree-native estimator from an MLflow PyFuncModel.
+_RAW_MODEL_ATTRS = ("python_model", "sklearn_model", "xgb_model", "lgb_model", "spark_model")
 
-    ``shap.TreeExplainer`` requires the raw sklearn / xgboost / lightgbm
-    estimator, not the ``mlflow.pyfunc.PyFuncModel`` wrapper (which only
-    exposes ``predict()``). This function probes the known internal
-    attribute chains. If the model is already a raw estimator it is
-    returned as-is.
+
+def unwrap_tree_model(model: Any) -> Any:
+    """Extract the underlying estimator from an MLflow ``PyFuncModel``.
+
+    ``shap.TreeExplainer`` and the broader interpretability stack need the
+    raw estimator (sklearn / xgboost / lightgbm) — not the pyfunc wrapper,
+    which only exposes ``predict()``. The wrapper class differs per flavor
+    but every standard MLflow flavor exposes ``get_raw_model()`` (canonical)
+    or a flavor-specific attribute (``sklearn_model``, ``xgb_model``,
+    ``lgb_model``, ``spark_model``, ``python_model`` for custom models).
+
+    ``PyFuncModel.unwrap_python_model()`` is intentionally NOT used: it is
+    only valid for custom ``mlflow.pyfunc.PythonModel`` subclasses and
+    raises ``MlflowException`` for every other flavor. If no known accessor
+    matches, the wrapper is returned unchanged so the caller fails fast at
+    the SHAP explainer with a clear "model type not supported" error.
     """
     try:
         import mlflow.pyfunc
-        if isinstance(model, mlflow.pyfunc.PyFuncModel):
-            inner = getattr(model, "_model_impl", None)
-            if inner is not None:
-                # sklearn / xgboost / lightgbm flavors store the raw model
-                # on the ``python_model`` attribute of the implementation.
-                py_model = getattr(inner, "python_model", None)
-                if py_model is not None:
-                    return py_model
-            # mlflow >= 2.10 stores it under .unwrap_python_model()
-            if hasattr(model, "unwrap_python_model"):
-                return model.unwrap_python_model()
-    except (ImportError, AttributeError):
-        pass
+    except ImportError:
+        return model
+    if not isinstance(model, mlflow.pyfunc.PyFuncModel):
+        return model
+    inner = getattr(model, "_model_impl", None)
+    if inner is None:
+        return model
+    if hasattr(inner, "get_raw_model"):
+        return inner.get_raw_model()
+    for attr in _RAW_MODEL_ATTRS:
+        raw = getattr(inner, attr, None)
+        if raw is not None:
+            return raw
     return model
 
 
