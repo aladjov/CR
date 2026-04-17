@@ -138,7 +138,7 @@ uv build "$REPO_ROOT" --out-dir "$REPO_ROOT/dist"
 
 # --- 7. Publish to PyPI -------------------------------------------------
 echo "==> Uploading to PyPI"
-uvx twine upload "$REPO_ROOT/dist/"*
+uvx twine upload --verbose "$REPO_ROOT/dist/"*
 
 # --- 8. Push commit + tag -----------------------------------------------
 echo "==> Pushing ${BRANCH} and ${TAG} to ${REMOTE}"
