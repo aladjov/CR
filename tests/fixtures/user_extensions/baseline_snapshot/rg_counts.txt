@@ -1,0 +1,28 @@
+# rg -c "add_bronze_filtering|sps_notebook_overrides" -- src docs
+# Captured at baseline tag user-extensions-baseline-2026-04-17
+# Total: 123 occurrences across 24 files
+
+docs/sps_dataset_account_sanity_check_report.md:11
+docs/service_unit_lifecycle_enrichment.md:1
+docs/chi_squared_rescue_selection_plan.md:4
+docs/sps_dataset_opportunity_product_sanity_check_report.md:6
+docs/sps_run_451071b6_critical_evaluation.md:2
+docs/sps_target_derivation_analysis.md:1
+docs/sps_notebook_conservative_overrides-diff.md:3
+docs/sps_run_369ac53a_fix_plan.md:2
+docs/sps_dataset_case_history_scd_sanity_check_report.md:1
+docs/sps_dataset_request_sanity_check_report.md:7
+docs/sps_dataset_subscription_sanity_check_report.md:4
+docs/user_extensions.md:1
+docs/sps_notebook_overrides_no_case_expansion.md:8
+docs/sps_dataset_contract_sanity_check_report.md:19
+docs/sdc_history_grid_recosntruction.md:4
+docs/user_extensions_implementation_plan.md:20
+docs/session_changelog_2026_04_16.md:4
+src/customer_retention/analysis/auto_explorer/layered_recommendations.py:1
+docs/nb05_time_slice_relationship_plan.md:3
+docs/sps_dataset_implementation_project_sanity_check_report.md:10
+docs/sps_dataset_opportunity_sanity_check_report.md:7
+docs/tutorial/customer-emails/04_column_deep_dive.html:1
+docs/tutorial/customer-emails/12_view_documentation.html:2
+docs/tutorial/retail-churn/04_column_deep_dive.html:1
