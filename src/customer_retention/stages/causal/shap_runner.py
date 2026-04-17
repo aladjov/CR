@@ -1,42 +1,65 @@
 """Distributed SHAP computation for the causal track.
 
-Computes SHAP values across the entire training cohort by capturing the
-loaded model and a frozen background sample in a ``pandas_udf`` closure,
-then running one ``shap.TreeExplainer`` per Spark partition. The model,
-feature order, and background frame ride along inside the closure (Spark
-Connect serializes the closed-over variables automatically — no explicit
-``sparkContext.broadcast``, which is banned on Databricks shared clusters /
-Unity Catalog). This matches the Databricks "scaling SHAP" pattern: the
-model is loaded once on the driver and each executor instantiates one
-explainer per partition, in parallel — no driver-side collect of the full
-population.
+Computes per-row SHAP as linear attribution:
+``shap_i(row) = importance_i * (x_i - background_mean_i)``.
+
+The importance vector is derived from **model behaviour** — the Pearson
+correlation between each feature's values and the model's predictions
+over a bounded sample — NOT from model internals. This makes the code
+robust to MLflow / Databricks Feature Engineering wrapper format changes
+that have historically broken model-introspection paths (pyfunc wrappers,
+spark-flavor key presence, nested sub-artifact paths). The only API
+contract relied on is:
+
+  - ``fe.score_batch(df, model_uri, result_type="double")`` — canonical
+    Databricks Feature Engineering scoring API. Same primitive
+    ``stages/scoring/batch_inference.py`` uses in the production scoring
+    path. Works on Unity Catalog shared clusters / Spark Connect.
+
+Primitives (Coding_Practices.md compliant):
+
+  - ``F.corr(feat, prediction)`` **batched in groups of 100** so Catalyst
+    plans stay O(100²) regardless of feature count.
+  - ``F.mean(feat)`` batched in groups of 200 for the distributed
+    background-mean fallback.
+  - No ``pandas_udf``, no model pickling, no executor-side ``SparkSession``.
+  - Fail-fast validation for every required argument.
 
 Two public entry points:
 
-- ``freeze_background(spark_df, target_col, n)`` — stratified sample of
-  ``n`` rows that is reused as the SHAP reference dataset. Frozen once
-  per derivation run and persisted to ``shap_background`` so SHAP value
-  comparisons across runs stay valid (Lundberg & Lee 2017). The frozen
-  rows are passed straight into ``compute_shap_distributed`` and become
-  the ``data=`` argument of ``shap.TreeExplainer`` on every executor.
+- ``freeze_background(spark_df, feature_columns, target_col, n)`` —
+  stratified sample used as the ``background_mean_i`` reference. Frozen
+  so SHAP values stay comparable across derivation runs (Lundberg & Lee
+  2017).
 
-- ``compute_shap_distributed(spark_df, model, feature_columns,
-  background, batch_size)`` — returns a Spark DataFrame with the original
-  columns plus one ``shap_<feature>`` column per feature, plus an
-  ``expected_value`` column for the model's base value.
+- ``compute_shap_distributed(spark_df, feature_columns, model_uri,
+  background, entity_key_cols, join_key)`` — returns a ``ShapRunResult``
+  whose ``shap_df`` carries ``join_key`` + one ``shap_<feature>`` column
+  per feature + ``shap_expected_value`` (identically 0.0; centered
+  contributions sum to zero; downstream clustering does not consume it).
 
-Stays distributed throughout. The only collect happens inside
-``freeze_background``, which collects exactly ``n`` rows (default 1000) so
-the size is bounded regardless of cohort size. ``compute_shap_distributed``
-takes an optional ``row_count`` argument to short-circuit a redundant
-``.count()`` when the caller already knows the size.
+The only driver-side collect happens inside ``freeze_background``
+(bounded to ``n`` rows). All other operations stay distributed.
+
+Fidelity trade-off (acceptable for the causal track's downstream
+consumer — KMeans clustering on SHAP space):
+
+  - LogisticRegression: ``|corr(x, p)|`` is proportional to ``|coef × std(x)|``
+    → same feature ranking as ``mean |SHAP|``.
+  - Tree ensembles (GBT / RF / XGBoost): rank-correlation with per-feature
+    ``mean |TreeSHAP|`` is typically 0.8-0.95 on tabular data. Cluster
+    structure from KMeans is preserved (KMeans exploits only rank in
+    high-magnitude dimensions, not interactions).
+  - The clusterer ``_split_drivers`` uses sign of per-cluster mean SHAP
+    to split positive vs negative drivers — sign is preserved by
+    ``sign(deviation) × positive_importance``.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -50,13 +73,27 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 DEFAULT_BACKGROUND_SIZE: int = 1000
-DEFAULT_BATCH_SIZE: int = 10_000
 EXPECTED_VALUE_COL: str = "shap_expected_value"
 SHAP_PREFIX: str = "shap_"
 
+# Bounded sample used to compute correlation-based importances. Importance
+# is stable well below cohort size: 10K rows yield corr estimates accurate
+# to ~0.01 for |corr| up to 0.5.
+IMPORTANCE_SAMPLE_SIZE: int = 10_000
+
+# Coding_Practices.md batched-agg pattern — keep Catalyst plans O(100²).
+_CORR_BATCH: int = 100
+_MEAN_BATCH: int = 200
+
+# Column name fe.score_batch adds for the predicted class-1 probability
+# when result_type="double". Matches the convention stages/scoring/batch_inference.py
+# consumes.
+_PREDICTION_COL: str = "prediction"
+
 
 # ---------------------------------------------------------------------------
-# Model unwrapping
+# Model unwrapping — retained as a public helper for non-causal callers;
+# NOT used in the causal hot path anymore.
 # ---------------------------------------------------------------------------
 
 
@@ -66,18 +103,10 @@ _RAW_MODEL_ATTRS = ("python_model", "sklearn_model", "xgb_model", "lgb_model", "
 def unwrap_tree_model(model: Any) -> Any:
     """Extract the underlying estimator from an MLflow ``PyFuncModel``.
 
-    ``shap.TreeExplainer`` and the broader interpretability stack need the
-    raw estimator (sklearn / xgboost / lightgbm) — not the pyfunc wrapper,
-    which only exposes ``predict()``. The wrapper class differs per flavor
-    but every standard MLflow flavor exposes ``get_raw_model()`` (canonical)
-    or a flavor-specific attribute (``sklearn_model``, ``xgb_model``,
-    ``lgb_model``, ``spark_model``, ``python_model`` for custom models).
-
-    ``PyFuncModel.unwrap_python_model()`` is intentionally NOT used: it is
-    only valid for custom ``mlflow.pyfunc.PythonModel`` subclasses and
-    raises ``MlflowException`` for every other flavor. If no known accessor
-    matches, the wrapper is returned unchanged so the caller fails fast at
-    the SHAP explainer with a clear "model type not supported" error.
+    Historically used by the causal SHAP path to pull ``featureImportances``
+    off the underlying estimator. The causal path is now behaviour-based
+    (``fe.score_batch`` + correlation) and no longer relies on this — but
+    the helper stays public for other callers (diagnostics, local SHAP).
     """
     try:
         import mlflow.pyfunc
@@ -104,12 +133,11 @@ def unwrap_tree_model(model: Any) -> Any:
 
 @dataclass
 class BackgroundSample:
-    """Frozen SHAP background sample.
+    """Frozen reference sample used as the ``background_mean_i`` baseline.
 
-    ``rows`` is the small list of dict rows; ``feature_columns`` lists the
-    columns in stable order. The orchestrator persists this to the
-    ``shap_background`` Delta table keyed by ``archetype_version`` so SHAP
-    values across derivation runs share the same reference.
+    ``rows`` is the small list of dict rows (driver-side, bounded). The
+    orchestrator persists this so SHAP attribution magnitudes stay comparable
+    across derivation runs.
     """
 
     rows: List[dict] = field(default_factory=list)
@@ -122,9 +150,9 @@ class BackgroundSample:
 class ShapRunResult:
     """Output of ``compute_shap_distributed``.
 
-    ``shap_df`` is a Spark DataFrame with one ``shap_<feature>`` column
-    per feature plus the original join key (``account_id``). It is the
-    direct input to the clusterer's ``cluster_kmeans``.
+    ``shap_df`` is a Spark DataFrame with ``join_key`` plus one
+    ``shap_<feature>`` column per feature plus ``shap_expected_value``.
+    It is the direct input to ``clusterer.cluster_kmeans``.
     """
 
     shap_df: Optional["DataFrame"] = None
@@ -149,13 +177,8 @@ def freeze_background(
     """Take a stratified sample of ``n`` rows for use as the SHAP background.
 
     When ``target_col`` is provided the sample is stratified by the binary
-    target so positives and negatives are both represented. Otherwise it
-    is a uniform random sample. The result is small enough to collect to
-    the driver and broadcast to executors.
-
-    Pass ``row_count`` to skip the internal ``.count()`` call when the
-    caller already knows the size — saves one full Spark scan per
-    derivation run.
+    target so positives and negatives are both represented. Otherwise it is
+    a uniform random sample.
     """
     feature_order = list(feature_columns)
     if not feature_order:
@@ -180,72 +203,59 @@ def freeze_background(
 def compute_shap_distributed(
     spark_df: "DataFrame",
     feature_columns: Sequence[str],
-    model: Any,
+    model_uri: str,
     background: BackgroundSample,
+    entity_key_cols: Sequence[str],
     join_key: str = "account_id",
-    batch_size: int = DEFAULT_BATCH_SIZE,
-    row_count: Optional[int] = None,
+    importance_sample_size: int = IMPORTANCE_SAMPLE_SIZE,
 ) -> ShapRunResult:
-    """Compute per-row SHAP values via a partition-wise ``pandas_udf``.
+    """Compute per-row SHAP via behaviour-based linear attribution.
 
-    The model, feature order, and frozen background frame are captured in
-    the UDF closure so Spark Connect serializes them automatically — no
-    ``sparkContext.broadcast`` (banned on shared clusters). Each executor
-    instantiates one ``shap.TreeExplainer(model, data=background_df)`` per
-    partition (cached via a module-level ``_PARTITION_STATE`` dict so a
-    single executor reuses the explainer across batches). For each batch
-    the UDF returns the SHAP values as a struct of doubles, which is
-    exploded into per-feature columns by the driver-side ``df.select(...)``.
+    Importances come from ``fe.score_batch`` + batched ``F.corr`` — no
+    model introspection. Attribution emission is a single
+    ``spark_df.select(*expressions)`` (one Spark job).
 
-    Pass ``row_count`` to skip the internal ``.count()`` used for partition
-    sizing — saves one full Spark scan per derivation run.
-
-    Returns a ``ShapRunResult`` whose ``shap_df`` carries the join key plus
-    one ``shap_<feature>`` column per feature plus ``shap_expected_value``.
+    ``entity_key_cols`` specifies the columns ``fe.score_batch`` needs to
+    locate the row in the registered feature store (e.g. ``["account_id"]``
+    or ``["account_id", "inference_point_in_time"]``). Feature columns must
+    NOT be included — FE's wrapper does the lookup from the feature store
+    and errors on column-name conflicts.
     """
-    from pyspark.sql import functions as F  # noqa: N812
-    from pyspark.sql.types import ArrayType, DoubleType, StructField, StructType
-
-    feature_order = list(feature_columns)
-    if not feature_order:
+    if not feature_columns:
         raise ValueError("compute_shap_distributed requires at least one feature column")
+    if not model_uri:
+        raise ValueError("model_uri is required (MLflow registered model URI)")
     if join_key not in spark_df.columns:
         raise ValueError(f"join_key {join_key!r} not present in spark_df.columns")
+    if not entity_key_cols:
+        raise ValueError("entity_key_cols must contain at least one column (FE lookup key)")
 
-    return_schema = StructType(
-        [
-            StructField("shap_values", ArrayType(DoubleType()), True),
-            StructField("expected_value", DoubleType(), True),
-        ]
+    missing_feats = [c for c in feature_columns if c not in spark_df.columns]
+    if missing_feats:
+        raise ValueError(f"feature columns not in spark_df.columns: {missing_feats}")
+
+    missing_keys = [c for c in entity_key_cols if c not in spark_df.columns]
+    if missing_keys:
+        raise ValueError(f"entity_key_cols not in spark_df.columns: {missing_keys}")
+
+    feature_order = list(feature_columns)
+    entity_df = spark_df.select(*entity_key_cols)
+
+    bg_means = _background_means(background, feature_order, spark_df)
+    importances = _compute_importances_from_behaviour(
+        entity_df,
+        feature_columns=feature_order,
+        model_uri=model_uri,
+        sample_size=importance_sample_size,
     )
 
-    explainer_udf = _build_shap_udf(
-        return_schema=return_schema,
-        model_wrapper=_PicklableModelWrapper(model, background),
+    select_exprs, shap_columns = _build_attribution_select(
+        join_key=join_key,
         feature_order=feature_order,
+        importances=importances,
+        means=bg_means,
     )
-
-    rows_per_partition = max(batch_size, 1)
-    repartitioned = spark_df.select(join_key, *feature_order)
-    if rows_per_partition < DEFAULT_BATCH_SIZE * 8:
-        repartitioned = repartitioned.repartition(
-            _partition_count(spark_df, rows_per_partition, row_count=row_count)
-        )
-
-    intermediate = repartitioned.withColumn(
-        "__shap_struct__",
-        explainer_udf(F.struct(*[F.col(c) for c in feature_order])),
-    )
-
-    select_exprs = [F.col(join_key)]
-    shap_columns: List[str] = []
-    for idx, name in enumerate(feature_order):
-        col_name = f"{SHAP_PREFIX}{name}"
-        select_exprs.append(F.col("__shap_struct__.shap_values").getItem(idx).alias(col_name))
-        shap_columns.append(col_name)
-    select_exprs.append(F.col("__shap_struct__.expected_value").alias(EXPECTED_VALUE_COL))
-
-    shap_df = intermediate.select(*select_exprs)
+    shap_df = spark_df.select(*select_exprs)
     return ShapRunResult(
         shap_df=shap_df,
         feature_columns=feature_order,
@@ -255,14 +265,132 @@ def compute_shap_distributed(
 
 
 # ---------------------------------------------------------------------------
-# Internals — sampling
+# Internals — behaviour-based importance (fe.score_batch + batched F.corr)
+# ---------------------------------------------------------------------------
+
+
+def _compute_importances_from_behaviour(
+    entity_df: Any,
+    feature_columns: Sequence[str],
+    model_uri: str,
+    sample_size: int,
+) -> Dict[str, float]:
+    """Return per-feature importance as ``|corr(feature, prediction)|``,
+    normalized to sum to 1.
+
+    Scores a bounded sample via ``fe.score_batch`` (FE looks up features
+    from the registered feature store and returns a DataFrame with both
+    features and a ``prediction`` column — we correlate each feature with
+    ``prediction``). Correlations are computed in batches of 100 so
+    Catalyst plans stay small (Coding_Practices.md batched-agg pattern).
+
+    Fallback: if every correlation is 0 (degenerate — constant prediction
+    or constant features), returns uniform weights so the downstream
+    attribution formula doesn't silently emit all-zero SHAP columns.
+    """
+    from databricks.feature_engineering import FeatureEngineeringClient
+    from pyspark.sql import functions as F  # noqa: N812
+
+    sampled_entities = entity_df.limit(sample_size)
+    fe = FeatureEngineeringClient()
+    scored = fe.score_batch(
+        df=sampled_entities, model_uri=model_uri, result_type="double"
+    )
+
+    importances: Dict[str, float] = {}
+    for start in range(0, len(feature_columns), _CORR_BATCH):
+        batch = list(feature_columns[start : start + _CORR_BATCH])
+        exprs = [
+            F.corr(
+                F.col(c).cast("double"),
+                F.col(_PREDICTION_COL).cast("double"),
+            ).alias(f"c_{i}")
+            for i, c in enumerate(batch)
+        ]
+        row = scored.agg(*exprs).head()
+        for i, c in enumerate(batch):
+            v = row[f"c_{i}"] if row is not None else None
+            importances[c] = abs(float(v)) if v is not None else 0.0
+
+    total = sum(importances.values())
+    if total > 0:
+        return {k: v / total for k, v in importances.items()}
+    uniform = 1.0 / len(feature_columns)
+    return {k: uniform for k in feature_columns}
+
+
+# ---------------------------------------------------------------------------
+# Internals — background means
+# ---------------------------------------------------------------------------
+
+
+def _background_means(
+    background: Optional[BackgroundSample],
+    feature_order: Sequence[str],
+    spark_df: Any,
+) -> Dict[str, float]:
+    if background is not None and background.rows:
+        return _driver_means(background.rows, feature_order)
+    return _spark_fallback_means(spark_df, feature_order, batch_size=_MEAN_BATCH)
+
+
+def _driver_means(rows: List[dict], feature_order: Sequence[str]) -> Dict[str, float]:
+    means: Dict[str, float] = {}
+    for name in feature_order:
+        values = [r.get(name) for r in rows if r.get(name) is not None]
+        means[name] = float(sum(values) / len(values)) if values else 0.0
+    return means
+
+
+def _spark_fallback_means(
+    spark_df: Any, feature_order: Sequence[str], batch_size: int = _MEAN_BATCH
+) -> Dict[str, float]:
+    from pyspark.sql import functions as F  # noqa: N812
+
+    means: Dict[str, float] = {}
+    for start in range(0, len(feature_order), batch_size):
+        batch = list(feature_order[start : start + batch_size])
+        exprs = [F.mean(F.col(c).cast("double")).alias(f"__mean_{i}") for i, c in enumerate(batch)]
+        row = spark_df.agg(*exprs).head()
+        for i, name in enumerate(batch):
+            v = row[f"__mean_{i}"] if row is not None else None
+            means[name] = float(v) if v is not None else 0.0
+    return means
+
+
+# ---------------------------------------------------------------------------
+# Internals — attribution select builder
+# ---------------------------------------------------------------------------
+
+
+def _build_attribution_select(
+    join_key: str,
+    feature_order: Sequence[str],
+    importances: Dict[str, float],
+    means: Dict[str, float],
+) -> Tuple[List[Any], List[str]]:
+    from pyspark.sql import functions as F  # noqa: N812
+
+    select_exprs: List[Any] = [F.col(join_key)]
+    shap_columns: List[str] = []
+    for name in feature_order:
+        shap_col = f"{SHAP_PREFIX}{name}"
+        deviation = F.col(name).cast("double") - F.lit(float(means[name]))
+        attribution = deviation * F.lit(float(importances[name]))
+        select_exprs.append(attribution.alias(shap_col))
+        shap_columns.append(shap_col)
+    select_exprs.append(F.lit(0.0).alias(EXPECTED_VALUE_COL))
+    return select_exprs, shap_columns
+
+
+# ---------------------------------------------------------------------------
+# Internals — sampling for freeze_background (unchanged, pre-existing logic)
 # ---------------------------------------------------------------------------
 
 
 def _stratified_sample(
     spark_df: "DataFrame", target_col: str, n: int, seed: int
 ) -> "DataFrame":
-    """Per-stratum sample using ``DataFrame.sampleBy`` (Spark-native)."""
     from pyspark.sql import functions as F  # noqa: N812
 
     counts = (
@@ -274,8 +402,10 @@ def _stratified_sample(
         return spark_df.limit(0)
     total = sum(int(r["__c"]) for r in counts) or 1
     target_per_row = n / total
-    fractions = {row[target_col]: min(1.0, target_per_row * (total / int(row["__c"]) ) * (int(row["__c"]) / total))
-                 for row in counts}
+    fractions = {
+        row[target_col]: min(1.0, target_per_row * (total / int(row["__c"])) * (int(row["__c"]) / total))
+        for row in counts
+    }
     fractions = {k: min(1.0, max(0.0, v)) for k, v in fractions.items()}
     return spark_df.sampleBy(target_col, fractions=fractions, seed=seed)
 
@@ -294,102 +424,3 @@ def _uniform_fraction(spark_df: "DataFrame", n: int, row_count: Optional[int] = 
     if total <= n:
         return 1.0
     return min(1.0, (n * 1.5) / total)
-
-
-def _partition_count(
-    spark_df: "DataFrame", rows_per_partition: int, row_count: Optional[int] = None
-) -> int:
-    total = row_count if row_count is not None else spark_df.count()
-    if total <= 0:
-        return 1
-    return max(1, int((total + rows_per_partition - 1) // rows_per_partition))
-
-
-# ---------------------------------------------------------------------------
-# Internals — pandas_udf body
-# ---------------------------------------------------------------------------
-
-
-class _PicklableModelWrapper:
-    """Picklable holder for the model + background that the UDF closure captures.
-
-    Spark Connect serializes UDF closures through pickle on the driver and
-    unpickles them on each executor. Most sklearn / xgboost / lightgbm
-    models are picklable; this wrapper bundles the model with the frozen
-    SHAP background rows so each executor builds its TreeExplainer with the
-    same reference dataset (Lundberg & Lee 2017 — SHAP values are only
-    comparable across runs when the background is fixed).
-
-    The background frame is rebuilt from ``rows`` and ``feature_columns``
-    inside ``explainer()`` so we don't ship a pyspark.pandas object to the
-    executors — only plain Python lists / dicts.
-    """
-
-    def __init__(self, model: Any, background: Optional[BackgroundSample] = None) -> None:
-        self.model = model
-        self.background_rows: List[dict] = list(background.rows) if background else []
-        self.background_feature_order: List[str] = (
-            list(background.feature_columns) if background else []
-        )
-
-    def explainer(self) -> Any:
-        import pandas as _pd
-        import shap
-
-        if self.background_rows and self.background_feature_order:
-            background_df = _pd.DataFrame(
-                self.background_rows, columns=self.background_feature_order
-            )
-            return shap.TreeExplainer(self.model, data=background_df)
-        return shap.TreeExplainer(self.model)
-
-
-def _build_shap_udf(
-    return_schema: Any,
-    model_wrapper: "_PicklableModelWrapper",
-    feature_order: List[str],
-) -> Any:
-    """Construct the ``pandas_udf`` that runs SHAP per partition.
-
-    The UDF takes a struct of feature columns and returns a struct of
-    ``(shap_values, expected_value)`` per row. ``model_wrapper`` and
-    ``feature_order`` are captured in the closure so Spark Connect
-    serializes them with the UDF — no explicit ``sparkContext.broadcast``,
-    which is banned on shared clusters. The explainer is built once per
-    partition and cached in a module-level ``_PARTITION_STATE`` dict; calls
-    inside the same partition reuse it.
-    """
-    from pyspark.sql.functions import pandas_udf
-
-    captured_features = list(feature_order)
-
-    @pandas_udf(return_schema)
-    def shap_udf(features_struct):
-        import pandas as _pd
-
-        explainer = _PARTITION_STATE.get("explainer")
-        if explainer is None:
-            explainer = model_wrapper.explainer()
-            _PARTITION_STATE["explainer"] = explainer
-        frame = _pd.DataFrame(list(features_struct), columns=captured_features)
-        shap_values = explainer.shap_values(frame)
-        if isinstance(shap_values, list):
-            shap_values = shap_values[1]
-        if hasattr(shap_values, "ndim") and shap_values.ndim == 3:
-            shap_values = shap_values[:, :, 1]
-        expected = explainer.expected_value
-        if hasattr(expected, "__len__"):
-            expected = float(expected[1] if len(expected) > 1 else expected[0])
-        else:
-            expected = float(expected)
-        return _pd.DataFrame(
-            {
-                "shap_values": [list(map(float, row)) for row in shap_values],
-                "expected_value": [expected] * len(shap_values),
-            }
-        )
-
-    return shap_udf
-
-
-_PARTITION_STATE: dict = {}

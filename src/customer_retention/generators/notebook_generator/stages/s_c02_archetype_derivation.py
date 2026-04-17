@@ -61,7 +61,6 @@ _DERIVE_ARCHETYPES_CELL = '''from customer_retention.stages.causal import (
     DerivationConfig,
     build_llm_namer,
     derive_archetypes_and_policies,
-    unwrap_tree_model,
 )
 from customer_retention.stages.causal.playbook_loader import load_playbooks_from_dir
 
@@ -85,8 +84,6 @@ elif not FORCE_DERIVATION and _model_version_already_derived(
 ):
     print(f"SKIPPED: active archetypes already exist for {MODEL_NAME} v{MODEL_VERSION}")
 else:
-    import mlflow
-
     training_df = spark.table(GOLD_FEATURES_FQN)
     feature_columns = [
         c for c in training_df.columns
@@ -94,6 +91,9 @@ else:
                      "inference_point_in_time", "model_uri")
     ]
     join_key = "account_id" if "account_id" in training_df.columns else "entity_id"
+    entity_key_cols = [join_key]
+    if "inference_point_in_time" in training_df.columns:
+        entity_key_cols.append("inference_point_in_time")
     catalog_rows, _ = load_playbooks_from_dir(PLAYBOOKS_DIR)
     llm_namer = build_llm_namer(LLM_ENDPOINT_NAME)
     print(f"LLM namer: {llm_namer.model_id}")
@@ -103,8 +103,9 @@ else:
         training_df=training_df,
         raw_feature_df=training_df,
         feature_columns=feature_columns,
-        model=unwrap_tree_model(mlflow.pyfunc.load_model(MODEL_URI)),
+        model_uri=MODEL_URI,
         target_column="target",
+        entity_key_cols=entity_key_cols,
         join_key=join_key,
         archetype_catalog_fqn=ARCHETYPE_CATALOG_FQN,
         eligibility_policy_fqn=ELIGIBILITY_POLICY_FQN,
