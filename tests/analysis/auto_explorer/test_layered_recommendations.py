@@ -1759,3 +1759,143 @@ class TestFeatureSelectionConfig:
         reg.save(path)
         loaded = RecommendationRegistry.load(path)
         assert isinstance(loaded.gold.feature_selection_config, FeatureSelectionConfig)
+
+
+class TestLandingRecommendations:
+    def test_init_landing_creates_empty_block(self):
+        reg = RecommendationRegistry()
+        assert reg.landing is None
+        reg.init_landing()
+        assert reg.landing is not None
+        assert reg.landing.filters == []
+        assert reg.landing.lifecycle_enrichments == []
+
+    def test_add_landing_filter_auto_inits(self):
+        reg = RecommendationRegistry()
+        reg.add_landing_filter(
+            dataset="request",
+            predicate="ACCOUNT_ID IS NOT NULL AND CREATED_DATE IS NOT NULL",
+            rationale="34.2% of request rows have NULL ACCOUNT_ID",
+            source_notebook="NB00 § 0.4.6",
+        )
+        assert len(reg.landing.filters) == 1
+        rec = reg.landing.filters[0]
+        assert rec.layer == "landing"
+        assert rec.category == "landing_filtering"
+        assert rec.action == "filter"
+        assert rec.target_column == "request"
+        assert rec.parameters["dataset"] == "request"
+        assert rec.parameters["predicate"] == "ACCOUNT_ID IS NOT NULL AND CREATED_DATE IS NOT NULL"
+
+    def test_landing_filter_id_does_not_collide_with_bronze_filter(self):
+        reg = RecommendationRegistry()
+        reg.init_bronze("requests.csv")
+        reg.add_bronze_filtering(
+            column="amount", condition="non_negative", action="drop",
+            rationale="neg values invalid", source_notebook="NB03",
+        )
+        reg.add_landing_filter(
+            dataset="request", predicate="amount >= 0",
+            rationale="parity with bronze", source_notebook="NB00",
+        )
+        landing_id = reg.landing.filters[0].id
+        bronze_id = reg.bronze.filtering[0].id
+        assert landing_id != bronze_id
+        assert landing_id.startswith("landing_landing_filtering")
+        assert bronze_id.startswith("bronze_filtering")
+
+    def test_add_landing_lifecycle_enrichment_serializes_config(self):
+        from customer_retention.stages.lifecycle.config import LifecycleEnrichmentConfig
+        cfg = LifecycleEnrichmentConfig(
+            enriched_view_name="subscription_events",
+            parent_entity_key="account_id",
+            sub_entity_key="subscription_id",
+            valid_from_column="start_date",
+            valid_to_columns=("end_date",),
+        )
+        reg = RecommendationRegistry()
+        reg.add_landing_lifecycle_enrichment(
+            dataset="subscription", config=cfg,
+            rationale="doubled stream", source_notebook="NB00",
+        )
+        rec = reg.landing.lifecycle_enrichments[0]
+        assert rec.category == "lifecycle_enrichment"
+        assert rec.action == "enrich"
+        assert rec.target_column == "subscription"
+        assert rec.parameters["dataset"] == "subscription"
+        assert rec.parameters["config"]["enriched_view_name"] == "subscription_events"
+        assert rec.parameters["config"]["valid_to_columns"] == ["end_date"]
+
+    def test_landing_in_all_recommendations(self):
+        reg = RecommendationRegistry()
+        reg.add_landing_filter(
+            dataset="request", predicate="x IS NOT NULL",
+            rationale="r", source_notebook="nb",
+        )
+        assert any(r.layer == "landing" for r in reg.all_recommendations)
+
+    def test_get_by_layer_landing(self):
+        reg = RecommendationRegistry()
+        reg.add_landing_filter(
+            dataset="request", predicate="x > 0",
+            rationale="r", source_notebook="nb",
+        )
+        recs = reg.get_by_layer("landing")
+        assert len(recs) == 1
+        assert recs[0].target_column == "request"
+
+    def test_landing_roundtrips_through_to_dict_from_dict(self):
+        reg = RecommendationRegistry()
+        reg.add_landing_filter(
+            dataset="request", predicate="ACCOUNT_ID IS NOT NULL",
+            rationale="r", source_notebook="NB00",
+        )
+        data = reg.to_dict()
+        assert "landing" in data
+        assert len(data["landing"]["filters"]) == 1
+        assert data["landing"]["filters"][0]["parameters"]["predicate"] == "ACCOUNT_ID IS NOT NULL"
+        restored = RecommendationRegistry.from_dict(data)
+        assert restored.landing is not None
+        assert len(restored.landing.filters) == 1
+        assert restored.landing.filters[0].parameters["predicate"] == "ACCOUNT_ID IS NOT NULL"
+
+    def test_landing_roundtrips_through_save_load(self, tmp_path):
+        reg = RecommendationRegistry()
+        reg.add_landing_filter(
+            dataset="account", predicate="STATUS = 'active'",
+            rationale="r", source_notebook="NB00",
+        )
+        path = tmp_path / "recs.yaml"
+        reg.save(path)
+        loaded = RecommendationRegistry.load(path)
+        assert loaded.landing is not None
+        assert loaded.landing.filters[0].target_column == "account"
+
+    def test_from_dict_tolerates_missing_landing_key(self):
+        data = {
+            "bronze": {
+                "source_file": "x.csv",
+                "null_handling": [],
+                "outlier_handling": [],
+                "type_conversions": [],
+                "deduplication": [],
+                "filtering": [],
+                "text_processing": [],
+                "modeling_strategy": [],
+            },
+        }
+        restored = RecommendationRegistry.from_dict(data)
+        assert restored.landing is None
+
+    def test_merge_preserves_landing_from_primary(self):
+        primary = RecommendationRegistry()
+        primary.init_gold("target")
+        primary.add_landing_filter(
+            dataset="request", predicate="x IS NOT NULL",
+            rationale="r", source_notebook="nb",
+        )
+        secondary = RecommendationRegistry()
+        merged = RecommendationRegistry.merge([secondary, primary])
+        assert merged.landing is not None
+        assert len(merged.landing.filters) == 1
+        assert merged.landing.filters[0].target_column == "request"
