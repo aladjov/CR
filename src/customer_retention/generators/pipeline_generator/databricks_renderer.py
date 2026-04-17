@@ -566,6 +566,8 @@ from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 from pyspark.sql.types import NumericType
 
+from customer_retention.core.naming import sanitize_column_token
+
 # COMMAND ----------
 
 # MAGIC %run ../config
@@ -753,7 +755,7 @@ def apply_event_aggregation_per_grid_date(df):
             cum_at_G = _spark_cumulative_at(spine, running, "as_of_date")
 
             for window_str in AGGREGATION_WINDOWS:
-                col_name = f"{vc_col}_{value}_count_{window_str}"
+                col_name = f"{vc_col}_{sanitize_column_token(value)}_count_{window_str}"
                 if window_str == "all_time":
                     contribution = cum_at_G.withColumnRenamed("_cum", col_name)
                 else:
@@ -857,7 +859,7 @@ def apply_event_aggregation(df):
         for _cvc_value in _cvc_values:
             agg_exprs.append(
                 F.sum(F.when(F.col(_cvc_col) == _cvc_value, 1).otherwise(0))
-                 .alias(f"{_cvc_col}_{_cvc_value}_count_{{ window }}")
+                 .alias(f"{_cvc_col}_{sanitize_column_token(_cvc_value)}_count_{{ window }}")
             )
     window_agg = window_df.groupBy(ENTITY_COLUMN).agg(*agg_exprs)
     results.append(window_agg)
@@ -1458,6 +1460,8 @@ dbutils.notebook.exit(_summary)
 
 from pyspark.sql import functions as F
 
+from customer_retention.core.naming import sanitize_column_token
+
 # COMMAND ----------
 
 # MAGIC %run ../config
@@ -1477,7 +1481,7 @@ def _encode_one_hot(df, col, max_categories=100):
         print(f"WARNING: column '{col}' has {len(categories)} categories (>{max_categories}), using label encoding instead")
         return _label_encode(df, col)
     for cat in sorted(categories):
-        safe_name = f"{col}_{cat}".replace(" ", "_").replace("-", "_")
+        safe_name = f"{col}_{sanitize_column_token(cat)}"
         df = df.withColumn(safe_name, F.when(F.col(col) == cat, 1).otherwise(0))
     df = df.drop(col)
     return df

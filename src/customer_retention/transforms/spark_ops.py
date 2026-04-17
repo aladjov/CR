@@ -10,6 +10,8 @@ from __future__ import annotations
 from pyspark.sql import DataFrame as SparkDataFrame
 from pyspark.sql import functions as F  # noqa: N812
 
+from customer_retention.core.naming import sanitize_column_token
+
 
 def spark_impute_null(df: SparkDataFrame, column: str, *, value=0) -> SparkDataFrame:
     if column not in df.columns:
@@ -92,7 +94,7 @@ def spark_one_hot_encode(df: SparkDataFrame, column: str) -> SparkDataFrame:
         return df
     categories = [row[column] for row in df.select(column).distinct().collect() if row[column] is not None]
     for cat in sorted(str(c) for c in categories):
-        safe_name = f"{column}_{cat}".replace(" ", "_").replace("-", "_")
+        safe_name = f"{column}_{sanitize_column_token(cat)}"
         df = df.withColumn(safe_name, F.when(F.col(column) == cat, 1).otherwise(0))
     return df.drop(column)
 

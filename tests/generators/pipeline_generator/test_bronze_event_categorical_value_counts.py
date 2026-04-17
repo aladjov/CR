@@ -226,6 +226,101 @@ class TestDatabricksRenderer:
         assert "CATEGORICAL_VALUE_COUNTS" in rendered
 
 
+class TestDeltaUnsafeValues:
+    """Guards the Delta-forbidden charset ' ,;{}()\\n\\t=' plus dots/parens
+    that appear in real categorical values (e.g. REP_RANKING_SUPPLIER_SALES).
+
+    Root cause: f\"{col}_{value}_count_{window}\" pasted raw user values
+    into column aliases, and Delta rejected the write. Fix: both renderers
+    pass ``value`` through ``sanitize_column_token`` at alias time while
+    keeping the raw value for the predicate comparison.
+    """
+
+    _DIRTY = "2 = Current Customers (reference, upsell, etc.)"
+    _CLEAN = "2_Current_Customers_reference_upsell_etc"
+
+    def test_local_snapshot_produces_delta_safe_alias(self):
+        renderer = CodeRenderer()
+        cfg = _make_event_config(
+            categorical_value_counts={"REP_RANKING_SUPPLIER_SALES": [self._DIRTY]},
+            windows=["all_time"],
+        )
+        rendered = renderer.render_bronze_event("contract", cfg, _make_pipeline_config(cfg))
+        ns = _exec_rendered(rendered, {})
+
+        df = pd.DataFrame({
+            "ACCOUNT_ID": ["A", "A", "B"],
+            "event_timestamp": pd.to_datetime(["2024-02-15", "2024-03-01", "2024-03-05"]),
+            "REP_RANKING_SUPPLIER_SALES": [self._DIRTY, self._DIRTY, "other"],
+        })
+        result = ns["apply_event_aggregation"](df.copy())
+
+        expected = f"REP_RANKING_SUPPLIER_SALES_{self._CLEAN}_count_all_time"
+        assert expected in result.columns, (
+            f"expected Delta-safe alias {expected!r}; got {list(result.columns)!r}"
+        )
+        # The raw-value predicate must still match — A has 2 dirty rows.
+        idx = result.set_index("ACCOUNT_ID")
+        assert idx.loc["A", expected] == 2
+        assert idx.loc["B", expected] == 0
+
+        # No emitted column may contain any Delta-forbidden char.
+        for col in result.columns:
+            for bad in " ,;{}()\n\t=.":
+                assert bad not in col, f"column {col!r} contains forbidden char {bad!r}"
+
+    def test_databricks_snapshot_emits_safe_alias_in_source(self):
+        renderer = DatabricksCodeRenderer(catalog="main", schema="default")
+        cfg = _make_event_config(
+            categorical_value_counts={"REP_RANKING_SUPPLIER_SALES": [self._DIRTY]},
+            windows=["all_time"],
+        )
+        rendered = renderer.render_bronze_event("contract", cfg, _make_pipeline_config(cfg))
+        ast.parse(rendered)
+
+        # The raw value must still appear (it drives F.when(col==value, ...))
+        assert self._DIRTY in rendered
+        # The template must route the value through sanitize_column_token for the alias
+        assert "sanitize_column_token" in rendered
+        # And the generated code must not spell the dirty token directly in an alias
+        assert f".alias(f\"REP_RANKING_SUPPLIER_SALES_{self._DIRTY}_count_" not in rendered
+
+    def test_local_renderer_imports_sanitizer(self):
+        renderer = CodeRenderer()
+        cfg = _make_event_config(
+            categorical_value_counts={"x": ["a"]},
+        )
+        rendered = renderer.render_bronze_event("contract", cfg, _make_pipeline_config(cfg))
+        assert "from customer_retention.core.naming import sanitize_column_token" in rendered
+
+    def test_databricks_renderer_imports_sanitizer(self):
+        renderer = DatabricksCodeRenderer(catalog="main", schema="default")
+        cfg = _make_event_config(
+            categorical_value_counts={"x": ["a"]},
+        )
+        rendered = renderer.render_bronze_event("contract", cfg, _make_pipeline_config(cfg))
+        assert "from customer_retention.core.naming import sanitize_column_token" in rendered
+
+    def test_value_with_equals_and_parens_round_trips(self):
+        renderer = CodeRenderer()
+        cfg = _make_event_config(
+            categorical_value_counts={"tier": ["A (new)", "B = mid", "C, VIP"]},
+            windows=["all_time"],
+        )
+        rendered = renderer.render_bronze_event("contract", cfg, _make_pipeline_config(cfg))
+        ns = _exec_rendered(rendered, {})
+
+        df = pd.DataFrame({
+            "ACCOUNT_ID": ["A", "B", "C"],
+            "event_timestamp": pd.to_datetime(["2024-02-15", "2024-03-01", "2024-03-05"]),
+            "tier": ["A (new)", "B = mid", "C, VIP"],
+        })
+        result = ns["apply_event_aggregation"](df.copy())
+
+        for expected in ("tier_A_new_count_all_time", "tier_B_mid_count_all_time", "tier_C_VIP_count_all_time"):
+            assert expected in result.columns, f"missing {expected!r} in {list(result.columns)!r}"
+
+
 class TestParity:
     def test_both_renderers_declare_same_constant(self):
         cfg_local = _make_event_config(

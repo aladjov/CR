@@ -2164,6 +2164,7 @@ from pathlib import Path
 from customer_retention.transforms import {{ ops | sort | join(', ') }}
 {% endif %}
 from customer_retention.core.compat import ensure_timestamp, safe_to_datetime, as_tz_naive
+from customer_retention.core.naming import sanitize_column_token
 from pandas.api.types import is_numeric_dtype
 {% if config.text_features %}
 from config import PRODUCTION_DIR, TARGET_COLUMN, FIT_MODE
@@ -2303,7 +2304,7 @@ def apply_event_aggregation_per_grid_date(df: pd.DataFrame) -> pd.DataFrame:
             cum_at_G["_cum_G"] = cum_at_G["_cum_G"].fillna(0)
 
             for window_str in AGGREGATION_WINDOWS:
-                col_name = f"{vc_col}_{value}_count_{window_str}"
+                col_name = f"{vc_col}_{sanitize_column_token(value)}_count_{window_str}"
                 if window_str == "all_time":
                     merged = cum_at_G.rename(columns={"_cum_G": col_name})
                 else:
@@ -2381,7 +2382,7 @@ def apply_event_aggregation(df: pd.DataFrame) -> pd.DataFrame:
         for _cvc_col, _cvc_values in CATEGORICAL_VALUE_COUNTS.items():
             for _cvc_value in _cvc_values:
                 _cvc_flag = (window_df[_cvc_col] == _cvc_value).astype(int)
-                parts.append(_cvc_flag.groupby(window_df[ENTITY_COLUMN]).sum().rename(f"{_cvc_col}_{_cvc_value}_count_{window}"))
+                parts.append(_cvc_flag.groupby(window_df[ENTITY_COLUMN]).sum().rename(f"{_cvc_col}_{sanitize_column_token(_cvc_value)}_count_{window}"))
         parts.append(window_df.groupby(ENTITY_COLUMN).size().rename(f"event_count_{window}"))
     if "feature_timestamp" in df.columns:
         parts.append(df.groupby(ENTITY_COLUMN)["feature_timestamp"].max().rename("feature_timestamp"))

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
@@ -20,6 +21,21 @@ _LAYER_SCRIPT_TEMPLATES = {
 }
 
 _PREFIX_CHAR_LIMIT = 4
+
+_COLUMN_TOKEN_BAD_CHARS = re.compile(r"[^\w]+", re.UNICODE)
+
+
+def sanitize_column_token(value: object) -> str:
+    """Collapse a categorical value into a Delta-safe column-name token.
+
+    Delta rejects ' ,;{}()\\n\\t=' in column names. Dots, slashes, quotes and
+    hyphens are additionally problematic in Spark SQL without backticks. Any
+    run of such chars collapses to a single '_'; leading/trailing '_' are
+    stripped; empty input returns '_' so the token is never empty.
+    """
+    text = str(value)
+    cleaned = _COLUMN_TOKEN_BAD_CHARS.sub("_", text).strip("_")
+    return cleaned or "_"
 
 
 def composite_name(sources: list[str]) -> str:
