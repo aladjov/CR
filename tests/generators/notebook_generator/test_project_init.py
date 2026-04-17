@@ -163,6 +163,40 @@ class TestExplorationNotebookCopyEdgeCases:
         assert copied == []
         init._get_exploration_source_dir = original_get
 
+    def test_resolver_falls_back_to_sysconfig_data_root(self, tmp_path, monkeypatch):
+        """When dev tree and RECORD both miss, sysconfig's ``data`` path must win.
+
+        Regression: pre-fix the resolver only checked ``sys.prefix``. On Databricks
+        ephemeral envs / ``--user`` installs, hatch shared-data lands in
+        ``sysconfig.get_path('data')`` which can differ from ``sys.prefix``.
+        """
+        import sysconfig
+
+        from customer_retention.generators.notebook_generator import project_init
+
+        # Move ``__file__`` somewhere that has no ``causal_notebooks/`` sibling,
+        # forcing dev-mode step 1 to miss.
+        fake_pkg = tmp_path / "isolated_pkg" / "generators" / "notebook_generator"
+        fake_pkg.mkdir(parents=True)
+        (fake_pkg / "project_init.py").touch()
+        monkeypatch.setattr(project_init, "__file__", str(fake_pkg / "project_init.py"))
+
+        # Seed the shared-data dir at a sysconfig-reported ``data`` root that is
+        # NOT ``sys.prefix`` — this is the exact scenario the old resolver missed.
+        data_root = tmp_path / "ephemeral_env"
+        target = data_root / "share" / "churnkit" / "causal_notebooks"
+        target.mkdir(parents=True)
+        (target / "c01_publish_definitions.ipynb").touch()
+        monkeypatch.setattr(
+            project_init.sysconfig,
+            "get_path",
+            lambda name: str(data_root) if name == "data" else sysconfig.get_path(name),
+        )
+        monkeypatch.setattr(project_init.sysconfig, "get_scheme_names", lambda: ())
+
+        init = project_init.ProjectInitializer(project_name="test")
+        assert init._get_causal_source_dir() == target
+
 
 class TestExplorationNotebooksPathParameter:
     def test_default_path_is_exploration_notebooks(self, tmp_path):

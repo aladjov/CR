@@ -1071,6 +1071,46 @@ class TestFrameworkRepoPathIntegration:
         assert repo_path in sys_cells[0].source
 
 
+    def test_causal_sync_injects_system_cell_on_new_copy(
+        self, monkeypatch, databricks_env, tmp_path,
+    ):
+        """Causal notebooks (c01-c04) must get the ``framework_path`` cell on
+        first copy, identically to exploration notebooks. Regression: user
+        reported c02 running without the ``sys.path.insert`` preamble."""
+        repo_nb = _make_test_notebook([("c1", "code", "# @cr:code\nrun()")])
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        _write_notebook(source_dir / "c02_archetype_derivation.ipynb", repo_nb)
+
+        dest_dir = tmp_path / "dest"
+        dest_dir.mkdir(parents=True)
+
+        mock_cls = MagicMock()
+        mock_cls.return_value._get_causal_source_dir.return_value = source_dir
+
+        import customer_retention.integrations.databricks_init as mod
+
+        real_path = mod.Path
+
+        def redirect_path(p):
+            if "/Workspace/" in str(p):
+                return dest_dir
+            return real_path(p)
+
+        monkeypatch.setattr(mod, "Path", redirect_path)
+        with patch(
+            "customer_retention.generators.notebook_generator.project_init.ProjectInitializer",
+            mock_cls,
+        ):
+            copied, synced = mod._sync_causal_notebooks(
+                "Users/me/project", framework_repo_path="/Workspace/Repos/me/churnkit",
+            )
+
+        assert len(copied) == 1
+        result_nb = _read_notebook(dest_dir / "c02_archetype_derivation.ipynb")
+        assert result_nb.cells[0].source.startswith("# @cr:code_system")
+        assert "/Workspace/Repos/me/churnkit" in result_nb.cells[0].source
+
     def test_sync_removes_system_cell_when_repo_path_none(self, monkeypatch, databricks_env, tmp_path):
         repo_nb = _make_test_notebook([("c1", "code", "# @cr:code\nnew_code()")])
         user_nb = _make_test_notebook([

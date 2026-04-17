@@ -287,7 +287,31 @@ def _sync_notebook_directory(
     *,
     framework_repo_path: str | None,
 ) -> tuple[list[str], list[str]]:
-    if not source_dir or not source_dir.exists():
+    if source_dir is None:
+        warnings.warn(
+            f"churnkit: cannot sync '{workspace_subpath}' — source directory could not "
+            "be located. The framework looked in the dev source tree, the distribution "
+            "RECORD, and every sysconfig data path; none contained the notebooks. "
+            "This typically means churnkit was installed without its shared-data (e.g. "
+            "old wheel, or an installer that stripped data files).",
+            stacklevel=2,
+        )
+        return [], []
+    if not source_dir.exists():
+        warnings.warn(
+            f"churnkit: resolved source directory for '{workspace_subpath}' does not "
+            f"exist: {source_dir}",
+            stacklevel=2,
+        )
+        return [], []
+
+    notebooks = sorted(source_dir.glob("*.ipynb"))
+    if not notebooks:
+        warnings.warn(
+            f"churnkit: source directory {source_dir} contains no .ipynb files — "
+            f"nothing to sync to /Workspace/{workspace_path}/{workspace_subpath}",
+            stacklevel=2,
+        )
         return [], []
 
     dest_dir = Path(f"/Workspace/{workspace_path}/{workspace_subpath}")
@@ -295,7 +319,7 @@ def _sync_notebook_directory(
 
     copied: list[str] = []
     synced: list[str] = []
-    for notebook in source_dir.glob("*.ipynb"):
+    for notebook in notebooks:
         dest_path = dest_dir / notebook.name
         if not dest_path.exists():
             shutil.copy2(notebook, dest_path)
