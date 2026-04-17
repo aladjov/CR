@@ -171,8 +171,6 @@ def derive_archetypes_and_policies(config: DerivationConfig) -> DerivationResult
         model=config.model,
         background=background,
         join_key=config.join_key,
-        batch_size=config.batch_size,
-        row_count=cohort_size,
     )
     if shap_result.shap_df is None:
         raise RuntimeError("compute_shap_distributed returned an empty result")
