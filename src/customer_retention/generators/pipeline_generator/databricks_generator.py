@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from customer_retention.core.config.experiments import get_framework_repo_path
 
 from .databricks_renderer import DatabricksCodeRenderer
 from .findings_parser import FindingsParser
 from .protocols import PipelineGeneratorBase
+
+if TYPE_CHECKING:
+    from customer_retention.runtime.harvest import HarvestResult
 
 
 class DatabricksPipelineGenerator(PipelineGeneratorBase):
@@ -24,6 +27,7 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
         framework_repo_path: str | None = None,
         bronze_aggregation_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
         disable_user_extensions: Optional[bool] = None,
+        harvest_result: Optional["HarvestResult"] = None,
     ):
         self._findings_dir = Path(findings_dir)
         self._output_dir = Path(output_dir)
@@ -38,6 +42,7 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
             bronze_aggregation_overrides=bronze_aggregation_overrides,
             disable_user_extensions=disable_user_extensions,
         )
+        self._harvest_result = harvest_result
         self._renderer = DatabricksCodeRenderer(
             catalog=catalog, schema=schema,
             framework_repo_path=framework_repo_path or get_framework_repo_path(),
@@ -57,5 +62,8 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
             self._write_training(config),
             self._write_runner(config),
         ]
+        user_ext_path = self._write_user_extensions()
+        if user_ext_path is not None:
+            generated_files.append(user_ext_path)
         generated_files.append(self._write_generation_manifest(config, generated_files))
         return generated_files

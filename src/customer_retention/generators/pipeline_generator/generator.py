@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from customer_retention.core.naming import Manifest
 
@@ -7,6 +7,9 @@ from .findings_parser import FindingsParser
 from .models import PipelineConfig
 from .protocols import PipelineGeneratorBase
 from .renderer import CodeRenderer
+
+if TYPE_CHECKING:
+    from customer_retention.runtime.harvest import HarvestResult
 
 
 class PipelineGenerator(PipelineGeneratorBase):
@@ -21,6 +24,7 @@ class PipelineGenerator(PipelineGeneratorBase):
         intent=None,
         bronze_aggregation_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
         disable_user_extensions: Optional[bool] = None,
+        harvest_result: Optional["HarvestResult"] = None,
     ):
         self._findings_dir = Path(findings_dir)
         self._output_dir = Path(output_dir)
@@ -36,6 +40,7 @@ class PipelineGenerator(PipelineGeneratorBase):
             disable_user_extensions=disable_user_extensions,
         )
         self._renderer = CodeRenderer()
+        self._harvest_result = harvest_result
 
     def generate(self) -> List[Path]:
         config = self._build_config()
@@ -58,6 +63,9 @@ class PipelineGenerator(PipelineGeneratorBase):
         ]
         self._copy_holdout_ids()
         self._copy_feature_spec()
+        user_ext_path = self._write_user_extensions()
+        if user_ext_path is not None:
+            generated_files.append(user_ext_path)
         generated_files.append(self._write_generation_manifest(config, generated_files))
         return generated_files
 
