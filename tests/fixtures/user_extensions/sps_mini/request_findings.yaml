@@ -1,0 +1,44 @@
+source_path: /data/sps_mini/request.csv
+source_format: csv
+row_count: 5000
+column_count: 4
+columns:
+  REQUEST_ID:
+    name: REQUEST_ID
+    inferred_type: identifier
+    confidence: 0.95
+    evidence: []
+    quality_score: 100
+    cleaning_needed: false
+    cleaning_recommendations: []
+  ACCOUNT_ID:
+    name: ACCOUNT_ID
+    inferred_type: identifier
+    confidence: 0.95
+    evidence: []
+    quality_score: 100
+    cleaning_needed: false
+    cleaning_recommendations: []
+  amount:
+    name: amount
+    inferred_type: numeric_continuous
+    confidence: 0.9
+    evidence: []
+    quality_score: 90
+    cleaning_needed: true
+    cleaning_recommendations: ["cap_outlier:iqr"]
+  created_date:
+    name: created_date
+    inferred_type: datetime
+    confidence: 0.95
+    evidence: []
+    quality_score: 100
+    cleaning_needed: false
+    cleaning_recommendations: []
+identifier_columns: ["REQUEST_ID"]
+datetime_columns: ["created_date"]
+time_series_metadata:
+  granularity: event_level
+  entity_column: ACCOUNT_ID
+  time_column: created_date
+  aggregation_windows_used: ["7d", "30d", "90d"]

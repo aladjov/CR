@@ -22,6 +22,8 @@ class PipelineTransformationType(Enum):
     FEATURE_SELECT = "feature_select"
     DERIVED_COLUMN = "derived_column"
     FILTER = "filter"
+    LANDING_FILTER = "landing_filter"
+    LANDING_LIFECYCLE_ENRICHMENT = "landing_lifecycle_enrichment"
 
 
 @dataclass
@@ -260,6 +262,8 @@ class LandingLayerConfig:
     datetime_derivation: Optional[DatetimeDerivationConfig] = None
     history_window: Optional[HistoryWindowConfig] = None
     key_resolution_steps: List[KeyResolutionStepConfig] = field(default_factory=list)
+    filters: List[TransformationStep] = field(default_factory=list)
+    lifecycle_enrichments: List[TransformationStep] = field(default_factory=list)
 
 
 @dataclass

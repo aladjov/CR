@@ -648,6 +648,11 @@ class TestNumericFeatureFilter:
                 entity_key_cols=["account_id"],
             )
 
+    def test_no_pandas_udf_invoked(self, monkeypatch):
+        """Regression for the CONTEXT_ONLY_VALID_ON_DRIVER bug."""
+        mocks = _install_orchestration_mocks(monkeypatch)
+        pandas_udf_calls: list = []
+        mocks["F"].pandas_udf = lambda *a, **kw: pandas_udf_calls.append((a, kw))
 
 # ---------------------------------------------------------------------------
 # compute_shap_distributed — orchestration

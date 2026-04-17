@@ -1759,3 +1759,267 @@ class TestFeatureSelectionConfig:
         reg.save(path)
         loaded = RecommendationRegistry.load(path)
         assert isinstance(loaded.gold.feature_selection_config, FeatureSelectionConfig)
+
+
+class TestLandingRecommendations:
+    def test_init_landing_creates_empty_block(self):
+        reg = RecommendationRegistry()
+        assert reg.landing is None
+        reg.init_landing()
+        assert reg.landing is not None
+        assert reg.landing.filters == []
+        assert reg.landing.lifecycle_enrichments == []
+
+    def test_add_landing_filter_auto_inits(self):
+        reg = RecommendationRegistry()
+        reg.add_landing_filter(
+            dataset="request",
+            predicate="ACCOUNT_ID IS NOT NULL AND CREATED_DATE IS NOT NULL",
+            rationale="34.2% of request rows have NULL ACCOUNT_ID",
+            source_notebook="NB00 § 0.4.6",
+        )
+        assert len(reg.landing.filters) == 1
+        rec = reg.landing.filters[0]
+        assert rec.layer == "landing"
+        assert rec.category == "landing_filtering"
+        assert rec.action == "filter"
+        assert rec.target_column == "request"
+        assert rec.parameters["dataset"] == "request"
+        assert rec.parameters["predicate"] == "ACCOUNT_ID IS NOT NULL AND CREATED_DATE IS NOT NULL"
+
+    def test_landing_filter_id_does_not_collide_with_bronze_filter(self):
+        reg = RecommendationRegistry()
+        reg.init_bronze("requests.csv")
+        reg.add_bronze_filtering(
+            column="amount", condition="non_negative", action="drop",
+            rationale="neg values invalid", source_notebook="NB03",
+        )
+        reg.add_landing_filter(
+            dataset="request", predicate="amount >= 0",
+            rationale="parity with bronze", source_notebook="NB00",
+        )
+        landing_id = reg.landing.filters[0].id
+        bronze_id = reg.bronze.filtering[0].id
+        assert landing_id != bronze_id
+        assert landing_id.startswith("landing_landing_filtering")
+        assert bronze_id.startswith("bronze_filtering")
+
+    def test_add_landing_lifecycle_enrichment_serializes_config(self):
+        from customer_retention.stages.lifecycle.config import LifecycleEnrichmentConfig
+        cfg = LifecycleEnrichmentConfig(
+            enriched_view_name="subscription_events",
+            parent_entity_key="account_id",
+            sub_entity_key="subscription_id",
+            valid_from_column="start_date",
+            valid_to_columns=("end_date",),
+        )
+        reg = RecommendationRegistry()
+        reg.add_landing_lifecycle_enrichment(
+            dataset="subscription", config=cfg,
+            rationale="doubled stream", source_notebook="NB00",
+        )
+        rec = reg.landing.lifecycle_enrichments[0]
+        assert rec.category == "lifecycle_enrichment"
+        assert rec.action == "enrich"
+        assert rec.target_column == "subscription"
+        assert rec.parameters["dataset"] == "subscription"
+        assert rec.parameters["config"]["enriched_view_name"] == "subscription_events"
+        assert rec.parameters["config"]["valid_to_columns"] == ["end_date"]
+
+    def test_landing_in_all_recommendations(self):
+        reg = RecommendationRegistry()
+        reg.add_landing_filter(
+            dataset="request", predicate="x IS NOT NULL",
+            rationale="r", source_notebook="nb",
+        )
+        assert any(r.layer == "landing" for r in reg.all_recommendations)
+
+    def test_get_by_layer_landing(self):
+        reg = RecommendationRegistry()
+        reg.add_landing_filter(
+            dataset="request", predicate="x > 0",
+            rationale="r", source_notebook="nb",
+        )
+        recs = reg.get_by_layer("landing")
+        assert len(recs) == 1
+        assert recs[0].target_column == "request"
+
+    def test_landing_roundtrips_through_to_dict_from_dict(self):
+        reg = RecommendationRegistry()
+        reg.add_landing_filter(
+            dataset="request", predicate="ACCOUNT_ID IS NOT NULL",
+            rationale="r", source_notebook="NB00",
+        )
+        data = reg.to_dict()
+        assert "landing" in data
+        assert len(data["landing"]["filters"]) == 1
+        assert data["landing"]["filters"][0]["parameters"]["predicate"] == "ACCOUNT_ID IS NOT NULL"
+        restored = RecommendationRegistry.from_dict(data)
+        assert restored.landing is not None
+        assert len(restored.landing.filters) == 1
+        assert restored.landing.filters[0].parameters["predicate"] == "ACCOUNT_ID IS NOT NULL"
+
+    def test_landing_roundtrips_through_save_load(self, tmp_path):
+        reg = RecommendationRegistry()
+        reg.add_landing_filter(
+            dataset="account", predicate="STATUS = 'active'",
+            rationale="r", source_notebook="NB00",
+        )
+        path = tmp_path / "recs.yaml"
+        reg.save(path)
+        loaded = RecommendationRegistry.load(path)
+        assert loaded.landing is not None
+        assert loaded.landing.filters[0].target_column == "account"
+
+    def test_from_dict_tolerates_missing_landing_key(self):
+        data = {
+            "bronze": {
+                "source_file": "x.csv",
+                "null_handling": [],
+                "outlier_handling": [],
+                "type_conversions": [],
+                "deduplication": [],
+                "filtering": [],
+                "text_processing": [],
+                "modeling_strategy": [],
+            },
+        }
+        restored = RecommendationRegistry.from_dict(data)
+        assert restored.landing is None
+
+    def test_merge_preserves_landing_from_primary(self):
+        primary = RecommendationRegistry()
+        primary.init_gold("target")
+        primary.add_landing_filter(
+            dataset="request", predicate="x IS NOT NULL",
+            rationale="r", source_notebook="nb",
+        )
+        secondary = RecommendationRegistry()
+        merged = RecommendationRegistry.merge([secondary, primary])
+        assert merged.landing is not None
+        assert len(merged.landing.filters) == 1
+        assert merged.landing.filters[0].target_column == "request"
+
+    def test_lifecycle_enrichment_survives_full_yaml_save_load_roundtrip(self, tmp_path):
+        """Plan antipattern §12a.7: to_dict/from_dict passing is not enough —
+        exercise save(path) → load(path) with a real LifecycleEnrichmentConfig
+        so YAML-specific escapes (tuples, nested dicts, unicode) are in scope."""
+        from customer_retention.stages.lifecycle.config import LifecycleEnrichmentConfig
+
+        cfg = LifecycleEnrichmentConfig(
+            enriched_view_name="sps_enriched_contract",
+            parent_entity_key="ACCOUNT_ID",
+            sub_entity_key="CONTRACT_ID",
+            valid_from_column="CONTRACT_START_DATE",
+            valid_to_columns=("BILLING_TERMINATION_DATE",),
+            status_column="CONTRACT_STATUS",
+            terminal_status_values=("Cancelled",),
+            drop_columns=(
+                "BILLING_TERMINATION_DATE",
+                "CONTRACT_STATUS",
+                "TAKE_RATE",
+            ),
+            on_corrupt_row="skip",
+        )
+        reg = RecommendationRegistry()
+        reg.add_landing_lifecycle_enrichment(
+            dataset="contract",
+            config=cfg,
+            rationale="Double START/TERMINATE events — contract sanity B1-B4",
+            source_notebook="NB00 § 0.2.5",
+        )
+        path = tmp_path / "recs.yaml"
+        reg.save(path)
+        loaded = RecommendationRegistry.load(path)
+
+        assert loaded.landing is not None
+        assert len(loaded.landing.lifecycle_enrichments) == 1
+        enrichment = loaded.landing.lifecycle_enrichments[0]
+        serialized = enrichment.parameters["config"]
+        restored = LifecycleEnrichmentConfig.from_dict(serialized)
+        assert restored.enriched_view_name == cfg.enriched_view_name
+        assert tuple(restored.valid_to_columns) == cfg.valid_to_columns
+        assert tuple(restored.drop_columns) == cfg.drop_columns
+        assert restored.terminal_status_values == cfg.terminal_status_values
+
+    def test_predicate_with_single_quotes_survives_save_load(self, tmp_path):
+        """Antipattern §12a.7: YAML can misparse unescaped predicates. Include
+        the single-quote-heavy predicate that comes out of SPS overrides."""
+        reg = RecommendationRegistry()
+        reg.add_landing_filter(
+            dataset="case",
+            predicate="RECORD_TYPE_NAME = 'Cancellation Case' OR RECORD_TYPE_NAME <> 'Retention'",
+            rationale="anti-leakage filter",
+            source_notebook="NB00 § 0.2.6",
+        )
+        path = tmp_path / "recs.yaml"
+        reg.save(path)
+        loaded = RecommendationRegistry.load(path)
+        predicate = loaded.landing.filters[0].parameters["predicate"]
+        assert predicate == "RECORD_TYPE_NAME = 'Cancellation Case' OR RECORD_TYPE_NAME <> 'Retention'"
+
+
+class TestLandingKillSwitch:
+    """Phase 0a.4.1: CR_DISABLE_USER_EXTENSIONS equivalent via init kwarg.
+    When set, add_landing_* are no-ops (plus INFO log + discard list)."""
+
+    def test_disable_kwarg_blocks_landing_filter_from_registering(self, caplog):
+        import logging
+        reg = RecommendationRegistry(disable_user_extensions=True)
+        with caplog.at_level(logging.INFO, logger="customer_retention.analysis.auto_explorer.layered_recommendations"):
+            reg.add_landing_filter(
+                dataset="request", predicate="x IS NOT NULL",
+                rationale="r", source_notebook="nb",
+            )
+        assert reg.landing is None
+        assert len(reg._discarded_landing) == 1
+        assert any("landing filter" in rec.message for rec in caplog.records)
+
+    def test_disable_kwarg_blocks_lifecycle_enrichment(self):
+        from customer_retention.stages.lifecycle.config import LifecycleEnrichmentConfig
+        cfg = LifecycleEnrichmentConfig(
+            enriched_view_name="v", parent_entity_key="pk",
+            sub_entity_key="sk", valid_from_column="from",
+            valid_to_columns=("to",),
+        )
+        reg = RecommendationRegistry(disable_user_extensions=True)
+        reg.add_landing_lifecycle_enrichment(
+            dataset="subscription", config=cfg,
+            rationale="r", source_notebook="nb",
+        )
+        assert reg.landing is None
+        assert len(reg._discarded_landing) == 1
+
+    def test_flag_false_preserves_normal_registration(self):
+        reg = RecommendationRegistry(disable_user_extensions=False)
+        reg.add_landing_filter(
+            dataset="request", predicate="x > 0",
+            rationale="r", source_notebook="nb",
+        )
+        assert reg.landing is not None
+        assert len(reg.landing.filters) == 1
+        assert reg._discarded_landing == []
+
+    def test_flag_default_none_resolves_via_env(self, monkeypatch):
+        monkeypatch.setenv("CR_DISABLE_USER_EXTENSIONS", "1")
+        reg = RecommendationRegistry()
+        reg.add_landing_filter(
+            dataset="request", predicate="x > 0",
+            rationale="r", source_notebook="nb",
+        )
+        assert reg.landing is None
+        assert len(reg._discarded_landing) == 1
+
+    def test_yaml_roundtrip_through_disabled_registry_drops_landing(self, tmp_path):
+        """Saving a disabled registry with dropped recs must NOT persist them."""
+        reg = RecommendationRegistry(disable_user_extensions=True)
+        reg.add_landing_filter(
+            dataset="request", predicate="x > 0",
+            rationale="r", source_notebook="nb",
+        )
+        path = tmp_path / "recs.yaml"
+        reg.save(path)
+        loaded_data = path.read_text()
+        assert "landing:" not in loaded_data
+        loaded = RecommendationRegistry.load(path)
+        assert loaded.landing is None

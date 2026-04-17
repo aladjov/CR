@@ -145,6 +145,7 @@ class FindingsParser:
         namespace=None,
         intent=None,
         bronze_aggregation_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
+        disable_user_extensions: Optional[bool] = None,
     ):
         self._findings_dir = Path(findings_dir)
         self._namespace = namespace
@@ -156,6 +157,12 @@ class FindingsParser:
         self._raw_source_columns: Dict[str, Set[str]] = {}
         self._feature_spec: Optional[FeatureSpec] = None
         self._silver_merged_columns_cache: Optional[Set[str]] = None
+        from customer_retention.runtime.flags import is_user_extensions_disabled
+        self._ext_disabled: bool = is_user_extensions_disabled(disable_user_extensions)
+
+    @property
+    def user_extensions_disabled(self) -> bool:
+        return self._ext_disabled
 
     def parse(self) -> PipelineConfig:
         self._feature_spec = self._load_feature_spec()
@@ -724,6 +731,52 @@ class FindingsParser:
     ) -> None:
         self._apply_dedup_recommendations(config, registry)
         self._apply_filter_recommendations(config, registry)
+        self._apply_landing_recommendations(config, registry)
+
+    def _apply_landing_recommendations(
+        self, config: PipelineConfig, registry: RecommendationRegistry
+    ) -> None:
+        if self._ext_disabled:
+            return
+        landing = getattr(registry, "landing", None)
+        if landing is None:
+            return
+        for rec in landing.filters:
+            dataset = rec.parameters.get("dataset")
+            target = self._resolve_landing_target(config, dataset, kind="filter")
+            target.filters.append(TransformationStep(
+                type=PipelineTransformationType.LANDING_FILTER,
+                column=dataset,
+                parameters={"predicate": rec.parameters.get("predicate", "")},
+                rationale=rec.rationale,
+                source_notebook=rec.source_notebook,
+            ))
+        for rec in landing.lifecycle_enrichments:
+            dataset = rec.parameters.get("dataset")
+            target = self._resolve_landing_target(config, dataset, kind="lifecycle_enrichment")
+            target.lifecycle_enrichments.append(TransformationStep(
+                type=PipelineTransformationType.LANDING_LIFECYCLE_ENRICHMENT,
+                column=dataset,
+                parameters={"config": rec.parameters.get("config", {})},
+                rationale=rec.rationale,
+                source_notebook=rec.source_notebook,
+            ))
+
+    @staticmethod
+    def _resolve_landing_target(
+        config: PipelineConfig, dataset: Optional[str], *, kind: str
+    ) -> LandingLayerConfig:
+        if not dataset:
+            raise ValueError(
+                f"landing {kind} recommendation missing 'dataset' parameter"
+            )
+        if dataset not in config.landing:
+            known = sorted(config.landing.keys())
+            raise ValueError(
+                f"landing {kind} references unknown dataset '{dataset}'. "
+                f"Known landing datasets: {known}"
+            )
+        return config.landing[dataset]
 
     def _resolve_bronze_source_name(self, config: PipelineConfig, target_bronze) -> Optional[str]:
         for name, cfg in config.bronze.items():

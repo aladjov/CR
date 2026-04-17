@@ -1,0 +1,36 @@
+sources:
+  account:
+    source_file: /data/sps_mini/account.csv
+    null_handling:
+      - id: bronze_null_age
+        layer: bronze
+        category: "null"
+        action: impute
+        target_column: age
+        parameters:
+          strategy: median
+        rationale: median impute for missing ages (5% null rate)
+        source_notebook: NB02
+        priority: 1
+        dependencies: []
+    outlier_handling: []
+    type_conversions: []
+    deduplication: []
+    filtering: []
+    text_processing: []
+    modeling_strategy: []
+landing:
+  filters:
+    - id: landing_landing_filtering_request
+      layer: landing
+      category: landing_filtering
+      action: filter
+      target_column: request
+      parameters:
+        dataset: request
+        predicate: "amount > 0"
+      rationale: drop zero/negative amount rows at landing
+      source_notebook: NB00 § 0.4.6
+      priority: 1
+      dependencies: []
+  lifecycle_enrichments: []

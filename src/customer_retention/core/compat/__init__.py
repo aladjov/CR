@@ -745,6 +745,50 @@ def safe_query(df: Any, expr: str) -> Any:
     return df.query(expr)
 
 
+def _sql_predicate_to_pandas(expr: str) -> str:
+    """Translate a SQL-form predicate into pandas `.query()` syntax.
+
+    Scope: the subset used by user-supplied landing filters in
+    `registry.add_landing_filter(predicate=...)` — equality / inequality
+    comparisons, AND/OR/NOT, and IS NULL / IS NOT NULL. Anything outside
+    that subset (window functions, CASE, subqueries) is not supported — the
+    caller should write a native-expression predicate instead.
+    """
+    import re
+
+    translated = re.sub(
+        r"([`\"]?\w+[`\"]?)\s+IS\s+NOT\s+NULL",
+        r"\1.notna()",
+        expr,
+        flags=re.IGNORECASE,
+    )
+    translated = re.sub(
+        r"([`\"]?\w+[`\"]?)\s+IS\s+NULL",
+        r"\1.isna()",
+        translated,
+        flags=re.IGNORECASE,
+    )
+    translated = re.sub(r"\bAND\b", "and", translated, flags=re.IGNORECASE)
+    translated = re.sub(r"\bOR\b", "or", translated, flags=re.IGNORECASE)
+    translated = re.sub(r"(?<![<>=!])=(?!=)", "==", translated)
+    translated = translated.replace("<>", "!=")
+    return translated
+
+
+def apply_sql_predicate(df: Any, predicate: str) -> Any:
+    """Apply a SQL-form predicate uniformly across backends.
+
+    Spark (raw `pyspark.sql.DataFrame`) supports SQL-string `.filter()`
+    natively. Native pandas and `pyspark.pandas` use `.query()` with a
+    translated predicate. Keeps registry-stored predicates in SQL form so
+    the same `add_landing_filter(predicate=...)` call produces semantically
+    identical behavior on both pipelines (plan § 2.4).
+    """
+    if _is_native_spark_df(df):
+        return df.filter(predicate)
+    return df.query(_sql_predicate_to_pandas(predicate))
+
+
 _ISIN_JOIN_THRESHOLD = 100_000
 
 

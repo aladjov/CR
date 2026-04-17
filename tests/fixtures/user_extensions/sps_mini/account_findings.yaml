@@ -1,0 +1,40 @@
+source_path: /data/sps_mini/account.csv
+source_format: csv
+row_count: 5000
+column_count: 4
+columns:
+  ACCOUNT_ID:
+    name: ACCOUNT_ID
+    inferred_type: identifier
+    confidence: 0.95
+    evidence: []
+    quality_score: 100
+    cleaning_needed: false
+    cleaning_recommendations: []
+  age:
+    name: age
+    inferred_type: numeric_continuous
+    confidence: 0.9
+    evidence: []
+    quality_score: 85
+    cleaning_needed: true
+    cleaning_recommendations: ["impute_null:median"]
+    type_metrics: {"has_nulls": true}
+  region:
+    name: region
+    inferred_type: categorical_nominal
+    confidence: 0.95
+    evidence: []
+    quality_score: 100
+    cleaning_needed: false
+    cleaning_recommendations: []
+  churn:
+    name: churn
+    inferred_type: binary
+    confidence: 0.99
+    evidence: []
+    quality_score: 100
+    cleaning_needed: false
+    cleaning_recommendations: []
+target_column: churn
+identifier_columns: ["ACCOUNT_ID"]

@@ -251,6 +251,69 @@ def calculate(x, y):
     return x + y
 ```
 
+### User-Supplied Logic in Exploration Notebooks
+
+User code in exploration notebooks belongs to **one of two lanes**. Never mix them in a single cell — see the cardinal rule below.
+
+#### Lane 1: Declarative `registry.add_*`
+Call a `RecommendationRegistry.add_*` method from the notebook cell. No function body, just a declarative call. Flows through `FindingsParser` into the generated pipeline via existing code paths.
+
+```python
+# NB00 § 0.4.6 — drop request rows with null ACCOUNT_ID at landing
+registry.add_landing_filter(
+    dataset="request",
+    predicate="ACCOUNT_ID IS NOT NULL AND CREATED_DATE IS NOT NULL",
+    rationale="34.2% of request rows have NULL ACCOUNT_ID (R2 sanity)",
+    source_notebook="NB00 § 0.4.6",
+)
+```
+
+#### Lane 2: Imperative `@cr.register`
+For logic that doesn't fit a declarative registry call (e.g., cross-dataset target derivation, bespoke enrichments). Decorate a function with `@cr.register` from `customer_retention.runtime.cr`. The decorator is metadata-only; it returns the function unchanged. Source is captured at decoration time and harvested into `user_extensions.py` at codegen.
+
+```python
+from customer_retention.runtime import cr
+
+@cr.register(datasets=["account", "contract", "case"], primary="account",
+             replay_at_scoring=False)
+def derive_churn_target(spark, datasets, namespace):
+    account = datasets["account"]
+    contract = datasets["contract"]
+    # ... bespoke cross-dataset logic ...
+    return {"account": account}
+```
+
+Decorator parameters: exactly one of `dataset=` (single) or `datasets=` (list or `"*"`). `primary=` required and must be in the list when `datasets` has more than one entry. `replay_at_scoring=` defaults to `False`; set `True` to re-run the function at scoring time.
+
+#### Cardinal Rule: Don't Mix Lanes
+
+A `@cr.register` function must NEVER call `registry.add_*` inside its body. The registry call runs only at exploration time, but the function is harvested into production — so the registration is silently dropped.
+
+This is enforced by `customer_retention.runtime.validation`, which runs during `Harvester.harvest()` (NB10 codegen) and fails the build with a clear fix message. The validator respects local shadowing: if the function rebinds `registry` as an argument or local variable, the call resolves to the local name and is safe.
+
+```python
+# ✗ BAD — registry.add_* inside @cr.register body
+@cr.register(dataset="request")
+def bad(df):
+    registry.add_silver_ratio(column="x", numerator="a", denominator="b",
+                              rationale="r", source_notebook="nb")
+    return df
+
+# ✓ GOOD — two cells, one per lane
+# Cell A: declarative only
+registry.add_silver_ratio(column="x", numerator="a", denominator="b",
+                          rationale="r", source_notebook="nb")
+
+# Cell B: imperative, no registry.* calls inside
+@cr.register(dataset="request")
+def transform(df):
+    return df.dropna(subset=["x"])
+```
+
+#### Kill Switch (Databricks-safe)
+
+Set cluster config `spark.cr.disable_user_extensions=true` (or env var `CR_DISABLE_USER_EXTENSIONS=1` for local/CI) to make every user-extension code path a no-op. `registry.add_landing_*` calls append to a throwaway list with INFO log; harvest is ignored; the generated pipeline is byte-identical to pre-design baseline. See `customer_retention.runtime.flags`.
+
 ### Style Guide
 
 We use [Ruff](https://docs.astral.sh/ruff/) for linting and formatting (enforced by pre-commit):

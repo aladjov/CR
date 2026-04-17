@@ -73,6 +73,18 @@ repos:
         stages: [pre-push]
         verbose: true
 
+      # Pre-commit hook: framework/phase_map.yaml must match a fresh
+      # rebuild. Runs whenever an exploration notebook or the builder
+      # script itself changes. Fixes: `python scripts/build_framework_phase_map.py`
+      # then stage the regenerated file.
+      - id: framework-phase-map
+        name: framework/phase_map.yaml up-to-date check
+        entry: .venv/bin/python scripts/build_framework_phase_map.py --check
+        language: system
+        pass_filenames: false
+        files: '^(exploration_notebooks/.*\.ipynb|scripts/build_framework_phase_map\.py)$'
+        verbose: true
+
       # Reminder about --no-verify
       - id: no-verify-warning
         name: coverage enforcement reminder

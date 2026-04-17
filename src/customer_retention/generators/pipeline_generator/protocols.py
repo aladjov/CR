@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from typing_extensions import Protocol, runtime_checkable
 
@@ -160,3 +160,47 @@ class PipelineGeneratorBase(ABC):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self._renderer.render_runner(config))
         return path
+
+    def _write_user_extensions(self) -> Optional[Path]:
+        harvest = getattr(self, "_harvest_result", None)
+        if harvest is None:
+            return None
+        kill_switch_active = getattr(self._parser, "user_extensions_disabled", False)
+        if kill_switch_active:
+            return None
+        from .user_extensions_emitter import write_user_extensions
+        return write_user_extensions(self._output_dir, harvest)
+
+    def _write_generation_manifest(
+        self, config: PipelineConfig, generated_files: List[Path]
+    ) -> Path:
+        from .generation_manifest import (
+            build_generation_manifest,
+            write_generation_manifest,
+        )
+        template_versions = (
+            self._renderer.template_versions()
+            if hasattr(self._renderer, "template_versions")
+            else {}
+        )
+        kill_switch_active = getattr(
+            self._parser, "user_extensions_disabled", False
+        )
+        harvested_names = self._harvested_function_names(kill_switch_active)
+        manifest = build_generation_manifest(
+            config,
+            generated_files,
+            self._output_dir,
+            template_versions=template_versions,
+            kill_switch_active=kill_switch_active,
+            harvested_functions=harvested_names,
+        )
+        return write_generation_manifest(manifest, self._output_dir)
+
+    def _harvested_function_names(self, kill_switch_active: bool) -> List[str]:
+        if kill_switch_active:
+            return []
+        harvest = getattr(self, "_harvest_result", None)
+        if harvest is None:
+            return []
+        return [rf.name for rf in harvest.all_functions()]

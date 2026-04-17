@@ -4,18 +4,39 @@ This stage generates notebooks that perform batch scoring using the feature stor
 with point-in-time correctness for feature retrieval.
 """
 
-from typing import List
+from typing import TYPE_CHECKING, List, Optional
 
 import nbformat
 
 from ..base import NotebookStage
+from ..scoring_replay import render_scoring_replay_block
 from .base_stage import StageGenerator
+
+if TYPE_CHECKING:
+    from customer_retention.runtime.harvest import HarvestResult
 
 
 class BatchInferenceStage(StageGenerator):
+    harvest_result: Optional["HarvestResult"] = None
+
     @property
     def stage(self) -> NotebookStage:
         return NotebookStage.BATCH_INFERENCE
+
+    def _scoring_replay_cells(self) -> List[nbformat.NotebookNode]:
+        if self.harvest_result is None:
+            return []
+        block = render_scoring_replay_block(self.harvest_result.all_functions())
+        if not block:
+            return []
+        return [
+            self.cb.section("3b. User-Extension Replay"),
+            self.cb.markdown(
+                "User-supplied functions with `replay_at_scoring=True` execute "
+                "here so training-time transforms apply identically at scoring."
+            ),
+            self.cb.code(block),
+        ]
 
     @property
     def title(self) -> str:
@@ -93,6 +114,8 @@ from the config that was in force at scoring time.'''),
     entity_id_columns={self.get_identifier_columns()},
 )
 print(config)'''),
+
+            *self._scoring_replay_cells(),
 
             self.cb.section("4. Run Batch Inference"),
             self.cb.markdown('''The framework call handles model loading, feature retrieval with point-in-time
@@ -172,6 +195,8 @@ Risk tier thresholds are explicit so historical runs are reconstructable.'''),
     audit_table="inference_audit_log",
 )
 print(config)'''),
+
+            *self._scoring_replay_cells(),
 
             self.cb.section("4. Run Batch Inference"),
             self.cb.markdown('''The framework call resolves the @production model URI, scores via

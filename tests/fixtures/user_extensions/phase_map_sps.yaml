@@ -1,0 +1,38 @@
+version: 1
+source_fingerprint: synthetic-sps-slice
+generated_from:
+- tests/fixtures/user_extensions/phase_map_sps.yaml
+sections:
+  00_start_here#0_2_5_contract_lifecycle_enrichment:
+    stage: landing_post
+    notebook: 00_start_here
+    source: keyword_match
+  00_start_here#0_2_5b_subscription_lifecycle_enrichment:
+    stage: landing_post
+    notebook: 00_start_here
+    source: keyword_match
+  00_start_here#0_2_6_target_derivation:
+    stage: target_derive
+    notebook: 00_start_here
+    source: keyword_match
+  00_start_here#0_4_5_semantics_overrides:
+    stage: landing_post
+    notebook: 00_start_here
+    source: keyword_match
+  00_start_here#0_4_6_request_quality_filter:
+    stage: landing_post
+    notebook: 00_start_here
+    source: keyword_match
+  00_start_here#0_11_5_scd_history_augmentation:
+    stage: landing_post
+    notebook: 00_start_here
+    source: annotation
+  05_relationship_analysis#5_9_5_feature_exclusions:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: notebook_fallback
+  06_feature_opportunities#6_5_business_driven_derived_features:
+    stage: silver_post
+    notebook: 06_feature_opportunities
+    source: keyword_match
+unmappable_cells: []

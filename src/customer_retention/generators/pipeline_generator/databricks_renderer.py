@@ -2461,6 +2461,18 @@ def run_landing():
 {%- if config.original_target_column %}
     df = df.withColumnRenamed("{{ config.original_target_column }}", TARGET_COLUMN)
 {%- endif %}
+{%- if config.filters %}
+{%- for step in config.filters %}
+    df = df.filter({{ step.parameters.predicate | python_repr }})
+{%- endfor %}
+{%- endif %}
+{%- if config.lifecycle_enrichments %}
+    from customer_retention.stages.lifecycle.config import LifecycleEnrichmentConfig
+    from customer_retention.stages.lifecycle.enrich import enrich_lifecycle_dataset
+{%- for step in config.lifecycle_enrichments %}
+    df = enrich_lifecycle_dataset(df, LifecycleEnrichmentConfig.from_dict({{ step.parameters.config | python_repr }}))
+{%- endfor %}
+{%- endif %}
 {%- if config.key_resolution_steps %}
     df = resolve_entity_key(df)
 {%- endif %}
@@ -2918,6 +2930,7 @@ class DatabricksCodeRenderer:
         self._env.globals["group_steps"] = group_steps
         self._env.globals["spark_provenance_block"] = spark_provenance_block
         self._env.globals["sorted_landing_names"] = _sorted_landing_names
+        self._env.filters["python_repr"] = repr
 
     _NOTEBOOK_HEADER = "# Databricks notebook source\n"
 
@@ -2941,6 +2954,10 @@ class DatabricksCodeRenderer:
     def _render(self, template_key: str, **context) -> str:
         rendered = self._env.get_template(self._TEMPLATE_MAP[template_key]).render(**context)
         return self._inject_sys_path(rendered)
+
+    def template_versions(self):
+        from .generation_manifest import template_versions_for
+        return template_versions_for(DATABRICKS_TEMPLATES)
 
     def render_config(self, config: PipelineConfig) -> str:
         return self._render("config", config=config, catalog=self._catalog, schema=self._schema)
