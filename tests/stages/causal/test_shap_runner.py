@@ -96,6 +96,12 @@ class _Aliasable:
     def __truediv__(self, other: Any) -> "_Aliasable":
         return _Aliasable(f"({self.name}/{other})")
 
+    def getItem(self, idx: Any) -> "_Aliasable":  # noqa: N802
+        return _Aliasable(f"{self.name}[{idx}]")
+
+    def __getitem__(self, idx: Any) -> "_Aliasable":
+        return _Aliasable(f"{self.name}[{idx}]")
+
     def __sub__(self, other: Any) -> "_Aliasable":
         return _Aliasable(f"({self.name}-{other})")
 
@@ -911,26 +917,38 @@ class TestComputeShapSamplingValidation:
 
 
 def _install_sampling_mocks(monkeypatch):
-    """Mock mlflow.pyfunc.spark_udf + pyspark.sql.functions for the sampling path.
+    """Mock mlflow.spark.load_model + pyspark.ml.functions.vector_to_array
+    + pyspark.sql.functions for the sampling path.
 
     Returns the mock objects so tests can inspect call sites. No real Spark
-    session is required.
+    session is required. This exercises the Unity-Catalog-shared-cluster
+    code path (``mlflow.spark.load_model`` + ``model.transform``), not the
+    old ``mlflow.pyfunc.spark_udf`` path that doesn't work for Spark ML
+    flavor models on shared clusters.
     """
     import sys
 
-    # Mock mlflow.pyfunc.spark_udf to return a callable that returns a column-like
-    fake_predict_udf = MagicMock(name="predict_udf")
-    fake_predict_udf.return_value = _Aliasable("pred")
+    # Spark PipelineModel mock — .transform(df) adds model output columns
+    fake_loaded_model = MagicMock(name="loaded_spark_model")
 
-    fake_spark_udf_factory = MagicMock(name="spark_udf", return_value=fake_predict_udf)
-    fake_pyfunc = MagicMock(name="mlflow.pyfunc")
-    fake_pyfunc.spark_udf = fake_spark_udf_factory
+    def _transform(df):
+        return df
+
+    fake_loaded_model.transform.side_effect = _transform
+
+    fake_load_model = MagicMock(name="mlflow.spark.load_model", return_value=fake_loaded_model)
+    fake_spark_module = MagicMock(name="mlflow.spark")
+    fake_spark_module.load_model = fake_load_model
     fake_mlflow = MagicMock(name="mlflow")
-    fake_mlflow.pyfunc = fake_pyfunc
+    fake_mlflow.spark = fake_spark_module
     monkeypatch.setitem(sys.modules, "mlflow", fake_mlflow)
-    monkeypatch.setitem(sys.modules, "mlflow.pyfunc", fake_pyfunc)
+    monkeypatch.setitem(sys.modules, "mlflow.spark", fake_spark_module)
 
-    # Mock pyspark.sql.functions
+    fake_vector_to_array = MagicMock(name="vector_to_array", return_value=_Aliasable("vec"))
+    fake_ml_functions = MagicMock(name="pyspark.ml.functions")
+    fake_ml_functions.vector_to_array = fake_vector_to_array
+    monkeypatch.setitem(sys.modules, "pyspark.ml.functions", fake_ml_functions)
+
     fake_F = MagicMock(name="pyspark.sql.functions")
     fake_F.col = lambda name: _Aliasable(name)
     fake_F.lit = lambda value: _Aliasable(f"lit({value})")
@@ -944,7 +962,6 @@ def _install_sampling_mocks(monkeypatch):
     fake_sql = MagicMock(name="pyspark.sql")
     fake_sql.functions = fake_F
 
-    # Mock pyspark.sql.types — only the types we actually use
     fake_types = MagicMock(name="pyspark.sql.types")
     fake_types.IntegerType = lambda: "IntegerType"
     fake_types.BooleanType = lambda: "BooleanType"
@@ -958,9 +975,10 @@ def _install_sampling_mocks(monkeypatch):
     monkeypatch.setitem(sys.modules, "pyspark.sql.types", fake_types)
 
     return {
-        "spark_udf_factory": fake_spark_udf_factory,
-        "predict_udf": fake_predict_udf,
-        "pyfunc_module": fake_pyfunc,
+        "load_model": fake_load_model,
+        "loaded_model": fake_loaded_model,
+        "vector_to_array": fake_vector_to_array,
+        "mlflow_spark": fake_spark_module,
         "F": fake_F,
     }
 
@@ -987,7 +1005,10 @@ def _make_chainable_spark_df(columns):
 
 
 class TestComputeShapSamplingOrchestration:
-    def test_invokes_mlflow_pyfunc_spark_udf_with_model_uri(self, monkeypatch):
+    def test_loads_spark_model_via_mlflow_spark_load_model(self, monkeypatch):
+        """Shared-cluster contract: uses ``mlflow.spark.load_model`` (driver-side
+        Spark PipelineModel), NOT ``mlflow.pyfunc.spark_udf`` (which fails for
+        Spark ML flavor models on Unity Catalog shared clusters)."""
         mocks = _install_sampling_mocks(monkeypatch)
         df = _make_chainable_spark_df(["account_id", "feat_a", "feat_b"])
         df.sparkSession = MagicMock(name="SparkSession")
@@ -1004,10 +1025,45 @@ class TestComputeShapSamplingOrchestration:
             background=bg,
             num_samples=3,
         )
-        mocks["spark_udf_factory"].assert_called_once()
-        call = mocks["spark_udf_factory"].call_args
-        # The model URI is passed positionally or via kwargs
-        assert "models:/churn@production" in (list(call.args) + list(call.kwargs.values()))
+        mocks["load_model"].assert_called_once_with("models:/churn@production")
+
+    def test_calls_transform_on_expanded_dataframe(self, monkeypatch):
+        """``model.transform(expanded_df)`` is the distributed primitive —
+        shared-cluster safe, no UDF, no pickling."""
+        mocks = _install_sampling_mocks(monkeypatch)
+        df = _make_chainable_spark_df(["account_id", "feat_a"])
+        df.sparkSession = MagicMock(name="SparkSession")
+
+        bg = BackgroundSample(
+            rows=[{"feat_a": 1.0}], feature_columns=["feat_a"], sample_size=1
+        )
+        shap_runner.compute_shap_sampling_distributed(
+            spark_df=df,
+            feature_columns=["feat_a"],
+            model_uri="models:/m@production",
+            background=bg,
+            num_samples=2,
+        )
+        mocks["loaded_model"].transform.assert_called()
+
+    def test_extracts_class_1_probability_via_vector_to_array(self, monkeypatch):
+        """Per Coding_Practices.md: Vector UDT requires ``vector_to_array``;
+        ``.getItem`` on probability column would fail silently."""
+        mocks = _install_sampling_mocks(monkeypatch)
+        df = _make_chainable_spark_df(["account_id", "feat_a"])
+        df.sparkSession = MagicMock(name="SparkSession")
+
+        bg = BackgroundSample(
+            rows=[{"feat_a": 1.0}], feature_columns=["feat_a"], sample_size=1
+        )
+        shap_runner.compute_shap_sampling_distributed(
+            spark_df=df,
+            feature_columns=["feat_a"],
+            model_uri="models:/m@production",
+            background=bg,
+            num_samples=2,
+        )
+        mocks["vector_to_array"].assert_called()
 
     def test_returns_shap_run_result_with_expected_columns(self, monkeypatch):
         _install_sampling_mocks(monkeypatch)
@@ -1053,14 +1109,20 @@ class TestComputeShapSamplingOrchestration:
         )
         assert pandas_udf_calls == []
 
-    def test_does_not_pickle_model_object(self, monkeypatch):
-        """The sampling path should never serialize a model; it uses
-        mlflow.pyfunc.spark_udf which loads the model on each executor
-        from the MLflow registry, avoiding cloudpickle entirely."""
-        mocks = _install_sampling_mocks(monkeypatch)
+    def test_does_not_call_mlflow_pyfunc_spark_udf(self, monkeypatch):
+        """``mlflow.pyfunc.spark_udf`` does NOT work on Unity Catalog
+        shared clusters for Spark ML flavor models. The sampling path must
+        never invoke it — it must use ``mlflow.spark.load_model`` instead."""
+        import sys
+
+        _install_sampling_mocks(monkeypatch)
+        spark_udf_calls: list = []
+        fake_pyfunc = MagicMock(name="mlflow.pyfunc")
+        fake_pyfunc.spark_udf = lambda *a, **kw: spark_udf_calls.append((a, kw))
+        monkeypatch.setitem(sys.modules, "mlflow.pyfunc", fake_pyfunc)
+
         df = _make_chainable_spark_df(["account_id", "feat_a"])
         df.sparkSession = MagicMock(name="SparkSession")
-
         bg = BackgroundSample(
             rows=[{"feat_a": 1.0}], feature_columns=["feat_a"], sample_size=1
         )
@@ -1071,14 +1133,7 @@ class TestComputeShapSamplingOrchestration:
             background=bg,
             num_samples=2,
         )
-        # spark_udf is called with a model_uri string, not a model object
-        call = mocks["spark_udf_factory"].call_args
-        uri_arg = None
-        for arg in list(call.args) + list(call.kwargs.values()):
-            if isinstance(arg, str) and arg.startswith("models:"):
-                uri_arg = arg
-                break
-        assert uri_arg == "models:/m@production"
+        assert spark_udf_calls == []
 
     def test_crossjoin_expansion_happens(self, monkeypatch):
         _install_sampling_mocks(monkeypatch)

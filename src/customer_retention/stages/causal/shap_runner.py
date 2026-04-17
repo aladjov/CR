@@ -450,12 +450,26 @@ def compute_shap_sampling_distributed(
       - ``x_without_i[j] = row[j] if j precedes i in the permutation else bg[j]``
       - ``bg`` is the mean of ``background.rows`` (interventional baseline).
 
-    The model is provided as an MLflow ``model_uri`` (registry URI or run
-    URI). It loads on each executor via ``mlflow.pyfunc.spark_udf`` — no
-    pickling of the model object, no SparkContext capture, Spark 4.0 safe.
+    The model is loaded via ``mlflow.spark.load_model(model_uri)`` — it
+    returns a Spark ML ``PipelineModel`` on the driver, and ``.transform``
+    runs as a pure Spark DataFrame operation (distributed via Spark SQL, no
+    UDF, no pickling, no executor-side ``SparkSession`` needed). This works
+    on Unity Catalog shared clusters / Spark Connect.
+
+    Supported model flavors: ``mlflow.spark`` (Spark ML pipelines —
+    LogisticRegression / RandomForestClassifier / GBTClassifier / SparkXGB).
+    For non-Spark flavors (sklearn, xgboost native, etc.), a flavor
+    dispatch on ``mlflow.pyfunc.spark_udf`` would be needed — not wired in
+    today because this project's training registers spark-flavor models.
 
     Converges to exact Shapley as ``num_samples → ∞``. 30–50 samples are
     adequate for stable top-K driver rankings in typical tabular settings.
+
+    The model's Spark ML pipeline is expected to include a
+    ``VectorAssembler`` consuming ``feature_columns`` as inputs and a
+    binary classifier whose output column is ``probability`` (a Vector
+    UDT). The class-1 probability is extracted via
+    ``vector_to_array(F.col("probability"))[1]`` per Coding_Practices.md.
     """
     if not feature_columns:
         raise ValueError("compute_shap_sampling_distributed requires at least one feature column")
@@ -477,7 +491,8 @@ def compute_shap_sampling_distributed(
     permutations = _sample_permutations(num_features, num_samples, seed)
     plan_rows = _build_sampling_plan(permutations, num_features)
 
-    import mlflow.pyfunc
+    import mlflow.spark
+    from pyspark.ml.functions import vector_to_array
     from pyspark.sql import functions as F  # noqa: N812
     from pyspark.sql.types import (
         ArrayType,
@@ -488,7 +503,7 @@ def compute_shap_sampling_distributed(
     )
 
     spark = spark_df.sparkSession
-    predict_udf = mlflow.pyfunc.spark_udf(spark, model_uri)
+    loaded_model = mlflow.spark.load_model(model_uri)
 
     plan_schema = StructType([
         StructField("sample_id", IntegerType(), False),
@@ -514,8 +529,9 @@ def compute_shap_sampling_distributed(
     )
     both = with_df.union(without_df)
 
-    predicted = both.withColumn(
-        "__pred__", predict_udf(*[F.col(f) for f in feature_order])
+    scored = loaded_model.transform(both)
+    predicted = scored.withColumn(
+        "__pred__", vector_to_array(F.col("probability")).getItem(1)
     )
     signed = predicted.withColumn(
         "__signed__",
