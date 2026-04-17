@@ -128,6 +128,19 @@ class TestPerStageContent:
         assert "build_llm_namer" in code  # only c02 builds the namer
         assert "feature_cap=KMEANS_FEATURE_CAP" in code
 
+    def test_c02_loads_model_via_mlflow_spark_not_pyfunc(self):
+        """Regression for the ``PyFuncModel exposes no featureImportances``
+        error: c02 must load the model via ``mlflow.spark.load_model`` so
+        the classifier's ``.featureImportances`` / ``.coefficients`` are
+        directly accessible (stable API across MLflow versions). The older
+        ``mlflow.pyfunc.load_model + unwrap_tree_model`` path was brittle
+        to MLflow 3.x internal wrapper changes."""
+        gen = LocalNotebookGenerator(NotebookConfig(), None)
+        code = _all_code(gen.generate_stage(NotebookStage.ARCHETYPE_DERIVATION))
+        assert "mlflow.spark.load_model(MODEL_URI)" in code
+        assert "mlflow.pyfunc.load_model" not in code
+        assert "unwrap_tree_model" not in code
+
     def test_c03_calls_approval_gate(self):
         gen = LocalNotebookGenerator(NotebookConfig(), None)
         code = _all_code(gen.generate_stage(NotebookStage.APPROVAL_GATE))
