@@ -2955,6 +2955,10 @@ class DatabricksCodeRenderer:
         rendered = self._env.get_template(self._TEMPLATE_MAP[template_key]).render(**context)
         return self._inject_sys_path(rendered)
 
+    def template_versions(self):
+        from .generation_manifest import template_versions_for
+        return template_versions_for(DATABRICKS_TEMPLATES)
+
     def render_config(self, config: PipelineConfig) -> str:
         return self._render("config", config=config, catalog=self._catalog, schema=self._schema)
 

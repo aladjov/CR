@@ -23,6 +23,7 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
         intent=None,
         framework_repo_path: str | None = None,
         bronze_aggregation_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
+        disable_user_extensions: Optional[bool] = None,
     ):
         self._findings_dir = Path(findings_dir)
         self._output_dir = Path(output_dir)
@@ -35,6 +36,7 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
             namespace=namespace,
             intent=intent,
             bronze_aggregation_overrides=bronze_aggregation_overrides,
+            disable_user_extensions=disable_user_extensions,
         )
         self._renderer = DatabricksCodeRenderer(
             catalog=catalog, schema=schema,
@@ -55,4 +57,5 @@ class DatabricksPipelineGenerator(PipelineGeneratorBase):
             self._write_training(config),
             self._write_runner(config),
         ]
+        generated_files.append(self._write_generation_manifest(config, generated_files))
         return generated_files

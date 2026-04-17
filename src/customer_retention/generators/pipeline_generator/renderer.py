@@ -1,6 +1,6 @@
 from collections import OrderedDict, namedtuple
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 from jinja2 import BaseLoader, Environment
 
@@ -2998,6 +2998,10 @@ class CodeRenderer:
 
     def _render(self, template_key: str, **context) -> str:
         return self._env.get_template(self._TEMPLATE_MAP[template_key]).render(**context)
+
+    def template_versions(self) -> Dict[str, str]:
+        from .generation_manifest import template_versions_for
+        return template_versions_for(TEMPLATES)
 
     def render_config(self, config: PipelineConfig) -> str:
         return self._render("config", config=config)

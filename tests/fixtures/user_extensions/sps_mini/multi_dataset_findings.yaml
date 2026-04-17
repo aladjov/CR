@@ -1,0 +1,43 @@
+datasets:
+  account:
+    name: account
+    findings_path: account_findings.yaml
+    source_path: /data/sps_mini/account.csv
+    granularity: entity_level
+    row_count: 5000
+    column_count: 4
+    excluded: false
+  request:
+    name: request
+    findings_path: request_findings.yaml
+    source_path: /data/sps_mini/request.csv
+    granularity: event_level
+    row_count: 5000
+    column_count: 4
+    excluded: false
+    entity_column: ACCOUNT_ID
+    time_column: created_date
+  contract:
+    name: contract
+    findings_path: contract_findings.yaml
+    source_path: /data/sps_mini/contract.csv
+    granularity: entity_level
+    row_count: 5000
+    column_count: 4
+    excluded: false
+relationships:
+  - left_dataset: account
+    right_dataset: request
+    left_column: ACCOUNT_ID
+    right_column: ACCOUNT_ID
+    relationship_type: one_to_many
+    confidence: 1.0
+  - left_dataset: account
+    right_dataset: contract
+    left_column: ACCOUNT_ID
+    right_column: ACCOUNT_ID
+    relationship_type: one_to_many
+    confidence: 1.0
+primary_entity_dataset: account
+event_datasets: ["request"]
+excluded_datasets: []

@@ -160,3 +160,27 @@ class PipelineGeneratorBase(ABC):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self._renderer.render_runner(config))
         return path
+
+    def _write_generation_manifest(
+        self, config: PipelineConfig, generated_files: List[Path]
+    ) -> Path:
+        from .generation_manifest import (
+            build_generation_manifest,
+            write_generation_manifest,
+        )
+        template_versions = (
+            self._renderer.template_versions()
+            if hasattr(self._renderer, "template_versions")
+            else {}
+        )
+        kill_switch_active = getattr(
+            self._parser, "user_extensions_disabled", False
+        )
+        manifest = build_generation_manifest(
+            config,
+            generated_files,
+            self._output_dir,
+            template_versions=template_versions,
+            kill_switch_active=kill_switch_active,
+        )
+        return write_generation_manifest(manifest, self._output_dir)

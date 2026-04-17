@@ -160,6 +160,10 @@ class FindingsParser:
         from customer_retention.runtime.flags import is_user_extensions_disabled
         self._ext_disabled: bool = is_user_extensions_disabled(disable_user_extensions)
 
+    @property
+    def user_extensions_disabled(self) -> bool:
+        return self._ext_disabled
+
     def parse(self) -> PipelineConfig:
         self._feature_spec = self._load_feature_spec()
         multi_dataset = self._load_multi_dataset_findings()

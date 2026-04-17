@@ -127,6 +127,10 @@ class RecommendationRegistry:
         self._ext_disabled: bool = is_user_extensions_disabled(disable_user_extensions)
         self._discarded_landing: List[LayeredRecommendation] = []
 
+    @property
+    def user_extensions_disabled(self) -> bool:
+        return self._ext_disabled
+
     def save(self, path) -> None:
         p = path if isinstance(path, Path) else Path(str(path))
         p.parent.mkdir(parents=True, exist_ok=True)

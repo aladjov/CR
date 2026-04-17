@@ -1,0 +1,38 @@
+source_path: /data/sps_mini/contract.csv
+source_format: csv
+row_count: 5000
+column_count: 4
+columns:
+  CONTRACT_ID:
+    name: CONTRACT_ID
+    inferred_type: identifier
+    confidence: 0.95
+    evidence: []
+    quality_score: 100
+    cleaning_needed: false
+    cleaning_recommendations: []
+  ACCOUNT_ID:
+    name: ACCOUNT_ID
+    inferred_type: identifier
+    confidence: 0.95
+    evidence: []
+    quality_score: 100
+    cleaning_needed: false
+    cleaning_recommendations: []
+  start_date:
+    name: start_date
+    inferred_type: datetime
+    confidence: 0.95
+    evidence: []
+    quality_score: 100
+    cleaning_needed: false
+    cleaning_recommendations: []
+  monthly_fee:
+    name: monthly_fee
+    inferred_type: numeric_continuous
+    confidence: 0.9
+    evidence: []
+    quality_score: 100
+    cleaning_needed: false
+    cleaning_recommendations: []
+identifier_columns: ["CONTRACT_ID"]
