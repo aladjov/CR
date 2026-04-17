@@ -367,7 +367,7 @@ def _normalize_decimal_distributed(df: Any) -> Any:
     from pyspark.sql.functions import col as spark_col
 
     casts = [
-        spark_col(f.name).cast("double").alias(f.name) if f.name in decimal_cols else spark_col(f.name)
+        spark_col(f"`{f.name}`").cast("double").alias(f.name) if f.name in decimal_cols else spark_col(f"`{f.name}`")
         for f in spark_df.schema.fields
     ]
     from .spark_backend import _as_pandas_api
@@ -401,9 +401,9 @@ def strip_spark_timestamp_tz(spark_df: Any) -> Any:
     if not ts_fields:
         return spark_df
     casts = [
-        spark_col(f.name).cast("timestamp_ntz").alias(f.name)
+        spark_col(f"`{f.name}`").cast("timestamp_ntz").alias(f.name)
         if isinstance(f.dataType, TimestampType)
-        else spark_col(f.name)
+        else spark_col(f"`{f.name}`")
         for f in spark_df.schema.fields
     ]
     return spark_df.select(casts)
@@ -430,11 +430,11 @@ def clamp_spark_timestamps(spark_df: Any) -> Any:
         return spark_df
     cols = [
         when(
-            year(spark_col(f.name)).between(1678, 2261),
-            spark_col(f.name).cast("timestamp_ntz"),
+            year(spark_col(f"`{f.name}`")).between(1678, 2261),
+            spark_col(f"`{f.name}`").cast("timestamp_ntz"),
         ).alias(f.name)
         if f.name in ts_names
-        else spark_col(f.name)
+        else spark_col(f"`{f.name}`")
         for f in spark_df.schema.fields
     ]
     return spark_df.select(cols)

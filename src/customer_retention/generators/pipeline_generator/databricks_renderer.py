@@ -1631,10 +1631,16 @@ def apply_feature_selection(df):
 
 def _cast_timestamp_ntz_to_timestamp(df):
     from pyspark.sql.types import TimestampNTZType, TimestampType
-    for field in df.schema.fields:
-        if isinstance(field.dataType, TimestampNTZType):
-            df = df.withColumn(field.name, F.col(field.name).cast(TimestampType()))
-    return df
+    ntz_names = {f.name for f in df.schema.fields if isinstance(f.dataType, TimestampNTZType)}
+    if not ntz_names:
+        return df
+    cols = [
+        F.col(f"`{f.name}`").cast(TimestampType()).alias(f.name)
+        if f.name in ntz_names
+        else F.col(f"`{f.name}`")
+        for f in df.schema.fields
+    ]
+    return df.select(cols)
 
 def _register_feature_table(table_name, df):
     has_ts = TIMESTAMP_COLUMN in [f.name for f in df.schema.fields]

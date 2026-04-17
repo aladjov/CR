@@ -1034,6 +1034,37 @@ class TestStripSparkTimestampTz:
         mock_df.select.assert_called_once()
         assert result is mock_df.select.return_value
 
+    def test_backtick_escapes_special_chars_in_column_names(self):
+        from unittest.mock import MagicMock, patch
+
+        from pyspark.sql.types import IntegerType, StringType, StructField, StructType, TimestampType
+
+        from customer_retention.core.compat import strip_spark_timestamp_tz
+
+        dotted = "REP_RANKING_SUPPLIER_SALES_2_=_Current_Customers_(reference,_upsell,_etc.)"
+        schema = StructType([
+            StructField("id", IntegerType()),
+            StructField(dotted, StringType()),
+            StructField("ts", TimestampType()),
+        ])
+        mock_df = MagicMock()
+        mock_df.schema.fields = schema.fields
+
+        with patch("pyspark.sql.functions.col", side_effect=lambda n: MagicMock(name=f"col({n})")) as mock_col:
+            try:
+                strip_spark_timestamp_tz(mock_df)
+            except Exception:
+                pass
+
+        received = [c.args[0] for c in mock_col.call_args_list]
+        assert f"`{dotted}`" in received, (
+            f"expected backtick-escaped name, got {received!r}"
+        )
+        for name in received:
+            assert "." not in name or name.startswith("`"), (
+                f"{name!r} must be backtick-escaped when it contains dots"
+            )
+
 
 class TestClampSparkTimestamps:
     @pytest.fixture(autouse=True)
@@ -1115,6 +1146,37 @@ class TestClampSparkTimestamps:
         mock_df.select.assert_called_once()
         args = mock_df.select.call_args[0][0]
         assert len(args) == 3
+
+    def test_backtick_escapes_special_chars_in_column_names(self):
+        from unittest.mock import MagicMock, patch
+
+        from pyspark.sql.types import IntegerType, StringType, StructField, StructType, TimestampNTZType
+
+        from customer_retention.core.compat import clamp_spark_timestamps
+
+        dotted = "FOO_=_Current_(reference,_upsell,_etc.)"
+        schema = StructType([
+            StructField("id", IntegerType()),
+            StructField(dotted, StringType()),
+            StructField("ts", TimestampNTZType()),
+        ])
+        mock_df = MagicMock()
+        mock_df.schema.fields = schema.fields
+
+        with patch("pyspark.sql.functions.col", side_effect=lambda n: MagicMock(name=f"col({n})")) as mock_col:
+            try:
+                clamp_spark_timestamps(mock_df)
+            except Exception:
+                pass
+
+        received = [c.args[0] for c in mock_col.call_args_list]
+        assert f"`{dotted}`" in received, (
+            f"expected backtick-escaped name, got {received!r}"
+        )
+        for name in received:
+            assert "." not in name or name.startswith("`"), (
+                f"{name!r} must be backtick-escaped when it contains dots"
+            )
 
 
 class TestClampDistributedTimestamps:
