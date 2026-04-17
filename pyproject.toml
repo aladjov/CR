@@ -1,6 +1,6 @@
 [project]
 name = "churnkit"
-version = "1.01.3ab3"
+version = "1.01.3b3"
 description = "Structured ML framework for customer churn prediction -- from exploration notebooks to production pipelines, locally or on Databricks."
 readme = "README.md"
 license = {text = "Apache-2.0"}
