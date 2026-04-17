@@ -1,0 +1,1068 @@
+version: 1
+source_fingerprint: sha256:3146c35ea42503980475da4984ca255d6885169c952a2c94f4d5eca97b04f460
+generated_from:
+- exploration_notebooks/00_start_here.ipynb
+- exploration_notebooks/01_data_discovery.ipynb
+- exploration_notebooks/01a_a_temporal_text_deep_dive.ipynb
+- exploration_notebooks/01a_temporal_deep_dive.ipynb
+- exploration_notebooks/01b_temporal_quality.ipynb
+- exploration_notebooks/01c_temporal_patterns.ipynb
+- exploration_notebooks/01d_event_aggregation.ipynb
+- exploration_notebooks/02_source_integrity.ipynb
+- exploration_notebooks/03_dataset_merge.ipynb
+- exploration_notebooks/04_column_deep_dive.ipynb
+- exploration_notebooks/04a_text_columns_deep_dive.ipynb
+- exploration_notebooks/05_relationship_analysis.ipynb
+- exploration_notebooks/06_feature_opportunities.ipynb
+- exploration_notebooks/07_modeling_readiness.ipynb
+- exploration_notebooks/08_baseline_experiments.ipynb
+- exploration_notebooks/09_business_alignment.ipynb
+- exploration_notebooks/10_spec_generation.ipynb
+- exploration_notebooks/11_scoring_validation.ipynb
+- exploration_notebooks/12_view_documentation.ipynb
+sections:
+  00_start_here#0_10_intent_configuration:
+    stage: landing_post
+    notebook: 00_start_here
+    source: notebook_fallback
+  00_start_here#0_11_initialize_snapshot_grid:
+    stage: landing_post
+    notebook: 00_start_here
+    source: notebook_fallback
+  00_start_here#0_12_save_project_context:
+    stage: landing_post
+    notebook: 00_start_here
+    source: notebook_fallback
+  00_start_here#0_13_exploration_sampling:
+    stage: landing_post
+    notebook: 00_start_here
+    source: notebook_fallback
+  00_start_here#0_14_field_availability_audit:
+    stage: landing_post
+    notebook: 00_start_here
+    source: notebook_fallback
+  00_start_here#0_15_schema_report:
+    stage: landing_post
+    notebook: 00_start_here
+    source: notebook_fallback
+  00_start_here#0_1_project_metadata:
+    stage: landing_post
+    notebook: 00_start_here
+    source: notebook_fallback
+  00_start_here#0_2_dataset_registration:
+    stage: landing_post
+    notebook: 00_start_here
+    source: notebook_fallback
+  00_start_here#0_3_auto_fingerprinting:
+    stage: landing_post
+    notebook: 00_start_here
+    source: notebook_fallback
+  00_start_here#0_4_confirm_semantics:
+    stage: landing_post
+    notebook: 00_start_here
+    source: keyword_match
+  00_start_here#0_5_target_dataset_selection:
+    stage: target_derive
+    notebook: 00_start_here
+    source: keyword_match
+  00_start_here#0_6_prediction_objective_detection:
+    stage: landing_post
+    notebook: 00_start_here
+    source: notebook_fallback
+  00_start_here#0_7_objective_priority_review:
+    stage: landing_post
+    notebook: 00_start_here
+    source: notebook_fallback
+  00_start_here#0_8_1_key_resolution_bridge_datasets:
+    stage: landing_post
+    notebook: 00_start_here
+    source: notebook_fallback
+  00_start_here#0_8_2_dataset_registry:
+    stage: landing_post
+    notebook: 00_start_here
+    source: notebook_fallback
+  00_start_here#0_8_join_scaffold:
+    stage: bronze_merge
+    notebook: 00_start_here
+    source: keyword_match
+  00_start_here#0_9_temporal_posture:
+    stage: landing_post
+    notebook: 00_start_here
+    source: notebook_fallback
+  00_start_here#project_bootstrap_guided_setup:
+    stage: landing_post
+    notebook: 00_start_here
+    source: notebook_fallback
+  01_data_discovery#1_1_configuration:
+    stage: bronze_post
+    notebook: 01_data_discovery
+    source: notebook_fallback
+  01_data_discovery#1_2_load_data:
+    stage: bronze_post
+    notebook: 01_data_discovery
+    source: notebook_fallback
+  01_data_discovery#1_3_column_summary_table:
+    stage: bronze_post
+    notebook: 01_data_discovery
+    source: notebook_fallback
+  01_data_discovery#1_4_type_override_optional:
+    stage: bronze_post
+    notebook: 01_data_discovery
+    source: notebook_fallback
+  01_data_discovery#1_5_dataset_structure_next_steps:
+    stage: bronze_post
+    notebook: 01_data_discovery
+    source: notebook_fallback
+  01_data_discovery#1_6_active_dataset_creation:
+    stage: bronze_post
+    notebook: 01_data_discovery
+    source: notebook_fallback
+  01_data_discovery#1_7_structural_stability:
+    stage: bronze_post
+    notebook: 01_data_discovery
+    source: notebook_fallback
+  01_data_discovery#1_8_save_findings:
+    stage: bronze_post
+    notebook: 01_data_discovery
+    source: notebook_fallback
+  01_data_discovery#1_8b_record_snapshot_grid_vote:
+    stage: bronze_post
+    notebook: 01_data_discovery
+    source: notebook_fallback
+  01_data_discovery#1_9_summary:
+    stage: bronze_post
+    notebook: 01_data_discovery
+    source: notebook_fallback
+  01_data_discovery#data_discovery:
+    stage: bronze_post
+    notebook: 01_data_discovery
+    source: notebook_fallback
+  01_data_discovery#section:
+    stage: bronze_post
+    notebook: 01_data_discovery
+    source: notebook_fallback
+  01a_a_temporal_text_deep_dive#1a_a_1_load_previous_findings:
+    stage: bronze_post
+    notebook: 01a_a_temporal_text_deep_dive
+    source: notebook_fallback
+  01a_a_temporal_text_deep_dive#1a_a_2_load_source_data:
+    stage: bronze_post
+    notebook: 01a_a_temporal_text_deep_dive
+    source: notebook_fallback
+  01a_a_temporal_text_deep_dive#1a_a_3_configuration:
+    stage: bronze_post
+    notebook: 01a_a_temporal_text_deep_dive
+    source: notebook_fallback
+  01a_a_temporal_text_deep_dive#1a_a_4_text_column_analysis:
+    stage: bronze_post
+    notebook: 01a_a_temporal_text_deep_dive
+    source: notebook_fallback
+  01a_a_temporal_text_deep_dive#1a_a_5_process_text_columns_per_event_embeddings:
+    stage: bronze_post
+    notebook: 01a_a_temporal_text_deep_dive
+    source: notebook_fallback
+  01a_a_temporal_text_deep_dive#1a_a_6_plan_time_window_aggregation:
+    stage: bronze_post
+    notebook: 01a_a_temporal_text_deep_dive
+    source: keyword_match
+  01a_a_temporal_text_deep_dive#1a_a_7_visualize_pc_distributions:
+    stage: bronze_post
+    notebook: 01a_a_temporal_text_deep_dive
+    source: notebook_fallback
+  01a_a_temporal_text_deep_dive#1a_a_8_update_findings:
+    stage: bronze_post
+    notebook: 01a_a_temporal_text_deep_dive
+    source: notebook_fallback
+  01a_a_temporal_text_deep_dive#1a_a_9_production_recommendations:
+    stage: bronze_post
+    notebook: 01a_a_temporal_text_deep_dive
+    source: notebook_fallback
+  01a_a_temporal_text_deep_dive#chapter_1a_a_temporal_text_columns_deep_dive:
+    stage: bronze_post
+    notebook: 01a_a_temporal_text_deep_dive
+    source: notebook_fallback
+  01a_a_temporal_text_deep_dive#section:
+    stage: bronze_post
+    notebook: 01a_a_temporal_text_deep_dive
+    source: notebook_fallback
+  01a_a_temporal_text_deep_dive#summary:
+    stage: bronze_post
+    notebook: 01a_a_temporal_text_deep_dive
+    source: notebook_fallback
+  01a_temporal_deep_dive#1a_1_load_previous_findings:
+    stage: bronze_post
+    notebook: 01a_temporal_deep_dive
+    source: notebook_fallback
+  01a_temporal_deep_dive#1a_2_load_source_data_configure_columns:
+    stage: bronze_post
+    notebook: 01a_temporal_deep_dive
+    source: notebook_fallback
+  01a_temporal_deep_dive#1a_3_time_series_profile_overview:
+    stage: bronze_post
+    notebook: 01a_temporal_deep_dive
+    source: notebook_fallback
+  01a_temporal_deep_dive#1a_4_events_per_entity_distribution:
+    stage: bronze_post
+    notebook: 01a_temporal_deep_dive
+    source: notebook_fallback
+  01a_temporal_deep_dive#1a_5_entity_lifecycle_analysis:
+    stage: landing_post
+    notebook: 01a_temporal_deep_dive
+    source: keyword_match
+  01a_temporal_deep_dive#1a_6_create_analysis_views_historic_recent:
+    stage: bronze_post
+    notebook: 01a_temporal_deep_dive
+    source: notebook_fallback
+  01a_temporal_deep_dive#1a_7_temporal_aggregation_perspective:
+    stage: bronze_post
+    notebook: 01a_temporal_deep_dive
+    source: keyword_match
+  01a_temporal_deep_dive#1a_8_update_findings_with_time_series_metadata:
+    stage: bronze_post
+    notebook: 01a_temporal_deep_dive
+    source: notebook_fallback
+  01a_temporal_deep_dive#chapter_1a_temporal_deep_dive_event_bronze_track:
+    stage: bronze_post
+    notebook: 01a_temporal_deep_dive
+    source: notebook_fallback
+  01a_temporal_deep_dive#section:
+    stage: bronze_post
+    notebook: 01a_temporal_deep_dive
+    source: notebook_fallback
+  01a_temporal_deep_dive#summary_what_we_learned:
+    stage: bronze_post
+    notebook: 01a_temporal_deep_dive
+    source: notebook_fallback
+  01b_temporal_quality#1b_1_load_findings_and_data:
+    stage: bronze_post
+    notebook: 01b_temporal_quality
+    source: notebook_fallback
+  01b_temporal_quality#1b_2_configure_quality_checks:
+    stage: bronze_post
+    notebook: 01b_temporal_quality
+    source: keyword_match
+  01b_temporal_quality#1b_3_run_temporal_quality_checks:
+    stage: bronze_post
+    notebook: 01b_temporal_quality
+    source: keyword_match
+  01b_temporal_quality#1b_4_quality_score:
+    stage: bronze_post
+    notebook: 01b_temporal_quality
+    source: keyword_match
+  01b_temporal_quality#1b_5_event_volume_analysis:
+    stage: bronze_post
+    notebook: 01b_temporal_quality
+    source: notebook_fallback
+  01b_temporal_quality#1b_6_outlier_analysis:
+    stage: bronze_post
+    notebook: 01b_temporal_quality
+    source: notebook_fallback
+  01b_temporal_quality#1b_7_data_validation:
+    stage: bronze_post
+    notebook: 01b_temporal_quality
+    source: notebook_fallback
+  01b_temporal_quality#1b_8_recommendations:
+    stage: bronze_post
+    notebook: 01b_temporal_quality
+    source: notebook_fallback
+  01b_temporal_quality#1b_9_save_results:
+    stage: bronze_post
+    notebook: 01b_temporal_quality
+    source: notebook_fallback
+  01b_temporal_quality#chapter_1b_temporal_quality_assessment_event_bronze_track:
+    stage: bronze_post
+    notebook: 01b_temporal_quality
+    source: keyword_match
+  01b_temporal_quality#section:
+    stage: bronze_post
+    notebook: 01b_temporal_quality
+    source: notebook_fallback
+  01b_temporal_quality#summary_what_we_learned:
+    stage: bronze_post
+    notebook: 01b_temporal_quality
+    source: notebook_fallback
+  01c_temporal_patterns#1c_10_entity_level_feature_analysis_effect_sizes:
+    stage: silver_post
+    notebook: 01c_temporal_patterns
+    source: keyword_match
+  01c_temporal_patterns#1c_11_recency_analysis:
+    stage: bronze_post
+    notebook: 01c_temporal_patterns
+    source: notebook_fallback
+  01c_temporal_patterns#1c_12_velocity_acceleration_analysis:
+    stage: bronze_post
+    notebook: 01c_temporal_patterns
+    source: notebook_fallback
+  01c_temporal_patterns#1c_13_momentum_analysis_window_ratios:
+    stage: bronze_post
+    notebook: 01c_temporal_patterns
+    source: notebook_fallback
+  01c_temporal_patterns#1c_14_lag_correlation_analysis:
+    stage: bronze_post
+    notebook: 01c_temporal_patterns
+    source: notebook_fallback
+  01c_temporal_patterns#1c_15_predictive_power_analysis_iv_ks_statistics:
+    stage: bronze_post
+    notebook: 01c_temporal_patterns
+    source: notebook_fallback
+  01c_temporal_patterns#1c_16_categorical_feature_analysis:
+    stage: silver_post
+    notebook: 01c_temporal_patterns
+    source: keyword_match
+  01c_temporal_patterns#1c_17_feature_engineering_summary:
+    stage: silver_post
+    notebook: 01c_temporal_patterns
+    source: keyword_match
+  01c_temporal_patterns#1c_18_save_pattern_analysis_results:
+    stage: bronze_post
+    notebook: 01c_temporal_patterns
+    source: notebook_fallback
+  01c_temporal_patterns#1c_19_record_snapshot_grid_vote:
+    stage: bronze_post
+    notebook: 01c_temporal_patterns
+    source: notebook_fallback
+  01c_temporal_patterns#1c_1_load_findings_and_data:
+    stage: bronze_post
+    notebook: 01c_temporal_patterns
+    source: notebook_fallback
+  01c_temporal_patterns#1c_2_target_column_configuration:
+    stage: target_derive
+    notebook: 01c_temporal_patterns
+    source: keyword_match
+  01c_temporal_patterns#1c_3_aggregation_window_configuration:
+    stage: bronze_post
+    notebook: 01c_temporal_patterns
+    source: keyword_match
+  01c_temporal_patterns#1c_4_configure_value_column_for_analysis:
+    stage: bronze_post
+    notebook: 01c_temporal_patterns
+    source: notebook_fallback
+  01c_temporal_patterns#1c_5_trend_detection:
+    stage: bronze_post
+    notebook: 01c_temporal_patterns
+    source: notebook_fallback
+  01c_temporal_patterns#1c_6_seasonality_detection:
+    stage: bronze_post
+    notebook: 01c_temporal_patterns
+    source: notebook_fallback
+  01c_temporal_patterns#1c_7_cohort_analysis:
+    stage: bronze_post
+    notebook: 01c_temporal_patterns
+    source: notebook_fallback
+  01c_temporal_patterns#1c_8_correlation_matrix_analysis:
+    stage: bronze_post
+    notebook: 01c_temporal_patterns
+    source: notebook_fallback
+  01c_temporal_patterns#1c_9_temporal_sparklines:
+    stage: bronze_post
+    notebook: 01c_temporal_patterns
+    source: notebook_fallback
+  01c_temporal_patterns#chapter_1c_temporal_pattern_analysis_event_bronze_track:
+    stage: bronze_post
+    notebook: 01c_temporal_patterns
+    source: notebook_fallback
+  01c_temporal_patterns#section:
+    stage: bronze_post
+    notebook: 01c_temporal_patterns
+    source: notebook_fallback
+  01c_temporal_patterns#summary_what_we_learned:
+    stage: bronze_post
+    notebook: 01c_temporal_patterns
+    source: notebook_fallback
+  01d_event_aggregation#1d_1_load_findings_and_data:
+    stage: bronze_post
+    notebook: 01d_event_aggregation
+    source: notebook_fallback
+  01d_event_aggregation#1d_1b_snapshot_grid_readiness_check:
+    stage: bronze_post
+    notebook: 01d_event_aggregation
+    source: notebook_fallback
+  01d_event_aggregation#1d_2_configure_aggregation_based_on_findings:
+    stage: bronze_post
+    notebook: 01d_event_aggregation
+    source: keyword_match
+  01d_event_aggregation#1d_3_preview_aggregation_plan:
+    stage: bronze_post
+    notebook: 01d_event_aggregation
+    source: keyword_match
+  01d_event_aggregation#1d_4_execute_aggregation:
+    stage: bronze_post
+    notebook: 01d_event_aggregation
+    source: keyword_match
+  01d_event_aggregation#1d_5_quality_check_on_aggregated_data:
+    stage: bronze_post
+    notebook: 01d_event_aggregation
+    source: keyword_match
+  01d_event_aggregation#1d_6_save_aggregated_data_and_findings:
+    stage: bronze_post
+    notebook: 01d_event_aggregation
+    source: keyword_match
+  01d_event_aggregation#1d_x_leakage_validation:
+    stage: bronze_post
+    notebook: 01d_event_aggregation
+    source: notebook_fallback
+  01d_event_aggregation#chapter_1d_event_aggregation_event_bronze_track_entity_bronz:
+    stage: bronze_post
+    notebook: 01d_event_aggregation
+    source: keyword_match
+  01d_event_aggregation#section:
+    stage: bronze_post
+    notebook: 01d_event_aggregation
+    source: notebook_fallback
+  01d_event_aggregation#summary_what_we_did:
+    stage: bronze_post
+    notebook: 01d_event_aggregation
+    source: notebook_fallback
+  01d_event_aggregation#temporal_feature_engineering_velocity_regularity_lifecycle:
+    stage: silver_post
+    notebook: 01d_event_aggregation
+    source: keyword_match
+  02_source_integrity#2_10_binary_field_validation:
+    stage: bronze_post
+    notebook: 02_source_integrity
+    source: notebook_fallback
+  02_source_integrity#2_11_data_consistency_checks:
+    stage: bronze_post
+    notebook: 02_source_integrity
+    source: notebook_fallback
+  02_source_integrity#2_12_quality_improvement_recommendations:
+    stage: bronze_post
+    notebook: 02_source_integrity
+    source: keyword_match
+  02_source_integrity#2_13_save_updated_findings:
+    stage: bronze_post
+    notebook: 02_source_integrity
+    source: notebook_fallback
+  02_source_integrity#2_1_setup:
+    stage: bronze_post
+    notebook: 02_source_integrity
+    source: notebook_fallback
+  02_source_integrity#2_2_duplicate_analysis:
+    stage: bronze_post
+    notebook: 02_source_integrity
+    source: notebook_fallback
+  02_source_integrity#2_3_overall_quality_score:
+    stage: bronze_post
+    notebook: 02_source_integrity
+    source: keyword_match
+  02_source_integrity#2_4_target_variable_analysis:
+    stage: target_derive
+    notebook: 02_source_integrity
+    source: keyword_match
+  02_source_integrity#2_5_missing_value_analysis:
+    stage: bronze_post
+    notebook: 02_source_integrity
+    source: notebook_fallback
+  02_source_integrity#2_6_missing_value_patterns:
+    stage: bronze_post
+    notebook: 02_source_integrity
+    source: notebook_fallback
+  02_source_integrity#2_7_segment_aware_outlier_analysis:
+    stage: bronze_post
+    notebook: 02_source_integrity
+    source: notebook_fallback
+  02_source_integrity#2_8_global_outlier_detection:
+    stage: bronze_post
+    notebook: 02_source_integrity
+    source: notebook_fallback
+  02_source_integrity#2_9_date_logic_validation:
+    stage: bronze_post
+    notebook: 02_source_integrity
+    source: notebook_fallback
+  02_source_integrity#chapter_2_source_integrity:
+    stage: bronze_post
+    notebook: 02_source_integrity
+    source: keyword_match
+  02_source_integrity#section:
+    stage: bronze_post
+    notebook: 02_source_integrity
+    source: notebook_fallback
+  02_source_integrity#summary_what_we_learned:
+    stage: bronze_post
+    notebook: 02_source_integrity
+    source: notebook_fallback
+  03_dataset_merge#3_1_setup:
+    stage: bronze_merge
+    notebook: 03_dataset_merge
+    source: notebook_fallback
+  03_dataset_merge#3_2_load_context:
+    stage: bronze_merge
+    notebook: 03_dataset_merge
+    source: notebook_fallback
+  03_dataset_merge#3_3_load_bronze_datasets:
+    stage: bronze_merge
+    notebook: 03_dataset_merge
+    source: notebook_fallback
+  03_dataset_merge#3_4_build_spine:
+    stage: bronze_merge
+    notebook: 03_dataset_merge
+    source: notebook_fallback
+  03_dataset_merge#3_5_merge:
+    stage: bronze_merge
+    notebook: 03_dataset_merge
+    source: keyword_match
+  03_dataset_merge#3_6_validation:
+    stage: bronze_merge
+    notebook: 03_dataset_merge
+    source: notebook_fallback
+  03_dataset_merge#3_7_save_merged_dataset:
+    stage: bronze_merge
+    notebook: 03_dataset_merge
+    source: notebook_fallback
+  03_dataset_merge#3_8_preview:
+    stage: bronze_merge
+    notebook: 03_dataset_merge
+    source: notebook_fallback
+  03_dataset_merge#3_9_summary:
+    stage: bronze_merge
+    notebook: 03_dataset_merge
+    source: notebook_fallback
+  03_dataset_merge#chapter_3_silver_merge:
+    stage: bronze_merge
+    notebook: 03_dataset_merge
+    source: keyword_match
+  03_dataset_merge#section:
+    stage: bronze_merge
+    notebook: 03_dataset_merge
+    source: notebook_fallback
+  03_dataset_merge#summary_what_we_learned:
+    stage: bronze_merge
+    notebook: 03_dataset_merge
+    source: notebook_fallback
+  04_column_deep_dive#4_10_save_updated_findings:
+    stage: silver_post
+    notebook: 04_column_deep_dive
+    source: notebook_fallback
+  04_column_deep_dive#4_1_load_previous_findings:
+    stage: silver_post
+    notebook: 04_column_deep_dive
+    source: notebook_fallback
+  04_column_deep_dive#4_2_load_source_data:
+    stage: silver_post
+    notebook: 04_column_deep_dive
+    source: notebook_fallback
+  04_column_deep_dive#4_3_value_range_validation:
+    stage: silver_post
+    notebook: 04_column_deep_dive
+    source: notebook_fallback
+  04_column_deep_dive#4_4_numeric_columns_analysis:
+    stage: silver_post
+    notebook: 04_column_deep_dive
+    source: notebook_fallback
+  04_column_deep_dive#4_5_distribution_summary_transformation_plan:
+    stage: silver_post
+    notebook: 04_column_deep_dive
+    source: notebook_fallback
+  04_column_deep_dive#4_6_categorical_columns_analysis:
+    stage: silver_post
+    notebook: 04_column_deep_dive
+    source: notebook_fallback
+  04_column_deep_dive#4_7_datetime_columns_analysis:
+    stage: silver_post
+    notebook: 04_column_deep_dive
+    source: notebook_fallback
+  04_column_deep_dive#4_8_type_override_optional:
+    stage: silver_post
+    notebook: 04_column_deep_dive
+    source: notebook_fallback
+  04_column_deep_dive#4_9_data_segmentation_analysis:
+    stage: silver_post
+    notebook: 04_column_deep_dive
+    source: notebook_fallback
+  04_column_deep_dive#chapter_4_column_deep_dive:
+    stage: silver_post
+    notebook: 04_column_deep_dive
+    source: notebook_fallback
+  04_column_deep_dive#section:
+    stage: silver_post
+    notebook: 04_column_deep_dive
+    source: notebook_fallback
+  04_column_deep_dive#summary_what_we_learned:
+    stage: silver_post
+    notebook: 04_column_deep_dive
+    source: notebook_fallback
+  04a_text_columns_deep_dive#4a_1_load_previous_findings:
+    stage: silver_post
+    notebook: 04a_text_columns_deep_dive
+    source: notebook_fallback
+  04a_text_columns_deep_dive#4a_2_load_source_data:
+    stage: silver_post
+    notebook: 04a_text_columns_deep_dive
+    source: notebook_fallback
+  04a_text_columns_deep_dive#4a_3_configuration:
+    stage: silver_post
+    notebook: 04a_text_columns_deep_dive
+    source: notebook_fallback
+  04a_text_columns_deep_dive#4a_4_text_column_analysis:
+    stage: silver_post
+    notebook: 04a_text_columns_deep_dive
+    source: notebook_fallback
+  04a_text_columns_deep_dive#4a_5_process_text_columns:
+    stage: silver_post
+    notebook: 04a_text_columns_deep_dive
+    source: notebook_fallback
+  04a_text_columns_deep_dive#4a_6_visualize_results:
+    stage: silver_post
+    notebook: 04a_text_columns_deep_dive
+    source: notebook_fallback
+  04a_text_columns_deep_dive#4a_7_update_findings_with_text_processing_metadata:
+    stage: silver_post
+    notebook: 04a_text_columns_deep_dive
+    source: notebook_fallback
+  04a_text_columns_deep_dive#4a_8_generate_recommendations:
+    stage: silver_post
+    notebook: 04a_text_columns_deep_dive
+    source: notebook_fallback
+  04a_text_columns_deep_dive#chapter_4a_text_columns_deep_dive:
+    stage: silver_post
+    notebook: 04a_text_columns_deep_dive
+    source: notebook_fallback
+  04a_text_columns_deep_dive#section:
+    stage: silver_post
+    notebook: 04a_text_columns_deep_dive
+    source: notebook_fallback
+  04a_text_columns_deep_dive#summary:
+    stage: silver_post
+    notebook: 04a_text_columns_deep_dive
+    source: notebook_fallback
+  05_relationship_analysis#5_1_setup:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: notebook_fallback
+  05_relationship_analysis#5_1b_leakage_exclusion_gate:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: notebook_fallback
+  05_relationship_analysis#5_2_numeric_correlation_matrix:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: notebook_fallback
+  05_relationship_analysis#5_3_high_correlation_pairs:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: notebook_fallback
+  05_relationship_analysis#5_4_feature_distributions_by_retention_status:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: keyword_match
+  05_relationship_analysis#5_5_feature_target_correlations:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: keyword_match
+  05_relationship_analysis#5_6_categorical_feature_analysis:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: keyword_match
+  05_relationship_analysis#5_7_scatter_plot_matrix_sample:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: notebook_fallback
+  05_relationship_analysis#5_8_datetime_feature_analysis:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: keyword_match
+  05_relationship_analysis#5_9_1_feature_selection_recommendations:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: keyword_match
+  05_relationship_analysis#5_9_2_stratification_recommendations:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: notebook_fallback
+  05_relationship_analysis#5_9_3_model_selection_recommendations:
+    stage: training
+    notebook: 05_relationship_analysis
+    source: keyword_match
+  05_relationship_analysis#5_9_4_feature_engineering_recommendations:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: keyword_match
+  05_relationship_analysis#5_9_4b_statistical_feature_selection:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: keyword_match
+  05_relationship_analysis#5_9_5_recommendations_summary_table:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: notebook_fallback
+  05_relationship_analysis#5_9_actionable_recommendations_summary:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: notebook_fallback
+  05_relationship_analysis#chapter_5_relationship_analysis:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: keyword_match
+  05_relationship_analysis#interpreting_effect_sizes_cohen_s_d:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: notebook_fallback
+  05_relationship_analysis#interpreting_the_scatter_matrix_above:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: notebook_fallback
+  05_relationship_analysis#section:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: notebook_fallback
+  05_relationship_analysis#summary_what_we_learned:
+    stage: silver_post
+    notebook: 05_relationship_analysis
+    source: notebook_fallback
+  06_feature_opportunities#6_1_setup:
+    stage: silver_post
+    notebook: 06_feature_opportunities
+    source: notebook_fallback
+  06_feature_opportunities#6_2_automated_feature_recommendations:
+    stage: silver_post
+    notebook: 06_feature_opportunities
+    source: keyword_match
+  06_feature_opportunities#6_3_1_model_complexity_guidance:
+    stage: training
+    notebook: 06_feature_opportunities
+    source: keyword_match
+  06_feature_opportunities#6_3_2_segment_specific_capacity_for_multi_model_strategy:
+    stage: training
+    notebook: 06_feature_opportunities
+    source: keyword_match
+  06_feature_opportunities#6_3_3_feature_capacity_action_items:
+    stage: silver_post
+    notebook: 06_feature_opportunities
+    source: keyword_match
+  06_feature_opportunities#6_3_4_feature_availability_issues:
+    stage: silver_post
+    notebook: 06_feature_opportunities
+    source: keyword_match
+  06_feature_opportunities#6_3_feature_capacity_analysis:
+    stage: silver_post
+    notebook: 06_feature_opportunities
+    source: keyword_match
+  06_feature_opportunities#6_4_datetime_feature_opportunities:
+    stage: silver_post
+    notebook: 06_feature_opportunities
+    source: keyword_match
+  06_feature_opportunities#6_5_business_driven_derived_features:
+    stage: silver_post
+    notebook: 06_feature_opportunities
+    source: keyword_match
+  06_feature_opportunities#6_6_customer_segmentation_features:
+    stage: silver_post
+    notebook: 06_feature_opportunities
+    source: keyword_match
+  06_feature_opportunities#6_7_numeric_transformation_opportunities:
+    stage: silver_post
+    notebook: 06_feature_opportunities
+    source: notebook_fallback
+  06_feature_opportunities#6_8_categorical_encoding_opportunities:
+    stage: silver_post
+    notebook: 06_feature_opportunities
+    source: notebook_fallback
+  06_feature_opportunities#6_9_feature_summary_table:
+    stage: silver_post
+    notebook: 06_feature_opportunities
+    source: keyword_match
+  06_feature_opportunities#chapter_6_feature_opportunities:
+    stage: silver_post
+    notebook: 06_feature_opportunities
+    source: keyword_match
+  06_feature_opportunities#next_steps:
+    stage: silver_post
+    notebook: 06_feature_opportunities
+    source: notebook_fallback
+  06_feature_opportunities#summary_what_we_learned:
+    stage: silver_post
+    notebook: 06_feature_opportunities
+    source: notebook_fallback
+  07_modeling_readiness#7_1_setup:
+    stage: silver_post
+    notebook: 07_modeling_readiness
+    source: notebook_fallback
+  07_modeling_readiness#7_2_modeling_readiness_checklist:
+    stage: silver_post
+    notebook: 07_modeling_readiness
+    source: keyword_match
+  07_modeling_readiness#7_3_class_imbalance_analysis:
+    stage: silver_post
+    notebook: 07_modeling_readiness
+    source: notebook_fallback
+  07_modeling_readiness#7_4_data_leakage_risk_assessment:
+    stage: silver_post
+    notebook: 07_modeling_readiness
+    source: notebook_fallback
+  07_modeling_readiness#7_5_feature_type_summary:
+    stage: silver_post
+    notebook: 07_modeling_readiness
+    source: keyword_match
+  07_modeling_readiness#7_6_readiness_score:
+    stage: silver_post
+    notebook: 07_modeling_readiness
+    source: notebook_fallback
+  07_modeling_readiness#7_7_feature_availability_status:
+    stage: silver_post
+    notebook: 07_modeling_readiness
+    source: keyword_match
+  07_modeling_readiness#7_x_final_leakage_validation:
+    stage: silver_post
+    notebook: 07_modeling_readiness
+    source: notebook_fallback
+  07_modeling_readiness#chapter_7_modeling_readiness:
+    stage: silver_post
+    notebook: 07_modeling_readiness
+    source: keyword_match
+  07_modeling_readiness#section:
+    stage: silver_post
+    notebook: 07_modeling_readiness
+    source: notebook_fallback
+  07_modeling_readiness#summary_what_we_learned:
+    stage: silver_post
+    notebook: 07_modeling_readiness
+    source: notebook_fallback
+  08_baseline_experiments#8_1_setup:
+    stage: training
+    notebook: 08_baseline_experiments
+    source: notebook_fallback
+  08_baseline_experiments#8_2_2_feature_availability:
+    stage: silver_post
+    notebook: 08_baseline_experiments
+    source: keyword_match
+  08_baseline_experiments#8_2_3_gold_transforms:
+    stage: training
+    notebook: 08_baseline_experiments
+    source: notebook_fallback
+  08_baseline_experiments#8_2_4_temporal_split:
+    stage: training
+    notebook: 08_baseline_experiments
+    source: notebook_fallback
+  08_baseline_experiments#8_2_5_chi_squared_selection:
+    stage: training
+    notebook: 08_baseline_experiments
+    source: notebook_fallback
+  08_baseline_experiments#8_2_6_l1_feature_selection:
+    stage: silver_post
+    notebook: 08_baseline_experiments
+    source: keyword_match
+  08_baseline_experiments#8_2_7_gbdt_selection:
+    stage: training
+    notebook: 08_baseline_experiments
+    source: notebook_fallback
+  08_baseline_experiments#8_2_8_feature_profile_snapshot:
+    stage: silver_post
+    notebook: 08_baseline_experiments
+    source: keyword_match
+  08_baseline_experiments#8_2_prepare_data_for_modeling:
+    stage: silver_post
+    notebook: 08_baseline_experiments
+    source: keyword_match
+  08_baseline_experiments#8_3_baseline_models_with_class_weights:
+    stage: training
+    notebook: 08_baseline_experiments
+    source: keyword_match
+  08_baseline_experiments#8_4_feature_importance_random_forest:
+    stage: silver_post
+    notebook: 08_baseline_experiments
+    source: keyword_match
+  08_baseline_experiments#8_5_classification_report_best_model:
+    stage: training
+    notebook: 08_baseline_experiments
+    source: keyword_match
+  08_baseline_experiments#8_6_1_individual_model_analysis:
+    stage: training
+    notebook: 08_baseline_experiments
+    source: keyword_match
+  08_baseline_experiments#8_6_1_precision_recall_curves:
+    stage: training
+    notebook: 08_baseline_experiments
+    source: notebook_fallback
+  08_baseline_experiments#8_6_model_comparison_grid:
+    stage: training
+    notebook: 08_baseline_experiments
+    source: keyword_match
+  08_baseline_experiments#8_7_key_takeaways:
+    stage: training
+    notebook: 08_baseline_experiments
+    source: notebook_fallback
+  08_baseline_experiments#chapter_8_baseline_experiments:
+    stage: training
+    notebook: 08_baseline_experiments
+    source: keyword_match
+  08_baseline_experiments#next_steps:
+    stage: training
+    notebook: 08_baseline_experiments
+    source: notebook_fallback
+  08_baseline_experiments#section:
+    stage: training
+    notebook: 08_baseline_experiments
+    source: notebook_fallback
+  08_baseline_experiments#summary_what_we_learned:
+    stage: training
+    notebook: 08_baseline_experiments
+    source: notebook_fallback
+  09_business_alignment#9_1_setup:
+    stage: null
+    notebook: 09_business_alignment
+    source: unmappable
+  09_business_alignment#9_2_business_context:
+    stage: null
+    notebook: 09_business_alignment
+    source: unmappable
+  09_business_alignment#9_3_success_metrics:
+    stage: null
+    notebook: 09_business_alignment
+    source: unmappable
+  09_business_alignment#9_4_deployment_requirements:
+    stage: null
+    notebook: 09_business_alignment
+    source: unmappable
+  09_business_alignment#9_5_data_constraints:
+    stage: null
+    notebook: 09_business_alignment
+    source: unmappable
+  09_business_alignment#9_6_intervention_strategy:
+    stage: null
+    notebook: 09_business_alignment
+    source: unmappable
+  09_business_alignment#9_7_save_business_context_to_findings:
+    stage: null
+    notebook: 09_business_alignment
+    source: unmappable
+  09_business_alignment#9_diagnostics_to_business_separator:
+    stage: null
+    notebook: 09_business_alignment
+    source: unmappable
+  09_business_alignment#9_feature_provenance:
+    stage: silver_post
+    notebook: 09_business_alignment
+    source: keyword_match
+  09_business_alignment#9_model_diagnostics:
+    stage: training
+    notebook: 09_business_alignment
+    source: keyword_match
+  09_business_alignment#chapter_9_business_alignment:
+    stage: null
+    notebook: 09_business_alignment
+    source: unmappable
+  09_business_alignment#next_steps:
+    stage: null
+    notebook: 09_business_alignment
+    source: unmappable
+  09_business_alignment#section:
+    stage: null
+    notebook: 09_business_alignment
+    source: unmappable
+  10_spec_generation#10_10_next_steps:
+    stage: null
+    notebook: 10_spec_generation
+    source: unmappable
+  10_spec_generation#10_1_configuration:
+    stage: null
+    notebook: 10_spec_generation
+    source: unmappable
+  10_spec_generation#10_2_load_findings_and_recommendations:
+    stage: null
+    notebook: 10_spec_generation
+    source: unmappable
+  10_spec_generation#10_3_review_layered_recommendations:
+    stage: null
+    notebook: 10_spec_generation
+    source: unmappable
+  10_spec_generation#10_4_generate_pipeline:
+    stage: null
+    notebook: 10_spec_generation
+    source: unmappable
+  10_spec_generation#10_5_convert_to_notebooks_optional:
+    stage: null
+    notebook: 10_spec_generation
+    source: unmappable
+  10_spec_generation#10_6_run_pipeline:
+    stage: null
+    notebook: 10_spec_generation
+    source: unmappable
+  10_spec_generation#10_7_summary:
+    stage: null
+    notebook: 10_spec_generation
+    source: unmappable
+  10_spec_generation#10_8_run_namespace:
+    stage: null
+    notebook: 10_spec_generation
+    source: unmappable
+  10_spec_generation#10_9_feature_store_validation:
+    stage: silver_post
+    notebook: 10_spec_generation
+    source: keyword_match
+  10_spec_generation#chapter_10_pipeline_generation:
+    stage: null
+    notebook: 10_spec_generation
+    source: unmappable
+  10_spec_generation#option_a_local_feast_mlflow:
+    stage: null
+    notebook: 10_spec_generation
+    source: unmappable
+  10_spec_generation#option_b_databricks_fs_mlflow:
+    stage: null
+    notebook: 10_spec_generation
+    source: unmappable
+  10_spec_generation#option_c_llm_documentation:
+    stage: null
+    notebook: 10_spec_generation
+    source: unmappable
+  10_spec_generation#section:
+    stage: null
+    notebook: 10_spec_generation
+    source: unmappable
+  10_spec_generation#section_databricks_feature_store:
+    stage: silver_post
+    notebook: 10_spec_generation
+    source: keyword_match
+  11_scoring_validation#11_10_parity_report:
+    stage: null
+    notebook: 11_scoring_validation
+    source: unmappable
+  11_scoring_validation#11_1_run_scoring:
+    stage: null
+    notebook: 11_scoring_validation
+    source: unmappable
+  11_scoring_validation#11_2_summary_metrics:
+    stage: null
+    notebook: 11_scoring_validation
+    source: unmappable
+  11_scoring_validation#11_3_model_comparison_grid:
+    stage: training
+    notebook: 11_scoring_validation
+    source: keyword_match
+  11_scoring_validation#11_4_adversarial_pipeline_validation:
+    stage: null
+    notebook: 11_scoring_validation
+    source: unmappable
+  11_scoring_validation#11_5_transformation_validation:
+    stage: null
+    notebook: 11_scoring_validation
+    source: unmappable
+  11_scoring_validation#11_6_model_explanations_shap:
+    stage: training
+    notebook: 11_scoring_validation
+    source: keyword_match
+  11_scoring_validation#11_7_customer_browser:
+    stage: null
+    notebook: 11_scoring_validation
+    source: unmappable
+  11_scoring_validation#11_8_error_analysis:
+    stage: null
+    notebook: 11_scoring_validation
+    source: unmappable
+  11_scoring_validation#11_9_export_results:
+    stage: null
+    notebook: 11_scoring_validation
+    source: unmappable
+  11_scoring_validation#chapter_11_scoring_validation_explanations:
+    stage: null
+    notebook: 11_scoring_validation
+    source: unmappable
+  11_scoring_validation#section:
+    stage: null
+    notebook: 11_scoring_validation
+    source: unmappable
+  12_view_documentation#view_documentation:
+    stage: null
+    notebook: 12_view_documentation
+    source: unmappable
+unmappable_cells: []
