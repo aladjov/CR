@@ -1,31 +1,39 @@
 """Distributed SHAP computation for the causal track.
 
-Computes per-row SHAP values as linear attribution:
-``shap_i(row) = importance_i * (x_i - background_mean_i)``.
+Two computation paths, both fully distributed with no model pickling and no
+``SparkContext`` capture on workers:
 
-- Exact SHAP for linear models (LogisticRegression) — well-known identity
-- First-order approximation for tree ensembles (GBT / RandomForest)
-- Fully distributed via one ``spark_df.select(*attribution_exprs)`` job
-- No ``pandas_udf``, no model pickling, no SparkContext capture on workers
-- Safe on Databricks shared clusters / Unity Catalog (all Spark Connect-compatible)
+1. ``compute_shap_distributed`` — **linear attribution** (default / fast path).
+   ``shap_i(row) = importance_i * (x_i - background_mean_i)``.
+   Exact SHAP for linear models (LogisticRegression — well-known identity),
+   first-order approximation for tree ensembles (GBT / RandomForest).
+   One ``spark_df.select(*attribution_exprs)`` job, pure Spark SQL.
 
-Two public entry points:
+2. ``compute_shap_sampling_distributed`` — **Monte Carlo Shapley Sampling**
+   (Štrumbelj & Kononenko 2014). Estimates exact Shapley values by averaging
+   marginal contributions across random feature permutations. Runs on top of
+   ``mlflow.pyfunc.spark_udf`` — the model loads on each executor from the
+   MLflow registry, never pickled through a closure. Spark 4.0 compatible,
+   model-agnostic (any flavor registered in MLflow: Spark ML, sklearn,
+   xgboost, etc.). Higher cost than linear (O(N × K × M) predict calls) but
+   yields true Shapley values as K → ∞.
 
-- ``freeze_background(spark_df, feature_columns, target_col, n)`` — stratified
-  sample of ``n`` rows that is reused as the reference dataset for the
-  ``background_mean`` term. Frozen once per derivation run and persisted to the
-  ``shap_background`` Delta table so SHAP values stay comparable across runs
+Shared public entry points:
+
+- ``freeze_background`` — stratified sample of ``n`` rows used as the
+  reference baseline. Persisted so SHAP values stay comparable across runs
   (Lundberg & Lee 2017 require a fixed background).
 
-- ``compute_shap_distributed(spark_df, feature_columns, model, background, join_key)``
-  — returns a Spark DataFrame with the join key plus one ``shap_<feature>``
-  column per feature, plus ``shap_expected_value`` (identically 0.0 —
-  centered contributions sum to zero by construction; downstream clustering
-  does not consume this column's value).
+- ``extract_top_drivers_per_account`` — per-account top-k feature-driver
+  extraction for the ``top_shap_drivers`` Delta cache (Phase 2 use).
 
-The only collect happens inside ``freeze_background`` (bounded to ``n``
-rows). ``compute_shap_distributed`` stays distributed throughout — no
-``.collect()`` / ``.toPandas()`` on cohort-size data.
+Implementation notes:
+
+- No ``pandas_udf`` anywhere — historical ``CONTEXT_ONLY_VALID_ON_DRIVER``
+  failure mode fully eliminated.
+- The only driver-side collect happens inside ``freeze_background``
+  (bounded to ``n`` rows). Both SHAP paths stay distributed throughout.
+- Safe on Databricks shared clusters / Unity Catalog (Spark Connect-compatible).
 """
 
 from __future__ import annotations
@@ -414,3 +422,255 @@ def _uniform_fraction(spark_df: "DataFrame", n: int, row_count: Optional[int] = 
     if total <= n:
         return 1.0
     return min(1.0, (n * 1.5) / total)
+
+
+# ---------------------------------------------------------------------------
+# Public API — Shapley Sampling path
+# ---------------------------------------------------------------------------
+
+
+DEFAULT_NUM_SAMPLES: int = 50
+
+
+def compute_shap_sampling_distributed(
+    spark_df: "DataFrame",
+    feature_columns: Sequence[str],
+    model_uri: str,
+    background: BackgroundSample,
+    join_key: str = "account_id",
+    num_samples: int = DEFAULT_NUM_SAMPLES,
+    seed: int = 42,
+) -> ShapRunResult:
+    """Compute per-row SHAP via Monte Carlo Shapley Sampling (Štrumbelj 2014).
+
+    For each ``(row, feature_i)`` pair, averages the marginal contribution
+    ``f(x_with_i) − f(x_without_i)`` across ``num_samples`` random
+    permutations where:
+      - ``x_with_i[j] = row[j] if j precedes or equals i in the permutation else bg[j]``
+      - ``x_without_i[j] = row[j] if j precedes i in the permutation else bg[j]``
+      - ``bg`` is the mean of ``background.rows`` (interventional baseline).
+
+    The model is provided as an MLflow ``model_uri`` (registry URI or run
+    URI). It loads on each executor via ``mlflow.pyfunc.spark_udf`` — no
+    pickling of the model object, no SparkContext capture, Spark 4.0 safe.
+
+    Converges to exact Shapley as ``num_samples → ∞``. 30–50 samples are
+    adequate for stable top-K driver rankings in typical tabular settings.
+    """
+    if not feature_columns:
+        raise ValueError("compute_shap_sampling_distributed requires at least one feature column")
+    if join_key not in spark_df.columns:
+        raise ValueError(f"join_key {join_key!r} not present in spark_df.columns")
+    if not model_uri:
+        raise ValueError("model_uri is required for the sampling SHAP path")
+    if num_samples < 1:
+        raise ValueError(f"num_samples must be >= 1, got {num_samples}")
+
+    missing = [c for c in feature_columns if c not in spark_df.columns]
+    if missing:
+        raise ValueError(f"feature columns not in spark_df.columns: {missing}")
+
+    feature_order = list(feature_columns)
+    num_features = len(feature_order)
+
+    bg_means = _background_means(background, feature_order, spark_df)
+    permutations = _sample_permutations(num_features, num_samples, seed)
+    plan_rows = _build_sampling_plan(permutations, num_features)
+
+    import mlflow.pyfunc
+    from pyspark.sql import functions as F  # noqa: N812
+    from pyspark.sql.types import (
+        ArrayType,
+        BooleanType,
+        IntegerType,
+        StructField,
+        StructType,
+    )
+
+    spark = spark_df.sparkSession
+    predict_udf = mlflow.pyfunc.spark_udf(spark, model_uri)
+
+    plan_schema = StructType([
+        StructField("sample_id", IntegerType(), False),
+        StructField("feature_idx", IntegerType(), False),
+        StructField("before_mask", ArrayType(BooleanType()), False),
+    ])
+    plan_df = spark.createDataFrame(plan_rows, schema=plan_schema)
+    expanded = spark_df.crossJoin(plan_df)
+
+    with_df = expanded.select(
+        F.col(join_key),
+        F.col("sample_id"),
+        F.col("feature_idx"),
+        F.lit("with").alias("__variant__"),
+        *_variant_feature_cols(feature_order, bg_means, variant="with"),
+    )
+    without_df = expanded.select(
+        F.col(join_key),
+        F.col("sample_id"),
+        F.col("feature_idx"),
+        F.lit("without").alias("__variant__"),
+        *_variant_feature_cols(feature_order, bg_means, variant="without"),
+    )
+    both = with_df.union(without_df)
+
+    predicted = both.withColumn(
+        "__pred__", predict_udf(*[F.col(f) for f in feature_order])
+    )
+    signed = predicted.withColumn(
+        "__signed__",
+        F.when(F.col("__variant__") == F.lit("with"), F.col("__pred__")).otherwise(
+            -F.col("__pred__")
+        ),
+    )
+    averaged = (
+        signed.groupBy(join_key, "feature_idx")
+        .agg((F.sum("__signed__") / F.lit(float(num_samples))).alias("__shap__"))
+    )
+    wide = (
+        averaged.groupBy(join_key)
+        .pivot("feature_idx", list(range(num_features)))
+        .agg(F.first("__shap__"))
+    )
+    shap_columns = [f"{SHAP_PREFIX}{name}" for name in feature_order]
+    shap_df = wide.select(
+        F.col(join_key),
+        *[F.col(str(idx)).alias(shap_columns[idx]) for idx in range(num_features)],
+        F.lit(0.0).alias(EXPECTED_VALUE_COL),
+    )
+
+    return ShapRunResult(
+        shap_df=shap_df,
+        feature_columns=feature_order,
+        shap_columns=shap_columns,
+        background_size=background.sample_size,
+    )
+
+
+def extract_top_drivers_per_account(
+    spark_df: "DataFrame",
+    shap_df: "DataFrame",
+    feature_columns: Sequence[str],
+    join_key: str = "account_id",
+    k: int = 5,
+) -> "DataFrame":
+    """Build a per-account DataFrame of the top-k SHAP drivers.
+
+    Output matches ``schemas._per_account_shap_driver_struct``:
+    ``[join_key, top_drivers: array<struct<feature, value, shap_contribution, direction>>]``.
+    Consumed by the ``top_shap_drivers`` Delta cache that
+    ``snapshot_writer._join_top_shap_drivers`` reads at dashboard time.
+
+    Sort is by ``|shap|`` descending via a three-field struct whose first
+    field is ``abs(shap)`` — ``F.sort_array`` sorts struct elements
+    lexicographically by the first field — then ``F.transform`` strips the
+    sort key so the output struct matches the Delta schema exactly.
+
+    Direction is ``"positive"`` / ``"negative"`` / ``"neutral"`` based on
+    the SHAP sign.
+    """
+    if join_key not in spark_df.columns:
+        raise ValueError(f"join_key {join_key!r} not present in spark_df.columns")
+    if join_key not in shap_df.columns:
+        raise ValueError(f"join_key {join_key!r} not present in shap_df.columns")
+    if k < 1:
+        raise ValueError(f"k must be >= 1, got {k}")
+
+    missing_features = [c for c in feature_columns if c not in spark_df.columns]
+    if missing_features:
+        raise ValueError(f"feature columns not in spark_df.columns: {missing_features}")
+
+    shap_columns = [f"{SHAP_PREFIX}{c}" for c in feature_columns]
+    missing_shap = [c for c in shap_columns if c not in shap_df.columns]
+    if missing_shap:
+        raise ValueError(f"shap columns not in shap_df.columns: {missing_shap}")
+
+    from pyspark.sql import functions as F  # noqa: N812
+
+    joined = spark_df.select(join_key, *feature_columns).join(
+        shap_df.select(join_key, *shap_columns), on=join_key, how="inner"
+    )
+
+    driver_structs = [
+        F.struct(
+            F.abs(F.col(shap_col)).alias("abs_shap"),
+            F.lit(name).alias("feature"),
+            F.col(name).cast("double").alias("value"),
+            F.col(shap_col).alias("shap_contribution"),
+            F.when(F.col(shap_col) > F.lit(0.0), F.lit("positive"))
+            .when(F.col(shap_col) < F.lit(0.0), F.lit("negative"))
+            .otherwise(F.lit("neutral")).alias("direction"),
+        )
+        for name, shap_col in zip(feature_columns, shap_columns)
+    ]
+    sorted_arr = F.sort_array(F.array(*driver_structs), asc=False)
+    top_k = F.slice(sorted_arr, 1, k)
+    cleaned = F.transform(
+        top_k,
+        lambda s: F.struct(
+            s["feature"].alias("feature"),
+            s["value"].alias("value"),
+            s["shap_contribution"].alias("shap_contribution"),
+            s["direction"].alias("direction"),
+        ),
+    )
+    return joined.select(F.col(join_key), cleaned.alias("top_drivers"))
+
+
+# ---------------------------------------------------------------------------
+# Internals — Shapley sampling plan (pure Python, deterministic with seed)
+# ---------------------------------------------------------------------------
+
+
+def _sample_permutations(num_features: int, num_samples: int, seed: int) -> List[List[int]]:
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    return [rng.permutation(num_features).tolist() for _ in range(num_samples)]
+
+
+def _build_sampling_plan(
+    permutations: Sequence[Sequence[int]], num_features: int
+) -> List[Tuple[int, int, List[bool]]]:
+    """Return (sample_id, feature_idx, before_mask) rows for the sampling expansion.
+
+    ``before_mask[j]`` is True iff feature ``j`` precedes ``feature_idx`` in
+    ``permutations[sample_id]``. The chosen feature ``feature_idx`` itself
+    is always False (it is added in the "with" variant via a separate
+    condition on ``feature_idx == j``).
+    """
+    plan: List[Tuple[int, int, List[bool]]] = []
+    for sample_id, perm in enumerate(permutations):
+        perm_list = list(perm)
+        position_of = [0] * num_features
+        for position, feature_j in enumerate(perm_list):
+            position_of[feature_j] = position
+        for feature_idx in range(num_features):
+            p = position_of[feature_idx]
+            before_mask = [position_of[j] < p for j in range(num_features)]
+            plan.append((sample_id, feature_idx, before_mask))
+    return plan
+
+
+def _variant_feature_cols(
+    feature_order: Sequence[str],
+    bg_means: Dict[str, float],
+    variant: str,
+) -> List[Any]:
+    """Build ``F.when(...)`` expressions for one variant (with / without).
+
+    For each feature ``j``, its value in the synthesized row is:
+    - ``"with"`` variant: ``row[j] if before_mask[j] or j == feature_idx else bg[j]``
+    - ``"without"`` variant: ``row[j] if before_mask[j] else bg[j]``
+    """
+    from pyspark.sql import functions as F  # noqa: N812
+
+    cols: List[Any] = []
+    for j, name in enumerate(feature_order):
+        mask_entry = F.element_at(F.col("before_mask"), j + 1)
+        if variant == "with":
+            condition = mask_entry | (F.col("feature_idx") == F.lit(j))
+        else:
+            condition = mask_entry
+        cols.append(F.when(condition, F.col(name)).otherwise(F.lit(float(bg_means[name]))).alias(name))
+    return cols

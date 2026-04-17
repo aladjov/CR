@@ -26,6 +26,7 @@ from customer_retention.stages.causal.playbook_mapper import (
     ArchetypeSummary,
 )
 from customer_retention.stages.causal.rule_extractor import ExtractedRule
+from customer_retention.stages.causal.shap_runner import BackgroundSample
 
 # ---------------------------------------------------------------------------
 # Pure helpers
@@ -335,3 +336,67 @@ class TestWriteRowsValidation:
         cfg.eligibility_policy_fqn = ""
         with pytest.raises(ValueError, match="eligibility_policy_fqn"):
             derivation._write_rows(cfg, archetype_rows=[], policy_rows=[])
+
+
+class TestShapMethodRouting:
+    """Verify DerivationConfig.shap_method dispatches to the correct runner."""
+
+    def test_default_method_is_linear(self):
+        cfg = _make_config()
+        assert cfg.shap_method == "linear"
+
+    def test_linear_method_routes_to_compute_shap_distributed(self, monkeypatch):
+        import customer_retention.stages.causal.derivation as mod
+
+        linear = MagicMock(return_value="linear_result")
+        sampling = MagicMock(return_value="sampling_result")
+        monkeypatch.setattr(mod, "compute_shap_distributed", linear)
+        monkeypatch.setattr(mod, "compute_shap_sampling_distributed", sampling)
+
+        cfg = _make_config()
+        cfg.shap_method = "linear"
+        bg = BackgroundSample(rows=[], feature_columns=[], sample_size=0)
+        out = mod._compute_shap(cfg, bg)
+        assert out == "linear_result"
+        linear.assert_called_once()
+        sampling.assert_not_called()
+
+    def test_sampling_method_routes_to_compute_shap_sampling_distributed(self, monkeypatch):
+        import customer_retention.stages.causal.derivation as mod
+
+        linear = MagicMock(return_value="linear_result")
+        sampling = MagicMock(return_value="sampling_result")
+        monkeypatch.setattr(mod, "compute_shap_distributed", linear)
+        monkeypatch.setattr(mod, "compute_shap_sampling_distributed", sampling)
+
+        cfg = _make_config()
+        cfg.shap_method = "sampling"
+        cfg.shap_model_uri = "models:/m@production"
+        cfg.shap_num_samples = 30
+        bg = BackgroundSample(rows=[], feature_columns=[], sample_size=0)
+        out = mod._compute_shap(cfg, bg)
+        assert out == "sampling_result"
+        linear.assert_not_called()
+        sampling.assert_called_once()
+        call = sampling.call_args
+        assert call.kwargs["model_uri"] == "models:/m@production"
+        assert call.kwargs["num_samples"] == 30
+
+    def test_sampling_method_without_model_uri_fails_fast(self):
+        import customer_retention.stages.causal.derivation as mod
+
+        cfg = _make_config()
+        cfg.shap_method = "sampling"
+        cfg.shap_model_uri = None
+        bg = BackgroundSample(rows=[], feature_columns=[], sample_size=0)
+        with pytest.raises(ValueError, match="shap_model_uri"):
+            mod._compute_shap(cfg, bg)
+
+    def test_unknown_method_fails_fast(self):
+        import customer_retention.stages.causal.derivation as mod
+
+        cfg = _make_config()
+        cfg.shap_method = "bogus"
+        bg = BackgroundSample(rows=[], feature_columns=[], sample_size=0)
+        with pytest.raises(ValueError, match="shap_method"):
+            mod._compute_shap(cfg, bg)

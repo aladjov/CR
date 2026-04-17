@@ -60,8 +60,10 @@ from .schemas import archetype_catalog_schema, eligibility_policy_schema
 from .shap_runner import (
     DEFAULT_BACKGROUND_SIZE,
     DEFAULT_BATCH_SIZE,
+    DEFAULT_NUM_SAMPLES,
     BackgroundSample,
     compute_shap_distributed,
+    compute_shap_sampling_distributed,
     freeze_background,
 )
 
@@ -109,6 +111,9 @@ class DerivationConfig:
     llm_endpoint_name: Optional[str] = None
     llm_namer: Optional[LLMNamer] = None
     write: bool = True
+    shap_method: str = "linear"
+    shap_model_uri: Optional[str] = None
+    shap_num_samples: int = DEFAULT_NUM_SAMPLES
 
 
 @dataclass
@@ -165,15 +170,9 @@ def derive_archetypes_and_policies(config: DerivationConfig) -> DerivationResult
     )
     logger.info("Background frozen: %d rows", background.sample_size)
 
-    shap_result = compute_shap_distributed(
-        spark_df=config.training_df,
-        feature_columns=config.feature_columns,
-        model=config.model,
-        background=background,
-        join_key=config.join_key,
-    )
+    shap_result = _compute_shap(config, background)
     if shap_result.shap_df is None:
-        raise RuntimeError("compute_shap_distributed returned an empty result")
+        raise RuntimeError("SHAP computation returned an empty result")
 
     clustering = cluster_kmeans(
         shap_df=shap_result.shap_df,
@@ -277,6 +276,43 @@ def derive_archetypes_and_policies(config: DerivationConfig) -> DerivationResult
         extracted_rules=extracted_rules,
         mappings=mappings,
         llm_model_id=namer.model_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Internals — SHAP dispatch
+# ---------------------------------------------------------------------------
+
+
+_SHAP_METHOD_LINEAR = "linear"
+_SHAP_METHOD_SAMPLING = "sampling"
+
+
+def _compute_shap(config: DerivationConfig, background: BackgroundSample):
+    if config.shap_method == _SHAP_METHOD_LINEAR:
+        return compute_shap_distributed(
+            spark_df=config.training_df,
+            feature_columns=config.feature_columns,
+            model=config.model,
+            background=background,
+            join_key=config.join_key,
+        )
+    if config.shap_method == _SHAP_METHOD_SAMPLING:
+        if not config.shap_model_uri:
+            raise ValueError(
+                "shap_method='sampling' requires DerivationConfig.shap_model_uri "
+                "(the MLflow registry URI, e.g. 'models:/<name>@production')"
+            )
+        return compute_shap_sampling_distributed(
+            spark_df=config.training_df,
+            feature_columns=config.feature_columns,
+            model_uri=config.shap_model_uri,
+            background=background,
+            join_key=config.join_key,
+            num_samples=config.shap_num_samples,
+        )
+    raise ValueError(
+        f"Unknown shap_method={config.shap_method!r}; expected 'linear' or 'sampling'"
     )
 
 

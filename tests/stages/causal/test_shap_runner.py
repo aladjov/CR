@@ -45,7 +45,14 @@ from customer_retention.stages.causal.shap_runner import (
 
 
 class _Aliasable:
-    """Column-like stub used for row access and chaining in mock Spark DFs."""
+    """Column-like stub used for row access and chaining in mock Spark DFs.
+
+    Supports the PySpark ``Column`` operator surface we exercise in
+    expression-builder tests: ``alias``, ``cast``, ``__eq__`` / ``__ne__``
+    (returning Column-like, not bool), boolean ops ``|`` / ``&`` / ``~``,
+    so mask conditions like ``mask_entry | (col == lit)`` do not trip
+    over native Python booleans.
+    """
 
     def __init__(self, name: str) -> None:
         self.name = name
@@ -55,6 +62,51 @@ class _Aliasable:
 
     def cast(self, _t: str) -> "_Aliasable":
         return self
+
+    def __eq__(self, other: Any) -> "_Aliasable":  # type: ignore[override]
+        return _Aliasable(f"({self.name}=={other})")
+
+    def __ne__(self, other: Any) -> "_Aliasable":  # type: ignore[override]
+        return _Aliasable(f"({self.name}!={other})")
+
+    def __or__(self, other: Any) -> "_Aliasable":
+        return _Aliasable(f"({self.name}|{other})")
+
+    def __and__(self, other: Any) -> "_Aliasable":
+        return _Aliasable(f"({self.name}&{other})")
+
+    def __invert__(self) -> "_Aliasable":
+        return _Aliasable(f"~({self.name})")
+
+    def __neg__(self) -> "_Aliasable":
+        return _Aliasable(f"-({self.name})")
+
+    def __gt__(self, other: Any) -> "_Aliasable":
+        return _Aliasable(f"({self.name}>{other})")
+
+    def __lt__(self, other: Any) -> "_Aliasable":
+        return _Aliasable(f"({self.name}<{other})")
+
+    def otherwise(self, other: Any) -> "_Aliasable":
+        return _Aliasable(f"otherwise({self.name},{other})")
+
+    def when(self, _cond: Any, _value: Any) -> "_Aliasable":
+        return self
+
+    def __truediv__(self, other: Any) -> "_Aliasable":
+        return _Aliasable(f"({self.name}/{other})")
+
+    def __sub__(self, other: Any) -> "_Aliasable":
+        return _Aliasable(f"({self.name}-{other})")
+
+    def __add__(self, other: Any) -> "_Aliasable":
+        return _Aliasable(f"({self.name}+{other})")
+
+    def __mul__(self, other: Any) -> "_Aliasable":
+        return _Aliasable(f"({self.name}*{other})")
+
+    def __hash__(self) -> int:
+        return id(self)
 
 
 class _RecordingExpr:
@@ -718,3 +770,524 @@ class TestUnwrapTreeModel:
         pyfunc_model._model_impl = impl
         self._install_fake_mlflow(monkeypatch, pyfunc_model)
         assert unwrap_tree_model(pyfunc_model) is custom_model
+
+
+# ---------------------------------------------------------------------------
+# Shapley Sampling — sampling plan (pure Python, deterministic with seed)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildSamplingPlan:
+    def test_plan_shape_num_samples_times_num_features(self):
+        import numpy as np
+
+        rng = np.random.default_rng(7)
+        perms = [rng.permutation(4).tolist() for _ in range(3)]
+        plan = shap_runner._build_sampling_plan(perms, num_features=4)
+        assert len(plan) == 3 * 4
+
+    def test_each_sample_feature_pair_appears_exactly_once(self):
+        import numpy as np
+
+        rng = np.random.default_rng(7)
+        perms = [rng.permutation(5).tolist() for _ in range(4)]
+        plan = shap_runner._build_sampling_plan(perms, num_features=5)
+        seen = {(s, f) for s, f, _mask in plan}
+        assert seen == {(s, f) for s in range(4) for f in range(5)}
+
+    def test_before_mask_never_includes_the_chosen_feature(self):
+        import numpy as np
+
+        rng = np.random.default_rng(11)
+        perms = [rng.permutation(6).tolist() for _ in range(2)]
+        plan = shap_runner._build_sampling_plan(perms, num_features=6)
+        for sample_id, feature_idx, before_mask in plan:
+            assert before_mask[feature_idx] is False, (
+                f"before_mask[{feature_idx}] must be False; sample_id={sample_id}"
+            )
+
+    def test_before_mask_count_equals_position_in_permutation(self):
+        import numpy as np
+
+        rng = np.random.default_rng(13)
+        perms = [rng.permutation(5).tolist() for _ in range(3)]
+        plan = shap_runner._build_sampling_plan(perms, num_features=5)
+        for sample_id, feature_idx, before_mask in plan:
+            perm = perms[sample_id]
+            expected_position = perm.index(feature_idx)
+            assert sum(before_mask) == expected_position
+
+    def test_before_mask_matches_features_preceding_in_permutation(self):
+        perms = [[2, 0, 3, 1]]
+        plan = shap_runner._build_sampling_plan(perms, num_features=4)
+        plan_by_feature = {f: m for _s, f, m in plan}
+        # feature 2 is at position 0 → no features before it
+        assert plan_by_feature[2] == [False, False, False, False]
+        # feature 0 is at position 1 → feature 2 precedes it
+        assert plan_by_feature[0] == [False, False, True, False]
+        # feature 3 is at position 2 → features 2 and 0 precede
+        assert plan_by_feature[3] == [True, False, True, False]
+        # feature 1 is at position 3 → features 2, 0, 3 precede
+        assert plan_by_feature[1] == [True, False, True, True]
+
+    def test_deterministic_given_seed(self):
+        import numpy as np
+
+        rng_a = np.random.default_rng(42)
+        rng_b = np.random.default_rng(42)
+        perms_a = [rng_a.permutation(10).tolist() for _ in range(5)]
+        perms_b = [rng_b.permutation(10).tolist() for _ in range(5)]
+        plan_a = shap_runner._build_sampling_plan(perms_a, num_features=10)
+        plan_b = shap_runner._build_sampling_plan(perms_b, num_features=10)
+        assert plan_a == plan_b
+
+
+# ---------------------------------------------------------------------------
+# compute_shap_sampling_distributed — validation
+# ---------------------------------------------------------------------------
+
+
+class TestComputeShapSamplingValidation:
+    def test_empty_feature_columns_raises(self):
+        df = MagicMock(name="DF")
+        df.columns = ["account_id", "feat_a"]
+        with pytest.raises(ValueError, match="at least one feature column"):
+            shap_runner.compute_shap_sampling_distributed(
+                spark_df=df,
+                feature_columns=[],
+                model_uri="models:/foo@production",
+                background=BackgroundSample(),
+            )
+
+    def test_missing_join_key_raises(self):
+        df = MagicMock(name="DF")
+        df.columns = ["feat_a", "feat_b"]
+        with pytest.raises(ValueError, match="join_key"):
+            shap_runner.compute_shap_sampling_distributed(
+                spark_df=df,
+                feature_columns=["feat_a"],
+                model_uri="models:/foo@production",
+                background=BackgroundSample(),
+            )
+
+    def test_num_samples_zero_raises(self):
+        df = MagicMock(name="DF")
+        df.columns = ["account_id", "feat_a"]
+        with pytest.raises(ValueError, match="num_samples"):
+            shap_runner.compute_shap_sampling_distributed(
+                spark_df=df,
+                feature_columns=["feat_a"],
+                model_uri="models:/foo@production",
+                background=BackgroundSample(),
+                num_samples=0,
+            )
+
+    def test_missing_feature_column_in_spark_df_raises(self):
+        df = MagicMock(name="DF")
+        df.columns = ["account_id", "feat_a"]
+        with pytest.raises(ValueError, match=r"feature columns not in spark_df\.columns.*feat_missing"):
+            shap_runner.compute_shap_sampling_distributed(
+                spark_df=df,
+                feature_columns=["feat_a", "feat_missing"],
+                model_uri="models:/foo@production",
+                background=BackgroundSample(),
+            )
+
+    def test_empty_model_uri_raises(self):
+        df = MagicMock(name="DF")
+        df.columns = ["account_id", "feat_a"]
+        with pytest.raises(ValueError, match="model_uri"):
+            shap_runner.compute_shap_sampling_distributed(
+                spark_df=df,
+                feature_columns=["feat_a"],
+                model_uri="",
+                background=BackgroundSample(),
+            )
+
+
+# ---------------------------------------------------------------------------
+# compute_shap_sampling_distributed — orchestration
+# ---------------------------------------------------------------------------
+
+
+def _install_sampling_mocks(monkeypatch):
+    """Mock mlflow.pyfunc.spark_udf + pyspark.sql.functions for the sampling path.
+
+    Returns the mock objects so tests can inspect call sites. No real Spark
+    session is required.
+    """
+    import sys
+
+    # Mock mlflow.pyfunc.spark_udf to return a callable that returns a column-like
+    fake_predict_udf = MagicMock(name="predict_udf")
+    fake_predict_udf.return_value = _Aliasable("pred")
+
+    fake_spark_udf_factory = MagicMock(name="spark_udf", return_value=fake_predict_udf)
+    fake_pyfunc = MagicMock(name="mlflow.pyfunc")
+    fake_pyfunc.spark_udf = fake_spark_udf_factory
+    fake_mlflow = MagicMock(name="mlflow")
+    fake_mlflow.pyfunc = fake_pyfunc
+    monkeypatch.setitem(sys.modules, "mlflow", fake_mlflow)
+    monkeypatch.setitem(sys.modules, "mlflow.pyfunc", fake_pyfunc)
+
+    # Mock pyspark.sql.functions
+    fake_F = MagicMock(name="pyspark.sql.functions")
+    fake_F.col = lambda name: _Aliasable(name)
+    fake_F.lit = lambda value: _Aliasable(f"lit({value})")
+    fake_F.when = lambda _cond, _value: _Aliasable("when")
+    fake_F.first = MagicMock(return_value=_Aliasable("first"))
+    fake_F.avg = MagicMock(return_value=_Aliasable("avg"))
+    fake_F.sum = MagicMock(return_value=_Aliasable("sum"))
+    fake_F.element_at = MagicMock(return_value=_Aliasable("element_at"))
+    fake_F.array = MagicMock(side_effect=lambda *a: _Aliasable("array"))
+    fake_F.struct = MagicMock(side_effect=lambda *a: _Aliasable("struct"))
+    fake_sql = MagicMock(name="pyspark.sql")
+    fake_sql.functions = fake_F
+
+    # Mock pyspark.sql.types — only the types we actually use
+    fake_types = MagicMock(name="pyspark.sql.types")
+    fake_types.IntegerType = lambda: "IntegerType"
+    fake_types.BooleanType = lambda: "BooleanType"
+    fake_types.ArrayType = lambda inner: ("ArrayType", inner)
+    fake_types.StructType = lambda fields: ("StructType", tuple(fields))
+    fake_types.StructField = lambda name, dtype, nullable=True: ("StructField", name, dtype, nullable)
+    fake_sql.types = fake_types
+
+    monkeypatch.setitem(sys.modules, "pyspark.sql", fake_sql)
+    monkeypatch.setitem(sys.modules, "pyspark.sql.functions", fake_F)
+    monkeypatch.setitem(sys.modules, "pyspark.sql.types", fake_types)
+
+    return {
+        "spark_udf_factory": fake_spark_udf_factory,
+        "predict_udf": fake_predict_udf,
+        "pyfunc_module": fake_pyfunc,
+        "F": fake_F,
+    }
+
+
+def _make_chainable_spark_df(columns):
+    """Return a MagicMock Spark DataFrame whose every method returns the same
+    mock so long chains like df.crossJoin(...).select(...).union(...).withColumn(...)
+    collapse to a single inspectable object."""
+    df = MagicMock(name="SparkDF")
+    df.columns = list(columns)
+
+    def _chain(*_a, **_kw):
+        return df
+
+    df.crossJoin.side_effect = _chain
+    df.select.side_effect = _chain
+    df.union.side_effect = _chain
+    df.withColumn.side_effect = _chain
+    df.withColumnRenamed.side_effect = _chain
+    df.groupBy.return_value = df
+    df.pivot.return_value = df
+    df.agg.return_value = df
+    return df
+
+
+class TestComputeShapSamplingOrchestration:
+    def test_invokes_mlflow_pyfunc_spark_udf_with_model_uri(self, monkeypatch):
+        mocks = _install_sampling_mocks(monkeypatch)
+        df = _make_chainable_spark_df(["account_id", "feat_a", "feat_b"])
+        df.sparkSession = MagicMock(name="SparkSession")
+
+        bg = BackgroundSample(
+            rows=[{"feat_a": 1.0, "feat_b": 2.0}],
+            feature_columns=["feat_a", "feat_b"],
+            sample_size=1,
+        )
+        shap_runner.compute_shap_sampling_distributed(
+            spark_df=df,
+            feature_columns=["feat_a", "feat_b"],
+            model_uri="models:/churn@production",
+            background=bg,
+            num_samples=3,
+        )
+        mocks["spark_udf_factory"].assert_called_once()
+        call = mocks["spark_udf_factory"].call_args
+        # The model URI is passed positionally or via kwargs
+        assert "models:/churn@production" in (list(call.args) + list(call.kwargs.values()))
+
+    def test_returns_shap_run_result_with_expected_columns(self, monkeypatch):
+        _install_sampling_mocks(monkeypatch)
+        df = _make_chainable_spark_df(["account_id", "feat_a", "feat_b"])
+        df.sparkSession = MagicMock(name="SparkSession")
+
+        bg = BackgroundSample(
+            rows=[{"feat_a": 1.0, "feat_b": 2.0}],
+            feature_columns=["feat_a", "feat_b"],
+            sample_size=1,
+        )
+        result = shap_runner.compute_shap_sampling_distributed(
+            spark_df=df,
+            feature_columns=["feat_a", "feat_b"],
+            model_uri="models:/churn@production",
+            background=bg,
+            num_samples=3,
+        )
+        assert result.feature_columns == ["feat_a", "feat_b"]
+        assert result.shap_columns == ["shap_feat_a", "shap_feat_b"]
+        assert result.background_size == 1
+        assert result.shap_df is not None
+
+    def test_no_pandas_udf_invoked_on_sampling_path(self, monkeypatch):
+        """Regression guard: the sampling path must never use pandas_udf
+        (that was the original CONTEXT_ONLY_VALID_ON_DRIVER bug)."""
+        mocks = _install_sampling_mocks(monkeypatch)
+        pandas_udf_calls: list = []
+        mocks["F"].pandas_udf = lambda *a, **kw: pandas_udf_calls.append((a, kw))
+
+        df = _make_chainable_spark_df(["account_id", "feat_a"])
+        df.sparkSession = MagicMock(name="SparkSession")
+
+        bg = BackgroundSample(
+            rows=[{"feat_a": 1.0}], feature_columns=["feat_a"], sample_size=1
+        )
+        shap_runner.compute_shap_sampling_distributed(
+            spark_df=df,
+            feature_columns=["feat_a"],
+            model_uri="models:/m@production",
+            background=bg,
+            num_samples=2,
+        )
+        assert pandas_udf_calls == []
+
+    def test_does_not_pickle_model_object(self, monkeypatch):
+        """The sampling path should never serialize a model; it uses
+        mlflow.pyfunc.spark_udf which loads the model on each executor
+        from the MLflow registry, avoiding cloudpickle entirely."""
+        mocks = _install_sampling_mocks(monkeypatch)
+        df = _make_chainable_spark_df(["account_id", "feat_a"])
+        df.sparkSession = MagicMock(name="SparkSession")
+
+        bg = BackgroundSample(
+            rows=[{"feat_a": 1.0}], feature_columns=["feat_a"], sample_size=1
+        )
+        shap_runner.compute_shap_sampling_distributed(
+            spark_df=df,
+            feature_columns=["feat_a"],
+            model_uri="models:/m@production",
+            background=bg,
+            num_samples=2,
+        )
+        # spark_udf is called with a model_uri string, not a model object
+        call = mocks["spark_udf_factory"].call_args
+        uri_arg = None
+        for arg in list(call.args) + list(call.kwargs.values()):
+            if isinstance(arg, str) and arg.startswith("models:"):
+                uri_arg = arg
+                break
+        assert uri_arg == "models:/m@production"
+
+    def test_crossjoin_expansion_happens(self, monkeypatch):
+        _install_sampling_mocks(monkeypatch)
+        df = _make_chainable_spark_df(["account_id", "feat_a", "feat_b"])
+        df.sparkSession = MagicMock(name="SparkSession")
+
+        bg = BackgroundSample(
+            rows=[{"feat_a": 1.0, "feat_b": 2.0}],
+            feature_columns=["feat_a", "feat_b"],
+            sample_size=1,
+        )
+        shap_runner.compute_shap_sampling_distributed(
+            spark_df=df,
+            feature_columns=["feat_a", "feat_b"],
+            model_uri="models:/m@production",
+            background=bg,
+            num_samples=3,
+        )
+        df.crossJoin.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# extract_top_drivers_per_account
+# ---------------------------------------------------------------------------
+
+
+class TestExtractTopDriversPerAccount:
+    def test_validates_join_key_in_spark_df(self):
+        spark_df = MagicMock(name="SparkDF")
+        spark_df.columns = ["a", "b"]
+        shap_df = MagicMock(name="ShapDF")
+        shap_df.columns = ["account_id", "shap_a", "shap_b"]
+        with pytest.raises(ValueError, match="spark_df"):
+            shap_runner.extract_top_drivers_per_account(
+                spark_df=spark_df,
+                shap_df=shap_df,
+                feature_columns=["a", "b"],
+                join_key="account_id",
+                k=5,
+            )
+
+    def test_validates_join_key_in_shap_df(self):
+        spark_df = MagicMock(name="SparkDF")
+        spark_df.columns = ["account_id", "a", "b"]
+        shap_df = MagicMock(name="ShapDF")
+        shap_df.columns = ["shap_a", "shap_b"]
+        with pytest.raises(ValueError, match="shap_df"):
+            shap_runner.extract_top_drivers_per_account(
+                spark_df=spark_df,
+                shap_df=shap_df,
+                feature_columns=["a", "b"],
+                join_key="account_id",
+                k=5,
+            )
+
+    def test_validates_feature_columns_present_in_spark_df(self):
+        spark_df = MagicMock(name="SparkDF")
+        spark_df.columns = ["account_id", "a"]
+        shap_df = MagicMock(name="ShapDF")
+        shap_df.columns = ["account_id", "shap_a", "shap_missing"]
+        with pytest.raises(ValueError, match=r"feature columns not in spark_df\.columns"):
+            shap_runner.extract_top_drivers_per_account(
+                spark_df=spark_df,
+                shap_df=shap_df,
+                feature_columns=["a", "missing"],
+                join_key="account_id",
+                k=2,
+            )
+
+    def test_validates_shap_columns_present_in_shap_df(self):
+        spark_df = MagicMock(name="SparkDF")
+        spark_df.columns = ["account_id", "a", "b"]
+        shap_df = MagicMock(name="ShapDF")
+        shap_df.columns = ["account_id", "shap_a"]
+        with pytest.raises(ValueError, match=r"shap columns not in shap_df\.columns"):
+            shap_runner.extract_top_drivers_per_account(
+                spark_df=spark_df,
+                shap_df=shap_df,
+                feature_columns=["a", "b"],
+                join_key="account_id",
+                k=2,
+            )
+
+    def test_validates_k_positive(self):
+        spark_df = MagicMock(name="SparkDF")
+        spark_df.columns = ["account_id", "a"]
+        shap_df = MagicMock(name="ShapDF")
+        shap_df.columns = ["account_id", "shap_a"]
+        with pytest.raises(ValueError, match="k"):
+            shap_runner.extract_top_drivers_per_account(
+                spark_df=spark_df,
+                shap_df=shap_df,
+                feature_columns=["a"],
+                join_key="account_id",
+                k=0,
+            )
+
+    def test_happy_path_returns_dataframe(self, monkeypatch):
+        import sys
+
+        fake_F = MagicMock(name="F")
+        fake_F.col = lambda name: _Aliasable(name)
+        fake_F.lit = lambda v: _Aliasable(f"lit({v})")
+        fake_F.abs = lambda c: _Aliasable("abs")
+        fake_F.array = MagicMock(return_value=_Aliasable("array"))
+        fake_F.struct = MagicMock(return_value=_Aliasable("struct"))
+        fake_F.when = MagicMock(return_value=_Aliasable("when"))
+        fake_F.slice = MagicMock(return_value=_Aliasable("slice"))
+        fake_F.sort_array = MagicMock(return_value=_Aliasable("sort_array"))
+        fake_F.transform = MagicMock(return_value=_Aliasable("transform"))
+        fake_sql = MagicMock(name="pyspark.sql")
+        fake_sql.functions = fake_F
+        monkeypatch.setitem(sys.modules, "pyspark.sql", fake_sql)
+        monkeypatch.setitem(sys.modules, "pyspark.sql.functions", fake_F)
+
+        spark_df = _make_chainable_spark_df(["account_id", "a", "b", "c"])
+        shap_df = _make_chainable_spark_df(["account_id", "shap_a", "shap_b", "shap_c"])
+        out = shap_runner.extract_top_drivers_per_account(
+            spark_df=spark_df,
+            shap_df=shap_df,
+            feature_columns=["a", "b", "c"],
+            join_key="account_id",
+            k=2,
+        )
+        assert out is not None
+
+    def test_sort_key_uses_abs_shap_as_first_struct_field(self, monkeypatch):
+        """Regression for the lexicographic-sort bug: ``F.sort_array`` orders
+        struct arrays by the first field, so ``abs_shap`` must be field #1.
+        Capture the struct-builder call order and verify."""
+        import sys
+
+        struct_calls: list = []
+
+        def _struct_record(*args):
+            struct_calls.append(args)
+            return _Aliasable("struct")
+
+        fake_F = MagicMock(name="F")
+        fake_F.col = lambda name: _Aliasable(name)
+        fake_F.lit = lambda v: _Aliasable(f"lit({v})")
+        fake_F.abs = lambda c: _Aliasable(f"abs({c.name})")
+        fake_F.array = MagicMock(return_value=_Aliasable("array"))
+        fake_F.struct = _struct_record
+        fake_F.when = MagicMock(return_value=_Aliasable("when"))
+        fake_F.slice = MagicMock(return_value=_Aliasable("slice"))
+        fake_F.sort_array = MagicMock(return_value=_Aliasable("sort_array"))
+        fake_F.transform = MagicMock(return_value=_Aliasable("transform"))
+        fake_sql = MagicMock(name="pyspark.sql")
+        fake_sql.functions = fake_F
+        monkeypatch.setitem(sys.modules, "pyspark.sql", fake_sql)
+        monkeypatch.setitem(sys.modules, "pyspark.sql.functions", fake_F)
+
+        spark_df = _make_chainable_spark_df(["account_id", "feat_a"])
+        shap_df = _make_chainable_spark_df(["account_id", "shap_feat_a"])
+        shap_runner.extract_top_drivers_per_account(
+            spark_df=spark_df,
+            shap_df=shap_df,
+            feature_columns=["feat_a"],
+            join_key="account_id",
+            k=1,
+        )
+        # The outer sortable struct is the first F.struct call
+        sortable = struct_calls[0]
+        # Field #1 must be the abs_shap alias so F.sort_array orders by it
+        first_field = sortable[0]
+        assert first_field.name == "abs_shap"
+
+    def test_output_schema_matches_delta_schema(self, monkeypatch):
+        """Regression: top_shap_drivers Delta schema requires struct fields
+        ``{feature, value, shap_contribution, direction}`` — not the earlier
+        ``{feature, shap_value}`` shape."""
+        import sys
+
+        struct_calls: list = []
+
+        def _struct_record(*args):
+            struct_calls.append(args)
+            return _Aliasable("struct")
+
+        fake_F = MagicMock(name="F")
+        fake_F.col = lambda name: _Aliasable(name)
+        fake_F.lit = lambda v: _Aliasable(f"lit({v})")
+        fake_F.abs = lambda c: _Aliasable("abs")
+        fake_F.array = MagicMock(return_value=_Aliasable("array"))
+        fake_F.struct = _struct_record
+        fake_F.when = MagicMock(return_value=_Aliasable("when"))
+        fake_F.slice = MagicMock(return_value=_Aliasable("slice"))
+        fake_F.sort_array = MagicMock(return_value=_Aliasable("sort_array"))
+        fake_F.transform = MagicMock(return_value=_Aliasable("transform"))
+        fake_sql = MagicMock(name="pyspark.sql")
+        fake_sql.functions = fake_F
+        monkeypatch.setitem(sys.modules, "pyspark.sql", fake_sql)
+        monkeypatch.setitem(sys.modules, "pyspark.sql.functions", fake_F)
+
+        spark_df = _make_chainable_spark_df(["account_id", "x"])
+        shap_df = _make_chainable_spark_df(["account_id", "shap_x"])
+        shap_runner.extract_top_drivers_per_account(
+            spark_df=spark_df,
+            shap_df=shap_df,
+            feature_columns=["x"],
+            join_key="account_id",
+            k=1,
+        )
+        # The sortable struct fields (aliased) in order:
+        # [abs_shap, feature, value, shap_contribution, direction]
+        sortable_aliases = [a.name if isinstance(a, _Aliasable) else None for a in struct_calls[0]]
+        # Extract alias targets — the Aliasable chain yields the alias name
+        assert any("feature" in a for a in sortable_aliases)
+        assert any("value" in a for a in sortable_aliases)
+        assert any("shap_contribution" in a for a in sortable_aliases)
+        assert any("direction" in a for a in sortable_aliases)

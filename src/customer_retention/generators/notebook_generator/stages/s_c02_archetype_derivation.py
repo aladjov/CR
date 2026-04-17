@@ -118,7 +118,42 @@ else:
         feature_cap=KMEANS_FEATURE_CAP,
         llm_endpoint_name=LLM_ENDPOINT_NAME,
         llm_namer=llm_namer,
+        shap_method=SHAP_METHOD,
+        shap_model_uri=MODEL_URI,
+        shap_num_samples=SHAP_NUM_SAMPLES,
     )
     derivation_result = derive_archetypes_and_policies(cfg)
     print(derivation_result.summary())
+
+    if WRITE_TOP_SHAP_DRIVERS and derivation_result is not None:
+        from customer_retention.stages.causal import (
+            compute_shap_sampling_distributed,
+            extract_top_drivers_per_account,
+        )
+        from pyspark.sql import functions as F
+
+        _shap_result = compute_shap_sampling_distributed(
+            spark_df=training_df,
+            feature_columns=feature_columns,
+            model_uri=MODEL_URI,
+            background=derivation_result.background,
+            join_key=join_key,
+            num_samples=SHAP_NUM_SAMPLES,
+        )
+        _top_df = extract_top_drivers_per_account(
+            spark_df=training_df,
+            shap_df=_shap_result.shap_df,
+            feature_columns=list(_shap_result.feature_columns),
+            join_key=join_key,
+            k=TOP_SHAP_DRIVERS_K,
+        )
+        _top_df = (
+            _top_df
+            .withColumnRenamed(join_key, "account_id")
+            .withColumn("model_name", F.lit(MODEL_NAME))
+            .withColumn("model_version", F.lit(MODEL_VERSION))
+            .withColumn("as_of_date", F.current_timestamp())
+        )
+        _top_df.write.format("delta").mode("overwrite").saveAsTable(TOP_SHAP_DRIVERS_FQN)
+        print(f"Wrote top-{TOP_SHAP_DRIVERS_K} drivers to {TOP_SHAP_DRIVERS_FQN}")
 '''
