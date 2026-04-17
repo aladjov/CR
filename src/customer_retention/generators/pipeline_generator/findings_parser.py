@@ -145,6 +145,7 @@ class FindingsParser:
         namespace=None,
         intent=None,
         bronze_aggregation_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
+        disable_user_extensions: Optional[bool] = None,
     ):
         self._findings_dir = Path(findings_dir)
         self._namespace = namespace
@@ -156,6 +157,8 @@ class FindingsParser:
         self._raw_source_columns: Dict[str, Set[str]] = {}
         self._feature_spec: Optional[FeatureSpec] = None
         self._silver_merged_columns_cache: Optional[Set[str]] = None
+        from customer_retention.runtime.flags import is_user_extensions_disabled
+        self._ext_disabled: bool = is_user_extensions_disabled(disable_user_extensions)
 
     def parse(self) -> PipelineConfig:
         self._feature_spec = self._load_feature_spec()
@@ -729,6 +732,8 @@ class FindingsParser:
     def _apply_landing_recommendations(
         self, config: PipelineConfig, registry: RecommendationRegistry
     ) -> None:
+        if self._ext_disabled:
+            return
         landing = getattr(registry, "landing", None)
         if landing is None:
             return

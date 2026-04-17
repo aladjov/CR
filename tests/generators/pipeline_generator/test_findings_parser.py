@@ -7842,3 +7842,82 @@ class TestLandingRecommendationsApplication:
         landing = config.landing["orders_agg"]
         assert landing.filters == []
         assert landing.lifecycle_enrichments == []
+
+
+class TestLandingKillSwitch:
+    """Phase 0a.4.1: disable_user_extensions=True on FindingsParser makes
+    _apply_landing_recommendations a no-op even with a populated registry."""
+
+    def _write_recs_with_landing(self, findings_dir):
+        (findings_dir / "recommendations.yaml").write_text(yaml.dump({
+            "landing": {
+                "filters": [
+                    {
+                        "id": "landing_landing_filtering_orders_agg",
+                        "layer": "landing",
+                        "category": "landing_filtering",
+                        "action": "filter",
+                        "target_column": "orders_agg",
+                        "parameters": {
+                            "dataset": "orders_agg",
+                            "predicate": "customer_id IS NOT NULL",
+                        },
+                        "rationale": "r",
+                        "source_notebook": "nb",
+                        "priority": 1,
+                        "dependencies": [],
+                    }
+                ],
+                "lifecycle_enrichments": [],
+            },
+        }))
+
+    def test_flag_true_ignores_landing_block_in_registry_yaml(self, aggregated_event_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        self._write_recs_with_landing(aggregated_event_setup)
+        parser = FindingsParser(str(aggregated_event_setup), disable_user_extensions=True)
+        config = parser.parse()
+
+        assert config.landing["orders_agg"].filters == []
+
+    def test_flag_false_applies_landing_block(self, aggregated_event_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        self._write_recs_with_landing(aggregated_event_setup)
+        parser = FindingsParser(str(aggregated_event_setup), disable_user_extensions=False)
+        config = parser.parse()
+
+        assert len(config.landing["orders_agg"].filters) == 1
+
+    def test_flag_on_preserves_byte_parity_vs_empty_landing(self, aggregated_event_setup):
+        """The core kill-switch guarantee: generated landing script with the
+        flag ON and a populated landing block must equal the script
+        generated when no landing block is present at all."""
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.renderer import CodeRenderer
+
+        renderer = CodeRenderer()
+
+        baseline_parser = FindingsParser(str(aggregated_event_setup))
+        baseline_config = baseline_parser.parse()
+        baseline_code = renderer.render_landing("orders_agg", baseline_config.landing["orders_agg"])
+
+        self._write_recs_with_landing(aggregated_event_setup)
+        killed_parser = FindingsParser(str(aggregated_event_setup), disable_user_extensions=True)
+        killed_config = killed_parser.parse()
+        killed_code = renderer.render_landing("orders_agg", killed_config.landing["orders_agg"])
+
+        assert killed_code == baseline_code
+
+    def test_flag_via_spark_conf_mock(self, aggregated_event_setup, monkeypatch):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        self._write_recs_with_landing(aggregated_event_setup)
+        monkeypatch.setattr(
+            "customer_retention.runtime.flags._read_spark_conf", lambda: "true"
+        )
+        parser = FindingsParser(str(aggregated_event_setup))
+        config = parser.parse()
+
+        assert config.landing["orders_agg"].filters == []

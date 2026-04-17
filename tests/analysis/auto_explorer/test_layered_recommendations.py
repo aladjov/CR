@@ -1899,3 +1899,69 @@ class TestLandingRecommendations:
         assert merged.landing is not None
         assert len(merged.landing.filters) == 1
         assert merged.landing.filters[0].target_column == "request"
+
+
+class TestLandingKillSwitch:
+    """Phase 0a.4.1: CR_DISABLE_USER_EXTENSIONS equivalent via init kwarg.
+    When set, add_landing_* are no-ops (plus INFO log + discard list)."""
+
+    def test_disable_kwarg_blocks_landing_filter_from_registering(self, caplog):
+        import logging
+        reg = RecommendationRegistry(disable_user_extensions=True)
+        with caplog.at_level(logging.INFO, logger="customer_retention.analysis.auto_explorer.layered_recommendations"):
+            reg.add_landing_filter(
+                dataset="request", predicate="x IS NOT NULL",
+                rationale="r", source_notebook="nb",
+            )
+        assert reg.landing is None
+        assert len(reg._discarded_landing) == 1
+        assert any("landing filter" in rec.message for rec in caplog.records)
+
+    def test_disable_kwarg_blocks_lifecycle_enrichment(self):
+        from customer_retention.stages.lifecycle.config import LifecycleEnrichmentConfig
+        cfg = LifecycleEnrichmentConfig(
+            enriched_view_name="v", parent_entity_key="pk",
+            sub_entity_key="sk", valid_from_column="from",
+            valid_to_columns=("to",),
+        )
+        reg = RecommendationRegistry(disable_user_extensions=True)
+        reg.add_landing_lifecycle_enrichment(
+            dataset="subscription", config=cfg,
+            rationale="r", source_notebook="nb",
+        )
+        assert reg.landing is None
+        assert len(reg._discarded_landing) == 1
+
+    def test_flag_false_preserves_normal_registration(self):
+        reg = RecommendationRegistry(disable_user_extensions=False)
+        reg.add_landing_filter(
+            dataset="request", predicate="x > 0",
+            rationale="r", source_notebook="nb",
+        )
+        assert reg.landing is not None
+        assert len(reg.landing.filters) == 1
+        assert reg._discarded_landing == []
+
+    def test_flag_default_none_resolves_via_env(self, monkeypatch):
+        monkeypatch.setenv("CR_DISABLE_USER_EXTENSIONS", "1")
+        reg = RecommendationRegistry()
+        reg.add_landing_filter(
+            dataset="request", predicate="x > 0",
+            rationale="r", source_notebook="nb",
+        )
+        assert reg.landing is None
+        assert len(reg._discarded_landing) == 1
+
+    def test_yaml_roundtrip_through_disabled_registry_drops_landing(self, tmp_path):
+        """Saving a disabled registry with dropped recs must NOT persist them."""
+        reg = RecommendationRegistry(disable_user_extensions=True)
+        reg.add_landing_filter(
+            dataset="request", predicate="x > 0",
+            rationale="r", source_notebook="nb",
+        )
+        path = tmp_path / "recs.yaml"
+        reg.save(path)
+        loaded_data = path.read_text()
+        assert "landing:" not in loaded_data
+        loaded = RecommendationRegistry.load(path)
+        assert loaded.landing is None

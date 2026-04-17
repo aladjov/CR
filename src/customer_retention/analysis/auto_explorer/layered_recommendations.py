@@ -1,6 +1,7 @@
 import decimal
 import hashlib
 import json
+import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -8,6 +9,10 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import yaml
+
+from customer_retention.runtime.flags import is_user_extensions_disabled
+
+_logger = logging.getLogger(__name__)
 
 
 def _to_native(value: Any) -> Any:
@@ -111,7 +116,7 @@ class LandingRecommendations:
 
 
 class RecommendationRegistry:
-    def __init__(self):
+    def __init__(self, disable_user_extensions: Optional[bool] = None):
         self.sources: Dict[str, BronzeRecommendations] = {}
         self.bronze: Optional[BronzeRecommendations] = None
         self.silver: Optional[SilverRecommendations] = None
@@ -119,6 +124,8 @@ class RecommendationRegistry:
         self.landing: Optional[LandingRecommendations] = None
         self.fit_artifacts: Dict[str, str] = {}
         self._id_counter = 0
+        self._ext_disabled: bool = is_user_extensions_disabled(disable_user_extensions)
+        self._discarded_landing: List[LayeredRecommendation] = []
 
     def save(self, path) -> None:
         p = path if isinstance(path, Path) else Path(str(path))
@@ -164,21 +171,34 @@ class RecommendationRegistry:
 
     def add_landing_filter(self, dataset: str, predicate: str, rationale: str,
                            source_notebook: str) -> None:
-        if self.landing is None:
-            self.init_landing()
         params = {"dataset": dataset, "predicate": predicate}
         rec = self._create_recommendation("landing", "landing_filtering", "filter", dataset,
                                           params, rationale, source_notebook)
+        if self._ext_disabled:
+            self._discarded_landing.append(rec)
+            _logger.info(
+                "user-extensions disabled; landing filter for dataset=%s dropped", dataset
+            )
+            return
+        if self.landing is None:
+            self.init_landing()
         self.landing.filters.append(rec)
 
     def add_landing_lifecycle_enrichment(self, dataset: str, config: Any, rationale: str,
                                          source_notebook: str) -> None:
-        if self.landing is None:
-            self.init_landing()
         serialized = config.to_dict() if hasattr(config, "to_dict") else dict(config)
         params = {"dataset": dataset, "config": serialized}
         rec = self._create_recommendation("landing", "lifecycle_enrichment", "enrich", dataset,
                                           params, rationale, source_notebook)
+        if self._ext_disabled:
+            self._discarded_landing.append(rec)
+            _logger.info(
+                "user-extensions disabled; landing lifecycle enrichment for dataset=%s dropped",
+                dataset,
+            )
+            return
+        if self.landing is None:
+            self.init_landing()
         self.landing.lifecycle_enrichments.append(rec)
 
     def add_bronze_null(self, column: str, strategy: str, rationale: str, source_notebook: str,
