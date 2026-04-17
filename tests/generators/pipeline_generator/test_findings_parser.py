@@ -7677,3 +7677,168 @@ class TestApplyGoldRecommendationsDropListExcludesEncodeTargets:
         assert {e.column for e in config.gold.encodings} == {
             "recency_bucket", "lifecycle_quadrant",
         }
+
+
+class TestLandingRecommendationsApplication:
+    """Phase 1 sub-phase 1.2: registry.landing populates
+    LandingLayerConfig.filters / lifecycle_enrichments via
+    FindingsParser._apply_landing_recommendations."""
+
+    def _write_landing_recs(self, findings_dir, landing_block):
+        rec_data = {"landing": landing_block}
+        (findings_dir / "recommendations.yaml").write_text(yaml.dump(rec_data))
+
+    def test_landing_filter_populates_landing_config(self, aggregated_event_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import PipelineTransformationType
+
+        self._write_landing_recs(aggregated_event_setup, {
+            "filters": [
+                {
+                    "id": "landing_landing_filtering_orders_agg",
+                    "layer": "landing",
+                    "category": "landing_filtering",
+                    "action": "filter",
+                    "target_column": "orders_agg",
+                    "parameters": {
+                        "dataset": "orders_agg",
+                        "predicate": "customer_id IS NOT NULL",
+                    },
+                    "rationale": "drop rows with null customer_id",
+                    "source_notebook": "NB00 § 0.4.6",
+                    "priority": 1,
+                    "dependencies": [],
+                }
+            ],
+            "lifecycle_enrichments": [],
+        })
+
+        parser = FindingsParser(str(aggregated_event_setup))
+        config = parser.parse()
+
+        landing = config.landing["orders_agg"]
+        assert len(landing.filters) == 1
+        step = landing.filters[0]
+        assert step.type is PipelineTransformationType.LANDING_FILTER
+        assert step.column == "orders_agg"
+        assert step.parameters["predicate"] == "customer_id IS NOT NULL"
+        assert step.rationale == "drop rows with null customer_id"
+        assert step.source_notebook == "NB00 § 0.4.6"
+        assert landing.lifecycle_enrichments == []
+
+    def test_landing_lifecycle_enrichment_populates_config(self, aggregated_event_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+        from customer_retention.generators.pipeline_generator.models import PipelineTransformationType
+
+        enrichment_cfg = {
+            "enriched_view_name": "orders_enriched",
+            "parent_entity_key": "customer_id",
+            "sub_entity_key": "order_id",
+            "valid_from_column": "order_date",
+            "valid_to_columns": ["cancelled_at"],
+        }
+        self._write_landing_recs(aggregated_event_setup, {
+            "filters": [],
+            "lifecycle_enrichments": [
+                {
+                    "id": "landing_lifecycle_enrichment_orders_agg",
+                    "layer": "landing",
+                    "category": "lifecycle_enrichment",
+                    "action": "enrich",
+                    "target_column": "orders_agg",
+                    "parameters": {
+                        "dataset": "orders_agg",
+                        "config": enrichment_cfg,
+                    },
+                    "rationale": "double stream for lifecycle",
+                    "source_notebook": "NB00",
+                    "priority": 1,
+                    "dependencies": [],
+                }
+            ],
+        })
+
+        parser = FindingsParser(str(aggregated_event_setup))
+        config = parser.parse()
+
+        landing = config.landing["orders_agg"]
+        assert len(landing.lifecycle_enrichments) == 1
+        step = landing.lifecycle_enrichments[0]
+        assert step.type is PipelineTransformationType.LANDING_LIFECYCLE_ENRICHMENT
+        assert step.parameters["config"]["enriched_view_name"] == "orders_enriched"
+        assert landing.filters == []
+
+    def test_landing_filter_unknown_dataset_raises(self, aggregated_event_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        self._write_landing_recs(aggregated_event_setup, {
+            "filters": [
+                {
+                    "id": "landing_landing_filtering_ghost",
+                    "layer": "landing",
+                    "category": "landing_filtering",
+                    "action": "filter",
+                    "target_column": "ghost",
+                    "parameters": {"dataset": "ghost", "predicate": "true"},
+                    "rationale": "bogus",
+                    "source_notebook": "nb",
+                    "priority": 1,
+                    "dependencies": [],
+                }
+            ],
+            "lifecycle_enrichments": [],
+        })
+
+        parser = FindingsParser(str(aggregated_event_setup))
+        with pytest.raises(ValueError, match="unknown dataset 'ghost'"):
+            parser.parse()
+
+    def test_landing_rec_without_dataset_param_raises(self, aggregated_event_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        self._write_landing_recs(aggregated_event_setup, {
+            "filters": [
+                {
+                    "id": "landing_landing_filtering_none",
+                    "layer": "landing",
+                    "category": "landing_filtering",
+                    "action": "filter",
+                    "target_column": "orders_agg",
+                    "parameters": {"predicate": "x > 0"},
+                    "rationale": "bad",
+                    "source_notebook": "nb",
+                    "priority": 1,
+                    "dependencies": [],
+                }
+            ],
+            "lifecycle_enrichments": [],
+        })
+
+        parser = FindingsParser(str(aggregated_event_setup))
+        with pytest.raises(ValueError, match="missing 'dataset' parameter"):
+            parser.parse()
+
+    def test_parse_with_no_landing_block_still_works(self, aggregated_event_setup):
+        """Registry YAML without 'landing' key must load cleanly (back-compat)."""
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        (aggregated_event_setup / "recommendations.yaml").write_text(yaml.dump({
+            "sources": {},
+        }))
+
+        parser = FindingsParser(str(aggregated_event_setup))
+        config = parser.parse()
+
+        landing = config.landing["orders_agg"]
+        assert landing.filters == []
+        assert landing.lifecycle_enrichments == []
+
+    def test_parse_without_any_recommendations_file_still_works(self, aggregated_event_setup):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        parser = FindingsParser(str(aggregated_event_setup))
+        config = parser.parse()
+
+        landing = config.landing["orders_agg"]
+        assert landing.filters == []
+        assert landing.lifecycle_enrichments == []

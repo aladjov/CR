@@ -2130,6 +2130,20 @@ def run_landing_{{ name }}():
 {% if config.original_target_column %}
     df = df.rename(columns={"{{ config.original_target_column }}": TARGET_COLUMN})
 {% endif %}
+{% if config.filters %}
+{% for step in config.filters %}
+    df = df.query({{ step.parameters.predicate | python_repr }})
+    print(f"  After user filter: {len(df):,}")
+{% endfor %}
+{% endif %}
+{% if config.lifecycle_enrichments %}
+    from customer_retention.stages.lifecycle.config import LifecycleEnrichmentConfig
+    from customer_retention.stages.lifecycle.enrich import enrich_lifecycle_dataset
+{% for step in config.lifecycle_enrichments %}
+    df = enrich_lifecycle_dataset(df, LifecycleEnrichmentConfig.from_dict({{ step.parameters.config | python_repr }}))
+    print(f"  After lifecycle enrichment: {len(df):,}")
+{% endfor %}
+{% endif %}
 {% if config.key_resolution_steps %}
     df = resolve_entity_key(df)
     print(f"  After key resolution: {len(df):,}")
@@ -2973,6 +2987,7 @@ class CodeRenderer:
         self._env.globals["provenance_key"] = provenance_key
         self._env.globals["partition_gold_steps"] = partition_gold_steps
         self._env.globals["sorted_landing_names"] = _sorted_landing_names
+        self._env.filters["python_repr"] = repr
 
     def set_docs_base(self, experiments_dir: str | None) -> None:
         global _docs_base
