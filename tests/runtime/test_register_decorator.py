@@ -187,3 +187,65 @@ class TestRegistryDedup:
         def fb():
             pass
         assert len(registry.get_registered()) == 2
+
+
+class TestDoubleDecoration:
+    """Plan § 3.1.1 and § 13.2: stacking @cr.register on the same function
+    must error at decoration time rather than silently re-register."""
+
+    def test_stacked_decorator_raises_type_error(self):
+        with pytest.raises(TypeError, match="already decorated with @cr.register"):
+            @cr.register(dataset="a")
+            @cr.register(dataset="a")
+            def f():
+                pass
+
+    def test_stacked_decorator_includes_function_name(self):
+        with pytest.raises(TypeError, match="my_fn"):
+            @cr.register(dataset="a")
+            @cr.register(dataset="a", name="my_fn")
+            def my_fn():
+                pass
+
+    def test_marker_attribute_survives_on_wrapped_func(self):
+        @cr.register(dataset="a")
+        def original():
+            return 1
+        assert getattr(original, "__cr_registered__", False) is True
+
+
+class TestCallerLocationCapture:
+    """Plan § 3.1.3 + § 3.1.5: cell_id dedup only works if cell_id is
+    stable. The IPython-input filename (`<ipython-input-3-...>`) changes
+    every kernel restart — do not persist it as cell_id."""
+
+    def test_ipython_input_filename_not_persisted_as_cell_id(self, monkeypatch):
+        import inspect as _inspect
+
+        from customer_retention.runtime import decorator as dec_module
+
+        fake_frame = type("F", (), {"filename": "<ipython-input-42-deadbeef>"})()
+        monkeypatch.setattr(_inspect, "stack", lambda: [fake_frame])
+        monkeypatch.setattr(dec_module.inspect, "stack", lambda: [fake_frame])
+
+        @cr.register(dataset="x")
+        def f():
+            pass
+
+        rec = registry.get_registered()[0]
+        assert rec.cell_id is None
+        assert rec.notebook_path is None
+
+    def test_notebook_path_extracted_when_present(self, monkeypatch):
+        from customer_retention.runtime import decorator as dec_module
+
+        fake_frame = type("F", (), {"filename": "/tmp/explore/00_start_here.ipynb"})()
+        monkeypatch.setattr(dec_module.inspect, "stack", lambda: [fake_frame])
+
+        @cr.register(dataset="x")
+        def f():
+            pass
+
+        rec = registry.get_registered()[0]
+        assert rec.notebook_path is not None
+        assert rec.notebook_path.name == "00_start_here.ipynb"

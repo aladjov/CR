@@ -91,7 +91,8 @@ class TestMiniSpsSmoke:
         out = tmp_path / "generated"
         _run_generator(sps_mini_findings_dir, out)
         landing_script = (out / "landing" / "landing_request.py").read_text()
-        assert "df = df.query('amount > 0')" in landing_script
+        assert "df = apply_sql_predicate(df, 'amount > 0')" in landing_script
+        assert "from customer_retention.core.compat import apply_sql_predicate" in landing_script
 
     def test_kill_switch_drops_landing_filter_from_manifest_and_script(
         self, sps_mini_findings_dir, tmp_path

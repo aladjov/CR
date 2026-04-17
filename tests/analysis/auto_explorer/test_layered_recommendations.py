@@ -1900,6 +1900,64 @@ class TestLandingRecommendations:
         assert len(merged.landing.filters) == 1
         assert merged.landing.filters[0].target_column == "request"
 
+    def test_lifecycle_enrichment_survives_full_yaml_save_load_roundtrip(self, tmp_path):
+        """Plan antipattern §12a.7: to_dict/from_dict passing is not enough —
+        exercise save(path) → load(path) with a real LifecycleEnrichmentConfig
+        so YAML-specific escapes (tuples, nested dicts, unicode) are in scope."""
+        from customer_retention.stages.lifecycle.config import LifecycleEnrichmentConfig
+
+        cfg = LifecycleEnrichmentConfig(
+            enriched_view_name="sps_enriched_contract",
+            parent_entity_key="ACCOUNT_ID",
+            sub_entity_key="CONTRACT_ID",
+            valid_from_column="CONTRACT_START_DATE",
+            valid_to_columns=("BILLING_TERMINATION_DATE",),
+            status_column="CONTRACT_STATUS",
+            terminal_status_values=("Cancelled",),
+            drop_columns=(
+                "BILLING_TERMINATION_DATE",
+                "CONTRACT_STATUS",
+                "TAKE_RATE",
+            ),
+            on_corrupt_row="skip",
+        )
+        reg = RecommendationRegistry()
+        reg.add_landing_lifecycle_enrichment(
+            dataset="contract",
+            config=cfg,
+            rationale="Double START/TERMINATE events — contract sanity B1-B4",
+            source_notebook="NB00 § 0.2.5",
+        )
+        path = tmp_path / "recs.yaml"
+        reg.save(path)
+        loaded = RecommendationRegistry.load(path)
+
+        assert loaded.landing is not None
+        assert len(loaded.landing.lifecycle_enrichments) == 1
+        enrichment = loaded.landing.lifecycle_enrichments[0]
+        serialized = enrichment.parameters["config"]
+        restored = LifecycleEnrichmentConfig.from_dict(serialized)
+        assert restored.enriched_view_name == cfg.enriched_view_name
+        assert tuple(restored.valid_to_columns) == cfg.valid_to_columns
+        assert tuple(restored.drop_columns) == cfg.drop_columns
+        assert restored.terminal_status_values == cfg.terminal_status_values
+
+    def test_predicate_with_single_quotes_survives_save_load(self, tmp_path):
+        """Antipattern §12a.7: YAML can misparse unescaped predicates. Include
+        the single-quote-heavy predicate that comes out of SPS overrides."""
+        reg = RecommendationRegistry()
+        reg.add_landing_filter(
+            dataset="case",
+            predicate="RECORD_TYPE_NAME = 'Cancellation Case' OR RECORD_TYPE_NAME <> 'Retention'",
+            rationale="anti-leakage filter",
+            source_notebook="NB00 § 0.2.6",
+        )
+        path = tmp_path / "recs.yaml"
+        reg.save(path)
+        loaded = RecommendationRegistry.load(path)
+        predicate = loaded.landing.filters[0].parameters["predicate"]
+        assert predicate == "RECORD_TYPE_NAME = 'Cancellation Case' OR RECORD_TYPE_NAME <> 'Retention'"
+
 
 class TestLandingKillSwitch:
     """Phase 0a.4.1: CR_DISABLE_USER_EXTENSIONS equivalent via init kwarg.

@@ -29,17 +29,17 @@ def is_user_extensions_disabled(explicit: Optional[bool] = None) -> bool:
 def _read_spark_conf() -> Optional[str]:
     try:
         from pyspark.sql import SparkSession
-    except Exception:
+    except ImportError:
         return None
     try:
         spark = SparkSession.getActiveSession()
-    except Exception:
+    except (ImportError, AttributeError):
         return None
     if spark is None:
         return None
     try:
         return spark.conf.get(_SPARK_CONF_KEY, None)
-    except Exception:
+    except (AttributeError, RuntimeError):
         return None
 
 

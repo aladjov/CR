@@ -1,0 +1,86 @@
+sources:
+  account:
+    source_file: /data/sps/account.csv
+    null_handling:
+      - id: bronze_null_age
+        layer: bronze
+        category: "null"
+        action: impute
+        target_column: age
+        parameters:
+          strategy: median
+        rationale: median impute for missing ages
+        source_notebook: NB02
+        priority: 1
+        dependencies: []
+    outlier_handling: []
+    type_conversions: []
+    deduplication: []
+    filtering: []
+    text_processing: []
+    modeling_strategy: []
+  request:
+    source_file: /data/sps/request.csv
+    null_handling: []
+    outlier_handling: []
+    type_conversions: []
+    deduplication: []
+    filtering: []
+    text_processing: []
+    modeling_strategy: []
+  contract:
+    source_file: /data/sps/contract.csv
+    null_handling: []
+    outlier_handling: []
+    type_conversions: []
+    deduplication: []
+    filtering: []
+    text_processing: []
+    modeling_strategy: []
+landing:
+  filters:
+    - id: landing_landing_filtering_request
+      layer: landing
+      category: landing_filtering
+      action: filter
+      target_column: request
+      parameters:
+        dataset: request
+        predicate: "ACCOUNT_ID IS NOT NULL AND CREATED_DATE IS NOT NULL"
+      rationale: >-
+        R2 sanity: 34.2% of request rows have NULL ACCOUNT_ID and get silently
+        dropped at NB03 inner merge. Filtering at landing makes the drop
+        countable and shrinks bronze width.
+      source_notebook: NB00 § 0.4.6
+      priority: 1
+      dependencies: []
+  lifecycle_enrichments:
+    - id: landing_lifecycle_enrichment_contract
+      layer: landing
+      category: lifecycle_enrichment
+      action: enrich
+      target_column: contract
+      parameters:
+        dataset: contract
+        config:
+          enriched_view_name: sps_enriched_contract
+          parent_entity_key: ACCOUNT_ID
+          sub_entity_key: CONTRACT_ID
+          valid_from_column: CONTRACT_START_DATE
+          valid_to_columns:
+            - BILLING_TERMINATION_DATE
+          status_column: CONTRACT_STATUS
+          terminal_status_values:
+            - Cancelled
+          drop_columns:
+            - BILLING_TERMINATION_DATE
+            - CONTRACT_STATUS
+            - TAKE_RATE
+          on_corrupt_row: skip
+      rationale: >-
+        Double START/TERMINATE event stream so bronze per-grid-date aggregator
+        captures the cancellation gradient (contract sanity B1-B4).
+      source_notebook: NB00 § 0.2.5
+      priority: 1
+      dependencies: []
+fit_artifacts: {}

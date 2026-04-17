@@ -23,7 +23,7 @@ def in_notebook() -> bool:
 def _detect_notebook() -> bool:
     try:
         from IPython import get_ipython
-    except Exception:
+    except ImportError:
         return False
     ip = get_ipython()
     if ip is None:
@@ -41,7 +41,7 @@ def log(message: str, **kw: Any) -> None:
     if in_notebook():
         try:
             from IPython.display import Markdown, display
-        except Exception:
+        except ImportError:
             _logger.info(message, extra=kw)
             return
         display(Markdown(message))
@@ -53,7 +53,7 @@ def log_table(df: Any, message: Optional[str] = None, max_rows: int = 20) -> Non
     if in_notebook():
         try:
             from IPython.display import Markdown, display
-        except Exception:
+        except ImportError:
             _emit_log_table_cli(df, message, max_rows)
             return
         if message:
@@ -70,10 +70,10 @@ def _emit_log_table_cli(df: Any, message: Optional[str], max_rows: int) -> None:
         try:
             df.show(max_rows)
             return
-        except Exception:
+        except (AttributeError, TypeError, RuntimeError):
             pass
     try:
         head = df.head(max_rows)
-    except Exception:
+    except (AttributeError, TypeError):
         head = df
     _logger.info("%s", head)

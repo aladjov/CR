@@ -325,3 +325,74 @@ class TestS10CellsCallFramework:
         code_dbx = self._databricks_code_only()
         assert ".saveAsTable(" not in code_dbx
         assert "storage.write" not in code_local
+
+
+class TestS10ScoringReplaySplice:
+    """Phase 7 splice point — BatchInferenceStage emits a replay cell iff
+    any harvested function has replay_at_scoring=True. Empty / missing
+    harvest preserves byte-parity with the pre-Phase-7 notebook."""
+
+    @staticmethod
+    def _make_stage(harvest_result=None):
+        from unittest.mock import MagicMock
+
+        from customer_retention.generators.notebook_generator.stages.s10_batch_inference import (
+            BatchInferenceStage,
+        )
+
+        config = MagicMock()
+        config.threshold = 0.5
+        config.feature_store.catalog = "c"
+        config.feature_store.schema = "s"
+        config.mlflow.model_name = "m"
+        stage = BatchInferenceStage(config=config, findings=None)
+        stage.header_cells = lambda: []
+        stage.get_dataset_name = lambda: "d"
+        stage.get_identifier_columns = lambda: ["id"]
+        stage.harvest_result = harvest_result
+        return stage
+
+    @staticmethod
+    def _harvest_with_replay(names):
+        from customer_retention.runtime.harvest import HarvestResult
+        from customer_retention.runtime.registry import RegisteredFunction
+
+        hr = HarvestResult.empty()
+        for n in names:
+            rf = RegisteredFunction(
+                name=n,
+                source=f"def {n}(df): return df",
+                scope="dataset",
+                dataset="request",
+                replay_at_scoring=True,
+                inferred_stage="landing_post",
+            )
+            hr.functions_by_target.setdefault(("landing_post", "request"), []).append(rf)
+        return hr
+
+    def test_no_harvest_emits_no_replay_cell_local(self):
+        code = "\n".join(c.source for c in self._make_stage().generate_local_cells())
+        assert "from user_extensions import" not in code
+        assert "User-Extension Replay" not in code
+
+    def test_no_harvest_emits_no_replay_cell_databricks(self):
+        code = "\n".join(c.source for c in self._make_stage().generate_databricks_cells())
+        assert "from user_extensions import" not in code
+
+    def test_replay_function_adds_import_cell_local(self):
+        stage = self._make_stage(self._harvest_with_replay(["enrich_req"]))
+        code = "\n".join(c.source for c in stage.generate_local_cells())
+        assert "from user_extensions import enrich_req" in code
+        assert "TODO wire replay call-site for enrich_req" in code
+
+    def test_replay_function_adds_import_cell_databricks(self):
+        stage = self._make_stage(self._harvest_with_replay(["enrich_req"]))
+        code = "\n".join(c.source for c in stage.generate_databricks_cells())
+        assert "from user_extensions import enrich_req" in code
+
+    def test_replay_cell_inserted_before_run_batch_inference(self):
+        stage = self._make_stage(self._harvest_with_replay(["enrich_req"]))
+        sources = [c.source for c in stage.generate_local_cells()]
+        replay_idx = next(i for i, s in enumerate(sources) if "enrich_req" in s)
+        run_idx = next(i for i, s in enumerate(sources) if "run_batch_inference(config)" in s)
+        assert replay_idx < run_idx

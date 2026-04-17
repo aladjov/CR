@@ -62,17 +62,18 @@ class TestLocalRendererLandingUserExtensions:
 
     def test_empty_landing_emits_no_filter_or_enrichment_lines(self, renderer):
         code = renderer.render_landing("request", _landing_config())
-        assert "df.query(" not in code
+        assert "apply_sql_predicate(" not in code
         assert "enrich_lifecycle_dataset" not in code
         assert "LifecycleEnrichmentConfig" not in code
         ast.parse(code)
 
-    def test_filter_emits_query_call_with_python_literal_predicate(self, renderer):
+    def test_filter_emits_apply_sql_predicate_call(self, renderer):
         code = renderer.render_landing(
             "request",
-            _landing_config(filters=[_filter_step("ACCOUNT_ID.notna() and amount > 0")]),
+            _landing_config(filters=[_filter_step("ACCOUNT_ID IS NOT NULL AND amount > 0")]),
         )
-        assert "df = df.query('ACCOUNT_ID.notna() and amount > 0')" in code
+        assert "from customer_retention.core.compat import apply_sql_predicate" in code
+        assert "df = apply_sql_predicate(df, 'ACCOUNT_ID IS NOT NULL AND amount > 0')" in code
         ast.parse(code)
 
     def test_filter_runs_after_renames_before_temporal_derivation(self, renderer):
@@ -80,9 +81,9 @@ class TestLocalRendererLandingUserExtensions:
             "request",
             _landing_config(filters=[_filter_step("amount > 0")]),
         )
-        query_idx = code.index("df = df.query(")
+        filter_idx = code.index("df = apply_sql_predicate(")
         derive_call_idx = code.index("df = derive_temporal_columns(df)")
-        assert query_idx < derive_call_idx
+        assert filter_idx < derive_call_idx
 
     def test_lifecycle_enrichment_emits_helper_call(self, renderer):
         enrichment_cfg = {
@@ -107,7 +108,7 @@ class TestLocalRendererLandingUserExtensions:
             _landing_config(filters=[_filter_step("STATUS = 'active'")]),
         )
         ast.parse(code)
-        assert "df = df.query" in code
+        assert "apply_sql_predicate" in code
 
 
 class TestDatabricksRendererLandingUserExtensions:
@@ -160,5 +161,69 @@ class TestLandingEmissionOrderParityBetweenRenderers:
         cfg = _landing_config(filters=[_filter_step("amount > 0")])
         local_code = CodeRenderer().render_landing("request", cfg)
         db_code = DatabricksCodeRenderer().render_landing("request", cfg)
-        assert local_code.index("df = df.query(") < local_code.index("df = derive_temporal_columns(df)")
+        assert local_code.index("df = apply_sql_predicate(") < local_code.index("df = derive_temporal_columns(df)")
         assert db_code.index("df = df.filter(") < db_code.index("df = derive_feature_timestamp(df)")
+
+
+class TestSqlPredicatePortability:
+    """The same SQL-form predicate stored in the registry must execute
+    correctly on both backends. Pandas .query() alone cannot parse
+    `IS NOT NULL` — apply_sql_predicate translates it; Spark .filter() handles
+    SQL directly. Regression guard for the Release C parity break."""
+
+    @pytest.fixture
+    def sps_predicate(self):
+        return "ACCOUNT_ID IS NOT NULL AND CREATED_DATE IS NOT NULL"
+
+    def test_predicate_translates_to_valid_pandas_query(self, sps_predicate):
+        import pandas as pd
+
+        from customer_retention.core.compat import apply_sql_predicate
+
+        df = pd.DataFrame({
+            "ACCOUNT_ID": [1, None, 3, 4],
+            "CREATED_DATE": ["2026-01-01", "2026-01-02", None, "2026-01-04"],
+            "amount": [10, 20, 30, 40],
+        })
+        kept = apply_sql_predicate(df, sps_predicate)
+        assert list(kept["ACCOUNT_ID"]) == [1.0, 4.0]
+
+    def test_equality_predicate_translates(self):
+        import pandas as pd
+
+        from customer_retention.core.compat import apply_sql_predicate
+
+        df = pd.DataFrame({"status": ["active", "cancelled", "active"]})
+        kept = apply_sql_predicate(df, "status = 'active'")
+        assert list(kept["status"]) == ["active", "active"]
+
+    def test_inequality_predicates_translate(self):
+        import pandas as pd
+
+        from customer_retention.core.compat import apply_sql_predicate
+
+        df = pd.DataFrame({"v": [1, 2, 3, 4, 5]})
+        assert list(apply_sql_predicate(df, "v <> 3")["v"]) == [1, 2, 4, 5]
+        assert list(apply_sql_predicate(df, "v >= 3 AND v <= 4")["v"]) == [3, 4]
+
+    def test_emitted_local_code_runs_against_real_pandas_frame(self, sps_predicate):
+        """Smoke: the generated landing script's filter line can execute.
+
+        Exec the exact one-line emission against a pandas DataFrame to prove
+        the renderer's output is actually pandas-compatible — the bug the
+        old `df.query(predicate)` form had."""
+        import pandas as pd
+
+        from customer_retention.core.compat import apply_sql_predicate
+
+        df = pd.DataFrame({
+            "ACCOUNT_ID": [1, None, 3, None],
+            "CREATED_DATE": ["2026-01-01", None, None, "2026-01-04"],
+        })
+        local = {"df": df, "apply_sql_predicate": apply_sql_predicate}
+        exec(
+            f"df = apply_sql_predicate(df, {sps_predicate!r})",
+            local,
+        )
+        assert len(local["df"]) == 1
+        assert local["df"]["ACCOUNT_ID"].iloc[0] == 1.0

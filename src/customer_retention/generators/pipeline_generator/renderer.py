@@ -2131,8 +2131,9 @@ def run_landing_{{ name }}():
     df = df.rename(columns={"{{ config.original_target_column }}": TARGET_COLUMN})
 {% endif %}
 {% if config.filters %}
+    from customer_retention.core.compat import apply_sql_predicate
 {% for step in config.filters %}
-    df = df.query({{ step.parameters.predicate | python_repr }})
+    df = apply_sql_predicate(df, {{ step.parameters.predicate | python_repr }})
     print(f"  After user filter: {len(df):,}")
 {% endfor %}
 {% endif %}

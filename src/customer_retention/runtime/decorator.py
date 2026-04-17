@@ -16,6 +16,9 @@ from .registry import RegisteredFunction, Scope, registry
 F = TypeVar("F", bound=Callable)
 
 
+_REGISTERED_MARKER = "__cr_registered__"
+
+
 def register(
     *,
     dataset: Optional[str] = None,
@@ -26,6 +29,11 @@ def register(
     expected_stage: Optional[str] = None,
 ) -> Callable[[F], F]:
     def _decorate(func: F) -> F:
+        if getattr(func, _REGISTERED_MARKER, False):
+            raise TypeError(
+                f"@cr.register on '{func.__qualname__}': function already "
+                f"decorated with @cr.register; stacking is not permitted"
+            )
         fn_name = name if name is not None else func.__name__
         _validate_params(
             func_qualname=func.__qualname__,
@@ -52,6 +60,10 @@ def register(
             cell_id=cell_id,
         )
         registry.register(rf)
+        try:
+            setattr(func, _REGISTERED_MARKER, True)
+        except (AttributeError, TypeError):
+            pass
         return func
     return _decorate
 
@@ -140,16 +152,24 @@ def _capture_source(func: Callable) -> str:
 
 
 def _capture_caller_location() -> tuple[Optional[Path], Optional[str]]:
-    """Best-effort notebook path + cell id via stack walk. Both may be
-    None; that's acceptable when expected_stage= is provided."""
+    """Best-effort notebook path + cell id via stack walk.
+
+    Returns `(path, cell_id)` where either may be None. An IPython-input
+    filename like `<ipython-input-3-abcd>` is NOT a stable cell id — it
+    changes every kernel restart — so we decline to persist it. Dedup in
+    `Registry.register` relies on cell_id stability to identify
+    re-executions of the same cell across the same kernel; falling back to
+    None here forces the caller to supply `expected_stage=` in that
+    environment and avoids the false-match trap.
+    """
     try:
         frames = inspect.stack()
-    except Exception:
+    except (RuntimeError, OSError):
         return None, None
     for frame_info in frames:
         fname = frame_info.filename or ""
-        if fname.startswith("<ipython-input-") or "ipykernel" in fname:
-            return None, fname
         if fname.endswith(".ipynb"):
             return Path(fname), None
+        if fname.startswith("<ipython-input-") or "ipykernel" in fname:
+            return None, None
     return None, None
