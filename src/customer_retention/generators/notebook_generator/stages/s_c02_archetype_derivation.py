@@ -84,8 +84,6 @@ elif not FORCE_DERIVATION and _model_version_already_derived(
 ):
     print(f"SKIPPED: active archetypes already exist for {MODEL_NAME} v{MODEL_VERSION}")
 else:
-    import mlflow.spark
-
     training_df = spark.table(GOLD_FEATURES_FQN)
     feature_columns = [
         c for c in training_df.columns
@@ -93,6 +91,9 @@ else:
                      "inference_point_in_time", "model_uri")
     ]
     join_key = "account_id" if "account_id" in training_df.columns else "entity_id"
+    entity_key_cols = [join_key]
+    if "inference_point_in_time" in training_df.columns:
+        entity_key_cols.append("inference_point_in_time")
     catalog_rows, _ = load_playbooks_from_dir(PLAYBOOKS_DIR)
     llm_namer = build_llm_namer(LLM_ENDPOINT_NAME)
     print(f"LLM namer: {llm_namer.model_id}")
@@ -102,8 +103,9 @@ else:
         training_df=training_df,
         raw_feature_df=training_df,
         feature_columns=feature_columns,
-        model=mlflow.spark.load_model(MODEL_URI),
+        model_uri=MODEL_URI,
         target_column="target",
+        entity_key_cols=entity_key_cols,
         join_key=join_key,
         archetype_catalog_fqn=ARCHETYPE_CATALOG_FQN,
         eligibility_policy_fqn=ELIGIBILITY_POLICY_FQN,
@@ -117,42 +119,7 @@ else:
         feature_cap=KMEANS_FEATURE_CAP,
         llm_endpoint_name=LLM_ENDPOINT_NAME,
         llm_namer=llm_namer,
-        shap_method=SHAP_METHOD,
-        shap_model_uri=MODEL_URI,
-        shap_num_samples=SHAP_NUM_SAMPLES,
     )
     derivation_result = derive_archetypes_and_policies(cfg)
     print(derivation_result.summary())
-
-    if WRITE_TOP_SHAP_DRIVERS and derivation_result is not None:
-        from customer_retention.stages.causal import (
-            compute_shap_sampling_distributed,
-            extract_top_drivers_per_account,
-        )
-        from pyspark.sql import functions as F
-
-        _shap_result = compute_shap_sampling_distributed(
-            spark_df=training_df,
-            feature_columns=feature_columns,
-            model_uri=MODEL_URI,
-            background=derivation_result.background,
-            join_key=join_key,
-            num_samples=SHAP_NUM_SAMPLES,
-        )
-        _top_df = extract_top_drivers_per_account(
-            spark_df=training_df,
-            shap_df=_shap_result.shap_df,
-            feature_columns=list(_shap_result.feature_columns),
-            join_key=join_key,
-            k=TOP_SHAP_DRIVERS_K,
-        )
-        _top_df = (
-            _top_df
-            .withColumnRenamed(join_key, "account_id")
-            .withColumn("model_name", F.lit(MODEL_NAME))
-            .withColumn("model_version", F.lit(MODEL_VERSION))
-            .withColumn("as_of_date", F.current_timestamp())
-        )
-        _top_df.write.format("delta").mode("overwrite").saveAsTable(TOP_SHAP_DRIVERS_FQN)
-        print(f"Wrote top-{TOP_SHAP_DRIVERS_K} drivers to {TOP_SHAP_DRIVERS_FQN}")
 '''

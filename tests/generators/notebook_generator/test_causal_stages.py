@@ -128,18 +128,28 @@ class TestPerStageContent:
         assert "build_llm_namer" in code  # only c02 builds the namer
         assert "feature_cap=KMEANS_FEATURE_CAP" in code
 
-    def test_c02_loads_model_via_mlflow_spark_not_pyfunc(self):
-        """Regression for the ``PyFuncModel exposes no featureImportances``
-        error: c02 must load the model via ``mlflow.spark.load_model`` so
-        the classifier's ``.featureImportances`` / ``.coefficients`` are
-        directly accessible (stable API across MLflow versions). The older
-        ``mlflow.pyfunc.load_model + unwrap_tree_model`` path was brittle
-        to MLflow 3.x internal wrapper changes."""
+    def test_c02_passes_model_uri_not_loaded_model(self):
+        """Regression for the three recurring failure modes:
+          1. PyFuncModel exposes no featureImportances (MLflow wrapper change)
+          2. KeyError: 'spark' from mlflow.spark.load_model on FE-wrapped models
+          3. Any sub-artifact path guess that ages out with FE versions
+
+        The durable fix: c02 passes ``model_uri=MODEL_URI`` (string) and
+        ``entity_key_cols`` to DerivationConfig. Scoring happens via
+        ``fe.score_batch`` inside ``shap_runner`` — no model loading, no
+        introspection, no MLflow/FE internal surface exposed to c02."""
         gen = LocalNotebookGenerator(NotebookConfig(), None)
         code = _all_code(gen.generate_stage(NotebookStage.ARCHETYPE_DERIVATION))
-        assert "mlflow.spark.load_model(MODEL_URI)" in code
+        # Durable primitives present
+        assert "model_uri=MODEL_URI" in code
+        assert "entity_key_cols=entity_key_cols" in code
+        # Fragile primitives absent
         assert "mlflow.pyfunc.load_model" not in code
+        assert "mlflow.spark.load_model" not in code
         assert "unwrap_tree_model" not in code
+        # No direct model-object passing
+        assert "model=unwrap" not in code
+        assert "model=mlflow" not in code
 
     def test_c03_calls_approval_gate(self):
         gen = LocalNotebookGenerator(NotebookConfig(), None)
