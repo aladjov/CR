@@ -61,6 +61,10 @@ The cell below is the only place you should need to edit. Every value here is re
 
 - **`LLM_ENDPOINT_NAME`** — Mosaic AI Foundation Model endpoint used to refine the archetype → playbook mapping and write rationales. Default `databricks-claude-sonnet-4-6` is pay-per-token and pre-configured in every Databricks workspace. Set to `""` to fall back to the deterministic feature-overlap baseline.
 - **`SHAP_BACKGROUND_SAMPLE_SIZE`** — frozen reference sample size for SHAP. 1000 is the standard tractable size from the SHAP literature.
+- **`SHAP_METHOD`** — `"linear"` (default, fast) computes distributed linear attribution `importance × (x − mean)`. Exact for LogisticRegression, first-order approximation for tree ensembles. `"sampling"` computes true Shapley values via Štrumbelj–Kononenko Monte Carlo sampling on top of `mlflow.pyfunc.spark_udf` — model-agnostic, Spark 4.0 compatible, higher cost (O(N × K × M) predictions).
+- **`SHAP_NUM_SAMPLES`** — permutations per row for the sampling path. 30–50 gives stable top-K driver rankings. Ignored when `SHAP_METHOD="linear"`.
+- **`WRITE_TOP_SHAP_DRIVERS`** — when true, per-account top-k SHAP drivers are written to the `top_shap_drivers` Delta cache for c04's dashboard. Requires `SHAP_METHOD="sampling"` for meaningful per-row fidelity on tree models.
+- **`TOP_SHAP_DRIVERS_K`** — number of top drivers persisted per account.
 - **`KMEANS_K_RANGE` / `KMEANS_MAX_K`** — silhouette sweep range; the chosen `k` is capped to keep clusters human-reviewable.
 - **`KMEANS_FEATURE_CAP`** — pre-select this many top features by mean absolute SHAP before clustering. Mandatory on Spark Connect: KMeans serializes the trained model and >100 columns can exceed the 1 GB serialization limit.
 - **`FORCE_DERIVATION`** — re-run derivation even when an `active` archetype already exists for the current model version.
@@ -69,6 +73,11 @@ The cell below is the only place you should need to edit. Every value here is re
 _C02_CONFIG_BODY = '''LLM_ENDPOINT_NAME = "databricks-claude-sonnet-4-6"
 
 SHAP_BACKGROUND_SAMPLE_SIZE = 1000
+SHAP_METHOD = "linear"            # "linear" | "sampling"
+SHAP_NUM_SAMPLES = 50
+
+WRITE_TOP_SHAP_DRIVERS = False
+TOP_SHAP_DRIVERS_K = 5
 
 KMEANS_K_RANGE = (4, 12)
 KMEANS_MAX_K = 8

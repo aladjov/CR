@@ -561,13 +561,127 @@ class TestComputeShapDistributedValidation:
 
 
 # ---------------------------------------------------------------------------
+# Numeric-feature filter — regression for
+# "TypeError: unsupported operand type(s) for +: 'int' and 'datetime.datetime'"
+# on the _driver_means path when feature_columns includes a timestamp column.
+# ---------------------------------------------------------------------------
+
+
+class TestNumericFeatureFilter:
+    def test_returns_numeric_columns_unchanged(self):
+        df = _make_chainable_spark_df(["a", "b", "c"])
+        out = shap_runner._numeric_feature_columns(df, ["a", "b", "c"])
+        assert out == ["a", "b", "c"]
+
+    def test_drops_timestamp_column(self):
+        df = _make_chainable_spark_df(
+            ["account_id", "numeric_feat", "created_at"],
+            non_numeric_cols=["created_at"],
+        )
+        out = shap_runner._numeric_feature_columns(df, ["numeric_feat", "created_at"])
+        assert out == ["numeric_feat"]
+
+    def test_keeps_boolean_columns(self):
+        """Booleans are usable in linear attribution (0/1 semantics)."""
+        from pyspark.sql.types import BooleanType, DoubleType
+
+        df = MagicMock(name="DF")
+        df.columns = ["flag", "score"]
+
+        class _FakeSchema:
+            def __getitem__(self, name):
+                field = MagicMock()
+                field.dataType = BooleanType() if name == "flag" else DoubleType()
+                return field
+
+        df.schema = _FakeSchema()
+        out = shap_runner._numeric_feature_columns(df, ["flag", "score"])
+        assert out == ["flag", "score"]
+
+    def test_compute_shap_distributed_drops_non_numeric_with_warning(self, monkeypatch, caplog):
+        """Regression: c02's `feature_columns = training_df.columns - metadata`
+        often includes datetime columns. Those must be auto-filtered with a
+        visible warning — not silently passed through to _driver_means where
+        ``sum([datetime, datetime, ...])`` crashes with TypeError."""
+        import logging as _logging
+
+        _install_orchestration_mocks(monkeypatch)
+        df = _make_chainable_spark_df(
+            ["account_id", "feat_a", "created_at", "feat_b"],
+            non_numeric_cols=["created_at"],
+        )
+        bg = BackgroundSample(
+            rows=[{"feat_a": 1.0, "feat_b": 2.0}],
+            feature_columns=["feat_a", "feat_b"],
+            sample_size=1,
+        )
+        with caplog.at_level(_logging.WARNING, logger="customer_retention.stages.causal.shap_runner"):
+            result = compute_shap_distributed(
+                spark_df=df,
+                feature_columns=["feat_a", "created_at", "feat_b"],
+                model_uri="models:/m@prod",
+                background=bg,
+                entity_key_cols=["account_id"],
+            )
+        # Non-numeric column is dropped from feature_columns and shap_columns
+        assert result.feature_columns == ["feat_a", "feat_b"]
+        assert result.shap_columns == ["shap_feat_a", "shap_feat_b"]
+        # Warning mentions the dropped column so the user can see what happened
+        assert any("created_at" in rec.getMessage() for rec in caplog.records)
+
+    def test_compute_shap_distributed_raises_when_no_numeric_features(self, monkeypatch):
+        """Fail-fast per Coding_Practices.md: if every feature is non-numeric,
+        the SHAP attribution formula has nothing to produce — surface a clear
+        error instead of emitting an empty ShapRunResult."""
+        _install_orchestration_mocks(monkeypatch)
+        df = _make_chainable_spark_df(
+            ["account_id", "created_at"],
+            non_numeric_cols=["created_at"],
+        )
+        bg = BackgroundSample()
+        with pytest.raises(ValueError, match="No numeric features"):
+            compute_shap_distributed(
+                spark_df=df,
+                feature_columns=["created_at"],
+                model_uri="models:/m@prod",
+                background=bg,
+                entity_key_cols=["account_id"],
+            )
+
+    def test_no_pandas_udf_invoked(self, monkeypatch):
+        """Regression for the CONTEXT_ONLY_VALID_ON_DRIVER bug."""
+        mocks = _install_orchestration_mocks(monkeypatch)
+        pandas_udf_calls: list = []
+        mocks["F"].pandas_udf = lambda *a, **kw: pandas_udf_calls.append((a, kw))
+
+# ---------------------------------------------------------------------------
 # compute_shap_distributed — orchestration
 # ---------------------------------------------------------------------------
 
 
-def _make_chainable_spark_df(columns):
+def _make_chainable_spark_df(columns, non_numeric_cols=()):
+    """Build a mock Spark DataFrame.
+
+    ``non_numeric_cols`` lets tests mark specific columns as TimestampType
+    so the numeric-feature filter exercises the drop path. All other
+    columns default to DoubleType.
+    """
+    from pyspark.sql.types import DoubleType, TimestampType
+
     df = MagicMock(name="SparkDF")
     df.columns = list(columns)
+
+    schema_map = {}
+    for c in columns:
+        field = MagicMock(name=f"Field({c})")
+        field.dataType = TimestampType() if c in non_numeric_cols else DoubleType()
+        schema_map[c] = field
+
+    class _FakeSchema:
+        def __getitem__(self, name):
+            return schema_map[name]
+
+    df.schema = _FakeSchema()
 
     def _chain(*_a, **_kw):
         return df

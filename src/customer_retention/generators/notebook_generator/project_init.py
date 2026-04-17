@@ -1,5 +1,7 @@
 import shutil
+import site
 import sys
+import sysconfig
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -250,11 +252,14 @@ dev = [
         except (PackageNotFoundError, FileNotFoundError, TypeError):
             pass
 
-        # 3. Fallback: common shared-data location under sys.prefix
-        #    (covers cases where RECORD is missing, e.g. conda --no-record)
-        prefix_path = Path(sys.prefix) / "share" / "churnkit" / dir_name
-        if prefix_path.is_dir():
-            return prefix_path
+        # 3. Fallback: shared-data location. Hatch's ``shared-data`` is installed
+        #    by pip/uv to the wheel's ``data`` scheme — which is ``sysconfig.get_path('data')``,
+        #    NOT always ``sys.prefix``. On Databricks ephemeral envs and ``--user``
+        #    installs these diverge. Check every plausible data root.
+        for data_root in _iter_shared_data_roots():
+            candidate = data_root / "share" / "churnkit" / dir_name
+            if candidate.is_dir():
+                return candidate
 
         return None
 
@@ -266,6 +271,43 @@ dev = [
             output_dir=str(output_dir),
             platforms=platforms,
         )
+
+
+def _iter_shared_data_roots() -> List[Path]:
+    """Return every plausible ``data`` root where hatch ``shared-data`` may live.
+
+    Hatch's ``shared-data`` entries are installed into the wheel's ``data``
+    scheme. Which directory that is depends on the installer, the interpreter,
+    and whether the install is system-wide, venv, ``--user``, or an ephemeral
+    Databricks env — ``sys.prefix`` is only *sometimes* the right answer.
+    """
+    seen: set[str] = set()
+    roots: List[Path] = []
+
+    def _add(path: Optional[str]) -> None:
+        if not path:
+            return
+        resolved = str(Path(path))
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        roots.append(Path(path))
+
+    _add(sysconfig.get_path("data"))
+    for scheme in sysconfig.get_scheme_names():
+        try:
+            _add(sysconfig.get_paths(scheme).get("data"))
+        except KeyError:
+            continue
+    _add(sys.prefix)
+    _add(getattr(sys, "base_prefix", None))
+    try:
+        _add(site.getuserbase())
+    except AttributeError:
+        pass
+    _add("/databricks/python")
+    _add("/databricks/driver")
+    return roots
 
 
 def initialize_project(

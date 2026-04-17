@@ -312,11 +312,13 @@ else:
     feature_columns = [
         c for c in training_df.columns
         if c not in ("account_id", "entity_id", "target", "churn_probability",
-                     "inference_point_in_time", "model_uri")
+                     "event_timestamp", "inference_point_in_time", "model_uri")
     ]
     join_key = "account_id" if "account_id" in training_df.columns else "entity_id"
     entity_key_cols = [join_key]
-    if "inference_point_in_time" in training_df.columns:
+    if "event_timestamp" in training_df.columns:
+        entity_key_cols.append("event_timestamp")
+    elif "inference_point_in_time" in training_df.columns:
         entity_key_cols.append("inference_point_in_time")
     catalog_rows, _ = load_playbooks_from_dir(PLAYBOOKS_DIR)
     llm_namer = build_llm_namer(LLM_ENDPOINT_NAME)

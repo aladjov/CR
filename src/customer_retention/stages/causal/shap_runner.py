@@ -238,7 +238,20 @@ def compute_shap_distributed(
     if missing_keys:
         raise ValueError(f"entity_key_cols not in spark_df.columns: {missing_keys}")
 
-    feature_order = list(feature_columns)
+    feature_order = _numeric_feature_columns(spark_df, feature_columns)
+    dropped = [c for c in feature_columns if c not in feature_order]
+    if dropped:
+        logger.warning(
+            "Dropped %d non-numeric feature(s) from SHAP attribution (timestamp / "
+            "string / struct / etc. have no meaningful mean or x*importance product): %s",
+            len(dropped),
+            dropped,
+        )
+    if not feature_order:
+        raise ValueError(
+            f"No numeric features found among {list(feature_columns)}. "
+            "SHAP linear attribution requires numeric (or boolean) feature columns."
+        )
     entity_df = spark_df.select(*entity_key_cols)
 
     bg_means = _background_means(background, feature_order, spark_df)
@@ -322,6 +335,27 @@ def _compute_importances_from_behaviour(
 # ---------------------------------------------------------------------------
 # Internals — background means
 # ---------------------------------------------------------------------------
+
+
+def _numeric_feature_columns(spark_df: Any, feature_columns: Sequence[str]) -> List[str]:
+    """Return the subset of ``feature_columns`` whose Spark dtype is numeric
+    (or boolean). SHAP linear attribution is ``importance × (x − mean)`` —
+    timestamps, strings, structs, arrays don't have a meaningful mean or
+    ``importance × value`` product and would crash downstream arithmetic.
+    Boolean columns are kept because they behave as 0/1 in the formula.
+
+    Driver-side schema inspection only: O(1) per column, no Spark jobs.
+    """
+    from pyspark.sql.types import BooleanType, NumericType
+
+    numeric: List[str] = []
+    for name in feature_columns:
+        if name not in spark_df.columns:
+            continue
+        dtype = spark_df.schema[name].dataType
+        if isinstance(dtype, (NumericType, BooleanType)):
+            numeric.append(name)
+    return numeric
 
 
 def _background_means(

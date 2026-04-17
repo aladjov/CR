@@ -151,6 +151,31 @@ class TestPerStageContent:
         assert "model=unwrap" not in code
         assert "model=mlflow" not in code
 
+    def test_c02_uses_event_timestamp_as_fe_timestamp_lookup_key(self):
+        """Regression for: "Unable to join feature table ... because timestamp
+        lookup key 'event_timestamp' not found in DataFrame".
+
+        Training's databricks_renderer.py sets TIMESTAMP_COLUMN = "event_timestamp"
+        and registers the feature lookup with that as the timestamp_lookup_key.
+        At score time, ``fe.score_batch`` reads the model's registered lookup
+        spec and demands the exact column name. c02's ``entity_key_cols`` must
+        therefore include ``event_timestamp`` when present (preferred over
+        ``inference_point_in_time``, which is scoring-side runtime-only).
+
+        ``event_timestamp`` must also be excluded from ``feature_columns`` —
+        it's a key column, not a feature."""
+        gen = LocalNotebookGenerator(NotebookConfig(), None)
+        code = _all_code(gen.generate_stage(NotebookStage.ARCHETYPE_DERIVATION))
+        # event_timestamp appears in both: the key-col branch AND the feature
+        # exclusion tuple. We check for both presences.
+        assert 'if "event_timestamp" in training_df.columns' in code
+        assert 'entity_key_cols.append("event_timestamp")' in code
+        # And event_timestamp is in the feature_columns exclusion tuple
+        assert '"event_timestamp"' in code
+        # Old mis-keyed logic is gone (inference_point_in_time may remain as
+        # fallback but must not be the only/first check)
+        assert code.index('"event_timestamp"') < code.index('"inference_point_in_time"')
+
     def test_c03_calls_approval_gate(self):
         gen = LocalNotebookGenerator(NotebookConfig(), None)
         code = _all_code(gen.generate_stage(NotebookStage.APPROVAL_GATE))
