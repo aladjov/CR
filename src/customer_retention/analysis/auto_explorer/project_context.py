@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime as _dt
-import os
 import uuid
 from enum import Enum
 from pathlib import Path
@@ -11,12 +10,16 @@ import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from customer_retention.core.compat import native_pd, pd
-from customer_retention.core.compat.remote_path import RemotePath
+from customer_retention.core.compat.remote_path import (
+    RemotePath,
+    atomic_write_text,
+    is_unity_volume_path,
+)
 from customer_retention.core.config.column_config import DatasetGranularity
 
 
 def _is_fuse_volume(path) -> bool:
-    return str(path).startswith("/Volumes/")
+    return is_unity_volume_path(path)
 
 
 class PredictionObjective(str, Enum):
@@ -298,12 +301,7 @@ class ProjectContext(BaseModel):
         p = path if isinstance(path, (Path, RemotePath)) else Path(str(path))
         p.parent.mkdir(parents=True, exist_ok=True)
         content = yaml.dump(self.model_dump(mode="json"), default_flow_style=False, sort_keys=False)
-        if isinstance(p, Path) and not _is_fuse_volume(p):
-            tmp = p.parent / (p.name + ".tmp")
-            tmp.write_text(content)
-            os.replace(str(tmp), str(p))
-        else:
-            p.write_text(content)
+        atomic_write_text(p, content)
 
     @classmethod
     def load(cls, path) -> ProjectContext:

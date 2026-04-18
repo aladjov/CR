@@ -646,11 +646,11 @@ class TestProjectContextSerialization:
     def test_save_on_volumes_fuse_path_skips_rename(self, tmp_path, monkeypatch):
         path = tmp_path / "project_context.yaml"
         monkeypatch.setattr(
-            "customer_retention.analysis.auto_explorer.project_context._is_fuse_volume",
+            "customer_retention.core.compat.remote_path.is_unity_volume_path",
             lambda _: True,
         )
         monkeypatch.setattr(
-            "customer_retention.analysis.auto_explorer.project_context.os.replace",
+            "customer_retention.core.compat.remote_path.os.replace",
             lambda *a, **kw: (_ for _ in ()).throw(OSError("FUSE rename unsupported")),
         )
         ctx = _minimal_context()

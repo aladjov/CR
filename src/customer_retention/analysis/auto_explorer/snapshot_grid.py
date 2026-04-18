@@ -13,7 +13,11 @@ from customer_retention.analysis.auto_explorer.project_context import (
     CadenceInterval,
     IntentConfig,
 )
-from customer_retention.core.compat.remote_path import RemotePath
+from customer_retention.core.compat.remote_path import (
+    RemotePath,
+    atomic_write_text,
+    is_unity_volume_path,
+)
 from customer_retention.core.config.column_config import DatasetGranularity
 
 
@@ -24,16 +28,11 @@ def _coerce_path(path):
 
 
 def _is_fuse_volume(path) -> bool:
-    return str(path).startswith("/Volumes/")
+    return is_unity_volume_path(path)
 
 
 def _atomic_write_text(path, content: str) -> None:
-    if isinstance(path, Path) and not _is_fuse_volume(path):
-        tmp = path.parent / (path.name + ".tmp")
-        tmp.write_text(content)
-        os.replace(str(tmp), str(path))
-    else:
-        path.write_text(content)
+    atomic_write_text(path, content)
 
 
 DEFAULT_MAX_GRID_DATES: int = 500

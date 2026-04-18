@@ -318,6 +318,43 @@ def _is_scheme_path(path_str: str) -> bool:
     return ":" in first_segment
 
 
+def is_unity_volume_path(path: Union[str, Path, "RemotePath"]) -> bool:
+    return str(path).startswith("/Volumes/")
+
+
+def atomic_write_text(path: Union[Path, "RemotePath"], content: str) -> None:
+    """Replace *path*'s contents with *content* in a single atomic operation.
+
+    Concurrent per-dataset Databricks ``for_each_task`` jobs write the same
+    shared YAML files (snapshot grid, project context). On Unity Catalog
+    Volumes FUSE mounts, standard ``open('w') → write → close`` can produce
+    byte-level interleaves where the shorter writer truncates the tail of
+    the longer one, corrupting the file. Routing Volumes writes through
+    ``dbutils.fs.put`` bypasses FUSE and commits one atomic PUT at the UC
+    service — last-writer-wins, never interleaved.
+    """
+    if isinstance(path, RemotePath):
+        path.write_text(content)
+        return
+    if is_unity_volume_path(path):
+        dbu = _maybe_get_dbutils()
+        if dbu is not None:
+            dbu.fs.put(str(path), content, overwrite=True)
+            return
+        path.write_text(content)
+        return
+    tmp = path.parent / (path.name + ".tmp")
+    tmp.write_text(content)
+    os.replace(str(tmp), str(path))
+
+
+def _maybe_get_dbutils() -> Any:
+    try:
+        return _get_dbutils()
+    except RuntimeError:
+        return None
+
+
 def make_path(path: Union[str, Path, RemotePath], force_remote: Optional[bool] = None) -> Union[Path, RemotePath]:
     if isinstance(path, RemotePath):
         return path

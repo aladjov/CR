@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 import yaml
@@ -659,11 +660,11 @@ class TestSerialization:
     def test_atomic_write_skips_rename_on_volumes_fuse_path(self, tmp_path, monkeypatch):
         path = tmp_path / "grid.yaml"
         monkeypatch.setattr(
-            "customer_retention.analysis.auto_explorer.snapshot_grid._is_fuse_volume",
+            "customer_retention.core.compat.remote_path.is_unity_volume_path",
             lambda _: True,
         )
         monkeypatch.setattr(
-            "customer_retention.analysis.auto_explorer.snapshot_grid.os.replace",
+            "customer_retention.core.compat.remote_path.os.replace",
             lambda *a, **kw: (_ for _ in ()).throw(OSError("should not be called")),
         )
         _atomic_write_text(path, "hello: world\n")
@@ -679,11 +680,11 @@ class TestSerialization:
     def test_save_grid_on_volumes_path(self, tmp_path, monkeypatch):
         path = tmp_path / "snapshot_grid.yaml"
         monkeypatch.setattr(
-            "customer_retention.analysis.auto_explorer.snapshot_grid._is_fuse_volume",
+            "customer_retention.core.compat.remote_path.is_unity_volume_path",
             lambda _: True,
         )
         monkeypatch.setattr(
-            "customer_retention.analysis.auto_explorer.snapshot_grid.os.replace",
+            "customer_retention.core.compat.remote_path.os.replace",
             lambda *a, **kw: (_ for _ in ()).throw(OSError("FUSE rename unsupported")),
         )
         grid = _minimal_grid(grid_start="2024-01-01", grid_end="2024-06-01")
@@ -691,6 +692,39 @@ class TestSerialization:
         loaded = SnapshotGrid.load(path)
         assert loaded.grid_start == "2024-01-01"
         assert not (tmp_path / "snapshot_grid.yaml.tmp").exists()
+
+    def test_atomic_write_on_volumes_uses_dbutils_put_when_available(self, tmp_path, monkeypatch):
+        path = tmp_path / "grid.yaml"
+        monkeypatch.setattr(
+            "customer_retention.core.compat.remote_path.is_unity_volume_path",
+            lambda _: True,
+        )
+
+        class _StubFs:
+            def __init__(self):
+                self.calls = []
+
+            def put(self, p, content, overwrite):
+                self.calls.append((p, content, overwrite))
+                Path(p).write_text(content)
+
+        class _StubDbutils:
+            def __init__(self):
+                self.fs = _StubFs()
+
+        stub = _StubDbutils()
+        monkeypatch.setattr(
+            "customer_retention.core.compat.remote_path._maybe_get_dbutils",
+            lambda: stub,
+        )
+        monkeypatch.setattr(
+            "customer_retention.core.compat.remote_path.os.replace",
+            lambda *a, **kw: (_ for _ in ()).throw(OSError("rename must not run")),
+        )
+        _atomic_write_text(path, "hello: world\n")
+        assert stub.fs.calls == [(str(path), "hello: world\n", True)]
+        assert path.read_text() == "hello: world\n"
+        assert not (tmp_path / "grid.yaml.tmp").exists()
 
     def test_is_fuse_volume_detects_volumes_prefix(self):
         from pathlib import Path as _Path
@@ -718,6 +752,69 @@ class TestSerialization:
         path.write_text(truncated)
         with pytest.raises((yaml.YAMLError, Exception)):
             SnapshotGrid.load(path)
+
+    def test_concurrent_writers_on_volumes_path_produce_valid_yaml(self, tmp_path, monkeypatch):
+        """Regression: per-dataset for_each_task jobs racing on the shared
+        snapshot_grid.yaml on UC Volumes FUSE used to produce byte-level
+        interleaves (shorter writer truncates tail of longer one), yielding
+        ``ScannerError`` on the next load — `'2026-04-17'` at column 1
+        followed by ``opportunity:`` at column 3. With ``dbutils.fs.put``
+        routing, every writer commits atomically at the UC service."""
+        import threading
+
+        path = tmp_path / "snapshot_grid.yaml"
+        monkeypatch.setattr(
+            "customer_retention.core.compat.remote_path.is_unity_volume_path",
+            lambda _: True,
+        )
+
+        class _AtomicFs:
+            def put(self, p, content, overwrite):
+                Path(p).write_bytes(content.encode())
+
+        class _StubDbutils:
+            fs = _AtomicFs()
+
+        monkeypatch.setattr(
+            "customer_retention.core.compat.remote_path._maybe_get_dbutils",
+            lambda: _StubDbutils(),
+        )
+
+        base = _minimal_grid(grid_start="2024-01-01", grid_end="2026-04-17")
+        base.save(path)
+
+        def _make_variant(n_votes: int) -> SnapshotGrid:
+            g = _minimal_grid(grid_start="2024-01-01", grid_end="2026-04-17")
+            for i in range(n_votes):
+                g.dataset_votes[f"dataset_{i:03d}"] = DatasetGridVote(
+                    dataset_name=f"dataset_{i:03d}",
+                    granularity=DatasetGranularity.EVENT_LEVEL,
+                    voted=True,
+                    data_span_start="2024-01-01",
+                    data_span_end="2026-04-17",
+                )
+            return g
+
+        errors: list[Exception] = []
+        variants = [_make_variant(n) for n in (1, 5, 12, 30, 60)]
+
+        def _writer(grid: SnapshotGrid) -> None:
+            try:
+                for _ in range(8):
+                    grid.save(path)
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=_writer, args=(g,)) for g in variants]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"writers failed: {errors}"
+        loaded = SnapshotGrid.load(path)
+        assert loaded.grid_start == "2024-01-01"
+        assert loaded.grid_end == "2026-04-17"
 
 
 class TestComputeBoundaries:
