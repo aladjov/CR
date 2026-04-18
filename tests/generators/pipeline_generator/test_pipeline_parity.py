@@ -34,7 +34,60 @@ from customer_retention.generators.pipeline_generator.protocols import (
     CodeRendererProtocol,
     PipelineGeneratorBase,
 )
-from customer_retention.generators.pipeline_generator.renderer import CodeRenderer
+from customer_retention.generators.pipeline_generator.renderer import (
+    CodeRenderer,
+    render_python_literal,
+)
+
+
+class TestRenderPythonLiteral:
+    def test_nan_emits_float_nan_call(self):
+        assert render_python_literal(float("nan")) == "float('nan')"
+
+    def test_inf_emits_float_inf_call(self):
+        assert render_python_literal(float("inf")) == "float('inf')"
+
+    def test_negative_inf_preserves_sign(self):
+        assert render_python_literal(float("-inf")) == "float('-inf')"
+
+    def test_regular_floats_use_repr(self):
+        assert eval(render_python_literal(1.5)) == 1.5
+        assert eval(render_python_literal(0.0)) == 0.0
+        assert eval(render_python_literal(-3.14)) == -3.14
+
+    def test_none_bool_int_str_use_repr(self):
+        assert render_python_literal(None) == "None"
+        assert render_python_literal(True) == "True"
+        assert render_python_literal(False) == "False"
+        assert render_python_literal(42) == "42"
+        assert eval(render_python_literal("hi 'quoted'")) == "hi 'quoted'"
+
+    def test_nested_dict_list_tuple_preserves_shape(self):
+        import math
+
+        value = {
+            "a": [1, 2.0, float("nan")],
+            "b": {"inner": (float("inf"), None, "x")},
+            "c": (float("-inf"),),
+        }
+        src = render_python_literal(value)
+        parsed = eval(src, {}, {})
+        assert parsed["a"][0] == 1
+        assert parsed["a"][1] == 2.0
+        assert math.isnan(parsed["a"][2])
+        assert parsed["b"]["inner"] == (float("inf"), None, "x")
+        assert parsed["c"] == (float("-inf"),)
+
+    def test_single_element_tuple_has_trailing_comma(self):
+        assert render_python_literal((1,)) == "(1,)"
+
+    def test_string_containing_nan_substring_is_not_corrupted(self):
+        """Regression guard: a naive ``str(dict).replace('nan', ...)`` would
+        rewrite the substring inside ``'banana'``. The recursive formatter
+        must not touch string contents."""
+        src = render_python_literal({"fruit": "banana"})
+        parsed = eval(src, {}, {})
+        assert parsed == {"fruit": "banana"}
 
 
 @pytest.fixture
@@ -1925,6 +1978,53 @@ class TestLocalTrainingFeatureProfile:
         )
         result = renderer.render_training(pipeline_config_minimal)
         ast.parse(result)
+
+    def test_local_training_profile_emits_float_nan_not_bare_nan(self, renderer, pipeline_config_minimal):
+        """Regression: ``repr({'score': float('nan')})`` emits the bare identifier
+        ``nan`` which raises ``NameError`` in module scope. Rendered profile
+        must use ``float('nan')`` so the cell executes standalone."""
+        import math
+        pipeline_config_minimal.training = TrainingConfig(
+            exploration_feature_profile={
+                "stage": "exploration",
+                "created_at": "2024-01-01",
+                "row_count": 100,
+                "feature_count": 1,
+                "target_column": "churn",
+                "features": {
+                    "col_a": {
+                        "dtype": "float32",
+                        "non_null": 90,
+                        "null_count": 10,
+                        "selection_trace": [
+                            {
+                                "stage": "chi_squared",
+                                "score": float("nan"),
+                                "score_name": "chi2_stat",
+                                "threshold": 500.0,
+                                "decision": "kept",
+                                "reason": None,
+                                "rank": None,
+                                "stage_input_count": 20,
+                                "stage_output_count": 20,
+                                "companion_feature": None,
+                            }
+                        ],
+                    },
+                },
+                "excluded": {},
+            },
+        )
+        result = renderer.render_training(pipeline_config_minimal)
+        ast.parse(result)
+        profile_line = next(
+            ln for ln in result.splitlines() if ln.startswith("_EXPLORATION_PROFILE = ")
+        )
+        assert "float('nan')" in profile_line
+        assert ": nan," not in profile_line
+        assert ": nan}" not in profile_line
+        parsed = eval(profile_line[len("_EXPLORATION_PROFILE = "):], {}, {})
+        assert math.isnan(parsed["features"]["col_a"]["selection_trace"][0]["score"])
 
 
 class TestExplorationFeatureProfileSaved:

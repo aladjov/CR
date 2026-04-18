@@ -15,6 +15,7 @@ from .renderer import (
     _sorted_landing_names,
     group_steps,
     provenance_key,
+    render_python_literal,
 )
 
 
@@ -1798,7 +1799,7 @@ _vector_schema = StructType([
     StructField("label", DoubleType(), True),
 ])
 {% if config.training and config.training.exploration_feature_profile %}
-_EXPLORATION_PROFILE = {{ config.training.exploration_feature_profile }}
+_EXPLORATION_PROFILE = {{ config.training.exploration_feature_profile | py_source }}
 {% else %}
 _EXPLORATION_PROFILE = None
 {% endif %}
@@ -2931,6 +2932,7 @@ class DatabricksCodeRenderer:
         self._env.globals["spark_provenance_block"] = spark_provenance_block
         self._env.globals["sorted_landing_names"] = _sorted_landing_names
         self._env.filters["python_repr"] = repr
+        self._env.filters["py_source"] = render_python_literal
 
     _NOTEBOOK_HEADER = "# Databricks notebook source\n"
 

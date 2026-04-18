@@ -3344,6 +3344,150 @@ class TestDatabricksTrainingFeatureProfile:
         result = renderer.render_training(config)
         ast.parse(result)
 
+    def test_training_profile_emits_float_nan_not_bare_nan(self, renderer, sample_pipeline_config):
+        """Regression: ``repr({'score': float('nan')})`` emits the bare identifier
+        ``nan`` which raises ``NameError`` in module scope. The rendered profile
+        must use ``float('nan')`` so the cell executes without requiring any
+        extra imports or identifier bindings."""
+        from customer_retention.generators.pipeline_generator.models import TrainingConfig
+
+        config = sample_pipeline_config
+        config.training = TrainingConfig(
+            exploration_feature_profile={
+                "stage": "exploration",
+                "created_at": "2024-01-01",
+                "row_count": 100,
+                "feature_count": 1,
+                "target_column": "churn",
+                "features": {
+                    "col_a": {
+                        "dtype": "float32",
+                        "non_null": 90,
+                        "null_count": 10,
+                        "selection_trace": [
+                            {
+                                "stage": "chi_squared",
+                                "score": float("nan"),
+                                "score_name": "chi2_stat",
+                                "threshold": 500.0,
+                                "decision": "kept",
+                                "reason": None,
+                                "rank": None,
+                                "stage_input_count": 20,
+                                "stage_output_count": 20,
+                                "companion_feature": None,
+                            }
+                        ],
+                    },
+                },
+                "excluded": {},
+            },
+        )
+        result = renderer.render_training(config)
+        ast.parse(result)
+        profile_line = next(
+            ln for ln in result.splitlines() if ln.startswith("_EXPLORATION_PROFILE = ")
+        )
+        assert "float('nan')" in profile_line
+        assert ": nan," not in profile_line
+        assert ": nan}" not in profile_line
+
+    def test_training_profile_handles_inf_values(self, renderer, sample_pipeline_config):
+        """Infinity scores must also become ``float('inf')`` / ``float('-inf')``
+        — ``repr(float('inf'))`` emits bare ``inf`` which likewise raises
+        ``NameError`` at module scope."""
+        from customer_retention.generators.pipeline_generator.models import TrainingConfig
+
+        config = sample_pipeline_config
+        config.training = TrainingConfig(
+            exploration_feature_profile={
+                "stage": "exploration",
+                "created_at": "2024-01-01",
+                "row_count": 100,
+                "feature_count": 1,
+                "target_column": "churn",
+                "features": {
+                    "col_a": {
+                        "dtype": "float32",
+                        "non_null": 90,
+                        "null_count": 10,
+                        "selection_trace": [
+                            {
+                                "stage": "chi_squared",
+                                "score": float("inf"),
+                                "score_name": "chi2_stat",
+                                "threshold": float("-inf"),
+                                "decision": "kept",
+                                "reason": None,
+                                "rank": None,
+                                "stage_input_count": 20,
+                                "stage_output_count": 20,
+                                "companion_feature": None,
+                            }
+                        ],
+                    },
+                },
+                "excluded": {},
+            },
+        )
+        result = renderer.render_training(config)
+        ast.parse(result)
+        profile_line = next(
+            ln for ln in result.splitlines() if ln.startswith("_EXPLORATION_PROFILE = ")
+        )
+        assert "float('inf')" in profile_line
+        assert "float('-inf')" in profile_line
+
+    def test_training_profile_rendered_source_parses_back_to_original_shape(
+        self, renderer, sample_pipeline_config
+    ):
+        """End-to-end round-trip: build a profile with NaN/Inf, render the
+        training script, extract the _EXPLORATION_PROFILE assignment, eval it
+        in an empty scope, and confirm NaN/Inf positions match the input."""
+        import math
+
+        from customer_retention.generators.pipeline_generator.models import TrainingConfig
+
+        original = {
+            "stage": "exploration",
+            "created_at": "2024-01-01",
+            "row_count": 100,
+            "feature_count": 1,
+            "target_column": "churn",
+            "features": {
+                "col_a": {
+                    "dtype": "float32",
+                    "non_null": 90,
+                    "null_count": 10,
+                    "selection_trace": [
+                        {
+                            "stage": "chi_squared",
+                            "score": float("nan"),
+                            "score_name": "chi2_stat",
+                            "threshold": 500.0,
+                            "decision": "kept",
+                            "reason": None,
+                            "rank": None,
+                            "stage_input_count": 20,
+                            "stage_output_count": 20,
+                            "companion_feature": None,
+                        }
+                    ],
+                },
+            },
+            "excluded": {},
+        }
+        config = sample_pipeline_config
+        config.training = TrainingConfig(exploration_feature_profile=original)
+        result = renderer.render_training(config)
+        profile_line = next(
+            ln for ln in result.splitlines() if ln.startswith("_EXPLORATION_PROFILE = ")
+        )
+        payload = profile_line[len("_EXPLORATION_PROFILE = "):]
+        parsed = eval(payload, {}, {})
+        assert math.isnan(parsed["features"]["col_a"]["selection_trace"][0]["score"])
+        assert parsed["features"]["col_a"]["selection_trace"][0]["threshold"] == 500.0
+
 
 class TestDatabricksTrainingProfilePersistence:
     def test_training_imports_run_namespace(self, renderer, sample_pipeline_config):

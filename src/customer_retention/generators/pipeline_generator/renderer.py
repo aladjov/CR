@@ -73,6 +73,31 @@ DEFAULT_NOTEBOOK_MAP = {
 _docs_base: str = "docs"
 
 
+def render_python_literal(value) -> str:
+    import math
+    if isinstance(value, bool) or value is None:
+        return repr(value)
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "float('nan')"
+        if math.isinf(value):
+            return "float('-inf')" if value < 0 else "float('inf')"
+        return repr(value)
+    if isinstance(value, dict):
+        body = ", ".join(
+            f"{render_python_literal(k)}: {render_python_literal(v)}"
+            for k, v in value.items()
+        )
+        return "{" + body + "}"
+    if isinstance(value, (list, tuple)):
+        body = ", ".join(render_python_literal(v) for v in value)
+        if isinstance(value, tuple):
+            suffix = "," if len(value) == 1 else ""
+            return "(" + body + suffix + ")"
+        return "[" + body + "]"
+    return repr(value)
+
+
 def _notebook_title(notebook: str) -> str:
     name = notebook.split("_", 1)[1] if "_" in notebook else notebook
     return name.replace("_", " ").title()
@@ -1094,7 +1119,7 @@ mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 logger = logging.getLogger("training")
 _EXCLUDE_COLS = {TARGET_COLUMN, FEAST_TIMESTAMP_COL, ENTITY_KEY} | GOLD_METADATA_COLUMNS
 {% if config.training and config.training.exploration_feature_profile %}
-_EXPLORATION_PROFILE = {{ config.training.exploration_feature_profile }}
+_EXPLORATION_PROFILE = {{ config.training.exploration_feature_profile | py_source }}
 {% else %}
 _EXPLORATION_PROFILE = None
 {% endif %}
@@ -2989,6 +3014,7 @@ class CodeRenderer:
         self._env.globals["partition_gold_steps"] = partition_gold_steps
         self._env.globals["sorted_landing_names"] = _sorted_landing_names
         self._env.filters["python_repr"] = repr
+        self._env.filters["py_source"] = render_python_literal
 
     def set_docs_base(self, experiments_dir: str | None) -> None:
         global _docs_base
