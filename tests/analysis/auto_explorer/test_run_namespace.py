@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
 
 
@@ -537,3 +539,74 @@ class TestFromEnvOrLatest:
         monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
         ns = RunNamespace.from_env_or_latest(root=tmp_path)
         assert ns is None
+
+
+class TestLiveStateAttributes:
+    def test_all_live_attrs_default_to_none(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="r")
+        assert ns.snapshot_grid is None
+        assert ns.semantics is None
+        assert ns.dataset_registry is None
+        assert ns.scd_history_sources is None
+
+    def test_backward_compatible_construction(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="r")
+        assert ns.root == tmp_path
+        assert ns.run_id == "r"
+
+    def test_snapshot_grid_assignment_preserves_reference(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="r")
+        sentinel = object()
+        ns.snapshot_grid = sentinel
+        assert ns.snapshot_grid is sentinel
+
+    def test_semantics_dict_mutation_visible_through_namespace(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="r")
+        semantics = {"case": {"time_column": "CREATED_DATE"}}
+        ns.semantics = semantics
+        ns.semantics["case"]["time_column"] = "as_of_date"
+        assert semantics["case"]["time_column"] == "as_of_date"
+
+    def test_dataset_registry_dict_mutation_visible(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="r")
+        registry: dict = {"case": object()}
+        ns.dataset_registry = registry
+        ns.dataset_registry["contract"] = object()
+        assert "contract" in registry
+
+    def test_scd_history_sources_is_user_writable(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="r")
+        ns.scd_history_sources = {"case": "/path/to/case_history"}
+        assert ns.scd_history_sources == {"case": "/path/to/case_history"}
+
+
+class TestLoadTable:
+    def test_load_table_delegates_to_load_spark_table(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="r")
+        with patch(
+            "customer_retention.analysis.auto_explorer.run_namespace.load_spark_table"
+        ) as mock_load:
+            mock_load.return_value = "spark-df-sentinel"
+            result = ns.load_table("data/landing/case_history")
+        mock_load.assert_called_once_with("data/landing/case_history")
+        assert result == "spark-df-sentinel"
+
+    def test_load_table_returns_whatever_loader_returns(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="r")
+        sentinel = object()
+        with patch(
+            "customer_retention.analysis.auto_explorer.run_namespace.load_spark_table",
+            return_value=sentinel,
+        ):
+            assert ns.load_table("tbl") is sentinel
+
+    def test_load_table_propagates_loader_errors(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="r")
+        with patch(
+            "customer_retention.analysis.auto_explorer.run_namespace.load_spark_table",
+            side_effect=RuntimeError("no spark session"),
+        ):
+            import pytest
+
+            with pytest.raises(RuntimeError, match="no spark session"):
+                ns.load_table("tbl")

@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
+from customer_retention.core.compat import load_spark_table
 from customer_retention.core.compat.remote_path import RemotePath, make_path
 
 _RUN_POINTER_FILENAME = ".cr_active_run.json"
@@ -16,6 +17,13 @@ _RUN_POINTER_FILENAME = ".cr_active_run.json"
 class RunNamespace:
     root: Union[Path, RemotePath]
     run_id: str
+    snapshot_grid: Optional[Any] = field(default=None, repr=False)
+    semantics: Optional[dict] = field(default=None, repr=False)
+    dataset_registry: Optional[dict] = field(default=None, repr=False)
+    scd_history_sources: Optional[dict] = field(default=None, repr=False)
+
+    def load_table(self, source: str) -> Any:
+        return load_spark_table(source)
 
     @property
     def run_dir(self) -> Path:
