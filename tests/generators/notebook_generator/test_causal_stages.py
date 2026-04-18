@@ -129,20 +129,19 @@ class TestPerStageContent:
         assert "feature_cap=KMEANS_FEATURE_CAP" in code
 
     def test_c02_passes_model_uri_not_loaded_model(self):
-        """Regression for the three recurring failure modes:
+        """Regression for the recurring MLflow / FE model-loading failure modes:
           1. PyFuncModel exposes no featureImportances (MLflow wrapper change)
           2. KeyError: 'spark' from mlflow.spark.load_model on FE-wrapped models
           3. Any sub-artifact path guess that ages out with FE versions
 
-        The durable fix: c02 passes ``model_uri=MODEL_URI`` (string) and
-        ``entity_key_cols`` to DerivationConfig. Scoring happens via
-        ``fe.score_batch`` inside ``shap_runner`` — no model loading, no
-        introspection, no MLflow/FE internal surface exposed to c02."""
+        The durable fix: c02 passes ``model_uri=MODEL_URI`` (a string) to
+        ``DerivationConfig``; ``shap_runner`` / ``shap_attribution`` load the
+        training-time attribution artifact from that URI. No model loading,
+        no model introspection, no MLflow/FE internal surface exposed to c02."""
         gen = LocalNotebookGenerator(NotebookConfig(), None)
         code = _all_code(gen.generate_stage(NotebookStage.ARCHETYPE_DERIVATION))
         # Durable primitives present
         assert "model_uri=MODEL_URI" in code
-        assert "entity_key_cols=entity_key_cols" in code
         # Fragile primitives absent
         assert "mlflow.pyfunc.load_model" not in code
         assert "mlflow.spark.load_model" not in code
@@ -151,30 +150,35 @@ class TestPerStageContent:
         assert "model=unwrap" not in code
         assert "model=mlflow" not in code
 
-    def test_c02_uses_event_timestamp_as_fe_timestamp_lookup_key(self):
-        """Regression for: "Unable to join feature table ... because timestamp
-        lookup key 'event_timestamp' not found in DataFrame".
+    def test_c02_excludes_key_columns_from_feature_set(self):
+        """Key columns (``event_timestamp``, ``inference_point_in_time``,
+        ``account_id``, ``entity_id``, ``target``, ``churn_probability``,
+        ``model_uri``) must not appear in ``feature_columns`` — they are
+        lookup keys or metadata, not features the model was trained on.
 
-        Training's databricks_renderer.py sets TIMESTAMP_COLUMN = "event_timestamp"
-        and registers the feature lookup with that as the timestamp_lookup_key.
-        At score time, ``fe.score_batch`` reads the model's registered lookup
-        spec and demands the exact column name. c02's ``entity_key_cols`` must
-        therefore include ``event_timestamp`` when present (preferred over
-        ``inference_point_in_time``, which is scoring-side runtime-only).
-
-        ``event_timestamp`` must also be excluded from ``feature_columns`` —
-        it's a key column, not a feature."""
+        Attribution is loaded from the MLflow run via ``MODEL_URI`` so c02
+        no longer needs to reconstruct FE lookup keys — but the feature
+        filter still has to exclude these columns or ``compute_shap_distributed``
+        will fail schema validation."""
         gen = LocalNotebookGenerator(NotebookConfig(), None)
         code = _all_code(gen.generate_stage(NotebookStage.ARCHETYPE_DERIVATION))
-        # event_timestamp appears in both: the key-col branch AND the feature
-        # exclusion tuple. We check for both presences.
-        assert 'if "event_timestamp" in training_df.columns' in code
-        assert 'entity_key_cols.append("event_timestamp")' in code
-        # And event_timestamp is in the feature_columns exclusion tuple
-        assert '"event_timestamp"' in code
-        # Old mis-keyed logic is gone (inference_point_in_time may remain as
-        # fallback but must not be the only/first check)
-        assert code.index('"event_timestamp"') < code.index('"inference_point_in_time"')
+        for col in (
+            '"account_id"', '"entity_id"', '"target"', '"churn_probability"',
+            '"event_timestamp"', '"inference_point_in_time"', '"model_uri"',
+        ):
+            assert col in code, f"{col!r} must appear in the feature-column exclusion tuple"
+
+    def test_c02_no_longer_emits_entity_key_cols(self):
+        """Attribution is persisted at training time; there is no
+        ``fe.score_batch`` round-trip at derivation time, so ``entity_key_cols``
+        and its ``event_timestamp`` append branch are no longer emitted. This
+        test guards against regressions that would reintroduce the obsolete
+        code path."""
+        gen = LocalNotebookGenerator(NotebookConfig(), None)
+        code = _all_code(gen.generate_stage(NotebookStage.ARCHETYPE_DERIVATION))
+        assert "entity_key_cols=" not in code
+        assert "entity_key_cols.append" not in code
+        assert "background_sample_size=" not in code
 
     def test_c03_calls_approval_gate(self):
         gen = LocalNotebookGenerator(NotebookConfig(), None)

@@ -2,8 +2,8 @@
 
 Wires together the Phase 2 modules:
 
-    shap_runner.freeze_background
-    shap_runner.compute_shap_distributed
+    shap_attribution.load_attribution_from_model_uri  (training artifact)
+    shap_runner.compute_shap_distributed              (linear attribution)
     clusterer.cluster_kmeans
     clusterer.cluster_centroids_raw   (raw-feature centroids for runtime)
     clusterer.cluster_target_means     (mean churn probability per cluster)
@@ -17,10 +17,11 @@ NB12 cell 3 calls a single function on this module:
 ``derive_archetypes_and_policies(config)``. Everything else is private.
 
 The orchestrator stays distributed throughout the heavy steps. The only
-points where data lands on the driver are the small per-cluster
-aggregations (centroids, sizes, mean churn) that are bounded by ``k``,
-plus the bounded surrogate-tree training set (max ``MAX_SAMPLE_ROWS``
-rows). The full training cohort is never collected.
+points where data lands on the driver are the small attribution dict
+(loaded once from the model's MLflow run), the per-cluster aggregations
+bounded by ``k``, and the bounded surrogate-tree training set
+(max ``MAX_SAMPLE_ROWS`` rows). The full training cohort is never
+collected.
 """
 
 from __future__ import annotations
@@ -31,6 +32,11 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
+
+from customer_retention.stages.modeling.shap_attribution import (
+    ShapAttribution,
+    load_attribution_from_model_uri,
+)
 
 from .approval_gate import cosine_similarity
 from .clusterer import (
@@ -57,13 +63,7 @@ from .rule_extractor import (
     extract_eligibility_rules,
 )
 from .schemas import archetype_catalog_schema, eligibility_policy_schema
-from .shap_runner import (
-    DEFAULT_BACKGROUND_SIZE,
-    IMPORTANCE_SAMPLE_SIZE,
-    BackgroundSample,
-    compute_shap_distributed,
-    freeze_background,
-)
+from .shap_runner import compute_shap_distributed
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,6 @@ class DerivationConfig:
     feature_columns: Sequence[str]
     model_uri: str
     target_column: str
-    entity_key_cols: Sequence[str] = field(default_factory=list)
     join_key: str = "account_id"
     archetype_catalog_fqn: str = ""
     eligibility_policy_fqn: str = ""
@@ -100,8 +99,6 @@ class DerivationConfig:
     model_name: str = ""
     model_version: str = ""
     derivation_run_id: Optional[str] = None
-    background_sample_size: int = DEFAULT_BACKGROUND_SIZE
-    importance_sample_size: int = IMPORTANCE_SAMPLE_SIZE
     k_range: Tuple[int, int] = DEFAULT_K_RANGE
     k_cap: int = DEFAULT_K_CAP
     feature_cap: int = DEFAULT_FEATURE_CAP
@@ -110,6 +107,7 @@ class DerivationConfig:
     llm_endpoint_name: Optional[str] = None
     llm_namer: Optional[LLMNamer] = None
     write: bool = True
+    attribution: Optional[ShapAttribution] = None
 
 
 @dataclass
@@ -123,7 +121,7 @@ class DerivationResult:
     cluster_target_means: List[Tuple[int, float]]
     archetype_rows: List[Dict[str, Any]]
     eligibility_policy_rows: List[Dict[str, Any]]
-    background: BackgroundSample
+    attribution: ShapAttribution
     extracted_rules: List[ExtractedRule]
     mappings: List[ArchetypeMapping]
     llm_model_id: Optional[str]
@@ -154,27 +152,17 @@ def derive_archetypes_and_policies(config: DerivationConfig) -> DerivationResult
     derivation_run_id = config.derivation_run_id or _make_run_id(config)
     logger.info("Starting causal derivation run_id=%s", derivation_run_id)
 
-    cohort_size = config.training_df.count()
-    logger.info("Training cohort size: %d rows", cohort_size)
-
-    background = freeze_background(
-        spark_df=config.training_df,
-        feature_columns=config.feature_columns,
-        target_col=config.target_column,
-        n=config.background_sample_size,
-        row_count=cohort_size,
+    attribution = config.attribution or load_attribution_from_model_uri(config.model_uri)
+    logger.info(
+        "Attribution loaded: %d features, sample_size=%d",
+        len(attribution.feature_columns),
+        attribution.sample_size,
     )
-    logger.info("Background frozen: %d rows", background.sample_size)
 
-    entity_key_cols = list(config.entity_key_cols) or [config.join_key]
     shap_result = compute_shap_distributed(
         spark_df=config.training_df,
-        feature_columns=config.feature_columns,
-        model_uri=config.model_uri,
-        background=background,
-        entity_key_cols=entity_key_cols,
+        attribution=attribution,
         join_key=config.join_key,
-        importance_sample_size=config.importance_sample_size,
     )
     if shap_result.shap_df is None:
         raise RuntimeError("compute_shap_distributed returned an empty result")
@@ -277,7 +265,7 @@ def derive_archetypes_and_policies(config: DerivationConfig) -> DerivationResult
         cluster_target_means=mean_targets,
         archetype_rows=archetype_rows,
         eligibility_policy_rows=policy_rows,
-        background=background,
+        attribution=attribution,
         extracted_rules=extracted_rules,
         mappings=mappings,
         llm_model_id=namer.model_id,
@@ -499,7 +487,6 @@ def _build_archetype_rows(
                     {
                         "k_range": list(config.k_range),
                         "k_cap": config.k_cap,
-                        "background_sample_size": config.background_sample_size,
                         "silhouette": clustering_silhouette,
                     }
                 ),

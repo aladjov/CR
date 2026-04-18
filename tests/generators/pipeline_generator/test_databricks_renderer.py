@@ -802,6 +802,108 @@ class TestDatabricksTrainingFeatureEngineering:
         fn = result[result.index("def _log_best_model") :]
         assert "mlflow.spark.log_model" in fn
 
+    def test_training_imports_pipeline_model_for_log_wrapping(self, renderer, sample_pipeline_config):
+        """``fe.score_batch`` feeds the logged model RAW feature columns via the
+        feature-store lookup. A bare ``RandomForestClassificationModel`` that was
+        fit on a pre-assembled ``features: vector`` column cannot accept that
+        input — Spark raises ``FIELD_NOT_FOUND: features``. The logged artifact
+        must be a ``PipelineModel(stages=[VectorAssembler, fitted_estimator])``
+        so the assembler runs inside the model, not driver-side during training."""
+        result = renderer.render_training(sample_pipeline_config)
+        assert "from pyspark.ml import PipelineModel" in result
+
+    def test_prepare_features_returns_assembler(self, renderer, sample_pipeline_config):
+        """The unfitted ``VectorAssembler`` built in ``prepare_features`` must
+        survive out of the function so it can be wrapped back into the logged
+        pipeline. Otherwise the assembler is consumed driver-side and the
+        logged model expects a pre-assembled ``features`` column that
+        ``fe.score_batch`` never produces."""
+        result = renderer.render_training(sample_pipeline_config)
+        prep_fn = result[result.index("def prepare_features"):result.index("def _temporal_split")]
+        assert "return assembled, feature_cols, assembler" in prep_fn
+        assembled_unpack = [ln for ln in result.splitlines() if "= prepare_features(df)" in ln]
+        assert assembled_unpack, "call site not found"
+        assert any(
+            ", _assembler = prepare_features(df)" in ln or ", assembler = prepare_features(df)" in ln
+            for ln in assembled_unpack
+        ), f"call site must unpack the assembler: {assembled_unpack}"
+
+    def test_log_best_model_wraps_in_pipeline_model(self, renderer, sample_pipeline_config):
+        """``_log_best_model`` must construct ``PipelineModel(stages=[assembler, model])``
+        and pass the **wrapped** model to both ``fe.log_model`` and the fallback
+        ``mlflow.spark.log_model``. If either path logs the bare ``model``,
+        ``fe.score_batch`` breaks for that artifact."""
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def _log_best_model"):result.index("def _promote_to_production")]
+        assert "PipelineModel(stages=[assembler, model])" in fn
+        fe_call_start = fn.index("fe.log_model(")
+        fe_call_end = fn.index(")", fe_call_start)
+        fe_call = fn[fe_call_start:fe_call_end]
+        assert "model=model," not in fe_call, "fe.log_model must receive the wrapped pipeline, not the bare estimator"
+        fallback_call_start = fn.index("mlflow.spark.log_model(")
+        fallback_call_end = fn.index(")", fallback_call_start)
+        fallback_call = fn[fallback_call_start:fallback_call_end]
+        assert "\n            model," not in fallback_call, "fallback log_model must receive wrapped pipeline"
+
+    def test_log_best_model_accepts_assembler_param(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        assert "def _log_best_model(model, df, feature_cols, test_df, assembler)" in result
+        assert "_log_best_model(best_model, df, feature_cols, test_df, _assembler)" in result
+
+    def test_log_best_model_fallback_signature_uses_raw_columns(self, renderer, sample_pipeline_config):
+        """The fallback ``infer_signature`` call must use raw feature columns as
+        input — the logged pipeline accepts raw, not pre-assembled vectors.
+        Using ``test_df`` (which has ``features: vector``) would produce a
+        signature that ``fe.score_batch`` cannot satisfy."""
+        result = renderer.render_training(sample_pipeline_config)
+        fn = result[result.index("def _log_best_model"):result.index("def _promote_to_production")]
+        except_block = fn[fn.index("except ImportError"):]
+        assert "infer_signature(test_df," not in except_block, (
+            "signature must be inferred from raw input frame, not pre-assembled test_df"
+        )
+
+    def test_training_imports_shap_attribution_helpers(self, renderer, sample_pipeline_config):
+        """Persisted attribution removes the ``fe.score_batch`` + batched-corr
+        round-trip from every SHAP consumer; both helpers must be imported so
+        the training script can compute and log the artifact."""
+        result = renderer.render_training(sample_pipeline_config)
+        assert (
+            "from customer_retention.stages.modeling.shap_attribution import "
+            "compute_shap_attribution, log_attribution"
+        ) in result
+
+    def test_training_logs_attribution_for_best_model(self, renderer, sample_pipeline_config):
+        """After the best model is registered, the training run must compute
+        and log a ``ShapAttribution`` (importances + background means) tied to
+        the same MLflow run. Downstream SHAP consumers load this instead of
+        rescoring on every call."""
+        result = renderer.render_training(sample_pipeline_config)
+        main = result[result.index("def train_and_evaluate"):]
+        best_block_start = main.index("if best_model is not None:")
+        best_block_end = main.index("_results[\"best_model\"]")
+        best_block = main[best_block_start:best_block_end]
+        assert "compute_shap_attribution(" in best_block
+        assert "log_attribution(" in best_block
+        assert "PipelineModel(stages=[_assembler, best_model])" in best_block
+
+    def test_attribution_is_logged_only_for_the_best_model(self, renderer, sample_pipeline_config):
+        """Attribution is a function of (model, training cohort). Logging one
+        per candidate would waste training time; we only persist the artifact
+        tied to the best model — the alias downstream consumers resolve."""
+        result = renderer.render_training(sample_pipeline_config)
+        main = result[result.index("def train_and_evaluate"):]
+        per_candidate_block = main[
+            main.index("for name, model in models.items()"):
+            main.index("if best_model_name is not None:")
+        ]
+        assert "compute_shap_attribution" not in per_candidate_block, (
+            "attribution must be computed only for the best model, not per candidate"
+        )
+
+    def test_training_is_valid_python_after_attribution_emission(self, renderer, sample_pipeline_config):
+        result = renderer.render_training(sample_pipeline_config)
+        ast.parse(result)
+
     def test_training_nested_runs_still_use_mlflow_spark(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
         fn = result[result.index("for name, model in models") :]

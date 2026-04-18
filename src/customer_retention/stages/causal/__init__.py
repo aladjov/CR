@@ -69,10 +69,8 @@ from .predicate_compiler import (
 )
 from .rule_extractor import ExtractedRule, extract_eligibility_rules
 from .shap_runner import (
-    BackgroundSample,
     ShapRunResult,
     compute_shap_distributed,
-    freeze_background,
     unwrap_tree_model,
 )
 from .snapshot_writer import (
@@ -94,7 +92,6 @@ __all__ = [
     "ArchetypeMapping",
     "ArchetypeNaming",
     "ArchetypeSummary",
-    "BackgroundSample",
     "ClusterCandidate",
     "ClusteringResult",
     "DatabricksFoundationModelNamer",
@@ -129,7 +126,6 @@ __all__ = [
     "evaluate_eligibility",
     "extract_eligibility_rules",
     "extract_features_from_text",
-    "freeze_background",
     "list_pending_review",
     "map_archetypes_to_playbooks",
     "predicate_to_sql",

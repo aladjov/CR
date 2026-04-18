@@ -263,15 +263,13 @@ _C02_CONFIG_MD = """## Configuration
 The cell below is the only place you should need to edit. Every value here is read by the derivation cell — nothing is hardcoded inside the algorithm.
 
 - **`LLM_ENDPOINT_NAME`** — Mosaic AI Foundation Model endpoint used to refine the archetype → playbook mapping and write rationales. Default `databricks-claude-sonnet-4-6` is pay-per-token and pre-configured in every Databricks workspace. Set to `""` to fall back to the deterministic feature-overlap baseline (no network calls).
-- **`SHAP_BACKGROUND_SAMPLE_SIZE`** — frozen reference sample size for SHAP. 1000 is the standard tractable size from the SHAP literature (Lundberg & Lee 2017).
+- **SHAP attribution** — importance vector + background means are persisted as `shap_attribution.json` on the training run (see `stages.modeling.shap_attribution`). c02 loads that artifact via `MODEL_URI` — no sample-size knob here, no rescoring.
 - **`KMEANS_K_RANGE` / `KMEANS_MAX_K`** — silhouette sweep range; the chosen `k` is capped to keep clusters human-reviewable.
 - **`KMEANS_FEATURE_CAP`** — pre-select this many top features by mean absolute SHAP before clustering. Mandatory on Spark Connect: KMeans serializes the trained model and >100 columns can exceed the 1 GB serialization limit. 50 is a safe interpretable default.
 - **`FORCE_DERIVATION`** — re-run derivation even when an `active` archetype already exists for the current model version. Useful after editing the playbook catalog or the surrogate-tree depth.
 """
 
 _C02_CONFIG_BODY = '''LLM_ENDPOINT_NAME = "databricks-claude-sonnet-4-6"
-
-SHAP_BACKGROUND_SAMPLE_SIZE = 1000
 
 KMEANS_K_RANGE = (4, 12)
 KMEANS_MAX_K = 8
@@ -315,11 +313,6 @@ else:
                      "event_timestamp", "inference_point_in_time", "model_uri")
     ]
     join_key = "account_id" if "account_id" in training_df.columns else "entity_id"
-    entity_key_cols = [join_key]
-    if "event_timestamp" in training_df.columns:
-        entity_key_cols.append("event_timestamp")
-    elif "inference_point_in_time" in training_df.columns:
-        entity_key_cols.append("inference_point_in_time")
     catalog_rows, _ = load_playbooks_from_dir(PLAYBOOKS_DIR)
     llm_namer = build_llm_namer(LLM_ENDPOINT_NAME)
     print(f"LLM namer: {llm_namer.model_id}")
@@ -331,7 +324,6 @@ else:
         feature_columns=feature_columns,
         model_uri=MODEL_URI,
         target_column="target",
-        entity_key_cols=entity_key_cols,
         join_key=join_key,
         archetype_catalog_fqn=ARCHETYPE_CATALOG_FQN,
         eligibility_policy_fqn=ELIGIBILITY_POLICY_FQN,
@@ -339,7 +331,6 @@ else:
         gold_feature_names=feature_columns,
         model_name=MODEL_NAME,
         model_version=MODEL_VERSION,
-        background_sample_size=SHAP_BACKGROUND_SAMPLE_SIZE,
         k_range=KMEANS_K_RANGE,
         k_cap=KMEANS_MAX_K,
         feature_cap=KMEANS_FEATURE_CAP,

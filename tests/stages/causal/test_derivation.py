@@ -171,7 +171,6 @@ def _make_config(write: bool = False) -> DerivationConfig:
         feature_columns=["a", "b"],
         model_uri="models:/test_model@production",
         target_column="target",
-        entity_key_cols=["account_id"],
         archetype_catalog_fqn="cat.sch.archetype_catalog",
         eligibility_policy_fqn="cat.sch.eligibility_policy",
         playbooks=[
@@ -298,6 +297,7 @@ class TestBuildPolicyRows:
 
 class TestDerivationResult:
     def test_summary_includes_run_id_and_counts(self):
+        from customer_retention.stages.modeling.shap_attribution import ShapAttribution
         result = DerivationResult(
             derivation_run_id="deriv_xyz",
             best_k=4,
@@ -306,7 +306,12 @@ class TestDerivationResult:
             cluster_target_means=[(0, 0.4), (1, 0.5)],
             archetype_rows=[{}, {}],
             eligibility_policy_rows=[{}, {}, {}],
-            background=MagicMock(),
+            attribution=ShapAttribution(
+                importances={"a": 1.0},
+                background_means={"a": 0.0},
+                feature_columns=["a"],
+                sample_size=10,
+            ),
             extracted_rules=[],
             mappings=[],
             llm_model_id="test-llm",
