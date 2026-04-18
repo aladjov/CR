@@ -9,7 +9,7 @@ class TestLocalNotebookGenerator:
         )
         generator = LocalNotebookGenerator(NotebookConfig(), None)
         notebooks = generator.generate_all()
-        assert len(notebooks) == 14  # 10 standard stages + 4 causal-track stages (c01..c04)
+        assert len(notebooks) == 15  # 10 standard stages + 5 causal-track stages (c01..c05)
         for stage in generator.available_stages:
             assert stage in notebooks
 
@@ -39,7 +39,7 @@ class TestLocalNotebookGenerator:
         from customer_retention.generators.notebook_generator import LocalNotebookGenerator, NotebookConfig
         generator = LocalNotebookGenerator(NotebookConfig(), None)
         paths = generator.save_all(str(tmp_path))
-        assert len(paths) == 14  # 10 standard stages + 4 causal-track stages (c01..c04)
+        assert len(paths) == 15  # 10 standard stages + 5 causal-track stages (c01..c05)
         for path in paths:
             assert path.endswith(".ipynb")
 
@@ -52,7 +52,7 @@ class TestDatabricksNotebookGenerator:
         )
         generator = DatabricksNotebookGenerator(NotebookConfig(), None)
         notebooks = generator.generate_all()
-        assert len(notebooks) == 14  # 10 standard stages + 4 causal-track stages (c01..c04)
+        assert len(notebooks) == 15  # 10 standard stages + 5 causal-track stages (c01..c05)
 
     def test_databricks_notebook_no_framework_imports(self):
         from customer_retention.generators.notebook_generator import (
@@ -97,8 +97,8 @@ class TestGenerateOrchestrationNotebooks:
         results = generate_orchestration_notebooks(output_dir=str(tmp_path))
         assert Platform.LOCAL in results
         assert Platform.DATABRICKS in results
-        assert len(results[Platform.LOCAL]) == 14  # 10 standard stages + 4 causal-track stages (c01..c04)
-        assert len(results[Platform.DATABRICKS]) == 14  # 10 standard stages + 4 causal-track stages (c01..c04)
+        assert len(results[Platform.LOCAL]) == 15  # 10 standard stages + 5 causal-track stages (c01..c05)
+        assert len(results[Platform.DATABRICKS]) == 15  # 10 standard stages + 5 causal-track stages (c01..c05)
 
     def test_generates_local_only(self, tmp_path):
         from customer_retention.generators.notebook_generator import Platform, generate_orchestration_notebooks

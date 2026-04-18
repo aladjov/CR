@@ -32,6 +32,202 @@ class TestBatchInferenceConfig:
         assert config.risk_tier_high == 0.75
         assert config.risk_tier_medium == 0.4
 
+    def test_filter_expression_default_none(self):
+        assert BatchInferenceConfig().filter_expression is None
+
+    def test_filter_expression_is_passthrough_string(self):
+        config = BatchInferenceConfig(filter_expression="plan_type == 'enterprise'")
+        assert config.filter_expression == "plan_type == 'enterprise'"
+
+
+class TestScopeFilterApplication:
+    """Scope filter (NB00 ``ProjectContext.sample_filters``) must narrow the
+    customer population before the entity projection on both execution paths.
+    Applied as a narrow projection (``df.filter`` / ``safe_query``) — no
+    shuffle, no extra Spark jobs, stays distributed."""
+
+    def test_databricks_path_calls_df_filter_when_expression_set(self, monkeypatch):
+        pytest.importorskip("pyspark", reason="PySpark required")
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.scoring import batch_inference
+        from customer_retention.stages.scoring.batch_inference import (
+            BatchInferenceConfig,
+            _run_databricks,
+        )
+
+        filter_calls: list[str] = []
+
+        class _FakeSparkDF:
+            def __init__(self, name="root"):
+                self._name = name
+
+            def filter(self, expr):
+                filter_calls.append(expr)
+                return _FakeSparkDF(name="filtered")
+
+            def select(self, *_a, **_kw):
+                return self
+
+            def withColumn(self, *_a, **_kw):  # noqa: N802 — mirrors Spark API
+                return self
+
+            def agg(self, *_a, **_kw):
+                r = MagicMock()
+                r.collect.return_value = [{"total": 0, "churners": 0, "avg_prob": 0.0}]
+                return r
+
+            def groupBy(self, *_a, **_kw):  # noqa: N802 — mirrors Spark API
+                r = MagicMock()
+                cnt = MagicMock()
+                cnt.collect.return_value = []
+                r.count.return_value = cnt
+                return r
+
+            def write(self, *_a, **_kw):
+                return MagicMock()
+
+        # Short-circuit at the first point past filter application so we can
+        # assert the filter was invoked without wiring the full Spark plan.
+        class _BoomError(RuntimeError):
+            pass
+        _Boom = _BoomError  # noqa: N806 — short alias used below
+
+        def stub_score(spark, entity_df, feature_table, model_uri):  # noqa: ARG001
+            raise _Boom("stop after filter")
+
+        monkeypatch.setattr(batch_inference, "_score_with_feature_store", stub_score)
+
+        fake_spark = MagicMock()
+        fake_spark.table.return_value = _FakeSparkDF()
+        monkeypatch.setattr(batch_inference, "_get_spark", lambda: fake_spark)
+
+        cfg = BatchInferenceConfig(
+            catalog="c", schema="s", model_name="m",
+            filter_expression="plan_type == 'enterprise'",
+        )
+        with pytest.raises(_Boom):
+            _run_databricks(cfg)
+        assert filter_calls == ["plan_type == 'enterprise'"]
+
+    def test_databricks_path_skips_filter_when_expression_missing(self, monkeypatch):
+        pytest.importorskip("pyspark", reason="PySpark required")
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.scoring import batch_inference
+        from customer_retention.stages.scoring.batch_inference import (
+            BatchInferenceConfig,
+            _run_databricks,
+        )
+
+        filter_calls: list[str] = []
+
+        class _FakeSparkDF:
+            def filter(self, expr):
+                filter_calls.append(expr)
+                return self
+
+            def select(self, *_a, **_kw):
+                return self
+
+            def withColumn(self, *_a, **_kw):  # noqa: N802 — mirrors Spark API
+                return self
+
+        class _BoomError(RuntimeError):
+            pass
+        _Boom = _BoomError  # noqa: N806 — short alias used below
+
+        monkeypatch.setattr(
+            batch_inference,
+            "_score_with_feature_store",
+            lambda *a, **kw: (_ for _ in ()).throw(_Boom()),
+        )
+        fake_spark = MagicMock()
+        fake_spark.table.return_value = _FakeSparkDF()
+        monkeypatch.setattr(batch_inference, "_get_spark", lambda: fake_spark)
+
+        with pytest.raises(_Boom):
+            _run_databricks(BatchInferenceConfig(catalog="c", schema="s", model_name="m"))
+        assert filter_calls == []
+
+    def test_local_path_applies_safe_query_when_expression_set(self, monkeypatch, tmp_path):
+        import pandas as _pd
+
+        from customer_retention.core import compat
+        from customer_retention.stages.scoring import batch_inference
+        from customer_retention.stages.scoring.batch_inference import (
+            BatchInferenceConfig,
+            _run_local,
+        )
+
+        captured: list[str] = []
+
+        def fake_safe_query(df, expr):
+            captured.append(expr)
+            return df.iloc[:1]
+
+        monkeypatch.setattr(compat, "safe_query", fake_safe_query)
+
+        class _BoomError(RuntimeError):
+            pass
+        _Boom = _BoomError  # noqa: N806 — short alias used below
+
+        monkeypatch.setattr(
+            batch_inference,
+            "_load_local_customers",
+            lambda *_a, **_kw: _pd.DataFrame(
+                {"customer_id": [1, 2, 3], "plan_type": ["free", "enterprise", "enterprise"]}
+            ),
+        )
+
+        # Stub feature-store-manager so `get_inference_features` raises,
+        # which sits *after* the filter application — letting us prove the
+        # filter was applied.
+        import sys
+        fake_fs = type(sys)("customer_retention.integrations.feature_store")
+
+        class _StubRegistry:
+            @staticmethod
+            def load(_p):
+                class _R:
+                    @staticmethod
+                    def list_features():
+                        return ["f1"]
+                return _R()
+
+        class _BoomManager:
+            def get_inference_features(self, *_a, **_kw):
+                raise _Boom("stop after filter")
+
+        fake_fs.FeatureRegistry = _StubRegistry
+        fake_fs.get_feature_store_manager = lambda *a, **kw: _BoomManager()
+        monkeypatch.setitem(sys.modules, "customer_retention.integrations.feature_store", fake_fs)
+
+        # Stub the delta factory too — same short-circuit style.
+        fake_factory = type(sys)("customer_retention.integrations.adapters.factory")
+        fake_factory.get_delta = lambda: object()
+        monkeypatch.setitem(
+            sys.modules,
+            "customer_retention.integrations.adapters.factory",
+            fake_factory,
+        )
+
+        cfg = BatchInferenceConfig(
+            model_path=tmp_path / "stub_model.joblib",
+            filter_expression="plan_type == 'enterprise'",
+        )
+        cfg.model_path.write_bytes(b"")
+        import joblib
+
+        class _StubModel:
+            feature_names_in_ = ["f1"]
+
+        monkeypatch.setattr(joblib, "load", lambda _p: _StubModel())
+
+        with pytest.raises(_Boom):
+            _run_local(cfg)
+        assert captured == ["plan_type == 'enterprise'"]
+
 
 class TestBatchInferenceResult:
     def test_summary_one_liner(self):

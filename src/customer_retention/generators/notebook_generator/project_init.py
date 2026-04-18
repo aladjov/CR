@@ -75,7 +75,8 @@ Customer retention analysis project using the churnkit framework.
 - `{self.exploration_notebooks_path}/` - Interactive exploration notebooks
 - `{self.causal_notebooks_path}/` - Causal-track orchestration notebooks
   (`c01_publish_definitions`, `c02_archetype_derivation`,
-  `c03_approval_gate`, `c04_snapshot_and_dashboard`)
+  `c03_approval_gate`, `c04_batch_inference`,
+  `c05_snapshot_and_dashboard`)
 - `generated_pipelines/` - Auto-generated pipeline notebooks/scripts
   - `local/` - Local platform notebooks
   - `databricks/` - Databricks platform notebooks

@@ -11,6 +11,7 @@ from .config import NotebookConfig, Platform
 from .stages import (
     ApprovalGateStage,
     ArchetypeDerivationStage,
+    BatchInferenceCausalStage,
     BatchInferenceStage,
     CleaningStage,
     DeploymentStage,
@@ -47,6 +48,7 @@ class LocalNotebookGenerator(NotebookGenerator):
             NotebookStage.PUBLISH_DEFINITIONS: PublishDefinitionsStage(config, findings),
             NotebookStage.ARCHETYPE_DERIVATION: ArchetypeDerivationStage(config, findings),
             NotebookStage.APPROVAL_GATE: ApprovalGateStage(config, findings),
+            NotebookStage.BATCH_INFERENCE_CAUSAL: BatchInferenceCausalStage(config, findings),
             NotebookStage.SNAPSHOT_AND_DASHBOARD: SnapshotAndDashboardStage(config, findings),
         }
 

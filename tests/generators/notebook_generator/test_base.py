@@ -7,7 +7,7 @@ import pytest
 class TestNotebookStage:
     def test_all_stages_defined(self):
         from customer_retention.generators.notebook_generator.base import NotebookStage
-        assert len(NotebookStage) == 15
+        assert len(NotebookStage) == 16
 
     def test_stage_values(self):
         from customer_retention.generators.notebook_generator.base import NotebookStage
@@ -25,7 +25,8 @@ class TestNotebookStage:
         assert NotebookStage.PUBLISH_DEFINITIONS.value == "c01_publish_definitions"
         assert NotebookStage.ARCHETYPE_DERIVATION.value == "c02_archetype_derivation"
         assert NotebookStage.APPROVAL_GATE.value == "c03_approval_gate"
-        assert NotebookStage.SNAPSHOT_AND_DASHBOARD.value == "c04_snapshot_and_dashboard"
+        assert NotebookStage.BATCH_INFERENCE_CAUSAL.value == "c04_batch_inference"
+        assert NotebookStage.SNAPSHOT_AND_DASHBOARD.value == "c05_snapshot_and_dashboard"
 
     def test_stage_ordering(self):
         from customer_retention.generators.notebook_generator.base import NotebookStage
@@ -71,7 +72,7 @@ class TestNotebookGenerator:
         generator = ConcreteGenerator(NotebookConfig(), None)
         result = generator.generate_all()
         assert isinstance(result, dict)
-        assert len(result) == 15
+        assert len(result) == 16
         assert all(stage in result for stage in NotebookStage)
 
     def test_save_all_creates_files(self, tmp_path):
@@ -88,7 +89,7 @@ class TestNotebookGenerator:
 
         generator = ConcreteGenerator(NotebookConfig(), None)
         paths = generator.save_all(str(tmp_path))
-        assert len(paths) == 15
+        assert len(paths) == 16
         assert all(p.endswith(".ipynb") for p in paths)
         for path in paths:
             assert Path(path).exists()

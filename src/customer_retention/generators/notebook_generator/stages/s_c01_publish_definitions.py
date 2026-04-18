@@ -49,7 +49,7 @@ class PublishDefinitionsStage(StageGenerator):
             self.header_cells()
             + c01_setup_block()
             + [
-                self.cb.section("1. Publish Definition Tables (YAML → Delta)"),
+                self.cb.section("1.1 Publish Definition Tables (YAML → Delta)"),
                 self.cb.code(_PUBLISH_DEFINITIONS_CELL),
                 self.cb.markdown(C01_RUN_PIPELINE_MD),
                 self.cb.code(C01_RUN_PIPELINE_BODY),

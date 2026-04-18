@@ -72,6 +72,13 @@ class BatchInferenceConfig:
     dataset_name: Optional[str] = None
     entity_id_columns: List[str] = field(default_factory=list)
 
+    # Scope filter (NB00 / ProjectContext.sample_filters).
+    # A Spark-SQL-style boolean expression that narrows the entity population to
+    # the subset in force during exploration / training. Applied distributed
+    # via ``df.filter(expr)`` on Databricks and ``safe_query(df, expr)`` locally
+    # — a single narrow projection, no shuffle, no extra Spark jobs.
+    filter_expression: Optional[str] = None
+
 
 @dataclass
 class BatchInferenceResult:
@@ -214,8 +221,14 @@ def _run_databricks(config: BatchInferenceConfig) -> BatchInferenceResult:
 
     logger.info("Databricks batch inference: model=%s feature_table=%s", model_uri, feature_table)
 
-    # Build entity_df with PIT timestamp
+    # Build entity_df with PIT timestamp. The scope filter is applied before
+    # the entity projection so scoring only covers the population defined in
+    # NB00 (ProjectContext.sample_filters). ``.filter(sql_expr)`` is a narrow
+    # projection — no shuffle, no extra Spark jobs, pushdown-friendly.
     df_customers = spark.table(f"{config.catalog}.{config.schema}.gold_customers")
+    if config.filter_expression:
+        df_customers = df_customers.filter(config.filter_expression)
+        logger.info("Applied scope filter: %s", config.filter_expression)
     entity_df = df_customers.select("entity_id").withColumn(
         "inference_timestamp",
         lit(inference_ts).cast(TimestampType()),
@@ -385,6 +398,11 @@ def _run_local(config: BatchInferenceConfig) -> BatchInferenceResult:
 
     # Customer fallback chain (order preserved from the original cell)
     df_customers = _load_local_customers(storage, base, dataset_name)
+    if config.filter_expression:
+        from customer_retention.core.compat import safe_query
+
+        df_customers = safe_query(df_customers, config.filter_expression)
+        logger.info("Applied scope filter: %s", config.filter_expression)
 
     entity_col_candidates = config.entity_id_columns or ["customer_id"]
     entity_col = entity_col_candidates[0]

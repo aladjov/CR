@@ -138,14 +138,21 @@ from customer_retention.generators.notebook_generator.stages.causal_setup_cell i
 )
 
 
+def _chapter_number(stage: str) -> int:
+    """Extract the chapter number from a ``c0N_*`` stage slug so sections can be
+    numbered ``N.x`` (e.g. c04 → 4)."""
+    return int(stage[1:3])
+
+
 def setup_block(stage: str, *, needs_model: bool) -> List[Dict[str, Any]]:
     body = _SETUP_BODY_NEEDS_MODEL if needs_model else _SETUP_BODY_PUBLISH_ONLY
+    chapter = _chapter_number(stage)
     return [
         md_cell(
             stage,
             f"{stage}_setup",
             [
-                "## 0. Setup\n",
+                f"## {chapter}.0 Setup\n",
                 "\n",
                 "Resolves catalog / schema / model identifiers from `ScoringConfig` "
                 "(reads the persisted Databricks init JSON on Databricks, or the local "
@@ -171,7 +178,7 @@ The cell below is the only place you should need to edit. Every value here is re
 - **`RISK_TIER_HIGH_THRESHOLD` / `RISK_TIER_MEDIUM_THRESHOLD`** — risk tier cutoffs mirrored into `decision_policy` so historical assignments can be reconstructed from the policy version in force at scoring time. The publish step writes these as the on-disk default; if a YAML row in `decision_policy.yaml` already specifies them, the YAML wins.
 - **`SKIP_PIPELINE_RUN`** — skip invoking the generated pipeline (e.g. when predictions are already fresh).
 - **`PIPELINE_DIR`** — directory containing the generated pipeline scripts produced by `exploration_notebooks/10_spec_generation.ipynb`. Leave as `None` to resolve to `/Workspace/{workspace_path}/generated_pipelines/databricks/{pipeline_name}` via `get_workspace_path()` + `ScoringConfig`. Override if the scripts live elsewhere.
-- **`PIPELINE_STAGES`** — ordered stage subdirectories to execute. Includes `scoring` so the `predictions` Delta table is populated before `c04_snapshot_and_dashboard` runs.
+- **`PIPELINE_STAGES`** — ordered stage subdirectories to execute. Includes `scoring` so the `predictions` Delta table is populated before `c05_snapshot_and_dashboard` runs. (The standalone `c04_batch_inference` notebook is an alternative when you only want to refresh scoring without re-running the full training pipeline.)
 - **`PIPELINE_STAGE_TIMEOUT_SECONDS`** — per-notebook timeout passed to `dbutils.notebook.run()`.
 """
 
@@ -244,7 +251,7 @@ def build_c01() -> List[Dict[str, Any]]:
         md_cell(stage, "c01_configuration", [_C01_CONFIG_MD]),
         code_cell(stage, "config", "configuration", [_C01_CONFIG_BODY]),
         *setup_block(stage, needs_model=False),
-        md_cell(stage, "c01_publish_section", ["## 1. Publish Definition Tables (YAML → Delta)\n"]),
+        md_cell(stage, "c01_publish_section", ["## 1.1 Publish Definition Tables (YAML → Delta)\n"]),
         code_cell(stage, "code", "publish_definition_tables", [_C01_PUBLISH_BODY]),
         md_cell(stage, "c01_run_pipeline_section", [C01_RUN_PIPELINE_MD]),
         code_cell(stage, "code", "run_generated_pipeline", [C01_RUN_PIPELINE_BODY]),
@@ -366,7 +373,7 @@ def build_c02() -> List[Dict[str, Any]]:
         md_cell(stage, "c02_configuration", [_C02_CONFIG_MD]),
         code_cell(stage, "config", "configuration", [_C02_CONFIG_BODY]),
         *setup_block(stage, needs_model=True),
-        md_cell(stage, "c02_derive_section", ["## 1. Derive Archetypes + Eligibility Policies\n"]),
+        md_cell(stage, "c02_derive_section", ["## 2.1 Derive Archetypes + Eligibility Policies\n"]),
         code_cell(stage, "code", "derive_archetypes_and_policies", [_C02_DERIVE_BODY]),
         release_cleanup_cell(stage),
     ]
@@ -473,22 +480,184 @@ def build_c03() -> List[Dict[str, Any]]:
         md_cell(stage, "c03_configuration", [_C03_CONFIG_MD]),
         code_cell(stage, "config", "configuration", [_C03_CONFIG_BODY]),
         *setup_block(stage, needs_model=True),
-        md_cell(stage, "c03_resolve_run_section", ["## 1. Resolve Latest Pending Derivation Run\n"]),
+        md_cell(stage, "c03_resolve_run_section", ["## 3.1 Resolve Latest Pending Derivation Run\n"]),
         code_cell(stage, "code", "resolve_derivation_run_id", [_C03_RESOLVE_BODY]),
-        md_cell(stage, "c03_run_gate_section", ["## 2. Run Approval Gate\n"]),
+        md_cell(stage, "c03_run_gate_section", ["## 3.2 Run Approval Gate\n"]),
         code_cell(stage, "code", "approval_gate", [_C03_GATE_BODY]),
-        md_cell(stage, "c03_print_pending_section", ["## 3. Print Pending Review Queue\n"]),
+        md_cell(stage, "c03_print_pending_section", ["## 3.3 Print Pending Review Queue\n"]),
         code_cell(stage, "code", "print_pending_queue", [_C03_PRINT_PENDING_BODY]),
         release_cleanup_cell(stage),
     ]
 
 
 # ---------------------------------------------------------------------------
-# c04 — snapshot + dashboard (Phase 3 placeholder, gated)
+# c04 — batch inference (standalone scoring refresh)
 # ---------------------------------------------------------------------------
 
 
 _C04_CONFIG_MD = """## Configuration
+
+The cell below is the only place you should need to edit. Every value here is read by the batch-inference cell — nothing is hardcoded inside the algorithmic cells.
+
+- **`BATCH_INFERENCE_MODE`** — `"auto"` (default): run only if `predictions` is missing or stale; `"always"`: force a scoring run regardless of freshness; `"never"`: skip entirely.
+- **`PREDICTIONS_STALE_AFTER_HOURS`** — in `"auto"` mode, re-score if the latest `inference_point_in_time` in `predictions` is older than this many hours.
+- **`SCORING_THRESHOLD`** — probability cutoff that marks a row as a predicted churner. Must match the threshold used in `decision_policy`.
+- **`RISK_TIER_HIGH` / `RISK_TIER_MEDIUM`** — risk-tier cutoffs written onto each scored row; c05's snapshot writer reads these back when `SNAPSHOT_RISK_TIER_*` are `None`.
+"""
+
+_C04_CONFIG_BODY = '''BATCH_INFERENCE_MODE = "auto"           # "auto" | "always" | "never"
+PREDICTIONS_STALE_AFTER_HOURS = 24
+
+SCORING_THRESHOLD = 0.5
+RISK_TIER_HIGH = 0.6
+RISK_TIER_MEDIUM = 0.3
+'''
+
+
+_C04_REFRESH_PREDICTIONS_BODY = '''from datetime import datetime, timedelta, timezone
+
+from customer_retention.stages.scoring.batch_inference import (
+    BatchInferenceConfig,
+    run_batch_inference,
+)
+
+
+def _resolve_scope_filter():
+    """Return the NB00 scope filter (``ProjectContext.sample_filters``) for the
+    target dataset, or ``None`` if project_context is absent / empty. Scoring
+    must cover only the entity subset that was in force during exploration
+    and training — this keeps the inference population in lock-step with the
+    feature-spec gate upstream."""
+    try:
+        from customer_retention.analysis.auto_explorer.project_context import ProjectContext
+        from customer_retention.analysis.auto_explorer.run_namespace import RunNamespace
+    except ImportError:
+        return None
+    _ns = RunNamespace.from_env_or_latest()
+    if _ns is None:
+        return None
+    _path = _ns.project_context_path
+    if not _path.exists():
+        return None
+    _ctx = ProjectContext.load(_path)
+    _filters = getattr(_ctx, "sample_filters", None) or {}
+    if not _filters:
+        return None
+    _target_name = next(
+        (name for name, ds in _ctx.datasets.items()
+         if getattr(ds, "role", None) == "target"),
+        None,
+    )
+    if _target_name is None and len(_ctx.datasets) == 1:
+        _target_name = next(iter(_ctx.datasets))
+    if _target_name is None:
+        return None
+    return _filters.get(_target_name)
+
+
+_scope_filter = _resolve_scope_filter()
+
+batch_inference_result = None
+_predictions_status = "UNKNOWN"
+
+if spark is None:
+    _predictions_status = "SKIPPED: no Spark session (Databricks-only cell)"
+    print(_predictions_status)
+elif BATCH_INFERENCE_MODE == "never":
+    _predictions_status = "SKIPPED: BATCH_INFERENCE_MODE='never'"
+    print(_predictions_status)
+else:
+    _should_run = True
+    _stale_reason = "always" if BATCH_INFERENCE_MODE == "always" else None
+    if BATCH_INFERENCE_MODE == "auto":
+        if not spark.catalog.tableExists(PREDICTIONS_FQN):
+            _stale_reason = f"{PREDICTIONS_FQN} does not exist"
+        else:
+            _latest_ts_row = spark.sql(
+                f"SELECT max(inference_point_in_time) AS ts FROM {PREDICTIONS_FQN}"
+            ).head()
+            _latest_ts = _latest_ts_row["ts"] if _latest_ts_row is not None else None
+            if _latest_ts is None:
+                _stale_reason = f"{PREDICTIONS_FQN} is empty"
+            else:
+                if _latest_ts.tzinfo is None:
+                    _latest_ts = _latest_ts.replace(tzinfo=timezone.utc)
+                _age_hours = (datetime.now(timezone.utc) - _latest_ts).total_seconds() / 3600.0
+                if _age_hours > PREDICTIONS_STALE_AFTER_HOURS:
+                    _stale_reason = f"latest inference_point_in_time is {_age_hours:.1f}h old (> {PREDICTIONS_STALE_AFTER_HOURS}h)"
+                else:
+                    _should_run = False
+                    _predictions_status = (
+                        f"FRESH: latest inference_point_in_time is {_age_hours:.1f}h old "
+                        f"(<= {PREDICTIONS_STALE_AFTER_HOURS}h) — skipping"
+                    )
+                    print(_predictions_status)
+    if _should_run:
+        print(f"Running batch inference ({_stale_reason})")
+        if _scope_filter:
+            print(f"Scope filter (from NB00 project_context): {_scope_filter}")
+        else:
+            print("Scope filter: (none — scoring full entity population)")
+        config = BatchInferenceConfig(
+            catalog=CATALOG,
+            schema=SCHEMA,
+            model_name=MODEL_NAME,
+            threshold=SCORING_THRESHOLD,
+            risk_tier_high=RISK_TIER_HIGH,
+            risk_tier_medium=RISK_TIER_MEDIUM,
+            inference_timestamp=datetime.now(timezone.utc),
+            filter_expression=_scope_filter,
+        )
+        batch_inference_result = run_batch_inference(config)
+        _predictions_status = batch_inference_result.summary()
+        print(batch_inference_result.long_summary())
+'''
+
+
+_C04_SUMMARY_BODY = '''if batch_inference_result is None:
+    print(f"Predictions status: {_predictions_status}")
+else:
+    print(f"Inference id: {batch_inference_result.inference_id}")
+    print(f"Inference timestamp: {batch_inference_result.inference_timestamp}")
+    print(f"Scored: {batch_inference_result.total_scored:,}")
+    print(f"Predicted churners: {batch_inference_result.predicted_churners:,}")
+    print(f"Mean probability: {batch_inference_result.avg_probability:.4f}")
+    print(f"Target table: {batch_inference_result.target_table_fqn}")
+'''
+
+
+def build_c04() -> List[Dict[str, Any]]:
+    stage = "c04_batch_inference"
+    return [
+        md_cell(
+            stage,
+            "chapter_c04_batch_inference",
+            [
+                "# Chapter c04: Batch Inference (Causal Track)\n",
+                "\n",
+                "Refreshes the `predictions` Delta table by scoring the current feature-store snapshot against the registered `@production` model. Independent from c02 (archetypes) and c05 (snapshot + dashboard) so operators can re-run scoring without recomputing archetypes.\n",
+                "\n",
+                "`BATCH_INFERENCE_MODE='auto'` (default) scores only when `predictions` is missing or older than `PREDICTIONS_STALE_AFTER_HOURS`. Use `'always'` to force a fresh scoring run or `'never'` to skip (useful when inspecting the model without writing).\n",
+            ],
+        ),
+        init_progress_cell(stage, stage),
+        md_cell(stage, "c04_configuration", [_C04_CONFIG_MD]),
+        code_cell(stage, "config", "configuration", [_C04_CONFIG_BODY]),
+        *setup_block(stage, needs_model=True),
+        md_cell(stage, "c04_refresh_section", ["## 4.1 Refresh Predictions\n"]),
+        code_cell(stage, "code", "refresh_predictions", [_C04_REFRESH_PREDICTIONS_BODY]),
+        md_cell(stage, "c04_summary_section", ["## 4.2 Print Run Summary\n"]),
+        code_cell(stage, "code", "print_run_summary", [_C04_SUMMARY_BODY]),
+        release_cleanup_cell(stage),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# c05 — snapshot + dashboard
+# ---------------------------------------------------------------------------
+
+
+_C05_CONFIG_MD = """## Configuration
 
 The cell below is the only place you should need to edit. Every value here is read by the snapshot writer and the dashboard publisher — nothing is hardcoded inside the algorithmic cells.
 
@@ -496,13 +665,13 @@ The cell below is the only place you should need to edit. Every value here is re
 - **`SNAPSHOT_CAPACITY_PARTITION_COLUMN`** — optional partition column for capacity caps (e.g. `"csm_owner_id"`). Leave as `""` to apply caps globally per playbook.
 """
 
-_C04_CONFIG_BODY = '''SNAPSHOT_RISK_TIER_HIGH = None
+_C05_CONFIG_BODY = '''SNAPSHOT_RISK_TIER_HIGH = None
 SNAPSHOT_RISK_TIER_MEDIUM = None
 SNAPSHOT_CAPACITY_PARTITION_COLUMN = ""
 '''
 
 
-_C04_BUILD_SNAPSHOT_BODY = '''from customer_retention.stages.causal import SnapshotConfig, build_eligibility_snapshot
+_C05_BUILD_SNAPSHOT_BODY = '''from customer_retention.stages.causal import SnapshotConfig, build_eligibility_snapshot
 
 snapshot_result = None
 if spark is None:
@@ -510,7 +679,7 @@ if spark is None:
 elif not spark.catalog.tableExists(ARCHETYPE_CATALOG_FQN):
     print(f"SKIPPED: {ARCHETYPE_CATALOG_FQN} does not exist (run c01..c03 first)")
 elif not spark.catalog.tableExists(PREDICTIONS_FQN):
-    print(f"SKIPPED: {PREDICTIONS_FQN} not populated (run s10_batch_inference first)")
+    print(f"SKIPPED: {PREDICTIONS_FQN} not populated (run c04_batch_inference first)")
 else:
     snapshot_cfg = SnapshotConfig(
         spark=spark,
@@ -531,7 +700,7 @@ else:
 '''
 
 
-_C04_PUBLISH_VIEWS_BODY = '''from customer_retention.stages.causal.dashboard_views import (
+_C05_PUBLISH_VIEWS_BODY = '''from customer_retention.stages.causal.dashboard_views import (
     DASHBOARD_VIEW_NAMES,
     publish_dashboard_views,
 )
@@ -548,7 +717,7 @@ else:
 '''
 
 
-_C04_SUMMARY_BODY = '''if spark is None or not spark.catalog.tableExists(ARCHETYPE_CATALOG_FQN):
+_C05_SUMMARY_BODY = '''if spark is None or not spark.catalog.tableExists(ARCHETYPE_CATALOG_FQN):
     print("(no archetype_catalog yet — run c01..c03 first)")
 else:
     counts = spark.sql(
@@ -563,30 +732,30 @@ else:
 '''
 
 
-def build_c04() -> List[Dict[str, Any]]:
-    stage = "c04_snapshot_and_dashboard"
+def build_c05() -> List[Dict[str, Any]]:
+    stage = "c05_snapshot_and_dashboard"
     return [
         md_cell(
             stage,
-            "chapter_c04_snapshot_and_dashboard",
+            "chapter_c05_snapshot_and_dashboard",
             [
-                "# Chapter c04: Snapshot + Dashboard (Causal Track)\n",
+                "# Chapter c05: Snapshot + Dashboard (Causal Track)\n",
                 "\n",
                 "Builds the per-scoring-run `eligibility_snapshot` table, publishes the six dashboard SQL views, and prints the four-way anchor tuple in force.\n",
                 "\n",
-                "Reads `predictions` from `s10_batch_inference` (do **not** trigger scoring here). Reads the active rows from `archetype_catalog`, `eligibility_policy`, and `decision_policy`. Writes `eligibility_snapshot` via Delta MERGE on the natural `(scoring_run_id, account_id, playbook_id)` key — re-running with the same anchor tuple is a no-op.\n",
+                "Reads `predictions` from `c04_batch_inference` (or the `s10_batch_inference` stage of the generated pipeline) — do **not** trigger scoring here. Reads the active rows from `archetype_catalog`, `eligibility_policy`, and `decision_policy`. Writes `eligibility_snapshot` via Delta MERGE on the natural `(scoring_run_id, account_id, playbook_id)` key — re-running with the same anchor tuple is a no-op.\n",
             ],
         ),
         init_progress_cell(stage, stage),
-        md_cell(stage, "c04_configuration", [_C04_CONFIG_MD]),
-        code_cell(stage, "config", "configuration", [_C04_CONFIG_BODY]),
+        md_cell(stage, "c05_configuration", [_C05_CONFIG_MD]),
+        code_cell(stage, "config", "configuration", [_C05_CONFIG_BODY]),
         *setup_block(stage, needs_model=True),
-        md_cell(stage, "c04_build_snapshot_section", ["## 1. Build Eligibility Snapshot\n"]),
-        code_cell(stage, "code", "build_eligibility_snapshot", [_C04_BUILD_SNAPSHOT_BODY]),
-        md_cell(stage, "c04_publish_views_section", ["## 2. Publish Dashboard SQL Views\n"]),
-        code_cell(stage, "code", "publish_dashboard_views", [_C04_PUBLISH_VIEWS_BODY]),
-        md_cell(stage, "c04_summary_section", ["## 3. Print Run Summary\n"]),
-        code_cell(stage, "code", "print_run_summary", [_C04_SUMMARY_BODY]),
+        md_cell(stage, "c05_build_snapshot_section", ["## 5.1 Build Eligibility Snapshot\n"]),
+        code_cell(stage, "code", "build_eligibility_snapshot", [_C05_BUILD_SNAPSHOT_BODY]),
+        md_cell(stage, "c05_publish_views_section", ["## 5.2 Publish Dashboard SQL Views\n"]),
+        code_cell(stage, "code", "publish_dashboard_views", [_C05_PUBLISH_VIEWS_BODY]),
+        md_cell(stage, "c05_summary_section", ["## 5.3 Print Run Summary\n"]),
+        code_cell(stage, "code", "print_run_summary", [_C05_SUMMARY_BODY]),
         release_cleanup_cell(stage),
     ]
 
@@ -601,7 +770,8 @@ def main() -> None:
     write_notebook(_CAUSAL_DIR / "c01_publish_definitions.ipynb", build_c01())
     write_notebook(_CAUSAL_DIR / "c02_archetype_derivation.ipynb", build_c02())
     write_notebook(_CAUSAL_DIR / "c03_approval_gate.ipynb", build_c03())
-    write_notebook(_CAUSAL_DIR / "c04_snapshot_and_dashboard.ipynb", build_c04())
+    write_notebook(_CAUSAL_DIR / "c04_batch_inference.ipynb", build_c04())
+    write_notebook(_CAUSAL_DIR / "c05_snapshot_and_dashboard.ipynb", build_c05())
 
 
 if __name__ == "__main__":

@@ -1,8 +1,13 @@
-"""Stage generator for ``c04_snapshot_and_dashboard``.
+"""Stage generator for ``c05_snapshot_and_dashboard``.
 
 The final causal-track notebook. Builds the per-scoring-run
 ``eligibility_snapshot`` table, publishes the dashboard SQL views, and
 prints the four-way anchor tuple in force.
+
+Reads ``predictions`` produced by ``c04_batch_inference`` (or the
+``s10_batch_inference`` stage of the generated pipeline) — do **not**
+trigger scoring here; re-running with the same anchor tuple is an
+idempotent MERGE no-op.
 """
 
 from typing import List
@@ -11,7 +16,7 @@ import nbformat
 
 from ..base import NotebookStage
 from .base_stage import StageGenerator
-from .causal_setup_cell import c04_setup_block
+from .causal_setup_cell import c05_setup_block
 
 
 class SnapshotAndDashboardStage(StageGenerator):
@@ -21,14 +26,15 @@ class SnapshotAndDashboardStage(StageGenerator):
 
     @property
     def title(self) -> str:
-        return "c04 - Snapshot + Dashboard (Causal Track)"
+        return "c05 - Snapshot + Dashboard (Causal Track)"
 
     @property
     def description(self) -> str:
         return (
             "Builds the per-scoring-run `eligibility_snapshot` table, publishes "
             "the dashboard SQL views, and prints the four-way anchor tuple. "
-            "Reads predictions from `s10_batch_inference` (do not trigger scoring here)."
+            "Reads predictions from `c04_batch_inference` (or `s10_batch_inference`) "
+            "— do not trigger scoring here."
         )
 
     def generate_local_cells(self) -> List[nbformat.NotebookNode]:
@@ -40,13 +46,13 @@ class SnapshotAndDashboardStage(StageGenerator):
     def _cells(self) -> List[nbformat.NotebookNode]:
         return (
             self.header_cells()
-            + c04_setup_block()
+            + c05_setup_block()
             + [
-                self.cb.section("1. Build Eligibility Snapshot"),
+                self.cb.section("5.1 Build Eligibility Snapshot"),
                 self.cb.code(_BUILD_SNAPSHOT_CELL),
-                self.cb.section("2. Publish Dashboard SQL Views"),
+                self.cb.section("5.2 Publish Dashboard SQL Views"),
                 self.cb.code(_PUBLISH_VIEWS_CELL),
-                self.cb.section("3. Print Run Summary"),
+                self.cb.section("5.3 Print Run Summary"),
                 self.cb.code(_PRINT_SUMMARY_CELL),
             ]
         )
@@ -60,7 +66,7 @@ if spark is None:
 elif not spark.catalog.tableExists(ARCHETYPE_CATALOG_FQN):
     print(f"SKIPPED: {ARCHETYPE_CATALOG_FQN} does not exist (run c01..c03 first)")
 elif not spark.catalog.tableExists(PREDICTIONS_FQN):
-    print(f"SKIPPED: {PREDICTIONS_FQN} not populated (run s10_batch_inference first)")
+    print(f"SKIPPED: {PREDICTIONS_FQN} not populated (run c04_batch_inference first)")
 else:
     snapshot_cfg = SnapshotConfig(
         spark=spark,

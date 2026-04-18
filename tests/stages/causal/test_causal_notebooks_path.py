@@ -79,10 +79,11 @@ class TestProjectInitializerWiring:
             causal_notebooks_path="my_causal",
         )
         assert (tmp_path / "new_project" / "my_causal").is_dir()
-        # Causal notebooks should be copied (the framework ships four of them)
+        # Causal notebooks should be copied (the framework ships five of them)
         copied = result.get("causal_notebooks", [])
         assert any(p.endswith("c01_publish_definitions.ipynb") for p in copied)
-        assert any(p.endswith("c04_snapshot_and_dashboard.ipynb") for p in copied)
+        assert any(p.endswith("c04_batch_inference.ipynb") for p in copied)
+        assert any(p.endswith("c05_snapshot_and_dashboard.ipynb") for p in copied)
 
     def test_readme_mentions_causal_notebooks_dir(self, tmp_path):
         from customer_retention.generators.notebook_generator.project_init import ProjectInitializer
@@ -219,7 +220,7 @@ class TestJupyterSaveHookCausal:
 
         from customer_retention.analysis.jupyter_save_hook import post_save_export
 
-        nb_path = tmp_path / "causal_notebooks" / "c04_snapshot_and_dashboard.ipynb"
+        nb_path = tmp_path / "causal_notebooks" / "c05_snapshot_and_dashboard.ipynb"
         nb_path.parent.mkdir()
         nb_path.write_text("{}")
         with patch(

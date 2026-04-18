@@ -26,7 +26,8 @@ class NotebookStage(str, Enum):
     PUBLISH_DEFINITIONS = "c01_publish_definitions"
     ARCHETYPE_DERIVATION = "c02_archetype_derivation"
     APPROVAL_GATE = "c03_approval_gate"
-    SNAPSHOT_AND_DASHBOARD = "c04_snapshot_and_dashboard"
+    BATCH_INFERENCE_CAUSAL = "c04_batch_inference"
+    SNAPSHOT_AND_DASHBOARD = "c05_snapshot_and_dashboard"
 
 
 class NotebookGenerator(ABC):

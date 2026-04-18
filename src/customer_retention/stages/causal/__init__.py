@@ -12,13 +12,14 @@ specified in ``docs/playbook_execution_data_model.md``:
 - Analytical-only DDL: ``assignments``, ``actions``, ``outcomes`` (defined for
   the writeback contract; not populated by this stage).
 
-The package is organized as a thin library that the four hand-authored
+The package is organized as a thin library that the five hand-authored
 notebooks under ``causal_notebooks/`` (project root, sibling of
 ``exploration_notebooks/``) orchestrate: ``c01_publish_definitions``,
-``c02_archetype_derivation``, ``c03_approval_gate``, and
-``c04_snapshot_and_dashboard``. The same library code is also rendered as
-production scripts under ``generated_pipelines/{platform}/c0X_*.py`` via
-the ``s_c01..s_c04`` stage generators. See
+``c02_archetype_derivation``, ``c03_approval_gate``,
+``c04_batch_inference``, and ``c05_snapshot_and_dashboard``. The same
+library code is also rendered as production scripts under
+``generated_pipelines/{platform}/c0X_*.py`` via the ``s_c01..s_c05``
+stage generators. See
 ``docs/playbook_execution_data_model.md`` for the full specification and
 ``docs/causal_track_implementation_plan.md`` for the implementation plan.
 """

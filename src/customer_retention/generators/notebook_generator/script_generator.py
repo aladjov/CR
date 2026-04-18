@@ -12,6 +12,7 @@ from .config import NotebookConfig, Platform
 from .stages import (
     ApprovalGateStage,
     ArchetypeDerivationStage,
+    BatchInferenceCausalStage,
     BatchInferenceStage,
     CleaningStage,
     DeploymentStage,
@@ -94,6 +95,7 @@ class LocalScriptGenerator(ScriptGenerator):
             NotebookStage.PUBLISH_DEFINITIONS: PublishDefinitionsStage(self.config, self.findings),
             NotebookStage.ARCHETYPE_DERIVATION: ArchetypeDerivationStage(self.config, self.findings),
             NotebookStage.APPROVAL_GATE: ApprovalGateStage(self.config, self.findings),
+            NotebookStage.BATCH_INFERENCE_CAUSAL: BatchInferenceCausalStage(self.config, self.findings),
             NotebookStage.SNAPSHOT_AND_DASHBOARD: SnapshotAndDashboardStage(self.config, self.findings),
         }
 
@@ -119,5 +121,6 @@ class DatabricksScriptGenerator(ScriptGenerator):
             NotebookStage.PUBLISH_DEFINITIONS: PublishDefinitionsStage(self.config, self.findings),
             NotebookStage.ARCHETYPE_DERIVATION: ArchetypeDerivationStage(self.config, self.findings),
             NotebookStage.APPROVAL_GATE: ApprovalGateStage(self.config, self.findings),
+            NotebookStage.BATCH_INFERENCE_CAUSAL: BatchInferenceCausalStage(self.config, self.findings),
             NotebookStage.SNAPSHOT_AND_DASHBOARD: SnapshotAndDashboardStage(self.config, self.findings),
         }

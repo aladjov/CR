@@ -46,11 +46,11 @@ class ApprovalGateStage(StageGenerator):
             self.header_cells()
             + c03_setup_block()
             + [
-                self.cb.section("1. Resolve Latest Pending Derivation Run"),
+                self.cb.section("3.1 Resolve Latest Pending Derivation Run"),
                 self.cb.code(_RESOLVE_RUN_CELL),
-                self.cb.section("2. Run Approval Gate"),
+                self.cb.section("3.2 Run Approval Gate"),
                 self.cb.code(_APPROVAL_GATE_CELL),
-                self.cb.section("3. Print Pending Review Queue"),
+                self.cb.section("3.3 Print Pending Review Queue"),
                 self.cb.code(_PRINT_PENDING_CELL),
             ]
         )

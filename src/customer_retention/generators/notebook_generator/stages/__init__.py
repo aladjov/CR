@@ -13,7 +13,8 @@ from .s11_feature_store import FeatureStoreStage
 from .s_c01_publish_definitions import PublishDefinitionsStage
 from .s_c02_archetype_derivation import ArchetypeDerivationStage
 from .s_c03_approval_gate import ApprovalGateStage
-from .s_c04_snapshot_and_dashboard import SnapshotAndDashboardStage
+from .s_c04_batch_inference import BatchInferenceCausalStage
+from .s_c05_snapshot_and_dashboard import SnapshotAndDashboardStage
 
 __all__ = [
     "StageGenerator",
@@ -21,5 +22,5 @@ __all__ = [
     "FeatureEngineeringStage", "FeatureSelectionStage", "ModelTrainingStage",
     "DeploymentStage", "MonitoringStage", "BatchInferenceStage", "FeatureStoreStage",
     "PublishDefinitionsStage", "ArchetypeDerivationStage", "ApprovalGateStage",
-    "SnapshotAndDashboardStage",
+    "BatchInferenceCausalStage", "SnapshotAndDashboardStage",
 ]

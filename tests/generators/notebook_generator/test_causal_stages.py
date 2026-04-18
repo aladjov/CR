@@ -1,4 +1,4 @@
-"""Smoke tests for the four causal-track stage generators (s_c01..s_c04).
+"""Smoke tests for the five causal-track stage generators (s_c01..s_c05).
 
 These tests guard the layer-2 (generated_pipelines) side of the causal
 track. They verify that each stage generator emits a notebook with the
@@ -28,6 +28,7 @@ from customer_retention.generators.notebook_generator import (
 from customer_retention.generators.notebook_generator.stages import (
     ApprovalGateStage,
     ArchetypeDerivationStage,
+    BatchInferenceCausalStage,
     PublishDefinitionsStage,
     SnapshotAndDashboardStage,
 )
@@ -36,7 +37,8 @@ _CAUSAL_STAGES = [
     (NotebookStage.PUBLISH_DEFINITIONS, PublishDefinitionsStage, "c01"),
     (NotebookStage.ARCHETYPE_DERIVATION, ArchetypeDerivationStage, "c02"),
     (NotebookStage.APPROVAL_GATE, ApprovalGateStage, "c03"),
-    (NotebookStage.SNAPSHOT_AND_DASHBOARD, SnapshotAndDashboardStage, "c04"),
+    (NotebookStage.BATCH_INFERENCE_CAUSAL, BatchInferenceCausalStage, "c04"),
+    (NotebookStage.SNAPSHOT_AND_DASHBOARD, SnapshotAndDashboardStage, "c05"),
 ]
 
 
@@ -189,7 +191,44 @@ class TestPerStageContent:
         # c03 doesn't build the LLM namer
         assert "build_llm_namer" not in code
 
-    def test_c04_calls_snapshot_writer_and_dashboard_views(self):
+    def test_c04_calls_run_batch_inference(self):
+        """c04 is the standalone scoring refresh — it must call
+        ``run_batch_inference`` against the registered ``@production`` model
+        and must NOT touch archetypes / snapshot / dashboard publishing
+        (those belong to c02 and c05)."""
+        gen = LocalNotebookGenerator(NotebookConfig(), None)
+        nb = gen.generate_stage(NotebookStage.BATCH_INFERENCE_CAUSAL)
+        code = _all_code(nb)
+        assert "run_batch_inference" in code
+        assert "BatchInferenceConfig" in code
+        # Freshness gate + three modes
+        assert "BATCH_INFERENCE_MODE" in code
+        assert "PREDICTIONS_STALE_AFTER_HOURS" in code
+        assert '"auto"' in code
+        assert '"always"' in code
+        assert '"never"' in code
+        # Must NOT cross-call into archetype / snapshot / dashboard modules
+        assert "build_eligibility_snapshot" not in code
+        assert "publish_dashboard_views" not in code
+        assert "derive_archetypes_and_policies" not in code
+
+    def test_c04_applies_nb00_scope_filter(self):
+        """The scoring population must match NB00's ``ProjectContext.sample_filters``
+        for the target dataset — otherwise batch inference scores entities
+        that were excluded from training / exploration, poisoning every
+        downstream archetype assignment with out-of-scope rows.
+
+        The notebook resolves the filter from ``RunNamespace.project_context_path``
+        and threads it into ``BatchInferenceConfig.filter_expression``."""
+        gen = LocalNotebookGenerator(NotebookConfig(), None)
+        nb = gen.generate_stage(NotebookStage.BATCH_INFERENCE_CAUSAL)
+        code = _all_code(nb)
+        assert "ProjectContext" in code
+        assert "project_context_path" in code
+        assert "sample_filters" in code
+        assert "filter_expression=_scope_filter" in code
+
+    def test_c05_calls_snapshot_writer_and_dashboard_views(self):
         gen = LocalNotebookGenerator(NotebookConfig(), None)
         nb = gen.generate_stage(NotebookStage.SNAPSHOT_AND_DASHBOARD)
         code = _all_code(nb)
@@ -207,6 +246,8 @@ class TestPerStageContent:
         assert "NotImplementedError" not in code
         # The summary cell exists and queries archetype_catalog
         assert "archetype_catalog row counts" in code
+        # c05 must point operators to c04, not the old s10-only wording
+        assert "run c04_batch_inference first" in code
 
 
 class TestSetupBlockSeparation:
@@ -220,9 +261,10 @@ class TestSetupBlockSeparation:
     @pytest.mark.parametrize("stage", [
         NotebookStage.ARCHETYPE_DERIVATION,
         NotebookStage.APPROVAL_GATE,
+        NotebookStage.BATCH_INFERENCE_CAUSAL,
         NotebookStage.SNAPSHOT_AND_DASHBOARD,
     ])
-    def test_c02_c03_c04_setup_loads_model(self, stage):
+    def test_c02_c03_c04_c05_setup_loads_model(self, stage):
         gen = LocalNotebookGenerator(NotebookConfig(), None)
         code = _all_code(gen.generate_stage(stage))
         assert "MODEL_URI" in code
@@ -251,7 +293,8 @@ _DOC_TAG = re.compile(r"^\[//\]: # \(cr:doc name='([^']+)' id=([0-9a-f]{8})\)$")
     "c01_publish_definitions",
     "c02_archetype_derivation",
     "c03_approval_gate",
-    "c04_snapshot_and_dashboard",
+    "c04_batch_inference",
+    "c05_snapshot_and_dashboard",
 ])
 class TestCausalNotebookFiles:
     def _load(self, basename: str):

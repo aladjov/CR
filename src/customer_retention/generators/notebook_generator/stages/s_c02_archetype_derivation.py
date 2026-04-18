@@ -51,7 +51,7 @@ class ArchetypeDerivationStage(StageGenerator):
             self.header_cells()
             + c02_setup_block()
             + [
-                self.cb.section("1. Derive Archetypes + Eligibility Policies"),
+                self.cb.section("2.1 Derive Archetypes + Eligibility Policies"),
                 self.cb.code(_DERIVE_ARCHETYPES_CELL),
             ]
         )

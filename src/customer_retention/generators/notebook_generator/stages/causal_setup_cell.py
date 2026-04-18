@@ -1,4 +1,4 @@
-"""Shared cell builders for the four causal-track stage generators (c01..c04).
+"""Shared cell builders for the five causal-track stage generators (c01..c05).
 
 Each causal stage produces three cell groups:
 
@@ -7,7 +7,7 @@ Each causal stage produces three cell groups:
    reads are exposed (no shared bloat).
 2. **Setup block** — code cell that resolves catalog / schema / model
    identifiers via ``ScoringConfig``. Two flavors: the full
-   ``setup_with_model`` flavor (c02 / c03 / c04) and the lightweight
+   ``setup_with_model`` flavor (c02 / c03 / c04 / c05) and the lightweight
    ``setup_publish_only`` flavor (c01) which skips model URI lookup.
 3. **Algorithmic cells** — supplied by the individual stage generator.
 
@@ -38,7 +38,7 @@ The cell below is the only place you should need to edit. Every value here is re
 - **`RISK_TIER_HIGH_THRESHOLD` / `RISK_TIER_MEDIUM_THRESHOLD`** — risk tier cutoffs mirrored into `decision_policy` so historical assignments can be reconstructed from the policy version in force at scoring time. The publish step writes these as the on-disk default; if a YAML row in `decision_policy.yaml` already specifies them, the YAML wins.
 - **`SKIP_PIPELINE_RUN`** — skip invoking the generated pipeline (e.g. when predictions are already fresh).
 - **`PIPELINE_DIR`** — directory containing the generated pipeline scripts produced by `exploration_notebooks/10_spec_generation.ipynb`. Leave as `None` to resolve to `/Workspace/{workspace_path}/generated_pipelines/databricks/{pipeline_name}` via `get_workspace_path()` + `ScoringConfig`. Override if the scripts live elsewhere.
-- **`PIPELINE_STAGES`** — ordered stage subdirectories to execute. Includes `scoring` so the `predictions` Delta table is populated before `c04_snapshot_and_dashboard` runs.
+- **`PIPELINE_STAGES`** — ordered stage subdirectories to execute. Includes `scoring` so the `predictions` Delta table is populated before `c05_snapshot_and_dashboard` runs. (The hand-authored `c04_batch_inference` notebook is an independent alternative when you want to refresh scoring without re-running the full training pipeline.)
 - **`PIPELINE_STAGE_TIMEOUT_SECONDS`** — per-notebook timeout passed to `dbutils.notebook.run()`.
 """
 
@@ -99,7 +99,26 @@ FORCE_APPROVE = False
 '''
 
 
-_C04_CONFIG_MD = """## Configuration
+_C04_BATCH_INFERENCE_CONFIG_MD = """## Configuration
+
+The cell below is the only place you should need to edit. Every value here is read by the batch-inference cell — nothing is hardcoded inside the algorithmic cells.
+
+- **`BATCH_INFERENCE_MODE`** — `"auto"` (default): run only if `predictions` is missing or stale; `"always"`: force a scoring run regardless of freshness; `"never"`: skip (useful to inspect the model without touching the predictions table).
+- **`PREDICTIONS_STALE_AFTER_HOURS`** — in `"auto"` mode, trigger a new scoring run if the latest `inference_point_in_time` in `predictions` is older than this many hours. Default 24.
+- **`SCORING_THRESHOLD`** — probability cutoff that marks a row as a predicted churner. Must match the threshold used in `decision_policy`.
+- **`RISK_TIER_HIGH` / `RISK_TIER_MEDIUM`** — risk-tier cutoffs written onto each scored row so c05's snapshot writer can use them directly. Defaults mirror the framework defaults; override only if your `decision_policy` uses different cutoffs.
+"""
+
+_C04_BATCH_INFERENCE_CONFIG_BODY = '''BATCH_INFERENCE_MODE = "auto"           # "auto" | "always" | "never"
+PREDICTIONS_STALE_AFTER_HOURS = 24
+
+SCORING_THRESHOLD = 0.5
+RISK_TIER_HIGH = 0.6
+RISK_TIER_MEDIUM = 0.3
+'''
+
+
+_C05_CONFIG_MD = """## Configuration
 
 The cell below is the only place you should need to edit. Every value here is read by the snapshot writer and the dashboard publisher — nothing is hardcoded inside the algorithmic cells.
 
@@ -107,7 +126,7 @@ The cell below is the only place you should need to edit. Every value here is re
 - **`SNAPSHOT_CAPACITY_PARTITION_COLUMN`** — optional partition column for capacity caps (e.g. `"csm_owner_id"`). Leave as `""` to apply caps globally per playbook.
 """
 
-_C04_CONFIG_BODY = '''SNAPSHOT_RISK_TIER_HIGH = None
+_C05_CONFIG_BODY = '''SNAPSHOT_RISK_TIER_HIGH = None
 SNAPSHOT_RISK_TIER_MEDIUM = None
 SNAPSHOT_CAPACITY_PARTITION_COLUMN = ""
 '''
@@ -205,28 +224,35 @@ def _config_block(md_text: str, code_body: str) -> List[nbformat.NotebookNode]:
     return [CellBuilder.markdown(md_text), CellBuilder.code(code_body)]
 
 
-def _setup_block(needs_model: bool) -> List[nbformat.NotebookNode]:
+def _setup_block(needs_model: bool, chapter: int) -> List[nbformat.NotebookNode]:
     body = _SETUP_BODY_NEEDS_MODEL if needs_model else _SETUP_BODY_PUBLISH_ONLY
     return [
-        CellBuilder.section("0. Setup + Resolve @production Model"),
+        CellBuilder.section(f"{chapter}.0 Setup + Resolve @production Model"),
         CellBuilder.code(body),
     ]
 
 
 def c01_setup_block() -> List[nbformat.NotebookNode]:
-    return _config_block(_C01_CONFIG_MD, _C01_CONFIG_BODY) + _setup_block(needs_model=False)
+    return _config_block(_C01_CONFIG_MD, _C01_CONFIG_BODY) + _setup_block(needs_model=False, chapter=1)
 
 
 def c02_setup_block() -> List[nbformat.NotebookNode]:
-    return _config_block(_C02_CONFIG_MD, _C02_CONFIG_BODY) + _setup_block(needs_model=True)
+    return _config_block(_C02_CONFIG_MD, _C02_CONFIG_BODY) + _setup_block(needs_model=True, chapter=2)
 
 
 def c03_setup_block() -> List[nbformat.NotebookNode]:
-    return _config_block(_C03_CONFIG_MD, _C03_CONFIG_BODY) + _setup_block(needs_model=True)
+    return _config_block(_C03_CONFIG_MD, _C03_CONFIG_BODY) + _setup_block(needs_model=True, chapter=3)
 
 
 def c04_setup_block() -> List[nbformat.NotebookNode]:
-    return _config_block(_C04_CONFIG_MD, _C04_CONFIG_BODY) + _setup_block(needs_model=True)
+    return (
+        _config_block(_C04_BATCH_INFERENCE_CONFIG_MD, _C04_BATCH_INFERENCE_CONFIG_BODY)
+        + _setup_block(needs_model=True, chapter=4)
+    )
+
+
+def c05_setup_block() -> List[nbformat.NotebookNode]:
+    return _config_block(_C05_CONFIG_MD, _C05_CONFIG_BODY) + _setup_block(needs_model=True, chapter=5)
 
 
 # ---------------------------------------------------------------------------
@@ -234,9 +260,9 @@ def c04_setup_block() -> List[nbformat.NotebookNode]:
 # ---------------------------------------------------------------------------
 
 
-C01_RUN_PIPELINE_MD = """## 2. Run the Generated Pipeline (s01 → s10)
+C01_RUN_PIPELINE_MD = """## 1.2 Run the Generated Pipeline (s01 → s10)
 
-Before `c02_archetype_derivation` and `c04_snapshot_and_dashboard` can run, three artifacts must exist on the cluster:
+Before `c02_archetype_derivation`, `c04_batch_inference`, and `c05_snapshot_and_dashboard` can run, three artifacts must exist on the cluster:
 
 1. **Gold features table** — `{CATALOG}.{SCHEMA}.customer_features` registered as a feature table
 2. **Registered `@production` model** — `models:/{MODEL_NAME}@production` (where `MODEL_NAME` is the 3-part Unity Catalog FQN written by training as `registered_model_name`)
