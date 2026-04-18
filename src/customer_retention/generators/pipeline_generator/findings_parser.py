@@ -1,8 +1,31 @@
 import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import yaml
+
+_URI_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
+_DBFS_PREFIXES = ("dbfs:", "/Volumes/", "/dbfs/", "/mnt/", "/Workspace/")
+_FILE_SUFFIXES = (".csv", ".parquet", ".pq", ".json", ".orc", ".avro", ".delta", ".txt")
+
+
+def _normalize_source_path(raw: str) -> str:
+    """Preserve UC table refs and Databricks storage URIs; only resolve local paths.
+
+    `Path(...).resolve()` mangles Unity Catalog 3-part names (e.g. `cat.sch.tbl`
+    becomes `/cwd/cat.sch.tbl`) and can strip scheme prefixes from URIs. Both
+    break downstream `spark.read.table` detection in the Databricks renderer.
+    """
+    if not raw:
+        return raw
+    s = str(raw).strip()
+    if _URI_SCHEME_RE.match(s) or s.startswith(_DBFS_PREFIXES):
+        return s
+    if "/" not in s and "\\" not in s and ":" not in s \
+            and "." in s and not s.lower().endswith(_FILE_SUFFIXES):
+        return s
+    return str(Path(s).resolve())
 
 logger = logging.getLogger(__name__)
 
@@ -480,10 +503,10 @@ class FindingsParser:
             dataset_info = multi.datasets.get(name)
             is_event = name in multi.event_datasets
             is_excluded = name in multi.excluded_datasets or (dataset_info and dataset_info.excluded)
-            raw_source = str(Path(
+            raw_source = _normalize_source_path(
                 dataset_info.raw_source_path or dataset_info.source_path
                 if dataset_info else findings.source_path
-            ).resolve())
+            )
             time_col = None
             entity_key = findings.identifier_columns[0] if findings.identifier_columns else "id"
             if is_event and findings.time_series_metadata:
@@ -1542,9 +1565,9 @@ class FindingsParser:
                 or "timestamp"
             )
             raw_time_col = self._resolve_raw_time_column(findings)
-            raw_source = str(Path(
+            raw_source = _normalize_source_path(
                 dataset_info.raw_source_path or dataset_info.source_path or findings.source_path
-            ).resolve())
+            )
             source_cfg = next((s for s in config.sources if s.name == event_name), None)
             if not source_cfg:
                 continue
@@ -2084,7 +2107,7 @@ class FindingsParser:
                 if ms.name == agg_name:
                     ms.granularity = DatasetGranularity.EVENT_LEVEL.value
                     break
-            raw_source = str(Path(preagg.source_path).resolve())
+            raw_source = _normalize_source_path(preagg.source_path)
             original_target = self._resolve_original_target(preagg, config.target_column)
             config.landing[agg_name] = LandingLayerConfig(
                 source=source_cfg,

@@ -7921,3 +7921,68 @@ class TestLandingKillSwitch:
         config = parser.parse()
 
         assert config.landing["orders_agg"].filters == []
+
+
+class TestNormalizeSourcePath:
+    def test_preserves_uc_three_part_table_reference(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            _normalize_source_path,
+        )
+
+        uc_ref = "prod_corp_snowflake_provisioning_shared.salesforce.case"
+        assert _normalize_source_path(uc_ref) == uc_ref
+
+    def test_preserves_uc_two_part_table_reference(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            _normalize_source_path,
+        )
+
+        assert _normalize_source_path("sales.orders") == "sales.orders"
+
+    def test_preserves_volumes_path(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            _normalize_source_path,
+        )
+
+        vol = "/Volumes/cat/sch/vol/file.csv"
+        assert _normalize_source_path(vol) == vol
+
+    def test_preserves_dbfs_uri(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            _normalize_source_path,
+        )
+
+        assert _normalize_source_path("dbfs:/FileStore/data.csv") == "dbfs:/FileStore/data.csv"
+
+    def test_preserves_cloud_uri_scheme(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            _normalize_source_path,
+        )
+
+        uri = "abfss://container@acct.dfs.core.windows.net/path"
+        assert _normalize_source_path(uri) == uri
+
+    def test_resolves_local_relative_path(self, tmp_path, monkeypatch):
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            _normalize_source_path,
+        )
+
+        monkeypatch.chdir(tmp_path)
+        result = _normalize_source_path("data/x.csv")
+        assert result == str((tmp_path / "data" / "x.csv").resolve())
+
+    def test_resolves_path_with_file_extension(self, tmp_path, monkeypatch):
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            _normalize_source_path,
+        )
+
+        monkeypatch.chdir(tmp_path)
+        result = _normalize_source_path("orders.csv")
+        assert result == str((tmp_path / "orders.csv").resolve())
+
+    def test_empty_string_is_passthrough(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            _normalize_source_path,
+        )
+
+        assert _normalize_source_path("") == ""
