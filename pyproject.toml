@@ -192,6 +192,8 @@ ignore = [
 "exploration_notebooks/*.ipynb" = ["F821", "F401", "N814"]
 # Processed tutorial notebooks: same as exploration notebooks
 "docs/tutorial/**/*.ipynb" = ["F821", "F401", "N814"]
+# Diagnostic notebook templates: Databricks globals (spark, dbutils) + F alias convention
+"diagnostic_notebooks/*.ipynb" = ["F821", "F401", "N814", "N812"]
 
 [tool.uv]
 # PyTorch CUDA index - used when installing ml-cuda extras

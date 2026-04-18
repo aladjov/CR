@@ -181,6 +181,15 @@ class TestExplorationNotebookCopyEdgeCases:
         (fake_pkg / "project_init.py").touch()
         monkeypatch.setattr(project_init, "__file__", str(fake_pkg / "project_init.py"))
 
+        # Force PEP 376 RECORD lookup (step 2) to miss — on CI the churnkit
+        # wheel is actually installed, so without this the resolver would
+        # find the real install path before reaching the sysconfig fallback.
+        import importlib.metadata as _metadata
+        from importlib.metadata import PackageNotFoundError
+        def _raise_not_found(name):
+            raise PackageNotFoundError(name)
+        monkeypatch.setattr(_metadata, "distribution", _raise_not_found)
+
         # Seed the shared-data dir at a sysconfig-reported ``data`` root that is
         # NOT ``sys.prefix`` — this is the exact scenario the old resolver missed.
         data_root = tmp_path / "ephemeral_env"
