@@ -70,6 +70,28 @@ class TestPureHelpers:
     def test_stability_score_reexport(self):
         assert stability_score([1.0, 0.0], [1.0, 0.0]) == pytest.approx(1.0)
 
+    def test_row_value_scrubs_nan(self):
+        """Regression: ``_row_value`` feeds the surrogate-tree numpy matrix in
+        ``_collect_surrogate_inputs``. ``float('nan')`` previously passed
+        through — old sklearn (<1.3) raises on NaN, and newer sklearn learns
+        'null pattern' as a tree-split predicate (wrong semantics for
+        eligibility rules). NaN must be coerced to 0.0 the same way NULL is."""
+        row = {"a": float("nan"), "b": float("inf"), "c": 3.14, "d": None, "e": "garbage"}
+        # NaN and strings both land on the error branch → 0.0
+        assert derivation._row_value(row, "a") == 0.0
+        # +inf is a finite-but-extreme value; surrogate tree tolerates it. Leave as-is.
+        assert derivation._row_value(row, "b") == float("inf")
+        assert derivation._row_value(row, "c") == pytest.approx(3.14)
+        assert derivation._row_value(row, "d") == 0.0
+        assert derivation._row_value(row, "e") == 0.0
+
+    def test_row_value_scrubs_negative_nan(self):
+        """Bit-level defensiveness: a signaling NaN from pandas→Spark round-trip
+        has the sign bit set. ``math.isnan`` catches both quiet and signaling,
+        positive and negative NaN."""
+        row = {"x": float("-nan")}
+        assert derivation._row_value(row, "x") == 0.0
+
 
 # ---------------------------------------------------------------------------
 # Driver splitting
@@ -112,6 +134,51 @@ class TestSplitDrivers:
 # ---------------------------------------------------------------------------
 # Top-shap struct
 # ---------------------------------------------------------------------------
+
+
+class TestJoinClusterLabels:
+    def test_dedupes_both_sides_on_join_key(self):
+        """Regression: if gold is snapshot-grained (multiple rows per
+        ``account_id``), the inner join fans out |raw| × |labelled-per-key|
+        rows per account, and downstream per-cluster aggregations (centroids,
+        sizes, mean churn) become biased toward entities with more snapshots.
+        Both sides must be collapsed to one row per entity before joining —
+        the archetype is a property of the entity, not the snapshot."""
+        labelled = MagicMock(name="LabelledShap")
+        labelled_selected = MagicMock(name="LabelledSelected")
+        labelled_deduped = MagicMock(name="LabelledDeduped")
+        labelled.select = MagicMock(return_value=labelled_selected)
+        labelled_selected.dropDuplicates = MagicMock(return_value=labelled_deduped)
+
+        raw = MagicMock(name="RawFeatures")
+        raw_deduped = MagicMock(name="RawDeduped")
+        raw.dropDuplicates = MagicMock(return_value=raw_deduped)
+        raw_deduped.join = MagicMock(return_value=MagicMock(name="Joined"))
+
+        derivation._join_cluster_labels(labelled, raw, join_key="account_id")
+
+        labelled_selected.dropDuplicates.assert_called_once_with(["account_id"])
+        raw.dropDuplicates.assert_called_once_with(["account_id"])
+        raw_deduped.join.assert_called_once()
+        join_args, join_kwargs = raw_deduped.join.call_args
+        assert join_args[0] is labelled_deduped or join_kwargs.get("other") is labelled_deduped
+        assert join_kwargs.get("on") == "account_id"
+        assert join_kwargs.get("how") == "inner"
+
+    def test_select_scopes_to_join_key_and_cluster_col(self):
+        labelled = MagicMock(name="LabelledShap")
+        labelled_selected = MagicMock(name="LabelledSelected")
+        labelled_selected.dropDuplicates = MagicMock(return_value=MagicMock())
+        labelled.select = MagicMock(return_value=labelled_selected)
+        raw = MagicMock(name="RawFeatures")
+        raw.dropDuplicates = MagicMock(return_value=MagicMock(join=MagicMock(return_value=MagicMock())))
+
+        derivation._join_cluster_labels(labelled, raw, join_key="entity_id")
+
+        labelled.select.assert_called_once()
+        assert "entity_id" in labelled.select.call_args.args
+        from customer_retention.stages.causal.clusterer import CLUSTER_COL
+        assert CLUSTER_COL in labelled.select.call_args.args
 
 
 class TestTopShapStruct:

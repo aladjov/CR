@@ -241,6 +241,10 @@ def patched_pyspark_sql_functions(monkeypatch):
     fake_functions = MagicMock(name="pyspark.sql.functions")
     fake_functions.mean = MagicMock(side_effect=lambda c: c)
     fake_functions.col = MagicMock(side_effect=lambda c: c if hasattr(c, "cast") else _FakeCol(c))
+    fake_functions.nanvl = MagicMock(side_effect=lambda a, _b: a)
+    fake_functions.lit = MagicMock(side_effect=lambda v: _FakeCol(f"lit({v})"))
+    fake_functions.abs = MagicMock(side_effect=lambda c: c)
+    fake_functions.stddev_pop = MagicMock(side_effect=lambda c: c)
     fake_sql = MagicMock(name="pyspark.sql")
     fake_sql.functions = fake_functions
     monkeypatch.setitem(sys.modules, "pyspark.sql", fake_sql)
@@ -256,6 +260,21 @@ class _FakeCol:
 
     def alias(self, name: str) -> "_FakeCol":
         return _FakeCol(name)
+
+
+def _assert_nanvl_fallback_is_null(fake_functions: Any, *, expected_calls: int) -> None:
+    """Assert every ``F.nanvl`` call received a NULL literal as its second arg.
+
+    Using ``F.lit(0.0)`` in place of NULL would make ``F.mean`` include bogus
+    zeros in the aggregation instead of skipping NaN rows — the clusterer's
+    per-cluster means would silently skew toward zero for any feature with
+    NaN rows. Pinning the fallback here stops that regression cold."""
+    assert fake_functions.nanvl.call_count == expected_calls
+    for call in fake_functions.nanvl.call_args_list:
+        fallback = call.args[1]
+        assert getattr(fallback, "name", None) == "lit(None)", (
+            f"nanvl fallback must be F.lit(None) (DoubleType NULL); got {fallback!r}"
+        )
 
 
 class TestClusterCentroidsRaw:
@@ -274,6 +293,22 @@ class TestClusterCentroidsRaw:
         chain = _make_chain_returning(rows)
         centroids, _ = clusterer.cluster_centroids_raw(chain, feature_columns=["a", "b"])
         assert centroids[0] == [0.0, 5.0]
+
+    def test_mean_wraps_nanvl_so_nan_rows_are_skipped(self, patched_pyspark_sql_functions):
+        """Regression: Spark's ``F.mean`` skips NULL but not NaN — a single NaN
+        in a gold column poisons the whole cluster mean for that feature. The
+        aggregation must wrap each column in ``F.nanvl(col, NULL)`` so NaN
+        values are coerced to NULL (which ``F.mean`` then skips), preserving
+        the contribution of finite rows.
+
+        The fallback arg of every ``nanvl`` call must be a NULL literal — a
+        future refactor that substituted ``F.lit(0.0)`` would include bogus
+        zeros in the mean and silently skew centroids toward the origin; this
+        assertion pins the NULL fallback so that regression can't slip in."""
+        rows = [{CLUSTER_COL: 0, "__mean_0": 1.0, "__mean_1": 2.0}]
+        chain = _make_chain_returning(rows)
+        clusterer.cluster_centroids_raw(chain, feature_columns=["a", "b"])
+        _assert_nanvl_fallback_is_null(patched_pyspark_sql_functions, expected_calls=2)
 
 
 class TestClusterSizeStats:
@@ -294,6 +329,12 @@ class TestClusterTargetMeans:
         result = clusterer.cluster_target_means(chain, target_col="target")
         assert result == [(0, 0.3), (1, 0.6)]
 
+    def test_mean_target_wraps_nanvl(self, patched_pyspark_sql_functions):
+        rows = [{CLUSTER_COL: 0, "__mean_target": 0.3}]
+        chain = _make_chain_returning(rows)
+        clusterer.cluster_target_means(chain, target_col="target")
+        _assert_nanvl_fallback_is_null(patched_pyspark_sql_functions, expected_calls=1)
+
 
 class TestClusterShapCentroids:
     def test_returns_per_cluster_shap_means(self, patched_pyspark_sql_functions):
@@ -307,3 +348,127 @@ class TestClusterShapCentroids:
         )
         assert centroids == [[0.1, -0.2], [0.4, 0.5]]
         assert order == ["shap_a", "shap_b"]
+
+    def test_shap_mean_wraps_nanvl(self, patched_pyspark_sql_functions):
+        rows = [{CLUSTER_COL: 0, "__shap_mean_0": 0.1, "__shap_mean_1": -0.2}]
+        chain = _make_chain_returning(rows)
+        clusterer.cluster_shap_centroids(chain, shap_columns=["shap_a", "shap_b"])
+        _assert_nanvl_fallback_is_null(patched_pyspark_sql_functions, expected_calls=2)
+
+
+# ---------------------------------------------------------------------------
+# select_top_shap_features — batched per Coding_Practices.md (≤200 / .agg())
+# ---------------------------------------------------------------------------
+
+
+class TestSelectTopShapFeatures:
+    def test_returns_input_unchanged_when_under_cap(self, patched_pyspark_sql_functions):
+        df = MagicMock(name="ShapDF")
+        out = clusterer.select_top_shap_features(df, ["a", "b"], feature_cap=50)
+        assert out == ["a", "b"]
+
+    def test_batches_aggregations_at_200_columns_per_call(
+        self, patched_pyspark_sql_functions
+    ):
+        """Coding_Practices.md: per-column aggregates must be batched in
+        groups of ≤200 so Catalyst plans stay O(200²) instead of O(N²)."""
+        agg_calls: list[int] = []
+
+        class _Row:
+            def __getitem__(self, key):
+                return 0.1
+
+        def _agg(*exprs):
+            agg_calls.append(len(exprs))
+            r = MagicMock()
+            r.head.return_value = _Row()
+            return r
+
+        df = MagicMock(name="ShapDF")
+        df.agg = _agg
+
+        features = [f"shap_f{i}" for i in range(450)]
+        selected = clusterer.select_top_shap_features(df, features, feature_cap=50)
+        # 450 / 200 → batches of 200, 200, 50
+        assert agg_calls == [200, 200, 50]
+        assert len(selected) == 50
+
+    def test_mean_abs_wraps_nanvl(self, patched_pyspark_sql_functions):
+        """NaN rows in shap_<feature> (shouldn't happen after the emission
+        fix, but defensive) must not poison the top-feature ranking — wrap
+        each column in ``nanvl`` before ``F.mean(F.abs(...))``."""
+
+        class _Row:
+            def __getitem__(self, key):
+                return 0.1
+
+        def _agg(*_exprs):
+            r = MagicMock()
+            r.head.return_value = _Row()
+            return r
+
+        df = MagicMock(name="ShapDF")
+        df.agg = _agg
+        features = [f"shap_f{i}" for i in range(250)]  # forces batching
+        clusterer.select_top_shap_features(df, features, feature_cap=50)
+        assert patched_pyspark_sql_functions.nanvl.call_count == 250
+
+
+# ---------------------------------------------------------------------------
+# _compute_feature_scales batching (lives in derivation.py but shares pattern)
+# ---------------------------------------------------------------------------
+
+
+class TestComputeFeatureScales:
+    def test_batches_stddev_at_200_columns_per_call(self):
+        """Same batching contract as select_top_shap_features — keep Catalyst
+        plans small when feature_order has 100+ columns."""
+
+        from customer_retention.stages.causal import derivation
+
+        fake_functions = MagicMock(name="pyspark.sql.functions")
+        fake_functions.col = MagicMock(side_effect=lambda c: _FakeCol(c))
+        fake_functions.stddev_pop = MagicMock(side_effect=lambda c: c)
+        fake_sql = MagicMock(name="pyspark.sql")
+        fake_sql.functions = fake_functions
+
+        with _patch_module("pyspark.sql", fake_sql), _patch_module("pyspark.sql.functions", fake_functions):
+            agg_calls: list[int] = []
+
+            class _Row:
+                def __getitem__(self, key):
+                    return 1.5
+
+            def _agg(*exprs):
+                agg_calls.append(len(exprs))
+                r = MagicMock()
+                r.head.return_value = _Row()
+                return r
+
+            df = MagicMock(name="RawWithClusters")
+            df.columns = [f"f{i}" for i in range(450)]
+            df.agg = _agg
+
+            features = [f"f{i}" for i in range(450)]
+            scales = derivation._compute_feature_scales(df, features)
+            assert agg_calls == [200, 200, 50]
+            assert len(scales) == 450
+            assert all(s == 1.5 for s in scales)
+
+
+def _patch_module(name, module):
+    import sys
+
+    class _Ctx:
+        def __enter__(self):
+            self._prev = sys.modules.get(name)
+            sys.modules[name] = module
+            return module
+
+        def __exit__(self, *exc):
+            if self._prev is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = self._prev
+
+    return _Ctx()

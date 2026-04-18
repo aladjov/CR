@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
@@ -286,8 +287,30 @@ class _SurrogateInputs:
 def _join_cluster_labels(
     labelled_shap_df: "DataFrame", raw_df: "DataFrame", join_key: str
 ) -> "DataFrame":
-    cluster_lookup = labelled_shap_df.select(join_key, CLUSTER_COL)
-    return raw_df.join(cluster_lookup, on=join_key, how="inner")
+    """Attach per-entity cluster labels to the raw feature frame.
+
+    Both sides are collapsed to one row per ``join_key`` before the inner
+    join. If gold is snapshot-grained (multiple rows per ``account_id``),
+    the naïve join fans out to ``|raw| × |labelled-per-key|`` rows per
+    entity and biases every downstream per-cluster aggregate
+    (centroids, sizes, mean churn) toward entities with more snapshots.
+    Collapsing first keeps each entity at one row and preserves the
+    contract that archetypes are a property of the *entity*, not the
+    snapshot.
+
+    Caveat for multi-snapshot callers: ``dropDuplicates([join_key])`` keeps
+    an arbitrary row per entity (Spark picks whichever survives the hash
+    shuffle). The archetype label is stable across snapshots for a given
+    entity so clustering is unaffected, but the *raw-feature centroid* is
+    computed from the kept snapshot's features and will therefore drift
+    between runs if gold has multiple snapshots per account. Callers that
+    need reproducible centroids in that regime must pre-dedupe with an
+    explicit ordering (e.g. ``Window.partitionBy(join_key).orderBy(
+    F.col(timestamp_col).desc())`` + ``row_number() == 1``) before calling
+    ``derive_archetypes_and_policies``."""
+    cluster_lookup = labelled_shap_df.select(join_key, CLUSTER_COL).dropDuplicates([join_key])
+    raw_unique = raw_df.dropDuplicates([join_key])
+    return raw_unique.join(cluster_lookup, on=join_key, how="inner")
 
 
 def _join_target_means(
@@ -340,13 +363,18 @@ def _bounded_fraction(spark_df: "DataFrame", cap: int, row_count: Optional[int] 
 
 
 def _row_value(row: Any, column: str) -> float:
+    """Coerce a driver-side row cell to a finite ``float`` for the numpy
+    surrogate-tree matrix. NULL, NaN, and unparseable strings all collapse to
+    ``0.0`` — sklearn ≤ 1.2 raises on NaN, and newer sklearn learns a "null
+    pattern" as a split predicate (wrong semantics for eligibility rules)."""
     value = row[column]
     if value is None:
         return 0.0
     try:
-        return float(value)
+        coerced = float(value)
     except (TypeError, ValueError):
         return 0.0
+    return 0.0 if math.isnan(coerced) else coerced
 
 
 # ---------------------------------------------------------------------------
@@ -357,19 +385,25 @@ def _row_value(row: Any, column: str) -> float:
 _TOP_DRIVER_COUNT: int = 10
 
 
+_SCALE_BATCH: int = 200
+
+
 def _compute_feature_scales(
     raw_with_clusters: "DataFrame",
     feature_order: Sequence[str],
 ) -> List[float]:
     """Return per-feature population std-dev aligned with ``feature_order``.
 
-    A single batched Spark aggregation job computes ``stddev_pop`` for every
-    feature column in one scan. Features absent from the DataFrame, or with
-    zero / null std-dev (constant columns), fall back to ``1.0`` so distance
-    computation degrades gracefully to unscaled rather than dividing by zero.
+    Batches aggregations in groups of ``_SCALE_BATCH`` columns per
+    ``.agg()`` call so Catalyst plans stay O(200²) instead of O(N²) —
+    matches Coding_Practices.md's bulk-agg pattern for per-column stats
+    at ≥100 columns. Features absent from the DataFrame, or with zero /
+    null / NaN std-dev (constant columns), fall back to ``1.0`` so the
+    runtime's scaled-distance formula degrades to unscaled rather than
+    dividing by zero.
 
-    The returned list is aligned 1:1 with ``feature_order`` and is stored as
-    ``centroid_feature_scales`` on every archetype row so the runtime
+    The returned list is aligned 1:1 with ``feature_order`` and is stored
+    as ``centroid_feature_scales`` on every archetype row so the runtime
     snapshot writer can apply scaled Euclidean distance:
     ``scaled_diff = (x - centroid) / scale``.
     """
@@ -380,13 +414,18 @@ def _compute_feature_scales(
     if not indexed:
         return [1.0] * len(feature_order)
 
-    exprs = [F.stddev_pop(F.col(c)).alias(f"__scale_{i}") for i, c in indexed]
-    row = raw_with_clusters.agg(*exprs).head()
-
     scales = [1.0] * len(feature_order)
-    for i, c in indexed:
-        v = row[f"__scale_{i}"]
-        scales[i] = float(v) if (v is not None and float(v) > 0.0) else 1.0
+    for start in range(0, len(indexed), _SCALE_BATCH):
+        batch = indexed[start : start + _SCALE_BATCH]
+        exprs = [
+            F.stddev_pop(F.col(c)).alias(f"__scale_{i}") for i, (_, c) in enumerate(batch)
+        ]
+        row = raw_with_clusters.agg(*exprs).head()
+        if row is None:
+            continue
+        for i, (feature_idx, _c) in enumerate(batch):
+            v = row[f"__scale_{i}"]
+            scales[feature_idx] = float(v) if (v is not None and float(v) > 0.0) else 1.0
     return scales
 
 

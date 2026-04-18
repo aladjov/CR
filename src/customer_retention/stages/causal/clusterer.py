@@ -200,6 +200,9 @@ def cluster_kmeans(
             logger.debug("cluster_kmeans unpersist failed (non-fatal): %s", exc)
 
 
+_BULK_AGG_BATCH: int = 200
+
+
 def select_top_shap_features(
     shap_df: "DataFrame",
     feature_columns: Sequence[str],
@@ -207,9 +210,10 @@ def select_top_shap_features(
 ) -> List[str]:
     """Pick the top-N SHAP columns by mean absolute SHAP magnitude.
 
-    One batched Spark agg computes ``mean(abs(col))`` for every column in
-    ``feature_columns`` (a single Spark job), then the driver sorts and
-    keeps the top ``feature_cap``. Below the cap the input list is
+    Batches columns in groups of ``_BULK_AGG_BATCH`` so Catalyst plans stay
+    O(200²) regardless of feature count (Coding_Practices.md bulk-agg
+    pattern). Each column is wrapped in ``_nan_safe`` so stray NaN values
+    don't poison the magnitude estimate. Below the cap the input list is
     returned unchanged so callers can pass any column count safely.
     """
     from pyspark.sql import functions as F  # noqa: N812
@@ -217,16 +221,19 @@ def select_top_shap_features(
     feature_list = list(feature_columns)
     if len(feature_list) <= feature_cap:
         return feature_list
-    agg_exprs = [
-        F.mean(F.abs(F.col(c).cast("double"))).alias(f"__mag_{i}")
-        for i, c in enumerate(feature_list)
-    ]
-    row = shap_df.agg(*agg_exprs).head()
-    if row is None:
-        return feature_list[:feature_cap]
-    magnitudes = [
-        (feature_list[i], _safe_double(row[f"__mag_{i}"])) for i in range(len(feature_list))
-    ]
+    magnitudes: List[Tuple[str, float]] = []
+    for start in range(0, len(feature_list), _BULK_AGG_BATCH):
+        batch = feature_list[start : start + _BULK_AGG_BATCH]
+        agg_exprs = [
+            F.mean(F.abs(_nan_safe(c))).alias(f"__mag_{i}") for i, c in enumerate(batch)
+        ]
+        row = shap_df.agg(*agg_exprs).head()
+        if row is None:
+            magnitudes.extend((c, 0.0) for c in batch)
+            continue
+        magnitudes.extend(
+            (c, _safe_double(row[f"__mag_{i}"])) for i, c in enumerate(batch)
+        )
     magnitudes.sort(key=lambda pair: -pair[1])
     selected = [name for name, _ in magnitudes[:feature_cap]]
     logger.info(
@@ -250,14 +257,18 @@ def cluster_centroids_raw(
     the same row is represented in both spaces, then calls this helper.
 
     Single Spark job: one ``groupBy(cluster_col).agg(F.mean(...))`` over
-    all raw feature columns. No per-cluster loop, no per-column loop.
+    all raw feature columns. Each column is wrapped in ``_nan_safe(col)``
+    so NaN rows are treated as NULL (and therefore skipped by ``F.mean``);
+    Spark's native ``F.mean`` skips NULL but NOT NaN — a single NaN would
+    otherwise poison the whole cluster mean for that feature and land NaN
+    in the Delta ``archetype_catalog``.
     """
     from pyspark.sql import functions as F  # noqa: N812
 
     if not feature_columns:
         raise ValueError("cluster_centroids_raw requires at least one feature column")
     feature_order = list(feature_columns)
-    agg_exprs = [F.mean(F.col(c).cast("double")).alias(f"__mean_{i}") for i, c in enumerate(feature_order)]
+    agg_exprs = [F.mean(_nan_safe(c)).alias(f"__mean_{i}") for i, c in enumerate(feature_order)]
     rows = (
         raw_features_df.groupBy(cluster_col)
         .agg(*agg_exprs)
@@ -288,7 +299,7 @@ def cluster_target_means(
 
     rows = (
         labelled_df.groupBy(cluster_col)
-        .agg(F.mean(F.col(target_col).cast("double")).alias("__mean_target"))
+        .agg(F.mean(_nan_safe(target_col)).alias("__mean_target"))
         .orderBy(cluster_col)
         .collect()
     )
@@ -304,7 +315,7 @@ def cluster_shap_centroids(
     from pyspark.sql import functions as F  # noqa: N812
 
     feature_order = list(shap_columns)
-    agg_exprs = [F.mean(F.col(c).cast("double")).alias(f"__shap_mean_{i}") for i, c in enumerate(feature_order)]
+    agg_exprs = [F.mean(_nan_safe(c)).alias(f"__shap_mean_{i}") for i, c in enumerate(feature_order)]
     rows = (
         labelled_df.groupBy(cluster_col)
         .agg(*agg_exprs)
@@ -320,10 +331,26 @@ def cluster_shap_centroids(
 # ---------------------------------------------------------------------------
 
 
+def _nan_safe(col_name: str) -> Any:
+    """Cast a Spark column to ``double`` and coerce NaN to NULL.
+
+    ``F.mean`` / ``F.stddev_pop`` skip NULL but not NaN, so without this
+    wrapper a single NaN value poisons the entire aggregation result.
+    Wrapping with ``F.nanvl(col, NULL)`` turns NaN into NULL so the
+    aggregator treats it as missing — matching the semantic we want for
+    per-cluster centroids and means."""
+    from pyspark.sql import functions as F  # noqa: N812
+
+    return F.nanvl(F.col(col_name).cast("double"), F.lit(None).cast("double"))
+
+
 def _safe_double(value: Any) -> float:
     if value is None:
         return 0.0
     try:
-        return float(value)
+        coerced = float(value)
     except (TypeError, ValueError):
         return 0.0
+    import math
+
+    return 0.0 if math.isnan(coerced) else coerced
