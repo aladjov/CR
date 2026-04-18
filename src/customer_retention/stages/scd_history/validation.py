@@ -18,12 +18,13 @@ def validate_scd_sources(
     for parent_name in scd_sources:
         if parent_name not in datasets:
             raise KeyError(
-                f"SCD_HISTORY_SOURCES references {parent_name!r} which is not "
-                f"in `datasets`. Add it to the dataset registration first."
+                f"namespace.scd_history_sources references {parent_name!r} "
+                f"which is not in `datasets`. Add it to the dataset "
+                f"registration first."
             )
         if parent_name not in configs:
             raise KeyError(
-                f"SCD_HISTORY_SOURCES has an entry for {parent_name!r} but "
-                f"SCD_RECONSTRUCTION_CONFIGS does not — add a "
-                f"SCDHistoryReconstructionConfig above."
+                f"namespace.scd_history_sources has an entry for "
+                f"{parent_name!r} but SCD_RECONSTRUCTION_CONFIGS does not — "
+                f"add a SCDHistoryReconstructionConfig above."
             )
