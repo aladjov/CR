@@ -330,13 +330,18 @@ def _install_aliasable_functions(monkeypatch):
     return fake
 
 
-def _install_fe_with_corrs(monkeypatch, corrs_per_batch: list[dict]):
-    """Install databricks.feature_engineering mock that, for each successive
-    ``.agg(...)`` on the scored DF, returns a head row dict-indexable by
-    alias name ``c_0``, ``c_1``, ... per the batched corr pattern."""
+def _install_fe_and_spark_mocks(monkeypatch, corrs_per_batch: list[dict]):
+    """Install the full mock surface for ``_compute_importances_from_behaviour``.
+
+    The production flow sample-caches ``spark_df``, passes entity-keys-only to
+    ``fe.score_batch``, then inner-joins ``prediction`` back onto the cached
+    feature sample before running batched correlations on the **joined** DF.
+    Each successive ``.agg(...)`` on the joined DF returns a row dict-indexable
+    by alias name (``c_0``, ``c_1`` …) per the batched-corr pattern.
+    """
     import sys
 
-    scored_df = MagicMock(name="ScoredDF")
+    joined_df = MagicMock(name="JoinedDF")
     call_idx = {"i": 0}
 
     def _agg(*_exprs):
@@ -352,7 +357,21 @@ def _install_fe_with_corrs(monkeypatch, corrs_per_batch: list[dict]):
         r.head.return_value = _Row()
         return r
 
-    scored_df.agg = _agg
+    joined_df.agg = _agg
+
+    entity_sample = MagicMock(name="EntitySample")
+    sampled_df = MagicMock(name="SampledDF")
+    sampled_df.count = MagicMock(return_value=1000)
+    sampled_df.select = MagicMock(return_value=entity_sample)
+    sampled_df.join = MagicMock(return_value=joined_df)
+    sampled_df.unpersist = MagicMock()
+
+    spark_df = MagicMock(name="SparkDF")
+    spark_df.select.return_value.limit.return_value.cache.return_value = sampled_df
+
+    scored_pred = MagicMock(name="ScoredPred")
+    scored_df = MagicMock(name="ScoredDF")
+    scored_df.select = MagicMock(return_value=scored_pred)
     fake_client = MagicMock()
     fake_client.score_batch = MagicMock(return_value=scored_df)
     fake_fe_module = MagicMock()
@@ -361,40 +380,141 @@ def _install_fe_with_corrs(monkeypatch, corrs_per_batch: list[dict]):
     fake_databricks.feature_engineering = fake_fe_module
     monkeypatch.setitem(sys.modules, "databricks", fake_databricks)
     monkeypatch.setitem(sys.modules, "databricks.feature_engineering", fake_fe_module)
-    return {"client": fake_client, "scored_df": scored_df, "agg_call_idx": call_idx}
+
+    return {
+        "spark_df": spark_df,
+        "sampled_df": sampled_df,
+        "entity_sample": entity_sample,
+        "scored_df": scored_df,
+        "scored_pred": scored_pred,
+        "joined_df": joined_df,
+        "fe_client": fake_client,
+        "agg_call_idx": call_idx,
+    }
+
+
+def _install_safe_corr_stub(monkeypatch):
+    """Replace ``_safe_corr_expr`` with an ``_Aliasable``-returning stub so
+    ``.alias(...)`` still works in the test harness and we can record calls."""
+    import customer_retention.core.compat as _compat
+
+    calls: list[tuple[Any, Any]] = []
+
+    def _stub(col_a, col_b):
+        calls.append((col_a, col_b))
+        return _Aliasable("safe_corr")
+
+    monkeypatch.setattr(_compat, "_safe_corr_expr", _stub)
+    return calls
 
 
 class TestComputeImportancesFromBehaviour:
-    def test_calls_fe_score_batch_with_entity_df_and_model_uri(self, monkeypatch):
-        mocks = _install_fe_with_corrs(monkeypatch, [{"c_0": 0.5, "c_1": 0.3}])
+    def test_fe_receives_only_entity_keys_not_features(self, monkeypatch):
+        """FE's ``score_batch`` contract: the input DF must carry the entity
+        lookup keys — NOT the feature columns. Passing features in causes a
+        name collision with the feature-store wrapper's lookup output and
+        also wastes scoring-side memory."""
+        mocks = _install_fe_and_spark_mocks(monkeypatch, [{"c_0": 0.5, "c_1": 0.3}])
         _install_aliasable_functions(monkeypatch)
+        _install_safe_corr_stub(monkeypatch)
 
-        entity_df = MagicMock(name="EntityDF")
-        entity_df.limit.return_value = entity_df
-
-        out = shap_runner._compute_importances_from_behaviour(
-            entity_df, feature_columns=["a", "b"], model_uri="models:/m@prod",
+        shap_runner._compute_importances_from_behaviour(
+            spark_df=mocks["spark_df"],
+            feature_columns=["a", "b"],
+            entity_key_cols=["account_id", "point_in_time"],
+            model_uri="models:/m@prod",
             sample_size=5000,
         )
-        mocks["client"].score_batch.assert_called_once()
-        call = mocks["client"].score_batch.call_args
-        assert call.kwargs.get("model_uri") == "models:/m@prod"
-        assert call.kwargs.get("result_type") == "double"
-        entity_df.limit.assert_called_with(5000)
-        assert set(out) == {"a", "b"}
+
+        score_call = mocks["fe_client"].score_batch.call_args
+        assert score_call.kwargs.get("model_uri") == "models:/m@prod"
+        assert score_call.kwargs.get("result_type") == "double"
+        assert score_call.kwargs.get("df") is mocks["entity_sample"]
+        assert list(mocks["sampled_df"].select.call_args.args) == ["account_id", "point_in_time"]
+
+    def test_feature_sample_is_cached_limited_and_unpersisted(self, monkeypatch):
+        """The sampled feature frame is materialized once (``cache`` + ``count``)
+        so FE scoring and the join-back see the same rows — ``.limit`` alone is
+        non-deterministic across reads. ``.unpersist`` runs in ``finally`` to
+        release executor memory even on error."""
+        mocks = _install_fe_and_spark_mocks(monkeypatch, [{"c_0": 0.4}])
+        _install_aliasable_functions(monkeypatch)
+        _install_safe_corr_stub(monkeypatch)
+
+        shap_runner._compute_importances_from_behaviour(
+            spark_df=mocks["spark_df"],
+            feature_columns=["a"],
+            entity_key_cols=["account_id"],
+            model_uri="models:/m@prod",
+            sample_size=7500,
+        )
+
+        spark_df = mocks["spark_df"]
+        spark_df.select.return_value.limit.assert_called_with(7500)
+        spark_df.select.return_value.limit.return_value.cache.assert_called_once()
+        mocks["sampled_df"].count.assert_called_once()
+        mocks["sampled_df"].unpersist.assert_called_once()
+
+    def test_correlates_against_prediction_joined_back_on_entity_keys(self, monkeypatch):
+        """Root-cause fix: ``scored`` from ``fe.score_batch`` contains only
+        entity keys + prediction (plus on-demand features), NOT the store-
+        resident feature columns. Correlating features against prediction on
+        ``scored`` raises ``UNRESOLVED_COLUMN``. The fix projects
+        ``[entity_keys, prediction]`` from ``scored`` and inner-joins onto the
+        cached feature sample so both sides share a single DF."""
+        mocks = _install_fe_and_spark_mocks(monkeypatch, [{"c_0": 0.6}])
+        _install_aliasable_functions(monkeypatch)
+        _install_safe_corr_stub(monkeypatch)
+
+        shap_runner._compute_importances_from_behaviour(
+            spark_df=mocks["spark_df"],
+            feature_columns=["unsubscribed"],
+            entity_key_cols=["account_id"],
+            model_uri="models:/m@prod",
+            sample_size=1000,
+        )
+
+        scored_select_args = list(mocks["scored_df"].select.call_args.args)
+        assert "account_id" in scored_select_args
+        assert "prediction" in scored_select_args
+
+        join_call = mocks["sampled_df"].join.call_args
+        assert join_call.args[0] is mocks["scored_pred"]
+        assert join_call.kwargs.get("on") == ["account_id"]
+        assert join_call.kwargs.get("how") == "inner"
+
+    def test_uses_safe_corr_expr_not_bare_f_corr(self, monkeypatch):
+        """ANSI-safe correlation: bare ``F.corr`` raises ``DIVIDE_BY_ZERO`` on
+        zero-variance columns when ``spark.sql.ansi.enabled = true``.
+        Coding_Practices.md mandates ``_safe_corr_expr`` from ``core.compat``."""
+        mocks = _install_fe_and_spark_mocks(monkeypatch, [{"c_0": 0.4, "c_1": 0.2}])
+        fake_F = _install_aliasable_functions(monkeypatch)
+        fake_F.corr = MagicMock(side_effect=AssertionError("bare F.corr is banned"))
+        calls = _install_safe_corr_stub(monkeypatch)
+
+        shap_runner._compute_importances_from_behaviour(
+            spark_df=mocks["spark_df"],
+            feature_columns=["a", "b"],
+            entity_key_cols=["account_id"],
+            model_uri="models:/m@prod",
+            sample_size=1000,
+        )
+        assert len(calls) == 2
+        fake_F.corr.assert_not_called()
 
     def test_uniform_fallback_when_all_correlations_zero(self, monkeypatch):
         """Regression: if prediction is constant (degenerate model), all
         correlations are 0. Must return uniform weights (not all-zero)
         so the downstream attribution formula emits meaningful values."""
-        _install_fe_with_corrs(monkeypatch, [{}])
+        mocks = _install_fe_and_spark_mocks(monkeypatch, [{}])
         _install_aliasable_functions(monkeypatch)
-
-        entity_df = MagicMock(name="EntityDF")
-        entity_df.limit.return_value = entity_df
+        _install_safe_corr_stub(monkeypatch)
 
         out = shap_runner._compute_importances_from_behaviour(
-            entity_df, feature_columns=["a", "b", "c"], model_uri="models:/m@prod",
+            spark_df=mocks["spark_df"],
+            feature_columns=["a", "b", "c"],
+            entity_key_cols=["account_id"],
+            model_uri="models:/m@prod",
             sample_size=1000,
         )
         expected = 1.0 / 3
@@ -402,16 +522,17 @@ class TestComputeImportancesFromBehaviour:
         assert sum(out.values()) == pytest.approx(1.0)
 
     def test_importances_normalize_to_unit_sum(self, monkeypatch):
-        _install_fe_with_corrs(
+        mocks = _install_fe_and_spark_mocks(
             monkeypatch, [{"c_0": 0.6, "c_1": -0.4, "c_2": 0.0}]
         )
         _install_aliasable_functions(monkeypatch)
-
-        entity_df = MagicMock(name="EntityDF")
-        entity_df.limit.return_value = entity_df
+        _install_safe_corr_stub(monkeypatch)
 
         out = shap_runner._compute_importances_from_behaviour(
-            entity_df, feature_columns=["a", "b", "c"], model_uri="models:/m@prod",
+            spark_df=mocks["spark_df"],
+            feature_columns=["a", "b", "c"],
+            entity_key_cols=["account_id"],
+            model_uri="models:/m@prod",
             sample_size=1000,
         )
         # |0.6| + |0.4| + 0 = 1.0 → identity-normalize; correlation signs absorbed
@@ -419,14 +540,14 @@ class TestComputeImportancesFromBehaviour:
         assert out["b"] == pytest.approx(0.4)
         assert out["c"] == pytest.approx(0.0)
 
-    def test_batched_corr_uses_100_per_batch(self, monkeypatch):
-        """Coding_Practices.md: batch up to 100 expressions per .agg() to
-        keep Catalyst plans small."""
+    def test_batched_corr_uses_100_per_batch_on_joined_df(self, monkeypatch):
+        """Coding_Practices.md: batch up to 100 expressions per ``.agg()`` on
+        the **joined** DF so Catalyst plans stay O(100²). Large feature counts
+        otherwise blow up plan size or force per-column Spark jobs."""
+        mocks = _install_fe_and_spark_mocks(monkeypatch, [])
         _install_aliasable_functions(monkeypatch)
+        _install_safe_corr_stub(monkeypatch)
 
-        import sys
-
-        scored_df = MagicMock(name="ScoredDF")
         agg_sizes: list[int] = []
 
         class _Row:
@@ -439,25 +560,36 @@ class TestComputeImportancesFromBehaviour:
             r.head.return_value = _Row()
             return r
 
-        scored_df.agg = _agg
-        fake_client = MagicMock()
-        fake_client.score_batch = MagicMock(return_value=scored_df)
-        fake_fe_module = MagicMock()
-        fake_fe_module.FeatureEngineeringClient = MagicMock(return_value=fake_client)
-        fake_databricks = MagicMock()
-        fake_databricks.feature_engineering = fake_fe_module
-        monkeypatch.setitem(sys.modules, "databricks", fake_databricks)
-        monkeypatch.setitem(sys.modules, "databricks.feature_engineering", fake_fe_module)
-
-        entity_df = MagicMock(name="EntityDF")
-        entity_df.limit.return_value = entity_df
+        mocks["joined_df"].agg = _agg
 
         features = [f"f{i}" for i in range(250)]
         shap_runner._compute_importances_from_behaviour(
-            entity_df, feature_columns=features, model_uri="models:/m@prod",
+            spark_df=mocks["spark_df"],
+            feature_columns=features,
+            entity_key_cols=["account_id"],
+            model_uri="models:/m@prod",
             sample_size=1000,
         )
         assert agg_sizes == [100, 100, 50]
+
+    def test_unpersist_called_even_when_fe_raises(self, monkeypatch):
+        """Cleanup contract: ``unpersist`` runs in ``finally`` so a scoring
+        failure does not leak the cached feature sample."""
+        mocks = _install_fe_and_spark_mocks(monkeypatch, [{"c_0": 0.1}])
+        _install_aliasable_functions(monkeypatch)
+        _install_safe_corr_stub(monkeypatch)
+
+        mocks["fe_client"].score_batch.side_effect = RuntimeError("FE down")
+
+        with pytest.raises(RuntimeError, match="FE down"):
+            shap_runner._compute_importances_from_behaviour(
+                spark_df=mocks["spark_df"],
+                feature_columns=["a"],
+                entity_key_cols=["account_id"],
+                model_uri="models:/m@prod",
+                sample_size=1000,
+            )
+        mocks["sampled_df"].unpersist.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -694,6 +826,10 @@ def _make_chainable_spark_df(columns, non_numeric_cols=()):
     df.groupBy.return_value = df
     df.pivot.return_value = df
     df.limit.return_value = df
+    df.cache.side_effect = _chain
+    df.join.side_effect = _chain
+    df.count.return_value = len(columns)
+    df.unpersist.return_value = None
 
     class _Row:
         def __getitem__(self, key):
@@ -738,6 +874,10 @@ def _install_orchestration_mocks(monkeypatch):
     fake_sql.functions = fake_F
     monkeypatch.setitem(sys.modules, "pyspark.sql", fake_sql)
     monkeypatch.setitem(sys.modules, "pyspark.sql.functions", fake_F)
+
+    import customer_retention.core.compat as _compat
+    monkeypatch.setattr(_compat, "_safe_corr_expr", lambda a, b: _Aliasable("safe_corr"))
+
     return {"fe_client": fake_client, "F": fake_F}
 
 

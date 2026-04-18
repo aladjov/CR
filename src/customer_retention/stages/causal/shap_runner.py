@@ -252,12 +252,11 @@ def compute_shap_distributed(
             f"No numeric features found among {list(feature_columns)}. "
             "SHAP linear attribution requires numeric (or boolean) feature columns."
         )
-    entity_df = spark_df.select(*entity_key_cols)
-
     bg_means = _background_means(background, feature_order, spark_df)
     importances = _compute_importances_from_behaviour(
-        entity_df,
+        spark_df,
         feature_columns=feature_order,
+        entity_key_cols=entity_key_cols,
         model_uri=model_uri,
         sample_size=importance_sample_size,
     )
@@ -283,53 +282,83 @@ def compute_shap_distributed(
 
 
 def _compute_importances_from_behaviour(
-    entity_df: Any,
+    spark_df: Any,
     feature_columns: Sequence[str],
+    entity_key_cols: Sequence[str],
     model_uri: str,
     sample_size: int,
 ) -> Dict[str, float]:
     """Return per-feature importance as ``|corr(feature, prediction)|``,
     normalized to sum to 1.
 
-    Scores a bounded sample via ``fe.score_batch`` (FE looks up features
-    from the registered feature store and returns a DataFrame with both
-    features and a ``prediction`` column — we correlate each feature with
-    ``prediction``). Correlations are computed in batches of 100 so
-    Catalyst plans stay small (Coding_Practices.md batched-agg pattern).
+    ``fe.score_batch`` returns the **input** DataFrame augmented with a
+    ``prediction`` column (plus any on-demand features). Feature columns
+    looked up from the registered feature store are consumed **inside** the
+    scorer and do NOT appear on the output. Correlating features against
+    ``prediction`` therefore requires joining ``prediction`` back onto the
+    feature-bearing sample.
 
-    Fallback: if every correlation is 0 (degenerate — constant prediction
-    or constant features), returns uniform weights so the downstream
-    attribution formula doesn't silently emit all-zero SHAP columns.
+    Flow:
+      1. Sample ``sample_size`` rows carrying entity keys + features, cache
+         and materialize so FE scoring and the join-back see identical rows
+         (``.limit`` alone is non-deterministic across reads).
+      2. Pass entity-keys-only to ``fe.score_batch`` (FE errors on column-
+         name collisions between input and looked-up features).
+      3. Inner-join ``[entity_keys, prediction]`` onto the cached sample.
+      4. Batched ``_safe_corr_expr`` over ``_CORR_BATCH`` columns per
+         ``.agg()`` — ANSI-safe (zero-variance → NULL, not DIVIDE_BY_ZERO)
+         and keeps Catalyst plans O(100²).
+      5. Unpersist in ``finally`` to release executor memory even on error.
+
+    Fallback: if every correlation is 0 (degenerate — constant prediction or
+    constant features), returns uniform weights so the downstream attribution
+    formula does not silently emit all-zero SHAP columns.
     """
     from databricks.feature_engineering import FeatureEngineeringClient
     from pyspark.sql import functions as F  # noqa: N812
 
-    sampled_entities = entity_df.limit(sample_size)
-    fe = FeatureEngineeringClient()
-    scored = fe.score_batch(
-        df=sampled_entities, model_uri=model_uri, result_type="double"
-    )
+    from customer_retention.core.compat import _safe_corr_expr
 
-    importances: Dict[str, float] = {}
-    for start in range(0, len(feature_columns), _CORR_BATCH):
-        batch = list(feature_columns[start : start + _CORR_BATCH])
-        exprs = [
-            F.corr(
-                F.col(c).cast("double"),
-                F.col(_PREDICTION_COL).cast("double"),
-            ).alias(f"c_{i}")
-            for i, c in enumerate(batch)
-        ]
-        row = scored.agg(*exprs).head()
-        for i, c in enumerate(batch):
-            v = row[f"c_{i}"] if row is not None else None
-            importances[c] = abs(float(v)) if v is not None else 0.0
+    entity_keys = list(entity_key_cols)
+    feature_list = list(feature_columns)
+
+    sampled = spark_df.select(*entity_keys, *feature_list).limit(sample_size).cache()
+    try:
+        sampled.count()
+        fe = FeatureEngineeringClient()
+        scored = fe.score_batch(
+            df=sampled.select(*entity_keys),
+            model_uri=model_uri,
+            result_type="double",
+        )
+        joined = sampled.join(
+            scored.select(*entity_keys, _PREDICTION_COL),
+            on=entity_keys,
+            how="inner",
+        )
+
+        importances: Dict[str, float] = {}
+        for start in range(0, len(feature_list), _CORR_BATCH):
+            batch = list(feature_list[start : start + _CORR_BATCH])
+            exprs = [
+                _safe_corr_expr(
+                    F.col(c).cast("double"),
+                    F.col(_PREDICTION_COL).cast("double"),
+                ).alias(f"c_{i}")
+                for i, c in enumerate(batch)
+            ]
+            row = joined.agg(*exprs).head()
+            for i, c in enumerate(batch):
+                v = row[f"c_{i}"] if row is not None else None
+                importances[c] = abs(float(v)) if v is not None else 0.0
+    finally:
+        sampled.unpersist()
 
     total = sum(importances.values())
     if total > 0:
         return {k: v / total for k, v in importances.items()}
-    uniform = 1.0 / len(feature_columns)
-    return {k: uniform for k in feature_columns}
+    uniform = 1.0 / len(feature_list)
+    return {k: uniform for k in feature_list}
 
 
 # ---------------------------------------------------------------------------
