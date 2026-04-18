@@ -75,6 +75,10 @@ def recording_functions(monkeypatch):
     fake = MagicMock(name="pyspark.sql.functions")
     fake.col = lambda name: _RecordingExpr("col", payload=name)
     fake.lit = lambda value: _RecordingExpr("lit", payload=value)
+    fake.nanvl = lambda a, b: _RecordingExpr("nanvl", children=[_wrap(a), _wrap(b)])
+    fake.coalesce = lambda *args: _RecordingExpr(
+        "coalesce", children=[_wrap(a) for a in args]
+    )
     fake_sql = MagicMock(name="pyspark.sql")
     fake_sql.functions = fake
     monkeypatch.setitem(sys.modules, "pyspark.sql", fake_sql)
@@ -131,6 +135,11 @@ class TestBuildAttributionSelect:
         assert select_exprs[-1].alias_name == EXPECTED_VALUE_COL
 
     def test_shap_formula_is_importance_times_deviation(self, recording_functions):
+        """``shap_f = coalesce(nanvl(x - mean, 0), 0) * importance`` — the
+        ``nanvl`` substitutes 0 when ``x`` is NaN and ``coalesce`` substitutes
+        0 when ``x`` is NULL, so unknown feature values contribute 0 SHAP
+        (Lundberg & Lee linear attribution: x at the background mean ⇒
+        deviation 0 ⇒ no contribution)."""
         select_exprs, _ = shap_runner._build_attribution_select(
             join_key="pk",
             feature_order=["x"],
@@ -140,17 +149,26 @@ class TestBuildAttributionSelect:
         shap_expr = select_exprs[1]
         assert shap_expr.alias_name == "shap_x"
         assert shap_expr.kind == "mul"
-        left, right = shap_expr.children
-        assert left.kind == "sub"
-        col_expr, mean_lit = left.children
+        safe_deviation, importance_lit = shap_expr.children
+        assert importance_lit.kind == "lit" and importance_lit.payload == 0.7
+
+        assert safe_deviation.kind == "coalesce"
+        nanvl_node, coalesce_fallback = safe_deviation.children
+        assert coalesce_fallback.kind == "lit" and coalesce_fallback.payload == 0.0
+
+        assert nanvl_node.kind == "nanvl"
+        raw_deviation, nanvl_fallback = nanvl_node.children
+        assert nanvl_fallback.kind == "lit" and nanvl_fallback.payload == 0.0
+
+        assert raw_deviation.kind == "sub"
+        col_expr, mean_lit = raw_deviation.children
         assert col_expr.kind == "col" and col_expr.payload == "x"
         assert mean_lit.kind == "lit" and mean_lit.payload == 5.0
-        assert right.kind == "lit" and right.payload == 0.7
 
     def test_missing_importance_defaults_to_zero_attribution(self, recording_functions):
         """Defensive against a feature missing from ``importances``. Attribution
-        becomes ``(x - mean) * 0 = 0`` — a sane degenerate output rather than a
-        KeyError mid-pipeline."""
+        becomes ``safe_deviation * 0 = 0`` — a sane degenerate output rather
+        than a KeyError mid-pipeline."""
         select_exprs, _ = shap_runner._build_attribution_select(
             join_key="pk",
             feature_order=["x"],
@@ -158,8 +176,33 @@ class TestBuildAttributionSelect:
             means={"x": 5.0},
         )
         shap_expr = select_exprs[1]
-        right = shap_expr.children[1]
-        assert right.kind == "lit" and right.payload == 0.0
+        importance_lit = shap_expr.children[1]
+        assert importance_lit.kind == "lit" and importance_lit.payload == 0.0
+
+    def test_emission_is_null_and_nan_safe(self, recording_functions):
+        """Regression: c02 reads the full ``GOLD_FEATURES_FQN`` (no target-null
+        filter), so rows that training's ``handleInvalid="error"`` assembler
+        rejected can reach the SHAP emission. A NaN or NULL value in any
+        feature column previously produced a NaN/NULL in the SHAP column;
+        Spark-ML KMeans then failed with
+        ``Vector values MUST NOT be NaN or Infinity``. The fix wraps every
+        feature's deviation in ``coalesce(nanvl(deviation, 0), 0)`` — NaN and
+        NULL both collapse to 0 SHAP."""
+        select_exprs, _ = shap_runner._build_attribution_select(
+            join_key="pk",
+            feature_order=["a", "b"],
+            importances={"a": 0.5, "b": 0.5},
+            means={"a": 1.0, "b": 2.0},
+        )
+        for shap_expr in select_exprs[1:-1]:  # skip join_key + expected_value
+            safe_deviation = shap_expr.children[0]
+            assert safe_deviation.kind == "coalesce", (
+                "each feature's deviation must be NULL-safe via coalesce"
+            )
+            nanvl_node = safe_deviation.children[0]
+            assert nanvl_node.kind == "nanvl", (
+                "each feature's deviation must be NaN-safe via nanvl"
+            )
 
 
 # ---------------------------------------------------------------------------

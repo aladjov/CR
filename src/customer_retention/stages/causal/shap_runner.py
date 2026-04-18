@@ -159,14 +159,23 @@ def _build_attribution_select(
     importances: Dict[str, float],
     means: Dict[str, float],
 ) -> Tuple[List[Any], List[str]]:
+    """Emit ``shap_<feature> = coalesce(nanvl(x - mean, 0), 0) * importance``.
+
+    ``nanvl`` replaces NaN with 0; outer ``coalesce`` replaces NULL with 0.
+    Lundberg & Lee linear-SHAP semantics: when ``x`` is unknown we assume it
+    sits at the background mean (deviation 0 → contribution 0), which is
+    safer than dropping the row (would shift the clustering cohort) or
+    poisoning the SHAP vector with NaN (Spark-ML KMeans rejects NaN /
+    Infinity in feature vectors)."""
     from pyspark.sql import functions as F  # noqa: N812
 
     select_exprs: List[Any] = [F.col(join_key)]
     shap_columns: List[str] = []
     for name in feature_order:
         shap_col = f"{SHAP_PREFIX}{name}"
-        deviation = F.col(name).cast("double") - F.lit(float(means.get(name, 0.0)))
-        attribution = deviation * F.lit(float(importances.get(name, 0.0)))
+        raw_deviation = F.col(name).cast("double") - F.lit(float(means.get(name, 0.0)))
+        safe_deviation = F.coalesce(F.nanvl(raw_deviation, F.lit(0.0)), F.lit(0.0))
+        attribution = safe_deviation * F.lit(float(importances.get(name, 0.0)))
         select_exprs.append(attribution.alias(shap_col))
         shap_columns.append(shap_col)
     select_exprs.append(F.lit(0.0).alias(EXPECTED_VALUE_COL))
