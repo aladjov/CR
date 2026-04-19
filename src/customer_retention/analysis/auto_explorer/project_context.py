@@ -217,6 +217,7 @@ class ProjectContext(BaseModel):
     storage_backend: str = "local"
     created_at: str = Field(default_factory=lambda: _dt.datetime.now(_dt.timezone.utc).isoformat())
     datasets: dict[str, DatasetRegistryEntry] = Field(default_factory=dict)
+    original_datasets: dict[str, str] = Field(default_factory=dict)
     target_dataset: Optional[str] = None
     target_column: Optional[str] = None
     entity_column: Optional[str] = None

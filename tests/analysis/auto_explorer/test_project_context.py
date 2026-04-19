@@ -679,6 +679,51 @@ class TestProjectContextSerialization:
                 assert loaded.temporal_posture == expected, f"{old_key}={legacy_val}"
 
 
+class TestOriginalDatasets:
+    def test_default_is_empty_dict(self):
+        ctx = _minimal_context()
+        assert ctx.original_datasets == {}
+
+    def test_populated_value_is_preserved(self):
+        ctx = _minimal_context(original_datasets={
+            "account": "prod.salesforce.account",
+            "case": "prod.salesforce.case",
+        })
+        assert ctx.original_datasets["account"] == "prod.salesforce.account"
+        assert ctx.original_datasets["case"] == "prod.salesforce.case"
+
+    def test_round_trips_through_yaml(self, tmp_path):
+        ctx = _minimal_context(original_datasets={
+            "account": "prod.salesforce.account",
+            "contract": "prod.salesforce.contract",
+        })
+        out = tmp_path / "ctx.yaml"
+        ctx.save(out)
+        loaded = ProjectContext.load(out)
+        assert loaded.original_datasets == {
+            "account": "prod.salesforce.account",
+            "contract": "prod.salesforce.contract",
+        }
+
+    def test_backward_compat_yaml_without_field_loads(self, tmp_path):
+        ctx = _minimal_context()
+        out = tmp_path / "ctx.yaml"
+        ctx.save(out)
+        raw = yaml.safe_load(out.read_text())
+        raw.pop("original_datasets", None)
+        out.write_text(yaml.dump(raw, default_flow_style=False, sort_keys=False))
+        loaded = ProjectContext.load(out)
+        assert loaded.original_datasets == {}
+
+    def test_empty_dict_still_serializes(self, tmp_path):
+        ctx = _minimal_context()
+        out = tmp_path / "ctx.yaml"
+        ctx.save(out)
+        data = yaml.safe_load(out.read_text())
+        assert "original_datasets" in data
+        assert data["original_datasets"] == {}
+
+
 class TestProjectContextProvenanceRoundTrip:
     def test_initially_empty_provenance_round_trips(self, tmp_path):
         ctx = _minimal_context()

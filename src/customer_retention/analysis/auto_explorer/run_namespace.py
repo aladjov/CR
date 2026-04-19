@@ -21,6 +21,7 @@ class RunNamespace:
     semantics: Optional[dict] = field(default=None, repr=False)
     dataset_registry: Optional[dict] = field(default=None, repr=False)
     scd_history_sources: Optional[dict] = field(default=None, repr=False)
+    original_datasets: Optional[dict] = field(default=None, repr=False)
 
     def load_table(self, source: str) -> Any:
         return load_spark_table(source)

@@ -579,6 +579,16 @@ class TestLiveStateAttributes:
         ns.scd_history_sources = {"case": "/path/to/case_history"}
         assert ns.scd_history_sources == {"case": "/path/to/case_history"}
 
+    def test_original_datasets_default_is_none(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="r")
+        assert ns.original_datasets is None
+
+    def test_original_datasets_is_user_writable(self, tmp_path):
+        ns = RunNamespace(root=tmp_path, run_id="r")
+        raw = {"account": "prod.salesforce.account", "case": "prod.salesforce.case"}
+        ns.original_datasets = raw
+        assert ns.original_datasets is raw
+
 
 class TestLoadTable:
     def test_load_table_delegates_to_load_spark_table(self, tmp_path):
