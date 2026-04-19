@@ -812,30 +812,48 @@ class TestDatabricksTrainingFeatureEngineering:
         result = renderer.render_training(sample_pipeline_config)
         assert "from pyspark.ml import PipelineModel" in result
 
-    def test_prepare_features_returns_assembler(self, renderer, sample_pipeline_config):
-        """The unfitted ``VectorAssembler`` built in ``prepare_features`` must
-        survive out of the function so it can be wrapped back into the logged
-        pipeline. Otherwise the assembler is consumed driver-side and the
-        logged model expects a pre-assembled ``features`` column that
-        ``fe.score_batch`` never produces."""
+    def test_prepare_features_returns_filler_and_assembler(self, renderer, sample_pipeline_config):
+        """Both the null-filler ``SQLTransformer`` and the unfitted
+        ``VectorAssembler`` must survive out of ``prepare_features`` so they
+        can both be baked into the logged ``PipelineModel``. The filler is
+        what keeps train-time and FE score-time null handling consistent —
+        without it, raw gold NULLs reach the assembler at scoring and trip
+        the "Encountered null while assembling a row" crash."""
         result = renderer.render_training(sample_pipeline_config)
         prep_fn = result[result.index("def prepare_features"):result.index("def _temporal_split")]
-        assert "return assembled, feature_cols, assembler" in prep_fn
+        assert "return assembled, feature_cols, filler, assembler" in prep_fn
         assembled_unpack = [ln for ln in result.splitlines() if "= prepare_features(df)" in ln]
         assert assembled_unpack, "call site not found"
         assert any(
-            ", _assembler = prepare_features(df)" in ln or ", assembler = prepare_features(df)" in ln
+            ", _filler, _assembler = prepare_features(df)" in ln
             for ln in assembled_unpack
-        ), f"call site must unpack the assembler: {assembled_unpack}"
+        ), f"call site must unpack filler + assembler: {assembled_unpack}"
 
-    def test_log_best_model_wraps_in_pipeline_model(self, renderer, sample_pipeline_config):
-        """``_log_best_model`` must construct ``PipelineModel(stages=[assembler, model])``
-        and pass the **wrapped** model to both ``fe.log_model`` and the fallback
-        ``mlflow.spark.log_model``. If either path logs the bare ``model``,
-        ``fe.score_batch`` breaks for that artifact."""
+    def test_prepare_features_uses_sql_transformer_filler_not_imputer(self, renderer, sample_pipeline_config):
+        """Coding_Practices.md bans ``pyspark.ml.Imputer`` past ~100 cols
+        (serialized ML model exceeds 1 GB). The null-filler must be a
+        ``SQLTransformer`` (pure Transformer, no ``.fit()``, zero fit-time
+        cost, scales to any column count)."""
+        result = renderer.render_training(sample_pipeline_config)
+        assert "SQLTransformer" in result
+        assert "from pyspark.ml.feature import SQLTransformer, VectorAssembler" in result
+        # No data-prep Imputer
+        assert "from pyspark.ml.feature import Imputer" not in result
+        assert "Imputer(" not in result
+        # COALESCE + nanvl wrap every feature col (NULL→0 AND NaN→0).
+        prep_fn = result[result.index("def _build_null_filler"):result.index("def prepare_features")]
+        assert "COALESCE(nanvl(CAST(" in prep_fn
+        assert "AS DOUBLE), 0.0), 0.0)" in prep_fn
+
+    def test_log_best_model_wraps_three_stage_pipeline(self, renderer, sample_pipeline_config):
+        """``_log_best_model`` must construct
+        ``PipelineModel(stages=[filler, assembler, model])`` and pass the
+        wrapped model to both ``fe.log_model`` and the fallback
+        ``mlflow.spark.log_model`` — training- and scoring-time null handling
+        live in the same SQLTransformer stage."""
         result = renderer.render_training(sample_pipeline_config)
         fn = result[result.index("def _log_best_model"):result.index("def _promote_to_production")]
-        assert "PipelineModel(stages=[assembler, model])" in fn
+        assert "PipelineModel(stages=[filler, assembler, model])" in fn
         fe_call_start = fn.index("fe.log_model(")
         fe_call_end = fn.index(")", fe_call_start)
         fe_call = fn[fe_call_start:fe_call_end]
@@ -845,10 +863,10 @@ class TestDatabricksTrainingFeatureEngineering:
         fallback_call = fn[fallback_call_start:fallback_call_end]
         assert "\n            model," not in fallback_call, "fallback log_model must receive wrapped pipeline"
 
-    def test_log_best_model_accepts_assembler_param(self, renderer, sample_pipeline_config):
+    def test_log_best_model_accepts_filler_and_assembler_params(self, renderer, sample_pipeline_config):
         result = renderer.render_training(sample_pipeline_config)
-        assert "def _log_best_model(model, df, feature_cols, test_df, assembler)" in result
-        assert "_log_best_model(best_model, df, feature_cols, test_df, _assembler)" in result
+        assert "def _log_best_model(model, df, feature_cols, test_df, filler, assembler)" in result
+        assert "_log_best_model(best_model, df, feature_cols, test_df, _filler, _assembler)" in result
 
     def test_log_best_model_fallback_signature_uses_raw_columns(self, renderer, sample_pipeline_config):
         """The fallback ``infer_signature`` call must use raw feature columns as
@@ -884,7 +902,7 @@ class TestDatabricksTrainingFeatureEngineering:
         best_block = main[best_block_start:best_block_end]
         assert "compute_shap_attribution(" in best_block
         assert "log_attribution(" in best_block
-        assert "PipelineModel(stages=[_assembler, best_model])" in best_block
+        assert "PipelineModel(stages=[_filler, _assembler, best_model])" in best_block
 
     def test_attribution_is_logged_only_for_the_best_model(self, renderer, sample_pipeline_config):
         """Attribution is a function of (model, training cohort). Logging one
@@ -2635,21 +2653,46 @@ class TestDatabricksGoldAsOfDate:
 
 
 class TestDatabricksTrainingNullImputation:
-    def test_training_fills_nan_before_assembly(self, renderer, sample_pipeline_config):
+    def test_training_nulls_handled_inside_pipeline_not_by_fillna(self, renderer, sample_pipeline_config):
+        """Regression for ``Encountered null while assembling a row with
+        handleInvalid='error'`` at ``fe.score_batch`` time. Null handling
+        must be a pipeline *stage* (SQLTransformer), not a driver-side
+        ``df.fillna(...)`` — the latter only runs during training and
+        leaves raw NULLs in the gold feature-store rows that FE fetches
+        at inference, which the logged VectorAssembler then rejects."""
         result = renderer.render_training(sample_pipeline_config)
-        prepare_fn = result[result.index("def prepare_features") :]
-        fillna_pos = prepare_fn.index("fillna(0")
-        assembler_pos = prepare_fn.index("VectorAssembler")
-        assert fillna_pos < assembler_pos
+        prepare_fn = result[result.index("def prepare_features"):result.index("def _temporal_split")]
+        # fillna is NOT the null-handling primitive anymore — no upfront
+        # driver-side fillna in prepare_features.
+        assert "fillna" not in prepare_fn
+        # Filler stage is built + transforms the frame before VectorAssembler.
+        filler_pos = prepare_fn.index("filler = _build_null_filler(")
+        transform_pos = prepare_fn.index("filler.transform(df)")
+        assembler_pos = prepare_fn.index("VectorAssembler(")
+        assert filler_pos < transform_pos < assembler_pos
 
-    def test_training_assembler_uses_error_mode(self, renderer, sample_pipeline_config):
+    def test_training_assembler_keeps_invalid_rows_as_belt_and_suspenders(
+        self, renderer, sample_pipeline_config
+    ):
+        """With the SQLTransformer filler coercing NULL/NaN to 0 first, the
+        VectorAssembler never *sees* a null. ``handleInvalid='keep'`` is the
+        defensive default in case a stray NaN slips past the filler — it
+        lets the NaN propagate into the vector rather than crashing the
+        whole batch scoring run."""
         result = renderer.render_training(sample_pipeline_config)
-        assert 'handleInvalid="error"' in result
-        assert 'handleInvalid="skip"' not in result
+        assert 'handleInvalid="keep"' in result
+        # Must NOT use "error" — that's the mode that crashed at scoring.
+        assert 'handleInvalid="error"' not in result
 
-    def test_training_fillna_targets_feature_cols(self, renderer, sample_pipeline_config):
+    def test_training_filler_coerces_feature_cols_to_double_and_zero(
+        self, renderer, sample_pipeline_config
+    ):
+        """The SQL wraps every feature in COALESCE+nanvl so both NULL and
+        NaN collapse to 0.0 before the assembler sees them."""
         result = renderer.render_training(sample_pipeline_config)
-        assert "fillna(0, subset=feature_cols)" in result
+        assert "SQLTransformer" in result
+        assert "COALESCE(nanvl(CAST(" in result
+        assert "AS DOUBLE), 0.0), 0.0)" in result
 
 
 class TestDatabricksTrainingDropAsOfDate:
