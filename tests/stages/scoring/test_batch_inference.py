@@ -46,6 +46,238 @@ class TestBatchInferenceConfig:
         cfg = BatchInferenceConfig(customer_table="cat.sch.gold_features_abc")
         assert cfg.customer_table == "cat.sch.gold_features_abc"
 
+    def test_timestamp_column_default_matches_training(self):
+        """Must match ``databricks_renderer.py`` training template's
+        ``TIMESTAMP_COLUMN = "event_timestamp"`` — a mismatch with the
+        registered FE lookup spec raises
+        ``"Unable to join feature table ... because timestamp lookup key
+        'event_timestamp' not found in DataFrame"``."""
+        assert BatchInferenceConfig().timestamp_column == "event_timestamp"
+
+    def test_timestamp_column_override_is_passthrough(self):
+        cfg = BatchInferenceConfig(timestamp_column="ts")
+        assert cfg.timestamp_column == "ts"
+
+
+class TestResolveModelVersion:
+    def test_resolves_alias_uri(self, monkeypatch):
+        import sys
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.scoring import batch_inference
+
+        mv = MagicMock(version="47", run_id="abc123")
+        client = MagicMock()
+        client.get_model_version_by_alias = MagicMock(return_value=mv)
+
+        fake_tracking = type(sys)("mlflow.tracking")
+        fake_tracking.MlflowClient = MagicMock(return_value=client)
+        fake_mlflow = type(sys)("mlflow")
+        fake_mlflow.tracking = fake_tracking
+        monkeypatch.setitem(sys.modules, "mlflow", fake_mlflow)
+        monkeypatch.setitem(sys.modules, "mlflow.tracking", fake_tracking)
+
+        version, run_id = batch_inference._resolve_model_version(
+            "models:/c.s.model_abc@production"
+        )
+        assert (version, run_id) == ("47", "abc123")
+        client.get_model_version_by_alias.assert_called_once_with("c.s.model_abc", "production")
+
+    def test_resolves_numeric_version_uri(self, monkeypatch):
+        import sys
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.scoring import batch_inference
+
+        mv = MagicMock(version="3", run_id="def456")
+        client = MagicMock()
+        client.get_model_version = MagicMock(return_value=mv)
+
+        fake_tracking = type(sys)("mlflow.tracking")
+        fake_tracking.MlflowClient = MagicMock(return_value=client)
+        fake_mlflow = type(sys)("mlflow")
+        fake_mlflow.tracking = fake_tracking
+        monkeypatch.setitem(sys.modules, "mlflow", fake_mlflow)
+        monkeypatch.setitem(sys.modules, "mlflow.tracking", fake_tracking)
+
+        version, run_id = batch_inference._resolve_model_version("models:/c.s.m/3")
+        assert (version, run_id) == ("3", "def456")
+
+    def test_non_models_uri_returns_none_tuple(self):
+        from customer_retention.stages.scoring import batch_inference
+
+        assert batch_inference._resolve_model_version("runs:/abc/model") == (None, None)
+
+    def test_mlflow_failure_is_swallowed_as_diagnostic(self, monkeypatch):
+        """Resolution is *diagnostic enrichment*. Never block scoring over it."""
+        import sys
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.scoring import batch_inference
+
+        client = MagicMock()
+        client.get_model_version_by_alias = MagicMock(side_effect=RuntimeError("API down"))
+
+        fake_tracking = type(sys)("mlflow.tracking")
+        fake_tracking.MlflowClient = MagicMock(return_value=client)
+        fake_mlflow = type(sys)("mlflow")
+        fake_mlflow.tracking = fake_tracking
+        monkeypatch.setitem(sys.modules, "mlflow", fake_mlflow)
+        monkeypatch.setitem(sys.modules, "mlflow.tracking", fake_tracking)
+
+        assert batch_inference._resolve_model_version(
+            "models:/c.s.m@production"
+        ) == (None, None)
+
+
+class TestProgressReporting:
+    """Structured ``[batch_inference]`` prints + populated diagnostic fields
+    on ``BatchInferenceResult`` so operators can grep cell output and
+    downstream code can persist provenance without re-calling MLflow."""
+
+    def test_provenance_block_prints_identity_lines(self, monkeypatch, capsys):
+        pytest.importorskip("pyspark", reason="PySpark required")
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.scoring import batch_inference
+        from customer_retention.stages.scoring.batch_inference import (
+            BatchInferenceConfig,
+            _run_databricks,
+        )
+
+        class _FakeSparkDF:
+            def filter(self, _expr): return self
+            def select(self, *_a, **_kw): return self
+            def distinct(self): return self
+            def withColumn(self, *_a, **_kw): return self  # noqa: N802
+            def count(self): return 77255
+
+        class _BoomError(RuntimeError):
+            pass
+
+        monkeypatch.setattr(
+            batch_inference,
+            "_resolve_model_version",
+            lambda _uri: ("48", "run_xyz"),
+        )
+        monkeypatch.setattr(
+            batch_inference,
+            "_score_with_feature_store",
+            lambda *a, **kw: (_ for _ in ()).throw(_BoomError()),
+        )
+        fake_spark = MagicMock()
+        fake_spark.table.return_value = _FakeSparkDF()
+        monkeypatch.setattr(batch_inference, "_get_spark", lambda: fake_spark)
+
+        cfg = BatchInferenceConfig(
+            catalog="c", schema="s",
+            model_uri="models:/c.s.model_abc@production",
+            customer_table="c.s.gold_features_abc",
+            filter_expression="region == 'EU'",
+        )
+        with pytest.raises(_BoomError):
+            _run_databricks(cfg)
+
+        out = capsys.readouterr().out
+        # Every diagnostic line is grep-friendly with the fixed prefix.
+        assert "[batch_inference] model_uri=models:/c.s.model_abc@production" in out
+        assert "[batch_inference] model_version=v48 run_id=run_xyz" in out
+        assert "[batch_inference] customer_table=c.s.gold_features_abc" in out
+        assert "[batch_inference] timestamp_column=event_timestamp" in out
+        assert "[batch_inference] scope_filter=region == 'EU'" in out
+        assert "[batch_inference] target_table=c.s.predictions" in out
+        assert "[batch_inference] 77,255 entities after filter/dedup" in out
+
+    def test_zero_entity_population_fails_fast(self, monkeypatch):
+        """A filter/dedup that collapses to zero entities would silently write
+        an empty predictions table without this guard. Fail fast with a clear
+        message so operators see the actual cohort problem, not a downstream
+        NullPointerException in the dashboard."""
+        pytest.importorskip("pyspark", reason="PySpark required")
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.scoring import batch_inference
+        from customer_retention.stages.scoring.batch_inference import (
+            BatchInferenceConfig,
+            _run_databricks,
+        )
+
+        class _FakeSparkDF:
+            def filter(self, _expr): return self
+            def select(self, *_a, **_kw): return self
+            def distinct(self): return self
+            def withColumn(self, *_a, **_kw): return self  # noqa: N802
+            def count(self): return 0
+
+        monkeypatch.setattr(
+            batch_inference, "_resolve_model_version", lambda _u: (None, None)
+        )
+        fake_spark = MagicMock()
+        fake_spark.table.return_value = _FakeSparkDF()
+        monkeypatch.setattr(batch_inference, "_get_spark", lambda: fake_spark)
+
+        cfg = BatchInferenceConfig(
+            catalog="c", schema="s",
+            model_uri="models:/c.s.m@production",
+            customer_table="c.s.gold_features_abc",
+        )
+        with pytest.raises(ValueError, match="0 entities"):
+            _run_databricks(cfg)
+
+
+class TestBatchInferenceResultDiagnosticFields:
+    def test_long_summary_includes_resolved_version_and_run_id(self):
+        result = BatchInferenceResult(
+            inference_id="batch_20260419_120000",
+            inference_timestamp=datetime(2026, 4, 19, 12, 0, 0),
+            total_scored=100,
+            predicted_churners=20,
+            avg_probability=0.2,
+            risk_distribution={"High": 5, "Medium": 15, "Low": 80},
+            model_uri="models:/c.s.m@production",
+            resolved_model_version="48",
+            resolved_run_id="abc123",
+        )
+        text = result.long_summary()
+        assert "Resolved version:" in text
+        assert "v48" in text
+        assert "abc123" in text
+
+    def test_long_summary_includes_phase_timings(self):
+        result = BatchInferenceResult(
+            inference_id="x",
+            inference_timestamp=datetime(2026, 4, 19),
+            total_scored=1,
+            predicted_churners=0,
+            avg_probability=0.0,
+            risk_distribution={},
+            model_uri="u",
+            phase_seconds={"prep": 0.5, "score": 12.3, "write": 2.1, "total": 14.9},
+        )
+        text = result.long_summary()
+        assert "Wall-clock phases:" in text
+        assert "prep" in text and "12.3" in text
+        assert "total" in text and "14.9" in text
+
+    def test_long_summary_surfaces_entity_drop_warning(self):
+        """If entity_count > total_scored it means fe.score_batch silently
+        dropped rows — surface that in the summary so operators investigate
+        missing features rather than trusting a shrunken population."""
+        result = BatchInferenceResult(
+            inference_id="x",
+            inference_timestamp=datetime(2026, 4, 19),
+            total_scored=75_000,
+            predicted_churners=0,
+            avg_probability=0.0,
+            risk_distribution={},
+            model_uri="u",
+            entity_count=77_255,
+        )
+        text = result.long_summary()
+        assert "Entity population (input)" in text
+        assert "77,255" in text
+        assert "dropped" in text.lower() or "missing features" in text
+
 
 class TestScopeFilterApplication:
     """Scope filter (NB00 ``ProjectContext.sample_filters``) must narrow the
@@ -79,6 +311,8 @@ class TestScopeFilterApplication:
             def distinct(self):
                 return self
 
+            def count(self): return 100
+
             def withColumn(self, *_a, **_kw):  # noqa: N802 — mirrors Spark API
                 return self
 
@@ -103,7 +337,7 @@ class TestScopeFilterApplication:
             pass
         _Boom = _BoomError  # noqa: N806 — short alias used below
 
-        def stub_score(spark, entity_df, feature_table, model_uri):  # noqa: ARG001
+        def stub_score(spark, entity_df, feature_table, model_uri, **_kw):  # noqa: ARG001
             raise _Boom("stop after filter")
 
         monkeypatch.setattr(batch_inference, "_score_with_feature_store", stub_score)
@@ -151,6 +385,9 @@ class TestScopeFilterApplication:
                 distinct_calls["count"] += 1
                 return self
 
+            def count(self):
+                return 100
+
             def withColumn(self, *_a, **_kw):  # noqa: N802 — mirrors Spark API
                 return self
 
@@ -180,6 +417,106 @@ class TestScopeFilterApplication:
         assert table_calls == ["c.s.gold_features_abc"]
         assert distinct_calls["count"] == 1
 
+    def test_databricks_path_uses_configured_timestamp_column(self, monkeypatch):
+        """Regression for `Unable to join feature table ... because timestamp
+        lookup key 'event_timestamp' not found in DataFrame`. The entity_df's
+        timestamp column MUST be named with ``config.timestamp_column`` so
+        the FE registered lookup key resolves."""
+        pytest.importorskip("pyspark", reason="PySpark required")
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.scoring import batch_inference
+        from customer_retention.stages.scoring.batch_inference import (
+            BatchInferenceConfig,
+            _run_databricks,
+        )
+
+        with_column_names: list[str] = []
+        score_call_kwargs: list[dict] = []
+
+        class _FakeSparkDF:
+            def filter(self, _expr):
+                return self
+
+            def select(self, *_a, **_kw):
+                return self
+
+            def distinct(self):
+                return self
+
+            def count(self): return 100
+
+            def withColumn(self, name, _expr):  # noqa: N802 — mirrors Spark API
+                with_column_names.append(name)
+                return self
+
+        class _BoomError(RuntimeError):
+            pass
+
+        def stub_score(spark, entity_df, feature_table, model_uri, timestamp_column):  # noqa: ARG001
+            score_call_kwargs.append({"timestamp_column": timestamp_column})
+            raise _BoomError()
+
+        monkeypatch.setattr(batch_inference, "_score_with_feature_store", stub_score)
+        fake_spark = MagicMock()
+        fake_spark.table.return_value = _FakeSparkDF()
+        monkeypatch.setattr(batch_inference, "_get_spark", lambda: fake_spark)
+
+        cfg = BatchInferenceConfig(
+            catalog="c", schema="s",
+            model_uri="models:/c.s.model_abc@production",
+        )
+        with pytest.raises(_BoomError):
+            _run_databricks(cfg)
+
+        assert with_column_names == ["event_timestamp"]
+        assert score_call_kwargs == [{"timestamp_column": "event_timestamp"}]
+
+    def test_score_with_feature_store_uses_timestamp_column_in_lookup(self, monkeypatch):
+        """``FeatureLookup.timestamp_lookup_key`` must come from the config
+        knob — otherwise the fallback path's training-set load fails with
+        the same mismatch as ``fe.score_batch``."""
+        pytest.importorskip("pyspark", reason="PySpark required")
+        import sys
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.scoring import batch_inference
+
+        captured_kwargs: list[dict] = []
+
+        class _FakeFeatureLookup:
+            def __init__(self, **kwargs):
+                captured_kwargs.append(kwargs)
+
+        class _BoomError(RuntimeError):
+            pass
+
+        class _FakeClient:
+            def score_batch(self, **_kw):
+                raise _BoomError("stop after FeatureLookup constructed")
+
+        fake_fe = type(sys)("databricks.feature_engineering")
+        fake_fe.FeatureEngineeringClient = lambda *a, **kw: _FakeClient()
+        fake_fe.FeatureLookup = _FakeFeatureLookup
+        fake_databricks = type(sys)("databricks")
+        fake_databricks.feature_engineering = fake_fe
+        monkeypatch.setitem(sys.modules, "databricks", fake_databricks)
+        monkeypatch.setitem(sys.modules, "databricks.feature_engineering", fake_fe)
+
+        with pytest.raises(_BoomError):
+            batch_inference._score_with_feature_store(
+                spark=MagicMock(),
+                entity_df=MagicMock(),
+                feature_table="c.s.ft",
+                model_uri="models:/c.s.m@production",
+                timestamp_column="event_timestamp",
+            )
+        assert captured_kwargs == [{
+            "table_name": "c.s.ft",
+            "lookup_key": ["entity_id"],
+            "timestamp_lookup_key": "event_timestamp",
+        }]
+
     def test_databricks_path_falls_back_to_gold_customers(self, monkeypatch):
         pytest.importorskip("pyspark", reason="PySpark required")
         from unittest.mock import MagicMock
@@ -201,6 +538,8 @@ class TestScopeFilterApplication:
 
             def distinct(self):
                 return self
+
+            def count(self): return 100
 
             def withColumn(self, *_a, **_kw):  # noqa: N802 — mirrors Spark API
                 return self
@@ -243,6 +582,8 @@ class TestScopeFilterApplication:
 
             def distinct(self):
                 return self
+
+            def count(self): return 100
 
             def withColumn(self, *_a, **_kw):  # noqa: N802 — mirrors Spark API
                 return self
@@ -497,12 +838,13 @@ class TestModelUriPassthrough:
             def filter(self, _expr): return self
             def select(self, *_a, **_kw): return self
             def distinct(self): return self
+            def count(self): return 100
             def withColumn(self, *_a, **_kw): return self  # noqa: N802
 
         class _BoomError(RuntimeError):
             pass
 
-        def stub_score(spark, entity_df, feature_table, model_uri):  # noqa: ARG001
+        def stub_score(spark, entity_df, feature_table, model_uri, **_kw):  # noqa: ARG001
             captured_uris.append(model_uri)
             raise _BoomError()
 
@@ -537,12 +879,13 @@ class TestModelUriPassthrough:
             def filter(self, _expr): return self
             def select(self, *_a, **_kw): return self
             def distinct(self): return self
+            def count(self): return 100
             def withColumn(self, *_a, **_kw): return self  # noqa: N802
 
         class _BoomError(RuntimeError):
             pass
 
-        def stub_score(spark, entity_df, feature_table, model_uri):  # noqa: ARG001
+        def stub_score(spark, entity_df, feature_table, model_uri, **_kw):  # noqa: ARG001
             captured_uris.append(model_uri)
             raise _BoomError()
 
