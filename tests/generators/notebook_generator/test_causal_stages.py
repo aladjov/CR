@@ -228,6 +228,17 @@ class TestPerStageContent:
         assert "sample_filters" in code
         assert "filter_expression=_scope_filter" in code
 
+    def test_c04_passes_gold_features_fqn_as_customer_table(self):
+        """Regression: the default ``gold_customers`` table doesn't exist
+        in projects that use composite-name-qualified gold tables. c04 must
+        route the already-resolved ``GOLD_FEATURES_FQN`` into
+        ``BatchInferenceConfig.customer_table`` so fe.score_batch can find
+        the entity universe."""
+        gen = LocalNotebookGenerator(NotebookConfig(), None)
+        nb = gen.generate_stage(NotebookStage.BATCH_INFERENCE_CAUSAL)
+        code = _all_code(nb)
+        assert "customer_table=GOLD_FEATURES_FQN" in code
+
     def test_c05_calls_snapshot_writer_and_dashboard_views(self):
         gen = LocalNotebookGenerator(NotebookConfig(), None)
         nb = gen.generate_stage(NotebookStage.SNAPSHOT_AND_DASHBOARD)

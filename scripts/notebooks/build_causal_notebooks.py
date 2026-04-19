@@ -602,6 +602,7 @@ else:
             catalog=CATALOG,
             schema=SCHEMA,
             model_name=MODEL_NAME,
+            customer_table=GOLD_FEATURES_FQN,
             threshold=SCORING_THRESHOLD,
             risk_tier_high=RISK_TIER_HIGH,
             risk_tier_medium=RISK_TIER_MEDIUM,

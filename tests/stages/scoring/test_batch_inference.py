@@ -39,6 +39,13 @@ class TestBatchInferenceConfig:
         config = BatchInferenceConfig(filter_expression="plan_type == 'enterprise'")
         assert config.filter_expression == "plan_type == 'enterprise'"
 
+    def test_customer_table_default_none(self):
+        assert BatchInferenceConfig().customer_table is None
+
+    def test_customer_table_override_is_passthrough(self):
+        cfg = BatchInferenceConfig(customer_table="cat.sch.gold_features_abc")
+        assert cfg.customer_table == "cat.sch.gold_features_abc"
+
 
 class TestScopeFilterApplication:
     """Scope filter (NB00 ``ProjectContext.sample_filters``) must narrow the
@@ -67,6 +74,9 @@ class TestScopeFilterApplication:
                 return _FakeSparkDF(name="filtered")
 
             def select(self, *_a, **_kw):
+                return self
+
+            def distinct(self):
                 return self
 
             def withColumn(self, *_a, **_kw):  # noqa: N802 — mirrors Spark API
@@ -110,6 +120,107 @@ class TestScopeFilterApplication:
             _run_databricks(cfg)
         assert filter_calls == ["plan_type == 'enterprise'"]
 
+    def test_databricks_path_reads_config_customer_table_and_dedups(self, monkeypatch):
+        """Regression: the default ``gold_customers`` table doesn't exist in
+        projects that use composite-name-qualified gold tables (``gold_features_{CN}``).
+        The caller (c04) passes ``customer_table=GOLD_FEATURES_FQN``; the framework
+        must read from that table and collapse to one row per entity via
+        ``.distinct()`` so fe.score_batch only sees unique entity_ids.
+        ``.distinct()`` shuffle is bounded by the entity count — one bounded
+        Spark job, no wide aggregations."""
+        pytest.importorskip("pyspark", reason="PySpark required")
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.scoring import batch_inference
+        from customer_retention.stages.scoring.batch_inference import (
+            BatchInferenceConfig,
+            _run_databricks,
+        )
+
+        table_calls: list[str] = []
+        distinct_calls = {"count": 0}
+
+        class _FakeSparkDF:
+            def filter(self, _expr):
+                return self
+
+            def select(self, *_a, **_kw):
+                return self
+
+            def distinct(self):
+                distinct_calls["count"] += 1
+                return self
+
+            def withColumn(self, *_a, **_kw):  # noqa: N802 — mirrors Spark API
+                return self
+
+        class _BoomError(RuntimeError):
+            pass
+
+        monkeypatch.setattr(
+            batch_inference,
+            "_score_with_feature_store",
+            lambda *a, **kw: (_ for _ in ()).throw(_BoomError()),
+        )
+        fake_spark = MagicMock()
+
+        def _table(name):
+            table_calls.append(name)
+            return _FakeSparkDF()
+
+        fake_spark.table.side_effect = _table
+        monkeypatch.setattr(batch_inference, "_get_spark", lambda: fake_spark)
+
+        cfg = BatchInferenceConfig(
+            catalog="c", schema="s", model_name="m",
+            customer_table="c.s.gold_features_abc",
+        )
+        with pytest.raises(_BoomError):
+            _run_databricks(cfg)
+        assert table_calls == ["c.s.gold_features_abc"]
+        assert distinct_calls["count"] == 1
+
+    def test_databricks_path_falls_back_to_gold_customers(self, monkeypatch):
+        pytest.importorskip("pyspark", reason="PySpark required")
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.scoring import batch_inference
+        from customer_retention.stages.scoring.batch_inference import (
+            BatchInferenceConfig,
+            _run_databricks,
+        )
+
+        table_calls: list[str] = []
+
+        class _FakeSparkDF:
+            def filter(self, _expr):
+                return self
+
+            def select(self, *_a, **_kw):
+                return self
+
+            def distinct(self):
+                return self
+
+            def withColumn(self, *_a, **_kw):  # noqa: N802 — mirrors Spark API
+                return self
+
+        class _BoomError(RuntimeError):
+            pass
+
+        monkeypatch.setattr(
+            batch_inference,
+            "_score_with_feature_store",
+            lambda *a, **kw: (_ for _ in ()).throw(_BoomError()),
+        )
+        fake_spark = MagicMock()
+        fake_spark.table.side_effect = lambda n: table_calls.append(n) or _FakeSparkDF()
+        monkeypatch.setattr(batch_inference, "_get_spark", lambda: fake_spark)
+
+        with pytest.raises(_BoomError):
+            _run_databricks(BatchInferenceConfig(catalog="c", schema="s", model_name="m"))
+        assert table_calls == ["c.s.gold_customers"]
+
     def test_databricks_path_skips_filter_when_expression_missing(self, monkeypatch):
         pytest.importorskip("pyspark", reason="PySpark required")
         from unittest.mock import MagicMock
@@ -128,6 +239,9 @@ class TestScopeFilterApplication:
                 return self
 
             def select(self, *_a, **_kw):
+                return self
+
+            def distinct(self):
                 return self
 
             def withColumn(self, *_a, **_kw):  # noqa: N802 — mirrors Spark API
