@@ -601,7 +601,7 @@ else:
         config = BatchInferenceConfig(
             catalog=CATALOG,
             schema=SCHEMA,
-            model_name=MODEL_NAME,
+            model_uri=MODEL_URI,
             customer_table=GOLD_FEATURES_FQN,
             threshold=SCORING_THRESHOLD,
             risk_tier_high=RISK_TIER_HIGH,

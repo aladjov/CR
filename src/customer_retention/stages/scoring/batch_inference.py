@@ -61,6 +61,11 @@ class BatchInferenceConfig:
     catalog: Optional[str] = None
     schema: Optional[str] = None
     model_name: Optional[str] = None
+    # Registered-model URI. When set, bypasses the default
+    # ``models:/{catalog}.{schema}.{model_name}@production`` assembly — which
+    # double-prefixes when ``model_name`` is already the 3-part FQN written by
+    # training's ``_registered_name`` (``{CATALOG}.{SCHEMA}.model_{CN}``).
+    model_uri: Optional[str] = None
     feature_table: Optional[str] = None  # default: f"{catalog}.{schema}.customer_features"
     customer_table: Optional[str] = None  # default: f"{catalog}.{schema}.gold_customers".
     # Source for entity IDs to score. Accepts snapshot-grained tables like
@@ -211,16 +216,24 @@ def _run_databricks(config: BatchInferenceConfig) -> BatchInferenceResult:
 
     spark = _get_spark()
 
-    if not (config.catalog and config.schema and config.model_name):
+    if not (config.catalog and config.schema):
         raise ValueError(
-            "BatchInferenceConfig.catalog, schema, and model_name are required "
-            "on the Databricks execution path."
+            "BatchInferenceConfig.catalog and schema are required on the Databricks "
+            "execution path."
+        )
+    if not (config.model_uri or config.model_name):
+        raise ValueError(
+            "BatchInferenceConfig requires either model_uri or model_name on the "
+            "Databricks execution path."
         )
 
     feature_table = config.feature_table or f"{config.catalog}.{config.schema}.customer_features"
     target_fqn = f"{config.catalog}.{config.schema}.{config.target_table}"
     audit_fqn = f"{config.catalog}.{config.schema}.{config.audit_table}"
-    model_uri = f"models:/{config.catalog}.{config.schema}.{config.model_name}@production"
+    model_uri = (
+        config.model_uri
+        or f"models:/{config.catalog}.{config.schema}.{config.model_name}@production"
+    )
     inference_ts = config.inference_timestamp or _dt.now()
 
     logger.info("Databricks batch inference: model=%s feature_table=%s", model_uri, feature_table)

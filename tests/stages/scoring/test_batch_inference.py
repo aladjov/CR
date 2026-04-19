@@ -450,7 +450,7 @@ class TestGetSpark:
 
 
 class TestRunDatabricksRequiresIdentity:
-    def test_missing_catalog_schema_or_model_raises(self, monkeypatch):
+    def test_missing_catalog_or_schema_raises(self, monkeypatch):
         pytest.importorskip("pyspark", reason="PySpark required for Databricks inference tests")
         from customer_retention.stages.scoring import batch_inference
         from customer_retention.stages.scoring.batch_inference import (
@@ -458,12 +458,103 @@ class TestRunDatabricksRequiresIdentity:
             _run_databricks,
         )
 
-        # Stub _get_spark so we get past it; the validation error should fire
-        # before any Spark operations
         monkeypatch.setattr(batch_inference, "_get_spark", lambda: object())
+        with pytest.raises(ValueError, match="catalog and schema are required"):
+            _run_databricks(BatchInferenceConfig())
 
-        with pytest.raises(ValueError, match="catalog, schema, and model_name"):
-            _run_databricks(BatchInferenceConfig())  # all three None
+    def test_missing_model_identity_raises(self, monkeypatch):
+        pytest.importorskip("pyspark", reason="PySpark required")
+        from customer_retention.stages.scoring import batch_inference
+        from customer_retention.stages.scoring.batch_inference import (
+            BatchInferenceConfig,
+            _run_databricks,
+        )
+
+        monkeypatch.setattr(batch_inference, "_get_spark", lambda: object())
+        with pytest.raises(ValueError, match="model_uri or model_name"):
+            _run_databricks(BatchInferenceConfig(catalog="c", schema="s"))
+
+
+class TestModelUriPassthrough:
+    def test_model_uri_when_set_bypasses_assembly(self, monkeypatch):
+        """Regression: ``ScoringConfig.registered_model_name`` is the 3-part
+        FQN written by training (``{catalog}.{schema}.model_{CN}``). Assembling
+        ``f"models:/{catalog}.{schema}.{model_name}@production"`` double-prefixes
+        to ``models:/cat.sch.cat.sch.model_...`` — INVALID. When c04 provides
+        ``model_uri=MODEL_URI`` directly, the framework must use it as-is."""
+        pytest.importorskip("pyspark", reason="PySpark required")
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.scoring import batch_inference
+        from customer_retention.stages.scoring.batch_inference import (
+            BatchInferenceConfig,
+            _run_databricks,
+        )
+
+        captured_uris: list[str] = []
+
+        class _FakeSparkDF:
+            def filter(self, _expr): return self
+            def select(self, *_a, **_kw): return self
+            def distinct(self): return self
+            def withColumn(self, *_a, **_kw): return self  # noqa: N802
+
+        class _BoomError(RuntimeError):
+            pass
+
+        def stub_score(spark, entity_df, feature_table, model_uri):  # noqa: ARG001
+            captured_uris.append(model_uri)
+            raise _BoomError()
+
+        monkeypatch.setattr(batch_inference, "_score_with_feature_store", stub_score)
+        fake_spark = MagicMock()
+        fake_spark.table.return_value = _FakeSparkDF()
+        monkeypatch.setattr(batch_inference, "_get_spark", lambda: fake_spark)
+
+        cfg = BatchInferenceConfig(
+            catalog="c", schema="s",
+            model_uri="models:/c.s.model_abc@production",
+        )
+        with pytest.raises(_BoomError):
+            _run_databricks(cfg)
+        assert captured_uris == ["models:/c.s.model_abc@production"]
+
+    def test_model_uri_falls_back_to_legacy_assembly(self, monkeypatch):
+        """Legacy callers that still pass ``model_name`` (unqualified) get the
+        assembled ``models:/{catalog}.{schema}.{model_name}@production`` URI."""
+        pytest.importorskip("pyspark", reason="PySpark required")
+        from unittest.mock import MagicMock
+
+        from customer_retention.stages.scoring import batch_inference
+        from customer_retention.stages.scoring.batch_inference import (
+            BatchInferenceConfig,
+            _run_databricks,
+        )
+
+        captured_uris: list[str] = []
+
+        class _FakeSparkDF:
+            def filter(self, _expr): return self
+            def select(self, *_a, **_kw): return self
+            def distinct(self): return self
+            def withColumn(self, *_a, **_kw): return self  # noqa: N802
+
+        class _BoomError(RuntimeError):
+            pass
+
+        def stub_score(spark, entity_df, feature_table, model_uri):  # noqa: ARG001
+            captured_uris.append(model_uri)
+            raise _BoomError()
+
+        monkeypatch.setattr(batch_inference, "_score_with_feature_store", stub_score)
+        fake_spark = MagicMock()
+        fake_spark.table.return_value = _FakeSparkDF()
+        monkeypatch.setattr(batch_inference, "_get_spark", lambda: fake_spark)
+
+        cfg = BatchInferenceConfig(catalog="c", schema="s", model_name="m")
+        with pytest.raises(_BoomError):
+            _run_databricks(cfg)
+        assert captured_uris == ["models:/c.s.m@production"]
 
 
 class TestRunBatchInferenceDispatch:

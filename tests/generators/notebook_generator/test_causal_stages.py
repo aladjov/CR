@@ -239,6 +239,19 @@ class TestPerStageContent:
         code = _all_code(nb)
         assert "customer_table=GOLD_FEATURES_FQN" in code
 
+    def test_c04_passes_model_uri_not_model_name(self):
+        """Regression: ``ScoringConfig.registered_model_name`` is already a 3-part
+        FQN (``{catalog}.{schema}.model_{CN}``). Passing it as ``model_name``
+        makes the framework re-prefix ``{catalog}.{schema}`` and produce a
+        broken URI like ``models:/cat.sch.cat.sch.model_abc@production``.
+        The setup block already computes the correct ``MODEL_URI`` — c04 must
+        thread that constant through ``BatchInferenceConfig.model_uri``."""
+        gen = LocalNotebookGenerator(NotebookConfig(), None)
+        nb = gen.generate_stage(NotebookStage.BATCH_INFERENCE_CAUSAL)
+        code = _all_code(nb)
+        assert "model_uri=MODEL_URI" in code
+        assert "model_name=MODEL_NAME" not in code
+
     def test_c05_calls_snapshot_writer_and_dashboard_views(self):
         gen = LocalNotebookGenerator(NotebookConfig(), None)
         nb = gen.generate_stage(NotebookStage.SNAPSHOT_AND_DASHBOARD)
