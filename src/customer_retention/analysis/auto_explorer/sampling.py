@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Iterable, Optional
@@ -189,8 +190,59 @@ class SegmentEntitySelection:
         return spark.createDataFrame([(v,) for v in self._data], [_SEGMENT_ID_COL])
 
 
+_SUBQUERY_RE = re.compile(r"\bIN\s*\(\s*SELECT\b", re.IGNORECASE)
+
+
+def _filter_has_subquery(query_expr: str) -> bool:
+    """Heuristic: predicates with `IN (SELECT ...)` need spark.sql evaluation.
+
+    `F.expr()` in a `.withColumn` / `.filter` column-expression context has
+    limited and version-dependent support for correlated / uncorrelated
+    subqueries; observed silent "all-true" behaviour on Databricks when the
+    SPS account filter is passed through F.expr. `spark.sql()` evaluates the
+    full SQL grammar and handles subqueries correctly.
+    """
+    return bool(_SUBQUERY_RE.search(query_expr))
+
+
+def _spark_passing_entities_sql(
+    view_name: str, query_expr: str, entity_col: str,
+) -> Any:
+    """Distributed: one-column Spark DataFrame of entities where every row
+    of that entity passes ``query_expr``. Evaluates via ``spark.sql`` so
+    subqueries inside the predicate resolve correctly.
+
+    ``view_name`` must be a Spark temp view registered in the active
+    session (``_expose_frames_as_views`` handles this for every dict entry
+    in ``compute_sampling_universe``).
+    """
+    from customer_retention.core.compat.detection import get_spark_session
+
+    spark = get_spark_session()
+    if spark is None:
+        raise RuntimeError(
+            "no active Spark session — _spark_passing_entities_sql requires "
+            "Databricks / PySpark runtime",
+        )
+    sql = (
+        f"SELECT `{entity_col}` FROM ( "
+        f"SELECT `{entity_col}`, "
+        f"       COUNT(*) AS _total, "
+        f"       SUM(CASE WHEN ({query_expr}) THEN 1 ELSE 0 END) AS _matching "
+        f"FROM `{view_name}` "
+        f"GROUP BY `{entity_col}` "
+        f") WHERE _total = _matching"
+    )
+    return spark.sql(sql)
+
+
 def _spark_passing_entities(df: Any, query_expr: str, entity_col: str) -> Any:
-    """Distributed: one-column Spark DataFrame of entities where every row passes."""
+    """Distributed: one-column Spark DataFrame of entities where every row passes.
+
+    Uses ``F.expr`` for simple predicates. NOT safe for ``IN (SELECT ...)``
+    subqueries — route those through :func:`_spark_passing_entities_sql`
+    instead via :func:`_filter_passing_selection`.
+    """
     from pyspark.sql import functions as F  # noqa: N812
 
     from customer_retention.core.compat import _spark_safe_query_expr
@@ -387,11 +439,14 @@ def _entity_set_selection(df: Any, entity_col: str) -> SegmentEntitySelection:
 
 def _filter_passing_selection(
     df: Any, query_expr: str, entity_col: str,
+    view_name: Optional[str] = None,
 ) -> SegmentEntitySelection:
     if _is_spark_pandas(df):
-        return SegmentEntitySelection.from_spark_df(
-            _spark_passing_entities(df, query_expr, entity_col), entity_col,
-        )
+        if view_name is not None and _filter_has_subquery(query_expr):
+            passing_df = _spark_passing_entities_sql(view_name, query_expr, entity_col)
+        else:
+            passing_df = _spark_passing_entities(df, query_expr, entity_col)
+        return SegmentEntitySelection.from_spark_df(passing_df, entity_col)
     return SegmentEntitySelection.from_set(
         _pandas_passing_entities(df, query_expr, entity_col),
     )
