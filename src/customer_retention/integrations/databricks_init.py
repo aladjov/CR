@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
+import sys
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 
 @dataclass
@@ -268,16 +270,92 @@ def _sync_causal_notebooks(
     framework package and use the same cell-id sync engine. The destination
     is a sibling workspace folder so operators see two parallel directories
     inside their Databricks workspace.
+
+    When the framework is installed as an editable repo (Databricks Repos),
+    regenerate the causal ipynb artifacts from their Python source before
+    syncing so edits to ``build_causal_notebooks.py`` land on the workspace
+    in a single ``databricks_init()`` call. Wheel installs skip this step —
+    the wheel bakes the built notebooks at package-build time, and the
+    build script is not shipped inside the wheel.
     """
     from customer_retention.generators.notebook_generator.project_init import ProjectInitializer
 
     source_dir = ProjectInitializer(project_name="")._get_causal_source_dir()
+    _maybe_regenerate_causal_notebooks(source_dir)
     return _sync_notebook_directory(
         source_dir,
         workspace_path,
         causal_notebooks_path,
         framework_repo_path=framework_repo_path,
     )
+
+
+def _maybe_regenerate_causal_notebooks(source_dir: Optional[Path]) -> None:
+    """Run ``build_causal_notebooks.py`` if a co-located build script is found.
+
+    Detection is file-based and safe for every install mode:
+
+    - **Repo / editable install**: the build script sits at
+      ``{repo_root}/scripts/notebooks/build_causal_notebooks.py`` next to
+      the ``causal_notebooks/`` source directory. Running it refreshes the
+      ipynb artifacts before the sync copies them into the workspace.
+    - **Wheel install**: the script is not part of the wheel; detection
+      fails and we skip silently. The wheel-build pipeline already ran
+      this step at package-build time, so the notebooks on disk are fresh.
+
+    Environment override: set ``CHURNKIT_REGENERATE_CAUSAL=0`` to disable
+    (CI pinning a prebuilt artifact). The child inherits the current
+    interpreter and environment so the build runs against the same
+    ``customer_retention`` installation that called ``databricks_init``.
+
+    Any build failure is surfaced via a warning (not raised) so a bad
+    script doesn't block the rest of ``databricks_init`` — the sync step
+    that follows will see the last-successfully-built notebooks.
+    """
+    if os.environ.get("CHURNKIT_REGENERATE_CAUSAL", "1") == "0":
+        return
+    if source_dir is None or not source_dir.exists():
+        return
+    script = _find_causal_build_script(source_dir)
+    if script is None:
+        return
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=str(source_dir.parent),
+        )
+    except OSError as exc:
+        warnings.warn(
+            f"churnkit: could not launch {script.name} ({exc}); "
+            "using on-disk causal notebooks as-is",
+            stacklevel=2,
+        )
+        return
+    if result.returncode != 0:
+        warnings.warn(
+            f"churnkit: {script.name} exited {result.returncode}; "
+            "using on-disk causal notebooks as-is. stderr:\n"
+            f"{result.stderr.strip()}",
+            stacklevel=2,
+        )
+        return
+    for line in result.stdout.splitlines():
+        print(f"  [regen] {line}")
+
+
+def _find_causal_build_script(source_dir: Path) -> Optional[Path]:
+    """Return ``scripts/notebooks/build_causal_notebooks.py`` if co-located.
+
+    The build script lives next to the repo's ``causal_notebooks/`` directory.
+    Inside wheel installs the directory is under site-packages or
+    shared-data, where no ``scripts/`` sibling exists — so this returns
+    ``None`` and the caller skips regeneration cleanly.
+    """
+    candidate = source_dir.parent / "scripts" / "notebooks" / "build_causal_notebooks.py"
+    return candidate if candidate.exists() else None
 
 
 def _sync_notebook_directory(

@@ -302,3 +302,104 @@ class TestConfirmationFlow:
         with patch("builtins.input", return_value="y"):
             main(["--repo-dir", str(repo), "--user-dir", str(user)])
         assert (user / "01_a.ipynb.bak").exists()
+
+
+class TestCausalRegeneration:
+    """Regen-before-sync: avoid silently pushing stale causal ipynb artifacts."""
+
+    def _setup_causal_layout(self, tmp_path):
+        """Build project structure: exploration_notebooks/, causal_notebooks/,
+        scripts/notebooks/build_causal_notebooks.py."""
+        repo = tmp_path / "exploration_notebooks"
+        repo.mkdir()
+        _write_nb(repo / "01.ipynb", [_code_cell("c1", "pass\n")])
+        user = tmp_path / "exploration_user"
+        user.mkdir()
+        _write_nb(user / "01.ipynb", [_code_cell("c1", "pass\n")])
+
+        causal_repo = tmp_path / "causal_notebooks"
+        causal_repo.mkdir()
+        _write_nb(causal_repo / "c01.ipynb", [_code_cell("c1", "pass\n")])
+        causal_user = tmp_path / "causal_user"
+        causal_user.mkdir()
+        _write_nb(causal_user / "c01.ipynb", [_code_cell("c1", "pass\n")])
+
+        scripts = tmp_path / "scripts" / "notebooks"
+        scripts.mkdir(parents=True)
+        build = scripts / "build_causal_notebooks.py"
+        # Sentinel script — writes a marker file so the test can verify the
+        # build ran before the sync did.
+        build.write_text(
+            "import pathlib\n"
+            f"pathlib.Path({str(tmp_path)!r}).joinpath('.build_ran').touch()\n"
+            "print('regenerated causal notebooks')\n"
+        )
+        return repo, user, causal_repo, causal_user, build
+
+    def test_regenerates_before_syncing_by_default(self, tmp_path, capsys):
+        repo, user, causal_repo, causal_user, _ = self._setup_causal_layout(tmp_path)
+        main([
+            "--repo-dir", str(repo),
+            "--user-dir", str(user),
+            "--causal-repo-dir", str(causal_repo),
+            "--causal-user-dir", str(causal_user),
+            "--no-backup",
+        ])
+        marker = tmp_path / ".build_ran"
+        assert marker.exists(), "build_causal_notebooks.py should have executed"
+        out = capsys.readouterr().out
+        assert "regenerating from build_causal_notebooks.py" in out
+        assert "regenerated causal notebooks" in out
+
+    def test_no_regenerate_flag_skips_build(self, tmp_path):
+        repo, user, causal_repo, causal_user, _ = self._setup_causal_layout(tmp_path)
+        main([
+            "--repo-dir", str(repo),
+            "--user-dir", str(user),
+            "--causal-repo-dir", str(causal_repo),
+            "--causal-user-dir", str(causal_user),
+            "--no-backup",
+            "--no-regenerate-causal",
+        ])
+        assert not (tmp_path / ".build_ran").exists()
+
+    def test_dry_run_skips_actual_build(self, tmp_path, capsys):
+        repo, user, causal_repo, causal_user, _ = self._setup_causal_layout(tmp_path)
+        main([
+            "--repo-dir", str(repo),
+            "--user-dir", str(user),
+            "--causal-repo-dir", str(causal_repo),
+            "--causal-user-dir", str(causal_user),
+            "--dry-run",
+        ])
+        # Dry-run should not actually invoke the build
+        assert not (tmp_path / ".build_ran").exists()
+        out = capsys.readouterr().out
+        assert "would regenerate" in out
+        assert "build_causal_notebooks.py" in out
+
+    def test_missing_build_script_degrades_gracefully(self, tmp_path, capsys):
+        repo, user, causal_repo, causal_user, build = self._setup_causal_layout(tmp_path)
+        build.unlink()  # remove the build script
+        # Should complete without raising
+        main([
+            "--repo-dir", str(repo),
+            "--user-dir", str(user),
+            "--causal-repo-dir", str(causal_repo),
+            "--causal-user-dir", str(causal_user),
+            "--no-backup",
+        ])
+        out = capsys.readouterr().out
+        assert "build script not found" in out
+
+    def test_build_failure_aborts_sync(self, tmp_path):
+        repo, user, causal_repo, causal_user, build = self._setup_causal_layout(tmp_path)
+        build.write_text("import sys\nsys.exit(7)\n")
+        with pytest.raises(SystemExit):
+            main([
+                "--repo-dir", str(repo),
+                "--user-dir", str(user),
+                "--causal-repo-dir", str(causal_repo),
+                "--causal-user-dir", str(causal_user),
+                "--no-backup",
+            ])

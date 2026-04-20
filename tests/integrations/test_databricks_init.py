@@ -1451,3 +1451,75 @@ class TestExperimentsPathParameter:
         databricks_init(catalog="main", schema="default", copy_notebooks=False)
         captured = capsys.readouterr()
         assert "/Volumes/main/default/experiments" in captured.out
+
+
+class TestMaybeRegenerateCausalNotebooks:
+    """databricks_init's inline regeneration hook.
+
+    Users invoking ``databricks_init()`` from a Databricks notebook cell
+    never touch ``sync_notebooks.py``. The same single-shot-build guarantee
+    must hold on that path, so the integration regenerates from
+    ``build_causal_notebooks.py`` when the repo layout makes it available.
+    """
+
+    def _repo_layout(self, tmp_path):
+        """Build a fake repo layout: causal_notebooks + scripts/notebooks/build."""
+        source_dir = tmp_path / "causal_notebooks"
+        source_dir.mkdir()
+        scripts = tmp_path / "scripts" / "notebooks"
+        scripts.mkdir(parents=True)
+        build = scripts / "build_causal_notebooks.py"
+        build.write_text(
+            "import pathlib\n"
+            f"pathlib.Path({str(tmp_path)!r}).joinpath('.build_ran').touch()\n"
+            "print('wrote causal_notebooks/c01_publish_definitions.ipynb')\n"
+        )
+        return source_dir, build
+
+    def test_runs_build_when_script_is_co_located(self, tmp_path, capsys):
+        from customer_retention.integrations.databricks_init import (
+            _maybe_regenerate_causal_notebooks,
+        )
+        source_dir, _ = self._repo_layout(tmp_path)
+        _maybe_regenerate_causal_notebooks(source_dir)
+        assert (tmp_path / ".build_ran").exists()
+        out = capsys.readouterr().out
+        assert "[regen] wrote causal_notebooks" in out
+
+    def test_skips_when_build_script_absent(self, tmp_path, capsys):
+        """Wheel install: no scripts/ sibling. Should be a silent no-op."""
+        from customer_retention.integrations.databricks_init import (
+            _maybe_regenerate_causal_notebooks,
+        )
+        source_dir = tmp_path / "site-packages" / "churnkit" / "causal_notebooks"
+        source_dir.mkdir(parents=True)
+        _maybe_regenerate_causal_notebooks(source_dir)
+        # No exception, no output, no .build_ran marker
+        assert capsys.readouterr().out == ""
+
+    def test_skips_when_source_dir_missing(self, tmp_path):
+        from customer_retention.integrations.databricks_init import (
+            _maybe_regenerate_causal_notebooks,
+        )
+        # Should tolerate None and non-existent directories
+        _maybe_regenerate_causal_notebooks(None)
+        _maybe_regenerate_causal_notebooks(tmp_path / "nope")
+
+    def test_env_var_disables_regeneration(self, tmp_path, monkeypatch):
+        from customer_retention.integrations.databricks_init import (
+            _maybe_regenerate_causal_notebooks,
+        )
+        source_dir, _ = self._repo_layout(tmp_path)
+        monkeypatch.setenv("CHURNKIT_REGENERATE_CAUSAL", "0")
+        _maybe_regenerate_causal_notebooks(source_dir)
+        assert not (tmp_path / ".build_ran").exists()
+
+    def test_build_failure_warns_but_does_not_raise(self, tmp_path):
+        from customer_retention.integrations.databricks_init import (
+            _maybe_regenerate_causal_notebooks,
+        )
+        source_dir, build = self._repo_layout(tmp_path)
+        build.write_text("import sys\nsys.stderr.write('boom\\n')\nsys.exit(7)\n")
+        with pytest.warns(UserWarning, match="exited 7"):
+            _maybe_regenerate_causal_notebooks(source_dir)
+        # No .build_ran marker and no exception — sync continues on stale ipynb

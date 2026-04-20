@@ -1,8 +1,10 @@
 import argparse
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import nbformat
 
@@ -169,6 +171,19 @@ def main(argv: list[str] | None = None):
         help="Skip causal notebooks even if a causal-repo-dir is detected",
     )
     parser.add_argument(
+        "--no-regenerate-causal",
+        action="store_true",
+        help=(
+            "Skip regenerating causal notebooks from their Python source "
+            "before syncing. By default ``sync_notebooks`` invokes "
+            "``scripts/notebooks/build_causal_notebooks.py`` first so the "
+            "repo-side ipynb files are always rebuilt from the current "
+            "``build_causal_notebooks.py``. Use this flag when you want to "
+            "sync prebuilt notebooks as-is (e.g. in CI against a pinned "
+            "artifact)."
+        ),
+    )
+    parser.add_argument(
         "--notebook",
         default=None,
         help="Sync a single notebook by filename",
@@ -214,6 +229,8 @@ def main(argv: list[str] | None = None):
     causal_repo_dir = _resolve_causal_repo_dir(args, repo_dir)
     causal_user_dir = Path(args.causal_user_dir).resolve()
     if causal_repo_dir and causal_user_dir.exists():
+        if not args.no_regenerate_causal:
+            _regenerate_causal_notebooks(causal_repo_dir, dry_run=args.dry_run)
         print(f"\n[causal]      {causal_repo_dir.name}/ -> {causal_user_dir}")
         causal_results = sync_directory(
             causal_repo_dir,
@@ -232,6 +249,69 @@ def main(argv: list[str] | None = None):
     )
     label = "Would sync" if args.dry_run else "Synced"
     print(f"\n{label} {changed}/{total} notebooks")
+
+
+def _find_causal_build_script(causal_repo_dir: Path) -> Optional[Path]:
+    """Locate ``scripts/notebooks/build_causal_notebooks.py`` next to the repo dir.
+
+    The causal repo dir is conventionally ``{project}/causal_notebooks`` and the
+    build script conventionally lives at
+    ``{project}/scripts/notebooks/build_causal_notebooks.py``. Look relative
+    to the repo dir's parent; return ``None`` if the script is not present so
+    regeneration degrades to a warning instead of a hard failure.
+    """
+    candidate = (
+        causal_repo_dir.parent
+        / "scripts"
+        / "notebooks"
+        / "build_causal_notebooks.py"
+    )
+    return candidate if candidate.exists() else None
+
+
+def _regenerate_causal_notebooks(causal_repo_dir: Path, dry_run: bool) -> None:
+    """Rebuild the causal ipynb artifacts from their Python source before sync.
+
+    Addresses a recurring class of drift: editing ``build_causal_notebooks.py``
+    does not automatically refresh the on-disk ipynb files, so syncs have
+    silently pushed stale notebooks to Databricks. Running the build step
+    first makes the pipeline single-shot.
+
+    Executes the script via ``subprocess.run([sys.executable, script])`` so
+    the child inherits the current interpreter and PYTHONPATH without this
+    module needing to import script-local symbols. Build output (``wrote
+    causal_notebooks/...``) is streamed through so the operator sees exactly
+    what was regenerated. ``--dry-run`` skips the build, matching the sync's
+    dry-run semantics.
+    """
+    script = _find_causal_build_script(causal_repo_dir)
+    if script is None:
+        print(
+            f"[causal] regenerate skipped — build script not found next to "
+            f"{causal_repo_dir}"
+        )
+        return
+    if dry_run:
+        print(f"[causal] would regenerate via {script}")
+        return
+    print(f"[causal] regenerating from {script.name}")
+    result = subprocess.run(
+        [sys.executable, str(script)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    for line in result.stdout.splitlines():
+        print(f"  {line}")
+    for line in result.stderr.splitlines():
+        print(f"  {line}", file=sys.stderr)
+    if result.returncode != 0:
+        raise SystemExit(
+            f"Causal notebook regeneration failed with exit code "
+            f"{result.returncode}. Aborting sync so stale artifacts do not "
+            "get pushed. Fix the error above or pass --no-regenerate-causal "
+            "to bypass."
+        )
 
 
 def _resolve_causal_repo_dir(args, repo_dir: Path) -> Path | None:
