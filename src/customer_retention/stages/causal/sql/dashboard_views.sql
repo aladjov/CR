@@ -30,7 +30,7 @@ WITH latest_run AS (
     LIMIT 1
 )
 SELECT
-    s.account_id,
+    s.entity_id,
     s.churn_probability,
     s.risk_tier,
     s.value_at_risk,
@@ -130,7 +130,7 @@ WHERE e.status = 'active';
 -- ============================================================================
 CREATE OR REPLACE VIEW {catalog}.{schema}.v_holdout_assignments AS
 SELECT
-    s.account_id,
+    s.entity_id,
     s.playbook_id,
     s.playbook_version,
     s.archetype_id,
@@ -191,7 +191,7 @@ SELECT
     MAX(model_version) AS model_version,
     MAX(decision_policy_id) AS decision_policy_id,
     COUNT(*) AS total_eligible_rows,
-    COUNT(DISTINCT account_id) AS distinct_accounts,
+    COUNT(DISTINCT entity_id) AS distinct_entities,
     COUNT(DISTINCT archetype_id) AS distinct_archetypes,
     COUNT(DISTINCT playbook_id) AS distinct_playbooks,
     SUM(CASE WHEN recommended THEN 1 ELSE 0 END) AS recommended_rows,
