@@ -273,6 +273,95 @@ class TestEnsureTableExists:
 
 
 # ---------------------------------------------------------------------------
+# _ensure_table_schema (additive schema evolution)
+# ---------------------------------------------------------------------------
+
+
+def _make_spark_with_existing_columns(column_names):
+    """Fake spark whose ``spark.table(fqn).schema.fields`` lists ``column_names``."""
+    spark = MagicMock(name="SparkSession")
+    spark.catalog = MagicMock()
+    spark.catalog.tableExists.return_value = True
+    spark.sql = MagicMock()
+
+    fields = [SimpleNamespace(name=n) for n in column_names]
+    schema_obj = SimpleNamespace(fields=fields)
+    df = SimpleNamespace(schema=schema_obj)
+    spark.table.return_value = df
+    return spark
+
+
+class TestEnsureTableSchema:
+    """Drives the fix for DELTA_MERGE_UNRESOLVED_EXPRESSION on schema drift."""
+
+    def test_no_op_when_table_does_not_exist(self):
+        spark = MagicMock()
+        spark.catalog = MagicMock()
+        spark.catalog.tableExists.return_value = False
+        spark.sql = MagicMock()
+        delta_writer._ensure_table_schema(spark, "cat.sch.t", playbook_catalog_schema())
+        spark.sql.assert_not_called()
+
+    def test_no_op_when_schema_in_sync(self):
+        schema = playbook_catalog_schema()
+        spark = _make_spark_with_existing_columns([f.name for f in schema.fields])
+        delta_writer._ensure_table_schema(spark, "cat.sch.t", schema)
+        spark.sql.assert_not_called()
+
+    def test_alter_table_for_each_missing_column(self):
+        schema = playbook_catalog_schema()
+        # Drop two desired columns from the "existing" table to simulate drift
+        existing = [f.name for f in schema.fields if f.name not in ("when_applicable", "name")]
+        spark = _make_spark_with_existing_columns(existing)
+        delta_writer._ensure_table_schema(spark, "cat.sch.t", schema)
+        # One ALTER per missing column
+        calls = [c.args[0] for c in spark.sql.call_args_list]
+        assert any("ADD COLUMN `when_applicable`" in q for q in calls)
+        assert any("ADD COLUMN `name`" in q for q in calls)
+        assert all(q.startswith("ALTER TABLE cat.sch.t ADD COLUMN") for q in calls)
+        assert len(calls) == 2
+
+    def test_alter_uses_canonical_spark_type_strings(self):
+        """Renders ArrayType(StringType) as ``array<string>``, DoubleType as ``double``, etc."""
+        from customer_retention.stages.causal.schemas import eligibility_policy_schema
+
+        schema = eligibility_policy_schema()
+        # Simulate the production failure: existing table is missing fit_score + fit_tier
+        existing = [f.name for f in schema.fields if f.name not in ("fit_score", "fit_tier")]
+        spark = _make_spark_with_existing_columns(existing)
+        delta_writer._ensure_table_schema(spark, "cat.sch.elig", schema)
+        calls = [c.args[0] for c in spark.sql.call_args_list]
+        assert any("ADD COLUMN `fit_score` double" in q for q in calls)
+        assert any("ADD COLUMN `fit_tier` string" in q for q in calls)
+
+
+class TestMergeDataframeIntoEvolvesSchema:
+    """End-to-end: merge_dataframe_into evolves schema before merging."""
+
+    def test_evolves_schema_then_merges(self, patched_delta_table):
+        from customer_retention.stages.causal.schemas import eligibility_policy_schema
+
+        schema = eligibility_policy_schema()
+        # Fake spark with existing table missing the two new columns
+        existing = [f.name for f in schema.fields if f.name not in ("fit_score", "fit_tier")]
+        spark = _make_spark_with_existing_columns(existing)
+        # _ensure_table_exists path needs createDataFrame too
+        spark.createDataFrame = MagicMock()
+        source = MagicMock()
+        source.alias = MagicMock(return_value=source)
+
+        delta_writer.merge_dataframe_into(
+            spark, source, schema, "cat.sch.elig", merge_keys=["eligibility_policy_id", "version"]
+        )
+        # ALTER issued for both missing columns
+        calls = [c.args[0] for c in spark.sql.call_args_list]
+        assert any("ADD COLUMN `fit_score`" in q for q in calls)
+        assert any("ADD COLUMN `fit_tier`" in q for q in calls)
+        # Merge still ran
+        patched_delta_table.builder.execute.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # Note: ``_count_matching`` was removed alongside the bug-fix rewrite.
 # It existed only to fabricate inserted/updated counts via three full
 # table scans, and the result was structurally wrong (post - pre rows

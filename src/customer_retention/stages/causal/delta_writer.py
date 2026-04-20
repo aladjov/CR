@@ -129,12 +129,16 @@ def merge_dataframe_into(
     collected to the driver. Used by the snapshot writer where the source
     can be tens of millions of rows wide (population × |playbooks|).
 
-    Auto-creates the target table from ``schema`` when it does not exist
-    so the first scoring run never has to seed the table by hand.
+    Auto-creates the target table from ``schema`` when it does not exist,
+    and additively evolves the schema (``ALTER TABLE ADD COLUMN``) when
+    the desired schema has fields the existing table is missing. Both
+    safety nets keep deployments single-shot — a schema addition never
+    requires a separate manual migration step before the next merge.
     """
     if not merge_keys:
         raise ValueError("merge_dataframe_into requires at least one merge_key")
     _ensure_table_exists(spark, table_fqn, schema)
+    _ensure_table_schema(spark, table_fqn, schema)
     _execute_delta_merge(spark, source_df, table_fqn, merge_keys, schema)
     logger.info("merged Spark DataFrame into %s via DeltaTable.merge", table_fqn)
 
@@ -177,6 +181,48 @@ def _ensure_table_exists(spark: "SparkSession", table_fqn: str, schema: "StructT
         .saveAsTable(table_fqn)
     )
     logger.info("created empty Delta table %s", table_fqn)
+
+
+def _ensure_table_schema(
+    spark: "SparkSession", table_fqn: str, schema: "StructType"
+) -> None:
+    """Additively evolve an existing Delta table's schema to match ``schema``.
+
+    The Delta MERGE writer assembles its UPDATE/INSERT clauses from the
+    desired ``schema``. When the target table on disk is older than the
+    schema (e.g. a new field was added in code), the merge fails with
+    ``DELTA_MERGE_UNRESOLVED_EXPRESSION`` because the UPDATE clause names
+    a column the target does not have. This helper closes that gap by
+    issuing ``ALTER TABLE ADD COLUMN`` for every field present in
+    ``schema`` but absent from the current table — additive only, never
+    drop, never type-change. Type changes still surface explicitly at
+    merge time so they are not silently coerced.
+
+    Cheap to run on every merge: one ``DESCRIBE``-equivalent + a small
+    set diff on the driver, plus one ``ALTER`` per missing column. The
+    alters themselves are metadata-only Delta operations (no data
+    rewrite). Idempotent: a table already in sync is a no-op.
+
+    No-op when the table does not yet exist — the caller is expected to
+    have run ``_ensure_table_exists`` first, which creates the table
+    with the full ``schema`` so there are no missing fields by
+    construction.
+    """
+    if not spark.catalog.tableExists(table_fqn):
+        return
+    actual = {f.name for f in spark.table(table_fqn).schema.fields}
+    missing = [f for f in schema.fields if f.name not in actual]
+    if not missing:
+        return
+    for field in missing:
+        type_str = field.dataType.simpleString()
+        spark.sql(f"ALTER TABLE {table_fqn} ADD COLUMN `{field.name}` {type_str}")
+        logger.info(
+            "added column %s %s to %s (additive schema evolution)",
+            field.name,
+            type_str,
+            table_fqn,
+        )
 
 
 def _execute_delta_merge(
