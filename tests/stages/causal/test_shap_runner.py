@@ -121,7 +121,7 @@ class TestConstants:
 class TestBuildAttributionSelect:
     def test_emits_join_key_plus_shap_columns_plus_expected_value(self, recording_functions):
         select_exprs, shap_cols = shap_runner._build_attribution_select(
-            join_key="account_id",
+            join_key="entity_id",
             feature_order=["a", "b"],
             importances={"a": 0.6, "b": 0.4},
             means={"a": 10.0, "b": 20.0},
@@ -129,7 +129,7 @@ class TestBuildAttributionSelect:
         assert shap_cols == ["shap_a", "shap_b"]
         assert len(select_exprs) == 4
         assert select_exprs[0].kind == "col"
-        assert select_exprs[0].payload == "account_id"
+        assert select_exprs[0].payload == "entity_id"
         assert select_exprs[-1].kind == "lit"
         assert select_exprs[-1].payload == 0.0
         assert select_exprs[-1].alias_name == EXPECTED_VALUE_COL
@@ -212,7 +212,7 @@ class TestBuildAttributionSelect:
 
 class TestComputeShapDistributedValidation:
     def test_empty_attribution_feature_columns_raises(self, recording_functions):
-        df = _make_spark_df(["account_id", "a"])
+        df = _make_spark_df(["entity_id", "a"])
         with pytest.raises(ValueError, match="feature_columns is empty"):
             compute_shap_distributed(
                 spark_df=df,
@@ -233,7 +233,7 @@ class TestComputeShapDistributedValidation:
             )
 
     def test_attribution_feature_missing_in_spark_df_raises(self, recording_functions):
-        df = _make_spark_df(["account_id", "a"])
+        df = _make_spark_df(["entity_id", "a"])
         with pytest.raises(ValueError, match="training/scoring schema drift"):
             compute_shap_distributed(
                 spark_df=df,
@@ -253,7 +253,7 @@ class TestComputeShapDistributedValidation:
 
 class TestComputeShapDistributedOrchestration:
     def test_happy_path_returns_shap_run_result(self, recording_functions):
-        df = _make_spark_df(["account_id", "feat_a", "feat_b"])
+        df = _make_spark_df(["entity_id", "feat_a", "feat_b"])
         attribution = ShapAttribution(
             importances={"feat_a": 0.7, "feat_b": 0.3},
             background_means={"feat_a": 10.0, "feat_b": 5.0},
@@ -270,7 +270,7 @@ class TestComputeShapDistributedOrchestration:
     def test_emits_single_select_one_spark_job(self, recording_functions):
         """Stays distributed: emission is one ``spark_df.select(*expressions)``.
         No model scoring, no FE score_batch, no shuffle."""
-        df = _make_spark_df(["account_id", "a"])
+        df = _make_spark_df(["entity_id", "a"])
         attribution = ShapAttribution(
             importances={"a": 1.0},
             background_means={"a": 0.0},
@@ -294,7 +294,7 @@ class TestComputeShapDistributedOrchestration:
         monkeypatch.setitem(sys.modules, "databricks", fake_databricks)
         monkeypatch.setitem(sys.modules, "databricks.feature_engineering", fake_fe_module)
 
-        df = _make_spark_df(["account_id", "a", "b"])
+        df = _make_spark_df(["entity_id", "a", "b"])
         attribution = ShapAttribution(
             importances={"a": 0.5, "b": 0.5},
             background_means={"a": 0.0, "b": 0.0},
@@ -304,7 +304,7 @@ class TestComputeShapDistributedOrchestration:
         compute_shap_distributed(spark_df=df, attribution=attribution)
 
     def test_background_size_threads_through_from_attribution(self, recording_functions):
-        df = _make_spark_df(["account_id", "a"])
+        df = _make_spark_df(["entity_id", "a"])
         attribution = ShapAttribution(
             importances={"a": 1.0},
             background_means={"a": 0.0},

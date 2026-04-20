@@ -155,14 +155,14 @@ class TestJoinClusterLabels:
         raw.dropDuplicates = MagicMock(return_value=raw_deduped)
         raw_deduped.join = MagicMock(return_value=MagicMock(name="Joined"))
 
-        derivation._join_cluster_labels(labelled, raw, join_key="account_id")
+        derivation._join_cluster_labels(labelled, raw, join_key="entity_id")
 
-        labelled_selected.dropDuplicates.assert_called_once_with(["account_id"])
-        raw.dropDuplicates.assert_called_once_with(["account_id"])
+        labelled_selected.dropDuplicates.assert_called_once_with(["entity_id"])
+        raw.dropDuplicates.assert_called_once_with(["entity_id"])
         raw_deduped.join.assert_called_once()
         join_args, join_kwargs = raw_deduped.join.call_args
         assert join_args[0] is labelled_deduped or join_kwargs.get("other") is labelled_deduped
-        assert join_kwargs.get("on") == "account_id"
+        assert join_kwargs.get("on") == "entity_id"
         assert join_kwargs.get("how") == "inner"
 
     def test_select_scopes_to_join_key_and_cluster_col(self):

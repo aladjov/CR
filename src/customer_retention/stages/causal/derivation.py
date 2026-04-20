@@ -127,7 +127,7 @@ class DerivationConfig:
     feature_columns: Sequence[str]
     model_uri: str
     target_column: str
-    join_key: str = "account_id"
+    join_key: str = "entity_id"
     archetype_catalog_fqn: str = ""
     eligibility_policy_fqn: str = ""
     playbooks: Sequence[Dict[str, Any]] = field(default_factory=list)
@@ -378,7 +378,7 @@ def _join_cluster_labels(
     """Attach per-entity cluster labels to the raw feature frame.
 
     Both sides are collapsed to one row per ``join_key`` before the inner
-    join. If gold is snapshot-grained (multiple rows per ``account_id``),
+    join. If gold is snapshot-grained (multiple rows per ``entity_id``),
     the naïve join fans out to ``|raw| × |labelled-per-key|`` rows per
     entity and biases every downstream per-cluster aggregate
     (centroids, sizes, mean churn) toward entities with more snapshots.

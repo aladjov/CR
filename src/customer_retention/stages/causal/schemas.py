@@ -394,9 +394,13 @@ def decision_policy_schema() -> "StructType":
 def eligibility_snapshot_schema() -> "StructType":
     """§1.7 — The grouping pivot.
 
-    One row per ``(scoring_run, account, playbook)`` for every customer
-    matching a playbook's eligibility predicates, including holdouts. Carries
-    the four-way definition anchor and the multi-arm context.
+    One row per ``(scoring_run, entity, playbook)`` for every subject
+    matching a playbook's eligibility predicates, including holdouts.
+    Carries the four-way definition anchor and the multi-arm context.
+    The ``entity_id`` key is the generic scoring subject (subscriber for
+    email, account for SPS). Downstream CSM writeback tables
+    (``assignments``/``actions``/``outcomes``) keep their own
+    ``account_id`` column to match the CSM tool's internal model.
     """
     t = _types()
     return t["StructType"](
@@ -404,7 +408,7 @@ def eligibility_snapshot_schema() -> "StructType":
             t["StructField"]("eligibility_id", t["StringType"](), False),  # UUID
             t["StructField"]("scoring_run_id", t["StringType"](), False),
             t["StructField"]("as_of_date", t["TimestampType"](), False),
-            t["StructField"]("account_id", t["StringType"](), False),
+            t["StructField"]("entity_id", t["StringType"](), False),
             # Four-way definition anchor
             t["StructField"]("playbook_id", t["StringType"](), False),
             t["StructField"]("playbook_version", t["StringType"](), False),
@@ -664,7 +668,7 @@ def top_shap_drivers_schema() -> "StructType":
         [
             t["StructField"]("model_name", t["StringType"](), False),
             t["StructField"]("model_version", t["StringType"](), False),
-            t["StructField"]("account_id", t["StringType"](), False),
+            t["StructField"]("entity_id", t["StringType"](), False),
             t["StructField"]("as_of_date", t["TimestampType"](), True),
             t["StructField"](
                 "top_drivers",

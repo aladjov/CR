@@ -102,7 +102,7 @@ class ShapRunResult:
 def compute_shap_distributed(
     spark_df: "DataFrame",
     attribution: ShapAttribution,
-    join_key: str = "account_id",
+    join_key: str = "entity_id",
 ) -> ShapRunResult:
     """Emit per-row SHAP from a pre-computed attribution artifact.
 

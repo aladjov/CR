@@ -150,7 +150,7 @@ class TestEligibilitySnapshotSchema:
         nullability = {f.name: f.nullable for f in struct.fields}
         assert nullability["eligibility_id"] is False
         assert nullability["scoring_run_id"] is False
-        assert nullability["account_id"] is False
+        assert nullability["entity_id"] is False
         # churn_probability is the frozen outcome risk — must be present
         assert nullability["churn_probability"] is False
         assert nullability["recommended"] is False

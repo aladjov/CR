@@ -24,7 +24,7 @@ Phase 3 of the causal-track pipeline. After ``s10_batch_inference`` populates
    ``eligibility_policy_version``, ``decision_policy_version``) plus
    ``as_of_date`` is folded into the deterministic ``scoring_run_id``.
 5. **Writes the snapshot** via ``DeltaTable.merge(snapshot_df, ...)`` keyed
-   on the natural ``(scoring_run_id, account_id, playbook_id)`` so a
+   on the natural ``(scoring_run_id, entity_id, playbook_id)`` so a
    re-run with identical inputs is a no-op. The snapshot DataFrame is
    never collected to the driver — the merge runs entirely in Spark.
 
@@ -99,7 +99,13 @@ class SnapshotConfig:
     snapshot_table_fqn: str
     model_name: str
     model_version: str
-    account_id_column: str = "account_id"
+    # The scoring-layer key: the column on predictions / gold / the snapshot
+    # output that identifies the subject of scoring (a subscriber for email,
+    # an account for SPS, a user for product-usage, etc). Generic by
+    # construction; downstream writeback tables (assignments / actions /
+    # outcomes) may introduce a CSM-specific account_id by join or rename if
+    # a CSM tool is wired in.
+    entity_id_column: str = "entity_id"
     probability_column: str = "churn_probability"
     value_at_risk_column: Optional[str] = None
     inference_timestamp_column: str = "inference_point_in_time"
@@ -115,7 +121,6 @@ class SnapshotConfig:
     # gold table joined in. Required whenever any active policy has a
     # non-empty requires_features list.
     gold_features_fqn: Optional[str] = None
-    entity_key_column: str = "entity_id"
 
 
 @dataclass
@@ -191,13 +196,13 @@ def compute_scoring_run_id(
     return f"score_{digest[:16]}"
 
 
-def compute_eligibility_id(scoring_run_id: str, account_id: str, playbook_id: str) -> str:
+def compute_eligibility_id(scoring_run_id: str, entity_id: str, playbook_id: str) -> str:
     """Deterministic per-row id used as the natural-key surrogate.
 
     Pure function so the snapshot writer can produce the same id for the
     same triple across re-runs without consulting the target table.
     """
-    payload = f"{scoring_run_id}|{account_id}|{playbook_id}"
+    payload = f"{scoring_run_id}|{entity_id}|{playbook_id}"
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:24]
 
 
@@ -379,7 +384,7 @@ def apply_decision_policy(
     eligible_df: "DataFrame",
     decision_policy: Optional[Mapping[str, Any]],
     *,
-    account_id_column: str = "account_id",
+    entity_id_column: str = "entity_id",
     probability_column: str = "churn_probability",
     risk_tier_high: float = 0.6,
     risk_tier_medium: float = 0.3,
@@ -445,7 +450,7 @@ def apply_decision_policy(
         eligible_df,
         holdout_fractions=holdout_fractions,
         seed_recipe=holdout_seed_recipe,
-        account_id_column=account_id_column,
+        entity_id_column=entity_id_column,
     )
 
     capacity_map = policy.get("capacity_by_playbook") or {}
@@ -469,10 +474,10 @@ def apply_decision_policy(
         F.col("playbook_suppressed_reason").isNotNull(), F.col("playbook_suppressed_reason")
     ).when(capacity_breached, F.lit("capacity_exceeded")).otherwise(F.lit(None).cast("string"))
 
-    account_window = Window.partitionBy(F.col(account_id_column)).orderBy(
+    entity_window = Window.partitionBy(F.col(entity_id_column)).orderBy(
         F.col(probability_column).desc(), F.col("playbook_id")
     )
-    account_set_window = Window.partitionBy(F.col(account_id_column))
+    entity_set_window = Window.partitionBy(F.col(entity_id_column))
 
     eligible_df = (
         eligible_df.withColumn("playbook_suppressed_reason", suppression_with_capacity)
@@ -480,10 +485,10 @@ def apply_decision_policy(
             "recommended",
             F.col("playbook_suppressed_reason").isNull() & ~F.col("is_holdout"),
         )
-        .withColumn("policy_rank_among_eligible", F.row_number().over(account_window))
+        .withColumn("policy_rank_among_eligible", F.row_number().over(entity_window))
         .withColumn(
             "eligible_playbooks_set",
-            F.collect_set(F.col("playbook_id")).over(account_set_window),
+            F.collect_set(F.col("playbook_id")).over(entity_set_window),
         )
         .withColumn("eligible_playbook_count", F.size(F.col("eligible_playbooks_set")))
     )
@@ -497,7 +502,7 @@ def write_snapshot(
 ) -> Dict[str, str]:
     """MERGE the snapshot DataFrame into ``eligibility_snapshot``.
 
-    Idempotent on ``(scoring_run_id, account_id, playbook_id)``. The first
+    Idempotent on ``(scoring_run_id, entity_id, playbook_id)``. The first
     write into a fresh target creates the table with the schema declared
     in ``schemas.eligibility_snapshot_schema``.
 
@@ -513,7 +518,7 @@ def write_snapshot(
         snapshot_df,
         eligibility_snapshot_schema(),
         snapshot_table_fqn,
-        ("scoring_run_id", "account_id", "playbook_id"),
+        ("scoring_run_id", "entity_id", "playbook_id"),
     )
     return {"target": snapshot_table_fqn}
 
@@ -544,13 +549,21 @@ def build_eligibility_snapshot(config: SnapshotConfig) -> SnapshotResult:
         as_of_date,
     )
 
-    enriched_df = assign_archetype(predictions_df, definitions.archetypes)
-    enriched_df = _join_features_for_predicates(
+    # Raw features must be on the DataFrame BEFORE assign_archetype, not
+    # only before evaluate_eligibility. assign_archetype silently skips
+    # centroid features that don't exist in the input (cold-start
+    # behavior) — without raw features joined in, every row would land
+    # on the last archetype with distance=0. Policy-required features
+    # are a hard contract; archetype-referenced features are projected
+    # if present in gold and silently skipped otherwise.
+    scored_df = _join_features_for_predicates(
         spark=spark,
-        enriched_df=enriched_df,
+        scored_df=predictions_df,
         config=config,
         policies=definitions.policies,
+        archetypes=definitions.archetypes,
     )
+    enriched_df = assign_archetype(scored_df, definitions.archetypes)
     eligible_df = evaluate_eligibility(enriched_df, definitions.policies)
     if config.top_shap_drivers_fqn:
         eligible_df = _join_top_shap_drivers(spark, eligible_df, config)
@@ -561,7 +574,7 @@ def build_eligibility_snapshot(config: SnapshotConfig) -> SnapshotResult:
     decisioned_df = apply_decision_policy(
         eligible_df,
         definitions.decision_policy,
-        account_id_column=config.account_id_column,
+        entity_id_column=config.entity_id_column,
         probability_column=config.probability_column,
         risk_tier_high=risk_tier_high,
         risk_tier_medium=risk_tier_medium,
@@ -662,7 +675,7 @@ def _join_top_shap_drivers(
     the cache (the dashboard view falls back to the archetype-global
     drivers from ``archetype_catalog.top_shap_features`` for those).
 
-    The join is a single Spark left join on ``account_id`` — distributed,
+    The join is a single Spark left join on ``entity_id`` — distributed,
     no driver collect.
     """
     if not config.top_shap_drivers_fqn:
@@ -675,14 +688,14 @@ def _join_top_shap_drivers(
         return eligible_df
 
     drivers = spark.sql(
-        f"SELECT account_id, top_drivers AS top_shap_features "
+        f"SELECT entity_id, top_drivers AS top_shap_features "
         f"FROM {config.top_shap_drivers_fqn} "
         f"WHERE model_name = ? AND model_version = ?",
         args=[config.model_name, config.model_version],
     )
-    join_key = config.account_id_column
-    if join_key != "account_id":
-        drivers = drivers.withColumnRenamed("account_id", join_key)
+    join_key = config.entity_id_column
+    if join_key != "entity_id":
+        drivers = drivers.withColumnRenamed("entity_id", join_key)
     # Plain left join — let Spark's cost-based optimizer pick broadcast vs.
     # sort-merge based on the actual driver-table size. Forcing broadcast
     # would OOM the executors on large customer bases (top_shap_drivers
@@ -769,38 +782,52 @@ def _resolve_definition_version(rows: Sequence[Mapping[str, Any]], field_name: s
 
 def _join_features_for_predicates(
     spark: "SparkSession",
-    enriched_df: "DataFrame",
+    scored_df: "DataFrame",
     config: SnapshotConfig,
     policies: Sequence[Mapping[str, Any]],
+    archetypes: Sequence[Mapping[str, Any]] = (),
 ) -> "DataFrame":
-    """Join raw features from gold onto ``enriched_df`` for predicate eval.
+    """Join raw features from gold onto ``scored_df`` before the c05 pipeline.
 
-    The predictions table is the model's output. Eligibility rules
-    reference raw feature columns (e.g. ``active_span_days >= 42``),
-    which live in the gold features table. Without joining them onto
-    ``enriched_df`` the ``evaluate_eligibility`` filter fails with
-    ``UNRESOLVED_COLUMN``. This helper pulls in only the union of
-    ``requires_features`` across active policies — projection pushdown
-    keeps the IO tight — and performs a left join on the shared entity
-    key. The join runs entirely inside Spark; no collect, no broadcast
-    hint (Spark's optimizer picks broadcast vs. sort-merge based on
-    gold-table size).
+    The predictions table is the model's output. Two downstream consumers
+    need raw features back on each row:
+
+    - ``assign_archetype`` reads per-archetype ``centroid_feature_order``
+      and computes scaled Euclidean distance; missing feature columns
+      are silently skipped, so without the join every row lands on the
+      last archetype with distance=0.
+    - ``evaluate_eligibility`` compiles predicates referencing raw
+      feature columns (e.g. ``active_span_days >= 42``); a missing
+      column surfaces as ``UNRESOLVED_COLUMN`` at filter time.
+
+    The projection is the union of:
+    (a) ``requires_features`` across every active policy — hard
+        contract: missing from gold ⇒ RuntimeError.
+    (b) ``centroid_feature_order`` across every active archetype —
+        soft: only projected if present in gold; missing features are
+        silently skipped so cold-start archetypes still work.
+
+    The join runs entirely inside Spark; no collect, no broadcast hint
+    (Spark's CBO picks broadcast vs. sort-merge from real gold size, so
+    executors don't OOM on large gold tables).
 
     Fail-fast guards:
     - Policies need features but ``gold_features_fqn`` is unset.
     - ``gold_features_fqn`` is set but the table does not exist.
-    - Requested features are not present in the gold table's schema.
-    - ``entity_key_column`` is missing from either side.
+    - Policy-required features are missing from gold's schema.
+    - ``entity_id_column`` is missing from either side.
     """
-    needed = _required_features_union(policies)
+    policy_needed = _required_features_union(policies)
+    archetype_wanted = _archetype_feature_union(archetypes)
+    needed = policy_needed | archetype_wanted
     if not needed:
-        return enriched_df
+        return scored_df
 
     if not config.gold_features_fqn:
         raise RuntimeError(
             "Eligibility policies reference raw feature columns "
-            f"({sorted(needed)[:5]}{'…' if len(needed) > 5 else ''}) but "
-            "SnapshotConfig.gold_features_fqn is not set. Point it at the "
+            f"({sorted(policy_needed)[:5]}{'…' if len(policy_needed) > 5 else ''}) "
+            "but SnapshotConfig.gold_features_fqn is not set. Point it at the "
             "gold features table used at training time so c05 can evaluate "
             "the predicates against each scored entity's features."
         )
@@ -810,35 +837,52 @@ def _join_features_for_predicates(
             "does not exist — cannot evaluate eligibility predicates."
         )
 
-    entity_key = config.entity_key_column
+    entity_key = config.entity_id_column
     gold = spark.table(config.gold_features_fqn)
     if entity_key not in gold.columns:
         raise RuntimeError(
-            f"entity_key_column {entity_key!r} missing from "
+            f"entity_id_column {entity_key!r} missing from "
             f"{config.gold_features_fqn}; cannot join features."
         )
-    if entity_key not in enriched_df.columns:
+    if entity_key not in scored_df.columns:
         raise RuntimeError(
-            f"entity_key_column {entity_key!r} missing from predictions "
+            f"entity_id_column {entity_key!r} missing from predictions "
             "dataframe; cannot join features."
         )
 
-    missing = sorted(n for n in needed if n not in gold.columns)
-    if missing:
+    gold_columns = set(gold.columns)
+    missing_policy = sorted(n for n in policy_needed if n not in gold_columns)
+    if missing_policy:
         raise RuntimeError(
             f"Gold features table {config.gold_features_fqn} is missing "
-            f"{len(missing)} feature(s) referenced by eligibility policies: "
-            f"{missing}. The model or the policies drifted — "
+            f"{len(missing_policy)} feature(s) referenced by eligibility policies: "
+            f"{missing_policy}. The model or the policies drifted — "
             "re-run c02 against the current gold schema or fix the gold "
             "table to include these columns."
         )
+    # Archetype-only features that are missing from gold are softly skipped —
+    # assign_archetype is cold-start tolerant and will skip these features per
+    # archetype. Log them for audit so silent degradation is visible.
+    missing_archetype = sorted(
+        n for n in (archetype_wanted - policy_needed) if n not in gold_columns
+    )
+    if missing_archetype:
+        logger.warning(
+            "Gold %s is missing %d archetype centroid feature(s); "
+            "assign_archetype will skip them per archetype: %s",
+            config.gold_features_fqn,
+            len(missing_archetype),
+            missing_archetype,
+        )
 
-    # Drop any collision columns from the features side so enriched's
-    # versions win. Keeps downstream predicate resolution unambiguous.
-    overlap = set(enriched_df.columns) & set(needed) - {entity_key}
-    projection = [entity_key] + [c for c in sorted(needed) if c not in overlap]
+    # Keep only features that exist on gold. Drop any collisions with
+    # columns already on scored_df so scored_df's versions win (predictions
+    # may carry a subset for audit).
+    projected = [n for n in sorted(needed) if n in gold_columns]
+    overlap = set(scored_df.columns) & set(projected) - {entity_key}
+    projection = [entity_key] + [c for c in projected if c not in overlap]
     gold_slim = gold.select(*projection)
-    return enriched_df.join(gold_slim, on=entity_key, how="left")
+    return scored_df.join(gold_slim, on=entity_key, how="left")
 
 
 def _required_features_union(policies: Sequence[Mapping[str, Any]]) -> set:
@@ -846,8 +890,7 @@ def _required_features_union(policies: Sequence[Mapping[str, Any]]) -> set:
 
     Each policy row has a ``requires_features: array<string>`` column.
     The union is the smallest set of gold columns the snapshot needs to
-    project for predicate evaluation, so we don't pull the full gold
-    schema (many columns × many entities) into the join.
+    project for predicate evaluation.
     """
     out: set = set()
     for policy in policies or []:
@@ -855,6 +898,25 @@ def _required_features_union(policies: Sequence[Mapping[str, Any]]) -> set:
         if isinstance(values, str):
             continue
         for name in values:
+            if name:
+                out.add(str(name))
+    return out
+
+
+def _archetype_feature_union(archetypes: Sequence[Mapping[str, Any]]) -> set:
+    """Union of ``centroid_feature_order`` across all active archetypes.
+
+    Same projection-pushdown motivation: assign_archetype needs these
+    columns on the input to compute scaled Euclidean distance to each
+    centroid. The union across archetypes is the minimal projection
+    that serves every archetype's centroid vector.
+    """
+    out: set = set()
+    for arch in archetypes or []:
+        order = arch.get("centroid_feature_order") or []
+        if isinstance(order, str):
+            continue
+        for name in order:
             if name:
                 out.add(str(name))
     return out
@@ -928,13 +990,13 @@ def _apply_holdout_assignment(
     *,
     holdout_fractions: Mapping[str, Any],
     seed_recipe: str,
-    account_id_column: str,
+    entity_id_column: str,
 ) -> "DataFrame":
     """Stable per-(account, playbook) holdout assignment via deterministic hash."""
     from pyspark.sql import functions as F  # noqa: N812
     from pyspark.sql.types import LongType
 
-    seed_columns = _seed_columns(seed_recipe, df.columns, account_id_column)
+    seed_columns = _seed_columns(seed_recipe, df.columns, entity_id_column)
     seed_concat = F.concat_ws("|", *(F.coalesce(F.col(c).cast("string"), F.lit("")) for c in seed_columns))
     seed_concat = F.concat(seed_concat, F.lit("|"), F.col("playbook_id"))
     bucket_col = (F.abs(F.xxhash64(seed_concat)).cast(LongType()) % F.lit(10_000)).cast("double") / F.lit(10_000.0)
@@ -966,13 +1028,13 @@ def _holdout_fraction_lookup(holdout_fractions: Mapping[str, Any]) -> "Column":
     return F.coalesce(map_col[F.col("playbook_id")], F.lit(_DEFAULT_HOLDOUT_FRACTION))
 
 
-def _seed_columns(seed_recipe: str, available: Sequence[str], account_id_column: str) -> List[str]:
+def _seed_columns(seed_recipe: str, available: Sequence[str], entity_id_column: str) -> List[str]:
     if not seed_recipe:
-        return [account_id_column]
+        return [entity_id_column]
     requested = [c.strip() for c in seed_recipe.split(",") if c.strip()]
     resolved = [c for c in requested if c in available]
     if not resolved:
-        return [account_id_column]
+        return [entity_id_column]
     return resolved
 
 
@@ -998,10 +1060,10 @@ def _shape_snapshot_rows(
 
     written_at = datetime.now(timezone.utc)
     base_df = decisioned_df
-    if config.account_id_column != "account_id":
-        base_df = base_df.withColumnRenamed(config.account_id_column, "account_id")
+    if config.entity_id_column != "entity_id":
+        base_df = base_df.withColumnRenamed(config.entity_id_column, "entity_id")
     eligibility_id_col = F.sha1(
-        F.concat_ws("|", F.lit(scoring_run_id), F.col("account_id"), F.col("playbook_id"))
+        F.concat_ws("|", F.lit(scoring_run_id), F.col("entity_id"), F.col("playbook_id"))
     )
     base_df = (
         base_df.withColumn("eligibility_id", eligibility_id_col)
@@ -1023,7 +1085,7 @@ def _shape_snapshot_rows(
         F.col("eligibility_id"),
         F.col("scoring_run_id"),
         F.col("as_of_date"),
-        F.col("account_id"),
+        F.col("entity_id"),
         F.col("playbook_id"),
         F.col("playbook_version"),
         F.col("archetype_id"),

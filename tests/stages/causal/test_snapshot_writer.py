@@ -127,15 +127,15 @@ class TestResolveDefinitionVersion:
 
 class TestSeedColumns:
     def test_empty_recipe_uses_account_id(self):
-        assert _seed_columns("", ["account_id", "x"], "account_id") == ["account_id"]
+        assert _seed_columns("", ["entity_id", "x"], "entity_id") == ["entity_id"]
 
     def test_recipe_filters_to_available(self):
-        cols = _seed_columns("a, b, c", ["a", "c"], "account_id")
+        cols = _seed_columns("a, b, c", ["a", "c"], "entity_id")
         assert cols == ["a", "c"]
 
     def test_no_overlap_falls_back(self):
-        cols = _seed_columns("nope, missing", ["account_id"], "account_id")
-        assert cols == ["account_id"]
+        cols = _seed_columns("nope, missing", ["entity_id"], "entity_id")
+        assert cols == ["entity_id"]
 
 
 class TestResolveRiskTierThresholds:
@@ -214,7 +214,7 @@ from customer_retention.stages.causal.snapshot_writer import (  # noqa: E402
 class TestAssignArchetype:
     def test_empty_archetypes_fills_nulls(self, spark_session):
         df = spark_session.createDataFrame(
-            [(1, 0.1, 0.2), (2, 0.5, 0.6)], ["account_id", "f1", "f2"]
+            [(1, 0.1, 0.2), (2, 0.5, 0.6)], ["entity_id", "f1", "f2"]
         )
         out = assign_archetype(df, [])
         rows = out.collect()
@@ -228,7 +228,7 @@ class TestAssignArchetype:
                 ("a2", 1.0, 1.0),
                 ("a3", 5.0, 5.0),
             ],
-            ["account_id", "f1", "f2"],
+            ["entity_id", "f1", "f2"],
         )
         archetypes = [
             {
@@ -245,13 +245,13 @@ class TestAssignArchetype:
             },
         ]
         out = assign_archetype(df, archetypes)
-        result = {row["account_id"]: row["archetype_id"] for row in out.collect()}
+        result = {row["entity_id"]: row["archetype_id"] for row in out.collect()}
         assert result["a1"] == "near_origin"
         assert result["a2"] == "near_origin"
         assert result["a3"] == "near_origin"  # 5,5 closer to 0,0 than to 10,10
 
     def test_skip_archetype_with_missing_centroid(self, spark_session):
-        df = spark_session.createDataFrame([("a", 0.0, 0.0)], ["account_id", "f1", "f2"])
+        df = spark_session.createDataFrame([("a", 0.0, 0.0)], ["entity_id", "f1", "f2"])
         archetypes = [
             {
                 "archetype_id": "incomplete",
@@ -273,7 +273,7 @@ class TestAssignArchetype:
     def test_missing_feature_columns_handled(self, spark_session):
         # Centroid references columns the predictions DF does not have —
         # the missing column is silently skipped per archetype.
-        df = spark_session.createDataFrame([("a", 0.5)], ["account_id", "f1"])
+        df = spark_session.createDataFrame([("a", 0.5)], ["entity_id", "f1"])
         archetypes = [
             {
                 "archetype_id": "uses_missing_feature",
@@ -299,7 +299,7 @@ class TestAssignArchetype:
           scaled_dist(a2) = sqrt((10-0)²/1² + (50-51)²/500²)   ≈ sqrt(100 + 0.000004) ≈ 10
         """
         df = spark_session.createDataFrame(
-            [("cust", 10.0, 50.0)], ["account_id", "f1", "f2"]
+            [("cust", 10.0, 50.0)], ["entity_id", "f1", "f2"]
         )
         archetypes = [
             {
@@ -326,7 +326,7 @@ class TestAssignArchetype:
     def test_missing_scales_defaults_to_unscaled(self, spark_session):
         """When centroid_feature_scales is absent, behaviour matches plain Euclidean."""
         df = spark_session.createDataFrame(
-            [("a1", 0.0, 0.0), ("a3", 5.0, 5.0)], ["account_id", "f1", "f2"]
+            [("a1", 0.0, 0.0), ("a3", 5.0, 5.0)], ["entity_id", "f1", "f2"]
         )
         archetypes = [
             {
@@ -344,7 +344,7 @@ class TestAssignArchetype:
             },
         ]
         out = assign_archetype(df, archetypes)
-        result = {r["account_id"]: r["archetype_id"] for r in out.collect()}
+        result = {r["entity_id"]: r["archetype_id"] for r in out.collect()}
         assert result["a1"] == "near_origin"
         assert result["a3"] == "near_origin"  # (5,5) is closer to origin than (10,10)
 
@@ -357,7 +357,7 @@ class TestEvaluateEligibility:
                 ("a2", 50, 0.4),
                 ("a3", 200, 0.1),
             ],
-            ["account_id", "tenure_days", "churn_probability"],
+            ["entity_id", "tenure_days", "churn_probability"],
         )
 
     def test_predicate_filter_fans_out_per_policy(self, spark_session):
@@ -391,7 +391,7 @@ class TestEvaluateEligibility:
         out = evaluate_eligibility(df, policies)
         rows = out.collect()
         # a1 matches both policies → 2 rows; a2 none; a3 matches tenure → 1 row
-        triples = sorted((r["account_id"], r["playbook_id"]) for r in rows)
+        triples = sorted((r["entity_id"], r["playbook_id"]) for r in rows)
         assert triples == [
             ("a1", "high_risk_outreach"),
             ("a1", "tenure_check"),
@@ -440,7 +440,7 @@ class TestApplyDecisionPolicy:
             ("a2", "p1", 0.4),
             ("a3", "p1", 0.05),
         ]
-        df = spark.createDataFrame(rows, ["account_id", "playbook_id", "churn_probability"])
+        df = spark.createDataFrame(rows, ["entity_id", "playbook_id", "churn_probability"])
         # evaluate_eligibility would normally add these columns; mimic them
         return (
             df.withColumn("playbook_version", F.lit("v1"))
@@ -454,7 +454,7 @@ class TestApplyDecisionPolicy:
     def test_risk_tier_assignment(self, spark_session):
         df = self._eligible_df(spark_session)
         out = apply_decision_policy(df, None, risk_tier_high=0.6, risk_tier_medium=0.3)
-        tiers = {r["account_id"]: r["risk_tier"] for r in out.collect() if r["playbook_id"] == "p1"}
+        tiers = {r["entity_id"]: r["risk_tier"] for r in out.collect() if r["playbook_id"] == "p1"}
         assert tiers["a1"] == "High"
         assert tiers["a2"] == "Medium"
         assert tiers["a3"] == "Low"
@@ -478,18 +478,18 @@ class TestApplyDecisionPolicy:
         # p1 sorted by churn descending: a1 (0.9), a2 (0.4), a3 (0.05)
         # capacity 1 -> only top row recommended
         p1_rows = [r for r in out.collect() if r["playbook_id"] == "p1"]
-        recommended_p1 = sorted(r["account_id"] for r in p1_rows if r["recommended"])
-        suppressed_p1 = sorted(r["account_id"] for r in p1_rows if not r["recommended"])
+        recommended_p1 = sorted(r["entity_id"] for r in p1_rows if r["recommended"])
+        suppressed_p1 = sorted(r["entity_id"] for r in p1_rows if not r["recommended"])
         assert recommended_p1 == ["a1"]
         assert sorted(suppressed_p1) == ["a2", "a3"]
         for row in p1_rows:
-            if row["account_id"] != "a1":
+            if row["entity_id"] != "a1":
                 assert row["playbook_suppressed_reason"] == "capacity_exceeded"
 
     def test_eligible_playbook_count_per_account(self, spark_session):
         df = self._eligible_df(spark_session)
         out = apply_decision_policy(df, None)
-        counts = {r["account_id"]: r["eligible_playbook_count"] for r in out.collect()}
+        counts = {r["entity_id"]: r["eligible_playbook_count"] for r in out.collect()}
         assert counts["a1"] == 2  # a1 has p1 and p2
         assert counts["a2"] == 1
 
@@ -657,7 +657,7 @@ class TestBuildEligibilitySnapshotE2E:
                 ("a2", 0.4, 5.0, 50.0),
                 ("a3", 0.05, 2.0, 20.0),
             ],
-            ["account_id", "churn_probability", "f1", "f2"],
+            ["entity_id", "churn_probability", "f1", "f2"],
         )
 
         captured: Dict[str, Any] = {}
@@ -688,7 +688,7 @@ class TestBuildEligibilitySnapshotE2E:
 
         # All schema columns must be present in the snapshot passed to write_snapshot
         required_cols = {
-            "eligibility_id", "scoring_run_id", "as_of_date", "account_id",
+            "eligibility_id", "scoring_run_id", "as_of_date", "entity_id",
             "playbook_id", "archetype_id", "archetype_version", "churn_probability",
             "risk_tier", "recommended", "is_holdout", "holdout_stratum",
             "holdout_seed", "playbook_suppressed_reason", "decision_policy_id",
@@ -750,7 +750,7 @@ class TestJoinFeaturesForPredicates:
         enriched = self._enriched_df(["entity_id", "churn_probability"])
         cfg = self._cfg(spark=spark)
         result = _join_features_for_predicates(
-            spark=spark, enriched_df=enriched, config=cfg, policies=[]
+            spark=spark, scored_df=enriched, config=cfg, policies=[]
         )
         assert result is enriched
         spark.table.assert_not_called()
@@ -762,7 +762,7 @@ class TestJoinFeaturesForPredicates:
         policies = [{"requires_features": ["active_span_days"]}]
         with pytest.raises(RuntimeError, match="gold_features_fqn is not set"):
             _join_features_for_predicates(
-                spark=spark, enriched_df=enriched, config=cfg, policies=policies
+                spark=spark, scored_df=enriched, config=cfg, policies=policies
             )
 
     def test_raises_when_gold_table_does_not_exist(self):
@@ -773,7 +773,7 @@ class TestJoinFeaturesForPredicates:
         policies = [{"requires_features": ["active_span_days"]}]
         with pytest.raises(RuntimeError, match="does not exist"):
             _join_features_for_predicates(
-                spark=spark, enriched_df=enriched, config=cfg, policies=policies
+                spark=spark, scored_df=enriched, config=cfg, policies=policies
             )
 
     def test_raises_when_required_features_missing_from_gold(self):
@@ -787,21 +787,21 @@ class TestJoinFeaturesForPredicates:
         policies = [{"requires_features": ["active_span_days", "missing_col"]}]
         with pytest.raises(RuntimeError, match="missing_col"):
             _join_features_for_predicates(
-                spark=spark, enriched_df=enriched, config=cfg, policies=policies
+                spark=spark, scored_df=enriched, config=cfg, policies=policies
             )
 
     def test_raises_when_entity_key_missing_from_gold(self):
         spark = MagicMock()
         spark.catalog.tableExists.return_value = True
         gold_df = MagicMock()
-        gold_df.columns = ["account_id", "active_span_days"]  # no entity_id
+        gold_df.columns = ["some_other_key", "active_span_days"]  # no entity_id
         spark.table.return_value = gold_df
         enriched = self._enriched_df(["entity_id"])
         cfg = self._cfg(spark=spark, gold_features_fqn="cat.sch.gold")
         policies = [{"requires_features": ["active_span_days"]}]
-        with pytest.raises(RuntimeError, match="entity_key_column"):
+        with pytest.raises(RuntimeError, match="entity_id"):
             _join_features_for_predicates(
-                spark=spark, enriched_df=enriched, config=cfg, policies=policies
+                spark=spark, scored_df=enriched, config=cfg, policies=policies
             )
 
     def test_happy_path_projects_and_joins(self):
@@ -824,7 +824,7 @@ class TestJoinFeaturesForPredicates:
             {"requires_features": ["event_count_180d"]},
         ]
         result = _join_features_for_predicates(
-            spark=spark, enriched_df=enriched, config=cfg, policies=policies
+            spark=spark, scored_df=enriched, config=cfg, policies=policies
         )
         # Should select only entity_key + required features (not noise_col)
         selected_args = gold_df.select.call_args[0]
@@ -835,3 +835,122 @@ class TestJoinFeaturesForPredicates:
         # Left join on entity_id
         enriched.join.assert_called_once_with(selected_df, on="entity_id", how="left")
         assert result is enriched
+
+
+class TestArchetypeFeatureUnion:
+    """The archetype centroid features are also needed on the join projection."""
+
+    def test_union_across_archetypes(self):
+        from customer_retention.stages.causal.snapshot_writer import (
+            _archetype_feature_union,
+        )
+        archetypes = [
+            {"centroid_feature_order": ["event_count_180d", "regularity_score"]},
+            {"centroid_feature_order": ["active_span_days", "regularity_score"]},
+        ]
+        assert _archetype_feature_union(archetypes) == {
+            "event_count_180d", "regularity_score", "active_span_days",
+        }
+
+    def test_handles_missing_centroid_feature_order(self):
+        from customer_retention.stages.causal.snapshot_writer import (
+            _archetype_feature_union,
+        )
+        assert _archetype_feature_union([{}, {"centroid_feature_order": None}]) == set()
+
+    def test_empty_archetypes_returns_empty(self):
+        from customer_retention.stages.causal.snapshot_writer import (
+            _archetype_feature_union,
+        )
+        assert _archetype_feature_union([]) == set()
+
+
+class TestJoinFeaturesProjectsBothUnions:
+    """The join must project the union of policy + archetype features."""
+
+    def _cfg(self, **overrides) -> SnapshotConfig:
+        base = dict(
+            spark=MagicMock(),
+            predictions_fqn="cat.sch.predictions",
+            archetype_catalog_fqn="cat.sch.archetype_catalog",
+            eligibility_policy_fqn="cat.sch.eligibility_policy",
+            decision_policy_fqn="cat.sch.decision_policy",
+            snapshot_table_fqn="cat.sch.eligibility_snapshot",
+            model_name="m",
+            model_version="1",
+            gold_features_fqn="cat.sch.gold",
+        )
+        base.update(overrides)
+        return SnapshotConfig(**base)
+
+    def test_projects_archetype_features_even_without_policy_requirements(self):
+        """assign_archetype needs centroid features on input — join must provide."""
+        spark = MagicMock()
+        spark.catalog.tableExists.return_value = True
+        gold_df = MagicMock()
+        gold_df.columns = ["entity_id", "event_count_180d", "regularity_score"]
+        gold_df.select = MagicMock(return_value=MagicMock())
+        spark.table.return_value = gold_df
+
+        scored = MagicMock()
+        scored.columns = ["entity_id", "churn_probability"]
+        scored.join = MagicMock(return_value=scored)
+
+        cfg = self._cfg(spark=spark)
+        policies = [{"requires_features": []}]  # no policy features
+        archetypes = [{"centroid_feature_order": ["event_count_180d", "regularity_score"]}]
+
+        _join_features_for_predicates(
+            spark=spark, scored_df=scored, config=cfg,
+            policies=policies, archetypes=archetypes,
+        )
+        selected_args = gold_df.select.call_args[0]
+        assert "event_count_180d" in selected_args
+        assert "regularity_score" in selected_args
+
+    def test_soft_warns_when_archetype_feature_missing_from_gold(self, caplog):
+        """Archetype features missing from gold log a warning but do not raise."""
+        import logging
+        spark = MagicMock()
+        spark.catalog.tableExists.return_value = True
+        gold_df = MagicMock()
+        gold_df.columns = ["entity_id", "active_span_days"]
+        gold_df.select = MagicMock(return_value=MagicMock())
+        spark.table.return_value = gold_df
+
+        scored = MagicMock()
+        scored.columns = ["entity_id"]
+        scored.join = MagicMock(return_value=scored)
+
+        cfg = self._cfg(spark=spark)
+        policies = [{"requires_features": ["active_span_days"]}]
+        archetypes = [{"centroid_feature_order": ["never_materialized_feature"]}]
+
+        with caplog.at_level(logging.WARNING, logger="customer_retention.stages.causal.snapshot_writer"):
+            _join_features_for_predicates(
+                spark=spark, scored_df=scored, config=cfg,
+                policies=policies, archetypes=archetypes,
+            )
+        assert any("never_materialized_feature" in r.message for r in caplog.records)
+
+    def test_policy_feature_missing_still_raises(self):
+        """Policy-required features are a hard contract even with archetypes in play."""
+        spark = MagicMock()
+        spark.catalog.tableExists.return_value = True
+        gold_df = MagicMock()
+        gold_df.columns = ["entity_id", "event_count_180d"]  # no active_span_days
+        gold_df.select = MagicMock(return_value=MagicMock())
+        spark.table.return_value = gold_df
+
+        scored = MagicMock()
+        scored.columns = ["entity_id"]
+
+        cfg = self._cfg(spark=spark)
+        policies = [{"requires_features": ["active_span_days"]}]
+        archetypes = [{"centroid_feature_order": ["event_count_180d"]}]
+
+        with pytest.raises(RuntimeError, match="active_span_days"):
+            _join_features_for_predicates(
+                spark=spark, scored_df=scored, config=cfg,
+                policies=policies, archetypes=archetypes,
+            )

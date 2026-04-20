@@ -25,7 +25,7 @@ summaries. The cached ``assembled`` DataFrame is unpersisted in a
 
 A second function, ``cluster_centroids_raw``, computes per-cluster mean
 vectors over the *raw* feature columns (joined back to the same rows by
-``account_id``). These raw centroids are what the snapshot writer uses at
+``entity_id``). These raw centroids are what the snapshot writer uses at
 scoring time — runtime archetype assignment is nearest-neighbor on raw
 features, not SHAP values, because SHAP isn't available for new rows.
 
@@ -253,7 +253,7 @@ def cluster_centroids_raw(
     """Compute per-cluster mean vectors over the raw feature columns.
 
     The orchestrator joins the labelled SHAP DataFrame back onto the raw
-    feature DataFrame on ``account_id`` (or whatever the join key is) so
+    feature DataFrame on ``entity_id`` (or whatever the join key is) so
     the same row is represented in both spaces, then calls this helper.
 
     Single Spark job: one ``groupBy(cluster_col).agg(F.mean(...))`` over
