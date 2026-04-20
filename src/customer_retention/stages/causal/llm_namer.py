@@ -1,32 +1,31 @@
-"""Archetype naming and playbook-mapping refinement via an LLM endpoint.
+"""Archetype → playbook matching: deterministic baseline and LLM refinement.
 
-The Phase 2 design (see ``docs/causal_track_implementation_plan.md`` §SHAP →
-Playbook mapping) calls for a hybrid mapping where:
-
-1. A deterministic feature-overlap baseline always produces a candidate set.
-2. An optional LLM call refines the candidate set, picks a human-readable
-   archetype name, and writes a one-sentence rationale per playbook.
-
-This module is the *naming/refinement* layer. The mapper
-(``playbook_mapper.py``) calls into an ``LLMNamer`` instance for step 2;
-when no endpoint is configured the mapper transparently uses the
-``TemplateNamer`` and the deterministic floor stands on its own.
+The mapper (``playbook_mapper.py``) calls into an ``LLMNamer`` instance
+for each archetype. The instance is responsible for two outputs in one
+shot: (a) the archetype's human-readable name and description, and
+(b) a per-playbook fit decision with a rationale. Matching happens in
+prose space — the playbook's ``description`` / ``when_applicable``
+text against the archetype's top SHAP driver names (tokenized) and
+archetype description. Feature column layout is never consulted; that
+would couple business-owned playbook prose to the model's feature
+schema and break the cadence split.
 
 Two implementations ship out of the box:
 
-- **``TemplateNamer``** — deterministic, no network calls. Names are formed
-  from the top SHAP driver (e.g. ``"Archetype 1: high tenure_days"``) and
-  rationales are simple feature-overlap explanations. Always available.
-- **``DatabricksFoundationModelNamer``** — calls a Databricks-hosted Mosaic
-  AI Foundation Model endpoint via the OpenAI-compatible client. Default
-  endpoint is ``databricks-claude-sonnet-4-6`` (pay-per-token, pre-configured
-  in every Databricks workspace). Auth flows through the workspace
-  credentials, so no API keys are required at the framework layer.
+- **``ProseOverlapMatcher``** — deterministic, no network calls. Scores
+  each playbook by the fraction of archetype driver tokens that appear
+  in the playbook's prose. Always available and always non-empty: every
+  (archetype, playbook) pair yields a fit decision so every match shows
+  up in the review queue with a transparent rationale.
+- **``DatabricksFoundationModelNamer``** — calls a Databricks-hosted
+  Mosaic AI Foundation Model endpoint via the OpenAI-compatible client.
+  Default endpoint is ``databricks-claude-sonnet-4-6``. On any failure
+  (network, auth, JSON parse, missing ``openai`` client) it falls back
+  to ``ProseOverlapMatcher`` so the derivation pipeline never blocks,
+  with ``llm_model_id`` suffixed by ``:fallback`` for audit.
 
-A factory ``build_llm_namer(endpoint_name)`` returns the appropriate
-implementation: empty string ⇒ ``TemplateNamer``, otherwise the Databricks
-endpoint client. Failures inside the Databricks call (network, auth, JSON
-parse) fall back to the template — they never block a derivation run.
+Factory: ``build_llm_namer(endpoint_name)``. Empty string ⇒
+``ProseOverlapMatcher``; otherwise the Databricks endpoint client.
 """
 
 from __future__ import annotations
@@ -50,13 +49,14 @@ def is_llm_fallback_id(model_id: Optional[str]) -> bool:
     """Return True when ``model_id`` came from a fallback path.
 
     Used by ``playbook_mapper`` so it can correctly tag a mapping as
-    deterministic-only when the LLM call failed and ``TemplateNamer``
-    produced the result. The ``DatabricksFoundationModelNamer`` appends
-    ``FALLBACK_SUFFIX`` to its endpoint name on every fallback path.
+    deterministic-only when the LLM call failed and
+    ``ProseOverlapMatcher`` produced the result. The
+    ``DatabricksFoundationModelNamer`` appends ``FALLBACK_SUFFIX`` to
+    its endpoint name on every fallback path.
     """
     if not model_id:
         return False
-    return model_id == TemplateNamer.model_id or model_id.endswith(FALLBACK_SUFFIX)
+    return model_id == ProseOverlapMatcher.model_id or model_id.endswith(FALLBACK_SUFFIX)
 
 
 # ---------------------------------------------------------------------------
@@ -134,13 +134,13 @@ def build_llm_namer(
 ) -> LLMNamer:
     """Return the appropriate ``LLMNamer`` for ``endpoint_name``.
 
-    Empty / ``None`` selects ``TemplateNamer``. Otherwise constructs a
+    Empty / ``None`` selects ``ProseOverlapMatcher``. Otherwise constructs a
     ``DatabricksFoundationModelNamer``. The Databricks namer reads
     workspace credentials from the env (``DATABRICKS_HOST``, ``DATABRICKS_TOKEN``)
     when explicit values are not provided.
     """
     if not endpoint_name:
-        return TemplateNamer()
+        return ProseOverlapMatcher()
     return DatabricksFoundationModelNamer(
         endpoint_name=endpoint_name,
         workspace_url=workspace_url,
@@ -153,42 +153,85 @@ def build_llm_namer(
 # ---------------------------------------------------------------------------
 
 
-class TemplateNamer:
-    """Deterministic namer used when no LLM endpoint is configured.
+class ProseOverlapMatcher:
+    """Deterministic prose-overlap namer and always-available baseline.
 
-    Produces stable, predictable names from the top SHAP driver of each
-    cluster and one-sentence rationales by template. Equivalent to the
-    floor of the hybrid design — no network, no JSON parsing, fully
-    reproducible.
+    Role: when no LLM endpoint is configured, or when the Databricks
+    Foundation Model endpoint fails, this namer produces the matching
+    result. It also runs as a transparency signal alongside the LLM so
+    reviewers can compare deterministic overlap against LLM judgment.
+
+    What it matches on:
+
+    - Archetype side — driver feature names from ``top_positive_drivers``
+      and ``top_negative_drivers``, split on underscore/case boundaries
+      into business-meaningful tokens (``nps_score`` → {``nps``,
+      ``score``}; ``missed_payment_count_90d`` → {``missed``, ``payment``,
+      ``count``}).
+    - Playbook side — authoring prose from ``description`` +
+      ``when_applicable`` + ``name`` + ``playbook_id``, tokenized with
+      stopwords removed.
+
+    Feature column layout is never consulted. Matching happens entirely
+    in prose/token space so playbook YAMLs stay coupled to the business
+    vocabulary, not the feature schema.
+
+    Every candidate playbook produces exactly one ``PlaybookFitDecision``
+    so every (archetype, playbook) pair appears in the review queue with
+    a transparent rationale — never silently dropped.
     """
 
-    model_id: str = "template"
+    model_id: str = "prose_overlap"
 
     def name_archetype(self, context: ArchetypeContext) -> ArchetypeNaming:
+        from .playbook_mapper import ArchetypeSummary, prose_overlap_score
+
+        archetype = ArchetypeSummary(
+            cluster_index=context.cluster_index,
+            cluster_size=context.cluster_size,
+            cluster_mean_churn_probability=context.cluster_mean_churn_probability,
+            top_positive_drivers=list(context.top_positive_drivers),
+            top_negative_drivers=list(context.top_negative_drivers),
+        )
+
         top_positive = context.top_positive_drivers[0] if context.top_positive_drivers else None
         top_negative = context.top_negative_drivers[0] if context.top_negative_drivers else None
-        if top_positive:
-            label = f"Archetype {context.cluster_index}: high {top_positive['feature']}"
-        elif top_negative:
-            label = f"Archetype {context.cluster_index}: low {top_negative['feature']}"
-        else:
-            label = f"Archetype {context.cluster_index}"
+        label = self._template_label(context, top_positive, top_negative)
         description = self._template_description(context, top_positive, top_negative)
-        decisions = [
-            PlaybookFitDecision(
-                playbook_id=cand["playbook_id"],
-                fit_score=float(cand.get("overlap_score", 0.0)),
-                rationale=self._template_rationale(cand, top_positive),
+
+        decisions: List[PlaybookFitDecision] = []
+        for cand in context.candidate_playbooks:
+            score, matched_tokens = prose_overlap_score(cand, archetype)
+            rationale = self._template_rationale(cand, score, matched_tokens, top_positive)
+            decisions.append(
+                PlaybookFitDecision(
+                    playbook_id=str(cand.get("playbook_id", "")),
+                    fit_score=float(score),
+                    rationale=rationale,
+                )
             )
-            for cand in context.candidate_playbooks
-        ]
+
+        decisions.sort(key=lambda d: (-d.fit_score, d.playbook_id))
+        confidence = max((d.fit_score for d in decisions), default=0.0)
         return ArchetypeNaming(
             archetype_name=label,
             archetype_description=description,
             playbooks=decisions,
-            confidence=1.0 if decisions else 0.0,
+            confidence=confidence,
             llm_model_id=self.model_id,
         )
+
+    @staticmethod
+    def _template_label(
+        context: ArchetypeContext,
+        top_positive: Optional[Dict[str, Any]],
+        top_negative: Optional[Dict[str, Any]],
+    ) -> str:
+        if top_positive:
+            return f"Archetype {context.cluster_index}: high {top_positive['feature']}"
+        if top_negative:
+            return f"Archetype {context.cluster_index}: low {top_negative['feature']}"
+        return f"Archetype {context.cluster_index}"
 
     @staticmethod
     def _template_description(
@@ -207,14 +250,25 @@ class TemplateNamer:
         return " ".join(parts)
 
     @staticmethod
-    def _template_rationale(candidate: Dict[str, Any], top_positive: Optional[Dict[str, Any]]) -> str:
-        score = candidate.get("overlap_score", 0.0)
+    def _template_rationale(
+        candidate: Dict[str, Any],
+        score: float,
+        matched_tokens: List[str],
+        top_positive: Optional[Dict[str, Any]],
+    ) -> str:
+        if matched_tokens:
+            tokens_str = ", ".join(matched_tokens)
+            return (
+                f"prose-overlap score {score:.2f}; "
+                f"archetype driver tokens matched in playbook prose: [{tokens_str}]"
+            )
         if top_positive:
             return (
-                f"Selected by feature-overlap baseline (score {score:.2f}); "
-                f"top driver {top_positive['feature']} is referenced by this playbook."
+                f"prose-overlap score {score:.2f}; "
+                f"no archetype driver tokens (e.g. from '{top_positive['feature']}') "
+                "appear in this playbook's description or when_applicable prose"
             )
-        return f"Selected by feature-overlap baseline (score {score:.2f})."
+        return f"prose-overlap score {score:.2f}; archetype has no driver tokens to match"
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +285,7 @@ class DatabricksFoundationModelNamer:
     variables ``DATABRICKS_HOST`` and ``DATABRICKS_TOKEN``).
 
     On any failure (network, auth, malformed JSON), the call falls back to
-    ``TemplateNamer`` so the derivation pipeline never blocks.
+    ``ProseOverlapMatcher`` so the derivation pipeline never blocks.
     """
 
     def __init__(
@@ -247,7 +301,7 @@ class DatabricksFoundationModelNamer:
         self.workspace_token = workspace_token or os.environ.get("DATABRICKS_TOKEN", "")
         self.max_tokens = max_tokens
         self.temperature = temperature
-        self._fallback = TemplateNamer()
+        self._fallback = ProseOverlapMatcher()
         self._client: Any = None
 
     @property
@@ -303,7 +357,7 @@ class DatabricksFoundationModelNamer:
 
     def _fallback_with_log(self, reason: str, context: ArchetypeContext) -> ArchetypeNaming:
         logger.warning(
-            "DatabricksFoundationModelNamer fallback (%s); using TemplateNamer", reason
+            "DatabricksFoundationModelNamer fallback (%s); using ProseOverlapMatcher", reason
         )
         result = self._fallback.name_archetype(context)
         result.llm_model_id = self.endpoint_name + FALLBACK_SUFFIX

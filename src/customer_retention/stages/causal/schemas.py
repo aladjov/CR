@@ -144,7 +144,11 @@ def playbook_catalog_schema() -> "StructType":
             t["StructField"]("analysis_population_rule", t["StringType"](), True),
             t["StructField"]("active_from", t["TimestampType"](), True),
             t["StructField"]("active_to", t["TimestampType"](), True),
-            t["StructField"]("target_features", t["ArrayType"](t["StringType"]()), True),
+            # Prose field: "when this playbook has been found useful" — feeds
+            # the archetype→playbook matcher (ProseOverlapMatcher + LLM) alongside
+            # description. Authored by CS leadership in the YAML. No feature
+            # column names; business prose only.
+            t["StructField"]("when_applicable", t["StringType"](), True),
         ]
     )
 
@@ -306,6 +310,12 @@ def eligibility_policy_schema() -> "StructType":
             t["StructField"]("eligibility_rules_sql", t["StringType"](), True),  # rendered SQL for dashboard
             t["StructField"]("requires_features", t["ArrayType"](t["StringType"]()), True),
             t["StructField"]("expected_uplift_pct", t["DoubleType"](), True),
+            # Archetype↔playbook prose/LLM match score in [0, 1]. Review tier
+            # for this row derives from thresholds in DerivationConfig.
+            t["StructField"]("fit_score", t["DoubleType"](), True),
+            # Classification: auto / review / manual / catch_all. Drives c03
+            # auto-promotion decisions and manual-review queue display.
+            t["StructField"]("fit_tier", t["StringType"](), True),
             t["StructField"]("rationale", t["StringType"](), True),
             t["StructField"]("llm_model_id", t["StringType"](), True),
             t["StructField"]("status", t["StringType"](), False),

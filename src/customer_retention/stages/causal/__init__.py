@@ -44,8 +44,15 @@ from .clusterer import (
     select_top_shap_features,
 )
 from .derivation import (
+    DEFAULT_FIT_AUTO_THRESHOLD,
+    DEFAULT_FIT_REVIEW_THRESHOLD,
+    FIT_TIER_AUTO,
+    FIT_TIER_CATCH_ALL,
+    FIT_TIER_MANUAL,
+    FIT_TIER_REVIEW,
     DerivationConfig,
     DerivationResult,
+    FitThresholds,
     derive_archetypes_and_policies,
 )
 from .llm_namer import (
@@ -54,7 +61,7 @@ from .llm_namer import (
     DatabricksFoundationModelNamer,
     LLMNamer,
     PlaybookFitDecision,
-    TemplateNamer,
+    ProseOverlapMatcher,
     build_llm_namer,
 )
 from .playbook_mapper import (
@@ -62,7 +69,7 @@ from .playbook_mapper import (
     ArchetypeSummary,
     extract_features_from_text,
     map_archetypes_to_playbooks,
-    validate_playbook_feature_references,
+    prose_overlap_score,
 )
 from .predicate_compiler import (
     collect_features,
@@ -97,8 +104,15 @@ __all__ = [
     "ClusterCandidate",
     "ClusteringResult",
     "DatabricksFoundationModelNamer",
+    "DEFAULT_FIT_AUTO_THRESHOLD",
+    "DEFAULT_FIT_REVIEW_THRESHOLD",
+    "FIT_TIER_AUTO",
+    "FIT_TIER_CATCH_ALL",
+    "FIT_TIER_MANUAL",
+    "FIT_TIER_REVIEW",
     "DerivationConfig",
     "DerivationResult",
+    "FitThresholds",
     "ExtractedRule",
     "LLMNamer",
     "PlaybookFitDecision",
@@ -106,7 +120,7 @@ __all__ = [
     "SnapshotConfig",
     "SnapshotResult",
     "StabilityDecision",
-    "TemplateNamer",
+    "ProseOverlapMatcher",
     "apply_decision_policy",
     "assign_archetype",
     "auto_promote_stable",
@@ -131,8 +145,8 @@ __all__ = [
     "list_pending_review",
     "map_archetypes_to_playbooks",
     "predicate_to_sql",
+    "prose_overlap_score",
     "select_top_shap_features",
     "unwrap_tree_model",
-    "validate_playbook_feature_references",
     "write_snapshot",
 ]

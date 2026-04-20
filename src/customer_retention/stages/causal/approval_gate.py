@@ -409,6 +409,9 @@ def _merge_archetype_status(
         )
 
 
+AUTO_PROMOTABLE_FIT_TIERS: Tuple[str, ...] = ("auto",)
+
+
 def _merge_policy_status(
     spark: "SparkSession",
     table_fqn: str,
@@ -418,24 +421,28 @@ def _merge_policy_status(
 ) -> int:
     """Cascade auto-promotion to ``eligibility_policy`` via ``arrays_overlap``.
 
-    The previous implementation tried a correlated EXISTS subquery with an
-    inner ``explode`` that had no FROM table reference — Spark rejects
-    that shape. ``arrays_overlap(archetype_ids, array(...))`` is the
-    canonical way to filter array columns by membership.
+    Only rows with ``fit_tier = 'auto'`` (high-confidence match) are
+    auto-promoted. Review-tier and catch-all rows stay ``pending_review``
+    so a human picks them up from c03's review queue. NULL ``fit_tier``
+    is treated as auto-promotable for backwards compatibility with older
+    derivation runs that pre-date the tier column.
     """
     versions_array_placeholders = ", ".join("?" for _ in promoted_archetype_versions)
+    tier_placeholders = ", ".join("?" for _ in AUTO_PROMOTABLE_FIT_TIERS)
     spark.sql(
         f"UPDATE {table_fqn} "
         f"SET status = 'active', approved_by = ?, approved_at = ?, valid_from = ? "
         f"WHERE derivation_run_id = ? "
         f"  AND status = 'pending_review' "
-        f"  AND arrays_overlap(archetype_ids, array({versions_array_placeholders}))",
+        f"  AND arrays_overlap(archetype_ids, array({versions_array_placeholders})) "
+        f"  AND (fit_tier IS NULL OR fit_tier IN ({tier_placeholders}))",
         args=[
             AUTO_APPROVER,
             timestamp,
             timestamp,
             derivation_run_id,
             *promoted_archetype_versions,
+            *AUTO_PROMOTABLE_FIT_TIERS,
         ],
     )
     return len(promoted_archetype_versions)

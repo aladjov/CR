@@ -39,7 +39,7 @@ from .llm_namer import (
     ArchetypeNaming,
     LLMNamer,
     PlaybookFitDecision,
-    TemplateNamer,
+    ProseOverlapMatcher,
     is_llm_fallback_id,
 )
 
@@ -94,86 +94,106 @@ class ArchetypeMapping:
 # ---------------------------------------------------------------------------
 
 
-MIN_OVERLAP_SCORE: float = 0.3
 DEFAULT_TOP_N_DRIVERS: int = 10
+PROSE_MATCH_MIN_SCORE: float = 0.1
 
-
-def validate_playbook_feature_references(
-    playbooks: Sequence[Dict[str, Any]],
-    gold_feature_names: Sequence[str],
-) -> None:
-    """Fail fast when any playbook's ``target_features`` names a missing column.
-
-    Playbooks reference gold feature column names by string literal (e.g.
-    ``target_features: [emails_opens_30d]``). When the gold schema drifts —
-    a column gets renamed or removed — the feature-overlap baseline
-    silently starts matching zero candidates for that playbook, and c02
-    fails with "0 policy rows" three steps later. This validator surfaces
-    the rename/typo at the point where the contract is broken: the
-    playbook YAML references a column that no longer exists.
-
-    Playbooks with no ``target_features`` (empty or missing) are allowed —
-    they still have the prose-based matching path as a fallback during
-    rollout. Only non-empty lists with unknown column names raise.
-    """
-    feature_set = set(gold_feature_names)
-    missing_by_playbook: List[Tuple[str, List[str]]] = []
-    for playbook in playbooks:
-        target_features = playbook.get("target_features")
-        if not isinstance(target_features, list) or not target_features:
-            continue
-        unknown = [f for f in target_features if f not in feature_set]
-        if unknown:
-            missing_by_playbook.append((str(playbook.get("playbook_id", "?")), unknown))
-    if missing_by_playbook:
-        details = "; ".join(
-            f"{pid}: {cols}" for pid, cols in missing_by_playbook
-        )
-        raise RuntimeError(
-            f"Playbook target_features reference gold columns that do not exist "
-            f"in the current feature table — {details}. Gold table has "
-            f"{len(feature_set)} columns. Fix: edit each playbook YAML under "
-            "'catalog.target_features:' to match the current gold schema, "
-            "then re-run c01_publish_definitions and c02."
-        )
+_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*")
+_STOPWORDS: frozenset = frozenset(
+    {
+        "a", "an", "and", "any", "are", "as", "at", "be", "by", "for", "from",
+        "has", "have", "in", "is", "it", "its", "of", "on", "or", "that", "the",
+        "this", "to", "was", "with", "who", "which", "their", "they", "these",
+        "those", "than", "then", "not", "but", "can", "customer", "customers",
+        "account", "accounts", "playbook", "playbooks", "active", "goal", "data",
+        "intended", "population", "target", "trial", "sense", "case", "cases",
+        "run", "runs", "applicable", "use", "used", "when", "where", "what",
+        "one", "two", "three",
+    }
+)
 
 
 def map_archetypes_to_playbooks(
     archetypes: Sequence[ArchetypeSummary],
     playbooks: Sequence[Dict[str, Any]],
-    gold_feature_names: Sequence[str],
+    gold_feature_names: Sequence[str],  # retained for signature stability; unused
     llm_namer: Optional[LLMNamer] = None,
-    min_overlap_score: float = MIN_OVERLAP_SCORE,
 ) -> List[ArchetypeMapping]:
-    """Run the hybrid feature-overlap + LLM refinement mapping.
+    """Match archetypes to playbooks by prose (never by feature columns).
 
-    ``playbooks`` is a list of ``playbook_catalog`` row dicts (the loader's
-    output). ``gold_feature_names`` is the list of column names in the gold
-    feature table — the regex matches feature tokens against this set so
-    arbitrary words in playbook descriptions don't get mistaken for column
-    names.
+    Every playbook is passed to the namer as a candidate for every
+    archetype — the matcher decides fit by comparing the playbook's
+    ``description`` + ``when_applicable`` + ``name`` against the
+    archetype's top SHAP driver names + description. The feature-column
+    schema is not used anywhere in this function; that would couple
+    business-owned playbook prose to the model's feature layout and
+    break the quarterly-vs-per-retrain cadence split.
 
-    When ``llm_namer`` is None, ``TemplateNamer`` is used so the result is
-    always deterministic and self-contained.
+    ``gold_feature_names`` is retained in the signature for caller
+    stability but is no longer consumed. It will be removed once
+    downstream callers drop it.
+
+    Two namer implementations drive the scoring:
+
+    - ``ProseOverlapMatcher`` (deterministic, always available) scores each
+      playbook by lexical overlap between the playbook's prose tokens
+      and the archetype's driver feature names + archetype prose.
+      Always non-empty — every (archetype, playbook) pair produces a
+      ``PlaybookFitDecision`` with a transparent rationale.
+
+    - ``DatabricksFoundationModelNamer`` (LLM-refined) calls the
+      configured Foundation Model endpoint and returns the LLM's
+      per-playbook fit scores + rationale. When the LLM is unavailable,
+      it falls back to ``ProseOverlapMatcher`` — the result is still
+      non-empty.
     """
-    namer = llm_namer or TemplateNamer()
-    playbook_features = _extract_playbook_features(playbooks, gold_feature_names)
+    del gold_feature_names  # intentionally unused; see docstring
+    namer = llm_namer or ProseOverlapMatcher()
     mappings: List[ArchetypeMapping] = []
     for archetype in archetypes:
-        candidates = _candidate_set(archetype, playbooks, playbook_features, min_overlap_score)
+        candidates = _all_playbooks_as_candidates(playbooks)
         context = _build_context(archetype, candidates)
         naming = namer.name_archetype(context)
         mappings.append(_assemble_mapping(archetype, candidates, naming))
     return mappings
 
 
+def prose_overlap_score(
+    playbook: Dict[str, Any], archetype: ArchetypeSummary
+) -> Tuple[float, List[str]]:
+    """Score a (playbook, archetype) prose match. Returns (score, matched_tokens).
+
+    Matching surfaces (both sides):
+
+    - Playbook tokens: ``description`` + ``when_applicable`` + ``name`` +
+      ``playbook_id`` (tokenized on word boundaries, lowercased,
+      stopwords removed).
+    - Archetype tokens: driver feature names (e.g. ``nps_score`` →
+      ``nps``, ``score``) from top positive + top negative SHAP drivers.
+
+    Score is ``|matched| / |archetype_tokens|`` — the fraction of
+    archetype driver concepts this playbook's prose references. Range
+    [0, 1]. A zero score means the playbook mentions none of the
+    archetype's driving concepts; this is surfaced (not filtered) so
+    humans see the full grid at review time.
+    """
+    pb_tokens = _playbook_prose_tokens(playbook)
+    arch_tokens = _archetype_driver_tokens(archetype)
+    if not arch_tokens:
+        return 0.0, []
+    matched = sorted(t for t in arch_tokens if t in pb_tokens)
+    score = len(matched) / len(arch_tokens)
+    return float(score), matched
+
+
 def extract_features_from_text(
     text: str, gold_feature_names: Iterable[str]
 ) -> List[str]:
-    """Public helper: extract gold feature column names from a free-text playbook description.
+    """Extract gold feature column names from a free-text description.
 
-    Used directly by ``_extract_playbook_features`` and exposed for unit
-    tests so the regex behavior can be exercised in isolation.
+    Retained for backwards compatibility with existing tests. No longer
+    used by the mapper — the mapper matches prose tokens directly (see
+    ``prose_overlap_score``) rather than against the gold feature
+    schema.
     """
     if not text:
         return []
@@ -192,77 +212,88 @@ def extract_features_from_text(
 
 
 # ---------------------------------------------------------------------------
-# Internals — feature overlap baseline
+# Internals — prose tokenization + candidate assembly
 # ---------------------------------------------------------------------------
 
 
-def _extract_playbook_features(
-    playbooks: Sequence[Dict[str, Any]], gold_feature_names: Sequence[str]
-) -> Dict[str, List[str]]:
-    feature_set = list(gold_feature_names)
-    out: Dict[str, List[str]] = {}
+def _all_playbooks_as_candidates(
+    playbooks: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Return every playbook annotated with the minimum prose needed for matching.
+
+    The namer (ProseOverlapMatcher or LLM) receives every playbook — no
+    pre-filter. The namer produces one fit decision per candidate, so
+    every (archetype, playbook) pair becomes a policy row at write
+    time, with fit_score + rationale visible for human review.
+    """
+    out: List[Dict[str, Any]] = []
     for playbook in playbooks:
-        text_parts = [
-            str(playbook.get("description") or ""),
-            str(playbook.get("name") or ""),
-            str(playbook.get("analysis_population_rule") or ""),
-        ]
-        target_features = playbook.get("target_features")
-        if isinstance(target_features, list):
-            text_parts.extend(str(f) for f in target_features)
-        out[str(playbook["playbook_id"])] = extract_features_from_text(
-            " ".join(text_parts), feature_set
+        out.append(
+            {
+                "playbook_id": str(playbook.get("playbook_id", "")),
+                "playbook_version": str(playbook.get("version", "1.0.0")),
+                "name": str(playbook.get("name") or ""),
+                "description": str(playbook.get("description") or ""),
+                "when_applicable": str(playbook.get("when_applicable") or ""),
+            }
         )
     return out
 
 
-def _candidate_set(
-    archetype: ArchetypeSummary,
-    playbooks: Sequence[Dict[str, Any]],
-    playbook_features: Dict[str, List[str]],
-    min_overlap_score: float,
-) -> List[Dict[str, Any]]:
-    top_features = _archetype_feature_set(archetype)
-    primary_driver = (
-        archetype.top_positive_drivers[0]["feature"]
-        if archetype.top_positive_drivers
-        else None
-    )
-    candidates: List[Dict[str, Any]] = []
-    for playbook in playbooks:
-        playbook_id = str(playbook["playbook_id"])
-        ref_features = playbook_features.get(playbook_id, [])
-        score = _overlap_score(ref_features, top_features)
-        primary_match = bool(primary_driver and primary_driver in ref_features)
-        if score >= min_overlap_score or primary_match:
-            candidates.append(
-                {
-                    "playbook_id": playbook_id,
-                    "playbook_version": str(playbook.get("version", "1.0.0")),
-                    "description": str(playbook.get("description") or ""),
-                    "overlap_score": float(score),
-                    "primary_driver_match": primary_match,
-                    "matched_features": [f for f in ref_features if f in top_features],
-                }
-            )
-    candidates.sort(key=lambda c: (-c["overlap_score"], c["playbook_id"]))
-    return candidates
+def _playbook_prose_tokens(playbook: Dict[str, Any]) -> set[str]:
+    """Tokenize a playbook's authoring prose. Lowercased, stopwords removed."""
+    parts = [
+        str(playbook.get("description") or ""),
+        str(playbook.get("when_applicable") or ""),
+        str(playbook.get("name") or ""),
+        str(playbook.get("playbook_id") or ""),
+    ]
+    return _tokenize(" ".join(parts))
 
 
-def _archetype_feature_set(archetype: ArchetypeSummary) -> set[str]:
-    features: set[str] = set()
+def _archetype_driver_tokens(archetype: ArchetypeSummary) -> set[str]:
+    """Extract business-meaningful tokens from the archetype's top SHAP drivers.
+
+    Driver feature names like ``nps_score``, ``tenure_days``, and
+    ``missed_payment_count_90d`` carry business semantics. We split on
+    underscore/digit boundaries and drop stopwords, yielding tokens like
+    ``nps``, ``tenure``, ``missed``, ``payment`` that business prose is
+    likely to use.
+    """
+    out: set[str] = set()
     for driver in archetype.top_positive_drivers[:DEFAULT_TOP_N_DRIVERS]:
-        features.add(str(driver["feature"]))
+        out.update(_tokenize_feature_name(str(driver.get("feature", ""))))
     for driver in archetype.top_negative_drivers[:DEFAULT_TOP_N_DRIVERS]:
-        features.add(str(driver["feature"]))
-    return features
+        out.update(_tokenize_feature_name(str(driver.get("feature", ""))))
+    return out
 
 
-def _overlap_score(playbook_features: Sequence[str], archetype_features: set[str]) -> float:
-    if not playbook_features:
-        return 0.0
-    matched = sum(1 for f in playbook_features if f in archetype_features)
-    return matched / len(playbook_features)
+def _tokenize_feature_name(feature_name: str) -> set[str]:
+    """Split a feature column name into business-meaningful word tokens.
+
+    Examples:
+    - ``nps_score`` → {"nps", "score"}
+    - ``missed_payment_count_90d`` → {"missed", "payment", "count"}
+    - ``emails_opens_30d`` → {"emails", "opens"}
+    - ``tenureDaysV2`` → {"tenure", "days"}
+    """
+    if not feature_name:
+        return set()
+    snake = re.sub(r"([a-z])([A-Z])", r"\1_\2", feature_name)
+    return _tokenize(snake.replace("_", " "))
+
+
+def _tokenize(text: str) -> set[str]:
+    out: set[str] = set()
+    for match in _TOKEN_RE.findall(text.lower()):
+        if len(match) <= 2:
+            continue
+        if match.isdigit():
+            continue
+        if match in _STOPWORDS:
+            continue
+        out.add(match)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -287,19 +318,14 @@ def _assemble_mapping(
     naming: ArchetypeNaming,
 ) -> ArchetypeMapping:
     candidate_ids = [str(c["playbook_id"]) for c in candidates]
-    decisions = naming.playbooks or [
-        PlaybookFitDecision(
-            playbook_id=cand_id,
-            fit_score=float(cand["overlap_score"]),
-            rationale="Selected by feature-overlap baseline",
-        )
-        for cand_id, cand in zip(candidate_ids, candidates)
-    ]
-    rationale = "; ".join(f"{d.playbook_id}: {d.rationale}" for d in decisions[:3])
+    decisions = list(naming.playbooks)
+    rationale = "; ".join(
+        f"{d.playbook_id}: {d.rationale}" for d in decisions[:3]
+    )
     derivation_method = (
-        "feature_overlap"
+        "prose_overlap"
         if is_llm_fallback_id(naming.llm_model_id)
-        else "feature_overlap+llm"
+        else "prose_overlap+llm"
     )
     return ArchetypeMapping(
         cluster_index=archetype.cluster_index,

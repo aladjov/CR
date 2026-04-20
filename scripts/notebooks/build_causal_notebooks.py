@@ -269,7 +269,10 @@ _C02_CONFIG_MD = """## Configuration
 
 The cell below is the only place you should need to edit. Every value here is read by the derivation cell — nothing is hardcoded inside the algorithm.
 
-- **`LLM_ENDPOINT_NAME`** — Mosaic AI Foundation Model endpoint used to refine the archetype → playbook mapping and write rationales. Default `databricks-claude-sonnet-4-6` is pay-per-token and pre-configured in every Databricks workspace. Set to `""` to fall back to the deterministic feature-overlap baseline (no network calls).
+- **`LLM_ENDPOINT_NAME`** — Mosaic AI Foundation Model endpoint used to propose the archetype → playbook mapping and write rationales. Default `databricks-claude-sonnet-4-6` is pay-per-token and pre-configured in every Databricks workspace. Set to `""` to run the deterministic prose-overlap matcher only (no network calls). The setup cell below lists every foundation-model endpoint your workspace exposes so you can swap.
+- **`FIT_AUTO_THRESHOLD`** — prose-match fit score (0-1) at or above which an (archetype, playbook) policy row is eligible for auto-promotion in c03. Default `0.5`.
+- **`FIT_REVIEW_THRESHOLD`** — fit score at or above which a policy row is written as `pending_review` (human approves). Below this it is dropped as a regular row. Default `0.2`.
+- **`DEFAULT_PLAYBOOK_ID`** — catch-all playbook id. If an archetype produces no auto/review matches, one policy row is emitted pointing at this playbook so every archetype is served. Set `""` to disable; c02 then flags uncovered archetypes in the summary and `c05` will fail on them.
 - **SHAP attribution** — importance vector + background means are persisted as `shap_attribution.json` on the training run (see `stages.modeling.shap_attribution`). c02 loads that artifact via `MODEL_URI` — no sample-size knob here, no rescoring.
 - **`KMEANS_K_RANGE` / `KMEANS_MAX_K`** — silhouette sweep range; the chosen `k` is capped to keep clusters human-reviewable.
 - **`KMEANS_FEATURE_CAP`** — pre-select this many top features by mean absolute SHAP before clustering. Mandatory on Spark Connect: KMeans serializes the trained model and >100 columns can exceed the 1 GB serialization limit. 50 is a safe interpretable default.
@@ -277,6 +280,10 @@ The cell below is the only place you should need to edit. Every value here is re
 """
 
 _C02_CONFIG_BODY = '''LLM_ENDPOINT_NAME = "databricks-claude-sonnet-4-6"
+
+FIT_AUTO_THRESHOLD = 0.5
+FIT_REVIEW_THRESHOLD = 0.2
+DEFAULT_PLAYBOOK_ID = ""
 
 KMEANS_K_RANGE = (4, 12)
 KMEANS_MAX_K = 8
@@ -288,10 +295,26 @@ FORCE_DERIVATION = False
 
 _C02_DERIVE_BODY = '''from customer_retention.stages.causal import (
     DerivationConfig,
+    FitThresholds,
     build_llm_namer,
     derive_archetypes_and_policies,
 )
 from customer_retention.stages.causal.playbook_loader import load_playbooks_from_dir
+
+
+def _list_foundation_model_endpoints():
+    """Return (configured endpoint reachable?, list of available endpoint names)."""
+    try:
+        from mlflow.deployments import get_deploy_client
+        client = get_deploy_client("databricks")
+        endpoints = client.list_endpoints() or []
+    except Exception as exc:
+        print(f"(Could not list serving endpoints: {exc})")
+        return False, []
+    names = sorted({str(e.get("name", "")) for e in endpoints if e.get("name")})
+    kind_hints = ("claude", "llama", "gpt", "mistral", "dbrx", "mixtral", "gemma")
+    foundation = [n for n in names if any(h in n.lower() for h in kind_hints)]
+    return True, foundation
 
 
 def _model_version_already_derived(_spark, table_fqn, model_name, model_version):
@@ -304,6 +327,21 @@ def _model_version_already_derived(_spark, table_fqn, model_name, model_version)
     )
     return df.limit(1).count() > 0
 
+
+# Transparency: show which endpoint is configured and what else is available.
+print(f"Configured LLM endpoint: {LLM_ENDPOINT_NAME or '(deterministic prose_overlap only)'}")
+_reachable, _available = _list_foundation_model_endpoints()
+if _reachable:
+    if LLM_ENDPOINT_NAME and LLM_ENDPOINT_NAME not in _available:
+        print(
+            f"WARNING: {LLM_ENDPOINT_NAME!r} is not in the reachable foundation model list. "
+            "If matching silently falls back to prose_overlap, that is why."
+        )
+    print("Available foundation-model endpoints on this workspace:")
+    for _name in _available:
+        marker = " *" if _name == LLM_ENDPOINT_NAME else "  "
+        print(f"{marker} {_name}")
+    print("(set LLM_ENDPOINT_NAME in the config cell above to switch)")
 
 derivation_result = None
 if not is_databricks():
@@ -322,7 +360,7 @@ else:
     join_key = "account_id" if "account_id" in training_df.columns else "entity_id"
     catalog_rows, _ = load_playbooks_from_dir(PLAYBOOKS_DIR)
     llm_namer = build_llm_namer(LLM_ENDPOINT_NAME)
-    print(f"LLM namer: {llm_namer.model_id}")
+    print(f"Resolved LLM matcher: {llm_namer.model_id}")
 
     cfg = DerivationConfig(
         spark=spark,
@@ -343,9 +381,18 @@ else:
         feature_cap=KMEANS_FEATURE_CAP,
         llm_endpoint_name=LLM_ENDPOINT_NAME,
         llm_namer=llm_namer,
+        fit_thresholds=FitThresholds(
+            auto=float(FIT_AUTO_THRESHOLD),
+            review=float(FIT_REVIEW_THRESHOLD),
+        ),
+        default_playbook_id=(DEFAULT_PLAYBOOK_ID or None),
     )
     derivation_result = derive_archetypes_and_policies(cfg)
     print(derivation_result.summary())
+    # Per-archetype coverage breakdown so reviewers see exactly which
+    # archetypes hit auto/review/catch_all tiers or have no coverage.
+    for _arch_id, _tiers in derivation_result.coverage_report().items():
+        print(f"  archetype {_arch_id}: tiers={_tiers or ['(none)']}")
 '''
 
 
@@ -451,7 +498,7 @@ else:
         print("All archetypes auto-promoted. Pending review queue is empty.")
     else:
         print(
-            "Pending review queue (re-run this notebook with FORCE_APPROVE=True "
+            "Archetype pending-review queue (re-run this notebook with FORCE_APPROVE=True "
             "after manual review):"
         )
         for row in pending:
@@ -459,6 +506,31 @@ else:
                 f"  - {row['archetype_id']} v{row['archetype_version']} "
                 f"name={row['name']!r} stability={row['stability_vs_prior_version']}"
             )
+
+# Transparency: also show every pending eligibility_policy row with its fit tier
+# and score. The approval gate auto-promotes only 'auto'-tier rows; 'review'
+# and 'catch_all' rows stay pending for human decision.
+if derivation_run_id is not None and spark.catalog.tableExists(ELIGIBILITY_POLICY_FQN):
+    policy_rows = spark.sql(
+        f"SELECT playbook_id, archetype_ids, fit_tier, fit_score, rationale "
+        f"FROM {ELIGIBILITY_POLICY_FQN} "
+        "WHERE derivation_run_id = ? AND status = 'pending_review' "
+        "ORDER BY fit_tier, fit_score DESC",
+        args=[derivation_run_id],
+    ).collect()
+    if policy_rows:
+        print("\\nEligibility policy pending-review queue:")
+        for r in policy_rows:
+            arch = (r["archetype_ids"] or ["?"])[0]
+            score = r["fit_score"]
+            score_str = f"{float(score):.2f}" if score is not None else "n/a"
+            rationale = (r["rationale"] or "")[:140]
+            print(
+                f"  - [{r['fit_tier']}] playbook={r['playbook_id']} "
+                f"archetype_version={arch} fit_score={score_str} | {rationale}"
+            )
+    else:
+        print("\\nEligibility policy pending-review queue is empty.")
 '''
 
 

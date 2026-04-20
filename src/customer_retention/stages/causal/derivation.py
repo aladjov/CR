@@ -56,7 +56,6 @@ from .playbook_mapper import (
     ArchetypeMapping,
     ArchetypeSummary,
     map_archetypes_to_playbooks,
-    validate_playbook_feature_references,
 )
 from .rule_extractor import (
     DEFAULT_MAX_DEPTH,
@@ -76,6 +75,41 @@ if TYPE_CHECKING:  # pragma: no cover
 # ---------------------------------------------------------------------------
 # Public dataclasses
 # ---------------------------------------------------------------------------
+
+
+DEFAULT_FIT_AUTO_THRESHOLD: float = 0.5
+DEFAULT_FIT_REVIEW_THRESHOLD: float = 0.2
+FIT_TIER_AUTO: str = "auto"
+FIT_TIER_REVIEW: str = "review"
+FIT_TIER_MANUAL: str = "manual"
+FIT_TIER_CATCH_ALL: str = "catch_all"
+
+
+@dataclass
+class FitThresholds:
+    """Three-tier cutoffs for archetype-to-playbook fit scores.
+
+    Every (archetype, playbook) pair produced by the namer is classified:
+
+    - ``fit_score >= auto`` → tier ``auto``. Candidate for auto-promotion
+      in c03 approval gate.
+    - ``review <= fit_score < auto`` → tier ``review``. Written as
+      ``pending_review`` for manual approval; never auto-promoted.
+    - ``fit_score < review`` → tier ``manual``. Not written as a regular
+      policy row. If the archetype has no ``auto``/``review`` matches
+      AND a catch-all playbook is configured, one catch-all row is
+      emitted for that archetype (tier ``catch_all``).
+    """
+
+    auto: float = DEFAULT_FIT_AUTO_THRESHOLD
+    review: float = DEFAULT_FIT_REVIEW_THRESHOLD
+
+    def classify(self, fit_score: float) -> str:
+        if fit_score >= self.auto:
+            return FIT_TIER_AUTO
+        if fit_score >= self.review:
+            return FIT_TIER_REVIEW
+        return FIT_TIER_MANUAL
 
 
 @dataclass
@@ -110,6 +144,8 @@ class DerivationConfig:
     llm_namer: Optional[LLMNamer] = None
     write: bool = True
     attribution: Optional[ShapAttribution] = None
+    fit_thresholds: FitThresholds = field(default_factory=FitThresholds)
+    default_playbook_id: Optional[str] = None
 
 
 @dataclass
@@ -129,13 +165,62 @@ class DerivationResult:
     llm_model_id: Optional[str]
 
     def summary(self) -> str:
+        tier_counts = self.fit_tier_counts()
+        tier_str = (
+            f"auto={tier_counts.get(FIT_TIER_AUTO, 0)} "
+            f"review={tier_counts.get(FIT_TIER_REVIEW, 0)} "
+            f"catch_all={tier_counts.get(FIT_TIER_CATCH_ALL, 0)}"
+        )
+        coverage = self.coverage_report()
+        uncovered = [a for a, tiers in coverage.items() if not tiers]
+        uncovered_str = (
+            f"; archetypes without any matched playbook: {sorted(uncovered)}"
+            if uncovered
+            else ""
+        )
         return (
             f"Derivation {self.derivation_run_id}: best_k={self.best_k} "
             f"silhouette={self.best_silhouette:.4f}; "
             f"{len(self.archetype_rows)} archetype rows + "
-            f"{len(self.eligibility_policy_rows)} policy rows; "
-            f"llm={self.llm_model_id or 'template'}"
+            f"{len(self.eligibility_policy_rows)} policy rows ({tier_str}); "
+            f"llm={self.llm_model_id or 'prose_overlap'}"
+            f"{uncovered_str}"
         )
+
+    def fit_tier_counts(self) -> Dict[str, int]:
+        """Count policy rows per fit tier."""
+        counts: Dict[str, int] = {}
+        for row in self.eligibility_policy_rows:
+            tier = str(row.get("fit_tier") or FIT_TIER_MANUAL)
+            counts[tier] = counts.get(tier, 0) + 1
+        return counts
+
+    def coverage_report(self) -> Dict[str, List[str]]:
+        """Map archetype_id → list of tiers present in its policy rows.
+
+        Empty list means the archetype has no eligibility_policy rows at
+        all — not covered even by the catch-all fallback. The c02 summary
+        flags this; c05's snapshot will fail if any active archetype has
+        zero active policy rows.
+        """
+        by_archetype: Dict[str, List[str]] = {
+            str(row.get("archetype_id")): []
+            for row in self.archetype_rows
+        }
+        # archetype_id lookup via archetype_version (policy rows carry version in archetype_ids[0])
+        version_to_id = {
+            str(row.get("archetype_version")): str(row.get("archetype_id"))
+            for row in self.archetype_rows
+        }
+        for policy in self.eligibility_policy_rows:
+            ids = policy.get("archetype_ids") or []
+            for aver in ids:
+                arch_id = version_to_id.get(str(aver))
+                if arch_id is not None:
+                    by_archetype.setdefault(arch_id, []).append(
+                        str(policy.get("fit_tier") or FIT_TIER_MANUAL)
+                    )
+        return by_archetype
 
 
 # ---------------------------------------------------------------------------
@@ -223,9 +308,6 @@ def derive_archetypes_and_policies(config: DerivationConfig) -> DerivationResult
         raw_feature_order=raw_feature_order,
     )
 
-    validate_playbook_feature_references(
-        config.playbooks, config.gold_feature_names
-    )
     namer = config.llm_namer or build_llm_namer(config.llm_endpoint_name)
     mappings = map_archetypes_to_playbooks(
         archetypes=summaries,
@@ -567,11 +649,28 @@ def _build_policy_rows(
     extracted_rules: List[ExtractedRule],
     mappings: List[ArchetypeMapping],
 ) -> List[Dict[str, Any]]:
+    """Apply the three-tier fit classifier and emit eligibility_policy rows.
+
+    Behavior per archetype:
+
+    - Every ``auto``-tier decision → one policy row (status=pending_review;
+      approval gate promotes on fit_score >= auto threshold).
+    - Every ``review``-tier decision → one policy row (status=pending_review;
+      never auto-promoted — human picks from the queue).
+    - ``manual``-tier decisions are NOT written as regular rows.
+    - If an archetype has zero ``auto``/``review`` rows AND
+      ``config.default_playbook_id`` is set, one catch-all row is emitted
+      so every archetype has at least one eligible playbook. The
+      catch-all row carries ``fit_tier = catch_all`` and its rationale
+      flags that the archetype has no proper match.
+    """
     rules_by_index = {rule.cluster_index: rule for rule in extracted_rules}
     archetype_by_cluster = {
         int(row["cluster_raw_id"]): row for row in archetype_rows
     }
     playbook_lookup = {str(p["playbook_id"]): p for p in config.playbooks}
+    thresholds = config.fit_thresholds
+    default_pb_id = (config.default_playbook_id or "").strip() or None
     rows: List[Dict[str, Any]] = []
     for mapping in mappings:
         archetype_row = archetype_by_cluster.get(mapping.cluster_index)
@@ -580,40 +679,96 @@ def _build_policy_rows(
         rule = rules_by_index.get(mapping.cluster_index)
         if rule is None:
             continue
+        emitted_for_archetype = 0
         for decision in mapping.fit_decisions:
             playbook = playbook_lookup.get(decision.playbook_id)
             if not playbook:
                 continue
-            policy_id = _policy_id(
-                model_version=config.model_version,
-                playbook_id=decision.playbook_id,
-                archetype_version=archetype_row["archetype_version"],
-            )
+            tier = thresholds.classify(float(decision.fit_score))
+            if tier == FIT_TIER_MANUAL:
+                continue
             rows.append(
-                {
-                    "eligibility_policy_id": policy_id,
-                    "version": archetype_row["archetype_version"],
-                    "playbook_id": decision.playbook_id,
-                    "playbook_version": str(playbook.get("version", "1.0.0")),
-                    "model_name": config.model_name,
-                    "model_version": config.model_version,
-                    "archetype_ids": [archetype_row["archetype_version"]],
-                    "derivation_run_id": derivation_run_id,
-                    "derivation_method": mapping.derivation_method,
-                    "eligibility_rules": json.dumps(rule.predicate_json),
-                    "eligibility_rules_sql": rule.predicate_sql,
-                    "requires_features": list(rule.used_features),
-                    "expected_uplift_pct": _safe_float(playbook.get("expected_uplift_pct_default")),
-                    "rationale": decision.rationale,
-                    "llm_model_id": mapping.llm_model_id,
-                    "status": "pending_review",
-                    "approved_by": None,
-                    "approved_at": None,
-                    "valid_from": None,
-                    "valid_to": None,
-                }
+                _policy_row(
+                    config=config,
+                    derivation_run_id=derivation_run_id,
+                    archetype_row=archetype_row,
+                    playbook=playbook,
+                    rule=rule,
+                    mapping=mapping,
+                    playbook_id=str(decision.playbook_id),
+                    fit_score=float(decision.fit_score),
+                    fit_tier=tier,
+                    rationale=f"[{tier}] {decision.rationale}",
+                )
             )
+            emitted_for_archetype += 1
+        if emitted_for_archetype == 0 and default_pb_id:
+            default_pb = playbook_lookup.get(default_pb_id)
+            if default_pb is not None:
+                rows.append(
+                    _policy_row(
+                        config=config,
+                        derivation_run_id=derivation_run_id,
+                        archetype_row=archetype_row,
+                        playbook=default_pb,
+                        rule=rule,
+                        mapping=mapping,
+                        playbook_id=default_pb_id,
+                        fit_score=0.0,
+                        fit_tier=FIT_TIER_CATCH_ALL,
+                        rationale=(
+                            f"[{FIT_TIER_CATCH_ALL}] no playbook met fit thresholds "
+                            f"(auto>={thresholds.auto:.2f}, review>={thresholds.review:.2f}) "
+                            f"for archetype {archetype_row.get('archetype_id')}; "
+                            f"routing to default playbook '{default_pb_id}' so the archetype "
+                            "is served, but this needs manual review."
+                        ),
+                    )
+                )
     return rows
+
+
+def _policy_row(
+    config: DerivationConfig,
+    derivation_run_id: str,
+    archetype_row: Dict[str, Any],
+    playbook: Dict[str, Any],
+    rule: "ExtractedRule",
+    mapping: ArchetypeMapping,
+    playbook_id: str,
+    fit_score: float,
+    fit_tier: str,
+    rationale: str,
+) -> Dict[str, Any]:
+    policy_id = _policy_id(
+        model_version=config.model_version,
+        playbook_id=playbook_id,
+        archetype_version=archetype_row["archetype_version"],
+    )
+    return {
+        "eligibility_policy_id": policy_id,
+        "version": archetype_row["archetype_version"],
+        "playbook_id": playbook_id,
+        "playbook_version": str(playbook.get("version", "1.0.0")),
+        "model_name": config.model_name,
+        "model_version": config.model_version,
+        "archetype_ids": [archetype_row["archetype_version"]],
+        "derivation_run_id": derivation_run_id,
+        "derivation_method": mapping.derivation_method,
+        "eligibility_rules": json.dumps(rule.predicate_json),
+        "eligibility_rules_sql": rule.predicate_sql,
+        "requires_features": list(rule.used_features),
+        "expected_uplift_pct": _safe_float(playbook.get("expected_uplift_pct_default")),
+        "fit_score": fit_score,
+        "fit_tier": fit_tier,
+        "rationale": rationale,
+        "llm_model_id": mapping.llm_model_id,
+        "status": "pending_review",
+        "approved_by": None,
+        "approved_at": None,
+        "valid_from": None,
+        "valid_to": None,
+    }
 
 
 def _validate_policy_coverage(

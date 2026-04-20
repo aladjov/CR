@@ -357,6 +357,123 @@ class TestBuildPolicyRows:
         assert rows == []
 
 
+class TestFitThresholdTiers:
+    """Three-tier classification + catch-all routing in _build_policy_rows."""
+
+    def _arch_row(self) -> dict:
+        return {"archetype_id": "arch_0_a", "archetype_version": "v_1", "cluster_raw_id": "0"}
+
+    def _mapping_with_scores(self, scored: dict[str, float]) -> ArchetypeMapping:
+        return ArchetypeMapping(
+            cluster_index=0,
+            archetype_name="T",
+            archetype_description="t",
+            rationale="r",
+            confidence=0.5,
+            candidate_playbook_ids=list(scored.keys()),
+            fit_decisions=[
+                PlaybookFitDecision(playbook_id=pid, fit_score=score, rationale="r")
+                for pid, score in scored.items()
+            ],
+            llm_model_id="prose_overlap",
+        )
+
+    def test_auto_tier_emits_row_with_fit_tier_auto(self):
+        rows = derivation._build_policy_rows(
+            config=_make_config(),
+            derivation_run_id="dx",
+            timestamp=None,
+            archetype_rows=[self._arch_row()],
+            extracted_rules=[_make_extracted_rule(0)],
+            mappings=[self._mapping_with_scores({"low_nps": 0.9})],
+        )
+        assert len(rows) == 1
+        assert rows[0]["fit_tier"] == "auto"
+        assert rows[0]["fit_score"] == pytest.approx(0.9)
+        assert "[auto]" in rows[0]["rationale"]
+
+    def test_review_tier_emits_row_with_fit_tier_review(self):
+        rows = derivation._build_policy_rows(
+            config=_make_config(),
+            derivation_run_id="dx",
+            timestamp=None,
+            archetype_rows=[self._arch_row()],
+            extracted_rules=[_make_extracted_rule(0)],
+            mappings=[self._mapping_with_scores({"low_nps": 0.3})],
+        )
+        assert len(rows) == 1
+        assert rows[0]["fit_tier"] == "review"
+        assert rows[0]["fit_score"] == pytest.approx(0.3)
+
+    def test_manual_tier_is_dropped(self):
+        rows = derivation._build_policy_rows(
+            config=_make_config(),
+            derivation_run_id="dx",
+            timestamp=None,
+            archetype_rows=[self._arch_row()],
+            extracted_rules=[_make_extracted_rule(0)],
+            mappings=[self._mapping_with_scores({"low_nps": 0.05})],
+        )
+        assert rows == []
+
+    def test_catch_all_row_when_configured_and_no_matches(self):
+        cfg = _make_config()
+        cfg.default_playbook_id = "low_nps"
+        rows = derivation._build_policy_rows(
+            config=cfg,
+            derivation_run_id="dx",
+            timestamp=None,
+            archetype_rows=[self._arch_row()],
+            extracted_rules=[_make_extracted_rule(0)],
+            mappings=[self._mapping_with_scores({"low_nps": 0.05, "upsell": 0.01})],
+        )
+        assert len(rows) == 1
+        assert rows[0]["fit_tier"] == "catch_all"
+        assert rows[0]["playbook_id"] == "low_nps"
+        assert "needs manual review" in rows[0]["rationale"]
+
+    def test_no_catch_all_row_when_auto_match_exists(self):
+        cfg = _make_config()
+        cfg.default_playbook_id = "upsell"
+        rows = derivation._build_policy_rows(
+            config=cfg,
+            derivation_run_id="dx",
+            timestamp=None,
+            archetype_rows=[self._arch_row()],
+            extracted_rules=[_make_extracted_rule(0)],
+            mappings=[self._mapping_with_scores({"low_nps": 0.9, "upsell": 0.02})],
+        )
+        tiers = [r["fit_tier"] for r in rows]
+        assert "catch_all" not in tiers
+        assert "auto" in tiers
+
+    def test_no_catch_all_when_default_is_disabled(self):
+        cfg = _make_config()
+        cfg.default_playbook_id = None
+        rows = derivation._build_policy_rows(
+            config=cfg,
+            derivation_run_id="dx",
+            timestamp=None,
+            archetype_rows=[self._arch_row()],
+            extracted_rules=[_make_extracted_rule(0)],
+            mappings=[self._mapping_with_scores({"low_nps": 0.05})],
+        )
+        assert rows == []
+
+    def test_custom_thresholds_classify_differently(self):
+        cfg = _make_config()
+        cfg.fit_thresholds = derivation.FitThresholds(auto=0.3, review=0.1)
+        rows = derivation._build_policy_rows(
+            config=cfg,
+            derivation_run_id="dx",
+            timestamp=None,
+            archetype_rows=[self._arch_row()],
+            extracted_rules=[_make_extracted_rule(0)],
+            mappings=[self._mapping_with_scores({"low_nps": 0.35})],
+        )
+        assert rows[0]["fit_tier"] == "auto"
+
+
 # ---------------------------------------------------------------------------
 # DerivationResult.summary
 # ---------------------------------------------------------------------------

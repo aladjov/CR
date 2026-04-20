@@ -94,44 +94,40 @@ class TestMapArchetypesToPlaybooksTemplatePath:
     def test_archetype_with_matching_driver_finds_playbook(self):
         archetypes = [_make_archetype(1, ["nps_score"], ["tenure_days"])]
         playbooks = [
-            _make_playbook("low_nps", "Recover accounts with declining nps_score scores"),
-            _make_playbook("upsell", "Offer expansion to customers with monthly_revenue growth"),
+            _make_playbook("low_nps", "Recover accounts with declining NPS survey scores"),
+            _make_playbook("upsell", "Offer expansion to customers with revenue growth"),
         ]
         mappings = map_archetypes_to_playbooks(archetypes, playbooks, GOLD_FEATURES)
         assert len(mappings) == 1
+        # All playbooks are candidates now; matching appears in fit_decisions scores.
         assert "low_nps" in mappings[0].candidate_playbook_ids
+        scores = {d.playbook_id: d.fit_score for d in mappings[0].fit_decisions}
+        assert scores["low_nps"] > scores["upsell"]
 
-    def test_overlap_threshold_filters_unrelated(self):
+    def test_unrelated_playbook_appears_with_low_score(self):
+        """Every playbook stays visible for review; unrelated ones get a low score, not filtered out."""
         archetypes = [_make_archetype(1, ["tenure_days"])]
         playbooks = [
-            _make_playbook("upsell", "Offer expansion to customers with monthly_revenue growth")
+            _make_playbook("upsell", "Offer expansion based on revenue growth")
         ]
         mappings = map_archetypes_to_playbooks(archetypes, playbooks, GOLD_FEATURES)
-        assert mappings[0].candidate_playbook_ids == []
+        assert mappings[0].candidate_playbook_ids == ["upsell"]
+        assert mappings[0].fit_decisions[0].fit_score == 0.0
 
-    def test_primary_driver_match_overrides_low_overlap(self):
-        archetypes = [_make_archetype(1, ["tenure_days"])]
-        playbooks = [
-            _make_playbook(
-                "loyalty_program",
-                "Reward customers with high tenure_days and bonus offers and gifts and tokens",
-            )
-        ]
-        mappings = map_archetypes_to_playbooks(archetypes, playbooks, GOLD_FEATURES)
-        assert "loyalty_program" in mappings[0].candidate_playbook_ids
-
-    def test_template_namer_writes_rationale(self):
+    def test_matcher_writes_rationale(self):
         archetypes = [_make_archetype(1, ["nps_score"])]
-        playbooks = [_make_playbook("low_nps", "Recover accounts with low nps_score outreach")]
+        playbooks = [_make_playbook("low_nps", "Recover accounts with low NPS scores")]
         mappings = map_archetypes_to_playbooks(archetypes, playbooks, GOLD_FEATURES)
         assert mappings[0].fit_decisions[0].rationale  # non-empty
-        assert mappings[0].llm_model_id == "template"
+        assert mappings[0].llm_model_id == "prose_overlap"
 
-    def test_archetype_without_drivers_returns_empty_candidate_set(self):
+    def test_archetype_without_drivers_emits_zero_scored_decisions(self):
+        """No driver tokens → every fit decision scores 0, but all playbooks remain candidates."""
         archetypes = [_make_archetype(1, [], [])]
-        playbooks = [_make_playbook("low_nps", "Recover accounts with low nps_score")]
+        playbooks = [_make_playbook("low_nps", "Recover accounts with low NPS scores")]
         mappings = map_archetypes_to_playbooks(archetypes, playbooks, GOLD_FEATURES)
-        assert mappings[0].candidate_playbook_ids == []
+        assert mappings[0].candidate_playbook_ids == ["low_nps"]
+        assert mappings[0].fit_decisions[0].fit_score == 0.0
         assert mappings[0].confidence == 0.0
 
     def test_multiple_archetypes_each_get_their_own_mapping(self):
@@ -140,24 +136,27 @@ class TestMapArchetypesToPlaybooksTemplatePath:
             _make_archetype(2, ["monthly_revenue"]),
         ]
         playbooks = [
-            _make_playbook("low_nps", "Recover accounts with low nps_score outreach"),
-            _make_playbook("upsell", "Offer expansion to customers with monthly_revenue growth"),
+            _make_playbook("low_nps", "Recover accounts with low NPS survey responses"),
+            _make_playbook("upsell", "Offer expansion to customers with monthly revenue growth"),
         ]
         mappings = map_archetypes_to_playbooks(archetypes, playbooks, GOLD_FEATURES)
         assert len(mappings) == 2
-        assert "low_nps" in mappings[0].candidate_playbook_ids
-        assert "upsell" in mappings[1].candidate_playbook_ids
+        scores_0 = {d.playbook_id: d.fit_score for d in mappings[0].fit_decisions}
+        scores_1 = {d.playbook_id: d.fit_score for d in mappings[1].fit_decisions}
+        assert scores_0["low_nps"] > scores_0["upsell"]
+        assert scores_1["upsell"] > scores_1["low_nps"]
 
-    def test_sort_by_overlap_score_descending(self):
+    def test_fit_decisions_sorted_by_score_descending(self):
         archetypes = [_make_archetype(1, ["nps_score"])]
         playbooks = [
-            # a: 1 of 1 referenced features matches → overlap 1.0
-            _make_playbook("a", "matches nps_score only"),
-            # b: 1 of 2 referenced features matches → overlap 0.5
-            _make_playbook("b", "references nps_score and monthly_revenue"),
+            _make_playbook("unrelated", "billing questions and invoice"),
+            _make_playbook("low_nps", "NPS survey recovery outreach"),
         ]
         mappings = map_archetypes_to_playbooks(archetypes, playbooks, GOLD_FEATURES)
-        assert mappings[0].candidate_playbook_ids == ["a", "b"]
+        # fit_decisions are sorted by score descending inside the namer
+        decisions = mappings[0].fit_decisions
+        assert decisions[0].playbook_id == "low_nps"
+        assert decisions[0].fit_score >= decisions[1].fit_score
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +209,7 @@ class TestMapArchetypesToPlaybooksCustomNamer:
         mappings = map_archetypes_to_playbooks(
             archetypes, playbooks, GOLD_FEATURES, llm_namer=namer
         )
-        assert mappings[0].derivation_method == "feature_overlap+llm"
+        assert mappings[0].derivation_method == "prose_overlap+llm"
 
     def test_namer_receives_full_archetype_context(self):
         namer = _StubNamer()
@@ -226,68 +225,78 @@ class TestMapArchetypesToPlaybooksCustomNamer:
 
 
 # ---------------------------------------------------------------------------
-# validate_playbook_feature_references
+# Prose-overlap scoring (no feature column coupling)
 # ---------------------------------------------------------------------------
 
 
-class TestValidatePlaybookFeatureReferences:
-    """Schema-drift guard: playbook target_features must name real gold columns."""
+class TestProseOverlapScore:
+    """Playbook prose ↔ archetype driver-token matching is the baseline."""
 
-    def test_no_raise_when_all_target_features_exist(self):
+    def test_matches_driver_tokens_in_description(self):
+        from customer_retention.stages.causal.playbook_mapper import prose_overlap_score
+
+        playbook = {
+            "playbook_id": "low_nps",
+            "name": "Low NPS",
+            "description": "Engage customers with low NPS survey response",
+            "when_applicable": "",
+        }
+        archetype = _make_archetype(0, top_positive=["nps_score", "survey_count"])
+        score, matched = prose_overlap_score(playbook, archetype)
+        assert score > 0.0
+        assert "nps" in matched
+
+    def test_zero_score_when_no_driver_tokens_in_prose(self):
+        from customer_retention.stages.causal.playbook_mapper import prose_overlap_score
+
+        playbook = {
+            "playbook_id": "x",
+            "name": "X",
+            "description": "something unrelated",
+            "when_applicable": "",
+        }
+        archetype = _make_archetype(0, top_positive=["payment_overdue_days"])
+        score, matched = prose_overlap_score(playbook, archetype)
+        assert score == 0.0
+        assert matched == []
+
+    def test_matches_when_applicable_prose(self):
+        from customer_retention.stages.causal.playbook_mapper import prose_overlap_score
+
+        playbook = {
+            "playbook_id": "credit",
+            "name": "Credit",
+            "description": "Internal workflow",
+            "when_applicable": "Found useful when payment issues are the cause",
+        }
+        archetype = _make_archetype(0, top_positive=["payment_overdue_days"])
+        score, matched = prose_overlap_score(playbook, archetype)
+        assert score > 0.0
+        assert "payment" in matched
+
+    def test_no_feature_column_coupling(self):
+        """The mapper does not consult gold_feature_names anywhere."""
         from customer_retention.stages.causal.playbook_mapper import (
-            validate_playbook_feature_references,
+            map_archetypes_to_playbooks,
         )
-        playbooks = [
-            {"playbook_id": "a", "target_features": ["tenure_days", "nps_score"]},
-        ]
-        validate_playbook_feature_references(playbooks, GOLD_FEATURES)
+        archetypes = [_make_archetype(0, ["nps_score"])]
+        playbooks = [_make_playbook("low_nps", "Low NPS engagement")]
+        mappings_a = map_archetypes_to_playbooks(archetypes, playbooks, [])
+        mappings_b = map_archetypes_to_playbooks(archetypes, playbooks, GOLD_FEATURES)
+        assert len(mappings_a) == len(mappings_b) == 1
+        assert mappings_a[0].fit_decisions[0].fit_score == mappings_b[0].fit_decisions[0].fit_score
 
-    def test_raises_when_target_feature_missing_from_gold(self):
-        import pytest
-
+    def test_every_playbook_becomes_a_candidate(self):
+        """Transparency: all playbooks appear in fit_decisions with a score."""
         from customer_retention.stages.causal.playbook_mapper import (
-            validate_playbook_feature_references,
+            map_archetypes_to_playbooks,
         )
+        archetypes = [_make_archetype(0, ["nps_score"])]
         playbooks = [
-            {"playbook_id": "low_nps", "target_features": ["tenure_days", "renamed_col"]},
+            _make_playbook("a", "about NPS dissatisfaction"),
+            _make_playbook("b", "about billing"),
+            _make_playbook("c", "about onboarding"),
         ]
-        with pytest.raises(RuntimeError, match="renamed_col"):
-            validate_playbook_feature_references(playbooks, GOLD_FEATURES)
-
-    def test_error_message_names_offending_playbook(self):
-        import pytest
-
-        from customer_retention.stages.causal.playbook_mapper import (
-            validate_playbook_feature_references,
-        )
-        playbooks = [
-            {"playbook_id": "low_nps", "target_features": ["bad_col"]},
-        ]
-        with pytest.raises(RuntimeError, match="low_nps"):
-            validate_playbook_feature_references(playbooks, GOLD_FEATURES)
-
-    def test_no_raise_when_target_features_empty(self):
-        from customer_retention.stages.causal.playbook_mapper import (
-            validate_playbook_feature_references,
-        )
-        playbooks = [
-            {"playbook_id": "a", "target_features": []},
-            {"playbook_id": "b"},
-        ]
-        validate_playbook_feature_references(playbooks, GOLD_FEATURES)
-
-    def test_aggregates_multiple_offenders(self):
-        import pytest
-
-        from customer_retention.stages.causal.playbook_mapper import (
-            validate_playbook_feature_references,
-        )
-        playbooks = [
-            {"playbook_id": "a", "target_features": ["ghost_a"]},
-            {"playbook_id": "b", "target_features": ["ghost_b", "tenure_days"]},
-        ]
-        with pytest.raises(RuntimeError) as excinfo:
-            validate_playbook_feature_references(playbooks, GOLD_FEATURES)
-        msg = str(excinfo.value)
-        assert "ghost_a" in msg
-        assert "ghost_b" in msg
+        mappings = map_archetypes_to_playbooks(archetypes, playbooks, GOLD_FEATURES)
+        ids = {d.playbook_id for d in mappings[0].fit_decisions}
+        assert ids == {"a", "b", "c"}
