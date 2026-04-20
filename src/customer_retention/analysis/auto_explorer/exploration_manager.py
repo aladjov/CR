@@ -373,13 +373,15 @@ class ExplorationManager:
         return stem
 
     def _source_event_level_metadata(self, path: Path):
-        """Recover event-level TimeSeriesMetadata from the non-aggregated sibling.
+        """Recover ``(TimeSeriesMetadata, raw_source_path)`` from the non-aggregated sibling.
 
         When `prefer_aggregated=True` serves a `<name>_aggregated_findings.yaml`
         whose `time_series_metadata` is null (aggregation output), the
-        event-level signal still lives on the sibling `<name>_findings.yaml`.
-        Returns its TimeSeriesMetadata when it carries EVENT_LEVEL granularity,
-        else None. Callers use this to preserve event_datasets in merged output.
+        event-level signal and the original raw source both live on the sibling
+        `<name>_findings.yaml`. The sibling's ``source_path`` is the raw CSV /
+        table — the aggregated findings' ``source_path`` points at the
+        aggregation OUTPUT and must not be used as the landing raw source.
+        Returns None when there is no qualifying event-level sibling.
         """
         if "_aggregated" not in path.stem:
             return None
@@ -390,7 +392,7 @@ class ExplorationManager:
         ts_meta = sibling_findings.time_series_metadata
         if ts_meta is None or ts_meta.granularity != DatasetGranularity.EVENT_LEVEL:
             return None
-        return ts_meta
+        return ts_meta, sibling_findings.source_path
 
     def get_skipped_event_findings(self) -> List[Path]:
         """Return event-level findings that were skipped in favor of aggregated versions."""
@@ -423,13 +425,15 @@ class ExplorationManager:
             findings = ExplorationFindings.load(str(path))
 
             # Determine granularity
+            raw_source_override: Optional[str] = None
             if findings.is_time_series and findings.time_series_metadata:
                 granularity = findings.time_series_metadata.granularity
                 entity_col = findings.time_series_metadata.entity_column
                 time_col = findings.time_series_metadata.time_column
             else:
-                source_ts_meta = self._source_event_level_metadata(path)
-                if source_ts_meta is not None:
+                sibling_info = self._source_event_level_metadata(path)
+                if sibling_info is not None:
+                    source_ts_meta, raw_source_override = sibling_info
                     granularity = DatasetGranularity.EVENT_LEVEL
                     entity_col = source_ts_meta.entity_column
                     time_col = source_ts_meta.time_column
@@ -456,6 +460,7 @@ class ExplorationManager:
                     entity_column=entity_col,
                     time_column=time_col,
                     target_column=findings.target_column,
+                    raw_source_path=raw_source_override,
                     excluded=is_excluded,
                 )
             )

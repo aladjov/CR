@@ -202,3 +202,93 @@ class TestRunSpschurnRegressionShape:
 
         assert set(multi.event_datasets) >= {"contract", "subscription"}
         assert multi.event_datasets  # not empty — catches the regression directly
+
+
+class TestAggregatedDatasetRawSourcePath:
+    """When the aggregated findings is the served file, ``DatasetInfo.source_path``
+    points at the aggregation OUTPUT (delta/parquet), not the raw CSV. Generated
+    landing scripts load ``RAW_SOURCES[...]["path"]`` and must read the original
+    raw source — otherwise they receive already-aggregated columns and fail with
+    ``Time column '<raw_ts>' not found``. The sibling non-aggregated findings
+    carries the raw source path; ``list_datasets`` must surface it through
+    ``raw_source_path`` so downstream landing generation can use it.
+    """
+
+    def test_raw_source_path_flows_from_non_aggregated_sibling(self, temp_explorations_dir):
+        _write_event_findings(temp_explorations_dir, "customer_emails")
+        _write_aggregated_findings(temp_explorations_dir, "customer_emails", ts_meta_null=True)
+
+        manager = ExplorationManager(explorations_dir=temp_explorations_dir)
+        datasets = {d.name: d for d in manager.list_datasets()}
+
+        info = datasets["customer_emails"]
+        assert info.granularity == DatasetGranularity.EVENT_LEVEL
+        assert info.source_path == "/data/customer_emails_aggregated.parquet"
+        assert info.raw_source_path == "/data/customer_emails.csv", (
+            "raw_source_path must come from the non-aggregated sibling so the "
+            "landing script reads the original CSV, not aggregated output"
+        )
+
+    def test_multi_dataset_findings_carries_raw_source_path(self, temp_explorations_dir):
+        _write_event_findings(temp_explorations_dir, "customer_emails")
+        _write_aggregated_findings(temp_explorations_dir, "customer_emails", ts_meta_null=True)
+
+        manager = ExplorationManager(explorations_dir=temp_explorations_dir)
+        multi = manager.create_multi_dataset_findings()
+
+        assert multi.datasets["customer_emails"].raw_source_path == "/data/customer_emails.csv"
+
+    def test_no_sibling_leaves_raw_source_path_none(self, temp_explorations_dir):
+        _write_event_findings(temp_explorations_dir, "standalone_events")
+
+        manager = ExplorationManager(explorations_dir=temp_explorations_dir)
+        info = {d.name: d for d in manager.list_datasets()}["standalone_events"]
+        assert info.granularity == DatasetGranularity.EVENT_LEVEL
+        assert info.raw_source_path is None  # findings.source_path already raw
+
+    def test_unity_catalog_source_preserved_through_sibling(self, temp_explorations_dir):
+        """Raw source is a UC 3-part table name, not a file. ``is_table_name``
+        and ``_normalize_source_path`` must preserve it end-to-end so the
+        generated Databricks landing script dispatches to ``spark.read.table``
+        (via ``_is_uc_table_reference``) rather than ``spark.read.csv`` on a
+        bogus filesystem path.
+        """
+        uc_table = "catalog.bronze.customer_emails"
+        agg_table = "catalog.silver.customer_emails_aggregated"
+
+        event_findings = ExplorationFindings(
+            source_path=uc_table,
+            source_format="delta",
+            row_count=20000,
+            column_count=10,
+            columns={},
+            time_series_metadata=TimeSeriesMetadata(
+                granularity=DatasetGranularity.EVENT_LEVEL,
+                entity_column="customer_id",
+                time_column="sent_date",
+                avg_events_per_entity=3.5,
+                unique_entities=6000,
+            ),
+        )
+        event_findings.save(str(temp_explorations_dir / "customer_emails_findings.yaml"))
+
+        agg_findings = ExplorationFindings(
+            source_path=agg_table,
+            source_format="delta",
+            row_count=6000,
+            column_count=48,
+            columns={},
+            time_series_metadata=None,
+        )
+        agg_findings.save(
+            str(temp_explorations_dir / "customer_emails_aggregated_findings.yaml")
+        )
+
+        manager = ExplorationManager(explorations_dir=temp_explorations_dir)
+        info = {d.name: d for d in manager.list_datasets()}["customer_emails"]
+        assert info.granularity == DatasetGranularity.EVENT_LEVEL
+        assert info.source_path == agg_table
+        assert info.raw_source_path == uc_table, (
+            "UC 3-part table name must survive the sibling lookup so the "
+            "generated landing reads raw events via spark.read.table"
+        )

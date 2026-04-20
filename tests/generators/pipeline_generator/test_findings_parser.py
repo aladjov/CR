@@ -1440,6 +1440,122 @@ class TestRawSourcePathResolution:
         assert source.raw_source_path == "/data/customers.csv"
 
 
+class TestAggregatedSiblingRawSourceFlow:
+    """End-to-end: an aggregated findings file served by `prefer_aggregated=True`
+    must not leak its aggregation-output path into the generated landing script.
+    The raw CSV path lives on the non-aggregated sibling and must flow through
+    `ExplorationManager.create_multi_dataset_findings().save()` into the parser.
+    """
+
+    def _write_event_findings(self, dir_, name, *, source_path):
+        from customer_retention.analysis.auto_explorer import ExplorationFindings
+        from customer_retention.analysis.auto_explorer.findings import TimeSeriesMetadata
+        from customer_retention.core.config.column_config import DatasetGranularity
+
+        findings = ExplorationFindings(
+            source_path=source_path,
+            source_format="csv",
+            row_count=2000,
+            column_count=5,
+            columns={},
+            time_series_metadata=TimeSeriesMetadata(
+                granularity=DatasetGranularity.EVENT_LEVEL,
+                entity_column="customer_id",
+                time_column="sent_date",
+                avg_events_per_entity=3.0,
+                unique_entities=500,
+            ),
+        )
+        path = dir_ / f"{name}_findings.yaml"
+        findings.save(str(path))
+        return path
+
+    def _write_aggregated_findings(self, dir_, name, *, source_path):
+        from customer_retention.analysis.auto_explorer import ExplorationFindings
+
+        findings = ExplorationFindings(
+            source_path=source_path,
+            source_format="parquet",
+            row_count=500,
+            column_count=20,
+            columns={},
+            time_series_metadata=None,
+        )
+        path = dir_ / f"{name}_aggregated_findings.yaml"
+        findings.save(str(path))
+        return path
+
+    def test_landing_reads_raw_csv_not_aggregated_output(self, tmp_path):
+        from customer_retention.analysis.auto_explorer.exploration_manager import (
+            ExplorationManager,
+        )
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+        raw_csv = "/data/customer_emails.csv"
+        agg_parquet = "/data/customer_emails_aggregated.parquet"
+        self._write_event_findings(findings_dir, "customer_emails", source_path=raw_csv)
+        self._write_aggregated_findings(findings_dir, "customer_emails", source_path=agg_parquet)
+
+        manager = ExplorationManager(explorations_dir=findings_dir)
+        multi = manager.create_multi_dataset_findings()
+        multi.save(findings_dir / "multi_dataset_findings.yaml")
+
+        config = FindingsParser(str(findings_dir)).parse()
+
+        assert "customer_emails" in config.landing
+        landing = config.landing["customer_emails"]
+        assert landing.raw_source_path == raw_csv, (
+            "landing.raw_source_path must be the raw CSV path from the non-aggregated "
+            "sibling, NOT the aggregation output. Generated landing_customer_emails "
+            f"would otherwise fail at runtime when it cannot find 'sent_date'. "
+            f"got: {landing.raw_source_path}"
+        )
+        assert landing.raw_source_format == "csv"
+
+    def test_unity_catalog_table_source_survives_full_pipeline(self, tmp_path):
+        """Raw source is a UC Delta table (e.g. `catalog.bronze.customer_emails`).
+        The 3-part name must survive ExplorationManager save/reload AND
+        FindingsParser's ``_normalize_source_path`` without getting mangled by
+        ``Path(...).resolve()`` into a bogus filesystem path. The generated
+        Databricks landing uses ``_is_uc_table_reference(path)`` to dispatch
+        to ``spark.read.table`` — that check depends on the table name
+        surviving unchanged (no leading CWD, no scheme stripping).
+        """
+        from customer_retention.analysis.auto_explorer.exploration_manager import (
+            ExplorationManager,
+        )
+        from customer_retention.generators.pipeline_generator.findings_parser import (
+            FindingsParser,
+        )
+
+        findings_dir = tmp_path / "findings"
+        findings_dir.mkdir()
+        uc_table = "catalog.bronze.customer_emails"
+        agg_table = "catalog.silver.customer_emails_aggregated"
+        self._write_event_findings(findings_dir, "customer_emails", source_path=uc_table)
+        self._write_aggregated_findings(findings_dir, "customer_emails", source_path=agg_table)
+
+        manager = ExplorationManager(explorations_dir=findings_dir)
+        multi = manager.create_multi_dataset_findings()
+        multi.save(findings_dir / "multi_dataset_findings.yaml")
+
+        config = FindingsParser(str(findings_dir)).parse()
+
+        landing = config.landing["customer_emails"]
+        assert landing.raw_source_path == uc_table, (
+            f"UC table name must be preserved verbatim, got: {landing.raw_source_path}"
+        )
+        # _infer_format on a table ref (no extension) must default to "delta"
+        assert landing.raw_source_format == "delta"
+
+        source = next(s for s in config.sources if s.name == "customer_emails")
+        assert source.raw_source_path == uc_table
+
+
 class TestSourcePathFilenameOnly:
     def test_source_path_is_filename_only(self, sample_findings_dir):
         """SourceConfig.path should be just the filename for template simplicity."""
