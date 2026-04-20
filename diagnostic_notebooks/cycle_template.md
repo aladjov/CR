@@ -50,6 +50,7 @@ edits suffices.
 - **Offline**:
   - `ruff check src/ diagnostic_notebooks/ <cycle-paths>`
   - `pytest <relevant tests>`
+  - If any exploration notebook cell changed: `python scripts/build_framework_phase_map.py && git add framework/phase_map.yaml`
   - Render-and-grep where applicable: `python -m customer_retention.generators ...
     --output /tmp/fx && grep <literal> /tmp/fx/<file>`
 - **Runtime**:

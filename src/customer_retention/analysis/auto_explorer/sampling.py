@@ -294,6 +294,137 @@ def resolve_segment_entity_ids(
     return result
 
 
+def compute_sampling_universe(
+    frames: dict[str, Any],
+    entity_columns: dict[str, str],
+    *,
+    primary_entity_dataset: str,
+    filters: Optional[dict[str, str]] = None,
+    bridges: Optional[dict[str, dict]] = None,
+    diagnostics: Optional[list] = None,
+) -> SegmentEntitySelection:
+    """Sampler ANCHOR universe — post-filter entity IDs guaranteed
+    to exist in the primary entity dataset.
+
+    Invariant (from `debug/strategy/sps_phased_fix_strategy.md` and
+    `debug/engagement_e4ad6e1b/fix_cycles/001_sampler_universe.md`):
+
+        universe = primary_entity_dataset.entity_ids
+                   INTERSECT (over each filter F) filter_passing(F)
+
+    Auxiliary-dataset presence is NOT required — sparse datasets
+    (request, opportunity_product, etc.) may legitimately lack rows
+    for an entity without that entity being an orphan.
+
+    Bridges resolve a filter on a non-primary dataset whose entity
+    column is not itself the primary key. The bridge spec maps the
+    filter's entity column into the primary entity space before
+    intersection. Example::
+
+        bridges = {
+            "dataset_c": {"through": "dataset_b",
+                          "on": "opp_id", "resolves_to": "id"},
+        }
+
+    When ``diagnostics`` is a list, per-filter input/output counts are
+    appended as :class:`SegmentFilterStats`. Raises ``ValueError`` when
+    the resulting universe is empty (fail-fast: an empty pool is never
+    a silent condition).
+    """
+    if primary_entity_dataset not in frames:
+        raise ValueError(
+            f"primary_entity_dataset {primary_entity_dataset!r} not in frames: "
+            f"{sorted(frames)}",
+        )
+    _expose_frames_as_views(frames)
+    primary_df = frames[primary_entity_dataset]
+    primary_col = entity_columns[primary_entity_dataset]
+    universe = _entity_set_selection(primary_df, primary_col)
+
+    for dataset_name, query_expr in (filters or {}).items():
+        if dataset_name not in frames:
+            raise ValueError(
+                f"filter references missing dataset {dataset_name!r}; "
+                f"available: {sorted(frames)}",
+            )
+        df = frames[dataset_name]
+        filter_entity_col = entity_columns[dataset_name]
+        passing = _filter_passing_selection(df, query_expr, filter_entity_col)
+
+        if dataset_name != primary_entity_dataset and dataset_name in (bridges or {}):
+            passing = _resolve_through_bridge(
+                passing, filter_entity_col, bridges[dataset_name],
+                frames, entity_columns,
+            )
+
+        universe = universe.intersect(passing)
+
+        if diagnostics is not None:
+            input_count = int(safe_len(df[filter_entity_col].drop_duplicates())) \
+                if filter_entity_col in df.columns else 0
+            diagnostics.append(SegmentFilterStats(
+                dataset=dataset_name, filter_expr=query_expr,
+                input_entities=input_count, output_entities=len(passing),
+            ))
+
+    if len(universe) == 0:
+        raise ValueError(
+            "sampling universe is empty after anchoring at "
+            f"{primary_entity_dataset!r} and intersecting "
+            f"{len(filters or {})} filter(s) — check SAMPLE_FILTER_COLUMNS "
+            "and primary dataset coverage",
+        )
+
+    return universe
+
+
+def _entity_set_selection(df: Any, entity_col: str) -> SegmentEntitySelection:
+    if _is_spark_pandas(df):
+        spark_df = as_spark_df(df).select(entity_col).distinct()
+        return SegmentEntitySelection.from_spark_df(spark_df, entity_col)
+    return SegmentEntitySelection.from_set(set(df[entity_col].to_numpy()))
+
+
+def _filter_passing_selection(
+    df: Any, query_expr: str, entity_col: str,
+) -> SegmentEntitySelection:
+    if _is_spark_pandas(df):
+        return SegmentEntitySelection.from_spark_df(
+            _spark_passing_entities(df, query_expr, entity_col), entity_col,
+        )
+    return SegmentEntitySelection.from_set(
+        _pandas_passing_entities(df, query_expr, entity_col),
+    )
+
+
+def _resolve_through_bridge(
+    selection: SegmentEntitySelection,
+    source_entity_col: str,
+    bridge: dict,
+    frames: dict[str, Any],
+    entity_columns: dict[str, str],
+) -> SegmentEntitySelection:
+    through_name = bridge["through"]
+    on = bridge["on"]
+    resolves_to = bridge["resolves_to"]
+    through_df = frames[through_name]
+
+    if selection.is_distributed or _is_spark_pandas(through_df):
+        from pyspark.sql import functions as F  # noqa: N812
+        source = selection._as_spark_df().withColumnRenamed(_SEGMENT_ID_COL, on)
+        bridge_df = as_spark_df(through_df).select(on, resolves_to)
+        resolved = (
+            bridge_df.join(source, on=on, how="inner")
+            .select(F.col(resolves_to).alias(_SEGMENT_ID_COL))
+            .distinct()
+        )
+        return SegmentEntitySelection(resolved.cache())
+    source_ids = set(selection._data)
+    mask = through_df[on].isin(source_ids)
+    resolved_ids = set(through_df.loc[mask, resolves_to].to_numpy())
+    return SegmentEntitySelection.from_set(resolved_ids)
+
+
 def apply_sample_filters(
     df: pd.DataFrame,
     dataset_name: str,

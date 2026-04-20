@@ -28,7 +28,7 @@ from pathlib import Path
 
 import yaml
 
-DEFAULT_ID_REGEXES = [r"\b[0-9a-zA-Z]{18}\b"]
+DEFAULT_ID_REGEXES = [r"\b(?=[0-9a-zA-Z]{18}\b)[0-9a-zA-Z]*[0-9][0-9a-zA-Z]*\b"]
 
 STAGED_DEBUG_PATH_PATTERN = re.compile(r"^debug/")
 

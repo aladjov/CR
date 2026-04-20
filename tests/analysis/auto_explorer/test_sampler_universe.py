@@ -54,19 +54,27 @@ def _expected_universe(
     frames: dict[str, pd.DataFrame],
     entity_columns: dict[str, str],
     filters: dict[str, str] | None = None,
+    primary: str = "dataset_a",
 ) -> set[str]:
     """Oracle — the correct universe by definition.
 
-    Computes the intersection of per-dataset entity sets, then narrows by
-    each filter's passing-ID set. Pure pandas; no dependency on the
-    production implementation. Used as ground truth in every test below.
+    Anchors at the primary entity dataset; narrows by each filter's
+    passing-ID set (a filter on a non-primary dataset counts an entity
+    only when at least one of its rows there passes, matching
+    _spark_passing_entities groupBy-then-all-match semantics). Pure
+    pandas; no dependency on the production implementation.
+
+    Entities appearing in auxiliary datasets but not in the primary are
+    NOT contributed by this oracle — those would be orphans per cycle
+    001's ANCHOR invariant.
     """
-    sets = [set(frames[n][entity_columns[n]].astype(str)) for n in frames]
-    universe = set.intersection(*sets) if sets else set()
+    universe = set(frames[primary][entity_columns[primary]].astype(str))
     for name, expr in (filters or {}).items():
         df = frames[name]
-        passing = df.query(expr)
-        universe &= set(passing[entity_columns[name]].astype(str))
+        pre = df.groupby(entity_columns[name]).size()
+        passed = df.query(expr).groupby(entity_columns[name]).size()
+        passing = {k for k in pre.index if passed.get(k, 0) == pre[k]}
+        universe &= {str(x) for x in passing}
     return universe
 
 
@@ -87,7 +95,11 @@ class TestAnchorInvariant:
         assert actual == expected
         assert len(actual) == 50
 
-    def test_two_datasets_no_filter_intersection(self):
+    def test_two_datasets_no_filter_anchors_at_primary(self):
+        # Auxiliary-dataset presence is NOT required. Entities that exist only
+        # in dataset_b (X0..X74 here, after the slice) must not enter the
+        # universe — they'd be orphans — but primary-only entities (E0..E24)
+        # stay. Intersecting across all datasets was the pre-fix overreach.
         frames = {
             "dataset_a": _frame("id", _ids("E", 0, 50)),
             "dataset_b": _frame("id", _ids("E", 25, 100)),
@@ -95,7 +107,7 @@ class TestAnchorInvariant:
         entity_cols = {"dataset_a": "id", "dataset_b": "id"}
 
         expected = _expected_universe(frames, entity_cols)
-        assert expected == set(_ids("E", 25, 50))
+        assert expected == set(_ids("E", 0, 50))
 
         universe = compute_sampling_universe(
             frames=frames,
@@ -217,16 +229,20 @@ class TestAnchorInvariant:
         assert len(actual & set(primary)) == 50
 
     def test_empty_universe_raises(self):
+        # Under anchor-at-primary, an empty universe requires a filter that
+        # eliminates every primary entity — not merely a disjoint auxiliary.
         frames = {
-            "dataset_a": _frame("id", _ids("E", 0, 50)),
-            "dataset_b": _frame("id", _ids("X", 0, 50)),
+            "dataset_a": _frame("id", _ids("E", 0, 50),
+                                 seg=["keep" if i < 0 else "drop" for i in range(50)]),
         }
-        entity_cols = {"dataset_a": "id", "dataset_b": "id"}
+        entity_cols = {"dataset_a": "id"}
+        filters = {"dataset_a": "seg == 'keep'"}
         with pytest.raises((ValueError, RuntimeError), match=r"(empty|no entities|universe)"):
             compute_sampling_universe(
                 frames=frames,
                 entity_columns=entity_cols,
                 primary_entity_dataset="dataset_a",
+                filters=filters,
             )
 
 
