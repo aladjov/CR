@@ -32,7 +32,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .llm_namer import (
     ArchetypeContext,
@@ -96,6 +96,46 @@ class ArchetypeMapping:
 
 MIN_OVERLAP_SCORE: float = 0.3
 DEFAULT_TOP_N_DRIVERS: int = 10
+
+
+def validate_playbook_feature_references(
+    playbooks: Sequence[Dict[str, Any]],
+    gold_feature_names: Sequence[str],
+) -> None:
+    """Fail fast when any playbook's ``target_features`` names a missing column.
+
+    Playbooks reference gold feature column names by string literal (e.g.
+    ``target_features: [emails_opens_30d]``). When the gold schema drifts —
+    a column gets renamed or removed — the feature-overlap baseline
+    silently starts matching zero candidates for that playbook, and c02
+    fails with "0 policy rows" three steps later. This validator surfaces
+    the rename/typo at the point where the contract is broken: the
+    playbook YAML references a column that no longer exists.
+
+    Playbooks with no ``target_features`` (empty or missing) are allowed —
+    they still have the prose-based matching path as a fallback during
+    rollout. Only non-empty lists with unknown column names raise.
+    """
+    feature_set = set(gold_feature_names)
+    missing_by_playbook: List[Tuple[str, List[str]]] = []
+    for playbook in playbooks:
+        target_features = playbook.get("target_features")
+        if not isinstance(target_features, list) or not target_features:
+            continue
+        unknown = [f for f in target_features if f not in feature_set]
+        if unknown:
+            missing_by_playbook.append((str(playbook.get("playbook_id", "?")), unknown))
+    if missing_by_playbook:
+        details = "; ".join(
+            f"{pid}: {cols}" for pid, cols in missing_by_playbook
+        )
+        raise RuntimeError(
+            f"Playbook target_features reference gold columns that do not exist "
+            f"in the current feature table — {details}. Gold table has "
+            f"{len(feature_set)} columns. Fix: edit each playbook YAML under "
+            "'catalog.target_features:' to match the current gold schema, "
+            "then re-run c01_publish_definitions and c02."
+        )
 
 
 def map_archetypes_to_playbooks(

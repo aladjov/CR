@@ -223,3 +223,71 @@ class TestMapArchetypesToPlaybooksCustomNamer:
         assert ctx.cluster_index == 1
         assert ctx.top_positive_drivers
         assert ctx.top_negative_drivers
+
+
+# ---------------------------------------------------------------------------
+# validate_playbook_feature_references
+# ---------------------------------------------------------------------------
+
+
+class TestValidatePlaybookFeatureReferences:
+    """Schema-drift guard: playbook target_features must name real gold columns."""
+
+    def test_no_raise_when_all_target_features_exist(self):
+        from customer_retention.stages.causal.playbook_mapper import (
+            validate_playbook_feature_references,
+        )
+        playbooks = [
+            {"playbook_id": "a", "target_features": ["tenure_days", "nps_score"]},
+        ]
+        validate_playbook_feature_references(playbooks, GOLD_FEATURES)
+
+    def test_raises_when_target_feature_missing_from_gold(self):
+        import pytest
+
+        from customer_retention.stages.causal.playbook_mapper import (
+            validate_playbook_feature_references,
+        )
+        playbooks = [
+            {"playbook_id": "low_nps", "target_features": ["tenure_days", "renamed_col"]},
+        ]
+        with pytest.raises(RuntimeError, match="renamed_col"):
+            validate_playbook_feature_references(playbooks, GOLD_FEATURES)
+
+    def test_error_message_names_offending_playbook(self):
+        import pytest
+
+        from customer_retention.stages.causal.playbook_mapper import (
+            validate_playbook_feature_references,
+        )
+        playbooks = [
+            {"playbook_id": "low_nps", "target_features": ["bad_col"]},
+        ]
+        with pytest.raises(RuntimeError, match="low_nps"):
+            validate_playbook_feature_references(playbooks, GOLD_FEATURES)
+
+    def test_no_raise_when_target_features_empty(self):
+        from customer_retention.stages.causal.playbook_mapper import (
+            validate_playbook_feature_references,
+        )
+        playbooks = [
+            {"playbook_id": "a", "target_features": []},
+            {"playbook_id": "b"},
+        ]
+        validate_playbook_feature_references(playbooks, GOLD_FEATURES)
+
+    def test_aggregates_multiple_offenders(self):
+        import pytest
+
+        from customer_retention.stages.causal.playbook_mapper import (
+            validate_playbook_feature_references,
+        )
+        playbooks = [
+            {"playbook_id": "a", "target_features": ["ghost_a"]},
+            {"playbook_id": "b", "target_features": ["ghost_b", "tenure_days"]},
+        ]
+        with pytest.raises(RuntimeError) as excinfo:
+            validate_playbook_feature_references(playbooks, GOLD_FEATURES)
+        msg = str(excinfo.value)
+        assert "ghost_a" in msg
+        assert "ghost_b" in msg

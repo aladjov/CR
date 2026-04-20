@@ -144,6 +144,7 @@ def playbook_catalog_schema() -> "StructType":
             t["StructField"]("analysis_population_rule", t["StringType"](), True),
             t["StructField"]("active_from", t["TimestampType"](), True),
             t["StructField"]("active_to", t["TimestampType"](), True),
+            t["StructField"]("target_features", t["ArrayType"](t["StringType"]()), True),
         ]
     )
 

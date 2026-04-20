@@ -121,6 +121,10 @@ def _parse_catalog(catalog: Any) -> Dict[str, Any]:
         "analysis_population_rule": _as_optional_str(catalog.get("analysis_population_rule")),
         "active_from": _as_optional_timestamp(catalog.get("active_from")),
         "active_to": _as_optional_timestamp(catalog.get("active_to")),
+        # List of gold feature column names this playbook targets. Persisted
+        # on playbook_catalog and consumed by playbook_mapper's feature-overlap
+        # baseline (see _extract_playbook_features).
+        "target_features": _as_str_array(catalog.get("target_features")),
     }
 
 
@@ -256,6 +260,19 @@ def _as_int_array(value: Any) -> Union[List[int], None]:
             out.append(int(item))
         except (TypeError, ValueError):
             continue
+    return out
+
+
+def _as_str_array(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if not isinstance(value, Iterable) or isinstance(value, (str, bytes)):
+        return []
+    out: List[str] = []
+    for item in value:
+        text = str(item).strip()
+        if text:
+            out.append(text)
     return out
 
 

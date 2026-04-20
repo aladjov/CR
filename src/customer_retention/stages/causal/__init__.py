@@ -62,6 +62,7 @@ from .playbook_mapper import (
     ArchetypeSummary,
     extract_features_from_text,
     map_archetypes_to_playbooks,
+    validate_playbook_feature_references,
 )
 from .predicate_compiler import (
     collect_features,
@@ -132,5 +133,6 @@ __all__ = [
     "predicate_to_sql",
     "select_top_shap_features",
     "unwrap_tree_model",
+    "validate_playbook_feature_references",
     "write_snapshot",
 ]

@@ -408,3 +408,67 @@ class TestWriteRowsValidation:
         cfg.eligibility_policy_fqn = ""
         with pytest.raises(ValueError, match="eligibility_policy_fqn"):
             derivation._write_rows(cfg, archetype_rows=[], policy_rows=[])
+
+
+class TestValidatePolicyCoverage:
+    """Guard against the silent failure where archetypes exist but no policies map.
+
+    Original incident: playbook YAMLs had prose descriptions with no
+    ``target_features`` and no gold-feature-name tokens, so the overlap
+    baseline returned 0 candidates per archetype, 0 policy rows got written,
+    and c05's snapshot failed three steps downstream with "no active
+    eligibility_policy rows". This validation converts the silent case into
+    a RuntimeError at derivation time.
+    """
+
+    def _archetype_row(self) -> dict:
+        return {"archetype_id": "a1", "archetype_version": "v1"}
+
+    def _mapping_empty_decisions(self) -> ArchetypeMapping:
+        return ArchetypeMapping(
+            cluster_index=0,
+            archetype_name="Archetype 0",
+            archetype_description="",
+            rationale="",
+            confidence=0.0,
+            candidate_playbook_ids=[],
+            fit_decisions=[],
+        )
+
+    def test_raises_when_archetypes_present_but_no_policies(self):
+        cfg = _make_config(write=False)
+        with pytest.raises(RuntimeError, match="0 eligibility_policy rows"):
+            derivation._validate_policy_coverage(
+                archetype_rows=[self._archetype_row()],
+                policy_rows=[],
+                mappings=[self._mapping_empty_decisions()],
+                config=cfg,
+            )
+
+    def test_error_message_names_target_features_fix(self):
+        cfg = _make_config(write=False)
+        with pytest.raises(RuntimeError, match="target_features"):
+            derivation._validate_policy_coverage(
+                archetype_rows=[self._archetype_row()],
+                policy_rows=[],
+                mappings=[self._mapping_empty_decisions()],
+                config=cfg,
+            )
+
+    def test_no_raise_when_policies_present(self):
+        cfg = _make_config(write=False)
+        derivation._validate_policy_coverage(
+            archetype_rows=[self._archetype_row()],
+            policy_rows=[{"eligibility_policy_id": "p1"}],
+            mappings=[self._mapping_empty_decisions()],
+            config=cfg,
+        )
+
+    def test_no_raise_when_no_archetypes(self):
+        cfg = _make_config(write=False)
+        derivation._validate_policy_coverage(
+            archetype_rows=[],
+            policy_rows=[],
+            mappings=[],
+            config=cfg,
+        )

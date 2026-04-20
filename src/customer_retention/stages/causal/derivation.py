@@ -56,6 +56,7 @@ from .playbook_mapper import (
     ArchetypeMapping,
     ArchetypeSummary,
     map_archetypes_to_playbooks,
+    validate_playbook_feature_references,
 )
 from .rule_extractor import (
     DEFAULT_MAX_DEPTH,
@@ -222,6 +223,9 @@ def derive_archetypes_and_policies(config: DerivationConfig) -> DerivationResult
         raw_feature_order=raw_feature_order,
     )
 
+    validate_playbook_feature_references(
+        config.playbooks, config.gold_feature_names
+    )
     namer = config.llm_namer or build_llm_namer(config.llm_endpoint_name)
     mappings = map_archetypes_to_playbooks(
         archetypes=summaries,
@@ -254,6 +258,8 @@ def derive_archetypes_and_policies(config: DerivationConfig) -> DerivationResult
         extracted_rules=extracted_rules,
         mappings=mappings,
     )
+
+    _validate_policy_coverage(archetype_rows, policy_rows, mappings, config)
 
     if config.write:
         _write_rows(config, archetype_rows, policy_rows)
@@ -608,6 +614,48 @@ def _build_policy_rows(
                 }
             )
     return rows
+
+
+def _validate_policy_coverage(
+    archetype_rows: List[Dict[str, Any]],
+    policy_rows: List[Dict[str, Any]],
+    mappings: Sequence[ArchetypeMapping],
+    config: DerivationConfig,
+) -> None:
+    """Fail fast when archetypes were produced but no policy rows were mapped.
+
+    The silent-failure mode is: playbook_catalog rows have no ``target_features``
+    and their descriptions contain no gold feature column names, so
+    ``playbook_mapper._candidate_set`` returns ``[]`` for every archetype,
+    every ``fit_decisions`` is empty, and ``_build_policy_rows`` returns
+    ``[]``. The c02 summary printed "0 policy rows" but nothing downstream
+    caught it, and c05's snapshot failed with "no active eligibility_policy
+    rows" three steps later. Surface the gap here so operators see the
+    root cause at derivation time.
+    """
+    if not archetype_rows or policy_rows:
+        return
+    mapped_any = any(mapping.fit_decisions for mapping in mappings)
+    playbook_count = len(config.playbooks)
+    feature_count = len(config.gold_feature_names)
+    reason = (
+        "no playbook mapped to any archetype — every archetype produced "
+        "an empty fit_decisions list"
+        if not mapped_any
+        else "every mapping produced fit_decisions but _build_policy_rows "
+        "dropped them all (check extracted_rules coverage)"
+    )
+    raise RuntimeError(
+        f"Derivation produced {len(archetype_rows)} archetype rows but 0 "
+        f"eligibility_policy rows: {reason}. Inputs: {playbook_count} "
+        f"playbooks, {feature_count} gold feature columns. Likely cause: "
+        "playbook YAMLs have no 'target_features' list and their prose "
+        "descriptions do not reference any gold feature column names, so "
+        "the feature-overlap baseline matches zero candidates per archetype. "
+        "Add 'target_features: [col_a, col_b, ...]' to each playbook YAML "
+        "under 'catalog:', naming the actual gold feature column names "
+        "the playbook targets, then re-run c01_publish_definitions + c02."
+    )
 
 
 def _write_rows(
