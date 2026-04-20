@@ -763,6 +763,11 @@ else:
         snapshot_table_fqn=ELIGIBILITY_SNAPSHOT_FQN,
         model_name=MODEL_NAME,
         model_version=MODEL_VERSION,
+        # gold_features_fqn is the raw-feature source for predicate evaluation
+        # (eligibility rules like `active_span_days >= 42` reference raw feature
+        # columns that are NOT carried on the predictions table).
+        gold_features_fqn=GOLD_FEATURES_FQN,
+        entity_key_column="entity_id",
         risk_tier_high=SNAPSHOT_RISK_TIER_HIGH,
         risk_tier_medium=SNAPSHOT_RISK_TIER_MEDIUM,
         capacity_partition_column=SNAPSHOT_CAPACITY_PARTITION_COLUMN or None,

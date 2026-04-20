@@ -109,6 +109,13 @@ class SnapshotConfig:
     risk_tier_medium: Optional[float] = None
     capacity_partition_column: Optional[str] = None  # e.g. "csm_owner_id"
     top_shap_drivers_fqn: Optional[str] = None  # optional Phase 2 cache
+    # Gold features source for eligibility-predicate evaluation. The
+    # predictions table carries only scoring outputs; eligibility rules
+    # reference raw feature columns (e.g. active_span_days) and need the
+    # gold table joined in. Required whenever any active policy has a
+    # non-empty requires_features list.
+    gold_features_fqn: Optional[str] = None
+    entity_key_column: str = "entity_id"
 
 
 @dataclass
@@ -538,6 +545,12 @@ def build_eligibility_snapshot(config: SnapshotConfig) -> SnapshotResult:
     )
 
     enriched_df = assign_archetype(predictions_df, definitions.archetypes)
+    enriched_df = _join_features_for_predicates(
+        spark=spark,
+        enriched_df=enriched_df,
+        config=config,
+        policies=definitions.policies,
+    )
     eligible_df = evaluate_eligibility(enriched_df, definitions.policies)
     if config.top_shap_drivers_fqn:
         eligible_df = _join_top_shap_drivers(spark, eligible_df, config)
@@ -752,6 +765,99 @@ def _resolve_definition_version(rows: Sequence[Mapping[str, Any]], field_name: s
     if not versions:
         return ""
     return versions[-1]
+
+
+def _join_features_for_predicates(
+    spark: "SparkSession",
+    enriched_df: "DataFrame",
+    config: SnapshotConfig,
+    policies: Sequence[Mapping[str, Any]],
+) -> "DataFrame":
+    """Join raw features from gold onto ``enriched_df`` for predicate eval.
+
+    The predictions table is the model's output. Eligibility rules
+    reference raw feature columns (e.g. ``active_span_days >= 42``),
+    which live in the gold features table. Without joining them onto
+    ``enriched_df`` the ``evaluate_eligibility`` filter fails with
+    ``UNRESOLVED_COLUMN``. This helper pulls in only the union of
+    ``requires_features`` across active policies — projection pushdown
+    keeps the IO tight — and performs a left join on the shared entity
+    key. The join runs entirely inside Spark; no collect, no broadcast
+    hint (Spark's optimizer picks broadcast vs. sort-merge based on
+    gold-table size).
+
+    Fail-fast guards:
+    - Policies need features but ``gold_features_fqn`` is unset.
+    - ``gold_features_fqn`` is set but the table does not exist.
+    - Requested features are not present in the gold table's schema.
+    - ``entity_key_column`` is missing from either side.
+    """
+    needed = _required_features_union(policies)
+    if not needed:
+        return enriched_df
+
+    if not config.gold_features_fqn:
+        raise RuntimeError(
+            "Eligibility policies reference raw feature columns "
+            f"({sorted(needed)[:5]}{'…' if len(needed) > 5 else ''}) but "
+            "SnapshotConfig.gold_features_fqn is not set. Point it at the "
+            "gold features table used at training time so c05 can evaluate "
+            "the predicates against each scored entity's features."
+        )
+    if not spark.catalog.tableExists(config.gold_features_fqn):
+        raise RuntimeError(
+            f"SnapshotConfig.gold_features_fqn={config.gold_features_fqn!r} "
+            "does not exist — cannot evaluate eligibility predicates."
+        )
+
+    entity_key = config.entity_key_column
+    gold = spark.table(config.gold_features_fqn)
+    if entity_key not in gold.columns:
+        raise RuntimeError(
+            f"entity_key_column {entity_key!r} missing from "
+            f"{config.gold_features_fqn}; cannot join features."
+        )
+    if entity_key not in enriched_df.columns:
+        raise RuntimeError(
+            f"entity_key_column {entity_key!r} missing from predictions "
+            "dataframe; cannot join features."
+        )
+
+    missing = sorted(n for n in needed if n not in gold.columns)
+    if missing:
+        raise RuntimeError(
+            f"Gold features table {config.gold_features_fqn} is missing "
+            f"{len(missing)} feature(s) referenced by eligibility policies: "
+            f"{missing}. The model or the policies drifted — "
+            "re-run c02 against the current gold schema or fix the gold "
+            "table to include these columns."
+        )
+
+    # Drop any collision columns from the features side so enriched's
+    # versions win. Keeps downstream predicate resolution unambiguous.
+    overlap = set(enriched_df.columns) & set(needed) - {entity_key}
+    projection = [entity_key] + [c for c in sorted(needed) if c not in overlap]
+    gold_slim = gold.select(*projection)
+    return enriched_df.join(gold_slim, on=entity_key, how="left")
+
+
+def _required_features_union(policies: Sequence[Mapping[str, Any]]) -> set:
+    """Union of ``requires_features`` across all active policies.
+
+    Each policy row has a ``requires_features: array<string>`` column.
+    The union is the smallest set of gold columns the snapshot needs to
+    project for predicate evaluation, so we don't pull the full gold
+    schema (many columns × many entities) into the join.
+    """
+    out: set = set()
+    for policy in policies or []:
+        values = policy.get("requires_features") or []
+        if isinstance(values, str):
+            continue
+        for name in values:
+            if name:
+                out.add(str(name))
+    return out
 
 
 def _load_latest_predictions(spark: "SparkSession", config: SnapshotConfig) -> "DataFrame":

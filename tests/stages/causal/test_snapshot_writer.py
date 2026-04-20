@@ -22,7 +22,9 @@ from customer_retention.stages.causal.snapshot_writer import (
     _capacity_lookup_column,
     _compile_suppression,
     _holdout_fraction_lookup,
+    _join_features_for_predicates,
     _parse_predicate,
+    _required_features_union,
     _resolve_definition_version,
     _resolve_risk_tier_thresholds,
     _seed_columns,
@@ -696,3 +698,140 @@ class TestBuildEligibilitySnapshotE2E:
         assert required_cols.issubset(captured["columns"]), (
             f"missing snapshot columns: {required_cols - captured['columns']}"
         )
+
+
+# ---------------------------------------------------------------------------
+# _required_features_union + _join_features_for_predicates
+# ---------------------------------------------------------------------------
+
+
+class TestRequiredFeaturesUnion:
+    def test_union_across_policies(self):
+        policies = [
+            {"requires_features": ["active_span_days", "event_count_180d"]},
+            {"requires_features": ["event_count_180d", "regularity_score"]},
+        ]
+        assert _required_features_union(policies) == {
+            "active_span_days", "event_count_180d", "regularity_score",
+        }
+
+    def test_empty_policies_returns_empty(self):
+        assert _required_features_union([]) == set()
+
+    def test_handles_missing_requires_features(self):
+        assert _required_features_union([{}, {"requires_features": None}]) == set()
+
+
+class TestJoinFeaturesForPredicates:
+    """Drives the fix for UNRESOLVED_COLUMN on missing raw features in c05."""
+
+    def _cfg(self, **overrides) -> SnapshotConfig:
+        base = dict(
+            spark=MagicMock(),
+            predictions_fqn="cat.sch.predictions",
+            archetype_catalog_fqn="cat.sch.archetype_catalog",
+            eligibility_policy_fqn="cat.sch.eligibility_policy",
+            decision_policy_fqn="cat.sch.decision_policy",
+            snapshot_table_fqn="cat.sch.eligibility_snapshot",
+            model_name="m",
+            model_version="1",
+        )
+        base.update(overrides)
+        return SnapshotConfig(**base)
+
+    def _enriched_df(self, columns):
+        df = MagicMock(name="EnrichedDF")
+        df.columns = list(columns)
+        df.join = MagicMock(return_value=df)
+        return df
+
+    def test_no_op_when_no_policy_requires_features(self):
+        spark = MagicMock()
+        enriched = self._enriched_df(["entity_id", "churn_probability"])
+        cfg = self._cfg(spark=spark)
+        result = _join_features_for_predicates(
+            spark=spark, enriched_df=enriched, config=cfg, policies=[]
+        )
+        assert result is enriched
+        spark.table.assert_not_called()
+
+    def test_raises_when_gold_missing_and_features_needed(self):
+        spark = MagicMock()
+        cfg = self._cfg(spark=spark, gold_features_fqn=None)
+        enriched = self._enriched_df(["entity_id"])
+        policies = [{"requires_features": ["active_span_days"]}]
+        with pytest.raises(RuntimeError, match="gold_features_fqn is not set"):
+            _join_features_for_predicates(
+                spark=spark, enriched_df=enriched, config=cfg, policies=policies
+            )
+
+    def test_raises_when_gold_table_does_not_exist(self):
+        spark = MagicMock()
+        spark.catalog.tableExists.return_value = False
+        cfg = self._cfg(spark=spark, gold_features_fqn="cat.sch.gold")
+        enriched = self._enriched_df(["entity_id"])
+        policies = [{"requires_features": ["active_span_days"]}]
+        with pytest.raises(RuntimeError, match="does not exist"):
+            _join_features_for_predicates(
+                spark=spark, enriched_df=enriched, config=cfg, policies=policies
+            )
+
+    def test_raises_when_required_features_missing_from_gold(self):
+        spark = MagicMock()
+        spark.catalog.tableExists.return_value = True
+        gold_df = MagicMock()
+        gold_df.columns = ["entity_id", "active_span_days"]
+        spark.table.return_value = gold_df
+        enriched = self._enriched_df(["entity_id", "churn_probability"])
+        cfg = self._cfg(spark=spark, gold_features_fqn="cat.sch.gold")
+        policies = [{"requires_features": ["active_span_days", "missing_col"]}]
+        with pytest.raises(RuntimeError, match="missing_col"):
+            _join_features_for_predicates(
+                spark=spark, enriched_df=enriched, config=cfg, policies=policies
+            )
+
+    def test_raises_when_entity_key_missing_from_gold(self):
+        spark = MagicMock()
+        spark.catalog.tableExists.return_value = True
+        gold_df = MagicMock()
+        gold_df.columns = ["account_id", "active_span_days"]  # no entity_id
+        spark.table.return_value = gold_df
+        enriched = self._enriched_df(["entity_id"])
+        cfg = self._cfg(spark=spark, gold_features_fqn="cat.sch.gold")
+        policies = [{"requires_features": ["active_span_days"]}]
+        with pytest.raises(RuntimeError, match="entity_key_column"):
+            _join_features_for_predicates(
+                spark=spark, enriched_df=enriched, config=cfg, policies=policies
+            )
+
+    def test_happy_path_projects_and_joins(self):
+        """Validates projection pushdown + left join semantics."""
+        spark = MagicMock()
+        spark.catalog.tableExists.return_value = True
+        gold_df = MagicMock()
+        gold_df.columns = [
+            "entity_id", "active_span_days", "event_count_180d", "noise_col",
+        ]
+        # Track what columns we select before joining
+        selected_df = MagicMock()
+        gold_df.select = MagicMock(return_value=selected_df)
+        spark.table.return_value = gold_df
+
+        enriched = self._enriched_df(["entity_id", "churn_probability"])
+        cfg = self._cfg(spark=spark, gold_features_fqn="cat.sch.gold")
+        policies = [
+            {"requires_features": ["active_span_days"]},
+            {"requires_features": ["event_count_180d"]},
+        ]
+        result = _join_features_for_predicates(
+            spark=spark, enriched_df=enriched, config=cfg, policies=policies
+        )
+        # Should select only entity_key + required features (not noise_col)
+        selected_args = gold_df.select.call_args[0]
+        assert "entity_id" in selected_args
+        assert "active_span_days" in selected_args
+        assert "event_count_180d" in selected_args
+        assert "noise_col" not in selected_args
+        # Left join on entity_id
+        enriched.join.assert_called_once_with(selected_df, on="entity_id", how="left")
+        assert result is enriched
