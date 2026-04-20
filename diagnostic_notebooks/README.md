@@ -26,14 +26,23 @@ inside `debug/engagement_a/` (gitignored).
    ```
    debug/engagement_a/
      .check_privacy.yaml            # denylist: client names, catalogs, etc.
+     .engagement.yaml               # framework_repo_root for Databricks sys.path
      probe.ipynb                    # copy of probe_template.ipynb, with DATASETS filled
-     fix_cycles/
-       _template.md                 # copy of cycle_template.md
-     cycles/                        # per-cycle notebooks (copies of cycle_template.ipynb)
+     fix_cycles/                    # per-cycle docs (managed by new_cycle.py)
+     cycles/                        # per-cycle notebooks (managed by new_cycle.py)
      artifacts/                     # HTML exports, downloaded result.json, CSVs
    ```
 
-2. **Fill `debug/engagement_a/.check_privacy.yaml`**
+2. **Fill `debug/engagement_a/.engagement.yaml`**
+   ```yaml
+   framework_repo_root: /Workspace/Repos/<user>/customer_retention
+   ```
+   Only needed if the Databricks cluster runs `customer_retention` from a
+   Workspace Repo clone (i.e. the package is not pip-installed). The
+   `@cr:code_system` cell that `new_cycle.py` injects is a no-op when
+   pip-install is present (the `sys.path` guard skips duplicate insertion).
+
+3. **Fill `debug/engagement_a/.check_privacy.yaml`**
    ```yaml
    terms:
      - <client product name>
@@ -42,17 +51,23 @@ inside `debug/engagement_a/` (gitignored).
    id_regexes: []   # optional — defaults include an 18-char CRM-ID regex
    ```
 
-3. **Fill `debug/engagement_a/probe.ipynb`'s `probe-config` cell**
+4. **Fill `debug/engagement_a/probe.ipynb`'s `probe-config` cell**
    See cell docstring. `DATASETS` is the main config. Everything else is optional.
+   When first copying `probe_template.ipynb` → `debug/engagement_a/probe.ipynb`,
+   also prepend a `@cr:code_system` cell if your cluster needs it
+   (same pattern `new_cycle.py` uses — one-time setup for the probe).
 
-4. **Open cycle 001**
+5. **Open cycle 001**
    ```
-   cp diagnostic_notebooks/cycle_template.md       debug/engagement_a/fix_cycles/001_<slug>.md
-   cp diagnostic_notebooks/cycle_template.ipynb    debug/engagement_a/cycles/001_<slug>.ipynb
+   python diagnostic_notebooks/new_cycle.py \
+       --engagement engagement_a --cycle 1 --slug <short-name>
    ```
 
-   Fill the doc's problem / impacted-files / required-checks sections.
-   Run the cycle notebook on Databricks; it reads the probe result and gates.
+   `new_cycle.py` copies the templates and prepends the
+   `@cr:code_system` cell so `customer_retention.*` imports resolve on
+   Databricks before the first cell runs. Fill the doc's problem /
+   impacted-files / required-checks sections and the notebook's
+   cycle-config cell, then run on Databricks.
 
 ## Running from Databricks
 
