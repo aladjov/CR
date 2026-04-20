@@ -2694,6 +2694,29 @@ class TestDatabricksTrainingNullImputation:
         assert "COALESCE(nanvl(CAST(" in result
         assert "AS DOUBLE), 0.0), 0.0)" in result
 
+    def test_training_filler_uses_star_projection_not_explicit_passthrough(
+        self, renderer, sample_pipeline_config
+    ):
+        """Regression for ``UNRESOLVED_COLUMN`` at fe.score_batch time.
+
+        The SQL must NOT reference pass-through columns (entity_id /
+        event_timestamp / label) by name — those exist at training but FE
+        feeds the logged pipeline only the feature columns at score time.
+        Use ``SELECT *, COALESCE(...) AS col__nafilled`` so:
+          (a) training: ``*`` passes label / timestamp / entity_id through,
+              and the new ``__nafilled`` copies are added alongside,
+          (b) scoring: ``*`` passes the 20 feature columns through and the
+              filler never asks for columns that aren't there.
+        """
+        result = renderer.render_training(sample_pipeline_config)
+        prep_fn = result[result.index("def _build_null_filler"):result.index("def prepare_features")]
+        assert '"SELECT " + ", ".join(projections) + " FROM __THIS__"' in prep_fn
+        assert 'projections = ["*"]' in prep_fn
+        # VectorAssembler inputs must be the __nafilled names, not the raw feature cols.
+        assert '__nafilled' in prep_fn or '_NAFILLED_SUFFIX' in prep_fn
+        main = result[result.index("def prepare_features"):]
+        assert "inputCols=filled_cols" in main
+
 
 class TestDatabricksTrainingDropAsOfDate:
     def test_training_excludes_timestamp_and_entity(self, renderer, sample_pipeline_config):

@@ -1862,20 +1862,31 @@ def _apply_feature_spec_gate(df, spec):
 def load_training_data():
     return spark.table(gold_table())
 
-def _build_null_filler(feature_cols, pass_through_cols):
-    # SQLTransformer coalesces every feature column to 0 so train-time
-    # and fe.score_batch time apply the SAME coerce-to-zero rule inside
-    # the logged pipeline. COALESCE handles NULL; nanvl handles NaN
-    # (can leak in via pandas-round-tripped gold columns even when the
-    # Delta column declares NOT NULL). Coding_Practices.md rules out
-    # pyspark.ml.Imputer past ~100 cols; SQLTransformer is a pure
+_NAFILLED_SUFFIX = "__nafilled"
+
+
+def _build_null_filler(feature_cols):
+    # SQLTransformer emits a copy of every feature column with NULL and NaN
+    # coerced to 0.0, under a `<col>__nafilled` alias. We use SELECT * so the
+    # filler never references columns that might be absent at scoring time:
+    #   - At training, SELECT * passes entity_id / event_timestamp / label
+    #     through untouched and adds the *__nafilled* copies alongside.
+    #   - At fe.score_batch time, FE feeds only the feature columns; SELECT *
+    #     passes those through and the same *__nafilled* projection runs.
+    # The VectorAssembler then reads inputCols=[<col>__nafilled, ...] so the
+    # vector is built from the null-safe copies in both worlds.
+    #
+    # pyspark.ml.Imputer is ruled out by Coding_Practices.md past ~100 cols
+    # (serialized model exceeds the 1 GB ceiling). SQLTransformer is a pure
     # Transformer with no .fit() step so it scales to any column count.
-    parts = [f"`{c}`" for c in pass_through_cols]
-    parts.extend(
-        f"COALESCE(nanvl(CAST(`{c}` AS DOUBLE), 0.0), 0.0) AS `{c}`"
+    projections = ["*"]
+    projections.extend(
+        f"COALESCE(nanvl(CAST(`{c}` AS DOUBLE), 0.0), 0.0) AS `{c}{_NAFILLED_SUFFIX}`"
         for c in feature_cols
     )
-    return SQLTransformer(statement="SELECT " + ", ".join(parts) + " FROM __THIS__")
+    return SQLTransformer(
+        statement="SELECT " + ", ".join(projections) + " FROM __THIS__"
+    )
 
 
 def prepare_features(df):
@@ -1888,11 +1899,11 @@ def prepare_features(df):
     if not feature_cols:
         col_types = {c: df.schema[c].dataType.typeName() for c in df.columns}
         raise ValueError(f"[TRAINING] No numeric feature columns found. Column types: {col_types}")
-    pass_through = [c for c in (ENTITY_KEY, TIMESTAMP_COLUMN, TARGET) if c in df.columns]
-    filler = _build_null_filler(feature_cols, pass_through)
+    filler = _build_null_filler(feature_cols)
     filled = filler.transform(df)
+    filled_cols = [f"{c}{_NAFILLED_SUFFIX}" for c in feature_cols]
     assembler = VectorAssembler(
-        inputCols=feature_cols, outputCol="features", handleInvalid="keep"
+        inputCols=filled_cols, outputCol="features", handleInvalid="keep"
     )
     keep = ["features", F.col(TARGET).alias("label")]
     if TIMESTAMP_COLUMN in df.columns:
