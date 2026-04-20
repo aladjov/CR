@@ -6607,7 +6607,12 @@ class TestAggregationWindowsPriority:
             ),
         )
 
-    def test_prefers_per_dataset_aggregation_windows_used(self):
+    def test_prefers_intent_windows_over_narrower_material(self):
+        """Cycle 3 invariant: ``multi.aggregation_windows`` (user intent) wins
+        over ``findings.time_series_metadata.aggregation_windows_used`` (the
+        coverage-narrowed set NB01a/NB01d wrote). Without this, a data-driven
+        recommendation silently drops window families the user declared.
+        """
         from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
 
         findings = self._make_findings_with_windows(["180d", "365d", "all_time"])
@@ -6616,6 +6621,23 @@ class TestAggregationWindowsPriority:
             aggregation_windows = ["24h", "7d", "30d", "90d", "180d", "365d", "all_time"]
 
         parser = FindingsParser.__new__(FindingsParser)
+        parser._bronze_aggregation_overrides = {}
+        result = parser._build_aggregation_config(FakeMulti(), findings)
+        assert result is not None
+        assert result.windows == [
+            "24h", "7d", "30d", "90d", "180d", "365d", "all_time",
+        ]
+
+    def test_falls_back_to_material_when_intent_empty(self):
+        from customer_retention.generators.pipeline_generator.findings_parser import FindingsParser
+
+        findings = self._make_findings_with_windows(["180d", "365d", "all_time"])
+
+        class FakeMulti:
+            aggregation_windows = []
+
+        parser = FindingsParser.__new__(FindingsParser)
+        parser._bronze_aggregation_overrides = {}
         result = parser._build_aggregation_config(FakeMulti(), findings)
         assert result is not None
         assert result.windows == ["180d", "365d", "all_time"]

@@ -98,6 +98,25 @@ _RECOGNIZED_BRONZE_OVERRIDE_KEYS = frozenset(
 )
 
 
+def resolve_aggregation_windows(*, intent, material, override):
+    """Precedence: per-dataset override > multi-dataset intent > findings material.
+
+    Intent (``multi.aggregation_windows``) is the user-declared window breadth;
+    ``ts.aggregation_windows_used`` records what NB01d actually materialized
+    after coverage-based narrowing. When intent is set, it must win — otherwise
+    a coverage recommendation silently drops window families the user expects
+    to appear in generated bronze (cycle 3 / G4). ``override`` is the
+    per-dataset ``BRONZE_AGGREGATIONS[<ds>]['windows']`` escape hatch.
+    """
+    if override:
+        return list(override)
+    if intent:
+        return list(intent)
+    if material:
+        return list(material)
+    return []
+
+
 def _get_delta_for_silver_schema():
     from customer_retention.integrations.adapters.factory import get_delta
     return get_delta()
@@ -1612,10 +1631,20 @@ class FindingsParser:
         self, multi: MultiDatasetFindings, findings: ExplorationFindings, dataset_name: str = ""
     ) -> Optional[AggregationWindowConfig]:
         ts = findings.time_series_metadata
-        windows = getattr(ts, "aggregation_windows_used", None) or [] if ts else []
+        if not ts:
+            return None
+        material = getattr(ts, "aggregation_windows_used", None) or []
+        intent = list(getattr(multi, "aggregation_windows", None) or [])
+        override_windows = (
+            (getattr(self, "_bronze_aggregation_overrides", {}) or {})
+            .get(dataset_name, {})
+            .get("windows")
+            if dataset_name else None
+        )
+        windows = resolve_aggregation_windows(
+            intent=intent, material=material, override=override_windows
+        )
         if not windows:
-            if not ts:
-                return None
             raise ValueError(
                 f"No aggregation_windows_used in findings for '{dataset_name}'. "
                 "NB01d must run before pipeline generation to record actual aggregation windows."
