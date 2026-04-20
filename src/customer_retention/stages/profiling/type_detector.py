@@ -198,10 +198,6 @@ class TypeDetector:
                 self.evidence.append(f"Exactly 2 unique values: {unique_values}")
                 return True
 
-        if distinct_count == 2:
-            self.evidence.append(f"Exactly 2 unique values (non-standard): {unique_values}")
-            return True
-
         return False
 
     def is_datetime(self, series: pd.Series) -> bool:

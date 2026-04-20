@@ -372,6 +372,26 @@ class ExplorationManager:
             stem = stem.rsplit("_aggregated", 1)[0]
         return stem
 
+    def _source_event_level_metadata(self, path: Path):
+        """Recover event-level TimeSeriesMetadata from the non-aggregated sibling.
+
+        When `prefer_aggregated=True` serves a `<name>_aggregated_findings.yaml`
+        whose `time_series_metadata` is null (aggregation output), the
+        event-level signal still lives on the sibling `<name>_findings.yaml`.
+        Returns its TimeSeriesMetadata when it carries EVENT_LEVEL granularity,
+        else None. Callers use this to preserve event_datasets in merged output.
+        """
+        if "_aggregated" not in path.stem:
+            return None
+        sibling = path.parent / f"{self._get_base_name(path)}_findings.yaml"
+        if not sibling.exists():
+            return None
+        sibling_findings = ExplorationFindings.load(str(sibling))
+        ts_meta = sibling_findings.time_series_metadata
+        if ts_meta is None or ts_meta.granularity != DatasetGranularity.EVENT_LEVEL:
+            return None
+        return ts_meta
+
     def get_skipped_event_findings(self) -> List[Path]:
         """Return event-level findings that were skipped in favor of aggregated versions."""
         if not self.explorations_dir.exists():
@@ -408,9 +428,15 @@ class ExplorationManager:
                 entity_col = findings.time_series_metadata.entity_column
                 time_col = findings.time_series_metadata.time_column
             else:
-                granularity = DatasetGranularity.ENTITY_LEVEL
-                entity_col = None
-                time_col = None
+                source_ts_meta = self._source_event_level_metadata(path)
+                if source_ts_meta is not None:
+                    granularity = DatasetGranularity.EVENT_LEVEL
+                    entity_col = source_ts_meta.entity_column
+                    time_col = source_ts_meta.time_column
+                else:
+                    granularity = DatasetGranularity.ENTITY_LEVEL
+                    entity_col = None
+                    time_col = None
 
             # Extract dataset name from path
             name = self._extract_dataset_name(path)
