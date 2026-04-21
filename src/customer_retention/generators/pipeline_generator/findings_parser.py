@@ -232,6 +232,8 @@ class FindingsParser:
         self._build_landing_configs(config, multi_dataset, source_findings)
         self._build_discovered_landing_configs(config, discovered_events, multi_dataset)
         self._build_bronze_event_configs(config, multi_dataset, source_findings, discovered_events)
+        if self._feature_spec is not None:
+            self._reconcile_config_with_spec(config)
         if recommendations_registry:
             self._apply_recommendations_to_config(config, recommendations_registry, multi_dataset, source_findings)
             self._apply_event_recommendations(config, recommendations_registry)
@@ -241,7 +243,6 @@ class FindingsParser:
         self._reconcile_bronze_columns(config)
         self._reconcile_gold_columns(config)
         if self._feature_spec is not None:
-            self._reconcile_config_with_spec(config)
             self._enforce_spec_schema_parity(config)
         return config
 
@@ -1311,17 +1312,22 @@ class FindingsParser:
     def _reconcile_aggregation_windows_with_spec(
         event_cfg: "BronzeEventConfig", selected: Set[str],
     ) -> None:
-        agg = event_cfg.aggregation
-        if agg is None:
+        required = FindingsParser._windows_required_by_spec(selected, event_cfg.aggregation)
+        if not required:
             return
-        required = FindingsParser._windows_required_by_spec(selected, agg)
-        missing = [w for w in required if w not in agg.windows]
+        if event_cfg.aggregation is None:
+            event_cfg.aggregation = AggregationWindowConfig(
+                windows=sorted(required),
+                agg_funcs=["sum", "mean", "max", "count"],
+            )
+            return
+        missing = [w for w in required if w not in event_cfg.aggregation.windows]
         if missing:
-            agg.windows = list(agg.windows) + sorted(missing)
+            event_cfg.aggregation.windows = list(event_cfg.aggregation.windows) + sorted(missing)
 
     @staticmethod
     def _windows_required_by_spec(
-        selected: Set[str], agg: "AggregationWindowConfig",
+        selected: Set[str], agg: Optional["AggregationWindowConfig"],
     ) -> Set[str]:
         required: Set[str] = set()
         for feat in selected:

@@ -359,6 +359,131 @@ class TestReconcileIntegrationWithParser:
         assert "max" not in blocked.get("amount", [])
 
 
+class TestReconcileRunsBeforeSilverRecommendations:
+    """Silver ratio recs gate on predicted pipeline columns. If the reconcile
+    pass ran after recommendations, ratios over reconciled columns (e.g.
+    `event_count_180d_to_active_span_days_ratio`) would be permanently dropped.
+    """
+
+    def test_ratio_rec_over_reconciled_columns_survives(self, tmp_path):
+        ns = _fake_namespace(tmp_path)
+
+        ts = {
+            "entity_column": "customer_id", "time_column": "feature_timestamp",
+            "avg_events_per_entity": 8.0, "time_span_days": 730,
+            "aggregation_windows_used": ["30d", "180d"],
+            "suggested_aggregations": ["30d", "180d"],
+            "aggregation_executed": True,
+        }
+        email_findings = {
+            "source_path": "/data/email.csv", "source_format": "csv",
+            "row_count": 12000, "column_count": 4,
+            "target_column": "churn",
+            "identifier_columns": ["customer_id"],
+            "datetime_columns": ["sent_date"],
+            "columns": {
+                "customer_id": {"name": "customer_id", "inferred_type": "identifier",
+                                "confidence": 1.0, "evidence": []},
+                "sent_date": {"name": "sent_date", "inferred_type": "datetime",
+                              "confidence": 1.0, "evidence": []},
+                "amount": {"name": "amount", "inferred_type": "numeric_continuous",
+                           "confidence": 1.0, "evidence": []},
+            },
+            "time_series_metadata": ts,
+        }
+        email_path = ns.dataset_findings_dir("email") / "email_findings.yaml"
+        _write_yaml(email_path, email_findings)
+
+        multi_doc = {
+            "datasets": {
+                "email": {
+                    "name": "email",
+                    "findings_path": str(email_path),
+                    "source_path": "/data/email.csv",
+                    "granularity": "event_level",
+                    "row_count": 12000, "column_count": 4,
+                    "entity_column": "customer_id", "time_column": "feature_timestamp",
+                    "target_column": "churn",
+                },
+            },
+            "primary_entity_dataset": "email",
+            "event_datasets": ["email"],
+            "excluded_datasets": [],
+            "aggregation_windows": ["30d", "180d"],
+        }
+        _write_yaml(ns.multi_dataset_findings_path, multi_doc)
+
+        recommendations = {
+            "silver": {
+                "entity_column": "customer_id",
+                "time_column": "feature_timestamp",
+                "derived_columns": [
+                    {
+                        "id": "silver.ratio.001",
+                        "layer": "silver",
+                        "category": "derived_column",
+                        "target_column": "event_count_180d_to_event_count_all_time_ratio",
+                        "action": "ratio",
+                        "parameters": {"numerator": "event_count_180d",
+                                       "denominator": "event_count_all_time"},
+                        "rationale": "engagement recency vs lifetime",
+                        "source_notebook": "01e",
+                    },
+                    {
+                        "id": "silver.ratio.002",
+                        "layer": "silver",
+                        "category": "derived_column",
+                        "target_column": "event_count_180d_to_active_span_days_ratio",
+                        "action": "ratio",
+                        "parameters": {"numerator": "event_count_180d",
+                                       "denominator": "active_span_days"},
+                        "rationale": "events per active span",
+                        "source_notebook": "01e",
+                    },
+                ],
+            },
+        }
+        _write_yaml(ns.merged_recommendations_path, recommendations)
+
+        _write_spec(ns, [
+            "event_count_180d",
+            "event_count_all_time",
+            "active_span_days",
+            "event_count_180d_to_event_count_all_time_ratio",
+            "event_count_180d_to_active_span_days_ratio",
+            "dow_cos",
+            "regularity_score",
+        ])
+
+        parser = FindingsParser(findings_dir=str(ns.merged_dir), namespace=ns)
+        config = parser.parse()
+
+        silver_columns = {s.column for s in config.silver.derived_columns}
+        assert "event_count_180d_to_event_count_all_time_ratio" in silver_columns
+        assert "event_count_180d_to_active_span_days_ratio" in silver_columns
+        event_cfg = config.bronze_event["email"]
+        assert "all_time" in event_cfg.aggregation.windows
+        assert event_cfg.temporal_features is not None
+        assert "recency" in event_cfg.temporal_features.feature_groups
+
+
+class TestReconcileCreatesAggregationWhenAbsent:
+    """If findings produced no aggregation config but spec needs event_count_*,
+    reconcile must create a minimal AggregationWindowConfig so parity holds.
+    """
+
+    def test_creates_minimal_aggregation_when_spec_requires_event_count(self):
+        event_cfg = BronzeEventConfig(
+            source=_event_source(), entity_column="ACCOUNT_ID",
+            time_column="CREATED_DATE", aggregation=None,
+        )
+        spec = _build_spec(["event_count_365d", "event_count_all_time"])
+        FindingsParser._reconcile_event_config_with_spec(event_cfg, spec)
+        assert event_cfg.aggregation is not None
+        assert "365d" in event_cfg.aggregation.windows
+        assert "all_time" in event_cfg.aggregation.windows
+
+
 class TestReconcileIsNoOpWithoutSpec:
     def test_no_spec_means_no_reconciliation_side_effect(self, tmp_path):
         parser = FindingsParser(findings_dir=str(tmp_path))
