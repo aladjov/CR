@@ -1,7 +1,8 @@
 # diagnostic_notebooks/
 
-Universal, client-agnostic tooling for remediation cycles. Complements
-`docs/sps_phased_fix_strategy.md` (rename pending → `phased_fix_strategy.md`).
+Universal, engagement-agnostic tooling for remediation cycles.
+Complements `diagnostic_notebooks/phased_fix_strategy.md` — the canonical methodology
+this directory implements.
 
 **Contract:** every file in this directory is client-agnostic. No client
 names, catalog prefixes, internal segment labels, or run IDs. Instantiations
